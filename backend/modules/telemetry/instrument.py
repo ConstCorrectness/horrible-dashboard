@@ -74,7 +74,33 @@ _SKIP_WS_CHANNELS = ("telemetry",)
 # every layout change, throttled to ~2.5/s but still the largest repeated payload
 # here. The rest of the `share` channel is small and genuinely useful in the
 # panel, so the channel-level skip would be a blunt instrument.
-_SKIP_WS_EVENTS = ("share/signal", "share/mirror", "share/remote_mirror")
+# `hassault/snapshot` joins them for the same reason and then some: it is the
+# largest repeated payload on this socket by a wide margin — the full player
+# table, every grenade and every effect, to every player in the match, twenty
+# times a second — and one tick looks exactly like the last. Recording it meant
+# two more `json.dumps` of that payload per frame (compact, then again with
+# `indent=2`) on every tick whether or not anybody had the panel open. The rest
+# of the `hassault` channel — joins, the killfeed, invites, match results — is
+# small, individually interesting, and still recorded.
+_SKIP_WS_EVENTS = (
+    "share/signal",
+    "share/mirror",
+    "share/remote_mirror",
+    "hassault/snapshot",
+)
+
+
+def observes_ws_frame(channel: str, event: str) -> bool:
+    """Whether `record_ws_frame` would record this `channel`/`event`.
+
+    Registered with `set_ws_send_observer` so a sender can ask before choosing a
+    code path. The skip rules live here, once — `record_ws_frame` applies them
+    through this same function rather than repeating them.
+    """
+    if channel in _SKIP_WS_CHANNELS:
+        return False
+    target = f"{channel}/{event}" if event else channel
+    return target not in _SKIP_WS_EVENTS
 
 
 def capture_headers(headers: object) -> dict[str, str]:
@@ -265,12 +291,10 @@ def record_ws_frame(direction: str, data: object) -> None:
     if not isinstance(data, dict):
         return
     channel = str(data.get("channel", "?"))
-    if channel in _SKIP_WS_CHANNELS:
-        return
     event_name = data.get("event") or data.get("type")
-    target = f"{channel}/{event_name}" if event_name else channel
-    if target in _SKIP_WS_EVENTS:
+    if not observes_ws_frame(channel, str(event_name or "")):
         return
+    target = f"{channel}/{event_name}" if event_name else channel
     try:
         compact = json.dumps(data, separators=(",", ":"), default=str)
         pretty = json.dumps(data, indent=2, default=str)

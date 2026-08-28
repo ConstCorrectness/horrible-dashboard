@@ -824,6 +824,7 @@ dependencies = [
  "glam",
  "gltf",
  "image",
+ "naga",
  "png",
  "pollster",
  "serde",

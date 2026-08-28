@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from backend.paths import data_dir
@@ -1098,7 +1098,7 @@ async def get_latest_match_summary() -> dict[str, Any] | None:
     match history a thing that exists at all.
     """
     from backend.modules.hassault import results
-    from backend.modules.hassault.skins import SKIN_DICT, skin_manager
+    from backend.modules.hassault.skins import skin_dict, skin_manager
 
     summary = results.latest(_account_id())
     if summary is None:
@@ -1110,7 +1110,7 @@ async def get_latest_match_summary() -> dict[str, Any] | None:
     if drop_id:
         instance = skin_manager.find_instance(_account_id(), str(drop_id))
         if instance is not None:
-            summary["earnedDrop"] = instance.to_dict(SKIN_DICT.get(instance.skin_id))
+            summary["earnedDrop"] = instance.to_dict(skin_dict().get(instance.skin_id))
     return summary
 
 
@@ -1167,16 +1167,25 @@ async def get_match_history(limit: int = 20) -> list[dict[str, Any]]:
 
 @router.get("/skins/catalog")
 async def get_skin_catalog() -> list[dict[str, Any]]:
-    """Master catalog of all available skin designs, rarities and collections."""
+    """Master catalog of all available skin designs, rarities and collections.
+
+    The built-ins **and** every installed pack — see `skinpacks.py`. A pack skin
+    carries the extra `packId` and `textureUrl` keys; a built-in carries neither,
+    which is what tells a client there is nothing to fetch rather than something
+    that failed to load.
+    """
+    from backend.modules.hassault.skinpacks import installed_skins
     from backend.modules.hassault.skins import SKIN_CATALOG
 
-    return [s.to_dict() for s in SKIN_CATALOG]
+    return [s.to_dict() for s in SKIN_CATALOG] + [
+        s.to_dict() for s in installed_skins()
+    ]
 
 
 @router.get("/skins/inventory")
 async def get_skin_inventory() -> list[dict[str, Any]]:
     """Get the active player's skin inventory with float values, pattern seeds and wear."""
-    from backend.modules.hassault.skins import SKIN_DICT, skin_manager
+    from backend.modules.hassault.skins import skin_dict, skin_manager
 
     account_id = _account_id()
 
@@ -1187,7 +1196,95 @@ async def get_skin_inventory() -> list[dict[str, Any]]:
     if not skin_manager.has_local(account_id):
         await skin_manager.load_from_atlas(account_id)
     items = skin_manager.get_inventory(account_id)
-    return [item.to_dict(SKIN_DICT.get(item.skin_id)) for item in items]
+    known = skin_dict()
+    return [item.to_dict(known.get(item.skin_id)) for item in items]
+
+
+# -----------------------------------------------------------------------------
+# Skin packs: skins that are not in this repo
+# -----------------------------------------------------------------------------
+#
+# See `backend/modules/hassault/skinpacks.py` for the format and for the rules
+# that are silent if broken. These routes are deliberately thin — every check
+# lives in that module, so the agent tools and a future CLI get the same one.
+
+
+class SkinPackInstall(BaseModel):
+    """Where to fetch a pack from, and optionally what it should hash to."""
+
+    url: str
+    #: Hex sha256. Optional, and its absence is recorded rather than assumed
+    #: away: a pack installed without one is reported `verified: false`.
+    sha256: str | None = None
+
+
+@router.get("/skins/packs")
+async def list_skin_packs() -> list[dict[str, Any]]:
+    """Every skin pack installed on this node."""
+    from backend.modules.hassault.skinpacks import installed_packs
+
+    return [p.to_dict() for p in installed_packs()]
+
+
+@router.post("/skins/packs/install")
+async def install_skin_pack(body: SkinPackInstall) -> dict[str, Any]:
+    """Download a skin pack to this node and install it.
+
+    The fetch is SSRF-guarded (`browser.fetch`), the archive is validated before
+    a byte is written, and the pack lands via a staging directory and a rename —
+    so a failure here leaves the node exactly as it was.
+    """
+    # Imported here, like every other heavy dependency in this file: reaching
+    # `browser.fetch` pulls the extraction stack in behind it, and a module that
+    # every hassault route pays for at import time to serve one of them is the
+    # kind of cost that only shows up as a slow boot.
+    from backend.modules.browser.fetch import UnsafeUrlError
+    from backend.modules.hassault.skinpacks import PackError, install_from_url
+    from backend.modules.hassault.skins import invalidate_pack_cache
+
+    try:
+        pack = await install_from_url(body.url, sha256=body.sha256)
+    except PackError as exc:
+        # 400, not 500: every one of these is something about the *pack*, and the
+        # message names which rule it broke. A 500 would file a user's malformed
+        # manifest as a bug in the node.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except UnsafeUrlError as exc:
+        raise HTTPException(status_code=400, detail=f"unsafe url: {exc}") from exc
+    invalidate_pack_cache()
+    return pack.to_dict()
+
+
+@router.delete("/skins/packs/{pack_id}")
+async def remove_skin_pack(pack_id: str) -> dict[str, bool]:
+    """Delete an installed pack and everything in it."""
+    from backend.modules.hassault.skinpacks import PackError, remove_pack
+    from backend.modules.hassault.skins import invalidate_pack_cache
+
+    try:
+        removed = remove_pack(pack_id)
+    except PackError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"no pack '{pack_id}' is installed")
+    invalidate_pack_cache()
+    return {"removed": True}
+
+
+@router.get("/skins/packs/{pack_id}/files/{name}")
+async def get_skin_pack_file(pack_id: str, name: str) -> FileResponse:
+    """Serve one file out of an installed pack — a skin's texture.
+
+    `texture_path` resolves and containment-checks the path; a `..` or a symlink
+    pointing out of the pack is a 400 here rather than an arbitrary-file read.
+    """
+    from backend.modules.hassault.skinpacks import PackError, texture_path
+
+    try:
+        path = texture_path(pack_id, name)
+    except PackError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return FileResponse(path)
 
 
 @router.post("/skins/equip")
@@ -1225,7 +1322,7 @@ async def claim_level_up_drop() -> dict[str, Any]:
     new item, the button never went away, and a Covert was a matter of clicking
     for a minute.
     """
-    from backend.modules.hassault.skins import SKIN_DICT, skin_manager
+    from backend.modules.hassault.skins import skin_dict, skin_manager
 
     account_id = _account_id()
 
@@ -1240,7 +1337,7 @@ async def claim_level_up_drop() -> dict[str, Any]:
             ),
         )
     await skin_manager.sync_to_atlas(account_id)
-    payload = drop.to_dict(SKIN_DICT.get(drop.skin_id))
+    payload = drop.to_dict(skin_dict().get(drop.skin_id))
     payload["remaining"] = skin_manager.drop_status(account_id)["available"]
     return payload
 
@@ -1248,7 +1345,7 @@ async def claim_level_up_drop() -> dict[str, Any]:
 @router.post("/skins/tradeup")
 async def execute_trade_up(instance_ids: list[str]) -> dict[str, Any]:
     """Trade in 10 skins of rarity Tier N to forge 1 skin of Tier N+1."""
-    from backend.modules.hassault.skins import SKIN_DICT, skin_manager
+    from backend.modules.hassault.skins import skin_dict, skin_manager
 
     account_id = _account_id()
 
@@ -1259,7 +1356,7 @@ async def execute_trade_up(instance_ids: list[str]) -> dict[str, Any]:
             detail="Trade-Up Contract requires exactly 10 items of the same rarity tier.",
         )
     await skin_manager.sync_to_atlas(account_id)
-    return result.to_dict(SKIN_DICT.get(result.skin_id))
+    return result.to_dict(skin_dict().get(result.skin_id))
 
 
 # -----------------------------------------------------------------------------

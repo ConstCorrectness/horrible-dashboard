@@ -157,7 +157,11 @@ from backend.modules.secrets import router as secrets_router
 from backend.modules.telemetry import push_telemetry
 from backend.modules.notifications.routes import router as notifications_router
 from backend.modules.telemetry import router as telemetry_router
-from backend.modules.telemetry.instrument import record_ws_frame, telemetry_middleware
+from backend.modules.telemetry.instrument import (
+    observes_ws_frame,
+    record_ws_frame,
+    telemetry_middleware,
+)
 from backend.modules.terminal import TerminalManager
 from backend.modules.symdex import push_symdex_events
 from backend.modules.symdex import register_agent_tools as register_symdex_tools
@@ -187,7 +191,7 @@ from backend.version import app_version
 
 # Observe every outbound `/ws` frame for the observability panel (inbound frames
 # are recorded in the receive loop below). One global observer covers all sockets.
-set_ws_send_observer(record_ws_frame)
+set_ws_send_observer(record_ws_frame, wants=observes_ws_frame)
 
 #: Resolved from `pyproject.toml`, not restated here — this literal had already
 #: drifted a minor version behind it. See `backend/version.py`.

@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 
-use crate::protocol::{self, Command, Event, InputBatch, JoinRequest, Outbound};
+use crate::protocol::{self, Command, ConsoleExec, Event, InputBatch, JoinRequest, Outbound};
 
 type Socket = WebSocket<MaybeTlsStream<TcpStream>>;
 
@@ -204,6 +204,27 @@ impl MatchSocket {
         self.send(&Outbound::new(
             "add_bot",
             serde_json::json!({ "count": count, "skill": skill }),
+        ))
+    }
+
+    /// Send one developer-console line to the node.
+    ///
+    /// Sent **immediately**, not queued behind the next `flush`: a console line
+    /// is not an input frame, and batching it with movement would make its
+    /// latency depend on the frame rate.
+    ///
+    /// It rides this socket rather than the REST route the browser pane uses
+    /// because `channel.py` resolves the room and the player from the connection
+    /// itself — a command sent this way lands in the match this client is
+    /// actually in, with no room id to get wrong.
+    pub fn console_exec(&self, command: &str, req_id: u64) -> Result<(), NetError> {
+        self.send(&Outbound::new(
+            "console_exec",
+            ConsoleExec {
+                command,
+                req_id,
+                context: serde_json::json!({}),
+            },
         ))
     }
 

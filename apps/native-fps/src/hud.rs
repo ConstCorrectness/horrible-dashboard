@@ -31,7 +31,9 @@
 
 use std::collections::VecDeque;
 
+use crate::console::{LogLine, Tone};
 use crate::protocol::{Fx, HitMarker, SelfState};
+use crate::radar::{self, Blip, Run};
 use crate::settings::{Crosshair, CrosshairStyle};
 
 /// One overlay vertex: a position already in clip space, and a colour with an
@@ -87,6 +89,73 @@ pub struct KillNote {
     /// Whether we did it or it was done to us — worth colouring differently.
     pub mine: bool,
     pub age: f32,
+}
+
+/// The radar, as this frame's painter needs to see it.
+///
+/// The floor plan is borrowed and built **once per map** (`radar::floor_plan`),
+/// not per frame: it is a property of the world, and rebuilding it every frame
+/// is how a minimap ends up costing more than the map.
+///
+/// `blips` is already filtered — see `radar::blips`. Deciding *here* who is on
+/// the radar would put the rule that keeps unspotted enemies off it inside a
+/// painter, where nothing can test it.
+pub struct RadarView<'a> {
+    pub plan: &'a [Run],
+    /// Where we are, in cubes, and which way we are facing, in **radians**.
+    pub x: f32,
+    pub y: f32,
+    pub yaw: f32,
+    pub blips: &'a [Blip],
+}
+
+/// The developer console, as this frame's painter needs to see it.
+///
+/// Borrowed rather than copied: the scrollback is up to 400 lines and a HUD is
+/// rebuilt every frame, so cloning it would be four hundred string allocations
+/// per frame for a panel that is closed almost always.
+pub struct ConsoleView<'a> {
+    /// The lines the active filter shows, oldest first.
+    ///
+    /// **Already filtered by the caller**, not filtered here. The filter's rules
+    /// are the console's business — they mirror the browser's, and they are
+    /// evaluated once per line when it is logged rather than once per line per
+    /// frame — and a painter that re-derived them would be a second opinion
+    /// about which tab a line belongs to.
+    pub lines: &'a [&'a LogLine],
+    pub input: &'a str,
+    /// Byte offset of the caret within `input`.
+    pub cursor: usize,
+    /// Lines scrolled back from the bottom.
+    pub scroll: usize,
+    pub suggestions: &'a [String],
+    pub suggestion: usize,
+    /// The selected completion, spelled out. Drawn under the input line.
+    pub detail: Option<&'a str>,
+    /// Whether the node's registry actually loaded. Drawn in the title bar,
+    /// because a console with no completions looks broken in exactly the same
+    /// way as one whose fetch 404'd, and the two want different reactions.
+    pub registry_loaded: bool,
+    /// The active filter's name, and how many lines it is hiding.
+    ///
+    /// The count is drawn whenever it is non-zero, because a filtered console
+    /// that did not say so is indistinguishable from one that has stopped
+    /// receiving output — which is the first thing you would reach for this
+    /// console to diagnose.
+    pub filter: &'static str,
+    pub hidden: usize,
+    /// The match this console is attached to. Empty in Train, where there is no
+    /// room and saying `ROOM` with nothing after it would be worse than silence.
+    pub room: &'a str,
+    pub map: &'a str,
+    /// Round-trip time, when one has been measured. `None` draws as absent
+    /// rather than as zero, the same rule the rest of this HUD follows.
+    pub rtt: Option<f32>,
+    /// `sv_cheats`, as last seen. `None` is "never been told", which is a
+    /// different fact from "off" and must not draw the same.
+    pub cheats: Option<bool>,
+    /// The quick-action row. See `console::QuickAction`.
+    pub quick: &'a [crate::console::QuickAction],
 }
 
 /// Everything about this frame that is not already inside `Hud`.
@@ -149,6 +218,16 @@ pub struct HudView<'a> {
     /// configured not to show the hip-fire penalty would be a setting that wins
     /// gunfights.
     pub crosshair: Crosshair,
+    /// The radar, when there is a body to centre it on. `None` in Train and
+    /// while connecting — a radar with no viewer would have to invent a
+    /// position, and the centre of this instrument is the one thing on it that
+    /// is not allowed to be a guess.
+    pub radar: Option<RadarView<'a>>,
+    /// The console, when it is open. `None` is "closed" — and the panel is
+    /// drawn **last and over everything**, including the scoreboard, because a
+    /// console you can read the ammo counter through is a console you cannot
+    /// read.
+    pub console: Option<ConsoleView<'a>>,
 }
 
 /// The HUD's own memory: things that persist across frames because they are
@@ -241,6 +320,26 @@ impl Hud {
 
     /// A respawn: the health jump it causes is not damage in reverse, and the
     /// last-seen value has to move with it or the next real hit flashes twice.
+    /// A line that is not a kill: somebody arriving, somebody leaving, a friend
+    /// asking you into their match.
+    ///
+    /// Onto the kill feed rather than into a panel of its own, and that is the
+    /// whole point: the feed is already the place this client says what just
+    /// happened, it is already on screen during play, and a second notice
+    /// surface would be a second thing to position, fade and cap. `mine` picks
+    /// the colour — an invite is *about you* and reads amber; a stranger
+    /// joining is grey.
+    pub fn note(&mut self, text: impl Into<String>, mine: bool) {
+        self.feed.push_front(KillNote {
+            text: text.into().to_uppercase(),
+            mine,
+            age: 0.0,
+        });
+        while self.feed.len() > MAX_FEED {
+            self.feed.pop_back();
+        }
+    }
+
     pub fn on_respawn(&mut self) {
         self.last_hp = f32::MAX;
         self.damage_age = f32::MAX;
@@ -287,31 +386,43 @@ impl Hud {
 
         self.paint_feed(&mut p, u);
 
-        if !view.playing {
-            // Not in the world yet: connecting, or between matches. The kill feed
-            // above is the one thing that still makes sense there.
-            return;
+        // Not in the world yet — connecting, or between matches — means most of
+        // the HUD has nothing to report. The kill feed above still makes sense,
+        // and so does the console below: it is the surface you would reach for
+        // *because* the client is not in a world yet. It used to be an early
+        // return, which would have made the console the one panel you could not
+        // open when you needed it.
+        if view.playing {
+            let dead = view.you.is_some_and(|y| !y.alive);
+            if !dead && view.magnification > 1.0 {
+                p.scope(u, hit, self.hit_killed, view.magnification);
+            } else if !dead {
+                // The browser's `crosshairSpread`, in its units, scaled to this
+                // window's — with the player's own gap as the floor it opens
+                // from.
+                let gap = (view.crosshair.gap + view.spread * 260.0) * u * 0.5;
+                p.crosshair(gap.max(2.0), u, hit, self.hit_killed, &view.crosshair);
+            }
+
+            self.paint_health(&mut p, view, u);
+            paint_weapon(&mut p, view, u);
+            self.paint_center(&mut p, view, u);
+            paint_movement(&mut p, view, u);
+            paint_net_graph(&mut p, view, u);
+            if let Some(r) = &view.radar {
+                paint_radar(&mut p, r, u);
+            }
+            // Last of the in-world layers, so it covers the rest: a scoreboard
+            // is a thing you hold *over* the game, and one the ammo counter
+            // shows through reads as a bug.
+            if let Some(rows) = view.scoreboard {
+                paint_scoreboard(&mut p, rows, view.scores, u);
+            }
         }
 
-        let dead = view.you.is_some_and(|y| !y.alive);
-        if !dead && view.magnification > 1.0 {
-            p.scope(u, hit, self.hit_killed, view.magnification);
-        } else if !dead {
-            // The browser's `crosshairSpread`, in its units, scaled to this
-            // window's — with the player's own gap as the floor it opens from.
-            let gap = (view.crosshair.gap + view.spread * 260.0) * u * 0.5;
-            p.crosshair(gap.max(2.0), u, hit, self.hit_killed, &view.crosshair);
-        }
-
-        self.paint_health(&mut p, view, u);
-        paint_weapon(&mut p, view, u);
-        self.paint_center(&mut p, view, u);
-        paint_movement(&mut p, view, u);
-        paint_net_graph(&mut p, view, u);
-        // Last, so it covers the rest: a scoreboard is a thing you hold *over*
-        // the game, and one the ammo counter shows through reads as a bug.
-        if let Some(rows) = view.scoreboard {
-            paint_scoreboard(&mut p, rows, view.scores, u);
+        // Over absolutely everything, in or out of a world.
+        if let Some(console) = &view.console {
+            paint_console(&mut p, console, u);
         }
     }
 
@@ -614,6 +725,334 @@ fn paint_net_graph(p: &mut Painter, view: &HudView, u: f32) {
 }
 
 /// A name to draw, falling back to the id when the server sent none.
+/// The developer console: a status header, a quick-action row, a scrollback and
+/// an input line.
+///
+/// Occupies the **top** of the screen rather than the bottom, which is where a
+/// Quake console has always gone and is not nostalgia: the bottom of this screen
+/// is the health and ammo block, and a console that covered it would hide the
+/// two numbers most worth glancing at while typing `player.god 1`.
+///
+/// The layout is built from both ends inward — header and chips down from the
+/// top, input and completions up from the bottom — and the scrollback takes
+/// whatever is left between them. That is what keeps the caret and the newest
+/// line adjacent at any window size, which is the one property a console cannot
+/// trade away.
+fn paint_console(p: &mut Painter, c: &ConsoleView, u: f32) {
+    let scale = u * 0.7;
+    let line_h = scale * 9.0;
+    let width = p.width;
+    let height = (p.height * 0.55).max(line_h * 9.0);
+    let pad = u * 3.0;
+
+    // Near-opaque, unlike every other panel here. The rest of the HUD sits over
+    // a world you still need to see; a console does not, and a transparent one
+    // makes a map's own geometry read as text.
+    p.rect(0.0, 0.0, width, height, [0.03, 0.04, 0.06, 0.93]);
+    // The one accent line, at the bottom edge — a border all the way round is
+    // the "generic panel" look this UI deliberately avoids.
+    p.rect(0.0, height, width, u * 0.5, [0.29, 0.42, 0.94, 0.9]);
+
+    // ---- the header ---------------------------------------------------------
+    //
+    // The browser's title bar: which match this console is attached to, how far
+    // away it is, and whether cheats are open. All of it is context for reading
+    // the output below, which is why it is here rather than behind a command.
+    let title = if c.registry_loaded {
+        "HASSAULT CONSOLE"
+    } else {
+        // Not an error and not silence: completion being absent has two very
+        // different causes and only one of them is worth acting on.
+        "HASSAULT CONSOLE - REGISTRY UNAVAILABLE"
+    };
+    p.text(pad, pad, scale * 0.9, DIM, title);
+
+    let mut status = String::new();
+    if !c.room.is_empty() {
+        status.push_str(&format!("ROOM {}  ", short_room(c.room)));
+    }
+    if !c.map.is_empty() {
+        status.push_str(&format!("{}  ", c.map));
+    }
+    match c.rtt {
+        // Absent rather than zero, the same rule the rest of this HUD follows: a
+        // `0 MS` for "not measured yet" is a claim of a perfect link.
+        Some(rtt) => status.push_str(&format!("PING {rtt:.0}MS  ")),
+        None => status.push_str("PING --  "),
+    }
+    status.push_str(match c.cheats {
+        Some(true) => "CHEATS ON",
+        Some(false) => "CHEATS OFF",
+        // Never been told. See `ConsoleView::cheats`.
+        None => "CHEATS ?",
+    });
+    let status_x = pad + text_width(title, scale * 0.9) + scale * 4.0;
+    p.text(status_x, pad, scale * 0.9, DIM, &status);
+
+    p.text_right(
+        width - pad,
+        pad,
+        scale * 0.9,
+        DIM,
+        "F1-F8 ACTIONS   ^F FILTER   TAB COMPLETE   ESC CLOSE",
+    );
+
+    // ---- the quick-action chips ---------------------------------------------
+    //
+    // The browser's toolbar. Half of what a toggle button gives you is not the
+    // click but the *state*, which is why a chip is drawn even for the actions
+    // that have none to show.
+    let chip_y = pad + line_h;
+    let mut x = pad;
+    for action in c.quick {
+        let text = match &action.state {
+            Some(state) => format!("{} {} {}", action.key, action.label, state),
+            None => format!("{} {}", action.key, action.label),
+        };
+        let w = text_width(&text, scale * 0.85) + scale * 3.0;
+        if x + w > width - pad {
+            break;
+        }
+        // Three fills for three states, because they are three different facts:
+        // on, off, and "this client does not read it". An unhonored chip drawn
+        // like an off one would be the console lying about its own coverage,
+        // which is the failure the honesty rule exists to prevent.
+        let fill = if !action.honored {
+            [0.35, 0.12, 0.12, 0.5]
+        } else if action.active {
+            [0.29, 0.42, 0.94, 0.45]
+        } else {
+            [0.12, 0.14, 0.20, 0.7]
+        };
+        p.rect(x, chip_y, w - scale, line_h * 0.85, fill);
+        let ink = if !action.honored {
+            RED
+        } else if action.active {
+            WHITE
+        } else {
+            DIM
+        };
+        p.text(x + scale, chip_y + scale * 0.6, scale * 0.85, ink, &text);
+        x += w;
+    }
+
+    // The filter, on the right of the chip row where the browser puts its tabs.
+    let filter_text = if c.hidden > 0 {
+        format!("[{}]  {} HIDDEN", c.filter, c.hidden)
+    } else {
+        format!("[{}]", c.filter)
+    };
+    p.text_right(
+        width - pad,
+        chip_y + scale * 0.6,
+        scale * 0.85,
+        if c.hidden > 0 { AMBER } else { DIM },
+        &filter_text,
+    );
+
+    // ---- the input line -----------------------------------------------------
+    //
+    // On the floor of the panel, with the log growing upward from just above it,
+    // so the newest line is always adjacent to the caret.
+    let input_y = height - pad - line_h;
+    let prompt = format!("] {}", c.input);
+    p.text(pad, input_y, scale, AMBER, &prompt);
+    // A block caret, positioned by measuring the text to its left — the only way
+    // to place it that stays correct at any scale, since the font is fixed-width
+    // in *units* and not in pixels.
+    let caret_x = pad + text_width(&format!("] {}", &c.input[..c.cursor]), scale) + scale;
+    p.rect(
+        caret_x,
+        input_y,
+        scale,
+        scale * 7.0,
+        [0.94, 0.83, 0.54, 0.55],
+    );
+
+    let mut y = input_y - line_h;
+
+    // What the selected completion actually *is*. The browser carries a type and
+    // a description on every autocomplete row; a row here is one line of 5x7
+    // glyphs with no room for either, so it is spelled out once for the selected
+    // one — which is the half that was being read anyway.
+    if let Some(detail) = c.detail {
+        p.text(pad, y, scale * 0.8, [0.55, 0.62, 0.75, 1.0], detail);
+        y -= line_h * 0.9;
+    }
+
+    // Completions, immediately under the caret where the eye already is.
+    if !c.suggestions.is_empty() {
+        let mut x = pad;
+        for (i, item) in c.suggestions.iter().enumerate() {
+            let selected = i == c.suggestion;
+            let w = text_width(item, scale * 0.85) + scale * 2.0;
+            if selected {
+                p.rect(
+                    x - scale,
+                    y - scale,
+                    w,
+                    line_h * 0.85,
+                    [0.29, 0.42, 0.94, 0.35],
+                );
+            }
+            p.text(x, y, scale * 0.85, if selected { WHITE } else { DIM }, item);
+            x += w + scale * 2.0;
+            if x > width - pad {
+                break;
+            }
+        }
+        y -= line_h;
+    }
+
+    // ---- the scrollback -----------------------------------------------------
+    //
+    // Newest first, painted upward until the panel runs out. Iterating from the
+    // back is what makes `scroll` mean "lines back from the bottom" — the only
+    // definition under which new output does not shift what you are reading.
+    //
+    // `c.lines` is already filtered, so `scroll` counts visible lines and a tab
+    // change cannot leave the view parked in the middle of nothing.
+    let top = pad + line_h * 2.0;
+    let stamp_column = text_width("00:00", scale * 0.8) + scale * 1.5;
+    for entry in c.lines.iter().rev().skip(c.scroll) {
+        if y < top {
+            break;
+        }
+        let color = match entry.tone {
+            Tone::Echo => DIM,
+            Tone::Output => WHITE,
+            Tone::Error => RED,
+            Tone::Note => GREEN,
+        };
+        // The stamp is always dim, whatever the line is: it is not part of the
+        // message, and a red timestamp on an error line reads as the time itself
+        // being the problem.
+        p.text(pad, y, scale * 0.8, [0.35, 0.40, 0.50, 1.0], &entry.stamp());
+        p.text(pad + stamp_column, y, scale, color, &entry.text);
+        y -= line_h;
+    }
+
+    if c.scroll > 0 {
+        // Scrolled up, so what is on screen is not the newest thing. Said out
+        // loud: a console silently showing history is a console that looks like
+        // it stopped responding.
+        p.text_right(
+            width - pad,
+            input_y,
+            scale * 0.85,
+            AMBER,
+            &format!("SCROLLED BACK {}", c.scroll),
+        );
+    }
+}
+
+/// A room id, short enough to sit in a header.
+///
+/// The ids are uuid-shaped and the browser prints the first eight characters,
+/// which is the part a player reads out to a friend anyway. Truncated by bytes
+/// because these are hex; anything else would need a char boundary.
+fn short_room(room: &str) -> &str {
+    &room[..room.len().min(8)]
+}
+
+/// The radar, drawn over the map's floor plan.
+///
+/// The browser's `Radar.tsx` is the reference for the look — 110 cubes across,
+/// rotated so up is where you are looking, teammates blue and spotted enemies
+/// red — and this is deliberately *not* a port of how it draws. That version
+/// rasterises the map into an offscreen canvas once and blits it with a
+/// transform; there is no image and no transform here, so the plan arrives as
+/// merged runs (`radar::floor_plan`) and each one is drawn as an oriented thick
+/// line. See `radar.rs` for why that is the cheap shape.
+///
+/// **Rotated, not north-up.** North-up is easier to draw and much harder to read
+/// under pressure: it makes every glance a mental rotation before it is
+/// information.
+fn paint_radar(p: &mut Painter, r: &RadarView, u: f32) {
+    // 76 HUD units is the browser's 168 px on the 800-tall canvas it was tuned
+    // against, which is what keeps the two clients the same size on screen
+    // rather than the same number of pixels.
+    let radius = u * 38.0;
+    let cx = MARGIN * u + radius;
+    let cy = MARGIN * u + radius;
+    let per_cube = (radius * 2.0) / radar::SPAN;
+
+    // The instrument's own ground, so the map underneath does not read through
+    // the floor plan as more floor plan.
+    p.disc(cx, cy, radius, 48, [0.031, 0.047, 0.071, 0.72]);
+
+    // Canvas's own rotation, reproduced: `ctx.rotate(-yaw - PI/2)` in a y-down
+    // space. Looking along +x must put "ahead" at the top of the instrument, and
+    // getting the sign wrong here yields a radar that is *plausible* — it turns
+    // when you turn — and mirrored.
+    let angle = -r.yaw - std::f32::consts::FRAC_PI_2;
+    let (sin, cos) = angle.sin_cos();
+    let project = |wx: f32, wy: f32| -> (f32, f32) {
+        let lx = (wx - r.x) * per_cube;
+        let ly = (wy - r.y) * per_cube;
+        (lx * cos - ly * sin, lx * sin + ly * cos)
+    };
+
+    let half_span = radar::SPAN * 0.5;
+    for run in r.plan {
+        // Cull by row before transforming. A 256×256 map is thousands of runs
+        // and all but a band of them are off the instrument; rotating each one
+        // to discover that is the whole cost of the radar.
+        if (run.y - r.y).abs() > half_span {
+            continue;
+        }
+        let a = project(run.x0, run.y);
+        let b = project(run.x1, run.y);
+        // Cut to the rim rather than drawn and hoped for: there is no clip here,
+        // and an uncut floor plan is a square minimap inside a round frame.
+        let Some((a, b)) = radar::clip_to_circle(a, b, radius) else {
+            continue;
+        };
+        p.line(
+            cx + a.0,
+            cy + a.1,
+            cx + b.0,
+            cy + b.1,
+            per_cube,
+            [0.549, 0.667, 0.824, 0.16],
+        );
+    }
+
+    for blip in r.blips {
+        let (bx, by) = project(blip.x, blip.y);
+        if (bx * bx + by * by).sqrt() > radius {
+            continue;
+        }
+        // The enemy is drawn the larger of the two, as in the browser: a
+        // teammate is context and an enemy is the reason you looked.
+        let (size, color) = if blip.friendly {
+            (u * 1.45, [0.345, 0.651, 1.0, 0.95])
+        } else {
+            (u * 1.72, RED)
+        };
+        p.disc(cx + bx, cy + by, size, 12, color);
+    }
+
+    // Us, last and **unrotated**: an arrow at the centre pointing up, which is
+    // the fixed reference everything else on the instrument is read against.
+    let s = u * 1.1;
+    let tip = (cx, cy - s * 2.6);
+    let right = (cx + s * 2.0, cy + s * 2.2);
+    let notch = (cx, cy + s * 1.1);
+    let left = (cx - s * 2.0, cy + s * 2.2);
+    p.tri(tip, right, notch, GREEN);
+    p.tri(tip, notch, left, GREEN);
+
+    // The rim, over everything, so the plan's cut edge reads as an edge.
+    p.ring(
+        cx,
+        cy,
+        radius - u * 0.35,
+        radius,
+        [0.706, 0.784, 0.902, 0.28],
+    );
+}
+
 fn name_of(name: &str, id: &str) -> String {
     let raw = if name.is_empty() { id } else { name };
     // Uppercased because the font has one case, and clipped because a long
@@ -801,6 +1240,41 @@ impl<'a> Painter<'a> {
                     color,
                 });
             }
+        }
+    }
+
+    /// A filled circle at a caller-chosen resolution.
+    ///
+    /// `segments` is a parameter rather than `ring`'s fixed 72 because the two
+    /// uses are three orders of magnitude apart in size: the radar's ground is
+    /// drawn once and wants to look round, while a blip is three pixels across
+    /// and twelve segments is already more than the screen can show. Reusing
+    /// `ring(.., 0.0, r, ..)` for both would spend 432 vertices per blip to draw
+    /// a dot.
+    fn disc(&mut self, cx: f32, cy: f32, r: f32, segments: usize, color: [f32; 4]) {
+        let segments = segments.max(3);
+        for i in 0..segments {
+            let a0 = (i as f32 / segments as f32) * std::f32::consts::TAU;
+            let a1 = ((i + 1) as f32 / segments as f32) * std::f32::consts::TAU;
+            for position in [
+                self.ndc(cx, cy),
+                self.ndc(cx + a0.cos() * r, cy + a0.sin() * r),
+                self.ndc(cx + a1.cos() * r, cy + a1.sin() * r),
+            ] {
+                self.out.push(OverlayVertex { position, color });
+            }
+        }
+    }
+
+    /// One triangle, in pixels. The only free-form primitive here, and it exists
+    /// for the radar's own arrow — the one shape on this HUD that is neither
+    /// axis-aligned nor a segment.
+    fn tri(&mut self, a: (f32, f32), b: (f32, f32), c: (f32, f32), color: [f32; 4]) {
+        for (x, y) in [a, b, c] {
+            self.out.push(OverlayVertex {
+                position: self.ndc(x, y),
+                color,
+            });
         }
     }
 
@@ -1065,6 +1539,67 @@ fn glyph(ch: char) -> [u8; 7] {
         '_' => [
             0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b11111,
         ],
+        // The console's punctuation. Added when the developer console landed:
+        // a `=`, a bracket or a quote with no shape draws an invisible column,
+        // so a line the player typed and a line the console echoes back would
+        // silently differ — in the one surface whose whole job is to say
+        // exactly what happened.
+        // A backslash, for the Windows paths a `player.get_pos` or an error out
+        // of a Python handler will eventually print.
+        '\\' => [
+            0b00000, 0b10000, 0b01000, 0b00100, 0b00010, 0b00001, 0b00000,
+        ],
+        '=' => [
+            0b00000, 0b00000, 0b11111, 0b00000, 0b11111, 0b00000, 0b00000,
+        ],
+        '(' => [
+            0b00010, 0b00100, 0b01000, 0b01000, 0b01000, 0b00100, 0b00010,
+        ],
+        ')' => [
+            0b01000, 0b00100, 0b00010, 0b00010, 0b00010, 0b00100, 0b01000,
+        ],
+        '[' => [
+            0b01110, 0b01000, 0b01000, 0b01000, 0b01000, 0b01000, 0b01110,
+        ],
+        ']' => [
+            0b01110, 0b00010, 0b00010, 0b00010, 0b00010, 0b00010, 0b01110,
+        ],
+        '{' => [
+            0b00110, 0b01000, 0b01000, 0b11000, 0b01000, 0b01000, 0b00110,
+        ],
+        '}' => [
+            0b01100, 0b00010, 0b00010, 0b00011, 0b00010, 0b00010, 0b01100,
+        ],
+        '"' => [
+            0b01010, 0b01010, 0b01010, 0b00000, 0b00000, 0b00000, 0b00000,
+        ],
+        '*' => [
+            0b00000, 0b10101, 0b01110, 0b11111, 0b01110, 0b10101, 0b00000,
+        ],
+        ';' => [
+            0b00000, 0b00100, 0b00000, 0b00000, 0b00100, 0b00100, 0b01000,
+        ],
+        '#' => [
+            0b01010, 0b11111, 0b01010, 0b01010, 0b01010, 0b11111, 0b01010,
+        ],
+        '@' => [
+            0b01110, 0b10001, 0b10111, 0b10101, 0b10111, 0b10000, 0b01110,
+        ],
+        '&' => [
+            0b01100, 0b10010, 0b10100, 0b01000, 0b10101, 0b10010, 0b01101,
+        ],
+        '|' => [
+            0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+        '$' => [
+            0b00100, 0b01111, 0b10100, 0b01110, 0b00101, 0b11110, 0b00100,
+        ],
+        '~' => [
+            0b00000, 0b00000, 0b01001, 0b10110, 0b00000, 0b00000, 0b00000,
+        ],
+        '^' => [
+            0b00100, 0b01010, 0b10001, 0b00000, 0b00000, 0b00000, 0b00000,
+        ],
         // Bottomless reserve. The browser writes ∞ and so does this, rather than
         // a large number that looks like a count.
         '∞' => [
@@ -1111,6 +1646,8 @@ mod tests {
             net_graph: 0,
             scoreboard: None,
             scores: &[],
+            radar: None,
+            console: None,
         }
     }
 
@@ -1166,6 +1703,8 @@ mod tests {
                 id: "me".into(),
                 weapon: 2,
                 hit: true,
+                origin: [0.0; 3],
+                ends: Vec::new(),
             },
             "me",
         );
@@ -1444,5 +1983,382 @@ mod tests {
         // Lowercase is folded rather than dropped: every string here is
         // uppercased on the way in, but a weapon name comes from the server.
         assert_eq!(glyph('a'), glyph('A'));
+    }
+
+    #[test]
+    fn the_font_can_draw_what_a_console_line_is_made_of() {
+        // Console text is not HUD text: it is whatever the player types and
+        // whatever a Python handler prints back. A missing glyph there is worse
+        // than a hole in the ammo counter, because the console's whole job is to
+        // report exactly what happened — and `server.bots.add(count=3)` is four
+        // characters of punctuation the HUD never needed.
+        for ch in "=(){}[]\"'*;#@&|$~^_,%!?\\<".chars() {
+            assert_ne!(glyph(ch), [0; 7], "no glyph for {ch:?}");
+        }
+    }
+
+    /// One scrollback line, at a stated time.
+    ///
+    /// The time is set explicitly rather than left to `Console`, because the
+    /// painter draws a stamp and a test that took the real clock would assert
+    /// against whatever second it happened to run in.
+    fn log_line(text: &str, tone: Tone) -> LogLine {
+        LogLine {
+            text: text.into(),
+            tone,
+            at: 12.0,
+            channels: 0,
+        }
+    }
+
+    /// The console, with some lines in it, as a view.
+    fn console_view<'a>(
+        lines: &'a [&'a LogLine],
+        input: &'a str,
+        quick: &'a [crate::console::QuickAction],
+    ) -> ConsoleView<'a> {
+        ConsoleView {
+            lines,
+            input,
+            cursor: input.len(),
+            scroll: 0,
+            suggestions: &[],
+            suggestion: 0,
+            detail: None,
+            registry_loaded: true,
+            filter: "ALL",
+            hidden: 0,
+            room: "95783cd7-1111",
+            map: "hd_atrium",
+            rtt: Some(2.5),
+            cheats: Some(false),
+            quick,
+        }
+    }
+
+    fn quick(
+        label: &'static str,
+        state: Option<&str>,
+        honored: bool,
+    ) -> crate::console::QuickAction {
+        crate::console::QuickAction {
+            key: "F1",
+            label,
+            state: state.map(|s| s.to_string()),
+            active: false,
+            honored,
+            command: "draw.hitboxes 1".into(),
+        }
+    }
+
+    #[test]
+    fn an_open_console_draws_and_a_closed_one_costs_nothing() {
+        let lines = vec![log_line("net.graph = 2", Tone::Output)];
+        let refs: Vec<&LogLine> = lines.iter().collect();
+        let hud = Hud::default();
+
+        let mut closed = Vec::new();
+        hud.build(&view(Some(&alive())), &mut closed);
+
+        let mut open = Vec::new();
+        let me = alive();
+        let mut v = view(Some(&me));
+        v.console = Some(console_view(&refs, "net.graph 2", &[]));
+        hud.build(&v, &mut open);
+
+        assert!(
+            open.len() > closed.len(),
+            "an open console has to be more geometry than a closed one"
+        );
+    }
+
+    #[test]
+    fn the_console_opens_even_before_there_is_a_world() {
+        // `playing: false` used to be an early return, which would have made the
+        // console the one panel unavailable while connecting — the exact moment
+        // somebody wants it.
+        let lines = vec![log_line("connecting", Tone::Note)];
+        let refs: Vec<&LogLine> = lines.iter().collect();
+        let hud = Hud::default();
+        let mut v = view(None);
+        v.playing = false;
+        v.console = Some(console_view(&refs, "", &[]));
+        let mut out = Vec::new();
+        hud.build(&v, &mut out);
+        assert!(
+            !out.is_empty(),
+            "the console must draw with no body in the world"
+        );
+    }
+
+    #[test]
+    fn the_quick_action_row_is_drawn() {
+        // The chips are the browser's toolbar, and the whole reason they exist
+        // is to be *visible* — a row that silently drew nothing would look
+        // exactly like a client that had not implemented them.
+        let lines = vec![log_line("ready", Tone::Note)];
+        let refs: Vec<&LogLine> = lines.iter().collect();
+        let hud = Hud::default();
+        let me = alive();
+
+        let mut bare = Vec::new();
+        let mut v = view(Some(&me));
+        v.console = Some(console_view(&refs, "", &[]));
+        hud.build(&v, &mut bare);
+
+        let chips = [
+            quick("HITBOXES", Some("ON"), true),
+            quick("WIREFRAME", None, false),
+        ];
+        let mut with_chips = Vec::new();
+        let mut v = view(Some(&me));
+        v.console = Some(console_view(&refs, "", &chips));
+        hud.build(&v, &mut with_chips);
+
+        assert!(
+            with_chips.len() > bare.len(),
+            "the quick-action chips have to draw"
+        );
+    }
+
+    #[test]
+    fn the_console_stays_inside_the_window() {
+        // The same guarantee `everything_drawn_lands_on_the_screen` makes for
+        // the rest of the HUD. A scrollback painted upward from the input line
+        // is the one block here whose height is not bounded by its own layout —
+        // and the header, the chip row and the completion detail all eat into
+        // the space it has, so this has to hold with every one of them present.
+        let lines: Vec<LogLine> = (0..200)
+            .map(|i| {
+                log_line(
+                    &format!("LINE {i} WITH SOME REASONABLY LONG TEXT ON IT"),
+                    Tone::Output,
+                )
+            })
+            .collect();
+        let refs: Vec<&LogLine> = lines.iter().collect();
+        let chips: Vec<crate::console::QuickAction> = (0..8)
+            .map(|_| quick("HITBOXES", Some("OFF"), true))
+            .collect();
+        let hud = Hud::default();
+        let me = alive();
+        let mut v = view(Some(&me));
+        let mut cv = console_view(&refs, "SERVER.BOTS.ADD(COUNT=3)", &chips);
+        cv.detail = Some("draw.hitboxes <bool> client = 0 (default 0) - draw hitboxes");
+        cv.hidden = 42;
+        v.console = Some(cv);
+        let mut out = Vec::new();
+        hud.build(&v, &mut out);
+        for vertex in &out {
+            let [x, y] = vertex.position;
+            assert!(
+                (-1.2..=1.2).contains(&x) && (-1.2..=1.2).contains(&y),
+                "a console vertex landed off screen at {x},{y}"
+            );
+        }
+    }
+
+    fn radar_view<'a>(plan: &'a [Run], blips: &'a [Blip], yaw: f32) -> RadarView<'a> {
+        RadarView {
+            plan,
+            x: 50.0,
+            y: 50.0,
+            yaw,
+            blips,
+        }
+    }
+
+    /// Where a blip landed on screen, as an offset from the radar's centre.
+    ///
+    /// Found by painting a radar with exactly one contact and taking the mean of
+    /// the vertices that carry its colour. Reading the geometry back is the only
+    /// way to test a painter that has no return value — and orientation is
+    /// exactly the kind of bug that leaves every unit test green.
+    fn blip_offset(blip: Blip, yaw: f32) -> (f32, f32) {
+        let hud = Hud::default();
+        let blips = [blip];
+        let mut v = view(None);
+        v.playing = true;
+        v.radar = Some(radar_view(&[], &blips, yaw));
+        let mut out = Vec::new();
+        hud.build(&v, &mut out);
+
+        let want = if blip.friendly {
+            [0.345, 0.651, 1.0, 0.95]
+        } else {
+            RED
+        };
+        let hits: Vec<[f32; 2]> = out
+            .iter()
+            .filter(|vert| vert.color == want)
+            .map(|vert| vert.position)
+            .collect();
+        assert!(!hits.is_empty(), "the blip was not drawn at all");
+        let n = hits.len() as f32;
+        let mx = hits.iter().map(|p| p[0]).sum::<f32>() / n;
+        let my = hits.iter().map(|p| p[1]).sum::<f32>() / n;
+
+        // The centre of the instrument, in the same clip space, from the layout
+        // constants rather than from a second guess at them.
+        let (w, h) = (v.width as f32, v.height as f32);
+        let u = (h / 360.0).round().max(2.0);
+        let radius = u * 38.0;
+        let cx = MARGIN * u + radius;
+        let cy = MARGIN * u + radius;
+        let ndc_cx = cx / w * 2.0 - 1.0;
+        let ndc_cy = 1.0 - cy / h * 2.0;
+        // Clip space is y-up; report y-down so "ahead is negative y" reads the
+        // way the layout does.
+        (mx - ndc_cx, -(my - ndc_cy))
+    }
+
+    #[test]
+    fn what_is_ahead_of_you_is_at_the_top_of_the_radar() {
+        // The orientation trap. A radar with the rotation sign wrong still turns
+        // when you turn, still shows contacts at the right distance, and is
+        // mirrored — which is worse than no radar, because it is trusted.
+        //
+        // Looking along +x, a contact further along +x is directly ahead.
+        let ahead = Blip {
+            x: 70.0,
+            y: 50.0,
+            friendly: false,
+        };
+        let (dx, dy) = blip_offset(ahead, 0.0);
+        assert!(dy < 0.0, "ahead must be up, got dy={dy}");
+        assert!(dx.abs() < 1e-3, "ahead must be centred, got dx={dx}");
+    }
+
+    #[test]
+    fn a_contact_to_your_right_is_drawn_to_the_right() {
+        // The half of the orientation a mirrored radar gets wrong while the
+        // "ahead is up" test above still passes.
+        //
+        // In this world +y is to the right of a body facing +x, which is what
+        // the movement code means by strafe-right.
+        let right = Blip {
+            x: 50.0,
+            y: 70.0,
+            friendly: false,
+        };
+        let (dx, dy) = blip_offset(right, 0.0);
+        assert!(dx > 0.0, "right must be right, got dx={dx}");
+        assert!(dy.abs() < 1e-3, "abeam must be level, got dy={dy}");
+    }
+
+    #[test]
+    fn turning_turns_the_radar_under_you() {
+        // The same contact, seen after a quarter turn to the right: what was
+        // ahead must now be abeam to the left.
+        let ahead = Blip {
+            x: 70.0,
+            y: 50.0,
+            friendly: false,
+        };
+        let (dx, dy) = blip_offset(ahead, std::f32::consts::FRAC_PI_2);
+        assert!(dx < 0.0, "got dx={dx}");
+        assert!(dy.abs() < 1e-3, "got dy={dy}");
+    }
+
+    #[test]
+    fn a_contact_beyond_the_span_is_not_drawn() {
+        // Off the instrument, not clamped to its edge: a blip pinned to the rim
+        // is a claim that somebody is standing there.
+        let hud = Hud::default();
+        let far = [Blip {
+            x: 50.0 + radar::SPAN,
+            y: 50.0,
+            friendly: false,
+        }];
+        let mut v = view(None);
+        v.playing = true;
+        v.radar = Some(radar_view(&[], &far, 0.0));
+        let mut out = Vec::new();
+        hud.build(&v, &mut out);
+        assert!(
+            !out.iter().any(|vert| vert.color == RED),
+            "a contact past the radar's span was drawn anyway"
+        );
+    }
+
+    #[test]
+    fn the_floor_plan_is_cut_at_the_rim() {
+        // There is no clip here, so an uncut plan is a square minimap inside a
+        // round frame. Checked as geometry: every vertex the plan contributes
+        // must be inside the instrument.
+        let hud = Hud::default();
+        // One run straight through the middle, far longer than the radar.
+        let plan = [Run {
+            y: 50.5,
+            x0: -500.0,
+            x1: 500.0,
+        }];
+        let mut v = view(None);
+        v.playing = true;
+        v.radar = Some(radar_view(&plan, &[], 0.0));
+        let mut out = Vec::new();
+        hud.build(&v, &mut out);
+
+        let (w, h) = (v.width as f32, v.height as f32);
+        let u = (h / 360.0).round().max(2.0);
+        let radius = u * 38.0;
+        let cx = MARGIN * u + radius;
+        let cy = MARGIN * u + radius;
+        let plan_color = [0.549, 0.667, 0.824, 0.16];
+        let mut seen = 0;
+        for vert in out.iter().filter(|vert| vert.color == plan_color) {
+            seen += 1;
+            // Back to pixels to compare against a radius in pixels.
+            let px = (vert.position[0] + 1.0) / 2.0 * w;
+            let py = (1.0 - vert.position[1]) / 2.0 * h;
+            let d = ((px - cx).powi(2) + (py - cy).powi(2)).sqrt();
+            assert!(
+                d <= radius + u,
+                "a floor-plan vertex sits {d:.1}px out, past a {radius:.1}px rim"
+            );
+        }
+        assert!(seen > 0, "the run was clipped away entirely");
+    }
+
+    #[test]
+    fn a_radar_that_was_not_asked_for_draws_nothing() {
+        // `None` is Train and the seconds before a welcome — a radar there would
+        // have to invent the position it is centred on.
+        let hud = Hud::default();
+        let mut before = Vec::new();
+        hud.build(&view(None), &mut before);
+        let mut v = view(None);
+        v.radar = None;
+        let mut after = Vec::new();
+        hud.build(&v, &mut after);
+        assert_eq!(before.len(), after.len());
+    }
+
+    #[test]
+    fn the_radar_shows_the_span_it_says_it_does() {
+        // Direction is only half of it: a radar with the right orientation and
+        // the wrong scale reads as an enemy being somewhere they are not, which
+        // is the same lie in a quieter voice. Pinned against the browser's own
+        // number — 110 cubes across the instrument — rather than against
+        // whatever this painter happens to do.
+        //
+        // The view is 800 tall, so `u` is 2 and the radar is 152 px across:
+        // 152 / 110 = 1.3818 px per cube.
+        let cubes = 10.5;
+        let ahead = Blip {
+            x: 50.0 + cubes,
+            y: 50.0,
+            friendly: false,
+        };
+        let (_, dy) = blip_offset(ahead, 0.0);
+        // `blip_offset` reports clip-space units; convert back to pixels against
+        // the same height the view declares.
+        let h = 800.0;
+        let px = -dy / 2.0 * h;
+        let expected = cubes * (2.0 * 38.0 * 2.0) / radar::SPAN;
+        assert!(
+            (px - expected).abs() < 0.5,
+            "{cubes} cubes ahead drew {px:.2}px out, expected {expected:.2}px"
+        );
     }
 }

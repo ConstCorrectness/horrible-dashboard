@@ -91,6 +91,7 @@ import { NadePool } from './nades';
 import { GrenadeController } from './utility';
 import { TrainingRange } from './training';
 import { equippedSkins, WeaponViewModel, type WeaponSkin } from './viewmodel';
+import { createPropEnvironment } from './models/weapons';
 import { World } from './world';
 
 /**
@@ -198,6 +199,11 @@ interface SceneHandle {
   /** Vertical field of view in degrees. A setting, so it has to reach the camera
    * after construction rather than only at it. */
   setFov: (degrees: number) => void;
+  /** Park the render loop, scheduling nothing. Used while the native client owns
+   * the GPU; the scene stays resident so `resume` costs one frame. */
+  suspend: () => void;
+  /** Re-arm the loop, discarding the time spent parked. */
+  resume: () => void;
   avatars: AvatarPool;
   /** The gun in your hands. Exposed so the key handler can start an inspect: it
    * is a *local* animation with no command behind it, so there is nothing on the
@@ -400,6 +406,30 @@ export function HorribleAssaultPanel() {
       active = false;
     };
   }, []);
+
+  /**
+   * Park the pane's render loop for the duration of a native match.
+   *
+   * The frame callback already declined to *draw* while the native client was
+   * up, but it kept re-arming itself, so a webview compositor woke at display
+   * rate on the same GPU the game wants exclusively. Parking schedules nothing
+   * at all. The scene is not torn down — `resume` is one frame, and the map is
+   * back the instant the native window exits, which was the reason the loop was
+   * left running in the first place.
+   *
+   * Keyed on `nativeRunning` rather than done inside `launchNative`, because the
+   * flag is also cleared by the status poll below (the process exiting on its
+   * own) and by the companion's Exit button — three call sites, one effect.
+   */
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    if (nativeRunning) scene.suspend();
+    else scene.resume();
+    // On unmount the scene effect's own cleanup cancels the frame, so there is
+    // nothing to undo here: resuming a loop that is being torn down would only
+    // schedule one more callback into a disposed renderer.
+  }, [nativeRunning]);
 
   useEffect(() => {
     let active = true;
@@ -828,6 +858,13 @@ export function HorribleAssaultPanel() {
       // The gun in your hands. Parented to the camera by the constructor, which
       // is also what puts the camera in the scene graph.
       const viewmodel = new WeaponViewModel(THREE, scene, camera);
+      // The weapon props are physically-based and metallic; the world is not.
+      // Confined to the view model rather than set as `scene.environment`
+      // precisely so the map's Lambert surfaces and the operator keep the look
+      // the shared light rig gives them — this exists to stop the gun in your
+      // hands rendering as a black silhouette, not to relight the game.
+      const propEnvironment = createPropEnvironment(THREE, renderer);
+      viewmodel.setEnvironment(propEnvironment);
 
       const setMesh = (world: World): number => {
         if (mesh) {
@@ -912,6 +949,9 @@ export function HorribleAssaultPanel() {
       observer.observe(mountRef.current);
 
       let raf = 0;
+      // Whether the loop has been parked (the native client is playing). Parked
+      // means *nothing scheduled* — see `suspend` below.
+      let suspended = false;
       let last = performance.now();
       const started = last;
       let fpsAccum = 0;
@@ -924,13 +964,11 @@ export function HorribleAssaultPanel() {
         const dt = Math.max(0, (now - last) / 1000);
         last = now;
 
-        // **Nothing is drawn while the native client is playing.** The pane is
-        // covered by the companion overlay, so this scene is invisible — and it
-        // is a full WebGL render, in a compositing webview, on the same GPU the
-        // game is trying to have to itself. The loop is kept alive rather than
-        // cancelled so the map is back the instant the native window exits, and
-        // `last` is updated above so the first frame back is not a two-minute
-        // `dt`.
+        // Belt and braces for the frame or two between the native client
+        // starting and the effect below parking the loop. The real saving is
+        // `suspend`, not this: returning here still leaves a callback firing at
+        // display rate. `last` is updated above, so this frame's time is spent
+        // rather than accumulated.
         if (nativeRunningRef.current) return;
 
         const world = worldRef.current;
@@ -1266,6 +1304,33 @@ export function HorribleAssaultPanel() {
       };
       raf = requestAnimationFrame(frame);
 
+      /**
+       * Park the render loop entirely.
+       *
+       * Not the same as skipping the draw. While the native client is playing
+       * this scene is invisible behind the companion overlay, but a scheduled
+       * `requestAnimationFrame` still wakes the webview's compositor at display
+       * rate on the very GPU the game is trying to have to itself. The scene,
+       * its geometry and the pools all stay resident, so `resume` puts the map
+       * back on the next frame rather than rebuilding it.
+       */
+      const suspend = () => {
+        if (suspended) return;
+        suspended = true;
+        cancelAnimationFrame(raf);
+        raf = 0;
+      };
+
+      const resume = () => {
+        if (!suspended) return;
+        suspended = false;
+        // Before re-arming, not after: `now - last` would otherwise be the whole
+        // length of the native match. `step` clamps its own `dt`, but the FPS
+        // accumulator and `backdrop.update(elapsed)` do not.
+        last = performance.now();
+        raf = requestAnimationFrame(frame);
+      };
+
       const setFov = (degrees: number) => {
         camera.fov = degrees;
         camera.updateProjectionMatrix();
@@ -1274,12 +1339,20 @@ export function HorribleAssaultPanel() {
       sceneRef.current = {
         setMesh,
         setFov,
+        suspend,
+        resume,
         avatars,
         weapon: viewmodel,
         reveal,
         backdrop,
         camera: camera as never,
       };
+      // If a native match is already in flight, this loop is born parked. The
+      // effect keyed on `nativeRunning` cannot do it: it ran before this scene
+      // existed, so without this a scene rebuilt mid-match would come up armed
+      // and stay that way until the native window exited.
+      if (nativeRunningRef.current) suspend();
+
       // Unblocks the map load, which has been waiting rather than polling.
       sceneReadyRef.current?.resolve();
 

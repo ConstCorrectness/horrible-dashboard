@@ -23,6 +23,8 @@
  */
 import type * as THREE from 'three';
 
+import { PROP_ENV_INTENSITY, fitWeaponModel, loadWeaponModel } from './models/weapons';
+
 import { MOVE_SPEED } from './player';
 import { createDetailTexture } from './surfaces';
 
@@ -260,6 +262,8 @@ interface Built extends Shape {
   /** This model's own resources, freed when it is swapped out. */
   geometries: THREE.BufferGeometry[];
   materials: THREE.Material[];
+  /** Overwritten when a prop lands and the muzzle moves to its barrel. */
+  muzzle: [number, number, number];
 }
 
 /**
@@ -305,6 +309,18 @@ export class WeaponViewModel {
   /** Geometries created by the build in progress, collected by `box`/`tube`. */
   private building: THREE.BufferGeometry[] = [];
 
+  /**
+   * Which weapon+skin the in-flight prop load belongs to.
+   *
+   * A swap mid-download is the whole reason this exists: the fetch is async and
+   * `setWeapon` is not, so a pistol's GLB can land after the player has already
+   * switched to the sniper. Stamping the request and checking it on arrival is
+   * what stops the wrong gun appearing in your hands a second after you changed
+   * weapons — a race that is invisible on a fast connection and reliable on a
+   * slow one.
+   */
+  private propToken = '';
+
   private flash: THREE.Mesh | null = null;
   private flashAge = FLASH_LIFE;
   private kick = 0;
@@ -335,6 +351,12 @@ export class WeaponViewModel {
   private accent!: THREE.MeshPhongMaterial;
   /** Fine grain, shared by all four. Owned here and freed with them. */
   private grain: THREE.Texture | null = null;
+
+  /**
+   * What a metallic prop reflects. `null` renders it nearly black — see
+   * `createPropEnvironment`, which is why the panel builds one.
+   */
+  private environment: THREE.Texture | null = null;
 
   constructor(
     private readonly three: typeof THREE,
@@ -402,6 +424,106 @@ export class WeaponViewModel {
       materials: [flashMat],
     };
     this.building = [];
+
+    // The boxes are already in your hands by this point. The prop, if there is
+    // one, arrives behind them — see `models/weapons.ts` for why this is not
+    // awaited.
+    this.requestProp(id, skinKey, skin);
+  }
+
+  /**
+   * Fetch this weapon's prop and swap it in for the boxes when it lands.
+   *
+   * Every exit is a no-op that leaves the boxes standing: no prop for this
+   * weapon, a failed fetch, or the player having swapped weapons since. That is
+   * the design — a prop is an upgrade over a working model, never a dependency
+   * of one.
+   */
+  private requestProp(id: string, skinKey: string, skin: WeaponSkin | null): void {
+    const token = `${id}|${skinKey}`;
+    this.propToken = token;
+    void loadWeaponModel(id)
+      .then((asset) => {
+        // Three ways to be stale, and they are all the same check: the weapon
+        // changed, the skin changed, or the view model was disposed while the
+        // fetch was in flight.
+        if (!asset || this.propToken !== token || !this.built) return;
+        const built = this.built;
+        const { model, muzzle } = fitWeaponModel(this.three, asset.prototype, built.group);
+
+        // The skin tints the prop rather than repainting it: these materials
+        // carry real texture maps, and `color` multiplies the base colour map.
+        // White is not a special case here — it is the identity, which is
+        // exactly what "no skin" should mean.
+        const tint = skin ? paletteFor(skin).body : 0xffffff;
+        const materials: THREE.Material[] = [];
+        model.traverse((obj) => {
+          const mesh = obj as THREE.Mesh;
+          if (!mesh.isMesh) return;
+          for (const mat of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+            const tinted = mat as THREE.MeshStandardMaterial;
+            tinted.color?.setHex(tint);
+            // Without this the weapon is a silhouette: a metal has no diffuse
+            // term, so analytic lights alone leave it with nothing to return.
+            tinted.envMap = this.environment;
+            tinted.envMapIntensity = PROP_ENV_INTENSITY;
+            tinted.needsUpdate = true;
+            materials.push(mat);
+          }
+        });
+
+        // The boxes go, the flash stays: it belongs to *this* barrel and its
+        // position is recomputed from the prop's own muzzle. Removing the
+        // children rather than the group keeps the group's rest rotation and
+        // everything hanging off it, including the flash.
+        for (const child of [...built.group.children]) {
+          if (child !== this.flash) built.group.remove(child);
+        }
+        for (const geo of built.geometries) geo.dispose();
+        built.geometries = [];
+        built.group.add(model);
+        // The prop is exported already oriented, so it needs none of the box
+        // model's resting rotation — that was a property of how the boxes were
+        // built, not of how a weapon is held.
+        built.group.rotation.set(0, 0, 0);
+        built.muzzle = muzzle;
+        if (this.flash) this.flash.position.set(muzzle[0], muzzle[1], muzzle[2] - 0.2);
+        // Tracked so `release` frees them: a clone owns its own materials.
+        built.materials.push(...materials);
+      })
+      .catch((err) => {
+        // Said once, not swallowed: the boxes still render, so the only symptom
+        // of a broken URL is a weapon that never gets its model and no reason
+        // given anywhere.
+        console.warn(`hassault: could not load the ${id} prop`, err);
+      });
+  }
+
+  /**
+   * Hand the view model the environment its props reflect.
+   *
+   * Separate from the constructor because building one needs the **renderer**,
+   * and the view model deliberately never sees one — it owns a piece of the
+   * scene graph, not a way to draw it. Applied to props only, so the world's
+   * Lambert surfaces and the operator are untouched by it.
+   */
+  setEnvironment(environment: THREE.Texture | null): void {
+    this.environment = environment;
+    const built = this.built;
+    if (!built) return;
+    // Applied to whatever is already in the hands, so an environment arriving
+    // after a prop has loaded is not silently ignored until the next swap.
+    built.group.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      for (const mat of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+        const standard = mat as THREE.MeshStandardMaterial;
+        if (!('envMap' in standard)) continue;
+        standard.envMap = environment;
+        standard.envMapIntensity = PROP_ENV_INTENSITY;
+        standard.needsUpdate = true;
+      }
+    });
   }
 
   /** A shot left the barrel this frame: kick the model and light the muzzle. */
@@ -598,10 +720,22 @@ export class WeaponViewModel {
     const built = this.built;
     this.built = null;
     this.flash = null;
+    // Any prop still in flight now belongs to nothing. Cleared rather than
+    // cancelled because a fetch cannot be un-sent — the arrival checks this.
+    this.propToken = '';
     if (!built) return;
     this.pivot.remove(built.group);
     for (const geo of built.geometries) geo.dispose();
     for (const mat of built.materials) mat.dispose();
+    // A prop's geometry belongs to the clone, not to `building`, so it is not in
+    // `geometries`. Walked here instead: a clone shares its prototype's buffers
+    // in three, so this disposes the *instance's* meshes only when they are its
+    // own — which `BufferGeometry.dispose` is safe to call for either way, since
+    // the prototype is never rendered.
+    built.group.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      if (mesh.isMesh && mesh.geometry) mesh.geometry.dispose();
+    });
   }
 
   // ---- the models -----------------------------------------------------------

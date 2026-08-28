@@ -679,6 +679,91 @@ def test_a_teammate_looking_at_them_paints_them_for_you():
     assert enemy.id in room.spotted_by(me)
 
 
+def test_every_player_on_a_team_gets_the_identical_radar():
+    """The invariant the per-team computation rests on.
+
+    An enemy is painted when *anybody* on your side can see them, so the answer
+    depends on the viewer only through their team. If that ever stopped being
+    true, computing it once per team would start handing players a radar that is
+    not theirs — so it is asserted rather than assumed.
+    """
+    room = make_room()
+    me = room.add("@rob", None)
+    mate = room.add("@mate", None)
+    blind = room.add("@blind", None)
+    mate.team = blind.team = me.team
+    enemy = room.add("@enemy", None)
+    enemy.team = 1 - me.team
+    # Only the mate can see the enemy; the other two are facing away.
+    place(me, 10, 10, yaw=math.pi)
+    place(blind, 11, 10, yaw=math.pi)
+    place(mate, 30, 10, yaw=0.0)
+    place(enemy, 40, 10)
+
+    assert room.spotted_by(me) == room.spotted_by(mate) == room.spotted_by(blind)
+    assert enemy.id in room.spotted_by(blind)
+
+
+def test_each_team_gets_its_own_radar_and_not_the_other_ones():
+    """The failure mode worth guarding: computing per team must not become
+    computing one radar and giving it to everybody.
+
+    Set up so the two sides genuinely differ — team 0 is looking at team 1, and
+    team 1 is looking away — and assert the sighted side sees and the blind side
+    does not.
+    """
+    room = make_room()
+    seer = room.add("@seer", None)
+    seer.team = 0
+    hidden = room.add("@hidden", None)
+    hidden.team = 1
+    place(seer, 10, 10, yaw=0.0)
+    place(hidden, 30, 10, yaw=0.0)  # facing further away, not back at the seer
+
+    by_team = room.spotted_by_team()
+    assert by_team[0] == [hidden.id]
+    assert by_team[1] == []
+    # And the per-team map agrees with asking each player individually, which is
+    # the equivalence the refactor has to preserve.
+    for player in room.players.values():
+        assert by_team[player.team] == room.spotted_by(player)
+
+
+def test_a_team_with_nobody_on_it_has_no_radar_entry():
+    """`private_view_for` falls back rather than assuming the key is there."""
+    room = make_room()
+    solo = room.add("@solo", None)
+    solo.team = 0
+    place(solo, 10, 10)
+    by_team = room.spotted_by_team()
+    assert set(by_team) == {0}
+    # The fallback path, exercised through the packet a player actually receives.
+    assert room.private_view_for(solo, by_team)["spotted"] == []
+
+
+def test_broadcast_gives_each_player_their_own_teams_radar():
+    """End to end through `_broadcast`, which is what computes the map once."""
+    room = make_room()
+    seer = room.add("@seer", None)
+    seer.team = 0
+    hidden = room.add("@hidden", None)
+    hidden.team = 1
+    place(seer, 10, 10, yaw=0.0)
+    place(hidden, 30, 10, yaw=0.0)
+
+    spotted = room.spotted_by_team()
+    rows = [p.snapshot(0.0) for p in room.players.values()]
+    shared = room.shared_view()
+    seer_packet = room.snapshot_message(
+        0.0, rows, shared, seer.ack, room.private_view_for(seer, spotted)
+    )
+    hidden_packet = room.snapshot_message(
+        0.0, rows, shared, hidden.ack, room.private_view_for(hidden, spotted)
+    )
+    assert seer_packet["data"]["you"]["spotted"] == [hidden.id]
+    assert hidden_packet["data"]["you"]["spotted"] == []
+
+
 def test_spotting_is_per_recipient_and_never_shared():
     room = make_room()
     me = room.add("@rob", None)

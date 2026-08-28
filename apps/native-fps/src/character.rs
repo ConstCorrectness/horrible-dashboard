@@ -628,7 +628,7 @@ const CHUNK_BIN: u32 = 0x004E_4942;
 /// Deliberately narrow. Any *other* required extension is left in place and
 /// still rejected: silently stripping requirements is how you end up rendering a
 /// file wrong instead of failing to render it.
-fn normalise_glb(bytes: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn normalise_glb(bytes: &[u8]) -> Result<Vec<u8>, String> {
     if bytes.len() < 12 || &bytes[0..4] != b"glTF" {
         return Err("not a GLB: bad magic".into());
     }
@@ -724,7 +724,7 @@ fn normalise_glb(bytes: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 /// Decode one glTF image to RGBA8.
-fn decode_image(image: &gltf::Image, blob: Option<&[u8]>) -> Result<TextureImage, String> {
+pub(crate) fn decode_image(image: &gltf::Image, blob: Option<&[u8]>) -> Result<TextureImage, String> {
     let bytes: &[u8] = match image.source() {
         gltf::image::Source::View { view, .. } => {
             let blob = blob.ok_or("operator GLB has no binary chunk")?;

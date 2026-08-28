@@ -107,15 +107,24 @@ impl Quality {
         }
     }
 
-    /// How far the fog reaches, in cubes. Shorter is cheaper only in the sense
-    /// that it hides distance — but it is also the most visible difference
-    /// between the levels, and a quality setting whose effect is invisible is one
-    /// people flip back and forth wondering whether it did anything.
-    pub fn fog_end(self) -> f32 {
+    /// The exponential-squared fog's density, in inverse cubes.
+    ///
+    /// Denser is cheaper only in the sense that it hides distance — but it is
+    /// also the most visible difference between the levels, and a quality
+    /// setting whose effect is invisible is one people flip back and forth
+    /// wondering whether it did anything.
+    ///
+    /// **High is exactly the browser's `FogExp2` density**, not a value picked
+    /// to look close: at High the two clients are meant to be the same picture,
+    /// and the lower levels trade distance for fill rate from there. A density
+    /// rather than the linear end distance this used to return, because a linear
+    /// ramp has an exponential one's shape nowhere along its length — see the
+    /// fog note in `lighting.wgsl.inc`.
+    pub fn fog_density(self) -> f32 {
         match self {
-            Quality::Low => 150.0,
-            Quality::Medium => 260.0,
-            Quality::High => 380.0,
+            Quality::Low => 0.0110,
+            Quality::Medium => 0.0075,
+            Quality::High => 0.0055,
         }
     }
 
@@ -171,7 +180,7 @@ impl CrosshairStyle {
         }
     }
 
-    fn parse(s: &str) -> CrosshairStyle {
+    pub fn parse(s: &str) -> CrosshairStyle {
         match s {
             "crossDot" => CrosshairStyle::CrossDot,
             "dot" => CrosshairStyle::Dot,

@@ -126,6 +126,42 @@ def test_ws_telemetry_channel_is_not_recorded() -> None:
     assert not [e for e in recorder.recent() if e.source == "ws"]
 
 
+def test_hassault_snapshots_are_not_recorded() -> None:
+    """The match snapshot is skipped, and the rest of the channel is not.
+
+    It is the largest repeated payload on the socket — the whole player table,
+    every grenade and every effect, to every player, twenty times a second — and
+    each tick looks like the last. Recording it cost two more `json.dumps` of
+    that payload per frame on every tick whether or not the panel was open.
+    """
+    recorder.clear()
+    record_ws_frame("out", {"channel": "hassault", "event": "snapshot", "data": {}})
+    assert not [e for e in recorder.recent() if e.source == "ws"]
+
+    # Joins, the killfeed, invites and results are small and individually
+    # interesting, so the channel is not skipped wholesale.
+    record_ws_frame("out", {"channel": "hassault", "event": "welcome", "data": {}})
+    assert [e for e in recorder.recent() if e.source == "ws"]
+
+
+def test_the_registered_observer_leaves_the_snapshot_fast_path_live() -> None:
+    """Importing the app must not disable the match server's pre-serialised send.
+
+    `backend/app.py` registers an observer unconditionally at import, so asking
+    "is an observer registered?" is permanently true and would make
+    `MatchServer._template_or_none` dead code in every real process while still
+    passing every unit test that never imports the app. `is_observed` asks per
+    event instead; this pins the answer under the real registration.
+    """
+    from backend.modules.ws import is_observed
+
+    # `app` is imported at the top of this module, so the real observer is in
+    # force here — that is the whole point of asserting it from this file.
+    assert app is not None
+    assert is_observed("hassault", "snapshot") is False
+    assert is_observed("hassault", "welcome") is True
+
+
 def test_outbound_call_is_recorded() -> None:
     recorder.clear()
 

@@ -152,6 +152,10 @@ async def match_status(args: dict[str, Any]) -> dict[str, Any]:
             for p in room.players.values()
         ],
         "capacity": MAX_PLAYERS,
+        # What the tick actually costs, against the 50 ms it has. The loop sleeps
+        # the remainder of the interval, so a room running out of budget slows
+        # down without ever saying so — this is where you find out.
+        "tick": room.stats.report(),
     }
 
 
@@ -479,7 +483,10 @@ def register_hassault_tools() -> None:
         handler=console_exec_tool,
         group="hassault",
         parameters={
-            "command": {"type": "string", "description": "Command string or Python script."},
+            "command": {
+                "type": "string",
+                "description": "Command string or Python script.",
+            },
             "room": {"type": "string", "description": "Optional match room id."},
         },
         required=["command"],
@@ -491,7 +498,10 @@ def register_hassault_tools() -> None:
         handler=run_macro_tool,
         group="hassault",
         parameters={
-            "name": {"type": "string", "description": "Macro name, e.g. warmup, bot_1v5."},
+            "name": {
+                "type": "string",
+                "description": "Macro name, e.g. warmup, bot_1v5.",
+            },
             "room": {"type": "string", "description": "Optional match room id."},
         },
         required=["name"],
@@ -536,4 +546,3 @@ async def run_macro_tool(args: dict[str, Any]) -> dict[str, Any]:
         "error": res.error,
         "affected_cvars": res.affected_cvars,
     }
-

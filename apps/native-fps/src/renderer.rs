@@ -48,6 +48,62 @@ pub struct Vertex {
     pub color: [f32; 3],
 }
 
+/// A vertex of a translucent volume: smoke, fire.
+///
+/// A separate type from `Vertex` rather than a fourth field on it, because the
+/// alpha is only ever needed by this one pass and widening `Vertex` would put
+/// four bytes on every one of a map's ~200,000 world vertices to carry a number
+/// that is always 1.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct VolumeVertex {
+    pub position: [f32; 3],
+    pub normal: [f32; 3],
+    pub color: [f32; 4],
+    /// Which shading this vertex wants: `MODE_CLOUD` or `MODE_FLAT`.
+    ///
+    /// An explicit field rather than an implicit signal — the tempting trick is
+    /// a zero normal, since no sphere produces one — because the whole pass is
+    /// shared by two things that look nothing alike, and a convention encoded in
+    /// the *absence* of data is one nobody finds when it breaks. Four bytes on a
+    /// buffer that holds a few thousand vertices is not a cost worth being
+    /// clever about.
+    pub mode: f32,
+}
+
+/// Volume shading: the noisy interior of a smoke or fire cloud.
+pub const MODE_CLOUD: f32 = 0.0;
+/// Volume shading: flat colour, for tracers, impacts and blast shells, which are
+/// *thin* and would be mottled to nothing by the cloud noise.
+pub const MODE_FLAT: f32 = 1.0;
+
+impl VolumeVertex {
+    const ATTRS: [wgpu::VertexAttribute; 4] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4, 3 => Float32];
+
+    fn layout() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<VolumeVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRS,
+        }
+    }
+}
+
+/// How many volume vertices the cloud buffer can hold.
+///
+/// This buffer carries **both** the clouds and the effects, and the budget test
+/// below has now moved it twice: 16384 → 32768 when a full team's smokes came to
+/// 18,432, then → 65536 when tracers and impacts joined the same pass and a
+/// shotgun volley from everyone at once put it past 48,000. Neither number was
+/// wrong when it was written; both were wrong the moment something else started
+/// sharing the buffer, which is exactly the failure `MAX_BODY_VERTS` had and
+/// nobody noticed for a whole rewrite.
+///
+/// Overflow is reported (see `set_volumes`) rather than quietly dropping a smoke
+/// somebody is standing behind.
+const MAX_VOLUME_VERTS: usize = 65536;
+
 impl Vertex {
     const ATTRS: [wgpu::VertexAttribute; 3] =
         wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3];
@@ -78,30 +134,83 @@ impl OverlayVertex {
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct CameraUniform {
     view_proj: [[f32; 4]; 4],
-    /// `[fog_end, detail, 0, 0]` — the quality level, as the shader reads it.
-    /// Packed into the camera's own buffer rather than given a second binding:
-    /// a uniform buffer's minimum size is 16 bytes, so two floats and two of
-    /// padding is exactly what a separate one would have cost.
+    /// `[fog_density, detail, reveal_height, receives_shadow]` — the quality
+    /// level, as the shader reads it. Packed into the camera's own buffer rather
+    /// than given a second binding: a uniform buffer's minimum size is 16 bytes,
+    /// so a few floats and some padding is exactly what a separate one would
+    /// have cost. The last slot was that padding.
     params: [f32; 4],
+    /// `[progress, centre_x, centre_y, radius]` for the build-in. See `Reveal`.
+    ///
+    /// Here, in the *camera's* uniform, for a reason that is the whole design:
+    /// the world and the view model share one pipeline and one shader, and
+    /// differ only in which camera bind group is bound. Putting the reveal here
+    /// means the weapon in your hands is excluded from it by construction — its
+    /// own uniform simply carries a finished reveal — rather than by a branch
+    /// somebody has to remember to write.
+    reveal: [f32; 4],
+    /// Whatever takes a vertex of this draw into **world space, for lighting**.
+    ///
+    /// The identity for the world and the operators, whose vertices are already
+    /// there. For the view model it is the camera-to-world matrix, because that
+    /// pass's vertices are camera space and the sun, the fill and the shadow map
+    /// are all world space — see `Camera::camera_to_world`.
+    ///
+    /// Deliberately *not* folded into `view_proj`: the two answer different
+    /// questions (where does this land on screen, and where is this in the room),
+    /// and the view model is the whole reason they are allowed to disagree.
+    light_transform: [[f32; 4]; 4],
 }
 
 impl CameraUniform {
-    fn new(view_proj: glam::Mat4, video: Video) -> CameraUniform {
+    fn new(view_proj: glam::Mat4, video: Video, reveal: crate::reveal::Reveal) -> CameraUniform {
         CameraUniform {
             view_proj: view_proj.to_cols_array_2d(),
-            params: [video.quality.fog_end(), video.quality.detail(), 0.0, 0.0],
+            params: [
+                video.quality.fog_density(),
+                video.quality.detail(),
+                reveal.height(),
+                // Everything drawn in world space receives the sun's shadow. The
+                // view model opts out — see `attached_to`.
+                1.0,
+            ],
+            reveal: reveal.uniform(),
+            light_transform: glam::Mat4::IDENTITY.to_cols_array_2d(),
         }
+    }
+
+    /// The same camera, for a pass whose vertices are **camera space**.
+    ///
+    /// Two things, and they belong together because they are the same fact about
+    /// this pass. `camera_to_world` is what the lighting needs to shade a
+    /// camera-space normal against a world-space sun. And the shadow is switched
+    /// **off**, matching the browser: three only shadows a mesh with
+    /// `receiveShadow` set, and `HorribleAssaultPanel.tsx` sets it on the map's
+    /// mesh and on nothing else. Leaving it on here is not merely a difference —
+    /// the weapon is a hand's width from the eye, so it crosses a shadow edge as
+    /// a hard flicker across the whole model rather than as a shadow moving over
+    /// something.
+    fn attached_to(mut self, camera_to_world: glam::Mat4) -> CameraUniform {
+        self.light_transform = camera_to_world.to_cols_array_2d();
+        self.params[3] = 0.0;
+        self
     }
 }
 
 /// How many body vertices the dynamic buffer can hold.
 ///
-/// 16 players (the server's `MAX_PLAYERS`) × 6 box faces × 6 vertices = 576, and
-/// this leaves generous room. Sized once at startup so the per-frame path never
-/// allocates; overflow is **truncated rather than grown**, because a frame that
-/// silently reallocates is a frame that stutters, and dropping the seventeenth
-/// body is not a thing anyone can see.
-const MAX_BODY_VERTS: usize = 4096;
+/// **This was 4096, and it was wrong.** The comment justifying that number read
+/// "16 players × 6 box faces × 6 vertices = 576, generous room" — arithmetic
+/// that was true when a body *was* a box. `bodies.rs` became an articulated
+/// operator of some nineteen boxes, one body became **684** vertices, and the
+/// cap silently stopped fitting six players. Nothing failed: `set_bodies`
+/// truncates, so a full match simply stopped drawing its last players, and a
+/// body cut off mid-torso is not a symptom anyone would trace to a buffer size.
+///
+/// The budget is now asserted from the real builders rather than estimated —
+/// see `the_body_buffer_fits_a_full_match`. Sized once at startup so the
+/// per-frame path never allocates.
+const MAX_BODY_VERTS: usize = 32768;
 
 /// How many view-model vertices the weapon buffer can hold.
 ///
@@ -137,8 +246,37 @@ pub struct Renderer {
     world_verts: u32,
     body_buffer: wgpu::Buffer,
     body_verts: u32,
+    /// Smoke and fire: drawn in the main pass, after everything opaque, with
+    /// blending on and depth writes off. See `volume_pipeline`.
+    /// The build-in's clock, uploaded with the camera each frame.
+    reveal: crate::reveal::Reveal,
+    /// The same view projection with the build-in already **finished**.
+    ///
+    /// Bodies, grenades and hitbox wireframes are drawn with the world's
+    /// pipeline and would otherwise rise out of the floor with the map. The
+    /// browser reveals only the world material, and `skin.wgsl` declares a
+    /// `Camera` without the reveal field at all — so the skinned operators were
+    /// already exempt while the box fallback was not, which is two body paths
+    /// behaving differently for no reason anyone chose.
+    settled_camera_buffer: wgpu::Buffer,
+    settled_bind_group: wgpu::BindGroup,
+    volume_pipeline: wgpu::RenderPipeline,
+    volume_buffer: wgpu::Buffer,
+    volume_verts: u32,
     /// The weapon in your hands, in **camera space**. Its own uniform, because
     /// the pass that draws it uses a different projection and an identity view.
+    /// The weapon props, and the camera they are drawn through.
+    ///
+    /// A **third** camera uniform, and it has to be: the prop's vertices are in
+    /// its own model space, so its `view_proj` carries the view model's pose
+    /// baked in and its `light_transform` carries that pose *and* the way back
+    /// out to world space. The box view model's uniform has neither, because its
+    /// vertices arrive already posed.
+    props: crate::props_gpu::Props,
+    /// This frame's prop pose, from `WeaponViewModel::prop_model`.
+    prop_model: Option<glam::Mat4>,
+    prop_camera_buffer: wgpu::Buffer,
+    prop_bind_group: wgpu::BindGroup,
     viewmodel_buffer: wgpu::Buffer,
     viewmodel_verts: u32,
     viewmodel_camera_buffer: wgpu::Buffer,
@@ -296,7 +434,11 @@ impl Renderer {
 
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("camera"),
-            contents: bytemuck::cast_slice(&[CameraUniform::new(glam::Mat4::IDENTITY, video)]),
+            contents: bytemuck::cast_slice(&[CameraUniform::new(
+                glam::Mat4::IDENTITY,
+                video,
+                crate::reveal::Reveal::done(),
+            )]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
@@ -378,6 +520,30 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
+        let volume_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("volumes"),
+            size: (MAX_VOLUME_VERTS * std::mem::size_of::<VolumeVertex>()) as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Its own layout, carrying only the camera: this shader reads neither
+        // the detail texture nor the shadow map, and a pipeline layout that
+        // declared them would oblige every caller to keep those groups bound
+        // for a pass that never looks at them.
+        let volume_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("volume-layout"),
+            bind_group_layouts: &[Some(&camera_layout)],
+            immediate_size: 0,
+        });
+        let volume_pipeline = volume_pipeline(
+            &device,
+            &volume_layout,
+            &shader,
+            format,
+            video.quality.samples(),
+        );
+
         let viewmodel_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("viewmodel"),
             size: (MAX_VIEWMODEL_VERTS * std::mem::size_of::<Vertex>()) as wgpu::BufferAddress,
@@ -385,10 +551,32 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
+        let settled_camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("settled-camera"),
+            contents: bytemuck::cast_slice(&[CameraUniform::new(
+                glam::Mat4::IDENTITY,
+                video,
+                crate::reveal::Reveal::done(),
+            )]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let settled_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("settled-bind-group"),
+            layout: &camera_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: settled_camera_buffer.as_entire_binding(),
+            }],
+        });
+
         let viewmodel_camera_buffer =
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("viewmodel-camera"),
-                contents: bytemuck::cast_slice(&[CameraUniform::new(glam::Mat4::IDENTITY, video)]),
+                contents: bytemuck::cast_slice(&[CameraUniform::new(
+                    glam::Mat4::IDENTITY,
+                    video,
+                    crate::reveal::Reveal::done(),
+                )]),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });
 
@@ -400,6 +588,26 @@ impl Renderer {
                 resource: viewmodel_camera_buffer.as_entire_binding(),
             }],
         });
+
+        let prop_camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("prop-camera"),
+            contents: bytemuck::cast_slice(&[CameraUniform::new(
+                glam::Mat4::IDENTITY,
+                video,
+                crate::reveal::Reveal::done(),
+            )]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let prop_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("prop-bind-group"),
+            layout: &camera_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: prop_camera_buffer.as_entire_binding(),
+            }],
+        });
+        let props =
+            crate::props_gpu::Props::new(&device, &camera_layout, format, video.quality.samples());
 
         // The HUD's own pipeline: no camera, no depth, and **alpha blending**,
         // which is the one state that differs from everything else drawn here.
@@ -540,6 +748,16 @@ impl Renderer {
             world_verts: vertices.len() as u32,
             body_buffer,
             body_verts: 0,
+            reveal: crate::reveal::Reveal::done(),
+            settled_camera_buffer,
+            settled_bind_group,
+            volume_pipeline,
+            volume_buffer,
+            volume_verts: 0,
+            props,
+            prop_model: None,
+            prop_camera_buffer,
+            prop_bind_group,
             viewmodel_buffer,
             viewmodel_verts: 0,
             viewmodel_camera_buffer,
@@ -619,6 +837,13 @@ impl Renderer {
 
     /// Replace the body geometry for this frame.
     pub fn set_bodies(&mut self, vertices: &[Vertex]) {
+        if vertices.len() > MAX_BODY_VERTS {
+            // Truncation is still the behaviour — a frame that reallocated would
+            // stutter — but it is no longer silent. This exact overflow went
+            // unnoticed through a whole rewrite of `bodies.rs` because the only
+            // symptom was a player not being there.
+            crate::divergence::note_overflow("bodies", vertices.len(), MAX_BODY_VERTS);
+        }
         let count = vertices.len().min(MAX_BODY_VERTS);
         self.body_verts = count as u32;
         if count > 0 {
@@ -630,8 +855,52 @@ impl Renderer {
         }
     }
 
+    /// Set the build-in's state for this frame. See `reveal.rs`.
+    pub fn set_reveal(&mut self, reveal: crate::reveal::Reveal) {
+        self.reveal = reveal;
+    }
+
+    /// Replace this frame's translucent volumes.
+    pub fn set_volumes(&mut self, vertices: &[VolumeVertex]) {
+        if vertices.len() > MAX_VOLUME_VERTS {
+            crate::divergence::note_overflow("volumes", vertices.len(), MAX_VOLUME_VERTS);
+        }
+        let count = vertices.len().min(MAX_VOLUME_VERTS);
+        self.volume_verts = count as u32;
+        if count > 0 {
+            self.queue.write_buffer(
+                &self.volume_buffer,
+                0,
+                bytemuck::cast_slice(&vertices[..count]),
+            );
+        }
+    }
+
     /// Replace the weapon geometry for this frame.
     ///
+    /// Whether a prop for this weapon is already uploaded.
+    pub fn holds_prop(&self, weapon: &str) -> bool {
+        self.props.holds(weapon)
+    }
+
+    /// Upload a parsed weapon prop, replacing whatever was in the hands.
+    pub fn set_prop(&mut self, weapon: &str, prop: &crate::prop::Prop) {
+        self.props.set(&self.device, &self.queue, weapon, prop);
+    }
+
+    /// Go back to the box model.
+    pub fn clear_prop(&mut self) {
+        self.props.clear();
+    }
+
+    /// Where the resident prop is drawn, in the view model's own space.
+    ///
+    /// `None` leaves the prop pass drawing nothing, which is what the boxes
+    /// being the fallback means in practice.
+    pub fn set_prop_model(&mut self, model: Option<glam::Mat4>) {
+        self.prop_model = model;
+    }
+
     /// Already in camera space: `viewmodel.rs` applies the pivot's transform on
     /// the CPU, which is a few hundred matrix multiplies and saves a per-object
     /// uniform this renderer has no other use for.
@@ -675,19 +944,57 @@ impl Renderer {
         self.queue.write_buffer(
             &self.camera_buffer,
             0,
-            bytemuck::cast_slice(&[CameraUniform::new(vp, self.video)]),
+            bytemuck::cast_slice(&[CameraUniform::new(vp, self.video, self.reveal)]),
+        );
+        // The same camera, with the build-in already over. See
+        // `settled_bind_group`.
+        self.queue.write_buffer(
+            &self.settled_camera_buffer,
+            0,
+            bytemuck::cast_slice(&[CameraUniform::new(
+                vp,
+                self.video,
+                crate::reveal::Reveal::done(),
+            )]),
         );
 
         // The view model's projection, rebuilt with the window: its view matrix
         // is the identity, because its vertices *are* camera space. That is the
-        // whole of "parented to the camera" without a scene graph to do it.
+        // whole of "parented to the camera" without a scene graph to do it — and
+        // `attached_to` is the other half of that bargain, handing the shader the
+        // way back out to world space so the lighting still knows where the eye
+        // is standing.
         self.queue.write_buffer(
             &self.viewmodel_camera_buffer,
             0,
             bytemuck::cast_slice(&[CameraUniform::new(
                 viewmodel_projection(camera.fov, self.config.width, self.config.height),
                 self.video,
-            )]),
+                // Always finished: the weapon in your hands does not rise out of
+                // the floor with the map. This is the whole reason the reveal
+                // lives in the camera's uniform rather than in one of its own.
+                crate::reveal::Reveal::done(),
+            )
+            .attached_to(camera.camera_to_world())]),
+        );
+
+        // The prop's camera. Its vertices are in the model's own space, so the
+        // view model's pose is folded into **both** matrices: into `view_proj`
+        // to place it on screen, and into `light_transform` so a model-space
+        // normal reaches world space through the same pose. Feeding the second
+        // one without the pose gives a weapon whose shading ignores every kick,
+        // bob and sway the first one applies — lit as though it never moved.
+        let pose = self.prop_model.unwrap_or(glam::Mat4::IDENTITY);
+        let projection = viewmodel_projection(camera.fov, self.config.width, self.config.height);
+        self.queue.write_buffer(
+            &self.prop_camera_buffer,
+            0,
+            bytemuck::cast_slice(&[CameraUniform::new(
+                projection * pose,
+                self.video,
+                crate::reveal::Reveal::done(),
+            )
+            .attached_to(camera.camera_to_world() * pose)]),
         );
 
         use wgpu::CurrentSurfaceTexture as Cst;
@@ -736,11 +1043,14 @@ impl Renderer {
                     ops: wgpu::Operations {
                         // The fog colour, so geometry fading into the distance
                         // meets a matching background rather than a hard edge
-                        // against the void.
+                        // against the void. `FOG_COLOR` in `lighting.wgsl.inc`,
+                        // which is the browser's `0x11161f` horizon decoded to
+                        // linear — this is written to an sRGB surface, so a raw
+                        // hex here would come out three shades too pale.
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.02,
-                            g: 0.024,
-                            b: 0.035,
+                            r: 0.0056,
+                            g: 0.0080,
+                            b: 0.0137,
                             a: 1.0,
                         }),
                         store: wgpu::StoreOp::Store,
@@ -766,14 +1076,41 @@ impl Renderer {
             pass.set_vertex_buffer(0, self.world_buffer.slice(..));
             pass.draw(0..self.world_verts, 0..1);
             if self.body_verts > 0 {
+                // Bodies, grenades and hitbox wireframes: the same pipeline, a
+                // camera whose build-in is finished. A player standing in a map
+                // that is still arriving does not arrive with it.
+                pass.set_bind_group(0, &self.settled_bind_group, &[]);
                 pass.set_vertex_buffer(0, self.body_buffer.slice(..));
                 pass.draw(0..self.body_verts, 0..1);
+                pass.set_bind_group(0, &self.camera_bind_group, &[]);
             }
             // After the world and the untextured bodies, into the same depth
             // buffer: an operator behind a wall is hidden by the wall, and the
             // hitbox wireframes still overlay it.
             if let Some(characters) = self.characters.as_ref() {
-                characters.draw(&mut pass, &self.camera_bind_group, &self.shadow.bind_group);
+                // Settled, like the boxes above: `skin.wgsl` declares a
+                // `Camera` without the reveal field, so the skinned path ignored
+                // it either way — handing it the settled group makes the two
+                // body paths agree explicitly rather than by omission.
+                characters.draw(&mut pass, &self.settled_bind_group, &self.shadow.bind_group);
+            }
+
+            // Translucent volumes last, inside the *same* pass. Deliberately not
+            // a pass of its own: a second one would have to take over resolving
+            // the multisampled target, and that choice already moves between the
+            // main and view-model passes depending on whether a weapon is drawn.
+            // Adding a third claimant to it is how a frame ends up resolved
+            // twice, or not at all.
+            //
+            // Last because they blend: everything opaque has to be in the colour
+            // buffer already for a cloud to be blended *over* it.
+            if self.volume_verts > 0 {
+                pass.set_pipeline(&self.volume_pipeline);
+                // Re-bound because the volume pipeline has its own layout, which
+                // invalidates the groups the world pipeline had set.
+                pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.volume_buffer.slice(..));
+                pass.draw(0..self.volume_verts, 0..1);
             }
         }
 
@@ -808,6 +1145,11 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            // The prop first, then the box geometry — which with a prop loaded
+            // is only the muzzle flare, and has to land on top of the barrel it
+            // comes out of.
+            self.props.draw(&mut pass, &self.prop_bind_group);
+
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.viewmodel_bind_group, &[]);
             // The same pipeline, so the same layout: group 1 must be bound even
@@ -944,6 +1286,16 @@ impl Renderer {
                     video.quality.samples(),
                 );
             }
+            // And the prop pass, for the same reason and with the same failure:
+            // it draws into that attachment too, so a pipeline left at the old
+            // sample count is a validation error on the next frame rather than
+            // a weapon that merely looks wrong.
+            self.props.rebuild(
+                &self.device,
+                &self.camera_layout,
+                self.config.format,
+                video.quality.samples(),
+            );
         }
         if vsync_changed {
             let caps = self.surface.get_capabilities(&self.adapter);
@@ -1015,6 +1367,70 @@ fn world_pipeline(
         depth_stencil: Some(wgpu::DepthStencilState {
             format: DEPTH_FORMAT,
             depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Less),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState {
+            count: samples,
+            ..Default::default()
+        },
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// The translucent pass: smoke and fire.
+///
+/// Three departures from `world_pipeline`, each of which is a visible bug if
+/// forgotten:
+///
+/// - **`depth_write_enabled: false`.** A cloud that wrote depth would hide
+///   whatever is drawn after it — including the operators standing in it, which
+///   is the one thing a smoke must never do.
+/// - **`cull_mode: None`.** Walking into smoke has to fill the screen, and that
+///   means drawing the far wall of the sphere as seen from inside. With back
+///   faces culled a cloud simply vanishes as you enter it.
+/// - **Alpha blending**, obviously — but note it still `depth_compare: Less`, so
+///   a cloud behind a wall is hidden by the wall.
+fn volume_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    format: wgpu::TextureFormat,
+    samples: u32,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("volume-pipeline"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_volume"),
+            buffers: &[Some(VolumeVertex::layout())],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_volume"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(false),
             depth_compare: Some(wgpu::CompareFunction::Less),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
@@ -1276,5 +1692,99 @@ mod tests {
         assert_eq!(verts.len(), 2);
         assert_eq!(verts[1].position, [3.0, 4.0, 5.0]);
         assert_eq!(verts[1].color, [0.25, 0.25, 0.25]);
+    }
+}
+#[cfg(test)]
+mod budget {
+    use super::*;
+    use crate::api::HitboxSpec;
+    use crate::nades::NadePool;
+    use crate::protocol::{NadeRow, PlayerRow, ZoneRow};
+
+    /// The server's `MAX_PLAYERS`.
+    const MAX_PLAYERS: usize = 16;
+
+    fn crowd() -> Vec<PlayerRow> {
+        (0..MAX_PLAYERS)
+            .map(|i| PlayerRow {
+                id: format!("p{i}"),
+                alive: true,
+                x: i as f32 * 4.0,
+                y: 10.0,
+                z: 2.0,
+                ..Default::default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_body_buffer_fits_a_full_match() {
+        // The test that was missing. `MAX_BODY_VERTS` was 4096, justified by
+        // arithmetic that treated a body as one box — true when it was written,
+        // false once `bodies.rs` grew into an articulated operator of nineteen.
+        // A body became 684 vertices, six players stopped fitting, and the only
+        // symptom was a player not being drawn.
+        //
+        // Computed from the real builders rather than from a remembered number,
+        // so it re-measures itself whenever a body changes shape.
+        let rows = crowd();
+        let hitbox = HitboxSpec::default();
+        let mut verts = crate::bodies::build(&rows, "nobody", &hitbox);
+        // The debug overlay rides the same buffer, so it is part of the budget.
+        verts.extend(crate::bodies::build_hitboxes(&rows, "nobody", &hitbox));
+
+        // Plus every grenade a round could plausibly have in the air at once.
+        let mut pool = NadePool::default();
+        let thrown: Vec<NadeRow> = (0..MAX_PLAYERS)
+            .map(|i| NadeRow {
+                id: format!("n{i}"),
+                kind: "he".into(),
+                fuse: 0.4,
+                ..Default::default()
+            })
+            .collect();
+        pool.sync(&thrown, &[]);
+        pool.vertices(&mut verts);
+
+        assert!(
+            verts.len() <= MAX_BODY_VERTS,
+            "a full match needs {} body vertices and the buffer holds {MAX_BODY_VERTS}; \
+             the excess is silently not drawn",
+            verts.len()
+        );
+    }
+
+    #[test]
+    fn the_volume_buffer_fits_a_round_full_of_smoke() {
+        let mut pool = NadePool::default();
+        // Effects share this buffer, so they share the budget: a full team's
+        // worth of smoke *and* a shotgun volley from everyone at once.
+        let clouds: Vec<ZoneRow> = (0..MAX_PLAYERS)
+            .map(|i| ZoneRow {
+                id: format!("z{i}"),
+                kind: "smoke".into(),
+                r: 6.0,
+                left: 6.0,
+                duration: 12.0,
+                ..Default::default()
+            })
+            .collect();
+        pool.sync(&[], &clouds);
+        let mut out = Vec::new();
+        crate::nades::volume_vertices(&pool, &mut out);
+
+        let mut fx = crate::effects::EffectsPool::default();
+        for i in 0..MAX_PLAYERS {
+            // A shotgun is eight pellets, so eight tracers and eight impacts.
+            let ends: Vec<[f32; 3]> = (0..8).map(|p| [i as f32, p as f32, 2.0]).collect();
+            fx.shot([i as f32, 0.0, 2.0], &ends, false);
+        }
+        fx.vertices(&mut out);
+
+        assert!(
+            out.len() <= MAX_VOLUME_VERTS,
+            "{} volume vertices, buffer holds {MAX_VOLUME_VERTS}",
+            out.len()
+        );
     }
 }

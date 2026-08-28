@@ -182,13 +182,29 @@ fn tonemap(color: vec3<f32>) -> vec3<f32> {
 // The colour is the clear colour, so geometry fading into the distance meets a
 // matching background rather than a hard edge against the void.
 //
-// Applied **after** tone mapping, in display space: fogging before it means the
-// tone curve then lifts the fog itself, and the far end of a corridor comes back
-// grey instead of receding.
-const FOG_START: f32 = 40.0;
-const FOG_COLOR: vec3<f32> = vec3<f32>(0.02, 0.024, 0.035);
+// **Exponential-squared, and the same colour the browser uses**, which is the
+// point: this was a linear ramp from 40 cubes to a quality-dependent end, and a
+// linear fog does not have an exponential one's shape anywhere along its length
+// — near geometry the browser leaves untouched came out hazed, and the far end
+// of a long corridor came out of the ramp's end as a hard edge the browser
+// never had. `FogExp2(0x11161f, 0.0055)` is what `HorribleAssaultPanel.tsx`
+// sets, and `Quality::fog_density` returns exactly 0.0055 at High.
+//
+// The colour is that hex **decoded to linear**, because this is applied before
+// the surface's sRGB target encodes it. three mixes its fog in *after* the
+// colour-space encode (`fog_fragment` follows `colorspace_fragment` in every
+// three material) while still handing the shader a linearised uniform, so the
+// one thing that cannot be matched here without encoding by hand and giving up
+// the sRGB target is the blend *space* — mid-distance comes out a shade deeper
+// here than in the browser. The colour and the curve are the parts that read.
+//
+// Applied **after** tone mapping: fogging before it means the tone curve then
+// lifts the fog itself, and the far end of a corridor comes back grey instead
+// of receding.
+const FOG_COLOR: vec3<f32> = vec3<f32>(0.0056, 0.0080, 0.0137);
 
-fn apply_fog(color: vec3<f32>, view_depth: f32, fog_end: f32) -> vec3<f32> {
-    let t = clamp((view_depth - FOG_START) / (fog_end - FOG_START), 0.0, 1.0);
+fn apply_fog(color: vec3<f32>, view_depth: f32, density: f32) -> vec3<f32> {
+    let d = density * view_depth;
+    let t = clamp(1.0 - exp(-d * d), 0.0, 1.0);
     return mix(color, FOG_COLOR, t);
 }

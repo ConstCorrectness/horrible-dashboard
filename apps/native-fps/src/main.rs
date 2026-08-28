@@ -36,6 +36,7 @@ use hassault_native::api::NodeApi;
 use hassault_native::geometry;
 use hassault_native::net::{Incoming, MatchSocket};
 use hassault_native::protocol::{Command, Event};
+use hassault_native::radar;
 use hassault_native::settings::{Settings, SettingsWriter};
 use hassault_native::viewmodel;
 use hassault_native::world::World;
@@ -212,10 +213,19 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         .count();
     let world = World::new(info, &cubes)?;
     let mesh = geometry::build_world_mesh(&world);
+    // The radar's floor plan, merged once here beside the mesh rather than per
+    // frame — it is a property of the map, exactly as the mesh is. Built before
+    // `--check` returns so the check exercises it: a map that produces a plan
+    // nobody can draw should fail on a machine with no GPU, not on a player's.
+    let plan = radar::floor_plan(&world);
 
     eprintln!(
-        "hassault: {}×{} grid, {} spawns, {} triangles",
-        ssize, ssize, spawn_count, mesh.triangles
+        "hassault: {}×{} grid, {} spawns, {} triangles, {} radar runs",
+        ssize,
+        ssize,
+        spawn_count,
+        mesh.triangles,
+        plan.len()
     );
     if world.info.truncated {
         // The reader fills a short cube stream with defaults rather than
@@ -304,6 +314,29 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    // The developer console's registry. Non-fatal in the strongest sense: an
+    // older node has no such route, and the console still opens, still sends
+    // lines and still applies client CVars — it loses completion and the
+    // type/range validation that comes with a definition. Declaring a fallback
+    // table here instead would be a third copy of `console.py`'s list, and the
+    // way a third copy fails is a console offering commands the node has never
+    // heard of.
+    let definitions = match node.console_definitions() {
+        Ok(defs) => {
+            eprintln!(
+                "hassault: console registry — {} cvars, {} commands, {} macros",
+                defs.cvars.len(),
+                defs.commands.len(),
+                defs.macros.len()
+            );
+            defs
+        }
+        Err(e) => {
+            eprintln!("hassault: no console registry ({e}); completion is off");
+            Default::default()
+        }
+    };
+
     if args.check_only {
         return Ok(());
     }
@@ -321,7 +354,18 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             args.map
         );
         let event_loop = EventLoop::new()?;
-        let mut app = App::new(world, mesh, None, settings, writer, weapons, skins, hitbox);
+        let mut app = App::new(
+            world,
+            mesh,
+            None,
+            settings,
+            writer,
+            weapons,
+            skins,
+            hitbox,
+            definitions,
+            plan,
+        );
         event_loop.run_app(&mut app)?;
         return Ok(());
     }
@@ -360,6 +404,8 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         weapons,
         skins,
         hitbox,
+        definitions,
+        plan,
     );
     if args.mode == Mode::Host {
         // Queued, not sent: `add_bot` needs the room the welcome names, and it is
@@ -412,7 +458,25 @@ fn run_headless(socket: &mut MatchSocket) -> Result<(), Box<dyn std::error::Erro
                 // Headless never pings, so this only arrives if something else
                 // on the socket did. Nothing to report.
                 Incoming::Event(Event::Pong(_)) => {}
-                Incoming::Event(Event::Other(name)) => eprintln!("hassault: (ignored {name})"),
+                // Reported once per name by `protocol::classify`, which is
+                // where every consumer of this socket now learns what it is
+                // dropping — this loop used to be the only one that said so,
+                // and it is the one nobody plays in.
+                Incoming::Event(Event::Other(_)) => {}
+                Incoming::Event(Event::ConsoleRes(_)) => {}
+                // The headless watcher reports the room's membership, which is
+                // most of what it is for.
+                Incoming::Event(Event::Joined(j)) => {
+                    eprintln!("hassault: {} joined", j.player.name)
+                }
+                Incoming::Event(Event::Left(l)) => {
+                    eprintln!("hassault: {} left", l.player_id)
+                }
+                Incoming::Event(Event::Roster(_)) => {}
+                Incoming::Event(Event::Invite(i)) => {
+                    eprintln!("hassault: invite to room {} from {}", i.room, i.host_name)
+                }
+                Incoming::Event(Event::Invites(_)) => {}
                 Incoming::Closed(why) => {
                     eprintln!("hassault: connection closed: {why}");
                     return Ok(());

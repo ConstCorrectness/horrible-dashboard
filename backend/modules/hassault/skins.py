@@ -14,12 +14,15 @@ Implements the CS / CS2 skin architecture:
 
 from __future__ import annotations
 
+import logging
 import random
 import time
 import uuid
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 
 class Rarity(str, Enum):
@@ -353,6 +356,80 @@ SKIN_CATALOG: list[SkinDefinition] = [
 SKIN_DICT = {s.id: s for s in SKIN_CATALOG}
 
 
+#: How long a catalog read may reuse the last directory scan, in seconds.
+#:
+#: The catalog is consulted on every drop roll, every inventory read and every
+#: trade-up, and a directory scan plus a JSON parse per skin is not something to
+#: do inside a match tick. Short enough that installing a pack shows up without
+#: a restart; long enough that the scan is not on any hot path. `_invalidate` is
+#: what makes an install visible immediately rather than up to this late.
+_PACK_CACHE_TTL = 30.0
+
+_pack_cache: tuple[float, list[Any]] | None = None
+
+
+def _installed_skins() -> list[Any]:
+    """Skins from installed packs, cached. Never raises.
+
+    A failure to read the packs directory must not take the built-in catalog with
+    it: a player with a corrupt pack should lose that pack, not the game's own
+    skins. The import is local because `skinpacks` imports `SkinDefinition` back
+    out of this module.
+    """
+    global _pack_cache
+    import time
+
+    now = time.monotonic()
+    if _pack_cache is not None and now - _pack_cache[0] < _PACK_CACHE_TTL:
+        return _pack_cache[1]
+    try:
+        from backend.modules.hassault.skinpacks import installed_skins
+
+        found = installed_skins()
+    except Exception:  # pragma: no cover - a broken data dir must not be fatal
+        log.exception("hassault: could not read installed skin packs")
+        found = []
+    _pack_cache = (now, found)
+    return found
+
+
+def invalidate_pack_cache() -> None:
+    """Forget the cached pack scan. Called after an install or a removal."""
+    global _pack_cache
+    _pack_cache = None
+
+
+def catalog() -> list[SkinDefinition]:
+    """Every skin the node knows: the built-ins, then whatever is installed.
+
+    **Built-ins first, and a pack can never displace one.** `skinpacks` refuses a
+    manifest that redefines a built-in id at install time, so the two lists are
+    disjoint by construction and this concatenation cannot produce a duplicate.
+    The ordering still matters for anything that takes the first match: the
+    game's own skins are the ones whose behaviour is pinned by tests.
+    """
+    return [*SKIN_CATALOG, *(s.definition for s in _installed_skins())]
+
+
+def skin_dict() -> dict[str, SkinDefinition]:
+    """`catalog()` keyed by id, for the lookups that used `SKIN_DICT`."""
+    return {s.id: s for s in catalog()}
+
+
+def texture_url(skin_id: str) -> str | None:
+    """Where a skin's texture is served from, or `None` for a built-in.
+
+    Built-ins have no texture at all — their two colours are distributed across
+    the weapon's parts by `patternType`, which is what both clients have always
+    drawn. A pack skin may carry one, and a pack skin without one renders exactly
+    like a built-in.
+    """
+    for installed in _installed_skins():
+        if installed.definition.id == skin_id:
+            return installed.to_dict()["textureUrl"]
+    return None
+
+
 class SkinInventoryManager:
     """Manages player inventories, random drops, trade-up contracts, and AtlasDB sync."""
 
@@ -587,13 +664,14 @@ class SkinInventoryManager:
         if not target:
             return False
 
-        target_def = SKIN_DICT.get(target.skin_id)
+        known = skin_dict()
+        target_def = known.get(target.skin_id)
         if not target_def:
             return False
 
         # Unequip other skins for the same weapon slot
         for item in inv:
-            item_def = SKIN_DICT.get(item.skin_id)
+            item_def = known.get(item.skin_id)
             if item_def and item_def.weapon_id == target_def.weapon_id:
                 item.is_equipped = False
 
@@ -695,9 +773,10 @@ class SkinInventoryManager:
         weights = [DROP_WEIGHTS[r] for r in rarities]
         chosen_rarity = random.choices(rarities, weights=weights, k=1)[0]
 
-        matching_skins = [s for s in SKIN_CATALOG if s.rarity == chosen_rarity]
+        pool = catalog()
+        matching_skins = [s for s in pool if s.rarity == chosen_rarity]
         if not matching_skins:
-            matching_skins = SKIN_CATALOG
+            matching_skins = pool
 
         chosen_skin = random.choice(matching_skins)
         # Beta distribution for float value: biases toward Field-Tested / Minimal Wear
@@ -746,13 +825,14 @@ class SkinInventoryManager:
             return None
 
         # Verify all items share the exact same rarity
-        first_def = SKIN_DICT.get(selected_items[0].skin_id)
+        known = skin_dict()
+        first_def = known.get(selected_items[0].skin_id)
         if not first_def:
             return None
 
         current_rarity = first_def.rarity
         for item in selected_items:
-            item_def = SKIN_DICT.get(item.skin_id)
+            item_def = known.get(item.skin_id)
             if not item_def or item_def.rarity != current_rarity:
                 return None  # Mismatched rarity
 
@@ -761,7 +841,7 @@ class SkinInventoryManager:
             return None  # Already max rarity (Special)
 
         next_rarity = RARITY_ORDER[rarity_idx + 1]
-        next_pool = [s for s in SKIN_CATALOG if s.rarity == next_rarity]
+        next_pool = [s for s in catalog() if s.rarity == next_rarity]
         if not next_pool:
             return None
 

@@ -827,6 +827,393 @@ thing that just happened and needs no ledger. It is `claim_level_drop` — reser
 then roll — that the banner goes through. Keeping them separate is why a finished
 match does not quietly consume a level's entitlement.
 
+### Converting a weapon model into a prop
+
+`scripts/build_hassault_weapon.mjs` (`pnpm build:hassault-weapon`), sharing
+`scripts/lib/three-headless.mjs` with the character build.
+
+Both clients draw weapons as procedural boxes. This produces the alternative: one
+GLB per weapon, scaled to cube units, oriented so the barrel runs down `-Z`, with
+its PBR maps wired up — the same shape the operator GLB has.
+
+```bash
+node scripts/build_hassault_weapon.mjs --model assets/horribleAssault/beretta-92 --inspect
+```
+
+`--inspect` measures and writes nothing, which is how you find out what the other
+flags should be. Then:
+
+```bash
+node scripts/build_hassault_weapon.mjs --model assets/horribleAssault/beretta-92 --length 0.6 --forward +z --out apps/web/public/hassault-weapon-pistol.glb
+```
+
+#### Five things it exists to get right
+
+Each was found by measuring the actual downloads, and each fails silently.
+
+**There is no shared unit.** Measured across three models: the Beretta's longest
+bounding-box axis is 21.4 for a ~21.7 cm pistol (centimetres); the Remington's is
+463.9 for a ~104 cm shotgun (~0.22 cm per unit); the M4A1's is 20.0 for a ~84 cm
+carbine (~4.2 cm per unit) — a 450× spread with nothing in any file saying which.
+So scale is **derived from a stated real length**, exactly as the character build
+derives its from `--height`: you say how long the weapon is in cubes and the box
+is measured to get there. A converter that assumed centimetres would render two
+of those three at the wrong size, and being wrong by 20× is not subtle — the
+weapon is either invisible or it fills the screen.
+
+**Which way it points is not derivable.** A rifle pointing backwards has exactly
+the same bounding box as one pointing forwards, so `--forward` is required and
+the script refuses to guess. It reports which axis is longest (`z`, `z` and `x`
+for the three above), so `--inspect` gives you the letter and you supply the sign.
+
+**The maps are not in the FBX.** Every material comes back from `FBXLoader` with
+no maps at all bar one normal map, while the PBR set sits unreferenced in a
+sibling `textures/` directory under a different naming scheme per model. They are
+matched by name (`MAP_PATTERNS`), anchored to the **end** of the stem so
+`M4_Colour_Variant_Normal.png` is a normal map rather than a colour one. The
+bare single-letter forms are not redundant with the underscored ones: the
+Beretta's maps are literally `D.png`, `N.png`, `Metal.png` and `rough.png`, so
+requiring a separator matched two of four and silently lost its base colour and
+its normals — worse than matching none, because a half-wired material looks
+deliberate.
+
+Textures are grouped into **sets** by stripping the map suffix, because these
+models carry several (`svu_a_sniper_rifle_texset_*`, `..._scope_texset_*`,
+`..._lens_texset_*`) and pouring them all into one material gives the rifle its
+own scope's paint. A material picks its set by longest shared prefix, since
+neither side is authoritative — the FBX says `R870 Express Tactical` and the
+files say `R870_Express_Tactical_Basecolor`, agreeing on everything but
+separators and case.
+
+**Phong is not PBR, and glTF packs two maps into one.** `FBXLoader` produces
+`MeshPhongMaterial`; glTF's model is metallic-roughness with a **single**
+texture carrying roughness in G and metalness in B. Exported as-is, metalness and
+roughness are dropped and the weapon has a base colour and no surface response.
+Every material is converted to `MeshStandardMaterial`, and the two maps are
+packed with sharp — `GLTFExporter` will do that packing itself by drawing onto a
+canvas, which the headless shims cannot do, and it surfaces as
+`context.fillRect is not a function` long after the interesting part of the
+conversion has succeeded. The packed texture is assigned to **both** slots as the
+same object, which is what makes the exporter take its already-packed branch.
+Occlusion rides in R, where glTF expects it. A missing roughness map fills with
+255 and a missing metalness with 0, never the other way round: zero roughness is
+a mirror finish and a black occlusion channel is a weapon in permanent shadow.
+
+**A prop is geometry and nothing else.** The Remington's FBX carries a light and
+a camera. An exported prop that lights the room it is carried through is a bug
+nobody would go looking for in a *model* — it reads as the renderer's lighting
+being wrong — so lights and cameras are stripped and the count reported.
+
+#### The state of the four models
+
+| Model | Triangles | Longest axis | Usable |
+| --- | --- | --- | --- |
+| `beretta-92` | 5.4k | `z` | yes |
+| `remington-870-express-tactical` | 28k | `z` | yes |
+| `carbine-m4a1` | **687k**, 25 meshes | `x` | needs decimating first |
+| `svu-a-sniper-rifle` | 25k | `z` | yes, once its `source/dragunov_svu.zip` is extracted |
+| `m4-carbine-rifle` | — | — | mesh is inside a `.rar` |
+
+687k triangles is not a viewmodel — the entire `hd_atrium` world draws about 32k.
+The script warns above 40k rather than refusing, because what counts as too many
+is a judgement about the target machine that a converter has no business making;
+but decimation belongs in Blender, since three has no simplifier worth using at a
+98% reduction. An archive that still holds its mesh is named explicitly in the
+error, because the directory looks complete until you go looking for the FBX.
+
+:::note The two builds share their headless shims
+`FBXLoader` and `GLTFExporter` are written for a browser and reach for
+`OffscreenCanvas`, `FileReader` and `URL.createObjectURL` whether or not a pixel
+needs drawing. `scripts/lib/three-headless.mjs` carries the encoded bytes
+straight through instead, so nothing is rasterised and no map is re-compressed on
+the way out. It was extracted from the character build when this one needed the
+same thing, and it is shared rather than copied because two of its pieces are
+subtle enough to drift into being wrong without failing: the `FileReader` shim
+must not resolve synchronously (the exporter installs its handler *after*
+calling), and `resolveFlips` has to bake every flip out before the exporter runs.
+The extraction is verified by the operator GLB rebuilding to a byte-identical
+sha256.
+:::
+
+### Drawing the props: both clients
+
+`packages/core/src/modules/hassault/models/weapons.ts` +
+`apps/native-fps/src/{prop.rs,props_gpu.rs,prop.wgsl}`.
+
+Three weapons now render as real models — pistol, shotgun, sniper. `assault` and
+`knife` do not, and that is the answer rather than a gap: the M4A1 is 687k
+triangles and there is no knife model. **A weapon with no prop keeps its
+procedural boxes**, which is a complete working weapon and was the only kind
+there was. `tests/browser_parity.rs` pins the two clients' lists equal, because a
+weapon that is a model in one and boxes in the other is invisible from either
+side alone — each renders something that looks deliberate.
+
+The fallback is the design, not politeness. In the browser the boxes are built
+**first** and a GLB is swapped in behind them if one arrives, so a missing model,
+a 404 and a load still in flight all render the same working weapon; making the
+view model wait would leave a player who deployed on a slow connection holding
+nothing, and an empty hand reads as a broken client rather than a pending fetch.
+Natively every failure — no GLB, a parse error, a prop that will not fit — falls
+back the same way, and a *parse* failure is reported through
+`divergence::note_prop`, since silently drawing boxes because an asset is corrupt
+looks exactly like a weapon that simply has no model.
+
+#### The fit is measured, not tuned
+
+Both clients place a prop by translating it so its **bounding-box centre** lands
+on the box model's. Everything the pose is expressed in — `HOME`, the bob, the
+sway, the recoil kick, the muzzle — is relative to that space, so a prop that
+occupies it needs none of them changed, and re-running the converter with a
+different `--length` moves the model rather than breaking the pose.
+
+Centres and not origins, and that is the whole of it: the converter puts a
+prop's origin at the rear of its box, which on a rifle is the buttstock, while
+the box models are built around roughly where a hand is. Matching origins hangs
+every rifle a foot in front of the screen. The muzzle flash moves to the prop's
+own barrel for the same reason — left at the box model's muzzle it hangs in the
+air beside the gun.
+
+A prop is drawn **without** the box model's `rest` rotation. That constant
+describes how a pile of boxes had to be turned to look like a weapon; the GLB is
+exported already oriented.
+
+#### A metal with nothing to reflect renders black
+
+The browser needed one thing the boxes never did. A metallic surface in a
+physically-based renderer has **no diffuse response at all** — it only reflects —
+and the hassault scene is lit purely by analytic lights, so every prop came out a
+silhouette. Measured on the SVU with the game's own rig: mean luminance 3.5/255
+and 93% of its pixels near-black with no environment, against 41.2 and 21% with
+one. It looks exactly like textures that failed to load.
+
+`createPropEnvironment` builds one, and three details in it each cost a debugging
+round:
+
+- **The gradient is the hemisphere light's own two colours**, not a studio box.
+  `RoomEnvironment` is the usual answer and it is wrong here — it would light the
+  gun in your hands from a room that is not the map you are standing in, and a
+  weapon lit differently from its surroundings reads as pasted on. That is the
+  same failure `lighting.wgsl.inc` exists to prevent between the two clients.
+- **An equirectangular map is twice as wide as it is tall**, and it must not be
+  tiny. Both were wrong first time and neither failed: a 16×32 portrait source
+  drove `PMREMGenerator` to a degenerate 336×16 output that rendered **pure
+  black**, indistinguishable from having no environment at all. A metal sphere
+  lit by it had zero non-black pixels. 128×64 prefilters to a sane pyramid.
+- **It is prefiltered.** A raw texture assigned as an environment ignores
+  roughness, so a matte grip comes out as shiny as a barrel.
+
+`PROP_ENV_INTENSITY` is 1.55 because that is the scene's hemisphere intensity and
+the environment encodes its colours at 1.0 — the factor that puts the two on the
+same footing, not a number picked because it looked better. Nothing clips at it,
+or at 2.2: the headroom is real and the weapons are simply dark.
+
+It is applied to the **view model only**, never as `scene.environment`. The map's
+Lambert surfaces and the operator keep exactly the look the shared rig gives
+them; this exists to stop the gun rendering as a silhouette, not to relight the
+game.
+
+#### The native side is a third pipeline
+
+`prop.rs` is a separate parser from `character.rs`, and `prop.wgsl` a third
+shader beside `shader.wgsl` and `skin.wgsl`. Both splits come from the same fact:
+a weapon has textures but no bones.
+
+- The operator is **skinned**, so its vertex positions are in skin space and the
+  node hierarchy reaches them through the skinning matrices — reading positions
+  raw is correct there.
+- A weapon is **not**. Everything the converter computed lives in node
+  transforms, and reading its positions raw yields a pistol thirty-five times too
+  large in the wrong place. So `prop.rs` walks the node tree and bakes each
+  node's world matrix into its vertices, with the **inverse transpose** for
+  normals. Getting this wrong in the direction of doing nothing is silent: the
+  GLB loads, the primitives are there, the textures decode, and the weapon is
+  simply enormous.
+- `local_matrix` reads a node's transform **either way glTF spells it**. The
+  format allows a matrix or a TRS triple and one file may mix them —
+  `GLTFExporter` writes a matrix for a node carrying a rotation and TRS for one
+  that does not — so reading only TRS drops the scale off every matrix node.
+
+A prop could have been pushed through the character pipeline with one bone at
+identity. That costs eight bytes a vertex, a storage-buffer binding and a bone
+array on geometry that never deforms; the extra pipeline is cheaper than the
+pretence.
+
+Two things the prop shader does differently from the world's, both deliberate: it
+is **always fully lit** (a prop is a hand's width from the eye, so a shadow it
+received would cross an edge as a hard flicker across the whole model — and the
+browser does not shadow it either, since three only shadows a mesh with
+`receiveShadow`), and it applies **no fog** (it is roughly a cube and a half
+away, where every fog curve worth having is still the identity).
+
+The props get a **third camera uniform**. The prop's vertices are in its own
+model space, so the view model's pose is folded into both matrices: into
+`view_proj` to place it on screen, and into `light_transform` so a model-space
+normal reaches world space through the same pose. Feeding the second without the
+pose gives a weapon whose shading ignores every kick, bob and sway the first one
+applies — lit as though it never moved. That uniform is forty floats, not the
+thirty-six it is easy to count; wgpu rejects a short one at draw time naming both
+byte counts, which makes it the rare mistake here that fails loudly.
+
+The GLBs are compiled in with `include_bytes!`, like the operator, and one prop
+is resident at a time — a swap re-uploads a few thousand vertices and a megabyte
+of texture, against four times the VRAM to avoid an upload nobody can perceive.
+
+#### Looking at it
+
+The unit tests check properties a wrong-*looking* weapon would still satisfy: the
+GLB parses, the bounds are right, the normals are unit length, the shader
+validates. None would catch one rendered inside out, unlit, or with its base
+colour in the wrong slot. Those are properties of a picture, so there is one:
+
+```bash
+cargo run --manifest-path apps/native-fps/Cargo.toml --example weapon_preview
+```
+
+It prints coverage and mean luminance alongside the PNG, which is what makes it
+checkable without eyes on it — the likeliest failure in this pipeline (a base
+colour sampled as linear, a normal left at source scale) renders a weapon that is
+*there* and *dark*, so "something was drawn" is not the assertion worth making.
+
+:::note Known cosmetic gap
+The Remington's GLB carries a loose 12-gauge shell as a second material, sitting
+where the artist left it — so the shotgun draws with a shell floating beside it.
+It is a mesh in the source model rather than anything the converter did, and the
+fix is to drop that object before export.
+:::
+
+### Skin packs: skins that are not in this repo
+
+`backend/modules/hassault/skinpacks.py`.
+
+`SKIN_CATALOG` is a Python list, which is the right shape for the skins the game
+ships with and the wrong shape for every skin after them. Adding one meant
+editing the backend, a player could not have a skin the node's own source did not
+name, and a skin somebody else made had nowhere to live at all.
+
+A **pack** is the unit that fixes that: a zip carrying a `pack.json` and its
+textures, fetched to the user's own node and unpacked under
+`$HORRIBLE_DATA_DIR/hassault/skins/<pack id>/`. Nothing is bundled — the same
+rule that keeps AssaultCube's maps on the user's own install, SearXNG supported
+rather than shipped, and karaoke songs fetched rather than committed. The catalog
+the rest of the module reads becomes *built-ins plus whatever is installed*.
+
+```json
+{
+  "id": "neon-collection",
+  "name": "Neon Collection",
+  "version": "1.0.0",
+  "license": "CC-BY-NC-4.0",
+  "attribution": "SVU-A sniper rifle by Luiz Reis (https://www.artstation.com/izreis)",
+  "skins": [
+    {
+      "id": "neon_assault_pulse",
+      "name": "Pulse",
+      "weaponId": "assault",
+      "rarity": "covert",
+      "collection": "Neon Collection",
+      "baseColor": "#22d3ee",
+      "accentColor": "#f472b6",
+      "patternType": "custom_art",
+      "description": "...",
+      "texture": "pulse.png"
+    }
+  ]
+}
+```
+
+| Route | What it does |
+| --- | --- |
+| `GET /api/hassault/skins/packs` | What is installed |
+| `POST /api/hassault/skins/packs/install` | `{url, sha256?}` — fetch and install |
+| `DELETE /api/hassault/skins/packs/{id}` | Remove one, and its files |
+| `GET /api/hassault/skins/packs/{id}/files/{name}` | Serve a texture |
+
+`GET /api/hassault/skins/catalog` returns built-ins and pack skins together. A
+pack skin carries two extra keys, `packId` and `textureUrl`; a built-in carries
+neither, which is what tells a client there is nothing to fetch rather than
+something that failed to load. **`textureUrl` is built by the backend**, not by
+each client — three clients composing that path is three chances to compose it
+differently.
+
+`texture` is optional, and that is what makes a pack useful today: without one
+the skin renders exactly as a built-in does, its two colours distributed across
+the weapon's parts by `patternType`. Neither client draws a weapon texture yet —
+the procedural props have no UVs and the native view-model pass has no sampler —
+so the distribution half landed first and the rendering half is the next slice.
+
+#### A pack has to say what its art is, and who made it
+
+`license` is **required** and `attribution` is required for any licence whose
+name starts `CC-BY` (however it is spelled — `CC BY 4.0`, `cc-by-nc-4.0` and
+`Creative Commons Attribution 4.0` all count, because refusing a pack over
+punctuation pushes authors toward writing something vaguer that passes).
+
+This is not paperwork, and the case it exists for is in this repo. The SVU-A
+rifle under `assets/horribleAssault/svu-a-sniper-rifle/` ships its own
+`readme.txt` inside its source zip saying it is **CC BY-NC 4.0 by Luiz Reis**,
+naming the exact credit line to use and offering a separate commercial licence
+on request — while the directory's provenance table had it as GPL by somebody
+else. Those cannot both be true, and CC BY-NC cannot be relicensed as GPL by
+anyone but its author: GPL permits commercial use and BY-NC forbids it.
+
+A pack format that let the licence field be omitted would have carried that
+mistake onto every machine that installed the pack, with nothing in the
+installed directory to notice it by. So a pack with no `license` does not
+install, the credit line is stored **verbatim** (the licensor writes the
+sentence; a schema that reformatted it into a name and a URL would be failing
+the condition while looking tidier), and both are copied down onto every skin as
+well as the pack — because a player looks at a skin in the armoury and nobody
+opens a list of installed packs to find out who made the gun they are holding.
+
+#### Six rules, every one of them silent if broken
+
+- **A pack may not shadow a built-in.** Refused at install time, not filtered out
+  when the catalog is assembled: a pack that installed and then had half its
+  skins quietly disappear is the worst of both, since it is on disk, it is
+  listed, and it does not work. Same reasoning as `hd_*` map names resolving
+  before the AssaultCube install — two catalogs that can each define one id means
+  the same name renders differently depending on what somebody installed, and it
+  reads as a rendering bug rather than a collision.
+- **A zip member's path is not to be trusted.** `../../.ssh/authorized_keys` is a
+  legal name inside a zip and `extractall` writes it. Every member is resolved
+  against the destination and refused if it lands outside, and `texture_path`
+  resolves again on the way out — a symlink planted by a hostile pack points
+  wherever it likes regardless of what its name looks like, and only
+  `Path.resolve` answers that.
+- **The size budget is checked before extracting, from the declared sizes.** A
+  40 KB zip can declare 40 GB of contents. Checking as you go means finding out
+  when the disk is full, which is the lesson the llama.cpp downloader already
+  learned.
+- **A pack lands via `.part` and a rename**, and a failure part-way takes the
+  staging directory with it. A half-extracted directory scanned as installed is a
+  skin with half its textures and nothing to say so. `installed_packs` skips
+  `.part` directories *silently* — those are downloads in flight, and reporting
+  one as broken would report a normal state as a fault.
+- **A digest mismatch aborts and writes nothing**; a pack fetched without one
+  installs as `verified: false` rather than as probably fine. The provenance is
+  written **into** the pack's own manifest, so a directory copied to another
+  machine carries where it came from.
+- **The fetch goes through `browser.fetch`**, not a bare `httpx` call. This is a
+  route that takes a URL from a user and makes the *server* request it, which is
+  the definition of an SSRF sink; that module is the single place the policy
+  lives, and a second copy of the redirect loop is a second guard to keep in
+  step.
+
+Two smaller decisions worth keeping. A zip made by right-clicking a folder has
+everything one directory down, so the manifest is looked for at the root **or**
+one level in and the members are flattened relative to it — otherwise "it works
+if you zip it the other way" becomes something a user has to know, and a
+`texture` naming a bare file name would resolve in one layout and not the other.
+And a file type a pack has no business carrying (`.dll`, `.exe`) is a **refusal**,
+not a skipped file: silently ignoring it installs the pack anyway, under a name
+nobody looked at.
+
+The catalog scan is cached for 30 seconds, because it is consulted on every drop
+roll, inventory read and trade-up, and a directory walk plus a JSON parse per
+skin is not something to do inside a match tick. `skins.invalidate_pack_cache()`
+is what makes an install visible immediately instead of up to half a minute
+later; every route that changes what is installed calls it.
+
 ### The skin has to be visible before it is equipped
 
 `WeaponSilhouettes.tsx` is the armoury's product shot: the inventory card, the
@@ -1307,16 +1694,121 @@ snapshot.
 ### Why JSON on the shared socket, not a binary one
 
 This revises the earlier "binary WebSocket first" plan, and the reason is
-arithmetic. A snapshot of eight players is ~500 bytes of JSON, so 20 Hz costs
-about 10 KB/s — nothing on a LAN, which is the only place this runs. Against
-that, JSON on the shell's existing `/ws` socket shows up in the observability
-panel, needs no second connection to manage or reconnect, and can be debugged by
-reading it. Binary framing is worth reaching for when player counts or tick rates
-make the bandwidth real; today it would buy nothing and cost legibility.
+arithmetic. JSON on the shell's existing `/ws` socket shows up in the
+observability panel, needs no second connection to manage or reconnect, and can
+be debugged by reading it. Binary framing is worth reaching for when player
+counts or tick rates make the bandwidth real.
+
+The numbers, measured rather than estimated — an earlier version of this section
+claimed "~500 bytes for eight players, about 10 KB/s", which was written before
+health, crouch, the held weapon, grenades, zones, the radar and the noise
+envelope were in the packet, and was off by a factor of five:
+
+| Players | Per player per tick | Per player | Host uplink |
+| --- | --- | --- | --- |
+| 8 | ~2.5 KB | ~50 KiB/s | ~400 KiB/s |
+| 16 | ~4.5 KB | ~88 KiB/s | ~1.4 MiB/s |
+
+Still nothing on a LAN, which is the only place this runs, and the host's uplink
+is the number to watch rather than any one client's. And the cost of *producing*
+those bytes is no longer the argument it might have been: serialising a
+16-player tick now costs ~0.16 ms of the 50 ms budget (see below), so a binary
+codec would be optimising three tenths of one percent of a tick — in exchange
+for a second encoder to keep in step across `match.py`, `session.ts` and the
+Rust client's `protocol.rs`. That is the silent-drift shape this module already
+guards against with `physics-vectors.json`, bought with nothing.
 
 Input is batched — one message per send tick carrying every command since the
 last, rather than one per rendered frame. At 60 fps that is ~30 messages a second
 instead of 60, for identical information.
+
+### The snapshot is serialised once, not once per player
+
+Only two fields of a snapshot differ per recipient: `ack`, which prediction
+depends on, and `you`, the private half (ammo, hitmarkers, the noise envelope,
+what your team can see). Everything else — the player table, the scores, the
+grenades and zones in the air, the tick's effects — is identical for everyone in
+the room.
+
+It was nevertheless rebuilt and re-serialised for each of them: every grenade
+snapshotted sixteen times to produce sixteen identical lists, and `json.dumps`
+run over all sixteen player rows once per recipient, so a full room cost 256 row
+serialisations per tick. `MatchRoom.snapshot_template` now serialises the tick
+once and splits it at the two per-recipient holes, and `WsConnection.send_text`
+puts the assembled string on the socket without a second encode.
+
+**The layout is not written out by hand.** The holes are placeholder values that
+go through `json.dumps` with the rest of the envelope, so key order, separators
+and escaping all come from the encoder — there is no second copy of the
+envelope's shape to drift from `snapshot_message`. The wire is byte-for-byte
+what it was, and a test asserts exactly that against a room with grenades, zones
+and effects in flight. Without that test the fast path would have no independent
+spec, and a reordered key would be a silent protocol change that only the Rust
+client would notice.
+
+Two things make it fall back to plain `send_json`, both on purpose:
+
+- **A peer's connection.** A remote player is a `PeerPlayerConn` (see
+  [Playing in a friend's match](#playing-in-a-friends-match)), which exposes only `send_json` and
+  stamps the payload with the guest's client id. It has no text path and needs
+  none — the choice is made per connection, so one room can hold both.
+- **An observed frame.** `WsConnection.send_json` hands every outbound frame to
+  the `/ws` observer as a dict, and a pre-serialised frame has none to give it.
+  The question is asked **per event** (`ws.is_observed`), not "is an observer
+  registered": `backend/app.py` registers one unconditionally at import, so a
+  global check would be permanently true and would have made this whole path
+  dead code in every real process while still passing unit tests that never
+  import the app.
+
+Today the answer for `hassault/snapshot` is that nothing observes it, because
+the snapshot joined the observer's skip list alongside `share/mirror` — it is
+the largest repeated payload on the socket by a wide margin and every tick looks
+like the last, so recording it meant two further `json.dumps` of that payload per
+frame (compact, then again with `indent=2`) on every tick whether or not anybody
+had the panel open. The rest of the `hassault` channel — joins, the killfeed,
+invites, results — is small, individually interesting, and still recorded. If
+that list ever changes, the snapshot correctly reverts to the plain path rather
+than silently starving the panel.
+
+### Where the tick's 50 ms goes
+
+The match loop sleeps the *remainder* of `TICK_INTERVAL` rather than a flat
+interval, so the rate does not sag under load — which also means a room running
+out of budget slows down without ever saying so. `TickStats` (a rolling
+200-tick window per room, ~10 seconds at 20 Hz) reports simulate and broadcast
+cost separately, plus the bytes one tick puts on the wire across all recipients.
+Read it with the `server.tick()` console command or the `hassault.status` agent
+tool.
+
+What it said when the counters first went in was that **about two thirds of the
+broadcast was the radar** — `spotted_by`, raycasting every ally against every
+living enemy, once per recipient. That is now fixed (see
+[The radar](#the-radar)); on a full 16-player room on `hd_atrium` the controlled
+before/after is:
+
+| | raycasts/tick | broadcast |
+| --- | --- | --- |
+| radar per recipient | 216 | 2.36 ms |
+| radar per team | 24 | 0.40 ms |
+
+Serialisation, the thing that looks expensive, is ~0.16 ms of what remains —
+which is the measured answer to "should the wire be binary?" and the answer is
+no. Pre-serialising the tick was worth ~0.45 ms; the radar was worth four times
+that, and neither would have been known without the counters.
+
+A note on reading these numbers: they are a **controlled A/B in one process**,
+not two `server.tick()` readings taken minutes apart. Live samples move with
+whatever else the machine is doing — a later run showed `broadcast` higher than
+an earlier one while `simulate`, which nothing had touched, had risen 43% along
+with it. Compare within a run, or compare the raycast count, which is
+deterministic.
+
+Two reporting rules, both the hardware module's: a window with no samples reports
+`None` rather than `0` — a room that has not ticked and a room whose ticks are
+free are different facts — and byte counts are recorded **only** on the
+pre-serialised path, where the string is already in hand. Weighing the plain path
+would mean serialising a second time to measure the cost of serialising, so it
+reports "not measured" instead of a number it had to manufacture.
 
 ### Playing in a friend's match
 
@@ -1899,6 +2391,48 @@ somebody with your back turned does not paint them), and sight — which a wall
 stops and **so does a smoke**. That last one is most of the reason to throw one;
 a cloud that blocked eyes but not the minimap would be worth almost nothing.
 
+The order those are tested in is load-bearing: range and facing are arithmetic on
+numbers already in hand, and both run **before** `raycast_world` walks the level.
+Reversing them would not change a single answer and would cost most of what the
+radar spends.
+
+### It is a team's answer, not a player's
+
+An enemy is painted when *anybody* on your side can see them — so `spotted_by`
+reads its viewer **only** through `viewer.team`, and every player on a side gets a
+list that is not merely similar but identical. It was nonetheless recomputed once
+per recipient, which made the total work per tick
+
+```
+N recipients x (N/2 allies x N/2 enemies)  =  O(N³)
+```
+
+`spotted_for_team` is the real signature of the question, and
+`MatchRoom.spotted_by_team` computes it once per team per tick. `_broadcast`
+builds it alongside `rows` and `shared_view` and hands it down, so the work
+becomes
+
+```
+2 teams x (N/2 allies x N/2 enemies)  =  O(N²)
+```
+
+Cubic to quadratic, which is the part that matters — at sixteen players it is a
+9x cut in raycasts (216 to 24 on `hd_atrium`), and the gap widens with every
+player added. That is why this was worth doing while still costing only 5% of the
+tick budget: `MAX_PLAYERS` rising or the tick rate going up is exactly the change
+that would have made it hurt.
+
+It is deliberately **computed once and passed down**, not cached inside
+`spotted_for_team` behind a tick number. A cache has to answer when it goes
+stale, and the honest answer is "whenever a position changes" — which a tick
+counter does not know, since `simulate` moves everybody *within* one tick value.
+A test that broadcast twice without advancing the tick would have been served the
+first answer.
+
+The thing that must never break here is that per-team does not become per-room:
+two tests assert the sides get *different* radars, and both fail if one team's
+list is handed to everybody.
+
 **It is a fairness rule, not an anti-cheat one, and it is worth being honest
 about which.** The shared rows already carry every player's position, because the
 renderer needs them the instant somebody steps into view. A modified client could
@@ -2125,12 +2659,14 @@ Three details carry the whole cross-platform claim and the whole latency claim:
   and up to a frame of lag). Plus `desired_maximum_frame_latency: 1`, because
   every queued frame is a frame of input latency.
 
-There are **no textures and no light sources**, because the module ships neither.
-The shader does one directional wash and distance fog over the mesher's
-per-texture-id colours — enough that two perpendicular walls of the same texture
-id do not merge into one shape when you stand in a corner. Bodies are boxes sized
-from `PLAYER_RADIUS` and the player's own crouch fraction, because a body drawn
-larger than its hitbox teaches you to miss.
+There are **no textures**, because the module ships none — surfaces carry the
+mesher's per-texture-id colours, enough that two perpendicular walls of the same
+texture id do not merge into one shape when you stand in a corner. There *are*
+lights: the browser's rig, ported whole, over a runtime-generated surface grain
+and a sun shadow map rendered once per map. See
+[Lighting, and why the two clients stopped matching](#lighting-and-why-the-two-clients-stopped-matching).
+Bodies are boxes sized from `PLAYER_RADIUS` and the player's own crouch fraction,
+because a body drawn larger than its hitbox teaches you to miss.
 
 :::note wgpu clip space is `directx`, not `vulkan`
 In glam 0.33's vocabulary, wgpu's NDC — **Y-up, z in 0..1** — is the `directx`
@@ -2278,9 +2814,12 @@ The muzzle flash is fired from the server's own `shot` effect, not from the fire
 key. The browser can drive its flash locally because it has a trigger *controller*
 that knows the fire interval, the magazine and whether you are alive; this client
 has none, so the key would flash on every shot the server refused. It is lit by
-**cheating the normal**: the shader has one fixed directional wash and no unlit
-material, so the flare's vertices carry the light direction as their normal and
-land at full brightness — cheaper than a second pipeline for six triangles.
+**cheating the normal**: the shader has no unlit material, so the flare's vertices
+carry the *sun's* direction as their normal and land at full brightness — cheaper
+than a second pipeline for six triangles. `viewmodel.rs`'s `LIGHT_DIR` must
+therefore equal `lighting.wgsl.inc`'s `SUN_DIR`, and
+`tests/browser_parity.rs` pins it: a stale copy does not fail, it takes the
+cosine between the two off every flash and reads as the flash simply being weak.
 
 :::warning `zoomLevels` and `hipfireSpread` are camelCase on the wire
 `WeaponSpec` read them as `zoom_levels` and `hipfire_spread` with no
@@ -2668,8 +3207,11 @@ upscaled from half resolution are unreadable and the HUD costs nothing to draw a
 full size. The title bar reports the rendered size whenever it is not the
 window's, since a render scale is otherwise invisible in a screenshot.
 
-Quality moves three things: the shading (flat, the directional wash, the wash plus
-a rim), how far the fog reaches, and the sample count.
+Quality moves three things: the shading (flat, the hemisphere and sun, the fill as
+well), the fog's density, and the sample count. **High is the browser's own fog
+density**, not a value picked to look close — it is the level at which the two
+clients are meant to be the same picture, and the lower levels trade distance for
+fill rate from there.
 
 :::warning 2× MSAA is not a supported sample count
 Only **1 and 4** are guaranteed by the spec. The machine this was written on
@@ -2679,7 +3221,10 @@ the scene needs is how a client refuses to start on a perfectly capable integrat
 GPU. A pipeline built with 2× is a **validation error on the first frame**, not a
 slower one, and that is exactly how the first build of the quality setting
 crashed. Low and Medium therefore share a sample count and differ in shading and
-fog, which is the more visible difference anyway. The support list is not the
+fog, which is the more visible difference anyway. Note that Low returns the
+surface *flat* — no hemisphere, no sun, no shadow — which is a level's choice and
+not a cheaper approximation of the same picture; a screenshot taken at Low beside
+a browser screenshot is not evidence the clients diverge. The support list is not the
 guarantee.
 :::
 
@@ -3596,6 +4141,89 @@ The console ships with five pre-configured training and diagnostic drills:
 4. **`net_stress_test`**: Injects 120ms artificial latency and 5% packet loss with full NetGraph breakdown.
 5. **`slowmo_duel`**: Matrix-style 0.35x timescale sniper challenge against an elite bot.
 
+
+---
+
+### The same console in the native client
+
+`apps/native-fps/src/console.rs` + the painter in `apps/native-fps/src/hud.rs`.
+
+The native client's console is **not a second console**. The registry is served
+(`GET /api/hassault/console/definitions`) and this reads that list rather than
+declaring one of its own — a Rust copy of the CVar table would be a third source
+of truth after `console.py` and `registry.ts`, and the failure mode of a third
+copy is not a build error but a console offering a command the server has never
+heard of.
+
+What differs is the *surface*: the pane is a React panel with a toolbar you
+click, and this is 5×7 glyphs drawn by the HUD painter while the mouse is aiming
+a weapon. So every capability arrives by a different route, which is worth
+writing down because the useful half of a toolbar button is usually not the
+click.
+
+| Browser | Native |
+| --- | --- |
+| Title bar: room, map, ping, cheats | The header line |
+| Quick-toggle buttons | `F1`–`F8`, drawn as live state chips |
+| Filter tabs (ALL/NET/DRAW/SERVER/MACRO) | `^F`, or `filter <name>` |
+| Macro drawer | `macros`, listing what the node serves |
+| Copy logs | `copy`, which writes a file |
+| Autocomplete rows carrying a type and a description | One detail line under the input, for the selected item |
+| `[4:30:12 AM]` timestamps | `[02:05]`, elapsed since the console came up |
+
+Six of those carry a decision worth keeping:
+
+- **The chips are the point, not the keys.** Half of what a toggle button gives
+  you is the click; the other half is seeing at a glance that hitboxes are on,
+  which is otherwise a `draw.hitboxes` round trip. So a chip is drawn even for
+  the actions that have no state to show.
+- **A chip for something this client does not read is drawn as unhonored**, in
+  red, rather than hidden. `draw.wireframe` is a client CVar the browser reads
+  and the native client does not; a chip that drew it like an "off" one would be
+  the console lying about its own coverage, which is the exact failure the
+  module's honesty rule exists to prevent.
+- **A server value nobody has told us yet draws as `?`, never as `OFF`.** This
+  bit during development: the registry's `current_value` field is
+  `serde(default)`, so a node that reports no value leaves `Value::Null` there —
+  and a null read as a flag is `false`. Seeding the cache with those nulls turned
+  "never been told" into a confident "off" on the god-mode chip, with nothing
+  anywhere to say so.
+- **A toggle's command comes from the current state**, computed in
+  `quick_actions` rather than spelled as a static table. A table of fixed strings
+  gives you a key that turns hitboxes on and can never turn them off, and that is
+  a bug you only find by pressing it twice.
+- **Changing the filter resets the scroll.** `scroll` counts lines back from the
+  bottom of the *visible* set, so keeping the offset across a filter change
+  silently parks the view somewhere unrelated in the log.
+- **The transcript ignores the filter.** A filter is a reading aid; a transcript
+  is evidence, and one that dropped three quarters of a session because a tab was
+  selected would be the worst possible artifact to hand somebody debugging.
+
+Two smaller things are different because the platform is:
+
+- **Timestamps are elapsed, not wall clock.** `std` cannot render a local time —
+  there is no timezone database in it — so the alternatives were a dependency
+  carrying one, or printing UTC and letting the reader do arithmetic. What a
+  console log is read for is the interval between two lines, which elapsed
+  answers directly and cannot be wrong about a timezone.
+- **`copy` writes a file rather than filling the clipboard.** The clipboard
+  crates pull an X11/Wayland stack in on Linux and own a background thread for
+  the process's lifetime, which is a lot of surface area for one console action.
+  A file is also the more useful native artifact: it can be attached to a bug
+  report, and it survives the crash you were trying to capture. It goes to the
+  system temp directory, because this client writes nothing else to disk at all
+  — its settings live on the node — and inventing a data directory here would
+  mean a second answer to a question `backend/paths.py` is the sole authority on.
+
+`help` prints the client-only commands **and** still forwards to the node, since
+the two halves of the command list live on different sides and answering from
+only one leaves the other undiscoverable.
+
+One failure that used to be silent now is not: an `affectedCvars` entry naming a
+CVar the client's registry has no definition for is dropped — there is nothing to
+render an untyped value as — and reported through `divergence::note_unknown_cvar`.
+The only symptom otherwise is a status chip that never updates, on a client whose
+registry fetch is older than the node it is talking to.
 ---
 
 ### Agent Tools Integration
@@ -3844,6 +4472,74 @@ browser hands three as a `BufferAttribute`, which three uses **as linear** — s
 decoding them natively would render every map darker and more saturated than the
 browser renders the same map. The operator's team wash is a hex colour someone
 picked, so that one *is* decoded, matching three's `Color`.
+
+#### The three that survived the port
+
+Porting the light rig closed the *world's* divergence and left three narrower ones
+behind, all found the same way every divergence here has been — by putting two
+screenshots side by side. All three are now pinned by `tests/browser_parity.rs`,
+which reads the **browser's own source** rather than a second copy of the expected
+value: asserting against a literal typed into the test would pin the two clients
+to whatever was true the day it was written, and would not notice the browser
+moving, which is the only direction drift has ever come from.
+
+**1. The view model was being brightened twice.** `viewmodel.rs` carried a palette
+a notch above the browser's, justified by a comment reading "this renderer has one
+ambient floor and a single directional wash". That renderer stopped existing when
+the rig landed: the weapon is drawn with the **world pipeline** — `Renderer::render`
+binds `self.pipeline` for it — so it gets the same hemisphere, sun, fill, Lambert
+normalisation and ACES curve every wall does. The compensation outlived the thing
+it compensated for, and the native rifle read as white plastic beside the browser's
+gunmetal. The palette is now `viewmodel.ts`'s `DEFAULT_PALETTE` unchanged.
+
+This is the shape to watch for: a constant that is correct *relative to* a
+subsystem, when the subsystem is the thing being replaced. Nothing about it fails
+to compile and no test that existed at the time was about the colour of a gun.
+
+**2. The view model was lit in camera space.** Its vertices *are* camera space —
+that is how it is parented to the eye without a scene graph — but `SUN_DIR`,
+`FILL_DIR` and the shadow map are all world space, and the shader was shading
+those camera-space normals directly. Two symptoms: the weapon's lit side never
+moved when you turned (three parents the browser's to the camera and still lights
+it in world space, so the browser's does), and the shadow lookup was being handed
+what amounted to a point near the map's origin.
+
+The fix is a second matrix in the camera uniform, `light_transform`: the identity
+for the world and the operators, the camera-to-world matrix for the view model.
+Deliberately *not* folded into `view_proj` — the two answer different questions,
+"where does this land on screen" and "where is this in the room", and the view
+model is the whole reason they are allowed to disagree. The same uniform's spare
+`params.w` now carries whether a pass **receives** the sun's shadow, and the view
+model does not: three shadows a mesh only with `receiveShadow` set, and
+`HorribleAssaultPanel.tsx` sets it on the map's mesh and nothing else. Leaving it
+on is not merely a difference — the weapon is a hand's width from the eye, so it
+crosses a shadow edge as a hard flicker across the whole model.
+
+**3. The fog was a linear ramp against an exponential-squared one.** The browser
+sets `FogExp2(0x11161f, 0.0055)`; the native side ramped linearly from 40 cubes to
+a quality-dependent end. A linear fog has an exponential one's shape nowhere along
+its length, so near geometry the browser left untouched came out hazed and the far
+end of a long corridor arrived at the ramp's end as an edge the browser never had.
+`Quality::fog_density` now returns the browser's exact density at High.
+
+The colour is that hex **decoded to linear**, because it is applied before the
+sRGB target encodes it — a raw hex here comes out three shades too pale and reads
+as the density being wrong. One difference genuinely remains and is not worth what
+closing it would cost: three mixes its fog *after* the colour-space encode
+(`fog_fragment` follows `colorspace_fragment` in every three material) while still
+handing the shader a linearised uniform, so the blend **space** differs and
+mid-distance comes out a shade deeper natively. Matching it would mean encoding by
+hand and giving up the sRGB target. The colour and the curve are the parts that
+read.
+
+:::note A screenshot of the pane is dimmer than the game
+The browser panel lays `rgba(13,17,23,0.72)` over the whole canvas whenever it is
+in `playing` and **not pointer-locked** — the "Click to play" prompt. Nearly
+three-quarters of the picture is that overlay, so an unlocked pane screenshot is
+much darker and flatter than what the renderer drew. Every side-by-side with the
+native client has to be taken with the pane locked, or most of the difference
+being compared is a `<div>`.
+:::
 
 #### Sun shadows
 

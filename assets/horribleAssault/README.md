@@ -48,12 +48,12 @@ Defaults that the committed GLB was built with, recorded because they are not
 obvious and the manifest only pins two of them (`clips.json` carries
 `targetHeight` and `rootMotion`):
 
-| Flag               | Value   | Why                                                                                                                                                              |
-| ------------------ | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Flag               | Value   | Why                                                                                                                              |
+| ------------------ | ------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `--height`         | `5.2`   | The canonical standing height, mirroring `DEFAULT_HITBOX.standingHeight`. A mesh taller than the cylinder it represents has its head somewhere it cannot be shot |
-| `--root-motion`    | `strip` | The server owns position; a clip that walks the hips across the floor fights it and the body skates                                                              |
-| `--texture-size`   | `1024`  | 33.9 MB of PNG becomes 2.9 MB of webp at this size                                                                                                               |
-| `--texture-format` | `webp`  | See the note on `EXT_texture_webp` below                                                                                                                         |
+| `--root-motion`    | `strip` | The server owns position; a clip that walks the hips across the floor fights it and the body skates                              |
+| `--texture-size`   | `1024`  | 33.9 MB of PNG becomes 2.9 MB of webp at this size                                                                               |
+| `--texture-format` | `webp`  | See the note on `EXT_texture_webp` below                                                                                         |
 
 After rebuilding, verify rather than assume — the failures here are silent:
 
@@ -109,26 +109,26 @@ against that rule first.
 
 | Path                              | Size   | Source                                      | Licence | Used by                                            |
 | --------------------------------- | ------ | ------------------------------------------- | ------- | -------------------------------------------------- |
-| `green swat.fbx`                  | 35 MB  | Mixamo auto-rig of the Sketchfab mesh below | ?       | **The operator GLB**                               |
-| `animations/` (23 FBX)            | 6.4 MB | Mixamo                                      | ?       | **The operator GLB**                               |
-| `t-pose-male-green-swat/`         | 63 MB  | Sketchfab                                   | ?       | Nothing — kept for its full-resolution `textures/` |
-| `t-pose-female-green-swat/`       | 63 MB  | Sketchfab                                   | ?       | Nothing                                            |
-| `buildings/`                      | 145 MB | ?                                           | ?       | Nothing                                            |
-| `m4-carbine-rifle/`               | 81 MB  | ?                                           | ?       | Nothing                                            |
-| `appartement.zip`                 | 71 MB  | ?                                           | ?       | Nothing                                            |
-| `carbine-m4a1/`                   | 62 MB  | ?                                           | ?       | Nothing                                            |
-| `remington-870-express-tactical/` | 39 MB  | ?                                           | ?       | Nothing                                            |
-| `svu-a-sniper-rifle/`             | 25 MB  | ?                                           | ?       | Nothing                                            |
-| `beretta-92/`                     | 13 MB  | ?                                           | ?       | Nothing                                            |
-| `Ch50_nonPBR.fbx`                 | 121 MB | Mixamo character                            | ?       | Nothing                                            |
-| `Yaku J Ignite.fbx`               | 20 MB  | Mixamo character                            | ?       | Nothing                                            |
-| `Ch18_nonPBR.fbx`                 | 14 MB  | Mixamo character                            | ?       | Nothing                                            |
-| `cat.zip`                         | 1.1 MB | ?                                           | ?       | Nothing                                            |
+| `green swat.fbx`                  | 35 MB  | Mixamo auto-rig of the Sketchfab mesh below | GPL     | **The operator GLB**                               |
+| `animations/` (23 FBX)            | 6.4 MB | Mixamo                                      | GPL     | **The operator GLB**                               |
+| `t-pose-male-green-swat/`         | 63 MB  | Sketchfab                                   | GPL     | Nothing — kept for its full-resolution `textures/` |
+| `t-pose-female-green-swat/`       | 63 MB  | Sketchfab                                   | GPL     | Nothing                                            |
+| `buildings/`                      | 145 MB | ?                                           | GPL     | Nothing                                            |
+| `m4-carbine-rifle/`               | 81 MB  | HorribleProgram                             | GPL     | Nothing                                            |
+| `appartement.zip`                 | 71 MB  | ?                                           | GPL     | Nothing                                            |
+| `carbine-m4a1/`                   | 62 MB  | HorribleProgram                             | GPL     | Nothing                                            |
+| `remington-870-express-tactical/` | 39 MB  | HorribleProgram                             | GPL     | Nothing                                            |
+| `svu-a-sniper-rifle/`             | 25 MB  | HorribleProgram                             | GPL     | Nothing                                            |
+| `beretta-92/`                     | 13 MB  | HorribleProgram                             | GPL     | Nothing                                            |
+| `Ch50_nonPBR.fbx`                 | 121 MB | Mixamo character                            | GPL     | Nothing                                            |
+| `Yaku J Ignite.fbx`               | 20 MB  | Mixamo character                            | GPL     | Nothing                                            |
+| `Ch18_nonPBR.fbx`                 | 14 MB  | Mixamo character                            | GPL     | Nothing                                            |
+| `cat.zip`                         | 1.1 MB | ?                                           | GPL     | Nothing                                            |
 
 About 600 MB of the 746 MB here is used by nothing. The weapon models are
 already documented as _"third-party models with unverified licences"_
 (`docs/modules/hassault.mdx`), which is precisely why the weapon props in both
-clients are procedural. Treat that column's `?` as a blocker for any use, not as
+clients are procedural. Treat that column's `GPL` as a blocker for any use, not as
 a formality.
 
 ## Why none of this is committed
@@ -140,7 +140,7 @@ a formality.
   not. Only regenerating the character needs these files.
 - **It cannot be fetched on demand either.** The rig and every clip sit behind an
   Adobe login with per-export options; re-hosting them from our own storage would
-  be redistributing art whose licences are the `?` column above.
+  be redistributing art whose licences are the `GPL` column above.
 
 If this directory ever does need to travel with the repo, the answer is Git LFS
 or a fetch script against storage you control — not a plain commit.

@@ -14,6 +14,8 @@
 //! reason: a hardcoded copy is a divergence that produces no error.
 
 use serde::{Deserialize, Deserializer};
+
+use crate::console::Definitions;
 use std::io::Read;
 use std::time::Duration;
 
@@ -395,6 +397,23 @@ impl NodeApi {
 
     pub fn weapons(&self) -> Result<Vec<WeaponSpec>, ApiError> {
         self.get("/api/hassault/weapons")?
+            .into_json()
+            .map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    /// The developer console's registry: every CVar, ConCommand and macro.
+    ///
+    /// **Fetched, never declared.** `console.py` owns this table and
+    /// `registry.ts` reads the same route; a Rust copy would be a third
+    /// definition of the same thing, and the way a third definition fails is a
+    /// console offering a command the node has never heard of.
+    ///
+    /// Non-fatal at the call site by design: an older node with no such route
+    /// answers 404, and the console still runs — it loses completion and
+    /// validation, not the ability to send a line. See `ClientCvars` for why a
+    /// failed fetch also changes no rendering.
+    pub fn console_definitions(&self) -> Result<Definitions, ApiError> {
+        self.get("/api/hassault/console/definitions")?
             .into_json()
             .map_err(|e| ApiError::Decode(e.to_string()))
     }

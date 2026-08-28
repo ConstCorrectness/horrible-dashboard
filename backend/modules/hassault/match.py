@@ -38,6 +38,7 @@ See docs/modules/hassault.mdx.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import random
@@ -65,6 +66,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 CHANNEL = "hassault"
+
+#: Placeholders `snapshot_template` puts where the per-recipient fields go, so
+#: the shared body of a tick is serialised once instead of once per player. They
+#: are deliberately not anything a name, room id or weapon could be: a collision
+#: would not corrupt a frame (the split fails and the caller falls back to
+#: `send_json`) but it would silently give up the saving.
+_ACK_HOLE = "\x00hassault:ack\x00"
+_YOU_HOLE = "\x00hassault:you\x00"
 
 # Snapshots per second. 20 Hz with ~100 ms of client-side interpolation delay is
 # the classic Source-engine setting and holds up: remote players are rendered
@@ -134,6 +143,67 @@ SPOT_FOV = 1.35
 # who has not clicked the invite yet is empty and must survive; a room everyone
 # has left is ~590 KB of map planes and should not.
 EMPTY_GRACE = 60.0
+
+
+#: Ticks kept in the rolling performance window. Ten seconds at 20 Hz — long
+#: enough that one slow tick does not read as a trend, short enough that the
+#: numbers still describe the match you are in rather than the one you left.
+TICK_WINDOW = 200
+
+
+class TickStats:
+    """Where the 50 ms of a tick actually goes.
+
+    The loop already sleeps the *remainder* of `TICK_INTERVAL` rather than a flat
+    interval, precisely so the rate does not sag silently under load. That makes
+    the headroom real but invisible: nothing reported whether a tick was using
+    2 ms of its budget or 45. This reports it.
+
+    Deliberately a fixed-length window rather than an all-time mean: an average
+    over an hour hides the ten seconds when the room filled up, which is the only
+    part anyone wants to see.
+    """
+
+    __slots__ = ("simulate_ms", "broadcast_ms", "tick_bytes")
+
+    def __init__(self) -> None:
+        self.simulate_ms: deque[float] = deque(maxlen=TICK_WINDOW)
+        self.broadcast_ms: deque[float] = deque(maxlen=TICK_WINDOW)
+        # Bytes actually put on the wire for one tick, summed across recipients.
+        # Only recorded on the pre-serialised path, where the string is in hand:
+        # measuring the dict path would mean serialising a second time to weigh
+        # the result, which is the very cost being measured.
+        self.tick_bytes: deque[int] = deque(maxlen=TICK_WINDOW)
+
+    def record(self, simulate_ms: float, broadcast_ms: float) -> None:
+        self.simulate_ms.append(simulate_ms)
+        self.broadcast_ms.append(broadcast_ms)
+
+    def report(self) -> dict[str, Any]:
+        """The window, or `None`s if no tick has been measured yet.
+
+        Absent numbers are reported as `None` rather than `0`: a room that has
+        not ticked and a room whose ticks are free are not the same fact, and
+        this module has the hardware probe's rule about that.
+        """
+
+        def stat(window: deque[float] | deque[int]) -> dict[str, Any]:
+            if not window:
+                return {"mean": None, "max": None, "samples": 0}
+            return {
+                "mean": round(sum(window) / len(window), 3),
+                "max": round(max(window), 3),
+                "samples": len(window),
+            }
+
+        return {
+            "budgetMs": round(TICK_INTERVAL * 1000, 1),
+            "simulateMs": stat(self.simulate_ms),
+            "broadcastMs": stat(self.broadcast_ms),
+            # Summed across every recipient of one tick, so this is what the
+            # room costs the uplink 20 times a second.
+            "tickBytes": stat(self.tick_bytes),
+        }
 
 
 @dataclass(slots=True)
@@ -409,6 +479,9 @@ class MatchRoom:
         # in `MatchPlayer.flash` instead.
         self.nades: list[grenades.Grenade] = []
         self.zones: list[grenades.Zone] = []
+        #: Rolling tick cost. Per room, not per server: two matches on one node
+        #: have separate budgets and averaging them describes neither.
+        self.stats = TickStats()
         # Monotonic per room, so an id is stable for a client to interpolate a
         # grenade's arc against between snapshots.
         self._nade_seq = 0
@@ -675,7 +748,9 @@ class MatchRoom:
                 x=nade.x,
                 y=nade.y,
                 z=nade.z,
-                loudness=noise.EXPLOSION_LOUDNESS if kind == "he" else noise.LAND_LOUDNESS,
+                loudness=noise.EXPLOSION_LOUDNESS
+                if kind == "he"
+                else noise.LAND_LOUDNESS,
             )
         )
         self._emit(
@@ -810,15 +885,54 @@ class MatchRoom:
         view. A modified client could always draw a full radar. What this buys is
         that the radar the game ships shows the same thing to everyone, and that
         a smoke does the same job on it that it does on screen.
+
+        **It is a team's answer, not a player's** — see `spotted_for_team`, which
+        is where the work happens and why it is not done here.
+        """
+        return self.spotted_for_team(viewer.team)
+
+    def spotted_for_team(self, team: int) -> list[str]:
+        """The radar for one whole team.
+
+        This is the real signature of the question. `spotted_by` reads its viewer
+        **only** through `viewer.team`: an enemy is painted when *anybody* on your
+        side can see them, so every player on a team gets a list that is not
+        merely similar but identical. It was nonetheless recomputed per recipient,
+        which at sixteen players meant deriving each team's radar eight times per
+        tick from the same positions — and each derivation raycasts every ally
+        against every living enemy, so it was the dominant cost in the whole
+        broadcast path (about two thirds of it, measured).
+
+        `spotted_by_team` computes this once per team per tick and `_broadcast`
+        hands the result down, so the per-recipient multiplier is gone.
+
+        The order of the three tests is load-bearing and already right: the range
+        check and the facing cone are arithmetic on numbers we already have, and
+        both run **before** `raycast_world` walks the level. Moving the raycast
+        earlier would not change a single answer and would cost most of what this
+        method spends.
         """
         seen: list[str] = []
-        allies = [
-            p
-            for p in self.players.values()
-            if p.team == viewer.team and p.alive
+        allies = [p for p in self.players.values() if p.team == team and p.alive]
+        if not allies:
+            return seen
+        # Hoisted out of the pair loop: an ally's eye does not move between the
+        # enemies it is tested against, and this used to be recomputed once per
+        # (ally, enemy) pair.
+        ally_eyes = [
+            (
+                ally,
+                weapons.eye_position(
+                    ally.state.x,
+                    ally.state.y,
+                    ally.state.z,
+                    physics.eye_height(ally.state),
+                ),
+            )
+            for ally in allies
         ]
         for other in self.players.values():
-            if other.team == viewer.team or not other.alive:
+            if other.team == team or not other.alive:
                 continue
             target = weapons.eye_position(
                 other.state.x,
@@ -826,13 +940,7 @@ class MatchRoom:
                 other.state.z,
                 physics.eye_height(other.state),
             )
-            for ally in allies:
-                eye = weapons.eye_position(
-                    ally.state.x,
-                    ally.state.y,
-                    ally.state.z,
-                    physics.eye_height(ally.state),
-                )
+            for ally, eye in ally_eyes:
                 dx = target[0] - eye[0]
                 dy = target[1] - eye[1]
                 dz = target[2] - eye[2]
@@ -856,7 +964,30 @@ class MatchRoom:
                 break
         return seen
 
-    def smoked(self, a: tuple[float, float, float], b: tuple[float, float, float]) -> bool:
+    def spotted_by_team(self) -> dict[int, list[str]]:
+        """Every team's radar for this tick, each computed once.
+
+        Built by `_broadcast` and passed to `private_view_for`, the same shape as
+        `rows` and `shared_view` — an explicit "compute once, hand it down" rather
+        than a cache inside `spotted_for_team` keyed on the tick number. A cache
+        would have to answer when it goes stale, and the honest answer is
+        "whenever a position changes", which is not something a tick counter
+        knows: `simulate` moves everybody *within* one tick value, and a test that
+        broadcasts twice without advancing the tick would silently be served the
+        first answer.
+
+        Only teams that actually have players get an entry. A team with nobody on
+        it has no radar to compute, and `private_view_for` falls back rather than
+        assuming a key exists.
+        """
+        return {
+            team: self.spotted_for_team(team)
+            for team in {p.team for p in self.players.values()}
+        }
+
+    def smoked(
+        self, a: tuple[float, float, float], b: tuple[float, float, float]
+    ) -> bool:
         """Whether a smoke stands between two points.
 
         Public because it is not only the renderer's business: the bots' vision
@@ -1031,7 +1162,11 @@ class MatchRoom:
 
         state = player.state
         origin = grenades.throw_origin(
-            state.x, state.y, state.z + physics.eye_height(state), command.yaw, command.pitch
+            state.x,
+            state.y,
+            state.z + physics.eye_height(state),
+            command.yaw,
+            command.pitch,
         )
         velocity = grenades.throw_velocity(
             command.yaw,
@@ -1241,11 +1376,40 @@ class MatchRoom:
 
     # -- wire ---------------------------------------------------------------
 
-    def snapshot_for(self, player: MatchPlayer, now: float, rows: list[dict]) -> dict:
-        """This player's copy of the tick.
+    def shared_view(self) -> dict[str, Any]:
+        """The half of the tick that is identical for every recipient.
 
-        Note `private_view` **drains** their hitmarkers, so this is the flush
-        point and must be called once per player per tick.
+        Built once per tick by `_broadcast` and handed to each envelope, rather
+        than recomputed inside it. It used to be rebuilt per player: every
+        grenade and every zone in the room re-serialised sixteen times to produce
+        sixteen identical lists.
+        """
+        return {
+            # Public, unlike the noise envelope in `private_view_for`: a grenade
+            # in the air and a cloud in a doorway are things everybody can see,
+            # and withholding one somebody is looking at would be worse than
+            # useless.
+            "nades": [n.snapshot() for n in self.nades],
+            "zones": [z.snapshot() for z in self.zones],
+            # Copied, not aliased: `_broadcast` clears `self.fx` once everyone
+            # has been sent their copy, and handing out a reference to a list
+            # we are about to empty is the kind of thing that works until
+            # someone makes the send path yield before serialising.
+            "fx": list(self.fx),
+        }
+
+    def private_view_for(
+        self, player: MatchPlayer, spotted: dict[int, list[str]] | None = None
+    ) -> dict[str, Any]:
+        """The half only this player gets.
+
+        **Drains** their hitmarkers, so this is the flush point and must be
+        called exactly once per player per tick.
+
+        `spotted` is this tick's radar for every team, from `spotted_by_team`.
+        Optional so a caller with one player and no tick around it still works;
+        `_broadcast` always passes it, because computing it here would be
+        computing each team's answer once per member of that team.
         """
         you = player.private_view(time.monotonic())
         # Resolved per recipient, here rather than in the shared rows, because
@@ -1254,7 +1418,11 @@ class MatchRoom:
         # Per recipient for the same reason the noise envelope is: it is a
         # different answer for each team, and a shared list would be one team's
         # information sitting in the other's packet.
-        you["spotted"] = self.spotted_by(player)
+        # A team with no entry is a team with no living players to see with, so
+        # an empty radar is the right answer rather than a missing key.
+        you["spotted"] = (
+            self.spotted_by(player) if spotted is None else spotted.get(player.team, [])
+        )
         you["noise"] = noise.envelope(
             self.world,
             weapons.eye_position(
@@ -1266,6 +1434,22 @@ class MatchRoom:
             player.id,
             self.noises,
         )
+        return you
+
+    def snapshot_message(
+        self,
+        now: float,
+        rows: list[dict],
+        shared: dict[str, Any],
+        ack: Any,
+        you: Any,
+    ) -> dict:
+        """The one place the snapshot envelope's shape is written down.
+
+        `ack` and `you` are parameters rather than looked up because
+        `snapshot_template` builds this same envelope with holes where they go
+        - see there for why that matters.
+        """
         return {
             "channel": CHANNEL,
             "event": "snapshot",
@@ -1275,23 +1459,63 @@ class MatchRoom:
                 # Server clock in ms, so a client can measure one-way drift and
                 # order snapshots without trusting arrival order.
                 "t": round(now * 1000),
-                "ack": player.ack,
+                "ack": ack,
                 "players": rows,
                 "you": you,
                 "scores": self.scores,
-                # Public, unlike the noise envelope above: a grenade in the air
-                # and a cloud in a doorway are things everybody can see, and
-                # withholding one somebody is looking at would be worse than
-                # useless.
-                "nades": [n.snapshot() for n in self.nades],
-                "zones": [z.snapshot() for z in self.zones],
-                # Copied, not aliased: `_broadcast` clears `self.fx` once everyone
-                # has been sent their copy, and handing out a reference to a list
-                # we are about to empty is the kind of thing that works until
-                # someone makes the send path yield before serialising.
-                "fx": list(self.fx),
+                **shared,
             },
         }
+
+    def snapshot_for(
+        self,
+        player: MatchPlayer,
+        now: float,
+        rows: list[dict],
+        shared: dict[str, Any] | None = None,
+    ) -> dict:
+        """This player's copy of the tick.
+
+        Note `private_view_for` **drains** their hitmarkers, so this is the flush
+        point and must be called once per player per tick.
+        """
+        return self.snapshot_message(
+            now,
+            rows,
+            self.shared_view() if shared is None else shared,
+            player.ack,
+            self.private_view_for(player),
+        )
+
+    def snapshot_template(
+        self, now: float, rows: list[dict], shared: dict[str, Any]
+    ) -> tuple[str, str, str]:
+        """The tick serialised **once**, split at the two per-recipient holes.
+
+        `players` is most of the packet and is identical for everyone, but it
+        sits between `ack` and `you` in the envelope, so every recipient re-ran
+        `json.dumps` over all sixteen rows: 256 row serialisations per tick.
+        This runs it once and hands back three fragments that a recipient's
+        frame is assembled from by concatenation.
+
+        **The layout is not written out by hand.** The holes go through
+        `json.dumps` with the rest of the envelope, so key order, separators and
+        escaping all come from the encoder rather than from a second copy of the
+        envelope's shape that could drift from `snapshot_message`. If a
+        sentinel ever collided with real data the split would not find it, and
+        the caller falls back to plain `send_json` rather than shipping a
+        malformed frame.
+        """
+        blob = json.dumps(
+            self.snapshot_message(now, rows, shared, _ACK_HOLE, _YOU_HOLE)
+        )
+        # The sentinels are strings, so they arrive quoted; splitting on the
+        # quoted form is what lets `ack` be spliced back in as a bare number.
+        head, found_ack, rest = blob.partition(json.dumps(_ACK_HOLE))
+        mid, found_you, tail = rest.partition(json.dumps(_YOU_HOLE))
+        if not found_ack or not found_you:
+            raise ValueError("snapshot sentinel collided with payload data")
+        return head, mid, tail
 
     def state_payload(self) -> dict[str, Any]:
         now = time.monotonic()
@@ -1390,8 +1614,19 @@ class MatchServer:
                             self.rooms.pop(room.id, None)
                         continue
                     room.tick += 1
+                    # Measured rather than assumed: `TICK_INTERVAL` minus these
+                    # two is the headroom, and the sleep below hides it by
+                    # design. `perf_counter` because this is a duration, not a
+                    # point in time.
+                    sim_started = time.perf_counter()
                     room.simulate(elapsed)
+                    sent_started = time.perf_counter()
                     await self._broadcast(room)
+                    finished = time.perf_counter()
+                    room.stats.record(
+                        (sent_started - sim_started) * 1000,
+                        (finished - sent_started) * 1000,
+                    )
                 await asyncio.sleep(
                     max(0.0, TICK_INTERVAL - (time.monotonic() - started))
                 )
@@ -1407,16 +1642,46 @@ class MatchServer:
         # hitmarkers differ per recipient, and `ack` is the field prediction
         # depends on.
         rows = [p.snapshot(mono) for p in room.players.values()]
+        # Everything else that is the same for everyone — grenades, zones, the
+        # tick's effects — built once here rather than inside each envelope.
+        shared = room.shared_view()
+        # The radar, once per team rather than once per player. It is the same
+        # list for everyone on a side, and deriving it raycasts every ally against
+        # every living enemy — which made it the most expensive thing in this
+        # method by a wide margin when it ran per recipient.
+        spotted = room.spotted_by_team()
+        # And serialised once. `players` is most of the packet and identical for
+        # every recipient, so this is the difference between sixteen dumps of
+        # sixteen rows and one. `None` if the split failed, which sends everyone
+        # down the ordinary dict path.
+        template = self._template_or_none(room, now, rows, shared)
+        # Only meaningful on the pre-serialised path — see `TickStats.tick_bytes`
+        # for why the dict path is not weighed.
+        sent_bytes = 0
         for player in list(room.players.values()):
             conn = player.conn
             if conn is None:
                 continue
             try:
-                await conn.send_json(room.snapshot_for(player, now, rows))
+                # `private_view_for` drains this player's hitmarkers, so it is
+                # called exactly once per player per tick on both paths.
+                you = room.private_view_for(player, spotted)
+                send_text = getattr(conn, "send_text", None)
+                if template is not None and send_text is not None:
+                    head, mid, tail = template
+                    frame = f"{head}{player.ack}{mid}{json.dumps(you)}{tail}"
+                    sent_bytes += len(frame)
+                    await send_text(frame)
+                else:
+                    await conn.send_json(
+                        room.snapshot_message(now, rows, shared, player.ack, you)
+                    )
             except Exception:
                 # A dead socket is the /ws loop's problem; dropping the player
                 # here would race its own disconnect handling.
                 pass
+        if sent_bytes:
+            room.stats.tick_bytes.append(sent_bytes)
         # Cleared after everyone has been sent this tick's copy, not as they are
         # produced — a bot has no socket and would otherwise consume the effects
         # nobody ever saw.
@@ -1425,6 +1690,39 @@ class MatchServer:
         # built from this one list, so it cannot be emptied until the last of them
         # has had their audibility resolved against it.
         room.noises.clear()
+
+    @staticmethod
+    def _template_or_none(
+        room: MatchRoom, now: float, rows: list[dict], shared: dict[str, Any]
+    ) -> tuple[str, str, str] | None:
+        """The pre-serialised tick, or `None` to fall back to `send_json`.
+
+        Two reasons to fall back. A sentinel collision (`snapshot_template`
+        raises) is the unlikely one. The routine one is **this frame being
+        observed**: `WsConnection.send_json` hands every outbound frame to the
+        `/ws` observer as a dict, and the observability panel's whole job is
+        showing what actually went out. A pre-serialised frame has no dict to
+        give it, and rebuilding one would cost more than the saving — so a
+        watched frame takes the plain path. Legibility on this socket is worth
+        more than the bytes, which is why the wire is JSON at all.
+
+        Asked **per event**, not "is an observer registered": `app.py` registers
+        one unconditionally at import, so a global check would be permanently
+        true and would quietly make this whole path dead code. Today the answer
+        is no, because `snapshot` is on the observer's skip list — it is the
+        largest repeated payload on the socket and every tick looks like the
+        last. If that list ever changes, this correctly goes back to the plain
+        path instead of silently starving the panel.
+        """
+        from backend.modules.ws import is_observed
+
+        if is_observed(CHANNEL, "snapshot"):
+            return None
+        try:
+            return room.snapshot_template(now, rows, shared)
+        except ValueError:
+            logger.warning("hassault snapshot template split failed; sending plain")
+            return None
 
     async def broadcast_event(
         self, room: MatchRoom, event: str, data: dict[str, Any], exclude: str = ""
@@ -1581,7 +1879,11 @@ def parse_command(raw: Any) -> Command | None:
         # grenade" — the same shape as `weapon`, and for the same reason: a
         # nonsensical slot must do nothing rather than pick one.
         nade=(
-            int(_clamp(_num(raw.get("nade"), -1.0), -1.0, float(len(grenades.GRENADES) - 1)))
+            int(
+                _clamp(
+                    _num(raw.get("nade"), -1.0), -1.0, float(len(grenades.GRENADES) - 1)
+                )
+            )
             if isinstance(raw.get("nade"), (int, float))
             else -1
         ),

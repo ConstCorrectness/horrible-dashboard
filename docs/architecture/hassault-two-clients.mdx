@@ -88,6 +88,10 @@ maintenance hazard, listed so that changing one sends you to the other:
 | Light rig, tone curve | `HorribleAssaultPanel.tsx`, `lighting.wgsl.inc` | The two clients stop looking like the same game |
 | Faction colours | `skins.ts`, `bodies.rs` + `animator.rs` | Teams read differently depending on the client |
 | Grip transform for held weapons | `CharacterModel.ts`, `held.rs` | A rifle in the wrist rather than the hand |
+| Radar span, colours, blip sizes | `panels/Radar.tsx`, `radar.rs` + `hud.rs` | The same contact is at a different distance from the centre in each client |
+| Effect lifetimes, tints, blast curves | `effects.ts`, `effects.rs` | A tracer that lingers in one client and blinks in the other |
+| Build-in timing, band, rise, glow | `reveal.ts`, `reveal.rs` + `shader.wgsl` | The map assembles at a different speed or from a different direction |
+| Grenade and cloud tints, fuse blink rate | `nades.ts`, `nades.rs` | Smoke reads as a different colour depending on which client you launched |
 
 The tint and the detail tile are the two most worth pinning next: both are pure
 functions of small integer inputs, so a vectors file is cheap, and both decide
@@ -102,22 +106,381 @@ by a test in `shadow.rs` that reads the shader source.
 
 ## What the native client still lacks
 
-Accurate as of the shadow work. Everything here exists in the browser and does
-not exist natively — not as a stub, not as a partial: the code is absent.
+Accurate as of the invite and roster work. Everything here exists in the
+browser and does not exist natively — not as a stub, not as a partial: the code
+is absent.
 
 | Feature | Browser | Notes |
 | --- | --- | --- |
-| Radar / minimap | `panels/Radar.tsx` | The wire half now parses natively (`spotted`), the drawing does not exist |
-| Grenades in flight, smoke and fire | `nades.ts`, `utility.ts` | `nades`/`zones` now parse natively; nothing renders them |
-| Tracers and impacts | `effects.ts` | |
-| Through-wall reveal | `reveal.ts` | Patches the lit material via `onBeforeCompile` |
-| Voice comms | `voice.ts`, `panels/VoiceCommsPanel.tsx` | |
-| Match companion, post-match debrief, armoury | `panels/*.tsx` | Native has an in-match HUD (`hud.rs`) and a pause menu only |
 | Boot/backdrop scenery | `backdrop.ts` | Deliberately not ported: it is boot-sequence scenery, faded to zero once you deploy, and the native client goes straight into the map |
+| Joining an invite mid-session | `session.ts` | The invite is now *shown* natively; acting on it means leaving this match and reconnecting to another room, which the client cannot yet do |
 
 And in the other direction, so the list is honest: the native client has a
-**developer console**, a **NetGraph** (`F3`), and a **trace/conformance harness**
-that the browser pane does not.
+**NetGraph** (`F3`) and a **trace/conformance harness** that the browser pane
+does not.
+
+:::warning This table said the opposite until recently
+It claimed the native client had a developer console. There was no `console.rs`
+and no match arm for `console_res` — grep for "console" under
+`apps/native-fps/src/` returned nothing at all. That is the failure this page
+warns about, committed on the page itself: a table maintained by hand, describing
+two clients neither of which fails a build when it drifts. The console is real
+now; the lesson is that step 5 of the checklist below is the load-bearing one.
+:::
+
+
+
+## Divergence is now reported, not silent
+
+Everything above describes drift that was found by looking at a screenshot. Three
+mechanisms in the native client made that the _only_ way it could be found, and
+all three are now instrumented in `apps/native-fps/src/divergence.rs`:
+
+| Mechanism                      | What it swallowed                                                                                                                | What happens now                                                        |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `Event::Other`                 | `roster`, `invite`, `invites`, `invite_sent`, `console_res` — every event with no Rust variant, dropped by a `=> {}` in `app.rs` | `classify` names it once per event name                                 |
+| serde ignoring undeclared keys | `spotted`, `nades`, `zones`, `flash` arrived and evaporated for as long as they existed                                          | every wire struct carries `#[serde(flatten)] extra`, walked per message |
+| `#[serde(other)]` on `Fx`      | a new effect kind became `Fx::Other`, and the tag — the one useful fact — was destroyed as it was learned                        | `fx` is read as JSON first so the kind can be named                     |
+
+Two properties are load-bearing and easy to lose:
+
+- **Reported once per distinct thing, not per occurrence.** A snapshot arrives
+  20 times a second; an unfiltered warning is a way of being silent that also
+  costs frames.
+- **Reporting is never refusing.** `#[serde(deny_unknown_fields)]` would have
+  been the one-line version of this and it is the wrong tool: a client that
+  failed to parse a snapshot because the server grew a key would stop rendering
+  the moment the backend gained a feature. Rendering a little less of a newer
+  server is the correct behaviour; doing it in silence was not.
+
+The `extra` capture is deliberately a flattened catch-all rather than a list of
+expected keys. A list would need updating in step with the struct — the same
+discipline that failed in the first place — whereas declaring a real field
+removes the key from the report on its own.
+
+## The console, and the client-CVar contract
+
+The native client now has a developer console (`` ` ``), and it is worth being
+precise about what is shared and what is not, because "both clients have a
+console" is exactly the kind of statement that hides a divergence.
+
+**The registry is served.** `GET /api/hassault/console/definitions` is the one
+definition of every CVar, ConCommand and macro; `console.py` owns it,
+`registry.ts` reads it, and `console.rs` reads it. There is no Rust table. A
+node that cannot answer the route costs completion and validation and **changes
+no rendering at all** — which is why `ClientCvars` holds _overrides_ rather than
+a mirror seeded from the served defaults.
+
+**Execution splits on the flags, not on a namespace.** A `client`-flagged CVar is
+applied locally and never reaches the wire (the server does not apply them —
+`draw.hitboxes` means nothing on a machine with no screen). Everything else is
+sent as `console_exec` on the **match socket**, not through the REST route the
+browser pane uses: `channel.py` resolves the room and the player from the
+connection itself, so a command sent that way lands in the match the client is
+actually in, with no room id to get wrong.
+
+:::danger `affectedCvars` has two spellings
+The websocket handler writes `affectedCvars`; the REST route's Pydantic model
+writes `affected_cvars`. The browser pane only ever sees the second, so nothing
+has forced them to agree. `ConsoleResponse` accepts both — not out of tolerance,
+but because reading one would silently drop half the CVar updates depending on
+which pipe the answer came down.
+:::
+
+### The honesty rule
+
+The node serves 22 `client`-flagged CVars and the native client reads seven of
+them (`console::HONORED`). The tempting behaviour — accept every assignment
+silently — is the same failure this page exists to end: a console that answers
+`net.prediction = false` while prediction carries on running has now told the
+player something untrue.
+
+So setting a CVar with no reader here **stores the value and says so**, and
+`DIVERGENCE` typed into the console prints two lists: the client CVars this build
+has no reader for, derived from the served registry rather than written down, and
+everything the running server has actually sent that this build dropped. The
+console is the place divergence is _visible_ rather than another place it hides.
+
+One consequence worth keeping: **F3 and `net.graph` are now the same number.**
+The NetGraph step used to be a private field in `app.rs` while `net.graph` sat
+unread beside it, so typing `net.graph 2` changed the browser pane and not this
+client — the shape of divergence in miniature. Both now go through
+`App::net_graph()`.
+
+## The radar
+
+Now drawn natively. What is on it is not this client's decision: `you.spotted` is
+resolved by `MatchRoom.spotted_by`, because the answer depends on two things only
+the server holds — the level's geometry and the smoke standing in it. `radar.rs`
+filters by *team* and nothing else.
+
+The asymmetry between the two rules is the whole mechanic and is easy to get
+wrong in the tidy direction: **teammates are unconditional** (that is a radio,
+and they are deliberately absent from `spotted` — a per-player id list that never
+changes would be bytes a tick to say something already known), while **an enemy
+needs to have been seen by somebody on our side**, never by you specifically.
+
+### Why it is not a port of `Radar.tsx`
+
+The browser rasterises the map into an offscreen canvas once and blits it with a
+transform. There is no image and no transform here — the overlay is triangles,
+rebuilt from nothing each frame — so three things had to be solved differently
+rather than copied:
+
+| The browser | Natively |
+| --- | --- |
+| An offscreen canvas of open cells, blitted | Open cells merged into **runs** once per map, each drawn as an oriented thick line |
+| `ctx.clip()` to a circle | Segments cut against the circle analytically (`radar::clip_to_circle`) |
+| `ctx.rotate` | The same rotation applied per point, y-down, to match canvas exactly |
+
+Runs rather than cells because the browser's 110-cube span is ~12,000 open cells,
+and a quad each is more geometry than the map itself. A floor plan is mostly long
+corridors, so merging collapses it — measured at startup, which is why the run
+count is printed beside the triangle count:
+
+| Map | Grid | Cells | Runs |
+| --- | --- | --- | --- |
+| `hd_atrium` | 128² | 16,384 | 312 |
+| `ac_africa` | 256² | 65,536 | 237 |
+| `ac_aqueous` | 256² | 65,536 | 554 |
+
+A run is also a *segment*, which rotates correctly — whereas a rotated
+axis-aligned rectangle is not axis-aligned any more, and `Painter` has no
+primitive for one. Rows are culled against the span before any of them is
+transformed, so a frame touches a band of that few hundred rather than all of it.
+
+:::danger Orientation is the bug that passes every test
+A radar with the rotation sign flipped still turns when you turn, still puts
+contacts at the right distance, and is mirrored — worse than no radar, because it
+is trusted. Two tests read the emitted geometry back and assert that what is
+ahead is *up* and what is on your right is on the *right*; both were checked by
+deliberately breaking the projection, because a test that cannot fail is the
+same as no test. A third pins the **scale** against the browser's 110-cube span:
+right direction and wrong distance is the same lie in a quieter voice.
+:::
+
+Drawn only once joined, matching the browser's `online &&` gate. Train has no
+server and therefore no `spotted` — and the centre of the instrument is the one
+thing on it that must not be a guess.
+
+## Utility and effects
+
+Grenades, clouds, tracers, impacts and detonations are now drawn natively. Every
+one of them renders something the server already resolved: the arc, the bounce,
+the fuse, the cloud's radius and every shot's endpoints all arrive in the
+snapshot. Nothing in `nades.rs` or `effects.rs` simulates.
+
+Three things are worth carrying forward.
+
+### `flatten` does not reach inside an enum
+
+`Fx::Shot` has carried `origin` and `ends` since shots existed, and the native
+client declared neither — it matched the effect, flashed the muzzle from the
+`id`, and threw the geometry away. `Fx::Detonate` had no variant at all.
+
+The wire's own divergence check did not catch either, and the reason is a real
+limit worth knowing: `#[serde(flatten)]` cannot be applied inside an enum
+variant, so a *thin variant* is indistinguishable from a complete one. The
+catch-all reports unknown `fx` **kinds** — which is how `detonate` was found —
+but a missing field on a kind that is already handled is still only findable by
+reading `match.py`.
+
+### One translucent pass, two things in it
+
+Clouds and effects share a pipeline because they share the three properties that
+make a pass necessary: they blend, they must not write depth, and they must not
+cull back faces (walking into smoke has to fill the screen). They do **not**
+share shading, so `VolumeVertex` carries an explicit `mode`.
+
+That is deliberately a field and not a convention. The tempting trick is a zero
+normal — no sphere produces one — but a rule encoded in the *absence* of data is
+one nobody finds when it breaks, and four bytes on a buffer of a few thousand
+vertices is not worth being clever about.
+
+### Buffer budgets are a real failure mode here
+
+`MAX_BODY_VERTS` was 4096, justified in its own comment by "16 players × 6 box
+faces × 6 vertices = 576, generous room". That arithmetic was true when a body
+*was* a box. `bodies.rs` later became an articulated operator of some nineteen
+boxes — **684 vertices a body** — and the cap silently stopped fitting six
+players. `set_bodies` truncates, so a full match simply stopped drawing its last
+players, and a body cut off mid-torso is not a symptom anyone traces to a
+constant.
+
+There are now two defences, and both earned their place immediately:
+
+- **The budgets are asserted from the real builders** (`renderer::budget`), not
+  estimated. That test moved `MAX_VOLUME_VERTS` twice while this landed — once
+  when a full team's smokes came to 18,432, again when tracers and impacts
+  joined the same buffer and a shotgun volley from everyone put it past 48,000.
+- **Overflow is reported** through `divergence::note_overflow`. Truncating is
+  still the right behaviour — a buffer that grew mid-frame would stutter — but
+  it is no longer silent.
+
+:::note What is still different from the browser
+The native clouds use a **static** world-space value noise; the browser animates
+its shader on a time uniform, and this pass has no clock. Smoke here has
+structure but does not roil. Recorded rather than quietly accepted, because a
+difference nobody wrote down is the next entry in the drift table.
+:::
+
+### The shaders are checked now
+
+`cargo check` never looks at a `.wgsl` file — it is a string literal to the
+compiler. A typo failed at `create_render_pipeline`, on a machine with a GPU, at
+the instant somebody launched the game. `tests/shaders.rs` parses and validates
+the same concatenated source the renderer builds, and asserts that every entry
+point a pipeline names exists. It does not replace running the thing (vertex
+layouts and bind group types are still only proven on a driver), but it catches
+the whole class of "the shader does not compile".
+
+## The build-in
+
+The map assembles itself when you arrive: cubes rise into place along a front
+that sweeps out from the middle, lit at the frontier and settling into their
+normal shading behind it. `reveal.rs` plus four additions to `shader.wgsl`,
+ported from the browser's `reveal.ts`.
+
+:::warning This was listed as "through-wall reveal"
+It is not. `reveal.ts` is the **map build-in**, and the row in the table above
+described it as a wallhack for however long it sat there. Nobody would have
+found that by reading the code, because nobody reads a row describing a feature
+they are not building — which is the same way the "native has a developer
+console" row survived.
+:::
+
+### It is not driven by load progress, in either client
+
+`reveal.ts`'s own header says it is "driven by the real load progress". The call
+site does the opposite and explains why: *"Runs on its own clock rather than on
+load progress: the map is already here by now, and the point of the animation is
+to show the world arriving, not to stall until it has."* The call site is the one
+that is true.
+
+That contradiction is the only reason this was portable. Driven by real progress
+it would need the native client's startup restructured — the window does not
+exist until the map is fetched and meshed. On its own clock it is a float and a
+shader.
+
+### Where the progress lives, and why that is the design
+
+In the **camera's** uniform (`CameraUniform::reveal`), not a uniform of its own.
+The world, the bodies and the view model all share one pipeline and one shader
+and differ only in which camera bind group is bound, so what is and is not
+revealed becomes a matter of *which uniform you hand a draw call* rather than a
+branch somebody has to remember:
+
+| Draw | Bind group | Revealed |
+| --- | --- | --- |
+| World mesh | `camera_bind_group` | yes |
+| Bodies, grenades, hitbox wireframes | `settled_bind_group` | no |
+| Skinned operators | `settled_bind_group` | no |
+| View model | `viewmodel_bind_group` | no |
+
+`settled_bind_group` was added *because* of a divergence this created:
+`skin.wgsl` declares a `Camera` without the reveal field at all, so the skinned
+operators were exempt automatically while the box-body fallback would have risen
+out of the floor with the map. Two body paths behaving differently, decided by
+which shader happened to declare which struct. They are now exempt explicitly.
+
+### The two silent failure modes
+
+Both are the kind that produce a plausible picture rather than an error:
+
+- **A zero radius or height** divides by zero in the ordering function and
+  resolves every vertex to build order 1 — a world that appears all at once at
+  the very end, looking exactly like an effect that simply did not run.
+  `Reveal::fit` clamps, and a test pins it.
+- **Stopping progress at exactly 1.0** leaves the far corner mid-rise forever,
+  which is how a build-in finishes with a seam across the map. Progress is
+  driven to `1 + BAND`.
+
+And one performance note: once the build is over the shader takes a
+uniform-coherent branch and skips the ordering function entirely, rather than
+evaluating a hash, a length and a floor per vertex per frame for the rest of the
+match to compute a number that is always 1.
+
+:::note What is still different
+The browser skips the animation for `prefers-reduced-motion`. This client has no
+way to read that preference — winit does not expose it and the Windows API for it
+would mean a dependency for one boolean — so `Reveal::disable` exists and nothing
+calls it. Recorded rather than quietly dropped.
+:::
+
+## Rows that were never native gaps
+
+Three entries sat in the table above for a long time. None of them described
+something the native client was behind on, and each was wrong in a different
+way. They are recorded here rather than deleted, because the *reason* each was
+wrong is the reusable part.
+
+### Voice comms — neither client has it
+
+`voice.ts` opens your microphone, builds a spatial audio graph, and exposes
+`attachPeerStream`. **Nothing calls `attachPeerStream`.** There is no
+`RTCPeerConnection` anywhere in the module, no signalling, and no voice channel
+in the backend — `grep -rn voice backend/modules/hassault` returns a comment
+about a weapon's sound and nothing else.
+
+So voice comms is a microphone, an audio graph and a panel of toggles with no
+transport between players. Porting the native half would have been building the
+client end of a feature that has no middle. What is missing is the transport,
+for both clients at once.
+
+### Match companion and post-match debrief — the browser's UI *for* the native client
+
+`MatchCompanion` renders under `{nativeRunning && ...}`. It is the dashboard
+panel shown **while the native game runs in its own window**. Porting it into
+the native client is a category error.
+
+`PostMatchDebrief` is populated from `GET /hassault/match/latest_summary`, and
+the summary is written by `channel.py`'s `_record_result` when a socket leaves a
+room — which happens for a native client exactly as it does for a browser one.
+A native match is already recorded and already produces a debrief; it appears in
+the dashboard, where the XP and the skin drop it reports also live.
+
+### Armoury — a store, not a game surface
+
+899 lines of inventory and marketplace. The native client already reads the
+equipped skins it needs (`GET /hassault/skins/inventory`). Buying cosmetics
+belongs in the dashboard, and a native client that also had to be a shop would
+be duplicating a surface for no gameplay reason.
+
+:::danger The pattern
+Every one of these rows was written by someone listing what the browser has and
+the native client does not, without asking what the thing *is*. That is the same
+inventory that described `reveal.ts` as a through-wall wallhack and claimed the
+native client had a developer console. A gap table is only worth having if each
+row has been read against the code it names.
+:::
+
+## The events that were still being dropped
+
+`invite`, `invites`, `joined`, `left` and `roster` reached the native client and
+vanished into `Event::Other`. The divergence report named them; this closes them.
+
+The one that cost something is **`invite`**. `fabric.py` broadcasts it the moment
+it arrives, so a client that is *already in a game* is precisely who it is aimed
+at — and a friend inviting a native player got silence with no way to know why.
+It now prints and lands on the kill feed, which is already the place this client
+says what just happened.
+
+It is **shown, not acted on**: joining would mean leaving this match and
+reconnecting to another room mid-session, which the client cannot do. The room id
+is on screen so `--room` can be used deliberately. That is now the honest row in
+the "still lacks" table, replacing three that were not.
+
+Two shapes worth pinning, both of which a tidier model would have got wrong:
+
+- **`joined` carries a whole `player` row; `left` carries only a `playerId`.**
+  Modelling them as one event reads an empty row on every departure and
+  announces that somebody called `""` has left.
+- **`roster`'s `added` is a list of names and its `removed` is a count.** Not
+  symmetric. Declaring `removed` as a list parses nothing, silently, and reports
+  no bots leaving.
+
+`left` is also the one thing a snapshot cannot express: a body that disconnected
+and a body behind a wall both simply stop appearing.
 
 ## Adding a feature: the checklist
 
@@ -131,6 +494,8 @@ When you add something to either client, walk this list. It is short on purpose.
 3. **Does it need a wire field?** Check `protocol.rs` actually declares it. The
    native client silently ignored `nades`, `zones`, `spotted` and `flash` for as
    long as they existed, because an undeclared field in serde is not an error.
+   It is no longer silent — see "Divergence is now reported" above — but a line
+   on stderr is a prompt to declare the field, not a substitute for doing it.
 4. **Is it visual?** Then it will not be caught by any test. Render it and look:
    `cargo run --example operator_preview` for the character offscreen, or launch
    the client against a local node. Put the picture next to the browser's.

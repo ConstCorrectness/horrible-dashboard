@@ -276,13 +276,35 @@ impl World {
     }
 }
 
+/// Test worlds, shared across the crate's suites.
+///
+/// Lifted out of `mod tests` when the radar needed one: a builder private to
+/// one test module gets copy-pasted into the next, and two builders that were
+/// meant to be the same world are two worlds that quietly differ.
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::api::MapInfo;
+impl World {
+    /// A world of `ssize`² cells, all open.
+    pub fn test_open(ssize: i32) -> World {
+        World::test_build(ssize, |_| {})
+    }
 
-    /// A 4×4 world we can hand-check, built plane by plane in the wire order.
-    fn build(ssize: i32, mut edit: impl FnMut(&mut Vec<Vec<u8>>)) -> World {
+    /// An open interior inside a solid border — the shape every real map has,
+    /// because a map open at the edge is one you can walk out of.
+    pub fn test_box(ssize: i32) -> World {
+        World::test_build(ssize, |planes| {
+            for y in 0..ssize {
+                for x in 0..ssize {
+                    if x == 0 || y == 0 || x == ssize - 1 || y == ssize - 1 {
+                        planes[0][(y * ssize + x) as usize] = SOLID;
+                    }
+                }
+            }
+        })
+    }
+
+    /// Built plane by plane **in the wire order**, so a test world is assembled
+    /// the same way a real one is read.
+    pub fn test_build(ssize: i32, mut edit: impl FnMut(&mut Vec<Vec<u8>>)) -> World {
         let n = (ssize * ssize) as usize;
         // type, floor, ceil, wtex, ftex, ctex, vdelta, utex, tag
         let mut planes = vec![
@@ -298,7 +320,7 @@ mod tests {
         ];
         edit(&mut planes);
         let bytes: Vec<u8> = planes.concat();
-        let info = MapInfo {
+        let info = crate::api::MapInfo {
             name: "t".into(),
             ssize,
             cubic_size: n,
@@ -307,6 +329,17 @@ mod tests {
             ..Default::default()
         };
         World::new(info, &bytes).expect("world")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::MapInfo;
+
+    /// A 4×4 world we can hand-check. See `World::test_build`.
+    fn build(ssize: i32, edit: impl FnMut(&mut Vec<Vec<u8>>)) -> World {
+        World::test_build(ssize, edit)
     }
 
     #[test]

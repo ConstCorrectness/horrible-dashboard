@@ -39,17 +39,23 @@ use hassault_native::api::{HitboxSpec, WeaponSpec};
 use hassault_native::audio::GameAudio;
 use hassault_native::bodies;
 use hassault_native::camera::Camera;
+use hassault_native::console::{self, ClientCvars, Console, Definitions, Dispatch};
+use hassault_native::effects::EffectsPool;
 use hassault_native::geometry::MeshData;
 use hassault_native::held;
-use hassault_native::hud::{Hud, HudView, OverlayVertex, ScoreRow};
+use hassault_native::hud::{ConsoleView, Hud, HudView, OverlayVertex, RadarView, ScoreRow};
 use hassault_native::interp::{PingTracker, SnapshotBuffer};
 use hassault_native::menu::{self, Action, Menu, Page};
+use hassault_native::nades::{self, NadePool};
 use hassault_native::net::{Incoming, MatchSocket};
 use hassault_native::physics::{self, eye_height, MoveInput, JUMP_SPEED, MOVE_SPEED};
 use hassault_native::prediction::Prediction;
+use hassault_native::prop;
 use hassault_native::protocol::{Command, Event, Fx, PlayerRow, SelfState};
-use hassault_native::renderer::{Renderer, Vertex};
-use hassault_native::settings::{Settings, SettingsWriter};
+use hassault_native::radar::{self, Blip, Run};
+use hassault_native::renderer::{Renderer, Vertex, VolumeVertex};
+use hassault_native::reveal::Reveal;
+use hassault_native::settings::{Crosshair, CrosshairStyle, Settings, SettingsWriter};
 use hassault_native::trace::kick_vector;
 use hassault_native::training::TrainingRange;
 use hassault_native::viewmodel::{self, Skin, WeaponViewModel};
@@ -162,10 +168,48 @@ pub struct App {
     frames: u32,
     fps_since: Instant,
     fps: f32,
-    net_graph: u32,
+    /// The `net.graph` step this client falls back to when nothing has set the
+    /// CVar. **Not the live value** — that is `self.net_graph()`, which consults
+    /// the console first. Keeping the private field as the *default* rather than
+    /// as the state is what stops F3 and `net.graph 2` being two different
+    /// numbers for the same thing, which is precisely the shape of divergence
+    /// this client already had against the browser pane.
+    net_graph_default: u32,
+    /// Grenades in the air and the clouds they leave. Drawn only — every
+    /// position, radius and fuse in it is the server's. See `nades.rs`.
+    /// The map building itself, over the first couple of seconds. See
+    /// `reveal.rs` — a clock, not a load progress bar, exactly as the browser's
+    /// call site runs it.
+    reveal: Reveal,
+    nades: NadePool,
+    /// Tracers, impacts and detonations. Like the nades, purely a renderer for
+    /// what the server resolved — see `effects.rs`.
+    effects: EffectsPool,
+    /// Kept buffers, like `overlay`: the render path does not allocate.
+    volume_verts: Vec<VolumeVertex>,
+    /// The map's floor plan, merged into runs **once** when the world loads.
+    /// See `radar::floor_plan`: it is a property of the map, and rebuilding it
+    /// per frame is how a minimap costs more than the map.
+    radar_plan: Vec<Run>,
+    /// This frame's radar contacts. A kept buffer rather than a fresh `Vec`, for
+    /// the same reason `overlay` is: the render path does not allocate.
+    blips: Vec<Blip>,
+    /// The developer console. See `console.rs` — the registry it completes and
+    /// validates against is served by the node, never declared here.
+    console: Console,
+    /// Live values for `client`-flagged CVars: **overrides**, empty until
+    /// something sets one, so a node that cannot serve the registry changes no
+    /// behaviour at all. Every reader passes its own default as the fallback.
+    cvars: ClientCvars,
     /// Unacknowledged commands, sampled when the title updates.
     pending: usize,
     map_name: String,
+    /// The room this client is in, from the welcome. Empty in Train and while
+    /// connecting — the console header draws nothing rather than an empty label,
+    /// because `ROOM` with a blank after it reads as a room whose id is missing.
+    room: String,
+    /// Which modifier keys are held. See `WindowEvent::ModifiersChanged`.
+    modifiers: winit::keyboard::ModifiersState,
     /// Sequence numbers for the offline simulation, which has no socket to stamp
     /// them. Only the ordering matters here — nothing acknowledges them.
     local_seq: u64,
@@ -270,6 +314,8 @@ impl App {
         weapons: Vec<WeaponSpec>,
         skins: HashMap<String, Skin>,
         hitbox: HitboxSpec,
+        definitions: Definitions,
+        radar_plan: Vec<Run>,
     ) -> App {
         let map_name = world.info.name.clone();
         let mut app = App {
@@ -306,9 +352,19 @@ impl App {
             frames: 0,
             fps_since: Instant::now(),
             fps: 0.0,
-            net_graph: 1,
+            net_graph_default: 1,
+            reveal: Reveal::default(),
+            nades: NadePool::default(),
+            effects: EffectsPool::default(),
+            volume_verts: Vec::new(),
+            radar_plan,
+            blips: Vec::new(),
+            console: Console::default(),
+            cvars: ClientCvars::default(),
             pending: 0,
             map_name,
+            room: String::new(),
+            modifiers: winit::keyboard::ModifiersState::empty(),
             local_seq: 0,
             weapons,
             skins,
@@ -340,6 +396,13 @@ impl App {
             // sound is broken, and the noise mechanic is a mechanic.
             eprintln!("hassault: no audio output device; playing silently");
         }
+        // Aimed at the map it will build. `extent * 1.05` is the browser's:
+        // a radius slightly larger than the world, so the far corner is not
+        // still mid-rise when the clock runs out.
+        let extent = app.world.ssize as f32 * 0.5;
+        app.reveal
+            .fit([extent, extent], extent * 1.05, (extent * 0.6).max(1.0));
+        app.console.set_definitions(definitions);
         if app.socket.is_none() {
             app.place_offline();
         }
@@ -393,7 +456,7 @@ impl App {
         // narrowed the view without slowing the mouse would make a given hand
         // movement sweep four times as much of the world at 4× — an aim that is
         // wrong only while scoped.
-        let sensitivity = LOOK_SCALE * self.sensitivity / self.magnification();
+        let sensitivity = LOOK_SCALE * self.sensitivity() / self.magnification();
         self.camera.apply_look(dx, dy, sensitivity);
     }
 
@@ -480,6 +543,13 @@ impl App {
     /// Advance the HUD and the weapon in the hands by one frame.
     fn animate(&mut self, dt: f32) {
         self.hud.update(dt);
+        // Drawn-position easing only. Nothing here simulates a grenade — the
+        // arc, the bounce and the fuse are all the server's, and a second
+        // implementation of the bounce would exist only to disagree with the
+        // first.
+        self.reveal.advance(dt);
+        self.nades.update(dt);
+        self.effects.update(dt);
         // Advanced here rather than at draw time so every player's clip runs on
         // the same clock the weapon and the HUD do. The poses are uploaded later
         // in the frame — see `poses()`.
@@ -512,6 +582,7 @@ impl App {
             self.unscope();
         }
         self.viewmodel.set_weapon(&weapon, self.skins.get(&weapon));
+        self.sync_prop(&weapon);
         // Alive unless the server says otherwise. **Not** gated on the pointer
         // being captured: releasing it here is not a menu, it is a mouse you can
         // move — the world is still drawn behind it, so a world with no weapon
@@ -689,6 +760,7 @@ impl App {
             match item {
                 Incoming::Event(Event::Welcome(w)) => {
                     eprintln!("hassault: joined room {} as {}", w.room, w.player_id);
+                    self.room = w.room.clone();
                     self.self_id = w.player_id;
                     self.players = w.players;
                     self.joined = true;
@@ -741,6 +813,22 @@ impl App {
                         // trigger controller, so the key flashes on shots the
                         // server refused for rate limiting, an empty magazine, or
                         // being dead.
+                        // The shot's geometry, which this client parsed and
+                        // discarded for as long as shots have existed: the
+                        // server resolves every ray and sends the muzzle and
+                        // one endpoint per pellet.
+                        if let Fx::Shot {
+                            id, origin, ends, ..
+                        } = fx
+                        {
+                            self.effects.shot(*origin, ends, id == &self.self_id);
+                        }
+                        if let Fx::Detonate {
+                            nade, at, radius, ..
+                        } = fx
+                        {
+                            self.effects.detonate(nade, *at, *radius);
+                        }
                         if let Fx::Shot { id, .. } = fx {
                             // Every shooter's upper body kicks, not just ours —
                             // the animation is how a shot reads from the outside.
@@ -769,6 +857,10 @@ impl App {
                             audio.heard(event, yaw, &self.weapons);
                         }
                     }
+                    // Grenades and clouds. Both were declared in `protocol.rs`
+                    // and read by nothing at all until now — parsed every tick,
+                    // 20 times a second, and thrown away.
+                    self.nades.sync(&s.nades, &s.zones);
                     self.scores = s.scores.clone();
                     self.you = Some(s.you.clone());
                     // Filed for interpolation *before* the roster is replaced,
@@ -817,6 +909,75 @@ impl App {
                     let rtt = (Self::clock_ms() - p.t).max(0.0) as f32;
                     self.ping.record(rtt);
                 }
+                Incoming::Event(Event::Invite(invite)) => {
+                    // The event this client dropped that actually cost somebody
+                    // something: `fabric.py` broadcasts an invite the moment it
+                    // arrives, so a client already in a game is exactly who it
+                    // is aimed at — and a friend inviting a native player got
+                    // silence and no way to know why.
+                    //
+                    // Shown, not acted on. Joining would mean leaving this match
+                    // and reconnecting to another room mid-session, which is a
+                    // bigger change than telling the player it happened; the
+                    // room id is on screen so `--room` can be used deliberately.
+                    let who = if invite.host_name.is_empty() {
+                        invite.host.clone()
+                    } else {
+                        invite.host_name.clone()
+                    };
+                    let map = if invite.map.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" on {}", invite.map)
+                    };
+                    eprintln!("hassault: {who} invited you to room {}{map}", invite.room);
+                    self.hud
+                        .note(format!("{who} invites you: room {}", invite.room), true);
+                }
+                Incoming::Event(Event::Invites(list)) => {
+                    // Only in answer to asking, which this client does not do
+                    // yet. Handled so it is not reported as unhandled forever —
+                    // an empty branch that says why is worth more than a name in
+                    // a divergence log nobody will action.
+                    if !list.invites.is_empty() {
+                        eprintln!("hassault: {} invite(s) waiting", list.invites.len());
+                    }
+                }
+                Incoming::Event(Event::Joined(joined)) => {
+                    if joined.player.id != self.self_id {
+                        let name = name_or_id(&joined.player.name, &joined.player.id);
+                        self.hud.note(format!("{name} joined"), false);
+                    }
+                }
+                Incoming::Event(Event::Left(left)) => {
+                    // Worth saying, and the one thing a snapshot cannot: a body
+                    // that disconnected and a body behind a wall both simply
+                    // stop appearing.
+                    let name = self
+                        .players
+                        .iter()
+                        .find(|p| p.id == left.player_id)
+                        .map(|p| name_or_id(&p.name, &p.id))
+                        .unwrap_or_else(|| left.player_id.clone());
+                    if left.player_id != self.self_id {
+                        self.hud.note(format!("{name} left"), false);
+                    }
+                }
+                Incoming::Event(Event::Roster(roster)) => {
+                    if !roster.added.is_empty() {
+                        self.hud
+                            .note(format!("{} bots fielded", roster.added.len()), false);
+                    } else if roster.removed > 0 {
+                        self.hud
+                            .note(format!("{} bots kicked", roster.removed), false);
+                    }
+                }
+                Incoming::Event(Event::ConsoleRes(res)) => {
+                    self.console.on_response(&res, &mut self.cvars);
+                }
+                // Already reported by name in `protocol::classify` — see
+                // `divergence::note_event`. Nothing to do here beyond not
+                // pretending this was a handled message.
                 Incoming::Event(Event::Other(_)) => {}
                 Incoming::Closed(why) => {
                     eprintln!("hassault: connection closed: {why}");
@@ -1093,6 +1254,304 @@ impl App {
         }
     }
 
+    /// Which side we are on, from the shared roster.
+    ///
+    /// Read off our own `PlayerRow` rather than kept as state: the server can
+    /// move a player between teams (autobalance), and a cached copy would leave
+    /// the radar colouring the wrong half of the room with nothing reporting it.
+    /// `-1` while there is no row for us yet — a team nobody is on, so the
+    /// radar shows no friendlies rather than treating every stranger as one.
+    fn my_team(&self) -> i32 {
+        self.players
+            .iter()
+            .find(|p| p.id == self.self_id)
+            .map(|p| p.team)
+            .unwrap_or(-1)
+    }
+
+    /// The live `net.graph` step.
+    ///
+    /// The CVar wins when it is set, and `net_graph_default` is what F3 has been
+    /// stepping. Reading through one accessor is the point: the browser pane
+    /// draws its NetGraph from `net.graph` and this client drew it from a
+    /// private field, so `net.graph 2` typed into a console changed one client
+    /// and not the other — with nothing anywhere reporting that.
+    fn net_graph(&self) -> u32 {
+        self.cvars
+            .number("net.graph")
+            .map(|v| v.clamp(0.0, 3.0) as u32)
+            .unwrap_or(self.net_graph_default)
+    }
+
+    /// Whether hitboxes are drawn. The CVar over the saved setting, because a
+    /// console assignment is a statement about *now* and the setting is a
+    /// preference — and the browser pane resolves the same pair the same way.
+    fn show_hitboxes(&self) -> bool {
+        self.cvars
+            .boolean("draw.hitboxes")
+            .unwrap_or(self.settings.show_hitboxes)
+    }
+
+    /// The crosshair this frame, with any console overrides folded in.
+    ///
+    /// Built per frame rather than mutated in place so the saved setting is
+    /// never overwritten by a console experiment: closing the console with
+    /// `draw.crosshair.size 9` still on it should not leave 9 in the settings
+    /// bag, and a mutation would.
+    fn crosshair(&self) -> Crosshair {
+        let mut c = self.settings.crosshair;
+        if let Some(v) = self.cvars.number("draw.crosshair.size") {
+            c.size = v.clamp(1.0, 12.0);
+        }
+        if let Some(v) = self.cvars.number("draw.crosshair.gap") {
+            c.gap = v.clamp(0.0, 20.0);
+        }
+        if let Some(v) = self.cvars.number("draw.crosshair.thickness") {
+            c.thickness = v.clamp(0.2, 3.0);
+        }
+        if let Some(v) = self.cvars.string("draw.crosshair.style") {
+            c.style = CrosshairStyle::parse(v);
+        }
+        c
+    }
+
+    /// Mouse sensitivity, CVar over setting. Same resolution as the crosshair.
+    fn sensitivity(&self) -> f32 {
+        self.cvars
+            .number("player.sensitivity")
+            .map(|v| v.clamp(0.05, 10.0))
+            .unwrap_or(self.sensitivity)
+    }
+
+    /// Make the uploaded prop match the weapon in hand.
+    ///
+    /// Called every frame with whatever the server last said we are holding, and
+    /// cheap on the frames where nothing changed — `holds_prop` is a string
+    /// compare, and the parse and upload only happen on a real swap.
+    ///
+    /// Every failure here falls back to the box model rather than propagating.
+    /// A weapon with no GLB, a GLB that will not parse, a prop that cannot be
+    /// fitted: all three are a weapon that draws as boxes, which is a complete
+    /// working weapon and was the only kind there was until recently. The parse
+    /// failure is *reported* through `divergence`, though — silently drawing
+    /// boxes because an asset is corrupt is the shape of bug this client keeps
+    /// finding.
+    fn sync_prop(&mut self, weapon: &str) {
+        // No renderer yet means the window has not come up. Nothing to upload
+        // to, and the next frame that has one runs this again.
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+        if !renderer.holds_prop(weapon) {
+            match prop::weapon_glb(weapon) {
+                None => {
+                    // No prop for this weapon, which is a decision rather than a
+                    // failure — see `WEAPON_GLBS`.
+                    renderer.clear_prop();
+                    self.viewmodel.clear_prop();
+                }
+                Some(bytes) => match prop::Prop::from_slice(bytes) {
+                    Ok(parsed) => {
+                        let (min, max) = parsed.bounds();
+                        if self.viewmodel.fit_prop(min, max).is_some() {
+                            renderer.set_prop(weapon, &parsed);
+                        } else {
+                            renderer.clear_prop();
+                            self.viewmodel.clear_prop();
+                        }
+                    }
+                    Err(e) => {
+                        hassault_native::divergence::note_prop(weapon, &e);
+                        renderer.clear_prop();
+                        self.viewmodel.clear_prop();
+                    }
+                },
+            }
+        }
+        renderer.set_prop_model(self.viewmodel.prop_model());
+    }
+
+    /// Open or close the console.
+    ///
+    /// Releases the pointer on the way open, for the same reason Escape does:
+    /// you cannot type into a window that is eating your mouse, and a console
+    /// that left the view spinning while you typed would be unusable. Restoring
+    /// the grab on close would be wrong in the menu's case and is left to the
+    /// player's next click, exactly as `set_grab(false)` elsewhere.
+    fn toggle_console(&mut self) {
+        self.console.open = !self.console.open;
+        if self.console.open {
+            self.set_grab(false);
+            // Every movement key is released, not remembered. A console opened
+            // mid-strafe otherwise leaves the body walking into a wall for as
+            // long as it takes to type a command — and the key-up that would
+            // have stopped it is swallowed by the console.
+            self.keys = Keys::default();
+        }
+    }
+
+    /// Run one console line and send it on if the node has to answer it.
+    fn run_console(&mut self, line: &str) {
+        let online = self.socket.is_some();
+        let dispatch = self.console.execute(line, &mut self.cvars, online);
+        self.dispatch_console(dispatch);
+    }
+
+    fn dispatch_console(&mut self, dispatch: Dispatch) {
+        match dispatch {
+            Dispatch::Handled => {}
+            Dispatch::SaveTranscript { text } => self.save_transcript(&text),
+            Dispatch::Send { command, req_id } => self.send_console(&command, req_id),
+        }
+    }
+
+    /// Write the scrollback out and say where it went.
+    ///
+    /// Into the **system temp directory**, which is a deliberate choice and not
+    /// laziness. This client writes nothing else to disk at all — its settings
+    /// live on the node and arrive over HTTP — so there is no data directory
+    /// here to put it in, and inventing one would mean a second answer to a
+    /// question `backend/paths.py` is the single authority on. A transcript is
+    /// also a transient artifact: you write it to attach it to a bug report, not
+    /// to keep it. Temp is where both of those point.
+    fn save_transcript(&mut self, text: &str) {
+        // Seconds since the epoch, not a formatted date: `std` cannot render a
+        // local time, and all this has to do is stop two saves in one session
+        // overwriting each other.
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!("hassault-console-{stamp}.log"));
+        match std::fs::write(&path, text) {
+            Ok(()) => self.console.note(format!("wrote {}", path.display())),
+            Err(e) => self
+                .console
+                .error(format!("could not write {}: {e}", path.display())),
+        }
+    }
+
+    fn send_console(&mut self, command: &str, req_id: u64) {
+        let Some(socket) = &self.socket else {
+            // `execute` already refuses when offline, so reaching here means the
+            // socket went away between the two — worth saying rather than
+            // dropping the line into nothing.
+            self.console
+                .error("the connection is gone; nothing was sent");
+            return;
+        };
+        if let Err(e) = socket.console_exec(command, req_id) {
+            self.console.error(format!("could not send: {e}"));
+        }
+    }
+
+    /// The console's keyboard. Returns whether the key was consumed.
+    ///
+    /// The console takes the keyboard **whole** while it is up, the same rule
+    /// the menu follows: a `W` typed into a command must not also walk you
+    /// forward, and the key that closes it must not also do something in the
+    /// game on the way past.
+    fn console_key(&mut self, code: KeyCode, text: Option<&str>) {
+        match code {
+            KeyCode::Escape | KeyCode::Backquote => {
+                self.console.open = false;
+                return;
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter => {
+                let online = self.socket.is_some();
+                let dispatch = self.console.submit(&mut self.cvars, online);
+                self.dispatch_console(dispatch);
+                return;
+            }
+            KeyCode::Backspace => {
+                self.console.backspace();
+                return;
+            }
+            KeyCode::Tab => {
+                self.console.complete();
+                return;
+            }
+            KeyCode::ArrowUp => {
+                self.console.history_prev();
+                return;
+            }
+            KeyCode::ArrowDown => {
+                self.console.history_next();
+                return;
+            }
+            KeyCode::ArrowLeft => {
+                self.console.move_cursor(-1);
+                return;
+            }
+            KeyCode::ArrowRight => {
+                self.console.move_cursor(1);
+                return;
+            }
+            KeyCode::PageUp => {
+                self.console.scroll_by(1, 8);
+                return;
+            }
+            KeyCode::PageDown => {
+                self.console.scroll_by(-1, 8);
+                return;
+            }
+            // The browser's filter tabs. Ctrl is not needed — nothing in a
+            // console line is typed with a bare function key — but `^F` is what
+            // the header advertises and what every other text surface uses, so
+            // the plain key is left alone for whoever binds it.
+            KeyCode::KeyF if self.modifiers.control_key() => {
+                self.console.cycle_filter();
+                let hidden = self.console.hidden_count();
+                self.console.note(format!(
+                    "filter: {} ({hidden} lines hidden)",
+                    self.console.filter.label()
+                ));
+                return;
+            }
+            // The browser's toolbar, as keys. The command comes from
+            // `quick_actions` rather than being spelled again here: a toggle has
+            // to know what it is toggling *from*, and a second copy of that
+            // arithmetic is how a key ends up only ever turning something on.
+            KeyCode::F1
+            | KeyCode::F2
+            | KeyCode::F3
+            | KeyCode::F4
+            | KeyCode::F5
+            | KeyCode::F6
+            | KeyCode::F7
+            | KeyCode::F8 => {
+                let index = match code {
+                    KeyCode::F1 => 0,
+                    KeyCode::F2 => 1,
+                    KeyCode::F3 => 2,
+                    KeyCode::F4 => 3,
+                    KeyCode::F5 => 4,
+                    KeyCode::F6 => 5,
+                    KeyCode::F7 => 6,
+                    _ => 7,
+                };
+                if let Some(command) = self.console.quick_command(index, &self.cvars) {
+                    // Echoed and run through the same path a typed line takes,
+                    // so the log records what the key did. A quick action whose
+                    // effect was invisible in the scrollback would be the one
+                    // part of this console you could not audit.
+                    self.console
+                        .push(format!("] {command}"), console::Tone::Echo);
+                    self.run_console(&command);
+                }
+                return;
+            }
+            _ => {}
+        }
+        // Text comes from the *logical* key, never from the physical one: a
+        // physical `KeyZ` is a `Z` on QWERTY and a `W` on AZERTY, and a console
+        // that spelled commands by scancode would be unusable on half the
+        // keyboards in the world.
+        if let Some(text) = text {
+            self.console.insert(text);
+        }
+    }
+
     fn window_size(&self) -> (f32, f32) {
         self.renderer
             .as_ref()
@@ -1286,6 +1745,34 @@ impl App {
     }
 }
 
+/// A key as the console spells it.
+///
+/// `KeyF` is `f` and `Digit1` is `1`, because `bind keyf "..."` is not something
+/// anybody would type. Derived from winit's own name rather than from a table:
+/// a table would need a row per key and would be missing exactly the one
+/// somebody wanted to bind.
+/// A player's display name, falling back to their id.
+///
+/// A blank name is not an error — a bot's name is its own, and a browser client
+/// that has not been told a username yet sends none — but "  joined" is a line
+/// nobody can read.
+fn name_or_id(name: &str, id: &str) -> String {
+    if name.trim().is_empty() {
+        id.to_string()
+    } else {
+        name.to_string()
+    }
+}
+
+fn key_name(code: KeyCode) -> String {
+    let raw = format!("{code:?}");
+    let trimmed = raw
+        .strip_prefix("Key")
+        .or_else(|| raw.strip_prefix("Digit"))
+        .unwrap_or(&raw);
+    trimmed.to_ascii_lowercase()
+}
+
 fn axis(positive: bool, negative: bool) -> f32 {
     (positive as i32 as f32) - (negative as i32 as f32)
 }
@@ -1384,6 +1871,10 @@ impl ApplicationHandler for App {
                     }
                 }
             }
+            // A click with the console up is a click *on the console*: grabbing
+            // the pointer there would hide the cursor and start turning the view
+            // while the player is still typing.
+            WindowEvent::MouseInput { .. } if self.console.open => {}
             WindowEvent::MouseInput { state, button, .. } => {
                 if button == MouseButton::Right && self.focused {
                     if state == ElementState::Pressed {
@@ -1401,9 +1892,26 @@ impl ApplicationHandler for App {
                     }
                 }
             }
+            // Tracked rather than read off the key event, because winit reports
+            // modifier state on its own event and a `KeyboardInput` carries no
+            // modifiers at all. The only consumer is the console's `^F`.
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.modifiers = modifiers.state();
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 let down = event.state == ElementState::Pressed;
+                let typed = event.text.clone();
                 if let PhysicalKey::Code(code) = event.physical_key {
+                    // The console takes the keyboard before the menu does, and
+                    // before the game: it is the innermost thing on screen, and
+                    // Escape has to unwind from the inside out or it closes the
+                    // wrong layer.
+                    if self.console.open {
+                        if down {
+                            self.console_key(code, typed.as_deref());
+                        }
+                        return;
+                    }
                     // The menu takes the keyboard whole while it is up. Letting
                     // movement keys through would leave you walking into a wall
                     // while reading a settings page, and the key that closes the
@@ -1413,6 +1921,16 @@ impl ApplicationHandler for App {
                             self.menu_key(code, event_loop);
                         }
                         return;
+                    }
+                    // A key the console has bound runs its command instead of
+                    // whatever the game would have done with it. Checked before
+                    // the match so a bind can shadow a default — which is the
+                    // only thing a bind is *for*.
+                    if down {
+                        if let Some(cmd) = self.console.bound(&key_name(code)) {
+                            self.run_console(&cmd);
+                            return;
+                        }
                     }
                     match code {
                         KeyCode::KeyW => self.keys.forward = down,
@@ -1435,7 +1953,16 @@ impl ApplicationHandler for App {
                         KeyCode::Digit3 if down => self.select_weapon(2),
                         KeyCode::Digit4 if down => self.select_weapon(3),
                         KeyCode::Digit5 if down => self.select_weapon(4),
-                        KeyCode::F3 if down => self.net_graph = (self.net_graph + 1) % 4,
+                        // F3 steps the *fallback*, and clears any override so
+                        // the key the player is pressing is the thing they see.
+                        // Stepping a private field while `net.graph` sat unread
+                        // beside it is the exact divergence this work is about.
+                        KeyCode::F3 if down => {
+                            self.net_graph_default = (self.net_graph() + 1) % 4;
+                            self.cvars
+                                .set("net.graph", serde_json::json!(self.net_graph_default));
+                        }
+                        KeyCode::Backquote if down => self.toggle_console(),
                         // Escape opens the menu — and releases the pointer on
                         // the way, because the reflex it has to serve first is
                         // still "give me my mouse back". A client that exited
@@ -1473,13 +2000,20 @@ impl ApplicationHandler for App {
                     Some(squad) => held::build(squad.poses()),
                     None => bodies::build(rows, &self.self_id, &self.hitbox),
                 };
-                if self.settings.show_hitboxes {
+                // Into the same opaque stream as the bodies: a grenade is a
+                // small solid object and wants no pass of its own. The clouds do
+                // — see `volume_verts` below.
+                self.nades.vertices(&mut verts);
+                if self.show_hitboxes() {
                     // Appended to the same stream, so the wireframes are depth
                     // tested against the world like everything else: a hitbox
                     // behind a wall is hidden by the wall. Drawn in their own
                     // always-on-top pass they would be a wall hack.
                     verts.extend(bodies::build_hitboxes(rows, &self.self_id, &self.hitbox));
                 }
+                self.volume_verts.clear();
+                nades::volume_vertices(&self.nades, &mut self.volume_verts);
+                self.effects.vertices(&mut self.volume_verts);
                 self.viewmodel.vertices(&mut self.weapon_verts);
                 // Built here rather than in the painter: sorting is a game-mode
                 // question and the painter has no business having an opinion.
@@ -1507,8 +2041,70 @@ impl ApplicationHandler for App {
                     .unwrap_or(0.0);
                 let magnification = self.magnification();
                 let mut overlay = std::mem::take(&mut self.overlay);
+                // Filtered here rather than in the painter: the rule that keeps
+                // an unspotted enemy off the radar is the one part of this that
+                // would be a cheat if it were wrong, and a painter is not a
+                // place anything can test it. See `radar::blips`.
+                //
+                // Drawn from `drawn`, not `players`: the roster is where the
+                // server last said everyone was, which is a different question
+                // from where they should be shown this frame — and a radar that
+                // stepped 20 times a second while the bodies moved smoothly
+                // would disagree with the screen it sits on.
+                self.blips.clear();
+                if let Some(you) = &self.you {
+                    self.blips.extend(radar::blips(
+                        &self.drawn,
+                        &self.self_id,
+                        self.my_team(),
+                        &you.spotted,
+                    ));
+                }
+                // Centred on the camera, which is the prediction — where we
+                // believe we are — and not on the last snapshot. Anything else
+                // makes your own arrow lag your own movement.
+                let radar = self.joined.then(|| RadarView {
+                    plan: &self.radar_plan,
+                    x: self.camera.x,
+                    y: self.camera.y,
+                    yaw: self.camera.yaw.to_radians(),
+                    blips: &self.blips,
+                });
+                // Built before the view, not inside it: each of these is an
+                // owned value the borrowed `ConsoleView` points at, and one
+                // built inside the closure would not outlive the expression. All
+                // three are empty when the console is closed, which costs
+                // nothing — an empty `Vec` does not allocate — and keeps the
+                // common case off the scrollback entirely.
+                let (console_lines, console_quick, console_detail) = if self.console.open {
+                    (
+                        self.console.visible(),
+                        self.console.quick_actions(&self.cvars),
+                        self.console.suggestion_detail(&self.cvars),
+                    )
+                } else {
+                    (Vec::new(), Vec::new(), None)
+                };
                 let view = HudView {
-                    crosshair: self.settings.crosshair,
+                    radar,
+                    crosshair: self.crosshair(),
+                    console: self.console.open.then(|| ConsoleView {
+                        lines: &console_lines,
+                        input: &self.console.input,
+                        cursor: self.console.cursor,
+                        scroll: self.console.scroll,
+                        suggestions: &self.console.suggestions,
+                        suggestion: self.console.suggestion,
+                        detail: console_detail.as_deref(),
+                        registry_loaded: !self.console.definitions().cvars.is_empty(),
+                        filter: self.console.filter.label(),
+                        hidden: self.console.hidden_count(),
+                        room: &self.room,
+                        map: &self.map_name,
+                        rtt: self.ping.rtt(),
+                        cheats: self.console.server_bool("server.cheats"),
+                        quick: &console_quick,
+                    }),
                     width,
                     height,
                     you: self.you.as_ref(),
@@ -1526,7 +2122,7 @@ impl ApplicationHandler for App {
                     playing: self.joined,
                     rtt: self.ping.rtt(),
                     fps: if self.fps > 0.0 { Some(self.fps) } else { None },
-                    net_graph: self.net_graph,
+                    net_graph: self.net_graph(),
                     scoreboard: scoreboard.as_deref(),
                     scores: &self.scores,
                 };
@@ -1548,6 +2144,8 @@ impl ApplicationHandler for App {
                     return;
                 };
                 renderer.set_bodies(&verts);
+                renderer.set_volumes(&self.volume_verts);
+                renderer.set_reveal(self.reveal);
                 if let Some(squad) = self.squad.as_ref() {
                     renderer.set_characters(squad.poses());
                 }
@@ -1705,6 +2303,8 @@ mod tests {
             weapons(),
             HashMap::new(),
             Default::default(),
+            Default::default(),
+            Vec::new(),
         )
     }
 
@@ -1763,6 +2363,8 @@ mod tests {
             HashMap::new(),
             // The shipped body. A test that fetched one would depend on a node.
             Default::default(),
+            Default::default(),
+            Vec::new(),
         )
     }
 

@@ -22,7 +22,6 @@ import math
 import re
 import shlex
 import time
-from pathlib import Path
 from typing import Any, Callable, Coroutine, Literal
 
 from pydantic import BaseModel, Field
@@ -113,11 +112,11 @@ BUILTIN_MACROS: list[MacroDefinition] = [
         name="warmup",
         description="Warmup practice mode: god mode, infinite ammo, hitboxes, bullet tracers, 3 bots",
         code=(
-            'server.cheats = True\n'
-            'player.god = True\n'
-            'player.infinite_ammo = True\n'
-            'draw.hitboxes = True\n'
-            'draw.trajectories = True\n'
+            "server.cheats = True\n"
+            "player.god = True\n"
+            "player.infinite_ammo = True\n"
+            "draw.hitboxes = True\n"
+            "draw.trajectories = True\n"
             'server.bots.add(count=3, skill="normal")\n'
             'print("[macro] Warmup initialized: God mode ON, Infinite Ammo ON, 3 Bots spawned.")'
         ),
@@ -127,8 +126,8 @@ BUILTIN_MACROS: list[MacroDefinition] = [
         name="bot_1v5",
         description="Challenge drill: 1 vs 5 Hard Bots on opposing team",
         code=(
-            'server.cheats = True\n'
-            'server.bots.kick_all()\n'
+            "server.cheats = True\n"
+            "server.bots.kick_all()\n"
             'server.bots.add(count=5, skill="hard", team="RVSF")\n'
             'player.give("carbine")\n'
             'print("[macro] 1v5 Bot Challenge Drill started against 5 Hard RVSF bots!")'
@@ -139,11 +138,11 @@ BUILTIN_MACROS: list[MacroDefinition] = [
         name="smoke_practice",
         description="Grenade / trajectory practice with visual tracers and free respawn",
         code=(
-            'server.cheats = True\n'
-            'player.god = True\n'
-            'player.infinite_ammo = True\n'
-            'draw.trajectories = True\n'
-            'draw.hitboxes = True\n'
+            "server.cheats = True\n"
+            "player.god = True\n"
+            "player.infinite_ammo = True\n"
+            "draw.trajectories = True\n"
+            "draw.hitboxes = True\n"
             'print("[macro] Trajectory & Grenade practice lab ready.")'
         ),
         builtin=True,
@@ -152,9 +151,9 @@ BUILTIN_MACROS: list[MacroDefinition] = [
         name="net_stress_test",
         description="Simulate laggy network conditions: 120ms ping, 5% loss, NetGraph level 2",
         code=(
-            'net.simulate_lag = 120\n'
-            'net.simulate_loss = 0.05\n'
-            'net.graph = 2\n'
+            "net.simulate_lag = 120\n"
+            "net.simulate_loss = 0.05\n"
+            "net.graph = 2\n"
             'print("[macro] Network Stress Test active (Lag: 120ms, Loss: 5%, NetGraph: 2)")'
         ),
         builtin=True,
@@ -163,8 +162,8 @@ BUILTIN_MACROS: list[MacroDefinition] = [
         name="slowmo_duel",
         description="Slow motion Matrix-style firefight (0.35x timescale)",
         code=(
-            'server.cheats = True\n'
-            'server.timescale = 0.35\n'
+            "server.cheats = True\n"
+            "server.timescale = 0.35\n"
             'print("[macro] Matrix Slow-Mo enabled (Timescale: 0.35x)")'
         ),
         builtin=True,
@@ -181,7 +180,9 @@ class ConsoleRegistry:
         self.commands: dict[str, ConCommandDefinition] = {}
         self.handlers: dict[
             str,
-            Callable[[dict[str, Any], ConsoleExecutionContext], Coroutine[Any, Any, Any]],
+            Callable[
+                [dict[str, Any], ConsoleExecutionContext], Coroutine[Any, Any, Any]
+            ],
         ] = {}
         self.macros: dict[str, MacroDefinition] = {}
         self._init_defaults()
@@ -588,6 +589,16 @@ class ConsoleRegistry:
             example="server.stop()",
         )
 
+        # server.tick
+        self._register_command(
+            "server.tick",
+            "server",
+            self._cmd_server_tick,
+            description="Report where the match tick's 50 ms budget is going",
+            signature="server.tick(room: str = '')",
+            example="server.tick()",
+        )
+
         # server.map
         self._register_command(
             "server.map",
@@ -597,7 +608,10 @@ class ConsoleRegistry:
             signature="server.map(map_name: str)",
             params=[
                 ConCommandParameter(
-                    name="map_name", type="string", required=True, description="Map name"
+                    name="map_name",
+                    type="string",
+                    required=True,
+                    description="Map name",
                 )
             ],
             example='server.map("hd_crossing")',
@@ -836,7 +850,9 @@ class ConsoleRegistry:
 
     def _persist_user_macros(self) -> None:
         try:
-            user_macros = [m.model_dump() for m in self.macros.values() if not m.builtin]
+            user_macros = [
+                m.model_dump() for m in self.macros.values() if not m.builtin
+            ]
             MACROS_FILE.write_text(json.dumps(user_macros, indent=2), encoding="utf-8")
         except Exception:
             logger.exception("Failed to persist user macros")
@@ -879,6 +895,49 @@ class ConsoleRegistry:
         ctx.print(f"[server] Match room '{room_id}' closed.")
         return {"stopped": room_id}
 
+    async def _cmd_server_tick(
+        self, args: dict[str, Any], ctx: ConsoleExecutionContext
+    ) -> Any:
+        """Where the tick's budget goes.
+
+        A read, not a cvar: `TickStats` is a measurement and cvars are things you
+        set. The loop sleeps the *remainder* of `TICK_INTERVAL`, so a room that
+        is running out of budget quietly slows down instead of reporting it —
+        this is the only place that headroom is visible.
+        """
+        room = ctx.resolve_room(args.get("room"))
+        if room is None:
+            ctx.print("[server] No active match.")
+            return {"error": "no match"}
+        report = room.stats.report()
+        budget = report["budgetMs"]
+        ctx.print(f"[server] Room '{room.id}' — {budget} ms per tick to spend.")
+        for label, key in (("simulate", "simulateMs"), ("broadcast", "broadcastMs")):
+            stat = report[key]
+            if not stat["samples"]:
+                # Never "0.0 ms": a room that has not ticked has not been
+                # measured, and saying it is free would be a lie the numbers
+                # cannot distinguish from a fast one.
+                ctx.print(f"[server]   {label}: not measured yet")
+                continue
+            share = stat["mean"] / budget * 100
+            ctx.print(
+                f"[server]   {label}: {stat['mean']} ms mean "
+                f"({share:.0f}% of budget), {stat['max']} ms peak "
+                f"over {stat['samples']} ticks"
+            )
+        sent = report["tickBytes"]
+        if sent["samples"]:
+            ctx.print(
+                f"[server]   wire: {sent['mean'] / 1024:.1f} KiB per tick "
+                f"across all recipients ({sent['mean'] * 20 / 1024:.0f} KiB/s)"
+            )
+        else:
+            # Only the pre-serialised path weighs itself; the dict path would
+            # have to serialise twice to answer.
+            ctx.print("[server]   wire: not measured (plain send path)")
+        return report
+
     async def _cmd_server_map(
         self, args: dict[str, Any], ctx: ConsoleExecutionContext
     ) -> Any:
@@ -914,7 +973,9 @@ class ConsoleRegistry:
             room.kills = 0
             room.deaths = 0
             room.respawn(p)
-        ctx.print(f"[server] Match scores reset and players respawned (room {room.id}).")
+        ctx.print(
+            f"[server] Match scores reset and players respawned (room {room.id})."
+        )
         return {"restarted": room.id}
 
     async def _cmd_bots_add(
@@ -934,9 +995,7 @@ class ConsoleRegistry:
         )
         added = bots.add_bots(room, count, skill, team)
         names = [b.name for b in added]
-        ctx.print(
-            f"[server] Spawned {len(names)} bots ({skill}): {', '.join(names)}"
-        )
+        ctx.print(f"[server] Spawned {len(names)} bots ({skill}): {', '.join(names)}")
         return {"added": names, "skill": skill, "total": len(room.players)}
 
     async def _cmd_bots_remove(
@@ -949,7 +1008,11 @@ class ConsoleRegistry:
         name = str(args.get("name") or "").strip().lower()
         if name:
             match = next(
-                (p for p in room.players.values() if p.is_bot and name in p.name.lower()),
+                (
+                    p
+                    for p in room.players.values()
+                    if p.is_bot and name in p.name.lower()
+                ),
                 None,
             )
             if match:
@@ -1107,7 +1170,9 @@ class ConsoleRegistry:
         self, args: dict[str, Any], ctx: ConsoleExecutionContext
     ) -> Any:
         q = str(args.get("query") or "").strip().lower()
-        ctx.print(f"=== hAssault Developer Console {'(matching: ' + q + ')' if q else ''} ===")
+        ctx.print(
+            f"=== hAssault Developer Console {'(matching: ' + q + ')' if q else ''} ==="
+        )
         matched_cvars = [
             c
             for c in self.cvars.values()
@@ -1123,7 +1188,9 @@ class ConsoleRegistry:
             ctx.print("--- Variables (CVars) ---")
             for c in sorted(matched_cvars, key=lambda x: x.name):
                 flags = f" [{', '.join(c.flags)}]" if c.flags else ""
-                ctx.print(f"  {c.name:24} = {c.current_value!r} ({c.type}){flags} - {c.description}")
+                ctx.print(
+                    f"  {c.name:24} = {c.current_value!r} ({c.type}){flags} - {c.description}"
+                )
 
         if matched_cmds:
             ctx.print("--- Commands ---")
@@ -1222,10 +1289,13 @@ class ConsoleRegistry:
                 ctx.print(
                     f'"{cvar.name}" is "{cvar.current_value}" '
                     f'(default "{cvar.default_value}")'
-                    f' - {cvar.description}'
+                    f" - {cvar.description}"
                 )
                 return ConsoleExecResponse(
-                    ok=True, command=line, output=ctx.output_lines, result_data=cvar.current_value
+                    ok=True,
+                    command=line,
+                    output=ctx.output_lines,
+                    result_data=cvar.current_value,
                 )
             # Setting value
             val_str = tokens[1]
@@ -1282,7 +1352,13 @@ class ConsoleRegistry:
             )
 
     def _is_python_code(self, code: str) -> bool:
-        if "\n" in code or code.startswith("for ") or code.startswith("if ") or code.startswith("def ") or code.startswith("import "):
+        if (
+            "\n" in code
+            or code.startswith("for ")
+            or code.startswith("if ")
+            or code.startswith("def ")
+            or code.startswith("import ")
+        ):
             return True
         # Check if contains function call syntax like `server.start("map")` or assignments
         if "(" in code and ")" in code:
@@ -1301,16 +1377,20 @@ class ConsoleRegistry:
                 val = max(val, cvar.min_value)
             if cvar.max_value is not None:
                 val = min(val, cvar.max_value)
-            return int(val) if val.is_integer() and isinstance(cvar.default_value, int) else val
+            return (
+                int(val)
+                if val.is_integer() and isinstance(cvar.default_value, int)
+                else val
+            )
         if cvar.type == "enum":
             if cvar.enum_values and clean not in cvar.enum_values:
                 # fuzzy match or default
-                match = next((e for e in cvar.enum_values if clean.lower() == e.lower()), None)
+                match = next(
+                    (e for e in cvar.enum_values if clean.lower() == e.lower()), None
+                )
                 if match:
                     return match
-                raise ValueError(
-                    f"value must be one of {', '.join(cvar.enum_values)}"
-                )
+                raise ValueError(f"value must be one of {', '.join(cvar.enum_values)}")
             return clean
         return clean
 
@@ -1459,8 +1539,9 @@ class ConsoleExecutionContext:
                             return coro
 
                     return _wrapper
-                raise AttributeError(f"'{self._prefix}' has no property or command '{item}'")
-
+                raise AttributeError(
+                    f"'{self._prefix}' has no property or command '{item}'"
+                )
 
             def __setattr__(self, item: str, value: Any) -> None:
                 if item.startswith("_"):

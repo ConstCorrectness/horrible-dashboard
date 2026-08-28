@@ -37,6 +37,13 @@ image = { version = "0.25", default-features = false, features = ["webp"] }
 
 
 [dev-dependencies]
+# WGSL validation, tests only. `cargo check` does not look at a shader at all:
+# a typo in `shader.wgsl` compiles fine and fails at pipeline creation, on a
+# machine with a GPU, at the moment somebody launches the game. Parsing and
+# validating the same concatenated source a test away from that is the cheapest
+# possible version of the check. Pinned to wgpu's own naga major so the two
+# agree about what the language is.
+naga = { version = "30", features = ["wgsl-in"] }
 # PNG encoding for the `operator_preview` example only. Deliberately not a
 # feature on `image` above: features unify across a build, so enabling `png`
 # there would put an encoder nobody calls into the shipped client.

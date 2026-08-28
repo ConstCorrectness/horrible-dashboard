@@ -22,10 +22,11 @@
 //!   stops a 2.5-cube rifle from being sawn in half by a wall you are standing
 //!   against. In three that was a `renderOrder`; here it is a second pass.
 //!
-//! The muzzle flash is lit by *cheating the normal*: the shader applies one fixed
-//! directional wash and has no notion of an unlit material, so the flash's
-//! vertices carry the light direction as their normal, which lands them at full
-//! brightness. Cheaper than a second pipeline for six triangles.
+//! The muzzle flash is lit by *cheating the normal*: the shader has no notion of
+//! an unlit material, so the flash's vertices carry the **sun's** direction as
+//! their normal, which lands them at full brightness. Cheaper than a second
+//! pipeline for six triangles — and the reason `LIGHT_DIR` below has to be kept
+//! in step with `lighting.wgsl.inc`.
 
 use std::collections::HashMap;
 
@@ -47,20 +48,53 @@ const FLASH_LIFE: f32 = 0.055;
 const KICK_DECAY: f32 = 11.0;
 const RELOAD_RATE: f32 = 6.0;
 
-/// The shader's own light direction, used as the flash's normal so it comes out
-/// at full brightness. Kept in step with `shader.wgsl`'s `LIGHT_DIR` — a drift
-/// here dims the flash, which is a cosmetic failure and not worth a uniform.
-const LIGHT_DIR: [f32; 3] = [0.35, 0.9, 0.2];
-
-/// The palette, a notch brighter than the browser's.
+/// The sun's direction, used as the flash's normal so it comes out at full
+/// brightness.
 ///
-/// The TS models are lit by the scene's lights; this renderer has one ambient
-/// floor and a single directional wash, so the browser's `0x1c2026` receiver
-/// lands at about 6% grey — a gun-shaped hole rather than a gun.
-const METAL: [f32; 3] = [0.30, 0.33, 0.37];
-const DARK: [f32; 3] = [0.22, 0.24, 0.28];
-const GRIP: [f32; 3] = [0.36, 0.30, 0.24];
-const ACCENT: [f32; 3] = [0.58, 0.61, 0.65];
+/// Must equal `SUN_DIR` in `lighting.wgsl.inc`. It was `[0.35, 0.9, 0.2]` — the
+/// direction of a single hardcoded wash this renderer has not had since the
+/// browser's light rig was ported — and a stale copy here does not fail, it
+/// dims the muzzle flash by the cosine of the angle between the two and looks
+/// like the flash is simply weak.
+const LIGHT_DIR: [f32; 3] = [0.523, 0.780, 0.343];
+
+/// Where a loaded prop sits, once fitted to the box model it replaces.
+///
+/// The fit is **measured, not tuned per weapon**, and it is the same rule the
+/// browser applies in `fitWeaponModel`: translate the prop so its bounding-box
+/// centre lands on the box model's. Everything the pose is expressed in — `HOME`,
+/// the bob, the sway, the recoil kick — is relative to that space, so a prop
+/// that occupies it needs none of them changed.
+///
+/// Aligning **centres and not origins** is the whole of it. `build_hassault_weapon.mjs`
+/// puts a prop's origin at the rear of its box, which on a rifle is the
+/// buttstock, while the box models are built around roughly where a hand is.
+/// Matching origins hangs every rifle a foot in front of the screen.
+#[derive(Debug, Clone, Copy)]
+pub struct PropFit {
+    /// Added to the model transform to place the prop.
+    pub offset: Vec3,
+    /// The prop's own muzzle, in the same space, for the flare.
+    pub muzzle: Vec3,
+}
+
+/// The palette. **The browser's own hex values**, not a brightened variant of
+/// them.
+///
+/// These used to sit a notch higher, on the grounds that "the TS models are lit
+/// by the scene's lights; this renderer has one ambient floor and a single
+/// directional wash". That stopped being true when the rig was ported: the view
+/// model is drawn with the *world* pipeline (`Renderer::render` binds
+/// `self.pipeline` for it), so it gets the same hemisphere, sun, fill, Lambert
+/// normalisation and ACES curve every wall does. The compensation outlived the
+/// thing it compensated for and the weapon was being brightened twice, which is
+/// why the native rifle read as white plastic beside the browser's gunmetal.
+///
+/// `0x3a4048`, `0x1c2026`, `0x4a3f33`, `0x8a929c` — `viewmodel.ts`'s `PALETTE`.
+const METAL: [f32; 3] = [0.2275, 0.2510, 0.2824];
+const DARK: [f32; 3] = [0.1098, 0.1255, 0.1490];
+const GRIP: [f32; 3] = [0.2902, 0.2471, 0.2000];
+const ACCENT: [f32; 3] = [0.5412, 0.5725, 0.6118];
 const FLASH: [f32; 3] = [1.0, 0.82, 0.48];
 
 /// The equipped skin for the weapon in your hands.
@@ -108,11 +142,12 @@ fn parse_color(value: &str, fallback: [f32; 3]) -> [f32; 3] {
 /// The darkest a *skinned* surface is allowed to be.
 ///
 /// `assault_slate`'s base colour is `#09090b`, which is a legitimate design and
-/// renders here as a gun-shaped hole: this shader has one ambient wash, no
-/// speculars and no scene lights, so a near-black surface has nothing to catch.
-/// The floor keeps the skin's hue and lifts only its brightness, which is the
-/// smallest lie that leaves the weapon readable — and it is applied **only to
-/// skins**, so a player carrying none sees exactly the palette they always did.
+/// renders as a gun-shaped hole: there are no speculars here, so a near-black
+/// surface has nothing to catch. The floor keeps the skin's hue and lifts only
+/// its brightness, which is the smallest lie that leaves the weapon readable —
+/// and it is applied **only to skins**, so a player carrying none sees exactly
+/// the palette they always did. `viewmodel.ts` does the identical lift for the
+/// identical reason.
 const MIN_LUMA: f32 = 0.14;
 
 fn luma(c: [f32; 3]) -> f32 {
@@ -319,6 +354,14 @@ pub struct WeaponViewModel {
     inspect: Option<f32>,
     /// The pivot's transform for this frame, rebuilt by `update`.
     transform: Mat4,
+    /// Where a loaded prop sits relative to the box model it replaces, and the
+    /// muzzle that comes with it.
+    ///
+    /// `None` means the boxes are what is being drawn — a weapon with no prop, a
+    /// GLB that failed to parse, or one not uploaded yet. The boxes are the
+    /// fallback rather than the loading state's placeholder: they are a complete
+    /// working weapon and always were.
+    prop: Option<PropFit>,
     visible: bool,
     /// A flash that is a different size every frame it is lit reads better than
     /// a fade, and needs no crate: two shots never look identical.
@@ -342,6 +385,7 @@ impl Default for WeaponViewModel {
             walk: 0.0,
             flash_age: FLASH_LIFE,
             transform: Mat4::IDENTITY,
+            prop: None,
             visible: false,
             rng: 0x9e37_79b9,
         }
@@ -504,11 +548,62 @@ impl WeaponViewModel {
         self.flash_age += dt;
     }
 
+    /// Fit a prop to the weapon currently held, and start drawing it.
+    ///
+    /// Returns `None` — and leaves the boxes drawing — when there is no shape to
+    /// fit against or the prop is degenerate. A prop is an upgrade over a
+    /// working model, never a dependency of one.
+    pub fn fit_prop(&mut self, min: Vec3, max: Vec3) -> Option<PropFit> {
+        let shape = self.shape.as_ref()?;
+        if !min.is_finite() || !max.is_finite() || (max - min).min_element() <= 0.0 {
+            return None;
+        }
+        let mut box_min = Vec3::splat(f32::INFINITY);
+        let mut box_max = Vec3::splat(f32::NEG_INFINITY);
+        for v in &shape.verts {
+            let p = Vec3::from(v.position);
+            box_min = box_min.min(p);
+            box_max = box_max.max(p);
+        }
+        if !box_min.is_finite() || !box_max.is_finite() {
+            return None;
+        }
+        let offset = (box_min + box_max) * 0.5 - (min + max) * 0.5;
+        // Front-centre of the fitted prop. The converter points every barrel
+        // down -Z, so the front is the minimum z.
+        let centre = (min + max) * 0.5 + offset;
+        let fit = PropFit {
+            offset,
+            muzzle: Vec3::new(centre.x, centre.y, min.z + offset.z),
+        };
+        self.prop = Some(fit);
+        Some(fit)
+    }
+
+    /// Go back to the box model — a weapon with no prop, or one that failed.
+    pub fn clear_prop(&mut self) {
+        self.prop = None;
+    }
+
+    /// The matrix a resident prop is drawn with, or `None` when the boxes are.
+    ///
+    /// Deliberately **without** the shape's `rest` rotation, which the box models
+    /// need and a prop does not: `rest` describes how a pile of boxes had to be
+    /// turned to look like a weapon, and the GLB is exported already oriented.
+    pub fn prop_model(&self) -> Option<Mat4> {
+        let fit = self.prop?;
+        Some(self.transform * Mat4::from_translation(fit.offset))
+    }
+
     /// This frame's vertices, in camera space, ready for the view-model pass.
     ///
     /// Rebuilt per frame rather than transformed on the GPU: a weapon is a few
     /// hundred vertices and this is one matrix multiply each, which costs less
     /// than the second uniform and bind group the alternative needs.
+    ///
+    /// With a prop loaded this emits **only the muzzle flare**: the weapon
+    /// itself is geometry on the GPU that never comes back to the CPU, and
+    /// pushing the boxes as well would draw a box gun inside the real one.
     pub fn vertices(&mut self, out: &mut Vec<Vertex>) {
         out.clear();
         if !self.visible {
@@ -528,9 +623,21 @@ impl WeaponViewModel {
         };
         let Some(shape) = &self.shape else { return };
         let model = self.transform * Mat4::from_euler(glam::EulerRot::XYZ, rest.x, rest.y, rest.z);
-        for v in &shape.verts {
-            out.push(transform_vertex(&model, v));
+        if self.prop.is_none() {
+            for v in &shape.verts {
+                out.push(transform_vertex(&model, v));
+            }
         }
+        // The flare rides the **prop's** muzzle when there is one — its barrel
+        // is somewhere else entirely, and a flash left at the box model's muzzle
+        // hangs in the air beside the gun.
+        let (model, muzzle) = match &self.prop {
+            Some(fit) => (
+                self.transform * Mat4::from_translation(fit.offset),
+                fit.muzzle,
+            ),
+            None => (model, muzzle),
+        };
         if flare {
             // Squeezed in x/y only, exactly as the browser scales it, so the
             // flare's length stays put and only its girth varies.
@@ -990,9 +1097,9 @@ mod tests {
 
     #[test]
     fn a_near_black_skin_is_still_a_visible_weapon() {
-        // `assault_slate` is #09090b, and this shader has one ambient wash and no
-        // speculars: taken literally it draws a silhouette. The floor keeps the
-        // hue and lifts the brightness.
+        // `assault_slate` is #09090b and there are no speculars here: taken
+        // literally it draws a silhouette. The floor keeps the hue and lifts the
+        // brightness.
         let mut vm = WeaponViewModel::default();
         vm.set_weapon("assault", Some(&skin("#09090b", "#27272a", "solid", 0.03)));
         vm.update(0.016, &frame(true));

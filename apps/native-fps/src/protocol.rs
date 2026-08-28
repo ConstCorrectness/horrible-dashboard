@@ -19,6 +19,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::divergence::{self, Extra};
+
 // Fields below that this stage does not read are the wire's shape, not dead
 // weight: a protocol type trimmed to today's consumers stops documenting the
 // protocol, and the next stage adds the reader, not the field.
@@ -176,6 +178,11 @@ pub struct PlayerRow {
     pub deaths: i32,
     #[serde(default)]
     pub weapon: i32,
+    /// Wire keys this struct does not name. See `divergence::Extra` — the point
+    /// is that adding a real field below makes the key disappear from here on
+    /// its own, so the check cannot rot the way a hand-kept list would.
+    #[serde(flatten)]
+    pub extra: Extra,
 }
 
 /// The private half of a player's state — the part only they get to see.
@@ -269,6 +276,11 @@ pub struct SelfState {
     pub spotted: Vec<String>,
     #[serde(rename = "move", default)]
     pub movement: Option<MoveState>,
+    /// Wire keys this struct does not name. See `divergence::Extra` — the point
+    /// is that adding a real field below makes the key disappear from here on
+    /// its own, so the check cannot rot the way a hand-kept list would.
+    #[serde(flatten)]
+    pub extra: Extra,
 }
 
 /// The private half of a snapshot's momentum: what a client cannot derive from a
@@ -364,6 +376,36 @@ pub enum Fx {
         weapon: i32,
         #[serde(default)]
         hit: bool,
+        /// The muzzle, in cubes.
+        ///
+        /// **On the wire since shots existed, and declared here only now.** The
+        /// server resolves every ray and sends where it went; the native client
+        /// parsed the effect, used the `id` to trigger a muzzle flash, and threw
+        /// the geometry away. `#[serde(flatten)]` cannot reach inside an enum
+        /// variant, so this one had to be found by reading `match.py` rather
+        /// than by the divergence report — which is worth knowing about the
+        /// limits of that report.
+        #[serde(default)]
+        origin: [f32; 3],
+        /// One endpoint per pellet. A rifle sends one, a shotgun sends its
+        /// whole pattern — which is why this is a list and not a point.
+        #[serde(default)]
+        ends: Vec<[f32; 3]>,
+    },
+    /// A grenade going off. A kind of its own rather than a flag on anything:
+    /// it has a place and a radius, and until now this client had no variant
+    /// for it at all, so every detonation became `Fx::Other` and vanished.
+    #[serde(rename = "detonate")]
+    Detonate {
+        #[serde(default)]
+        id: String,
+        /// `he` | `flash` | `smoke` | `fire`.
+        #[serde(default)]
+        nade: String,
+        #[serde(default)]
+        at: [f32; 3],
+        #[serde(default)]
+        radius: f32,
     },
     #[serde(rename = "kill")]
     Kill {
@@ -413,7 +455,7 @@ pub struct Snapshot {
     pub scores: Vec<i32>,
     /// This tick's effects — shots, kills, spawns. The kill feed is built from
     /// these and nothing else.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "fx_noting_unknown_kinds")]
     pub fx: Vec<Fx>,
     /// Grenades in the air. **Public**, unlike the noise envelope: a grenade is
     /// a thing on everybody's screen, and hiding it would make the one cue that
@@ -423,6 +465,47 @@ pub struct Snapshot {
     /// Smoke and fire standing in a place.
     #[serde(default)]
     pub zones: Vec<ZoneRow>,
+    /// Wire keys this struct does not name. See `divergence::Extra` — the point
+    /// is that adding a real field below makes the key disappear from here on
+    /// its own, so the check cannot rot the way a hand-kept list would.
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+/// Read `fx`, naming any kind this build has no variant for.
+///
+/// `#[serde(other)]` on `Fx` is the right behaviour and the wrong diagnostic: it
+/// keeps a snapshot parsing when the server grows an effect, which is what we
+/// want, and it does so by **discarding the tag**, which means the one piece of
+/// information worth having — *which* effect — is destroyed at exactly the
+/// moment it is learned. Reading the array as JSON first costs one allocation a
+/// tick and buys the name.
+fn fx_noting_unknown_kinds<'de, D>(d: D) -> Result<Vec<Fx>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: Vec<serde_json::Value> = Vec::deserialize(d)?;
+    let mut out = Vec::with_capacity(raw.len());
+    for value in raw {
+        let kind = value
+            .get("kind")
+            .and_then(|k| k.as_str())
+            .unwrap_or("")
+            .to_string();
+        match serde_json::from_value::<Fx>(value) {
+            Ok(fx) => {
+                if matches!(fx, Fx::Other) {
+                    divergence::note_fx_kind(&kind);
+                }
+                out.push(fx);
+            }
+            // A malformed entry is not a reason to drop the whole tick: the
+            // other effects in it are fine, and a snapshot that failed to parse
+            // takes the positions down with it.
+            Err(e) => divergence::note_fx_kind(&format!("{kind} (unreadable: {e})")),
+        }
+    }
+    Ok(out)
 }
 
 /// A grenade in the air.
@@ -453,6 +536,11 @@ pub struct NadeRow {
     /// Seconds of fuse left, for the tick that gets louder as it runs out.
     #[serde(default)]
     pub fuse: f32,
+    /// Wire keys this struct does not name. See `divergence::Extra` — the point
+    /// is that adding a real field below makes the key disappear from here on
+    /// its own, so the check cannot rot the way a hand-kept list would.
+    #[serde(flatten)]
+    pub extra: Extra,
 }
 
 /// A smoke cloud or a patch of fire: an effect that persists in a place.
@@ -477,6 +565,145 @@ pub struct ZoneRow {
     pub left: f32,
     #[serde(default)]
     pub duration: f32,
+    /// Wire keys this struct does not name. See `divergence::Extra` — the point
+    /// is that adding a real field below makes the key disappear from here on
+    /// its own, so the check cannot rot the way a hand-kept list would.
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+/// One console line on its way to the node.
+///
+/// The console rides the **same socket as the match**, not a second HTTP call,
+/// and that is not a style preference: `channel.py` resolves the room and the
+/// player from the connection itself (`match_server.player_for(conn)`), so a
+/// command sent over this socket lands in the match this client is actually in.
+/// The REST route the browser pane uses has to be told, and can be told wrong.
+#[derive(Debug, Serialize)]
+pub struct ConsoleExec<'a> {
+    pub command: &'a str,
+    /// Correlates the answer with the line that asked, because two commands can
+    /// be in flight and the console prints them in the order they were typed.
+    #[serde(rename = "reqId")]
+    pub req_id: u64,
+    /// Anything the client knows that the server does not. Empty today; declared
+    /// because the backend reads `context` and a client that omitted the key
+    /// entirely would have to grow it back the first time that mattered.
+    pub context: serde_json::Value,
+}
+
+/// The node's answer to one console line.
+///
+/// **Two spellings, one meaning.** The websocket handler in `channel.py` writes
+/// `affectedCvars` while the REST route's Pydantic model writes
+/// `affected_cvars`; the browser pane only ever sees the second, so nothing has
+/// forced them to agree. Accepting both here is not tolerance for sloppiness —
+/// it is the cheapest way to make sure a native console never silently drops a
+/// CVar update because it came down the other pipe.
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct ConsoleResponse {
+    #[serde(rename = "reqId", default)]
+    pub req_id: Option<u64>,
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub output: Vec<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(rename = "affectedCvars", alias = "affected_cvars", default)]
+    pub affected_cvars: serde_json::Map<String, serde_json::Value>,
+    #[serde(rename = "resultData", alias = "result_data", default)]
+    pub result_data: serde_json::Value,
+}
+
+/// A friend asking you into a match on their node.
+///
+/// Broadcast on the shared channel by `fabric.py` the moment it arrives, so a
+/// client that is *already in a game* is exactly the client this is aimed at —
+/// which is why the native client ignoring it mattered: a friend inviting you
+/// while you were playing got no answer and no way to know why.
+///
+/// Identity here is `host` (the node id the fabric authenticated). `host_name`
+/// is a **label**, resolved by the backend from the person key, and is never
+/// used to decide anything.
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct Invite {
+    #[serde(default)]
+    pub room: String,
+    #[serde(default)]
+    pub map: String,
+    #[serde(default)]
+    pub host: String,
+    #[serde(rename = "hostName", default)]
+    pub host_name: String,
+    /// Which of their machines it came from. Secondary — an invite fans out to
+    /// every device a person has online.
+    #[serde(rename = "hostDevice", default)]
+    pub host_device: String,
+    #[serde(rename = "personId", default)]
+    pub person_id: String,
+    /// Unix seconds. The backend prunes on read, so a stale one can still be in
+    /// a list this client is holding.
+    #[serde(rename = "expiresAt", default)]
+    pub expires_at: f64,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+/// The whole live invite list, in answer to an `invites` request.
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct Invites {
+    #[serde(default)]
+    pub invites: Vec<Invite>,
+}
+
+/// Somebody arrived. `{room, player}`.
+///
+/// Membership is re-derived from the next snapshot in both clients, so this
+/// exists to react **within a frame** rather than up to 50 ms later.
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct Joined {
+    #[serde(default)]
+    pub room: String,
+    #[serde(default)]
+    pub player: PlayerRow,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+/// Somebody went. `{room, playerId}`.
+///
+/// Worth its own event rather than being left to the snapshot, because a
+/// snapshot cannot say it: a body that disconnected and a body behind a wall
+/// both simply stop appearing.
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct Left {
+    #[serde(default)]
+    pub room: String,
+    #[serde(rename = "playerId", default)]
+    pub player_id: String,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+/// Bots were fielded or kicked.
+///
+/// **Two shapes on one event**, and they are not symmetric: `added` is a list of
+/// names and `removed` is a *count*. Modelled as the server actually sends it
+/// rather than tidied into a pair of lists — a client that declared `removed` as
+/// a list would silently parse nothing and report no bots leaving.
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct Roster {
+    #[serde(default)]
+    pub room: String,
+    #[serde(default)]
+    pub added: Vec<String>,
+    #[serde(default)]
+    pub removed: i32,
+    #[serde(flatten)]
+    pub extra: Extra,
 }
 
 /// The server's answer to a `ping`.
@@ -508,6 +735,11 @@ pub struct Welcome {
     pub snapshot_hz: f32,
     #[serde(default)]
     pub players: Vec<PlayerRow>,
+    /// Wire keys this struct does not name. See `divergence::Extra` — the point
+    /// is that adding a real field below makes the key disappear from here on
+    /// its own, so the check cannot rot the way a hand-kept list would.
+    #[serde(flatten)]
+    pub extra: Extra,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -529,8 +761,25 @@ pub enum Event {
     /// this client has. Without it the round trip is unknown and unshowable —
     /// and "no ping displayed" is indistinguishable from "the ping is fine".
     Pong(Pong),
-    /// A `hassault` event this build has no use for (`invite`, `matches`, …).
-    /// Named rather than dropped silently so `--verbose` can show it.
+    /// The node's answer to a console line. See `ConsoleResponse`.
+    ConsoleRes(ConsoleResponse),
+    /// A friend wants you in their match.
+    Invite(Box<Invite>),
+    /// Every live invite, in answer to asking.
+    Invites(Invites),
+    /// Somebody arrived.
+    Joined(Box<Joined>),
+    /// Somebody left.
+    Left(Left),
+    /// Bots were fielded or kicked.
+    Roster(Roster),
+    /// A `hassault` event this build has no variant for (`invite`, `matches`,
+    /// `roster`, …).
+    ///
+    /// Named rather than dropped silently, and **reported** on the way past —
+    /// see `divergence::note_event`. This variant existing is not the same as
+    /// the event being handled, and for a long time the app loop's `=> {}` made
+    /// those indistinguishable.
     Other(String),
 }
 
@@ -546,14 +795,74 @@ pub fn classify(line: &str) -> Option<Event> {
         return None;
     }
     Some(match env.event.as_str() {
-        "welcome" => Event::Welcome(serde_json::from_value(env.data).unwrap_or_default()),
-        "snapshot" => Event::Snapshot(Box::new(
-            serde_json::from_value(env.data).unwrap_or_default(),
-        )),
+        "welcome" => {
+            let w: Welcome = serde_json::from_value(env.data).unwrap_or_default();
+            report_welcome(&w);
+            Event::Welcome(w)
+        }
+        "snapshot" => {
+            let s: Snapshot = serde_json::from_value(env.data).unwrap_or_default();
+            report_snapshot(&s);
+            Event::Snapshot(Box::new(s))
+        }
         "pong" => Event::Pong(serde_json::from_value(env.data).unwrap_or_default()),
         "error" => Event::Error(serde_json::from_value(env.data).unwrap_or_default()),
-        other => Event::Other(other.to_string()),
+        "console_res" => Event::ConsoleRes(serde_json::from_value(env.data).unwrap_or_default()),
+        "invite" => {
+            let i: Invite = serde_json::from_value(env.data).unwrap_or_default();
+            divergence::note_extra("invite", &i.extra);
+            Event::Invite(Box::new(i))
+        }
+        "invites" => Event::Invites(serde_json::from_value(env.data).unwrap_or_default()),
+        "joined" => {
+            let j: Joined = serde_json::from_value(env.data).unwrap_or_default();
+            divergence::note_extra("joined", &j.extra);
+            Event::Joined(Box::new(j))
+        }
+        "left" => {
+            let l: Left = serde_json::from_value(env.data).unwrap_or_default();
+            divergence::note_extra("left", &l.extra);
+            Event::Left(l)
+        }
+        "roster" => {
+            let r: Roster = serde_json::from_value(env.data).unwrap_or_default();
+            divergence::note_extra("roster", &r.extra);
+            Event::Roster(r)
+        }
+        other => {
+            divergence::note_event(other);
+            Event::Other(other.to_string())
+        }
     })
+}
+
+/// Name every wire key in a welcome this build declares no field for.
+fn report_welcome(w: &Welcome) {
+    divergence::note_extra("welcome", &w.extra);
+    for p in &w.players {
+        divergence::note_extra("welcome.players[]", &p.extra);
+    }
+}
+
+/// The same walk for a snapshot, which is where the wire actually grows.
+///
+/// Walked rather than checked at the top level only: `spotted`, `nades` and
+/// `flash` all arrived *inside* `you` and `players[]`, so a check that stopped
+/// at the envelope would have reported none of them. Reporting is deduplicated
+/// in `divergence`, so doing this on every one of the 20 snapshots a second
+/// costs a `BTreeSet` lookup per key and prints once.
+fn report_snapshot(s: &Snapshot) {
+    divergence::note_extra("snapshot", &s.extra);
+    divergence::note_extra("snapshot.you", &s.you.extra);
+    for p in &s.players {
+        divergence::note_extra("snapshot.players[]", &p.extra);
+    }
+    for n in &s.nades {
+        divergence::note_extra("snapshot.nades[]", &n.extra);
+    }
+    for z in &s.zones {
+        divergence::note_extra("snapshot.zones[]", &z.extra);
+    }
 }
 
 #[cfg(test)]
@@ -673,5 +982,243 @@ mod tests {
         assert!(!json.contains("room"), "{json}");
         assert!(!json.contains("host"), "{json}");
         assert!(json.contains(r#""channel":"hassault""#));
+    }
+
+    #[test]
+    fn an_event_this_build_cannot_handle_is_named_rather_than_dropped() {
+        // `roster`, `invite`, `invites` and `invite_sent` all reached this client
+        // and vanished into a `=> {}` for as long as they existed. The variant
+        // carrying the name is what turns that into something a person can see.
+        //
+        // This test used to *use* `roster` as its example, and started failing
+        // the moment `roster` was handled — which is the report working: the
+        // name it was written around stopped being unhandled. It now uses an
+        // event nobody will ever implement, so it tests the mechanism rather
+        // than the state of the backlog.
+        let ev =
+            classify(r#"{"channel":"hassault","event":"inventedEventForTest","data":{}}"#).unwrap();
+        match ev {
+            Event::Other(name) => assert_eq!(name, "inventedEventForTest"),
+            other => panic!("expected an unhandled event, got {other:?}"),
+        }
+        assert!(
+            divergence::seen().contains(&"event:inventedEventForTest".to_string()),
+            "an unhandled event must leave a trace; silence is the bug"
+        );
+    }
+
+    #[test]
+    fn a_wire_field_with_no_rust_declaration_is_reported() {
+        // The mechanism, exercised on a name invented for this test so it cannot
+        // collide with a field somebody later declares for real.
+        classify(
+            r#"{"channel":"hassault","event":"snapshot","data":{
+                "room":"r1","tick":1,"t":1.0,"ack":1,"players":[],
+                "you":{"hp":100,"alive":true},
+                "inventedFieldForTest":42}}"#,
+        )
+        .unwrap();
+        assert!(
+            divergence::seen().contains(&"field:snapshot.inventedFieldForTest".to_string()),
+            "seen: {:?}",
+            divergence::seen()
+        );
+    }
+
+    #[test]
+    fn a_declared_field_is_not_reported_as_extra() {
+        // The self-maintaining half: `spotted` used to be exactly this kind of
+        // silent arrival, and declaring it is what must remove it from the
+        // report — not an edit to a list somewhere.
+        classify(
+            r#"{"channel":"hassault","event":"snapshot","data":{
+                "room":"r1","tick":1,"t":1.0,"ack":1,"players":[],
+                "you":{"hp":100,"alive":true,"spotted":["p2"],"flash":0.5}}}"#,
+        )
+        .unwrap();
+        for key in ["field:snapshot.you.spotted", "field:snapshot.you.flash"] {
+            assert!(
+                !divergence::seen().contains(&key.to_string()),
+                "{key} is declared and must not be reported"
+            );
+        }
+    }
+
+    #[test]
+    fn a_snapshot_still_parses_around_an_undeclared_field() {
+        // Reporting must not become refusing. A client that failed to read a
+        // snapshot because the server grew a key would stop rendering the moment
+        // the backend gained a feature — much worse than rendering a little less
+        // of it.
+        let ev = classify(
+            r#"{"channel":"hassault","event":"snapshot","data":{
+                "room":"r1","tick":7,"t":9.0,"ack":42,"somethingNew":{"a":1},
+                "players":[{"id":"p9","x":1.5,"y":2.5,"z":3.5,"alive":true}],
+                "you":{"hp":80,"alive":true}}}"#,
+        )
+        .unwrap();
+        match ev {
+            Event::Snapshot(s) => {
+                assert_eq!(s.ack, 42);
+                assert_eq!(s.you.hp, 80.0);
+                assert_eq!(s.players.len(), 1);
+            }
+            other => panic!("expected a snapshot, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_fx_kind_this_build_cannot_draw_is_named() {
+        // One level down from an undeclared field, and it used to be worse:
+        // `#[serde(other)]` learns the tag and then throws it away, so the one
+        // piece of information worth having was destroyed as it arrived.
+        let ev = classify(
+            r#"{"channel":"hassault","event":"snapshot","data":{
+                "room":"r1","tick":1,"t":1.0,"ack":1,"players":[],
+                "you":{"hp":100,"alive":true},
+                "fx":[{"kind":"inventedFxForTest","id":"p1"},{"kind":"spawn","id":"p2"}]}}"#,
+        )
+        .unwrap();
+        match ev {
+            Event::Snapshot(s) => {
+                assert_eq!(s.fx.len(), 2, "the unknown one is kept, just not drawn");
+                assert!(
+                    matches!(s.fx[1], Fx::Spawn { .. }),
+                    "the known one still parses"
+                );
+            }
+            other => panic!("expected a snapshot, got {other:?}"),
+        }
+        assert!(divergence::seen().contains(&"fx:inventedFxForTest".to_string()));
+    }
+
+    #[test]
+    fn a_console_answer_is_a_first_class_event_now() {
+        // `console_res` was in `Event::Other` for as long as the backend has
+        // been able to answer a console line — which is why the native client
+        // could not have a console at all.
+        let ev = classify(
+            r#"{"channel":"hassault","event":"console_res","data":{
+                "reqId":3,"ok":true,"command":"net.graph 2","output":["ok"],
+                "affectedCvars":{"net.graph":2}}}"#,
+        )
+        .unwrap();
+        match ev {
+            Event::ConsoleRes(res) => {
+                assert_eq!(res.req_id, Some(3));
+                assert!(res.ok);
+                assert_eq!(res.output, vec!["ok".to_string()]);
+                assert_eq!(res.affected_cvars.len(), 1);
+            }
+            other => panic!("expected a console answer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_real_console_answer_off_the_running_node_parses() {
+        // Captured verbatim from `ws://…/ws` against a live backend, keys and
+        // all. Hand-written fixtures agree with whatever the person writing
+        // them believed; this one agrees with the server. Two things it pins
+        // that a tidier fixture would not: the key is `affectedCvars` (the REST
+        // route spells the same field `affected_cvars`), and `error` arrives as
+        // an explicit `null` rather than being absent — which `#[serde(default)]`
+        // alone does not cover, since a present null is a value of the wrong
+        // type unless the field is an `Option`.
+        let ev = classify(
+            r#"{"channel":"hassault","event":"console_res","data":{
+                "reqId": 7, "ok": true, "command": "net.graph",
+                "output": ["\"net.graph\" is \"0\" (default \"0\") - Draw in-game network graph"],
+                "error": null, "affectedCvars": {}, "resultData": 0}}"#,
+        )
+        .unwrap();
+        match ev {
+            Event::ConsoleRes(res) => {
+                assert_eq!(res.req_id, Some(7));
+                assert!(res.ok);
+                assert_eq!(res.error, None, "a present null is not an error message");
+                assert_eq!(res.output.len(), 1);
+                assert_eq!(res.result_data, serde_json::json!(0));
+            }
+            other => panic!("expected a console answer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_invite_carries_who_and_which_room() {
+        // The event that actually cost somebody something: `fabric.py`
+        // broadcasts this the moment it arrives, so a client already in a game
+        // is exactly who it is aimed at — and the native client dropped it.
+        let ev = classify(
+            r#"{"channel":"hassault","event":"invite","data":{
+                "room":"r7","map":"hd_pit","host":"nodeabc","hostName":"@rob",
+                "hostDevice":"desk","personId":"p1","ts":1.0,"expiresAt":61.0}}"#,
+        )
+        .unwrap();
+        match ev {
+            Event::Invite(i) => {
+                assert_eq!(i.room, "r7");
+                assert_eq!(i.host_name, "@rob");
+                // Identity is the node id the fabric authenticated; the name is
+                // a label and nothing decides anything with it.
+                assert_eq!(i.host, "nodeabc");
+            }
+            other => panic!("expected an invite, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn joined_carries_a_body_and_left_carries_only_an_id() {
+        // Two events, two shapes. A client that modelled them as one would read
+        // an empty player row on every departure and announce that somebody
+        // called "" had left.
+        match classify(
+            r#"{"channel":"hassault","event":"joined","data":{
+                "room":"r1","player":{"id":"p2","name":"@sam","alive":true}}}"#,
+        )
+        .unwrap()
+        {
+            Event::Joined(j) => {
+                assert_eq!(j.player.id, "p2");
+                assert_eq!(j.player.name, "@sam");
+            }
+            other => panic!("expected a join, got {other:?}"),
+        }
+        match classify(
+            r#"{"channel":"hassault","event":"left","data":{"room":"r1","playerId":"p2"}}"#,
+        )
+        .unwrap()
+        {
+            Event::Left(l) => assert_eq!(l.player_id, "p2"),
+            other => panic!("expected a departure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_roster_event_is_a_list_one_way_and_a_count_the_other() {
+        // `added` is a list of names; `removed` is a **count**. Not symmetric,
+        // and modelled as the server actually sends it: declaring `removed` as a
+        // list parses nothing and reports no bots leaving, silently.
+        match classify(
+            r#"{"channel":"hassault","event":"roster","data":{"room":"r1","added":["BOT ONE","BOT TWO"]}}"#,
+        )
+        .unwrap()
+        {
+            Event::Roster(r) => {
+                assert_eq!(r.added.len(), 2);
+                assert_eq!(r.removed, 0);
+            }
+            other => panic!("expected a roster, got {other:?}"),
+        }
+        match classify(
+            r#"{"channel":"hassault","event":"roster","data":{"room":"r1","removed":3}}"#,
+        )
+        .unwrap()
+        {
+            Event::Roster(r) => {
+                assert!(r.added.is_empty());
+                assert_eq!(r.removed, 3);
+            }
+            other => panic!("expected a roster, got {other:?}"),
+        }
     }
 }

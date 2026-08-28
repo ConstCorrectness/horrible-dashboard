@@ -83,6 +83,28 @@ impl Camera {
         Vec3::new(self.x, self.z, self.y)
     }
 
+    /// The view matrix on its own: render space into camera space.
+    ///
+    /// Split out of `view_projection` because the view model needs its
+    /// **inverse**. Its vertices are already in camera space — that is how it is
+    /// parented to the eye without a scene graph — but the lighting rig's
+    /// directions and the sun's shadow map are both in *world* space, so
+    /// something has to carry a camera-space vertex back out to where the lights
+    /// are. Shading a camera-space normal against a world-space sun is not a
+    /// subtle error: the weapon's lit side stops moving when you turn, which is
+    /// the one thing that tells the eye the gun is in the same room as the walls.
+    pub fn view(&self) -> Mat4 {
+        look_to_mat4(self.eye(), self.forward(), Vec3::Y)
+    }
+
+    /// Camera space back into render space, for the view model's lighting.
+    pub fn camera_to_world(&self) -> Mat4 {
+        // An inverse rather than a transpose-and-negate by hand: a view matrix is
+        // a rigid transform so the two agree, and `inverse` cannot be got subtly
+        // backwards at four in the morning.
+        self.view().inverse()
+    }
+
     /// The combined view-projection matrix the shader multiplies by.
     ///
     /// `aspect` guards against zero: a window minimised to zero width produces a
@@ -94,11 +116,9 @@ impl Camera {
         } else {
             (width.max(1) as f32) / (height as f32)
         };
-        let eye = self.eye();
-        let view = look_to_mat4(eye, self.forward(), Vec3::Y);
         // `directx`, not `vulkan` or `opengl` — see the module header.
         let proj = perspective(self.fov.to_radians(), aspect, NEAR, FAR);
-        proj * view
+        proj * self.view()
     }
 
     /// Apply a mouse movement, in raw device units.

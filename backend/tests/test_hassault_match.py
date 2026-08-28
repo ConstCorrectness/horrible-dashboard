@@ -11,11 +11,12 @@ there is no pytest-asyncio here.
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 import pytest
 
-from backend.modules.hassault import channel, match
+from backend.modules.hassault import channel, grenades, match
 from backend.modules.hassault.match import (
     BUDGET_CEILING,
     EMPTY_GRACE,
@@ -25,6 +26,7 @@ from backend.modules.hassault.match import (
     MatchRoom,
     MatchServer,
 )
+from backend.modules.hassault.noise import Noise
 from backend.modules.hassault.physics import MOVE_SPEED, flat_world
 
 
@@ -34,6 +36,21 @@ def signed_in(monkeypatch):
     test_hassault_channel.py); these tests are about the wire path past that gate,
     so they stand an account up rather than exercise the refusal."""
     monkeypatch.setattr(channel, "_signed_in_username", lambda: "alice")
+
+
+@pytest.fixture
+def unobserved(monkeypatch):
+    """No `/ws` observer for the duration of the test.
+
+    `app.py` registers one at import, and importing the app anywhere in the
+    session leaves it registered process-wide — so a test that asserts the
+    pre-serialised send path is taken has to say so rather than inherit
+    whichever modules happened to be imported first.
+    """
+    from backend.modules import ws
+
+    monkeypatch.setattr(ws, "_send_observer", None)
+    monkeypatch.setattr(ws, "_observer_wants", None)
 
 
 class FakeConn:
@@ -47,6 +64,24 @@ class FakeConn:
 
     def events(self, name: str) -> list[dict[str, Any]]:
         return [m["data"] for m in self.sent if m.get("event") == name]
+
+
+class FakeTextConn(FakeConn):
+    """A `FakeConn` that also takes pre-serialised frames.
+
+    `_broadcast` picks its fast path on the presence of `send_text`, so the base
+    `FakeConn` above exercises the `send_json` fallback and this one exercises
+    the template. Both must produce the same frame — that is what
+    `test_the_prebuilt_snapshot_is_byte_identical_to_the_dict_one` pins.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.texts: list[str] = []
+
+    async def send_text(self, text: str) -> None:
+        self.texts.append(text)
+        self.sent.append(json.loads(text))
 
 
 class Spawn:
@@ -258,6 +293,160 @@ def test_each_player_gets_their_own_ack():
     rows = [p.snapshot(0.0) for p in room.players.values()]
     assert room.snapshot_for(a, 0.0, rows)["data"]["ack"] == 7
     assert room.snapshot_for(b, 0.0, rows)["data"]["ack"] == 3
+
+
+def test_the_prebuilt_snapshot_is_byte_identical_to_the_dict_one():
+    """The entire correctness argument for the pre-serialised broadcast path.
+
+    `snapshot_template` exists only to move work, never to change the wire, so
+    the bytes it assembles must equal `json.dumps` of the envelope
+    `snapshot_for` builds — key order and separators included. Without this the
+    fast path has no independent spec, and a reordered key would be a silent
+    protocol change that only the Rust client would notice.
+
+    Loaded deliberately: grenades in the air, a zone burning and effects in the
+    tick, because those are the fields that used to be rebuilt per recipient.
+    """
+    room = make_room()
+    a = room.add("a", None)
+    b = room.add("b", None)
+    a.ack = 7
+    b.ack = 3
+    room.scores = [4, 2]
+    room.fx.append({"kind": "shot", "id": "a", "origin": [1, 2, 3], "ends": [4, 5, 6]})
+    room.nades.append(
+        grenades.Grenade(
+            id="n1",
+            spec=grenades.GRENADES[0],
+            owner="a",
+            team=0,
+            x=1.0,
+            y=2.0,
+            z=3.0,
+            vx=0.5,
+            vy=0.5,
+            vz=1.0,
+            fuse=1.2,
+        )
+    )
+    room.zones.append(
+        grenades.Zone(
+            id="z1",
+            kind="smoke",
+            owner="b",
+            team=1,
+            x=4.0,
+            y=5.0,
+            z=6.0,
+            radius=7.0,
+            remaining=2.0,
+            duration=8.0,
+            damage_per_second=0.0,
+        )
+    )
+    rows = [p.snapshot(0.0) for p in room.players.values()]
+    shared = room.shared_view()
+
+    head, mid, tail = room.snapshot_template(0.0, rows, shared)
+    for player in (a, b):
+        # Built first: both calls drain the player's hitmarkers, so the two
+        # sides have to be compared against the *same* drain.
+        you = room.private_view_for(player)
+        expected = json.dumps(room.snapshot_message(0.0, rows, shared, player.ack, you))
+        assert f"{head}{player.ack}{mid}{json.dumps(you)}{tail}" == expected
+
+
+def test_broadcast_sends_the_same_frame_over_text_and_json(signed_in, unobserved):
+    """The two send paths are chosen per connection, so a room can hold both."""
+    server = MatchServer()
+    room = make_room()
+    server.rooms[room.id] = room
+    text_conn = FakeTextConn()
+    json_conn = FakeConn()
+    room.add("a", text_conn)
+    room.add("b", json_conn)
+
+    asyncio.run(server._broadcast(room))
+
+    assert text_conn.texts, "the text conn should have taken the fast path"
+    sent_text = text_conn.events("snapshot")[0]
+    sent_json = json_conn.events("snapshot")[0]
+    # `ack` and `you` are per recipient; everything else is the shared body and
+    # must match exactly across the two paths.
+    for key in ("room", "tick", "t", "players", "scores", "nades", "zones", "fx"):
+        assert sent_text[key] == sent_json[key], key
+
+
+def test_broadcast_clears_the_tick_it_just_sent(signed_in, unobserved):
+    """`fx` and `noises` are drained once everyone has their copy.
+
+    A regression test with a specific history: refactoring the send path left
+    these two lines stranded after a `return` in a helper, so nothing cleared
+    them and every shot in a match accumulated in the packet forever. No
+    existing test noticed, because a single-tick test never sees the second
+    tick — hence this one, which broadcasts twice.
+    """
+    server = MatchServer()
+    room = make_room()
+    server.rooms[room.id] = room
+    conn = FakeTextConn()
+    room.add("a", conn)
+    room.fx.append({"kind": "shot", "id": "a"})
+    room.noises.append(
+        Noise(kind="step", source="a", x=1.0, y=2.0, z=3.0, loudness=20.0)
+    )
+
+    asyncio.run(server._broadcast(room))
+    assert room.fx == []
+    assert room.noises == []
+
+    # And the next tick carries none of the previous one's.
+    asyncio.run(server._broadcast(room))
+    assert conn.events("snapshot")[1]["fx"] == []
+
+
+def test_tick_stats_report_nothing_before_the_first_tick():
+    """A room that has not ticked and a room whose ticks are free are different
+    facts, so the window reports `None` rather than `0`."""
+    room = make_room()
+    report = room.stats.report()
+    assert report["simulateMs"] == {"mean": None, "max": None, "samples": 0}
+    assert report["budgetMs"] == pytest.approx(50.0)
+
+    room.stats.record(2.0, 8.0)
+    room.stats.record(4.0, 12.0)
+    assert room.stats.report()["broadcastMs"] == {
+        "mean": 10.0,
+        "max": 12.0,
+        "samples": 2,
+    }
+
+
+def test_broadcast_falls_back_to_json_while_the_observer_is_watching(
+    signed_in, monkeypatch
+):
+    """The observability panel sees a dict or the fast path does not run.
+
+    A pre-serialised frame has nothing to hand `set_ws_send_observer`, so a
+    registered observer disables the template rather than being shown a
+    reconstruction of what went out.
+    """
+    from backend.modules import ws
+
+    server = MatchServer()
+    room = make_room()
+    server.rooms[room.id] = room
+    conn = FakeTextConn()
+    room.add("a", conn)
+
+    # An observer that wants everything, which is what `is_observed` assumes
+    # when none was declared.
+    monkeypatch.setattr(ws, "_send_observer", lambda direction, data: None)
+    monkeypatch.setattr(ws, "_observer_wants", None)
+    asyncio.run(server._broadcast(room))
+
+    assert not conn.texts, "an observer must force the dict path"
+    assert conn.events("snapshot")
 
 
 # ---------------------------------------------------------------------------
