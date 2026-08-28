@@ -10,7 +10,7 @@
  * instantaneous rate over a chunked stream reads as noise and an ETA computed from
  * it swings by minutes between frames.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 
 import './viz.css';
 
@@ -65,7 +65,9 @@ export function ProgressBar({
       <div className="viz-progress-track">
         <div
           className={`viz-progress-fill${value === null ? ' viz-progress-idle' : ''}`}
-          style={value === null ? undefined : { width: `${value}%` }}
+          // A scale factor, not a width: the bar is animated with `transform` so a
+          // stream of progress frames never triggers layout. See `viz.css`.
+          style={value === null ? undefined : ({ ['--viz-p' as string]: value / 100 } as CSSProperties)}
         />
       </div>
       <span className="viz-progress-label">

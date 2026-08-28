@@ -18,6 +18,7 @@
  * The inherited rule: **"unknown" is never drawn as "none".**
  */
 import { Meter } from '../../viz/Meter';
+import { entranceProps } from '../../viz/useStaggeredEntrance';
 import type { Accelerator, Hardware } from '../hardware/api';
 import { formatBytes } from './api';
 
@@ -25,9 +26,17 @@ function gbOf(mb: number): string {
   return formatBytes(mb * 1024 * 1024);
 }
 
-function AcceleratorCard({ device, primary }: { device: Accelerator; primary: boolean }) {
+function AcceleratorCard({
+  device,
+  primary,
+  index,
+}: {
+  device: Accelerator;
+  primary: boolean;
+  index: number;
+}) {
   return (
-    <li className={`llama-gpu${primary ? ' llama-gpu-primary' : ''}`}>
+    <li className={`llama-gpu${primary ? ' llama-gpu-primary' : ''}`} {...entranceProps(index)}>
       <div className="llama-gpu-head">
         <span className="llama-dot llama-dot-on" />
         <b>{device.name}</b>
@@ -107,6 +116,7 @@ export function MachineBand({
           {devices.map((device, index) => (
             <AcceleratorCard
               key={`${device.kind}:${device.name}:${index}`}
+              index={index}
               device={device}
               primary={device === profile.primary || device.name === profile.primary?.name}
             />

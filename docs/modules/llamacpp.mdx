@@ -215,6 +215,105 @@ knows the model and the context and the probe knows neither. The preview is righ
 default is a starting point.
 :::
 
+### The planner draws every block, not three totals
+
+The preview above began life as three stacked widths — weights on the GPU, KV cache,
+weights left in RAM — with a ceiling line across them. That drawing could state both
+of the rules in the previous section and *show* neither, because a single bar has no
+place to put a block index.
+
+`LayerColumns.tsx` draws one column per decoder block, height from the real
+`layerBytes[i]`, filled from the right. Dragging the slider then teaches the last-N
+rule without a sentence: the fill travels backwards down the stack, which is exactly
+what `i_gpu_start = n_layer - n_gpu_layers` does. The embedding and output head are a
+separate, wider column set apart from the rest, so the 2.9-of-5.3 GB fact is a thing
+you can see rather than a number in a paragraph, and it visibly stays empty until the
+count passes the block count.
+
+The ceiling changed shape too. `offloadColumns` (pure, in `offload.ts`, tested beside
+`estimateOffload`) accumulates a running total **in offload order** — last block
+first, output tensors last — and the VRAM line crosses that curve at exactly the block
+where the model stops fitting. "Does it fit" becomes a position rather than a verdict.
+
+Two honesty rules the columns inherit and one they add:
+
+- No measured VRAM means **no ceiling and no verdict**, unchanged from the bar.
+- A block whose bytes could not be sized still gets a tick, at a floor height. The
+  rail is an index as well as a chart, and a missing column would shift every label
+  after it.
+- **A budget larger than the whole model draws no ceiling either.** Clamping the line
+  to 100% put it across the top of the chart, which reads as "this exactly fills the
+  card" — an assertion of a crossing that does not exist. A model that fits entirely
+  has no crossing point, and the honest drawing of no crossing is no line, plus a
+  sentence saying so.
+
+`estimateOffload` and `offloadColumns` are checked against each other at every slider
+position, so the legend and the picture cannot drift apart.
+
+### The drawing primitives are shared now
+
+Four of the visuals on these tabs used to be private to one component: a sparkline
+and a heat strip inside `TracesSection.tsx`, a progress bar in `ServerPane.tsx`, and
+a segmented budget bar in `OffloadPreview.tsx` — the last of which had two more call
+sites that had settled for a sentence instead. They live in `packages/core/src/viz/`
+now, beside `Primitives.tsx` and `DataList.tsx` which set that precedent.
+
+Three of them carry a rule that used to be a comment:
+
+- **`spark.ts` — a gap is a gap.** A pass whose record was summarized without a
+  statistic has nothing to report, and joining the line across it draws a
+  measurement that was never taken. A lone measured point between two gaps becomes a
+  dot, because a one-point polyline draws nothing at all — silently.
+- **`Meter` — `threshold: null` means no verdict.** The "unknown VRAM draws no
+  ceiling" rule is now in the type: there is deliberately no `fits` prop, so a caller
+  cannot assert a verdict the component would have refused to draw.
+- **`ramp.ts` returns a sign and an alpha, never a colour.** The old `cellColor`
+  returned `rgb(110 190 255 / 34%)`, which renders identically on the light theme and
+  slipped past `no-hex-literals.test.ts` only because that guard matches `#rrggbb`.
+  Passing the ratchet is not the same as being themed. The sign becomes a data
+  attribute and the alpha a custom property, resolved in CSS against two new
+  per-theme tokens, `--ramp-pos` and `--ramp-neg` — the only two tokens whose job is
+  to be read as a *direction* rather than as a status, which is why they are not
+  `--accent` and `--danger`: a negative activation is not an error.
+
+`HeatCanvas` is deliberately **not** added to the hex guard's `CANVAS_EXEMPT` bucket.
+That exemption exists because a `CanvasRenderingContext2D` cannot resolve a custom
+property — true, but it only covers a canvas with no way to *ask*. This one reads its
+ramp through `getComputedStyle` and repaints on a theme change. The cautionary case is
+`training/panels/MetricsPane.tsx`, which passed `var(--accent, #539bf5)` straight into
+uPlot: `ctx.strokeStyle` ignores an unparseable value **without throwing**, so that
+series was drawn in uPlot's default colour on all six themes while looking, in the
+source, fully themed. `viz/uplot-theme.ts` resolves tokens properly and that bug is
+fixed.
+
+### The machine band — what the probe found, and what it could not ask
+
+The Server section used to open with one line naming `profile.primary`. Three things
+the hardware probe had already measured were reaching the pane and being dropped:
+
+- **`accelerators[]`, not just `primary`.** A machine with a discrete card and an
+  integrated GPU showed one of them, so "why did it pick that one" had no answer on
+  screen. Each device now gets a card with its own memory meter and a
+  `measured` / `reported` mark taken from `Accelerator.exact`.
+- **`notes[]` — the gaps.** This is the hardware module's entire reason for existing
+  and it had **no renderer anywhere in the app**. An absent `nvidia-smi` and an absent
+  GPU produce the same empty list and are not the same fact; the backend is careful to
+  distinguish them and the UI flattened it. They are now listed under "what the probe
+  could not ask".
+- **`defaults.reasons`** for every auto-resolved field, not the two that had tooltips.
+
+`installs[]` had the same problem: always fetched, never listed. A machine that has
+changed build variant a few times accumulates them — five, on the machine this was
+developed against, four of them stale CUDA builds — and `POST /install/remove` had no
+frontend caller at all. The list is now rendered whenever there is more than one, and
+the Remove button says why it is disabled while the server is up rather than letting
+the backend answer 409.
+
+Finally `running` and `ready` are drawn as the two separate facts the API models them
+as. Loading a large GGUF takes tens of seconds during which the process is up and
+every request fails; collapsing that into one sentence made a normal load look like a
+fault and gave no way to tell it from a server that is genuinely stuck.
+
 ### Verification says what it actually knows
 
 GitHub publishes a `digest` for release assets. When it is there, a mismatch aborts
@@ -267,6 +366,33 @@ into a 40 GB transfer. The ceiling is `llamacpp.diskBudgetGb` (default 80).
 Downloads write to a `.part` file and rename on success, so an interrupted transfer
 can never be picked up by the catalog scan as a servable model — a truncated GGUF
 fails at load time with an error that reads like a corrupt *model*.
+
+### Reading the catalogue
+
+The model list is grouped by `origin` with each group's root named, because "why is
+this file here" and "why can I not delete it" are the same question and `origin` is
+the whole answer — it was previously a bare tag on a row, sorted next to nothing.
+`extraDirs` is finally rendered, so a file from a user-configured directory says which
+one.
+
+Two things that were sentences became pictures:
+
+- **The disk budget** is a segmented meter, one segment per model, hovering either
+  way between a segment and its row. `usedBytes of budgetBytes` told you the total
+  and never which file was responsible for it.
+- **Quantization cost** is a log-log scatter of `parameters` against `sizeBytes`.
+  Plotted against each other the two numbers stop being two numbers and become a
+  *rate* — bytes per parameter — and each quantization family falls on its own line
+  through the origin, with guides drawn at 0.5, 1, 2 and 4. Q8_0 sits at about twice
+  Q4_K_M's slope and F16 at four times, which is readable without knowing what any of
+  the names mean. Log-log because a catalogue spans 0.5B to 70B and a linear axis puts
+  every small model in one pixel; a constant ratio is still a straight line after the
+  transform, so the property being read survives it. It **refuses to draw under three
+  points** — a scatter of one is a dot with axes implying a trend nobody measured.
+
+Each row also carries a context rail against the longest context in the catalogue, so
+the over-context warning on the Server tab is predictable before you type a number
+rather than after.
 
 ## The server
 
@@ -834,6 +960,54 @@ because on Windows an open mapping keeps the file undeletable.
 
 `modelSha` keys the cache, which is the same key the trace carries — two
 quantizations of one model are two caches, as they must be.
+
+### Narrowing, and why it is a stride
+
+The grid is a `<table>` with one row per layer and one column per token, so a
+262-layer trace over a 200-token prompt is 52,400 cells — a request measured in
+seconds and a picture nothing can be found in. `getLensGrid` has accepted `layers`
+and `positions` since it was written and the pane passed **neither**.
+
+The control is a **stride**, not a window, and that is the interesting choice. What a
+logit lens is for is seeing *where along the depth* a prediction settles. A window
+over layers 0–32 of a 262-layer model answers a different question: it shows a sixth
+of the model in full detail and hides where the answer actually appeared. A stride
+keeps the full span and samples it, so the knee is still visible and you can then
+narrow to a window once you know roughly where to look.
+
+Three rules in `narrow.ts` (pure, tested):
+
+- **The last layer is always kept.** It is the model's real output, and a stride that
+  happened to skip it would draw a lens whose final row is a prediction the model
+  never made.
+- **The window is applied first, then the stride samples within it.** Striding first
+  and clipping after gives a different row count depending on where the window sits,
+  so widening it could make the picture *coarser* — the opposite of what the control
+  says it does.
+- **Only an unnarrowed response tells us the true depth.** A narrowed one reports the
+  rows it was asked for; treating that as the depth would let the suggested stride
+  ratchet itself down on every refresh.
+
+A deep trace opens at a suggested stride rather than opening broken; touching the
+control stops it being suggested again.
+
+### The track ribbon — where a word gets decided
+
+`LensTrack` carries `logits[layer][position]` **and** `ranks[layer][position]`, and
+the pane used only the ranks: a superscript in a cell and a tint behind it. The logits
+were fetched on every track and thrown away.
+
+That is the whole point of a logit lens, and it had no picture. A word does not fade
+in evenly across the depth — it sits near the floor for two thirds of the stack and
+then climbs steeply over a handful of layers. A per-cell tint cannot show a knee. A
+curve can, and the knee is the finding.
+
+`TrackRibbon` draws both encodings on purpose. The **line** is the logit, the quantity
+the model computes. The **band** beneath is the rank, log-scaled, which is what that
+logit is worth against every other token — a rising logit stuck at rank 4000 has
+decided nothing. The first layer at which the token is the top choice is called out as
+a badge, and a token that never wins says so rather than leaving the badge absent,
+which would read as a missing feature.
 
 ### Swapping a token
 

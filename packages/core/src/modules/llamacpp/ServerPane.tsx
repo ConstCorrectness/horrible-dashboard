@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePaneSection } from '../../layout/use-sections';
 import { ProgressBar } from '../../viz/ProgressBar';
 import { RollingCounter } from '../../viz/RollingCounter';
+import { entranceProps } from '../../viz/useStaggeredEntrance';
 import { Meter } from '../../viz/Meter';
 import { MachineBand } from './MachineBand';
 import { QuantScatter } from './QuantScatter';
@@ -334,10 +335,14 @@ function ServerSection({
             the other two — `POST /install/remove` had no caller at all. */}
         {status && status.installs.length > 1 && (
           <ul className="llama-installs">
-            {status.installs.map((entry) => {
+            {status.installs.map((entry, index) => {
               const active = entry.tag === install0?.tag && entry.variant === install0?.variant;
               return (
-                <li key={`${entry.tag}:${entry.variant}`} className={active ? 'llama-on' : ''}>
+                <li
+                  key={`${entry.tag}:${entry.variant}`}
+                  className={active ? 'llama-on' : ''}
+                  {...entranceProps(index)}
+                >
                   <code>{entry.tag}</code>
                   <span className="llama-tag">{entry.variant}</span>
                   <span className="llama-meta">{formatBytes(entry.sizeBytes)}</span>
@@ -696,12 +701,13 @@ function ModelsSection({ data, refresh }: { data: ModelsResponse | null; refresh
               )}
             </div>
             <ul className="llama-models">
-              {entries.map((m) => (
+              {entries.map((m, index) => (
                 <li
                   key={m.path}
                   className={hover === m.path ? 'llama-on' : ''}
                   onMouseEnter={() => setHover(m.path)}
                   onMouseLeave={() => setHover(null)}
+                  {...entranceProps(index)}
                 >
                   <div className="llama-model-head">
                     <span className="llama-model-name">{m.name.split('/').pop() ?? m.name}</span>

@@ -365,6 +365,73 @@ def test_a_roaming_bot_turns_to_face_where_it_is_walking():
     assert bot.state.pitch < 0.1
 
 
+def test_a_roaming_bot_turns_to_face_where_it_is_walking():
+    """The bug that made bots look like they could not rotate at all.
+
+    `yaw` was only ever assigned inside the `target is not None` branch, so a bot
+    with nobody to shoot at kept the yaw it spawned with for the whole match. It
+    still *walked* to its roam point — movement is expressed in the player's own
+    frame, so the heading was rotated into forward/strafe and it slid there
+    sideways or backwards — which from the outside reads as a model stuck facing
+    one direction rather than as an aim bug. Every bot spawning level and most
+    spawning at the same angle is what completed the illusion.
+    """
+    room = make_room()
+    bot = bots.add_bots(room, 1, team=0)[0]
+    place(bot, 10.0, 10.0, yaw=0.0)
+    # Due north-east of it, so a bot that faces its heading has to leave yaw 0.
+    bot.brain.roam = (60.0, 60.0)
+    bot.brain.roam_in = 99.0
+
+    for _ in range(20):
+        command = bot.brain.think(room, bot, 1 / 20)
+        bot.state.yaw = command.yaw
+        bot.state.pitch = command.pitch
+
+    assert abs(bot.state.yaw) > 0.2, (
+        "a roaming bot never turned away from its spawn yaw"
+    )
+
+
+def test_a_roaming_bot_turns_no_faster_than_it_aims():
+    """The turn is rate-limited by the same `turn_rate` the aim is.
+
+    A bot that snapped instantly to each new roam heading would be the other
+    tell that nothing human is steering it — and `_steer` swings the heading hard
+    around obstacles, so the unclamped version twitches rather than turns.
+    """
+    room = make_room()
+    bot = bots.add_bots(room, 1, skill="easy", team=0)[0]
+    place(bot, 10.0, 10.0, yaw=0.0)
+    # Directly behind it: the largest turn there is, so the clamp has to bite.
+    bot.brain.roam = (-40.0, 10.0)
+    bot.brain.roam_in = 99.0
+
+    dt = 1 / 20
+    command = bot.brain.think(room, bot, dt)
+    assert abs(command.yaw) <= bot.brain.skill.turn_rate * dt + 1e-6
+
+
+def test_a_bot_that_loses_its_target_levels_off():
+    """Pitch is turned back towards level while roaming, for the same reason.
+
+    Without it a bot that was shooting at somebody below it kept staring at the
+    floor for the rest of the match, which reads as a broken rig.
+    """
+    room = make_room()
+    bot = bots.add_bots(room, 1, team=0)[0]
+    place(bot, 10.0, 10.0)
+    bot.state.pitch = -1.2
+    bot.brain.roam = (40.0, 40.0)
+    bot.brain.roam_in = 99.0
+
+    for _ in range(20):
+        command = bot.brain.think(room, bot, 1 / 20)
+        bot.state.pitch = command.pitch
+
+    assert abs(bot.state.pitch) < 0.2
+
+
 def test_roaming_heads_for_the_enemy_half():
     """Four bots wandering uniformly on a 256-cube map can spend a minute never
     meeting, which is the opposite of what "add some bots" is for. Enemy spawns

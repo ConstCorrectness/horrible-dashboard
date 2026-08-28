@@ -11,6 +11,7 @@ export { Meter, type MeterProps, type MeterSegment, type MeterTone } from './Met
 export { ProgressBar, type ProgressBarProps } from './ProgressBar';
 export { RollingCounter, type RollingCounterProps } from './RollingCounter';
 export { HeatCanvas, type HeatCanvasProps } from './HeatCanvas';
+export { entranceProps, useStaggeredEntrance, type EntranceProps } from './useStaggeredEntrance';
 export { chartColors, subscribeThemeColors, type ChartColors } from './uplot-theme';
 export { sparkRuns, sharedDomain, type SparkPoint, type SparkGeometry } from './spark';
 export { rampCell, rampProps, rampScale, RAMP_FLOOR, RAMP_RANGE, type RampCell, type RampSign } from './ramp';

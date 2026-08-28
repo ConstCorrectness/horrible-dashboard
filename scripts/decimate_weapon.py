@@ -102,7 +102,9 @@ def export_any(path: Path) -> None:
     # directory by `build_hassault_weapon.mjs`, never read from the FBX — see its
     # header. Copying them beside this file would write 32 MB nothing reads.
     try:
-        bpy.ops.export_scene.fbx(filepath=str(path), use_selection=False, path_mode="STRIP")
+        bpy.ops.export_scene.fbx(
+            filepath=str(path), use_selection=False, path_mode="STRIP"
+        )
     except AttributeError:
         bpy.ops.wm.fbx_export(filepath=str(path))
 

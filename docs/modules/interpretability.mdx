@@ -191,6 +191,92 @@ The block is drawn **once with a ×N multiplier** rather than repeated — forty
 identical rectangles say nothing the number doesn't — but the multiplier expands
 into a layer picker, so "block 17 specifically" is one click away.
 
+### Inspect is a canvas, and the stack is one node
+
+Inspect used to be a vertical column of `<button>` rows inside a CSS grid track
+declared `minmax(190px, 260px)`. That single line was the whole problem: the diagram
+could not exceed 260px in a pane of any width, there was no zoom, and the residual —
+the one connection worth drawing — was a text row reading `⊕ residual` that connected
+nothing to nothing.
+
+It is now a read-only `@xyflow/react` canvas (`inspect/InspectCanvas.tsx`) with pan,
+zoom, a minimap and two fit controls, sitting inside a resizable split.
+
+**The node model is O(1) in the layer count.** A 48-layer model has ~290 sublayers,
+and drawing them would be unreadable *and* a lie: the interesting fact about a stack
+of 48 decoder blocks is that they are identical, and 48 drawn boxes assert the
+opposite. So the stack is **one node carrying a rail of N ticks**, and exactly one
+block is ever expanded — the selected one. Six to eight nodes, ever, plus the rail.
+
+The rail earns its place twice over. Tick *height* is that block's real bytes from
+the GGUF inventory, so a model whose later blocks are heavier says so. Tick *band* is
+its tensor-shape signature, computed by `layerSignatures`, so a model that alternates
+its attention shape by layer — Gemma 4's `blk.0.attn_q` is 3840×4096 while
+`blk.17.attn_q` is 3840×8192 — draws as **stripes** instead of as a grey `varies`
+chip with a tooltip. The GGUF inventory is the only source that can see this at all:
+every scalar source, GGUF metadata and a repo's `config.json` alike, reports a single
+head count for the whole model.
+
+`Selection {stage, layer}` is unchanged and remains the single source of truth;
+`inspect/graph.ts` only provides a bijection to node ids, so the canvas is a
+*projection* of the selection rather than a second copy of it. That is what let the
+model-locus wiring survive the rewrite with no edit at all — the
+lens still publishes a layer, the explorer still selects and opens that block, and the
+canvas now additionally brings it into view. The focus is driven by a **nonce** rather
+than the layer value, so clicking layer 15 in the lens twice re-centres instead of
+being a no-op.
+
+Layout is dagre with `rankdir: 'TB'`, in a file deliberately separate from the
+designer's `LR` one. `designer/layout.ts` already argues both sides: `LR` because node
+editors read left to right, and `TB` for `training/panels/ModelGraphPane` because "a
+traced module tree reads as a stack". Inspect is the second case by that file's own
+criterion — and every canonical transformer figure is vertical, the residual only
+reads as a *spine* when the block runs down the page, and the left column is now
+narrow by default so the axis with room to spare is the vertical one.
+
+:::note[The third importer of the graph engine]
+`flow/canvas/FlowCanvas.tsx` said it was the only file importing `@xyflow/react`, and
+`designer/ModelCanvas.tsx` argued its way in as the second. `InspectCanvas` makes the
+same argument a third time in its own header rather than assuming it: `ModelCanvas` is
+built around the designer's **editable** `GraphNode` — typed sockets,
+`socketsCompatible` refusing a link at the wire, `onConnect`, frame membership, a
+persisted layout sidecar. Inspect's nodes are read-only, derived, socketless and
+unpersisted, so reusing it would mean every one of those invariants growing a "not in
+inspect mode" branch. What the rule protects — the node *model* is the API, the engine
+stays swappable — still holds: nothing outside that file imports the engine.
+:::
+
+**Zoom means two things**, because the wheel already changes the zoom factor and a
+control that did the same would be redundant. *Fit* is the whole model and the way
+back. *Focus* is the selected node **and what it connects to**, on double-click — the
+useful verb on a graph is "show me this and its neighbours", not "make it 1.4×". On
+top of that the nodes read the viewport zoom and drop their fact rows below ~0.62, so
+zooming out shows the model's shape and zooming in reads its numbers.
+
+### Both sides resize now
+
+`SplitPane` (`packages/core/src/SplitPane.tsx`) is a shared in-pane splitter, applied
+to Inspect's two columns and to the designer's palette and inspector — which were
+`width: 176px` and `width: 320px`, equally unresizable.
+
+It is not `packages/ui/src/layout/Sash.tsx`: that one takes a `SplitNode` and
+dispatches `SET_SPLIT_SIZES` to `layoutStore` because it divides the *workspace*. A
+pane's own columns are not part of the layout tree, and core cannot import ui anyway.
+Sizes live in `localStorage` (`split-sizes.ts`, mirroring `llamacpp/pins.ts`) rather
+than in the layout store, which also keeps them out of an exported workspace — opening
+somebody else's workspace should not resize the insides of your panes.
+
+Two things in it are load-bearing:
+
+- **The drag does not `setState`.** A pointermove at 60 Hz re-rendering both children
+  makes the React Flow canvas rebuild its node list sixty times a second. The live
+  size is written straight to a `--split-size` custom property and React is told once,
+  on pointerup.
+- **`narrowBelow` measures the container, not the viewport.** It replaces a
+  `@media (width <= 720px)` rule that was wrong by construction: a pane docked in a
+  three-column workspace is narrow at any viewport width, and a maximised pane is wide
+  on a small screen.
+
 ### Two sources, and why they stay separate
 
 | Source | Available for | What it gives |

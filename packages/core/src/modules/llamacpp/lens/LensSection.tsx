@@ -25,7 +25,9 @@ import {
   trackRank,
   type CellDiff,
 } from './grid-model';
+import { narrowLayers, suggestedStride } from './narrow';
 import { TokenPicker } from './TokenPicker';
+import { TrackRibbon } from './TrackRibbon';
 import {
   addVocabPin,
   clearVocabPins,
@@ -234,6 +236,18 @@ export function LensSection() {
   const [error, setError] = useState('');
   const [selected, setSelected] = useState<{ layer: number; position: number } | null>(null);
   const [pins, setPins] = useState<VocabPin[]>([]);
+  /**
+   * How much of the depth to ask for.
+   *
+   * `getLensGrid` has always taken `layers` and `positions` and this pane passed
+   * neither, so a 262-layer trace rendered 262 table rows — a request measured in
+   * seconds and a picture nothing can be found in. `step` is defaulted from the
+   * trace's own depth so a deep model opens readable instead of opening broken.
+   */
+  /** Every layer the trace has, learned from the first unnarrowed response. */
+  const allLayers = useRef<number[]>([]);
+  const [step, setStep] = useState(1);
+  const [stepTouched, setStepTouched] = useState(false);
   const [tracks, setTracks] = useState<Record<number, LensTrack>>({});
   const [activeTrack, setActiveTrack] = useState<number | null>(null);
   const [swapAt, setSwapAt] = useState<number | null>(null);
@@ -275,6 +289,9 @@ export function LensSection() {
     setPins(model ? getVocabPins(model) : []);
     setTracks({});
     setActiveTrack(null);
+    allLayers.current = [];
+    setStep(1);
+    setStepTouched(false);
   }, [model]);
 
   useEffect(() => {
@@ -296,11 +313,27 @@ export function LensSection() {
     }
     setBusy(true);
     setError('');
-    void getLensGrid(traceId, { lens: lensId, k })
+    // `allLayers` is what the LAST response reported, so the stride samples the
+    // real depth rather than a guess at it. On the first load there is nothing to
+    // narrow against and the request asks for everything — which is correct: the
+    // depth is exactly what we do not know yet.
+    void getLensGrid(traceId, {
+      lens: lensId,
+      k,
+      layers: narrowLayers(allLayers.current, { step }),
+    })
       .then((res) => {
         if (!alive.current) return;
+        // Only a full read tells us the model's true depth; a narrowed one reports
+        // the rows it was asked for, and treating that as the depth would let the
+        // stride ratchet itself down on every refresh.
+        if (step === 1) allLayers.current = res.layers;
         setGrid(res);
         setSelected(null);
+        if (!stepTouched) {
+          const suggested = suggestedStride(allLayers.current.length);
+          if (suggested !== step) setStep(suggested);
+        }
       })
       .catch((err: unknown) => {
         if (!alive.current) return;
@@ -308,7 +341,7 @@ export function LensSection() {
         setError(err instanceof Error ? err.message : String(err));
       })
       .finally(() => alive.current && setBusy(false));
-  }, [traceId, lensId, k]);
+  }, [traceId, lensId, k, step, stepTouched]);
 
   useEffect(loadGrid, [loadGrid]);
 
@@ -479,6 +512,21 @@ export function LensSection() {
             onChange={(e) => setK(Math.max(1, Math.min(20, Number(e.target.value) || 5)))}
           />
         </label>
+        <label
+          title="Show every Nth layer. The span stays the same and the last layer is always kept, so the knee in a curve is still visible — narrow to a window once you can see where to look."
+        >
+          Every
+          <input
+            type="number"
+            min={1}
+            max={32}
+            value={step}
+            onChange={(e) => {
+              setStepTouched(true);
+              setStep(Math.max(1, Math.min(32, Number(e.target.value) || 1)));
+            }}
+          />
+        </label>
         <button onClick={loadGrid} disabled={busy}>
           {busy ? 'Reading…' : 'Refresh'}
         </button>
@@ -497,6 +545,19 @@ export function LensSection() {
       {grid ? (
         <>
           <VerifyBanner grid={grid} />
+
+          {/* The tracked token's logit against depth. `LensTrack.logits` was
+              fetched on every track and never drawn — the grid could only tint a
+              cell, and a tint cannot show the knee that IS the finding. */}
+          {track && (
+            <TrackRibbon
+              track={track}
+              position={selected?.position ?? track.positions[track.positions.length - 1] ?? 0}
+              onPosition={(position) =>
+                setSelected((current) => ({ layer: current?.layer ?? grid.layers[0], position }))
+              }
+            />
+          )}
 
           {trace?.derivedFrom ? (
             <p className="llama-meta">

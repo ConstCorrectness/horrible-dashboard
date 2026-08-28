@@ -116,7 +116,7 @@ against that rule first.
 | `buildings/`                      | 145 MB | ?                                           | GPL     | Nothing                                            |
 | `m4-carbine-rifle/`               | 81 MB  | HorribleProgram                             | GPL     | Nothing                                            |
 | `appartement.zip`                 | 71 MB  | ?                                           | GPL     | Nothing                                            |
-| `carbine-m4a1/`                   | 62 MB  | HorribleProgram                             | GPL     | Nothing                                            |
+| `carbine-m4a1/`                   | 62 MB  | HorribleProgram                             | GPL     | **The assault prop**, via `decimate_weapon.py`      |
 | `remington-870-express-tactical/` | 39 MB  | HorribleProgram                             | GPL     | Nothing                                            |
 | `svu-a-sniper-rifle/`             | 25 MB  | HorribleProgram                             | GPL     | Nothing                                            |
 | `beretta-92/`                     | 13 MB  | HorribleProgram                             | GPL     | Nothing                                            |
@@ -124,6 +124,22 @@ against that rule first.
 | `Yaku J Ignite.fbx`               | 20 MB  | Mixamo character                            | GPL     | Nothing                                            |
 | `Ch18_nonPBR.fbx`                 | 14 MB  | Mixamo character                            | GPL     | Nothing                                            |
 | `cat.zip`                         | 1.1 MB | ?                                           | GPL     | Nothing                                            |
+
+### Rebuilding the assault prop
+
+The one weapon that needs two steps, because the source is 687k triangles and a
+view model's budget is about 30k. Decimate first, then convert:
+
+```bash
+"C:/Program Files/Blender Foundation/Blender 5.0/blender.exe" --background   --python scripts/decimate_weapon.py --   --in "assets/horribleAssault/carbine-m4a1/source/Carbine M4A1.fbx"   --out .cache/hassault/carbine-m4a1-lod.fbx --budget 30000
+
+node scripts/build_hassault_weapon.mjs   --fbx .cache/hassault/carbine-m4a1-lod.fbx   --textures assets/horribleAssault/carbine-m4a1/textures   --exclude "Bullet_01$" --length 2.3 --forward -x   --out apps/web/public/hassault-weapon-assault.glb
+```
+
+The `--textures` flag is needed because the LOD lands in `.cache/` rather than
+in a Sketchfab-shaped directory, so the converter cannot find the sibling maps on
+its own. `--exclude "Bullet_01$"` drops a loose round that would otherwise hang
+in the air beside the magazine — the same reason the shotgun excludes `shell`.
 
 About 600 MB of the 746 MB here is used by nothing. The weapon models are
 already documented as _"third-party models with unverified licences"_

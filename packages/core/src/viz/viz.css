@@ -182,30 +182,47 @@
   overflow: hidden;
 }
 
+/* Driven by `transform`, not `width`.
+ *
+ * Both of these used to animate a layout property — `width` here and `margin-left`
+ * in the keyframes below — which forces layout on every frame. It is inherited from
+ * the private bar this replaced, and it matters more now than it did there: this one
+ * is shared, a download drives it from an NDJSON stream several times a second, and
+ * the indeterminate pulse runs *forever*. `transform` is composited, so neither
+ * touches layout at all.
+ *
+ * The fill is full-width and scaled down, so the progress value is a scale factor
+ * rather than a length. `transform-origin: left` is what makes it grow from the
+ * correct end; without it the bar would expand from its middle. */
 .viz-progress-fill {
+  width: 100%;
   height: 100%;
   background: var(--accent);
-  transition: width var(--dur-base) linear;
+  transform: scaleX(var(--viz-p, 0));
+  transform-origin: left center;
+  transition: transform var(--dur-base) linear;
 }
 
 /* No total yet (a resolve step, or a server that sent no content-length): a full
    bar would claim a completeness we don't have, so it pulses instead. */
 .viz-progress-idle {
   width: 30%;
+  /* The keyframes below supply the transform; this clears the scaleX above so the
+     stripe is its own full width rather than being scaled to nothing first. */
+  transform: none;
   animation: viz-indeterminate 1.2s var(--ease-standard) infinite;
 }
 
+/* 233% of a stripe that is 30% of the track travels exactly 70% of the track — the
+   same sweep the old `margin-left` keyframes described. */
 @keyframes viz-indeterminate {
-  0% {
-    margin-left: 0;
+  0%,
+  100% {
+    transform: translateX(0);
   }
 
   50% {
-    margin-left: 70%;
-  }
-
-  100% {
-    margin-left: 0;
+    transform: translateX(233%);
   }
 }
 
@@ -246,4 +263,33 @@
   background: var(--bg-inset);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+}
+
+/* ------------------------------------------------------- staggered entrance --
+ *
+ * One rule for every list that wants it. The CAP is the load-bearing part: a
+ * linear `i * step` over a 200-row catalogue is a five-second arrival, during
+ * which the list is a half-drawn thing you cannot use. Past the twelfth item the
+ * effect has been read anyway.
+ */
+[data-enter] {
+  animation: viz-enter var(--dur-base) var(--ease-entrance) both;
+  animation-delay: calc(min(var(--stagger-i, 0), 12) * var(--stagger-step));
+}
+
+@keyframes viz-enter {
+  from {
+    opacity: 0;
+    /* Translated along one axis only. A scale or a blur on a list of numbers
+       makes the figures illegible for the length of the animation. */
+    transform: translateY(4px);
+  }
+}
+
+/* Motion is the decoration here, not the content — so it is removed entirely
+   rather than shortened, and nothing is left mid-transition. */
+@media (prefers-reduced-motion: reduce) {
+  [data-enter] {
+    animation: none;
+  }
 }
