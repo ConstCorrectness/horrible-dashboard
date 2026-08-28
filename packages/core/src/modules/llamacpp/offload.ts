@@ -95,3 +95,82 @@ export function maxFittingLayers(
   }
   return 0;
 }
+
+/** One decoder block as the planner draws it. */
+export interface OffloadColumn {
+  /** Block index, or -1 for the embedding/output overhead column. */
+  index: number;
+  weightBytes: number;
+  /** KV cache this block costs at the given context, 0 when it stays on the CPU. */
+  kvBytes: number;
+  onGpu: boolean;
+  /**
+   * Everything the GPU holds up to and including this column, walking the stack in
+   * the order llama.cpp offloads it — from the LAST block downward.
+   *
+   * This is the series that turns "does it fit" from a verdict word into a crossing
+   * point: where the running total meets the budget is exactly the block at which
+   * it stops fitting, which is a thing you can see and a number you can act on.
+   */
+  cumulative: number;
+}
+
+/**
+ * The stack as columns, in offload order.
+ *
+ * `estimateOffload` answers "what does N cost"; this answers "what would each next
+ * one cost", which is the question the slider is actually asking on every drag.
+ *
+ * Returned in **block order** (0 first) because that is how the stack reads on
+ * screen, while `cumulative` is accumulated in **offload order** (last block
+ * first). Conflating the two is the bug this comment exists to prevent: filling
+ * the columns from the left would draw the first N blocks as the offloaded ones,
+ * which is the wrong end of the stack — see this file's header.
+ */
+export function offloadColumns(
+  plan: LayerPlan,
+  requestedLayers: number,
+  contextSize: number,
+): OffloadColumn[] {
+  const count = plan.layerCount;
+  const layers = Math.max(0, Math.min(requestedLayers, count));
+  const includesOutput = count > 0 && requestedLayers > count;
+  const start = count - layers;
+  const kvPerLayer = plan.kvBytesPerToken && count ? plan.kvBytesPerToken / count : 0;
+  const kvEach = Math.round(kvPerLayer * Math.max(0, contextSize));
+
+  const blocks: OffloadColumn[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const onGpu = i >= start;
+    blocks.push({
+      index: i,
+      weightBytes: plan.layerBytes[i] ?? 0,
+      kvBytes: onGpu ? kvEach : 0,
+      onGpu,
+      cumulative: 0,
+    });
+  }
+
+  // The embedding and output head. Their own column, not folded into "layers":
+  // Gemma 4 E4B keeps 2.9 GB of its 5.3 GB here, so a picture that hid them would
+  // be wrong by more than half — and they only move when N exceeds the block count.
+  const overhead: OffloadColumn = {
+    index: -1,
+    weightBytes: plan.overheadBytes,
+    kvBytes: 0,
+    onGpu: includesOutput,
+    cumulative: 0,
+  };
+
+  // Accumulate in offload order: the last block first, the output tensors last
+  // (they are the final thing `-ngl 99` adds).
+  let running = 0;
+  for (let i = count - 1; i >= 0; i -= 1) {
+    const column = blocks[i];
+    running += column.weightBytes + column.kvBytes;
+    column.cumulative = running;
+  }
+  overhead.cumulative = running + overhead.weightBytes;
+
+  return [...blocks, overhead];
+}

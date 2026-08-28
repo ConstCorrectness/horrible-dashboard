@@ -548,6 +548,64 @@ built from a pure `node-kind.ts` classifier. Two details worth keeping:
 - **Only the kinds present are offered** as toggles. A Mamba trace showing an
   "attention" chip that matches nothing is worse than no chip.
 
+### The depth profile — the pass, without pinning anything
+
+A `TraceRecord` carries seven statistics (`count, min, max, mean, rms, absMax,
+zeroFraction`) and the pane rendered exactly one of them, for pinned nodes only — so
+the most basic question you can ask of a traced pass, *does the residual grow with
+depth?*, took eight manual pins and still could not be seen at a glance. The Profile
+card answers it in two views, above the record list.
+
+**Why it is a route and not a `useMemo`.** The first cut computed it from
+`records[].summary`, already in the browser, and cost no request. Against every trace
+on disk it drew an empty chart reading *0 of 28 layers measured*, and blamed the
+fidelity for it. `tracer._capture` writes `summary` **only** for `summary`-fidelity
+records — the ones that hold no data — so on an fp16 trace the manifest carries 170
+records and zero statistics. Exactly the records with data have no statistics. That
+is the same fact that forced `GET /series` to exist, and
+`GET /traces/{id}/profile?passIndex=&stat=` is its sibling one axis over: every record
+of one pass, reduced server-side over its **whole** tensor rather than the
+`_VALUE_CAP` prefix `get_record` ships to a browser. Summarizing 322 records that way
+is 22 MB of activations, which is why `traces.summarize_array` is numpy and
+`summarize` now delegates to it — one implementation, not two that can disagree about
+the number the pane prints.
+
+The pass and the statistic are the whole request; **which role is on screen is not**,
+because that is arrangement of a response already in hand. So:
+
+- **One role against depth.** A *role* is a record name with its block index
+  removed, so `kqv_out-3` and `kqv_out-27` are the same role at two depths — which
+  is the only way to compare them. Two naming schemes reach `roleOf` and only one is
+  `blk.N.`: graph nodes named by llama.cpp's `cb()` carry the index as a **`-N`
+  suffix**, and handling only the segment form left every activation name unchanged,
+  so each depth read as its own role and nothing was profilable at all. Only roles
+  appearing at more than one depth are offered; a node captured once is not a
+  profile.
+- **The pass as a fingerprint** — node kind against depth as a heat grid,
+  **normalized per row, not globally.** An attention score and an FFN activation are
+  different quantities in different units, and one shared scale would render every
+  row but the largest as uniformly blank, which reads as *nothing happens there*.
+  Per-row normalization asks the only question a heat grid can honestly answer here:
+  where along the depth is *this* quantity large? Several records of one kind landing
+  on one layer (q, k and v are all attention) average rather than max, so one outlier
+  cannot stand for the group.
+
+The statistic selector is as much the point as the charts: `rms` answers "how big",
+`zeroFraction` "how sparse", `absMax` "is there an outlier". Those are different
+questions about the same pass, and six of the seven statistics previously had no
+renderer at all. The same selector now also drives the watch sparklines, which the
+series route already accepted as `?stat=`.
+
+**A missing statistic is `null`, never `0`.** A `summary`-fidelity record can lack a
+statistic outright, and zero is a measurement — reporting it would draw a value that
+was never taken and drag every mean and every colour scale toward it. The route emits
+`null` and the grid skips it; a gap is drawn as a gap. The other half of the same
+rule is why the grid tests `value !== null` rather than truthiness: a genuine `0.0`
+is a reading and belongs on the chart.
+
+A failed request is **surfaced, not swallowed** — an empty profile and a broken one
+look identical on screen otherwise, and only one of them is a bug worth seeing.
+
 ### Architectures beyond the transformer
 
 `DEFAULT_CAPTURE` is a *transformer* capture set — `attn_norm`, `kqv_out`, `ffn_*`.

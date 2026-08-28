@@ -490,6 +490,30 @@ class BotBrain:
             and self.rng.random() < self.skill.poise
         )
 
+        # -- look where you are going ---------------------------------------
+        #
+        # With a target, `yaw` was already turned toward it above and the body
+        # walks in whatever direction the strafe pattern asked for. With *no*
+        # target there was nothing turning `yaw` at all, so a roaming bot kept
+        # the yaw it spawned with for the whole match: it slid to its roam point
+        # sideways or backwards, facing one fixed direction forever. That reads
+        # from the outside as a model that cannot rotate rather than as an aim
+        # bug, because every bot spawns level and most spawn facing the same way.
+        #
+        # So an untargeted bot turns toward where it is walking, rate-limited by
+        # the same `turn_rate` its aim is — a bot that snapped instantly to each
+        # new roam point would be the other tell — and levels its pitch off, so
+        # one that lost a target while looking down does not roam staring at the
+        # floor.
+        #
+        # After `heading` is final, deliberately: the stuck detector turns it
+        # hard, and turning to face a heading the bot then abandons is what
+        # produces the twitch.
+        if target is None:
+            limit = self.skill.turn_rate * dt
+            yaw = yaw + _clamp(_wrap(heading - yaw), -limit, limit)
+            pitch = pitch - _clamp(pitch, -limit, limit)
+
         # Movement is expressed in the player's own frame, so a bot that is aiming
         # one way and walking another — which is most of a firefight — needs the
         # heading rotated into it.

@@ -5891,20 +5891,18 @@ kbd {
   flex-direction: column;
 }
 
+/* The two columns are a `SplitPane` now (see `core/src/SplitPane.tsx`), so the
+   sizing lives there. This used to be `grid-template-columns: minmax(190px, 260px)
+   minmax(0, 1fr)`, which capped the architecture diagram at 260px in a pane of any
+   width — the diagram could not be made bigger by any means the app offered. The
+   `@media (width <= 720px)` stacking that sat here went with it: it measured the
+   VIEWPORT, and a pane docked in a three-column workspace is narrow on any screen.
+   `SplitPane`'s `narrowBelow` measures the container instead. */
 .mx-body {
-  display: grid;
-  grid-template-columns: minmax(190px, 260px) minmax(0, 1fr);
-  gap: 0.6rem;
+  display: flex;
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
-}
-
-@media (width <= 720px) {
-  .mx-body {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
-  }
 }
 
 .mx-stack {
@@ -5925,12 +5923,11 @@ kbd {
   padding-left: 0.6rem;
 }
 
-@media (width <= 720px) {
-  .mx-detail {
-    border-left: none;
-    border-top: 1px solid var(--border);
-    padding: 0.5rem 0 0;
-  }
+/* Stacked (the container is narrow, not the window) the divider is horizontal, so
+   the left border that separated two columns would be a stray vertical rule. */
+[data-narrow] .mx-detail {
+  border-left: none;
+  padding: 0 0 0.5rem;
 }
 
 /* One stage of the stack. A button, not a div: this is the pane's whole
@@ -6153,9 +6150,9 @@ kbd {
 
 .mx-heads {
   width: 100%;
-  max-width: 260px;
   height: auto;
 }
+
 
 .mx-noinv {
   font-size: 11px;
@@ -6657,66 +6654,307 @@ kbd {
   font-variant-numeric: tabular-nums;
 }
 
-/* Stacked segments, not a percentage fill: "how much is on the GPU" and "how much
-   is left in RAM" are two quantities, and one bar with one number hides the second. */
-.llama-offload-bar {
-  position: relative;
-  display: flex;
-  height: 14px;
-  border-radius: 3px;
-  overflow: hidden;
-  background: var(--surface-2, rgb(255 255 255 / 6%));
-}
-
-.llama-offload-gpu {
-  background: var(--accent, #6ea8fe);
-}
-
-/* The KV cache is VRAM the weights don't account for, so it gets its own band
-   rather than being folded into the weights and quietly overflowing the card. */
-.llama-offload-kv {
-  background: rgb(110 200 140 / 70%);
-}
-
-.llama-offload-cpu {
-  background: rgb(255 255 255 / 14%);
-}
-
-/* The capacity line. Drawn over the segments so "past this point it does not fit"
-   is a position rather than a sentence. */
-.llama-offload-limit {
-  position: absolute;
-  top: -2px;
-  bottom: -2px;
-  width: 2px;
-  background: var(--text);
-  box-shadow: 0 0 0 1px var(--surface, #12121a);
-}
-
-.llama-offload-over .llama-offload-gpu,
-.llama-offload-over .llama-offload-kv {
-  background: rgb(255 120 110 / 80%);
-}
-
+/* The over-budget sentence beside the meter. The meter draws the crossing; this
+   says by how much, which a position cannot. */
 .llama-offload-warn {
-  color: rgb(255 140 130);
+  color: var(--danger);
 }
 
 .llama-linkbtn.llama-inline {
   margin-left: 0;
 }
 
-/* The machine itself, above the build and offload controls that depend on it. */
+/* ------------------------------------------------------- the machine band --
+ *
+ * What the probe found, above the controls whose defaults it decides. This used to
+ * be one line showing `profile.primary`; the accelerator list, the RAM, the core
+ * count and — most importantly — the list of things the probe COULD NOT ASK were
+ * all measured and none of them were drawn.
+ */
 .llama-machine {
   display: flex;
-  align-items: center;
-  gap: 0.4rem;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.llama-band-head {
+  display: flex;
+  align-items: baseline;
   flex-wrap: wrap;
-  margin: 0 0 0.4rem;
-  font-size: 11px;
-  line-height: 1.45;
+  gap: var(--space-4);
+}
+
+.llama-band-head h4 {
+  margin: 0;
+  font-size: var(--fs-label);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-display);
+  color: var(--text-strong);
+}
+
+/* An asymmetric grid rather than a centred stack: cards that fill the row read as
+   an inventory, which is what this is. */
+.llama-gpus {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-4);
+}
+
+.llama-gpu {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-5);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  /* The accent as a leading edge rather than a glowing perimeter — the house rule
+     from datalist.css, and the only thing separating the primary device. */
+  border-top: 2px solid transparent;
+  border-radius: var(--radius-md);
+}
+
+.llama-gpu-primary {
+  border-top-color: var(--accent);
+}
+
+.llama-gpu-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.llama-notes {
+  font-size: var(--fs-meta);
   color: var(--text-dim);
 }
+
+.llama-notes summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.llama-notes ul {
+  margin: var(--space-3) 0 0;
+  padding-left: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* --------------------------------------------------------- installed builds -- */
+.llama-installs {
+  list-style: none;
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.llama-installs li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+}
+
+.llama-installs li.llama-on {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* ------------------------------------------------------------ the ready strip --
+ *
+ * `running` and `ready` are two facts and this draws them as two. The middle step
+ * is the one that matters: the port is open and every request fails.
+ */
+.llama-ready {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  flex-wrap: wrap;
+}
+
+.llama-ready ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+}
+
+.llama-ready li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* The connector between steps. A drawn line, so the three read as a sequence
+   rather than as three independent tags. */
+.llama-ready li + li::before {
+  content: '';
+  width: var(--space-6);
+  height: 1px;
+  background: var(--border);
+}
+
+.llama-ready-on {
+  color: var(--text);
+}
+
+.llama-ready-on .llama-dot {
+  background: var(--success);
+}
+
+.llama-ready-bad {
+  color: var(--danger);
+}
+
+.llama-ready-bad .llama-dot {
+  background: var(--danger);
+}
+
+/* Mid-load, the step being waited on pulses so the strip reads as in-progress
+   rather than as stalled. */
+.llama-ready[data-stage='loading'] li:nth-child(2) .llama-dot {
+  background: var(--warn);
+  animation: llama-pulse 1.4s var(--ease-standard) infinite;
+}
+
+@keyframes llama-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .llama-ready[data-stage='loading'] li:nth-child(2) .llama-dot {
+    animation: none;
+  }
+}
+
+/* ------------------------------------------------------- the layer columns --
+ *
+ * One column per decoder block. The whole point is that the GPU fills from the
+ * RIGHT — llama.cpp offloads from `n_layer - n_gpu_layers` upward — which a single
+ * aggregate bar cannot show at all.
+ */
+.llama-cols-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.llama-cols {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 72px;
+  padding: 0 0 1px;
+  border-bottom: 1px solid var(--border);
+  /* A faint technical grid behind the marks, not over them. */
+  background-image: repeating-linear-gradient(
+    to top,
+    var(--border) 0 1px,
+    transparent 1px 18px
+  );
+  background-position: bottom;
+}
+
+.llama-col {
+  flex: 1 1 0;
+  min-width: 2px;
+  position: relative;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: color-mix(in srgb, var(--text-faint) 35%, transparent);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-standard);
+}
+
+.llama-col:hover {
+  background: color-mix(in srgb, var(--text-faint) 60%, transparent);
+}
+
+.llama-col-gpu {
+  background: var(--accent);
+}
+
+.llama-col-gpu:hover {
+  filter: brightness(1.2);
+}
+
+/* The embedding and output head. Wider and set apart, because they are not a
+   block and only move once the count exceeds the block count. */
+.llama-col-overhead {
+  flex: 0 0 auto;
+  width: 22px;
+  margin-left: var(--space-4);
+}
+
+/* The KV cache rides on top of its own block's weights: it is VRAM the weight
+   figure does not account for. */
+.llama-col-kv {
+  position: absolute;
+  inset: 0 0 auto;
+  background: color-mix(in srgb, var(--accent-2, var(--accent)) 60%, transparent);
+}
+
+.llama-cols-ceiling {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1px dashed var(--text-strong);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.llama-cols-ceiling span {
+  position: absolute;
+  right: 0;
+  top: -1.1em;
+  font-size: var(--fs-micro);
+  font-family: var(--font-mono);
+  letter-spacing: var(--tracking-badge);
+  color: var(--text-strong);
+}
+
+.llama-cols-axis {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-3);
+  font-size: var(--fs-micro);
+  font-family: var(--font-mono);
+  color: var(--text-faint);
+}
+
+.llama-cols-axis-mid {
+  flex: 1 1 auto;
+  text-align: right;
+  padding-right: var(--space-4);
+}
+
+.llama-cols-axis-out {
+  width: 22px;
+  margin-left: var(--space-4);
+  text-align: center;
+  overflow: visible;
+  white-space: nowrap;
+}
+
 
 .llama-linkbtn {
   margin-left: auto;
@@ -6773,50 +7011,6 @@ kbd {
   background: rgb(130 210 160);
 }
 
-.llama-progress {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-}
-
-.llama-progress-track {
-  height: 4px;
-  border-radius: 2px;
-  background: rgb(255 255 255 / 10%);
-  overflow: hidden;
-}
-
-.llama-progress-fill {
-  height: 100%;
-  background: var(--accent, #6ea8fe);
-  transition: width 0.2s linear;
-}
-
-/* No total yet (a resolve step, or a server that sent no content-length): a full
-   bar would claim a completeness we don't have, so it pulses instead. */
-.llama-progress-idle {
-  width: 30%;
-  animation: llama-indeterminate 1.2s ease-in-out infinite;
-}
-
-@keyframes llama-indeterminate {
-  0% {
-    margin-left: 0;
-  }
-
-  50% {
-    margin-left: 70%;
-  }
-
-  100% {
-    margin-left: 0;
-  }
-}
-
-.llama-progress-label {
-  color: var(--text-dim);
-  font-size: 10px;
-}
 
 .llama-files,
 .llama-models {
@@ -6997,25 +7191,6 @@ kbd {
   text-decoration: line-through;
 }
 
-.llama-spark {
-  flex: 0 0 auto;
-  width: 96px;
-  height: 18px;
-  overflow: visible;
-}
-
-.llama-spark-line {
-  fill: none;
-  stroke: var(--accent, #6ea8fe);
-  stroke-width: 1.2;
-  stroke-linejoin: round;
-  vector-effect: non-scaling-stroke;
-}
-
-.llama-spark-dot {
-  fill: var(--accent, #6ea8fe);
-}
-
 /* --- the node filter --- */
 
 .llama-filter {
@@ -7066,23 +7241,6 @@ kbd {
 .llama-fidelity-full {
   border-color: rgb(110 200 140 / 60%);
   color: rgb(130 210 160);
-}
-
-.llama-heat {
-  display: flex;
-  align-items: stretch;
-  gap: 1px;
-  height: 2.4rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 2px;
-  overflow: hidden;
-}
-
-.llama-heat-cell {
-  flex: 1 1 0;
-  min-width: 1px;
-  border-radius: 1px;
 }
 
 .llama-tokens {
@@ -7444,4 +7602,193 @@ kbd {
       opacity: 1;
     }
   }
+}
+
+/* ------------------------------------------------------- the models catalogue --
+ *
+ * Grouped by origin, because "why is this file here" and "why can I not delete it"
+ * are the same question and `origin` is the whole answer.
+ */
+.llama-origin-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-6);
+}
+
+.llama-origin-group .llama-model-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: right;
+}
+
+.llama-models li.llama-on {
+  background: var(--bg-hover);
+}
+
+/* The trained context window, relative to the longest file in the catalogue. */
+.llama-ctxrail {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: var(--space-5);
+}
+
+.llama-ctxrail span {
+  height: var(--space-2);
+  min-width: 2px;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.llama-ctxrail em {
+  font-style: normal;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------ the quantization plot --
+ *
+ * Log-log parameters against bytes, so a constant bytes-per-parameter ratio is a
+ * straight line and each quantization family separates into its own diagonal.
+ */
+.llama-scatter-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+}
+
+.llama-scatter {
+  width: 100%;
+  max-width: 420px;
+  height: auto;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+/* The guides are reference, not data: they must never read as strongly as a mark. */
+.llama-scatter-guide {
+  stroke: var(--border);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.llama-scatter-dot {
+  fill: var(--accent);
+  fill-opacity: 0.75;
+  cursor: pointer;
+  transition: r var(--dur-fast) var(--ease-standard);
+}
+
+/* Two families, two ends of the diverging pair, everything else on the accent.
+   Deliberately not a per-family palette: a categorical scale over an open-ended
+   set of quantization names would run out and start reusing colours silently. */
+.llama-scatter-dot[data-family='F16'],
+.llama-scatter-dot[data-family='BF16'] {
+  fill: var(--ramp-neg);
+}
+
+.llama-scatter-dot[data-family='Q8'] {
+  fill: var(--ramp-pos);
+}
+
+.llama-scatter-on {
+  fill-opacity: 1;
+  stroke: var(--text-strong);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.llama-scatter-axis {
+  fill: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+.llama-scatter-end {
+  text-anchor: end;
+}
+
+.llama-scatter-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.llama-scatter-legend .llama-chip[data-family='F16'],
+.llama-scatter-legend .llama-chip[data-family='BF16'] {
+  border-color: var(--ramp-neg);
+}
+
+.llama-scatter-legend .llama-chip[data-family='Q8'] {
+  border-color: var(--ramp-pos);
+}
+
+/* --------------------------------------------------------- the pass profile --
+ *
+ * One statistic against depth, plus the whole pass as a fingerprint. Both are
+ * rearrangements of `records[].summary`, which the record list already carries —
+ * six of the seven statistics simply had no renderer.
+ */
+.llama-profile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.llama-profile .viz-spark {
+  width: 100%;
+  height: 72px;
+}
+
+.llama-profile-axis,
+.llama-fingerprint-axis {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--text-faint);
+}
+
+/* Row labels beside the grid rather than over it: a label drawn on top of a heat
+   cell changes the colour being read. */
+.llama-fingerprint {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-2) var(--space-4);
+  align-items: start;
+  margin-top: var(--space-5);
+}
+
+.llama-fingerprint-rows {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-around;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  text-align: right;
+}
+
+.llama-fingerprint-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.llama-fingerprint .llama-why {
+  grid-column: 2;
 }

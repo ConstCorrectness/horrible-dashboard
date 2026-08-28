@@ -36,15 +36,20 @@ use crate::character::{decode_image, normalise_glb, MaterialDef, Primitive, Text
 /// client has no asset directory and fetching them would put three downloads
 /// between deploying and having a weapon in your hands.
 ///
-/// `assault` and `knife` are **absent, and that is the answer rather than a
-/// gap** — the M4A1 in the asset directory is 687k triangles, twenty times the
-/// whole map, and there is no knife model at all. A weapon with no entry keeps
-/// the procedural boxes, which is what every weapon had before any of this.
-/// `models/weapons.ts` carries the identical list for the browser.
+/// `knife` is **absent, and that is the answer rather than a gap** — there is no
+/// knife model at all. A weapon with no entry keeps the procedural boxes, which
+/// is what every weapon had before any of this. The M4A1 used to be absent too,
+/// at 687k triangles — twenty times the whole map — and is here now because
+/// `scripts/decimate_weapon.py` takes it to 30k. `models/weapons.ts` carries the
+/// identical list for the browser.
 pub const WEAPON_GLBS: &[(&str, &[u8])] = &[
     (
         "pistol",
         include_bytes!("../../web/public/hassault-weapon-pistol.glb"),
+    ),
+    (
+        "assault",
+        include_bytes!("../../web/public/hassault-weapon-assault.glb"),
     ),
     (
         "shotgun",
@@ -360,7 +365,12 @@ mod tests {
         // muzzle offsets are expressed against. A model pointing the other way
         // renders a weapon held backwards, which looks like a pose bug rather
         // than an export one.
-        for (name, length) in [("pistol", 0.6f32), ("shotgun", 2.9), ("sniper", 2.72)] {
+        for (name, length) in [
+            ("pistol", 0.6f32),
+            ("assault", 2.3),
+            ("shotgun", 2.9),
+            ("sniper", 2.72),
+        ] {
             let Some(bytes) = weapon(name) else {
                 eprintln!("skipping: run `pnpm build:hassault-weapon` first");
                 return;

@@ -170,9 +170,10 @@ impl CameraUniform {
                 video.quality.fog_density(),
                 video.quality.detail(),
                 reveal.height(),
-                // Everything drawn in world space receives the sun's shadow. The
-                // view model opts out — see `attached_to`.
-                1.0,
+                // Everything drawn in world space receives the sun's shadow,
+                // unless the player has turned shadows off. The view model opts
+                // out either way — see `attached_to`.
+                if video.shadows { 1.0 } else { 0.0 },
             ],
             reveal: reveal.uniform(),
             light_transform: glam::Mat4::IDENTITY.to_cols_array_2d(),
@@ -292,7 +293,22 @@ pub struct Renderer {
     /// Kept so the pipelines can be rebuilt when the sample count changes.
     shader: wgpu::ShaderModule,
     camera_layout: wgpu::BindGroupLayout,
-    detail_layout: wgpu::BindGroupLayout,
+    /// The world pipeline's layout, **kept rather than rebuilt**.
+    ///
+    /// `set_video` used to construct a second one when the sample count changed,
+    /// and the second one was wrong: it named `[camera, detail]` where this one
+    /// names `[camera, detail, shadow]`. The pass binds the shadow map at group
+    /// 2 either way, so the first frame after switching quality bound a group the
+    /// pipeline's layout did not have — a wgpu validation error, which is a
+    /// **panic**, not a darker picture. Selecting High crashed the client every
+    /// time, and so did selecting anything else afterwards.
+    ///
+    /// A layout is immutable and independent of the multisample state, so there
+    /// was never a reason to build a second one. Holding the single definition
+    /// here is what makes the two paths unable to disagree again.
+    world_layout: wgpu::PipelineLayout,
+    /// The translucent-volume pipeline's layout, kept for the same reason.
+    volume_layout: wgpu::PipelineLayout,
     detail_bind_group: wgpu::BindGroup,
     shadow: crate::shadow::ShadowMap,
     video: Video,
@@ -505,13 +521,8 @@ impl Renderer {
             immediate_size: 0,
         });
 
-        let pipeline = world_pipeline(
-            &device,
-            &pipeline_layout,
-            &shader,
-            format,
-            video.quality.samples(),
-        );
+        let pipeline = world_pipeline(&device, &pipeline_layout, &shader, format, video.samples());
+        let world_layout = pipeline_layout;
 
         let body_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("bodies"),
@@ -536,13 +547,8 @@ impl Renderer {
             bind_group_layouts: &[Some(&camera_layout)],
             immediate_size: 0,
         });
-        let volume_pipeline = volume_pipeline(
-            &device,
-            &volume_layout,
-            &shader,
-            format,
-            video.quality.samples(),
-        );
+        let volume_pipeline =
+            volume_pipeline(&device, &volume_layout, &shader, format, video.samples());
 
         let viewmodel_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("viewmodel"),
@@ -606,8 +612,7 @@ impl Renderer {
                 resource: prop_camera_buffer.as_entire_binding(),
             }],
         });
-        let props =
-            crate::props_gpu::Props::new(&device, &camera_layout, format, video.quality.samples());
+        let props = crate::props_gpu::Props::new(&device, &camera_layout, format, video.samples());
 
         // The HUD's own pipeline: no camera, no depth, and **alpha blending**,
         // which is the one state that differs from everything else drawn here.
@@ -664,12 +669,7 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
-        let scene = create_scene(
-            &device,
-            &config,
-            video.render_scale,
-            video.quality.samples(),
-        );
+        let scene = create_scene(&device, &config, video.render_scale, video.samples());
 
         // Linear, so a scaled-up frame is smoothed rather than blocky — nearest
         // at 50% looks like a rendering fault rather than a setting.
@@ -770,7 +770,8 @@ impl Renderer {
             adapter,
             shader,
             camera_layout,
-            detail_layout,
+            world_layout,
+            volume_layout,
             detail_bind_group,
             shadow,
             video,
@@ -797,7 +798,7 @@ impl Renderer {
             &self.camera_layout,
             &self.shadow.layout,
             self.config.format,
-            self.video.quality.samples(),
+            self.video.samples(),
         ));
     }
 
@@ -1234,7 +1235,7 @@ impl Renderer {
             &self.device,
             &self.config,
             self.video.render_scale,
-            self.video.quality.samples(),
+            self.video.samples(),
         );
         // The bind group holds a *view*, so it is stale the moment the texture
         // behind it is replaced. Forgetting this draws the previous frame's
@@ -1255,25 +1256,31 @@ impl Renderer {
     /// carries the shader's fog and detail, which need nothing rebuilt at all —
     /// they are uniform data, written next frame.
     pub fn set_video(&mut self, video: Video) {
-        let samples_changed = video.quality.samples() != self.video.quality.samples();
+        let samples_changed = video.samples() != self.video.samples();
         let scale_changed = (video.render_scale - self.video.render_scale).abs() > 1e-4;
         let vsync_changed = video.vsync != self.video.vsync;
         self.video = video;
 
         if samples_changed {
-            let layout = self
-                .device
-                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("hassault-layout"),
-                    bind_group_layouts: &[Some(&self.camera_layout), Some(&self.detail_layout)],
-                    immediate_size: 0,
-                });
             self.pipeline = world_pipeline(
                 &self.device,
-                &layout,
+                &self.world_layout,
                 &self.shader,
                 self.config.format,
-                video.quality.samples(),
+                video.samples(),
+            );
+            // The translucent volumes draw **inside the same pass** — see the
+            // comment at the `volume_pipeline` call — so their multisample state
+            // has to move with it too. Missed here originally, and the failure is
+            // the nastiest of the three: it needs a smoke cloud on screen to
+            // fire, so switching quality in an empty room looks like it worked
+            // and the crash lands on somebody's grenade a match later.
+            self.volume_pipeline = volume_pipeline(
+                &self.device,
+                &self.volume_layout,
+                &self.shader,
+                self.config.format,
+                video.samples(),
             );
             // The character pass draws into the same attachment, so its
             // multisample state has to move with it — a pipeline left at the old
@@ -1284,7 +1291,7 @@ impl Renderer {
                     &self.camera_layout,
                     &self.shadow.layout,
                     self.config.format,
-                    video.quality.samples(),
+                    video.samples(),
                 );
             }
             // And the prop pass, for the same reason and with the same failure:
@@ -1295,7 +1302,7 @@ impl Renderer {
                 &self.device,
                 &self.camera_layout,
                 self.config.format,
-                video.quality.samples(),
+                video.samples(),
             );
         }
         if vsync_changed {

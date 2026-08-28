@@ -723,6 +723,63 @@ def _tail(path: Path, lines: int = 3) -> str:
     return " / ".join(text.splitlines()[-lines:])
 
 
+#: The launch in flight, per account. A launch is **not** a request-shaped thing:
+#: when the client has been edited since it was last built it compiles first, and
+#: a cold `cargo build --release` of this crate is minutes. Held here so the work
+#: outlives the HTTP request that started it — the pane that started a launch is
+#: unmounted the moment its tab is switched, and a browser that has gone away
+#: must not be able to cancel a build that a second tab is about to ask about.
+_LAUNCH_JOBS: dict[str, dict[str, Any]] = {}
+
+#: How long the route waits for a launch before answering "still going".
+#: Deliberately longer than `_LAUNCH_SETTLE_SECONDS`, so the ordinary case — a
+#: build that is already current — still answers with the real result inline and
+#: no client ever has to poll for it. Only a launch that is actually compiling
+#: crosses this line.
+_LAUNCH_INLINE_SECONDS = 3.0
+
+#: What each unfinished phase says while it is unfinished. A launch that is
+#: compiling has to *say* it is compiling: "Launching…" for four minutes is
+#: indistinguishable from a hang, which is exactly what it was read as.
+_LAUNCH_PENDING: dict[str, str] = {
+    "building": (
+        "Compiling the native client — you have edited it since it was last "
+        "built. This takes minutes on a cold build; it keeps going if you leave "
+        "this tab."
+    ),
+    "starting": "Starting the native client…",
+}
+
+
+def _launch_job_response(job: dict[str, Any]) -> LaunchNativeResponse:
+    """This job as the browser sees it, finished or not.
+
+    One spelling of it, because both the POST and `GET /launch_native/status`
+    answer with it and a second copy is how the two would come to disagree about
+    what "still building" looks like.
+    """
+    result = job.get("result")
+    phase = str(job.get("phase") or "idle")
+    if isinstance(result, LaunchNativeResponse):
+        return result.model_copy(update={"phase": phase})
+    task = job.get("task")
+    if task is not None and task.done():
+        # Finished without leaving a result: the loop it was running on went
+        # away under it (a cancelled task). Reported as a failure rather than
+        # left saying "building" forever — a phase that can never change again
+        # is the hang wearing a different word.
+        return LaunchNativeResponse(
+            launched=False,
+            phase="failed",
+            message="The launch was interrupted before it finished.",
+        )
+    return LaunchNativeResponse(
+        launched=False,
+        phase=phase,
+        message=_LAUNCH_PENDING.get(phase, "Starting the native client…"),
+    )
+
+
 @router.post("/launch_native", response_model=LaunchNativeResponse)
 async def launch_native_client(
     req: LaunchNativeRequest, request: Request
@@ -754,6 +811,86 @@ async def launch_native_client(
     because `match_server.join` with no room id is join-*or*-create and there is no
     way to ask it for solitude.
     """
+
+    # **The work is a job, not a request.** It used to run inline, which is fine
+    # for the ordinary launch and a trap for the one that matters: an edited
+    # client is compiled first, and a cold `cargo build --release` of this crate
+    # is minutes. The browser sat on "Launching…" for all of it with nothing to
+    # read, and switching tabs unmounted the pane that was awaiting the promise —
+    # so the launch appeared to stop, while a build nobody could see carried on.
+    #
+    # Started with `ensure_future` and parked in `_LAUNCH_JOBS` for exactly that
+    # reason: the task outlives this coroutine, so a client that goes away
+    # cancels nothing, and `GET /launch_native/status` hands the same job back to
+    # whoever asks next — including the same pane after it is remounted.
+    account_id = _account_id()
+    # This node as the caller reached it, read here rather than in the worker:
+    # the request is gone by the time a build finishes.
+    origin = str(request.base_url).rstrip("/")
+
+    running = _LAUNCH_JOBS.get(account_id)
+    if running is not None and not running["task"].done():
+        # Never two builds of the same crate at once — cargo would block on its
+        # own `target/` lock and the second launch would look like the hang this
+        # exists to end.
+        return _launch_job_response(running)
+
+    job: dict[str, Any] = {"phase": "starting", "result": None, "task": None}
+    job["task"] = asyncio.ensure_future(_perform_launch(req, origin, job))
+    _LAUNCH_JOBS[account_id] = job
+
+    # A launch that needs no build finishes well inside this, so the common case
+    # still answers with the real result and nothing has to poll. Only a
+    # compiling one crosses the line and answers "building".
+    await asyncio.wait({job["task"]}, timeout=_LAUNCH_INLINE_SECONDS)
+    return _launch_job_response(job)
+
+
+@router.get("/launch_native/status", response_model=LaunchNativeResponse)
+async def launch_native_status() -> LaunchNativeResponse:
+    """Where this account's launch has got to.
+
+    The half of the fix that survives a tab switch: a pane reads this on mount,
+    so a build started before it was unmounted is still reported — with its own
+    message — rather than the pane coming back showing an idle button and a build
+    still running behind it.
+
+    `idle` is a real answer and not an error: nothing has been launched from this
+    account this run.
+    """
+    job = _LAUNCH_JOBS.get(_account_id())
+    if job is None:
+        return LaunchNativeResponse(launched=False, phase="idle")
+    return _launch_job_response(job)
+
+
+async def _perform_launch(
+    req: LaunchNativeRequest, origin: str, job: dict[str, Any]
+) -> LaunchNativeResponse:
+    """Resolve a binary, build it if it is stale, start it, and watch it settle.
+
+    Everything the route used to do inline. It reports into `job` as it goes
+    rather than only at the end, because the phase *is* the information while it
+    is running: "building" and "starting" want different words on screen and take
+    different amounts of time.
+    """
+    try:
+        result = await _launch_now(req, origin, job)
+    except Exception as exc:  # noqa: BLE001 - a job has nobody to raise to
+        logger.exception("hassault: the native client launch failed")
+        result = LaunchNativeResponse(
+            launched=False,
+            connect_args=[],
+            message=f"Could not launch native client: {exc}",
+        )
+    job["result"] = result
+    job["phase"] = "launched" if result.launched else "failed"
+    return result
+
+
+async def _launch_now(
+    req: LaunchNativeRequest, origin: str, job: dict[str, Any]
+) -> LaunchNativeResponse:
     import subprocess
 
     from backend.modules.settings.routes import get_value
@@ -819,6 +956,11 @@ async def launch_native_client(
                     if bin_path and Path(bin_path).parent.name == "debug"
                     else "release"
                 )
+                # Said before it starts, not after it finishes: this is the
+                # minutes-long branch, and the whole point of the job is that
+                # somebody can be told which branch they are in while they are
+                # in it.
+                job["phase"] = "building"
                 started = time.monotonic()
                 ok, detail = await asyncio.to_thread(
                     build_native_client, crate_root, profile
@@ -833,6 +975,7 @@ async def launch_native_client(
                         message=detail,
                     )
                 rebuilt = True
+                job["phase"] = "starting"
                 # Re-resolved: the build just changed which binary is newest, and
                 # a first-ever build created one where `pick_binary` found none.
                 bin_path = pick_binary("", local_bins)
@@ -852,9 +995,10 @@ async def launch_native_client(
             message="A match on a friend's node needs a room id.",
         )
 
-    # `request.base_url` is this node as the caller reached it, which is the only
-    # address known to be right.
-    origin = str(request.base_url).rstrip("/")
+    # `origin` is this node as the caller reached it — read off the request that
+    # started the job, which is the only address known to be right, and captured
+    # there rather than here because the request is long gone by the time a build
+    # finishes.
     connect_args = [
         f"--server={origin}",
         f"--map={req.map_name}",

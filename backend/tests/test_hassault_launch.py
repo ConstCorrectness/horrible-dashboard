@@ -16,6 +16,7 @@ checkout, and a test suite that opens a game window is a test suite nobody runs.
 from __future__ import annotations
 
 import subprocess
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -369,3 +370,97 @@ def test_a_named_binary_is_never_rebuilt(stale_build, tmp_path, monkeypatch) -> 
     )
     assert res.json()["launched"] is True
     assert stale_build == []
+
+
+# ---- a launch is a job, not a request ---------------------------------------
+#
+# The failure these pin: an edited client is compiled before it is started, and a
+# cold `cargo build --release` of that crate is minutes. Run inline, the response
+# simply did not arrive for all of them — the pane said "Launching…" with nothing
+# to read, which is indistinguishable from a hang, and switching tabs unmounted
+# the pane and lost the promise it was awaiting while the build carried on
+# invisibly. So the work outlives the request that started it, and both the POST
+# and the status route report which phase it is in.
+
+
+@pytest.fixture
+def slow_build(stale_build, monkeypatch):
+    """A build that does not finish inside the route's inline window."""
+    import threading
+
+    release = threading.Event()
+
+    def build(root, profile):
+        release.wait(10)
+        return True, ""
+
+    monkeypatch.setattr(routes, "build_native_client", build)
+    monkeypatch.setattr(routes, "_LAUNCH_INLINE_SECONDS", 0.2)
+    monkeypatch.setattr(
+        "backend.modules.settings.routes.get_value", settings_returning()
+    )
+    yield release
+    release.set()
+
+
+def test_a_launch_that_is_compiling_says_so_instead_of_hanging(slow_build) -> None:
+    client = TestClient(app)
+    body = client.post(
+        "/api/hassault/launch_native", json={"map_name": "hd_pit", "mode": "train"}
+    ).json()
+    assert body["phase"] == "building"
+    assert body["launched"] is False
+    # And it says which minutes-long thing it is doing. A pending launch whose
+    # message is "Launching…" is the state this whole shape exists to end.
+    assert "ompiling" in (body["message"] or "")
+
+
+def test_the_build_survives_the_browser_going_away(slow_build) -> None:
+    """The tab-switch half. A pane is unmounted on a tab switch, so the promise
+    it was awaiting is dropped — and the launch must still be there to ask
+    about when it comes back."""
+    # One portal for the whole block, because that is what a server is: without
+    # `with`, TestClient spins up and tears down an event loop *per request* and
+    # would cancel the very task this is about.
+    with TestClient(app) as client:
+        client.post(
+            "/api/hassault/launch_native", json={"map_name": "hd_pit", "mode": "train"}
+        )
+        # Nothing kept a reference to that response, exactly as a remounted pane
+        # has not: the status route is the whole conversation.
+        status = client.get("/api/hassault/launch_native/status").json()
+        assert status["phase"] == "building"
+
+        slow_build.set()
+        for _ in range(100):
+            status = client.get("/api/hassault/launch_native/status").json()
+            if status["phase"] in ("launched", "failed"):
+                break
+            time.sleep(0.1)
+    assert status["phase"] == "launched"
+    assert status["launched"] is True
+    assert status["rebuilt"] is True
+
+
+def test_a_second_press_joins_the_build_rather_than_starting_another(
+    slow_build, stale_build
+) -> None:
+    """Two `cargo build`s of one crate block on each other's `target/` lock, and
+    the second would look exactly like the hang this replaced."""
+    client = TestClient(app)
+    client.post(
+        "/api/hassault/launch_native", json={"map_name": "hd_pit", "mode": "train"}
+    )
+    again = client.post(
+        "/api/hassault/launch_native", json={"map_name": "hd_pit", "mode": "train"}
+    ).json()
+    assert again["phase"] == "building"
+    assert len(stale_build) <= 1
+
+
+def test_nothing_launched_is_idle_and_not_a_failure(monkeypatch) -> None:
+    monkeypatch.setattr(routes, "_LAUNCH_JOBS", {})
+    status = TestClient(app).get("/api/hassault/launch_native/status").json()
+    assert status["phase"] == "idle"
+    assert status["launched"] is False
+    assert status["message"] is None

@@ -227,9 +227,11 @@
   flex: 1 1 auto;
   min-height: 0;
 }
+/* The two side widths are `SplitPane`'s now (`core/src/SplitPane.tsx`); these were
+   `width: 176px` and `width: 320px`, which is why neither side could be resized. */
 .mg-left {
-  width: 176px;
-  flex: 0 0 auto;
+  flex: 1 1 auto;
+  min-height: 0;
   border-right: 1px solid var(--mg-line);
   overflow-y: auto;
 }
@@ -244,8 +246,7 @@
   flex-direction: column;
 }
 .mg-right {
-  width: 320px;
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   border-left: 1px solid var(--mg-line);
   display: flex;
   flex-direction: column;

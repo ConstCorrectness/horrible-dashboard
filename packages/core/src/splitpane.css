@@ -1,0 +1,137 @@
+/*
+ * The in-pane splitter.
+ *
+ * The size lives in one custom property, `--split-size`, which the drag writes
+ * directly to the element — see `SplitPane.tsx` for why the drag must not go
+ * through React. Both children get `min-width: 0` (or `min-height`), without which
+ * a flex child refuses to shrink below its content and the handle stops tracking
+ * the pointer partway through a drag — the classic flexbox splitter bug.
+ */
+.hd-split {
+  /* Declared here, not only set from JS. `SplitPane` writes this through
+     `setProperty` inside a layout effect, so it is present before paint in
+     practice — but a `width: var(--split-size)` with nothing declared is an
+     invalid declaration rather than a fallback, and a server-rendered or
+     error-boundary-recovered first frame would collapse the measured side to
+     `auto`. The value is a floor, not the real one; the component overwrites it. */
+  --split-size: 240px;
+
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.hd-split[data-orientation='row'] {
+  flex-direction: row;
+}
+
+.hd-split[data-orientation='column'] {
+  flex-direction: column;
+}
+
+.hd-split-a,
+.hd-split-b {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The measured side is fixed at `--split-size`; the other takes what is left.
+   Which one is measured is the `side` prop. */
+.hd-split[data-side='start'] > .hd-split-a,
+.hd-split[data-side='end'] > .hd-split-b {
+  flex: 0 0 auto;
+}
+
+.hd-split[data-orientation='row'][data-side='start'] > .hd-split-a,
+.hd-split[data-orientation='row'][data-side='end'] > .hd-split-b {
+  width: var(--split-size);
+}
+
+.hd-split[data-orientation='column'][data-side='start'] > .hd-split-a,
+.hd-split[data-orientation='column'][data-side='end'] > .hd-split-b {
+  height: var(--split-size);
+}
+
+.hd-split[data-side='start'] > .hd-split-b,
+.hd-split[data-side='end'] > .hd-split-a {
+  flex: 1 1 auto;
+}
+
+/* --------------------------------------------------------------- the handle --
+ *
+ * The hit area is deliberately wider than the line. A 1px divider is a 1px target,
+ * which is unusable with a trackpad; this is a 7px grab zone drawn as a hairline.
+ *
+ * `touch-action: none` is required, not cosmetic: without it a touch drag scrolls
+ * the pane and the pointermove events never arrive.
+ */
+.hd-split-handle {
+  flex: 0 0 auto;
+  position: relative;
+  background: var(--border);
+  touch-action: none;
+  transition: background var(--dur-fast) var(--ease-standard);
+}
+
+.hd-split[data-orientation='row'] > .hd-split-handle {
+  width: 1px;
+  margin: 0 var(--space-3);
+  cursor: col-resize;
+}
+
+.hd-split[data-orientation='column'] > .hd-split-handle {
+  height: 1px;
+  margin: var(--space-3) 0;
+  cursor: row-resize;
+}
+
+/* The grab zone, invisible and centred on the line. */
+.hd-split-handle::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+}
+
+.hd-split[data-orientation='row'] > .hd-split-handle::after {
+  inset: 0 calc(var(--space-3) * -1);
+}
+
+.hd-split[data-orientation='column'] > .hd-split-handle::after {
+  inset: calc(var(--space-3) * -1) 0;
+}
+
+.hd-split-handle:hover,
+.hd-split-handle:focus-visible {
+  background: var(--accent);
+  outline: none;
+}
+
+/* --------------------------------------------------------------------- narrow --
+ *
+ * Measured off the CONTAINER, not the viewport: a pane docked in a three-column
+ * workspace is narrow on any screen. Stacked, there is no axis left to drag along,
+ * so the handle becomes a plain rule.
+ */
+.hd-split[data-narrow] {
+  flex-direction: column;
+}
+
+.hd-split[data-narrow] > .hd-split-a,
+.hd-split[data-narrow] > .hd-split-b {
+  width: auto;
+  height: auto;
+  flex: 0 0 auto;
+}
+
+.hd-split[data-narrow] > .hd-split-handle {
+  width: auto;
+  height: 1px;
+  margin: var(--space-4) 0;
+  cursor: default;
+  pointer-events: none;
+}

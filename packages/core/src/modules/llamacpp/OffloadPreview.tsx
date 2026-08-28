@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 
+import { Meter } from '../../viz/Meter';
+import { LayerColumns } from './LayerColumns';
 import { formatBytes, getLayerPlan, type LayerPlan } from './api';
 import { estimateOffload, maxFittingLayers, VRAM_RESERVE_BYTES } from './offload';
 
@@ -78,11 +80,10 @@ export function OffloadPreview({
   const estimate = estimateOffload(plan, layers, contextSize, vramBytes);
   const best = maxFittingLayers(plan, contextSize, vramBytes);
 
-  // The bar is scaled so the ceiling is always on it, even when the model dwarfs
-  // the card — otherwise an 80 GB model on a 12 GB card draws a full bar and a line
-  // pinned at the left edge, which reads as "nearly fits".
-  const scale = Math.max(plan.totalBytes + estimate.kvOnGpu, vramBytes ?? 0);
-  const pctOf = (bytes: number) => `${Math.min(100, (bytes / scale) * 100)}%`;
+  // `Meter` scales to the larger of the content and the threshold, so the ceiling
+  // is always on the bar even when the model dwarfs the card — otherwise an 80 GB
+  // model on a 12 GB card draws a full bar with the line pinned at the left edge,
+  // which reads as "nearly fits".
   const budget = vramBytes === null ? null : Math.max(0, vramBytes - VRAM_RESERVE_BYTES);
 
   return (
@@ -110,22 +111,40 @@ export function OffloadPreview({
         )}
       </div>
 
-      <div
-        className={`llama-offload-bar${estimate.fits === false ? ' llama-offload-over' : ''}`}
-        role="img"
-        aria-label={`${estimate.layers} of ${plan.layerCount} layers on the GPU`}
-      >
-        <div className="llama-offload-gpu" style={{ width: pctOf(estimate.weightsOnGpu) }} />
-        <div className="llama-offload-kv" style={{ width: pctOf(estimate.kvOnGpu) }} />
-        <div className="llama-offload-cpu" style={{ width: pctOf(estimate.weightsOnCpu) }} />
-        {budget !== null && (
-          <div
-            className="llama-offload-limit"
-            style={{ left: pctOf(budget) }}
-            title={`${gb(vramBytes ?? 0)} VRAM less a ${gb(VRAM_RESERVE_BYTES)} reserve for compute buffers`}
-          />
-        )}
-      </div>
+      <LayerColumns
+        plan={plan}
+        layers={estimate.includesOutput ? max : estimate.layers}
+        contextSize={contextSize}
+        budgetBytes={budget}
+        onPick={onChange}
+      />
+
+      {/* The same allocation as a single proportion. Kept alongside the columns
+          rather than replaced by them: the columns say WHICH blocks, this says how
+          much of the card is spoken for, and neither answers the other. */}
+      <Meter
+        label={`${estimate.layers} of ${plan.layerCount} layers on the GPU`}
+        total={plan.totalBytes + estimate.kvOnGpu}
+        threshold={budget}
+        thresholdLabel={`${gb(vramBytes ?? 0)} VRAM less a ${gb(VRAM_RESERVE_BYTES)} reserve for compute buffers`}
+        segments={[
+          {
+            value: estimate.weightsOnGpu,
+            tone: 'primary',
+            label: `${gb(estimate.weightsOnGpu)} of weights on the GPU`,
+          },
+          {
+            value: estimate.kvOnGpu,
+            tone: 'secondary',
+            label: `${gb(estimate.kvOnGpu)} KV cache`,
+          },
+          {
+            value: estimate.weightsOnCpu,
+            tone: 'muted',
+            label: `${gb(estimate.weightsOnCpu)} left in RAM`,
+          },
+        ]}
+      />
 
       <p className="llama-why">
         <b>{gb(estimate.weightsOnGpu)}</b> of weights

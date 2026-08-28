@@ -281,21 +281,80 @@ interface Built extends Shape {
  * same pose: the two clients drawing the same weapon differently is the drift
  * this module's shape exists to avoid.
  */
-export const INSPECT_DURATION = 1.35;
+export const INSPECT_DURATION = 1.5;
+
+/**
+ * How long the pose takes to reach full weight, and to return.
+ *
+ * The fall is longer than the rise on purpose: a flourish that snaps back to the
+ * aim faster than it left reads as being yanked away.
+ */
+const INSPECT_RISE = 0.3;
+const INSPECT_FALL = 0.46;
+
+/** The roll at full weight, before the turn adds to it, in radians. */
+const INSPECT_ROLL = 2.15;
+
+/**
+ * How much further the weapon turns across the hold, in radians.
+ *
+ * **This is the whole difference between an inspect and a freeze frame.** The
+ * pose used to be one scalar driving every axis, so the weapon travelled out,
+ * stopped dead for the ~0.7s of the hold, and retraced its path — which reads as
+ * a stutter rather than as somebody turning a weapon over. Keeping it rotating
+ * through the hold is what makes the same journey read as deliberate.
+ */
+const INSPECT_TURN = 0.85;
+
+/**
+ * How far the lift leads the roll, in seconds.
+ *
+ * Every axis starting and stopping on the same frame is the signature of a
+ * single rigid transform, which is exactly what this is. Sixty milliseconds of
+ * lead buys the weapon coming up first and rolling over as it goes.
+ */
+const INSPECT_LEAD = 0.06;
+
+/**
+ * Smootherstep — Perlin's, with a continuous second derivative.
+ *
+ * Smoothstep's acceleration jumps at both ends; over a 0.3s rise that is a
+ * visible tick as the weapon leaves rest.
+ */
+function ease(x: number): number {
+  const c = clamp(x, 0, 1);
+  // Clamped on the way out as well as in. The polynomial is monotonic on [0,1]
+  // and cannot exceed 1 algebraically, but in floats it lands on
+  // 1.0000000000000013 near the top — enough to fail the envelope's own bound
+  // check, and enough for a caller that trusts the range to scale a pose very
+  // slightly past the pose it was told about.
+  return clamp(c * c * c * (c * (c * 6 - 15) + 10), 0, 1);
+}
 
 /**
  * The inspect pose's weight over its own duration: ease in, hold, ease out.
  *
- * Smoothstepped at both ends rather than linear. A linear ramp reverses
- * direction instantly at the hold, which reads as the animation being cut off
- * and restarted — the one thing a "look at this weapon" flourish must not do.
+ * Eased at both ends rather than linear. A linear ramp reverses direction
+ * instantly at the hold, which reads as the animation being cut off and
+ * restarted — the one thing a "look at this weapon" flourish must not do.
  */
 export function inspectEnvelope(t: number): number {
-  const RISE = 0.28;
-  const FALL = 0.42;
-  const out = INSPECT_DURATION - FALL;
-  const x = clamp(t < RISE ? t / RISE : t > out ? 1 - (t - out) / FALL : 1, 0, 1);
-  return x * x * (3 - 2 * x);
+  const out = INSPECT_DURATION - INSPECT_FALL;
+  return ease(
+    t < INSPECT_RISE ? t / INSPECT_RISE : t > out ? 1 - (t - out) / INSPECT_FALL : 1,
+  );
+}
+
+/**
+ * How far through the turn the weapon is, 0..1, monotonic across the animation.
+ *
+ * Deliberately **not** the envelope: the envelope comes back down, and a roll
+ * driven by it unwinds along the path it wound up. This only ever climbs, so the
+ * weapon keeps turning the same way throughout — and because the roll is still
+ * *scaled* by the envelope, it lands back at rest anyway.
+ */
+export function inspectTurn(t: number): number {
+  return ease(t / INSPECT_DURATION);
 }
 
 export class WeaponViewModel {
@@ -608,7 +667,14 @@ export class WeaponViewModel {
     if (frame.reloading) this.inspectT = null;
     // Advanced before it is read, so the frame it completes on is the frame the
     // weapon is back at rest rather than one after.
+    //
+    // Three numbers, not one: the weight (how much of the pose is applied), the
+    // lift (the same weight, run slightly ahead so the gun rises before it
+    // rolls) and the turn (monotonic, so the roll keeps going through the hold
+    // instead of freezing). See the constants above.
     let inspect = 0;
+    let lift = 0;
+    let turn = 0;
     if (this.inspectT !== null) {
       const t = this.inspectT + dt;
       if (t >= INSPECT_DURATION) {
@@ -616,6 +682,8 @@ export class WeaponViewModel {
       } else {
         this.inspectT = t;
         inspect = inspectEnvelope(t);
+        lift = inspectEnvelope(t + INSPECT_LEAD);
+        turn = inspectTurn(t);
       }
     }
 
@@ -626,16 +694,23 @@ export class WeaponViewModel {
     // screen, up, and rolled most of the way over so the side of the receiver —
     // which is where a skin's pattern lives — faces the camera. A pose that only
     // lifted the gun would show the face it already shows.
+    //
+    // The translation rides `lift` and the rotation rides `inspect`, which is
+    // the lead: the weapon is already on its way up before it starts turning,
+    // and finishes unrolling after it has come back down. The roll is
+    // `inspect * (ROLL + TURN * turn)` rather than `inspect * ROLL` — the
+    // envelope still scales it, so it starts and ends at rest; the turn is what
+    // keeps it moving in between.
     this.pivot.position.set(
-      HOME.x + bobX + this.swayX - inspect * 0.3,
-      HOME.y + bobY + this.swayY - this.reloadT * 0.55 + inspect * 0.16,
+      HOME.x + bobX + this.swayX - lift * 0.3,
+      HOME.y + bobY + this.swayY - this.reloadT * 0.55 + lift * 0.16,
       // Recoil is mostly backwards: a gun that only rotates looks hinged.
-      HOME.z + this.kick * 0.28 + inspect * 0.2,
+      HOME.z + this.kick * 0.28 + lift * 0.2,
     );
     this.pivot.rotation.set(
       this.kick * -0.16 + this.reloadT * 0.7 + bobY * 0.4 + inspect * 0.34,
       this.swayX * 0.7 + this.reloadT * 0.25 - inspect * 0.95,
-      this.swayX * 0.5 + bobX * 0.6 + inspect * 2.15,
+      this.swayX * 0.5 + bobX * 0.6 + inspect * (INSPECT_ROLL + INSPECT_TURN * turn),
     );
 
     if (this.flash) {

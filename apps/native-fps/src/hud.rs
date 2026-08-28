@@ -158,6 +158,27 @@ pub struct ConsoleView<'a> {
     pub quick: &'a [crate::console::QuickAction],
 }
 
+/// One grenade in the tray: what it is, how many are left, and whether it is the
+/// one that would go out if the throw key went down.
+pub struct UtilitySlot {
+    pub name: String,
+    /// The grenade's *kind* (`he`, `flash`, `smoke`, `fire`), which the browser's
+    /// tray tints by and this one abbreviates from. Not the id: the incendiary's
+    /// id is `molotov` and its kind is `fire`.
+    pub kind: String,
+    pub count: i32,
+}
+
+/// What is in the pouch, as this frame's painter needs to see it.
+///
+/// Served in slot order and drawn in it, because the wire carries a slot index:
+/// a tray that sorted itself would number the keys differently from the throws
+/// they produce, and the player would learn the wrong four keys.
+pub struct UtilityView {
+    pub slots: Vec<UtilitySlot>,
+    pub selected: usize,
+}
+
 /// Everything about this frame that is not already inside `Hud`.
 pub struct HudView<'a> {
     pub width: u32,
@@ -223,6 +244,19 @@ pub struct HudView<'a> {
     /// position, and the centre of this instrument is the one thing on it that
     /// is not allowed to be a guess.
     pub radar: Option<RadarView<'a>>,
+    /// The grenades, when any have been served. `None` is a node that answered
+    /// no `/tacticals` — and the tray is then absent rather than drawn empty,
+    /// because an empty tray is a claim that you are carrying nothing.
+    pub utility: Option<&'a UtilityView>,
+    /// How blind a flashbang has left us, 0..1, straight off `you.flash`.
+    ///
+    /// **Resolved per player on the server** from where we were looking and
+    /// whether a wall was in the way, so this is a renderer for a number and not
+    /// a client-side effect — a client that computed its own would make not being
+    /// blinded a setting. Parsed and then ignored for as long as flashbangs have
+    /// existed here, which made the flash the one grenade with no effect on the
+    /// person it went off in front of.
+    pub flash: f32,
     /// The console, when it is open. `None` is "closed" — and the panel is
     /// drawn **last and over everything**, including the scoreboard, because a
     /// console you can read the ammo counter through is a console you cannot
@@ -406,6 +440,9 @@ impl Hud {
 
             self.paint_health(&mut p, view, u);
             paint_weapon(&mut p, view, u);
+            if let Some(utility) = view.utility {
+                paint_utility(&mut p, utility, u);
+            }
             self.paint_center(&mut p, view, u);
             paint_movement(&mut p, view, u);
             paint_net_graph(&mut p, view, u);
@@ -418,6 +455,21 @@ impl Hud {
             if let Some(rows) = view.scoreboard {
                 paint_scoreboard(&mut p, rows, view.scores, u);
             }
+        }
+
+        // The flashbang, over the world and the HUD and under the console: a
+        // flash you could read your ammo through is not a flash, and a flash
+        // that hid the console would take the developer's one tool away for the
+        // three seconds it is most interesting.
+        //
+        // Squared on the way in, exactly as the browser's `FlashOverlay` does, so
+        // the peak is what hurts and the tail clears quickly — a linear fade
+        // spends most of its life at a brightness that is annoying rather than
+        // blinding.
+        if view.flash > 0.01 {
+            let a = (view.flash * view.flash).min(1.0);
+            let (w, h) = (p.width, p.height);
+            p.rect(0.0, 0.0, w, h, [1.0, 1.0, 1.0, a]);
         }
 
         // Over absolutely everything, in or out of a world.
@@ -556,6 +608,135 @@ fn paint_weapon(p: &mut Painter, view: &HudView, u: f32) {
     }
     if you.reloading {
         p.text_right(right, reload_y, small, AMBER, "RELOADING");
+    }
+}
+
+/// The pouch: four cells along the bottom right, under the ammo block.
+///
+/// Deliberately the same *information* as the browser's `NadeTray` — name, count
+/// and which is readied — and deliberately not the same drawing: this HUD is a
+/// vertex buffer with a 7-pixel bitmap font in it, and there is no SVG to put a
+/// grenade glyph in. A three-letter abbreviation earns its place where an icon
+/// cannot go.
+///
+/// An empty slot is drawn greyed rather than hidden, which is the same rule the
+/// controller follows in letting you ready one: "you have no smokes" is an
+/// answer, and a cell that vanished would move the other three under keys the
+/// player has already learned.
+/// How big one tray cell has to be to hold the widest thing written in it.
+///
+/// A function rather than four constants because it is the thing the first
+/// version of this tray got wrong, and the only way a test can hold the painter
+/// to it is to measure the same box the painter draws. `u * 11.0` looked tidy
+/// and was a quarter of what `FIRE` needs: this font advances `6.0 * scale` per
+/// glyph, so the labels drew through each other and through their own counts,
+/// and nothing failed — it just came out unreadable in a real match.
+///
+/// Returns `(cell_w, cell_h, pad, label_scale, count_scale)`.
+fn tray_metrics(labels: &[String], u: f32) -> (f32, f32, f32, f32, f32) {
+    let label_scale = u * 0.7;
+    let count_scale = u * 1.1;
+    let pad = u * 1.2;
+    let widest = labels
+        .iter()
+        .map(|label| text_width(label, label_scale))
+        .fold(0.0f32, f32::max)
+        // A two-digit count, so a cell does not resize as a pouch fills.
+        .max(text_width("00", count_scale));
+    let cell_w = widest + pad * 2.0;
+    let cell_h = pad * 2.0 + 7.0 * label_scale + u * 0.8 + 7.0 * count_scale;
+    (cell_w, cell_h, pad, label_scale, count_scale)
+}
+
+fn paint_utility(p: &mut Painter, view: &UtilityView, u: f32) {
+    if view.slots.is_empty() {
+        return;
+    }
+    // Two rows per cell: the key that readies it and what it is, then how many
+    // are left, larger — the count is the thing that gets read mid-firefight.
+    // Sized from the text, never from a guessed constant — see `tray_metrics`.
+    let labels: Vec<String> = view
+        .slots
+        .iter()
+        .enumerate()
+        .map(|(i, slot)| format!("{} {}", i + 6, abbreviate(&slot.kind)))
+        .collect();
+    let (cell_w, cell_h, pad, label_scale, count_scale) = tray_metrics(&labels, u);
+    let gap = u * 1.2;
+    let right = p.width - u * 6.0;
+
+    // **Above the weapon block, not beside it.** Both are anchored to the same
+    // right margin, so the arithmetic has to agree with `paint_weapon`'s: it
+    // stacks reload → ammo → name upwards from the bottom margin, and this
+    // continues that stack rather than starting a second one. Laid out from the
+    // bottom for the reason the health block is — anchoring downwards from a top
+    // puts the last row off the bottom of a small window, where it is not
+    // clipped with a warning, it is simply absent.
+    let small = u * 0.8;
+    let big = u * 2.4;
+    let reload_y = p.height - MARGIN * u - 7.0 * small;
+    let ammo_y = reload_y - u * 2.0 - 7.0 * big;
+    let name_y = ammo_y - u * 1.5 - 7.0 * small;
+    let y = name_y - u * 1.5 - cell_h;
+    let total = view.slots.len() as f32 * cell_w + (view.slots.len() as f32 - 1.0) * gap;
+    // Never off the left edge: on a very wide, very short window the tray is
+    // wider than the margin leaves room for, and a row drawn at a negative x is
+    // a row nobody can read.
+    let mut x = (right - total).max(u * 6.0);
+
+    for (i, slot) in view.slots.iter().enumerate() {
+        let active = i == view.selected;
+        let empty = slot.count <= 0;
+        let color = if empty {
+            [DIM[0], DIM[1], DIM[2], 0.35]
+        } else if active {
+            AMBER
+        } else {
+            WHITE
+        };
+        p.rect(x, y, cell_w, cell_h, PANEL);
+        // A 2px top accent on the readied one rather than a glow all round: it
+        // has to read as selected, not as neon.
+        if active {
+            p.rect(x, y, cell_w, u * 0.5, AMBER);
+        }
+        // The key is drawn with the name because the order is not ours to
+        // change: slot 0 is `6`, matching `DEFAULT_CONTROLS` in `controls.ts`
+        // and the number row this client binds.
+        p.text(
+            x + pad,
+            y + pad,
+            label_scale,
+            if empty { color } else { DIM },
+            &labels[i],
+        );
+        p.text(
+            x + pad,
+            y + pad + 7.0 * label_scale + u * 0.8,
+            count_scale,
+            color,
+            &slot.count.max(0).to_string(),
+        );
+        x += cell_w + gap;
+    }
+}
+
+/// Three letters for a grenade kind.
+///
+/// By *kind* and not by id, because the kinds are the four the server simulates
+/// and a node that adds a fifth should still get something legible rather than a
+/// blank cell — the same rule `nades::tint` follows for an unknown kind.
+fn abbreviate(kind: &str) -> String {
+    match kind {
+        "he" => "HE".to_string(),
+        "flash" => "FLS".to_string(),
+        "smoke" => "SMK".to_string(),
+        "fire" | "molotov" => "FIRE".to_string(),
+        other => other
+            .chars()
+            .take(4)
+            .collect::<String>()
+            .to_ascii_uppercase(),
     }
 }
 
@@ -725,6 +906,121 @@ fn paint_net_graph(p: &mut Painter, view: &HudView, u: f32) {
 }
 
 /// A name to draw, falling back to the id when the server sent none.
+/// A rectangle in window pixels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Hit {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+impl Hit {
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        x >= self.x && x < self.x + self.w && y >= self.y && y < self.y + self.h
+    }
+}
+
+/// Everything in the console you can click, in window pixels.
+///
+/// **Produced once and read by both the painter and the mouse**, which is the
+/// same rule `Menu::rows_at` follows and for the same reason: a second
+/// computation of a chip's rectangle is a click that lands on the chip next to
+/// the one it is drawn over, and nothing anywhere reports it. `paint_console`
+/// paints *from* this rather than laying the row out again.
+pub struct ConsoleHits {
+    /// The quick-action chips, each with its index into `ConsoleView::quick`.
+    /// Short of the full list when the row runs out of width — a chip that was
+    /// not drawn must not be clickable.
+    pub chips: Vec<(usize, Hit)>,
+    /// The completion row, each with its index into `ConsoleView::suggestions`.
+    pub suggestions: Vec<(usize, Hit)>,
+    /// The panel itself, so a click outside it can be told from one inside.
+    pub panel: Hit,
+}
+
+/// The console's geometry, from the window size alone.
+///
+/// Takes the three pieces it actually measures rather than a whole
+/// `ConsoleView`, so the mouse can ask for the layout without assembling a
+/// frame's worth of view state it has no other use for. `u` is derived here
+/// rather than passed, so a caller outside the painter cannot supply a
+/// different one and get a rectangle nobody drew.
+pub fn console_hits(
+    quick: &[crate::console::QuickAction],
+    suggestions: &[String],
+    has_detail: bool,
+    width: f32,
+    height: f32,
+) -> ConsoleHits {
+    let u = (height / 360.0).round().max(2.0);
+    let scale = u * 0.7;
+    let line_h = scale * 9.0;
+    let panel_h = (height * 0.55).max(line_h * 9.0);
+    let pad = u * 3.0;
+
+    let chip_y = pad + line_h;
+    let mut chips = Vec::new();
+    let mut x = pad;
+    for (i, action) in quick.iter().enumerate() {
+        let text = match &action.state {
+            Some(state) => format!("{} {} {}", action.key, action.label, state),
+            None => format!("{} {}", action.key, action.label),
+        };
+        let w = text_width(&text, scale * 0.85) + scale * 3.0;
+        if x + w > width - pad {
+            break;
+        }
+        chips.push((
+            i,
+            Hit {
+                x,
+                y: chip_y,
+                w: w - scale,
+                h: line_h * 0.85,
+            },
+        ));
+        x += w;
+    }
+
+    let input_y = panel_h - pad - line_h;
+    let mut y = input_y - line_h;
+    if has_detail {
+        y -= line_h * 0.9;
+    }
+    let mut rows = Vec::new();
+    if !suggestions.is_empty() {
+        let mut x = pad;
+        for (i, item) in suggestions.iter().enumerate() {
+            let w = text_width(item, scale * 0.85) + scale * 2.0;
+            rows.push((
+                i,
+                Hit {
+                    x: x - scale,
+                    y: y - scale,
+                    w,
+                    h: line_h * 0.85,
+                },
+            ));
+            x += w + scale * 2.0;
+            if x > width - pad {
+                break;
+            }
+        }
+    }
+
+    ConsoleHits {
+        chips,
+        suggestions: rows,
+        panel: Hit {
+            x: 0.0,
+            y: 0.0,
+            w: width,
+            h: panel_h,
+        },
+    }
+}
+
 /// The developer console: a status header, a quick-action row, a scrollback and
 /// an input line.
 ///
@@ -742,7 +1038,15 @@ fn paint_console(p: &mut Painter, c: &ConsoleView, u: f32) {
     let scale = u * 0.7;
     let line_h = scale * 9.0;
     let width = p.width;
-    let height = (p.height * 0.55).max(line_h * 9.0);
+    // The one layout, shared with the mouse. See `console_hits`.
+    let hits = console_hits(
+        c.quick,
+        c.suggestions,
+        c.detail.is_some(),
+        p.width,
+        p.height,
+    );
+    let height = hits.panel.h;
     let pad = u * 3.0;
 
     // Near-opaque, unlike every other panel here. The rest of the HUD sits over
@@ -803,16 +1107,12 @@ fn paint_console(p: &mut Painter, c: &ConsoleView, u: f32) {
     // click but the *state*, which is why a chip is drawn even for the actions
     // that have none to show.
     let chip_y = pad + line_h;
-    let mut x = pad;
-    for action in c.quick {
+    for (i, rect) in &hits.chips {
+        let action = &c.quick[*i];
         let text = match &action.state {
             Some(state) => format!("{} {} {}", action.key, action.label, state),
             None => format!("{} {}", action.key, action.label),
         };
-        let w = text_width(&text, scale * 0.85) + scale * 3.0;
-        if x + w > width - pad {
-            break;
-        }
         // Three fills for three states, because they are three different facts:
         // on, off, and "this client does not read it". An unhonored chip drawn
         // like an off one would be the console lying about its own coverage,
@@ -824,7 +1124,7 @@ fn paint_console(p: &mut Painter, c: &ConsoleView, u: f32) {
         } else {
             [0.12, 0.14, 0.20, 0.7]
         };
-        p.rect(x, chip_y, w - scale, line_h * 0.85, fill);
+        p.rect(rect.x, rect.y, rect.w, rect.h, fill);
         let ink = if !action.honored {
             RED
         } else if action.active {
@@ -832,8 +1132,13 @@ fn paint_console(p: &mut Painter, c: &ConsoleView, u: f32) {
         } else {
             DIM
         };
-        p.text(x + scale, chip_y + scale * 0.6, scale * 0.85, ink, &text);
-        x += w;
+        p.text(
+            rect.x + scale,
+            chip_y + scale * 0.6,
+            scale * 0.85,
+            ink,
+            &text,
+        );
     }
 
     // The filter, on the right of the chip row where the browser puts its tabs.
@@ -882,24 +1187,18 @@ fn paint_console(p: &mut Painter, c: &ConsoleView, u: f32) {
 
     // Completions, immediately under the caret where the eye already is.
     if !c.suggestions.is_empty() {
-        let mut x = pad;
-        for (i, item) in c.suggestions.iter().enumerate() {
-            let selected = i == c.suggestion;
-            let w = text_width(item, scale * 0.85) + scale * 2.0;
+        for (i, rect) in &hits.suggestions {
+            let selected = *i == c.suggestion;
             if selected {
-                p.rect(
-                    x - scale,
-                    y - scale,
-                    w,
-                    line_h * 0.85,
-                    [0.29, 0.42, 0.94, 0.35],
-                );
+                p.rect(rect.x, rect.y, rect.w, rect.h, [0.29, 0.42, 0.94, 0.35]);
             }
-            p.text(x, y, scale * 0.85, if selected { WHITE } else { DIM }, item);
-            x += w + scale * 2.0;
-            if x > width - pad {
-                break;
-            }
+            p.text(
+                rect.x + scale,
+                y,
+                scale * 0.85,
+                if selected { WHITE } else { DIM },
+                &c.suggestions[*i],
+            );
         }
         y -= line_h;
     }
@@ -1382,11 +1681,105 @@ fn text_width(s: &str, scale: f32) -> f32 {
 /// a `›` in a menu label is simply an invisible column, and the first person to
 /// notice is the one wondering why a row has no chevron.
 pub fn has_glyph(ch: char) -> bool {
-    ch == ' ' || glyph(ch.to_ascii_uppercase()) != [0u8; 7]
+    ch == ' ' || glyph(ch) != [0u8; 7]
 }
 
+/// The 5x7 bitmap for one character, or all-zero when there is none.
+///
+/// **Case-sensitive**, and it was not always. Every glyph used to be looked up
+/// through `to_ascii_uppercase`, so the font had one case and lowercase input
+/// came out shouting. That is right for the HUD — the kill feed, the scoreboard
+/// and the menu all uppercase their text explicitly, and those still do — but it
+/// is wrong for the one surface that echoes back exactly what the player typed.
+/// A console rendering `draw.hitboxes` as `DRAW.HITBOXES` is a console showing
+/// you a string you did not write, next to CVar names that are lowercase
+/// everywhere else in this app.
+///
+/// The lowercase cell is the fiddly half of a 5x7 font and the rules are the
+/// usual ones: x-height letters occupy rows 2-6, ascenders (`b d f h k l t`) the
+/// full seven, and descenders (`g j p q y`) shift up to rows 1-6 so the tail has
+/// somewhere to go. There is no eighth row to descend into, which is why the
+/// bowl of a `g` sits one row higher than the bowl of an `o`.
 fn glyph(ch: char) -> [u8; 7] {
-    match ch.to_ascii_uppercase() {
+    match ch {
+        'a' => [
+            0b00000, 0b00000, 0b01110, 0b00001, 0b01111, 0b10001, 0b01111,
+        ],
+        'b' => [
+            0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b10001, 0b11110,
+        ],
+        'c' => [
+            0b00000, 0b00000, 0b01110, 0b10001, 0b10000, 0b10001, 0b01110,
+        ],
+        'd' => [
+            0b00001, 0b00001, 0b01111, 0b10001, 0b10001, 0b10001, 0b01111,
+        ],
+        'e' => [
+            0b00000, 0b00000, 0b01110, 0b10001, 0b11111, 0b10000, 0b01110,
+        ],
+        'f' => [
+            0b00110, 0b01001, 0b01000, 0b11100, 0b01000, 0b01000, 0b01000,
+        ],
+        'g' => [
+            0b00000, 0b01111, 0b10001, 0b10001, 0b01111, 0b00001, 0b01110,
+        ],
+        'h' => [
+            0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b10001, 0b10001,
+        ],
+        'i' => [
+            0b00100, 0b00000, 0b01100, 0b00100, 0b00100, 0b00100, 0b01110,
+        ],
+        'j' => [
+            0b00010, 0b00000, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100,
+        ],
+        'k' => [
+            0b10000, 0b10000, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010,
+        ],
+        'l' => [
+            0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+        ],
+        'm' => [
+            0b00000, 0b00000, 0b11010, 0b10101, 0b10101, 0b10001, 0b10001,
+        ],
+        'n' => [
+            0b00000, 0b00000, 0b11110, 0b10001, 0b10001, 0b10001, 0b10001,
+        ],
+        'o' => [
+            0b00000, 0b00000, 0b01110, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        'p' => [
+            0b00000, 0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000,
+        ],
+        'q' => [
+            0b00000, 0b01111, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001,
+        ],
+        'r' => [
+            0b00000, 0b00000, 0b10110, 0b11001, 0b10000, 0b10000, 0b10000,
+        ],
+        's' => [
+            0b00000, 0b00000, 0b01111, 0b10000, 0b01110, 0b00001, 0b11110,
+        ],
+        't' => [
+            0b01000, 0b01000, 0b11100, 0b01000, 0b01000, 0b01001, 0b00110,
+        ],
+        'u' => [
+            0b00000, 0b00000, 0b10001, 0b10001, 0b10001, 0b10001, 0b01111,
+        ],
+        'v' => [
+            0b00000, 0b00000, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100,
+        ],
+        'w' => [
+            0b00000, 0b00000, 0b10001, 0b10001, 0b10101, 0b10101, 0b01010,
+        ],
+        'x' => [
+            0b00000, 0b00000, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001,
+        ],
+        'y' => [
+            0b00000, 0b10001, 0b10001, 0b10001, 0b01111, 0b00001, 0b01110,
+        ],
+        'z' => [
+            0b00000, 0b00000, 0b11111, 0b00010, 0b00100, 0b01000, 0b11111,
+        ],
         'A' => [
             0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
         ],
@@ -1629,6 +2022,11 @@ mod tests {
 
     fn view<'a>(you: Option<&'a SelfState>) -> HudView<'a> {
         HudView {
+            // No grenades and no flash: the default view is the one every older
+            // test builds, and inventing a pouch in it would draw a tray in
+            // assertions about the crosshair.
+            utility: None,
+            flash: 0.0,
             crosshair: crate::settings::Crosshair::default(),
             width: 1280,
             height: 800,
@@ -1660,6 +2058,120 @@ mod tests {
             mag: 30,
             ..Default::default()
         }
+    }
+
+    fn pouch() -> UtilityView {
+        UtilityView {
+            slots: vec![
+                UtilitySlot {
+                    name: "Frag".into(),
+                    kind: "he".into(),
+                    count: 1,
+                },
+                UtilitySlot {
+                    name: "Flashbang".into(),
+                    kind: "flash".into(),
+                    count: 0,
+                },
+            ],
+            selected: 0,
+        }
+    }
+
+    #[test]
+    fn the_pouch_is_drawn_and_an_empty_slot_keeps_its_place() {
+        // Greyed, not hidden. A cell that vanished when you ran out would shift
+        // the others under keys the player has already learned — the tray's
+        // order *is* the wire's slot index.
+        let you = alive();
+        let mut base = view(Some(&you));
+        base.playing = true;
+        let mut without = Vec::new();
+        Hud::default().build(&base, &mut without);
+
+        let tray = pouch();
+        let mut with_pouch = view(Some(&you));
+        with_pouch.playing = true;
+        with_pouch.utility = Some(&tray);
+        let mut drawn = Vec::new();
+        Hud::default().build(&with_pouch, &mut drawn);
+        assert!(drawn.len() > without.len(), "the tray was not drawn");
+
+        let mut one_gone = pouch();
+        one_gone.slots[1].count = 0;
+        let mut fewer = view(Some(&you));
+        fewer.playing = true;
+        fewer.utility = Some(&one_gone);
+        let mut second = Vec::new();
+        Hud::default().build(&fewer, &mut second);
+        assert_eq!(second.len(), drawn.len(), "an empty slot vanished");
+    }
+
+    #[test]
+    fn every_tray_cell_is_wide_enough_for_what_is_written_in_it() {
+        // Found by screenshotting a real match, not by a test — which is why
+        // this one measures `tray_metrics`, the box the painter itself draws,
+        // rather than recomputing the arithmetic beside it and agreeing with
+        // itself.
+        for u in [2.0f32, 3.0, 6.0] {
+            let labels: Vec<String> = ["he", "flash", "smoke", "fire"]
+                .iter()
+                .enumerate()
+                .map(|(i, kind)| format!("{} {}", i + 6, abbreviate(kind)))
+                .collect();
+            let (cell_w, cell_h, pad, label_scale, count_scale) = tray_metrics(&labels, u);
+            for label in &labels {
+                assert!(
+                    text_width(label, label_scale) + pad * 2.0 <= cell_w + 0.01,
+                    "'{label}' overflows its cell at u={u}"
+                );
+            }
+            // And a two-digit count, so a cell does not have to grow as a pouch
+            // fills — a tray that reflowed on a pickup would move every key's
+            // cell under the player's eyes.
+            assert!(text_width("00", count_scale) + pad * 2.0 <= cell_w + 0.01);
+            // Both rows fit vertically, which is the other half of the same
+            // mistake: text taller than its box overprints the cell below.
+            assert!(pad * 2.0 + 7.0 * label_scale + 7.0 * count_scale <= cell_h + 0.01);
+        }
+    }
+
+    #[test]
+    fn a_longer_name_widens_the_tray_instead_of_overprinting_it() {
+        // A node that adds a fifth grenade must not silently draw it through its
+        // neighbour. `abbreviate` passes an unknown kind through, so this is
+        // reachable without a client release.
+        let short = vec!["6 HE".to_string()];
+        let long = vec!["6 THERMOBARIC".to_string()];
+        assert!(tray_metrics(&long, 3.0).0 > tray_metrics(&short, 3.0).0);
+    }
+
+    #[test]
+    fn a_flash_whites_the_screen_out_and_a_zero_one_draws_nothing() {
+        // `you.flash` was parsed and then ignored, which made the flashbang the
+        // one grenade with no effect on the person it went off in front of.
+        let you = alive();
+        let mut dark = view(Some(&you));
+        dark.playing = true;
+        let mut without = Vec::new();
+        Hud::default().build(&dark, &mut without);
+
+        let mut blind = view(Some(&you));
+        blind.playing = true;
+        blind.flash = 1.0;
+        let mut with_flash = Vec::new();
+        Hud::default().build(&blind, &mut with_flash);
+        assert!(with_flash.len() > without.len(), "the flash drew nothing");
+
+        // A flash that has faded is absent, not a transparent quad: the last
+        // hundredth is not worth a draw call every frame for the rest of the
+        // match.
+        let mut faded = view(Some(&you));
+        faded.playing = true;
+        faded.flash = 0.001;
+        let mut nothing = Vec::new();
+        Hud::default().build(&faded, &mut nothing);
+        assert_eq!(nothing.len(), without.len());
     }
 
     #[test]
@@ -1980,9 +2492,95 @@ mod tests {
         }
         assert_eq!(glyph(' '), [0; 7], "a space is blank");
         assert_eq!(glyph('\u{2603}'), [0; 7], "an unknown glyph is blank");
-        // Lowercase is folded rather than dropped: every string here is
-        // uppercased on the way in, but a weapon name comes from the server.
-        assert_eq!(glyph('a'), glyph('A'));
+    }
+
+    #[test]
+    fn lowercase_has_its_own_shapes_rather_than_being_folded() {
+        // It used to be folded — `glyph` looked every character up through
+        // `to_ascii_uppercase`, so the font had one case. That is fine for the
+        // HUD, which uppercases its strings explicitly, and wrong for the
+        // console, which echoes back exactly what the player typed next to CVar
+        // names that are lowercase everywhere else in this app.
+        for ch in "abcdefghijklmnopqrstuvwxyz".chars() {
+            assert_ne!(glyph(ch), [0; 7], "no glyph for {ch:?}");
+            let upper = ch.to_ascii_uppercase();
+            assert_ne!(
+                glyph(ch),
+                glyph(upper),
+                "{ch:?} still draws as {upper:?} — the fold is back"
+            );
+        }
+        // The descenders are the reason lowercase is the fiddly half: there is
+        // no eighth row to hang a tail in, so these shift up instead. A `g` whose
+        // bowl sits where an `o`'s does has lost its tail off the bottom.
+        for ch in "gjpqy".chars() {
+            assert_ne!(glyph(ch)[6], 0, "{ch:?} has nothing on its last row");
+        }
+    }
+
+    #[test]
+    fn a_console_chip_is_clickable_exactly_where_it_is_drawn() {
+        // The painter and the mouse read one layout — `console_hits` — for the
+        // same reason `Menu::rows_at` exists: two computations of a chip's
+        // rectangle drift, and the symptom is a click that toggles the setting
+        // next to the one you aimed at, with nothing anywhere reporting it.
+        // This asserts the *shape* of that agreement: every rect the hit test
+        // offers is inside the panel, they do not overlap, and the ones past the
+        // right edge are absent rather than clamped — a chip that was never
+        // drawn must not be clickable.
+        let quick: Vec<crate::console::QuickAction> = (0..40)
+            .map(|_| crate::console::QuickAction {
+                key: "F1",
+                label: "HITBOXES",
+                state: Some("OFF".to_string()),
+                active: false,
+                honored: true,
+                command: "draw.hitboxes 1".to_string(),
+            })
+            .collect();
+        let hits = console_hits(&quick, &[], false, 1280.0, 800.0);
+
+        assert!(!hits.chips.is_empty(), "no chip was placed at all");
+        assert!(
+            hits.chips.len() < quick.len(),
+            "forty chips cannot fit in 1280px — the row is not being cut off"
+        );
+        for (_, rect) in &hits.chips {
+            assert!(rect.x >= 0.0 && rect.x + rect.w <= 1280.0);
+            assert!(rect.y + rect.h <= hits.panel.h, "a chip escaped the panel");
+        }
+        for pair in hits.chips.windows(2) {
+            let (a, b) = (pair[0].1, pair[1].1);
+            assert!(
+                a.x + a.w <= b.x,
+                "two chips overlap, so a click is ambiguous"
+            );
+        }
+
+        // And the indices are into the *original* list, not the drawn subset —
+        // clicking the third visible chip has to run the third action.
+        assert_eq!(hits.chips[2].0, 2);
+    }
+
+    #[test]
+    fn a_completion_row_is_hit_testable_and_shifts_for_the_detail_line() {
+        // The detail line sits between the caret and the completions, so its
+        // presence moves every completion up by one. Computing the row without
+        // accounting for it is a click that lands a line below the word.
+        let items: Vec<String> = ["draw.fov", "draw.hitboxes"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let without = console_hits(&[], &items, false, 1280.0, 800.0);
+        let with = console_hits(&[], &items, true, 1280.0, 800.0);
+        assert_eq!(without.suggestions.len(), 2);
+        assert_eq!(with.suggestions.len(), 2);
+        assert!(
+            with.suggestions[0].1.y < without.suggestions[0].1.y,
+            "the detail line did not push the completions up"
+        );
+        // Distinct rectangles, or the second suggestion is unreachable.
+        assert!(without.suggestions[0].1.x < without.suggestions[1].1.x);
     }
 
     #[test]

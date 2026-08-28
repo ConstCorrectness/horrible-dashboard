@@ -1,3 +1,4 @@
+import { chartColors } from '../../../viz/uplot-theme';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
@@ -82,6 +83,7 @@ function MetricChart({
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
+    const colors = chartColors(host);
     const plot = new uPlot(
       {
         width: host.clientWidth || 420,
@@ -91,14 +93,17 @@ function MetricChart({
           {},
           {
             label: title,
-            stroke: 'var(--accent, #539bf5)',
+            // Resolved, not `var(--accent)`: uPlot draws to a canvas, and
+            // `ctx.strokeStyle` ignores a custom property silently — which is why
+            // this line used to render in uPlot's default colour on every theme.
+            stroke: colors.accent,
             width: 1.5,
             points: { show: false },
           },
         ],
         axes: [
-          { stroke: '#8b949e', grid: { stroke: '#30363d' } },
-          { stroke: '#8b949e', grid: { stroke: '#30363d' } },
+          { stroke: colors.axis, grid: { stroke: colors.grid } },
+          { stroke: colors.axis, grid: { stroke: colors.grid } },
         ],
         scales: { x: { time: false } },
         legend: { show: false },

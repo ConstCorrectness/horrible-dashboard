@@ -14,7 +14,6 @@ import {
   getProcessStatus,
   getSession,
   getSkinInventory,
-  launchNativeFps,
   listInvitees,
   listMaps,
   listTacticals,
@@ -23,6 +22,7 @@ import {
   type BrowseMatch,
   type InstallStatus,
   type LaunchNativeOptions,
+  type LaunchNativeResult,
   type Invitee,
   type MapInfo,
   type MapSummary,
@@ -34,6 +34,7 @@ import { GameAudio } from './audio';
 import { AvatarPool } from './avatars';
 import { createBackdrop, type Backdrop } from './backdrop';
 import { MatchCompanion } from './panels/MatchCompanion';
+import { useNativeLaunch } from './native-launch';
 import { FlashOverlay, NadeTray, Radar } from './panels/Radar';
 import { PostMatchDebrief } from './panels/PostMatchDebrief';
 import {
@@ -168,6 +169,21 @@ const OWN_STRIDE = 4.2;
 
 /** How long a heard noise stays on the direction ring. */
 const NOISE_TTL_MS = 900;
+/**
+ * What to put under the Play buttons for a launch in whatever state it is in.
+ *
+ * The node's own message wins whenever it has one — it names the pid, the build
+ * and its age. This only fills the gap while a job is still running, and the two
+ * running phases deliberately read differently: a build is minutes and a start is
+ * a moment, and one word for both is what made a compile look like a hang.
+ */
+function launchMessage(res: LaunchNativeResult): string {
+  if (res.message) return res.message;
+  if (res.phase === 'building') return 'Compiling the native client — this takes minutes…';
+  if (res.phase === 'starting') return 'Starting the native client…';
+  return res.launched ? 'Launched' : 'It did not start';
+}
+
 /** How long a hitmarker and a damage flash stay on screen. */
 /** Stable empties: a fresh literal every render re-runs the radar's effect on
  * frames where nothing actually changed. */
@@ -336,6 +352,8 @@ export function HorribleAssaultPanel() {
    * the steady state of there never having been one. Without it a failed
    * launch's error message would be wiped by the very next poll. */
   const wasRunning = useRef(false);
+  /** The node's launch job — see `native-launch.ts`. Survives this pane. */
+  const launcher = useNativeLaunch();
   const [postMatchSummary, setPostMatchSummary] = useState<PostMatchSummary | null>(null);
 
   /**
@@ -1754,29 +1772,38 @@ export function HorribleAssaultPanel() {
    * successful launch reads as a button that did nothing.
    */
   const launchNative = useCallback(
-    async (opts: Omit<LaunchNativeOptions, 'map_name'> & { map_name?: string }) => {
+    (opts: Omit<LaunchNativeOptions, 'map_name'> & { map_name?: string }) => {
       sessionRef.current?.leave();
-      // Not just "starting": when the client has been edited since it was last
-      // built, this request compiles it first and does not answer for minutes.
-      // A status that only said "starting" for that long reads as a hang.
-      setNativeStatus('Starting the native client (rebuilding it if you have edited it)…');
-      try {
-        const res = await launchNativeFps({ map_name: mapName, max_fps: 240, ...opts });
-        setNativeStatus(res.message ?? (res.launched ? 'Launched' : 'It did not start'));
-        if (res.launched) {
-          setNativeRunning(true);
-          setNativePid(res.pid);
-          // Armed here rather than waiting for the poll to notice: a client that
-          // exits within the poll interval would otherwise never be seen running
-          // at all, and its launch message would stay up for the session.
-          wasRunning.current = true;
-        }
-      } catch (err) {
-        setNativeStatus(err instanceof Error ? err.message : 'Could not reach this node');
-      }
+      // Fire-and-watch, not await. When the client has been edited since it was
+      // last built the node compiles it first, which is minutes — and this pane
+      // is unmounted the instant its tab loses focus, so a promise awaited here
+      // was simply dropped and the launch looked like it had stopped. The job
+      // lives on the node now, and `useNativeLaunch` reads it back on mount.
+      void launcher.launch({ map_name: mapName, max_fps: 240, ...opts });
     },
-    [mapName],
+    [launcher, mapName],
   );
+
+  /**
+   * The launch job's own report, folded into the pane's native-process state.
+   *
+   * Kept as an effect rather than done inside `launchNative` for the reason the
+   * hook exists at all: a launch that finishes while this pane is unmounted is
+   * adopted when it comes back, and there is no press to hang that on.
+   */
+  useEffect(() => {
+    const res = launcher.result;
+    if (!res) return;
+    setNativeStatus(launchMessage(res));
+    if (res.launched) {
+      setNativeRunning(true);
+      setNativePid(res.pid);
+      // Armed here rather than waiting for the poll to notice: a client that
+      // exits within the poll interval would otherwise never be seen running at
+      // all, and its launch message would stay up for the session.
+      wasRunning.current = true;
+    }
+  }, [launcher.result]);
 
   const train = useCallback(() => {
     if (nativeClient) {

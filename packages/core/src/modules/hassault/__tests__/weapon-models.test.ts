@@ -30,15 +30,19 @@ describe('loadWeaponModel', () => {
     // "This weapon is boxes" is an ordinary answer. Making callers tell it apart
     // from a network failure by catching guarantees they eventually stop trying.
     await expect(loadWeaponModel('knife')).resolves.toBeNull();
-    await expect(loadWeaponModel('assault')).resolves.toBeNull();
     await expect(loadWeaponModel('nonsense')).resolves.toBeNull();
   });
 
   it('only claims props for weapons that have one built', () => {
-    // The M4A1 is 687k triangles and there is no knife model, so both are
-    // deliberately absent — an entry here pointing at a file that does not
-    // exist would turn a decision into a failed fetch on every weapon swap.
-    expect(Object.keys(WEAPON_MODEL_URLS).sort()).toEqual(['pistol', 'shotgun', 'sniper']);
+    // There is no knife model, so it is deliberately absent — an entry here
+    // pointing at a file that does not exist would turn a decision into a
+    // failed fetch on every weapon swap.
+    expect(Object.keys(WEAPON_MODEL_URLS).sort()).toEqual([
+      'assault',
+      'pistol',
+      'shotgun',
+      'sniper',
+    ]);
     for (const url of Object.values(WEAPON_MODEL_URLS)) {
       expect(url.startsWith('/hassault-weapon-')).toBe(true);
     }

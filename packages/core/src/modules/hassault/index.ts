@@ -137,9 +137,41 @@ export const hassaultModule: ModuleManifest = {
       key: 'hassault.video.quality',
       title: 'Native client: graphics quality',
       description:
-        'low, medium or high. Moves the shading (flat, a directional wash, the wash plus a rim), how far the fog reaches, and the multisample count — 1× below high, 4× at it, because those are the only counts every GPU is required to support.',
+        'low, medium or high — a preset, not a ceiling. It moves the shading (flat, a directional wash, the wash plus a rim), how far the fog reaches, and it writes the anti-aliasing row below. Changing that row afterwards is honoured: the preset is applied when you pick it, never re-applied on top of a later choice.',
       type: 'string',
       default: 'medium',
+    },
+    {
+      key: 'hassault.video.fov',
+      title: 'Native client: field of view',
+      description:
+        'Vertical field of view in degrees, 70–120, before a scope divides it. 75 is the pane’s, so the default is the same picture in both clients. The one video setting that changes how the game plays rather than how it looks — a wider view is more of the room and a smaller enemy in it.',
+      type: 'number',
+      default: 75,
+    },
+    {
+      key: 'hassault.video.antialias',
+      title: 'Native client: anti-aliasing',
+      description:
+        '4× multisampling, on or off — there is deliberately nothing between. 1 and 4 are the only sample counts the WebGPU spec guarantees a format supports; 2× is a validation error at pipeline creation on plenty of GPUs that list it, which is a crash on the first frame rather than a slower one. Set by the quality preset and overridable from here or the in-game menu.',
+      type: 'boolean',
+      default: false,
+    },
+    {
+      key: 'hassault.video.shadows',
+      title: 'Native client: shadows',
+      description:
+        'Whether world surfaces sample the sun’s shadow map. This is a look, not a frame rate: the map and the sun are both static, so the shadow map is baked once at load and turning this off skips no pass — only the shader’s filter taps. Offered because some people prefer the flat read, not as a performance setting.',
+      type: 'boolean',
+      default: true,
+    },
+    {
+      key: 'hassault.video.fpsLimit',
+      title: 'Native client: frame cap',
+      description:
+        'Frames per second to cap at, or 0 for uncapped (the default). One of 0, 60, 120, 144, 240 or 360; anything else is snapped to the nearest. Unlike vsync this queues no frame and adds no latency, it only sleeps — it is for a laptop that would otherwise run its fan flat out drawing frames no display will show, and then thermally throttle below the cap anyway.',
+      type: 'number',
+      default: 0,
     },
     {
       key: 'hassault.video.vsync',

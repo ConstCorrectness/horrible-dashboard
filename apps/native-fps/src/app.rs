@@ -27,16 +27,18 @@
 use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
-use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
+use winit::event::{
+    DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent,
+};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
 use hassault_native::animator::Squad;
-use hassault_native::api::{HitboxSpec, WeaponSpec};
+use hassault_native::api::{HitboxSpec, TacticalSpec, WeaponSpec};
 use hassault_native::audio::GameAudio;
 use hassault_native::bodies;
 use hassault_native::camera::Camera;
@@ -44,7 +46,9 @@ use hassault_native::console::{self, ClientCvars, Console, Definitions, Dispatch
 use hassault_native::effects::EffectsPool;
 use hassault_native::geometry::MeshData;
 use hassault_native::held;
-use hassault_native::hud::{ConsoleView, Hud, HudView, OverlayVertex, RadarView, ScoreRow};
+use hassault_native::hud::{
+    self, ConsoleView, Hud, HudView, OverlayVertex, RadarView, ScoreRow, UtilitySlot, UtilityView,
+};
 use hassault_native::interp::{PingTracker, SnapshotBuffer};
 use hassault_native::menu::{self, Action, Menu, Page};
 use hassault_native::nades::{self, NadePool};
@@ -56,9 +60,10 @@ use hassault_native::protocol::{Command, Event, Fx, PlayerRow, SelfState};
 use hassault_native::radar::{self, Blip, Run};
 use hassault_native::renderer::{Renderer, Vertex, VolumeVertex};
 use hassault_native::reveal::Reveal;
-use hassault_native::settings::{Crosshair, CrosshairStyle, Settings, SettingsWriter};
+use hassault_native::settings::{Crosshair, CrosshairStyle, Settings, SettingsWriter, FOV_RANGE};
 use hassault_native::trace::kick_vector;
 use hassault_native::training::TrainingRange;
+use hassault_native::utility::GrenadeController;
 use hassault_native::viewmodel::{self, Skin, WeaponViewModel};
 use hassault_native::world::World;
 
@@ -186,6 +191,11 @@ pub struct App {
     /// numbers for the same thing, which is precisely the shape of divergence
     /// this client already had against the browser pane.
     net_graph_default: u32,
+    /// The **throwing** half, which this client had none of: `nades` below drew
+    /// everybody else's grenades while nothing here could produce one. What is
+    /// readied, what is left, and the edge that puts `throw` on a command — see
+    /// `utility.rs`.
+    utility: GrenadeController,
     /// Grenades in the air and the clouds they leave. Drawn only — every
     /// position, radius and fuse in it is the server's. See `nades.rs`.
     /// The map building itself, over the first couple of seconds. See
@@ -262,6 +272,13 @@ pub struct App {
     /// The unscoped field of view, so stepping the scope divides *this* rather
     /// than compounding on whatever the last magnification left behind.
     base_fov: f32,
+    /// The pointer, in window pixels, whenever it is free.
+    ///
+    /// Meaningless while the pointer is grabbed — the look comes from a raw
+    /// `DeviceEvent` delta then, and there is no cursor to have a position. Kept
+    /// here rather than in the console because the menu already keeps its own in
+    /// `Menu::hover`, and a third copy is a third thing to update.
+    pointer: (f32, f32),
     /// Everything the pause menu edits, live. The authority for this session:
     /// the node is where it is *stored*, not where it is read from per frame.
     settings: Settings,
@@ -323,12 +340,21 @@ impl App {
         settings: Settings,
         writer: SettingsWriter,
         weapons: Vec<WeaponSpec>,
+        // The grenades, in slot order. Empty is a node that served none, and is
+        // a throw key that does nothing rather than a client-side guess at what
+        // the four are.
+        tacticals: Vec<TacticalSpec>,
         skins: HashMap<String, Skin>,
         hitbox: HitboxSpec,
         definitions: Definitions,
         radar_plan: Vec<Run>,
     ) -> App {
         let map_name = world.info.name.clone();
+        // Read off the bag before it is moved into the struct. The camera is
+        // constructed before the settings are, so a saved FOV taken from
+        // `Camera::default()` would sit unapplied until the player opened the
+        // menu and nudged the row.
+        let base_fov = settings.video.fov;
         let mut app = App {
             // Started here, before a window exists: the parse needs no GPU, and
             // the sooner it begins the likelier every prop is resident before
@@ -371,6 +397,7 @@ impl App {
             fps: 0.0,
             net_graph_default: 1,
             reveal: Reveal::default(),
+            utility: GrenadeController::new(tacticals),
             nades: NadePool::default(),
             effects: EffectsPool::default(),
             volume_verts: Vec::new(),
@@ -406,7 +433,12 @@ impl App {
             stride: 0.0,
             was_grounded: true,
             scoped: 0,
-            base_fov: Camera::default().fov,
+            // From the settings, never from `Camera::default()`: the camera is
+            // built before the bag is read, so taking it from there would leave
+            // a saved FOV applied to nothing until the player opened the menu
+            // and nudged it.
+            base_fov,
+            pointer: (0.0, 0.0),
         };
         if app.audio.is_none() {
             // Said out loud: a game that is silently silent reads as a game whose
@@ -504,7 +536,24 @@ impl App {
     /// it means the same hand movement sweeps four times as much of the world at
     /// 4×, which is precisely the aim being wrong only while scoped.
     fn apply_zoom(&mut self) {
-        self.camera.fov = self.base_fov / self.magnification();
+        self.camera.fov = self.base_fov() / self.magnification();
+    }
+
+    /// The unscoped FOV, with any console override folded in.
+    ///
+    /// The same precedence the crosshair and `draw.hitboxes` use, and for the
+    /// same reason: a CVar assignment is a statement about *now*, the setting is
+    /// a preference, and reading them through one accessor is what stops the
+    /// console and the video menu becoming two FOVs that disagree. Clamped to
+    /// the setting's range rather than trusted — `draw.fov` is declared over
+    /// exactly this range in `console.py`, but a client that believed whatever
+    /// arrived would render a fish-eye on a typo.
+    fn base_fov(&self) -> f32 {
+        self.cvars
+            .number("draw.fov")
+            .map(|v| v as f32)
+            .unwrap_or(self.base_fov)
+            .clamp(FOV_RANGE.0, FOV_RANGE.1)
     }
 
     /// The roster, ranked.
@@ -555,6 +604,36 @@ impl App {
     fn ground_speed(&self) -> f32 {
         let p = &self.prediction.state;
         (p.vel_x * p.vel_x + p.vel_y * p.vel_y).sqrt()
+    }
+
+    /// Sleep out whatever is left of this frame's slice under an FPS cap.
+    ///
+    /// **Before the frame clock is read, deliberately**, so the sleep is part of
+    /// `dt` rather than something that happened between two frames. Sleeping
+    /// after the clock would leave every step integrating a `dt` that excluded
+    /// the wait, which is the same class of bug as ticking a player by wall clock
+    /// — the simulation would run at the uncapped rate and the screen at the
+    /// capped one.
+    ///
+    /// This is **not** vsync and does not pretend to be: it adds no queued frame
+    /// and it does not align to the display, so tearing is exactly as visible as
+    /// it was. What it buys is a machine that is not pinned at 100% to draw
+    /// frames nobody's monitor will show — see `Video::fps_limit`.
+    ///
+    /// `spin_sleep` is not used and the accuracy is not chased. The OS timer's
+    /// granularity means a 240 cap lands somewhere near 240, and a cap that is
+    /// approximate is doing its whole job; a busy-wait that hit it exactly would
+    /// burn the core the cap exists to leave alone.
+    fn wait_for_frame(&mut self) {
+        let limit = self.settings.video.fps_limit;
+        if limit == 0 {
+            return;
+        }
+        let budget = Duration::from_secs_f32(1.0 / limit as f32);
+        let spent = self.last_frame.elapsed();
+        if let Some(left) = budget.checked_sub(spent) {
+            std::thread::sleep(left);
+        }
     }
 
     /// Advance the HUD and the weapon in the hands by one frame.
@@ -820,6 +899,11 @@ impl App {
                         // A jump back to full health is not healing, and the
                         // fall note from the death that caused it is stale.
                         self.hud.on_respawn();
+                        // And the pouch is refilled, matching `reset_loadout`.
+                        // The next snapshot's `you.nades` would correct this
+                        // anyway; doing it here means the tray is right on the
+                        // frame you respawn rather than one tick later.
+                        self.utility.reset();
                     }
                     self.hud.on_self(&s.you);
                     self.hud.on_hits(&s.you.hits);
@@ -1092,6 +1176,25 @@ impl App {
         // the rest of the match repeats a switch that already happened.
         cmd.weapon = std::mem::replace(&mut self.want_weapon, -1);
         cmd.reload = std::mem::take(&mut self.want_reload);
+        // The throw, on the same command and for the same reason firing is: it
+        // then carries the exact angles and sequence number of the frame the key
+        // went down on. Edge-triggered in the controller — a key read as held
+        // would set this sixty times a second, the server's cooldown would take
+        // one, and the player would watch a full pouch turn into one grenade.
+        // `clock_ms` and not `local_clock`: the latter is Train's own clock and
+        // is only advanced by `train`, so in a match it sits at zero forever and
+        // a cooldown measured against it would never elapse.
+        let intent = self.utility.frame(Self::clock_ms(), self.you.as_ref());
+        if intent.throwing {
+            cmd.r#throw = true;
+            cmd.nade = intent.nade;
+            cmd.lob = intent.lob;
+            // Ours, played locally. The server does send a `throw` noise, but it
+            // sends it to everyone *else* — your own noises never come back, so
+            // the thrower would be the one person in the room who could not hear
+            // it leave their hand.
+            self.play_own("throw", 0.4, false);
+        }
         // **Radians on the wire, not degrees**, and from the same expression the
         // prediction uses — see `view_angles`. This line read `self.camera.yaw`
         // raw. The server does not range-check an angle, because there is no
@@ -1413,13 +1516,65 @@ impl App {
     /// player's next click, exactly as `set_grab(false)` elsewhere.
     fn toggle_console(&mut self) {
         self.console.open = !self.console.open;
-        if self.console.open {
+        if !self.console.open {
+            // Closing hands the mouse back, the same way closing the menu does.
+            // It used to release the pointer on the way in and never take it
+            // again, so the tilde that put you back in the game left you with a
+            // free cursor and a view that would not turn until you clicked —
+            // which reads as the console having broken the mouse.
+            //
+            // Unless the menu is up behind it: `Escape` while the console is
+            // open closes the console, and grabbing the pointer would then hide
+            // the cursor over a menu that is still there to be clicked.
+            if !self.menu.open {
+                self.set_grab(true);
+            }
+            return;
+        }
+        {
             self.set_grab(false);
             // Every movement key is released, not remembered. A console opened
             // mid-strafe otherwise leaves the body walking into a wall for as
             // long as it takes to type a command — and the key-up that would
             // have stopped it is swallowed by the console.
             self.keys = Keys::default();
+        }
+    }
+
+    /// A left click inside the open console.
+    ///
+    /// Hit-tested against **`hud::console_hits`, the same layout the painter
+    /// draws from**, which is the rule `Menu::rows_at` already follows: a second
+    /// computation of where a chip is drawn is a click that lands on its
+    /// neighbour, and nothing anywhere reports that.
+    ///
+    /// A click that hits nothing is swallowed rather than falling through. The
+    /// panel covers the top half of the screen and the world is still live
+    /// behind it; a miss that reached the trigger would fire a shot at whatever
+    /// the crosshair was on while the player was reading their own scrollback.
+    fn console_click(&mut self) {
+        let (w, h) = self.window_size();
+        let (w, h) = (w as f32, h as f32);
+        let quick = self.console.quick_actions(&self.cvars);
+        let detail = self.console.suggestion_detail(&self.cvars);
+        let hits = hud::console_hits(&quick, &self.console.suggestions, detail.is_some(), w, h);
+        let (x, y) = self.pointer;
+
+        if let Some((index, _)) = hits.chips.iter().find(|(_, r)| r.contains(x, y)) {
+            if let Some(command) = self.console.quick_command(*index, &self.cvars) {
+                // Echoed like a typed line, for the same reason F1-F8 echo it:
+                // a chip that changed something without saying what would be the
+                // one part of this console you could not audit.
+                self.console
+                    .push(format!("] {command}"), console::Tone::Echo);
+                self.run_console(&command);
+            }
+            return;
+        }
+
+        if let Some((index, _)) = hits.suggestions.iter().find(|(_, r)| r.contains(x, y)) {
+            self.console.select_suggestion(*index);
+            self.console.complete();
         }
     }
 
@@ -1649,15 +1804,18 @@ impl App {
                 event_loop.exit();
             }
             action => {
-                let Some(key) = menu::apply(action, step, &mut self.settings) else {
+                let keys = menu::apply(action, step, &mut self.settings);
+                if keys.is_empty() {
                     return;
-                };
+                }
                 // Applied to the live client *before* it is saved: the point of
                 // an in-game menu is seeing the change on the frame you make it,
                 // and the write is a round trip on another thread.
                 self.apply_settings(action);
-                if let Some(value) = self.settings.value_for(key) {
-                    self.writer.save(key, value);
+                for key in keys {
+                    if let Some(value) = self.settings.value_for(key) {
+                        self.writer.save(key, value);
+                    }
                 }
             }
         }
@@ -1674,7 +1832,22 @@ impl App {
             // Nothing to apply: the flag is read straight from `self.settings`
             // by the render path, so toggling it is already in force.
             Action::ShowHitboxes => {}
-            Action::RenderScale | Action::Quality | Action::Vsync => {
+            // The FOV is the camera's, not the renderer's, and it goes through
+            // `apply_zoom` rather than straight onto the camera: setting
+            // `camera.fov` here would be overwritten by the next scope step, and
+            // the bug would only show while scoped.
+            Action::Fov => {
+                self.base_fov = self.settings.video.fov;
+                self.apply_zoom();
+            }
+            // Nothing to apply: the limiter reads `self.settings` at the top of
+            // every frame, so the next one is already capped.
+            Action::FpsLimit => {}
+            Action::RenderScale
+            | Action::Quality
+            | Action::Vsync
+            | Action::Antialias
+            | Action::Shadows => {
                 if let Some(renderer) = &mut self.renderer {
                     renderer.set_video(self.settings.video);
                 }
@@ -1884,10 +2057,26 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::Focused(false) => self.set_grab(false),
+            // The wheel scrolls the console and nothing else. In play it is
+            // deliberately inert: a weapon-cycle bound to it is the one binding
+            // people rebind first, and guessing wrong is worse than nothing.
+            WindowEvent::MouseWheel { delta, .. } if self.console.open => {
+                let lines = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y,
+                    // A trackpad reports pixels. Divided by a line height rather
+                    // than used raw, or one flick scrolls past the whole buffer.
+                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 20.0,
+                };
+                let step = lines.round() as i32;
+                if step != 0 {
+                    self.console.scroll_by(step, 8);
+                }
+            }
             WindowEvent::CursorMoved { position, .. } => {
-                // Only meaningful while the menu is up: in play the pointer is
-                // locked and the look comes from `DeviceEvent`, which is a raw
-                // delta and not a position. See the module docs.
+                self.pointer = (position.x as f32, position.y as f32);
+                // Only meaningful while the menu or the console is up: in play
+                // the pointer is locked and the look comes from `DeviceEvent`,
+                // which is a raw delta and not a position. See the module docs.
                 if self.menu.open {
                     let (w, h) = self.window_size();
                     let count = self.menu_rows();
@@ -1906,8 +2095,15 @@ impl ApplicationHandler for App {
             }
             // A click with the console up is a click *on the console*: grabbing
             // the pointer there would hide the cursor and start turning the view
-            // while the player is still typing.
-            WindowEvent::MouseInput { .. } if self.console.open => {}
+            // while the player is still typing. What it does instead is what the
+            // toolbar buttons in the browser pane do — the chips and the
+            // completion row are the two things there that are worth a click
+            // rather than a key.
+            WindowEvent::MouseInput { state, button, .. } if self.console.open => {
+                if button == MouseButton::Left && state == ElementState::Pressed {
+                    self.console_click();
+                }
+            }
             WindowEvent::MouseInput { state, button, .. } => {
                 if button == MouseButton::Right && self.focused {
                     if state == ElementState::Pressed {
@@ -1986,6 +2182,25 @@ impl ApplicationHandler for App {
                         KeyCode::Digit3 if down => self.select_weapon(2),
                         KeyCode::Digit4 if down => self.select_weapon(3),
                         KeyCode::Digit5 if down => self.select_weapon(4),
+                        // The four grenades sit on the number row after the
+                        // weapons, where a hand already is, and match
+                        // `DEFAULT_CONTROLS` in the browser's `controls.ts`:
+                        // one game, one set of keys.
+                        //
+                        // **Selecting only readies.** Throwing is its own key,
+                        // because the moment you throw a smoke is a different
+                        // decision from which smoke you are holding — and a
+                        // select-that-throws cannot express waiting.
+                        KeyCode::Digit6 if down => self.utility.select(0),
+                        KeyCode::Digit7 if down => self.utility.select(1),
+                        KeyCode::Digit8 if down => self.utility.select(2),
+                        KeyCode::Digit9 if down => self.utility.select(3),
+                        // `KeyG` is where every shooter since Half-Life has put
+                        // it. The underhand gets a modifier-free key of its own
+                        // rather than being Shift+G: a throw you have to hold two
+                        // keys for is one you will fumble under fire.
+                        KeyCode::KeyG if down => self.utility.press(false),
+                        KeyCode::KeyH if down => self.utility.press(true),
                         // F3 steps the *fallback*, and clears any override so
                         // the key the player is pressing is the thing they see.
                         // Stepping a private field while `net.graph` sat unread
@@ -2118,8 +2333,31 @@ impl ApplicationHandler for App {
                 } else {
                     (Vec::new(), Vec::new(), None)
                 };
+                // The pouch, built here rather than borrowed out of the
+                // controller: the HUD wants a name and a count per slot, and
+                // handing it the controller would make the painter ask the
+                // predictor questions.
+                let utility = (!self.utility.catalogue().is_empty()).then(|| UtilityView {
+                    slots: self
+                        .utility
+                        .catalogue()
+                        .iter()
+                        .enumerate()
+                        .map(|(i, spec)| UtilitySlot {
+                            name: spec.name.clone(),
+                            kind: spec.kind.clone(),
+                            count: self.utility.count_of(i),
+                        })
+                        .collect(),
+                    selected: self.utility.selected(),
+                });
                 let view = HudView {
                     radar,
+                    utility: utility.as_ref(),
+                    // Straight off the snapshot. Parsed and then ignored until
+                    // now, which made the flashbang the one grenade with no
+                    // effect on the person it went off in front of.
+                    flash: self.you.as_ref().map(|y| y.flash).unwrap_or(0.0),
                     crosshair: self.crosshair(),
                     console: self.console.open.then(|| ConsoleView {
                         lines: &console_lines,
@@ -2217,6 +2455,12 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Before the network pump, not after: the socket is drained on the way
+        // *out* of the wait, so this frame is built from snapshots that arrived
+        // during it. Sleeping after the pump would hold every snapshot that
+        // landed mid-sleep until the next iteration — a whole cap period of
+        // added latency on the one thing in this loop that came from the server.
+        self.wait_for_frame();
         self.pump_network(event_loop);
 
         let now = Instant::now();
@@ -2334,11 +2578,28 @@ mod tests {
             Settings::default(),
             SettingsWriter::disabled(),
             weapons(),
+            tacticals(),
             HashMap::new(),
             Default::default(),
             Default::default(),
             Vec::new(),
         )
+    }
+
+    /// The grenades the node serves. Four, in slot order, because the wire
+    /// carries a slot index and a test that shortened the list would be testing
+    /// a different keyboard than the one players have.
+    fn tacticals() -> Vec<TacticalSpec> {
+        ["he", "flash", "smoke", "molotov"]
+            .into_iter()
+            .map(|id| TacticalSpec {
+                id: id.to_string(),
+                name: id.to_uppercase(),
+                kind: if id == "molotov" { "fire" } else { id }.to_string(),
+                carried: 1,
+                ..Default::default()
+            })
+            .collect()
     }
 
     /// The loadout the node serves, trimmed to what these tests read.
@@ -2393,6 +2654,7 @@ mod tests {
             // and a settings write is fire-and-forget by design.
             SettingsWriter::disabled(),
             weapons(),
+            tacticals(),
             HashMap::new(),
             // The shipped body. A test that fetched one would depend on a node.
             Default::default(),

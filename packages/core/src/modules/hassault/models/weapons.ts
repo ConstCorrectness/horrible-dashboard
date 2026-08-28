@@ -25,12 +25,14 @@ import type * as THREE from 'three';
  * one — a missing entry is a decision, an entry pointing at a missing file is a
  * failed fetch, and only the second is worth a console line.
  *
- * `assault` and `knife` are deliberately absent. The M4A1 in the asset directory
- * is 687k triangles, which is twenty times the whole map and not a view model
- * until it has been decimated; there is no knife model at all.
+ * `knife` is deliberately absent: there is no knife model at all. The M4A1 used
+ * to be too, at 687k triangles — twenty times the whole map — and is here now
+ * because `scripts/decimate_weapon.py` takes it to 30k, which is the same order
+ * as the other three.
  */
 export const WEAPON_MODEL_URLS: Readonly<Record<string, string>> = {
   pistol: '/hassault-weapon-pistol.glb',
+  assault: '/hassault-weapon-assault.glb',
   shotgun: '/hassault-weapon-shotgun.glb',
   sniper: '/hassault-weapon-sniper.glb',
 };

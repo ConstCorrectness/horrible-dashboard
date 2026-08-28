@@ -13,7 +13,13 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 
-import { equippedSkins, INSPECT_DURATION, inspectEnvelope, WeaponViewModel } from '../viewmodel';
+import {
+  equippedSkins,
+  INSPECT_DURATION,
+  inspectEnvelope,
+  inspectTurn,
+  WeaponViewModel,
+} from '../viewmodel';
 
 function item(
   weaponId: string,
@@ -222,6 +228,67 @@ describe('inspect', () => {
     // be one you could get stuck in.
     for (let t = 0; t < 0.3; t += 0.05) vm.update(0.05, frame);
     expect(vm.inspecting).toBe(false);
+  });
+
+  it('never stops moving partway through', () => {
+    // The bug this pose was rebuilt for. It used to be one scalar driving every
+    // axis through an envelope that *holds*, so the weapon travelled out, froze
+    // for the length of the hold, and retraced its path — which reads as a
+    // stutter rather than as a weapon being turned over.
+    //
+    // Asserted on the pivot rather than on the envelope, because the envelope
+    // still holds at 1 and is supposed to: what must not hold still is the gun.
+    const { vm, camera } = stand();
+    vm.setWeapon('assault');
+    vm.update(0.016, frame);
+    vm.inspect();
+
+    // The pivot is parented to the camera (see `dispose`), so the pose is
+    // readable without a test-only accessor on the view model.
+    const pivot = camera.children[0];
+    const pose = () => [
+      pivot.position.x,
+      pivot.position.y,
+      pivot.position.z,
+      pivot.rotation.x,
+      pivot.rotation.y,
+      pivot.rotation.z,
+    ];
+    let previous = pose();
+    for (let i = 0; i < Math.floor(INSPECT_DURATION / 0.016) - 2; i += 1) {
+      vm.update(0.016, frame);
+      const now = pose();
+      const moved = now.some((v, j) => Math.abs(v - previous[j]) > 1e-5);
+      expect(moved).toBe(true);
+      previous = now;
+    }
+  });
+
+  it('winds one way and lands back at rest', () => {
+    // If the roll were driven by the envelope it would unwind along the path it
+    // wound up, which is the "played backwards" look. The turn only climbs; the
+    // envelope scaling it is what still returns the weapon to the aim.
+    let previous = -1;
+    for (let t = 0; t <= INSPECT_DURATION; t += 0.016) {
+      const now = inspectTurn(t);
+      expect(now).toBeGreaterThanOrEqual(previous);
+      previous = now;
+    }
+    expect(inspectTurn(INSPECT_DURATION)).toBeGreaterThan(0.99);
+    expect(inspectEnvelope(0)).toBe(0);
+    expect(inspectEnvelope(INSPECT_DURATION)).toBeLessThanOrEqual(1e-6);
+  });
+
+  it('matches the native client, which runs the same pose', () => {
+    // `apps/native-fps/src/viewmodel.rs` carries these as constants. The two
+    // clients drawing the same weapon differently is the drift this module's
+    // shape exists to avoid, and an inspect is the one animation a player
+    // watches closely enough to notice.
+    expect(INSPECT_DURATION).toBe(1.5);
+    // Sampled rather than compared symbolically: the Rust is a separate
+    // implementation, and what has to agree is the curve, not the source.
+    expect(inspectEnvelope(0.15)).toBeCloseTo(0.5, 5);
+    expect(inspectTurn(0.75)).toBeCloseTo(0.5, 5);
   });
 
   it('is cancelled by firing', () => {

@@ -20,8 +20,13 @@ import {
   type TraceSeries,
   type CaptureSet,
 } from './api';
+import { IconPin, IconPinOff } from '../../glyphs';
+import { Sparkline } from '../../viz/Sparkline';
+import { ValueStrip } from '../../viz/ValueStrip';
 import { KIND_LABELS, kindsPresent, nodeKind, type NodeKind } from './node-kind';
 import { addPin, addPins, clearPins, getPins, MAX_PINS, removePin } from './pins';
+import { TraceProfile } from './TraceProfile';
+import { STAT_LABELS, TRACE_STATS, type TraceStat } from './trace-profile';
 import { subscribeTracePrompt, takePendingPrompt } from './trace-prompt';
 
 /**
@@ -38,118 +43,6 @@ import { subscribeTracePrompt, takePendingPrompt } from './trace-prompt';
  * produced the trace — which is not the `llama-server` build the chat path runs,
  * and is why a trace may not be overlaid on a turn unless both agree.
  */
-
-/** Downsample to something a browser can lay out; a residual is ~4096 floats. */
-const CELLS = 192;
-
-function buckets(values: number[]): number[] {
-  if (values.length <= CELLS) return values;
-  const size = values.length / CELLS;
-  const out: number[] = [];
-  for (let i = 0; i < CELLS; i += 1) {
-    const start = Math.floor(i * size);
-    const end = Math.max(start + 1, Math.floor((i + 1) * size));
-    let total = 0;
-    for (let j = start; j < end; j += 1) total += values[j] ?? 0;
-    out.push(total / (end - start));
-  }
-  return out;
-}
-
-/**
- * A diverging ramp centred on zero. Activations are signed and the sign is the
- * interesting part, so a sequential ramp would hide half the story.
- */
-function cellColor(value: number, scale: number): string {
-  if (!scale) return 'rgb(120 120 120 / 25%)';
-  const t = Math.max(-1, Math.min(1, value / scale));
-  const alpha = 0.12 + Math.abs(t) * 0.8;
-  return t >= 0 ? `rgb(110 190 255 / ${alpha})` : `rgb(255 140 120 / ${alpha})`;
-}
-
-function ValueStrip({ data }: { data: RecordValues }) {
-  const cells = useMemo(() => buckets(data.values), [data.values]);
-  const scale = useMemo(() => cells.reduce((max, v) => Math.max(max, Math.abs(v)), 0), [cells]);
-  if (!data.values.length) {
-    return (
-      <p className="llama-note">
-        This record was stored as a <strong>summary</strong> — statistics instead of the tensor.
-        There are no values to draw.
-      </p>
-    );
-  }
-  return (
-    <div className="llama-heat" role="img" aria-label={`${data.record.name} activations`}>
-      {cells.map((value, index) => (
-        <span
-          key={index}
-          className="llama-heat-cell"
-          style={{ background: cellColor(value, scale) }}
-          title={value.toFixed(4)}
-        />
-      ))}
-    </div>
-  );
-}
-
-/**
- * A watched node's statistic across passes.
- *
- * A **gap is drawn as a gap**: a pass whose record was summarized without a stored
- * statistic has nothing to report, and joining the line across it would draw a
- * measurement that was never taken. So the polyline is split into runs of adjacent
- * measured points, and a lone measured point between two gaps is a dot.
- */
-function Sparkline({ series }: { series: TraceSeries }) {
-  const points = series.points;
-  const measured = points.filter((p) => p.value !== null);
-  if (measured.length < 1) return <span className="llama-meta">no series</span>;
-
-  const width = 96;
-  const height = 18;
-  const lo = Math.min(...measured.map((p) => p.value as number));
-  const hi = Math.max(...measured.map((p) => p.value as number));
-  const span = hi - lo || 1;
-  const lastPass = points[points.length - 1]?.passIndex || 1;
-  const x = (pass: number) => (lastPass ? (pass / lastPass) * (width - 2) + 1 : width / 2);
-  const y = (value: number) => height - 1 - ((value - lo) / span) * (height - 2);
-
-  const runs: string[][] = [];
-  let run: string[] = [];
-  for (const point of points) {
-    if (point.value === null) {
-      if (run.length) runs.push(run);
-      run = [];
-      continue;
-    }
-    run.push(`${x(point.passIndex).toFixed(1)},${y(point.value).toFixed(1)}`);
-  }
-  if (run.length) runs.push(run);
-
-  return (
-    <svg
-      className="llama-spark"
-      viewBox={`0 0 ${width} ${height}`}
-      preserveAspectRatio="none"
-      role="img"
-      aria-label={`${series.name} ${series.stat} over ${points.length} passes`}
-    >
-      {runs.map((coords, index) =>
-        coords.length > 1 ? (
-          <polyline key={index} className="llama-spark-line" points={coords.join(' ')} />
-        ) : (
-          <circle
-            key={index}
-            className="llama-spark-dot"
-            cx={coords[0].split(',')[0]}
-            cy={coords[0].split(',')[1]}
-            r={1.4}
-          />
-        ),
-      )}
-    </svg>
-  );
-}
 
 /**
  * The watch window: pinned nodes, all visible at once, re-resolved for the pass
@@ -216,7 +109,12 @@ function WatchCard({
                 ) : (
                   <span className="llama-meta">not captured in this trace</span>
                 )}
-                {line && <Sparkline series={line} />}
+                {line && (
+                  <Sparkline
+                    points={line.points.map((p) => ({ x: p.passIndex, y: p.value }))}
+                    label={`${line.name} ${line.stat} over ${line.points.length} passes`}
+                  />
+                )}
                 <button
                   className="llama-linkbtn"
                   onClick={() => onUnpin(name)}
@@ -225,7 +123,13 @@ function WatchCard({
                   ✕
                 </button>
               </div>
-              {data && data.values.length > 0 && <ValueStrip data={data} />}
+              {data && data.values.length > 0 && (
+                <ValueStrip
+                  values={data.values}
+                  label={`${name} activations`}
+                  showPooling={false}
+                />
+              )}
               {data && <Stats summary={data.summary} />}
             </li>
           );
@@ -493,7 +397,7 @@ function RecordList({
                       title={pinned ? 'Stop watching' : 'Watch this node across passes'}
                       aria-pressed={pinned}
                     >
-                      {pinned ? '📌' : '📍'}
+                      {pinned ? <IconPin /> : <IconPinOff />}
                     </button>
                   </li>
                 );
@@ -519,6 +423,15 @@ function TraceView({ traceId }: { traceId: string }) {
   const [pins, setPins] = useState<string[]>([]);
   const [pinValues, setPinValues] = useState<Map<string, RecordValues>>(new Map());
   const [series, setSeries] = useState<Map<string, TraceSeries>>(new Map());
+  /**
+   * Which statistic the watch sparklines plot.
+   *
+   * `GET /traces/{id}/series` has always taken one of seven and `getTraceSeries`
+   * has always exposed the parameter; this call site simply never passed it, so
+   * `rms` was the only one reachable. `zeroFraction` across passes is the clearest
+   * activation-sparsity story in the module and was one query param away.
+   */
+  const [watchStat, setWatchStat] = useState<TraceStat>('rms');
   const [error, setError] = useState('');
 
   // Pins are keyed by model, not by trace: a watch is about the model's structure,
@@ -589,7 +502,7 @@ function TraceView({ traceId }: { traceId: string }) {
     let alive = true;
     void Promise.all(
       pins.map((name) =>
-        getTraceSeries(traceId, name)
+        getTraceSeries(traceId, name, watchStat)
           .then((s) => [name, s] as const)
           .catch(() => null),
       ),
@@ -600,7 +513,7 @@ function TraceView({ traceId }: { traceId: string }) {
     return () => {
       alive = false;
     };
-  }, [traceId, pins, records]);
+  }, [traceId, pins, records, watchStat]);
 
   const passes = useMemo(
     () => Array.from(new Set(detail?.records.map((r) => r.passIndex) ?? [])).sort((a, b) => a - b),
@@ -647,6 +560,25 @@ function TraceView({ traceId }: { traceId: string }) {
         </div>
       </div>
 
+      {pins.length > 0 && (
+        <div className="llama-row">
+          <label>
+            Watching
+            <select
+              value={watchStat}
+              onChange={(e) => setWatchStat(e.target.value as TraceStat)}
+            >
+              {TRACE_STATS.map((stat) => (
+                <option key={stat} value={stat}>
+                  {STAT_LABELS[stat]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <span className="llama-meta">across every pass in this trace</span>
+        </div>
+      )}
+
       <WatchCard
         pins={pins}
         records={detail.records}
@@ -657,6 +589,10 @@ function TraceView({ traceId }: { traceId: string }) {
         onClear={() => setPins(clearPins(model))}
         onSelect={setSelected}
       />
+
+      {/* The pass as a whole. One request per (pass, statistic) — the manifest
+          cannot answer it, see TraceProfile. */}
+      <TraceProfile traceId={traceId} passIndex={pass} onSelect={setSelected} />
 
       <RecordList
         records={detail.records}
@@ -680,7 +616,14 @@ function TraceView({ traceId }: { traceId: string }) {
             {values.record.layer !== null && <span>layer {values.record.layer}</span>}
             {values.truncated && <span>first {values.values.length} values</span>}
           </div>
-          <ValueStrip data={values} />
+          {values.values.length > 0 ? (
+            <ValueStrip values={values.values} label={`${values.record.name} activations`} />
+          ) : (
+            <p className="llama-note">
+              This record was stored as a <strong>summary</strong> — statistics instead of the
+              tensor. There are no values to draw.
+            </p>
+          )}
           <Stats summary={values.summary} />
         </div>
       )}

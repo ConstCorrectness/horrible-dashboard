@@ -35,6 +35,10 @@ pub const KEY_FULLSCREEN: &str = "hassault.video.fullscreen";
 pub const KEY_RENDER_SCALE: &str = "hassault.video.renderScale";
 pub const KEY_QUALITY: &str = "hassault.video.quality";
 pub const KEY_VSYNC: &str = "hassault.video.vsync";
+pub const KEY_FOV: &str = "hassault.video.fov";
+pub const KEY_ANTIALIAS: &str = "hassault.video.antialias";
+pub const KEY_SHADOWS: &str = "hassault.video.shadows";
+pub const KEY_FPS_LIMIT: &str = "hassault.video.fpsLimit";
 pub const KEY_CROSSHAIR_STYLE: &str = "hassault.crosshair.style";
 pub const KEY_CROSSHAIR_SIZE: &str = "hassault.crosshair.size";
 pub const KEY_CROSSHAIR_GAP: &str = "hassault.crosshair.gap";
@@ -86,25 +90,15 @@ impl Quality {
         }
     }
 
-    /// Multisample count — **1 or 4, and nothing else**.
+    /// Whether this level turns anti-aliasing on when a preset is applied.
     ///
-    /// Those are the only counts the WebGPU spec guarantees a format supports.
-    /// `2` looks like the obvious middle and is not: this device reports
-    /// `[1, 2, 4, 8]`, but only behind `TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES`
-    /// — a feature this client deliberately does not request, because asking for
-    /// more than the scene needs is how a client refuses to start on a perfectly
-    /// capable integrated GPU. Without it, 2× is a validation error at pipeline
-    /// creation, which is a **crash on the first frame**, not a slower one. It
-    /// was exactly that, until a real run found it.
-    ///
-    /// So Low and Medium share a sample count and differ in shading and fog
-    /// instead. That is not a placebo: the wash going off is the most visible
-    /// difference between any two levels here.
-    pub fn samples(self) -> u32 {
-        match self {
-            Quality::Low | Quality::Medium => 1,
-            Quality::High => 4,
-        }
+    /// Only a *default*: `Video::antialias` is the value the renderer reads, and
+    /// picking a preset is the only thing that writes this into it. Anti-aliasing
+    /// used to be derived from the quality level with no way to say otherwise,
+    /// which made the one setting with a measurable cost on an integrated GPU the
+    /// one setting nobody could turn off without also flattening the shading.
+    pub fn antialias(self) -> bool {
+        matches!(self, Quality::High)
     }
 
     /// The exponential-squared fog's density, in inverse cubes.
@@ -300,7 +294,80 @@ pub struct Video {
     /// a frame of queued latency is precisely what this client exists to avoid —
     /// but tearing is real, and somebody who can see it should be able to say so.
     pub vsync: bool,
+    /// Vertical field of view, in **degrees**, before the scope divides it.
+    ///
+    /// 75 is the browser pane's, so the default is the same picture on both
+    /// clients; the range is the one every shooter settled on. This is the knob
+    /// people go looking for first and the only one on this page that changes how
+    /// the game *plays* rather than how it looks — a wider view is more of the
+    /// room and a smaller enemy in it.
+    pub fov: f32,
+    /// 4× multisampling — **on or off, and nothing between**.
+    ///
+    /// 1 and 4 are the only counts the WebGPU spec guarantees a format supports.
+    /// `2` looks like the obvious middle and is not: this device reports
+    /// `[1, 2, 4, 8]`, but only behind `TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES`
+    /// — a feature this client deliberately does not request, because asking for
+    /// more than the scene needs is how a client refuses to start on a perfectly
+    /// capable integrated GPU. Without it, 2× is a validation error at pipeline
+    /// creation, which is a **crash on the first frame**, not a slower one. It
+    /// was exactly that, until a real run found it. So this is a `bool`: a field
+    /// that cannot hold 2 cannot be set to 2 by a future edit either.
+    pub antialias: bool,
+    /// Whether world surfaces sample the sun's shadow map.
+    ///
+    /// **This is a look, not a frame rate**, and saying so is the point. The map
+    /// is static and so is the sun, so `ShadowMap::new` bakes it once at load and
+    /// no per-frame pass is skipped by turning this off — all that changes is
+    /// whether the fragment shader takes the PCF taps. Offering it as a
+    /// performance setting would be the placebo this file's other comments keep
+    /// refusing to ship.
+    pub shadows: bool,
+    /// Frames per second to cap at, or **0 for uncapped**.
+    ///
+    /// Uncapped by default, which is the whole argument of the note on `MAX_DT`
+    /// in `app.rs`: the shortest path from an input to a photon is the point. But
+    /// uncapped on a laptop is a fan at full tilt and a thermal throttle a few
+    /// minutes in, which costs more frames than the cap would have — and unlike
+    /// vsync, a cap adds no queued latency, it only sleeps.
+    pub fps_limit: u32,
 }
+
+impl Video {
+    /// The multisample count the renderer builds every pipeline against.
+    ///
+    /// The one place the count is decided, so the pipelines, the scene texture
+    /// and the resolve target cannot disagree about it — a mismatch there is a
+    /// validation error at pipeline creation rather than a softer picture.
+    pub fn samples(self) -> u32 {
+        if self.antialias {
+            4
+        } else {
+            1
+        }
+    }
+
+    /// The presets, applied wholesale.
+    ///
+    /// Picking a quality level writes the individual knobs rather than shadowing
+    /// them, so the menu never shows `HIGH` next to a row that contradicts it.
+    /// Everything the level does not name — FOV, the frame cap, the render scale
+    /// — is deliberately left alone: those are preferences about the machine and
+    /// the player, not about how pretty the scene is.
+    pub fn apply_preset(&mut self, quality: Quality) {
+        self.quality = quality;
+        self.antialias = quality.antialias();
+    }
+}
+
+/// The FOV range, in degrees. Narrow enough that nobody can zoom out to a
+/// fish-eye that renders every enemy a pixel wide and calls it a setting.
+pub const FOV_RANGE: (f32, f32) = (70.0, 120.0);
+
+/// The frame caps offered, `0` being uncapped. Not a free-form number: the useful
+/// values are the refresh rates displays actually run at, plus one below all of
+/// them for a laptop that would rather stay quiet.
+pub const FPS_LIMITS: [u32; 6] = [0, 60, 120, 144, 240, 360];
 
 impl Default for Video {
     fn default() -> Video {
@@ -312,6 +379,10 @@ impl Default for Video {
             render_scale: 1.0,
             quality: Quality::default(),
             vsync: false,
+            fov: 75.0,
+            antialias: Quality::default().antialias(),
+            shadows: true,
+            fps_limit: 0,
         }
     }
 }
@@ -365,6 +436,28 @@ impl Settings {
         if let Some(v) = get(KEY_VSYNC).and_then(|v| v.as_bool()) {
             s.video.vsync = v;
         }
+        if let Some(v) = get(KEY_FOV).and_then(|v| v.as_f64()) {
+            s.video.fov = (v as f32).clamp(FOV_RANGE.0, FOV_RANGE.1);
+        }
+        // Read *after* the quality level, and that order is load-bearing: the
+        // level carries a default for this one, so a bag holding both would
+        // otherwise have the preset overwrite the explicit choice.
+        if let Some(v) = get(KEY_ANTIALIAS).and_then(|v| v.as_bool()) {
+            s.video.antialias = v;
+        }
+        if let Some(v) = get(KEY_SHADOWS).and_then(|v| v.as_bool()) {
+            s.video.shadows = v;
+        }
+        if let Some(v) = get(KEY_FPS_LIMIT).and_then(|v| v.as_i64()) {
+            // Snapped to the offered list rather than clamped: a cap of 37 is not
+            // wrong so much as meaningless, and honouring it would make the menu
+            // unable to show the value it is holding.
+            let want = v.max(0) as u32;
+            s.video.fps_limit = FPS_LIMITS
+                .into_iter()
+                .min_by_key(|c| c.abs_diff(want))
+                .unwrap_or(0);
+        }
         if let Some(v) = get(KEY_CROSSHAIR_STYLE).and_then(|v| v.as_str()) {
             s.crosshair.style = CrosshairStyle::parse(v);
         }
@@ -395,6 +488,10 @@ impl Settings {
             KEY_RENDER_SCALE => json!(self.video.render_scale),
             KEY_QUALITY => json!(self.video.quality.key()),
             KEY_VSYNC => json!(self.video.vsync),
+            KEY_FOV => json!(self.video.fov),
+            KEY_ANTIALIAS => json!(self.video.antialias),
+            KEY_SHADOWS => json!(self.video.shadows),
+            KEY_FPS_LIMIT => json!(self.video.fps_limit),
             KEY_CROSSHAIR_STYLE => json!(self.crosshair.style.key()),
             KEY_CROSSHAIR_SIZE => json!(self.crosshair.size),
             KEY_CROSSHAIR_GAP => json!(self.crosshair.gap),
@@ -556,20 +653,76 @@ mod tests {
     }
 
     #[test]
-    fn quality_only_asks_for_sample_counts_the_spec_guarantees() {
+    fn video_only_asks_for_sample_counts_the_spec_guarantees() {
         // **1 and 4 only.** Anything else needs
         // `TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES`, which this client does not
         // request, and a pipeline built with an unsupported count is a
         // validation error on the first frame rather than a slower one. A 2×
         // "middle" level crashed the client on a machine that reports
         // `[1, 2, 4, 8]` — the support list is not the guarantee.
-        for q in Quality::ALL {
+        //
+        // Now over the *setting* rather than over the quality level, because the
+        // level no longer decides it: `antialias` is its own row, and the row is
+        // where a 2 would get in.
+        for antialias in [true, false] {
+            let video = Video {
+                antialias,
+                ..Video::default()
+            };
             assert!(
-                matches!(q.samples(), 1 | 4),
-                "{:?} asked for {}",
-                q,
-                q.samples()
+                matches!(video.samples(), 1 | 4),
+                "antialias {antialias} asked for {}",
+                video.samples()
             );
         }
+    }
+
+    #[test]
+    fn a_preset_writes_the_rows_under_it_rather_than_shadowing_them() {
+        // The whole reason `apply` returns a list. If picking HIGH left
+        // `antialias` alone, the menu would show HIGH next to `ANTI-ALIASING
+        // OFF`; if it wrote it without reporting the key, the level would come
+        // back next session with the old sample count under it.
+        let mut video = Video::default();
+        video.apply_preset(Quality::High);
+        assert_eq!(video.quality, Quality::High);
+        assert!(video.antialias);
+        video.apply_preset(Quality::Low);
+        assert!(!video.antialias);
+    }
+
+    #[test]
+    fn an_explicit_antialias_survives_a_bag_that_also_names_a_quality() {
+        // Read order, and it is load-bearing: the level carries a default for
+        // this key, so reading them the other way round would have the preset
+        // quietly overwrite the choice the player actually made.
+        let s = Settings::from_values(&json!({
+            "hassault.video.quality": "high",
+            "hassault.video.antialias": false,
+        }));
+        assert_eq!(s.video.quality, Quality::High);
+        assert!(!s.video.antialias);
+        assert_eq!(s.video.samples(), 1);
+    }
+
+    #[test]
+    fn a_frame_cap_is_snapped_to_one_the_menu_can_show() {
+        // Honouring 37 would leave the menu holding a value none of its steps can
+        // reach, so the row would jump the first time it was touched.
+        let s = Settings::from_values(&json!({"hassault.video.fpsLimit": 37}));
+        assert!(FPS_LIMITS.contains(&s.video.fps_limit));
+        let s = Settings::from_values(&json!({"hassault.video.fpsLimit": 144}));
+        assert_eq!(s.video.fps_limit, 144);
+        // Negative is not a slow cap, it is nonsense; uncapped is the honest read.
+        let s = Settings::from_values(&json!({"hassault.video.fpsLimit": -5}));
+        assert_eq!(s.video.fps_limit, 0);
+    }
+
+    #[test]
+    fn a_saved_fov_is_clamped_rather_than_believed() {
+        let s = Settings::from_values(&json!({"hassault.video.fov": 400.0}));
+        assert_eq!(s.video.fov, FOV_RANGE.1);
+        let s = Settings::from_values(&json!({"hassault.video.fov": 10.0}));
+        assert_eq!(s.video.fov, FOV_RANGE.0);
     }
 }

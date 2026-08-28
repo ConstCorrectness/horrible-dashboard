@@ -288,26 +288,73 @@ pub struct Frame {
 /// Long enough to read the weapon, short enough that it is over before it costs
 /// you a gunfight — and it is interruptible anyway, so this is a maximum rather
 /// than a commitment.
-const INSPECT_DURATION: f32 = 1.35;
+const INSPECT_DURATION: f32 = 1.5;
+
+/// How long the pose takes to reach full weight, and to return.
+///
+/// The fall is longer than the rise on purpose: a flourish that snaps back to
+/// the aim faster than it left reads as being yanked away.
+const INSPECT_RISE: f32 = 0.30;
+const INSPECT_FALL: f32 = 0.46;
+
+/// The roll at full weight, before the turn adds to it, in radians.
+const INSPECT_ROLL: f32 = 2.15;
+
+/// How much further the weapon turns across the hold, in radians.
+///
+/// **This is the whole difference between an inspect and a freeze frame.** The
+/// pose used to be one scalar driving every axis, so the weapon travelled out,
+/// stopped dead for the ~0.7s of the hold, and retraced its path — which reads
+/// as a stutter rather than as somebody turning a weapon over. Keeping it
+/// rotating through the hold is what makes the same journey read as deliberate.
+const INSPECT_TURN: f32 = 0.85;
+
+/// How far the lift leads the roll, in seconds.
+///
+/// Every axis starting and stopping on the same frame is the signature of a
+/// single rigid transform, which is exactly what this is. Sixty milliseconds of
+/// lead costs nothing and buys the weapon coming up first and rolling over as it
+/// goes, instead of doing both as one motion.
+const INSPECT_LEAD: f32 = 0.06;
+
+/// Smootherstep — Perlin's, with a continuous second derivative.
+///
+/// Smoothstep's acceleration jumps at both ends; over a 0.3s rise that is a
+/// visible tick as the weapon leaves rest. This costs two more multiplies.
+fn ease(x: f32) -> f32 {
+    let x = x.clamp(0.0, 1.0);
+    // Clamped on the way out as well as in. The polynomial is monotonic on [0,1]
+    // and cannot exceed 1 algebraically, but in floats it lands just past it
+    // near the top — enough for a caller that trusts the range to scale a pose
+    // very slightly past the pose it was told about.
+    (x * x * x * (x * (x * 6.0 - 15.0) + 10.0)).clamp(0.0, 1.0)
+}
 
 /// The inspect pose's weight over its own duration: ease in, hold, ease out.
 ///
-/// Smoothstepped at both ends rather than linear. A linear ramp reverses
-/// direction instantly at the hold, which reads as the animation being cut off
-/// and restarted — the one thing a "look at this weapon" flourish must not do.
+/// Eased at both ends rather than linear. A linear ramp reverses direction
+/// instantly at the hold, which reads as the animation being cut off and
+/// restarted — the one thing a "look at this weapon" flourish must not do.
 fn inspect_envelope(t: f32) -> f32 {
-    const RISE: f32 = 0.28;
-    const FALL: f32 = 0.42;
-    let out = INSPECT_DURATION - FALL;
-    let x = if t < RISE {
-        t / RISE
+    let out = INSPECT_DURATION - INSPECT_FALL;
+    ease(if t < INSPECT_RISE {
+        t / INSPECT_RISE
     } else if t > out {
-        1.0 - (t - out) / FALL
+        1.0 - (t - out) / INSPECT_FALL
     } else {
         1.0
-    }
-    .clamp(0.0, 1.0);
-    x * x * (3.0 - 2.0 * x)
+    })
+}
+
+/// How far through the turn the weapon is, 0..1, monotonic across the whole
+/// animation.
+///
+/// Deliberately **not** the envelope: the envelope comes back down, and a roll
+/// driven by it unwinds along the path it wound up. This only ever climbs, so
+/// the weapon keeps turning the same way throughout — and because the roll is
+/// still *scaled* by the envelope, it lands back at rest anyway.
+fn inspect_turn(t: f32) -> f32 {
+    ease(t / INSPECT_DURATION)
 }
 
 /// One part of a weapon, in the model's own space.
@@ -511,16 +558,25 @@ impl WeaponViewModel {
         }
         // The envelope: in, hold, out. Advanced before it is read, so the frame
         // it completes on is the frame it is back at rest rather than one after.
-        let inspect = match self.inspect {
-            None => 0.0,
+        //
+        // Three numbers, not one: the weight (how much of the pose is applied),
+        // the lift (the same weight, run slightly ahead so the gun rises before
+        // it rolls) and the turn (monotonic, so the roll keeps going through the
+        // hold instead of freezing). See the constants above.
+        let (inspect, lift, turn) = match self.inspect {
+            None => (0.0, 0.0, 0.0),
             Some(t) => {
                 let t = t + dt;
                 if t >= INSPECT_DURATION {
                     self.inspect = None;
-                    0.0
+                    (0.0, 0.0, 0.0)
                 } else {
                     self.inspect = Some(t);
-                    inspect_envelope(t)
+                    (
+                        inspect_envelope(t),
+                        inspect_envelope(t + INSPECT_LEAD),
+                        inspect_turn(t),
+                    )
                 }
             }
         };
@@ -533,15 +589,23 @@ impl WeaponViewModel {
         // receiver — which is where a skin's pattern actually lives — faces the
         // camera. A pose that only lifted the gun would show the same face it
         // already shows.
+        //
+        // The translation rides `lift` and the rotation rides `inspect`, which
+        // is the lead: the weapon is already on its way up before it starts
+        // turning, and it finishes unrolling after it has come back down.
+        //
+        // The roll is `inspect * (ROLL + TURN * turn)` rather than `inspect *
+        // ROLL`. The envelope still scales it, so it starts and ends at rest;
+        // the turn is what keeps it moving in between.
         let position = Vec3::new(
-            HOME.x + bob_x + self.sway_x - inspect * 0.30,
-            HOME.y + bob_y + self.sway_y - self.reload_t * 0.55 + inspect * 0.16,
-            HOME.z + self.kick * 0.28 + inspect * 0.20,
+            HOME.x + bob_x + self.sway_x - lift * 0.30,
+            HOME.y + bob_y + self.sway_y - self.reload_t * 0.55 + lift * 0.16,
+            HOME.z + self.kick * 0.28 + lift * 0.20,
         );
         let rotation = Vec3::new(
             self.kick * -0.16 + self.reload_t * 0.7 + bob_y * 0.4 + inspect * 0.34,
             self.sway_x * 0.7 + self.reload_t * 0.25 - inspect * 0.95,
-            self.sway_x * 0.5 + bob_x * 0.6 + inspect * 2.15,
+            self.sway_x * 0.5 + bob_x * 0.6 + inspect * (INSPECT_ROLL + INSPECT_TURN * turn),
         );
         self.transform = Mat4::from_translation(position)
             * Mat4::from_euler(glam::EulerRot::XYZ, rotation.x, rotation.y, rotation.z);
@@ -1008,6 +1072,102 @@ mod tests {
             visible,
             move_speed: 22.0,
         }
+    }
+
+    /// Where the muzzle end of the drawn weapon is this frame.
+    ///
+    /// The pose is a transform on a pivot, so the only honest way to ask "did it
+    /// move" is to look at a point that has been through it.
+    fn tip(vm: &mut WeaponViewModel) -> Vec3 {
+        let mut out = Vec::new();
+        vm.vertices(&mut out);
+        let mut far = Vec3::ZERO;
+        for v in &out {
+            let p = Vec3::from(v.position);
+            if p.length() > far.length() {
+                far = p;
+            }
+        }
+        far
+    }
+
+    #[test]
+    fn an_inspect_never_stops_moving_partway_through() {
+        // The bug this pose was rebuilt for. It used to be one scalar driving
+        // every axis through an envelope that *holds*, so the weapon travelled
+        // out, froze for the length of the hold, and retraced its path — which
+        // reads as a stutter rather than as a weapon being turned over.
+        //
+        // Asserted on the drawn geometry rather than on the envelope, because
+        // the envelope still holds at 1.0 and is *supposed* to: what must not
+        // hold still is the weapon.
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("assault", None);
+        vm.update(0.016, &frame(true));
+        vm.inspect();
+
+        let mut previous = tip(&mut vm);
+        let mut still = 0;
+        let mut worst = 0;
+        let steps = (INSPECT_DURATION / 0.016) as i32 - 2;
+        for _ in 0..steps {
+            vm.update(0.016, &frame(true));
+            let now = tip(&mut vm);
+            if (now - previous).length() < 1e-4 {
+                still += 1;
+                worst = worst.max(still);
+            } else {
+                still = 0;
+            }
+            previous = now;
+        }
+        assert_eq!(
+            worst, 0,
+            "the weapon held still for {worst} frames mid-inspect"
+        );
+    }
+
+    #[test]
+    fn an_inspect_starts_and_ends_at_rest() {
+        // The other half: it has to *stop* moving at both ends, or the weapon
+        // snaps out of the aim and snaps back into it. `ease` is what buys this
+        // — the envelope's slope is zero at 0 and at 1.
+        assert_eq!(inspect_envelope(0.0), 0.0);
+        assert!(inspect_envelope(INSPECT_DURATION) <= 1e-6);
+        // And no step larger than the curve's own steepest, which is what tells
+        // a smooth ramp from a discontinuity. Smootherstep's peak slope is 15/8
+        // over its span, so the bound comes from the constants rather than from
+        // a number that would quietly stop meaning anything if the rise changed.
+        const DT: f32 = 0.016;
+        let steepest = 1.875 / INSPECT_RISE.min(INSPECT_FALL) * DT * 1.05;
+        let mut previous = 0.0;
+        let mut t = 0.0;
+        while t < INSPECT_DURATION {
+            let now = inspect_envelope(t);
+            assert!(
+                (now - previous).abs() <= steepest,
+                "the envelope jumped {:.3} at t={t:.3}, over the curve's own {steepest:.3}",
+                now - previous
+            );
+            previous = now;
+            t += DT;
+        }
+    }
+
+    #[test]
+    fn the_turn_only_ever_winds_one_way() {
+        // If the roll were driven by the envelope it would unwind along the path
+        // it wound up, which is the "played backwards" look. The turn climbs
+        // throughout; the envelope scaling it is what still lands it at rest.
+        let mut previous = -1.0;
+        let mut t = 0.0;
+        while t <= INSPECT_DURATION {
+            let now = inspect_turn(t);
+            assert!(now >= previous, "the turn reversed at t={t:.3}");
+            previous = now;
+            t += 0.016;
+        }
+        assert!(inspect_turn(INSPECT_DURATION) > 0.99);
     }
 
     fn drawn(vm: &mut WeaponViewModel) -> Vec<Vertex> {

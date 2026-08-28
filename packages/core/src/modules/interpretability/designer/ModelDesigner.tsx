@@ -61,6 +61,7 @@ import {
 import { Inspector } from './Inspector';
 import { autoLayout } from './layout';
 import { ModelCanvas } from './ModelCanvas';
+import { SplitPane } from '../../../SplitPane';
 import { Palette } from './Palette';
 import { ProbeBar } from './ProbeBar';
 import { TraceBar } from './TraceBar';
@@ -760,6 +761,17 @@ export function ModelDesigner() {
       )}
 
       <div className="mg-body">
+        {/* Two nested splits rather than one three-way. A three-way splitter needs a
+            size VECTOR and a policy for which neighbour absorbs a drag; nothing
+            in-pane needs that, and the two-way is the one the Inspect tab uses. */}
+        <SplitPane
+          id="mx.design.left"
+          side="start"
+          initial={176}
+          min={140}
+          minOther={420}
+          label="Palette width"
+        >
         <aside className="mg-left">
           <Palette
             specs={catalog?.nodes ?? []}
@@ -773,6 +785,14 @@ export function ModelDesigner() {
           />
         </aside>
 
+        <SplitPane
+          id="mx.design.right"
+          side="end"
+          initial={320}
+          min={240}
+          minOther={280}
+          label="Inspector width"
+        >
         <main className="mg-center">
           {imported && <ImportReport result={imported} onClose={() => setImported(null)} />}
           {scope.nodes.length === 0 ? (
@@ -854,6 +874,8 @@ export function ModelDesigner() {
             syncState={sync}
           />
         </aside>
+        </SplitPane>
+        </SplitPane>
       </div>
     </div>
   );

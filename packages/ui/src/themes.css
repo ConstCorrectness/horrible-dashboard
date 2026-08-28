@@ -68,6 +68,14 @@
   --warn: #e2c08d;
   --danger: #e06c75;
 
+  /* The diverging ramp. A signed quantity — an activation, a logit delta —
+     needs a cool end and a warm end, and `--accent` alone cannot express a
+     sign. These are the only two tokens whose job is to be READ as a
+     direction rather than as a status, which is why they are not `--accent`
+     and `--danger`: a negative activation is not an error. */
+  --ramp-pos: #6ebeff;
+  --ramp-neg: #ff8c78;
+
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 10px;
@@ -124,6 +132,14 @@
   --warn: #e2c08d;
   --danger: #e4676b;
 
+  /* The diverging ramp. A signed quantity — an activation, a logit delta —
+     needs a cool end and a warm end, and `--accent` alone cannot express a
+     sign. These are the only two tokens whose job is to be READ as a
+     direction rather than as a status, which is why they are not `--accent`
+     and `--danger`: a negative activation is not an error. */
+  --ramp-pos: #74b4ff;
+  --ramp-neg: #ff8f7f;
+
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 16px;
@@ -176,6 +192,14 @@
   --success: #5fd67a;
   --warn: #ffd08a;
   --danger: #ff7b83;
+
+  /* The diverging ramp. A signed quantity — an activation, a logit delta —
+     needs a cool end and a warm end, and `--accent` alone cannot express a
+     sign. These are the only two tokens whose job is to be READ as a
+     direction rather than as a status, which is why they are not `--accent`
+     and `--danger`: a negative activation is not an error. */
+  --ramp-pos: #7cc4ff;
+  --ramp-neg: #ff9a8a;
 
   --radius-sm: 8px;
   --radius-md: 12px;
@@ -231,6 +255,14 @@
   --success: #00e57a;
   --warn: #ffc400;
   --danger: #ff3860;
+
+  /* The diverging ramp. A signed quantity — an activation, a logit delta —
+     needs a cool end and a warm end, and `--accent` alone cannot express a
+     sign. These are the only two tokens whose job is to be READ as a
+     direction rather than as a status, which is why they are not `--accent`
+     and `--danger`: a negative activation is not an error. */
+  --ramp-pos: #00e5c0;
+  --ramp-neg: #ff4d9d;
 
   --radius-sm: 0;
   --radius-md: 0;
@@ -290,6 +322,14 @@
   --warn: #a25b00;
   --danger: #c02434;
 
+  /* The diverging ramp. A signed quantity — an activation, a logit delta —
+     needs a cool end and a warm end, and `--accent` alone cannot express a
+     sign. These are the only two tokens whose job is to be READ as a
+     direction rather than as a status, which is why they are not `--accent`
+     and `--danger`: a negative activation is not an error. */
+  --ramp-pos: #1b6fd0;
+  --ramp-neg: #c0392b;
+
   --radius-sm: 5px;
   --radius-md: 8px;
   --radius-lg: 12px;
@@ -338,6 +378,14 @@
   --success: #007800;
   --warn: #806000;
   --danger: #a00000;
+
+  /* The diverging ramp. A signed quantity — an activation, a logit delta —
+     needs a cool end and a warm end, and `--accent` alone cannot express a
+     sign. These are the only two tokens whose job is to be READ as a
+     direction rather than as a status, which is why they are not `--accent`
+     and `--danger`: a negative activation is not an error. */
+  --ramp-pos: #000080;
+  --ramp-neg: #a00000;
 
   --radius-sm: 0;
   --radius-md: 0;

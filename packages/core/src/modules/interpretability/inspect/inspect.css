@@ -1,0 +1,248 @@
+/*
+ * The Inspect canvas.
+ *
+ * Co-located with the component, following `designer/model-graph.css`. Everything
+ * is a scale token: this canvas sits beside a resizable splitter, so a literal size
+ * here is a size that stops being right the moment somebody drags the handle.
+ */
+
+.ix-canvas {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+.ix-bg {
+  background: var(--bg-inset);
+}
+
+/* ------------------------------------------------------------------- nodes --
+ *
+ * The accent arrives on a leading edge, not as a glow around the perimeter — the
+ * house rule from `datalist.css`. Here the edge is the TOP border, so a column of
+ * nodes reads as a stack of layers with a coloured seam between each.
+ */
+.ix-node {
+  width: 190px;
+  box-sizing: border-box;
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  /* A clipped corner instead of a rounded one: angular containers, per the
+     project's design notes, and it also marks the node's reading order corner. */
+  clip-path: polygon(0 0, 100% 0, 100% 100%, var(--space-4) 100%, 0 calc(100% - var(--space-4)));
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard);
+}
+
+.ix-node:hover {
+  background: var(--bg-hover);
+}
+
+.ix-on {
+  border-color: var(--accent);
+  border-top-color: var(--accent);
+  background: var(--bg-elevated);
+}
+
+/* Each stage's own seam colour, so the block's internals are distinguishable at a
+   zoom where the labels are not yet readable. */
+.ix-io {
+  border-top-color: var(--text-faint);
+}
+
+.ix-norm {
+  border-top-color: var(--text-dim);
+}
+
+.ix-attn {
+  border-top-color: var(--accent);
+}
+
+.ix-ffn {
+  border-top-color: var(--accent-2, var(--accent));
+}
+
+.ix-moe {
+  border-top-color: var(--warn);
+}
+
+.ix-stack {
+  width: 190px;
+  border-top-color: var(--text-strong);
+}
+
+.ix-label {
+  font-size: var(--fs-label);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-display);
+  color: var(--text-strong);
+  line-height: 1.25;
+}
+
+.ix-sub {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+}
+
+.ix-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin-top: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--text-faint);
+}
+
+.ix-warn {
+  color: var(--warn);
+}
+
+.ix-node .mx-heads {
+  width: 100%;
+  height: auto;
+  margin-top: var(--space-2);
+}
+
+/* Ports exist so React Flow can route an edge; they are not interactive here. */
+.ix-port {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ------------------------------------------------------------- the layer rail --
+ *
+ * The whole layer index inside one node. Height is the block's bytes; the band is
+ * its tensor-shape signature, so a model that alternates its attention shape
+ * (Gemma 4 does) draws as stripes rather than as a tooltip on a grey chip.
+ */
+.ix-rail {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: var(--space-7);
+  margin-top: var(--space-2);
+  padding-bottom: 1px;
+  border-bottom: 1px solid var(--border);
+}
+
+.ix-tick {
+  flex: 1 1 0;
+  min-width: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: color-mix(in srgb, var(--text-faint) 45%, transparent);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-standard);
+}
+
+.ix-tick:hover {
+  background: var(--text-dim);
+}
+
+/* Band 0 is the common shape and stays neutral; the others are the exceptions and
+   are what the eye should catch. Only two are coloured on purpose — a model with
+   more than three distinct block shapes is past what a colour scale can say, and
+   the "N distinct block shapes" fact carries it instead. */
+.ix-tick[data-band='1'] {
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.ix-tick[data-band='2'] {
+  background: color-mix(in srgb, var(--warn) 55%, transparent);
+}
+
+.ix-tick-on {
+  background: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-contrast);
+}
+
+.ix-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------- edges -- */
+.ix-edge .react-flow__edge-path {
+  stroke: var(--border-strong);
+  stroke-width: 1.4;
+}
+
+/* The residual. Dashed and in the accent because it is a SKIP — it bypasses the
+   chain it runs beside, and drawing it identically to the chain would say the
+   opposite. This connection had no representation at all in the old stack. */
+.ix-edge-residual .react-flow__edge-path {
+  stroke: var(--accent);
+  stroke-dasharray: 4 3;
+  stroke-width: 1.2;
+}
+
+.ix-edge-residual .react-flow__edge-text {
+  fill: var(--accent);
+  font-size: 11px;
+}
+
+/* ------------------------------------------------------------------- chrome -- */
+.ix-tools {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  z-index: 5;
+  display: flex;
+  gap: var(--space-2);
+}
+
+.ix-tools button {
+  height: 30px;
+  padding: 0 var(--space-5);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  color: var(--text);
+  font-size: var(--fs-meta);
+  cursor: pointer;
+}
+
+.ix-tools button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.ix-tools button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.ix-minimap {
+  background: var(--bg-inset);
+}
+
+.ix-minimap .react-flow__minimap-mask {
+  fill: color-mix(in srgb, var(--bg) 65%, transparent);
+}
+
+.ix-minimap .react-flow__minimap-node {
+  fill: var(--border-strong);
+}
+
+.react-flow__controls-button {
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+  fill: var(--text);
+}
+
+.react-flow__controls-button:hover {
+  background: var(--bg-hover);
+}

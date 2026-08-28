@@ -186,6 +186,42 @@ pub struct WeaponSpec {
     pub zoom_levels: Vec<f32>,
 }
 
+/// One thrown grenade's numbers, as `GET /api/hassault/tacticals` serves them.
+///
+/// **Fetched, never tabulated** — the `interval` / `zoom_levels` / `plane_order`
+/// precedent. The list arrives in *slot order* and the wire carries a slot
+/// index rather than an id, so the order is load-bearing: a local copy that
+/// drifted by one would throw a smoke where the player asked for a flash, with
+/// nothing anywhere reporting an error.
+#[allow(dead_code)] // The blast numbers land with a damage indicator, not here.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct TacticalSpec {
+    /// `he`, `flash`, `smoke`, `molotov` — the id `you.nades` is keyed by.
+    #[serde(default)]
+    pub id: String,
+    /// The name to put on the HUD.
+    #[serde(default)]
+    pub name: String,
+    /// The *kind*, which is not the id: the incendiary's id is `molotov` and its
+    /// kind is `fire`, and `nades.rs` tints by kind. Reading one for the other
+    /// draws the incendiary in the fallback colour.
+    #[serde(rename = "type", default)]
+    pub kind: String,
+    #[serde(rename = "fuseTime", default)]
+    pub fuse_time: f32,
+    /// Detonates on contact instead of on the fuse — the incendiary.
+    #[serde(default)]
+    pub impact: bool,
+    #[serde(default)]
+    pub radius: f32,
+    #[serde(default)]
+    pub duration: f32,
+    /// How many you spawn with. The HUD's tray counts down from this until the
+    /// first snapshot replaces it with the server's own count.
+    #[serde(default)]
+    pub carried: i32,
+}
+
 /// The body a shot is resolved against, as `GET /api/hassault/hitbox` serves it.
 ///
 /// **Fetched, never held locally.** This client used to draw bodies from three
@@ -397,6 +433,17 @@ impl NodeApi {
 
     pub fn weapons(&self) -> Result<Vec<WeaponSpec>, ApiError> {
         self.get("/api/hassault/weapons")?
+            .into_json()
+            .map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    /// The four grenades, in slot order.
+    ///
+    /// Non-fatal at the call site, like the loadout: a node that cannot answer
+    /// leaves the tray empty and the throw key doing nothing, which is a game
+    /// missing a mechanic rather than a client that will not start.
+    pub fn tacticals(&self) -> Result<Vec<TacticalSpec>, ApiError> {
+        self.get("/api/hassault/tacticals")?
             .into_json()
             .map_err(|e| ApiError::Decode(e.to_string()))
     }

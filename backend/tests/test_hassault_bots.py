@@ -18,6 +18,7 @@ import time
 import pytest
 
 from backend.modules.hassault import bots, weapons
+from backend.modules.hassault.bots import _wrap
 from backend.modules.hassault.cgz import SOLID
 from backend.modules.hassault.match import (
     MAX_PLAYERS,
@@ -320,6 +321,48 @@ def test_a_bot_steers_around_a_wall_instead_of_into_it():
     # stood there grinding against it.
     assert bot.state.x < 14.0
     assert math.dist((10.0, 10.0), (bot.state.x, bot.state.y)) > 1.0
+
+
+def test_a_roaming_bot_turns_to_face_where_it_is_walking():
+    """A bot with nobody to shoot at used to keep the yaw it spawned with for the
+    whole match — `yaw` was only ever assigned inside the `target is not None`
+    branch. It still reached its roam point, because movement is expressed in the
+    bot's own frame and the strafe axis carried it, so the bug was invisible on a
+    radar and unmistakable on screen: a body sliding sideways across the map,
+    facing one fixed direction. Every bot spawning level and most spawning
+    aligned made it read as a model that could not rotate at all."""
+    room = make_room()
+    bot = bots.add_bots(room, 1, team=0)[0]
+    place(bot, 10.0, 10.0, yaw=0.0)
+    bot.state.pitch = 0.8
+
+    # Short of `STUCK_WINDOW`: nothing here simulates physics, so the bot never
+    # actually moves and the stuck detector would otherwise fire, drop the roam
+    # point and turn the heading hard — which is correct behaviour and a
+    # different test than this one.
+    yaws = []
+    for _ in range(18):
+        command = bot.brain.think(room, bot, 1 / 20)
+        bot.state.yaw = command.yaw
+        bot.state.pitch = command.pitch
+        yaws.append(command.yaw)
+
+    assert len({round(y, 3) for y in yaws}) > 1, "yaw never moved while roaming"
+
+    # It ends up facing its roam point, and got there by turning rather than by
+    # snapping: no single frame may exceed the skill's turn rate.
+    limit = bot.brain.skill.turn_rate * (1 / 20)
+    steps = [abs(_wrap(b - a)) for a, b in zip(yaws, yaws[1:])]
+    assert max(steps) <= limit + 1e-6
+
+    assert bot.brain.roam is not None
+    bearing = math.atan2(
+        bot.brain.roam[1] - bot.state.y, bot.brain.roam[0] - bot.state.x
+    )
+    assert abs(_wrap(bot.state.yaw - bearing)) < 0.6
+
+    # And it stops staring at the floor it was aiming into when it lost the target.
+    assert bot.state.pitch < 0.1
 
 
 def test_roaming_heads_for_the_enemy_half():

@@ -317,6 +317,20 @@ class LaunchNativeRequest(BaseModel):
 
 
 class LaunchNativeResponse(BaseModel):
+    """The launch, which is a **job** and not a request — see `_LAUNCH_JOBS`.
+
+    `phase` is what makes that visible. A launch that has to compile the client
+    first takes minutes, and the response that used to be the only signal simply
+    did not arrive for all of them; the pane read that as a hang, and switching
+    tabs (which unmounts it) lost even the promise it was waiting on. So the POST
+    answers with a phase either way, and `GET /launch_native/status` hands the
+    same shape back to a pane that has just been remounted.
+    """
+
+    #: `starting`, `building`, `launched`, `failed`, or `idle` — the last only
+    #: from the status route, and meaning "nothing has been launched", which is a
+    #: different fact from a launch that failed.
+    phase: str = ""
     launched: bool
     pid: int | None = None
     connect_args: list[str] = []

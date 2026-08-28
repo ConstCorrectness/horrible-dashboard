@@ -29,7 +29,8 @@ import type {
   NativeClientStatus,
   SessionInfo,
 } from './api';
-import { installNativeClient, launchNativeFps, nativeClientStatus } from './api';
+import { installNativeClient, nativeClientStatus } from './api';
+import { useNativeLaunch } from './native-launch';
 import { describeControls, type Bindings } from './controls';
 import {
   ControlsPanel,
@@ -221,8 +222,14 @@ export function MainMenu(props: MainMenuProps) {
  * See docs/modules/hassault.mdx.
  */
 function NativeClientRow(props: MainMenuProps) {
-  const [launching, setLaunching] = useState(false);
-  const [status, setStatus] = useState<string | null>(null);
+  // The launch is a job on the node, not this component's promise. A build takes
+  // minutes and this row is unmounted the moment its tab loses focus, so
+  // awaiting it here meant the launch appeared to stop when it had not — see
+  // `native-launch.ts`.
+  const launcher = useNativeLaunch();
+  const launching = launcher.busy;
+  const [installStatus, setInstallStatus] = useState<string | null>(null);
+  const status = installStatus ?? launcher.message;
   const [client, setClient] = useState<NativeClientStatus | null>(null);
   const [installing, setInstalling] = useState(false);
   const [progress, setProgress] = useState<ClientInstallEvent | null>(null);
@@ -237,11 +244,11 @@ function NativeClientRow(props: MainMenuProps) {
 
   const install = async () => {
     setInstalling(true);
-    setStatus(null);
+    setInstallStatus(null);
     setProgress(null);
     try {
       const done = await installNativeClient(setProgress);
-      setStatus(
+      setInstallStatus(
         done.error
           ? done.error
           : done.verified
@@ -249,7 +256,7 @@ function NativeClientRow(props: MainMenuProps) {
             : 'Installed. GitHub published no digest for this asset, so it could not be verified.',
       );
     } catch (err) {
-      setStatus(err instanceof Error ? err.message : 'The install failed.');
+      setInstallStatus(err instanceof Error ? err.message : 'The install failed.');
     } finally {
       setInstalling(false);
       setProgress(null);
@@ -289,9 +296,15 @@ function NativeClientRow(props: MainMenuProps) {
               style={{
                 fontSize: '0.72rem',
                 // A pid is the one unambiguous signal it really started; anything
-                // else the route returns is a reason it didn't.
-                color:
-                  status.includes('PID') || status.startsWith('Installed')
+                // else the *finished* route returns is a reason it didn't.
+                //
+                // A launch still running is neither, and must not be red: a
+                // compile can take minutes, and telling somebody in danger red
+                // that their build is progressing normally is exactly the wrong
+                // reading of the state this row was built to make legible.
+                color: launcher.busy
+                  ? 'var(--text-secondary, #94a3b8)'
+                  : status.includes('PID') || status.startsWith('Installed')
                     ? 'var(--success, #4ade80)'
                     : 'var(--danger, #f87171)',
                 marginTop: '0.2rem',
@@ -309,33 +322,31 @@ function NativeClientRow(props: MainMenuProps) {
             {installing ? 'Installing…' : client?.installed ? 'Reinstall' : 'Install'}
           </button>
           <button
-            onClick={async () => {
-              setLaunching(true);
-              setStatus(null);
-              try {
-                const res = await launchNativeFps({
-                  // The room we are actually in, or none — the client asks the node
-                  // for a match on this map. `'session_host'` used to go here, which
-                  // named no room that has ever existed.
-                  // Explicitly a join, because this row is "open it once and see",
-                  // not "change how I play". Train and Host reach the same route
-                  // with their own mode when the setting above is on.
-                  mode: 'join',
-                  room_id: props.room,
-                  map_name: props.mapName,
-                  username: props.account?.username || undefined,
-                  max_fps: 240,
-                });
-                setStatus(res.message || (res.launched ? 'Launched' : 'Binary not found'));
-              } catch (err) {
-                setStatus(err instanceof Error ? err.message : 'Launch failed');
-              } finally {
-                setLaunching(false);
-              }
+            onClick={() => {
+              setInstallStatus(null);
+              void launcher.launch({
+                // The room we are actually in, or none — the client asks the node
+                // for a match on this map. `'session_host'` used to go here, which
+                // named no room that has ever existed.
+                // Explicitly a join, because this row is "open it once and see",
+                // not "change how I play". Train and Host reach the same route
+                // with their own mode when the setting above is on.
+                mode: 'join',
+                room_id: props.room,
+                map_name: props.mapName,
+                username: props.account?.username || undefined,
+                max_fps: 240,
+              });
             }}
             disabled={launching || installing}
           >
-            {launching ? 'Launching…' : 'Launch'}
+            {/* A build is minutes and a start is a moment; a button that said
+                "Launching…" for both is what read as a hang. */}
+            {launcher.result?.phase === 'building'
+              ? 'Compiling…'
+              : launching
+                ? 'Launching…'
+                : 'Launch'}
           </button>
         </div>
       </div>

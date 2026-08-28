@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { LayerPlan } from '../api';
-import { estimateOffload, maxFittingLayers, VRAM_RESERVE_BYTES } from '../offload';
+import { estimateOffload, maxFittingLayers, offloadColumns, VRAM_RESERVE_BYTES } from '../offload';
 
 const GB = 1024 ** 3;
 
@@ -92,5 +92,60 @@ describe('maxFittingLayers', () => {
 
   it('has no answer without a measured budget', () => {
     expect(maxFittingLayers(plan(), 0, null)).toBeNull();
+  });
+});
+
+describe('offloadColumns', () => {
+  it('returns a column per block plus one for the output tensors', () => {
+    const columns = offloadColumns(plan(), 0, 0);
+    expect(columns).toHaveLength(5);
+    expect(columns.map((c) => c.index)).toEqual([0, 1, 2, 3, -1]);
+  });
+
+  /* The rule this file's header is about: llama.cpp offloads from `n_layer -
+     n_gpu_layers` upward. Filling from the left would give the same total and mark
+     the wrong end of the stack. */
+  it('puts the LAST block on the GPU before the first', () => {
+    const columns = offloadColumns(plan(), 1, 0);
+    expect(columns.find((c) => c.index === 3)?.onGpu).toBe(true);
+    expect(columns.find((c) => c.index === 0)?.onGpu).toBe(false);
+  });
+
+  it('moves the output tensors only once N exceeds the block count', () => {
+    expect(offloadColumns(plan(), 4, 0).find((c) => c.index === -1)?.onGpu).toBe(false);
+    expect(offloadColumns(plan(), 5, 0).find((c) => c.index === -1)?.onGpu).toBe(true);
+  });
+
+  it('charges KV only to the blocks that are actually offloaded', () => {
+    const columns = offloadColumns(plan({ kvBytesPerToken: 4 * 1024 }), 2, 1024);
+    expect(columns.find((c) => c.index === 3)?.kvBytes).toBe(1024 * 1024);
+    expect(columns.find((c) => c.index === 0)?.kvBytes).toBe(0);
+  });
+
+  /* The cumulative series is the whole point of the chart: where it crosses the
+     budget is the block at which the model stops fitting. It must therefore
+     accumulate in OFFLOAD order even though the columns are returned in block
+     order, and it must not depend on where the slider currently sits. */
+  it('accumulates from the last block down, regardless of the slider', () => {
+    const columns = offloadColumns(plan(), 0, 0);
+    const byIndex = new Map(columns.map((c) => [c.index, c.cumulative]));
+    expect(byIndex.get(3)).toBe(GB);
+    expect(byIndex.get(2)).toBe(2 * GB);
+    expect(byIndex.get(0)).toBe(4 * GB);
+    // The output tensors are the last thing `-ngl 99` adds, so they cap the series.
+    expect(byIndex.get(-1)).toBe(6 * GB);
+    expect(offloadColumns(plan(), 4, 0).find((c) => c.index === 2)?.cumulative).toBe(2 * GB);
+  });
+
+  /* The chart and the legend must not disagree: the cumulative total at the last
+     column the slider has turned on is what `estimateOffload` reports for that N. */
+  it('agrees with estimateOffload at every slider position', () => {
+    const p = plan({ kvBytesPerToken: 4 * 1024 });
+    for (let n = 0; n <= 5; n += 1) {
+      const columns = offloadColumns(p, n, 1024);
+      const onGpu = columns.filter((c) => c.onGpu);
+      const total = onGpu.reduce((sum, c) => sum + c.weightBytes + c.kvBytes, 0);
+      expect(total).toBe(estimateOffload(p, n, 1024, null).gpuBytes);
+    }
   });
 });

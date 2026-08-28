@@ -84,6 +84,7 @@ pub const HONORED: &[&str] = &[
     "draw.crosshair.size",
     "draw.crosshair.style",
     "draw.crosshair.thickness",
+    "draw.fov",
     "draw.hitboxes",
     "net.graph",
     "player.sensitivity",
@@ -977,6 +978,17 @@ impl Console {
             format!("{pick} {}", rest.join(" "))
         };
         self.set_input(line);
+    }
+
+    /// Pick a completion by index — the mouse's half of `cycle_suggestion`.
+    ///
+    /// Bounds-checked rather than trusted: the index comes from a hit test
+    /// against a layout computed for a frame that has already been drawn, and
+    /// the suggestion list can be rebuilt by a keystroke in between.
+    pub fn select_suggestion(&mut self, index: usize) {
+        if index < self.suggestions.len() {
+            self.suggestion = index;
+        }
     }
 
     pub fn cycle_suggestion(&mut self, delta: i32) {

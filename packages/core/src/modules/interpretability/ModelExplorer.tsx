@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 
+import { SplitPane } from '../../SplitPane';
 import { useModelLocus } from '../../model-locus';
 import { ModelDesigner } from './designer/ModelDesigner';
+import { buildInspectGraph, inspectGraphKey } from './inspect/graph';
+import { HeadGrouping } from './inspect/HeadGrouping';
+import { InspectCanvas } from './inspect/InspectCanvas';
 
 import {
   interpretabilityStore,
-  type AttentionSpec,
   type ModelArchitecture,
   type ModelTensors,
   type TensorEntry,
@@ -63,61 +66,6 @@ const ATTENTION_LABEL: Record<string, string> = {
 interface Selection {
   stage: string;
   layer: number | null;
-}
-
-/**
- * Query heads drawn over the KV heads they share.
- *
- * The one part of a transformer whose cost isn't obvious from a number: "32 heads /
- * 8 KV heads" is a 4× smaller KV cache than full MHA, and seeing four query ticks
- * sitting on each KV block makes that immediate. Capped at a readable number of
- * groups — past that the pattern is established and the ratio label carries it.
- */
-function HeadGrouping({ attention }: { attention: AttentionSpec }) {
-  const kv = attention.kvHeads;
-  const ratio = attention.groupRatio;
-  if (!kv || !ratio) return null;
-
-  const width = 240;
-  const shown = Math.min(kv, 8);
-  const gap = 4;
-  const groupW = (width - gap * (shown - 1)) / shown;
-
-  return (
-    <svg
-      className="mx-heads"
-      viewBox={`0 0 ${width + 12} 18`}
-      role="img"
-      aria-label="Head grouping"
-    >
-      {Array.from({ length: shown }, (_, g) => {
-        const x = g * (groupW + gap);
-        const qCount = Math.min(ratio, 8);
-        const qW = Math.max(1.5, (groupW - (qCount - 1) * 1.5) / qCount);
-        return (
-          <g key={g}>
-            {Array.from({ length: qCount }, (_, q) => (
-              <rect
-                key={q}
-                x={x + q * (qW + 1.5)}
-                y={0}
-                width={qW}
-                height={7}
-                rx={1}
-                className="md-qhead"
-              />
-            ))}
-            <rect x={x} y={9} width={groupW} height={5} rx={1} className="md-kvhead" />
-          </g>
-        );
-      })}
-      {kv > shown && (
-        <text x={width + 4} y={12} className="md-micro">
-          …
-        </text>
-      )}
-    </svg>
-  );
 }
 
 /** A `<dl>` that omits rows whose value is unknown — a gap is never drawn as "—". */
@@ -190,39 +138,6 @@ function TensorTable({ tensors }: { tensors: TensorEntry[] }) {
   );
 }
 
-/** One clickable stage in the stack. */
-function StageRow({
-  label,
-  sub,
-  tone,
-  selected,
-  indent,
-  onSelect,
-  right,
-}: {
-  label: string;
-  sub?: string;
-  tone: string;
-  selected: boolean;
-  indent?: boolean;
-  onSelect: () => void;
-  right?: React.ReactNode;
-}) {
-  return (
-    <button
-      className={`mx-stage mx-tone-${tone}${selected ? ' mx-stage-on' : ''}${
-        indent ? ' mx-stage-in' : ''
-      }`}
-      onClick={onSelect}
-      aria-pressed={selected}
-    >
-      <span className="mx-stage-label">{label}</span>
-      {sub && <span className="mx-stage-sub">{sub}</span>}
-      {right && <span className="mx-stage-right">{right}</span>}
-    </button>
-  );
-}
-
 /**
  * Bytes a full KV cache occupies at a given context length.
  *
@@ -267,16 +182,25 @@ function ModelInspector() {
    */
   const locus = useModelLocus();
   const locusLayer = locus.layer;
+  /**
+   * Bumped only when the selection arrived from OUTSIDE, so the canvas can bring
+   * that node into view. A counter and not the layer itself: clicking layer 15 in
+   * the lens twice must re-centre, and a value-keyed effect would treat the second
+   * click as a no-op.
+   */
+  const [focusNonce, setFocusNonce] = useState(0);
   useEffect(() => {
     if (locusLayer == null) return;
     if (locusLayer < 0) {
       setSelection({ stage: 'embedding', layer: null });
+      setFocusNonce((n) => n + 1);
       return;
     }
     setSelection({ stage: 'block', layer: locusLayer });
     // Opening the block is the point: a selected block whose tensor list is
     // still collapsed looks like nothing happened.
     setLayerOpen(true);
+    setFocusNonce((n) => n + 1);
   }, [locusLayer]);
 
   /** Tensors grouped by (component, layer), computed once per inventory. */
@@ -333,6 +257,27 @@ function ModelInspector() {
       .map(([role, shapes]) => ({ role, shapes: [...shapes] }));
   }, [inventory]);
 
+  /**
+   * The drawing.
+   *
+   * Memoized on a STRUCTURAL key, never on object identity: the interpretability
+   * store refetches on a schedule and an identical refetch produces a new object
+   * every time, so identity-keyed memos would rebuild every node on every poll —
+   * and React Flow, handed new node objects, drops the viewport mid-pan.
+   */
+  const graphKey = inspectGraphKey(arch, inventory, selection, layerOpen);
+  const graph = useMemo(
+    () =>
+      arch
+        ? buildInspectGraph(arch, inventory, selection, layerOpen)
+        : { nodes: [], edges: [], focusId: null },
+    // `graphKey` is the ONLY dependency, by design. `useMemo` runs during render,
+    // so the values read here are always current — the deliberate choice is not to
+    // recompute when they change identity without changing what is drawn. If a
+    // newly-drawn field is ever added above, it has to be added to the key too.
+    [graphKey]
+  );
+
   const selectedBytes = useMemo(
     () => selected.reduce((sum, t) => sum + (t.byteSize ?? 0), 0),
     [selected],
@@ -355,11 +300,6 @@ function ModelInspector() {
   }
 
   const attn = arch.attention;
-  const layers = arch.layers;
-  const pick = (stage: string, layer: number | null = selection.layer) =>
-    setSelection({ stage, layer });
-  const isOn = (stage: string, layer: number | null = selection.layer) =>
-    selection.stage === stage && selection.layer === layer;
 
   const sourceChip =
     arch.source === 'ollama' ? (
@@ -392,144 +332,37 @@ function ModelInspector() {
       </div>
 
       <div className="mx-body">
-        {/* ── The stack ───────────────────────────────────────────────── */}
-        <div className="mx-stack">
-          <StageRow
-            label="Model"
-            sub={`${fmtCount(arch.parameterCount ?? inventory?.totalParameters ?? null)} params`}
-            tone="io"
-            selected={isOn('model', selection.layer)}
-            onSelect={() => setSelection({ stage: 'model', layer: null })}
-          />
-          <div className="mx-flow" />
-          <StageRow
-            label="Token embedding"
-            sub={`${fmtCount(arch.vocabSize)} vocab × ${arch.hiddenSize ?? '—'}`}
-            tone="io"
-            selected={isOn('embedding', null)}
-            onSelect={() => setSelection({ stage: 'embedding', layer: null })}
-          />
-          <div className="mx-flow" />
-
-          <div className="mx-blockframe">
-            <div className="mx-blockhead">
-              <button
-                className="mx-blocktoggle"
-                onClick={() => setLayerOpen((v) => !v)}
-                aria-expanded={layerOpen}
-                disabled={!layers}
-              >
-                {layerOpen ? '▾' : '▸'} Decoder block{' '}
-                <b>× {layers ?? inventory?.layerCount ?? '?'}</b>
-              </button>
-              {nonUniform.length > 0 && (
-                <span
-                  className="interp-approx-chip"
-                  title={
-                    'These blocks are not identical — the head counts and sizes shown ' +
-                    'here describe some layers and not others. Pick a specific block to ' +
-                    'see its real tensors.'
-                  }
-                >
-                  varies
-                </span>
-              )}
-              {selection.layer !== null && (
-                <button
-                  className="mx-clear"
-                  onClick={() => setSelection((s) => ({ ...s, layer: null }))}
-                >
-                  layer {selection.layer} ✕
-                </button>
-              )}
-            </div>
-
-            {layerOpen && layers ? (
-              <div className="mx-layers">
-                {Array.from({ length: layers }, (_, i) => (
-                  <button
-                    key={i}
-                    className={`mx-layer${selection.layer === i ? ' mx-layer-on' : ''}`}
-                    onClick={() => setSelection((s) => ({ ...s, layer: i }))}
-                    title={`Block ${i}`}
-                  >
-                    {i}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-
-            {arch.normType && (
-              <StageRow
-                label={arch.normType === 'rmsnorm' ? 'RMSNorm' : arch.normType}
-                tone="norm"
-                indent
-                selected={isOn('norm')}
-                onSelect={() => pick('norm')}
-              />
-            )}
-            {attn && (
-              <StageRow
-                label={ATTENTION_LABEL[attn.kind] ?? 'Attention'}
-                sub={
-                  `${attn.heads ?? '—'} heads` +
-                  (attn.kvHeads != null && attn.kvHeads !== attn.heads
-                    ? ` / ${attn.kvHeads} KV`
-                    : '') +
-                  (attn.headDim ? ` · dim ${attn.headDimDerived ? '~' : ''}${attn.headDim}` : '')
-                }
-                tone="attn"
-                indent
-                selected={isOn('attention')}
-                onSelect={() => pick('attention')}
-              />
-            )}
-            <div className="md-residual mx-residual">⊕ residual</div>
-            {arch.moe ? (
-              <StageRow
-                label="Mixture of experts"
-                sub={`top-${arch.moe.expertsPerToken} of ${arch.moe.experts}${
-                  arch.moe.activeFraction != null
-                    ? ` · ${Math.round(arch.moe.activeFraction * 100)}% active`
-                    : ''
-                }`}
-                tone="moe"
-                indent
-                selected={isOn('moe')}
-                onSelect={() => pick('moe')}
-              />
-            ) : (
-              <StageRow
-                label="Feed-forward"
-                sub={
-                  arch.ffn?.intermediateSize
-                    ? `${arch.hiddenSize ?? '—'} → ${arch.ffn.intermediateSize}${
-                        arch.ffn.gated === true ? ' (gated)' : ''
-                      }`
-                    : undefined
-                }
-                tone="ffn"
-                indent
-                selected={isOn('ffn')}
-                onSelect={() => pick('ffn')}
-              />
-            )}
-            <div className="md-residual mx-residual">⊕ residual</div>
-          </div>
-
-          <div className="mx-flow" />
-          <StageRow
-            label="Output head"
-            sub={
-              arch.tiedEmbeddings === true
-                ? 'tied to embedding'
-                : `→ ${fmtCount(arch.vocabSize)} logits`
-            }
-            tone="io"
-            selected={isOn('output', null)}
-            onSelect={() => setSelection({ stage: 'output', layer: null })}
-          />
-        </div>
+        <SplitPane
+          id="mx.inspect"
+          initial={260}
+          min={190}
+          minOther={320}
+          narrowBelow={720}
+          label="Diagram width"
+        >
+        {/* ── The architecture ────────────────────────────────────────
+            Was a vertical stack of buttons in a 260px CSS grid column: it could
+            not be resized, could not be zoomed, and drew the residual as a text
+            row that connected nothing. `Selection` is unchanged and still the
+            source of truth — the canvas is a projection of it, which is why the
+            model-locus effect above needed no edit. */}
+        <InspectCanvas
+          graph={graph}
+          selection={selection}
+          onSelect={(next) => {
+            setSelection(next);
+            // Clicking the stack means "show me inside this block". The old UI had
+            // a separate disclosure triangle for that; the canvas has the node
+            // itself, and a click that selected the stack without opening it would
+            // leave the internals unreachable.
+            if (next.stage === 'block') setLayerOpen((open) => !open || selection.stage !== 'block');
+          }}
+          onPickLayer={(layer) => {
+            setSelection({ stage: 'block', layer });
+            setLayerOpen(true);
+          }}
+          focusNonce={focusNonce}
+        />
 
         {/* ── Detail for the selection ────────────────────────────────── */}
         <div className="mx-detail">
@@ -692,6 +525,7 @@ function ModelInspector() {
             </div>
           )}
         </div>
+        </SplitPane>
       </div>
     </div>
   );

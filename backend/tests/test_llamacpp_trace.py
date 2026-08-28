@@ -518,6 +518,148 @@ def test_series_404s_for_a_node_this_trace_never_captured(client) -> None:
     )
 
 
+def _profile_trace(trace_id: str = "prof") -> None:
+    """One pass, one role at three depths, plus a layerless node and a `summary`
+    record that carries no statistic — every case the profile has to distinguish."""
+    directory = traces.traces_root() / trace_id
+    writer = traces.TraceWriter(
+        directory,
+        {
+            "traceId": trace_id,
+            "modelSha": "abc",
+            "llamaBuild": "b",
+            "byteOrder": "little",
+        },
+    )
+    for layer, values in ((0, (1.0, 1.0)), (1, (2.0, 2.0))):
+        writer.append(
+            name=f"l_out-{layer}",
+            op="ADD",
+            dtype="f32",
+            ne=[2, 1, 1, 1],
+            nb=[4, 8, 0, 0],
+            pass_index=0,
+            fidelity="full",
+            payload=struct.pack("<2f", *values),
+        )
+    writer.append(
+        name="l_out-2",
+        op="ADD",
+        dtype="f32",
+        ne=[2, 1, 1, 1],
+        nb=[4, 8, 0, 0],
+        pass_index=0,
+        fidelity="summary",
+        summary={},
+    )
+    writer.append(
+        name="inp_embd",
+        op="GET_ROWS",
+        dtype="f32",
+        ne=[2, 1, 1, 1],
+        nb=[4, 8, 0, 0],
+        pass_index=0,
+        fidelity="full",
+        payload=struct.pack("<2f", 5.0, 5.0),
+    )
+    writer.close([])
+
+
+def test_profile_reports_every_record_of_the_pass(client) -> None:
+    _profile_trace()
+    body = client.get(
+        "/api/llamacpp/traces/prof/profile", params={"stat": "rms"}
+    ).json()
+
+    assert [p["name"] for p in body["points"]] == [
+        "l_out-0",
+        "l_out-1",
+        "l_out-2",
+        "inp_embd",
+    ]
+    assert body["points"][0]["value"] == pytest.approx(1.0)
+    assert body["points"][1]["value"] == pytest.approx(2.0)
+    # The layerless node is reported, not filtered — the client decides which axis
+    # it belongs on, and dropping it here would hide a real capture.
+    assert body["points"][3]["layer"] is None
+
+
+def test_profile_is_the_route_because_the_manifest_carries_no_statistics(
+    client,
+) -> None:
+    """The reason this route exists at all. `tracer._capture` writes `summary` only
+    for `summary`-fidelity records, so on a real fp16 trace the record list a client
+    already holds carries every record and *zero* statistics — a profile computed
+    from it renders empty and blames the fidelity."""
+    _profile_trace()
+    records = client.get("/api/llamacpp/traces/prof").json()["records"]
+    measured = [r for r in records if r["fidelity"] != "summary"]
+    assert measured, "the fixture must contain records with data"
+    assert all(not r["summary"] for r in measured)
+
+    body = client.get("/api/llamacpp/traces/prof/profile").json()
+    assert [p["value"] for p in body["points"][:2]] == [
+        pytest.approx(1.0),
+        pytest.approx(2.0),
+    ]
+
+
+def test_profile_leaves_an_unmeasurable_record_as_a_gap(client) -> None:
+    """A `summary` record with no stored statistic has nothing to report. 0.0 would
+    draw a plunge to zero that never happened, and would drag the row's colour
+    scale with it."""
+    _profile_trace()
+    body = client.get("/api/llamacpp/traces/prof/profile").json()
+    gap = body["points"][2]
+    assert gap["name"] == "l_out-2"
+    assert gap["value"] is None
+    assert gap["fidelity"] == "summary"
+
+
+def test_profile_summarizes_the_whole_record_not_a_prefix(client) -> None:
+    """Same rule as the series, one axis over: a profile compares a node against
+    itself across depth, and `get_record` caps because it ships values to a
+    browser."""
+    write_trace()
+    capped = client.get("/api/llamacpp/traces/t1/record/0?limit=2").json()
+    assert capped["summary"]["absMax"] == 2.0  # only saw 1.0, -2.0
+
+    body = client.get(
+        "/api/llamacpp/traces/t1/profile", params={"stat": "absMax"}
+    ).json()
+    assert body["points"][0]["name"] == "inp_embd"
+    assert body["points"][0]["value"] == pytest.approx(3.5)
+
+
+def test_profile_404s_for_a_pass_this_trace_does_not_have(client) -> None:
+    _profile_trace()
+    assert (
+        client.get(
+            "/api/llamacpp/traces/prof/profile", params={"passIndex": 9}
+        ).status_code
+        == 404
+    )
+
+
+def test_summarize_array_still_computes_what_the_python_loop_did(client) -> None:
+    """`summarize_array` is now the one implementation and `summarize` delegates to
+    it, so the profile route and a record detail cannot report different numbers for
+    the same tensor. The expected values are written out rather than compared
+    against the other function, which would only prove the delegation exists."""
+    values = [1.0, -2.0, 3.5, 0.0]
+    summary = traces.summarize(values)
+    assert summary["count"] == 4.0
+    assert summary["min"] == pytest.approx(-2.0)
+    assert summary["max"] == pytest.approx(3.5)
+    assert summary["mean"] == pytest.approx(2.5 / 4)
+    assert summary["rms"] == pytest.approx(((1 + 4 + 12.25) / 4) ** 0.5)
+    assert summary["absMax"] == pytest.approx(3.5)
+    assert summary["zeroFraction"] == pytest.approx(0.25)
+    # Nothing measured stays nothing measured — not a bag of zeros.
+    assert traces.summarize([]) == {}
+    assert traces.summarize_array([]) == {}
+
+
 def test_missing_trace_and_record_are_404(client) -> None:
     assert client.get("/api/llamacpp/traces/nope").status_code == 404
     write_trace()

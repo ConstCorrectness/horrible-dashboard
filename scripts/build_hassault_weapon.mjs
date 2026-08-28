@@ -133,6 +133,7 @@ function parseArgs(argv) {
     length: 2.5,
     forward: null,
     grip: 'rear',
+    exclude: [],
     textureSize: 1024,
     textureFormat: 'webp',
     inspect: false,
@@ -162,6 +163,9 @@ function parseArgs(argv) {
         break;
       case '--grip':
         opts.grip = next();
+        break;
+      case '--exclude':
+        opts.exclude.push(next());
         break;
       case '--texture-size':
         opts.textureSize = Number(next());
@@ -195,6 +199,8 @@ build_hassault_weapon.mjs — a downloaded weapon model into a hassault prop GLB
   --forward <+-xyz>      Which way the barrel points in the source file.
                          REQUIRED: a bounding box cannot tell you the sign
   --grip <rear|centre>   Where the origin goes (default rear — roughly the grip)
+  --exclude <regex>      Drop meshes whose object or material name matches.
+                         Repeatable. Applied before anything is measured
   --texture-size <px>    Longest edge; 0 to leave alone (default 1024)
   --texture-format <fmt> webp | png | jpeg (default webp)
   --inspect              Measure and report, write nothing
@@ -204,7 +210,31 @@ count and which textures matched which slot, which is everything you need to
 choose --length and --forward.
 `;
 
-/** Every image file under a textures directory, by lowercased stem. */
+/**
+ * A trailing UDIM tile index, as Substance Painter and Mari write it.
+ *
+ * `1001` is the first tile and the numbering runs up from there, so a bare
+ * four-digit number in that range at the end of a stem is a tile and not part of
+ * the name. Anything below 1001 is left alone: `Barrel_0110` is a variant id.
+ */
+const UDIM_TILE = /_(1[0-9]{3}|[2-9][0-9]{3})$/;
+
+/**
+ * Every image file under a textures directory, by lowercased stem.
+ *
+ * The stem has any UDIM tile stripped, and that strip is the difference between
+ * this model having textures and not. Every pattern in `MAP_PATTERNS` is
+ * anchored to the **end** of the stem — deliberately, so that
+ * `M4_Colour_Variant_Normal` is a normal map — and the M4A1's maps are named
+ * `Carbine_M4A1_0110_Base_color_1001`. The tile sits *after* the map suffix, so
+ * every one of its 67 files failed every anchored pattern and the whole model
+ * matched **zero** sets.
+ *
+ * That failure is quiet in the worst way. The script reports the unmatched files
+ * and carries on, the export succeeds, and the weapon renders flat grey — which
+ * reads as a lighting bug in the game rather than as a converter that found no
+ * textures, because a weapon with no maps still has a shape.
+ */
 function textureFiles(dir) {
   if (!dir || !existsSync(dir)) return [];
   return readdirSync(dir)
@@ -212,7 +242,7 @@ function textureFiles(dir) {
     .map((name) => ({
       name,
       path: join(dir, name),
-      stem: basename(name, extname(name)),
+      stem: basename(name, extname(name)).replace(UDIM_TILE, ''),
     }));
 }
 
@@ -421,6 +451,51 @@ async function main() {
   const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
   const root = new FBXLoader().parse(ab, `${dirname(fbxFile)}/`);
   await Promise.all(pending);
+
+  // -- prune ----------------------------------------------------------------
+  //
+  // Before the measure, not after, and that ordering is the whole point of the
+  // flag. `--length` is derived from the longest side of the bounding box and
+  // the muzzle is read back off its front face (`fitWeaponModel` takes the
+  // model's `min.z`), so one stray mesh sitting outside the weapon corrupts
+  // *both*: the M4A1 carries a loose cartridge floating past its flash hider,
+  // which made the rifle itself 6% shorter than the stated length and put the
+  // muzzle flash out in front of the barrel, in mid-air.
+  //
+  // Matched against the object name *and* the material name because these
+  // downloads name their objects nothing at all — the M4A1's are
+  // `mesh1.dat.desirefx.me_out` — while their materials are descriptive
+  // (`Carbine_M4A1_Bullet_01`). Anchor with `$` when a name is a prefix of its
+  // siblings: `Bullet_01$` is the loose round, `Bullet_01` is also the four in
+  // the magazine.
+  if (opts.exclude.length) {
+    const patterns = opts.exclude.map((p) => new RegExp(p, 'i'));
+    const matches = (name) => !!name && patterns.some((re) => re.test(name));
+    const dropped = [];
+    root.traverse((obj) => {
+      if (!obj.isMesh) return;
+      const names = [obj.name, ...(Array.isArray(obj.material) ? obj.material : [obj.material]).map((m) => m?.name)];
+      if (names.some(matches)) dropped.push(obj);
+    });
+    for (const obj of dropped) obj.removeFromParent();
+    // Reported by count *and* by name, and a pattern that matched nothing is an
+    // error rather than a shrug: an exclusion is stated because something is
+    // known to be in the way, so a typo that silently excludes nothing would
+    // hand back the exact model the flag was passed to avoid.
+    for (const re of patterns) {
+      if (!dropped.some((o) => matches(o.name) || (Array.isArray(o.material) ? o.material : [o.material]).some((m) => re.test(m?.name ?? '')))) {
+        throw new Error(
+          `--exclude ${re.source} matched no mesh.
+` +
+            'Run with --inspect to list the materials this file actually carries.',
+        );
+      }
+    }
+    console.log(
+      `excluded   ${dropped.length} mesh(es): ` +
+        dropped.map((o) => (Array.isArray(o.material) ? o.material[0]?.name : o.material?.name) || o.name).join(', '),
+    );
+  }
 
   // -- measure --------------------------------------------------------------
 

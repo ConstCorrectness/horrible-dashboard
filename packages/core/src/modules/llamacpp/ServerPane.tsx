@@ -1,6 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { usePaneSection } from '../../layout/use-sections';
+import { ProgressBar } from '../../viz/ProgressBar';
+import { RollingCounter } from '../../viz/RollingCounter';
+import { Meter } from '../../viz/Meter';
+import { MachineBand } from './MachineBand';
+import { QuantScatter } from './QuantScatter';
 import { getHardware, refreshHardware, type Hardware } from '../hardware/api';
 import {
   deleteModel,
@@ -12,6 +17,7 @@ import {
   getLlamaStatus,
   getRepoFiles,
   installServer,
+  removeInstall,
   startServer,
   stopServer,
   type LlamaStatus,
@@ -37,29 +43,27 @@ import { TracesSection } from './TracesSection';
  * server as running while the model list still offers to delete what it loaded.
  */
 
-function pct(p: Progress): number | null {
-  if (!p.total || !p.completed) return null;
-  return Math.min(100, Math.round((p.completed / p.total) * 100));
-}
-
-function ProgressBar({ progress }: { progress: Progress }) {
-  const value = pct(progress);
+/**
+ * The shared progress bar, fed llama.cpp's NDJSON frames.
+ *
+ * `rate` is on for both call sites because both are downloads measured in bytes —
+ * an unpacked build is ~200 MB and a GGUF can be forty times that, and a bar with
+ * only a percentage gives no way to decide whether to wait for it.
+ */
+function Progressing({ progress }: { progress: Progress }) {
   return (
-    <div className="llama-progress">
-      <div className="llama-progress-track">
-        <div
-          className={`llama-progress-fill${value === null ? ' llama-progress-idle' : ''}`}
-          style={value === null ? undefined : { width: `${value}%` }}
-        />
-      </div>
-      <span className="llama-progress-label">
-        {progress.status ?? 'working'}
-        {value !== null ? ` · ${value}%` : ''}
-        {progress.total
-          ? ` · ${formatBytes(progress.completed ?? 0)} / ${formatBytes(progress.total)}`
-          : ''}
-      </span>
-    </div>
+    <ProgressBar
+      completed={progress.completed}
+      total={progress.total}
+      status={progress.status}
+      detail={
+        progress.total
+          ? `${formatBytes(progress.completed ?? 0)} / ${formatBytes(progress.total)}`
+          : undefined
+      }
+      rate
+      formatRate={formatBytes}
+    />
   );
 }
 
@@ -70,55 +74,64 @@ function tuned(value: number | undefined): string {
 }
 
 /**
- * What the machine is, above the controls that depend on it.
+ * Uptime, at the resolution a person actually reads.
  *
- * The probe's findings used to live only in Settings, three clicks from the form
- * whose defaults they decide. Rendering the reading here is what makes a CPU build
- * on a machine with a card explicable rather than mysterious.
- *
- * The rule inherited from the hardware module: **"unknown" is never drawn as
- * "none"** — an absent `nvidia-smi` and an absent GPU are different facts.
+ * Coarsens as it grows: seconds matter while you are waiting for a model to load,
+ * and nobody reads the seconds off a server that has been up for two days.
  */
-function MachineLine({
-  hardware,
-  onReprobe,
-}: {
-  hardware: Hardware | null;
-  onReprobe: () => void;
-}) {
-  if (!hardware) return null;
-  const { profile } = hardware;
-  const primary = profile.primary;
+function formatDuration(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  if (total < 60) return `${total}s`;
+  const minutes = Math.floor(total / 60);
+  if (minutes < 60) return `${minutes}m ${total % 60}s`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${minutes % 60}m`;
+  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+}
+
+/**
+ * Spawned → loading → ready, as three states rather than one sentence.
+ *
+ * `running` and `ready` are separate fields for a real reason: `llama-server`
+ * binds its port and then spends tens of seconds mapping a large GGUF, and every
+ * request in that window fails. Collapsing them made a normal load look broken and
+ * gave no way to tell it apart from a server that is genuinely stuck.
+ */
+function ReadyStrip({ status }: { status: LlamaStatus }) {
+  const failed = !!status.error;
+  const stage = failed ? 'error' : status.ready ? 'ready' : 'loading';
+  const steps: { id: string; label: string }[] = [
+    { id: 'spawned', label: 'Process up' },
+    { id: 'loading', label: 'Mapping weights' },
+    { id: 'ready', label: 'Answering' },
+  ];
+  const reached = stage === 'ready' ? 3 : 2;
+
   return (
-    <p className="llama-machine">
-      {primary ? (
-        <>
-          <span className="llama-dot llama-dot-on" />
-          <b>{primary.name}</b>
-          {primary.vramMb !== null && (
-            <>
-              {' · '}
-              {(primary.vramMb / 1024).toFixed(primary.vramMb >= 10_240 ? 0 : 1)} GB
-              {primary.unified ? ' unified' : ' VRAM'}
-            </>
-          )}
-        </>
-      ) : profile.certain ? (
-        <>
-          <span className="llama-dot" />
-          No accelerator — this machine runs on its CPU.
-        </>
-      ) : (
-        <>
-          <span className="llama-dot" />
-          <b>Accelerator unknown</b> — the probe could not ask, which is not the same as none.
-        </>
+    <div className="llama-ready" data-stage={stage}>
+      <ol>
+        {steps.map((step, index) => (
+          <li
+            key={step.id}
+            className={
+              failed && index === reached - 1
+                ? 'llama-ready-bad'
+                : index < reached
+                  ? 'llama-ready-on'
+                  : ''
+            }
+          >
+            <span className="llama-dot" />
+            {step.label}
+          </li>
+        ))}
+      </ol>
+      {stage === 'loading' && !failed && (
+        <span className="llama-meta">
+          The port is open and requests will fail until this finishes.
+        </span>
       )}
-      {profile.overridden && <span className="llama-tag">your override</span>}
-      <button className="llama-linkbtn" onClick={onReprobe}>
-        Re-probe
-      </button>
-    </p>
+    </div>
   );
 }
 
@@ -211,6 +224,19 @@ function ServerSection({
     }
   };
 
+  const removeBuild = async (tag: string, variant: string) => {
+    setBusy(true);
+    setError('');
+    try {
+      await removeInstall(tag, variant);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+      refresh();
+    }
+  };
+
   const stop = async () => {
     setBusy(true);
     try {
@@ -225,9 +251,14 @@ function ServerSection({
 
   return (
     <div className="llama-section">
+      {/* The machine is its own card above the build, not a line inside it: the
+          build is chosen FOR the machine, so the reading has to come first. */}
+      <div className="llama-card">
+        <MachineBand hardware={hardware} onReprobe={reprobe} />
+      </div>
+
       <div className="llama-card">
         <h3>Build</h3>
-        <MachineLine hardware={hardware} onReprobe={reprobe} />
         {install0 ? (
           <p className="llama-meta">
             <code>{install0.tag}</code> · {install0.variant} · {formatBytes(install0.sizeBytes)}{' '}
@@ -296,17 +327,54 @@ function ServerSection({
           </p>
         )}
         {availability?.error && <p className="llama-note">{availability.error}</p>}
-        {progress && <ProgressBar progress={progress} />}
+        {progress && <Progressing progress={progress} />}
+        {/* Every unpacked build, not only the active one. `status.installs` has
+            always been fetched and never listed, so a machine that collected three
+            builds across variant changes showed one and offered no way to reclaim
+            the other two — `POST /install/remove` had no caller at all. */}
+        {status && status.installs.length > 1 && (
+          <ul className="llama-installs">
+            {status.installs.map((entry) => {
+              const active = entry.tag === install0?.tag && entry.variant === install0?.variant;
+              return (
+                <li key={`${entry.tag}:${entry.variant}`} className={active ? 'llama-on' : ''}>
+                  <code>{entry.tag}</code>
+                  <span className="llama-tag">{entry.variant}</span>
+                  <span className="llama-meta">{formatBytes(entry.sizeBytes)}</span>
+                  {active && <span className="llama-tag llama-ok">active</span>}
+                  {/* The backend refuses to remove a build whose server is up, so
+                      the button says so rather than offering the user a 409. */}
+                  <button
+                    className="llama-linkbtn"
+                    disabled={busy || status.running}
+                    title={
+                      status.running
+                        ? 'Stop the running server before removing a build'
+                        : `Delete ${entry.path}`
+                    }
+                    onClick={() => void removeBuild(entry.tag, entry.variant)}
+                  >
+                    Remove
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </div>
 
       <div className="llama-card">
         <h3>Server</h3>
         {status?.running ? (
           <>
+            {/* `running` and `ready` are deliberately distinct in the API — loading
+                a large GGUF takes tens of seconds during which the process is up and
+                every request fails — and this used to collapse them into one
+                sentence, so "started but not answering yet" read as a fault. */}
+            <ReadyStrip status={status} />
             <p className="llama-meta">
-              <span className={`llama-dot${status.ready ? ' llama-dot-on' : ''}`} />
-              {status.ready ? 'Ready' : 'Loading the model…'} · <code>{status.model}</code> ·{' '}
-              {status.endpoint} · pid {status.pid}
+              <code>{status.model}</code> · {status.endpoint} · pid {status.pid} · up{' '}
+              <RollingCounter value={status.uptimeSeconds} format={formatDuration} />
             </p>
             {!status.isAgentProvider && (
               <p className="llama-note">
@@ -419,13 +487,29 @@ function ServerSection({
 
       {!!status?.logs.length && (
         <div className="llama-card llama-logs">
-          <h3>Log</h3>
+          <h3>
+            Log{' '}
+            {/* Say that this is a tail. A silent slice makes a truncated log look
+                like the whole one, which is how a startup error scrolls off the top
+                and takes the explanation with it. */}
+            <span className="llama-meta">
+              last {Math.min(40, status.logs.length)} of {status.logs.length} lines
+            </span>
+          </h3>
           <pre>{status.logs.slice(-40).join('\n')}</pre>
         </div>
       )}
     </div>
   );
 }
+
+/** What each origin means — the bare word does not say where the file lives. */
+const ORIGIN_LABEL: Record<string, string> = {
+  managed: 'Downloaded here',
+  ollama: 'The Ollama store',
+  lmstudio: 'The LM Studio store',
+  extra: 'Your extra directories',
+};
 
 function ModelsSection({ data, refresh }: { data: ModelsResponse | null; refresh: () => void }) {
   const [repo, setRepo] = useState('');
@@ -481,6 +565,26 @@ function ModelsSection({ data, refresh }: { data: ModelsResponse | null; refresh
 
   const used = data?.usedBytes ?? 0;
   const budget = data?.budgetBytes ?? 0;
+  /** Which row the pointer is on — shared by the meter and the list, both ways. */
+  const [hover, setHover] = useState<string | null>(null);
+
+  const groups = useMemo(() => {
+    const by = new Map<string, ModelEntry[]>();
+    for (const m of data?.models ?? []) {
+      const list = by.get(m.origin) ?? [];
+      list.push(m);
+      by.set(m.origin, list);
+    }
+    // `managed` first: it is the only group whose files this app owns, and so the
+    // only one where a Delete button appears at all.
+    return [...by.entries()].sort(([a], [b]) =>
+      a === 'managed' ? -1 : b === 'managed' ? 1 : a.localeCompare(b),
+    );
+  }, [data]);
+
+  // Relative to the longest context in the catalogue, not to an absolute maximum:
+  // the comparison worth drawing is between the files you actually have.
+  const longestContext = Math.max(1, ...(data?.models ?? []).map((m) => m.contextLength ?? 0));
 
   return (
     <div className="llama-section">
@@ -530,7 +634,7 @@ function ModelsSection({ data, refresh }: { data: ModelsResponse | null; refresh
             ))}
           </ul>
         )}
-        {progress && <ProgressBar progress={progress} />}
+        {progress && <Progressing progress={progress} />}
         {error && <p className="llama-error">{error}</p>}
       </div>
 
@@ -538,40 +642,110 @@ function ModelsSection({ data, refresh }: { data: ModelsResponse | null; refresh
         <h3>
           On this machine{' '}
           <span className="llama-meta">
-            {formatBytes(used)}
-            {budget ? ` of ${formatBytes(budget)} budget` : ''}
+            {data?.models.length ?? 0} files · {formatBytes(used)}
+            {budget ? ` of ${formatBytes(budget)}` : ''}
           </span>
         </h3>
-        <ul className="llama-models">
-          {(data?.models ?? []).map((m) => (
-            <li key={m.path}>
-              <div className="llama-model-head">
-                <span className="llama-model-name">{m.name}</span>
-                <span className={`llama-tag llama-origin-${m.origin}`}>{m.origin}</span>
-              </div>
-              <div className="llama-meta">
-                {m.architecture || 'unknown arch'} · {formatParams(m.parameters)} params ·{' '}
-                {m.quantization || '—'} · {formatBytes(m.sizeBytes)}
-                {m.contextLength ? ` · ${m.contextLength.toLocaleString()} ctx` : ''}
-              </div>
-              <div className="llama-model-path" title={m.path}>
-                {m.path}
-              </div>
-              {m.error && <div className="llama-error">{m.error}</div>}
-              {m.deletable && (
-                <button className="llama-danger" onClick={() => void remove(m.path)}>
-                  Delete
-                </button>
+
+        {/* The budget as a proportion rather than a sentence. One segment per
+            model, so the bar also answers "what is taking the room" — hovering a
+            segment lights its row, and the row lights its segment. */}
+        {!!data?.models.length && (
+          <Meter
+            label={`${formatBytes(used)} of ${formatBytes(budget)} used`}
+            total={used}
+            threshold={budget || null}
+            thresholdLabel={`${formatBytes(budget)} budget (llamacpp.diskBudgetGb)`}
+            segments={data.models.map((m) => ({
+              value: m.sizeBytes,
+              tone: m.origin === 'managed' ? ('primary' as const) : ('muted' as const),
+              label: `${m.name} — ${formatBytes(m.sizeBytes)} (${m.origin})`,
+              active: hover === m.path,
+              onHover: (entering: boolean) => setHover(entering ? m.path : null),
+            }))}
+          >
+            <p className="llama-meta">
+              Filled segments are files this app manages. The rest are read where Ollama and LM
+              Studio already keep them — serveable, never touched, and not deletable from here.
+            </p>
+          </Meter>
+        )}
+
+        {/* Bytes per parameter, which is what a quantization name means. */}
+        <QuantScatter models={data?.models ?? []} />
+
+        {/* Grouped by origin, each group's root named. "Why is this here" and "why
+            can I not delete it" are the same question, and `origin` is the whole
+            answer — it was a bare tag on a row before, sorted next to nothing. */}
+        {groups.map(([origin, entries]) => (
+          <section key={origin} className="llama-origin-group">
+            <div className="llama-band-head">
+              <h4>{ORIGIN_LABEL[origin] ?? origin}</h4>
+              <span className="llama-meta">
+                {entries.length} · {formatBytes(entries.reduce((n, m) => n + m.sizeBytes, 0))}
+              </span>
+              {origin === 'managed' && !!data?.root && (
+                <code className="llama-model-path" title={data.root}>
+                  {data.root}
+                </code>
               )}
-            </li>
-          ))}
-          {!data?.models.length && (
-            <li className="llama-meta">
-              No GGUF files found. Download one above, or point <code>llamacpp.modelDirs</code> at a
-              folder you already have.
-            </li>
-          )}
-        </ul>
+              {origin === 'extra' && !!data?.extraDirs.length && (
+                <code className="llama-model-path" title={data.extraDirs.join(', ')}>
+                  {data.extraDirs.join(' · ')}
+                </code>
+              )}
+            </div>
+            <ul className="llama-models">
+              {entries.map((m) => (
+                <li
+                  key={m.path}
+                  className={hover === m.path ? 'llama-on' : ''}
+                  onMouseEnter={() => setHover(m.path)}
+                  onMouseLeave={() => setHover(null)}
+                >
+                  <div className="llama-model-head">
+                    <span className="llama-model-name">{m.name.split('/').pop() ?? m.name}</span>
+                    <span className="llama-tag">{m.quantization || '—'}</span>
+                    <span className="llama-meta">{formatBytes(m.sizeBytes)}</span>
+                  </div>
+                  <div className="llama-meta">
+                    {m.architecture || 'unknown arch'} · {formatParams(m.parameters)} params
+                  </div>
+                  {/* The trained context, against the longest in the catalogue. The
+                      Server tab warns you AFTER you type a number past it; this is
+                      the same fact before you type anything. */}
+                  {m.contextLength ? (
+                    <div
+                      className="llama-ctxrail"
+                      title={`Trained for ${m.contextLength.toLocaleString()} tokens`}
+                    >
+                      <span style={{ width: `${(m.contextLength / longestContext) * 100}%` }} />
+                      <em>{m.contextLength.toLocaleString()} ctx</em>
+                    </div>
+                  ) : (
+                    <div className="llama-meta">context length not recorded in this file</div>
+                  )}
+                  <div className="llama-model-path" title={m.path}>
+                    {m.path}
+                  </div>
+                  {m.error && <div className="llama-error">{m.error}</div>}
+                  {m.deletable && (
+                    <button className="llama-danger" onClick={() => void remove(m.path)}>
+                      Delete
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </section>
+        ))}
+
+        {!data?.models.length && (
+          <p className="llama-meta">
+            No GGUF files found. Download one above, or point <code>llamacpp.modelDirs</code> at a
+            folder you already have.
+          </p>
+        )}
       </div>
     </div>
   );

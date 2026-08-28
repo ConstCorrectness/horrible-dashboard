@@ -356,9 +356,13 @@ class ConsoleRegistry:
             "draw",
             "number",
             75.0,
-            "Vertical field of view in degrees (60-110)",
-            min_val=60.0,
-            max_val=110.0,
+            # The range is `settings::FOV_RANGE` in the native client, and the two
+            # have to agree: the console and the video menu write the same FOV,
+            # so a console that accepted 65 would set a value the menu cannot
+            # show and the next nudge of that row would silently jump it to 70.
+            "Vertical field of view in degrees (70-120)",
+            min_val=70.0,
+            max_val=120.0,
             flags=["client", "archived"],
         )
         self._register_cvar(

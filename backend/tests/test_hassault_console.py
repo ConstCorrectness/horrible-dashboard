@@ -42,7 +42,10 @@ async def test_cvar_query_and_set(fresh_registry: ConsoleRegistry) -> None:
     req_clamp = ConsoleExecRequest(command="draw.fov 150")
     res_clamp = await fresh_registry.execute(req_clamp)
     assert res_clamp.ok is True
-    assert res_clamp.affected_cvars.get("draw.fov") == 110.0
+    # The ceiling is `settings::FOV_RANGE.1` in the native client, which reads
+    # this same CVar — see `App::base_fov`. The two ranges have to agree or the
+    # console sets a value the video menu cannot show.
+    assert res_clamp.affected_cvars.get("draw.fov") == 120.0
 
 
 @pytest.mark.anyio

@@ -129,6 +129,34 @@ class TraceSeriesResponse(BaseModel):
     error: str = ""
 
 
+class ProfilePoint(BaseModel):
+    """One record of one pass, with one statistic computed over its whole tensor."""
+
+    index: int
+    name: str = ""
+    layer: int | None = None
+    #: None when the record has no values to summarize and carried no stored
+    #: statistic either. A gap, never a zero: zero is a measurement, and plotting
+    #: it would draw a reading that was never taken.
+    value: float | None = None
+    fidelity: str = ""
+
+
+class TraceProfileResponse(BaseModel):
+    """Every record of one forward pass, reduced to one statistic.
+
+    The pane arranges these into a role-against-depth profile and a kind-by-layer
+    fingerprint. It cannot compute them itself: `tracer._capture` writes `summary`
+    only for `summary`-fidelity records, so exactly the records that hold data
+    carry no statistics in the manifest.
+    """
+
+    passIndex: int = 0
+    stat: str = "rms"
+    points: list[ProfilePoint] = Field(default_factory=list)
+    error: str = ""
+
+
 class RepoFilesResponse(BaseModel):
     repo: str
     files: list[dict[str, Any]] = Field(default_factory=list)

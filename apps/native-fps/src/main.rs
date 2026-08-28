@@ -273,6 +273,28 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    // The pouch. Non-fatal like the loadout and for the same reason: a node that
+    // cannot answer leaves the tray empty and the throw key doing nothing, which
+    // is a game missing a mechanic — not a client that refuses to start. The
+    // alternative, a table of four grenades in Rust, is worse than empty: the
+    // wire carries a **slot index**, so a local list that drifted by one from
+    // `grenades.GRENADES` would throw a smoke where the player asked for a flash
+    // and report nothing at all.
+    let tacticals = match node.tacticals() {
+        Ok(specs) if !specs.is_empty() => {
+            eprintln!("hassault: {} grenades", specs.len());
+            specs
+        }
+        Ok(_) => {
+            eprintln!("hassault: warning — the node served no grenades; nothing to throw");
+            Vec::new()
+        }
+        Err(e) => {
+            eprintln!("hassault: warning — no grenades ({e}); nothing to throw");
+            Vec::new()
+        }
+    };
+
     // The body every hit is resolved against. Fetched rather than held, for the
     // reason `HitboxSpec` gives: the local copy this replaced drew a crouched
     // player four percent shorter than the server could hit them, all of it at
@@ -361,6 +383,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             settings,
             writer,
             weapons,
+            tacticals,
             skins,
             hitbox,
             definitions,
@@ -402,6 +425,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         settings,
         writer,
         weapons,
+        tacticals,
         skins,
         hitbox,
         definitions,

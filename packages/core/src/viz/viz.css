@@ -1,0 +1,249 @@
+/*
+ * The visualization primitives.
+ *
+ * `primitives.css` gave the controls around a list one shape; this file does the
+ * same for the things that draw a number. Four of them already existed, each
+ * privately, inside one module: a sparkline and a heat strip in
+ * `modules/llamacpp/TracesSection.tsx`, a progress bar in `ServerPane.tsx`, and a
+ * segmented budget bar in `OffloadPreview.tsx`. The budget bar in particular had
+ * two more call sites that had settled for a sentence instead.
+ *
+ * Two rules carried over from `primitives.css`, plus one of this file's own:
+ *
+ * - **Scale tokens, no literal sizes.** A literal is how the drift started.
+ * - **No colour that is not a token.** The strip's diverging ramp used to be
+ *   `rgb(110 190 255 / 34%)` in a TS file. That renders identically on `daylight`,
+ *   where a pale blue on white is invisible, and it slipped past
+ *   `no-hex-literals.test.ts` only because that guard matches `#rrggbb`.
+ * - **Data marks carry no decoration.** The chrome around a chart is the app's;
+ *   inside the plot there are no gradients, shadows or rounded bars, because every
+ *   one of those distorts a length that is supposed to be read.
+ */
+
+/* --------------------------------------------------------------- sparkline --
+ *
+ * `overflow: visible` because a stroke at the extreme of the viewBox is centred on
+ * the edge and would otherwise be drawn at half width — a series would appear to
+ * thin out exactly at its maximum.
+ */
+.viz-spark {
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
+.viz-spark-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.2;
+  stroke-linejoin: round;
+  /* The viewBox is stretched by `preserveAspectRatio: none`; without this the
+     stroke stretches with it and a wide chart draws a fatter line than a narrow
+     one for the same data. */
+  vector-effect: non-scaling-stroke;
+}
+
+.viz-spark-dot {
+  fill: var(--accent);
+}
+
+.viz-spark-empty {
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+}
+
+/* -------------------------------------------------------------- value strip --
+ *
+ * The diverging ramp. `ramp.ts` returns a sign and an alpha and never a colour, so
+ * the theme decides what "positive" looks like. `color-mix` against `transparent`
+ * rather than an opacity, so a cell composites over whatever surface it is on
+ * instead of fading the whole element.
+ */
+.viz-strip-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.viz-strip {
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  height: var(--space-8);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  overflow: hidden;
+  background: var(--bg-inset);
+}
+
+.viz-strip-cell {
+  flex: 1 1 0;
+  min-width: 1px;
+  background: color-mix(in srgb, var(--viz-ramp) calc(var(--viz-a, 0) * 100%), transparent);
+}
+
+[data-sign='pos'] {
+  --viz-ramp: var(--ramp-pos);
+}
+
+[data-sign='neg'] {
+  --viz-ramp: var(--ramp-neg);
+}
+
+/* Not "nothing measured" — a genuine zero, or a strip with no scale to compare
+   against. Either way it is drawn as neutral presence rather than as a hole, so a
+   flat strip still reads as a strip. */
+[data-sign='zero'] {
+  --viz-ramp: var(--text-faint);
+  --viz-a: 0.22;
+}
+
+.viz-note {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: var(--fs-micro);
+}
+
+/* ------------------------------------------------------------------- meter --
+ *
+ * Segments are laid out in order and sized by percentage, so the bar reads left to
+ * right as a composition. The rule is absolutely positioned over them because it
+ * is a *comparison*, not a part of the total — drawing it as a final segment is
+ * the classic way to make a budget look like consumption.
+ */
+.viz-meter-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.viz-meter {
+  position: relative;
+  display: flex;
+  height: var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  overflow: hidden;
+}
+
+.viz-meter-seg {
+  min-width: 0;
+  transition: filter var(--dur-fast) var(--ease-standard);
+}
+
+.viz-meter-seg[data-tone='primary'] {
+  background: var(--accent);
+}
+
+.viz-meter-seg[data-tone='secondary'] {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.viz-meter-seg[data-tone='muted'] {
+  background: color-mix(in srgb, var(--text-faint) 40%, transparent);
+}
+
+.viz-meter-seg[data-tone='warn'] {
+  background: var(--warn);
+}
+
+.viz-meter-seg-on {
+  filter: brightness(1.35);
+}
+
+/* The threshold. A 2px hairline, full height, in the strongest border the theme
+   has — it must survive being drawn over a filled segment. */
+.viz-meter-rule {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--text-strong);
+  box-shadow: 0 0 0 1px var(--bg);
+  pointer-events: none;
+}
+
+.viz-meter-over .viz-meter-rule {
+  background: var(--danger);
+}
+
+/* ---------------------------------------------------------------- progress -- */
+.viz-progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.viz-progress-track {
+  height: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  overflow: hidden;
+}
+
+.viz-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width var(--dur-base) linear;
+}
+
+/* No total yet (a resolve step, or a server that sent no content-length): a full
+   bar would claim a completeness we don't have, so it pulses instead. */
+.viz-progress-idle {
+  width: 30%;
+  animation: viz-indeterminate 1.2s var(--ease-standard) infinite;
+}
+
+@keyframes viz-indeterminate {
+  0% {
+    margin-left: 0;
+  }
+
+  50% {
+    margin-left: 70%;
+  }
+
+  100% {
+    margin-left: 0;
+  }
+}
+
+.viz-progress-label {
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+  font-family: var(--font-mono);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .viz-progress-idle {
+    animation: none;
+  }
+}
+
+/* ----------------------------------------------------------------- counter --
+ *
+ * Tabular figures are not optional here: a rolling number whose glyphs have
+ * different widths makes the whole row jitter sideways while it counts.
+ */
+.viz-counter {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------- heat grid --
+ *
+ * The canvas is drawn at the grid's NATIVE cell size and scaled up by CSS, so a
+ * 512x512 attention matrix is one `putImageData` rather than 262,144 DOM nodes.
+ * `image-rendering: pixelated` is required, not stylistic: the browser's default
+ * smoothing would interpolate between adjacent cells and invent values that are
+ * not in the data.
+ */
+.viz-heat {
+  display: block;
+  width: 100%;
+  image-rendering: pixelated;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}

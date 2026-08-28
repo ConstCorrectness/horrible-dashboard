@@ -102,6 +102,24 @@ pub struct Command {
     pub reload: bool,
     /// Weapon slot to switch to, or `-1` for no change.
     pub weapon: i32,
+    /// Throw the readied grenade this frame.
+    ///
+    /// A flag on a movement command for exactly the reason `fire` is one: the
+    /// throw then carries the yaw, pitch and sequence number of the frame it
+    /// happened on. A message of its own would arrive with none of them, and the
+    /// grenade would leave in a direction nobody was looking.
+    ///
+    /// **Edge-triggered by `utility::GrenadeController`, never read as held.** A
+    /// key read as held sets this on every frame it is down — sixty throws a
+    /// second, of which the server's cooldown accepts one and silently discards
+    /// the rest, leaving a player with an empty pouch and one grenade.
+    pub r#throw: bool,
+    /// Which grenade slot the throw uses. `-1` is no selection, and is what
+    /// `Command::new` starts at — a zero would name the HE and make every
+    /// command a request to throw one.
+    pub nade: i32,
+    /// Underhand: a short throw, for putting a smoke at your own feet.
+    pub lob: bool,
     /// Zoom step: 0 unscoped, otherwise 1-based into the weapon's `zoomLevels`.
     ///
     /// **Client-owned, and clamped by the server rather than by the wire parser**
@@ -122,6 +140,7 @@ impl Command {
         Command {
             seq,
             weapon: -1,
+            nade: -1,
             ..Default::default()
         }
     }
@@ -868,6 +887,34 @@ fn report_snapshot(s: &Snapshot) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_throw_spells_itself_the_way_the_server_reads_it() {
+        // `throw` is a Rust keyword, so the field is `r#throw` — and the whole
+        // question is whether serde strips the `r#` on the way out. It does, but
+        // if it ever did not, `match.py` reads `raw.get("throw")` and would find
+        // nothing: the command would be accepted, the movement would be applied,
+        // and the grenade would simply never leave the hand. No error anywhere.
+        let mut cmd = Command::new(7);
+        cmd.r#throw = true;
+        cmd.nade = 2;
+        cmd.lob = true;
+        let wire: serde_json::Value = serde_json::from_str(&serde_json::to_string(&cmd).unwrap())
+            .expect("a command serializes to an object");
+        assert_eq!(wire["throw"], serde_json::json!(true));
+        assert_eq!(wire["nade"], serde_json::json!(2));
+        assert_eq!(wire["lob"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn a_command_that_is_not_a_throw_names_no_grenade() {
+        // `-1`, not `0`: slot zero is the HE, so a default of zero would make
+        // every movement command a request to throw one — refused by the
+        // `throw` flag today, and a live grenade the day anything reads `nade`
+        // without checking it.
+        assert_eq!(Command::new(1).nade, -1);
+        assert!(!Command::new(1).r#throw);
+    }
 
     #[test]
     fn traffic_on_other_channels_is_not_ours() {

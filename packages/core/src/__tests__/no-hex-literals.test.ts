@@ -85,7 +85,14 @@ const BASELINE: Record<string, number> = {
   // ratchet that keeps slack lets the next regression back in unnoticed.
   excluded: 793,
   canvas: 6,
-  rest: 221,
+  // 221 → 217 with `viz/uplot-theme.ts`. `MetricsPane` held five of these, and
+  // they are worth naming because they were not a shortcut — they were a bug. Its
+  // series said `stroke: 'var(--accent, #539bf5)'`, which looks themed and is not:
+  // uPlot draws to a canvas, `ctx.strokeStyle` ignores a custom property WITHOUT
+  // throwing, and so the fallback was the only colour that ever rendered. A hex
+  // count is a decent proxy for "this will not follow the theme"; here it was
+  // also pointing at a line drawn in the wrong colour on all six.
+  rest: 217,
 };
 
 function walk(dir: string, out: string[] = []): string[] {

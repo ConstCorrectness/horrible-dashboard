@@ -259,6 +259,18 @@ export interface LaunchNativeOptions {
 }
 
 export interface LaunchNativeResult {
+  /**
+   * How far the launch has got: `starting`, `building`, `launched`, `failed`,
+   * or `idle` (only from the status route — "nothing has been launched", which
+   * is not the same fact as a launch that failed).
+   *
+   * A launch is a **job on the node**, not a request: an edited client is
+   * compiled before it is started, and a cold build of that crate is minutes.
+   * The POST answers `building` rather than not answering, and
+   * `nativeLaunchStatus` hands the same job back to a pane that has been
+   * unmounted and remounted in the meantime — which is what a tab switch does.
+   */
+  phase?: 'idle' | 'starting' | 'building' | 'launched' | 'failed';
   launched: boolean;
   pid?: number;
   connect_args: string[];
@@ -308,6 +320,18 @@ export async function getRankedMaps(): Promise<string[]> {
 
 export function launchNativeFps(opts: LaunchNativeOptions): Promise<LaunchNativeResult> {
   return apiPost<LaunchNativeResult>('/hassault/launch_native', opts);
+}
+
+/**
+ * Where this node's launch has got to, if one is running.
+ *
+ * Read on mount as well as while polling. That is the whole of the tab-switch
+ * fix: a pane is unmounted when its tab loses focus, taking the promise it was
+ * awaiting with it, and without this the remounted pane shows an idle button
+ * over a `cargo build` still running behind it.
+ */
+export function nativeLaunchStatus(): Promise<LaunchNativeResult> {
+  return apiGet<LaunchNativeResult>('/hassault/launch_native/status');
 }
 
 // ---- the native client's own installation ------------------------------------

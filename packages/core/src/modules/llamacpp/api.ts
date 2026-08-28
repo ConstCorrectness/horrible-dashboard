@@ -126,6 +126,16 @@ export function getRepoFiles(
   return apiGet(`/llamacpp/repo?repo=${encodeURIComponent(repo)}`);
 }
 
+/**
+ * Delete an unpacked build.
+ *
+ * The backend refuses (409) while that build's server is running, which is the
+ * right place for the check — this is also reachable outside the pane.
+ */
+export function removeInstall(tag: string, variant: string): Promise<{ removed: boolean }> {
+  return apiPost<{ removed: boolean }>('/llamacpp/install/remove', { tag, variant });
+}
+
 export function installServer(
   tag: string,
   variant: string,
@@ -334,6 +344,40 @@ export function getTraceSeries(traceId: string, name: string, stat = 'rms'): Pro
   return apiGet<TraceSeries>(
     `/llamacpp/traces/${encodeURIComponent(traceId)}/series` +
       `?name=${encodeURIComponent(name)}&stat=${encodeURIComponent(stat)}`,
+  );
+}
+
+export interface ProfilePoint {
+  index: number;
+  name: string;
+  layer: number | null;
+  /** `null` when nothing could be measured for this record. Never 0 — zero is a
+   * measurement, and standing it in for a gap would drag every scale toward it. */
+  value: number | null;
+  fidelity: string;
+}
+
+export interface TraceProfile {
+  passIndex: number;
+  stat: string;
+  points: ProfilePoint[];
+  error: string;
+}
+
+/** Every record of one forward pass, reduced to one statistic over its whole tensor.
+ *
+ * This cannot be computed from the record list already in hand: `tracer._capture`
+ * writes `summary` only for `summary`-fidelity records, so exactly the records that
+ * hold data carry no statistics in the manifest. Same reason `getTraceSeries` is a
+ * route, one axis over. */
+export function getTraceProfile(
+  traceId: string,
+  passIndex: number,
+  stat = 'rms',
+): Promise<TraceProfile> {
+  return apiGet<TraceProfile>(
+    `/llamacpp/traces/${encodeURIComponent(traceId)}/profile` +
+      `?passIndex=${passIndex}&stat=${encodeURIComponent(stat)}`,
   );
 }
 

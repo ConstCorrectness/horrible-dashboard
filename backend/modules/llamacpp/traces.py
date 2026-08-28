@@ -242,6 +242,39 @@ class TraceWriter:
 # --- summaries -------------------------------------------------------------
 
 
+def summarize_array(values: Any) -> dict[str, float]:
+    """The same statistics, straight off a numpy array.
+
+    The profile route summarizes *every* record of a pass — 322 of them on a
+    26-layer trace, 22 MB of activations — and a Python loop over 3M decoded
+    floats made that a multi-second request per statistic change. This is the one
+    implementation; `summarize` decodes to an array and calls it, rather than the
+    two of them drifting the way two decoders would.
+
+    Accumulation is float64 even though the values are float32, matching what a
+    Python loop over Python floats did: an rms over 3M float32 values accumulated
+    in float32 loses digits that show up in the last places of the number the pane
+    prints.
+    """
+    import numpy as np
+
+    array = np.asarray(values, dtype=np.float32)
+    if array.size == 0:
+        return {}
+    wide = array.astype(np.float64)
+    lo = float(wide.min())
+    hi = float(wide.max())
+    return {
+        "count": float(array.size),
+        "min": lo,
+        "max": hi,
+        "mean": float(wide.mean()),
+        "rms": float(np.sqrt((wide * wide).mean())),
+        "absMax": max(abs(lo), abs(hi)),
+        "zeroFraction": float((wide == 0.0).sum()) / array.size,
+    }
+
+
 def summarize(values: list[float]) -> dict[str, float]:
     """Statistics that stand in for a tensor we chose not to store.
 
@@ -250,29 +283,7 @@ def summarize(values: list[float]) -> dict[str, float]:
     """
     if not values:
         return {}
-    count = len(values)
-    total = 0.0
-    total_sq = 0.0
-    lo = values[0]
-    hi = values[0]
-    zeros = 0
-    for value in values:
-        total += value
-        total_sq += value * value
-        lo = min(lo, value)
-        hi = max(hi, value)
-        if value == 0.0:
-            zeros += 1
-    mean = total / count
-    return {
-        "count": float(count),
-        "min": lo,
-        "max": hi,
-        "mean": mean,
-        "rms": (total_sq / count) ** 0.5,
-        "absMax": max(abs(lo), abs(hi)),
-        "zeroFraction": zeros / count,
-    }
+    return summarize_array(values)
 
 
 #: The two dtypes this module ever *writes*, as numpy descriptors. Little-endian,

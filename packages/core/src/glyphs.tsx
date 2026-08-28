@@ -125,3 +125,28 @@ export function IconClock(props: SVGProps<SVGSVGElement>) {
     </Glyph>
   );
 }
+
+/**
+ * Pinned — a watch that is armed.
+ *
+ * Filled rather than outlined, because it sits next to its own unpinned twin in a
+ * long list and stroke weight alone is not enough contrast to scan down a column.
+ */
+export function IconPin(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M6 2h4l-.6 3.4 2.1 2.1H4.5l2.1-2.1L6 2Z" fill="currentColor" />
+      <path d="M8 7.5V14" />
+    </Glyph>
+  );
+}
+
+/** Not pinned. The same silhouette, hollow — so the pair reads as one control. */
+export function IconPinOff(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M6 2h4l-.6 3.4 2.1 2.1H4.5l2.1-2.1L6 2Z" />
+      <path d="M8 7.5V14" />
+    </Glyph>
+  );
+}

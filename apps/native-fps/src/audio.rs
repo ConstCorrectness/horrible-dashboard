@@ -114,6 +114,52 @@ pub fn timbre(kind: &str) -> Timbre {
             gain: 0.9,
             body: 55.0,
         },
+        // A grenade leaving the hand: a short soft rush, quieter than a footstep
+        // so it is a cue for the thrower rather than an announcement to the room.
+        "throw" => Timbre {
+            frequency: 1100.0,
+            q: 1.2,
+            decay: 0.12,
+            gain: 0.3,
+            body: 0.0,
+        },
+        // The four detonations, and they have to be tellable apart with your
+        // back turned — which is most of what a grenade is: information.
+        //
+        // **Low and long is an explosion; high and short is a bang.** The HE
+        // gets the longest decay and the most body in the room, the flash is a
+        // crack with no weight behind it, the smoke is a hiss, and fire is a low
+        // roar. Without these rows every detonation fell through to the footstep
+        // fallback below and an HE going off at your feet sounded like somebody
+        // walking past.
+        "explosion" => Timbre {
+            frequency: 90.0,
+            q: 0.5,
+            decay: 0.9,
+            gain: 1.0,
+            body: 150.0,
+        },
+        "nade_flash" => Timbre {
+            frequency: 2600.0,
+            q: 0.6,
+            decay: 0.35,
+            gain: 1.0,
+            body: 30.0,
+        },
+        "nade_smoke" => Timbre {
+            frequency: 4200.0,
+            q: 0.35,
+            decay: 0.85,
+            gain: 0.5,
+            body: 0.0,
+        },
+        "nade_fire" => Timbre {
+            frequency: 210.0,
+            q: 0.45,
+            decay: 1.1,
+            gain: 0.7,
+            body: 70.0,
+        },
         // `step`, and the fallback for a kind this build does not know: a noise
         // the server invented later must still be *audible*, because the whole
         // mechanic is hearing that something happened.

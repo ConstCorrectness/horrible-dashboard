@@ -847,7 +847,25 @@ flags should be. Then:
 node scripts/build_hassault_weapon.mjs --model assets/horribleAssault/beretta-92 --length 0.6 --forward +z --out apps/web/public/hassault-weapon-pistol.glb
 ```
 
-#### Five things it exists to get right
+The four shipped props, in full — a cube is ~36 cm, so each `--length` is the
+weapon's real length divided by that, which is the only reason they are
+consistent with each other:
+
+```bash
+# pistol — Beretta 92, ~21.7 cm
+node scripts/build_hassault_weapon.mjs --model assets/horribleAssault/beretta-92 --length 0.6 --forward +z --out apps/web/public/hassault-weapon-pistol.glb
+
+# assault — M4A1, ~84 cm, built from the decimated LOD rather than the 687k source
+node scripts/build_hassault_weapon.mjs --fbx .cache/hassault/carbine-m4a1-lod.fbx --textures assets/horribleAssault/carbine-m4a1/textures --exclude "Bullet_01$" --length 2.3 --forward -x --out apps/web/public/hassault-weapon-assault.glb
+
+# shotgun — Remington 870, ~104 cm
+node scripts/build_hassault_weapon.mjs --model assets/horribleAssault/remington-870-express-tactical --exclude shell --length 2.9 --forward -z --out apps/web/public/hassault-weapon-shotgun.glb
+
+# sniper — SVU-A
+node scripts/build_hassault_weapon.mjs --model assets/horribleAssault/svu-a-sniper-rifle --length 2.72 --forward -z --out apps/web/public/hassault-weapon-sniper.glb
+```
+
+#### Six things it exists to get right
 
 Each was found by measuring the actual downloads, and each fails silently.
 
@@ -865,6 +883,39 @@ weapon is either invisible or it fills the screen.
 the same bounding box as one pointing forwards, so `--forward` is required and
 the script refuses to guess. It reports which axis is longest (`z`, `z` and `x`
 for the three above), so `--inspect` gives you the letter and you supply the sign.
+
+And getting that sign wrong is silent, which it proved by shipping: **three of
+the four props were exported barrel-first down `+Z`**, so the shotgun and the
+sniper spent their whole lives in the view model pointing back at the player,
+with their muzzle flash 0.2 cubes behind the buttstock. Nothing could have
+caught it — a GLB is a binary blob in review, the fit tests build their
+prototypes synthetically, and `fitWeaponModel` *defines* the muzzle as the
+model's `min.z`, so it will put a flash on a stock without complaint.
+
+`weapon-prop-orientation.test.ts` now measures the shipped files instead. The
+discriminator is thickness: a weapon's front is a barrel and its back is a stock
+or a grip, so it compares the cross-section of the **frontmost twentieth**
+against the rearmost. Measured, the four score 2.14 (shotgun), 2.45 (pistol),
+4.26 (sniper) and 4.35 (assault); a deliberately flipped build of the assault
+scores **0.23**. A twentieth and not a tenth because the shotgun's front tenth
+reaches back over its underslung light and magazine tube, which are as bulky as
+the stock and say nothing about which way it points — that window drops it to
+1.32 and the margin with it.
+
+**Stray geometry corrupts both the length and the muzzle**, so `--exclude
+<regex>` drops meshes by object *or* material name before anything is measured.
+The M4A1 carries a loose cartridge floating past its flash hider: it made the
+rifle itself 6% shorter than the stated `--length` (the box is measured over it)
+and put the muzzle flash out in front of the barrel in mid-air (`min.z` is the
+bullet's tip, not the weapon's). The Remington carries a loose 12-gauge shell
+under the receiver, worth 0.12 cubes of height. Matched against both names
+because these downloads name their objects nothing at all — the M4A1's are
+`mesh1.dat.desirefx.me_out` — while their materials are descriptive
+(`Carbine_M4A1_Bullet_01`); anchor with `$` where a name is a prefix of its
+siblings, since `Bullet_01` is also the four rounds in the magazine, which stay.
+A pattern that matches nothing is an **error**, not a shrug: an exclusion is
+stated because something is known to be in the way, so a typo that quietly
+excluded nothing would hand back the exact model the flag was passed to avoid.
 
 **The maps are not in the FBX.** Every material comes back from `FBXLoader` with
 no maps at all bar one normal map, while the PBR set sits unreferenced in a
@@ -910,7 +961,7 @@ being wrong — so lights and cameras are stripped and the count reported.
 | --- | --- | --- | --- |
 | `beretta-92` | 5.4k | `z` | yes |
 | `remington-870-express-tactical` | 28k | `z` | yes |
-| `carbine-m4a1` | **687k**, 25 meshes | `x` | needs decimating first |
+| `carbine-m4a1` | 687k → **30k**, 25 meshes | `x` | yes, after `scripts/decimate_weapon.py` |
 | `svu-a-sniper-rifle` | 25k | `z` | yes, once its `source/dragunov_svu.zip` is extracted |
 | `m4-carbine-rifle` | — | — | mesh is inside a `.rar` |
 
@@ -920,6 +971,48 @@ is a judgement about the target machine that a converter has no business making;
 but decimation belongs in Blender, since three has no simplifier worth using at a
 98% reduction. An archive that still holds its mesh is named explicitly in the
 error, because the directory looks complete until you go looking for the FBX.
+
+##### Decimating the M4A1
+
+`scripts/decimate_weapon.py`, run under Blender, takes it to 29,990 triangles —
+the same order as the other three — and the prop is built from that rather than
+from the original:
+
+```bash
+"C:/Program Files/Blender Foundation/Blender 5.0/blender.exe" --background \
+  --python scripts/decimate_weapon.py -- \
+  --in "assets/horribleAssault/carbine-m4a1/source/Carbine M4A1.fbx" \
+  --out .cache/hassault/carbine-m4a1-lod.fbx \
+  --budget 30000
+```
+
+The budget is **per mesh, proportional, and floored** — not one ratio across
+the model, which produces a weapon wrong in a specific and recognisable way.
+This M4A1 is 25 meshes whose sizes span three orders of magnitude: a flat 4%
+takes the receiver somewhere reasonable and takes the rear sight aperture to
+*one triangle*, so the small parts — exactly the ones a player is looking down
+— dissolve first. No mesh goes below `MIN_FACES` (or its own original count, if
+it began smaller), and the surplus comes out of the large meshes, where it is
+invisible.
+
+That floor is why the allocation is **two passes**: the first totals the meshes
+already at or under the floor, whose triangles are spent whatever the ratio
+says, and the second shares what is left over the meshes that can actually give
+it up. Without the split the floor silently pushes the total back over the
+budget.
+
+Collapse decimation is *geometric*: it does not know about UV seams, so the
+budget is spent where the silhouette is rather than uniformly, and the modifier
+is **applied** rather than left in the stack, since the FBX exporter would bake
+it either way and an unapplied modifier makes the file look untouched.
+
+:::caution `hasattr(bpy.ops, ...)` is not a version probe
+`bpy.ops` resolves its members dynamically, so `hasattr` is **always true** for
+any plausible name — the probe reads as working right up until the call itself
+raises. Blender 5.0 replaced the FBX importer (`wm.fbx_import`) while leaving the
+exporter where it was, so the two halves genuinely need separate handling; both
+are done by *calling* and catching, never by asking whether the operator exists.
+:::
 
 :::note The two builds share their headless shims
 `FBXLoader` and `GLTFExporter` are written for a browser and reach for
@@ -940,11 +1033,10 @@ sha256.
 `packages/core/src/modules/hassault/models/weapons.ts` +
 `apps/native-fps/src/{prop.rs,props_gpu.rs,prop.wgsl}`.
 
-Three weapons now render as real models — pistol, shotgun, sniper. `assault` and
-`knife` do not, and that is the answer rather than a gap: the M4A1 is 687k
-triangles and there is no knife model. **A weapon with no prop keeps its
-procedural boxes**, which is a complete working weapon and was the only kind
-there was. `tests/browser_parity.rs` pins the two clients' lists equal, because a
+Four weapons now render as real models — pistol, assault, shotgun, sniper. Only
+`knife` does not, and that is the answer rather than a gap: there is no knife
+model at all. **A weapon with no prop keeps its procedural boxes**, which is a
+complete working weapon and was the only kind there was. `tests/browser_parity.rs` pins the two clients' lists equal, because a
 weapon that is a model in one and boxes in the other is invisible from either
 side alone — each renders something that looks deliberate.
 
@@ -2382,6 +2474,73 @@ arrive in the snapshot. Two decisions in it are worth keeping:
   work. With front faces only, stepping inside puts the camera past the geometry
   and the cloud disappears exactly when it should be blinding you.
 
+### Throwing in the native client
+
+The native client drew grenades long before it could throw one. `nades.rs`
+rendered everybody else's canisters and clouds, `SelfState.nades` and
+`SelfState.flash` were parsed on every snapshot, and none of the three had a
+producer or a consumer: there was no `/tacticals` fetch, no key that readied
+anything, no `throw` on the wire, no tray on the HUD, and a flashbang going off in
+your face did nothing at all. A native player was on the receiving end of a
+mechanic they could not use — which is a worse state than not having it.
+
+The throwing half is `apps/native-fps/src/utility.rs`, a deliberate port of the
+browser's `utility.ts` rather than a second design. Two clients play the same game
+against the same server, and a rule that exists in only one of them is a rule half
+the players are not subject to. It carries the same four:
+
+- **The throw is edge-triggered**, which is the whole reason the type exists.
+  `throw` rides on a movement command, so a key read as *held* sets it sixty times
+  a second — the server's cooldown accepts one and silently discards the rest, and
+  the player watches a full pouch become one grenade with nothing to explain it.
+- **Counts are predicted and then corrected.** The count drops locally the instant
+  you throw and is overwritten by `you.nades` on the next snapshot, so a throw the
+  server refused gives the grenade back rather than leaving the HUD one short
+  until the next respawn.
+- **Selecting only readies.** `6`–`9` pick a grenade, `G` throws it and `H` lobs
+  it underhand — the browser's `DEFAULT_CONTROLS`, key for key. When the moment
+  you throw a smoke is a different decision from which smoke you are holding, a
+  select-that-throws cannot express waiting.
+- **A `SelfState` with no inventory does not empty the pouch.** Train produces one,
+  and adopting it blindly would silently disarm the one mode you would practise a
+  smoke line in.
+
+Three things around it that fail *silently* if they drift:
+
+- **The catalogue is fetched, never tabulated.** The wire carries a **slot index**,
+  not an id, so a local list of four grenades that drifted by one from
+  `grenades.GRENADES` would throw a smoke where the player asked for a flash and
+  report nothing anywhere. A node that serves none leaves the tray empty and the
+  throw key inert — which is a game missing a mechanic, not a client that guessed.
+- **`throw` is a Rust keyword,** so `Command`'s field is `r#throw` and serde has to
+  strip the `r#` on the way out. `match.py` reads `raw.get("throw")`: if the key
+  were ever spelled otherwise the command would still be accepted, the movement
+  still applied, and the grenade would simply never leave the hand. A test pins the
+  serialized key.
+- **`nade` defaults to `-1`, not `0`.** Slot zero is the HE, so a zero default
+  makes every movement command a request to throw one — harmless only for as long
+  as nothing reads `nade` without checking `throw` first.
+- **The cooldown is measured on `clock_ms`, not `local_clock`.** The latter is
+  Train's own clock and is advanced only by `train()`, so in a match it sits at
+  zero forever and a cooldown measured against it would never elapse.
+
+The HUD gained the other two halves. The **tray** is four cells above the ammo
+block — the same information as the browser's `NadeTray` and deliberately not the
+same drawing, because this HUD is a vertex buffer with a 7-pixel bitmap font and
+has no SVG to put a glyph in, so a three-letter abbreviation earns its place. An
+empty slot is greyed rather than hidden: the tray's order *is* the wire's slot
+index, and a cell that vanished would shift the others under keys the player has
+already learned. The **flashbang** is `you.flash` drawn as a white-out over the
+world and the HUD and under the console — squared on the way in, as the browser's
+`FlashOverlay` does, so the peak is what hurts and the tail clears quickly.
+
+And the sound: `audio.rs` had no timbre for `throw`, `explosion`, `nade_flash`,
+`nade_smoke` or `nade_fire`, so every detonation fell through to the footstep
+fallback and an HE at your feet sounded like somebody walking past. Your own throw
+is played locally, because the server sends a `throw` noise to everyone *else* —
+your own noises never come back, so the thrower was the one person in the room who
+could not hear it leave their hand.
+
 Grenades are **not predicted**. Unlike movement — where the client predicts
 because it cannot wait a round trip to know where its own feet are — nobody is
 holding a grenade after it leaves the hand, so there is nothing to feel laggy.
@@ -2562,6 +2721,21 @@ error included — so it shoots with confidence and then misses by that error.
 Comparing against the *true* bearing instead would produce the opposite and much
 worse behaviour: a bot that holds fire until it is perfectly on target, and so
 never misses at all.
+
+A bot with nobody to shoot at turns too, and for a while it did not. `yaw` was
+only ever assigned inside the `target is not None` branch, so a roaming bot kept
+the yaw it **spawned** with for the whole match. It still reached its roam point,
+because movement is expressed in the bot's own frame and the strafe axis carried
+it there — which is exactly what made the bug invisible on a radar and
+unmistakable on screen: a body sliding sideways across the map, facing one fixed
+direction. Every bot spawning level and most spawning aligned made it read as a
+model that could not rotate at all, rather than as an aim bug.
+
+So an untargeted bot now turns toward the heading it is walking, rate-limited by
+the same `turn_rate` its aim is, and levels its pitch off so one that lost a
+target while aiming down does not roam staring at the floor. It happens **after
+`heading` is final**, deliberately: the stuck detector turns the heading hard, and
+facing a heading the bot then abandons is what produces a twitch.
 
 Two smaller rules that are easy to get wrong:
 
@@ -2933,6 +3107,49 @@ Four rules in that translation are load-bearing:
 An unknown `--mode` **exits rather than defaulting**. A typo silently becoming
 `join` is precisely how Train turns back into a match nobody asked to be in.
 
+### A launch is a job, not a request
+
+The route resolves a binary, **compiles it if it is older than its own source**,
+starts it, and waits `_LAUNCH_SETTLE_SECONDS` to see whether it survived. Three of
+those four are instant. The second is not: a cold `cargo build --release` of this
+crate builds `wgpu`, and `_BUILD_TIMEOUT_SECONDS` is fifteen minutes for that
+reason.
+
+Run inline, that made the response the only signal — and it did not arrive for
+minutes. The button said `Launching…` for all of them, which is indistinguishable
+from a hang; and every hassault surface lives in a frame tab, where **an inactive
+tab is unmounted**, so switching away dropped the promise the pane was awaiting
+and the launch appeared to stop. It had not: the build was still running, with
+nothing left in the app that knew about it.
+
+So the work is a job on the node:
+
+- `_LAUNCH_JOBS` holds one per account, started with `asyncio.ensure_future` so
+  the task **outlives the request**. A browser that goes away cancels nothing.
+- The POST waits `_LAUNCH_INLINE_SECONDS` (3s, deliberately longer than the
+  settle) and then answers with whatever phase the job is in. A launch that needs
+  no build still returns its real result inline, so nothing has to poll for the
+  ordinary case.
+- `phase` is `starting`, `building`, `launched`, `failed`, or `idle` — the last
+  only from the status route, and meaning *nothing has been launched*, which is a
+  different fact from a launch that failed.
+- `GET /api/hassault/launch_native/status` hands the same job back. This is the
+  half that survives a tab switch: `useNativeLaunch` reads it **on mount**, so a
+  remounted pane picks up the build it started before it went away.
+- A second press while one is running **joins** it rather than starting another.
+  Two `cargo build`s of one crate block on each other's `target/` lock, and the
+  second would look exactly like the hang this replaced.
+
+Two smaller rules in the client half (`packages/core/src/modules/hassault/native-launch.ts`):
+
+- **`building` and `starting` read differently on screen.** A build is minutes and
+  a start is a moment, and one word for both is what made a compile look like a
+  hang in the first place.
+- **A finished job is not adopted on sight.** `_LAUNCH_JOBS` keeps the last launch
+  for the life of the backend, so a pane mounted an hour later would otherwise
+  come up announcing a pid that exited long ago. A job that is *running* when the
+  hook finds it is the hook's to report, and so is whatever it becomes.
+
 ### Playing in the native client
 
 **The native client is where the game is played.** `hassault.nativeClient` is on
@@ -3190,7 +3407,7 @@ over.
 | --- | --- |
 | Root | Resume, the three sub-pages, and Quit — labelled **Leave match** in a match, because a button that ends something you were winning should say so |
 | Crosshair | Style (cross / cross+dot / dot / circle), size, gap, thickness, colour |
-| Video | Display (fullscreen / windowed), resolution scale, quality, vsync |
+| Video | Display (fullscreen / windowed), resolution scale, field of view, quality, anti-aliasing, shadows, vsync, frame cap, show hitboxes |
 | Controls | Sensitivity |
 
 The settings live in **the node's settings bag**, not a file beside the binary:
@@ -3220,10 +3437,63 @@ full size. The title bar reports the rendered size whenever it is not the
 window's, since a render scale is otherwise invisible in a screenshot.
 
 Quality moves three things: the shading (flat, the hemisphere and sun, the fill as
-well), the fog's density, and the sample count. **High is the browser's own fog
-density**, not a value picked to look close — it is the level at which the two
-clients are meant to be the same picture, and the lower levels trade distance for
-fill rate from there.
+well), the fog's density, and — as a **preset, not a ceiling** — the
+anti-aliasing row below it. **High is the browser's own fog density**, not a value
+picked to look close: it is the level at which the two clients are meant to be the
+same picture, and the lower levels trade distance for fill rate from there.
+
+Anti-aliasing used to be derived from the level with no way to say otherwise,
+which made the one setting with a measurable cost on an integrated GPU the one
+setting nobody could turn off without also flattening the shading. It is its own
+row now, and picking a quality level **writes** it rather than shadowing it — so
+the menu never shows `HIGH` next to `ANTI-ALIASING OFF`, and a choice made after
+the preset survives it. That is also why `menu::apply` returns a *list* of keys:
+persisting only `hassault.video.quality` would bring the level back next session
+with the old sample count underneath it.
+
+### The rest of the video page
+
+Four more knobs, and what each one honestly costs is the point of listing them
+separately rather than folding them into the preset.
+
+**Field of view** (`hassault.video.fov`, 70–120°) is the only row here that
+changes how the game *plays* rather than how it looks — a wider view is more of
+the room and a smaller enemy in it. 75 is the pane's, so the default is the same
+picture in both clients. It is read through `App::base_fov()` rather than written
+onto the camera, because the scope divides the *base* FOV and a value assigned
+straight to `camera.fov` would be overwritten by the next scope step — a bug
+visible only while scoped.
+
+That accessor also folds in the console's **`draw.fov`**, with the same precedence
+the crosshair and `draw.hitboxes` use: a CVar assignment is a statement about
+*now*, a setting is a preference. `draw.fov` was one of the served client CVars
+this client stored and admitted it was not reading; it now has a reader, so it
+moved into `console::HONORED`. Its declared range in `console.py` was widened from
+60–110 to match `settings::FOV_RANGE` — a console that accepted 65 would set a
+value the menu cannot show, and the next nudge of that row would silently jump it.
+
+**Shadows** (`hassault.video.shadows`) is **a look, not a frame rate**, and the
+setting says so. The map and the sun are both static, so `ShadowMap::new` bakes
+the map once at load; turning this off skips no pass, it only stops the fragment
+shader taking the filter taps. It is offered because some people prefer the flat
+read — presenting it as a performance option would be the placebo the rest of this
+page keeps refusing to ship.
+
+**Frame cap** (`hassault.video.fpsLimit`, one of 0/60/120/144/240/360, uncapped by
+default) sleeps out the remainder of a frame's slice. Unlike vsync it queues no
+frame and adds no latency; it is for a laptop that would otherwise run its fan
+flat out drawing frames no display will show and then thermally throttle *below*
+the cap anyway. The sleep happens **before the frame clock is read**, so it lands
+inside `dt` rather than between two frames — sleeping after it would leave the
+simulation stepping at the uncapped rate while the screen ran at the capped one,
+the same class of bug as ticking a player by wall clock. The accuracy is
+deliberately not chased: a cap that is approximate is doing its whole job, and a
+busy-wait that hit 240 exactly would burn the core the cap exists to leave alone.
+
+A saved cap is **snapped to the offered list** rather than clamped, because a cap
+of 37 is not wrong so much as meaningless — honouring it would leave the menu
+holding a value none of its steps can reach, so the row would jump the first time
+it was touched.
 
 :::warning 2× MSAA is not a supported sample count
 Only **1 and 4** are guaranteed by the spec. The machine this was written on
@@ -3232,13 +3502,41 @@ a feature this client deliberately does not request, because asking for more tha
 the scene needs is how a client refuses to start on a perfectly capable integrated
 GPU. A pipeline built with 2× is a **validation error on the first frame**, not a
 slower one, and that is exactly how the first build of the quality setting
-crashed. Low and Medium therefore share a sample count and differ in shading and
-fog, which is the more visible difference anyway. Note that Low returns the
+crashed. That is why the setting is a **`bool`** rather than a count: a field that
+cannot hold 2 cannot be set to 2 by a later edit either. Low and Medium therefore
+default to no anti-aliasing and differ in shading and fog, which is the more
+visible difference anyway. Note that Low returns the
 surface *flat* — no hemisphere, no sun, no shadow — which is a level's choice and
 not a cheaper approximation of the same picture; a screenshot taken at Low beside
 a browser screenshot is not evidence the clients diverge. The support list is not the
 guarantee.
 :::
+
+### Selecting High crashed the client
+
+Worth writing down because the fix is structural rather than a corrected value,
+and because the symptom named the wrong culprit.
+
+`set_video` rebuilds what a sample-count change invalidates. For the character
+and prop passes it calls each module's **own `build_pipeline`** — the same
+function construction uses — so those two cannot drift. For the world pass it
+built a **second `PipelineLayout` inline**, and the second one was wrong: it named
+`[camera, detail]` where the construction path names `[camera, detail, shadow]`.
+
+The render pass binds the shadow map at group 2 regardless. So the first frame
+after switching quality bound a group the pipeline's layout did not have, which
+is a wgpu validation error — a **panic**, not a darker picture. Every path to a
+sample-count change hit it, in both directions, which is why it read as "High
+crashes" rather than as anything to do with shadows.
+
+The fix is that there is now exactly one world layout, held on the `Renderer` as
+`world_layout`. A pipeline layout is immutable and says nothing about multisample
+state, so there was never a reason to build a second one; holding the single
+definition is what makes the two paths unable to disagree again. The same change
+caught a second, quieter instance: the **translucent-volume pipeline draws inside
+the same pass** and was not rebuilt at all, so it needed a smoke cloud on screen
+to fire — switching quality in an empty room looked like it worked and the crash
+landed on somebody's grenade a match later.
 
 ### What "the netcode feels laggy" actually was
 
@@ -3498,9 +3796,46 @@ happen — and so does a reload, because the reload is the animation the *server
 doing. Dying drops it, since it is something you asked for rather than a state of
 the weapon.
 
-The envelope is smoothstepped at both ends (`inspectEnvelope`). A linear ramp
-reverses direction instantly at the hold, which reads as the animation being cut
-off and restarted: the one thing a "look at this weapon" flourish must not do.
+#### Why the pose needs three numbers, not one
+
+The first version was one scalar — `inspectEnvelope(t)`, ramp up, hold, ramp down
+— multiplied into every axis of the pivot's position and rotation. That is a
+correct animation and it looks wrong, for a reason worth writing down because it
+is not obvious from the code: **the hold is a hold.** The weapon travelled out,
+stopped dead for the ~0.7s the envelope sits at 1.0, and then retraced its exact
+path. What the eye reads there is not "somebody is looking at a weapon", it is a
+stutter — and the retrace reads as the clip being played backwards, because it
+is.
+
+Three numbers fix it, and each one is doing a specific job:
+
+| | What it drives | Why it is separate |
+| --- | --- | --- |
+| `inspectEnvelope(t)` | the rotation, and how much of the pose applies at all | Has to return to zero, or the weapon never comes back to the aim |
+| `inspectEnvelope(t + LEAD)` | the translation | 60 ms of lead means the gun is already rising before it starts to turn. Every axis starting and stopping on the same frame is the signature of a single rigid transform, which is exactly what this is |
+| `inspectTurn(t)` | the extra roll, added to the base | **Monotonic**, so the roll only ever winds one way. This is what removes the freeze: through the whole hold the weapon keeps turning, even though the envelope is flat |
+
+The roll is `envelope * (ROLL + TURN * turn)` rather than `envelope * ROLL`. The
+envelope still scales it, so the weapon starts and ends at rest with no extra
+bookkeeping; the turn is only what it does in between. A roll driven by the
+envelope alone must unwind along the path it wound up, and no amount of easing
+hides that.
+
+The easing is **smootherstep**, not smoothstep. Smoothstep's *acceleration* jumps
+at both ends, and over a 0.3s rise that is a visible tick as the weapon leaves
+rest; the quintic costs two multiplies and has a continuous second derivative.
+Its output is clamped as well as its input — algebraically it cannot exceed 1 on
+`[0,1]`, but in floats it lands on `1.0000000000000013` near the top, which was
+enough to fail the envelope's own bound check.
+
+`INSPECT_DURATION` went 1.35 → 1.5s to give the turn room. It is still a maximum
+rather than a commitment, for the reason above: any frame can interrupt it.
+
+Both clients carry the same constants and the same curves, and a test samples
+them rather than comparing the source — the Rust and the TypeScript are separate
+implementations, so what has to agree is the curve. Two clients drawing the same
+weapon differently is the drift this module's shape exists to avoid, and an
+inspect is the one animation a player watches closely enough to notice.
 
 **The scoreboard** is new in the native client (`Tab`, held). Names, kills, deaths
 and a team stripe, with the match score above them; ranked most kills first then
@@ -3780,9 +4115,12 @@ against, and nothing to be MVP of.
   [Controls](#controls-and-why-they-are-not-keymap-bindings).
   Ranked play needs no setting: the entry point is a button, and the server it
   talks to is the one `games.serverUrl` already names for sign-in.
-  `hassault.video.fullscreen` / `.renderScale` / `.quality` / `.vsync` and
+  `hassault.video.fullscreen` / `.renderScale` / `.fov` / `.quality` /
+  `.antialias` / `.shadows` / `.vsync` / `.fpsLimit` and
   `hassault.crosshair.style` / `.size` / `.gap` / `.thickness` / `.color` — what
-  the native client's pause menu edits. Declared rows rather than a file beside
+  the native client's pause menu edits; see
+  [the rest of the video page](#the-rest-of-the-video-page) for what each of the
+  video rows actually costs. Declared rows rather than a file beside
   the binary, so the pane's Settings page and the in-game menu write the same
   values.
   `hassault.nativeClient` — whether Play, Train and Host open the native window
@@ -4176,12 +4514,36 @@ click.
 | Browser | Native |
 | --- | --- |
 | Title bar: room, map, ping, cheats | The header line |
-| Quick-toggle buttons | `F1`–`F8`, drawn as live state chips |
+| Quick-toggle buttons | `F1`–`F8`, drawn as live state chips — **or clicked** |
 | Filter tabs (ALL/NET/DRAW/SERVER/MACRO) | `^F`, or `filter <name>` |
 | Macro drawer | `macros`, listing what the node serves |
 | Copy logs | `copy`, which writes a file |
 | Autocomplete rows carrying a type and a description | One detail line under the input, for the selected item |
 | `[4:30:12 AM]` timestamps | `[02:05]`, elapsed since the console came up |
+
+The pointer is released whenever the console is up, so the chips and the
+completion row take a click and the wheel scrolls the scrollback — the mouse
+behaves the way it does in any other shooter's console. Two rules make that safe.
+The hit test reads **`hud::console_hits`, the same layout the painter draws
+from** (the rule `Menu::rows_at` already follows: a second computation of where a
+chip is drawn is a click that lands on its neighbour, silently). And a click that
+hits nothing is **swallowed rather than falling through** — the panel covers the
+top half of the screen and the world is still live behind it, so a miss that
+reached the trigger would fire a shot at whatever the crosshair was on while the
+player was reading their own scrollback. Closing the console takes the pointer
+back, the same way closing the pause menu does; it used to release it on the way
+in and never re-take it, so the tilde that put you back in the game left you with
+a view that would not turn until you clicked.
+
+The font is **case-sensitive**, and was not always. Every glyph used to be looked
+up through `to_ascii_uppercase`, so the 5×7 set had one case and lowercase came
+out shouting. That is right for the HUD — the kill feed, the scoreboard and the
+menu uppercase their strings explicitly, and still do — and wrong for the one
+surface whose job is to echo back exactly what was typed, next to CVar names that
+are lowercase everywhere else in this app. The lowercase cell is the fiddly half
+of a 5×7 font: x-height letters occupy rows 2–6, ascenders the full seven, and
+descenders (`g j p q y`) shift up to rows 1–6 because there is no eighth row to
+hang a tail in.
 
 Six of those carry a decision worth keeping:
 
@@ -4670,11 +5032,12 @@ The skin system provides distinct faction styling and collectible operator skins
   carries no reload state and there is no `ReloadFx`. Adding one is a server
   change, not a renderer one.
 
-- **Grenades are browser-only.** The native client (`apps/native-fps`) does not
-  draw them, throw them, or render a smoke — it shares the wire, so a grenade
-  thrown by somebody else still hurts a native player, and they still go blind,
-  with nothing on screen to say why. Until it catches up, utility is a reason to
-  play in the pane.
+- ~~**Grenades are browser-only.**~~ Fixed — see
+  [Throwing in the native client](#throwing-in-the-native-client). The drawing
+  half (`nades.rs`) landed first, and this entry outlived it by a release: for a
+  while the native client drew everybody else's grenades perfectly and could not
+  produce one, which is the *worse* half of the original bug rather than a fix
+  for it.
 - **The bots do not throw.** They respect a smoke (`BotBrain._visible` asks
   `MatchRoom.smoked`) but never use one, so utility is a purely human advantage
   in a match against them.
@@ -4688,7 +5051,8 @@ The skin system provides distinct faction styling and collectible operator skins
   shape; a 1v1 duel mode is where a hassault rating belongs. Until then the
   ladder is untouched and the debrief shows no rank.
 - **Nothing binds keys yet.** The native client's controls are fixed (WASD,
-  space, shift, R, 1–5, right mouse to scope, Escape for the menu); the pane's
+  space, shift, R, 1–5, 6–9 to ready a grenade, G to throw and H to lob, right
+  mouse to scope, Escape for the menu); the pane's
   rebindable `hassault.controls` map is not read. The menu has a Controls page
   with sensitivity on it and nothing else, which is where rebinding will land.
 - **The native client has no `NoiseRing`.** It plays what it hears, but the

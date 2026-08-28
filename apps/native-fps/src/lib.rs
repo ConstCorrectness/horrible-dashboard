@@ -42,5 +42,6 @@ pub mod settings;
 pub mod shadow;
 pub mod trace;
 pub mod training;
+pub mod utility;
 pub mod viewmodel;
 pub mod world;

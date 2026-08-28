@@ -53,10 +53,12 @@ from backend.modules.llamacpp.models import (
     RepoFilesResponse,
     SaveFindingRequest,
     SaveFindingResponse,
+    ProfilePoint,
     SeriesPoint,
     SpawnRequest,
     StatusResponse,
     TraceCatalogResponse,
+    TraceProfileResponse,
     TraceSeriesResponse,
     TraceDetail,
     TraceListResponse,
@@ -544,6 +546,61 @@ def get_series(trace_id: str, name: str, stat: str = "rms") -> TraceSeriesRespon
             )
 
     return TraceSeriesResponse(name=wanted, stat=stat, points=points)
+
+
+@router.get("/traces/{trace_id}/profile", response_model=TraceProfileResponse)
+def get_profile(
+    trace_id: str, passIndex: int = 0, stat: str = "rms"
+) -> TraceProfileResponse:
+    """Every record of one forward pass, reduced to one statistic.
+
+    **Why this is a route at all.** The obvious implementation is none: the record
+    list is already in the browser, so arranging `records[].summary` by depth would
+    cost no request. But `tracer._capture` writes `summary` **only** for
+    `summary`-fidelity records — exactly the records that hold no data — so on every
+    fp16 trace on disk the manifest carries 170 records and zero statistics, and a
+    client-side profile renders empty while blaming the fidelity. This is the same
+    reason `get_series` exists, one axis over.
+
+    Like the series, it summarizes the **whole** record rather than the first
+    `_VALUE_CAP` values `get_record` ships to a browser. A profile compares a node
+    against itself across depth, and while a common prefix rule would at least be
+    consistent, the tensors here are tens of KB and there is no reason to compare
+    prefixes when the whole thing is affordable.
+
+    One request serves both the role profile and the kind fingerprint, and both are
+    re-derived on the client, so switching the node under study costs nothing.
+    """
+    trace = _require(trace_id)
+    wanted = [r for r in trace.records if r.pass_index == passIndex]
+    if not wanted:
+        raise HTTPException(
+            status_code=404, detail=f"no pass {passIndex} in this trace"
+        )
+
+    points: list[ProfilePoint] = []
+    with trace.blob.open("rb") as handle:
+        for record in wanted:
+            value: float | None = None
+            if record.fidelity == "summary" or record.length == 0:
+                raw_stat = record.summary.get(stat)
+                value = float(raw_stat) if isinstance(raw_stat, (int, float)) else None
+            else:
+                handle.seek(record.offset)
+                values = traces.decode_array(handle.read(record.length), record.dtype)
+                computed = traces.summarize_array(values).get(stat)
+                value = float(computed) if computed is not None else None
+            points.append(
+                ProfilePoint(
+                    index=record.index,
+                    name=record.name,
+                    layer=record.layer,
+                    value=value,
+                    fidelity=record.fidelity,
+                )
+            )
+
+    return TraceProfileResponse(passIndex=passIndex, stat=stat, points=points)
 
 
 @router.get("/traces/{trace_id}/tensors")

@@ -47,6 +47,10 @@ pub enum Action {
     RenderScale,
     Quality,
     Vsync,
+    Fov,
+    Antialias,
+    Shadows,
+    FpsLimit,
     ShowHitboxes,
     Sensitivity,
 }
@@ -200,14 +204,47 @@ impl Menu {
                     Action::RenderScale,
                 ),
                 row(
+                    "FIELD OF VIEW",
+                    format!("{:.0}", settings.video.fov),
+                    Action::Fov,
+                ),
+                // The preset first and the knobs it writes directly under it, so
+                // the relationship is visible: stepping QUALITY moves the rows
+                // below rather than shadowing them, and a player who then changes
+                // one of those sees the preset row stay where they left it.
+                row(
                     "QUALITY",
                     settings.video.quality.label().to_string(),
                     Action::Quality,
                 ),
                 row(
+                    "ANTI-ALIASING",
+                    if settings.video.antialias {
+                        "4X"
+                    } else {
+                        "OFF"
+                    }
+                    .to_string(),
+                    Action::Antialias,
+                ),
+                row(
+                    "SHADOWS",
+                    if settings.video.shadows { "ON" } else { "OFF" }.to_string(),
+                    Action::Shadows,
+                ),
+                row(
                     "VSYNC",
                     if settings.video.vsync { "ON" } else { "OFF" }.to_string(),
                     Action::Vsync,
+                ),
+                row(
+                    "FRAME CAP",
+                    if settings.video.fps_limit == 0 {
+                        "UNCAPPED".to_string()
+                    } else {
+                        format!("{} FPS", settings.video.fps_limit)
+                    },
+                    Action::FpsLimit,
                 ),
                 // On the video page rather than a debug one, because it is a
                 // thing you turn on for thirty seconds to answer a question and
@@ -380,7 +417,11 @@ impl Menu {
     }
 }
 
-/// Apply one row's action to the settings, returning the keys that changed.
+/// Apply one row's action to the settings, returning every key that changed.
+///
+/// A `Vec` and not one key, because a preset is not one key: stepping QUALITY
+/// writes the individual rows under it, and returning only `KEY_QUALITY` would
+/// persist a level whose knobs came back at their old values on the next start.
 ///
 /// Returned rather than written here so the caller owns persistence: this
 /// function is pure, which is what lets every one of the stepping rules below be
@@ -389,46 +430,74 @@ impl Menu {
 /// `step` is +1 or -1. An action that is not a value ignores it — activating a
 /// choice row with Enter steps it forwards, which is the behaviour that makes
 /// one control work for both the keyboard and the mouse.
-pub fn apply(action: Action, step: i32, settings: &mut Settings) -> Option<&'static str> {
+pub fn apply(action: Action, step: i32, settings: &mut Settings) -> Vec<&'static str> {
     use crate::settings::*;
     match action {
-        Action::Resume | Action::Open(_) | Action::Back | Action::Quit => None,
+        Action::Resume | Action::Open(_) | Action::Back | Action::Quit => vec![],
         Action::CrosshairStyle => {
             settings.crosshair.style = cycle(&CrosshairStyle::ALL, settings.crosshair.style, step);
-            Some(KEY_CROSSHAIR_STYLE)
+            vec![KEY_CROSSHAIR_STYLE]
         }
         Action::CrosshairColor => {
             settings.crosshair.color = cycle(&CrosshairColor::ALL, settings.crosshair.color, step);
-            Some(KEY_CROSSHAIR_COLOR)
+            vec![KEY_CROSSHAIR_COLOR]
         }
         Action::CrosshairSize => {
             settings.crosshair.size = step_value(settings.crosshair.size, step, 0.5, 1.0, 12.0);
-            Some(KEY_CROSSHAIR_SIZE)
+            vec![KEY_CROSSHAIR_SIZE]
         }
         Action::CrosshairGap => {
             settings.crosshair.gap = step_value(settings.crosshair.gap, step, 1.0, 0.0, 20.0);
-            Some(KEY_CROSSHAIR_GAP)
+            vec![KEY_CROSSHAIR_GAP]
         }
         Action::CrosshairThickness => {
             settings.crosshair.thickness =
                 step_value(settings.crosshair.thickness, step, 0.2, 0.2, 3.0);
-            Some(KEY_CROSSHAIR_THICKNESS)
+            vec![KEY_CROSSHAIR_THICKNESS]
         }
         Action::Fullscreen => {
             settings.video.fullscreen = !settings.video.fullscreen;
-            Some(KEY_FULLSCREEN)
+            vec![KEY_FULLSCREEN]
         }
         Action::Vsync => {
             settings.video.vsync = !settings.video.vsync;
-            Some(KEY_VSYNC)
+            vec![KEY_VSYNC]
         }
         Action::ShowHitboxes => {
             settings.show_hitboxes = !settings.show_hitboxes;
-            Some(KEY_SHOW_HITBOXES)
+            vec![KEY_SHOW_HITBOXES]
         }
         Action::Quality => {
-            settings.video.quality = cycle(&Quality::ALL, settings.video.quality, step);
-            Some(KEY_QUALITY)
+            let quality = cycle(&Quality::ALL, settings.video.quality, step);
+            settings.video.apply_preset(quality);
+            vec![KEY_QUALITY, KEY_ANTIALIAS]
+        }
+        Action::Fov => {
+            settings.video.fov =
+                step_value(settings.video.fov, step, 5.0, FOV_RANGE.0, FOV_RANGE.1);
+            vec![KEY_FOV]
+        }
+        Action::Antialias => {
+            settings.video.antialias = !settings.video.antialias;
+            vec![KEY_ANTIALIAS]
+        }
+        Action::Shadows => {
+            settings.video.shadows = !settings.video.shadows;
+            vec![KEY_SHADOWS]
+        }
+        Action::FpsLimit => {
+            // Clamped rather than wrapped, unlike the choice rows above. A cap is
+            // an ordered scale with a meaningful end, and wrapping it means one
+            // step past UNCAPPED lands on 360 — which is the row doing the
+            // opposite of what the player just asked for.
+            let current = FPS_LIMITS
+                .iter()
+                .position(|c| *c == settings.video.fps_limit)
+                .unwrap_or(0);
+            let next =
+                (current as i32 + step.signum().max(-1)).clamp(0, FPS_LIMITS.len() as i32 - 1);
+            settings.video.fps_limit = FPS_LIMITS[next as usize];
+            vec![KEY_FPS_LIMIT]
         }
         Action::RenderScale => {
             // Discrete steps rather than a continuous slider: the render target
@@ -441,11 +510,11 @@ pub fn apply(action: Action, step: i32, settings: &mut Settings) -> Option<&'sta
                 .unwrap_or(SCALES.len() - 1);
             let next = (current as i32 + step.signum().max(-1)).clamp(0, SCALES.len() as i32 - 1);
             settings.video.render_scale = SCALES[next as usize];
-            Some(KEY_RENDER_SCALE)
+            vec![KEY_RENDER_SCALE]
         }
         Action::Sensitivity => {
             settings.sensitivity = step_value(settings.sensitivity, step, 0.05, 0.05, 10.0);
-            Some(KEY_SENSITIVITY)
+            vec![KEY_SENSITIVITY]
         }
     }
 }
@@ -548,7 +617,7 @@ mod tests {
         let (_, mut s) = menu();
         assert_eq!(
             apply(Action::CrosshairColor, 1, &mut s),
-            Some(KEY_CROSSHAIR_COLOR)
+            vec![KEY_CROSSHAIR_COLOR]
         );
         assert_eq!(s.crosshair.color, CrosshairColor::Green);
         apply(Action::CrosshairColor, -1, &mut s);
@@ -610,7 +679,7 @@ mod tests {
             Action::Quit,
             Action::Open(Page::Video),
         ] {
-            assert_eq!(apply(action, 1, &mut s), None);
+            assert!(apply(action, 1, &mut s).is_empty());
         }
         assert_eq!(s.crosshair.size, Settings::default().crosshair.size);
     }
