@@ -5,11 +5,17 @@
 //! deforms, and none of it applies to a rifle. What is shared is the part worth
 //! sharing — the lighting, through `lighting.wgsl.inc`.
 //!
-//! One prop is resident at a time, because one weapon is in your hands at a
-//! time. Swapping re-uploads, which is a few thousand vertices and a megabyte of
-//! texture on a weapon switch; the alternative — every weapon resident for the
-//! whole match — is four times the VRAM to save an upload nobody can perceive.
+//! **Every prop stays resident, and one of them is current.** It used to be one
+//! at a time, on the argument that a re-upload is imperceptible — which was true
+//! of the upload and false of everything in front of it: dropping the prop threw
+//! away the *parse* too, so switching back to a gun re-decoded its textures
+//! (57–110 ms, see `prop::preload`) on the frame thread. Three weapons of
+//! vertices and textures is a few megabytes of VRAM to make a weapon switch
+//! cost a hash lookup.
 
+use std::collections::HashMap;
+
+use glam::Vec3;
 use wgpu::util::DeviceExt;
 
 use crate::character::{MaterialDef, TextureImage};
@@ -48,6 +54,10 @@ pub struct PropGpu {
     vertices: wgpu::Buffer,
     draws: Vec<Draw>,
     materials: Vec<wgpu::BindGroup>,
+    /// The model's bounds, kept so a swap back can be re-fitted to the boxes
+    /// without the parsed `Prop` — which is exactly what the cache exists to
+    /// avoid rebuilding.
+    bounds: (Vec3, Vec3),
 }
 
 /// The pipeline and the resident prop.
@@ -56,8 +66,10 @@ pub struct Props {
     shader: wgpu::ShaderModule,
     material_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
-    /// The prop currently in the hands, and which weapon it is.
-    resident: Option<(String, PropGpu)>,
+    /// Every prop that has been uploaded, by weapon id.
+    uploaded: HashMap<String, PropGpu>,
+    /// Which of them is in the hands, if any.
+    current: Option<String>,
 }
 
 impl Props {
@@ -134,21 +146,30 @@ impl Props {
             shader,
             material_layout,
             sampler,
-            resident: None,
+            uploaded: HashMap::new(),
+            current: None,
         }
     }
 
-    /// Whether a prop for this weapon is already uploaded.
-    pub fn holds(&self, weapon: &str) -> bool {
-        self.resident.as_ref().is_some_and(|(id, _)| id == weapon)
+    /// Put an already-uploaded prop in the hands, and report its bounds so the
+    /// view model can fit it. `None` leaves the current one alone — the caller
+    /// has nothing to draw for this weapon and keeps its boxes.
+    pub fn select(&mut self, weapon: &str) -> Option<(Vec3, Vec3)> {
+        let bounds = self.uploaded.get(weapon)?.bounds;
+        self.current = Some(weapon.to_string());
+        Some(bounds)
     }
 
-    /// Drop whatever is resident. The boxes take over until something is set.
+    /// Stop drawing a prop. The boxes take over; **nothing is unloaded**, so
+    /// coming back to this weapon costs a lookup.
     pub fn clear(&mut self) {
-        self.resident = None;
+        self.current = None;
     }
 
-    /// Upload a parsed prop, replacing whatever was in the hands.
+    /// Upload a parsed prop into the cache, without putting it in the hands.
+    /// `select` does that, and the two are separate because the props arrive
+    /// from the preloader in their own order rather than the order they are
+    /// picked up in.
     pub fn set(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, weapon: &str, prop: &Prop) {
         let views: Vec<wgpu::TextureView> = prop
             .textures
@@ -190,14 +211,15 @@ impl Props {
             })
             .collect();
 
-        self.resident = Some((
+        self.uploaded.insert(
             weapon.to_string(),
             PropGpu {
                 vertices,
                 draws,
                 materials,
+                bounds: prop.bounds(),
             },
-        ));
+        );
     }
 
     fn material_group(
@@ -264,7 +286,7 @@ impl Props {
     /// camera-to-world matrix the shader lights by. Handing it the world camera
     /// would draw the weapon somewhere out in the map.
     pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, camera: &wgpu::BindGroup) -> bool {
-        let Some((_, prop)) = &self.resident else {
+        let Some(prop) = self.current.as_ref().and_then(|id| self.uploaded.get(id)) else {
             return false;
         };
         pass.set_pipeline(&self.pipeline);

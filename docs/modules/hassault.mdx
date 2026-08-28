@@ -1054,9 +1054,21 @@ applies — lit as though it never moved. That uniform is forty floats, not the
 thirty-six it is easy to count; wgpu rejects a short one at draw time naming both
 byte counts, which makes it the rare mistake here that fails loudly.
 
-The GLBs are compiled in with `include_bytes!`, like the operator, and one prop
-is resident at a time — a swap re-uploads a few thousand vertices and a megabyte
-of texture, against four times the VRAM to avoid an upload nobody can perceive.
+The GLBs are compiled in with `include_bytes!`, like the operator. **Every prop
+stays resident once uploaded, and all three are parsed on a background thread at
+startup** (`prop::preload`) — which is a correction, not a refinement. It used to
+be one resident prop parsed inline on the frame the player pressed a number key,
+on the argument that a re-upload is imperceptible. The upload was; the *parse* in
+front of it was not — 57–110 ms of frame thread per swap, measured in a release
+build, dominated by decoding the webp maps. And because dropping the prop dropped
+the parse with it, switching **back** to a gun paid it again, so 1–2–1 cost three
+stalls. Pressing a weapon key visibly froze the game, which is what it was
+reported as. `sync_prop` now parses nothing: it drains whatever the preloader has
+finished, uploads that, and picks a weapon with a hash lookup. A weapon whose
+prop has not landed yet keeps its boxes and is retried, which is the same
+fallback a weapon with no prop at all has always used. This is the lesson
+`Squad::load` already documents for the operator's fourteen textures — decoding
+them mid-match is a visible hitch — arrived at a second time.
 
 #### Looking at it
 

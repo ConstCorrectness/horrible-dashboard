@@ -876,16 +876,17 @@ impl Renderer {
         }
     }
 
-    /// Replace the weapon geometry for this frame.
-    ///
-    /// Whether a prop for this weapon is already uploaded.
-    pub fn holds_prop(&self, weapon: &str) -> bool {
-        self.props.holds(weapon)
-    }
-
-    /// Upload a parsed weapon prop, replacing whatever was in the hands.
+    /// Upload a parsed weapon prop into the cache. It is drawn once `use_prop`
+    /// picks it, which is a different event: props are preloaded off the frame
+    /// thread and land in whatever order they finish parsing.
     pub fn set_prop(&mut self, weapon: &str, prop: &crate::prop::Prop) {
         self.props.set(&self.device, &self.queue, weapon, prop);
+    }
+
+    /// Draw this weapon's uploaded prop, reporting its bounds for the fit.
+    /// `None` when it has not been uploaded — the boxes stay.
+    pub fn use_prop(&mut self, weapon: &str) -> Option<(glam::Vec3, glam::Vec3)> {
+        self.props.select(weapon)
     }
 
     /// Go back to the box model.

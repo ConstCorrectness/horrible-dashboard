@@ -25,6 +25,7 @@
 //! ground.
 
 use std::collections::HashMap;
+use std::sync::mpsc::Receiver;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
@@ -117,6 +118,16 @@ pub struct App {
     /// `None` when the asset failed to parse, which falls back to the old box
     /// bodies rather than to a match of invisible players.
     squad: Option<Squad>,
+    /// Weapon props being parsed off the frame thread — see `prop::preload`.
+    /// Drained in `sync_prop`, which is where the renderer is in hand.
+    prop_loads: Receiver<(String, Result<prop::Prop, String>)>,
+    /// The weapon `sync_prop` last fitted a prop to, and whether it succeeded.
+    /// Two fields rather than an `Option<String>` because "fitted nothing for
+    /// this weapon" and "have not tried this weapon yet" are different: the
+    /// first stops retrying, the second must keep trying until the preloader
+    /// catches up.
+    prop_weapon: String,
+    prop_fitted: bool,
     mesh: MeshData,
     world: World,
     /// The match, when there is one. **Train has none** — it is one player on a
@@ -319,6 +330,12 @@ impl App {
     ) -> App {
         let map_name = world.info.name.clone();
         let mut app = App {
+            // Started here, before a window exists: the parse needs no GPU, and
+            // the sooner it begins the likelier every prop is resident before
+            // the first weapon switch.
+            prop_loads: prop::preload(),
+            prop_weapon: String::new(),
+            prop_fitted: false,
             window: None,
             renderer: None,
             mesh,
@@ -1323,49 +1340,65 @@ impl App {
             .unwrap_or(self.sensitivity)
     }
 
-    /// Make the uploaded prop match the weapon in hand.
+    /// Make the drawn prop match the weapon in hand.
     ///
-    /// Called every frame with whatever the server last said we are holding, and
-    /// cheap on the frames where nothing changed — `holds_prop` is a string
-    /// compare, and the parse and upload only happen on a real swap.
+    /// Called every frame with whatever the server last said we are holding.
+    /// **Nothing is parsed here.** It used to be — a swap decoded the weapon's
+    /// GLB inline, 57–110 ms of frame thread on the key press, and again on
+    /// every press after it because only one prop stayed resident. Pressing
+    /// 1/2/3 therefore stalled the whole game, which is what this shape fixes:
+    /// `prop::preload` parses off the loop, this drains what it has finished and
+    /// pays only the upload, and picking a weapon is a lookup.
     ///
-    /// Every failure here falls back to the box model rather than propagating.
-    /// A weapon with no GLB, a GLB that will not parse, a prop that cannot be
-    /// fitted: all three are a weapon that draws as boxes, which is a complete
-    /// working weapon and was the only kind there was until recently. The parse
-    /// failure is *reported* through `divergence`, though — silently drawing
-    /// boxes because an asset is corrupt is the shape of bug this client keeps
-    /// finding.
+    /// Every failure falls back to the box model rather than propagating. A
+    /// weapon with no GLB, a GLB that will not parse, a prop that cannot be
+    /// fitted, a prop that has not arrived yet: all four are a weapon that draws
+    /// as boxes, which is a complete working weapon and was the only kind there
+    /// was until recently. The parse failure is *reported* through `divergence`,
+    /// though — silently drawing boxes because an asset is corrupt is the shape
+    /// of bug this client keeps finding.
     fn sync_prop(&mut self, weapon: &str) {
         // No renderer yet means the window has not come up. Nothing to upload
-        // to, and the next frame that has one runs this again.
+        // to, and the next frame that has one runs this again — the preloader's
+        // results wait in the channel until then.
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
-        if !renderer.holds_prop(weapon) {
-            match prop::weapon_glb(weapon) {
-                None => {
-                    // No prop for this weapon, which is a decision rather than a
-                    // failure — see `WEAPON_GLBS`.
+        // Drained here rather than in a handler of its own: this is the one
+        // place per frame that already owns the renderer, and an upload is a few
+        // milliseconds spread over the frames the props happen to land on.
+        while let Ok((id, parsed)) = self.prop_loads.try_recv() {
+            match parsed {
+                Ok(prop) => renderer.set_prop(&id, &prop),
+                Err(e) => hassault_native::divergence::note_prop(&id, &e),
+            }
+        }
+        if weapon != self.prop_weapon {
+            self.prop_weapon = weapon.to_string();
+            self.prop_fitted = false;
+        }
+        // Retried until it lands, because a weapon can be picked up before its
+        // prop has finished parsing — and then never again, which is what the
+        // flag is for: `fit_prop` walks the box model's vertices, and doing that
+        // every frame for a prop that has not moved is work for nothing.
+        if !self.prop_fitted {
+            match renderer.use_prop(weapon) {
+                Some((min, max)) if self.viewmodel.fit_prop(min, max).is_some() => {
+                    self.prop_fitted = true;
+                }
+                Some(_) => {
+                    // Degenerate bounds: this prop will never fit, so stop
+                    // asking and leave the boxes.
+                    self.prop_fitted = true;
                     renderer.clear_prop();
                     self.viewmodel.clear_prop();
                 }
-                Some(bytes) => match prop::Prop::from_slice(bytes) {
-                    Ok(parsed) => {
-                        let (min, max) = parsed.bounds();
-                        if self.viewmodel.fit_prop(min, max).is_some() {
-                            renderer.set_prop(weapon, &parsed);
-                        } else {
-                            renderer.clear_prop();
-                            self.viewmodel.clear_prop();
-                        }
-                    }
-                    Err(e) => {
-                        hassault_native::divergence::note_prop(weapon, &e);
-                        renderer.clear_prop();
-                        self.viewmodel.clear_prop();
-                    }
-                },
+                None => {
+                    // No prop for this weapon — none exists (see `WEAPON_GLBS`),
+                    // it failed to parse, or it has not landed yet.
+                    renderer.clear_prop();
+                    self.viewmodel.clear_prop();
+                }
             }
         }
         renderer.set_prop_model(self.viewmodel.prop_model());

@@ -104,9 +104,9 @@ async fn run(path: &str) {
         mapped_at_creation: false,
     });
 
-    // Each weapon in its own third of the frame. Drawn one at a time because one
-    // prop is resident at a time — which is the client's own behaviour, so this
-    // exercises the swap path as well as the draw.
+    // Each weapon in its own third of the frame, uploaded and then picked up in
+    // turn — the client's own two steps, so this exercises the swap path as well
+    // as the draw.
     let count = WEAPON_GLBS.len() as u32;
     let mut cleared = false;
     for (index, (name, bytes)) in WEAPON_GLBS.iter().enumerate() {
@@ -123,6 +123,9 @@ async fn run(path: &str) {
             extent.z,
         );
         props.set(&device, &queue, name, &prop);
+        // `set` only uploads: every prop stays resident and `select` says which
+        // one is in the hands. Uploading without selecting draws nothing.
+        props.select(name).expect("just uploaded");
 
         // Framed side-on, centred on the model, far enough back for the longest
         // of them. Its own camera per weapon so a pistol is not a speck beside a

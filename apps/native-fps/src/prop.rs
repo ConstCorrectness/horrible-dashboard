@@ -24,6 +24,8 @@
 //! parser must refuse the file), and the decoded-image and material shapes the
 //! renderer uploads.
 
+use std::sync::mpsc::{self, Receiver};
+
 use glam::{Mat4, Quat, Vec3, Vec4};
 
 use crate::character::{decode_image, normalise_glb, MaterialDef, Primitive, TextureImage};
@@ -60,6 +62,34 @@ pub fn weapon_glb(id: &str) -> Option<&'static [u8]> {
         .iter()
         .find(|(name, _)| *name == id)
         .map(|(_, bytes)| *bytes)
+}
+
+/// Parse every compiled-in weapon prop on a background thread.
+///
+/// The parse is **57–110 ms per weapon** (measured, release build: the webp
+/// textures are the bulk of it), and it used to run inside `sync_prop` on the
+/// frame the player pressed a number key. Two presses of the same key paid it
+/// twice, because only one prop was ever resident. That is the whole of the
+/// "switching guns lags the game" report: a tenth of a second of frame thread,
+/// on the one input that has to be instant in a firefight.
+///
+/// So it happens here instead, off the loop, starting the moment the client
+/// comes up — the same decision `Squad::load` documents for the operator's
+/// fourteen textures. The receiver hands each result to the frame loop, which
+/// only pays for the upload; a weapon whose prop has not landed yet keeps its
+/// boxes, which is what a weapon with no prop at all has always drawn.
+pub fn preload() -> Receiver<(String, Result<Prop, String>)> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        for (id, bytes) in WEAPON_GLBS {
+            // A closed receiver means the client is shutting down; there is no
+            // point decoding the rest of the textures for nobody.
+            if tx.send((id.to_string(), Prop::from_slice(bytes))).is_err() {
+                return;
+            }
+        }
+    });
+    rx
 }
 
 /// A vertex of a static prop.
@@ -371,5 +401,27 @@ mod tests {
     #[test]
     fn a_file_that_is_not_a_glb_is_refused_rather_than_guessed_at() {
         assert!(Prop::from_slice(b"not a glb at all").is_err());
+    }
+
+    #[test]
+    fn every_compiled_in_prop_is_parsed_off_the_frame_thread() {
+        // The guard on the weapon-switch stall: if `preload` ever stops
+        // delivering one of these, `sync_prop` draws that weapon as boxes
+        // forever — silently, since boxes are also what a weapon with no model
+        // draws. Blocking here is the test blocking, not the game: the point of
+        // the receiver is that the frame loop never does.
+        let rx = preload();
+        let mut seen: Vec<String> = rx
+            .iter()
+            .map(|(id, parsed)| {
+                assert!(parsed.is_ok(), "{id} did not parse");
+                id
+            })
+            .collect();
+        seen.sort();
+        let mut expected: Vec<String> =
+            WEAPON_GLBS.iter().map(|(id, _)| id.to_string()).collect();
+        expected.sort();
+        assert_eq!(seen, expected);
     }
 }
