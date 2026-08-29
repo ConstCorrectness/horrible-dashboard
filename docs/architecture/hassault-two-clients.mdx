@@ -66,6 +66,7 @@ that both sides replay, or merely asserted in a comment.
 | Movement, collision, spawn placement | `world.ts` + `player.ts`, `physics.py`, `physics.rs` | `__tests__/physics-vectors.json` (`cases`, `spawns`) |
 | Shot geometry | `trace.ts`, `weapons.py`, `trace.rs` | same fixture (`traces`, `bodies`) |
 | Operator clip selection | `models/clips.ts`, `clips.rs` | `__tests__/clip-vectors.json` |
+| Surface tint, face shades, detail tile | `geometry.ts` + `surfaces.ts`, `geometry.rs` + `detail.rs` | `__tests__/surface-vectors.json` |
 | Signed envelope + node id | Python, Kotlin (the Android companion) | `backend/tests/test_network_mobile_conformance.py` |
 
 The contract in every case is the same: **the fixture pins agreement, each side's
@@ -83,8 +84,6 @@ maintenance hazard, listed so that changing one sends you to the other:
 
 | Logic | Implementations | What drift looks like |
 | --- | --- | --- |
-| Surface tint per texture id | `geometry.ts` `texColor`, `geometry.rs` `tex_color` | The same map is a different colour in each client |
-| Surface detail tile | `surfaces.ts`, `detail.rs` | Different grain, or a seam in one and not the other |
 | Light rig, tone curve | `HorribleAssaultPanel.tsx`, `lighting.wgsl.inc` | The two clients stop looking like the same game |
 | Faction colours | `skins.ts`, `bodies.rs` + `animator.rs` | Teams read differently depending on the client |
 | Grip transform for held weapons | `CharacterModel.ts`, `held.rs` | A rifle in the wrist rather than the hand |
@@ -93,9 +92,10 @@ maintenance hazard, listed so that changing one sends you to the other:
 | Build-in timing, band, rise, glow | `reveal.ts`, `reveal.rs` + `shader.wgsl` | The map assembles at a different speed or from a different direction |
 | Grenade and cloud tints, fuse blink rate | `nades.ts`, `nades.rs` | Smoke reads as a different colour depending on which client you launched |
 
-The tint and the detail tile are the two most worth pinning next: both are pure
-functions of small integer inputs, so a vectors file is cheap, and both decide
-what the whole world looks like.
+The two rows that used to head this table — the surface tint and the detail
+tile — are the ones that moved to the table above. What happened when they were
+pinned is the argument for pinning the rest of it, and it has its own section
+below.
 
 :::note One duplication that is *not* a hazard
 The sun's direction appears in both `shadow.rs` and `lighting.wgsl.inc` — a
@@ -532,6 +532,70 @@ Two shapes worth pinning, both of which a tidier model would have got wrong:
 
 `left` is also the one thing a snapshot cannot express: a body that disconnected
 and a body behind a wall both simply stop appearing.
+
+## Pinning the look: what the surface fixture found
+
+The two rows above sat under a note saying they were the ones most worth pinning
+next. They were, and the reason generalises: **a pure function of small integer
+inputs is the cheapest thing on this page to pin and among the most expensive to
+leave unpinned.** The tint decides the colour of every surface in every map and
+the tile decides the grain on all of them, and neither has any failure signal at
+all — no throw, no warning, no broken frame.
+
+`packages/core/src/modules/hassault/__tests__/surface-vectors.json` now holds the
+browser's own output for both, replayed by `surface-conformance.test.ts` here and
+by `#[cfg(test)] mod conformance` in `geometry.rs` and `detail.rs` there. The
+expectations are generated from the browser because the browser is where both
+originated — `detail.rs`'s header calls itself a port of `surfaces.ts`.
+
+Generation lives **inside the vitest file**, behind `UPDATE_SURFACE_VECTORS=1`,
+rather than in `scripts/` beside `gen_hassault_vectors.py`:
+
+```bash
+UPDATE_SURFACE_VECTORS=1 pnpm --filter @horrible/core test surface-conformance
+```
+
+The physics fixture is written by Python, which has no trouble importing the
+server. These two functions are TypeScript with extensionless imports, which bare
+Node cannot resolve — and a generator carrying its own copy of the maths would
+pin the copy rather than the client, which is worse than having no fixture at
+all.
+
+### It failed on the first run
+
+Which is the point of this section. `tex_color` computed the hue in `f32` with
+the golden ratio conjugate truncated to `0.618_034`, under a comment asserting
+that this and the browser's `f64` digits "both round to the same f32". They do
+not. The error is proportional to the texture id: invisible at id 4, about
+**1.4e-5** by id 255.
+
+That is far too small to see, and that is exactly what makes it the right kind of
+catch. It is not a bug anybody would have found by looking; it is a *class* of
+bug that had no detector, sitting in the one function whose output covers every
+pixel of the world. The fix is to do the arithmetic in `f64` and cast the three
+channels at the end, which costs nothing — `tex_color` runs once per quad at mesh
+build, not per pixel and not per frame.
+
+Two details of the fixture's design are doing real work:
+
+- **The tint tolerance is `1e-5`; the tile's comparison is exact.** The tint
+  crosses a precision boundary (`f64` one side, `f32` the other) so it needs a
+  budget, and a hue step is ~0.6 apart, so `1e-5` is four orders of magnitude
+  tighter than anything an eye could resolve and still catches drift. The tile
+  does *not* cross one — `detail.rs` is deliberately `f64` throughout, because
+  the hash multiplies by 43758.5453123 and at `f32` the fraction that comes back
+  is a different number entirely — and both sides round to a byte at the end. A
+  tolerance there would quietly admit the drift the file exists to catch.
+- **The tile is pinned by samples *and* by whole-tile statistics.** Nineteen
+  sampled pixels can agree by luck while the rest of the 16384 have moved, so
+  min, max and mean over all of them are pinned too. And the tile is drawn a
+  second time at 16 wide: `size` is a parameter and the noise's wrap period is
+  derived from it, so a port that hardcoded 128 anywhere inside the lattice would
+  match every sample of the full-size tile and fail only there.
+
+The four shade constants are in the fixture as well, and not as padding. A shade
+is one of the two inputs to the tint, so pinning the colours while letting
+`SHADE_CEIL` drift would pin agreement on colours neither client ever draws.
 
 ## Adding a feature: the checklist
 

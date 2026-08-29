@@ -41,18 +41,26 @@ pub struct MeshData {
 /// the same colours — a map that looks different in the native client is a map
 /// somebody will report as a native-client bug.
 fn tex_color(tex: u8, shade: f32) -> [f32; 3] {
-    // The golden ratio conjugate, at the precision an f32 can actually hold —
-    // the TS side spells it to f64 digits, but both round to the same f32, so
-    // the two clients tint a map identically.
-    let hue = (tex as f32 * 0.618_034) % 1.0;
-    let sat = 0.22_f32;
-    let light = (0.55 * shade).min(0.95);
-    let f = |n: f32| {
+    // In f64, with the golden ratio conjugate to its full digits, because
+    // JavaScript numbers are f64 and this has to come out where `texColor` in
+    // `geometry.ts` comes out. It was written in f32 with a truncated constant
+    // and a comment claiming both rounded the same way; they do not. The error
+    // grows with the texture id — it is invisible at id 4 and about 1.4e-5 by id
+    // 255 — which is exactly the shape of drift that survives every screenshot
+    // anybody thinks to take. `surface-vectors.json` caught it the first time it
+    // ran; see the conformance module at the bottom of this file.
+    //
+    // The cost is nothing: this is called once per quad at mesh build, not per
+    // pixel and not per frame.
+    let hue = (tex as f64 * 0.618_033_988_749_895) % 1.0;
+    let sat = 0.22_f64;
+    let light = (0.55 * shade as f64).min(0.95);
+    let f = |n: f64| {
         let k = (n + hue * 12.0) % 12.0;
         let a = sat * light.min(1.0 - light);
-        light - a * (-1.0_f32).max(((k - 3.0).min(9.0 - k)).min(1.0))
+        light - a * (-1.0_f64).max(((k - 3.0).min(9.0 - k)).min(1.0))
     };
-    [f(0.0), f(8.0), f(4.0)]
+    [f(0.0) as f32, f(8.0) as f32, f(4.0) as f32]
 }
 
 /// Face shading, so surfaces read apart without real lighting.
@@ -736,5 +744,96 @@ mod tests {
         // "I did not finish this" — and the point here is that the renderer does
         // not invent one to fill the gap.
         assert!(ladder_verts(0).is_empty());
+    }
+}
+
+/// The tint's seat at the shared-fixture table.
+///
+/// `tex_color` and the four shade constants are duplicated in
+/// `packages/core/src/modules/hassault/geometry.ts`, and until this existed
+/// nothing checked that the two agreed. That duplication had no failure signal
+/// of any kind: a drift does not throw, does not fail a build, and does not
+/// break a frame — it renders the same map in different colours depending on
+/// which client the player launched, which is the exact failure mode
+/// docs/architecture/hassault-two-clients.mdx exists to end. That page named
+/// this and the detail tile as the two most worth pinning next.
+///
+/// The fixture is the browser's own output. What argues the rule is *right* is
+/// the unit tests above; this only argues the two clients apply the same one.
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    /// The vectors the browser client replays too.
+    ///
+    /// `include_str!` rather than a runtime read: the path resolves at compile
+    /// time, so a fixture that moves is a build error rather than a test that
+    /// quietly stops running. It is deliberately the *same file* the vitest
+    /// suite names — a copy under `apps/native-fps` would be two fixtures that
+    /// agree right up until one of them is edited.
+    const VECTORS: &str =
+        include_str!("../../../packages/core/src/modules/hassault/__tests__/surface-vectors.json");
+
+    fn vectors() -> serde_json::Value {
+        serde_json::from_str(VECTORS).expect("surface-vectors.json should parse")
+    }
+
+    #[test]
+    fn the_shade_constants_match_the_browsers() {
+        // A shade is one of the two inputs to the tint, so agreeing on colours
+        // while disagreeing about which shades a face gets would pin agreement
+        // on colours neither client ever actually draws.
+        let v = vectors();
+        let shades = &v["shades"];
+        for (name, ours) in [
+            ("floor", SHADE_FLOOR),
+            ("ceil", SHADE_CEIL),
+            ("wallX", SHADE_WALL_X),
+            ("wallY", SHADE_WALL_Y),
+        ] {
+            let theirs = shades[name]
+                .as_f64()
+                .unwrap_or_else(|| panic!("no shade named {name} in the fixture"))
+                as f32;
+            assert!(
+                (theirs - ours).abs() < 1e-6,
+                "{name} is {ours} here and {theirs} in the browser"
+            );
+        }
+    }
+
+    #[test]
+    fn every_tint_matches_the_browsers() {
+        let v = vectors();
+        let tints = v["tints"].as_array().expect("tints should be an array");
+        assert!(!tints.is_empty(), "the fixture has no tints in it");
+
+        for case in tints {
+            let tex = case["tex"].as_u64().expect("tex") as u8;
+            let shade = case["shade"].as_f64().expect("shade") as f32;
+            let face = case["face"].as_str().unwrap_or("?");
+            let want: Vec<f32> = case["rgb"]
+                .as_array()
+                .expect("rgb")
+                .iter()
+                .map(|c| c.as_f64().expect("channel") as f32)
+                .collect();
+
+            let got = tex_color(tex, shade);
+            for (i, channel) in ["r", "g", "b"].iter().enumerate() {
+                // The tolerance admits an f32 round trip and nothing looser:
+                // this side spells the golden ratio conjugate to f32 while the
+                // browser has the f64 digits, so the two agree to about a part
+                // in a million. A whole hue step is ~0.6 apart, so this is four
+                // orders of magnitude tighter than a difference an eye could
+                // find, and would still catch one.
+                assert!(
+                    (got[i] - want[i]).abs() < 1e-5,
+                    "texture {tex} on a {face} face: {channel} is {} here and {} in the browser",
+                    got[i],
+                    want[i]
+                );
+            }
+        }
     }
 }

@@ -294,3 +294,123 @@ mod tests {
         assert!(max > 189, "nothing brightens: peak is {max}");
     }
 }
+
+/// The tile's seat at the shared-fixture table.
+///
+/// The tests above argue this tile is *usable* — near neutral, wrapping, able to
+/// brighten. They say nothing about whether it is the **same** tile
+/// `surfaces.ts` draws, and it has to be: the grain is sampled once per cube, so
+/// a port that drifted would give the same wall in the same map a visibly
+/// different material depending on which client the player launched, with
+/// nothing failing anywhere to say so.
+///
+/// The fixture is the browser's own output, and the comparison is **exact**
+/// rather than approximate. Both sides do this arithmetic in f64 — see the
+/// header — and both round to a byte at the end, so there is no precision to
+/// budget for. A tolerance here would quietly admit exactly the drift the file
+/// exists to catch.
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    /// The vectors the browser client replays too. Same file, resolved at
+    /// compile time — see the note in `geometry.rs`'s conformance module.
+    const VECTORS: &str =
+        include_str!("../../../packages/core/src/modules/hassault/__tests__/surface-vectors.json");
+
+    fn detail() -> serde_json::Value {
+        serde_json::from_str::<serde_json::Value>(VECTORS)
+            .expect("surface-vectors.json should parse")["detail"]
+            .clone()
+    }
+
+    /// The red channel at a pixel of an RGBA8 tile.
+    fn at(tile: &[u8], size: u32, x: u32, y: u32) -> u8 {
+        tile[((y * size + x) * 4) as usize]
+    }
+
+    #[test]
+    fn the_tile_matches_the_browsers_pixel_for_pixel() {
+        let d = detail();
+        let size = d["size"].as_u64().expect("size") as u32;
+        assert_eq!(size, SIZE, "the fixture was generated at a different size");
+        let tile = draw_tile(size);
+
+        let pixels = d["pixels"].as_array().expect("pixels");
+        assert!(!pixels.is_empty(), "the fixture has no pixels in it");
+        for p in pixels {
+            let x = p["x"].as_u64().expect("x") as u32;
+            let y = p["y"].as_u64().expect("y") as u32;
+            let want = p["value"].as_u64().expect("value") as u8;
+            let got = at(&tile, size, x, y);
+            assert_eq!(
+                got, want,
+                "pixel ({x}, {y}) is {got} here and {want} in the browser"
+            );
+        }
+    }
+
+    #[test]
+    fn the_neutral_byte_matches_the_browsers() {
+        // This side's `NEUTRAL` and the browser's `DETAIL_NEUTRAL` are the
+        // reciprocal each shader multiplies by. If the byte the tile stores and
+        // the compensation disagree, every surface in the game is uniformly too
+        // dark or too bright, and it reads as a lighting bug rather than as a
+        // texture one.
+        let d = detail();
+        let want = d["neutralByte"].as_u64().expect("neutralByte") as f32;
+        assert!(
+            (NEUTRAL * 255.0 - want).abs() < 0.5,
+            "neutral is {} here",
+            NEUTRAL * 255.0
+        );
+    }
+
+    #[test]
+    fn the_whole_tile_agrees_and_not_just_the_sampled_pixels() {
+        // Nineteen sampled pixels can match by luck while the rest of the tile
+        // has moved. These three numbers are over all 16384 of them.
+        let d = detail();
+        let size = d["size"].as_u64().expect("size") as u32;
+        let tile = draw_tile(size);
+        let values: Vec<u8> = tile.iter().step_by(4).copied().collect();
+
+        let stats = &d["stats"];
+        assert_eq!(
+            *values.iter().min().unwrap() as u64,
+            stats["min"].as_u64().expect("min"),
+            "the darkest pixel differs"
+        );
+        assert_eq!(
+            *values.iter().max().unwrap() as u64,
+            stats["max"].as_u64().expect("max"),
+            "the brightest pixel differs"
+        );
+        let mean = values.iter().map(|&v| v as f64).sum::<f64>() / values.len() as f64;
+        let want = stats["mean"].as_f64().expect("mean");
+        assert!(
+            (mean - want).abs() < 1e-6,
+            "the tile averages {mean} here and {want} in the browser"
+        );
+    }
+
+    #[test]
+    fn the_wrap_period_follows_the_size_it_was_asked_for() {
+        // `size` is a parameter and the lattice's period is derived from it. A
+        // port that hardcoded 128 anywhere inside the noise would match every
+        // sampled pixel of the full-size tile and fail only here.
+        let d = detail();
+        let size = d["smallSize"].as_u64().expect("smallSize") as u32;
+        let tile = draw_tile(size);
+        for p in d["smallPixels"].as_array().expect("smallPixels") {
+            let x = p["x"].as_u64().expect("x") as u32;
+            let y = p["y"].as_u64().expect("y") as u32;
+            let want = p["value"].as_u64().expect("value") as u8;
+            let got = at(&tile, size, x, y);
+            assert_eq!(
+                got, want,
+                "the {size}-wide tile is {got} at ({x}, {y}) and {want} in the browser"
+            );
+        }
+    }
+}

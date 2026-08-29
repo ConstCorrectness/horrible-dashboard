@@ -82,8 +82,13 @@ function blocksAt(world: World, x: number, y: number, h: number): boolean {
  * not read yet, so surfaces are tinted by texture id instead. That is not purely
  * a placeholder: giving distinct ids distinct hues is what makes walls, floors
  * and trim legible as architecture rather than a uniform grey soup.
+ *
+ * Exported for `surface-conformance.test.ts` and for the generator that writes
+ * its fixture. `geometry.rs` has the same function, and until that fixture
+ * existed nothing checked that the two agreed — a drift here is the same map
+ * rendered in different colours depending on which client you launched.
  */
-function texColor(tex: number, shade: number, out: [number, number, number]): void {
+export function texColor(tex: number, shade: number, out: [number, number, number]): void {
   // Golden-ratio hue stepping puts adjacent ids far apart in hue.
   const hue = (tex * 0.618033988749895) % 1;
   const sat = 0.22;
@@ -98,11 +103,17 @@ function texColor(tex: number, shade: number, out: [number, number, number]): vo
   out[2] = f(4);
 }
 
-/** Face shading, so surfaces read apart without real lighting. */
-const SHADE_FLOOR = 1.0;
-const SHADE_CEIL = 0.55;
-const SHADE_WALL_X = 0.8;
-const SHADE_WALL_Y = 0.68;
+/**
+ * Face shading, so surfaces read apart without real lighting.
+ *
+ * Exported with the tint, and for the same reason: a shade is one of the two
+ * inputs to `texColor`, so pinning the function while leaving the constants
+ * private would pin agreement on colours neither client ever actually draws.
+ */
+export const SHADE_FLOOR = 1.0;
+export const SHADE_CEIL = 0.55;
+export const SHADE_WALL_X = 0.8;
+export const SHADE_WALL_Y = 0.68;
 
 class MeshBuilder {
   positions: number[] = [];
