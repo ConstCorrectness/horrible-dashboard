@@ -907,6 +907,9 @@ impl Renderer {
     /// the CPU, which is a few hundred matrix multiplies and saves a per-object
     /// uniform this renderer has no other use for.
     pub fn set_viewmodel(&mut self, vertices: &[Vertex]) {
+        if vertices.len() > MAX_VIEWMODEL_VERTS {
+            crate::divergence::note_overflow("viewmodel", vertices.len(), MAX_VIEWMODEL_VERTS);
+        }
         let count = vertices.len().min(MAX_VIEWMODEL_VERTS);
         self.viewmodel_verts = count as u32;
         if count > 0 {
@@ -923,6 +926,15 @@ impl Renderer {
         // Truncated rather than grown, like the bodies: a HUD that reallocated
         // mid-frame would stutter, and the vertices past the cap are the tail of
         // a kill feed nobody can read at that length anyway.
+        //
+        // **Reported, like the bodies and the volumes are.** Truncating in
+        // silence is how a HUD loses its last panel on a full server and nobody
+        // finds out: the frame still draws, at the right frame rate, simply
+        // missing whatever was laid out last. The font here is one quad per lit
+        // *pixel*, so this cap is closer than it looks.
+        if vertices.len() > MAX_OVERLAY_VERTS {
+            crate::divergence::note_overflow("overlay", vertices.len(), MAX_OVERLAY_VERTS);
+        }
         let count = vertices.len().min(MAX_OVERLAY_VERTS);
         self.overlay_verts = count as u32;
         if count > 0 {
@@ -1017,6 +1029,9 @@ impl Renderer {
             Cst::Occluded | Cst::Timeout => return Ok(false),
             Cst::Validation => return Err("the surface rejected this frame".into()),
         };
+        // Decided **once** and used in both places that care — see
+        // `draws_viewmodel`.
+        let draw_viewmodel = draws_viewmodel(self.viewmodel_verts, self.prop_model.is_some());
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -1037,7 +1052,11 @@ impl Renderer {
                     // would resolve twice. It belongs on the last pass that
                     // touches the scene, which is the view model's when there is
                     // one — see below.
-                    resolve_target: if self.viewmodel_verts > 0 {
+                    // The **same** predicate the pass below is gated on, and it
+                    // has to be: if the two disagree the scene resolves twice
+                    // or never, which is a black or half-drawn frame rather
+                    // than an error.
+                    resolve_target: if draw_viewmodel {
                         None
                     } else {
                         self.scene.resolve.as_ref()
@@ -1116,7 +1135,7 @@ impl Renderer {
             }
         }
 
-        if self.viewmodel_verts > 0 {
+        if draw_viewmodel {
             // A second pass purely to **clear the depth buffer**. A weapon is
             // two and a half cubes long and lives inside the player's own
             // collision radius, so drawn against the world's depth it is sawn in
@@ -1152,15 +1171,20 @@ impl Renderer {
             // comes out of.
             self.props.draw(&mut pass, &self.prop_bind_group);
 
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.viewmodel_bind_group, &[]);
-            // The same pipeline, so the same layout: group 1 must be bound even
-            // though the weapon in your hands is one flat colour per face and
-            // the grain on it is invisible at that scale.
-            pass.set_bind_group(1, &self.detail_bind_group, &[]);
-            pass.set_bind_group(2, &self.shadow.bind_group, &[]);
-            pass.set_vertex_buffer(0, self.viewmodel_buffer.slice(..));
-            pass.draw(0..self.viewmodel_verts, 0..1);
+            // Guarded on its own, because the pass now runs for a prop with no
+            // CPU vertices behind it — which is the common case, and the one
+            // that used to be drawn as nothing at all.
+            if self.viewmodel_verts > 0 {
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &self.viewmodel_bind_group, &[]);
+                // The same pipeline, so the same layout: group 1 must be bound
+                // even though the weapon in your hands is one flat colour per
+                // face and the grain on it is invisible at that scale.
+                pass.set_bind_group(1, &self.detail_bind_group, &[]);
+                pass.set_bind_group(2, &self.shadow.bind_group, &[]);
+                pass.set_vertex_buffer(0, self.viewmodel_buffer.slice(..));
+                pass.draw(0..self.viewmodel_verts, 0..1);
+            }
         }
 
         {
@@ -1566,6 +1590,25 @@ fn pick_present_mode(available: &[wgpu::PresentMode], vsync: bool) -> wgpu::Pres
     wgpu::PresentMode::Fifo
 }
 
+/// Whether the view-model pass runs at all this frame.
+///
+/// It is `||`, and that is the whole of a bug that made the four weapons with
+/// GLB models invisible except for the two frames after a shot.
+/// `WeaponViewModel::vertices` deliberately emits nothing but the muzzle flare
+/// once a prop is fitted — the prop *is* the gun, and pushing the boxes as well
+/// would draw a box gun inside the real one — so keying the pass on the vertex
+/// count alone drew the prop only while a flare existed. **A prop is a reason to
+/// run this pass on its own.**
+///
+/// A function rather than an expression inlined twice because the *same* answer
+/// has to reach two places: the pass below, and the main pass's MSAA
+/// `resolve_target`, which hands the resolve to whichever pass is last. If those
+/// two disagree the scene resolves twice or never — a black or half-drawn frame,
+/// with no error anywhere.
+fn draws_viewmodel(viewmodel_verts: u32, has_prop: bool) -> bool {
+    viewmodel_verts > 0 || has_prop
+}
+
 /// The view model's projection.
 ///
 /// **The camera's own field of view**, not a narrower one. Many shooters give a
@@ -1623,6 +1666,24 @@ pub fn mesh_vertices(mesh: &MeshData) -> Vec<Vertex> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_prop_alone_is_enough_to_run_the_view_model_pass() {
+        // The regression. A fitted prop emits no CPU vertices except during the
+        // ~55 ms muzzle flare, so keying the pass on the vertex count drew the
+        // gun for two frames after a shot and never otherwise.
+        assert!(
+            draws_viewmodel(0, true),
+            "a prop with no flare is still a weapon in your hands",
+        );
+        // The flare, and the box models that have no prop at all.
+        assert!(draws_viewmodel(36, true));
+        assert!(draws_viewmodel(288, false));
+        // Nothing to draw: dead, in the menu, or not yet joined. `prop_model`
+        // returns `None` when the view model is not visible, which is what makes
+        // this reachable with a prop loaded.
+        assert!(!draws_viewmodel(0, false));
+    }
 
     #[test]
     fn present_modes_are_chosen_lowest_latency_first() {
@@ -1785,7 +1846,7 @@ mod budget {
         for i in 0..MAX_PLAYERS {
             // A shotgun is eight pellets, so eight tracers and eight impacts.
             let ends: Vec<[f32; 3]> = (0..8).map(|p| [i as f32, p as f32, 2.0]).collect();
-            fx.shot([i as f32, 0.0, 2.0], &ends, false);
+            fx.shot([i as f32, 0.0, 2.0], &ends, false, false);
         }
         fx.vertices(&mut out);
 

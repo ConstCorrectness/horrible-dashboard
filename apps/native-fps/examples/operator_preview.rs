@@ -100,6 +100,7 @@ async fn run(path: &str) {
         z: 3.4,
         yaw: 0.0,
         pitch: -2.0,
+        roll: 0.0,
         fov: 48.0,
     };
     // `params.x` is the fog end and `.y` the detail level: 2 is the highest, so

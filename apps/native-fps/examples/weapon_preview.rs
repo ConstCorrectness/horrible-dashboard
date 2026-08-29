@@ -137,6 +137,7 @@ async fn run(path: &str) {
             z: centre.y + extent.y * 0.9,
             yaw: 150.0,
             pitch: -14.0,
+            roll: 0.0,
             fov: 42.0,
         };
         let view_proj = camera.view_projection(WIDTH / count, HEIGHT);

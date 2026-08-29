@@ -37,6 +37,14 @@ use crate::renderer::{VolumeVertex, MODE_FLAT};
 /// Tracer lifetime. Long enough to register, short enough not to draw a web.
 const TRACER_LIFE: f32 = 0.075;
 const IMPACT_LIFE: f32 = 0.3;
+/// Sparks off a surface. Shorter than the impact flash they come out of, so the
+/// bright point outlives the debris rather than the other way round.
+const SPARK_LIFE: f32 = 0.14;
+/// The dust a round knocks out of a wall. Much longer than everything else here,
+/// and the only slow thing in the file: dust is what tells you a shot has
+/// *already* happened, which is the cue that makes a corridor feel fought over
+/// rather than freshly lit.
+const DUST_LIFE: f32 = 0.6;
 /// How long a detonation's shell lasts.
 const BLAST_LIFE: f32 = 0.5;
 
@@ -45,11 +53,35 @@ const BLAST_LIFE: f32 = 0.5;
 /// A cap on what is *drawn*, not on what is received: a shotgun is eight
 /// tracers and eight impacts from one trigger pull, and a room of sixteen
 /// players firing is a lot of very short-lived geometry.
+/// A cap on what is *drawn*, and the reason it is safe to add effects here: the
+/// volume buffer holds `MAX_VOLUME_VERTS` (65536) and the most expensive shape
+/// in this file is a ball at `8 x 6 x 6 = 288` vertices, so 192 of the worst
+/// case is 55k and still fits. Sparks and dust are both cheaper than a ball —
+/// sparks are five thin beams and dust is a deliberately coarse sphere — so
+/// adding them raises how *fast* the cap is reached without raising the cap's
+/// own worst case at all. That arithmetic is the thing to redo before raising
+/// this number.
 const MAX_LIVE: usize = 192;
 
 /// Hex, like the browser's, so the two can be compared without arithmetic.
 const TRACER_COLOR: u32 = 0xffdb8c;
 const IMPACT_COLOR: u32 = 0xffd9a0;
+/// Hotter than the impact flash, because a spark is burning metal rather than
+/// the flash of the strike.
+const SPARK_COLOR: u32 = 0xffb347;
+/// Pale grey-brown. Deliberately **not** tinted toward the map: surfaces here
+/// are shaded by texture id and there is no material to ask, so a dust that
+/// tried to match the wall would be wrong on most of them. A neutral puff reads
+/// as dust everywhere.
+const DUST_COLOR: u32 = 0x9c948a;
+
+/// Beams in one spark burst.
+///
+/// One `Live` for the whole burst rather than one per spark, and that is the
+/// difference between this being affordable and not: eight shotgun pellets each
+/// throwing five sparks would be forty entries out of a budget of 192, which
+/// would evict the tracers of the shot that threw them.
+const SPARKS: usize = 5;
 
 /// The colour a detonation throws.
 ///
@@ -73,6 +105,20 @@ enum Shape {
     },
     /// A sphere at a point.
     Ball { at: [f32; 3], radius: f32 },
+    /// A burst of short beams thrown back out of a surface.
+    ///
+    /// `back` is the unit vector **back along the incoming ray**, which is the
+    /// only thing available: the server sends where a bullet stopped, never the
+    /// normal of what stopped it. Spraying back the way the round came is both
+    /// roughly what happens and the one direction that cannot be wrong — a
+    /// guessed normal would put half the sparks inside the wall.
+    Sparks {
+        at: [f32; 3],
+        back: [f32; 3],
+        seed: u32,
+    },
+    /// A slow, coarse puff of dust.
+    Puff { at: [f32; 3], radius: f32 },
 }
 
 struct Live {
@@ -97,8 +143,19 @@ impl EffectsPool {
     /// `mine` draws the tracer faint, because it leaves the camera: at full
     /// brightness your own tracer is a line down the middle of the screen and
     /// nothing else.
-    pub fn shot(&mut self, origin: [f32; 3], ends: &[[f32; 3]], mine: bool) {
-        for end in ends {
+    ///
+    /// `hit` is the server's own account of whether the shot found a **body**.
+    /// It gates the dust and nothing else: sparks read as a strike on anything,
+    /// but a puff of masonry dust off a player does not, and it is the one part
+    /// of an impact that would look plainly wrong.
+    ///
+    /// It is per *shot*, not per pellet, so a shotgun with one pellet in a body
+    /// and seven in a wall loses the wall dust. That is the honest reading of
+    /// what the wire carries — the alternative is inventing a per-pellet fact
+    /// the server never sent, which is the mistake this whole module's header
+    /// is about.
+    pub fn shot(&mut self, origin: [f32; 3], ends: &[[f32; 3]], mine: bool, hit: bool) {
+        for (i, end) in ends.iter().enumerate() {
             self.push(Live {
                 shape: Shape::Beam {
                     from: origin,
@@ -120,6 +177,37 @@ impl EffectsPool {
                 age: 0.0,
                 life: IMPACT_LIFE,
             });
+            let back = normalize([
+                origin[0] - end[0],
+                origin[1] - end[1],
+                origin[2] - end[2],
+            ]);
+            self.push(Live {
+                shape: Shape::Sparks {
+                    at: *end,
+                    back,
+                    // The pellet index is in the seed, so the eight impacts of
+                    // one shotgun blast are eight different bursts rather than
+                    // the same fan drawn eight times a few centimetres apart.
+                    seed: 0x9e37_79b9 ^ (i as u32).wrapping_mul(0x85eb_ca6b),
+                },
+                color: rgb(SPARK_COLOR),
+                base: 0.85,
+                age: 0.0,
+                life: SPARK_LIFE,
+            });
+            if !hit {
+                self.push(Live {
+                    shape: Shape::Puff {
+                        at: *end,
+                        radius: 0.22,
+                    },
+                    color: rgb(DUST_COLOR),
+                    base: 0.3,
+                    age: 0.0,
+                    life: DUST_LIFE,
+                });
+            }
         }
     }
 
@@ -192,7 +280,21 @@ impl EffectsPool {
                     // Tracer impacts have the short life that makes this a
                     // negligible growth for them.
                     let grown = radius * (0.55 + 0.45 * t);
-                    push_ball(out, *at, grown, e.color, alpha);
+                    push_ball(out, *at, grown, e.color, alpha, 8, 6);
+                }
+                Shape::Sparks { at, back, seed } => {
+                    // Sparks *decelerate*: the length is `sqrt(t)`, not `t`, so
+                    // they leap out of the surface and then stall. Grown
+                    // linearly they drift outward at a constant rate, which
+                    // reads as an expanding wire model rather than as debris.
+                    push_sparks(out, *at, *back, *seed, t.sqrt(), e.color, alpha);
+                }
+                Shape::Puff { at, radius } => {
+                    // Dust expands a long way and thins as it goes — the
+                    // opposite budget to everything else here, which is why it
+                    // is drawn at less than half a ball's detail. Nothing about
+                    // a cloud rewards more triangles.
+                    push_ball(out, *at, radius * (0.5 + 2.0 * t), e.color, alpha, 5, 3);
                 }
             }
         }
@@ -264,14 +366,83 @@ fn push_beam(
     }
 }
 
+/// One burst of sparks: short beams in a cone around `back`.
+///
+/// The directions come from a hash of the seed rather than from any stored
+/// state, so `vertices` stays `&self` and a burst looks identical on every frame
+/// of its life apart from its length — which is what makes it read as one object
+/// moving rather than as a new burst each frame.
+fn push_sparks(
+    out: &mut Vec<VolumeVertex>,
+    at: [f32; 3],
+    back: [f32; 3],
+    seed: u32,
+    reach: f32,
+    color: [f32; 3],
+    alpha: f32,
+) {
+    // A basis around the spray axis, chosen the same way `push_beam` chooses
+    // one, and for the same reason: a helper parallel to the axis gives a
+    // zero-length cross product and collapses every spark to a point.
+    let helper = if back[2].abs() < 0.9 {
+        [0.0, 0.0, 1.0]
+    } else {
+        [1.0, 0.0, 0.0]
+    };
+    let u = normalize(cross(back, helper));
+    let v = normalize(cross(back, u));
+    let mut rng = seed | 1;
+    let mut next = || {
+        rng ^= rng << 13;
+        rng ^= rng >> 17;
+        rng ^= rng << 5;
+        (rng >> 8) as f32 / (1u32 << 23) as f32
+    };
+    for _ in 0..SPARKS {
+        let theta = next() * std::f32::consts::TAU;
+        // Spread over the cone's *area*, like `trace::spread_direction` — in
+        // angle alone every spark clusters on the axis and the burst reads as
+        // one thick spike.
+        let spread = next().sqrt() * 0.75;
+        let len = (0.18 + next() * 0.34) * reach;
+        let (st, ct) = theta.sin_cos();
+        let dir = normalize([
+            back[0] + (u[0] * ct + v[0] * st) * spread,
+            back[1] + (u[1] * ct + v[1] * st) * spread,
+            back[2] + (u[2] * ct + v[2] * st) * spread,
+        ]);
+        // Started a little off the surface, so a spark is not half-buried in
+        // the wall it came out of.
+        let from = [
+            at[0] + dir[0] * 0.02,
+            at[1] + dir[1] * 0.02,
+            at[2] + dir[2] * 0.02,
+        ];
+        let to = [
+            from[0] + dir[0] * len,
+            from[1] + dir[1] * len,
+            from[2] + dir[2] * len,
+        ];
+        push_beam(out, from, to, 0.012, color, alpha);
+    }
+}
+
 /// A low-poly sphere for an impact or a blast shell.
 ///
 /// Built through `nades::push_sphere` and widened, rather than a second sphere
 /// generator: two of those is two conventions about winding and about the
 /// cube → render mapping, and the second one is always the one that is wrong.
-fn push_ball(out: &mut Vec<VolumeVertex>, at: [f32; 3], radius: f32, color: [f32; 3], alpha: f32) {
+fn push_ball(
+    out: &mut Vec<VolumeVertex>,
+    at: [f32; 3],
+    radius: f32,
+    color: [f32; 3],
+    alpha: f32,
+    segments: usize,
+    rings: usize,
+) {
     let mut scratch = Vec::new();
-    crate::nades::push_sphere(&mut scratch, at, [radius; 3], 8, 6, color);
+    crate::nades::push_sphere(&mut scratch, at, [radius; 3], segments, rings, color);
     out.extend(scratch.into_iter().map(|v| VolumeVertex {
         position: v.position,
         normal: v.normal,
@@ -322,16 +493,73 @@ mod tests {
         // A shotgun is one trigger pull and eight rays. Drawing one tracer for
         // the shot would hide the pattern, which is the whole character of the
         // weapon.
+        //
+        // Four entries per pellet against the world: tracer, impact flash,
+        // sparks, dust. The spark burst is **one** entry for all five of its
+        // beams — see `SPARKS`, and the budget arithmetic on `MAX_LIVE`.
         let mut fx = EffectsPool::default();
-        fx.shot([0.0; 3], &[[10.0, 0.0, 0.0], [10.0, 2.0, 0.0]], false);
-        assert_eq!(fx.count(), 4);
+        fx.shot([0.0; 3], &[[10.0, 0.0, 0.0], [10.0, 2.0, 0.0]], false, false);
+        assert_eq!(fx.count(), 8);
+    }
+
+    #[test]
+    fn a_shot_that_hit_a_body_throws_sparks_but_no_dust() {
+        // Masonry dust off a player is the one part of an impact that reads as
+        // plainly wrong; sparks read as a strike on anything.
+        let mut wall = EffectsPool::default();
+        wall.shot([0.0; 3], &[[10.0, 0.0, 0.0]], false, false);
+        let mut body = EffectsPool::default();
+        body.shot([0.0; 3], &[[10.0, 0.0, 0.0]], false, true);
+        assert_eq!(wall.count(), 4);
+        assert_eq!(body.count(), 3);
+    }
+
+    #[test]
+    fn sparks_leap_out_and_then_stall_rather_than_drifting() {
+        // `sqrt(t)`, not `t`. Grown linearly a burst reads as an expanding wire
+        // model; the deceleration is what makes it debris.
+        let reach = |t: f32| {
+            let mut fx = EffectsPool::default();
+            fx.shot([0.0; 3], &[[10.0, 0.0, 0.0]], false, true);
+            fx.update(SPARK_LIFE * t);
+            let mut out = Vec::new();
+            fx.vertices(&mut out);
+            // Sparks spray *back* toward the muzzle, so the near edge of what is
+            // drawn around the endpoint is how far they have got.
+            10.0 - out
+                .iter()
+                .filter(|v| v.position[0] > 5.0)
+                .map(|v| v.position[0])
+                .fold(f32::MAX, f32::min)
+        };
+        let early = reach(0.25);
+        let late = reach(0.95);
+        assert!(early > 0.0, "no sparks at all");
+        assert!(late > early, "sparks did not travel: {early} then {late}");
+        // Half the life should already have covered more than half the distance.
+        assert!(
+            reach(0.5) > late * 0.55,
+            "sparks drifted at a constant rate rather than stalling"
+        );
+    }
+
+    #[test]
+    fn dust_outlives_every_other_part_of_an_impact() {
+        // It is the cue that says a shot has *already* happened. A puff that
+        // expired with the flash would say nothing the flash had not.
+        let mut fx = EffectsPool::default();
+        fx.shot([0.0; 3], &[[10.0, 0.0, 0.0]], false, false);
+        fx.update(IMPACT_LIFE + SPARK_LIFE);
+        assert_eq!(fx.count(), 1, "only the dust should be left");
+        fx.update(DUST_LIFE);
+        assert_eq!(fx.count(), 0);
     }
 
     #[test]
     fn a_shot_with_no_endpoints_draws_nothing() {
         // The server sends an empty `ends` for a shot that resolved to nothing.
         let mut fx = EffectsPool::default();
-        fx.shot([0.0; 3], &[], false);
+        fx.shot([0.0; 3], &[], false, false);
         assert_eq!(fx.count(), 0);
     }
 
@@ -340,20 +568,21 @@ mod tests {
         // It leaves the camera, so at full brightness it is a line down the
         // middle of the screen and nothing else.
         let mut mine = EffectsPool::default();
-        mine.shot([0.0; 3], &[[10.0, 0.0, 0.0]], true);
+        mine.shot([0.0; 3], &[[10.0, 0.0, 0.0]], true, false);
         let mut theirs = EffectsPool::default();
-        theirs.shot([0.0; 3], &[[10.0, 0.0, 0.0]], false);
+        theirs.shot([0.0; 3], &[[10.0, 0.0, 0.0]], false, false);
         assert!(tracer_alpha(&mine) < tracer_alpha(&theirs));
     }
 
     #[test]
     fn effects_fade_to_nothing_and_are_retired() {
         let mut fx = EffectsPool::default();
-        fx.shot([0.0; 3], &[[10.0, 0.0, 0.0]], false);
+        fx.shot([0.0; 3], &[[10.0, 0.0, 0.0]], false, false);
         fx.update(TRACER_LIFE + 0.001);
-        // The tracer is gone; the impact outlives it.
-        assert_eq!(fx.count(), 1);
-        fx.update(IMPACT_LIFE);
+        // The tracer is the shortest-lived thing a shot makes; sparks, the
+        // impact flash and the dust all outlive it, in that order.
+        assert_eq!(fx.count(), 3);
+        fx.update(DUST_LIFE);
         assert_eq!(fx.count(), 0);
         let mut out = Vec::new();
         fx.vertices(&mut out);
@@ -365,7 +594,7 @@ mod tests {
         // `base * (1 - t)` rather than a compounding decay, which would leave an
         // effect asymptotically nearly gone forever and eat the cap.
         let mut fx = EffectsPool::default();
-        fx.shot([0.0; 3], &[[10.0, 0.0, 0.0]], false);
+        fx.shot([0.0; 3], &[[10.0, 0.0, 0.0]], false, false);
         fx.update(TRACER_LIFE * 0.999);
         let max = tracer_alpha(&fx);
         assert!(max < 0.02, "still {max} bright at the end of its life");
@@ -376,10 +605,10 @@ mod tests {
         // The shot that just happened is the one worth seeing.
         let mut fx = EffectsPool::default();
         for _ in 0..MAX_LIVE {
-            fx.shot([0.0; 3], &[[1.0, 0.0, 0.0]], false);
+            fx.shot([0.0; 3], &[[1.0, 0.0, 0.0]], false, false);
         }
         assert_eq!(fx.count(), MAX_LIVE);
-        fx.shot([0.0; 3], &[[99.0, 0.0, 0.0]], false);
+        fx.shot([0.0; 3], &[[99.0, 0.0, 0.0]], false, false);
         assert_eq!(fx.count(), MAX_LIVE, "capped, not grown");
         let mut out = Vec::new();
         fx.vertices(&mut out);
@@ -396,7 +625,7 @@ mod tests {
         // shot at somebody on a gantry — rare enough to ship broken, common
         // enough to be noticed.
         let mut fx = EffectsPool::default();
-        fx.shot([10.0, 10.0, 0.0], &[[10.0, 10.0, 20.0]], false);
+        fx.shot([10.0, 10.0, 0.0], &[[10.0, 10.0, 20.0]], false, false);
         let mut out = Vec::new();
         fx.vertices(&mut out);
         let span = |axis: usize| {
@@ -420,7 +649,7 @@ mod tests {
         // along the wrong axis, means the cube → render mapping was applied to
         // one end and not the other.
         let mut fx = EffectsPool::default();
-        fx.shot([0.0, 0.0, 0.0], &[[0.0, 30.0, 0.0]], false);
+        fx.shot([0.0, 0.0, 0.0], &[[0.0, 30.0, 0.0]], false, false);
         let mut out = Vec::new();
         fx.vertices(&mut out);
         let hi = out.iter().map(|v| v.position[2]).fold(f32::MIN, f32::max);
@@ -451,7 +680,7 @@ mod tests {
         // Sharing the cloud's pass is deliberate; sharing its noise is not. A
         // tracer 7cm across would be eaten by it rather than textured.
         let mut fx = EffectsPool::default();
-        fx.shot([0.0; 3], &[[10.0, 0.0, 0.0]], false);
+        fx.shot([0.0; 3], &[[10.0, 0.0, 0.0]], false, false);
         fx.detonate("he", [0.0; 3], 8.0);
         let mut out = Vec::new();
         fx.vertices(&mut out);

@@ -62,6 +62,19 @@ pub struct Timbre {
     pub gain: f32,
     /// A short sine thump under the noise, in Hz — 0 for none.
     pub body: f32,
+    /// The starting pitch of a **sub-bass transient**, in Hz — 0 for none.
+    ///
+    /// Distinct from `body`, and the distinction is the whole of the punch. The
+    /// body is a tone that lasts as long as the sound does and gives it weight;
+    /// this is a fast downward sweep that is over in about 60 ms and gives it an
+    /// *impact*. A gunshot with weight and no impact sounds like a door closing.
+    ///
+    /// **This field has no counterpart in the browser's `Timbre`.** Everything
+    /// else here is that struct field for field; this one is a deliberate
+    /// divergence, recorded in `docs/architecture/hassault-two-clients.mdx`. It
+    /// changes nothing either client acts on — see `weapon_voice` on why a
+    /// voice can drift where a number cannot.
+    pub thump: f32,
 }
 
 /// One timbre per noise kind, mirroring `audio.ts`.
@@ -78,6 +91,7 @@ pub fn timbre(kind: &str) -> Timbre {
             decay: 0.22,
             gain: 0.85,
             body: 62.0,
+            thump: 55.0,
         },
         "jump" => Timbre {
             frequency: 900.0,
@@ -85,6 +99,7 @@ pub fn timbre(kind: &str) -> Timbre {
             decay: 0.09,
             gain: 0.35,
             body: 0.0,
+            thump: 0.0,
         },
         "shot" => Timbre {
             frequency: 1500.0,
@@ -92,6 +107,25 @@ pub fn timbre(kind: &str) -> Timbre {
             decay: 0.3,
             gain: 1.0,
             body: 78.0,
+            thump: 105.0,
+        },
+        // A kill you made. **A chord, not a ping**, and that is what separates
+        // it from `pickup`: a narrow ring high up with a falling tone under it.
+        // A bare sine at any pitch is already the vocabulary of "an item left
+        // the map", and the two events are far too different to sound similar.
+        //
+        // Purely local — the server never sends this, and nobody else can hear
+        // it. It is a confirmation to one player, so unlike every other timbre
+        // here it carries no positional information at all.
+        "kill" => Timbre {
+            frequency: 3100.0,
+            q: 6.5,
+            decay: 0.26,
+            gain: 0.6,
+            // The `body` oscillator sweeps *down* over the decay, so this is a
+            // falling fifth under the ring rather than a second static tone.
+            body: 520.0,
+            thump: 0.0,
         },
         "reload" => Timbre {
             frequency: 2400.0,
@@ -99,6 +133,7 @@ pub fn timbre(kind: &str) -> Timbre {
             decay: 0.14,
             gain: 0.4,
             body: 0.0,
+            thump: 0.0,
         },
         // An item leaving the map. Bright, short and unmistakably not a gun: the
         // sound has to be legible as "somebody took the armour" from across a
@@ -110,6 +145,7 @@ pub fn timbre(kind: &str) -> Timbre {
             decay: 0.16,
             gain: 0.45,
             body: 0.0,
+            thump: 0.0,
         },
         // Breaking the surface. Low Q so the burst stays broadband — a splash is
         // noise, and a narrow filter turns it into a bell.
@@ -119,6 +155,7 @@ pub fn timbre(kind: &str) -> Timbre {
             decay: 0.34,
             gain: 0.75,
             body: 40.0,
+            thump: 0.0,
         },
         "hurt" => Timbre {
             frequency: 300.0,
@@ -126,6 +163,7 @@ pub fn timbre(kind: &str) -> Timbre {
             decay: 0.3,
             gain: 0.7,
             body: 120.0,
+            thump: 0.0,
         },
         "die" => Timbre {
             frequency: 220.0,
@@ -133,6 +171,7 @@ pub fn timbre(kind: &str) -> Timbre {
             decay: 0.6,
             gain: 0.9,
             body: 55.0,
+            thump: 48.0,
         },
         // A grenade leaving the hand: a short soft rush, quieter than a footstep
         // so it is a cue for the thrower rather than an announcement to the room.
@@ -142,6 +181,7 @@ pub fn timbre(kind: &str) -> Timbre {
             decay: 0.12,
             gain: 0.3,
             body: 0.0,
+            thump: 0.0,
         },
         // The four detonations, and they have to be tellable apart with your
         // back turned — which is most of what a grenade is: information.
@@ -158,6 +198,7 @@ pub fn timbre(kind: &str) -> Timbre {
             decay: 0.9,
             gain: 1.0,
             body: 150.0,
+            thump: 70.0,
         },
         "nade_flash" => Timbre {
             frequency: 2600.0,
@@ -165,6 +206,7 @@ pub fn timbre(kind: &str) -> Timbre {
             decay: 0.35,
             gain: 1.0,
             body: 30.0,
+            thump: 0.0,
         },
         "nade_smoke" => Timbre {
             frequency: 4200.0,
@@ -172,6 +214,7 @@ pub fn timbre(kind: &str) -> Timbre {
             decay: 0.85,
             gain: 0.5,
             body: 0.0,
+            thump: 0.0,
         },
         "nade_fire" => Timbre {
             frequency: 210.0,
@@ -179,6 +222,7 @@ pub fn timbre(kind: &str) -> Timbre {
             decay: 1.1,
             gain: 0.7,
             body: 70.0,
+            thump: 60.0,
         },
         // `step`, and the fallback for a kind this build does not know: a noise
         // the server invented later must still be *audible*, because the whole
@@ -189,6 +233,7 @@ pub fn timbre(kind: &str) -> Timbre {
             decay: 0.1,
             gain: 0.5,
             body: 90.0,
+            thump: 0.0,
         },
     }
 }
@@ -225,6 +270,7 @@ pub fn weapon_voice(weapon: Option<&WeaponSpec>) -> Timbre {
             decay: 0.12,
             gain: 0.45,
             body: 0.0,
+            thump: 0.0,
         };
     }
     let fast = (weapon.rpm / 700.0).min(1.0);
@@ -235,8 +281,30 @@ pub fn weapon_voice(weapon: Option<&WeaponSpec>) -> Timbre {
         decay: 0.16 + heft * 0.2,
         gain: 1.0,
         body: 95.0 - heft * 42.0,
+        thump: 120.0 - heft * 45.0,
     }
 }
+
+/// How long a sub-bass transient lasts, and how far it sweeps down.
+///
+/// Short and steep, because that is the difference between an impact and a
+/// drone: 45 ms of decay is over before the noise burst is, so the thump is felt
+/// at the *start* of the sound and then gets out of the way of it.
+///
+/// The sweep is the other half. A fixed low sine is a hum; a pitch that falls
+/// away underneath the crack is what the ear reads as something large having
+/// happened. `SUB_FLOOR` is where it lands, as a fraction of where it started.
+const SUB_DECAY: f32 = 0.045;
+const SUB_FLOOR: f32 = 0.42;
+
+/// How loud the transient is against the rest of the voice.
+///
+/// **Deliberately under half.** The mixer clips rather than limiting — see
+/// `GameAudio::open`, which explains why a limiter would be worse — so every
+/// layer added here is spent out of the same headroom, and a sub loud enough to
+/// be impressive on its own is a shot that clips into a click whenever two
+/// people fire at once.
+const SUB_GAIN: f32 = 0.45;
 
 /// One sound being played, owned by the audio thread from the moment it is sent.
 struct Voice {
@@ -253,6 +321,11 @@ struct Voice {
     band: f32,
     /// The body oscillator's phase.
     phase: f32,
+    /// The sub-bass transient's phase. **Its own**, not shared with the body:
+    /// the two run at different frequencies, and one accumulator driven by two
+    /// rates produces a phase that means neither of them — which is audible as a
+    /// warble rather than as a thump.
+    sub_phase: f32,
     rng: u32,
 }
 
@@ -300,6 +373,22 @@ impl Voice {
                 self.phase -= 1.0;
             }
             out += (self.phase * std::f32::consts::TAU).sin() * env * self.gain * 0.7;
+        }
+
+        // The punch. A sine an octave or so under the body, sweeping down and
+        // gone in about 45 ms — see `SUB_DECAY`. It has an envelope of its own
+        // rather than riding `env`, which is what keeps it a transient on a
+        // long sound: a sniper's 0.36 s tail would otherwise carry the sub the
+        // whole way and turn a gunshot into a note.
+        if self.timbre.thump > 0.0 {
+            let sub_env = (-self.t / SUB_DECAY).exp();
+            let hz = self.timbre.thump
+                * (SUB_FLOOR + (1.0 - SUB_FLOOR) * (-self.t / (SUB_DECAY * 0.7)).exp());
+            self.sub_phase += hz * dt;
+            if self.sub_phase > 1.0 {
+                self.sub_phase -= 1.0;
+            }
+            out += (self.sub_phase * std::f32::consts::TAU).sin() * sub_env * self.gain * SUB_GAIN;
         }
         (out * self.left, out * self.right)
     }
@@ -425,6 +514,7 @@ impl GameAudio {
             low: 0.0,
             band: 0.0,
             phase: 0.0,
+            sub_phase: 0.0,
             // Seeded per voice so two footsteps are never the same waveform,
             // which is audible immediately — as a machine gun rather than a
             // person walking.
@@ -542,6 +632,7 @@ mod tests {
             low: 0.0,
             band: 0.0,
             phase: 0.0,
+            sub_phase: 0.0,
             rng: 12345,
         };
         let dt = 1.0 / 48_000.0;
@@ -573,6 +664,7 @@ mod tests {
                 decay: 0.2,
                 gain: 1.0,
                 body: 0.0,
+                thump: 0.0,
             },
             gain: 1.0,
             left: 1.0,
@@ -581,6 +673,7 @@ mod tests {
             low: 0.0,
             band: 0.0,
             phase: 0.0,
+            sub_phase: 0.0,
             rng: 99,
         };
         let dt = 1.0 / 8_000.0;

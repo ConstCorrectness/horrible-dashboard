@@ -84,13 +84,13 @@ const ROW_H: f32 = 34.0;
 const HEADER: f32 = 64.0;
 const FOOTER: f32 = 40.0;
 
-const TEXT: [f32; 4] = [0.88, 0.91, 0.94, 0.95];
-const TEXT_DIM: [f32; 4] = [0.62, 0.66, 0.70, 0.85];
-const ACCENT: [f32; 4] = [0.49, 0.91, 0.53, 0.95];
-const PANEL_BG: [f32; 4] = [0.04, 0.05, 0.07, 0.96];
+pub(crate) const TEXT: [f32; 4] = [0.88, 0.91, 0.94, 0.95];
+pub(crate) const TEXT_DIM: [f32; 4] = [0.62, 0.66, 0.70, 0.85];
+pub(crate) const ACCENT: [f32; 4] = [0.49, 0.91, 0.53, 0.95];
+pub(crate) const PANEL_BG: [f32; 4] = [0.04, 0.05, 0.07, 0.96];
 const ROW_BG: [f32; 4] = [1.0, 1.0, 1.0, 0.05];
 const SELECTED_BG: [f32; 4] = [0.49, 0.91, 0.53, 0.14];
-const SCRIM: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
+pub(crate) const SCRIM: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
 
 #[derive(Default)]
 pub struct Menu {

@@ -41,8 +41,9 @@ use hassault_native::animator::Squad;
 use hassault_native::api::{HitboxSpec, ItemsResponse, TacticalSpec, WeaponSpec};
 use hassault_native::audio::GameAudio;
 use hassault_native::bodies;
-use hassault_native::camera::Camera;
+use hassault_native::camera::{blast_trauma, damage_trauma, fire_trauma, Camera, Shake};
 use hassault_native::console::{self, ClientCvars, Console, Definitions, Dispatch};
+use hassault_native::damage::{DamageNumbers, Placed};
 use hassault_native::effects::EffectsPool;
 use hassault_native::geometry::MeshData;
 use hassault_native::held;
@@ -57,7 +58,7 @@ use hassault_native::net::{Incoming, MatchSocket};
 use hassault_native::physics::{self, eye_height, MoveInput, JUMP_SPEED, MOVE_SPEED};
 use hassault_native::prediction::Prediction;
 use hassault_native::prop;
-use hassault_native::protocol::{Command, Event, Fx, PlayerRow, SelfState};
+use hassault_native::protocol::{Command, Event, Fx, HitMarker, PlayerRow, SelfState};
 use hassault_native::radar::{self, Blip, Run};
 use hassault_native::renderer::{Renderer, Vertex, VolumeVertex};
 use hassault_native::reveal::Reveal;
@@ -65,6 +66,7 @@ use hassault_native::settings::{Crosshair, CrosshairStyle, Settings, SettingsWri
 use hassault_native::trace::kick_vector;
 use hassault_native::training::TrainingRange;
 use hassault_native::utility::GrenadeController;
+use hassault_native::summary::{MatchTally, Summary, SummaryScreen};
 use hassault_native::viewmodel::{self, Skin, WeaponViewModel};
 use hassault_native::world::World;
 
@@ -147,6 +149,12 @@ pub struct App {
     /// Where we believe we are, ahead of the server. The camera reads this.
     prediction: Prediction,
     camera: Camera,
+    /// The camera's decaying trauma. **Applied to a copy at draw time and
+    /// nowhere else** — see `Camera::shaken`. Every angle this client puts on
+    /// the wire, and every ray it builds a shot from, comes off `camera` above,
+    /// so a shake written into that field would stop being a visual effect and
+    /// start being recoil the server honours.
+    shake: Shake,
     keys: Keys,
     sensitivity: f32,
     /// Whether the pointer is captured. Look is only applied while it is, so a
@@ -219,6 +227,17 @@ pub struct App {
     /// Tracers, impacts and detonations. Like the nades, purely a renderer for
     /// what the server resolved — see `effects.rs`.
     effects: EffectsPool,
+    /// Floating damage numbers, and the buffer they are projected into.
+    ///
+    /// The pool holds **world** anchors and is projected fresh every frame, so a
+    /// number stays on the body it belongs to as both of you move. The buffer is
+    /// reused rather than allocated per frame, like `volume_verts`.
+    damage: DamageNumbers,
+    damage_placed: Vec<Placed>,
+    /// The whole-match totals the wire does not carry, and the card that shows
+    /// them. See `summary.rs` — in particular why damage dealt is not among them.
+    tally: MatchTally,
+    summary: SummaryScreen,
     /// Kept buffers, like `overlay`: the render path does not allocate.
     volume_verts: Vec<VolumeVertex>,
     /// The map's floor plan, merged into runs **once** when the world loads.
@@ -393,6 +412,7 @@ impl App {
             pending_bots: None,
             prediction: Prediction::default(),
             camera: Camera::default(),
+            shake: Shake::default(),
             keys: Keys::default(),
             sensitivity: settings.sensitivity,
             focused: false,
@@ -431,6 +451,10 @@ impl App {
             item_table,
 
             effects: EffectsPool::default(),
+            damage: DamageNumbers::default(),
+            damage_placed: Vec::new(),
+            tally: MatchTally::default(),
+            summary: SummaryScreen::default(),
             volume_verts: Vec::new(),
             radar_plan,
             blips: Vec::new(),
@@ -674,7 +698,7 @@ impl App {
 
     /// Advance the HUD and the weapon in the hands by one frame.
     fn animate(&mut self, dt: f32) {
-        self.hud.update(dt);
+        self.hud.update(dt, self.keys.scores);
         // Drawn-position easing only. Nothing here simulates a grenade — the
         // arc, the bounce and the fuse are all the server's, and a second
         // implementation of the bounce would exist only to disagree with the
@@ -684,6 +708,8 @@ impl App {
         self.nades.update(dt);
         self.items.update(dt);
         self.effects.update(dt);
+        self.damage.update(dt);
+        self.shake.update(dt);
         // Advanced here rather than at draw time so every player's clip runs on
         // the same clock the weapon and the HUD do. The poses are uploaded later
         // in the frame — see `poses()`.
@@ -731,8 +757,31 @@ impl App {
             pitch: self.camera.pitch.to_radians(),
             visible: self.joined && alive,
             move_speed: MOVE_SPEED,
+            // The reload's *progress*, from the two served numbers: how long it
+            // takes (`reloadTime`, on the weapon) and how much is left
+            // (`reloadIn`, on the snapshot). The range fills both as well, so a
+            // reload dips identically in Train and in a match with no second
+            // code path to keep in step.
+            //
+            // `None` when `reloadTime` is zero — an older server, or a spec that
+            // has not arrived — because there is then nothing to measure
+            // against, and a progress of zero would hold the weapon down for the
+            // whole reload. See `Frame::reload_progress`.
+            reload_progress: self.you.as_ref().filter(|y| y.reloading).and_then(|y| {
+                let total = self.held().map(|w| w.reload_time).unwrap_or(0.0);
+                (total > 0.0).then(|| (1.0 - y.reload_in / total).clamp(0.0, 1.0))
+            }),
         };
         self.viewmodel.update(dt, &frame);
+        // **After** `update`, not inside `sync_prop`. `prop_model` reads the
+        // pose and the visibility that `update` has just written, so pushing it
+        // from `sync_prop` (which runs before, because it has to fit the prop
+        // first) handed the renderer last frame's transform — and, now that the
+        // pose is gated on `visible`, last frame's answer to "is there a weapon
+        // at all".
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.set_prop_model(self.viewmodel.prop_model());
+        }
         self.footsteps(dt);
     }
 
@@ -790,6 +839,92 @@ impl App {
         // of a match for a player who was already standing in water.
         self.was_wet = wet;
         self.was_grounded = grounded;
+    }
+
+    /// Say goodbye and stop.
+    ///
+    /// The `leave` is not optional politeness: without it the room holds a
+    /// player who is not there until the socket times out, and everyone still
+    /// in it is shooting at a body that no longer has anybody behind it.
+    fn leave_and_exit(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(socket) = &self.socket {
+            let _ = socket.leave();
+        }
+        event_loop.exit();
+    }
+
+    /// The card's contents, from what this client already knows.
+    ///
+    /// Assembled here rather than held as state so it cannot go stale: every
+    /// figure is read at the moment the card is drawn. `won` and `mvp` use
+    /// `MatchRoom.result_for`'s own definitions — nobody outscored you, and
+    /// nobody equalled you — because a second definition of winning is how two
+    /// cards for one match come to disagree.
+    fn build_summary(&self) -> Summary {
+        let you = self.you.as_ref();
+        let mine = you.map(|y| y.kills).unwrap_or(0);
+        // Bots included. Losing to one is losing, and a card that quietly
+        // excluded them would be flattering rather than true.
+        let best = self
+            .players
+            .iter()
+            .filter(|p| p.id != self.self_id)
+            .map(|p| p.kills)
+            .max()
+            .unwrap_or(-1);
+        Summary {
+            map: self.world.info.name.clone(),
+            name: self
+                .players
+                .iter()
+                .find(|p| p.id == self.self_id)
+                .map(|p| p.name.clone())
+                .unwrap_or_default(),
+            kills: mine,
+            deaths: you.map(|y| y.deaths).unwrap_or(0),
+            tally: self.tally,
+            opponents: self.players.iter().filter(|p| p.id != self.self_id).count(),
+            won: mine >= best,
+            mvp: mine > best,
+        }
+    }
+
+    /// File one tick's hitmarkers as floating damage numbers.
+    ///
+    /// The anchor is looked up in **the roster the renderer is drawing this
+    /// frame** — the interpolated one in a match, the dummies on the range — so
+    /// the number lands on the body as it is *seen* rather than where the last
+    /// snapshot put it. A victim who is not in it (a kill through smoke, or a
+    /// long shot that outlived its target in the buffer) falls back to the
+    /// crosshair rather than being dropped.
+    fn note_hits(&mut self, hits: &[HitMarker]) {
+        if hits.is_empty() {
+            return;
+        }
+        let dummies;
+        let rows: &[PlayerRow] = if self.socket.is_none() {
+            dummies = self.range.rows();
+            &dummies
+        } else {
+            &self.drawn
+        };
+        self.damage.push(hits, |id| {
+            rows.iter().find(|p| p.id == id).map(|p| [p.x, p.y, p.z])
+        });
+        // The same list, counted rather than drawn. One call site for both, so a
+        // path that files a hitmarker can never file it into only one of them.
+        self.tally.note(hits);
+    }
+
+    /// Sound a kill we made, once per tick however many hitmarkers carried one.
+    ///
+    /// A burst that kills fills the whole magazine's worth of markers with the
+    /// same event; playing one voice per marker turns a shotgun kill into eight
+    /// overlapping chords, which is not louder so much as broken.
+    fn confirm_kill(&self, hits: &[HitMarker]) {
+        if hits.iter().any(|h| h.killed) {
+            self.play_own("kill", 0.7, false);
+        }
     }
 
     /// One of our own noises, dead centre. `weapon` gives it the voice of the gun
@@ -917,6 +1052,9 @@ impl App {
                     self.self_id = w.player_id;
                     self.players = w.players;
                     self.joined = true;
+                    // A new room is a new match. The tally is for the whole of
+                    // one, so it survives a death and not a join.
+                    self.tally.reset();
                     // The moment the room exists, and the only moment it is worth
                     // trying: the request is host-only and we are the host of
                     // whatever this welcome named.
@@ -956,6 +1094,10 @@ impl App {
                         // A jump back to full health is not healing, and the
                         // fall note from the death that caused it is stale.
                         self.hud.on_respawn();
+                        // The numbers describe the fight that killed you.
+                        // Floating them over a body across the map would be a
+                        // reading of a hit that is no longer happening.
+                        self.damage.clear();
                         // And the pouch is refilled, matching `reset_loadout`.
                         // The next snapshot's `you.nades` would correct this
                         // anyway; doing it here means the tray is right on the
@@ -964,6 +1106,24 @@ impl App {
                     }
                     self.hud.on_self(&s.you);
                     self.hud.on_hits(&s.you.hits);
+                    self.confirm_kill(&s.you.hits);
+                    self.note_hits(&s.you.hits);
+                    // Being hit, and hitting the ground. **One shake for the
+                    // tick, not one per marker**: a shotgun lands eight pellets
+                    // in a single snapshot, and eight `add` calls would put a
+                    // point-blank blast at full trauma while the same total
+                    // damage from a rifle burst barely registered. The amounts
+                    // are summed and the curve is applied once.
+                    //
+                    // Both lists are per-tick rather than cumulative — the HUD's
+                    // arrows and fall notice rely on that too, and would pile up
+                    // forever otherwise.
+                    let taken: f32 = s.you.hurt.iter().map(|h| h.amount).sum();
+                    self.shake.add(damage_trauma(taken));
+                    // A fall has no attacker, so it appears in neither `hurt`
+                    // nor `hits` — landing hard is the one damage in the game
+                    // that would otherwise be felt by nothing at all.
+                    self.shake.add(damage_trauma(s.you.fell));
                     for fx in &s.fx {
                         self.hud.on_fx(fx, &self.self_id);
                         // The muzzle flash, from the server's own account of the
@@ -976,16 +1136,36 @@ impl App {
                         // server resolves every ray and sends the muzzle and
                         // one endpoint per pellet.
                         if let Fx::Shot {
-                            id, origin, ends, ..
+                            id,
+                            origin,
+                            ends,
+                            hit,
+                            ..
                         } = fx
                         {
-                            self.effects.shot(*origin, ends, id == &self.self_id);
+                            // `hit` has been on the wire and parsed into
+                            // nothing since shots existed. It gates the dust:
+                            // sparks read as a strike on anything, masonry dust
+                            // off a player does not.
+                            self.effects
+                                .shot(*origin, ends, id == &self.self_id, *hit);
                         }
                         if let Fx::Detonate {
                             nade, at, radius, ..
                         } = fx
                         {
                             self.effects.detonate(nade, *at, *radius);
+                            // How hard it is felt is a function of *distance*,
+                            // not of whether it hurt us: cover stops the damage
+                            // and does not stop the ground moving. Measured from
+                            // `camera`, the honest position — the drawn one has
+                            // a shake in it already, and feeding that back would
+                            // make the shake depend on itself.
+                            let d = ((at[0] - self.camera.x).powi(2)
+                                + (at[1] - self.camera.y).powi(2)
+                                + (at[2] - self.camera.z).powi(2))
+                            .sqrt();
+                            self.shake.add(blast_trauma(d, *radius));
                         }
                         // Start the sink on the frame the pickup was announced
                         // rather than waiting for the next snapshot to say the
@@ -1002,6 +1182,12 @@ impl App {
                             }
                             if id == &self.self_id {
                                 self.viewmodel.fire();
+                                // From the served `kickback`, so the heavy
+                                // weapon is whichever one the server currently
+                                // says is heavy.
+                                self.shake.add(fire_trauma(
+                                    self.held().map(|w| w.kickback).unwrap_or(0.0),
+                                ));
                                 // Our own gun, in its own voice. The browser
                                 // plays this off its local trigger; this client
                                 // has no trigger controller, so it would fire on
@@ -1343,6 +1529,12 @@ impl App {
         let you = self.range.self_state();
         self.hud.on_self(&you);
         self.hud.on_hits(&you.hits);
+        // Off the hitmarkers rather than off `Fx::Kill`, so this is one code
+        // path: the range has no server and so no kill effects, and a Train mode
+        // where downing a dummy is silent is the one place a player would first
+        // notice the sound was missing.
+        self.confirm_kill(&you.hits);
+        self.note_hits(&you.hits);
         self.you = Some(you);
     }
 
@@ -1401,6 +1593,10 @@ impl App {
         physics::apply_impulse(&mut self.prediction.state, kick[0], kick[1], kick[2]);
 
         self.viewmodel.fire();
+        // The same jolt a match gives, from the same served number — Train is
+        // where the shoot-jump is learnt, and learning it against a camera that
+        // behaves differently would be learning the wrong thing.
+        self.shake.add(fire_trauma(weapon.kickback));
         self.play_own("shot", 0.55, true);
         let _ = shot;
     }
@@ -1425,6 +1621,16 @@ impl App {
     fn select_weapon(&mut self, slot: usize) {
         if slot >= self.weapons.len() {
             return;
+        }
+        // Asking for the slot we already hold is not a switch, and dipping the
+        // weapon for it would punish leaning on the number row.
+        let held = self.you.as_ref().map(|y| y.weapon).unwrap_or(-1);
+        if slot as i32 != held {
+            // Down *now*, on the press. In a match the answer is a round trip
+            // away and a holster that waited for it would read as input lag;
+            // if the switch is refused the weapon comes back up on its own. See
+            // `WeaponViewModel::holster`.
+            self.viewmodel.holster();
         }
         if self.socket.is_some() {
             self.want_weapon = slot as i32;
@@ -1584,7 +1790,6 @@ impl App {
                 }
             }
         }
-        renderer.set_prop_model(self.viewmodel.prop_model());
     }
 
     /// Open or close the console.
@@ -1876,12 +2081,26 @@ impl App {
                 self.menu.move_cursor(-(self.menu.cursor() as i32), 1);
             }
             Action::Quit => {
-                // Leaving says goodbye first: without it the room holds a player
-                // who is not there until the socket times out.
-                if let Some(socket) = &self.socket {
-                    let _ = socket.leave();
+                // **In a match, the card comes first.** Leaving is the end of
+                // the match for this player, and it is the same instant the
+                // server settles up — `leave` reads `result_for` before `remove`
+                // drops the counters. So this is the one moment a debrief is
+                // both earned and still wanted by somebody looking at the game.
+                //
+                // Train has no match to summarise and no opponents to be
+                // measured against, so it quits as it always did rather than
+                // showing a card of numbers this client would have to invent.
+                if self.socket.is_some() {
+                    self.menu.close();
+                    self.summary.open();
+                    // The pointer comes back with it: the card has a button, and
+                    // a page you can only leave with the keyboard while the
+                    // mouse is captured reads as frozen.
+                    self.set_grab(false);
+                    self.keys = Keys::default();
+                    return;
                 }
-                event_loop.exit();
+                self.leave_and_exit(event_loop);
             }
             action => {
                 let keys = menu::apply(action, step, &mut self.settings);
@@ -2162,6 +2381,22 @@ impl ApplicationHandler for App {
                     let count = self.menu_rows();
                     self.menu
                         .hover(position.x as f32, position.y as f32, count, w, h);
+                } else if self.summary.open {
+                    let (w, h) = self.window_size();
+                    self.summary
+                        .pointer(position.x as f32, position.y as f32, w, h);
+                }
+            }
+            WindowEvent::MouseInput { state, button, .. } if self.summary.open => {
+                // Only the button does anything. A click anywhere else on a card
+                // whose only action is irreversible would leave a match by
+                // accident.
+                if button == MouseButton::Left && state == ElementState::Pressed {
+                    let (w, h) = self.window_size();
+                    let (x, y) = self.pointer;
+                    if self.summary.hit(x, y, w, h) {
+                        self.leave_and_exit(event_loop);
+                    }
                 }
             }
             WindowEvent::MouseInput { state, button, .. } if self.menu.open => {
@@ -2228,6 +2463,27 @@ impl ApplicationHandler for App {
                     if self.menu.open {
                         if down {
                             self.menu_key(code, event_loop);
+                        }
+                        return;
+                    }
+                    // The summary card, which is reached *from* the menu and
+                    // replaces it. Two keys and nothing else: Escape unwinds one
+                    // layer like everywhere else in this client, and Enter is the
+                    // only thing that actually leaves. Every other key is
+                    // swallowed rather than falling through — a card you can
+                    // walk around behind is a card that is not really up.
+                    if self.summary.open {
+                        if down {
+                            match code {
+                                KeyCode::Escape => {
+                                    self.summary.close();
+                                    self.set_grab(true);
+                                }
+                                KeyCode::Enter | KeyCode::NumpadEnter => {
+                                    self.leave_and_exit(event_loop);
+                                }
+                                _ => {}
+                            }
                         }
                         return;
                     }
@@ -2356,6 +2612,24 @@ impl ApplicationHandler for App {
                 // from "an empty match" and must not draw the same.
                 let scoreboard = self.keys.scores.then(|| self.score_rows());
                 let (width, height) = self.renderer.as_ref().map(|r| r.size()).unwrap_or((1, 1));
+                // **A copy, and only for the draw.** `self.camera` is what
+                // `view_angles` puts on the wire and what a shot's ray is built
+                // from; the shake exists on the way to the GPU and nowhere else.
+                // `active` keeps the common case — no trauma at all — at exactly
+                // the cost it had before.
+                //
+                // Computed here rather than at the `render` call below because
+                // the damage numbers project through it too, and they have to
+                // use *the same* camera the world does: projected through the
+                // true one they would sit still while the body underneath them
+                // shook, which reads as the number belonging to the HUD.
+                let drawn_camera = if self.shake.active() {
+                    self.camera.shaken(&self.shake)
+                } else {
+                    self.camera
+                };
+                self.damage
+                    .placed(&drawn_camera, width, height, &mut self.damage_placed);
                 // The name and the cone are copied out rather than borrowed:
                 // `self.overlay` is taken mutably below, and a `HudView` holding
                 // a `&str` into `self.weapons` would borrow `self` twice.
@@ -2472,9 +2746,13 @@ impl ApplicationHandler for App {
                     // honest reading either way: the crosshair must never be
                     // narrower than the shot it describes.
                     spread,
+                    // Served, never inferred from the largest `reloadIn` seen:
+                    // the arc has to be right on the first reload of a match.
+                    reload_time: self.held().map(|w| w.reload_time).unwrap_or(0.0),
                     magnification,
                     speed: self.ground_speed(),
                     move_speed: MOVE_SPEED,
+                    yaw: self.camera.yaw.to_radians(),
                     on_ground: self.prediction.state.on_ground,
                     crouching: self.prediction.state.crouch > 0.5,
                     // From the predicted body, not from the snapshot: this is
@@ -2488,6 +2766,7 @@ impl ApplicationHandler for App {
                     net_graph: self.net_graph(),
                     scoreboard: scoreboard.as_deref(),
                     scores: &self.scores,
+                    damage: &self.damage_placed,
                 };
                 self.hud.build(&view, &mut overlay);
                 // After the HUD, so the scrim covers it: the menu is *over* the
@@ -2501,6 +2780,18 @@ impl ApplicationHandler for App {
                     view.height as f32,
                     &mut overlay,
                 );
+                // Last, so it is over everything: the card is the only thing on
+                // screen once it is up, and the menu it was reached from has
+                // already closed itself.
+                if self.summary.open {
+                    let summary = self.build_summary();
+                    self.summary.build(
+                        &summary,
+                        view.width as f32,
+                        view.height as f32,
+                        &mut overlay,
+                    );
+                }
                 self.overlay = overlay;
 
                 let Some(renderer) = &mut self.renderer else {
@@ -2517,7 +2808,8 @@ impl ApplicationHandler for App {
                 // `Ok(false)` is a frame that did not happen — minimised,
                 // occluded, or a surface that has moved on. Routine, and already
                 // handled inside; there is nothing to report and nothing to stop.
-                match renderer.render(&self.camera) {
+                // The shaken copy built above, shared with the damage numbers.
+                match renderer.render(&drawn_camera) {
                     // Only a frame that actually presented counts. Occluded and
                     // minimised frames return early, and counting them would make
                     // the fps readout report work that never happened — the one

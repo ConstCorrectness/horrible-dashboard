@@ -46,7 +46,43 @@ const FLASH_LIFE: f32 = 0.055;
 
 /// Recoil decay and reload-dip rates, per second.
 const KICK_DECAY: f32 = 11.0;
+
+/// How fast the reload dip approaches when the reload's **length is unknown**.
+///
+/// The fallback only — see `reload_envelope`. A server too old to send
+/// `reloadTime`, or a weapon whose spec has not arrived yet, leaves nothing to
+/// stretch the animation across, and an exponential approach at least starts in
+/// the right direction.
 const RELOAD_RATE: f32 = 6.0;
+
+/// Fractions of a reload spent taking the weapon down, and bringing it back.
+///
+/// **Fractions, not seconds.** That is the whole change: expressed this way the
+/// dip stretches to whatever `reloadTime` the server serves, so a 1.2s pistol
+/// reload and a 3.4s sniper reload both come back up on the frame the magazine
+/// is full. Written in seconds, the two would need a table nobody would keep in
+/// step with `weapons.py`.
+const RELOAD_DIP_IN: f32 = 0.22;
+const RELOAD_DIP_OUT: f32 = 0.30;
+
+/// Seconds to take a weapon out of frame, and to bring the next one up.
+///
+/// The holster is faster than the draw on purpose: putting something away is a
+/// motion you have already committed to, while bringing one up is the moment
+/// that has to read as an *arrival*. Equal times make a swap look like a single
+/// mechanical sweep in one direction.
+const HOLSTER_TIME: f32 = 0.13;
+const DRAW_TIME: f32 = 0.25;
+
+/// How long the weapon waits down after a switch was *asked for*.
+///
+/// **This client does not own the slot** — in a match `select_weapon` sends a
+/// request and the server decides. So the holster is an anticipation, and this
+/// is how long it is willing to be wrong for: comfortably past a round trip,
+/// and short enough that a refused switch does not leave a player staring at
+/// their own knees. When the swap does arrive the hold is cancelled outright,
+/// so a confirmed switch never waits out the remainder.
+const HOLSTER_HOLD: f32 = 0.4;
 
 /// The sun's direction, used as the flash's normal so it comes out at full
 /// brightness.
@@ -281,6 +317,15 @@ pub struct Frame {
     pub visible: bool,
     /// The run speed the walk cycle is measured against.
     pub move_speed: f32,
+    /// How far through the reload we are, 0..1, or `None` when that cannot be
+    /// known — the weapon's `reloadTime` has not been served, or is zero.
+    ///
+    /// `Option` rather than a bare float, and the distinction is load-bearing:
+    /// `Some(0.0)` is "the reload has just started" and `None` is "there is no
+    /// length to measure against". Collapsed into one number, a server that
+    /// serves no `reloadTime` would look like a reload permanently at its first
+    /// frame — the weapon would go down and stay there.
+    pub reload_progress: Option<f32>,
 }
 
 /// How long one inspect takes, in seconds.
@@ -357,6 +402,39 @@ fn inspect_turn(t: f32) -> f32 {
     ease(t / INSPECT_DURATION)
 }
 
+/// The reload dip's weight across the reload's own length: down, hold, up.
+///
+/// Takes a **fraction**, so the shape is the same on every weapon and its
+/// duration is whatever the server said. The old behaviour — an exponential
+/// approach at a fixed rate — did neither end well: a fast reload was still on
+/// its way down when the magazine filled, and a slow one sat at the bottom for
+/// two seconds and then snapped back up.
+fn reload_envelope(progress: f32) -> f32 {
+    let p = progress.clamp(0.0, 1.0);
+    ease(if p < RELOAD_DIP_IN {
+        p / RELOAD_DIP_IN
+    } else if p > 1.0 - RELOAD_DIP_OUT {
+        (1.0 - p) / RELOAD_DIP_OUT
+    } else {
+        1.0
+    })
+}
+
+/// Move `value` toward `target` at a fixed rate, arriving exactly.
+///
+/// Linear rather than the exponential approach used for sway and kick, because
+/// a swap is an *action with a length*: an exponential never arrives, so the
+/// weapon would be perpetually a few percent stowed and the draw would have no
+/// moment at which it is over.
+fn approach(value: f32, target: f32, seconds: f32, dt: f32) -> f32 {
+    let step = dt / seconds.max(1e-4);
+    if target > value {
+        (value + step).min(target)
+    } else {
+        (value - step).max(target)
+    }
+}
+
 /// One part of a weapon, in the model's own space.
 struct Part {
     size: [f32; 3],
@@ -393,6 +471,16 @@ pub struct WeaponViewModel {
     /// stride.
     walk: f32,
     flash_age: f32,
+    /// How far out of frame the weapon is, 0..1. 1 is fully stowed.
+    stow: f32,
+    /// Seconds left of a holster that was *asked for* but not yet confirmed.
+    /// See `HOLSTER_HOLD`.
+    holster_hold: f32,
+    /// Set while the weapon is not being drawn at all, so that coming back —
+    /// respawning, or the match starting — plays a draw rather than having the
+    /// gun appear already at rest. Without it, the only swap that reads as an
+    /// action is one you asked for, and spawning into a fight does not.
+    draw_on_return: bool,
     /// How far through the inspect animation we are, in seconds, or `None`.
     ///
     /// A *duration* rather than a bool with a separate clock: the pose is a
@@ -430,6 +518,9 @@ impl Default for WeaponViewModel {
             sway_x: 0.0,
             sway_y: 0.0,
             walk: 0.0,
+            stow: 0.0,
+            holster_hold: 0.0,
+            draw_on_return: true,
             flash_age: FLASH_LIFE,
             transform: Mat4::IDENTITY,
             prop: None,
@@ -451,6 +542,10 @@ impl WeaponViewModel {
         if id == self.weapon && skin == self.skin.as_ref() {
             return;
         }
+        // **The id, not the skin.** `set_weapon` is also how a skin is equipped,
+        // and re-holstering because somebody changed a colour would make the
+        // weapon dive out of frame in the middle of a firefight.
+        let swapped = id != self.weapon;
         self.weapon = id.to_string();
         self.skin = skin.cloned();
         self.shape = if id.is_empty() {
@@ -458,6 +553,31 @@ impl WeaponViewModel {
         } else {
             Some(build(id, skin))
         };
+        if swapped && !id.is_empty() {
+            // Snapped fully stowed rather than eased there: the model has
+            // *already* changed, so there is nothing left to take down — easing
+            // from here would lower the new weapon out of frame and then raise
+            // it again. The hold is cleared because the swap it was waiting for
+            // has arrived.
+            self.stow = 1.0;
+            self.holster_hold = 0.0;
+        }
+    }
+
+    /// A switch was asked for: take the weapon down while we wait to hear.
+    ///
+    /// Called from the key, **not** from the server's answer, and that is the
+    /// point — a swap that only began once the server confirmed would start a
+    /// round trip after the press and read as input lag. In a match the server
+    /// owns the slot, so this is a guess; `HOLSTER_HOLD` is how long the guess
+    /// is allowed to stand before the weapon comes back up on its own.
+    ///
+    /// Purely cosmetic: nothing here changes what is held, what can be fired,
+    /// or what the wire says. A refused switch costs a dip and nothing else.
+    pub fn holster(&mut self) {
+        if self.shape.is_some() {
+            self.holster_hold = HOLSTER_HOLD;
+        }
     }
 
     pub fn weapon(&self) -> &str {
@@ -521,7 +641,18 @@ impl WeaponViewModel {
             // Dying mid-inspect must not resume it on respawn: the animation is
             // a thing you asked for, not a state of the weapon.
             self.inspect = None;
+            // Nor may a half-finished holster: the request that started it
+            // belongs to a life that has ended.
+            self.holster_hold = 0.0;
+            self.draw_on_return = true;
             return;
+        }
+
+        if self.draw_on_return {
+            // First frame back. Start fully stowed so the weapon comes up into
+            // frame rather than materialising at rest — a spawn is an arrival.
+            self.draw_on_return = false;
+            self.stow = 1.0;
         }
 
         let target = (frame.speed / frame.move_speed.max(0.001)).clamp(0.0, 1.0);
@@ -547,8 +678,34 @@ impl WeaponViewModel {
         self.sway_y += ((-pitch_delta * 1.6).clamp(-0.18, 0.18) - self.sway_y) * settle;
 
         self.kick -= self.kick * (dt * KICK_DECAY).min(1.0);
-        let reload_target = if frame.reloading { 1.0 } else { 0.0 };
-        self.reload_t += (reload_target - self.reload_t) * (dt * RELOAD_RATE).min(1.0);
+        // The dip, on the server's clock where there is one. `reload_progress`
+        // is `None` only when there is no length to stretch across, and the old
+        // fixed-rate approach is kept for exactly that case — see `RELOAD_RATE`.
+        self.reload_t = match frame.reload_progress {
+            Some(p) => reload_envelope(p),
+            None => {
+                let target = if frame.reloading { 1.0 } else { 0.0 };
+                self.reload_t + (target - self.reload_t) * (dt * RELOAD_RATE).min(1.0)
+            }
+        };
+
+        // The swap. A holster that was asked for holds the weapon down until it
+        // expires; anything else brings it back up, so a refused switch recovers
+        // on its own with nothing anywhere having to notice it was refused.
+        self.holster_hold = (self.holster_hold - dt).max(0.0);
+        let stowing = self.holster_hold > 0.0;
+        self.stow = approach(
+            self.stow,
+            if stowing { 1.0 } else { 0.0 },
+            if stowing { HOLSTER_TIME } else { DRAW_TIME },
+            dt,
+        );
+        // A weapon on its way in or out is not one you are looking at. Both of
+        // the other poses swing the barrel off the crosshair as well, and three
+        // of them fighting over one pivot is the picture of a broken rig.
+        if self.stow > 0.0 {
+            self.inspect = None;
+        }
 
         // A reload takes the weapon away for its own animation, and two poses
         // fighting over the same pivot is one that looks broken. The reload
@@ -597,15 +754,24 @@ impl WeaponViewModel {
         // The roll is `inspect * (ROLL + TURN * turn)` rather than `inspect *
         // ROLL`. The envelope still scales it, so it starts and ends at rest;
         // the turn is what keeps it moving in between.
+        // The swap, eased rather than applied raw: a linear `stow` moved
+        // linearly reads as the gun being winched, and the arrival is the part
+        // that has to land. Down and slightly back, muzzle tipping toward the
+        // floor — far enough that the model is genuinely clear of the frame,
+        // since a weapon that stops just short of gone reads as a bug.
+        let stow = ease(self.stow);
         let position = Vec3::new(
             HOME.x + bob_x + self.sway_x - lift * 0.30,
-            HOME.y + bob_y + self.sway_y - self.reload_t * 0.55 + lift * 0.16,
-            HOME.z + self.kick * 0.28 + lift * 0.20,
+            HOME.y + bob_y + self.sway_y - self.reload_t * 0.55 + lift * 0.16 - stow * 1.15,
+            HOME.z + self.kick * 0.28 + lift * 0.20 + stow * 0.22,
         );
         let rotation = Vec3::new(
-            self.kick * -0.16 + self.reload_t * 0.7 + bob_y * 0.4 + inspect * 0.34,
+            self.kick * -0.16 + self.reload_t * 0.7 + bob_y * 0.4 + inspect * 0.34 + stow * 1.05,
             self.sway_x * 0.7 + self.reload_t * 0.25 - inspect * 0.95,
-            self.sway_x * 0.5 + bob_x * 0.6 + inspect * (INSPECT_ROLL + INSPECT_TURN * turn),
+            self.sway_x * 0.5
+                + bob_x * 0.6
+                + inspect * (INSPECT_ROLL + INSPECT_TURN * turn)
+                + stow * 0.35,
         );
         self.transform = Mat4::from_translation(position)
             * Mat4::from_euler(glam::EulerRot::XYZ, rotation.x, rotation.y, rotation.z);
@@ -654,7 +820,17 @@ impl WeaponViewModel {
     /// Deliberately **without** the shape's `rest` rotation, which the box models
     /// need and a prop does not: `rest` describes how a pile of boxes had to be
     /// turned to look like a weapon, and the GLB is exported already oriented.
+    ///
+    /// **`visible` is checked here, exactly as `vertices` checks it.** The
+    /// renderer decides whether to run the view-model pass at all from this and
+    /// the vertex count together, so a pose returned while dead or in the menu
+    /// would put a gun on screen at the one moment there is meant to be none —
+    /// the mirror image of the bug that made props draw *only* during a muzzle
+    /// flash.
     pub fn prop_model(&self) -> Option<Mat4> {
+        if !self.visible {
+            return None;
+        }
         let fit = self.prop?;
         Some(self.transform * Mat4::from_translation(fit.offset))
     }
@@ -703,13 +879,35 @@ impl WeaponViewModel {
             None => (model, muzzle),
         };
         if flare {
-            // Squeezed in x/y only, exactly as the browser scales it, so the
-            // flare's length stays put and only its girth varies.
-            let flash = model
-                * Mat4::from_translation(muzzle - Vec3::new(0.0, 0.0, 0.2))
-                * Mat4::from_scale(Vec3::new(scale, scale, 1.0));
-            for v in flash_cone() {
-                out.push(transform_vertex(&flash, &v));
+            if let Some((radius, length, sides)) = flash_shape(&self.weapon) {
+                // Squeezed in x/y only, exactly as the browser scales it, so the
+                // flare's length stays put and only its girth varies.
+                let flash = model
+                    * Mat4::from_translation(muzzle - Vec3::new(0.0, 0.0, 0.2))
+                    * Mat4::from_scale(Vec3::new(scale, scale, 1.0));
+                // **The bloom is a second cone, not a post-process.** There is
+                // no bright-pass, no blur target and no second pipeline here —
+                // the view model is drawn with the world pipeline — so a halo
+                // wider and shorter than the core, at a fraction of its
+                // opacity, is the whole of it. Drawn *first*, so the core lands
+                // on top of it rather than being averaged into it.
+                //
+                // Alpha rides the flare's own age, which is the difference
+                // between a bloom and a second flash: the halo is already
+                // fading while the core is still at full brightness.
+                let fade = 1.0 - (self.flash_age / FLASH_LIFE).clamp(0.0, 1.0);
+                for v in flash_cone(radius * 2.1, length * 0.55, sides) {
+                    let mut v = transform_vertex(&flash, &v);
+                    v.color = [
+                        v.color[0] * 0.55 * fade,
+                        v.color[1] * 0.48 * fade,
+                        v.color[2] * 0.36 * fade,
+                    ];
+                    out.push(v);
+                }
+                for v in flash_cone(radius, length, sides) {
+                    out.push(transform_vertex(&flash, &v));
+                }
             }
         }
     }
@@ -754,10 +952,35 @@ fn transform_vertex(m: &Mat4, v: &Vertex) -> Vertex {
 }
 
 /// The muzzle flare: a five-sided cone lying along -Z, pointing away.
-fn flash_cone() -> Vec<Vertex> {
-    let sides = 5;
-    let radius = 0.16;
-    let length = 0.42;
+/// How a weapon's muzzle flash is shaped, by weapon id.
+///
+/// `(radius, length, sides)`, or `None` for a weapon that has no muzzle.
+///
+/// **Matched on the id, like `build`, and deliberately not served.** This is the
+/// same call `audio::weapon_voice` documents: a served number is one the client
+/// *acts* on, and a flash that drifted from the server's idea of a weapon makes
+/// a gun look wrong rather than making a shot land somewhere else. The shapes
+/// come from what the weapon is — a shotgun throws a wide short bloom, a sniper
+/// a long narrow lance — which is the cue that tells a player at the far end of
+/// a corridor what is being fired at them.
+///
+/// The knife returns `None`. It reaches here because a swing is resolved as a
+/// `Shot` like everything else, and a flare on it would light up the one weapon
+/// whose whole value is that carrying it gives nothing away.
+fn flash_shape(id: &str) -> Option<(f32, f32, usize)> {
+    match id {
+        "knife" => None,
+        "pistol" => Some((0.13, 0.30, 5)),
+        "shotgun" => Some((0.30, 0.34, 7)),
+        "sniper" => Some((0.13, 0.78, 6)),
+        // The rifle, and anything the server has grown since this client was
+        // built — a new weapon should look ordinary, not invisible.
+        _ => Some((0.17, 0.44, 5)),
+    }
+}
+
+/// A cone of `sides` triangles, `length` long and `radius` across at the base.
+fn flash_cone(radius: f32, length: f32, sides: usize) -> Vec<Vertex> {
     let mut out = Vec::with_capacity(sides * 3);
     for i in 0..sides {
         let a0 = (i as f32 / sides as f32) * std::f32::consts::TAU;
@@ -1071,6 +1294,19 @@ mod tests {
             pitch: 0.0,
             visible,
             move_speed: 22.0,
+            reload_progress: None,
+        }
+    }
+
+    /// Run the draw out, so a test that means "at rest" starts there.
+    ///
+    /// Equipping a weapon now plays a draw — see `DRAW_TIME` — so a single
+    /// `update` after `set_weapon` leaves the model most of the way out of
+    /// frame. Any test that reasons about a *resting* pose has to get past it
+    /// first, or it measures the draw instead of the thing it came to measure.
+    fn settle(vm: &mut WeaponViewModel) {
+        for _ in 0..(DRAW_TIME / 0.016) as i32 + 4 {
+            vm.update(0.016, &frame(true));
         }
     }
 
@@ -1103,7 +1339,7 @@ mod tests {
         // hold still is the weapon.
         let mut vm = WeaponViewModel::default();
         vm.set_weapon("assault", None);
-        vm.update(0.016, &frame(true));
+        settle(&mut vm);
         vm.inspect();
 
         let mut previous = tip(&mut vm);
@@ -1357,6 +1593,52 @@ mod tests {
         assert!(drawn(&mut vm).is_empty());
     }
 
+    /// Fit a prop the size of a rifle, so `prop` is `Some` without a GPU.
+    fn with_prop(vm: &mut WeaponViewModel) {
+        vm.fit_prop(Vec3::new(-0.1, -0.1, -1.2), Vec3::new(0.1, 0.15, 0.4))
+            .expect("a rifle-sized prop fits");
+    }
+
+    #[test]
+    fn a_fitted_prop_draws_no_vertices_but_still_has_a_pose() {
+        // The bug this pins: with a prop loaded, `vertices` emits **only** the
+        // muzzle flare, so a renderer that decided whether to run the view-model
+        // pass from the vertex count alone drew the gun for the ~55 ms after a
+        // shot and never otherwise. The pose being `Some` here is what the
+        // renderer must key on instead.
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("assault", None);
+        vm.update(0.016, &frame(true));
+        with_prop(&mut vm);
+        vm.update(0.016, &frame(true));
+
+        assert!(
+            drawn(&mut vm).is_empty(),
+            "a fitted prop suppresses the box model, flare aside",
+        );
+        assert!(
+            vm.prop_model().is_some(),
+            "but there is still a gun, and something has to say so",
+        );
+    }
+
+    #[test]
+    fn a_fitted_prop_has_no_pose_while_dead() {
+        // The mirror image: `prop_model` gates the view-model pass now, so a
+        // pose returned while dead or in the menu puts a gun on screen at the
+        // one moment there is meant to be none.
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("assault", None);
+        vm.update(0.016, &frame(true));
+        with_prop(&mut vm);
+
+        vm.update(0.016, &frame(true));
+        assert!(vm.prop_model().is_some(), "alive: a weapon is drawn");
+
+        vm.update(0.016, &frame(false));
+        assert!(vm.prop_model().is_none(), "dead: nothing is");
+    }
+
     #[test]
     fn the_muzzle_flash_is_lit_for_two_frames_and_then_gone() {
         let mut vm = WeaponViewModel::default();
@@ -1373,10 +1655,268 @@ mod tests {
     }
 
     #[test]
+    fn a_knife_has_no_muzzle_to_flash() {
+        // A swing is resolved as a `Shot` like everything else, so it reaches
+        // the flare code. Lighting one would give away the position of the one
+        // weapon whose entire value is that carrying it does not.
+        assert!(flash_shape("knife").is_none());
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("knife", None);
+        settle(&mut vm);
+        let quiet = drawn(&mut vm).len();
+        vm.fire();
+        vm.update(0.016, &frame(true));
+        assert_eq!(drawn(&mut vm).len(), quiet, "the knife flashed");
+    }
+
+    #[test]
+    fn a_shotgun_blooms_wide_and_a_sniper_lances_long() {
+        // The shape is the cue that tells a player at the far end of a corridor
+        // what is being fired at them. Measured on the geometry rather than on
+        // the table, so a shape that stopped reaching the vertices would fail.
+        let span = |id: &str| {
+            let mut vm = WeaponViewModel::default();
+            vm.set_weapon(id, None);
+            settle(&mut vm);
+            let quiet: Vec<Vertex> = drawn(&mut vm);
+            vm.fire();
+            vm.update(0.001, &frame(true));
+            let lit = drawn(&mut vm);
+            // Only the vertices the flare added, so the weapon's own model does
+            // not dominate the measurement.
+            let flare = &lit[quiet.len()..];
+            let axis = |i: usize| {
+                let lo = flare.iter().map(|v| v.position[i]).fold(f32::MAX, f32::min);
+                let hi = flare.iter().map(|v| v.position[i]).fold(f32::MIN, f32::max);
+                hi - lo
+            };
+            (axis(0), axis(2))
+        };
+        let (shotgun_w, shotgun_l) = span("shotgun");
+        let (sniper_w, sniper_l) = span("sniper");
+        assert!(
+            shotgun_w > sniper_w,
+            "shotgun {shotgun_w} was not wider than sniper {sniper_w}"
+        );
+        assert!(
+            sniper_l > shotgun_l,
+            "sniper {sniper_l} was not longer than shotgun {shotgun_l}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_weapon_still_flashes() {
+        // The same rule `build` follows: a weapon the server has grown since
+        // this client was built should look ordinary, never invisible.
+        assert!(flash_shape("railgun").is_some());
+    }
+
+    #[test]
+    fn the_bloom_is_dimmer_than_the_core_and_fades_first() {
+        // It is a halo, not a second flash. If the two were equally bright the
+        // flare would just be a fatter cone.
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("assault", None);
+        settle(&mut vm);
+        let quiet = drawn(&mut vm).len();
+        vm.fire();
+        vm.update(0.001, &frame(true));
+        let lit = drawn(&mut vm);
+        let flare = &lit[quiet..];
+        let brightest = flare.iter().map(|v| v.color[0]).fold(0.0f32, f32::max);
+        let dimmest = flare.iter().map(|v| v.color[0]).fold(f32::MAX, f32::min);
+        assert!(
+            dimmest < brightest * 0.8,
+            "the halo ({dimmest}) is as bright as the core ({brightest})"
+        );
+
+        // And it is already on its way out while the core still is not.
+        let early = dimmest;
+        vm.update(FLASH_LIFE * 0.7, &frame(true));
+        let late_all = drawn(&mut vm);
+        let late = late_all[quiet..]
+            .iter()
+            .map(|v| v.color[0])
+            .fold(f32::MAX, f32::min);
+        assert!(late < early, "the halo did not fade: {early} then {late}");
+    }
+
+    #[test]
+    fn a_swap_takes_the_weapon_out_of_frame_and_brings_it_back() {
+        // The point of the whole animation: a swap should read as an action,
+        // not as one model being substituted for another between two frames.
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("assault", None);
+        settle(&mut vm);
+        let rest = vm.transform.w_axis.y;
+
+        vm.set_weapon("pistol", None);
+        vm.update(0.016, &frame(true));
+        let low = vm.transform.w_axis.y;
+        assert!(low < rest - 0.5, "{low} was not below {rest}");
+
+        settle(&mut vm);
+        // Back at *this* weapon's rest, which is the same home pose — the model
+        // differs, the pivot does not.
+        assert!(
+            (vm.transform.w_axis.y - rest).abs() < 1e-3,
+            "the draw never finished: {} vs {rest}",
+            vm.transform.w_axis.y
+        );
+    }
+
+    #[test]
+    fn a_refused_switch_brings_the_weapon_back_up_on_its_own() {
+        // The holster is fired on the *key*, before the server has answered, so
+        // the case where it never answers has to recover with nothing anywhere
+        // noticing. Otherwise a switch the server declines leaves the player
+        // looking at their knees for the rest of the match.
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("assault", None);
+        settle(&mut vm);
+        let rest = vm.transform.w_axis.y;
+
+        vm.holster();
+        for _ in 0..(HOLSTER_TIME / 0.016) as i32 + 2 {
+            vm.update(0.016, &frame(true));
+        }
+        assert!(vm.stow > 0.9, "the holster did not take it down: {}", vm.stow);
+
+        // No `set_weapon` ever arrives.
+        for _ in 0..((HOLSTER_HOLD + DRAW_TIME) / 0.016) as i32 + 4 {
+            vm.update(0.016, &frame(true));
+        }
+        assert_eq!(vm.stow, 0.0);
+        assert!((vm.transform.w_axis.y - rest).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_confirmed_switch_does_not_wait_out_the_rest_of_the_hold() {
+        // `set_weapon` clears the hold. Without that, a swap confirmed in 40ms
+        // would still sit at the bottom for the remaining 360ms of the guess.
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("assault", None);
+        settle(&mut vm);
+        vm.holster();
+        vm.update(0.016, &frame(true));
+        vm.set_weapon("pistol", None);
+        assert_eq!(vm.holster_hold, 0.0);
+        settle(&mut vm);
+        assert_eq!(vm.stow, 0.0);
+    }
+
+    #[test]
+    fn changing_a_skin_does_not_holster_the_weapon() {
+        // `set_weapon` is also how a skin is equipped. Re-holstering for one
+        // would dive the gun out of frame in the middle of a firefight, for a
+        // change of colour.
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("assault", None);
+        settle(&mut vm);
+        let painted = skin("#c04020", "#f0d060", "solid", 0.1);
+        vm.set_weapon("assault", Some(&painted));
+        assert_eq!(vm.stow, 0.0);
+    }
+
+    #[test]
+    fn a_spawn_draws_the_weapon_rather_than_having_it_appear() {
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("assault", None);
+        settle(&mut vm);
+        // Dead, then alive again holding the same weapon — so `set_weapon`
+        // never fires and nothing else would start a draw.
+        vm.update(0.016, &frame(false));
+        vm.update(0.016, &frame(true));
+        assert!(vm.stow > 0.9, "respawn did not draw: {}", vm.stow);
+    }
+
+    #[test]
+    fn the_reload_dip_stretches_to_the_served_reload_time() {
+        // The whole reason the envelope takes a fraction. A 1.2s reload and a
+        // 3.4s one must both be at the bottom in the middle and back up at the
+        // end; measured in seconds, one of the two is always wrong.
+        for total in [1.2f32, 3.4] {
+            let mut vm = WeaponViewModel::default();
+            vm.set_weapon("assault", None);
+            settle(&mut vm);
+            let rest = vm.transform.w_axis.y;
+
+            let steps = (total / 0.016) as i32;
+            let mut lowest = f32::MAX;
+            for i in 0..=steps {
+                let progress = i as f32 / steps as f32;
+                vm.update(
+                    0.016,
+                    &Frame {
+                        reloading: true,
+                        reload_progress: Some(progress),
+                        ..frame(true)
+                    },
+                );
+                if (progress - 0.5).abs() < 0.02 {
+                    lowest = lowest.min(vm.transform.w_axis.y);
+                }
+            }
+            assert!(
+                lowest < rest - 0.4,
+                "a {total}s reload never dipped: {lowest} vs {rest}"
+            );
+            // And it is back up on the frame the magazine is full, not after.
+            assert!(
+                (vm.transform.w_axis.y - rest).abs() < 1e-3,
+                "a {total}s reload had not returned: {} vs {rest}",
+                vm.transform.w_axis.y
+            );
+        }
+    }
+
+    #[test]
+    fn the_dip_is_the_same_shape_at_the_same_fraction_of_any_reload() {
+        // Stated directly on the envelope, because the pose folds in bob and
+        // sway that a two-weapon comparison would have to hold still.
+        for p in [0.0f32, 0.11, 0.3, 0.5, 0.85, 1.0] {
+            assert_eq!(reload_envelope(p), reload_envelope(p));
+        }
+        assert_eq!(reload_envelope(0.0), 0.0);
+        assert_eq!(reload_envelope(1.0), 0.0);
+        assert_eq!(reload_envelope(0.5), 1.0);
+        // And out of range rather than panicking: `reloadIn` can exceed
+        // `reloadTime` by a tick when the two arrive from different messages.
+        assert_eq!(reload_envelope(-3.0), 0.0);
+        assert_eq!(reload_envelope(9.0), 0.0);
+    }
+
+    #[test]
+    fn a_reload_with_no_served_length_still_dips() {
+        // The fallback. A server too old to send `reloadTime` must not leave the
+        // reload with no animation at all — nor hold the weapon down forever,
+        // which is what `Some(0.0)` in place of `None` would have done.
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("assault", None);
+        settle(&mut vm);
+        let rest = vm.transform.w_axis.y;
+        for _ in 0..60 {
+            vm.update(
+                0.016,
+                &Frame {
+                    reloading: true,
+                    reload_progress: None,
+                    ..frame(true)
+                },
+            );
+        }
+        assert!(vm.transform.w_axis.y < rest - 0.3);
+        for _ in 0..120 {
+            vm.update(0.016, &frame(true));
+        }
+        assert!((vm.transform.w_axis.y - rest).abs() < 1e-2);
+    }
+
+    #[test]
     fn recoil_kicks_the_weapon_back_and_then_settles() {
         let mut vm = WeaponViewModel::default();
         vm.set_weapon("assault", None);
-        vm.update(0.016, &frame(true));
+        settle(&mut vm);
         let rest = vm.transform.w_axis.z;
         vm.fire();
         vm.update(0.016, &frame(true));

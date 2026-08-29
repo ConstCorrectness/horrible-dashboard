@@ -228,6 +228,16 @@ pub struct SelfState {
     // in rock, unable to move, until the next snapshot reconciled them out of it.
     #[serde(default)]
     pub hp: f32,
+    /// Armour, 0..100. Absorbs half of every hit and spends itself doing it, so
+    /// it is health that does not appear on the health bar.
+    ///
+    /// The server has sent this since armour became a real mechanic and the
+    /// browser has read it since; **this client silently dropped it**, because
+    /// an undeclared field in serde is not an error. The symptom was not a
+    /// missing number — it was a body taking half damage for a reason nothing on
+    /// screen explained.
+    #[serde(default)]
+    pub armour: f32,
     #[serde(default)]
     pub alive: bool,
     #[serde(default)]
@@ -267,6 +277,10 @@ pub struct SelfState {
     /// light up on every shot, including the ones that hit a wall.
     #[serde(default)]
     pub hits: Vec<HitMarker>,
+    /// Damage **taken** since the last snapshot, as bearings. Drained
+    /// server-side like `hits`, so each arrives exactly once.
+    #[serde(default)]
+    pub hurt: Vec<HurtMarker>,
     /// The momentum the prediction rebases on. See `MoveState`.
     ///
     /// `move` is a Rust keyword, hence the rename. `Option` because a server
@@ -372,6 +386,22 @@ pub struct HitMarker {
     pub head: bool,
     #[serde(default)]
     pub killed: bool,
+}
+
+/// One hit **taken**, from the victim's side: which way it came from.
+///
+/// A world bearing in radians and nothing else — the same shape `NoiseEvent`
+/// carries, for the same reason. The server resolves it because only the server
+/// holds both bodies, and it sends an angle rather than a position so the
+/// indicator cannot be turned into a tracker for whoever is shooting at you.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct HurtMarker {
+    /// World bearing to the attacker, radians. Subtract the view yaw to draw it.
+    #[serde(default)]
+    pub bearing: f32,
+    /// What the hit cost, health and armour together — the arrow's weight.
+    #[serde(default)]
+    pub amount: f32,
 }
 
 /// One thing that happened this tick, broadcast to everyone.

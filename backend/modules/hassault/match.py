@@ -319,6 +319,15 @@ class MatchPlayer:
     protected_until: float = 0.0
     # Hitmarker feedback, drained into that player's own snapshot envelope.
     pending_hits: list[dict[str, Any]] = field(default_factory=list)
+    #: Damage *taken* since the last envelope: a bearing and an amount, drained
+    #: the same way, for the indicator that says which way to turn.
+    #:
+    #: **A bearing, never a position** — `noise.py`'s rule, and for exactly its
+    #: reason. Sending the attacker's coordinates so the client could work the
+    #: angle out for itself would hand every player a wall hack that triggers on
+    #: being shot at, which is precisely when knowing where somebody is standing
+    #: is worth the most.
+    pending_hurt: list[dict[str, Any]] = field(default_factory=list)
     #: Items picked up since the last envelope, drained the same way and for the
     #: same reason: what an item gave *you* is yours, while the fact that it is
     #: gone from the map is everyone's and rides in the shared view.
@@ -416,6 +425,8 @@ class MatchPlayer:
         """
         hits = self.pending_hits
         self.pending_hits = []
+        hurt = self.pending_hurt
+        self.pending_hurt = []
         picked = self.pending_pickups
         self.pending_pickups = []
         fell = self.last_fall
@@ -457,6 +468,9 @@ class MatchPlayer:
             "deaths": self.deaths,
             "mag": weapon.mag,
             "hits": hits,
+            #: Damage taken, as bearings. Private for the same reason `hits` is:
+            #: it is feedback about what just happened to *you*.
+            "hurt": hurt,
             "armour": round(self.armour),
             #: What you just ran over, with the amounts that actually applied.
             "picked": picked,
@@ -644,6 +658,11 @@ class MatchRoom:
         # Drop queued commands: they were predicted against the old position, and
         # simulating them after a teleport walks the player away from the spawn.
         player.queue.clear()
+        # And the damage arrows, which point at a fight that is over and a place
+        # this body is no longer standing in. Undrained ones would arrive in the
+        # first envelope after the respawn and send a player who has just come
+        # back somewhere across the map to look at nothing.
+        player.pending_hurt.clear()
 
     # -- simulation ---------------------------------------------------------
 
@@ -1438,6 +1457,24 @@ class MatchRoom:
                 # just took, while the remaining total is the victim's business.
                 hit["armour"] = True
             attacker.pending_hits.append(hit)
+
+        # And the other half of the same event: the victim is told which way to
+        # turn. A bearing and an amount, resolved here because only the server
+        # holds both bodies — see `pending_hurt`, and note there is deliberately
+        # no wall test. Being shot *is* the evidence that a shot reached you, so
+        # muffling the arrow the way `noise.hear` muffles a footstep would hide
+        # the direction of the one thing that already proved it has line of fire.
+        if len(victim.pending_hurt) < MAX_PENDING_HITS:
+            dx = attacker.state.x - victim.state.x
+            dy = attacker.state.y - victim.state.y
+            if dx * dx + dy * dy > 1e-12:
+                victim.pending_hurt.append(
+                    {
+                        "bearing": round(math.atan2(dy, dx), 4),
+                        "amount": round(amount + absorbed),
+                    }
+                )
+
         if not killed:
             return
 

@@ -32,7 +32,8 @@
 use std::collections::VecDeque;
 
 use crate::console::{LogLine, Tone};
-use crate::protocol::{Fx, HitMarker, SelfState};
+use crate::damage::Placed;
+use crate::protocol::{Fx, HitMarker, HurtMarker, SelfState};
 use crate::radar::{self, Blip, Run};
 use crate::settings::{Crosshair, CrosshairStyle};
 
@@ -59,12 +60,85 @@ const FLASH_LIFE: f32 = 0.35;
 /// The most kill notes drawn at once, newest first — the browser's five.
 const MAX_FEED: usize = 5;
 
+/// How long a damage arrow stays up, and the most drawn at once.
+///
+/// Longer than a hitmarker because it is an *instruction* rather than a
+/// confirmation — it has to survive the moment of being hit, which is the moment
+/// a player is least able to read anything.
+const ARROW_LIFE: f32 = 1.2;
+const MAX_DAMAGE_ARROWS: usize = 6;
+
+/// How long the centre kill notice stays up.
+///
+/// Longer than a hitmarker, shorter than a damage arrow. It is a *reward*, not
+/// an instruction — it does not need to survive the moment the way an arrow
+/// pointing at your killer does, and one that outstayed the next engagement
+/// would be sitting over the crosshair during it.
+const KILL_NOTICE_LIFE: f32 = 1.4;
+
+/// Killstreak milestones, and what each is called.
+///
+/// **Ascending, and read from the back**, so the highest milestone a streak has
+/// passed is the one announced. Scanned forwards, a 12-kill streak would report
+/// the first threshold it matched.
+///
+/// Only the listed counts announce anything: a notice on every kill past three
+/// would make the streak the loudest thing on screen precisely when the kill
+/// itself is what you want to see. The gaps widen for the same reason.
+const STREAKS: [(u32, &str); 5] = [
+    (3, "TRIPLE"),
+    (5, "RAMPAGE"),
+    (7, "DOMINATING"),
+    (10, "UNSTOPPABLE"),
+    (15, "LEGENDARY"),
+];
+
+/// What to call a streak of exactly this many, or `None` at a count between
+/// milestones.
+fn streak_name(kills: u32) -> Option<&'static str> {
+    STREAKS
+        .iter()
+        .rev()
+        .find(|(at, _)| *at == kills)
+        .map(|(_, name)| *name)
+}
+
+// The palette, as a **ramp rather than six independent choices**. Everything
+// readable sits on one cool grey axis (`WHITE` → `DIM` → `FAINT`) and colour is
+// spent only where it means something: amber for "yours", red for "you are
+// losing something", green for "over the line", blue for armour.
+//
+// `ARMOUR` is the browser's own `#6f97c4`, so the one mechanic both clients draw
+// is the same colour in both — a health pack red in one client and orange in the
+// other looks deliberate from either side alone, which is the rule
+// `tests/browser_parity.rs` already pins for item tints.
 const WHITE: [f32; 4] = [0.92, 0.94, 0.96, 0.9];
 const DIM: [f32; 4] = [0.72, 0.76, 0.80, 0.65];
+/// One step below `DIM`: structure that must be visible without being read —
+/// bar troughs, spent magazine ticks, grid rules.
+const FAINT: [f32; 4] = [0.52, 0.57, 0.62, 0.40];
 const AMBER: [f32; 4] = [0.94, 0.83, 0.54, 0.95];
 const RED: [f32; 4] = [0.97, 0.32, 0.28, 0.95];
 const GREEN: [f32; 4] = [0.49, 0.91, 0.53, 0.95];
+/// `0x6f97c4` — the browser's armour colour, unchanged.
+const ARMOUR: [f32; 4] = [0.4353, 0.5922, 0.7686, 0.95];
 const PANEL: [f32; 4] = [0.05, 0.07, 0.09, 0.45];
+/// The trough a bar is drawn in. Darker than `PANEL` so a bar reads as
+/// *inset* rather than as another panel stacked on the first.
+const TROUGH: [f32; 4] = [0.06, 0.08, 0.10, 0.72];
+/// The lag trail behind a health bar that has just dropped: the same red the
+/// number turns, at a fraction of its weight, so the eye reads "this much, just
+/// now" without the trail competing with the bar itself.
+const GHOST: [f32; 4] = [0.80, 0.24, 0.22, 0.55];
+
+/// How long the damage-lag trail takes to catch up with the bar, in seconds.
+///
+/// Long enough to be read after the shot that caused it, short enough to have
+/// finished before the next one in a burst — a trail still draining from the
+/// previous hit would understate the one you are looking at.
+const GHOST_FALL: f32 = 0.45;
+/// The delay before it starts draining, so a single hit is legible at all.
+const GHOST_HOLD: f32 = 0.12;
 
 /// The margin every edge-anchored block keeps, in HUD units. Deliberately more
 /// than a couple of pixels: a HUD flush against the edge is the first thing an
@@ -199,6 +273,14 @@ pub struct HudView<'a> {
     /// here with the rest of the layout. Drawing `spread` instead would hide the
     /// hip-fire penalty, which is the one number an unscoped sniper is about.
     pub spread: f32,
+    /// The held weapon's full reload time in seconds, served like every other
+    /// weapon number. 0 for a weapon that does not reload.
+    ///
+    /// Needed because `you.reload_in` is a *remaining* time, and a progress dial
+    /// cannot be drawn from a remainder alone. Taking it from the served table
+    /// rather than remembering the largest `reload_in` seen keeps the arc honest
+    /// on the first reload of a match.
+    pub reload_time: f32,
     /// Scope magnification: 1 when unscoped, so a caller can pass it blind.
     ///
     /// Above 1 the crosshair is replaced by the sight, whose blacked-out surround
@@ -210,6 +292,14 @@ pub struct HudView<'a> {
     /// the movement is *about*, and the only way a chained jump is learnable.
     pub speed: f32,
     pub move_speed: f32,
+    /// Which way we are facing, in **radians**. Every bearing the server sends
+    /// is a world bearing, so this is what turns one into a direction on screen.
+    ///
+    /// Carried here rather than read off `radar`, which is `None` in Train and
+    /// while connecting: the damage arrows have to work in a match whether or
+    /// not a radar is being drawn, and reaching into an optional for a number
+    /// that is always known would make them disappear with it.
+    pub yaw: f32,
     pub on_ground: bool,
     pub crouching: bool,
     /// Whether our own eye is under the water plane.
@@ -234,6 +324,13 @@ pub struct HudView<'a> {
     /// is the only place the *match* score appears — the per-player columns are
     /// a different question from who is winning.
     pub scores: &'a [i32],
+    /// This frame's floating damage numbers, already projected onto the screen.
+    ///
+    /// **Projected by the caller, not here.** The painter holds no matrices and
+    /// should not start: `damage.rs` owns the world anchors and the projection,
+    /// which is what lets both be tested headless. Everything in this slice is
+    /// already in the painter's own pixels.
+    pub damage: &'a [Placed],
     /// Round-trip time in ms, or `None` when nothing has been measured yet —
     /// Train, or the first second of a match.
     ///
@@ -286,9 +383,43 @@ pub struct Hud {
     damage_age: f32,
     /// The health we last saw, so a drop can be told from a snapshot repeating.
     last_hp: f32,
+    /// Where the damage-lag trail currently is, in hit points, and how long it
+    /// has been held there.
+    ///
+    /// Health the bar has already given up but the trail has not yet caught up
+    /// with, which is what turns "you are on 40" into "you *were* on 75 a moment
+    /// ago". It is only ever pulled **down** toward the live value: a heal
+    /// snaps it, because a trail that grew would be drawing damage that never
+    /// happened.
+    ghost_hp: f32,
+    ghost_hold: f32,
+    /// Where damage came from, as world bearings in radians, newest last, with
+    /// the age of each. Drawn as arcs around the crosshair.
+    damage_from: VecDeque<(f32, f32)>,
     /// Fall damage from the most recent landing, and how long ago.
     fell: f32,
     fell_age: f32,
+    /// The centre kill notice: what it says, and how old it is.
+    ///
+    /// Two sources feed it, deliberately. `on_hits` sets the generic form from
+    /// **our own hitmarkers**, which exist in a match *and* on the range — so
+    /// Train confirms a downed dummy rather than being the one mode where a kill
+    /// says nothing. `on_fx` then upgrades it with the victim's name from the
+    /// authoritative kill event, which only a match has. Online the two arrive
+    /// in the same tick and only the named form is ever drawn.
+    kill_notice: String,
+    kill_age: f32,
+    /// Kills since we last died, and the milestone notice it earned.
+    ///
+    /// Counted from **our own hitmarkers** rather than from `Fx::Kill`, which is
+    /// the only source that exists in both modes — the range has no server and
+    /// so no kill effects at all. Counted rather than `any()`-ed, because one
+    /// tick can carry two kills (a shotgun through two bodies) and collapsing
+    /// them would silently make a streak undercount.
+    streak: u32,
+    streak_notice: String,
+    /// How long the scoreboard has been held open, for the entrance cascade.
+    board_age: f32,
 }
 
 impl Default for Hud {
@@ -299,8 +430,16 @@ impl Default for Hud {
             hit_killed: false,
             damage_age: f32::MAX,
             last_hp: f32::MAX,
+            ghost_hp: 0.0,
+            ghost_hold: 0.0,
+            damage_from: VecDeque::new(),
             fell: 0.0,
             fell_age: f32::MAX,
+            kill_notice: String::new(),
+            kill_age: f32::MAX,
+            streak: 0,
+            streak_notice: String::new(),
+            board_age: 0.0,
         }
     }
 }
@@ -332,6 +471,18 @@ impl Hud {
             )
         };
         let mine = killer == self_id || victim == self_id;
+        // A kill **we** made, with the name the feed already has. Not a death of
+        // ours, and not a fall — `killer` is empty for those, and "ELIMINATED"
+        // over the crosshair as you die would be an unusually cruel bug.
+        if killer == self_id && victim != self_id {
+            self.kill_notice = if *head {
+                format!("HEADSHOT {}", name_of(victim_name, victim))
+            } else {
+                format!("ELIMINATED {}", name_of(victim_name, victim))
+            }
+            .to_uppercase();
+            self.kill_age = 0.0;
+        }
         self.feed.push_front(KillNote {
             text,
             mine,
@@ -349,14 +500,58 @@ impl Hud {
         // A burst that kills is a kill marker even if the other pellets only
         // wounded: the louder of the two is the one worth showing.
         self.hit_killed = hits.iter().any(|h| h.killed);
+        if self.hit_killed {
+            // The generic form, so a downed training dummy still confirms. In a
+            // match `on_fx` runs immediately after this and replaces it with the
+            // named one — which is why this must not be conditional on the
+            // notice being empty, or a second kill in the same match would keep
+            // the first victim's name.
+            self.kill_notice = "ELIMINATED".to_string();
+            self.kill_age = 0.0;
+            self.streak += hits.iter().filter(|h| h.killed).count() as u32;
+            // Cleared unless this kill *earned* a milestone, so the previous
+            // one does not ride along under every kill until you die.
+            self.streak_notice = match streak_name(self.streak) {
+                Some(name) => format!("{name} {}", self.streak),
+                None => String::new(),
+            };
+        }
     }
 
     /// The private half of a snapshot, for the things derived from a *change*.
     pub fn on_self(&mut self, you: &SelfState) {
         if you.hp < self.last_hp && self.last_hp != f32::MAX {
             self.damage_age = 0.0;
+            // The trail holds where the bar *was*. Taken from the last seen
+            // value rather than from the trail's current position, so a second
+            // hit during a burst extends the same trail instead of restarting it
+            // partway down and understating the pair.
+            self.ghost_hp = self.ghost_hp.max(self.last_hp);
+            self.ghost_hold = GHOST_HOLD;
+        } else if you.hp > self.last_hp {
+            // A heal snaps the trail down to the bar rather than leaving it
+            // stranded above one that has gone *up*, where it would draw damage
+            // that never happened and sit there until the next real hit.
+            // `.max()` was the obvious way to write this and is the wrong one:
+            // it can only raise the trail, so a heal left it exactly where the
+            // last hit had put it.
+            self.ghost_hp = you.hp;
+            self.ghost_hold = 0.0;
         }
         self.last_hp = you.hp;
+        // Dying ends the streak, and this is the moment it ends — not the
+        // respawn several seconds later, which is where a player would see a
+        // streak they no longer have still counting.
+        if !you.alive {
+            self.streak = 0;
+            self.streak_notice.clear();
+        }
+        for h in &you.hurt {
+            self.damage_from.push_back((h.bearing, 0.0));
+        }
+        while self.damage_from.len() > MAX_DAMAGE_ARROWS {
+            self.damage_from.pop_front();
+        }
         if you.fell > 0.0 {
             self.fell = you.fell;
             self.fell_age = 0.0;
@@ -389,12 +584,60 @@ impl Hud {
         self.last_hp = f32::MAX;
         self.damage_age = f32::MAX;
         self.fell_age = f32::MAX;
+        // A kill you made before dying is over. Congratulating a player on the
+        // frame they respawn reads as congratulating them for dying.
+        self.kill_age = f32::MAX;
+        // Belt and braces with `on_self`: a respawn is reached by dying, and a
+        // streak surviving into the next life would be the one number on the
+        // HUD that was simply wrong.
+        self.streak = 0;
+        self.streak_notice.clear();
+        // Neither the trail nor the arrows survive a death: they describe the
+        // fight that killed you, and drawing them over a fresh body would send
+        // a player who has just spawned to look somewhere across the map.
+        self.ghost_hp = 0.0;
+        self.ghost_hold = 0.0;
+        self.damage_from.clear();
     }
 
-    pub fn update(&mut self, dt: f32) {
+    /// `board_open` is the scoreboard key, held. It drives the entrance
+    /// cascade, and resetting on release is what makes the cascade play *every*
+    /// time the board is opened rather than only the first.
+    pub fn update(&mut self, dt: f32, board_open: bool) {
+        self.board_age = if board_open { self.board_age + dt } else { 0.0 };
         self.hit_age = advance(self.hit_age, dt);
         self.damage_age = advance(self.damage_age, dt);
         self.fell_age = advance(self.fell_age, dt);
+        self.kill_age = advance(self.kill_age, dt);
+        // The trail eases toward the live value, holding first so a single hit
+        // is legible before it starts draining. Only ever downward: `on_self`
+        // owns moving it up, and does so by snapping.
+        //
+        // The hold is **spent out of `dt`**, and the remainder drains in the
+        // same call. An `else` here instead would make one long frame either
+        // hold or drain but never both, so a trail could stall for a whole frame
+        // at a time — and at a low frame rate it would visibly stutter rather
+        // than ease.
+        let mut rest = dt;
+        if self.ghost_hold > 0.0 {
+            let used = rest.min(self.ghost_hold);
+            self.ghost_hold -= used;
+            rest -= used;
+        }
+        if rest > 0.0 && self.ghost_hp > self.last_hp && self.last_hp != f32::MAX {
+            // A fixed rate rather than a fixed duration, so a 5 hp scratch
+            // drains in a fifth of the time a 25 hp burst does — it is the
+            // trail's *length* that carries the reading, and a short one
+            // lingering as long as a long one would overstate it.
+            let step = (100.0 / GHOST_FALL) * rest;
+            self.ghost_hp = (self.ghost_hp - step).max(self.last_hp);
+        }
+        for arrow in &mut self.damage_from {
+            arrow.1 += dt;
+        }
+        while self.damage_from.front().is_some_and(|a| a.1 > ARROW_LIFE) {
+            self.damage_from.pop_front();
+        }
         for note in &mut self.feed {
             note.age += dt;
         }
@@ -449,12 +692,21 @@ impl Hud {
                 p.crosshair(gap.max(2.0), u, hit, self.hit_killed, &view.crosshair);
             }
 
+            // Over the crosshair and under everything else: an arrow is read at
+            // the centre of the screen, where the player is already looking.
+            if !dead {
+                self.paint_damage_arrows(&mut p, view.yaw, u);
+            }
             self.paint_health(&mut p, view, u);
             paint_weapon(&mut p, view, u);
             if let Some(utility) = view.utility {
-                paint_utility(&mut p, utility, u);
+                paint_utility(&mut p, view, utility, u);
             }
             self.paint_center(&mut p, view, u);
+            // After the centre notices and before the scoreboard: a damage
+            // number belongs to the world, so it must sit under the panels you
+            // deliberately hold over it and over the reticle it is reporting on.
+            paint_damage_numbers(&mut p, view.damage, u);
             paint_movement(&mut p, view, u);
             paint_net_graph(&mut p, view, u);
             if let Some(r) = &view.radar {
@@ -464,7 +716,7 @@ impl Hud {
             // is a thing you hold *over* the game, and one the ammo counter
             // shows through reads as a bug.
             if let Some(rows) = view.scoreboard {
-                paint_scoreboard(&mut p, rows, view.scores, u);
+                paint_scoreboard(&mut p, rows, view.scores, self.board_age, u);
             }
         }
 
@@ -514,13 +766,35 @@ impl Hud {
             color[3] *= fade;
             let w = text_width(&note.text, scale);
             let x = p.width - w - u * 6.0;
+            let h = 7.0 * scale + scale * 2.0;
+            // Chamfered on the left only — the right edge is the screen margin
+            // that every line shares, and cutting it would make the stack look
+            // ragged rather than cut.
+            let cut = scale * 1.6;
             p.rect(
-                x - scale,
+                x - scale + cut,
                 y - scale,
-                w + scale * 2.0,
-                7.0 * scale + scale * 2.0,
+                w + scale * 2.0 - cut,
+                h,
                 [PANEL[0], PANEL[1], PANEL[2], PANEL[3] * fade],
             );
+            p.tri(
+                (x - scale, y - scale + cut),
+                (x - scale + cut, y - scale),
+                (x - scale + cut, y - scale + cut),
+                [PANEL[0], PANEL[1], PANEL[2], PANEL[3] * fade],
+            );
+            p.tri(
+                (x - scale, y - scale + h - cut),
+                (x - scale + cut, y - scale + h - cut),
+                (x - scale + cut, y - scale + h),
+                [PANEL[0], PANEL[1], PANEL[2], PANEL[3] * fade],
+            );
+            // A leading accent bar, which is what lets your own kills be found
+            // in a busy feed without reading any of it.
+            let mut accent = if note.mine { AMBER } else { FAINT };
+            accent[3] *= fade;
+            p.rect(x - scale + cut, y - scale, (u * 0.4).max(2.0), h, accent);
             p.text(x, y, scale, color, &note.text);
             y += 7.0 * scale + u * 3.0;
         }
@@ -535,13 +809,41 @@ impl Hud {
         // Anchoring downwards from a top instead puts the last line off the bottom
         // of the screen on a small window — where it is not clipped with a warning,
         // it is simply absent.
-        let bar_h = u * 1.8;
-        let bar_y = p.height - MARGIN * u - 7.0 * (u * 0.75) - u * 1.5 - bar_h;
-        let number_y = bar_y - u * 2.0 - 7.0 * big;
+        let bar_h = u * 2.6;
+        let armour_h = u * 1.2;
+        // The floor is the top of the movement line, which owns the bottom-left
+        // corner — **including this block's own panel padding**, which is the
+        // part that is easy to leave out. The block used to be positioned so its
+        // last bar cleared the line while the panel drawn around it did not, so
+        // the two overlapped by exactly the padding: invisible at 720p, obvious
+        // at 1440p, and a function of the window size either way.
+        let padding = u * 1.8;
+        let floor = p.height - MARGIN * u - 7.0 * (u * 0.75) - u * 1.5 - padding;
+        // The armour row is **always** reserved, like the reload line opposite.
+        // Taking the space only when there is armour means the health bar — the
+        // one thing on this HUD read continuously — moves the instant a vest
+        // runs out, which is the instant it is being watched hardest.
+        let armour_y = floor - armour_h;
+        let bar_y = armour_y - u * 0.6 - bar_h;
+        let number_y = bar_y - u * 1.6 - 7.0 * big;
 
         let hp = you.hp.max(0.0).round() as i32;
-        let color = if you.hp > 30.0 { WHITE } else { RED };
+        let low = you.hp <= 30.0;
+        let color = if low { RED } else { WHITE };
         let label = hp.to_string();
+        let bar_w = u * 44.0;
+        // The armour bar sits *under* the health bar and is thinner, so the two
+        // never compete: health is the number you die at, armour is a modifier
+        // on the way there.
+        p.panel(
+            left - u * 1.5,
+            number_y - u * 1.2,
+            bar_w + u * 3.0,
+            armour_y + armour_h - number_y + u * 1.8,
+            u * 1.2,
+            Some(if low { RED } else { FAINT }),
+        );
+
         p.text(left, number_y, big, color, &label);
         p.text(
             left + text_width(&label, big) + small * 2.0,
@@ -550,12 +852,43 @@ impl Hud {
             DIM,
             "HP",
         );
+
         // A bar as well as a number: a number is exact and a bar is instant, and
         // in a firefight only one of those gets read.
-        let bar_w = u * 44.0;
-        p.rect(left, bar_y, bar_w, bar_h, [0.1, 0.12, 0.15, 0.7]);
+        p.rect(left, bar_y, bar_w, bar_h, TROUGH);
         let frac = (you.hp / 100.0).clamp(0.0, 1.0);
+        // The lag trail, drawn between the trough and the bar so the bar covers
+        // its own share of it. What is left is the gap between where health is
+        // and where it was a moment ago — which is how much that last hit cost,
+        // readable without doing arithmetic on two numbers.
+        let ghost = (self.ghost_hp / 100.0).clamp(0.0, 1.0);
+        if ghost > frac {
+            p.rect(
+                left + bar_w * frac,
+                bar_y,
+                bar_w * (ghost - frac),
+                bar_h,
+                GHOST,
+            );
+        }
         p.rect(left, bar_y, bar_w * frac, bar_h, color);
+        // Segment rules over the top, every 25. Ticks rather than separate
+        // bars, so the bar stays one continuous length and the marks only give
+        // the eye something to measure it against.
+        for i in 1..4 {
+            let x = left + bar_w * (i as f32 / 4.0);
+            p.rect(x, bar_y, (u * 0.2).max(1.0), bar_h, TROUGH);
+        }
+
+        // The trough is drawn whether or not there is armour: an empty trough
+        // says "you could be wearing some and are not", which is a different
+        // statement from the blank space that says nothing at all.
+        p.rect(left, armour_y, bar_w, armour_h, TROUGH);
+        if you.armour > 0.0 {
+            let af = (you.armour / 100.0).clamp(0.0, 1.0);
+            p.rect(left, armour_y, bar_w * af, armour_h, ARMOUR);
+        }
+
         if you.protected {
             p.text(
                 left + bar_w + u * 2.0,
@@ -564,6 +897,44 @@ impl Hud {
                 AMBER,
                 "SPAWN SHIELD",
             );
+        }
+    }
+
+    /// Arcs around the crosshair pointing at whatever is shooting you.
+    ///
+    /// The one piece of this HUD that is an *instruction* rather than a report,
+    /// and the reason it is worth a wire field: a hurt vignette says you are
+    /// being shot, which you already knew, while this says which way to turn.
+    ///
+    /// Bearings are the server's, so the drawing is `bearing - yaw` and nothing
+    /// else — this client never learns where the shooter is, only which way they
+    /// were. Same contract as the noise ring.
+    fn paint_damage_arrows(&self, p: &mut Painter, yaw: f32, u: f32) {
+        let cx = p.width * 0.5;
+        let cy = p.height * 0.5;
+        // Far enough out not to crowd the crosshair, close enough to be inside
+        // the same glance. Roughly a tenth of the screen's height.
+        let radius = u * 26.0;
+        for (bearing, age) in &self.damage_from {
+            let fade = (1.0 - age / ARROW_LIFE).clamp(0.0, 1.0);
+            // Squared, so an arrow is bright for the moment it matters and then
+            // gets out of the way rather than lingering at half strength.
+            let alpha = fade * fade;
+            let rel = bearing - yaw;
+            let (s, c) = rel.sin_cos();
+            // Screen space: +x right, +y **down**, so forward (`rel == 0`) has to
+            // come out above the crosshair. Getting this sign wrong points every
+            // arrow at the exact opposite of the shooter, which is worse than
+            // drawing nothing at all and looks like working code.
+            let (dx, dy) = (s, -c);
+            let tip = (cx + dx * (radius + u * 7.0), cy + dy * (radius + u * 7.0));
+            // The base, one arc-width either side of the bearing.
+            let spread = 0.22_f32;
+            let (ls, lc) = (rel - spread).sin_cos();
+            let (rs, rc) = (rel + spread).sin_cos();
+            let left = (cx + ls * radius, cy - lc * radius);
+            let right = (cx + rs * radius, cy - rc * radius);
+            p.tri(left, right, tip, [0.97, 0.32, 0.28, 0.85 * alpha]);
         }
     }
 
@@ -584,7 +955,129 @@ impl Hud {
             let line = format!("-{} FALL", self.fell.round() as i32);
             p.center_text(p.height * 0.58, scale, [0.98, 0.62, 0.58, 0.9], &line);
         }
+        if self.kill_age < KILL_NOTICE_LIFE && !self.kill_notice.is_empty() {
+            // **Below the crosshair, and below the fall notice.** The obvious
+            // place for a kill confirmation is above the aim, and this was there
+            // first — until `examples/hud_preview` drew it: the scoreboard is a
+            // centred panel spanning roughly 0.28..0.47 of the height, so a
+            // notice at 0.36 printed straight through it every time somebody
+            // opened the board. That collision is intermittent in play — the
+            // board is a held key — which is exactly the kind of fault that
+            // ships. No unit test would have caught it; the picture did.
+            //
+            // Faded out over its last third rather than cut, so a notice on its
+            // way out cannot be mistaken for one that has just arrived.
+            let fade = ((KILL_NOTICE_LIFE - self.kill_age) / (KILL_NOTICE_LIFE * 0.33))
+                .clamp(0.0, 1.0);
+            let colour = [AMBER[0], AMBER[1], AMBER[2], AMBER[3] * fade];
+            let big = scale * 1.15;
+            let y = p.height * 0.65;
+            p.center_text(y, big, colour, &self.kill_notice);
+            // A rule under it, the width of the text, growing out of nothing as
+            // the notice fades. The one piece of structure the tactical
+            // direction asks for and the cheapest thing on screen to draw: an
+            // underline reads as a stamp where a box would read as a dialog.
+            let w = text_width(&self.kill_notice, big);
+            p.rect(
+                (p.width - w * fade) * 0.5,
+                y + 8.0 * big,
+                w * fade,
+                (big * 0.4).max(2.0),
+                colour,
+            );
+            // The milestone, beneath the kill that earned it.
+            //
+            // **On the kill notice's clock, not one of its own.** A streak is
+            // only ever announced at the instant of a kill, so a second timer
+            // would be a second thing to age, cap and reset that could only ever
+            // disagree with this one. Empty at a count between milestones, which
+            // is most kills.
+            if !self.streak_notice.is_empty() {
+                p.center_text(
+                    y + 11.0 * big,
+                    scale * 0.9,
+                    [WHITE[0], WHITE[1], WHITE[2], WHITE[3] * fade],
+                    &self.streak_notice,
+                );
+            }
+        }
     }
+}
+
+/// The floating damage numbers, already projected — see `HudView::damage`.
+///
+/// Three readings, in one glance and without reading the digits: a plain hit is
+/// pale, a headshot is amber, and a killing blow is red and larger. That ordering
+/// is the same one the hitmarker uses, so the two cannot disagree about what just
+/// happened.
+///
+/// Culled against the window rather than clipped. A number whose body is off to
+/// one side projects outside the screen, and the painter would happily emit those
+/// quads — they cost vertices out of a shared 65536 budget for a thing nobody can
+/// see. `text_width` is used for the left edge so the test is against the whole
+/// string rather than its first glyph.
+fn paint_damage_numbers(p: &mut Painter, numbers: &[Placed], u: f32) {
+    for n in numbers {
+        let (color, scale) = if n.killed {
+            ([0.97, 0.32, 0.28, 1.0], u * 1.35)
+        } else if n.head {
+            ([0.94, 0.83, 0.54, 1.0], u * 1.15)
+        } else {
+            ([0.92, 0.94, 0.96, 1.0], u * 0.95)
+        };
+        let text = n.amount.to_string();
+        let w = text_width(&text, scale);
+        let x = n.x - w * 0.5;
+        if x + w < 0.0 || x > p.width || n.y + 7.0 * scale < 0.0 || n.y > p.height {
+            continue;
+        }
+        // A headshot says so. The digits alone cannot: 90 from a rifle to the
+        // head and 90 from a sniper to the chest are the same number and very
+        // different shots.
+        if n.head {
+            p.text(
+                x - text_width("+", scale) - scale,
+                n.y,
+                scale,
+                [color[0], color[1], color[2], color[3] * n.fade],
+                "+",
+            );
+        }
+        p.text(
+            x,
+            n.y,
+            scale,
+            [color[0], color[1], color[2], color[3] * n.fade],
+            &text,
+        );
+    }
+}
+
+/// Where each row of the bottom-right weapon block sits, bottom-up.
+///
+/// `(strip_y, strip_h, reload_y, ammo_y, name_y)`.
+///
+/// **One function, because two blocks depend on it.** The utility tray stacks
+/// directly on top of this one and used to recompute the same four lines by
+/// hand, with a comment saying the arithmetic had to agree — which it then
+/// silently stopped doing the moment this layout changed. A tray printed
+/// through the weapon name is what that looks like, and nothing fails.
+///
+/// Everything here is **always reserved**, including the reload row and the
+/// magazine strip. A block that only takes the space it needs moves the ammo
+/// counter at the moment the magazine empties, which is the moment it is being
+/// read hardest.
+fn weapon_rows(view: &HudView, height: f32, u: f32) -> (f32, f32, f32, f32, f32) {
+    let big = u * 2.4;
+    let small = u * 0.8;
+    let strip_h = u * 1.4;
+    // Clear of the net graph, which shares this corner.
+    let floor = height - MARGIN * u - net_graph_height(&net_graph_lines(view), u);
+    let strip_y = floor - strip_h;
+    let reload_y = strip_y - u * 1.2 - 7.0 * small;
+    let ammo_y = reload_y - u * 1.2 - 7.0 * big;
+    let name_y = ammo_y - u * 1.5 - 7.0 * small;
+    (strip_y, strip_h, reload_y, ammo_y, name_y)
 }
 
 fn paint_weapon(p: &mut Painter, view: &HudView, u: f32) {
@@ -592,14 +1085,7 @@ fn paint_weapon(p: &mut Painter, view: &HudView, u: f32) {
     let big = u * 2.4;
     let small = u * 0.8;
     let right = p.width - u * 6.0;
-    // Upwards from the bottom margin, like the health block — and the reload
-    // line is *always* accounted for, so the ammo counter does not jump a line
-    // every time a magazine runs out.
-    let reload_y = p.height - MARGIN * u - 7.0 * small;
-    let ammo_y = reload_y - u * 2.0 - 7.0 * big;
-    let name_y = ammo_y - u * 1.5 - 7.0 * small;
-
-    p.text_right(right, name_y, small, DIM, &view.weapon_name.to_uppercase());
+    let (strip_y, strip_h, reload_y, ammo_y, name_y) = weapon_rows(view, p.height, u);
 
     // A magazine of zero is a weapon that has none — the knife — and "0 rounds
     // left" is a different statement from "this does not take rounds".
@@ -627,12 +1113,97 @@ fn paint_weapon(p: &mut Painter, view: &HudView, u: f32) {
     } else {
         WHITE
     };
+
+    // The panel spans from the weapon name down past the strip, so the whole
+    // block reads as one object the way the health side does.
+    //
+    // **Measured from what is written in it**, never a constant — the same rule
+    // `tray_metrics` exists to enforce two blocks up. A weapon called "ASSAULT
+    // RIFLE" is far wider than one called "KNIFE", and a fixed width picked
+    // against the short one leaves the long one hanging outside its own panel.
+    let name = view.weapon_name.to_uppercase();
+    let content = text_width(&name, small)
+        .max(text_width(&ammo, big) + tail_w)
+        .max(u * 26.0);
+    let panel_left = right - content - u * 1.5;
+    p.panel(
+        panel_left,
+        name_y - u * 1.2,
+        right - panel_left + u * 1.5,
+        strip_y + strip_h - name_y + u * 2.4,
+        u * 1.2,
+        Some(if you.mag > 0 && you.ammo == 0 {
+            RED
+        } else {
+            FAINT
+        }),
+    );
+
+    p.text_right(right, name_y, small, DIM, &name);
     p.text_right(right - tail_w, ammo_y, big, ammo_color, &ammo);
     if !tail.is_empty() {
         p.text_right(right, ammo_y + 7.0 * big - 7.0 * small, small, DIM, &tail);
     }
+
+    // The magazine, one tick per round. A count says how many are left; the
+    // strip says it without being read, which in a firefight is the difference
+    // between knowing and finding out.
+    //
+    // `mag == 0` is the knife — a weapon with no magazine at all — and it draws
+    // no strip rather than an empty one, the same distinction the dash above
+    // makes. A strip of zero ticks would claim it takes rounds and has none.
+    if you.mag > 0 {
+        let full = right - panel_left - u * 1.5;
+        // Above ~20 rounds a per-round tick is thinner than a pixel and the
+        // strip turns into a smear, so it becomes a plain bar instead. The
+        // threshold is where a tick plus its gap stops being drawable, not a
+        // round number.
+        let gap = (u * 0.25).max(1.0);
+        let tick = (full - gap * (you.mag - 1) as f32) / you.mag as f32;
+        if tick >= 1.5 {
+            for i in 0..you.mag {
+                let x = panel_left + u * 0.75 + (tick + gap) * i as f32;
+                let loaded = i < you.ammo;
+                p.rect(
+                    x,
+                    strip_y,
+                    tick,
+                    strip_h,
+                    if loaded { ammo_color } else { TROUGH },
+                );
+            }
+        } else {
+            p.rect(panel_left + u * 0.75, strip_y, full, strip_h, TROUGH);
+            let frac = (you.ammo as f32 / you.mag as f32).clamp(0.0, 1.0);
+            p.rect(
+                panel_left + u * 0.75,
+                strip_y,
+                full * frac,
+                strip_h,
+                ammo_color,
+            );
+        }
+    }
+
     if you.reloading {
-        p.text_right(right, reload_y, small, AMBER, "RELOADING");
+        // A dial rather than the word RELOADING, because the question during a
+        // reload is never *whether* — you pressed it — it is *how much longer*,
+        // and a word answers the one you did not ask.
+        //
+        // With no served reload time the arc cannot be drawn honestly, so the
+        // word comes back rather than a full ring implying it is nearly done.
+        if view.reload_time > 0.0 {
+            let r = u * 2.4;
+            // Inset by the panel's own chamfer, not flush with `right`: an arc
+            // centred on the margin has half of itself outside the panel.
+            let cx = right - r - u * 1.2;
+            let cy = reload_y + 7.0 * small * 0.5;
+            let done = ((view.reload_time - you.reload_in) / view.reload_time).clamp(0.0, 1.0);
+            p.ring(cx, cy, r - u * 0.5, r, TROUGH);
+            p.arc(cx, cy, r - u * 0.5, r, done, AMBER);
+        } else {
+            p.text_right(right, reload_y, small, AMBER, "RELOADING");
+        }
     }
 }
 
@@ -673,7 +1244,7 @@ fn tray_metrics(labels: &[String], u: f32) -> (f32, f32, f32, f32, f32) {
     (cell_w, cell_h, pad, label_scale, count_scale)
 }
 
-fn paint_utility(p: &mut Painter, view: &UtilityView, u: f32) {
+fn paint_utility(p: &mut Painter, hud: &HudView, view: &UtilityView, u: f32) {
     if view.slots.is_empty() {
         return;
     }
@@ -691,18 +1262,12 @@ fn paint_utility(p: &mut Painter, view: &UtilityView, u: f32) {
     let right = p.width - u * 6.0;
 
     // **Above the weapon block, not beside it.** Both are anchored to the same
-    // right margin, so the arithmetic has to agree with `paint_weapon`'s: it
-    // stacks reload → ammo → name upwards from the bottom margin, and this
-    // continues that stack rather than starting a second one. Laid out from the
-    // bottom for the reason the health block is — anchoring downwards from a top
-    // puts the last row off the bottom of a small window, where it is not
-    // clipped with a warning, it is simply absent.
-    let small = u * 0.8;
-    let big = u * 2.4;
-    let reload_y = p.height - MARGIN * u - 7.0 * small;
-    let ammo_y = reload_y - u * 2.0 - 7.0 * big;
-    let name_y = ammo_y - u * 1.5 - 7.0 * small;
-    let y = name_y - u * 1.5 - cell_h;
+    // right margin, and this continues that stack rather than starting a second
+    // one — so the top of it comes from `weapon_rows`, the same function
+    // `paint_weapon` lays itself out with, rather than from a second copy of the
+    // arithmetic that has to be remembered whenever the first changes.
+    let (_, _, _, _, name_y) = weapon_rows(hud, p.height, u);
+    let y = name_y - u * 2.4 - cell_h;
     let total = view.slots.len() as f32 * cell_w + (view.slots.len() as f32 - 1.0) * gap;
     // Never off the left edge: on a very wide, very short window the tray is
     // wider than the margin leaves room for, and a row drawn at a negative x is
@@ -798,7 +1363,19 @@ fn paint_movement(p: &mut Painter, view: &HudView, u: f32) {
 /// left-aligned and the numbers are right-aligned against fixed offsets from the
 /// panel's right edge, which is what makes a column a column in a bitmap font
 /// with no proportional metrics to fight.
-fn paint_scoreboard(p: &mut Painter, rows: &[ScoreRow], scores: &[i32], u: f32) {
+/// How long each row waits behind the one above it, and the longest the whole
+/// cascade may take.
+///
+/// The cap is the point. A per-row delay alone means a sixteen-player board
+/// takes twice as long to arrive as an eight-player one, and the board is read
+/// under time pressure — so the stagger compresses as the roster grows and the
+/// last row is always on screen within `BOARD_CASCADE`.
+const BOARD_STEP: f32 = 0.035;
+const BOARD_CASCADE: f32 = 0.22;
+/// How long one row takes to fade and slide in, once its turn comes.
+const BOARD_ROW_RISE: f32 = 0.12;
+
+fn paint_scoreboard(p: &mut Painter, rows: &[ScoreRow], scores: &[i32], age: f32, u: f32) {
     let scale = u * 0.85;
     let line = 7.0 * scale + u * 2.0;
     let width = (p.width * 0.52).max(u * 90.0);
@@ -833,15 +1410,56 @@ fn paint_scoreboard(p: &mut Painter, rows: &[ScoreRow], scores: &[i32], u: f32) 
     p.text(x + pad, head_y, scale, WHITE, &title);
     p.text_right(right, head_y, scale * 0.8, DIM, "K   D");
 
+    // Compressed so the whole cascade fits in `BOARD_CASCADE` however many
+    // players there are.
+    let step = if rows.len() > 1 {
+        BOARD_STEP.min(BOARD_CASCADE / (rows.len() - 1) as f32)
+    } else {
+        0.0
+    };
+
     for (i, row) in rows.iter().enumerate() {
+        // Seeded at its final value and clamped, not driven by a frame counter:
+        // a board opened in a backgrounded window must not be a stack of rows
+        // stuck at zero opacity, which is worse than no animation at all.
+        let t = ((age - step * i as f32) / BOARD_ROW_RISE).clamp(0.0, 1.0);
+        if t <= 0.0 {
+            continue;
+        }
+        // Ease out, and slide the last few pixels in from the right so the
+        // cascade reads as rows arriving rather than as rows blinking on.
+        let ease = 1.0 - (1.0 - t) * (1.0 - t);
+        let slide = (1.0 - ease) * u * 4.0;
         let ry = y + header + line * i as f32;
-        let color = if row.you {
+        let color = |mut c: [f32; 4]| {
+            c[3] *= ease;
+            c
+        };
+        // Alternating fills, and a brighter one under your own row. Zebra
+        // striping is what lets a name on the left be tracked across to a number
+        // on the right without a rule between every column.
+        if row.you {
+            p.rect(
+                x,
+                ry - u * 0.4,
+                width,
+                line,
+                [0.42, 0.72, 0.98, 0.10 * ease],
+            );
+            // And an accent down the leading edge, so your row is findable at a
+            // glance rather than by reading for the amber text.
+            p.rect(x, ry - u * 0.4, (u * 0.5).max(2.0), line, color(AMBER));
+        } else if i % 2 == 1 {
+            p.rect(x, ry - u * 0.4, width, line, [1.0, 1.0, 1.0, 0.030 * ease]);
+        }
+
+        let text_color = color(if row.you {
             AMBER
         } else if row.bot {
             DIM
         } else {
             WHITE
-        };
+        });
         let mut name = row.name.to_uppercase();
         if row.bot {
             name.push_str(" (BOT)");
@@ -849,29 +1467,80 @@ fn paint_scoreboard(p: &mut Painter, rows: &[ScoreRow], scores: &[i32], u: f32) 
         // The team stripe: the one piece of colour in the row, and the only
         // thing that says which side a name is on without spending a column.
         p.rect(
-            x + pad * 0.4,
+            x + pad * 0.4 + slide,
             ry,
             u * 0.6,
             7.0 * scale,
-            if row.team == 0 {
+            color(if row.team == 0 {
                 [0.85, 0.35, 0.25, 0.9]
             } else {
                 [0.30, 0.55, 0.90, 0.9]
-            },
+            }),
         );
-        p.text(x + pad, ry, scale, color, &name);
+        p.text(x + pad + slide, ry, scale, text_color, &name);
         p.text_right(
-            right - text_width("   D", scale * 0.8),
+            right - text_width("   D", scale * 0.8) - slide,
             ry,
             scale,
-            color,
+            text_color,
             &row.kills.to_string(),
         );
-        p.text_right(right, ry, scale, DIM, &row.deaths.to_string());
+        p.text_right(
+            right - slide,
+            ry,
+            scale,
+            color(DIM),
+            &row.deaths.to_string(),
+        );
     }
 }
 
 /// CS:GO style NetGraph overlay (FPS, Ping, KB/s I/O, Loss, Variance).
+/// What the net graph will write, without drawing it.
+///
+/// Split out so its **height** can be known before the ammo block is laid out.
+/// The two share the bottom-right corner, and the ammo block used to be drawn
+/// straight through the graph whenever it was open — the reload line sat inside
+/// the box. Nothing failed; the two were simply printed over each other, which
+/// is the kind of bug that survives because the corner is only crowded when a
+/// player has turned the graph on.
+fn net_graph_lines(view: &HudView) -> Vec<String> {
+    if view.net_graph == 0 {
+        return Vec::new();
+    }
+    let fps_text = if view.fps.is_some() {
+        format!("FPS: {:.0}", view.fps.unwrap_or(0.0))
+    } else {
+        "FPS: --".to_string()
+    };
+    let ping_text = if let Some(r) = view.rtt {
+        format!("PING: {:.0} MS", r)
+    } else {
+        "PING: --".to_string()
+    };
+    match view.net_graph {
+        1 => vec![format!("{fps_text} | {ping_text}")],
+        2 => vec![
+            format!("{fps_text} (VAR: 0.8MS) | {ping_text}"),
+            "IN: 14.2 KB/S | OUT: 4.8 KB/S | LOSS: 0.0%".to_string(),
+        ],
+        _ => vec![
+            format!("{fps_text} (VAR: 0.8MS) | {ping_text}"),
+            "RATE: 64/S | JITTER: 0.6MS | LOSS: 0.0%".to_string(),
+            "IN: 14.2 KB/S | OUT: 4.8 KB/S | TICK: 15.6MS".to_string(),
+        ],
+    }
+}
+
+/// How tall that box is, including the gap under it. Zero when it is off.
+fn net_graph_height(lines: &[String], u: f32) -> f32 {
+    if lines.is_empty() {
+        return 0.0;
+    }
+    let line_h = 7.0 * (u * 0.70) + u * 1.5;
+    line_h * lines.len() as f32 + u * 3.0 + u * 1.5
+}
+
 fn paint_net_graph(p: &mut Painter, view: &HudView, u: f32) {
     if view.net_graph == 0 {
         return;
@@ -880,37 +1549,9 @@ fn paint_net_graph(p: &mut Painter, view: &HudView, u: f32) {
     let pad = u * 2.0;
     let line_h = 7.0 * scale + u * 1.5;
 
-    let fps_val = view.fps.unwrap_or(0.0);
-    let fps_text = if view.fps.is_some() {
-        format!("FPS: {:.0}", fps_val)
-    } else {
-        "FPS: --".to_string()
-    };
-
-    let ping_text = if let Some(r) = view.rtt {
-        format!("PING: {:.0} MS", r)
-    } else {
-        "PING: --".to_string()
-    };
-
-    let lines: Vec<String> = match view.net_graph {
-        1 => {
-            vec![format!("{} | {}", fps_text, ping_text)]
-        }
-        2 => {
-            vec![
-                format!("{} (VAR: 0.8MS) | {}", fps_text, ping_text),
-                "IN: 14.2 KB/S | OUT: 4.8 KB/S | LOSS: 0.0%".to_string(),
-            ]
-        }
-        _ => {
-            vec![
-                format!("{} (VAR: 0.8MS) | {}", fps_text, ping_text),
-                "RATE: 64/S | JITTER: 0.6MS | LOSS: 0.0%".to_string(),
-                "IN: 14.2 KB/S | OUT: 4.8 KB/S | TICK: 15.6MS".to_string(),
-            ]
-        }
-    };
+    // The same list `net_graph_height` measured, so the box drawn here and the
+    // space the ammo block was moved out of can never disagree.
+    let lines = net_graph_lines(view);
 
     let max_w = lines
         .iter()
@@ -1434,6 +2075,64 @@ impl<'a> Painter<'a> {
         }
     }
 
+    /// The HUD's container: a chamfered panel with an accent edge.
+    ///
+    /// One primitive rather than each block drawing its own background, because
+    /// what makes a HUD read as a *system* is that every block is cut from the
+    /// same shape. It is also the only place the house style is expressed, so
+    /// restyling the whole HUD is editing this function.
+    ///
+    /// The corner is cut with two triangles rather than rounded: this painter
+    /// has no anti-aliasing and a "round" corner made of quads is a staircase.
+    /// A 45° cut is exact at every size and reads as deliberate — which is the
+    /// whole reason the tactical look uses chamfers.
+    ///
+    /// `accent` is drawn as a **2 px top edge**, not a full perimeter: a border
+    /// all the way round competes with the crosshair for the eye, and a single
+    /// heavy edge is what gives a stack of panels a reading order.
+    pub fn panel(&mut self, x: f32, y: f32, w: f32, h: f32, cut: f32, accent: Option<[f32; 4]>) {
+        if w <= 0.0 || h <= 0.0 {
+            return;
+        }
+        // Never cut more than the panel can spare, or the two chamfers meet in
+        // the middle and the "panel" is a bowtie.
+        let cut = cut.min(w * 0.5).min(h * 0.5).max(0.0);
+        // The body, as three rects: a full-width band between the chamfered
+        // rows, and an inset row at each end.
+        self.rect(x + cut, y, w - cut * 2.0, h, PANEL);
+        self.rect(x, y + cut, cut, h - cut * 2.0, PANEL);
+        self.rect(x + w - cut, y + cut, cut, h - cut * 2.0, PANEL);
+        if cut > 0.0 {
+            // The four corners. Wound the same way `rect` winds, which costs
+            // nothing here — the overlay pipeline does not cull — but keeps the
+            // buffer uniform for anything that ever inspects it.
+            self.tri((x, y + cut), (x + cut, y), (x + cut, y + cut), PANEL);
+            self.tri(
+                (x + w - cut, y),
+                (x + w, y + cut),
+                (x + w - cut, y + cut),
+                PANEL,
+            );
+            self.tri(
+                (x, y + h - cut),
+                (x + cut, y + h - cut),
+                (x + cut, y + h),
+                PANEL,
+            );
+            self.tri(
+                (x + w - cut, y + h - cut),
+                (x + w, y + h - cut),
+                (x + w - cut, y + h),
+                PANEL,
+            );
+        }
+        if let Some(accent) = accent {
+            // Inset by the chamfer so the edge stops where the shape does,
+            // rather than overhanging into the cut corner.
+            self.rect(x + cut, y, w - cut * 2.0, 2.0, accent);
+        }
+    }
+
     /// A thick line between two points — the only thing here that is not axis
     /// aligned, and it exists for the hitmarker's X.
     fn line(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, thickness: f32, color: [f32; 4]) {
@@ -1552,6 +2251,45 @@ impl<'a> Painter<'a> {
         for i in 0..SEGMENTS {
             let a0 = (i as f32 / SEGMENTS as f32) * std::f32::consts::TAU;
             let a1 = ((i + 1) as f32 / SEGMENTS as f32) * std::f32::consts::TAU;
+            let quad = [
+                self.ndc(cx + a0.cos() * inner, cy + a0.sin() * inner),
+                self.ndc(cx + a1.cos() * inner, cy + a1.sin() * inner),
+                self.ndc(cx + a1.cos() * outer, cy + a1.sin() * outer),
+                self.ndc(cx + a0.cos() * outer, cy + a0.sin() * outer),
+            ];
+            for idx in [0usize, 1, 2, 0, 2, 3] {
+                self.out.push(OverlayVertex {
+                    position: quad[idx],
+                    color,
+                });
+            }
+        }
+    }
+
+    /// A sweep of a ring, clockwise from twelve o'clock.
+    ///
+    /// `frac` is 0..1 of a full turn. Separate from `ring` rather than a
+    /// parameter on it because the two disagree about where zero is: a ring has
+    /// no start, while an arc is *read* as a progress dial and has to begin at
+    /// the top and travel the way a clock does, or it reads as counting down
+    /// when it is counting up.
+    ///
+    /// Segments scale with the sweep so a 5% arc is not drawn with 72 of them,
+    /// and there is always at least one — a reload that has just started should
+    /// show a sliver, not nothing.
+    fn arc(&mut self, cx: f32, cy: f32, inner: f32, outer: f32, frac: f32, color: [f32; 4]) {
+        let frac = frac.clamp(0.0, 1.0);
+        if frac <= 0.0 || color[3] <= 0.0 {
+            return;
+        }
+        let segments = ((frac * 72.0).ceil() as usize).max(1);
+        let sweep = frac * std::f32::consts::TAU;
+        // Twelve o'clock is -y in this painter's screen space, and the sweep is
+        // clockwise, which in a y-down frame means *adding* to the angle.
+        let start = -std::f32::consts::FRAC_PI_2;
+        for i in 0..segments {
+            let a0 = start + sweep * (i as f32 / segments as f32);
+            let a1 = start + sweep * ((i + 1) as f32 / segments as f32);
             let quad = [
                 self.ndc(cx + a0.cos() * inner, cy + a0.sin() * inner),
                 self.ndc(cx + a1.cos() * inner, cy + a1.sin() * inner),
@@ -2047,15 +2785,19 @@ mod tests {
 
     fn view<'a>(you: Option<&'a SelfState>) -> HudView<'a> {
         HudView {
-            // No grenades and no flash: the default view is the one every older
-            // test builds, and inventing a pouch in it would draw a tray in
-            // assertions about the crosshair.
+            // No grenades, no flash and no damage numbers: the default view is
+            // the one every older test builds, and inventing a pouch or a
+            // floating number in it would draw them into assertions about the
+            // crosshair.
             utility: None,
+            damage: &[],
             flash: 0.0,
             underwater: false,
             crosshair: crate::settings::Crosshair::default(),
             width: 1280,
             height: 800,
+            yaw: 0.0,
+            reload_time: 0.0,
             you,
             weapon_name: "assault rifle",
             spread: 0.02,
@@ -2219,7 +2961,7 @@ mod tests {
         let texts = hud.feed_texts();
         assert_eq!(texts.len(), MAX_FEED);
         assert!(texts[0].contains("V7"), "{texts:?}");
-        hud.update(KILL_TTL + 0.1);
+        hud.update(KILL_TTL + 0.1, false);
         assert!(hud.feed_texts().is_empty());
     }
 
@@ -2251,6 +2993,269 @@ mod tests {
     }
 
     #[test]
+    fn a_kill_we_made_puts_a_notice_over_the_crosshair() {
+        let mut hud = Hud::default();
+        hud.on_fx(&kill("me", "them", false), "me");
+        assert_eq!(hud.kill_notice, "ELIMINATED THEM");
+        assert!(hud.kill_age < KILL_NOTICE_LIFE);
+        hud.update(KILL_NOTICE_LIFE + 0.01, false);
+        assert!(hud.kill_age > KILL_NOTICE_LIFE);
+    }
+
+    #[test]
+    fn a_headshot_says_so_over_the_crosshair_too() {
+        let mut hud = Hud::default();
+        hud.on_fx(&kill("me", "them", true), "me");
+        assert_eq!(hud.kill_notice, "HEADSHOT THEM");
+    }
+
+    #[test]
+    fn somebody_elses_kill_is_not_congratulated() {
+        // The feed reports every kill in the room; the centre notice is only
+        // ever about one of ours. Reading the feed's event without checking the
+        // killer would applaud a player for watching two strangers fight.
+        let mut hud = Hud::default();
+        hud.on_fx(&kill("a", "b", false), "me");
+        assert!(hud.kill_notice.is_empty());
+        assert!(hud.kill_age > KILL_NOTICE_LIFE);
+    }
+
+    #[test]
+    fn dying_is_never_a_kill_notice() {
+        // Two shapes that both reach `on_fx` and neither of which is a kill of
+        // ours: being killed by somebody, and falling. The second has an *empty*
+        // killer, so a check that only compared victim ids would let it through.
+        let mut hud = Hud::default();
+        hud.on_fx(&kill("them", "me", true), "me");
+        assert!(hud.kill_notice.is_empty(), "{}", hud.kill_notice);
+        hud.on_fx(&kill("", "me", false), "me");
+        assert!(hud.kill_notice.is_empty(), "{}", hud.kill_notice);
+    }
+
+    #[test]
+    fn a_downed_training_dummy_still_confirms() {
+        // The range has no server and so no `Fx::Kill` at all. Without the
+        // hitmarker path, Train would be the one mode where a kill said nothing
+        // — and it is the mode a player meets first.
+        let mut hud = Hud::default();
+        hud.on_hits(&[HitMarker {
+            damage: 40.0,
+            killed: true,
+            ..Default::default()
+        }]);
+        assert_eq!(hud.kill_notice, "ELIMINATED");
+        assert!(hud.kill_age < KILL_NOTICE_LIFE);
+    }
+
+    #[test]
+    fn a_second_kill_replaces_the_first_victims_name() {
+        // `on_hits` runs before `on_fx` every tick, so the generic form must
+        // overwrite unconditionally. Written as "only if empty", a second kill
+        // would keep showing the first victim's name forever.
+        let mut hud = Hud::default();
+        hud.on_fx(&kill("me", "first", false), "me");
+        hud.on_hits(&[HitMarker {
+            killed: true,
+            ..Default::default()
+        }]);
+        assert_eq!(hud.kill_notice, "ELIMINATED");
+        hud.on_fx(&kill("me", "second", false), "me");
+        assert_eq!(hud.kill_notice, "ELIMINATED SECOND");
+    }
+
+    #[test]
+    fn a_kill_notice_does_not_survive_your_own_death() {
+        // Congratulating a player on the frame they respawn reads as
+        // congratulating them for dying.
+        let mut hud = Hud::default();
+        hud.on_fx(&kill("me", "them", false), "me");
+        hud.on_respawn();
+        assert!(hud.kill_age > KILL_NOTICE_LIFE);
+    }
+
+    fn killed_hit() -> HitMarker {
+        HitMarker {
+            damage: 40.0,
+            killed: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_streak_only_announces_at_its_milestones() {
+        // A notice on every kill past three makes the streak the loudest thing
+        // on screen exactly when the kill itself is what you want to see.
+        let mut hud = Hud::default();
+        for n in 1..=4 {
+            hud.on_hits(&[killed_hit()]);
+            assert_eq!(hud.streak, n);
+            match n {
+                3 => assert_eq!(hud.streak_notice, "TRIPLE 3"),
+                _ => assert!(
+                    hud.streak_notice.is_empty(),
+                    "kill {n} announced {:?}",
+                    hud.streak_notice
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn the_milestone_table_is_read_from_the_top() {
+        // Scanned forwards, a high streak reports the first threshold it passed.
+        assert_eq!(streak_name(3), Some("TRIPLE"));
+        assert_eq!(streak_name(15), Some("LEGENDARY"));
+        // Between milestones is nothing, not the previous one.
+        assert_eq!(streak_name(4), None);
+        assert_eq!(streak_name(0), None);
+        assert_eq!(streak_name(99), None);
+    }
+
+    #[test]
+    fn two_kills_in_one_tick_advance_the_streak_by_two() {
+        // A shotgun through two bodies is one snapshot carrying two kills.
+        // `any()` would collapse them and the streak would silently undercount.
+        let mut hud = Hud::default();
+        hud.on_hits(&[
+            killed_hit(),
+            HitMarker {
+                damage: 12.0,
+                ..Default::default()
+            },
+            killed_hit(),
+        ]);
+        assert_eq!(hud.streak, 2);
+    }
+
+    #[test]
+    fn dying_ends_the_streak_at_the_death_and_not_at_the_respawn() {
+        // Several seconds pass between the two. A streak still counting through
+        // them is the one number on the HUD that is simply wrong.
+        let mut hud = Hud::default();
+        for _ in 0..3 {
+            hud.on_hits(&[killed_hit()]);
+        }
+        assert_eq!(hud.streak, 3);
+        assert_eq!(hud.streak_notice, "TRIPLE 3");
+        hud.on_self(&SelfState {
+            hp: 0.0,
+            alive: false,
+            ..Default::default()
+        });
+        assert_eq!(hud.streak, 0);
+        assert!(hud.streak_notice.is_empty());
+    }
+
+    #[test]
+    fn a_streak_does_not_survive_a_respawn_either() {
+        let mut hud = Hud::default();
+        for _ in 0..3 {
+            hud.on_hits(&[killed_hit()]);
+        }
+        hud.on_respawn();
+        assert_eq!(hud.streak, 0);
+        assert!(hud.streak_notice.is_empty());
+    }
+
+    #[test]
+    fn a_milestone_does_not_ride_along_under_every_later_kill() {
+        // The notice is cleared unless *this* kill earned one; left set, a
+        // "TRIPLE 3" would sit under kills four through ten.
+        let mut hud = Hud::default();
+        for _ in 0..3 {
+            hud.on_hits(&[killed_hit()]);
+        }
+        assert_eq!(hud.streak_notice, "TRIPLE 3");
+        hud.on_hits(&[killed_hit()]);
+        assert!(hud.streak_notice.is_empty());
+    }
+
+    #[test]
+    fn a_damage_number_off_the_edge_of_the_screen_is_not_drawn() {
+        // A number whose body is off to one side projects outside the window,
+        // and the painter would happily emit those quads — vertices out of a
+        // shared budget for something nobody can see.
+        let you = alive();
+        let on = [Placed {
+            x: 400.0,
+            y: 300.0,
+            amount: 42,
+            head: false,
+            killed: false,
+            fade: 1.0,
+        }];
+        let off = [Placed {
+            x: -900.0,
+            ..on[0]
+        }];
+        let count = |numbers: &[Placed]| {
+            let mut v = view(Some(&you));
+            v.playing = true;
+            v.damage = numbers;
+            let mut out = Vec::new();
+            Hud::default().build(&v, &mut out);
+            out.len()
+        };
+        let base = count(&[]);
+        assert!(count(&on) > base, "a number on screen drew nothing");
+        assert_eq!(count(&off), base, "an off-screen number drew something");
+    }
+
+    #[test]
+    fn a_damage_number_is_coloured_by_what_the_hit_was() {
+        // Three readings in one glance without reading the digits, in the same
+        // order the hitmarker uses: plain is pale, a headshot is amber, a kill
+        // is red. Asserted on the colour of the pixels *at the number's own
+        // position* — the whole overlay's colours are dominated by the health
+        // and weapon blocks, so a global search would measure those instead.
+        //
+        // **The painter emits NDC, not pixels** (`Painter::rect` calls `ndc`),
+        // so the window is 1280x800 and the number is put three quarters across
+        // and halfway down — which is `x = 0.5`, `y = 0` in the coordinates the
+        // vertices actually carry. Filtering in pixels finds nothing at all, and
+        // an empty filter passes every `any()` assertion below vacuously; that is
+        // what the "nothing was drawn" guard is for.
+        let you = alive();
+        let colours = |head: bool, killed: bool| -> Vec<[f32; 4]> {
+            let n = [Placed {
+                x: 960.0,
+                y: 400.0,
+                amount: 42,
+                head,
+                killed,
+                fade: 1.0,
+            }];
+            let mut v = view(Some(&you));
+            v.playing = true;
+            v.damage = &n;
+            let mut out = Vec::new();
+            Hud::default().build(&v, &mut out);
+            out.iter()
+                .filter(|q| {
+                    (0.35..0.65).contains(&q.position[0])
+                        && (-0.15..0.15).contains(&q.position[1])
+                })
+                .map(|q| q.color)
+                .collect()
+        };
+        let near = |got: &[[f32; 4]], want: [f32; 4]| {
+            got.iter()
+                .any(|c| (c[0] - want[0]).abs() < 0.02 && (c[1] - want[1]).abs() < 0.02)
+        };
+
+        let plain = colours(false, false);
+        let head = colours(true, false);
+        let kill = colours(false, true);
+        assert!(!plain.is_empty(), "nothing was drawn at the number");
+        assert!(near(&plain, WHITE), "a plain hit was not drawn pale");
+        assert!(near(&head, AMBER), "a headshot was not drawn amber");
+        assert!(near(&kill, RED), "a kill was not drawn red");
+        // And the three are genuinely different, not three names for one colour.
+        assert!(!near(&plain, RED));
+        assert!(!near(&head, RED));
+    }
+
+    #[test]
     fn a_hitmarker_lasts_a_moment_and_a_kill_colours_it() {
         let mut hud = Hud::default();
         hud.on_hits(&[
@@ -2267,7 +3272,7 @@ mod tests {
         assert!(hud.hit_age < MARKER_LIFE);
         // A burst where one pellet finished them is a kill marker, not a hit.
         assert!(hud.hit_killed);
-        hud.update(MARKER_LIFE + 0.01);
+        hud.update(MARKER_LIFE + 0.01, false);
         assert!(hud.hit_age > MARKER_LIFE);
     }
 
@@ -2284,6 +3289,173 @@ mod tests {
         you.hp = 70.0;
         hud.on_self(&you);
         assert!(hud.damage_age < FLASH_LIFE);
+    }
+
+    #[test]
+    fn the_lag_trail_holds_where_health_was_and_then_catches_up() {
+        let mut hud = Hud::default();
+        let mut you = alive();
+        hud.on_self(&you);
+        you.hp = 40.0;
+        hud.on_self(&you);
+        // It marks where the bar *was*, which is the whole reading: the gap
+        // between the two is what that hit cost.
+        assert_eq!(hud.ghost_hp, 100.0);
+
+        // It holds first, so a single hit is legible before it starts draining.
+        hud.update(GHOST_HOLD * 0.5, false);
+        assert_eq!(hud.ghost_hp, 100.0);
+
+        // Then it drains, and it stops at the live value rather than past it.
+        hud.update(GHOST_HOLD + GHOST_FALL * 2.0, false);
+        assert_eq!(hud.ghost_hp, 40.0);
+    }
+
+    #[test]
+    fn a_second_hit_extends_the_trail_rather_than_restarting_it() {
+        // The burst case. Taking the trail from the *current* trail position
+        // instead of the last seen health would restart it partway down and
+        // report the pair as smaller than the first hit alone.
+        let mut hud = Hud::default();
+        let mut you = alive();
+        hud.on_self(&you);
+        you.hp = 70.0;
+        hud.on_self(&you);
+        hud.update(GHOST_HOLD + GHOST_FALL * 0.2, false);
+        let midway = hud.ghost_hp;
+        assert!(midway < 100.0 && midway > 70.0, "draining, got {midway}");
+
+        you.hp = 45.0;
+        hud.on_self(&you);
+        assert!(
+            hud.ghost_hp >= 70.0,
+            "the trail must not fall below where health was when the second hit \
+             landed, got {}",
+            hud.ghost_hp,
+        );
+    }
+
+    #[test]
+    fn healing_snaps_the_trail_instead_of_stranding_it() {
+        // A trail left above a bar that has gone *up* draws damage that never
+        // happened, and it would sit there until the next real hit.
+        let mut hud = Hud::default();
+        let mut you = alive();
+        hud.on_self(&you);
+        you.hp = 30.0;
+        hud.on_self(&you);
+        you.hp = 90.0;
+        hud.on_self(&you);
+        assert_eq!(hud.ghost_hp, 90.0);
+    }
+
+    #[test]
+    fn damage_arrows_arrive_expire_and_are_capped() {
+        let mut hud = Hud::default();
+        let mut you = alive();
+        hud.on_self(&you);
+        you.hurt = vec![
+            HurtMarker {
+                bearing: 1.0,
+                amount: 10.0,
+            },
+            HurtMarker {
+                bearing: -2.0,
+                amount: 5.0,
+            },
+        ];
+        hud.on_self(&you);
+        assert_eq!(hud.damage_from.len(), 2);
+
+        hud.update(ARROW_LIFE + 0.01, false);
+        assert!(
+            hud.damage_from.is_empty(),
+            "an arrow that outlived its fade would point at a fight that ended",
+        );
+
+        // More than the cap in one snapshot: the oldest go, not the newest. A
+        // shotgun is eight pellets and eight `hurt` entries from one trigger.
+        you.hurt = (0..MAX_DAMAGE_ARROWS + 4)
+            .map(|i| HurtMarker {
+                bearing: i as f32 * 0.1,
+                amount: 4.0,
+            })
+            .collect();
+        hud.on_self(&you);
+        assert_eq!(hud.damage_from.len(), MAX_DAMAGE_ARROWS);
+        let newest = (MAX_DAMAGE_ARROWS + 3) as f32 * 0.1;
+        assert!((hud.damage_from.back().expect("an arrow").0 - newest).abs() < 1e-4);
+    }
+
+    #[test]
+    fn dying_clears_the_trail_and_the_arrows() {
+        let mut hud = Hud::default();
+        let mut you = alive();
+        hud.on_self(&you);
+        you.hp = 20.0;
+        you.hurt = vec![HurtMarker {
+            bearing: 0.5,
+            amount: 80.0,
+        }];
+        hud.on_self(&you);
+        assert!(hud.ghost_hp > 20.0 && !hud.damage_from.is_empty());
+
+        hud.on_respawn();
+        assert_eq!(hud.ghost_hp, 0.0);
+        assert!(hud.damage_from.is_empty());
+    }
+
+    #[test]
+    fn the_weapon_block_clears_the_net_graph_at_every_level() {
+        // The two share the bottom-right corner. Before `weapon_rows` accounted
+        // for it, the reload line was laid out *inside* the graph's box and the
+        // two printed over each other whenever a player turned it on.
+        let you = alive();
+        for level in 0..=3 {
+            let mut v = view(Some(&you));
+            v.net_graph = level;
+            let u = 4.0;
+            let (strip_y, strip_h, ..) = weapon_rows(&v, v.height as f32, u);
+            let graph_top =
+                v.height as f32 - MARGIN * u - net_graph_height(&net_graph_lines(&v), u);
+            assert!(
+                strip_y + strip_h <= graph_top + 0.01,
+                "net.graph {level}: the weapon block ends at {} and the graph \
+                 starts at {graph_top}",
+                strip_y + strip_h,
+            );
+        }
+    }
+
+    #[test]
+    fn the_weapon_block_and_the_utility_tray_do_not_overlap() {
+        // Both stack up the right margin, and the tray used to recompute the
+        // weapon block's rows by hand — so the two silently disagreed the first
+        // time that layout changed.
+        let you = alive();
+        let pouch = pouch();
+        let mut v = view(Some(&you));
+        v.utility = Some(&pouch);
+        let mut out = Vec::new();
+        let mut p = Painter::new(&mut out, v.width as f32, v.height as f32);
+        let u = 4.0;
+
+        let (_, _, _, _, name_y) = weapon_rows(&v, v.height as f32, u);
+        let labels: Vec<String> = pouch
+            .slots
+            .iter()
+            .enumerate()
+            .map(|(i, s)| format!("{} {}", i + 6, abbreviate(&s.kind)))
+            .collect();
+        let (_, cell_h, ..) = tray_metrics(&labels, u);
+        let tray_bottom = name_y - u * 2.4 - cell_h + cell_h;
+        assert!(
+            tray_bottom <= name_y,
+            "the tray ends at {tray_bottom}, the weapon name starts at {name_y}",
+        );
+        // And it still draws, which is what stops this from passing vacuously.
+        paint_utility(&mut p, &v, &pouch, u);
+        assert!(!out.is_empty());
     }
 
     #[test]

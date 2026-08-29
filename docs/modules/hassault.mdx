@@ -1070,6 +1070,34 @@ A prop is drawn **without** the box model's `rest` rotation. That constant
 describes how a pile of boxes had to be turned to look like a weapon; the GLB is
 exported already oriented.
 
+#### A prop is its own reason to run the view-model pass
+
+Natively the weapon is drawn in a second pass with its own cleared depth buffer,
+so a 2.5-cube rifle is not sawn in half by a wall you are standing against. That
+pass used to be gated on the count of **CPU** vertices `WeaponViewModel::vertices`
+produced — and once a prop is fitted, that function deliberately emits nothing but
+the muzzle flare. The prop *is* the gun, and pushing the boxes as well would draw
+a box gun inside the real one.
+
+So the four weapons that have models were drawn only during the ~55 ms a flare
+exists: you glimpsed the gun for two frames when you shot and never otherwise,
+while the knife and the grenades — which have no GLB, so they keep their boxes and
+their vertices — stayed visible throughout. A model appearing to flicker in only on
+a shot reads as an animation bug or a bad asset; it was neither.
+
+`renderer::draws_viewmodel` is the fix and the shape of it is the lesson: **a prop
+is a reason to run the pass on its own**, so the predicate is
+`viewmodel_verts > 0 || has_prop`. Two things about it are load-bearing:
+
+- The **same** answer must reach two places. The main pass hands its MSAA
+  `resolve_target` to whichever pass is last, so if the resolve and the pass gate
+  disagree the scene resolves twice or never — a black or half-drawn frame, with no
+  error anywhere. It is one function called once per frame for that reason.
+- `prop_model()` checks `visible`, exactly as `vertices` does. The pose is now what
+  says a weapon exists, so returning one while dead or in the menu would put a gun
+  on screen at the one moment there is meant to be none — the mirror image of the
+  same bug.
+
 #### A metal with nothing to reflect renders black
 
 The browser needed one thing the boxes never did. A metallic surface in a
@@ -1405,6 +1433,94 @@ so it is unit-testable in a core vitest run, which has no DOM.
 Note the arrow back. `deployed` is a **flag the panel can clear**, not a one-way
 latch, because a game you can only enter is a game you have to close the pane to
 leave.
+
+## The native HUD
+
+`apps/native-fps/src/hud.rs` is a vertex buffer and a hand-rolled 5×7 bitmap font.
+`OverlayVertex` is position and colour — **no UVs, no textures** — and `glyph()`
+emits one quad per lit *pixel*. Everything below is built from `rect`, `line`,
+`tri`, `ring`, `arc`, `disc` and `panel`, and the whole layout is derived from one
+unit, `u = height / 360`.
+
+That constraint is why the house style here is angular rather than soft: this
+painter has no anti-aliasing, so a "rounded" corner made of quads is a staircase,
+while a 45° chamfer is exact at every size. `Painter::panel` is the one place that
+style is expressed — a chamfered container with a **2 px accent top edge**, never a
+full perimeter, because a border all the way round competes with the crosshair and
+a single heavy edge gives a stack of panels a reading order. Restyling the HUD is
+editing that function.
+
+### What the blocks say that a number alone does not
+
+- **The damage-lag trail.** The health bar leaves a dim red trail behind it that
+  holds for a moment and then drains. The gap between bar and trail is what the
+  last hit cost, readable without doing arithmetic on two numbers. It is taken from
+  the *last seen* health rather than from the trail's own position, so a second hit
+  during a burst extends one trail instead of restarting it partway down and
+  reporting the pair as smaller than the first shot alone. A heal **snaps** it —
+  `.max()` was the obvious way to write that and is the wrong one, since it can only
+  raise the trail and so left a heal drawing damage that never happened.
+- **The magazine strip.** One tick per round, spent ticks dimmed. A count says how
+  many are left; the strip says it without being read. Past ~20 rounds a per-round
+  tick is thinner than a pixel, so it becomes a plain bar — the threshold is where a
+  tick stops being drawable, not a round number. `mag == 0` is the knife and draws no
+  strip at all, the same distinction the dash in the counter already makes.
+- **The reload dial.** An arc, not the word `RELOADING`: during a reload the
+  question is never *whether* — you pressed it — it is *how much longer*. It needs
+  the weapon's served `reloadTime`, because `reloadIn` is a remainder and a dial
+  cannot be drawn from a remainder alone; with no served time the word comes back
+  rather than an arc implying progress it cannot know.
+- **The armour bar.** See [Armour](#armour). Its trough is drawn even at zero: an
+  empty trough says "you could be wearing some and are not", which is a different
+  statement from blank space.
+
+### Everything is always reserved
+
+The reload row, the magazine strip and the armour row all take their space whether
+or not they have anything to show. This is the rule the ammo counter already
+followed and the reason is the same in each case: a block that only takes the space
+it needs moves the counter at the moment the magazine empties, or moves the health
+bar the moment a vest runs out — which is the moment each is being read hardest.
+
+### Two blocks that share a corner have to share the arithmetic
+
+Three collisions existed here at once, and all three were invisible until the HUD
+was rendered and looked at:
+
+- The **ammo block was laid out inside the net graph's box**, so the two printed
+  over each other whenever a player turned the graph on. `net_graph_lines` and
+  `net_graph_height` now measure it without drawing it, and the weapon block sits
+  above whatever that comes to.
+- The **utility tray recomputed the weapon block's four rows by hand**, with a
+  comment saying the arithmetic had to agree — which it then silently stopped doing
+  the first time that layout changed. Both now call `weapon_rows`.
+- The **health block cleared the movement line but the panel drawn around it did
+  not**, so the two overlapped by exactly the panel's padding: invisible at 720p,
+  obvious at 1440p, and a function of the window size either way.
+
+### Looking at it is the test
+
+None of the above would fail a unit test. `cargo run --example hud_preview` renders
+the HUD offscreen to a PNG, the same way `weapon_preview` and `operator_preview` do
+for the models — it takes an optional path and a `WIDTHxHEIGHT`, and the size is a
+parameter precisely because the layout is derived from the window height, so a HUD
+that reads at 1080p can be a smear at 720p and overlapping at 1440p.
+
+Two things about that harness are deliberate. It draws a **mid-grey backdrop with a
+bright band**, not black, because a HUD checked against black passes with
+translucent panels that turn out to be unreadable over a lit wall. And it seeds the
+player **healthy and then hurts them**, because the lag trail is driven by a drop
+and `on_self` ignores the first sample it ever sees — seeding straight into the
+wounded state draws no trail and quietly makes the harness useless for the element
+it was added to check.
+
+It also prints the overlay vertex count against the 65536 cap. That cap is closer
+than it looks with a font that spends a quad per lit pixel, and `set_overlay`
+truncates — silently, until now: the overlay and the view model report an overflow
+through `divergence::note_overflow` the way the bodies and volumes already did.
+Truncating in silence is how a HUD loses its last panel on a full server and nobody
+finds out, because the frame still draws, at the right frame rate, simply missing
+whatever was laid out last.
 
 ## The main menu
 
@@ -2353,6 +2469,34 @@ game you host for friends, and the budget caps how much any of it is worth. The
 **push on the shooter's body** is not a concession: the server applies it from its own
 weapon table, and the client only predicts the same impulse from the served
 `kickback`. Nothing about the shove is client-supplied.
+
+#### Being hit tells you which way to turn
+
+The shooter gets a hitmarker; the victim gets an arrow. Both are private, both are
+drained as the envelope is built, and both are delivered exactly once.
+
+`pending_hurt` carries **a bearing and an amount, never a position** — `noise.py`'s
+rule, applied for exactly its reason. Sending the attacker's coordinates so the
+client could work the angle out itself would hand every player a wall hack that
+triggers on being shot at, which is precisely the moment knowing where somebody is
+standing is worth the most.
+
+Three details that are each a decision rather than an oversight:
+
+- **No wall test.** `noise.hear` muffles a footstep that came through a wall;
+  this does not. Being shot *is* the evidence that a shot reached you, so
+  attenuating the arrow would hide the direction of the one event that has already
+  proved it has line of fire.
+- **The weight is what the hit cost, armour included.** A vest absorbing half a
+  shot does not make it half a shot: the arrow is about where to turn and how
+  urgently, and armour changes neither.
+- **A hit from exactly underfoot records nothing.** Two bodies at the same x/y have
+  no direction between them, and `atan2(0, 0)` is zero — an arrow pointing due east
+  for a shot that came from below. Drawing nothing beats inventing a direction.
+
+They are cleared on respawn, or an undrained arrow arrives in the first envelope of
+the next life and sends a player who has just come back somewhere across the map to
+look at nothing.
 
 `crouch` joins health in the public rows, because it changes both what you see and
 what you can hit — the avatar is drawn to that height and the server rewinds a shot
@@ -4209,6 +4353,318 @@ Two things about that test are deliberate:
 The mesher has no shared fixture, so its cross-check is coarser but real: triangle
 counts match the browser client's HUD on every map tried (`hd_atrium` 31,944 →
 "32k", `hd_crossing` 30,552 → "31k", `hd_pit` 13,360 → "13k").
+
+## Game feel, natively
+
+The combat rules did not change here and neither did the wire. This is the layer
+between "the server said you hit them" and "that felt like a hit" — five things,
+all client-side, all in `apps/native-fps`.
+
+One rule governs the whole of it and is the only thing here that can fail
+silently.
+
+:::danger A camera effect must never reach the camera the game runs on
+`self.camera` is what `view_angles` puts on the wire on every command, and what a
+shot's ray is built from. `Camera::shaken` therefore returns a **copy**, and only
+`Renderer::render` is handed it — the shake exists on the way to the GPU and
+nowhere else.
+
+Written as a mutation instead, screen shake stops being cosmetic and becomes
+recoil the server faithfully honours. Nothing errors. The game simply feels like
+it has recoil nobody can find the tuning for, and the tuning is not there because
+the recoil is not real. `shaking_does_not_move_the_camera_the_game_runs_on` is a
+unit test for exactly this.
+:::
+
+### Screen shake
+
+`camera::Shake` holds a **trauma** value in `0..1` and squares it to get an angle.
+That is the whole design, and the squaring is worth a sentence: trauma climbs
+linearly with what happened to you and the displacement is its square, so a pistol
+round barely registers while a grenade at your feet throws the view — from one
+number, with no table of cases. A linear ramp makes small hits too loud and large
+ones too quiet _at the same time_, and no single scale factor fixes both.
+
+Three things feed it, each through a pure function with its own tests:
+
+| Source              | Function                         | Note                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Your own shot       | `fire_trauma(kickback)`          | From the **served** `kickback`, like `kick_vector` and `weapon_voice` before it — a balance change to the gun moves how it feels with it. `kickback <= 0` is how all three tell a knife from a gun, and **a knife shakes nothing**: a swing that jolted the camera would advertise the one weapon whose entire value is that carrying it gives nothing away                                                                                                                              |
+| A hit taken         | `damage_trauma(amount)`          | A square root, because the message is "you are being shot" and a graze means that just as much as a near-fatal hit. **One shake per tick, not one per marker** — a shotgun lands eight pellets in one snapshot, and eight calls would put a point-blank blast at full trauma while the same damage from a rifle burst barely registered. Fall damage goes through here too; it appears in neither `hurt` nor `hits`, so it would otherwise be the one damage in the game felt by nothing |
+| A nearby detonation | `blast_trauma(distance, radius)` | Reaches **twice** the blast radius, deliberately. The shake is not a damage indicator, and stopping it exactly where the damage stops would teach the radius by accident — the one number `effects::detonate` is careful to draw honestly. Measured from `camera`, never from the drawn copy, or the shake would depend on itself                                                                                                                                                        |
+
+Trauma decays **linearly**, not exponentially. An exponential is asymptotic: the
+camera would never actually stop, only shake by amounts too small to see, and
+`Shake::active` would answer "yes" for the rest of the match. `effects.rs` fades
+its tracers the same way and for the same reason.
+
+The noise is three sines at unrelated periods, sampled on a **clock rather than a
+frame counter**, and all three sit below ~23 Hz. That last part is the subtle one:
+a component faster than half the frame rate does not read as a faster shake, it
+aliases — a 40 Hz wobble sampled at 60 fps becomes a slow, wrong-looking crawl
+that gets _worse_ the smoother the machine is running.
+
+Roll is the largest of the three axes because it is the one the eye reads as
+impact; yaw and pitch look like the view being nudged off aim, which is the one
+sensation a cosmetic effect must not counterfeit. `Camera` grew a `roll` field to
+express it, and `up()` rotates the up vector **about the forward axis** — any
+other axis would move where the eye is looking.
+
+### The weapon draw and holster
+
+A swap now reads as an action rather than as one model being substituted for
+another between two frames. One scalar, `stow`, runs from 0 (in frame) to 1
+(fully out), and the holster is faster than the draw on purpose: putting something
+away is a motion you have already committed to, while bringing one up is the
+moment that has to land.
+
+**The holster fires on the key, not on the server's answer**, and that is the
+interesting part. This client does not own the slot — `select_weapon` sends a
+request and the server decides. A holster that waited for the confirmation would
+start a round trip after the press and read as input lag, so it starts
+immediately and is willing to be wrong for `HOLSTER_HOLD` (0.4s); if the switch
+is refused, the weapon comes back up on its own with nothing anywhere having to
+notice. When the swap _does_ arrive, `set_weapon` clears the hold outright, so a
+confirmed switch never waits out the remainder of the guess.
+
+Two smaller rules, both bugs first:
+
+- The draw triggers on the **id**, not on `set_weapon` being called. Equipping a
+  skin goes through the same function, and re-holstering for a change of colour
+  would dive the gun out of frame in the middle of a firefight.
+- Going invisible arms a draw for the return, so **respawning brings the weapon
+  up** rather than having it appear at rest. Holding the same weapon through a
+  death means `set_weapon` never fires, so nothing else would start one.
+
+### The reload dip, on the served time
+
+`Frame::reload_progress` is a fraction and `reload_envelope` takes fractions, so
+the dip's shape is the same on every weapon and its _duration_ is whatever the
+server served. That is the whole change. The old fixed-rate approach did neither
+end well — a fast reload was still on its way down when the magazine filled, and a
+slow one sat at the bottom for two seconds and then snapped back up.
+
+The progress comes from two served numbers: `reloadTime` on the weapon and
+`reloadIn` on the snapshot. The range fills both, so Train and a match take one
+code path.
+
+It is an `Option`, and the distinction is load-bearing: `Some(0.0)` is "the reload
+has just started" and `None` is "there is no length to measure against". Collapsed
+into one number, a server too old to serve `reloadTime` would look like a reload
+permanently at its first frame — the weapon would go down and stay there. `None`
+falls back to the old approach instead.
+
+### Muzzle flash, sparks and dust
+
+The flash is shaped per weapon class (`flash_shape`): a shotgun throws a wide short
+bloom, a sniper a long narrow lance, and **the knife has no muzzle at all**. A
+swing is resolved as a `Shot` like everything else, so it reaches the flare code;
+lighting one would give away the position of the one weapon whose silence is the
+point. An unknown id gets the rifle's, so a weapon the server has grown since this
+client was built looks ordinary rather than invisible.
+
+The bloom is a **second cone, not a post-process**. There is no bright-pass, no
+blur target and no second pipeline — the view model is drawn with the world
+pipeline — so a halo wider, shorter and dimmer than the core, drawn first and
+fading on the flare's own age, is the whole of it.
+
+`EffectsPool` gained two shapes off the endpoints it already receives:
+
+- **Sparks** spray _back along the incoming ray_, because that is the only
+  direction available: the server sends where a bullet stopped, never the normal
+  of what stopped it, and a guessed normal would put half the sparks inside the
+  wall. Their length is `sqrt(t)`, so they leap out and stall — grown linearly a
+  burst reads as an expanding wire model rather than as debris. One `Live` holds
+  the whole burst of five, which is what makes it affordable.
+- **Dust** is the only slow thing in the file, and it is the cue that says a shot
+  has _already_ happened. It is gated on the shot's `hit` flag — sparks read as a
+  strike on anything, masonry dust off a player does not.
+
+`hit` is per _shot_, not per pellet, so a shotgun with one pellet in a body and
+seven in a wall loses the wall dust. That is the honest reading of what the wire
+carries; inventing a per-pellet answer would be the mistake `effects.rs`'s header
+is about. The field had been parsed into nothing since shots existed.
+
+`MAX_LIVE` did not move, and the arithmetic is worth writing down before anyone
+raises it: the volume buffer holds 65,536 vertices, the most expensive shape here
+is a ball at `8 × 6 × 6 = 288`, and 192 of that worst case is 55k. Sparks are five
+thin beams and dust is a deliberately coarse sphere, so both are cheaper than a
+ball — adding them raises how _fast_ the cap is reached without raising its worst
+case at all.
+
+### Kill confirmation, and the punch under a shot
+
+A kill you made puts a centre notice up (`ELIMINATED <name>`, or `HEADSHOT <name>`)
+and plays a chord that is unmistakably not a gunshot.
+
+Two sources feed the notice, deliberately. `on_hits` sets the generic form from
+**our own hitmarkers**, which exist in a match _and_ on the range — so Train
+confirms a downed dummy rather than being the one mode where a kill says nothing,
+and it is the mode a player meets first. `on_fx` then upgrades it with the
+victim's name from the authoritative kill event, which only a match has. Online
+the two arrive in the same tick and only the named form is ever drawn. The
+generic form must overwrite **unconditionally**: written as "only if empty", a
+second kill would keep showing the first victim's name forever.
+
+The notice sits **below** the crosshair. The obvious place for a kill confirmation
+is above the aim, and it was there first — until `examples/hud_preview` drew it.
+The scoreboard is a centred panel spanning roughly 0.28–0.47 of the height, so a
+notice at 0.36 printed straight through it every time somebody opened the board.
+That collision is intermittent in play, because the board is a held key, which is
+exactly the kind of fault that ships. No unit test would have caught it; the
+picture did. This is the checklist item _"is it visual? Then it will not be caught
+by any test — render it and look"_ paying for itself.
+
+The audio gained a `thump`: a sub-bass transient distinct from the existing `body`,
+and the distinction is the whole of the punch. The body is a tone lasting as long
+as the sound does and giving it weight; the thump is a fast downward sweep, over in
+about 45 ms, giving it an _impact_. A gunshot with weight and no impact sounds like
+a door closing. It has an envelope of its own rather than riding the main one —
+otherwise a sniper's 0.36s tail would carry the sub the whole way and turn a
+gunshot into a note.
+
+It is kept under half the voice's gain, and that is not timidity. The mixer
+**clips rather than limits**, for a reason `GameAudio::open` records: a limiter
+that ducked the whole mix when a grenade went off would make every other cue
+quieter exactly when they matter most. Every layer added here is spent out of the
+same headroom, so a sub loud enough to be impressive alone is a shot that clips
+into a click whenever two people fire at once.
+
+:::note There is no ambient bed to duck
+The plan for this work paired the thump with "a short duck on the ambient bed when
+one fires". Neither client has an ambient audio bed — `ambient` in this codebase is
+the map's light level — and the nearest substitute, ducking the mix, is the thing
+the paragraph above explains the mixer deliberately does not do. The thump shipped;
+the duck did not, and would need a bed to exist first.
+:::
+
+## Progression and feedback, natively
+
+Three things that tell you what you just did: a number off the body you hit, a
+notice when a run of kills becomes a run, and a card at the end. **None of them
+changes the wire.** Every figure comes from `you.hits`, which the server has been
+sending per-recipient since weapons existed.
+
+### Damage numbers
+
+`HitMarker` carries `victim`, `damage`, `head` and `killed` — and deliberately no
+point of impact. So the anchor is the victim's **body**, looked up in the roster
+the renderer is drawing this frame, and projected fresh every frame rather than
+stamped once into screen space. Stamped once, a number slides off the body the
+moment either of you moves, which at these lifetimes is most of them.
+
+Four rules, each of which was a decision rather than an accident:
+
+- **Summed per victim, not one number per marker.** A shotgun lands eight pellets
+  in one snapshot; eight numbers stacked on a body is unreadable and, worse, reads
+  as eight hits when it was one trigger pull. The same reasoning that gives
+  `confirm_kill` one sound per tick.
+- **A victim who is not in the roster falls back to the crosshair.** This is not a
+  rare edge: you kill somebody through smoke and the kill removes them, and a shot
+  at maximum range can outlive its target in the snapshot buffer. Dropping the
+  number there would make exactly the most satisfying hits the silent ones.
+- **They project through the camera the world is _drawn_ with** — the shaken copy,
+  not the one the game runs on. Projected through the true camera a number sits
+  still while the body underneath it shakes, which reads as the number belonging
+  to the HUD. This is why `Workstream C`'s shaken camera is now built before the
+  HUD rather than at the `render` call.
+- **They are drawn under the scoreboard.** A damage number belongs to the world,
+  so it sits beneath the panels you deliberately hold over it.
+
+The projection lives in `damage.rs`, not in `hud.rs`. The painter holds no
+matrices and should not start; `Camera` is pure maths with no device in it, so
+both halves stay testable headless. That matters here because the two ways a
+projection goes wrong — a point behind the eye, and a flipped vertical axis —
+both produce a picture rather than an error:
+
+:::warning Behind the eye is a negative `w`, not a small one
+Divide by it and the point mirrors through the centre of the screen, so a hit on
+somebody _behind_ you draws a number in front of you. Clip space is also Y-up
+while the painter is Y-down; miss that flip and every number appears mirrored
+about the horizon. Both are pinned by tests, including one that asserts cube `+y`
+lands screen-**right** — which it does, because `apply_look` increases yaw when
+the mouse goes right and yaw 90° faces cube `+y`.
+:::
+
+### Killstreak notices
+
+Counted from **our own hitmarkers**, not from `Fx::Kill`. That is the only source
+that exists in both modes: the range has no server and so no kill effects at all,
+and a Train mode where a streak never appears is a feature you would first notice
+missing in the mode you meet first.
+
+Counted rather than `any()`-ed, too — one tick can carry two kills (a shotgun
+through two bodies), and collapsing them makes a streak silently undercount.
+
+Only the listed milestones announce anything (`STREAKS`, ascending, **read from
+the back** so a high streak reports the highest threshold it passed rather than
+the first). A notice on every kill past three would make the streak the loudest
+thing on screen exactly when the kill itself is what you want to see. The notice
+is cleared unless _this_ kill earned one, or a `TRIPLE 3` rides along under kills
+four through ten.
+
+The streak ends **at the death, not at the respawn** — `on_self` sees `alive` go
+false, and several seconds pass before `on_respawn`. A streak still counting
+through them is the one number on the HUD that is simply wrong.
+
+It shares the kill notice's clock rather than having one of its own: a streak is
+only ever announced at the instant of a kill, so a second timer could only ever
+disagree with the first.
+
+### The post-match summary
+
+`Action::Quit` in a match now shows a card before it leaves; Escape goes back,
+Enter (or the button) leaves. Train quits as it always did — there is no match to
+summarise and no opponents to be measured against.
+
+**Leaving is the moment, and not for want of a better one.** There is no round end
+to hang this on: deathmatch is the only mode and it runs until you go. That makes
+leaving the end of the match for this player, and it is already the instant the
+server settles up — `MatchServer.leave` reads `result_for` _before_ `remove` drops
+the counters. So the native card and the dashboard card describe the same moment
+by construction rather than by agreement.
+
+:::danger Damage dealt is not on this card, and "just sum the hitmarkers" is why
+`MatchRoom._apply_damage` accumulates `damage_dealt` from `landed`, which is
+**capped at the victim's remaining health**. The `HitMarker` it puts on the wire
+in the same breath carries `round(amount)` — post-armour, but _not_ capped. A
+90-damage sniper hit on a player with 30 health left contributes 30 to the
+server's figure and 90 to anything the client adds up.
+
+Over a match that is a systematic overstatement, and two cards for the same match
+showing two different numbers under one word is worse than one card with one
+fewer number on it. What the client _can_ count exactly is **hits landed** and
+**headshot kills** — one hitmarker per pellet that connected, and `killed` set
+exactly once per kill because `_shoot` skips a victim who is already dead. Those
+are what the card shows, under their own names, so it never competes with a figure
+it cannot reproduce.
+:::
+
+`won` and `mvp` use `result_for`'s own definitions — nobody outscored you, and
+nobody equalled you, bots included — because a second definition of winning is
+how two cards for one match come to disagree. K/D with no deaths is shown as the
+kill count with **no denominator**: a player who never died has an undefined
+ratio, not a ratio equal to their kills, and `max(deaths, 1)` prints a number that
+is wrong where absent would have been right.
+
+The card **scales with the window** (`summary::scale`), as the HUD does from
+`u = height / 360`. The pause menu does not — it is a fixed 460px — and that is a
+real inconsistency left alone deliberately: the menu is a settings list read for a
+while rather than a card glanced at once, and changing it would move every row
+rect the input path hit-tests against. `button_rect` is the single definition of
+the button's geometry, used by the painter _and_ the hit test, because two copies
+of it is a button drawn in one place and clicked in another, failing only at sizes
+nobody develops at.
+
+### Verified by rendering it
+
+`examples/hud_preview` takes a third argument, `summary`, and draws the card over
+a live HUD — which is the only arrangement in which the scrim's job is visible.
+Both halves of this work were checked at 720p, 1080p and 4K, and the preview
+earned its keep twice: the first pass put all three damage numbers inside the
+scoreboard's footprint, where they are correctly but uselessly drawn underneath
+it, and the footer hint sat visibly low against the leave button. Neither is
+something a unit test has an opinion about.
 
 ## After the match
 

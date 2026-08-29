@@ -414,3 +414,114 @@ def test_a_crouched_shot_leaves_from_the_lower_eye():
     place(player, 20.0, 20.0)
     player.state.crouch = 1.0
     assert physics.eye_height(player.state) < physics.PLAYER_EYE_HEIGHT
+
+
+# ---------------------------------------------------------------------------
+# Damage direction
+#
+# The other half of a hit: the shooter gets a hitmarker, and the victim gets an
+# arrow. It lives beside noise because it obeys noise's rule — a bearing and an
+# amount, never a position — and for the same reason.
+# ---------------------------------------------------------------------------
+
+
+def test_being_hit_records_a_bearing_to_the_attacker():
+    room = make_room()
+    victim = room.add("victim", None)
+    attacker = room.add("attacker", None)
+    place(victim, 20.0, 20.0)
+    # Due north of the victim in +y, which is a bearing of pi/2.
+    place(attacker, 20.0, 32.0)
+
+    room._apply_damage(
+        victim, attacker, 20.0, False, weapons.WEAPONS[weapons.DEFAULT_WEAPON], 1000.0
+    )
+
+    (arrow,) = victim.pending_hurt
+    assert arrow["bearing"] == pytest.approx(math.pi / 2, abs=1e-3)
+    assert arrow["amount"] == 20
+
+
+def test_the_arrow_carries_no_position():
+    """The whole reason this is a bearing. A client handed the shooter's
+    coordinates could draw them through a wall, and it would be handed them at
+    exactly the moment that is worth the most."""
+    room = make_room()
+    victim = room.add("victim", None)
+    attacker = room.add("attacker", None)
+    place(victim, 20.0, 20.0)
+    place(attacker, 30.0, 40.0)
+
+    room._apply_damage(
+        victim, attacker, 20.0, False, weapons.WEAPONS[weapons.DEFAULT_WEAPON], 1000.0
+    )
+
+    (arrow,) = victim.pending_hurt
+    assert set(arrow) == {"bearing", "amount"}
+
+
+def test_the_arrow_weight_is_what_the_hit_cost_including_armour():
+    """Armour absorbing half of a shot does not make it half a shot: the arrow
+    is about where to turn and how urgently, and a vest does not reduce either."""
+    room = make_room()
+    victim = room.add("victim", None)
+    attacker = room.add("attacker", None)
+    victim.armour = 100.0
+    place(victim, 20.0, 20.0)
+    place(attacker, 30.0, 20.0)
+
+    room._apply_damage(
+        victim, attacker, 40.0, False, weapons.WEAPONS[weapons.DEFAULT_WEAPON], 1000.0
+    )
+
+    (arrow,) = victim.pending_hurt
+    assert arrow["amount"] == 40
+
+
+def test_arrows_drain_into_the_private_view_exactly_once():
+    room = make_room()
+    victim = room.add("victim", None)
+    attacker = room.add("attacker", None)
+    place(victim, 20.0, 20.0)
+    place(attacker, 30.0, 20.0)
+
+    room._apply_damage(
+        victim, attacker, 10.0, False, weapons.WEAPONS[weapons.DEFAULT_WEAPON], 1000.0
+    )
+    assert len(victim.private_view(1000.0)["hurt"]) == 1
+    # Drained, like `hits`. Left in place they would redraw every tick and the
+    # arrows would never fade.
+    assert victim.private_view(1000.0)["hurt"] == []
+
+
+def test_respawning_drops_undrained_arrows():
+    """They point at a fight that is over and a place this body is no longer
+    standing in."""
+    room = make_room()
+    victim = room.add("victim", None)
+    attacker = room.add("attacker", None)
+    place(victim, 20.0, 20.0)
+    place(attacker, 30.0, 20.0)
+
+    room._apply_damage(
+        victim, attacker, 10.0, False, weapons.WEAPONS[weapons.DEFAULT_WEAPON], 1000.0
+    )
+    assert victim.pending_hurt
+    room.respawn(victim)
+    assert victim.pending_hurt == []
+
+
+def test_a_hit_from_exactly_underfoot_records_no_bearing():
+    """Two bodies at the same x/y have no direction between them, and
+    `atan2(0, 0)` is zero — an arrow pointing due east for a hit that came from
+    below. Better to draw nothing than to invent a direction."""
+    room = make_room()
+    victim = room.add("victim", None)
+    attacker = room.add("attacker", None)
+    place(victim, 20.0, 20.0, z=8.0)
+    place(attacker, 20.0, 20.0, z=0.0)
+
+    room._apply_damage(
+        victim, attacker, 10.0, False, weapons.WEAPONS[weapons.DEFAULT_WEAPON], 1000.0
+    )
+    assert victim.pending_hurt == []

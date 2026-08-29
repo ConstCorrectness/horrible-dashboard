@@ -116,8 +116,59 @@ is absent.
 | Joining an invite mid-session | `session.ts` | The invite is now *shown* natively; acting on it means leaving this match and reconnecting to another room, which the client cannot yet do |
 
 And in the other direction, so the list is honest: the native client has a
-**NetGraph** (`F3`) and a **trace/conformance harness** that the browser pane
-does not.
+**NetGraph** (`F3`), a **trace/conformance harness**, a **HUD the browser pane has
+not caught up with** — chamfered panels, a damage-lag trail on the health bar, a
+per-round magazine strip, a reload dial, an armour bar, and directional damage
+arrows — and now a **layer of game feel** the browser has none of at all.
+
+Both are deliberate, recorded divergences rather than drift, and every row is the
+browser's to pick up when somebody wants it:
+
+| Native has | Browser | Notes |
+| --- | --- | --- |
+| Damage-direction arrows | — | The wire field (`you.hurt`) is served to both; the browser ignores it. Its `NoiseRing` is the obvious place to draw them |
+| Damage-lag trail, magazine strip, reload dial | — | Pure presentation, no wire involved |
+| Armour bar | `armour` in the HUD | The browser has read `armour` all along; the **native client silently dropped the field**, because an undeclared field in serde is not an error. Declared now |
+| Screen shake | — | `camera::Shake`, fed by firing (from the served `kickback`), by damage taken, and by nearby detonations. Applied to a **copy** of the camera at draw time — see below |
+| Weapon draw/holster | — | A swap reads as an action. The holster fires on the *key*, before the server has confirmed the slot, and recovers on its own if it is refused |
+| Reload dip on the served `reloadTime` | — | Both clients have `reloadTime` and `reloadIn`; the browser's dip is not driven by either |
+| Impact sparks and dust | — | Off the same `Fx::Shot` endpoints both clients already receive. Dust is gated on the shot's `hit` flag, which the browser also has and also ignores |
+| Per-weapon-class muzzle flash, with a bloom | one cone | The bloom is a second, wider, dimmer cone rather than a post-process — there is no bright-pass in either client |
+| Kill confirmation | — | A centre notice and a distinct chord. Both are driven off `you.hits`, so Train confirms a downed dummy too |
+| Sub-bass transient on shots | — | `Timbre::thump`. **The one field where the native `Timbre` is no longer the browser's field for field** — see the note under it in `audio.rs` |
+| Floating damage numbers | — | Off `you.hits`, which both clients receive and only this one draws. Anchored to the victim's body and projected every frame; a victim absent from the roster falls back to the crosshair rather than being dropped |
+| Killstreak notices | — | Counted from our own hitmarkers, so Train has them too. Ends at the death, not at the respawn |
+| Post-match summary card | `panels/PostMatchDebrief.tsx` | The browser's is a **dashboard panel after the process exits**; this one is in the game window, at the moment the server settles up. An addition, not a port — see the damage-dealt note below |
+| — | Crosshair customisation | The browser hardcodes `arm = 6` and ignores every `hassault.crosshair.*` setting the native menu writes |
+
+The shake row carries the rule that governs the whole of this layer: **a client-side
+camera effect must never reach the camera the game runs on.** `self.camera` is what
+`view_angles` puts on the wire and what a shot's ray is built from; `Camera::shaken`
+returns a copy, and only the renderer is handed it. Written the other way, the shake
+would stop being cosmetic and become recoil the server faithfully honours — which
+fails silently, as a game that feels like it has recoil nobody can find the tuning
+for. There is a unit test asserting the real camera is untouched.
+
+The dust row carries the other one. `Fx::Shot` says whether the shot hit a *body*,
+per shot rather than per pellet, so a shotgun with one pellet in a player and seven
+in a wall loses its wall dust. That is the honest reading of what the wire carries;
+inventing a per-pellet answer would be exactly the mistake `effects.rs`'s header is
+about.
+
+The summary row carries a third, and it is the sharpest example on this page of
+why two clients drift. The dashboard's debrief shows **damage dealt**; the native
+card deliberately does not, because the client cannot reproduce that number.
+`_apply_damage` accumulates `damage_dealt` from `landed`, capped at the victim's
+remaining health, while the `HitMarker` on the wire carries the **uncapped**
+post-armour amount — so summing hitmarkers overstates it systematically. The
+native card shows *hits landed* and *headshot kills* instead: different names,
+exactly countable, and therefore incapable of contradicting the other card. Adding
+a stat to one client is easy; adding one that cannot disagree with the other
+client's is the actual work.
+
+The armour row is the one worth remembering, because it is this page's warning
+happening again in the other direction: the symptom was not a missing number, it
+was a native player taking half damage for a reason nothing on screen explained.
 
 :::warning This table said the opposite until recently
 It claimed the native client had a developer console. There was no `console.rs`
