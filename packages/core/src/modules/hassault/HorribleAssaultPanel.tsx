@@ -17,6 +17,7 @@ import {
   listInvitees,
   listMaps,
   listTacticals,
+  getItems,
   listWeapons,
   type TacticalSpec,
   type BrowseMatch,
@@ -71,11 +72,14 @@ import {
   SENSITIVITY_KEY,
   VOLUME_KEY,
 } from './menu-panels';
-import type { NoiseEvent, PlayerRow, SelfState, Vec3 } from './net';
+import type { ItemsResponse } from './api';
+import type { NoiseEvent, PickedItem, PlayerRow, SelfState, Vec3 } from './net';
 import {
   applyImpulse,
   applyLook,
   clampPitch,
+  inWater,
+  submerged,
   createPlayer,
   eyeHeight,
   JUMP_SPEED,
@@ -88,7 +92,10 @@ import { installReveal, type Reveal } from './reveal';
 import { onJoinRequested, takePendingJoin } from './invite-notify';
 import { MatchSession, type SessionState } from './session';
 import { createDetailTexture, DETAIL_NEUTRAL } from './surfaces';
+import { createLadders } from './ladders';
+import { ItemPool } from './items';
 import { NadePool } from './nades';
+import { createWater } from './water';
 import { GrenadeController } from './utility';
 import { TrainingRange } from './training';
 import { equippedSkins, WeaponViewModel, type WeaponSkin } from './viewmodel';
@@ -191,6 +198,24 @@ const EMPTY_SPOTTED: readonly string[] = [];
 const EMPTY_COUNTS: Readonly<Record<string, number>> = {};
 
 const FLASH_MS = 220;
+/** How long a pickup line stays on screen. */
+const PICKUP_TTL_MS = 2200;
+
+/**
+ * One pickup, in words.
+ *
+ * Reads the *applied* amounts off the wire rather than the item's spec, so the
+ * line and the numbers beside it can never disagree — a health pack taken at 90
+ * says "+10 hp".
+ */
+function describePickup(item: PickedItem): string {
+  const parts: string[] = [];
+  if (item.health) parts.push(`+${item.health} hp`);
+  if (item.armour) parts.push(`+${item.armour} ar`);
+  if (item.rounds) parts.push(`+${item.rounds} rounds`);
+  if (item.nade) parts.push(`+1 ${item.nade}`);
+  return parts.join('  ');
+}
 /** Team tint used for tracers and the scoreboard: CLA sand, RVSF blue. */
 const TEAM_COLORS = [0xd9a441, 0x4c8fd4];
 
@@ -208,6 +233,8 @@ const EMPTY_SESSION: SessionState = {
   killfeed: [],
   host: '',
   invites: [],
+  items: [],
+  itemsOut: [],
 };
 
 interface SceneHandle {
@@ -285,6 +312,16 @@ export function HorribleAssaultPanel() {
   const [net, setNet] = useState<SessionState>(EMPTY_SESSION);
   const [invitees, setInvitees] = useState<Invitee[]>([]);
   const [weapons, setWeapons] = useState<WeaponSpec[]>([]);
+  const [itemTable, setItemTable] = useState<ItemsResponse | null>(null);
+  /**
+   * Whether our own eye is under the water plane.
+   *
+   * Its own state rather than a field on `hud`, which updates at 4 Hz: this is
+   * the same line the simulation reads to take the jump away, so the screen has
+   * to say so on the frame it happens, not a quarter of a second later. Set only
+   * on a crossing, so it costs one render per dive rather than one per frame.
+   */
+  const [underwater, setUnderwater] = useState(false);
   /** The grenades, in slot order. Served for the same reason the weapons are. */
   const [tacticals, setTacticals] = useState<TacticalSpec[]>([]);
   /**
@@ -635,6 +672,18 @@ export function HorribleAssaultPanel() {
         // nowhere near its cause unless something says this happened.
         setLoadoutError(err instanceof Error ? err.message : String(err));
       });
+    // The item table, for the same reason the loadout is fetched: Train resolves
+    // its own ammunition pickups, and a copy of `respawn`/`mags`/`radius` here
+    // would be a range whose items behave differently from a match's. A failure
+    // is not surfaced — unlike an empty loadout, which leaves the trigger doing
+    // nothing, an absent item table simply means no items on the range.
+    void getItems()
+      .then((table) => {
+        if (cancelled) return;
+        setItemTable(table);
+      })
+      .catch(() => {});
+
     return () => {
       cancelled = true;
     };
@@ -730,6 +779,39 @@ export function HorribleAssaultPanel() {
       hurt: hurt ? at : f.hurt,
     }));
   }, [net.you]);
+
+  // Pickup feedback: the line that says what you just ran over, and its sound.
+  //
+  // Driven off `you.picked`, which the server drains: an item is reported once,
+  // and the amounts in it are the ones that actually applied — a health pack
+  // taken at 90 says "+10 hp", not "+25". The sound is synthesised locally
+  // rather than waiting for the server to echo it back, exactly like our own
+  // footsteps: a pickup noise arriving 50 ms after the pickup sounds like
+  // somebody else's.
+  const [picked, setPicked] = useState<{ at: number; text: string }[]>([]);
+  useEffect(() => {
+    const items = net.you?.picked;
+    if (!items || items.length === 0) return;
+    const at = Date.now();
+    audioRef.current?.own('pickup', 0.6);
+    setPicked((prev) => [
+      ...prev.filter((p) => at - p.at < PICKUP_TTL_MS),
+      ...items.map((item) => ({ at, text: describePickup(item) })),
+    ]);
+  }, [net.you]);
+
+  // Same wall-clock problem the hit flashes have: nothing re-renders when a
+  // pickup line simply gets old.
+  useEffect(() => {
+    if (picked.length === 0) return;
+    const remaining = picked[picked.length - 1].at + PICKUP_TTL_MS + 20 - Date.now();
+    if (remaining <= 0) {
+      setPicked([]);
+      return;
+    }
+    const timer = window.setTimeout(() => setPicked((p) => p.slice(0, 0)), remaining);
+    return () => window.clearTimeout(timer);
+  }, [picked]);
 
   // Flashes expire by wall clock, so something has to re-render when they do —
   // otherwise the crosshair keeps its hitmarker until the next snapshot that
@@ -873,6 +955,20 @@ export function HorribleAssaultPanel() {
       // Grenades in the air and the smoke/fire they leave. A renderer only: what
       // it draws is what the snapshot said, never anything it worked out.
       const nadePool = new NadePool(THREE, scene);
+      // Items on the floor. Placements come once with the welcome and never
+      // move; which of them are currently gone rides in every snapshot.
+      const itemPool = new ItemPool(THREE, scene);
+      let placedForRoom = '';
+      // Whether we were in water last frame, so *entering* can be told from
+      // *being in*: only the crossing makes a sound.
+      let wasWet = false;
+      let wasUnder = false;
+      // The map's water plane and its ladders. Both are static — water is one
+      // global height in Cube 1 and a ladder's span never changes — so they are
+      // built once from the world and only disposed. An invisible water plane
+      // would be the worst kind of bug now that it decides how a body moves.
+      let water: ReturnType<typeof createWater> = null;
+      let ladders: ReturnType<typeof createLadders> = null;
       // The gun in your hands. Parented to the camera by the constructor, which
       // is also what puts the camera in the scene graph.
       const viewmodel = new WeaponViewModel(THREE, scene, camera);
@@ -889,6 +985,13 @@ export function HorribleAssaultPanel() {
           scene.remove(mesh);
           mesh.geometry.dispose();
         }
+        // Rebuilt with the mesh rather than beside it: both describe this map,
+        // and a water plane left over from the previous one would hang in the
+        // air at whatever height that map's was.
+        water?.dispose();
+        ladders?.dispose();
+        water = createWater(THREE, scene, world);
+        ladders = createLadders(THREE, scene, world);
         const data = buildWorldMesh(world);
         const geo = new THREE.BufferGeometry();
         geo.setAttribute('position', new THREE.BufferAttribute(data.positions, 3));
@@ -1133,6 +1236,11 @@ export function HorribleAssaultPanel() {
               const kick = kickVector(shots.weapon, player.yaw, player.pitch, player.crouch > 0.5);
               applyImpulse(player, kick.x, kick.y, kick.z);
             }
+            // Also after the step, for the same reason the server collects in
+            // `_movement_consequences`: you pick something up by having moved
+            // onto it, so reading the position from before the step would take
+            // an item a frame early and miss one you ran straight through.
+            range?.collect(player.x, player.y, player.z);
           }
 
           // Our own sounds, made here rather than waited for: the server does not
@@ -1150,6 +1258,15 @@ export function HorribleAssaultPanel() {
               strideRef.current = 0;
             }
             if (wasOnGround && !player.onGround && player.velZ > 0) audio.own('jump', 0.5);
+            // Breaking the surface, in either direction. Synthesised locally like
+            // every other sound we make: the server does not send our own noises
+            // back, because one arriving half a round trip late does not sound
+            // like the thing that made it.
+            const nowWet = inWater(world, player);
+            if (nowWet !== wasWet) {
+              wasWet = nowWet;
+              audio.own('splash', 0.8);
+            }
             if (player.fallSpeed > 0) {
               // Louder the harder the landing, which is the audible half of the
               // fall-damage rule: you hear that a drop was expensive.
@@ -1190,6 +1307,21 @@ export function HorribleAssaultPanel() {
           // it was told about.
           const latest = session.snapshots.latest;
           nadePool.sync(latest?.nades, latest?.zones);
+          // Placed from the render loop rather than from the welcome handler:
+          // the pool needs the scene, which lives here, and a socket callback is
+          // the wrong place to be building geometry. Keyed on the room so
+          // rejoining rebuilds and a re-render does not.
+          //
+          // Offline the range holds the same placements (the server resolved
+          // them either way — see `MapInfo.items`), so the pool takes one code
+          // path and Train's items sit exactly where a match's do.
+          const trainingRange = online ? null : rangeRef.current;
+          const itemsKey = online ? `room:${session.state.room}` : 'training';
+          if (placedForRoom !== itemsKey) {
+            placedForRoom = itemsKey;
+            itemPool.place(online ? session.state.items : (trainingRange?.placements() ?? []));
+          }
+          itemPool.sync(online ? latest?.itemsOut : trainingRange?.takenIds());
           if (session.pendingShots.length > 0) {
             // Teams come from the roster, not from `remote` — that one excludes
             // us, and our own tracer needs a colour too.
@@ -1241,9 +1373,20 @@ export function HorribleAssaultPanel() {
         }
         effects.update(dt);
         nadePool.update(dt);
+        itemPool.update(dt);
 
         const elapsed = (now - started) / 1000;
         backdrop.update(elapsed);
+        water?.update(elapsed);
+        // Outside the audio block on purpose: the tint is not a sound, and a
+        // player with the volume at zero still has to be told their head is under.
+        if (worldRef.current) {
+          const nowUnder = submerged(worldRef.current, playerRef.current);
+          if (nowUnder !== wasUnder) {
+            wasUnder = nowUnder;
+            setUnderwater(nowUnder);
+          }
+        }
 
         if (acceptsGameInput(phaseRef.current)) {
           backdrop.setOpacity(0);
@@ -1380,6 +1523,9 @@ export function HorribleAssaultPanel() {
         avatars.dispose();
         effects.dispose();
         nadePool.dispose();
+        itemPool.dispose();
+        water?.dispose();
+        ladders?.dispose();
         viewmodel.dispose();
         backdrop.dispose();
         if (mesh) mesh.geometry.dispose();
@@ -1821,9 +1967,14 @@ export function HorribleAssaultPanel() {
       // are the ones in front of you rather than the ones the map happens to
       // list first.
       if (world) range.place(world, playerRef.current.x, playerRef.current.y);
+      // The map's own items, exactly where a match would put them: the server
+      // resolved these heights, so the range never has to.
+      if (itemTable && info) {
+        range.placeItems(info.items, itemTable.kinds, itemTable.reach);
+      }
     }
     deploy();
-  }, [deploy, weapons, nativeClient, launchNative]);
+  }, [deploy, weapons, nativeClient, launchNative, itemTable, info]);
 
   /**
    * Play a match the **game server** adjudicates.
@@ -2532,6 +2683,19 @@ export function HorribleAssaultPanel() {
                 >
                   {you.hp}
                   <span style={{ fontSize: '0.7rem', opacity: 0.6 }}> hp</span>
+                  {/* Armour beside health rather than as its own bar: it is a
+                      second pool of the same resource, and reading "how much can
+                      I take" off two widgets in two places is the thing a HUD is
+                      supposed to save you. Hidden at zero — a permanent 0 next
+                      to the health is noise for the whole first minute of every
+                      round. */}
+                  {!!you.armour && (
+                    <span style={{ color: '#6f97c4' }}>
+                      {' '}
+                      {you.armour}
+                      <span style={{ fontSize: '0.7rem', opacity: 0.6 }}> ar</span>
+                    </span>
+                  )}
                   {you.protected && (
                     <span style={{ fontSize: '0.6rem', opacity: 0.7 }}> · spawn shield</span>
                   )}
@@ -2556,6 +2720,44 @@ export function HorribleAssaultPanel() {
               {!online && noclipRef.current ? ' · noclip' : ''}
               {online ? ` · ${Math.round(net.rtt)} ms · err ${hud.error.toFixed(2)}` : ''}
             </div>
+
+            {/* Pickup lines, above the bottom-left readout they are about. */}
+            {picked.length > 0 && (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: 8,
+                  bottom: 96,
+                  pointerEvents: 'none',
+                  fontFamily: 'monospace',
+                  fontSize: '0.78rem',
+                  letterSpacing: '0.06em',
+                  color: '#7ee787',
+                  textShadow: '0 1px 2px rgba(0,0,0,0.8)',
+                }}
+              >
+                {picked.map((line) => (
+                  <div key={`${line.at}-${line.text}`}>{line.text}</div>
+                ))}
+              </div>
+            )}
+
+            {/* Underwater. A tint rather than a post-process: it has to read as
+                "your head is under", and the cheapest honest way to say that is
+                to put water between the player and everything else. Drawn below
+                the crosshair so aiming still works — swimming is a bad place to
+                fight, not a blindfold. */}
+            {underwater && (
+              <div
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  pointerEvents: 'none',
+                  background:
+                    'radial-gradient(ellipse at center, rgba(24,86,120,0.28) 0%, rgba(12,46,68,0.62) 100%)',
+                }}
+              />
+            )}
 
             <NoiseRing heard={heard} yaw={hud.yaw} />
 

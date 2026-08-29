@@ -76,6 +76,7 @@ function room(ssize = 64, floorAt = 0, ceilAt = 24): World {
     truncated: false,
     legacy_unscaled_attrs: false,
     plane_order: PLANES,
+    items: [],
   };
   return new World(info, buf);
 }

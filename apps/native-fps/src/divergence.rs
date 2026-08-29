@@ -91,6 +91,19 @@ pub fn note_fx_kind(kind: &str) {
     );
 }
 
+/// An item kind the map carries that this client has no shape or colour for.
+///
+/// Drawn in a fallback colour rather than dropped — a bare patch of floor where
+/// an item is reads as an empty spawn, which is worse than an unfamiliar box —
+/// so without this the substitution would be silent, which is the whole thing
+/// this module exists to prevent.
+pub fn note_item_kind(kind: &str) {
+    report(
+        format!("item:{kind}"),
+        &format!("the map carries an item of kind '{kind}' this client has no shape for"),
+    );
+}
+
 /// A client CVar the node serves that this client has no reader for.
 ///
 /// The console calls this when someone sets one, which is the moment it matters:

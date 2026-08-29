@@ -3,6 +3,7 @@
  * `backend/modules/hassault/models.py`; the backend stays the source of truth.
  */
 import { apiGet, apiPost } from '../../api';
+import type { ItemRow } from './net';
 import { apiUrl } from '../../origin';
 
 export interface MapSummary {
@@ -56,6 +57,47 @@ export interface MapInfo {
   legacy_unscaled_attrs: boolean;
   /** Plane names in the order they appear in the /cubes payload. */
   plane_order: string[];
+  /**
+   * The map's items, already resolved onto the floor by the server.
+   *
+   * Served rather than derived from `entities`, the `plane_order` precedent:
+   * resolving an item's height is a real rule (an entity's `z` is the mapper's
+   * eye, not the ground), and a copy of it here would put Train's items
+   * somewhere a match's are not.
+   */
+  items: ItemRow[];
+}
+
+/**
+ * One item kind's numbers, served rather than duplicated here.
+ *
+ * The `interval` / `zoomLevels` / `plane_order` precedent: the HUD draws the
+ * label and a respawn countdown, and Train resolves its own ammunition pickups
+ * against `respawn` and `mags` — a hardcoded copy would be a timer that says the
+ * armour is back before it is.
+ */
+export interface ItemSpec {
+  kind: string;
+  name: string;
+  respawn: number;
+  health: number;
+  armour: number;
+  armourCap: number;
+  /** Reserve rounds per weapon, as a multiple of that weapon's magazine. */
+  mags: number;
+  nade: string | null;
+}
+
+/** How close a body has to get to take something. Served for the same reason. */
+export interface ItemReach {
+  radius: number;
+  below: number;
+  above: number;
+}
+
+export interface ItemsResponse {
+  reach: ItemReach;
+  kinds: ItemSpec[];
 }
 
 export interface MatchSummary {
@@ -298,6 +340,10 @@ export function browseServers(): Promise<ServerBrowse> {
 
 export function listWeapons(): Promise<WeaponSpec[]> {
   return apiGet<WeaponSpec[]>('/hassault/weapons');
+}
+
+export function getItems(): Promise<ItemsResponse> {
+  return apiGet<ItemsResponse>('/hassault/items');
 }
 
 export function listTacticals(): Promise<TacticalSpec[]> {

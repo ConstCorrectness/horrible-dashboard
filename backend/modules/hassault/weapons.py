@@ -80,6 +80,21 @@ HISTORY_SECONDS = 1.0
 MAX_HEALTH = 100
 RESPAWN_DELAY = 3.0
 
+# Armour, which exists because the map has always carried `helmet` and `armour`
+# entities (see `pickups.py`). Two numbers rather than one: how much you can
+# carry, and how much of an incoming hit it eats.
+MAX_ARMOUR = 100.0
+
+# The fraction of incoming damage armour absorbs while it lasts, spending itself
+# point for point on what it absorbs. Ours, not AC's: their divisor is tuned
+# against their weapon damages, and half is the value that keeps the armour worth
+# crossing a map for without making the first player to reach it unkillable.
+#
+# It applies to bullets and blasts, never to a fall: `_fall_damage` goes around
+# `_apply_damage` deliberately, and a vest that cushioned a four-storey drop
+# would make the shoot-jump free for whoever holds the armour spawn.
+ARMOUR_ABSORB = 0.5
+
 # Invulnerability granted on spawning, and dropped the moment you fire. Without
 # it, spawn points on small maps are a lottery; without the drop, it is a shield
 # you can attack from.

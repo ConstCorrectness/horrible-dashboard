@@ -295,6 +295,21 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    // What each item kind gives, and how close you have to get. Non-fatal like
+    // the loadout: a node too old to serve it leaves the range's items drawn but
+    // inert — a missing convenience, not a client that refuses to start. In a
+    // match nothing reads it at all, because the server resolves every pickup.
+    let item_table = match node.items() {
+        Ok(table) => {
+            eprintln!("hassault: {} item kinds", table.kinds.len());
+            table
+        }
+        Err(e) => {
+            eprintln!("hassault: warning — no item table ({e}); range items will give nothing");
+            Default::default()
+        }
+    };
+
     // The body every hit is resolved against. Fetched rather than held, for the
     // reason `HitboxSpec` gives: the local copy this replaced drew a crouched
     // player four percent shorter than the server could hit them, all of it at
@@ -386,6 +401,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             tacticals,
             skins,
             hitbox,
+            item_table.clone(),
             definitions,
             plan,
         );
@@ -428,6 +444,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         tacticals,
         skins,
         hitbox,
+        item_table,
         definitions,
         plan,
     );

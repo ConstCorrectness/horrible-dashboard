@@ -24,7 +24,7 @@
 //!   That is the whole trick, and it is why native Train now shows ammo, counts
 //!   a magazine down, reloads, and lights a hitmarker.
 
-use crate::api::WeaponSpec;
+use crate::api::{ItemReach, ItemRow, ItemSpec, WeaponSpec};
 use crate::physics::{spawn_at, Spawn};
 use crate::protocol::{HitMarker, PlayerRow, SelfState};
 use crate::trace::{
@@ -114,6 +114,29 @@ pub struct TrainingRange {
     reload_in: f32,
     pending_hits: Vec<TargetHit>,
     rng: Rng,
+    /// The map's items, and when each is back.
+    ///
+    /// The range resolves **only the ammunition half** of a pickup, exactly as
+    /// the browser's `TrainingRange` does. Health and armour mean nothing where
+    /// nothing shoots back — `hp` here is a constant 100 — and faking them would
+    /// teach a resource cycle the range does not have.
+    items: Vec<RangeItem>,
+    /// The served pickup reach. `None` until the table arrives, and a `None`
+    /// means items are drawn but give nothing rather than being taken at a
+    /// radius this client made up.
+    reach: Option<ItemReach>,
+    clock: f32,
+}
+
+/// One item the range will actually give you.
+struct RangeItem {
+    id: i32,
+    at: [f32; 3],
+    /// Reserve rounds per weapon, as a multiple of that weapon's magazine.
+    mags: f32,
+    respawn: f32,
+    /// `clock` at which it comes back. Zero is available.
+    back_at: f32,
 }
 
 impl TrainingRange {
@@ -123,6 +146,88 @@ impl TrainingRange {
         self.ammo = specs.iter().map(|w| w.mag).collect();
         self.reserve = specs.iter().map(|w| w.reserve).collect();
         self.reload_in = 0.0;
+    }
+
+    /// Put the map's items out, from the placements the server resolved.
+    ///
+    /// Takes the reach with them rather than hardcoding a radius: Train decides
+    /// its own pickups, and a copy of that number here would be a range where
+    /// items come off the floor at a different distance than they do in a match.
+    ///
+    /// Every item is *drawn* — that is `items.rs`'s business and it draws them
+    /// all — but only the ammunition ones are listed here, because those are the
+    /// only ones the range can honour.
+    pub fn place_items(&mut self, rows: &[ItemRow], kinds: &[ItemSpec], reach: ItemReach) {
+        self.reach = Some(reach);
+        self.items = rows
+            .iter()
+            .filter_map(|row| {
+                let spec = kinds.iter().find(|k| k.kind == row.kind)?;
+                (spec.mags > 0.0).then_some(RangeItem {
+                    id: row.id,
+                    at: [row.x, row.y, row.z],
+                    mags: spec.mags,
+                    respawn: spec.respawn,
+                    back_at: 0.0,
+                })
+            })
+            .collect();
+    }
+
+    /// Ids of items currently taken, for the renderer.
+    pub fn taken_items(&self) -> Vec<i32> {
+        self.items
+            .iter()
+            .filter(|i| i.back_at > self.clock)
+            .map(|i| i.id)
+            .collect()
+    }
+
+    /// Take anything the body at `(x, y, z)` is standing on.
+    ///
+    /// Called from the frame loop with the player's own position, which is the
+    /// offline equivalent of the server collecting after a step. **After** the
+    /// step, for the same reason `_movement_consequences` runs there: you pick
+    /// something up by having moved onto it.
+    pub fn collect_items(&mut self, x: f32, y: f32, z: f32) {
+        let Some(reach) = self.reach else { return };
+        let clock = self.clock;
+        for item in &mut self.items {
+            if item.back_at > clock {
+                continue;
+            }
+            if (item.at[0] - x).hypot(item.at[1] - y) > reach.radius {
+                continue;
+            }
+            let dz = z - item.at[2];
+            if dz < -reach.below || dz > reach.above {
+                continue;
+            }
+            let mut rounds = 0;
+            for (index, weapon) in self.weapons.iter().enumerate() {
+                // `-1` is unlimited and stays unlimited, the same rule
+                // `finish_reload` follows: topping up a bottomless reserve would
+                // report rounds nobody received.
+                if weapon.reserve < 0 {
+                    continue;
+                }
+                let held = self.reserve.get(index).copied().unwrap_or(0);
+                let gain = ((weapon.mag as f32 * item.mags).round() as i32)
+                    .min(weapon.reserve - held)
+                    .max(0);
+                if gain == 0 {
+                    continue;
+                }
+                self.reserve[index] = held + gain;
+                rounds += gain;
+            }
+            // An item that can give nothing is not consumed — the server's rule,
+            // and for the same reason: taking it off the floor having gained
+            // nothing makes the map's rhythm a lie.
+            if rounds > 0 {
+                item.back_at = clock + item.respawn;
+            }
+        }
     }
 
     /// Put dummies out on the map's own spawn points.
@@ -217,6 +322,7 @@ impl TrainingRange {
 
     /// Advance reload timers and stand downed targets back up.
     pub fn update(&mut self, dt: f32) {
+        self.clock += dt;
         if self.reload_in > 0.0 {
             self.reload_in -= dt;
             if self.reload_in <= 0.0 {
@@ -425,6 +531,12 @@ impl TrainingRange {
         self.reload_in = 0.0;
         self.ammo = self.weapons.iter().map(|w| w.mag).collect();
         self.reserve = self.weapons.iter().map(|w| w.reserve).collect();
+        // The items stay placed — a reset restocks *you*, and putting every item
+        // back at the same moment would hide the respawn cycle the range exists
+        // to let you learn.
+        for item in &mut self.items {
+            item.back_at = 0.0;
+        }
     }
 }
 
@@ -453,6 +565,8 @@ mod tests {
             entities: spawns
                 .iter()
                 .map(|(x, y)| Entity {
+                    // `playerstart`, matching `cgz.ENTITY_NAMES`.
+                    kind: 2,
                     name: "playerstart".into(),
                     x: *x,
                     y: *y,
@@ -672,5 +786,145 @@ mod tests {
             let v = rng.next_f32();
             assert!((0.0..1.0).contains(&v), "{v}");
         }
+    }
+
+    // -- items -----------------------------------------------------------------
+
+    fn item_kinds() -> Vec<ItemSpec> {
+        vec![
+            ItemSpec {
+                kind: "ammo".into(),
+                name: "Ammo".into(),
+                respawn: 20.0,
+                mags: 2.0,
+                ..Default::default()
+            },
+            ItemSpec {
+                kind: "health".into(),
+                name: "Health".into(),
+                respawn: 25.0,
+                health: 25.0,
+                ..Default::default()
+            },
+        ]
+    }
+
+    const REACH: ItemReach = ItemReach {
+        radius: 1.8,
+        below: 1.25,
+        above: 4.5,
+    };
+
+    fn ranged_with_items(rows: &[(i32, &str, f32, f32)]) -> (World, TrainingRange) {
+        let (world, mut range) = ranged();
+        let rows: Vec<ItemRow> = rows
+            .iter()
+            .map(|(id, kind, x, y)| ItemRow {
+                id: *id,
+                kind: (*kind).into(),
+                x: *x,
+                y: *y,
+                z: 0.0,
+            })
+            .collect();
+        range.place_items(&rows, &item_kinds(), REACH);
+        (world, range)
+    }
+
+    /// Spend rounds the only way the range allows: by firing them.
+    ///
+    /// Worth doing the long way rather than reaching into the reserve, because
+    /// "an ammo pickup does nothing until you have actually spent something" is
+    /// the behaviour under test, not an obstacle to it.
+    fn spend(world: &World, range: &mut TrainingRange, shots: usize) {
+        for _ in 0..shots {
+            range.fire(world, 10.0, 10.0, 0.0, 4.5, 0.0, 0.0, 0);
+            range.request_reload();
+            range.update(10.0);
+        }
+    }
+
+    #[test]
+    fn the_range_only_ever_gives_you_the_ammunition() {
+        // Health means nothing where nothing shoots back — `hp` here is a
+        // constant 100 — and faking it would teach a resource cycle the range
+        // does not have. `items.rs` still *draws* the health pack.
+        let (world, mut range) =
+            ranged_with_items(&[(1, "ammo", 20.0, 10.0), (2, "health", 22.0, 10.0)]);
+        spend(&world, &mut range, 4);
+        range.collect_items(22.0, 10.0, 0.0);
+        assert!(range.taken_items().is_empty(), "the range gave out health");
+
+        range.collect_items(20.0, 10.0, 0.0);
+        assert_eq!(range.taken_items(), vec![1]);
+    }
+
+    #[test]
+    fn a_pickup_refills_finite_reserves_and_leaves_the_bottomless_one_alone() {
+        let (world, mut range) = ranged_with_items(&[(1, "ammo", 20.0, 10.0)]);
+        spend(&world, &mut range, 4);
+        let before = range.self_state().reserve;
+        assert!(before < 60, "nothing was spent");
+
+        range.collect_items(20.0, 10.0, 0.0);
+        assert!(range.self_state().reserve > before);
+
+        // The sidearm's reserve is unlimited and stays unlimited, rather than
+        // becoming a very large number.
+        range.select(1);
+        assert_eq!(range.self_state().reserve, -1);
+    }
+
+    #[test]
+    fn an_item_that_can_give_nothing_is_not_consumed() {
+        // Running over the ammo at full reserves and taking it off the floor for
+        // twenty seconds, having gained nothing, is the quiet unfairness the
+        // server's rule prevents — and the range follows the same one.
+        let (_, mut range) = ranged_with_items(&[(1, "ammo", 20.0, 10.0)]);
+        range.collect_items(20.0, 10.0, 0.0);
+        assert!(range.taken_items().is_empty());
+    }
+
+    #[test]
+    fn the_served_reach_is_what_decides_a_pickup() {
+        let (world, mut range) = ranged_with_items(&[(1, "ammo", 20.0, 10.0)]);
+        spend(&world, &mut range, 4);
+        range.collect_items(20.0 + REACH.radius + 0.1, 10.0, 0.0);
+        assert!(range.taken_items().is_empty());
+        range.collect_items(20.0 + REACH.radius - 0.1, 10.0, 0.0);
+        assert_eq!(range.taken_items(), vec![1]);
+    }
+
+    #[test]
+    fn with_no_served_table_items_draw_but_give_nothing() {
+        // A node too old to serve one. The range must not invent a reach.
+        let (world, mut range) = ranged();
+        spend(&world, &mut range, 4);
+        range.collect_items(10.0, 10.0, 0.0);
+        assert!(range.taken_items().is_empty());
+    }
+
+    #[test]
+    fn a_taken_item_comes_back_rather_than_disappearing() {
+        let (world, mut range) = ranged_with_items(&[(1, "ammo", 20.0, 10.0)]);
+        spend(&world, &mut range, 4);
+        range.collect_items(20.0, 10.0, 0.0);
+        assert_eq!(range.taken_items(), vec![1]);
+
+        range.update(19.0);
+        assert_eq!(range.taken_items(), vec![1]);
+        range.update(2.0);
+        assert!(range.taken_items().is_empty());
+    }
+
+    #[test]
+    fn a_reset_restocks_the_player_and_leaves_the_items_where_they_are() {
+        let (world, mut range) = ranged_with_items(&[(1, "ammo", 20.0, 10.0)]);
+        spend(&world, &mut range, 4);
+        range.collect_items(20.0, 10.0, 0.0);
+        range.reset();
+        // Back on the floor: a reset is about you, and leaving an item down would
+        // hide the cycle the range exists to let you learn.
+        assert!(range.taken_items().is_empty());
     }
 }

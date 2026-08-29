@@ -228,3 +228,144 @@ fn every_prop_this_client_ships_actually_parses() {
         );
     }
 }
+
+// -- map objects ---------------------------------------------------------------
+
+/// The browser's item tints.
+const ITEMS_TS: &str = include_str!("../../../packages/core/src/modules/hassault/items.ts");
+/// The browser's water surface.
+const WATER_TS: &str = include_str!("../../../packages/core/src/modules/hassault/water.ts");
+/// The browser's ladder geometry.
+const LADDERS_TS: &str = include_str!("../../../packages/core/src/modules/hassault/ladders.ts");
+/// This client's items.
+const ITEMS_RS: &str = include_str!("../src/items.rs");
+const WATER_RS: &str = include_str!("../src/water.rs");
+const GEOMETRY_RS: &str = include_str!("../src/geometry.rs");
+
+/// One `kind: 0xrrggbb,` out of the browser's `TINT` table.
+fn browser_tint(kind: &str) -> u32 {
+    let block = between(ITEMS_TS, "const TINT: Record<string, number> = {", "};");
+    for line in block.lines() {
+        let line = line.trim().trim_end_matches(',');
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if name.trim() == kind {
+            let digits = value.trim().trim_start_matches("0x");
+            return u32::from_str_radix(digits, 16).expect("a hex tint");
+        }
+    }
+    panic!("the browser's TINT has no '{kind}' — did it get renamed?");
+}
+
+/// A `pub const NAME: u32 = 0xrrggbb;` out of one of this client's sources.
+fn rust_hex(source: &str, name: &str) -> u32 {
+    let body = between(source, &format!("const {name}: u32 = "), ";");
+    u32::from_str_radix(body.trim().trim_start_matches("0x"), 16).expect("a hex constant")
+}
+
+/// A `const NAME: f32 = v;` out of one of this client's sources.
+fn rust_f32(source: &str, name: &str) -> f32 {
+    between(source, &format!("const {name}: f32 = "), ";")
+        .trim()
+        .parse()
+        .expect("a float")
+}
+
+/// A `const NAME = v;` out of one of the browser's sources.
+fn browser_f32(source: &str, name: &str) -> f32 {
+    between(source, &format!("const {name} = "), ";")
+        .trim()
+        .parse()
+        .expect("a float")
+}
+
+#[test]
+fn both_clients_tint_items_identically() {
+    // The colour is the identifying signal on an item — the shapes are small and
+    // seen at a distance, and what a player actually reads across a room is "red
+    // means health". A health pack that is red in one client and orange in the
+    // other is invisible from either client alone: each looks deliberate.
+    for (kind, constant) in [
+        ("health", "TINT_HEALTH"),
+        ("helmet", "TINT_HELMET"),
+        ("armour", "TINT_ARMOUR"),
+        ("ammo", "TINT_AMMO"),
+        ("clips", "TINT_CLIPS"),
+        ("grenade", "TINT_GRENADE"),
+    ] {
+        assert_eq!(
+            rust_hex(ITEMS_RS, constant),
+            browser_tint(kind),
+            "the '{kind}' item is a different colour in the two clients"
+        );
+    }
+}
+
+#[test]
+fn both_clients_bob_and_fade_items_on_the_same_numbers() {
+    // Not cosmetic: `FADE` is how long an item takes to sink, and the bob is
+    // shared by every item on the map precisely so a *missing* one is easy to
+    // pick out of a moving field. Two clients disagreeing on either would make
+    // the same map read differently to two players in it.
+    for (name, ts) in [
+        ("HOVER", "HOVER"),
+        ("BOB", "BOB"),
+        ("BOB_SPEED", "BOB_SPEED"),
+        ("SPIN_SPEED", "SPIN_SPEED"),
+        ("FADE", "FADE"),
+    ] {
+        assert_close(
+            name,
+            [rust_f32(ITEMS_RS, name), 0.0, 0.0],
+            [browser_f32(ITEMS_TS, ts), 0.0, 0.0],
+            1e-6,
+        );
+    }
+}
+
+#[test]
+fn both_clients_draw_water_the_same_way_when_the_map_says_nothing() {
+    // A map with no `watercolor` is the common case, so the fallback is what most
+    // water is actually drawn in — and the opacity decides whether you can see
+    // the bottom of a pool, which is the difference between water you can fight
+    // over and water you cannot.
+    assert_eq!(
+        rust_hex(WATER_RS, "DEFAULT_COLOR"),
+        u32::from_str_radix(
+            between(WATER_TS, "const DEFAULT_COLOR = 0x", ";").trim(),
+            16
+        )
+        .expect("a hex colour"),
+        "the two clients fall back to different water colours"
+    );
+    for name in ["OPACITY", "RIPPLE", "RIPPLE_SPEED"] {
+        assert_close(
+            name,
+            [rust_f32(WATER_RS, name), 0.0, 0.0],
+            [browser_f32(WATER_TS, name), 0.0, 0.0],
+            1e-6,
+        );
+    }
+}
+
+#[test]
+fn both_clients_build_a_ladder_to_the_same_dimensions() {
+    // A ladder is drawn at the width of the *volume that catches you*, not of a
+    // real ladder. If the two clients drew it differently, players would learn
+    // two different answers to "how close do I have to be", and only one of them
+    // matches the physics both of them run.
+    for (rs, ts) in [
+        ("LADDER_RUNG_SPACING", "RUNG_SPACING"),
+        ("LADDER_RAIL", "RAIL_THICKNESS"),
+        ("LADDER_RUNG", "RUNG_THICKNESS"),
+        ("LADDER_RAIL_INSET", "RAIL_INSET"),
+    ] {
+        assert_close(
+            rs,
+            [rust_f32(GEOMETRY_RS, rs), 0.0, 0.0],
+            [browser_f32(LADDERS_TS, ts), 0.0, 0.0],
+            1e-6,
+        );
+    }
+}

@@ -447,6 +447,20 @@ pub enum Fx {
         #[serde(default)]
         id: String,
     },
+    /// An item left the map.
+    ///
+    /// Public, unlike what it gave: the item visibly disappears off a floor
+    /// everybody can see. Who took it is deliberately not on the wire — the
+    /// sound and the hole are the information, and a name would make an item a
+    /// tracker.
+    #[serde(rename = "pickup")]
+    Pickup {
+        #[serde(default)]
+        item: i32,
+        /// The item kind, so the effect can be coloured without a lookup.
+        #[serde(default)]
+        what: String,
+    },
     #[serde(other)]
     Other,
 }
@@ -484,6 +498,17 @@ pub struct Snapshot {
     /// Smoke and fire standing in a place.
     #[serde(default)]
     pub zones: Vec<ZoneRow>,
+    /// Ids of items currently **taken**, and the complement of the usual state on
+    /// purpose: a map with sixty items normally has a handful missing, so this is
+    /// a few numbers a tick rather than sixty.
+    ///
+    /// The placements themselves are not here — they are a property of the map
+    /// and arrive with `MapInfo`. An **absent** field means "this server has no
+    /// items", which is not the same as "every item is present": read the second
+    /// way it would pop every taken item back into existence once a tick, so the
+    /// app only applies this when the server actually sent it.
+    #[serde(rename = "itemsOut", default)]
+    pub items_out: Option<Vec<i32>>,
     /// Wire keys this struct does not name. See `divergence::Extra` — the point
     /// is that adding a real field below makes the key disappear from here on
     /// its own, so the check cannot rot the way a hand-kept list would.

@@ -61,6 +61,7 @@ function room(ssize = 32): World {
     truncated: false,
     legacy_unscaled_attrs: false,
     plane_order: PLANES,
+    items: [],
   };
   return new World(info, buf);
 }

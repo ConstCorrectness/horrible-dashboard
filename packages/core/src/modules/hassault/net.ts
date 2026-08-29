@@ -199,6 +199,20 @@ export interface SelfState {
   /** What we are carrying, keyed by grenade id. Private, like `ammo`. */
   nades?: Record<string, number>;
   /**
+   * Armour left, which absorbs part of every hit until it is spent.
+   *
+   * Private, unlike `hp` in the shared rows: how much protection somebody is
+   * carrying is exactly what you would like to know before starting a fight.
+   */
+  armour?: number;
+  /**
+   * Items picked up since the last snapshot, drained server-side like `hits`.
+   *
+   * Carries the amounts that *actually applied* — a health pack taken at 90 gave
+   * ten — so the HUD never prints a number the health bar disagrees with.
+   */
+  picked?: PickedItem[];
+  /**
    * How blind a flashbang has left *us*, 0..1.
    *
    * Resolved per player on the server, because it depends on where we were
@@ -213,6 +227,26 @@ export interface SelfState {
    * saying so every tick would be a per-player id list that never changes.
    */
   spotted?: string[];
+}
+
+/** One item lying on the map. Sent once, with the welcome: placements never move. */
+export interface ItemRow {
+  id: number;
+  /** `clips` | `ammo` | `grenade` | `health` | `helmet` | `armour`. */
+  kind: string;
+  x: number;
+  y: number;
+  z: number;
+}
+
+/** What one pickup gave us. Only the fields that applied are present. */
+export interface PickedItem {
+  item: number;
+  kind: string;
+  health?: number;
+  armour?: number;
+  rounds?: number;
+  nade?: string;
 }
 
 /** A grenade in the air. Public — it is a thing on everybody's screen. */
@@ -279,7 +313,22 @@ export interface DetonateFx {
   radius: number;
 }
 
-export type Fx = ShotFx | KillFx | SpawnFx | DetonateFx;
+/**
+ * An item leaving the map.
+ *
+ * Public, unlike what it gave: the item visibly disappears from a floor
+ * everybody can see, so withholding it would only mean drawing something that is
+ * not there. Who took it is deliberately absent — the sound and the hole are the
+ * information, and a name would make an item a tracker.
+ */
+export interface PickupFx {
+  kind: 'pickup';
+  item: number;
+  /** The item kind, so the effect can be coloured without a lookup. */
+  what: string;
+}
+
+export type Fx = ShotFx | KillFx | SpawnFx | DetonateFx | PickupFx;
 
 export interface Snapshot {
   room: string;
@@ -295,6 +344,15 @@ export interface Snapshot {
   nades?: NadeRow[];
   /** Smoke and fire currently standing in the world. */
   zones?: ZoneRow[];
+  /**
+   * Ids of items currently taken.
+   *
+   * The complement of the usual state on purpose: a map with sixty items
+   * normally has a handful missing, so this is a few numbers per tick rather
+   * than sixty. An absent field means "this server does not do items", which is
+   * not the same as "every item is here" — hence optional rather than defaulted.
+   */
+  itemsOut?: number[];
 }
 
 /** A three-component offset, in cube units. */

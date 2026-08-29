@@ -100,6 +100,26 @@ pub fn timbre(kind: &str) -> Timbre {
             gain: 0.4,
             body: 0.0,
         },
+        // An item leaving the map. Bright, short and unmistakably not a gun: the
+        // sound has to be legible as "somebody took the armour" from across a
+        // room, where a dull one would be mistaken for a footstep. The browser's
+        // `pickup`, to the digit.
+        "pickup" => Timbre {
+            frequency: 1650.0,
+            q: 5.5,
+            decay: 0.16,
+            gain: 0.45,
+            body: 0.0,
+        },
+        // Breaking the surface. Low Q so the burst stays broadband — a splash is
+        // noise, and a narrow filter turns it into a bell.
+        "splash" => Timbre {
+            frequency: 900.0,
+            q: 0.6,
+            decay: 0.34,
+            gain: 0.75,
+            body: 40.0,
+        },
         "hurt" => Timbre {
             frequency: 300.0,
             q: 2.2,

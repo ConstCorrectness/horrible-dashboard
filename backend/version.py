@@ -34,7 +34,7 @@ from pathlib import Path
 #: ``backend/tests/test_hassault_client_install.py``, which is where the version
 #: first became load-bearing) — the one thing stopping this file from becoming the
 #: fourth drifting copy it exists to prevent.
-FALLBACK_VERSION = "0.2.0"
+FALLBACK_VERSION = "0.3.0"
 
 
 @lru_cache(maxsize=1)

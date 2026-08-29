@@ -48,7 +48,14 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from backend.modules.hassault import assets, grenades, noise, physics, weapons
+from backend.modules.hassault import (
+    assets,
+    grenades,
+    noise,
+    physics,
+    pickups,
+    weapons,
+)
 from backend.modules.hassault.cgz import CgzError
 from backend.modules.hassault.noise import Noise
 from backend.modules.hassault.physics import MoveInput, PlayerState, World
@@ -278,6 +285,11 @@ class MatchPlayer:
 
     # -- combat -------------------------------------------------------------
     health: float = MAX_HEALTH
+    #: Absorbs `weapons.ARMOUR_ABSORB` of every incoming hit until it is spent.
+    #: **Private**, unlike health: how much protection somebody is carrying is
+    #: exactly what you would like to know before starting a fight, and the
+    #: public health number already says how the fight is going.
+    armour: float = 0.0
     alive: bool = True
     weapon: int = weapons.DEFAULT_WEAPON
     ammo: dict[int, int] = field(default_factory=dict)
@@ -307,11 +319,19 @@ class MatchPlayer:
     protected_until: float = 0.0
     # Hitmarker feedback, drained into that player's own snapshot envelope.
     pending_hits: list[dict[str, Any]] = field(default_factory=list)
+    #: Items picked up since the last envelope, drained the same way and for the
+    #: same reason: what an item gave *you* is yours, while the fact that it is
+    #: gone from the map is everyone's and rides in the shared view.
+    pending_pickups: list[dict[str, Any]] = field(default_factory=list)
     """Cubes travelled since the last footstep. A footstep every `STRIDE_DISTANCE`
     of ground covered, rather than on a timer: a player who is barely moving is
     barely audible, which is what makes creeping forward a real option even
     standing up."""
     stride: float = 0.0
+    #: Whether this body was in water at the end of the last step, so *entering*
+    #: can be told from *being in*. Only the entry makes a noise — swimming is
+    #: quiet, which is what makes water worth using once you are already in it.
+    was_wet: bool = False
     """Health the last landing cost, drained into that player's own envelope so
     the HUD can say why the number dropped."""
     last_fall: float = 0.0
@@ -337,6 +357,9 @@ class MatchPlayer:
     def reset_loadout(self) -> None:
         """Full health and full magazines. Called on spawn and on respawn."""
         self.health = MAX_HEALTH
+        # No armour on spawn: it is something the map gives you, and starting
+        # with it would make the pickup that exists to be fought over a top-up.
+        self.armour = 0.0
         self.alive = True
         self.weapon = weapons.DEFAULT_WEAPON
         self.ammo = {i: w.mag for i, w in enumerate(weapons.WEAPONS)}
@@ -393,6 +416,8 @@ class MatchPlayer:
         """
         hits = self.pending_hits
         self.pending_hits = []
+        picked = self.pending_pickups
+        self.pending_pickups = []
         fell = self.last_fall
         self.last_fall = 0.0
         weapon = weapons.weapon_at(self.weapon)
@@ -432,6 +457,9 @@ class MatchPlayer:
             "deaths": self.deaths,
             "mag": weapon.mag,
             "hits": hits,
+            "armour": round(self.armour),
+            #: What you just ran over, with the amounts that actually applied.
+            "picked": picked,
             # Private for the same reason ammo is: how much utility somebody has
             # left is exactly the thing you would like to know about them.
             "nades": self.nades.to_dict(),
@@ -444,13 +472,29 @@ class MatchPlayer:
 class MatchRoom:
     """One match on one map. Owns a tick task for as long as anyone is in it."""
 
-    def __init__(self, room_id: str, map_name: str, world: World, spawns: list) -> None:
+    def __init__(
+        self,
+        room_id: str,
+        map_name: str,
+        world: World,
+        spawns: list,
+        items: list | None = None,
+    ) -> None:
         """Takes a world and its spawns rather than a parsed map, so a test can
-        build a room without AssaultCube content — which this repo cannot ship."""
+        build a room without AssaultCube content — which this repo cannot ship.
+
+        `items` are the map's item entities, already resolved onto the floor by
+        `pickups.place`. Optional and defaulting to none for the same reason the
+        spawns are passed in: a physics test builds a room out of four numbers,
+        and a map with no items is a room where nothing is lying around, not an
+        error.
+        """
         self.id = room_id
         self.map_name = map_name
         self.world = world
         self.spawns = spawns
+        #: Items on the map and which of them are currently gone. See pickups.py.
+        self.items = pickups.Field(items=list(items or []))
         self.players: dict[str, MatchPlayer] = {}
         self.tick = 0
         self.created_at = time.time()
@@ -1005,7 +1049,10 @@ class MatchRoom:
         was_airborne: bool,
         now: float,
     ) -> None:
-        """Noise and fall damage — what moving costs you besides time.
+        """Noise, fall damage, and anything the body just ran over.
+
+        The three things a step produces besides a position — what it cost you,
+        and what it got you.
 
         Driven from the step that produced it rather than from a timer, so both are
         a function of the same simulated motion the position came from. That is
@@ -1042,6 +1089,38 @@ class MatchRoom:
                 self._fall_damage(player, damage, now)
         elif not was_airborne and not state.on_ground and state.vel_z > 0:
             self._noise(player, "jump", noise.JUMP_LOUDNESS)
+
+        # Breaking the surface, in either direction: getting out is as loud as
+        # getting in, and a swimmer who could climb out silently would make water
+        # a free flank rather than a trade.
+        wet = physics.in_water(self.world, state)
+        if wet != player.was_wet:
+            player.was_wet = wet
+            self._noise(player, "splash", noise.SPLASH_LOUDNESS)
+
+        # Items last, and only if the landing did not kill them: a health pack
+        # under a lethal drop is not a rescue, and handing one to a corpse would
+        # also take it off the map for everybody else.
+        if player.alive:
+            self._collect(player)
+
+    def _collect(self, player: MatchPlayer) -> None:
+        """Take anything this body is standing on, and tell the right people.
+
+        The split is the same one health and ammo already follow: **what it gave
+        you is private** and rides in your own envelope, while **the item being
+        gone is public** — it disappears off a map everyone can see, so hiding it
+        would only mean drawing something that is not there.
+
+        A pickup is also audible. It is not free map control: standing on the
+        armour tells anyone nearby roughly where you are, which is what makes
+        contesting a spawn a decision rather than a formality.
+        """
+        for taken in self.items.collect(player):
+            if len(player.pending_pickups) < MAX_PENDING_HITS:
+                player.pending_pickups.append(taken.to_dict())
+            self._emit({"kind": "pickup", "item": taken.item, "what": taken.kind})
+            self._noise(player, "pickup", noise.PICKUP_LOUDNESS)
 
     def _noise(
         self, player: MatchPlayer, kind: str, loudness: float, weapon: str = ""
@@ -1330,6 +1409,16 @@ class MatchRoom:
         weapon: weapons.Weapon,
         now: float,
     ) -> None:
+        # Armour first: it decides how much of this ever reaches health, and
+        # every number below — the hitmarker, `damage_dealt`, the kill — is about
+        # health. It spends itself point for point on what it absorbs, so a vest
+        # is a fixed amount of protection rather than a permanent discount.
+        absorbed = 0.0
+        if victim.armour > 0:
+            absorbed = min(victim.armour, amount * weapons.ARMOUR_ABSORB)
+            victim.armour -= absorbed
+            amount -= absorbed
+
         # Before the subtraction: what actually landed is capped by what was
         # left, and reading it afterwards would count the overkill too.
         landed = min(amount, max(0.0, victim.health))
@@ -1337,14 +1426,18 @@ class MatchRoom:
         victim.health -= amount
         killed = victim.health <= 0
         if len(attacker.pending_hits) < MAX_PENDING_HITS:
-            attacker.pending_hits.append(
-                {
-                    "victim": victim.id,
-                    "damage": round(amount),
-                    "head": head,
-                    "killed": killed,
-                }
-            )
+            hit = {
+                "victim": victim.id,
+                "damage": round(amount),
+                "head": head,
+                "killed": killed,
+            }
+            if absorbed:
+                # The shooter is told armour ate some of it, but never how much
+                # is left: "that one hit a vest" is feedback about the shot they
+                # just took, while the remaining total is the victim's business.
+                hit["armour"] = True
+            attacker.pending_hits.append(hit)
         if not killed:
             return
 
@@ -1396,6 +1489,11 @@ class MatchRoom:
             # we are about to empty is the kind of thing that works until
             # someone makes the send path yield before serialising.
             "fx": list(self.fx),
+            # Which items are currently gone, by id. The complement of the usual
+            # state on purpose: a map with sixty items normally has a handful
+            # missing, so this is a few numbers per tick rather than sixty. The
+            # placements themselves ride once, with the map.
+            "itemsOut": self.items.taken_ids(),
         }
 
     def private_view_for(
@@ -1528,6 +1626,8 @@ class MatchRoom:
             "scores": self.scores,
             "nades": [n.snapshot() for n in self.nades],
             "zones": [z.snapshot() for z in self.zones],
+            "items": self.items.placements(),
+            "itemsOut": self.items.taken_ids(),
         }
 
 
@@ -1548,7 +1648,14 @@ class MatchServer:
         if cgz is None:
             raise LookupError(f"no map named {map_name!r}")
         rid = room_id or uuid.uuid4().hex[:8]
-        room = MatchRoom(rid, map_name, World.from_map(cgz), cgz.spawns())
+        world = World.from_map(cgz)
+        room = MatchRoom(
+            rid,
+            map_name,
+            world,
+            cgz.spawns(),
+            pickups.place(world, cgz.entities),
+        )
         self.rooms[rid] = room
         # Start ticking even though the room is empty: the tick loop is also what
         # retires it, so a room opened for an invite nobody accepts would

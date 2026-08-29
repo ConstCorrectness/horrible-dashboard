@@ -15,11 +15,12 @@ a body can stand, and has to be able to reach every other one.
 
 from __future__ import annotations
 
+import math
 from collections import deque
 
 import pytest
 
-from backend.modules.hassault import assets, mapsource, physics
+from backend.modules.hassault import assets, mapsource, physics, pickups
 from backend.modules.hassault.cgz import (
     PLANE_ORDER,
     SOLID,
@@ -203,6 +204,120 @@ def test_the_whole_map_is_reachable_on_foot(name):
     first = physics.spawn_at(sim, world.spawns()[0])
     reached = _reachable(sim, (int(first.x), int(first.y)), cells)
     assert reached == cells, f"{name}: {len(cells - reached)} cells are cut off"
+
+
+@pytest.mark.parametrize("name", BUNDLED)
+def test_every_map_carries_items(name):
+    """A bundled map with no items would make pickups a feature only the people
+    who own AssaultCube can see, which is the exact asymmetry this module keeps
+    refusing: their content is optional, ours is the game."""
+    world = mapsource.load_bundled(name)
+    assert world is not None
+    placed = pickups.place(physics.World.from_map(world), world.entities)
+    kinds = {item.kind for item in placed}
+    assert len(placed) >= 8, f"{name}: only {len(placed)} items"
+    assert {"health", "ammo", "armour"} <= kinds, f"{name}: has only {sorted(kinds)}"
+
+
+@pytest.mark.parametrize("name", BUNDLED)
+def test_every_item_is_somewhere_a_body_can_reach(name):
+    """The spawn test, for items — and it catches strictly more.
+
+    `pickups.place` resolves an item onto the floor beneath it, so an item can
+    never be *floating*; what it can be is resting inside a pillar, or in a
+    sealed room. Either one is invisible until a player spends a match looking
+    for an armour that cannot be picked up."""
+    world = mapsource.load_bundled(name)
+    assert world is not None
+    sim = physics.World.from_map(world)
+    cells = _standable(sim)
+    first = physics.spawn_at(sim, world.spawns()[0])
+    reached = _reachable(sim, (int(first.x), int(first.y)), cells)
+
+    for item in pickups.place(sim, world.entities):
+        assert physics.can_stand(sim, item.x, item.y, item.z), (
+            f"{name}: {item.kind} at ({item.x}, {item.y}) is inside something"
+        )
+        assert (int(item.x), int(item.y)) in reached, (
+            f"{name}: {item.kind} at ({item.x}, {item.y}) cannot be walked to"
+        )
+
+
+@pytest.mark.parametrize("name", BUNDLED)
+def test_items_are_not_on_top_of_a_spawn(name):
+    """An item within reach of a spawn is a free pickup for whoever died last,
+    which turns dying into a resupply."""
+    world = mapsource.load_bundled(name)
+    assert world is not None
+    sim = physics.World.from_map(world)
+    spawns = [physics.spawn_at(sim, s) for s in world.spawns()]
+    for item in pickups.place(sim, world.entities):
+        for state in spawns:
+            assert not pickups.in_reach(item, state.x, state.y, state.z), (
+                f"{name}: {item.kind} at ({item.x}, {item.y}) is on a spawn"
+            )
+
+
+@pytest.mark.parametrize("name", BUNDLED)
+def test_every_ladder_actually_gets_you_somewhere(name):
+    """A ladder is only a route if climbing it ends with you standing somewhere.
+
+    The failure this catches is quiet and specific: our body is 2.2 cubes wide, so
+    a ladder placed flush against the lip it serves is already stood on by anyone
+    at its foot (`_support` takes the highest floor the body overlaps), and one
+    placed too far back drops you off the top before you reach the ledge. Both
+    look fine in the map source. So the test climbs each one, the way a player
+    would, and insists on arriving.
+    """
+    world = mapsource.load_bundled(name)
+    assert world is not None
+    sim = physics.World.from_map(world)
+
+    for ladder in sim.ladders:
+        arrived = False
+        # Approached from either side: a mapper decides which way a ladder faces
+        # by where they put it, and this asks only that *one* approach works.
+        for sign in (1.0, -1.0):
+            state = physics.PlayerState(
+                x=ladder.x,
+                y=ladder.y - sign,
+                z=ladder.base,
+                yaw=math.pi / 2 if sign > 0 else -math.pi / 2,
+            )
+            for _ in range(600):
+                physics.step(
+                    sim, state, physics.MoveInput(forward=1.0, dt=1 / 60), 1 / 60
+                )
+                if state.on_ground and state.z >= ladder.top - physics.STEP_HEIGHT:
+                    arrived = True
+                    break
+            if arrived:
+                break
+        assert arrived, (
+            f"{name}: the ladder at ({ladder.x}, {ladder.y}) cannot be climbed to "
+            f"anywhere you can stand — it spans {ladder.base} to {ladder.top}"
+        )
+
+
+@pytest.mark.parametrize("name", BUNDLED)
+def test_water_never_covers_the_whole_map(name):
+    """The one water slip nothing else notices.
+
+    A plane *below* every floor is how a map says it has no water — every
+    official map ships one — so that is not an error. A plane above every floor
+    is: the whole map becomes a swimming pool, nobody can jump, and the map
+    source looks completely ordinary.
+    """
+    world = mapsource.load_bundled(name)
+    assert world is not None
+    sim = physics.World.from_map(world)
+    floors = [
+        sim.floor_at(x, y)
+        for y in range(sim.ssize)
+        for x in range(sim.ssize)
+        if not sim.is_solid(x, y)
+    ]
+    assert max(floors) > sim.waterlevel, f"{name}: the water covers the whole map"
 
 
 @pytest.mark.parametrize("name", BUNDLED)

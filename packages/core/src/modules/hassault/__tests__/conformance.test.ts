@@ -15,11 +15,11 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import type { MapInfo } from '../api';
+import type { MapEntity, MapInfo } from '../api';
 import { DEFAULT_HITBOX } from '../hitbox';
 import { applyImpulse, createPlayer, spawnAt, step, type PlayerState } from '../player';
 import { aimVector, BODY_HEIGHT, raycastWorld, rayHitsBody, type Vec } from '../trace';
-import { PLAYER_RADIUS, SOLID, SPACE, World } from '../world';
+import { LADDER_ENTITY, NO_WATER, PLAYER_RADIUS, SOLID, SPACE, World } from '../world';
 
 const PLANES = ['type', 'floor', 'ceil', 'wtex', 'ftex', 'ctex', 'vdelta', 'utex', 'tag'];
 
@@ -37,6 +37,8 @@ interface Rect {
 interface WorldSpec {
   ssize: number;
   rects: Rect[];
+  waterlevel?: number;
+  ladders?: { x: number; y: number; height: number }[];
 }
 
 interface Vectors {
@@ -133,6 +135,16 @@ function buildWorld(spec: WorldSpec): World {
     }
   }
 
+  const ladderEntities: MapEntity[] = (spec.ladders ?? []).map((l) => ({
+    type: LADDER_ENTITY,
+    name: 'ladder',
+    x: l.x,
+    y: l.y,
+    z: 0,
+    yaw: null,
+    attrs: [l.height, 0, 0, 0, 0, 0, 0],
+  }));
+
   const info: MapInfo = {
     name: 'conformance',
     title: 'conformance',
@@ -141,18 +153,22 @@ function buildWorld(spec: WorldSpec): World {
     sfactor: Math.log2(ssize),
     ssize,
     cubic_size: n,
-    waterlevel: -100,
+    waterlevel: spec.waterlevel ?? NO_WATER,
     watercolor: [0, 0, 0, 0],
     maprevision: 1,
     ambient: 0,
     flags: 0,
     timestamp: 0,
-    entity_count: 0,
-    entities: [],
+    entity_count: ladderEntities.length,
+    // Ladders go in as *entities*, so the World's own `laddersFrom` resolves
+    // them exactly as it does for a real map — the derivation is part of what
+    // these vectors pin, not a span handed to both sides.
+    entities: ladderEntities,
     spawns: {},
     truncated: false,
     legacy_unscaled_attrs: false,
     plane_order: PLANES,
+    items: [],
   };
   return new World(info, buf);
 }

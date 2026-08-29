@@ -20,13 +20,17 @@ import json
 from pathlib import Path
 
 from backend.modules.hassault.physics import (
+    LADDER_ENTITY,
+    NO_WATER,
     MoveInput,
     PlayerState,
     World,
+    ladders_from,
     apply_impulse,
     spawn_at,
     step,
 )
+from backend.modules.hassault import hitbox
 from backend.modules.hassault.weapons import (
     BODY_HEIGHT,
     aim_vector,
@@ -104,6 +108,44 @@ WORLDS = {
             {"x0": 2, "y0": 2, "x1": 13, "y1": 13, "type": 4, "floor": 0, "ceil": 120}
         ],
     },
+    # A flooded room. Floor at 0, water at 6 — deep enough that a standing body
+    # (5.2) is fully under, which is what separates swimming from wading, and
+    # shallow enough that the two states are both reachable in one world.
+    "pool": {
+        "ssize": 16,
+        "rects": [
+            {"x0": 2, "y0": 2, "x1": 13, "y1": 13, "type": 4, "floor": 0, "ceil": 32}
+        ],
+        "waterlevel": 6,
+    },
+    # A tall room with water only at the bottom of a long drop: the case water
+    # exists for. The fall is long enough to be lethal dry.
+    "well": {
+        "ssize": 16,
+        "rects": [
+            {"x0": 2, "y0": 2, "x1": 13, "y1": 13, "type": 4, "floor": 0, "ceil": 120}
+        ],
+        "waterlevel": 8,
+    },
+    # A tall room with a ladder up one wall. The ladder is an *entity*, so both
+    # sides run their own `ladders_from` / `laddersFrom` on it — the derivation
+    # is part of what these vectors pin, not a number handed to both.
+    "climb": {
+        "ssize": 16,
+        "rects": [
+            {"x0": 2, "y0": 2, "x1": 13, "y1": 13, "type": 4, "floor": 0, "ceil": 60},
+            # A gallery 24 cubes up along the west side, which is what the ladder
+            # is *for*: a case that only reaches the top proves the clamp, and a
+            # case that steps off it proves `LADDER_TOP_RELEASE`.
+            {"x0": 2, "y0": 2, "x1": 7, "y1": 13, "type": 4, "floor": 24, "ceil": 60},
+        ],
+        # One cell clear of the gallery edge. Any closer and the 2.2-cube body
+        # standing at the ladder's foot already overlaps a gallery cell, and
+        # `_support` would rest it 24 cubes up without the ladder being involved
+        # at all — which would make the ladder redundant in exactly the cases
+        # meant to exercise it. Any further and stepping off the top is a jump.
+        "ladders": [{"x": 9, "y": 8, "height": 24}],
+    },
     # Open ground, sixty cubes across. Momentum cases need room to run: at 22
     # cubes a second a one-second case crosses the 16-cube room twice over, and a
     # case that ends against a wall measures the wall, not the movement.
@@ -131,13 +173,37 @@ def build(spec) -> World:
                 floor[i] = rect.get("floor", 0) & 0xFF
                 ceil[i] = rect.get("ceil", 16) & 0xFF
                 vdelta[i] = rect.get("vdelta", 0)
-    return World(
+    world = World(
         ssize=ssize,
         type=bytes(types),
         floor=bytes(floor),
         ceil=bytes(ceil),
         vdelta=bytes(vdelta),
+        waterlevel=float(spec.get("waterlevel", NO_WATER)),
     )
+    # Ladders go in as *entities* and are resolved by the same `ladders_from` the
+    # real map pipeline uses, so the fixture exercises the derivation rather than
+    # handing both sides a pre-computed span. `conformance.test.ts` does the same
+    # on its side.
+    world.ladders = ladders_from(
+        ssize,
+        world.floor_at,
+        [
+            _LadderEntity(spec_l["x"], spec_l["y"], spec_l["height"])
+            for spec_l in spec.get("ladders", [])
+        ],
+    )
+    return world
+
+
+class _LadderEntity:
+    """The three fields `ladders_from` reads off a map entity."""
+
+    def __init__(self, x: int, y: int, height: int) -> None:
+        self.type = LADDER_ENTITY
+        self.x = x
+        self.y = y
+        self.attr1 = height
 
 
 def repeat(count, **kw):
@@ -226,6 +292,110 @@ CASES = [
         "world": "corridor",
         "start": {"x": 5.0, "y": 7.0, "z": 0.0, "yaw": 1.5707963267948966},
         "steps": repeat(30, forward=1.0, dt=1 / 60),
+    },
+    # -- water ------------------------------------------------------------
+    {
+        "name": "wades slower than it walks",
+        "world": "pool",
+        # Feet under the water, head out: the wading state.
+        "start": {"x": 4.0, "y": 8.0, "z": 0.0, "yaw": 0.0, "on_ground": True},
+        "steps": repeat(40, forward=1.0, dt=1 / 60),
+    },
+    {
+        "name": "sinks slowly instead of falling",
+        "world": "pool",
+        # Dropped in from above the surface, fully submerged on the way down.
+        "start": {"x": 8.0, "y": 8.0, "z": 20.0},
+        "steps": repeat(90, dt=1 / 60),
+    },
+    {
+        "name": "swims up while jump is held",
+        "world": "pool",
+        "start": {"x": 8.0, "y": 8.0, "z": 0.0, "yaw": 0.0},
+        "steps": repeat(60, jump=True, dt=1 / 60),
+    },
+    {
+        "name": "dives while crouch is held",
+        "world": "pool",
+        "start": {"x": 8.0, "y": 8.0, "z": 4.0, "yaw": 0.0},
+        "steps": repeat(40, crouch=True, dt=1 / 60),
+    },
+    {
+        "name": "cannot jump off the bottom while submerged",
+        "world": "pool",
+        # On the floor with the water well over the head: `jump` is the swim
+        # control down here, and the difference between the two readings is
+        # nineteen cubes a second.
+        "start": {"x": 8.0, "y": 8.0, "z": 0.0, "yaw": 0.0, "on_ground": True},
+        "steps": [{"jump": True, "dt": 1 / 60}],
+    },
+    {
+        "name": "a long drop into water arrives gently",
+        "world": "well",
+        "start": {"x": 8.0, "y": 8.0, "z": 100.0},
+        "steps": repeat(240, dt=1 / 60),
+    },
+    # -- ladders ----------------------------------------------------------
+    {
+        "name": "climbs while facing the ladder",
+        "world": "climb",
+        # Facing +x at the ladder cell, one cube short of its centre.
+        "start": {
+            "x": 10.5,
+            "y": 8.5,
+            "z": 0.0,
+            "yaw": 3.141592653589793,
+            "on_ground": True,
+        },
+        "steps": repeat(60, forward=1.0, dt=1 / 60),
+    },
+    {
+        "name": "descends when pressing back on a ladder",
+        "world": "climb",
+        "start": {"x": 10.5, "y": 8.5, "z": 12.0, "yaw": 3.141592653589793},
+        "steps": repeat(60, forward=-1.0, dt=1 / 60),
+    },
+    {
+        "name": "holds position on a ladder with no input",
+        "world": "climb",
+        "start": {"x": 10.5, "y": 8.5, "z": 12.0, "yaw": 3.141592653589793},
+        "steps": repeat(60, dt=1 / 60),
+    },
+    {
+        "name": "strafing along a ladder does not climb it",
+        "world": "climb",
+        # Facing +y, so the ladder is off to the side: the alignment is zero and
+        # the climb rate with it. This is the case that stops a player running
+        # past a ladder being launched up it.
+        "start": {
+            "x": 10.5,
+            "y": 8.5,
+            "z": 6.0,
+            "yaw": 1.5707963267948966,
+            "on_ground": False,
+        },
+        "steps": repeat(30, forward=1.0, dt=1 / 60),
+    },
+    {
+        "name": "the climb stops at the top rung",
+        "world": "climb",
+        "start": {"x": 10.5, "y": 8.5, "z": 20.0, "yaw": 3.141592653589793},
+        "steps": repeat(120, forward=1.0, dt=1 / 60),
+    },
+    {
+        # Leaving at the top is the case `LADDER_TOP_RELEASE` exists for: at the
+        # last rung the axial grip lets go, so forward walks onto the ledge
+        # instead of holding you against a ladder you have finished climbing.
+        "name": "walks off the top of a ladder onto the ledge",
+        "world": "climb",
+        "start": {"x": 10.5, "y": 8.5, "z": 24.0, "yaw": 3.141592653589793},
+        "steps": repeat(40, forward=1.0, dt=1 / 60),
+    },
+    {
+        "name": "a jump on a ladder hops up a rung and re-grabs",
+        "world": "climb",
+        "start": {"x": 10.5, "y": 8.5, "z": 10.0, "yaw": 3.141592653589793},
+        "steps": [{"forward": 1.0, "jump": True, "dt": 1 / 60}] + repeat(20, dt=1 / 60),
     },
     # -- momentum ---------------------------------------------------------
     {
@@ -647,8 +817,20 @@ def main() -> None:
             "These pin that the two implementations agree, not that either is "
             "correct in the abstract - correctness is what each side's own unit "
             "tests are for. Regenerate only when a rule genuinely changes, and "
-            "make both suites pass before committing."
+            "make both suites pass before committing. 'hitboxSpecId' is the "
+            "content hash of the body these vectors were generated against "
+            "(backend/modules/hassault/hitbox.py). It is checked by the Python "
+            "suite: change a hit-deciding dimension and this file is stale, "
+            "which is the one failure mode a hand-maintained revision number "
+            "would let you forget."
         ),
+        # The body these vectors were generated against. Both suites read it:
+        # the Python one to refuse a stale fixture, the TypeScript one to catch
+        # its own default having drifted from the server's. This generator had
+        # lost the stamp while the committed fixture still carried it, so
+        # regenerating silently dropped two guards - restored here.
+        "hitboxSpecId": hitbox.DEFAULT.spec_id,
+        "hitbox": hitbox.DEFAULT.to_dict(),
         "tolerance": 1e-9,
         "worlds": WORLDS,
         "cases": out_cases,

@@ -68,6 +68,34 @@ class EntityOut(BaseModel):
     attrs: list[int] = Field(default_factory=list)
 
 
+class ItemReach(BaseModel):
+    """How close a body has to get. Served for the `interval`/`zoomLevels` reason:
+    Train resolves its own pickups locally, and a second copy of these numbers
+    would be a range where items come off the floor at a different distance than
+    they do in a match."""
+
+    radius: float
+    below: float
+    above: float
+
+
+class ItemsResponse(BaseModel):
+    """The item table and the one geometric rule that goes with it."""
+
+    reach: ItemReach
+    kinds: list[ItemOut]
+
+
+class ItemPlacement(BaseModel):
+    """One item, where it actually rests. See `pickups.place`."""
+
+    id: int
+    kind: str
+    x: float
+    y: float
+    z: float
+
+
 class MapInfo(BaseModel):
     """A map's header and entities. The cube grid is fetched separately as binary."""
 
@@ -92,6 +120,14 @@ class MapInfo(BaseModel):
     # Byte offsets of each plane inside the `/cubes` payload, so the client can
     # slice one download into typed arrays without guessing the field order.
     plane_order: list[str] = Field(default_factory=list)
+    #: The map's items, already **resolved onto the floor** by `pickups.place`.
+    #:
+    #: Served rather than derived in the browser from `entities` above, for the
+    #: same reason `plane_order` is served: resolving an item's height is a real
+    #: rule (an entity's `z` is the mapper's eye, not the ground), and a second
+    #: implementation of it in TypeScript would be a Train mode whose items sit
+    #: somewhere a match's do not.
+    items: list[ItemPlacement] = Field(default_factory=list)
 
 
 class MatchSummary(BaseModel):
@@ -196,6 +232,29 @@ class WeaponOut(BaseModel):
     """Cone half-angle while not scoped. Equal to `spread` for every weapon
     without a scope, so the client can read it unconditionally."""
     hipfireSpread: float = 0.0  # noqa: N815
+
+
+class ItemOut(BaseModel):
+    """One item kind's numbers, served for the same reason `WeaponOut` is.
+
+    The pane draws the label and — the part that actually needs this — a respawn
+    countdown on an item it watched somebody take. A copy of `respawn` in
+    TypeScript would be a timer that says the armour is back before it is.
+    """
+
+    kind: str
+    name: str
+    """Seconds from being taken to being available again."""
+    respawn: float
+    health: float = 0.0
+    armour: float = 0.0
+    armourCap: float = 0.0  # noqa: N815 — read verbatim by the browser
+    """Reserve rounds added per weapon, as a multiple of that weapon's magazine.
+    A multiple rather than a count because a shotgun magazine and a rifle
+    magazine are not the same amount of gun."""
+    mags: float = 0.0
+    """Grenade id topped up, or `None` for every item that gives none."""
+    nade: str | None = None
 
 
 class Invitee(BaseModel):

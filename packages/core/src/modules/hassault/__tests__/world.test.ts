@@ -77,6 +77,7 @@ function makeWorld(ssize: number, cells: Record<string, CellSpec> = {}): World {
     truncated: false,
     legacy_unscaled_attrs: false,
     plane_order: PLANES,
+    items: [],
   };
   return new World(info, buf);
 }

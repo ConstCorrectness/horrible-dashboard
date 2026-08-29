@@ -30,6 +30,7 @@ from backend.modules.hassault import (
     hitbox,
     lore,
     mapsource,
+    pickups,
     weapons,
 )
 from backend.modules.hassault.cgz import PLANE_ORDER, CgzError, write_cgz
@@ -41,6 +42,7 @@ from backend.modules.hassault.console import (
     console_registry,
 )
 from backend.modules.hassault.match import MAX_PLAYERS, match_server
+from backend.modules.hassault.physics import World as SimWorld
 from backend.modules.hassault.models import (
     BrowseMatch,
     BrowsePlayer,
@@ -50,6 +52,10 @@ from backend.modules.hassault.models import (
     HitboxTuneRequest,
     InstallStatus,
     Invitee,
+    ItemOut,
+    ItemPlacement,
+    ItemReach,
+    ItemsResponse,
     LoreOut,
     MapInfo,
     MapSummary,
@@ -177,6 +183,10 @@ async def get_map(name: str) -> MapInfo:
         flags=world.flags,
         timestamp=world.timestamp,
         entity_count=len(world.entities),
+        items=[
+            ItemPlacement(**item.placement())
+            for item in pickups.place(SimWorld.from_map(world), world.entities)
+        ],
         entities=[
             EntityOut(
                 type=e.type,
@@ -235,6 +245,24 @@ async def get_weapons() -> list[WeaponOut]:
     tune the rifle.
     """
     return [WeaponOut(**w.to_dict()) for w in weapons.WEAPONS]
+
+
+@router.get("/items", response_model=ItemsResponse)
+async def get_items() -> ItemsResponse:
+    """The item table, for the same reason `/weapons` exists.
+
+    The map's item *placements* are not here: they belong to a map, and ride on
+    `GET /maps/{name}`. This is what each kind does, and how close you have to
+    get to it.
+    """
+    return ItemsResponse(
+        reach=ItemReach(
+            radius=pickups.PICKUP_RADIUS,
+            below=pickups.PICKUP_BELOW,
+            above=pickups.PICKUP_ABOVE,
+        ),
+        kinds=[ItemOut(**spec) for spec in pickups.specs_payload()],
+    )
 
 
 @router.get("/hitbox", response_model=HitboxOut)

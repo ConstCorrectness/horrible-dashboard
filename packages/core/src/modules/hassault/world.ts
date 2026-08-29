@@ -11,7 +11,7 @@
  * y-up, so world space maps as `three.x = cube.x`, `three.y = height`,
  * `three.z = cube.y`. One cube is one world unit.
  */
-import type { MapInfo } from './api';
+import type { MapEntity, MapInfo } from './api';
 
 // Cube types — the on-disk encoding, from world.h.
 export const SOLID = 0;
@@ -29,6 +29,58 @@ export const PLAYER_RADIUS = 1.1;
 export const PLAYER_EYE_HEIGHT = 4.5;
 export const PLAYER_ABOVE_EYE = 0.7;
 
+/** `cgz.ENTITY_NAMES` index of a `ladder`, named so the one reader says what it reads. */
+export const LADDER_ENTITY = 12;
+
+/**
+ * Water plane for a map that has none. Far below any floor a `.cgz` can hold
+ * (`floor` is a signed byte), so "is this body in water" is one comparison with
+ * no special case for the absence of water.
+ */
+export const NO_WATER = -1e9;
+
+/**
+ * One climbable volume, resolved against the floor beneath it.
+ *
+ * Derived rather than served, because the entity carries a *height* and the
+ * simulation needs a span whose base is the floor of the cell. Mirrors `Ladder`
+ * in `physics.py`, and the derivation is pinned by the conformance vectors: the
+ * two sides must agree on where a ladder starts and ends or a climb desyncs on
+ * the first frame.
+ */
+export interface Ladder {
+  x: number;
+  y: number;
+  base: number;
+  top: number;
+}
+
+/**
+ * Resolve every `ladder` entity into a span. Mirrors `ladders_from`.
+ *
+ * A height of zero is **dropped**, not treated as unbounded: a mapper who never
+ * set the attribute meant "I did not finish this", and a ladder of infinite
+ * height in the middle of a room would be a hole in the map's physics.
+ */
+export function laddersFrom(
+  ssize: number,
+  floorAt: (x: number, y: number) => number,
+  entities: MapEntity[],
+): Ladder[] {
+  const out: Ladder[] = [];
+  for (const entity of entities) {
+    if (entity.type !== LADDER_ENTITY) continue;
+    const height = entity.attrs?.[0] ?? 0;
+    if (height <= 0) continue;
+    const x = Math.trunc(entity.x);
+    const y = Math.trunc(entity.y);
+    if (x < 0 || y < 0 || x >= ssize || y >= ssize) continue;
+    const base = floorAt(x, y);
+    out.push({ x: x + 0.5, y: y + 0.5, base, top: base + height });
+  }
+  return out;
+}
+
 export class World {
   readonly info: MapInfo;
   readonly ssize: number;
@@ -42,6 +94,10 @@ export class World {
   readonly vdelta: Uint8Array;
   readonly utex: Uint8Array;
   readonly tag: Uint8Array;
+  /** The map's water plane, or `NO_WATER` when it has none. */
+  readonly waterlevel: number;
+  /** Climbable spans, from the map's `ladder` entities. */
+  readonly ladders: Ladder[];
 
   constructor(info: MapInfo, cubes: ArrayBuffer) {
     this.info = info;
@@ -63,6 +119,14 @@ export class World {
     this.vdelta = new Uint8Array(cubes, at('vdelta'), n);
     this.utex = new Uint8Array(cubes, at('utex'), n);
     this.tag = new Uint8Array(cubes, at('tag'), n);
+    // A map with no water stores a level far below its floors already, so this
+    // needs no sentinel of its own — but a `MapInfo` from an older backend has
+    // no field at all, and reading that as zero would flood the map to the
+    // height of an ordinary floor.
+    this.waterlevel = Number.isFinite(info.waterlevel) ? info.waterlevel : NO_WATER;
+    // Derived here rather than in the caller: `floorAt` is a method of the world
+    // being constructed, and a ladder's base is the floor of its cell.
+    this.ladders = laddersFrom(this.ssize, (x, y) => this.floorAt(x, y), info.entities ?? []);
   }
 
   /** Flat index of a cell, matching the engine's `SWS(w,x,y,s)` macro. */

@@ -26,10 +26,10 @@
 
 use std::path::PathBuf;
 
-use hassault_native::api::MapInfo;
+use hassault_native::api::{Entity, MapInfo};
 use hassault_native::physics::{apply_impulse, spawn_at, step, MoveInput, PlayerState, Spawn};
 use hassault_native::trace::{aim_vector, ray_hits_body_sized, raycast_world, BODY_HEIGHT};
-use hassault_native::world::{World, PLAYER_RADIUS, SOLID, SPACE};
+use hassault_native::world::{World, LADDER_ENTITY, PLAYER_RADIUS, SOLID, SPACE};
 use serde_json::Value;
 
 const PLANES: [&str; 9] = [
@@ -93,10 +93,33 @@ fn build_world(spec: &Value) -> World {
     bytes.extend_from_slice(&vdelta);
     bytes.extend(std::iter::repeat_n(0u8, n * 2)); // utex, tag
 
+    // Ladders go in as *entities*, so `World::new` resolves them with the same
+    // `ladders_from` the map pipeline uses — the derivation is part of what these
+    // vectors pin, not a span handed to each side.
+    let entities = spec["ladders"]
+        .as_array()
+        .map(|list| {
+            list.iter()
+                .map(|l| Entity {
+                    kind: LADDER_ENTITY,
+                    name: "ladder".to_string(),
+                    x: l["x"].as_f64().unwrap() as f32,
+                    y: l["y"].as_f64().unwrap() as f32,
+                    attrs: vec![l["height"].as_i64().unwrap() as i32],
+                    ..Default::default()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     let info = MapInfo {
         ssize,
         cubic_size: n,
         plane_order: PLANES.iter().map(|s| s.to_string()).collect(),
+        // Absent means the fixture world has no water. `World::new` maps a zero
+        // to `NO_WATER` for exactly this reason.
+        waterlevel: spec["waterlevel"].as_f64().unwrap_or(0.0) as f32,
+        entities,
         ..Default::default()
     };
     World::new(info, &bytes).expect("fixture world")

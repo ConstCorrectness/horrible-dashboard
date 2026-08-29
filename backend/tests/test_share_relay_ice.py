@@ -84,6 +84,7 @@ def test_describe_reports_presence_never_the_credential(monkeypatch) -> None:
 
 
 def test_ice_servers_builds_real_aiortc_objects(monkeypatch) -> None:
+    pytest.importorskip("aiortc", reason="needs the `webrtc` extra")
     monkeypatch.setenv("SHARE_RELAY_TURN_URL", "turn:relay.example.com:3478")
     monkeypatch.setenv("SHARE_RELAY_TURN_USER", "u")
     monkeypatch.setenv("SHARE_RELAY_TURN_PASS", "p")

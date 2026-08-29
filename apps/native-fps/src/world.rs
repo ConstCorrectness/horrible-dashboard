@@ -18,7 +18,7 @@
 //! so world space maps as `render.x = cube.x`, `render.y = height`,
 //! `render.z = cube.y`. One cube is one world unit.
 
-use crate::api::MapInfo;
+use crate::api::{Entity, MapInfo};
 
 // Cube types — the on-disk encoding, from AssaultCube's `world.h`.
 pub const SOLID: u8 = 0;
@@ -92,6 +92,67 @@ pub struct World {
     pub utex: Vec<u8>,
     #[allow(dead_code)]
     pub tag: Vec<u8>,
+    /// The map's water plane, or `NO_WATER` when it has none.
+    pub waterlevel: f32,
+    /// Climbable spans, from the map's `ladder` entities.
+    pub ladders: Vec<Ladder>,
+}
+
+/// `cgz.ENTITY_NAMES` index of a `ladder`.
+pub const LADDER_ENTITY: i32 = 12;
+
+/// Water plane for a map that has none. Far below any floor a `.cgz` can hold, so
+/// "is this body in water" is one comparison with no special case for absence.
+pub const NO_WATER: f32 = -1e9;
+
+/// One climbable volume, resolved against the floor beneath it.
+///
+/// Derived rather than served, because the entity carries a *height* and the
+/// simulation needs a span whose base is the floor of the cell. Mirrors `Ladder`
+/// in `physics.py` and `world.ts`; the derivation is pinned by the conformance
+/// fixture, because all three sides must agree on where a ladder starts and ends
+/// or a climb desyncs on the first frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Ladder {
+    pub x: f32,
+    pub y: f32,
+    pub base: f32,
+    pub top: f32,
+}
+
+/// Resolve every `ladder` entity into a span. Mirrors `ladders_from`.
+///
+/// A height of zero is **dropped**, not treated as unbounded: a mapper who never
+/// set the attribute meant "I did not finish this", and a ladder of infinite
+/// height in the middle of a room would be a hole in the map's physics.
+pub fn ladders_from(
+    ssize: i32,
+    floor_at: impl Fn(i32, i32) -> f32,
+    entities: &[Entity],
+) -> Vec<Ladder> {
+    let mut out = Vec::new();
+    for entity in entities {
+        if entity.kind != LADDER_ENTITY {
+            continue;
+        }
+        let height = entity.attrs.first().copied().unwrap_or(0) as f32;
+        if height <= 0.0 {
+            continue;
+        }
+        let x = entity.x.trunc() as i32;
+        let y = entity.y.trunc() as i32;
+        if x < 0 || y < 0 || x >= ssize || y >= ssize {
+            continue;
+        }
+        let base = floor_at(x, y);
+        out.push(Ladder {
+            x: x as f32 + 0.5,
+            y: y as f32 + 0.5,
+            base,
+            top: base + height,
+        });
+    }
+    out
 }
 
 impl World {
@@ -127,7 +188,15 @@ impl World {
         // below-zero floor into a value around 250 and lifts those cells into
         // orbit — silently, since nothing about the bytes says which they are.
         let signed = |bytes: &[u8]| bytes.iter().map(|&b| b as i8).collect::<Vec<i8>>();
-        Ok(World {
+        // A map with no water already stores a level far below its floors, but a
+        // `MapInfo` from an older node has no field at all and `null` parses as
+        // zero — which would flood the map to the height of an ordinary floor.
+        let waterlevel = if info.waterlevel == 0.0 {
+            NO_WATER
+        } else {
+            info.waterlevel
+        };
+        let mut world = World {
             ssize: info.ssize,
             cell_type: plane("type")?.to_vec(),
             floor: signed(plane("floor")?),
@@ -138,8 +207,18 @@ impl World {
             vdelta: plane("vdelta")?.to_vec(),
             utex: plane("utex")?.to_vec(),
             tag: plane("tag")?.to_vec(),
+            waterlevel,
+            ladders: Vec::new(),
             info,
-        })
+        };
+        // Derived after construction: a ladder's base is the floor of its cell,
+        // and `floor_at` is a method of the world being built.
+        world.ladders = ladders_from(
+            world.ssize,
+            |x, y| world.floor_at(x, y),
+            &world.info.entities,
+        );
+        Ok(world)
     }
 
     /// Flat index of a cell, matching the engine's `SWS(w,x,y,s)` macro.

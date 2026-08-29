@@ -60,10 +60,21 @@ Two deliberate deviations, both because AC's exact behaviour would be a bug here
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Any
 
 from backend.modules.hassault.cgz import CHF, FHF, SEMISOLID, SOLID, SPACE, CgzMap
 from backend.modules.hassault import hitbox
+
+#: `cgz.ENTITY_NAMES` index of a `ladder`. Named here rather than imported as a
+#: bare number so the one place that reads it says what it is reading.
+LADDER_ENTITY = 12
+
+#: Water plane for a world that has none. Far below any floor a `.cgz` can hold
+#: (`floor` is a signed byte), so "is this body in water" is one comparison with
+#: no special case for the absence of water.
+NO_WATER = -1e9
 
 # Player dimensions. The numbers themselves live in `hitbox.py`, which is the one
 # authority both clients read, and these names survive as aliases for the *default*
@@ -124,6 +135,78 @@ JUMP_CHAIN_BOOST = 1.25
 FALL_SAFE_SPEED = 34.0
 FALL_DAMAGE_PER_SPEED = 3.0
 
+# -- water ------------------------------------------------------------------
+#
+# A map's `waterlevel` has been parsed since the reader was written and did
+# nothing. It is now the one piece of the map that changes how a body moves, and
+# the numbers below are **ours**: AC's water constants are tuned against AC's
+# gravity and jump, and copying them into a simulation that already deviates
+# (`1-exp(-k*dt)` rather than `k*dt`) would be a port in name only.
+#
+# What water is *for* decides the numbers. It is a slow, safe, loud route: you
+# give up speed and the ability to jump, and you get a descent that costs no
+# health and a body that is hard to hit cleanly.
+
+#: Horizontal speed cap in water, wading or swimming. Replaces the crouch scale
+#: rather than multiplying with it — there is no crouching in water, and two
+#: penalties stacking would make a crouched swimmer slower than walking pace.
+WATER_SPEED_SCALE = 0.62
+
+#: Velocity convergence while submerged. Between ground and air on purpose:
+#: water gives no footing, but it grips — using `AIR_RESPONSE` here would make
+#: swimming feel like ice, and `GROUND_RESPONSE` like walking.
+WATER_RESPONSE = 50.0 / 12.0
+
+#: Vertical damping per second while submerged, as `exp(-WATER_DRAG*dt)`.
+#:
+#: **This is what makes water a safe landing**, and it is deliberately not a
+#: special case in the fall-damage rule: a body entering water sheds its speed
+#: over a few frames because water is thick, and the impact it eventually reaches
+#: the bottom with is genuinely small. The explicit rescue below is the backstop
+#: for shallow water, not the mechanism.
+WATER_DRAG = 5.5
+
+#: How much of gravity still applies while submerged, so you sink slowly rather
+#: than float. A neutral body would make water a place you get stuck in.
+WATER_GRAVITY_SCALE = 0.32
+
+#: Upward speed while holding jump under water, and the fraction of it that
+#: holding crouch pushes you down at. Diving is slower than surfacing because
+#: nothing about water should be a fast way to get anywhere.
+SWIM_SPEED = 9.0
+SWIM_DOWN_SCALE = 0.7
+
+# -- ladders ----------------------------------------------------------------
+#
+# `ladder` entities are the other half of the map that was parsed and dropped.
+# A ladder is a vertical volume you cannot fall out of.
+
+#: How far from the ladder's cell centre the body's centre may be. Wider than the
+#: body's own radius: a ladder you have to stand exactly under is a ladder people
+#: report as broken.
+LADDER_REACH = 2.0
+
+#: How far below the base the volume still catches you, so walking into the foot
+#: of a ladder attaches rather than requiring you to already be off the ground.
+LADDER_GRACE = 1.0
+
+#: Climb rate, up or down. Slower than walking — a ladder is exposure, and one
+#: that got you out of the pit faster than the stairs would make the stairs
+#: decoration.
+LADDER_SPEED = 9.0
+
+#: Horizontal movement is damped, not stopped, on a ladder: you have to be able
+#: to step off at the top, and a body frozen in x/y could only leave by jumping.
+LADDER_HORIZONTAL_SCALE = 0.45
+
+#: How close to the top the axial grip is released, so pressing forward at the
+#: last rung walks you onto the ledge instead of holding you against it.
+#:
+#: Without this the ladder is a trap: the grip that makes descending possible is
+#: the same grip that stops you stepping off the top, and a player who climbed all
+#: the way up could only leave by strafing sideways into the air.
+LADDER_TOP_RELEASE = 0.05
+
 # Longest frame the simulation will integrate in one go. A client that stalls and
 # then sends a huge dt would otherwise tunnel straight through a wall — the same
 # clamp the client applies, and here it doubles as the cap on how much distance a
@@ -135,6 +218,53 @@ def _signed(plane: bytes, i: int) -> int:
     """One byte of a signed plane. `floor` and `ceil` can both go below zero."""
     v = plane[i]
     return v - 256 if v > 127 else v
+
+
+@dataclass(frozen=True, slots=True)
+class Ladder:
+    """One climbable volume, already resolved against the floor beneath it.
+
+    Derived rather than stored, by `ladders_from`, because the entity carries a
+    *height* and the simulation needs a span — and the base of that span is the
+    floor of the cell, which only the grid knows.
+    """
+
+    #: Cell centre, in cubes.
+    x: float
+    y: float
+    #: Foot and head of the climbable span.
+    base: float
+    top: float
+
+
+def ladders_from(
+    ssize: int, floor_at: Any, entities: Iterable[Any]
+) -> tuple[Ladder, ...]:
+    """Resolve every `ladder` entity into a span.
+
+    Takes `floor_at` as a callable rather than a `World` so it can run inside
+    `World.from_map`, before the world it is describing exists. Mirrored by
+    `laddersFrom` in `world.ts` and pinned by the conformance vectors — the two
+    sides must agree on where a ladder starts and ends, or a climb desyncs on the
+    first frame.
+
+    A height of zero is **dropped**, not treated as unbounded: a mapper who never
+    set the attribute meant "I did not finish this", and a ladder of infinite
+    height in the middle of a room would be a hole in the map's physics.
+    """
+    out: list[Ladder] = []
+    for entity in entities:
+        if getattr(entity, "type", None) != LADDER_ENTITY:
+            continue
+        height = float(getattr(entity, "attr1", 0) or 0)
+        if height <= 0:
+            continue
+        x, y = int(entity.x), int(entity.y)
+        if not (0 <= x < ssize and 0 <= y < ssize):
+            continue
+        base = float(floor_at(x, y))
+        out.append(Ladder(x=x + 0.5, y=y + 0.5, base=base, top=base + height))
+    return tuple(out)
 
 
 @dataclass(slots=True)
@@ -151,16 +281,26 @@ class World:
     floor: bytes
     ceil: bytes
     vdelta: bytes
+    #: The map's water plane. Defaults far below any real floor rather than to
+    #: zero: zero is a perfectly ordinary floor height, and a default of zero
+    #: would flood every world built without one — including every test world.
+    waterlevel: float = NO_WATER
+    #: Climbable spans, from the map's `ladder` entities. A tuple because it is
+    #: read on every step and never changes for the life of a room.
+    ladders: tuple[Ladder, ...] = ()
 
     @classmethod
     def from_map(cls, world: CgzMap) -> World:
-        return cls(
+        grid = cls(
             ssize=world.ssize,
             type=world.type,
             floor=world.floor,
             ceil=world.ceil,
             vdelta=world.vdelta,
+            waterlevel=world.waterlevel,
         )
+        grid.ladders = ladders_from(world.ssize, grid.floor_at, world.entities)
+        return grid
 
     def index(self, x: int, y: int) -> int:
         return y * self.ssize + x
@@ -358,6 +498,73 @@ def apply_impulse(player: PlayerState, dx: float, dy: float, dz: float) -> None:
         player.on_ground = False
 
 
+def in_water(world: World, player: PlayerState) -> bool:
+    """Feet under the water plane: wading or swimming, either way slowed."""
+    return player.z < world.waterlevel
+
+
+def submerged(world: World, player: PlayerState) -> bool:
+    """Eye under the water plane: swimming.
+
+    Measured at the **eye**, not the feet, because that is the line the two water
+    states actually differ across — a body with its head out has footing, sight
+    and a jump, and a body with its head under has none of them. It is also what
+    the screen tint keys off, so the moment you lose the jump is the moment the
+    screen says so.
+    """
+    return player.z + eye_height(player) < world.waterlevel
+
+
+def ladder_at(world: World, player: PlayerState) -> Ladder | None:
+    """The ladder this body is on, if any. Nearest wins, which only matters where
+    a mapper has put two side by side."""
+    if not world.ladders:
+        return None
+    best: Ladder | None = None
+    best_d = LADDER_REACH
+    for ladder in world.ladders:
+        if not (ladder.base - LADDER_GRACE <= player.z <= ladder.top):
+            continue
+        d = math.hypot(ladder.x - player.x, ladder.y - player.y)
+        if d <= best_d:
+            best, best_d = ladder, d
+    return best
+
+
+def _climb_rate(player: PlayerState, ladder: Ladder, move: MoveInput) -> float:
+    """How fast this input climbs, -1..1.
+
+    `forward` projected onto **where the body is facing**, not onto its wish
+    direction. Two consequences, both wanted: strafing along a ladder does not
+    climb it, and running *past* one with forward held does not launch you up it
+    — the alignment is near zero when the ladder is off to your side, so the
+    volume merely stops you falling for the frame you are inside it.
+    """
+    dx = ladder.x - player.x
+    dy = ladder.y - player.y
+    distance = math.hypot(dx, dy)
+    if distance < 1e-6:
+        # Standing exactly on the cell centre: there is no direction to face
+        # toward, so take the input at face value rather than dividing by zero.
+        return max(-1.0, min(1.0, move.forward))
+    align = (math.cos(player.yaw) * dx + math.sin(player.yaw) * dy) / distance
+    return max(-1.0, min(1.0, move.forward * align))
+
+
+def _tangential(
+    player: PlayerState, ladder: Ladder, wx: float, wy: float
+) -> tuple[float, float]:
+    """Strip the component of a wish direction that points at the ladder."""
+    dx = ladder.x - player.x
+    dy = ladder.y - player.y
+    distance = math.hypot(dx, dy)
+    if distance < 1e-6:
+        return wx, wy
+    tx, ty = dx / distance, dy / distance
+    along = wx * tx + wy * ty
+    return wx - along * tx, wy - along * ty
+
+
 def _update_crouch(
     world: World, player: PlayerState, move: MoveInput, dt: float
 ) -> None:
@@ -424,19 +631,70 @@ def step(world: World, player: PlayerState, move: MoveInput, dt: float) -> None:
     #
     # Crouched speed is AC's `chspeed`: 0.4 on the floor, and 0.4 in the air too
     # *unless* the crouch began airborne, which is the crouch-jump exemption.
+    #
+    # Water replaces the crouch scale rather than multiplying with it: there is
+    # no crouching in water, and two penalties stacking would make a crouched
+    # swimmer slower than a walk.
+    wet = in_water(world, player)
+    under = wet and submerged(world, player)
+
+    # -- ladder attachment -------------------------------------------------
+    #
+    # Resolved before anything reads it, because whether this body is on a ladder
+    # changes its speed cap, its wish direction and its whole vertical branch.
+    ladder = ladder_at(world, player)
+    climb = 0.0
+    if ladder is not None:
+        climb = _climb_rate(player, ladder, move)
+        if climb > 0 and player.z >= ladder.top - LADDER_TOP_RELEASE:
+            # At the last rung and still pressing up: **let go entirely**, rather
+            # than merely releasing the horizontal grip.
+            #
+            # Releasing the grip alone leaves the body attached while it walks
+            # forward, and walking forward from the top carries it *across* the
+            # ladder's centre — at which point the direction "toward the ladder"
+            # reverses, the alignment flips sign, and the input that was climbing
+            # up is suddenly climbing down. A player stepping off the top would
+            # ride the ladder back to the bottom. Detaching is also simply what
+            # happened: the climb is over.
+            ladder = None
+
     scale = 1.0
-    if player.crouch > 0.5 and (player.on_ground or not player.crouched_in_air):
+    if wet:
+        scale = WATER_SPEED_SCALE
+    elif player.crouch > 0.5 and (player.on_ground or not player.crouched_in_air):
         scale = CROUCH_SPEED_SCALE
+    if ladder is not None:
+        # Damped, not stopped: strafing off is one of the two ways to leave.
+        scale *= LADDER_HORIZONTAL_SCALE
     speed_cap = MOVE_SPEED * scale
 
     wx, wy = _wish_direction(player, move)
-    response = GROUND_RESPONSE if player.on_ground else AIR_RESPONSE
+    if ladder is not None and climb != 0.0:
+        # Movement *along the ladder axis* becomes climbing, not walking, while
+        # the input is actually climbing.
+        #
+        # Without this, pressing forward into a ladder both climbs it and walks
+        # you through it, and pressing back to descend walks you straight out of
+        # the volume — which made descending impossible at 0.45 of run speed
+        # against a two-cube reach. With `climb == 0` the grip is off, so a body
+        # merely passing through the volume is not caught by it.
+        wx, wy = _tangential(player, ladder, wx, wy)
+
+    if under:
+        response = WATER_RESPONSE
+    else:
+        response = GROUND_RESPONSE if player.on_ground else AIR_RESPONSE
     blend = 1.0 - math.exp(-response * dt)
     player.vel_x += (wx * speed_cap - player.vel_x) * blend
     player.vel_y += (wy * speed_cap - player.vel_y) * blend
 
     # -- jump, and the chained-jump boost ----------------------------------
-    if move.jump and player.on_ground:
+    #
+    # Not while submerged, even standing on the bottom: down there `jump` is the
+    # swim control, and a body that could also launch itself off the riverbed at
+    # full jump speed would make deep water a trampoline.
+    if move.jump and player.on_ground and not under:
         if move.strafe != 0.0 and (player.t - player.landed_at) <= JUMP_CHAIN_WINDOW:
             speed = math.hypot(player.vel_x, player.vel_y)
             if speed > 0.1:
@@ -496,12 +754,75 @@ def step(world: World, player: PlayerState, move: MoveInput, dt: float) -> None:
     # its way in, so treating that as a snap would mean nothing ever lands.
     was_grounded = player.on_ground
 
-    player.time_in_air = 0.0 if was_grounded else player.time_in_air + dt
-    # Gravity ramps with time in air, as AC's `dropf` does, so a fall comes down
-    # harder than the jump went up.
-    gravity = GRAVITY * min(MAX_GRAVITY_SCALE, 1.0 + player.time_in_air / GRAVITY_RAMP)
-    player.vel_z -= gravity * dt
-    player.z += player.vel_z * dt
+    if ladder is not None:
+        # -- on a ladder ---------------------------------------------------
+        #
+        # A ladder is a volume you cannot fall out of, which is the whole of it:
+        # gravity is off, the climb is driven by the input, and letting go of
+        # everything holds position. Jump still fires (the branch above ran) and
+        # is how you leave one sideways.
+        if move.jump:
+            # Jumping off, which has to work from *anywhere* on the ladder and
+            # not just from its foot: the jump branch above only fires for a body
+            # already on the ground, and a climber is not. Deliberately not
+            # clamped to the top — pushing off is how you leave.
+            player.vel_z = JUMP_SPEED
+            player.z += player.vel_z * dt
+            player.on_ground = False
+            player.time_in_air = 0.0
+            player.crouched_in_air = False
+            return
+        player.vel_z = LADDER_SPEED * climb
+        player.z += player.vel_z * dt
+        # Never past the top: the last rung is where the climb ends, and a body
+        # that kept rising would float off the roof of the map.
+        player.z = min(player.z, ladder.top)
+        # No air time accrues on a ladder, so stepping off the top falls at plain
+        # gravity rather than at whatever the ramp had reached, and a long climb
+        # can never be charged as a fall.
+        player.time_in_air = 0.0
+        player.crouched_in_air = False
+        if player.z <= floor:
+            player.z = floor
+            player.vel_z = 0.0
+            player.on_ground = True
+            player.landed_at = player.t
+        else:
+            player.on_ground = False
+        if player.z + height > ceil:
+            player.z = max(floor, ceil - height)
+            if player.vel_z > 0:
+                player.vel_z = 0.0
+        return
+
+    if under:
+        # -- swimming ------------------------------------------------------
+        #
+        # Drag first, then buoyancy. The drag is what makes water a safe
+        # landing: a body arriving at speed sheds it over a few frames because
+        # water is thick, rather than because a rule said falls into water are
+        # free.
+        player.vel_z *= math.exp(-WATER_DRAG * dt)
+        blend = 1.0 - math.exp(-WATER_RESPONSE * dt)
+        if move.jump:
+            player.vel_z += (SWIM_SPEED - player.vel_z) * blend
+        elif move.crouch:
+            player.vel_z += (-SWIM_SPEED * SWIM_DOWN_SCALE - player.vel_z) * blend
+        else:
+            player.vel_z -= GRAVITY * WATER_GRAVITY_SCALE * dt
+        # Zeroed rather than accumulated: the ramp is about a fall, and a body
+        # surfacing after a long swim must not be met by 2.5x gravity.
+        player.time_in_air = 0.0
+        player.z += player.vel_z * dt
+    else:
+        player.time_in_air = 0.0 if was_grounded else player.time_in_air + dt
+        # Gravity ramps with time in air, as AC's `dropf` does, so a fall comes
+        # down harder than the jump went up.
+        gravity = GRAVITY * min(
+            MAX_GRAVITY_SCALE, 1.0 + player.time_in_air / GRAVITY_RAMP
+        )
+        player.vel_z -= gravity * dt
+        player.z += player.vel_z * dt
 
     if player.z <= floor:
         player.z = floor
@@ -509,7 +830,16 @@ def step(world: World, player: PlayerState, move: MoveInput, dt: float) -> None:
             # A real landing. Reported for this step only; the server turns the
             # impact into damage, and the window this opens is what a chained
             # jump has to be timed against.
-            player.fall_speed = -player.vel_z if player.vel_z < 0 else 0.0
+            #
+            # A landing *while submerged* is free, and everything shallower
+            # than that is helped in proportion to its depth rather than by a
+            # rule: the drag has however long the body spends under the surface
+            # to work, so a puddle takes a little off a fall and a pool takes all
+            # of it. Gating the rescue on the feet instead of the eye would make
+            # any inch of water a total fall-damage negator, which is the
+            # puddle-dive that would put shoot-jumping back on a free ride.
+            impact = -player.vel_z if player.vel_z < 0 else 0.0
+            player.fall_speed = 0.0 if under else impact
             player.landed_at = player.t
         player.vel_z = 0.0
         player.on_ground = True

@@ -64,6 +64,11 @@ impl std::error::Error for ApiError {}
 #[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Entity {
+    /// The on-disk entity type byte. Read rather than matching on `name`,
+    /// because the other two implementations key on the number and a third that
+    /// keyed on the string would drift the moment one of them was renamed.
+    #[serde(rename = "type", default, deserialize_with = "null_as_default")]
+    pub kind: i32,
     #[serde(default, deserialize_with = "null_as_default")]
     pub name: String,
     #[serde(default, deserialize_with = "null_as_default")]
@@ -77,6 +82,67 @@ pub struct Entity {
     pub yaw: f32,
     #[serde(default, deserialize_with = "null_as_default")]
     pub attrs: Vec<i32>,
+}
+
+/// One item lying on the map. Mirrors `models.ItemPlacement`.
+///
+/// The `kind` is a string, not an enum: a node that grows a seventh item type
+/// must not stop this client from drawing the six it knows, and an unknown kind
+/// is reported through `divergence` rather than refusing to parse the map.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ItemRow {
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub id: i32,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub kind: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub x: f32,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub y: f32,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub z: f32,
+}
+
+/// One item kind's numbers. Mirrors `models.ItemOut`.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ItemSpec {
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub kind: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub name: String,
+    /// Seconds from being taken to being available again.
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub respawn: f32,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub health: f32,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub armour: f32,
+    /// Reserve rounds added per weapon, as a multiple of that weapon's magazine.
+    /// A multiple rather than a count, because a shotgun magazine and a rifle
+    /// magazine are not the same amount of gun.
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub mags: f32,
+}
+
+/// How close a body has to get to take something. Mirrors `models.ItemReach`.
+#[derive(Debug, Clone, Copy, Deserialize, Default)]
+pub struct ItemReach {
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub radius: f32,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub below: f32,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub above: f32,
+}
+
+/// `GET /api/hassault/items`.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ItemsResponse {
+    #[serde(default)]
+    pub reach: ItemReach,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub kinds: Vec<ItemSpec>,
 }
 
 /// Mirrors `models.MapInfo`. Deliberately `#[serde(default)]` throughout and
@@ -94,8 +160,21 @@ pub struct MapInfo {
     pub cubic_size: usize,
     #[serde(default, deserialize_with = "null_as_default")]
     pub waterlevel: f32,
+    /// RGBA 0..255, as the map stores it. Drawn in the map's own colour rather
+    /// than a constant: a mapper who chose green water meant it.
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub watercolor: Vec<u8>,
     #[serde(default, deserialize_with = "null_as_default")]
     pub entities: Vec<Entity>,
+    /// The map's items, **already resolved onto the floor by the server**.
+    ///
+    /// Taken from here rather than from the `welcome` for the same reason the
+    /// browser's Train does: the placements are a property of the map, not of a
+    /// match, so one source serves both a live room and a solo range. Only
+    /// *availability* is per-match, and that rides in the snapshot as
+    /// `itemsOut`.
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub items: Vec<ItemRow>,
     /// The order the nine cube planes arrive in. **Read, never assumed** — this
     /// field exists so the two sides cannot drift.
     pub plane_order: Vec<String>,
@@ -433,6 +512,22 @@ impl NodeApi {
 
     pub fn weapons(&self) -> Result<Vec<WeaponSpec>, ApiError> {
         self.get("/api/hassault/weapons")?
+            .into_json()
+            .map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    /// The item table, and how close you have to get to take one.
+    ///
+    /// Fetched for the `interval` / `zoomLevels` / `plane_order` reason: Train
+    /// resolves its own ammunition pickups locally, and a copy of `respawn`,
+    /// `mags` or the reach in Rust would be a range where items behave
+    /// differently from a match.
+    ///
+    /// Non-fatal at the call site like the loadout: a node too old to answer
+    /// leaves the range's items drawn but inert, which is a range missing a
+    /// convenience rather than a client that will not start.
+    pub fn items(&self) -> Result<ItemsResponse, ApiError> {
+        self.get("/api/hassault/items")?
             .into_json()
             .map_err(|e| ApiError::Decode(e.to_string()))
     }

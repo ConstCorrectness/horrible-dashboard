@@ -41,9 +41,10 @@ AGPL PyMuPDF.
 That restriction is about *their* content, and it says nothing about ours. The
 format is understood well enough to write as well as read, so the game ships
 **its own maps** — see [Bundled maps](#bundled-maps). An install is an
-enhancement, not a prerequisite, and the same rule is planned for every asset
-class still missing: textures procedural, weapon models geometric, gunshots
-synthesized. Nothing that would ever need someone else's copyright.
+enhancement, not a prerequisite, and the same rule has held for every asset class
+since: surface detail is generated at runtime (`surfaces.ts`), the weapon and item
+shapes are geometric, and the gunshots are synthesized. Nothing that would ever
+need someone else's copyright.
 
 The test suite follows the same rule. Hermetic tests synthesize maps in memory,
 the bundled maps give every machine real maps to play, and the tests that read
@@ -2361,6 +2362,260 @@ rebases on (`you.move`) and the noises you can hear (`you.noise`) go in the priv
 envelope with ammo, for the same two reasons: nobody else's business, and per-packet
 cost.
 
+## Items on the map
+
+Every `.cgz` has always carried item entities — `cgz.ENTITY_NAMES` has named them
+since the reader was written — and for a long time they were parsed and dropped.
+That had one visible consequence, recorded in `Weapon.reserve`: the sidearm had to
+be **bottomless**, because a finite reserve on everything with no way to refill it
+ends a long match with everybody standing around empty. `pickups.py` is the missing
+half of that trade, and the reserve comment is now the _reason_ items exist rather
+than an apology for their absence.
+
+Six kinds are placed: `clips`, `ammo`, `grenade`, `health`, `helmet`, `armour`.
+`akimbo` is in every official map and is deliberately **not** placed — we have no
+akimbo pistols, and putting something else there would be a lie about what the map
+says.
+
+### What a pickup gives is ours, not AssaultCube's
+
+AC splits `clips` (pistol) from `ammo` (your primary). We carry all five weapons at
+once, so "your primary" names nothing, and a pickup keyed to whichever gun you happen
+to be holding turns an item into a puzzle about inventory rather than a thing you run
+over. Ours top up **every weapon with a finite reserve**, capped at what that weapon
+started with, and the two kinds differ only in size — `clips` is the small one,
+`ammo` the big one. Amounts are a **multiple of each weapon's magazine** rather than a
+flat round count, because a shotgun magazine and a rifle magazine are not the same
+amount of gun.
+
+**An item that cannot help you is not consumed.** Running over the armour at full
+armour, gaining nothing, and taking it off the map for forty seconds is the kind of
+quiet unfairness that makes a map feel broken without anybody being able to say why —
+so `pickups.apply` returns `None` and the item stays where it is.
+
+A taken item is **not removed**: it is unavailable until `available_at`, which is what
+makes an item a piece of map control. Everyone can learn when the armour comes back,
+and a fight over that spot is a fight worth having.
+
+### Armour
+
+AC has it; we did not, which left `helmet` and `armour` entities with nothing to do.
+Rather than leave two of the six kinds inert — the silent no-op this module keeps
+refusing — armour is a real mechanic: it absorbs `weapons.ARMOUR_ABSORB` (half) of
+every incoming hit and **spends itself point for point on what it absorbs**, so a
+vest is a fixed amount of protection rather than a permanent discount. A helmet caps
+lower than a vest; two armour items with the same cap would make the small one the
+large one for whoever found it first.
+
+Three consequences worth keeping:
+
+- **Armour is private**, unlike health. How much protection somebody is carrying is
+  exactly what you would like to know before starting a fight, and the public health
+  number already says how the fight is going. The shooter's hitmarker carries a bare
+  `armour: true` — "that one hit a vest" is feedback about the shot they just took;
+  the remaining total is not theirs.
+- **`damage_dealt` counts health lost**, not damage rolled. It is the one stat a
+  player can check against the health bars they watched go down.
+- **Armour never cushions a fall.** `_fall_damage` goes around `_apply_damage`
+  deliberately, and a vest that softened a four-storey drop would make the shoot-jump
+  free for whoever holds the armour spawn.
+
+You spawn with none: it is something the map gives you, and starting with it would
+make the item everyone fights over a top-up.
+
+### An item's `z` is the mapper's eye, exactly like a spawn's
+
+`pickups.place` resolves every item onto the floor beneath it with `physics._support`
+— the same query `step` resolves against — for precisely the reason
+[`spawn_at`](#where-a-playerstart-actually-puts-you) does. Read verbatim, an entity's
+`z` leaves items hanging in the air where nothing can run over them and nothing says
+why. An item whose every supporting cell is solid is **dropped** rather than left
+sitting inside a wall drawing attention to itself.
+
+The resolved placements are **served**, on `GET /api/hassault/maps/{name}` as `items`
+and again with a match's `welcome`. That is the `plane_order` precedent: resolving an
+item's height is a real rule, and a second implementation of it in TypeScript would be
+a Train mode whose items sit somewhere a match's do not. The item _table_ — what each
+kind gives, its respawn, and the pickup reach — is served too, on
+`GET /api/hassault/items`, for the same reason `interval` and `zoomLevels` are.
+
+### Who is told what
+
+The split is the one health and ammo already follow. **The hole in the map is
+public**: the item visibly disappears off a floor everybody can see, so the shared
+view carries `itemsOut` — the ids currently gone. That is the _complement_ of the
+usual state on purpose: a map with sixty items normally has a handful missing, so it
+is a few numbers per tick rather than sixty. **What it gave you is private**, in
+`you.picked`, drained like hitmarkers and carrying the amounts that _actually_
+applied — a health pack taken at 90 says `+10 hp`, not `+25`.
+
+On the client, an absent `itemsOut` is deliberately **not** read as "none are gone".
+That would pop every taken item back into existence once a tick; absent means the
+server does not do items at all.
+
+A pickup is also **audible** (`noise.PICKUP_LOUDNESS`, quieter than a reload).
+Standing on the armour is not free map control.
+
+### The bundled maps carry items
+
+All three ship with their own layouts — armour on the contested ground, ammunition on
+the routes, clips in the corners. A bundled map with no items would make this a
+feature only the people who own AssaultCube can see, which is the exact asymmetry
+[the licensing rule](#licensing-whose-content-ships-and-whose-does-not) exists to
+prevent.
+
+Playability is checked the way spawns are, and the checks caught real mistakes: every
+item must be **standable** and **reachable on foot** from a spawn, and no item may sit
+**within pickup reach of a spawn** — an item you can take on respawn turns dying into
+a resupply. That last one moved four of The Pit's items on the first run.
+
+### Drawing them
+
+`items.ts` is a renderer for something the server already decided, the same contract
+`nades.ts` has. Shapes are built from primitives — a health pack is two boxes in a
+cross, an armour plate a bevelled slab — because AC's item models are its copyright,
+the same rule the maps follow.
+
+Two behaviours are load-bearing rather than decoration. A taken item **sinks and
+fades but its floor ring stays, dimmed**: players learn spawn timings off that ring,
+and an item that simply vanished would make the map's rhythm invisible. And the bob is
+driven by **one clock shared by every item**, so a whole map's items rise and fall
+together — a synchronised field is much easier to pick a _missing_ item out of than a
+field with per-item phase.
+
+### On the range
+
+Train places the same items, from the same served placements, and resolves **only the
+ammunition half** locally. Health and armour mean nothing where nothing shoots back
+(`hp` there is a constant 100), and faking them would teach a resource cycle the range
+does not have. They still _draw_: the map's item layout is a real thing to learn, and
+a range missing two thirds of it would teach a map that does not exist. The reach and
+the respawn come off the served table rather than being hardcoded — a copy would be a
+range where items come off the floor at a different distance than they do in a match.
+## Water and ladders
+
+Two more things the map has always carried and the simulation ignored: a
+`waterlevel` in the header, and `ladder` entities in the entity list. Both are now
+read, and both are **decisions rather than ports** — AC's water constants are tuned
+against AC's gravity and jump, and this simulation already deviates from AC's
+integrator (`1-exp(-k·dt)` rather than `k·dt`), so copying its numbers would be a
+port in name only.
+
+### Water is a slow, safe, loud route
+
+What water is *for* decides its numbers. You give up speed and the jump; you get a
+descent that costs no health and a body that is hard to hit cleanly. So:
+
+- **Two states, and the line between them is the eye, not the feet.** Feet under
+  the plane is *wading*: slowed, but you still have footing, sight and a jump. Eye
+  under is *swimming*: no jump at all, because down there the jump key is the swim
+  control. That line is exactly where the screen tint appears, so the moment you
+  lose the jump is the moment the screen says so.
+- **Water replaces the crouch penalty rather than multiplying with it.** There is
+  no crouching in water, and two penalties stacking would make a crouched swimmer
+  slower than a walk.
+- **Jump swims up, crouch dives, and diving is slower than surfacing** — nothing
+  about water should be a fast way to get anywhere.
+- **A body left alone sinks, slowly.** Neutral buoyancy would make water a place
+  you get stuck in.
+
+The safe landing is mostly **drag, not a rule**: a body entering water sheds its
+speed over a few frames because water is thick. A landing *while submerged* then
+costs nothing outright, and everything shallower is helped in proportion to its
+depth. Gating that rescue on the feet instead of the eye would make an inch of
+water a total fall-damage negator — the puddle-dive that would put
+[shoot-jumping](#shoot-jumping) back on a free ride.
+
+### A ladder is a volume you cannot fall out of
+
+`ladder` entities carry a height; `ladders_from` resolves each into a span whose
+base is the floor of its cell — the same "the entity's `z` is the mapper's eye"
+problem [items](#an-items-z-is-the-mappers-eye-exactly-like-a-spawns) and
+[spawns](#where-a-playerstart-actually-puts-you) have. A height of **zero is
+dropped**, not read as unbounded: a mapper who never set the attribute meant "I did
+not finish this", and an infinitely tall ladder is a hole in the map's physics.
+
+Inside the volume, gravity is off and the climb is driven by the input. Three rules
+make it behave, and each was a bug first:
+
+- **The climb is `forward` projected onto where you are facing.** Strafing along a
+  ladder does not climb it, and running *past* one with forward held does not
+  launch you up it — the alignment is near zero when the ladder is off to your
+  side, so the volume merely stops you falling for the frame you are inside it.
+- **While the input is climbing, it is not also walking.** Without that grip,
+  pressing forward into a ladder both climbs it and walks you through it, and
+  pressing back to descend walks you straight out of a two-cube volume — which made
+  descending effectively impossible at 0.45 of run speed.
+- **At the last rung, pressing up lets go entirely.** Releasing only the horizontal
+  grip leaves the body attached while it walks forward off the top, and walking
+  forward carries it *across* the ladder's centre — where "toward the ladder"
+  reverses, the alignment flips sign, and the input that was climbing up starts
+  climbing down. A player stepping off the top would ride the ladder back to the
+  bottom.
+
+Jump pushes off from anywhere on the ladder, and strafing walks off the side. A
+climber accrues **no air time**, so stepping off the top falls at plain gravity
+rather than at whatever the ramp had reached, and a long climb is never charged as
+a fall.
+
+### Three implementations, one fixture
+
+Water and ladders land in `physics.py`, `player.ts` **and** `apps/native-fps`'s
+`physics.rs` in the same change, because [that duplication](#two-implementations-of-one-set-of-rules)
+is only safe while the conformance fixture binds it. Thirteen new cases in
+`physics-vectors.json` cover both, and the ladder cases put the ladder in as an
+*entity* so all three sides run their own `ladders_from` — the derivation is part
+of what is pinned, not a span handed to each of them.
+
+Two things the fixture caught that no unit test would have:
+
+- **`eyeHeight` means different things in different languages.** In `player.ts` and
+  `physics.rs` it is the **absolute** eye position and already includes `z`; in
+  `physics.py` it is the offset above the feet. Two of the three ports of
+  `submerged` added `z` to it and double-counted, which reads as a swimmer who
+  sinks while the server says they are rising.
+- **The generator had lost the hitbox stamp.** `scripts/gen_hassault_vectors.py` no
+  longer wrote `hitboxSpecId`/`hitbox`, while the committed fixture still carried
+  them and both suites still checked them — so the first regeneration silently
+  dropped two guards. Restored in the same change.
+
+### On the bundled maps
+
+The Pit is flooded to its rim (`waterlevel` 0, pit floor -5), which turns the
+centre into a pool you swim in rather than a hole you fall into: the drop is safe,
+the armour at the bottom is contested, and you cannot jump while you are down
+there. Two ladders climb out of it — deliberately **slower than the stairs**, since
+a ladder that beat them would make the stairs decoration.
+
+Both are checked the way spawns and items are, and the checks encode a real trap:
+our body is 2.2 cubes wide, so a ladder placed flush against the lip it serves is
+already stood on by anyone at its foot (`_support` takes the highest floor the body
+overlaps), while one placed too far back drops you off the top before you reach the
+ledge. So the test *climbs* each bundled ladder the way a player would and insists
+on arriving somewhere standable. A separate check refuses a water plane above every
+floor, which floods a whole map while its source looks completely ordinary.
+
+### What draws them
+
+`water.ts` is one double-sided plane at `waterlevel`, in the map's own
+`watercolor` — a mapper who chose green water meant it. One plane is an exact
+depiction rather than an approximation: Cube 1 water is a single global height,
+with no per-cell water. It is drawn from both sides because you spend real time
+under it, where the surface is the ceiling of the pool.
+
+`ladders.ts` draws rails and rungs from boxes, **at the width of the volume rather
+than of a real ladder**: the catch radius is two cubes, and a slender ladder drawn
+in the middle of it would teach players to aim for a rung when what actually
+catches them is a cylinder. Drawing the *rule* is the same choice `nades.ts` makes
+for a smoke cloud.
+
+Entering or leaving the water is a **noise** — louder than a footstep, and resolved
+per recipient like every other one. Swimming itself is quiet, which is what makes
+water worth using once you are already in it.
+
+The native client draws all of it too — see
+[Map objects in the native client](#map-objects-in-the-native-client).
+
 ## Thrown utility: smoke, flash, incendiary, HE
 
 `weapons.TACTICALS` used to be a table of grenade numbers served over
@@ -2922,6 +3177,78 @@ The title bar reports commands **in flight**, which is a direct read on the roun
 trip the prediction is covering for: at ~1500 fps against 20 Hz snapshots it sits
 between roughly 25 and 100, draining each time a snapshot lands.
 
+### Map objects in the native client
+
+For a while this renderer drew the world mesh and the players and **nothing else on
+the map** — no items, no water, no ladders. That was survivable while those things
+did nothing. It stopped being survivable the moment they decided how a body moves:
+a player who suddenly cannot jump, moves at two thirds speed and takes no fall
+damage, with nothing on screen to say why, is the worst kind of bug this client can
+have. All three are drawn now.
+
+Each one lands in the pass that suits what it is, and the choices are the same ones
+the browser makes arranged differently:
+
+- **Items** (`items.rs`) go in the **opaque body pass**, in the same buffer as the
+  players and grenades — an item is a small solid object and wants no pass of its
+  own. Placements come from `MapInfo`, not from the `welcome`: the server resolved
+  each item onto the floor beneath it, and the placements are a property of the
+  _map_, so one source serves a live room and a solo range alike. Availability is
+  the per-match half and rides in the snapshot's `itemsOut`.
+- **Water** (`water.rs`) goes in the **translucent volume pass** with the smoke and
+  the tracers, as `MODE_FLAT` — the cloud shading is interior noise, which on a
+  surface this large reads as a rendering fault rather than as water. It is emitted
+  **both ways round**, two quads with opposite winding, because you spend real time
+  under it: wound one way only it would vanish exactly when your head went under,
+  which is when the player most needs to see where the surface is.
+- **Ladders** go into the **world mesh itself** (`geometry.rs`), because a ladder is
+  static map furniture whose span never changes. That gets them uploaded once and
+  shadowed like every other surface, for free.
+
+`itemsOut` is an `Option`, and that is load-bearing. **Absent means "this server has
+no items"**, which is not the same as "every item is present" — read the second way,
+every taken item pops back into existence once a tick. The `pickup` effect also now
+has a variant of its own rather than falling into `Fx::Other`: it starts an item
+sinking on the frame the pickup was announced, which at 20 Hz is visibly earlier
+than waiting for the next snapshot to say the same thing.
+
+An **unknown item kind is drawn**, in a fallback grey, and reported once through
+`divergence`. A bare patch of floor where an item is reads as an empty spawn, which
+is worse than an unfamiliar box.
+
+#### What the parity tests pin
+
+`tests/browser_parity.rs` now compares the two clients' **item tints**, their bob and
+fade constants, the water fallback colour and opacity, and the ladder dimensions —
+all read out of the browser's TypeScript source at test time.
+
+Colour is the part worth pinning hardest. The shapes are small and seen at a
+distance, and what a player actually reads across a room is "red means health"; a
+health pack that is red in one client and orange in the other is invisible from
+either client alone, because each looks deliberate. The same goes for `FADE` and the
+bob: the bob is shared by every item on a map **precisely so a missing one is easy
+to pick out of a moving field**, and two clients disagreeing on it would make the
+same map read differently to two players standing in it.
+
+A ladder is drawn at the width of the **volume that catches you**, not of a real
+ladder, in both clients — a slender ladder drawn in the middle of a two-cube catch
+radius teaches players to aim for a rung when what actually grabs them is a
+cylinder.
+
+#### The range gives ammunition too
+
+Train fetches the served item table (`GET /api/hassault/items`) and resolves **only
+the ammunition half** of a pickup locally, exactly as the browser's `TrainingRange`
+does: health and armour mean nothing where nothing shoots back, and faking them
+would teach a resource cycle the range does not have. Every item still _draws_ —
+the map's layout is a real thing to learn.
+
+The reach and the respawn come off that table rather than being hardcoded, the
+`interval` / `zoomLevels` / `plane_order` precedent: a copy in Rust would be a range
+where items come off the floor at a different distance than they do in a match. A
+node too old to serve the table leaves the range's items **drawn but inert**, which
+is a missing convenience rather than a client that refuses to start — and the range
+does not invent a reach to fill the gap.
 ### The rules that are easy to get backwards, again
 
 Both traps from [the renderer](#the-heightfield-rule-which-is-easy-to-get-backwards)

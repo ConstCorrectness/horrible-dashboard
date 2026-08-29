@@ -25,7 +25,7 @@
  * `__tests__/physics-vectors.json` is what fails if you don't.
  */
 import { currentHitbox, eyeAt, heightAt } from './hitbox';
-import { PLAYER_ABOVE_EYE, PLAYER_EYE_HEIGHT, World } from './world';
+import { PLAYER_ABOVE_EYE, PLAYER_EYE_HEIGHT, World, type Ladder } from './world';
 
 /** Cubes per second at a walk. Tuned to feel like AC rather than derived from it. */
 export const MOVE_SPEED = 22;
@@ -77,6 +77,27 @@ export const JUMP_CHAIN_BOOST = 1.25;
 
 /** Landing harder than this costs health. A flat jump lands at `JUMP_SPEED`, so
  * ordinary movement is free and a recoil-launched climb is not. */
+/**
+ * Water. Mirrors the `WATER_*` / `SWIM_*` block in `physics.py`, which carries
+ * the reasoning for each number: water is a slow, safe, loud route, and these
+ * are ours rather than AC's because the integrator already deviates from AC's.
+ */
+export const WATER_SPEED_SCALE = 0.62;
+export const WATER_RESPONSE = 50 / 12;
+/** Vertical damping per second while submerged. What makes water a safe landing. */
+export const WATER_DRAG = 5.5;
+export const WATER_GRAVITY_SCALE = 0.32;
+export const SWIM_SPEED = 9;
+export const SWIM_DOWN_SCALE = 0.7;
+
+/** Ladders. Mirrors the `LADDER_*` block in `physics.py`. */
+export const LADDER_REACH = 2.0;
+export const LADDER_GRACE = 1.0;
+export const LADDER_SPEED = 9;
+export const LADDER_HORIZONTAL_SCALE = 0.45;
+/** How close to the top the axial grip is released. See `LADDER_TOP_RELEASE`. */
+export const LADDER_TOP_RELEASE = 0.05;
+
 export const FALL_SAFE_SPEED = 34;
 export const FALL_DAMAGE_PER_SPEED = 3;
 
@@ -319,6 +340,76 @@ function wishDirection(player: PlayerState, input: MoveInput): [number, number] 
  * slides along the wall instead of stopping dead — testing the combined vector
  * once would make every corner sticky.
  */
+/** Feet under the water plane: wading or swimming, either way slowed. */
+export function inWater(world: World, player: PlayerState): boolean {
+  return player.z < world.waterlevel;
+}
+
+/**
+ * Eye under the water plane: swimming.
+ *
+ * Measured at the **eye**, not the feet, because that is the line the two water
+ * states actually differ across — a body with its head out has footing, sight and
+ * a jump, and one with its head under has none of them. The screen tint keys off
+ * the same test, so the moment you lose the jump is the moment the screen says so.
+ */
+export function submerged(world: World, player: PlayerState): boolean {
+  // `eyeHeight` here is **absolute** — it already includes `player.z` — unlike
+  // `eye_height` in `physics.py`, which is the offset above the feet. The two
+  // functions share a name and mean different things, and adding `player.z` to
+  // this one double-counts it: the body reads as submerged far too late, which
+  // shows up as a swimmer who sinks when the server says they are rising.
+  return eyeHeight(player) < world.waterlevel;
+}
+
+/** The ladder this body is on, if any. Nearest wins. Mirrors `ladder_at`. */
+export function ladderAt(world: World, player: PlayerState): Ladder | null {
+  let best: Ladder | null = null;
+  let bestD = LADDER_REACH;
+  for (const ladder of world.ladders) {
+    if (player.z < ladder.base - LADDER_GRACE || player.z > ladder.top) continue;
+    const d = Math.hypot(ladder.x - player.x, ladder.y - player.y);
+    if (d <= bestD) {
+      best = ladder;
+      bestD = d;
+    }
+  }
+  return best;
+}
+
+/**
+ * How fast this input climbs, -1..1. Mirrors `_climb_rate`.
+ *
+ * `forward` projected onto **where the body is facing**, not onto its wish
+ * direction: strafing along a ladder does not climb it, and running past one with
+ * forward held does not launch you up it.
+ */
+/** Strip the component of a wish direction that points at the ladder. */
+function tangential(
+  player: PlayerState,
+  ladder: Ladder,
+  wx: number,
+  wy: number,
+): [number, number] {
+  const dx = ladder.x - player.x;
+  const dy = ladder.y - player.y;
+  const distance = Math.hypot(dx, dy);
+  if (distance < 1e-6) return [wx, wy];
+  const tx = dx / distance;
+  const ty = dy / distance;
+  const along = wx * tx + wy * ty;
+  return [wx - along * tx, wy - along * ty];
+}
+
+function climbRate(player: PlayerState, ladder: Ladder, input: MoveInput): number {
+  const dx = ladder.x - player.x;
+  const dy = ladder.y - player.y;
+  const distance = Math.hypot(dx, dy);
+  if (distance < 1e-6) return Math.max(-1, Math.min(1, input.forward));
+  const align = (Math.cos(player.yaw) * dx + Math.sin(player.yaw) * dy) / distance;
+  return Math.max(-1, Math.min(1, input.forward * align));
+}
+
 export function step(world: World, player: PlayerState, input: MoveInput, dt: number): void {
   // Clamp the timestep: a backgrounded tab returns a huge dt, and integrating it
   // in one go teleports the player through walls.
@@ -355,18 +446,58 @@ export function step(world: World, player: PlayerState, input: MoveInput, dt: nu
   //
   // Crouched speed is AC's `chspeed`: 0.4 on the floor, and 0.4 in the air too
   // *unless* the crouch began airborne, which is the crouch-jump exemption.
-  const scale =
-    player.crouch > 0.5 && (player.onGround || !player.crouchedInAir) ? CROUCH_SPEED_SCALE : 1;
+  //
+  // Water replaces the crouch scale rather than multiplying with it: there is no
+  // crouching in water, and two penalties stacking would make a crouched swimmer
+  // slower than a walk.
+  const wet = inWater(world, player);
+  const under = wet && submerged(world, player);
+
+  // -- ladder attachment ------------------------------------------------------
+  //
+  // Resolved before anything reads it: being on a ladder changes the speed cap,
+  // the wish direction and the whole vertical branch.
+  let ladder = ladderAt(world, player);
+  let climb = 0;
+  if (ladder) {
+    climb = climbRate(player, ladder, input);
+    if (climb > 0 && player.z >= ladder.top - LADDER_TOP_RELEASE) {
+      // At the last rung and still pressing up: let go entirely. Releasing only
+      // the horizontal grip leaves the body attached while it walks forward, and
+      // walking forward from the top carries it *across* the ladder's centre —
+      // where "toward the ladder" reverses, the alignment flips sign, and the
+      // input that was climbing up starts climbing down. See `physics.py`.
+      ladder = null;
+    }
+  }
+
+  let scale = 1;
+  if (wet) scale = WATER_SPEED_SCALE;
+  else if (player.crouch > 0.5 && (player.onGround || !player.crouchedInAir))
+    scale = CROUCH_SPEED_SCALE;
+  // Damped, not stopped: strafing off is one of the two ways to leave a ladder.
+  if (ladder) scale *= LADDER_HORIZONTAL_SCALE;
   const speedCap = MOVE_SPEED * scale;
 
-  const [wx, wy] = wishDirection(player, input);
-  const response = player.onGround ? GROUND_RESPONSE : AIR_RESPONSE;
+  let [wx, wy] = wishDirection(player, input);
+  if (ladder && climb !== 0) {
+    // Movement along the ladder axis becomes climbing, not walking, while the
+    // input is actually climbing. With `climb === 0` the grip is off, so a body
+    // merely passing through the volume is not caught by it.
+    [wx, wy] = tangential(player, ladder, wx, wy);
+  }
+
+  const response = under ? WATER_RESPONSE : player.onGround ? GROUND_RESPONSE : AIR_RESPONSE;
   const blend = 1 - Math.exp(-response * dt);
   player.velX += (wx * speedCap - player.velX) * blend;
   player.velY += (wy * speedCap - player.velY) * blend;
 
   // -- jump, and the chained-jump boost ---------------------------------------
-  if (input.jump && player.onGround) {
+  //
+  // Not while submerged, even standing on the bottom: down there `jump` is the
+  // swim control, and a body that could also launch off the riverbed at full jump
+  // speed would make deep water a trampoline.
+  if (input.jump && player.onGround && !under) {
     if (input.strafe !== 0 && player.t - player.landedAt <= JUMP_CHAIN_WINDOW) {
       const speed = Math.hypot(player.velX, player.velY);
       if (speed > 0.1) {
@@ -425,12 +556,72 @@ export function step(world: World, player: PlayerState, input: MoveInput, dt: nu
   // a snap would mean nothing ever lands.
   const wasGrounded = player.onGround;
 
-  player.timeInAir = wasGrounded ? 0 : player.timeInAir + dt;
-  // Gravity ramps with time in air, as AC's `dropf` does, so a fall comes down
-  // harder than the jump went up.
-  const gravity = GRAVITY * Math.min(MAX_GRAVITY_SCALE, 1 + player.timeInAir / GRAVITY_RAMP);
-  player.velZ -= gravity * dt;
-  player.z += player.velZ * dt;
+  if (ladder) {
+    // -- on a ladder ----------------------------------------------------------
+    //
+    // A ladder is a volume you cannot fall out of, which is the whole of it:
+    // gravity is off, the climb is driven by the input, and letting go of
+    // everything holds position.
+    if (input.jump) {
+      // Jumping off, which has to work from anywhere on the ladder and not just
+      // from its foot: the jump branch above only fires for a body already on the
+      // ground, and a climber is not. Deliberately not clamped to the top —
+      // pushing off is how you leave.
+      player.velZ = JUMP_SPEED;
+      player.z += player.velZ * dt;
+      player.onGround = false;
+      player.timeInAir = 0;
+      player.crouchedInAir = false;
+      return;
+    }
+    player.velZ = LADDER_SPEED * climb;
+    player.z += player.velZ * dt;
+    // Never past the top: the last rung is where the climb ends.
+    player.z = Math.min(player.z, ladder.top);
+    // No air time accrues on a ladder, so stepping off the top falls at plain
+    // gravity rather than at whatever the ramp had reached, and a long climb can
+    // never be charged as a fall.
+    player.timeInAir = 0;
+    player.crouchedInAir = false;
+    if (player.z <= floor) {
+      player.z = floor;
+      player.velZ = 0;
+      player.onGround = true;
+      player.landedAt = player.t;
+    } else {
+      player.onGround = false;
+    }
+    if (player.z + height > ceil) {
+      player.z = Math.max(floor, ceil - height);
+      if (player.velZ > 0) player.velZ = 0;
+    }
+    return;
+  }
+
+  if (under) {
+    // -- swimming -------------------------------------------------------------
+    //
+    // Drag first, then buoyancy. The drag is what makes water a safe landing: a
+    // body arriving at speed sheds it over a few frames because water is thick,
+    // rather than because a rule said falls into water are free.
+    player.velZ *= Math.exp(-WATER_DRAG * dt);
+    const swimBlend = 1 - Math.exp(-WATER_RESPONSE * dt);
+    if (input.jump) player.velZ += (SWIM_SPEED - player.velZ) * swimBlend;
+    else if (input.crouch)
+      player.velZ += (-SWIM_SPEED * SWIM_DOWN_SCALE - player.velZ) * swimBlend;
+    else player.velZ -= GRAVITY * WATER_GRAVITY_SCALE * dt;
+    // Zeroed rather than accumulated: the ramp is about a fall, and a body
+    // surfacing after a long swim must not be met by 2.5x gravity.
+    player.timeInAir = 0;
+    player.z += player.velZ * dt;
+  } else {
+    player.timeInAir = wasGrounded ? 0 : player.timeInAir + dt;
+    // Gravity ramps with time in air, as AC's `dropf` does, so a fall comes down
+    // harder than the jump went up.
+    const gravity = GRAVITY * Math.min(MAX_GRAVITY_SCALE, 1 + player.timeInAir / GRAVITY_RAMP);
+    player.velZ -= gravity * dt;
+    player.z += player.velZ * dt;
+  }
 
   if (player.z <= floor) {
     player.z = floor;
@@ -438,7 +629,13 @@ export function step(world: World, player: PlayerState, input: MoveInput, dt: nu
       // A real landing. Reported for this step only; the server turns the impact
       // into damage, and the window this opens is what a chained jump has to be
       // timed against.
-      player.fallSpeed = player.velZ < 0 ? -player.velZ : 0;
+      //
+      // A landing *while submerged* is free; anything shallower is helped in
+      // proportion to its depth, because the drag only has as long as the body
+      // spends under the surface. See the note in `physics.py` on why the gate
+      // is the eye and not the feet.
+      const impact = player.velZ < 0 ? -player.velZ : 0;
+      player.fallSpeed = under ? 0 : impact;
       player.landedAt = player.t;
     }
     player.velZ = 0;

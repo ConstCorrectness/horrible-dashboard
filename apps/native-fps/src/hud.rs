@@ -48,6 +48,10 @@ pub struct OverlayVertex {
 /// How long a kill note stays up. The browser client's `KILL_TTL_MS`.
 const KILL_TTL: f32 = 6.0;
 
+/// The underwater tint: the browser's `rgba(12,46,68,0.62)` edge colour, which is
+/// the part of its gradient a player actually reads as "under water".
+const UNDERWATER_TINT: [f32; 4] = [0.047, 0.180, 0.267, 0.45];
+
 /// How long a hitmarker and a damage flash stay on screen.
 const MARKER_LIFE: f32 = 0.18;
 const FLASH_LIFE: f32 = 0.35;
@@ -208,6 +212,13 @@ pub struct HudView<'a> {
     pub move_speed: f32,
     pub on_ground: bool,
     pub crouching: bool,
+    /// Whether our own eye is under the water plane.
+    ///
+    /// The same line the simulation reads to take the jump away, which is the
+    /// whole reason it is drawn: a player who suddenly cannot jump and moves at
+    /// two thirds speed needs the screen to say why. The browser tints on exactly
+    /// this test.
+    pub underwater: bool,
     /// Whether there is a body in the world to report on — deployed and not
     /// still connecting. Deliberately **not** "the pointer is captured":
     /// releasing the pointer is not a menu here, and a world drawn with no HUD
@@ -455,6 +466,20 @@ impl Hud {
             if let Some(rows) = view.scoreboard {
                 paint_scoreboard(&mut p, rows, view.scores, u);
             }
+        }
+
+        // Underwater, under everything else the HUD draws: it is a property of
+        // the world you are looking at, not of the interface, so the ammo and the
+        // crosshair stay legible through it. Swimming is a bad place to fight,
+        // not a blindfold.
+        //
+        // A flat rect rather than the browser's radial gradient — this painter
+        // has no gradients, and a vignette is the half of that effect that is
+        // decoration. The half that matters is the colour shift, which says
+        // "your head is under".
+        if view.underwater {
+            let (w, h) = (p.width, p.height);
+            p.rect(0.0, 0.0, w, h, UNDERWATER_TINT);
         }
 
         // The flashbang, over the world and the HUD and under the console: a
@@ -2027,6 +2052,7 @@ mod tests {
             // assertions about the crosshair.
             utility: None,
             flash: 0.0,
+            underwater: false,
             crosshair: crate::settings::Crosshair::default(),
             width: 1280,
             height: 800,

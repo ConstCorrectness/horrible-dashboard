@@ -65,6 +65,13 @@ const TIMBRES: Record<string, Timbre> = {
   jump: { frequency: 900, q: 1.6, decay: 0.09, gain: 0.35, body: 0 },
   shot: { frequency: 1500, q: 0.7, decay: 0.3, gain: 1, body: 78 },
   reload: { frequency: 2400, q: 3.4, decay: 0.14, gain: 0.4, body: 0 },
+  // An item leaving the map. Bright, short and unmistakably not a gun: the
+  // sound has to be legible as "somebody took the armour" from across a room,
+  // where a dull one would be mistaken for a footstep.
+  pickup: { frequency: 1650, q: 5.5, decay: 0.16, gain: 0.45, body: 0 },
+  // Breaking the surface. Low Q so the burst stays broadband — a splash is
+  // noise, and a narrow filter turns it into a bell.
+  splash: { frequency: 900, q: 0.6, decay: 0.34, gain: 0.75, body: 40 },
   hurt: { frequency: 300, q: 2.2, decay: 0.3, gain: 0.7, body: 120 },
   die: { frequency: 220, q: 1.4, decay: 0.6, gain: 0.9, body: 55 },
   // A grenade leaving the hand: a short soft rush, quieter than a footstep so it

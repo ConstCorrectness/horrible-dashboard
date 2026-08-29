@@ -32,6 +32,8 @@ from backend.modules.hassault.weapons import (
 )
 from backend.modules.hassault.physics import (
     CROUCH_HEIGHT,
+    LADDER_ENTITY,
+    NO_WATER,
     CROUCH_SPEED_SCALE,
     FALL_SAFE_SPEED,
     JUMP_CHAIN_BOOST,
@@ -44,8 +46,13 @@ from backend.modules.hassault.physics import (
     STEP_HEIGHT,
     MoveInput,
     PlayerState,
+    SWIM_SPEED,
+    WATER_SPEED_SCALE,
     World,
     apply_impulse,
+    in_water,
+    ladders_from,
+    submerged,
     body_height,
     can_stand,
     eye_height,
@@ -87,13 +94,36 @@ def build_world(spec: dict) -> World:
                 floor[i] = rect.get("floor", 0) & 0xFF
                 ceil[i] = rect.get("ceil", 16) & 0xFF
                 vdelta[i] = rect.get("vdelta", 0)
-    return World(
+    world = World(
         ssize=ssize,
         type=bytes(types),
         floor=bytes(floor),
         ceil=bytes(ceil),
         vdelta=bytes(vdelta),
+        waterlevel=float(spec.get("waterlevel", NO_WATER)),
     )
+    # Ladders go in as *entities* and are resolved by the same `ladders_from` the
+    # map pipeline uses, so the fixture exercises that derivation on both sides
+    # rather than handing each a pre-computed span.
+    world.ladders = ladders_from(
+        ssize,
+        world.floor_at,
+        [
+            _LadderEntity(led["x"], led["y"], led["height"])
+            for led in spec.get("ladders", [])
+        ],
+    )
+    return world
+
+
+class _LadderEntity:
+    """The three fields `ladders_from` reads off a map entity."""
+
+    def __init__(self, x: int, y: int, height: int) -> None:
+        self.type = LADDER_ENTITY
+        self.x = x
+        self.y = y
+        self.attr1 = height
 
 
 class _Spawn:
@@ -726,3 +756,204 @@ def test_a_spawn_sealed_in_solid_geometry_still_places_the_player():
         vdelta=bytes(n),
     )
     assert spawn_at(world, _Spawn(8, 8, 30)).z == pytest.approx(7.0)
+
+
+# ---- water ------------------------------------------------------------------------
+
+
+def _pool(waterlevel: float, ssize: int = 32) -> World:
+    """A flat room with a water plane over it."""
+    world = flat_world(ssize, floor=0, ceil=32)
+    world.waterlevel = waterlevel
+    return world
+
+
+def _walk(world: World, player: PlayerState, steps: int, **kw) -> None:
+    for _ in range(steps):
+        step(world, player, MoveInput(dt=1 / 60, **kw), 1 / 60)
+
+
+def test_water_is_read_at_the_feet_and_swimming_at_the_eye():
+    """The two states differ across the eye line, not the feet: a body with its
+    head out has footing, sight and a jump, and one with its head under has
+    none of them."""
+    world = _pool(3.0)
+    player = PlayerState(x=8.0, y=8.0, z=0.0)
+    assert in_water(world, player)
+    assert not submerged(world, player)
+
+    world.waterlevel = 6.0
+    assert submerged(world, player)
+
+
+def test_wading_is_slower_than_walking():
+    dry = PlayerState(x=8.0, y=8.0, z=0.0, on_ground=True)
+    wet = PlayerState(x=8.0, y=8.0, z=0.0, on_ground=True)
+    _walk(flat_world(32, floor=0, ceil=32), dry, 60, forward=1.0)
+    _walk(_pool(3.0), wet, 60, forward=1.0)
+    assert wet.x < dry.x
+    assert math.hypot(wet.vel_x, wet.vel_y) == pytest.approx(
+        MOVE_SPEED * WATER_SPEED_SCALE, abs=0.5
+    )
+
+
+def test_a_crouched_swimmer_is_not_penalised_twice():
+    """Water replaces the crouch scale rather than multiplying with it. Stacked,
+    a crouched swimmer would move at a quarter of walking pace."""
+    world = _pool(9.0)
+    player = PlayerState(x=8.0, y=8.0, z=0.0, on_ground=True)
+    _walk(world, player, 90, forward=1.0, crouch=True)
+    assert math.hypot(player.vel_x, player.vel_y) == pytest.approx(
+        MOVE_SPEED * WATER_SPEED_SCALE, abs=0.5
+    )
+
+
+def test_jump_is_the_swim_control_when_submerged():
+    """Standing on the bottom of deep water, `jump` must not fire a full jump —
+    the difference between the two readings is nineteen cubes a second."""
+    world = _pool(9.0)
+    player = PlayerState(x=8.0, y=8.0, z=0.0, on_ground=True)
+    step(world, player, MoveInput(jump=True, dt=1 / 60), 1 / 60)
+    assert player.vel_z < SWIM_SPEED
+    assert player.vel_z != pytest.approx(JUMP_SPEED)
+
+
+def test_a_swimmer_rises_holding_jump_and_dives_holding_crouch():
+    world = _pool(20.0)
+    up = PlayerState(x=8.0, y=8.0, z=6.0)
+    down = PlayerState(x=8.0, y=8.0, z=6.0)
+    _walk(world, up, 60, jump=True)
+    _walk(world, down, 60, crouch=True)
+    assert up.z > 6.0
+    assert down.z < 6.0
+    # Diving is slower than surfacing: nothing about water is a fast way to get
+    # anywhere.
+    assert (6.0 - down.z) < (up.z - 6.0)
+
+
+def test_a_body_left_alone_in_water_sinks_slowly():
+    world = _pool(20.0)
+    swimmer = PlayerState(x=8.0, y=8.0, z=15.0)
+    faller = PlayerState(x=8.0, y=8.0, z=15.0)
+    _walk(world, swimmer, 30)
+    _walk(flat_world(32, floor=0, ceil=32), faller, 30)
+    assert swimmer.z < 15.0, "a neutral body would make water a place to get stuck"
+    assert swimmer.z > faller.z
+
+
+def test_water_takes_the_fall_out_of_a_long_drop():
+    """The point of water. Dry, this landing is lethal."""
+    world = _pool(12.0, ssize=32)
+    world.ceil = bytes([120]) * (32 * 32)
+    wet = PlayerState(x=8.0, y=8.0, z=100.0)
+    for _ in range(600):
+        step(world, wet, MoveInput(dt=1 / 60), 1 / 60)
+        if wet.on_ground:
+            break
+    assert wet.on_ground
+    assert fall_damage(wet.fall_speed) == 0.0
+
+
+def test_shallow_water_helps_in_proportion_to_its_depth():
+    """Water is not a switch. The drag only has as long as the body spends under
+    the surface, so a puddle takes a little off a fall and a pool takes all of
+    it — and an inch of water is not a total fall-damage negator, which would put
+    shoot-jumping back on a free ride."""
+    deep = _pool(12.0, ssize=32)
+    deep.ceil = bytes([120]) * (32 * 32)
+    shallow = _pool(0.5, ssize=32)
+    shallow.ceil = bytes([120]) * (32 * 32)
+
+    landings = []
+    for world in (shallow, deep):
+        player = PlayerState(x=8.0, y=8.0, z=100.0)
+        for _ in range(600):
+            step(world, player, MoveInput(dt=1 / 60), 1 / 60)
+            if player.on_ground:
+                break
+        assert player.on_ground
+        landings.append(player.fall_speed)
+
+    shallow_impact, deep_impact = landings
+    assert shallow_impact > 0.0, "an inch of water must not erase a lethal drop"
+    assert deep_impact == 0.0
+
+
+# ---- ladders ----------------------------------------------------------------------
+
+
+def _climb_world(height: int = 20, ssize: int = 32) -> World:
+    world = flat_world(ssize, floor=0, ceil=60)
+    world.ladders = ladders_from(ssize, world.floor_at, [_LadderEntity(16, 16, height)])
+    return world
+
+
+def test_a_ladder_entity_becomes_a_span_resting_on_its_own_floor():
+    world = flat_world(32, floor=6, ceil=60)
+    (ladder,) = ladders_from(32, world.floor_at, [_LadderEntity(16, 16, 10)])
+    assert (ladder.x, ladder.y) == (16.5, 16.5)
+    assert (ladder.base, ladder.top) == (6.0, 16.0)
+
+
+def test_a_ladder_with_no_height_is_dropped():
+    """A mapper who never set the attribute meant "I did not finish this", and a
+    ladder of unbounded height is a hole in the map's physics."""
+    world = flat_world(32)
+    assert ladders_from(32, world.floor_at, [_LadderEntity(16, 16, 0)]) == ()
+
+
+def test_climbing_needs_the_body_to_be_facing_the_ladder():
+    world = _climb_world()
+    facing = PlayerState(x=15.5, y=16.5, z=0.0, yaw=0.0, on_ground=True)
+    sideways = PlayerState(x=15.5, y=16.5, z=0.0, yaw=math.pi / 2, on_ground=True)
+    _walk(world, facing, 30, forward=1.0)
+    _walk(world, sideways, 30, forward=1.0)
+    assert facing.z > 2.0
+    # Running *past* a ladder must not launch you up it.
+    assert sideways.z == pytest.approx(0.0)
+
+
+def test_a_ladder_holds_you_where_you_are_with_no_input():
+    world = _climb_world()
+    player = PlayerState(x=15.5, y=16.5, z=8.0, yaw=0.0)
+    _walk(world, player, 60)
+    assert player.z == pytest.approx(8.0)
+
+
+def test_pressing_back_descends_instead_of_walking_off():
+    """The grip is what makes descending possible at all: without it the input
+    that climbs down also walks you out of a two-cube volume."""
+    world = _climb_world()
+    player = PlayerState(x=15.5, y=16.5, z=12.0, yaw=0.0)
+    _walk(world, player, 30, forward=-1.0)
+    assert player.z < 12.0
+    assert math.hypot(player.x - 15.5, player.y - 16.5) < 0.5
+
+
+def test_the_climb_stops_at_the_top_rung():
+    world = _climb_world(height=12)
+    player = PlayerState(x=15.5, y=16.5, z=10.0, yaw=0.0)
+    _walk(world, player, 120, forward=1.0)
+    assert player.z <= 12.0 + 1e-9
+
+
+def test_a_climber_never_accrues_air_time():
+    """So stepping off the top falls at plain gravity rather than at whatever the
+    ramp had reached, and a long climb is never charged as a fall."""
+    world = _climb_world()
+    player = PlayerState(x=15.5, y=16.5, z=0.0, yaw=0.0, on_ground=True)
+    _walk(world, player, 60, forward=1.0)
+    assert player.time_in_air == 0.0
+    assert player.fall_speed == 0.0
+
+
+def test_letting_go_at_the_top_does_not_ride_the_ladder_back_down():
+    """Walking forward off the top carries the body across the ladder's centre,
+    where "toward the ladder" reverses. Still attached, the input that was
+    climbing up would start climbing down and take the player back to the
+    bottom."""
+    world = _climb_world(height=12)
+    player = PlayerState(x=15.5, y=16.5, z=12.0, yaw=0.0)
+    _walk(world, player, 40, forward=1.0)
+    assert player.x > 16.5, "never crossed the ladder"
+    assert player.z < 12.0, "rode the ladder instead of stepping off it"

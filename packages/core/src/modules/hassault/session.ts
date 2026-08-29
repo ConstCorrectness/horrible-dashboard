@@ -15,6 +15,7 @@ import {
   type Command,
   type DetonateFx,
   type Fx,
+  type ItemRow,
   type MoveState,
   type NoiseEvent,
   type SelfState,
@@ -76,6 +77,13 @@ export interface SessionState {
   ranked: boolean;
   /** Invitations from friends, newest first. */
   invites: MatchInvite[];
+  /**
+   * Items lying on this map, from the welcome. Placements never move, so they
+   * arrive once; which of them are currently *gone* rides in every snapshot.
+   */
+  items: ItemRow[];
+  /** Ids of items currently taken, from the last snapshot. */
+  itemsOut: number[];
 }
 
 const PING_INTERVAL_MS = 1000;
@@ -104,6 +112,8 @@ export class MatchSession {
     host: '',
     ranked: false,
     invites: [],
+    items: [],
+    itemsOut: [],
   };
 
   /** Fires on any change worth re-rendering the surrounding UI for. */
@@ -267,6 +277,11 @@ export class MatchSession {
         this.state.host = String(data.host ?? this.state.host ?? '');
         this.state.peers = this.peersFrom(data.players);
         this.state.scores = Array.isArray(data.scores) ? (data.scores as number[]) : [0, 0];
+        // Items arrive with the map and stay for the life of the room. A server
+        // that sends none simply has none — an empty list is the honest reading,
+        // unlike `itemsOut`, where absent and empty mean different things.
+        this.state.items = Array.isArray(data.items) ? (data.items as ItemRow[]) : [];
+        this.state.itemsOut = Array.isArray(data.itemsOut) ? (data.itemsOut as number[]) : [];
         // The invitation has been taken up; leaving it on screen would invite
         // the same room twice. It is cleared from the notification surfaces too —
         // the toast, the bell and any OS notification are showing the same
@@ -329,6 +344,10 @@ export class MatchSession {
           this.state.peers = peers;
           this.state.you = you;
           if (Array.isArray(snapshot.scores)) this.state.scores = snapshot.scores;
+          // Guarded rather than defaulted: a server that never sends this does
+          // not do items, and reading its silence as "every item is back" would
+          // pop every taken item into existence once a tick.
+          if (Array.isArray(snapshot.itemsOut)) this.state.itemsOut = snapshot.itemsOut;
           this.emit();
         } else {
           // Still adopt it — the render loop reads `you.alive` every frame even
@@ -488,6 +507,9 @@ export class MatchSession {
       host: '',
       ranked: false,
       invites: this.state.invites,
+      // A reset is leaving a room: its items go with it.
+      items: [],
+      itemsOut: [],
     };
     this.predictor.reset();
     this.snapshots.clear();

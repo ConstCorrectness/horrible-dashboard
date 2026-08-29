@@ -8,7 +8,12 @@
   "brushes": [
     {
       "op": "room",
-      "rect": [8, 44, 28, 40],
+      "rect": [
+        8,
+        44,
+        28,
+        40
+      ],
       "floor": 0,
       "ceil": 16,
       "wtex": 76,
@@ -17,21 +22,66 @@
     },
     {
       "op": "room",
-      "rect": [92, 44, 28, 40],
+      "rect": [
+        92,
+        44,
+        28,
+        40
+      ],
       "floor": 0,
       "ceil": 16,
       "wtex": 89,
       "ftex": 21,
       "ctex": 33
     },
-    { "op": "solid", "rect": [16, 52, 4, 6], "wtex": 76 },
-    { "op": "solid", "rect": [16, 70, 4, 6], "wtex": 76 },
-    { "op": "solid", "rect": [108, 52, 4, 6], "wtex": 89 },
-    { "op": "solid", "rect": [108, 70, 4, 6], "wtex": 89 },
-
+    {
+      "op": "solid",
+      "rect": [
+        16,
+        52,
+        4,
+        6
+      ],
+      "wtex": 76
+    },
+    {
+      "op": "solid",
+      "rect": [
+        16,
+        70,
+        4,
+        6
+      ],
+      "wtex": 76
+    },
+    {
+      "op": "solid",
+      "rect": [
+        108,
+        52,
+        4,
+        6
+      ],
+      "wtex": 89
+    },
+    {
+      "op": "solid",
+      "rect": [
+        108,
+        70,
+        4,
+        6
+      ],
+      "wtex": 89
+    },
     {
       "op": "room",
-      "rect": [50, 40, 28, 48],
+      "rect": [
+        50,
+        40,
+        28,
+        48
+      ],
       "floor": 0,
       "ceil": 18,
       "wtex": 47,
@@ -40,7 +90,12 @@
     },
     {
       "op": "room",
-      "rect": [36, 58, 14, 12],
+      "rect": [
+        36,
+        58,
+        14,
+        12
+      ],
       "floor": 0,
       "ceil": 14,
       "wtex": 12,
@@ -49,17 +104,26 @@
     },
     {
       "op": "room",
-      "rect": [78, 58, 14, 12],
+      "rect": [
+        78,
+        58,
+        14,
+        12
+      ],
       "floor": 0,
       "ceil": 14,
       "wtex": 12,
       "ftex": 21,
       "ctex": 33
     },
-
     {
       "op": "room",
-      "rect": [56, 54, 16, 10],
+      "rect": [
+        56,
+        54,
+        16,
+        10
+      ],
       "floor": 5,
       "ceil": 18,
       "wtex": 47,
@@ -68,7 +132,12 @@
     },
     {
       "op": "stairs",
-      "rect": [58, 48, 10, 6],
+      "rect": [
+        58,
+        48,
+        10,
+        6
+      ],
       "axis": "y",
       "from": 0,
       "to": 5,
@@ -78,7 +147,12 @@
     },
     {
       "op": "stairs",
-      "rect": [58, 64, 10, 6],
+      "rect": [
+        58,
+        64,
+        10,
+        6
+      ],
       "axis": "y",
       "from": 5,
       "to": 0,
@@ -86,10 +160,14 @@
       "wtex": 47,
       "ftex": 58
     },
-
     {
       "op": "room",
-      "rect": [8, 16, 112, 10],
+      "rect": [
+        8,
+        16,
+        112,
+        10
+      ],
       "floor": 0,
       "ceil": 14,
       "wtex": 12,
@@ -98,7 +176,12 @@
     },
     {
       "op": "room",
-      "rect": [8, 102, 112, 10],
+      "rect": [
+        8,
+        102,
+        112,
+        10
+      ],
       "floor": 0,
       "ceil": 14,
       "wtex": 12,
@@ -107,7 +190,12 @@
     },
     {
       "op": "room",
-      "rect": [16, 26, 10, 18],
+      "rect": [
+        16,
+        26,
+        10,
+        18
+      ],
       "floor": 0,
       "ceil": 14,
       "wtex": 12,
@@ -116,7 +204,12 @@
     },
     {
       "op": "room",
-      "rect": [102, 26, 10, 18],
+      "rect": [
+        102,
+        26,
+        10,
+        18
+      ],
       "floor": 0,
       "ceil": 14,
       "wtex": 12,
@@ -125,7 +218,12 @@
     },
     {
       "op": "room",
-      "rect": [16, 84, 10, 18],
+      "rect": [
+        16,
+        84,
+        10,
+        18
+      ],
       "floor": 0,
       "ceil": 14,
       "wtex": 12,
@@ -134,7 +232,12 @@
     },
     {
       "op": "room",
-      "rect": [102, 84, 10, 18],
+      "rect": [
+        102,
+        84,
+        10,
+        18
+      ],
       "floor": 0,
       "ceil": 14,
       "wtex": 12,
@@ -143,7 +246,12 @@
     },
     {
       "op": "room",
-      "rect": [59, 26, 10, 14],
+      "rect": [
+        59,
+        26,
+        10,
+        14
+      ],
       "floor": 0,
       "ceil": 14,
       "wtex": 12,
@@ -152,36 +260,262 @@
     },
     {
       "op": "room",
-      "rect": [59, 88, 10, 14],
+      "rect": [
+        59,
+        88,
+        10,
+        14
+      ],
       "floor": 0,
       "ceil": 14,
       "wtex": 12,
       "ftex": 21,
       "ctex": 33
     },
-
-    { "op": "solid", "rect": [40, 18, 6, 6], "wtex": 12 },
-    { "op": "solid", "rect": [82, 18, 6, 6], "wtex": 12 },
-    { "op": "solid", "rect": [40, 104, 6, 6], "wtex": 12 },
-    { "op": "solid", "rect": [82, 104, 6, 6], "wtex": 12 }
+    {
+      "op": "solid",
+      "rect": [
+        40,
+        18,
+        6,
+        6
+      ],
+      "wtex": 12
+    },
+    {
+      "op": "solid",
+      "rect": [
+        82,
+        18,
+        6,
+        6
+      ],
+      "wtex": 12
+    },
+    {
+      "op": "solid",
+      "rect": [
+        40,
+        104,
+        6,
+        6
+      ],
+      "wtex": 12
+    },
+    {
+      "op": "solid",
+      "rect": [
+        82,
+        104,
+        6,
+        6
+      ],
+      "wtex": 12
+    }
   ],
   "entities": [
-    { "type": "playerstart", "x": 12, "y": 50, "yaw": 0, "team": 0 },
-    { "type": "playerstart", "x": 12, "y": 63, "yaw": 0, "team": 0 },
-    { "type": "playerstart", "x": 12, "y": 77, "yaw": 0, "team": 0 },
-    { "type": "playerstart", "x": 30, "y": 47, "yaw": 20, "team": 0 },
-    { "type": "playerstart", "x": 30, "y": 80, "yaw": 340, "team": 0 },
-
-    { "type": "playerstart", "x": 115, "y": 50, "yaw": 180, "team": 1 },
-    { "type": "playerstart", "x": 115, "y": 63, "yaw": 180, "team": 1 },
-    { "type": "playerstart", "x": 115, "y": 77, "yaw": 180, "team": 1 },
-    { "type": "playerstart", "x": 97, "y": 47, "yaw": 160, "team": 1 },
-    { "type": "playerstart", "x": 97, "y": 80, "yaw": 200, "team": 1 },
-
-    { "type": "light", "x": 63, "y": 63, "radius": 112, "color": [255, 240, 206] },
-    { "type": "light", "x": 22, "y": 63, "radius": 80, "color": [255, 214, 196] },
-    { "type": "light", "x": 105, "y": 63, "radius": 80, "color": [196, 218, 255] },
-    { "type": "light", "x": 63, "y": 20, "radius": 72, "color": [226, 232, 255] },
-    { "type": "light", "x": 63, "y": 106, "radius": 72, "color": [226, 232, 255] }
+    {
+      "type": "playerstart",
+      "x": 12,
+      "y": 50,
+      "yaw": 0,
+      "team": 0
+    },
+    {
+      "type": "playerstart",
+      "x": 12,
+      "y": 63,
+      "yaw": 0,
+      "team": 0
+    },
+    {
+      "type": "playerstart",
+      "x": 12,
+      "y": 77,
+      "yaw": 0,
+      "team": 0
+    },
+    {
+      "type": "playerstart",
+      "x": 30,
+      "y": 47,
+      "yaw": 20,
+      "team": 0
+    },
+    {
+      "type": "playerstart",
+      "x": 30,
+      "y": 80,
+      "yaw": 340,
+      "team": 0
+    },
+    {
+      "type": "playerstart",
+      "x": 115,
+      "y": 50,
+      "yaw": 180,
+      "team": 1
+    },
+    {
+      "type": "playerstart",
+      "x": 115,
+      "y": 63,
+      "yaw": 180,
+      "team": 1
+    },
+    {
+      "type": "playerstart",
+      "x": 115,
+      "y": 77,
+      "yaw": 180,
+      "team": 1
+    },
+    {
+      "type": "playerstart",
+      "x": 97,
+      "y": 47,
+      "yaw": 160,
+      "team": 1
+    },
+    {
+      "type": "playerstart",
+      "x": 97,
+      "y": 80,
+      "yaw": 200,
+      "team": 1
+    },
+    {
+      "type": "light",
+      "x": 63,
+      "y": 63,
+      "radius": 112,
+      "color": [
+        255,
+        240,
+        206
+      ]
+    },
+    {
+      "type": "light",
+      "x": 22,
+      "y": 63,
+      "radius": 80,
+      "color": [
+        255,
+        214,
+        196
+      ]
+    },
+    {
+      "type": "light",
+      "x": 105,
+      "y": 63,
+      "radius": 80,
+      "color": [
+        196,
+        218,
+        255
+      ]
+    },
+    {
+      "type": "light",
+      "x": 63,
+      "y": 20,
+      "radius": 72,
+      "color": [
+        226,
+        232,
+        255
+      ]
+    },
+    {
+      "type": "light",
+      "x": 63,
+      "y": 106,
+      "radius": 72,
+      "color": [
+        226,
+        232,
+        255
+      ]
+    },
+    {
+      "type": "armour",
+      "x": 63,
+      "y": 58,
+      "z": 0
+    },
+    {
+      "type": "health",
+      "x": 42,
+      "y": 63,
+      "z": 0
+    },
+    {
+      "type": "health",
+      "x": 85,
+      "y": 63,
+      "z": 0
+    },
+    {
+      "type": "ammo",
+      "x": 63,
+      "y": 20,
+      "z": 0
+    },
+    {
+      "type": "ammo",
+      "x": 63,
+      "y": 106,
+      "z": 0
+    },
+    {
+      "type": "clips",
+      "x": 20,
+      "y": 30,
+      "z": 0
+    },
+    {
+      "type": "clips",
+      "x": 105,
+      "y": 30,
+      "z": 0
+    },
+    {
+      "type": "clips",
+      "x": 20,
+      "y": 90,
+      "z": 0
+    },
+    {
+      "type": "clips",
+      "x": 105,
+      "y": 90,
+      "z": 0
+    },
+    {
+      "type": "grenade",
+      "x": 25,
+      "y": 63,
+      "z": 0
+    },
+    {
+      "type": "grenade",
+      "x": 102,
+      "y": 63,
+      "z": 0
+    },
+    {
+      "type": "helmet",
+      "x": 20,
+      "y": 63,
+      "z": 0
+    },
+    {
+      "type": "helmet",
+      "x": 107,
+      "y": 63,
+      "z": 0
+    }
   ]
 }

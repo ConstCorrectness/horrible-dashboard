@@ -14,6 +14,7 @@
 //! has no renderer dependency and stays testable with no device at all. B2 hands
 //! these straight to `wgpu`.
 
+use crate::physics::LADDER_REACH;
 use crate::world::{World, CHF, FHF};
 
 /// Held whole even though this stage only reads `triangles`: these three
@@ -59,6 +60,21 @@ const SHADE_FLOOR: f32 = 1.0;
 const SHADE_CEIL: f32 = 0.55;
 const SHADE_WALL_X: f32 = 0.8;
 const SHADE_WALL_Y: f32 = 0.68;
+
+/// Ladder dimensions, mirroring the browser's `ladders.ts`.
+const LADDER_RUNG_SPACING: f32 = 1.6;
+const LADDER_RAIL: f32 = 0.16;
+const LADDER_RUNG: f32 = 0.12;
+/// How much narrower than the catch radius the rails sit, so they read as inside
+/// it rather than as its exact edge.
+const LADDER_RAIL_INSET: f32 = 0.35;
+/// Which texture id a ladder borrows its tint from.
+///
+/// A ladder is not a cube and has no `wtex` of its own, so it takes one from the
+/// same golden-ratio palette the walls use — picked because it lands on a grey
+/// rather than because the number means anything. The alternative, a hardcoded
+/// colour, would be the one surface in the map that ignores the map's palette.
+const LADDER_TEX: u8 = 3;
 
 #[derive(Default)]
 struct MeshBuilder {
@@ -173,7 +189,123 @@ pub fn build_world_mesh(world: &World) -> MeshData {
             emit_wall(&mut b, world, x, y, 0, 1);
         }
     }
+    emit_ladders(&mut b, world);
     b.finish()
+}
+
+/// Ladder rails and rungs, in **cube** colours rather than a texture id.
+///
+/// Part of the world mesh rather than a pass of its own, because a ladder is
+/// static map furniture: its span is derived once by `ladders_from` and never
+/// changes, so it wants to be uploaded once and shadowed like every other
+/// surface. The browser draws it as a separate mesh; that is the same thing
+/// arranged differently, and neither is visible to a player.
+///
+/// A climbable volume you cannot see is a secret, and the whole value of a
+/// ladder is that players route around it.
+///
+/// **Drawn at the width of the volume, not of a real ladder.** The catch radius
+/// is `LADDER_REACH` — two cubes, comfortably wider than the body — and a slender
+/// ladder drawn in the middle of it would teach players to aim for a rung when
+/// what actually catches them is a cylinder. Drawing the *rule* is the same
+/// choice `nades.rs` makes for a smoke cloud.
+fn emit_ladders(b: &mut MeshBuilder, world: &World) {
+    for ladder in &world.ladders {
+        let height = ladder.top - ladder.base;
+        if height <= 0.0 {
+            continue;
+        }
+        let half = LADDER_REACH - LADDER_RAIL_INSET;
+        for dx in [-half, half] {
+            push_ladder_box(
+                b,
+                [ladder.x + dx, ladder.y, ladder.base + height / 2.0],
+                [LADDER_RAIL, LADDER_RAIL, height],
+            );
+        }
+        // At least one rung even on a stub ladder: a pair of bare rails reads as
+        // a pipe, and the rungs are what name the thing.
+        let rungs = ((height / LADDER_RUNG_SPACING).floor() as i32).max(1);
+        for i in 0..=rungs {
+            let t = i as f32 / rungs as f32;
+            push_ladder_box(
+                b,
+                [ladder.x, ladder.y, ladder.base + height * t],
+                [half * 2.0, LADDER_RUNG, LADDER_RUNG],
+            );
+        }
+    }
+}
+
+/// One axis-aligned box of ladder, in cube space, emitted in render coordinates.
+///
+/// Goes through `MeshBuilder::quad` like every other surface, so it is tinted,
+/// shaded and wound by exactly the same code the walls are.
+fn push_ladder_box(b: &mut MeshBuilder, centre: [f32; 3], size: [f32; 3]) {
+    let (hx, hy, hz) = (size[0] / 2.0, size[1] / 2.0, size[2] / 2.0);
+    // Cube `(x, y, z)` to render `[x, z, y]`, mapped here and nowhere else.
+    let p = |dx: f32, dy: f32, dz: f32| -> [f32; 3] {
+        [centre[0] + dx, centre[2] + dz, centre[1] + dy]
+    };
+    let faces: [([f32; 3], [[f32; 3]; 4]); 6] = [
+        (
+            [1.0, 0.0, 0.0],
+            [
+                p(hx, -hy, -hz),
+                p(hx, hy, -hz),
+                p(hx, hy, hz),
+                p(hx, -hy, hz),
+            ],
+        ),
+        (
+            [-1.0, 0.0, 0.0],
+            [
+                p(-hx, hy, -hz),
+                p(-hx, -hy, -hz),
+                p(-hx, -hy, hz),
+                p(-hx, hy, hz),
+            ],
+        ),
+        (
+            [0.0, 0.0, 1.0],
+            [
+                p(hx, hy, -hz),
+                p(-hx, hy, -hz),
+                p(-hx, hy, hz),
+                p(hx, hy, hz),
+            ],
+        ),
+        (
+            [0.0, 0.0, -1.0],
+            [
+                p(-hx, -hy, -hz),
+                p(hx, -hy, -hz),
+                p(hx, -hy, hz),
+                p(-hx, -hy, hz),
+            ],
+        ),
+        (
+            [0.0, 1.0, 0.0],
+            [
+                p(-hx, -hy, hz),
+                p(hx, -hy, hz),
+                p(hx, hy, hz),
+                p(-hx, hy, hz),
+            ],
+        ),
+        (
+            [0.0, -1.0, 0.0],
+            [
+                p(-hx, hy, -hz),
+                p(hx, hy, -hz),
+                p(hx, -hy, -hz),
+                p(-hx, -hy, -hz),
+            ],
+        ),
+    ];
+    for (normal, c) in faces {
+        b.quad(c[0], c[1], c[2], c[3], normal, LADDER_TEX, SHADE_FLOOR);
+    }
 }
 
 /// The wall between open cell `(x, y)` and its neighbour in direction `(dx, dy)`.
@@ -499,5 +631,110 @@ mod tests {
 
     fn w_index(ssize: i32, x: i32, y: i32) -> usize {
         (y * ssize + x) as usize
+    }
+
+    /// The same world, with one ladder entity in it.
+    fn build_with_ladder(ssize: i32, height: i32) -> World {
+        use crate::api::Entity;
+        let n = (ssize * ssize) as usize;
+        let planes = vec![
+            vec![SPACE; n],
+            vec![0u8; n],
+            vec![60u8; n],
+            vec![1u8; n],
+            vec![2u8; n],
+            vec![3u8; n],
+            vec![0u8; n],
+            vec![4u8; n],
+            vec![0u8; n],
+        ];
+        let info = MapInfo {
+            ssize,
+            cubic_size: n,
+            plane_order: PLANES.iter().map(|s| s.to_string()).collect(),
+            entities: vec![Entity {
+                kind: crate::world::LADDER_ENTITY,
+                name: "ladder".into(),
+                x: 4.0,
+                y: 4.0,
+                attrs: vec![height],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        World::new(info, &planes.concat()).unwrap()
+    }
+
+    #[test]
+    fn a_ladder_adds_geometry_to_the_world_mesh() {
+        // A climbable volume you cannot see is a secret, and the whole value of a
+        // ladder is that players route around it.
+        let plain = build_world_mesh(&build_with_ladder(8, 0));
+        let laddered = build_world_mesh(&build_with_ladder(8, 12));
+        assert!(
+            laddered.triangles > plain.triangles,
+            "a ladder drew nothing: {} triangles either way",
+            plain.triangles
+        );
+    }
+
+    /// Only the vertices a ladder added, which are the ones after the room's.
+    ///
+    /// `emit_ladders` runs last, so the plain mesh is a prefix of the laddered
+    /// one — which is what makes this a slice rather than a diff, and what lets
+    /// the assertions below be about the ladder rather than about a room whose
+    /// ceiling is sixty cubes up.
+    fn ladder_verts(height: i32) -> Vec<[f32; 3]> {
+        let plain = build_world_mesh(&build_with_ladder(8, 0));
+        let laddered = build_world_mesh(&build_with_ladder(8, height));
+        let all = verts(&laddered);
+        all[verts(&plain).len()..].to_vec()
+    }
+
+    #[test]
+    fn a_ladder_spans_its_own_height_and_no_more() {
+        // The span comes from `ladders_from`, which the conformance fixture pins
+        // against the other two clients. Drawing past it would show a ladder
+        // reaching somewhere the physics will not carry you.
+        let height = 12;
+        let vs = ladder_verts(height);
+        assert!(!vs.is_empty(), "the ladder drew nothing");
+        let top = vs.iter().map(|v| v[1]).fold(f32::MIN, f32::max);
+        let bottom = vs.iter().map(|v| v[1]).fold(f32::MAX, f32::min);
+        // Half a rail thickness of slack at each end: the boxes are centred on
+        // the base and the top rung.
+        assert!(
+            (top - height as f32).abs() <= LADDER_RUNG,
+            "the ladder's top is {top}, not {height}"
+        );
+        assert!(
+            bottom.abs() <= LADDER_RUNG,
+            "the ladder's foot is at {bottom}"
+        );
+    }
+
+    #[test]
+    fn a_ladder_is_drawn_at_the_width_of_the_volume_that_catches_you() {
+        // Not at the width of a real ladder. A slender one drawn in the middle of
+        // a two-cube catch radius teaches players to aim for a rung when what
+        // actually grabs them is a cylinder.
+        let vs = ladder_verts(12);
+        let widest = vs
+            .iter()
+            .map(|v| (v[0] - 4.5).abs())
+            .fold(f32::MIN, f32::max);
+        assert!(
+            (widest - (LADDER_REACH - LADDER_RAIL_INSET)).abs() <= LADDER_RAIL,
+            "the rails sit {widest} from the centre, not {}",
+            LADDER_REACH - LADDER_RAIL_INSET
+        );
+    }
+
+    #[test]
+    fn a_ladder_with_no_height_draws_nothing() {
+        // `ladders_from` drops it — a mapper who never set the attribute meant
+        // "I did not finish this" — and the point here is that the renderer does
+        // not invent one to fill the gap.
+        assert!(ladder_verts(0).is_empty());
     }
 }

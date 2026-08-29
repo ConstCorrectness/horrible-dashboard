@@ -57,6 +57,15 @@ STRIDE_LOUDNESS = 42.0
 LAND_LOUDNESS = 55.0
 JUMP_LOUDNESS = 30.0
 RELOAD_LOUDNESS = 34.0
+# Quieter than a reload and much quieter than a footstep: an item makes a small
+# sound, and the point of it is that standing on the armour is not free — not
+# that it announces you across the map.
+PICKUP_LOUDNESS = 26.0
+# Breaking the surface. Louder than a footstep and much louder than a pickup:
+# water is a slow route, and the price of taking it is that everyone hears you
+# get in. Only the *entry* is a noise — swimming itself is quiet, which is what
+# makes water worth using once you are already in it.
+SPLASH_LOUDNESS = 62.0
 HURT_LOUDNESS = 40.0
 DIE_LOUDNESS = 60.0
 # A shot's radius comes from the weapon: a knife is silent, a sniper rifle is not.

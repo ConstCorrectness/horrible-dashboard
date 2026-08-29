@@ -18,8 +18,8 @@
  *
  * Free of three and of React, like the rest of the game's logic files.
  */
-import type { WeaponSpec } from './api';
-import type { PlayerRow, SelfState } from './net';
+import type { ItemReach, ItemSpec, WeaponSpec } from './api';
+import type { ItemRow, PickedItem, PlayerRow, SelfState } from './net';
 import { currentHitbox } from './hitbox';
 import { spawnAt } from './player';
 import {
@@ -101,6 +101,21 @@ export class TrainingRange {
   private reserve: number[] = [];
   private reloadIn = 0;
   private pendingHits: TargetHit[] = [];
+  /**
+   * The map's items, as the server resolved them, and when each is back.
+   *
+   * The range resolves **only the ammunition half** of a pickup. Health and
+   * armour mean nothing where nothing shoots back (`hp` here is a constant 100),
+   * and faking them would teach a resource cycle the range does not have. The
+   * items still *draw*, because knowing where they are and when they are back is
+   * most of what there is to learn from them.
+   */
+  private items: { row: ItemRow; spec: ItemSpec; backAt: number }[] = [];
+  /** Every item on the map, takeable or not — the range draws them all. */
+  private itemRows: ItemRow[] = [];
+  private reach: ItemReach | null = null;
+  private clock = 0;
+  private pendingPickups: PickedItem[] = [];
 
   setWeapons(specs: WeaponSpec[], slot: number): void {
     this.weapons = specs;
@@ -152,6 +167,79 @@ export class TrainingRange {
     return this.targets.length > 0;
   }
 
+  /**
+   * Put the map's items out, from the placements the server resolved.
+   *
+   * Takes `reach` too rather than hardcoding a radius: Train decides its own
+   * pickups locally, and a copy of that number here would be a range where items
+   * come off the floor at a different distance than they do in a match.
+   */
+  placeItems(rows: ItemRow[], kinds: ItemSpec[], reach: ItemReach): void {
+    const byKind = new Map(kinds.map((k) => [k.kind, k]));
+    this.reach = reach;
+    // Every item is *drawn*, including the ones the range will not give you:
+    // the map's item layout is a real thing to learn, and a range missing half
+    // of it would teach a map that does not exist. Only the ammunition ones
+    // ever go away — see the note on `items`.
+    this.itemRows = rows;
+    this.items = rows.flatMap((row) => {
+      const spec = byKind.get(row.kind);
+      // Ammunition only, and silence is correct here: a health pack on the range
+      // is a thing to run past, and drawing it while refusing to give anything
+      // is the honest depiction of that.
+      if (!spec || !spec.mags) return [];
+      return [{ row, spec, backAt: 0 }];
+    });
+  }
+
+  /** Every item on the map, for the renderer. */
+  placements(): ItemRow[] {
+    return this.itemRows;
+  }
+
+  /** Ids of items currently taken, for the renderer. */
+  takenIds(): number[] {
+    return this.items.filter((i) => i.backAt > this.clock).map((i) => i.row.id);
+  }
+
+  /**
+   * Take anything the body at `(x, y, z)` is standing on.
+   *
+   * Called from the render loop with the player's own position, which is the
+   * offline equivalent of the server collecting after a step.
+   */
+  collect(x: number, y: number, z: number): void {
+    const reach = this.reach;
+    if (!reach) return;
+    for (const item of this.items) {
+      if (item.backAt > this.clock) continue;
+      if (Math.hypot(item.row.x - x, item.row.y - y) > reach.radius) continue;
+      const dz = z - item.row.z;
+      if (dz < -reach.below || dz > reach.above) continue;
+
+      let rounds = 0;
+      this.weapons.forEach((weapon, index) => {
+        // `-1` is unlimited and stays unlimited, the same rule `finishReload`
+        // follows: topping up a bottomless reserve would report rounds nobody
+        // received.
+        if (weapon.reserve < 0) return;
+        const gain = Math.min(
+          Math.round(weapon.mag * item.spec.mags),
+          weapon.reserve - this.reserve[index],
+        );
+        if (gain <= 0) return;
+        this.reserve[index] += gain;
+        rounds += gain;
+      });
+      // An item that can give nothing is not consumed — the same rule the server
+      // follows, and for the same reason: taking it off the floor having gained
+      // nothing makes the map's rhythm a lie.
+      if (rounds === 0) continue;
+      item.backAt = this.clock + item.spec.respawn;
+      this.pendingPickups.push({ item: item.row.id, kind: item.row.kind, rounds });
+    }
+  }
+
   select(slot: number): void {
     if (slot >= 0 && slot < this.weapons.length && slot !== this.slot) {
       this.slot = slot;
@@ -172,6 +260,7 @@ export class TrainingRange {
 
   /** Advance reload timers and stand downed targets back up. */
   update(dt: number): void {
+    this.clock += dt;
     if (this.reloadIn > 0) {
       this.reloadIn -= dt;
       if (this.reloadIn <= 0) {
@@ -312,7 +401,14 @@ export class TrainingRange {
       deaths: 0,
       mag: weapon?.mag ?? 0,
       hits,
+      picked: this.drainPickups(),
     };
+  }
+
+  private drainPickups(): PickedItem[] {
+    const out = this.pendingPickups;
+    this.pendingPickups = [];
+    return out;
   }
 
   /** The dummies as bodies the avatar pool can draw. */
@@ -347,5 +443,10 @@ export class TrainingRange {
     this.reloadIn = 0;
     this.ammo = this.weapons.map((w) => w.mag);
     this.reserve = this.weapons.map((w) => w.reserve);
+    this.pendingPickups = [];
+    // The items stay placed — a reset restocks *you*, and putting every item
+    // back at the same moment would hide the respawn cycle the range exists to
+    // let you learn.
+    for (const item of this.items) item.backAt = 0;
   }
 }

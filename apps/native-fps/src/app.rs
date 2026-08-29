@@ -38,7 +38,7 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
 use hassault_native::animator::Squad;
-use hassault_native::api::{HitboxSpec, TacticalSpec, WeaponSpec};
+use hassault_native::api::{HitboxSpec, ItemsResponse, TacticalSpec, WeaponSpec};
 use hassault_native::audio::GameAudio;
 use hassault_native::bodies;
 use hassault_native::camera::Camera;
@@ -50,6 +50,7 @@ use hassault_native::hud::{
     self, ConsoleView, Hud, HudView, OverlayVertex, RadarView, ScoreRow, UtilitySlot, UtilityView,
 };
 use hassault_native::interp::{PingTracker, SnapshotBuffer};
+use hassault_native::items::ItemField;
 use hassault_native::menu::{self, Action, Menu, Page};
 use hassault_native::nades::{self, NadePool};
 use hassault_native::net::{Incoming, MatchSocket};
@@ -202,7 +203,19 @@ pub struct App {
     /// `reveal.rs` — a clock, not a load progress bar, exactly as the browser's
     /// call site runs it.
     reveal: Reveal,
+    /// Seconds since this match started drawing, for effects that are a function
+    /// of time rather than of state — the water's ripple. Its own field rather
+    /// than borrowing the reveal's clock, which stops advancing once the map has
+    /// finished arriving.
+    elapsed: f32,
     nades: NadePool,
+    /// Items on the map: placements from `MapInfo`, availability from the
+    /// snapshot. A renderer only — the server decides every pickup.
+    items: ItemField,
+    /// What each item kind gives and how close you have to get, served rather
+    /// than declared. Only Train reads it: in a match the server resolves every
+    /// pickup and this client is told the result.
+    item_table: ItemsResponse,
     /// Tracers, impacts and detonations. Like the nades, purely a renderer for
     /// what the server resolved — see `effects.rs`.
     effects: EffectsPool,
@@ -262,6 +275,9 @@ pub struct App {
     /// Whether we were on the ground last frame, so a takeoff and a landing can
     /// be told apart from being in either state.
     was_grounded: bool,
+    /// Whether the body was in water last frame, so *entering* can be told from
+    /// *being in*: only the crossing makes a sound.
+    was_wet: bool,
     /// Zoom step: 0 unscoped, otherwise 1-based into the weapon's `zoom_levels`.
     ///
     /// **Client-owned**, like the view angles and for the same reason: it changes
@@ -346,6 +362,11 @@ impl App {
         tacticals: Vec<TacticalSpec>,
         skins: HashMap<String, Skin>,
         hitbox: HitboxSpec,
+        // What each item kind gives, and the reach. Another fetched thing this
+        // client is forbidden to hold a copy of: Train resolves its own
+        // ammunition pickups, and a local table would be a range where items
+        // behave differently from a match.
+        item_table: ItemsResponse,
         definitions: Definitions,
         radar_plan: Vec<Run>,
     ) -> App {
@@ -355,6 +376,8 @@ impl App {
         // `Camera::default()` would sit unapplied until the player opened the
         // menu and nudged the row.
         let base_fov = settings.video.fov;
+        // Read before `world` is moved into the struct below.
+        let world_items = world.info.items.clone();
         let mut app = App {
             // Started here, before a window exists: the parse needs no GPU, and
             // the sooner it begins the likelier every prop is resident before
@@ -398,7 +421,15 @@ impl App {
             net_graph_default: 1,
             reveal: Reveal::default(),
             utility: GrenadeController::new(tacticals),
+            elapsed: 0.0,
             nades: NadePool::default(),
+            // Placed from the map rather than from the welcome: the placements
+            // are a property of the map, so one source serves a live room and a
+            // solo range alike. Availability is the per-match half, and rides in
+            // the snapshot.
+            items: ItemField::place(&world_items),
+            item_table,
+
             effects: EffectsPool::default(),
             volume_verts: Vec::new(),
             radar_plan,
@@ -432,6 +463,11 @@ impl App {
             audio: GameAudio::open(),
             stride: 0.0,
             was_grounded: true,
+            // Corrected on the first frame before anything can hear it:
+            // `footsteps` writes this outside its `audible` guard, so a body that
+            // starts in water has already been recorded as wet by the time the
+            // match is joined.
+            was_wet: false,
             scoped: 0,
             // From the settings, never from `Camera::default()`: the camera is
             // built before the bag is read, so taking it from there would leave
@@ -644,7 +680,9 @@ impl App {
         // implementation of the bounce would exist only to disagree with the
         // first.
         self.reveal.advance(dt);
+        self.elapsed += dt;
         self.nades.update(dt);
+        self.items.update(dt);
         self.effects.update(dt);
         // Advanced here rather than at draw time so every player's clip runs on
         // the same clock the weapon and the HUD do. The poses are uploaded later
@@ -712,6 +750,7 @@ impl App {
         let speed = self.ground_speed();
         let fall_speed = state.fall_speed;
         let rising = state.vel_z > 0.0;
+        let wet = physics::in_water(&self.world, state);
         let audible = self.joined;
 
         if grounded && !crouched {
@@ -738,7 +777,18 @@ impl App {
                 let volume = (0.35 + fall_speed / (JUMP_SPEED * 2.0)).min(1.0);
                 self.play_own("land", volume, false);
             }
+            // Breaking the surface, in either direction — getting out is as loud
+            // as getting in. Synthesised locally like every other sound we make:
+            // the server does not send our own noises back, because one arriving
+            // half a round trip late does not sound like the thing that made it.
+            if wet != self.was_wet {
+                self.play_own("splash", 0.8, false);
+            }
         }
+        // Outside the `audible` guard: the flag tracks where the body *is*, and
+        // letting it drift while unjoined would fire a splash on the first frame
+        // of a match for a player who was already standing in water.
+        self.was_wet = wet;
         self.was_grounded = grounded;
     }
 
@@ -801,6 +851,13 @@ impl App {
         let weapons = self.weapons.clone();
         self.range.set_weapons(&weapons, slot);
         self.range.place(&self.world, placed.x, placed.y);
+        // The map's own items, exactly where a match would put them: the server
+        // resolved these heights, so the range never has to. An empty table is a
+        // node too old to serve one — the items still *draw*, they just give
+        // nothing, which is a range missing a convenience rather than a lie.
+        let items = self.world.info.items.clone();
+        self.range
+            .place_items(&items, &self.item_table.kinds, self.item_table.reach);
         if !self.range.populated() {
             // One spawn point on the map, and we are standing on it. Not fatal —
             // the movement is still the point — but silence here would read as
@@ -930,6 +987,13 @@ impl App {
                         {
                             self.effects.detonate(nade, *at, *radius);
                         }
+                        // Start the sink on the frame the pickup was announced
+                        // rather than waiting for the next snapshot to say the
+                        // same thing: at 20 Hz that difference is visible on an
+                        // item somebody took in front of you.
+                        if let Fx::Pickup { item, .. } = fx {
+                            self.items.take(*item);
+                        }
                         if let Fx::Shot { id, .. } = fx {
                             // Every shooter's upper body kicks, not just ours —
                             // the animation is how a shot reads from the outside.
@@ -962,6 +1026,11 @@ impl App {
                     // and read by nothing at all until now — parsed every tick,
                     // 20 times a second, and thrown away.
                     self.nades.sync(&s.nades, &s.zones);
+                    // `as_ref`, not `unwrap_or_default`: an absent `itemsOut`
+                    // means this server has no items, which is a different fact
+                    // from "every item is present" — read the second way it
+                    // would pop every taken item back once a tick.
+                    self.items.sync(s.items_out.as_ref());
                     self.scores = s.scores.clone();
                     self.you = Some(s.you.clone());
                     // Filed for interpolation *before* the roster is replaced,
@@ -1249,6 +1318,17 @@ impl App {
     fn train(&mut self, dt: f32) {
         self.local_clock += dt;
         self.range.update(dt);
+        // After the step that produced this position, for the same reason the
+        // server collects in `_movement_consequences`: you pick something up by
+        // having moved onto it, and reading the position from before the step
+        // would take an item a frame early and miss one you ran straight
+        // through.
+        let body = self.prediction.state;
+        self.range.collect_items(body.x, body.y, body.z);
+        // Offline there is no `itemsOut` on any wire, so the range is the
+        // authority on what is currently gone — the same split as online, with
+        // the range standing in for the server.
+        self.items.sync(Some(&self.range.taken_items()));
         if self.keys.fire {
             self.try_fire();
         } else {
@@ -2252,6 +2332,8 @@ impl ApplicationHandler for App {
                 // small solid object and wants no pass of its own. The clouds do
                 // — see `volume_verts` below.
                 self.nades.vertices(&mut verts);
+                // Same stream and same reason: an item is a small solid object.
+                self.items.vertices(&mut verts);
                 if self.show_hitboxes() {
                     // Appended to the same stream, so the wireframes are depth
                     // tested against the world like everything else: a hitbox
@@ -2262,6 +2344,11 @@ impl ApplicationHandler for App {
                 self.volume_verts.clear();
                 nades::volume_vertices(&self.nades, &mut self.volume_verts);
                 self.effects.vertices(&mut self.volume_verts);
+                // The water plane rides the translucent pass with the clouds —
+                // it is the one piece of the *map* that is not opaque. On the
+                // same clock as the reveal, so the ripple does not restart when
+                // something else does.
+                hassault_native::water::vertices(&self.world, self.elapsed, &mut self.volume_verts);
                 self.viewmodel.vertices(&mut self.weapon_verts);
                 // Built here rather than in the painter: sorting is a game-mode
                 // question and the painter has no business having an opinion.
@@ -2390,6 +2477,11 @@ impl ApplicationHandler for App {
                     move_speed: MOVE_SPEED,
                     on_ground: self.prediction.state.on_ground,
                     crouching: self.prediction.state.crouch > 0.5,
+                    // From the predicted body, not from the snapshot: this is
+                    // the same test the simulation runs to take the jump away,
+                    // and reading it a tick late would tint the screen after the
+                    // jump had already stopped working.
+                    underwater: physics::submerged(&self.world, &self.prediction.state),
                     playing: self.joined,
                     rtt: self.ping.rtt(),
                     fps: if self.fps > 0.0 { Some(self.fps) } else { None },
@@ -2519,6 +2611,8 @@ mod tests {
             .map(|s| s.to_string())
             .collect(),
             entities: vec![Entity {
+                // `playerstart`, matching `cgz.ENTITY_NAMES`.
+                kind: 2,
                 name: "playerstart".into(),
                 x: 1.0,
                 y: 1.0,
@@ -2557,6 +2651,8 @@ mod tests {
             .map(|s| s.to_string())
             .collect(),
             entities: vec![Entity {
+                // `playerstart`, matching `cgz.ENTITY_NAMES`.
+                kind: 2,
                 name: "playerstart".into(),
                 x: (ssize / 2) as f32,
                 y: (ssize / 2) as f32,
@@ -2580,6 +2676,9 @@ mod tests {
             weapons(),
             tacticals(),
             HashMap::new(),
+            Default::default(),
+            // No item table: these tests are about the match loop, and a range
+            // that gives nothing is the honest default for one.
             Default::default(),
             Default::default(),
             Vec::new(),
@@ -2657,6 +2756,9 @@ mod tests {
             tacticals(),
             HashMap::new(),
             // The shipped body. A test that fetched one would depend on a node.
+            Default::default(),
+            // No item table either, for the same reason. A range with one is
+            // covered by `training.rs`'s own tests, which need no App at all.
             Default::default(),
             Default::default(),
             Vec::new(),

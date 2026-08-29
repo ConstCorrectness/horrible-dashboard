@@ -20,6 +20,13 @@ from httpx import ASGITransport, AsyncClient
 from backend.share_relay import app as relay_app
 from backend.share_relay.tokens import Registry
 
+#: Every test here drives a real peer connection, so the whole module needs the
+#: optional `webrtc` extra (`uv sync --extra webrtc`). Skipping is the honest
+#: outcome without it: a hard ImportError here reads as "the relay is broken" on
+#: a machine that simply never installed the media stack, and that misreading
+#: cost a real investigation.
+pytest.importorskip("aiortc", reason="needs the `webrtc` extra")
+
 
 @pytest.fixture(autouse=True)
 def clean_relay(monkeypatch):
