@@ -12,6 +12,13 @@ import { apiDelete, apiGet, apiPost } from '../../api';
 /** Where a skill's file lives. `project` skills are the repo's, and are read-only here. */
 export type SkillScope = 'user' | 'project';
 
+/** One file inside a skill's directory, named relative to it. */
+export interface SkillFile {
+  /** `references/rules.md` — relative, because that is what the skill's body links to. */
+  name: string;
+  bytes: number;
+}
+
 export interface Skill {
   name: string;
   /** Rides EVERY turn. This is the trigger, and the per-turn cost. */
@@ -27,6 +34,8 @@ export interface Skill {
   /** A project skill hidden by a user skill of the same name. */
   shadowed: boolean;
   enabled: boolean;
+  /** Everything in the skill's directory, `SKILL.md` first. */
+  files: SkillFile[];
 }
 
 export interface SkillList {
@@ -50,6 +59,12 @@ export interface SkillPreview {
   /** The literal text `use_skill` returns. */
   instructions: string;
   groups: string[];
+}
+
+export interface SkillFileContent {
+  name: string;
+  bytes: number;
+  text: string;
 }
 
 export interface SkillInput {
@@ -81,6 +96,21 @@ export function skillCost(): Promise<SkillCost> {
 
 export function skillPreview(name: string): Promise<SkillPreview> {
   return apiGet<SkillPreview>(`/skills/${encodeURIComponent(name)}/preview`);
+}
+
+/**
+ * One resource file's text.
+ *
+ * Read-only, and deliberately so: the editor writes `SKILL.md` and nothing else, which
+ * is exactly what the backend's `save` does. A viewer that could write would need the
+ * whole question of what happens to a project skill's tracked files answered first.
+ */
+export function readSkillFile(name: string, file: string): Promise<SkillFileContent> {
+  const path = file
+    .split('/')
+    .map((part) => encodeURIComponent(part))
+    .join('/');
+  return apiGet<SkillFileContent>(`/skills/${encodeURIComponent(name)}/files/${path}`);
 }
 
 /** Copy a project skill into your own, so it becomes editable. */

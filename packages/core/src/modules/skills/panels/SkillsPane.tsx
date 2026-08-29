@@ -16,23 +16,29 @@
  * still component state. A pane reload returns to the editor tab with nothing
  * selected, which is the "new skill" case and reads correctly — but it is not a deep
  * link to a named skill, and pretending otherwise would need params on a singleton.
+ *
+ * ## Why the library is a split
+ *
+ * Every skill used to be one full-bleed row carrying its name, its description, a
+ * token figure and six controls. Nothing capped the width, so in a maximised pane the
+ * Delete button ended up two thousand pixels from the name it belonged to, and the
+ * name — 11px, uppercase — was smaller than the description sitting under it.
+ *
+ * So the row's job was split from the record's. The index holds identities and nothing
+ * else (name, cost, state), which is what lets it be 280px wide; `SkillDetail` holds
+ * everything that is *about* a skill, inside a reading measure. The index rows carry
+ * no buttons, and that is a rule rather than a preference: `DataRow` becomes a real
+ * `<button>` once it is clickable, and a `<button>` may not contain interactive
+ * descendants.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { Button, Chip, EmptyState, PaneHeader } from '../../../Primitives';
 import { DataList, DataRow, RollingNumber } from '../../../DataList';
-import { dialogs } from '../../../dialogs';
+import { SplitPane } from '../../../SplitPane';
 import { usePaneSection } from '../../../layout/use-sections';
-import {
-  copySkill,
-  deleteSkill,
-  exportSkill,
-  listSkills,
-  setSkillEnabled,
-  skillCost,
-  type Skill,
-  type SkillCost,
-} from '../api';
+import { listSkills, skillCost, type Skill, type SkillCost } from '../api';
+import { SkillDetail } from './SkillDetail';
 import { SkillEditor } from './SkillEditor';
 
 /**
@@ -50,131 +56,15 @@ function skillKind(skill: Skill) {
   return 'info' as const;
 }
 
-function SkillRow({
-  skill,
-  tokens,
-  index,
-  onChanged,
-  onEdit,
-}: {
-  skill: Skill;
-  tokens: number | undefined;
-  index: number;
-  onChanged: () => void;
-  onEdit: () => void;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const act = async (fn: () => Promise<unknown>) => {
-    setBusy(true);
-    setError(null);
-    try {
-      await fn();
-      onChanged();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const broken = Boolean(skill.error);
-  const toggleable = !broken && !skill.shadowed;
-
-  const remove = async () => {
-    const ok = await dialogs.confirm({
-      title: `Delete “${skill.name}”?`,
-      message: `Deletes ${skill.path}. This cannot be undone.`,
-      confirmLabel: 'Delete skill',
-      danger: true,
-    });
-    if (ok) await act(() => deleteSkill(skill.name));
-  };
-
-  return (
-    <DataRow
-      kind={skillKind(skill)}
-      hideMark={!broken && !skill.shadowed}
-      index={index}
-      title={skill.name}
-      meta={tokens !== undefined ? [`${tokens} tok/turn`] : undefined}
-      metaTone={broken ? 'fail' : undefined}
-      badge={
-        <>
-          {skill.scope === 'project' && <Chip>project</Chip>}
-          {skill.shadowed && <Chip kind="warn">shadowed</Chip>}
-          {broken && <Chip kind="fail">error</Chip>}
-          {!skill.enabled && toggleable && <Chip>off</Chip>}
-        </>
-      }
-      actions={
-        <>
-          {/* Disabling is the lever that matters: the honest answer to "my context
-              is full" is switching off the skills that never fire. A real checkbox,
-              labelled — the swatch-and-title trick used elsewhere leaves a control
-              that announces as unnamed. */}
-          <label
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)' }}
-            title={
-              broken
-                ? 'This skill has an error and cannot be enabled'
-                : skill.shadowed
-                  ? 'Shadowed by your own skill of this name'
-                  : 'Include its description in every turn'
-            }
-          >
-            <input
-              type="checkbox"
-              checked={skill.enabled && toggleable}
-              disabled={busy || !toggleable}
-              aria-label={`Enable ${skill.name}`}
-              onChange={(e) => act(() => setSkillEnabled(skill.name, e.target.checked))}
-            />
-          </label>
-          <Button size="sm" disabled={busy} onClick={onEdit}>
-            {skill.scope === 'project' ? 'View' : 'Edit'}
-          </Button>
-          {skill.scope === 'project' ? (
-            <Button size="sm" disabled={busy} onClick={() => act(() => copySkill(skill.name))}>
-              Copy to mine
-            </Button>
-          ) : (
-            <>
-              <Button
-                size="sm"
-                disabled={busy}
-                title="Copy into .claude/skills so Claude Code picks it up"
-                onClick={() => act(() => exportSkill(skill.name))}
-              >
-                Export
-              </Button>
-              <Button intent="danger" size="sm" disabled={busy} onClick={remove}>
-                Delete
-              </Button>
-            </>
-          )}
-        </>
-      }
-      footnotes={
-        <>
-          {broken && (
-            <div style={{ fontSize: 'var(--fs-meta)', color: 'var(--danger)' }}>{skill.error}</div>
-          )}
-          {skill.shadowed && (
-            <div style={{ fontSize: 'var(--fs-meta)', color: 'var(--warn)' }}>
-              Your own skill of this name is used instead — this one never reaches the agent.
-            </div>
-          )}
-          {error && (
-            <div style={{ fontSize: 'var(--fs-meta)', color: 'var(--danger)' }}>{error}</div>
-          )}
-        </>
-      }
-    >
-      {skill.description || <em>no description — the model has nothing to decide by</em>}
-    </DataRow>
-  );
+/**
+ * A skill's identity across a refresh.
+ *
+ * Keyed by scope as well as name: a shadowed project skill shares its name with the
+ * user skill hiding it, so a name alone would make the two the same row and the
+ * selection would jump between them.
+ */
+function keyOf(skill: Skill): string {
+  return `${skill.scope}:${skill.name}`;
 }
 
 export function SkillsPane() {
@@ -182,6 +72,7 @@ export function SkillsPane() {
   const [skills, setSkills] = useState<Skill[]>([]);
   const [cost, setCost] = useState<SkillCost | null>(null);
   const [dirs, setDirs] = useState({ userDir: '', projectDir: '' });
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [editing, setEditing] = useState<Skill | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -207,6 +98,15 @@ export function SkillsPane() {
     void refresh();
   }, [refresh]);
 
+  // Resolved against the current list rather than held as an object, so a refresh
+  // after a toggle or a delete never leaves the detail rendering a stale copy — or a
+  // skill that no longer exists. Falling back to the first row means the empty state
+  // is only reachable when there genuinely are no skills.
+  const selected = useMemo(() => {
+    if (skills.length === 0) return null;
+    return skills.find((s) => keyOf(s) === selectedKey) ?? skills[0];
+  }, [skills, selectedKey]);
+
   const openEditor = (skill: Skill | null) => {
     setEditing(skill);
     setSection('editor');
@@ -227,8 +127,9 @@ export function SkillsPane() {
     );
   }
 
-  const perSkill = new Map((cost?.skills ?? []).map((s) => [s.name, s.tokens]));
+  const perSkill = new Map((cost?.skills ?? []).map((s) => [s.name, s]));
   const active = skills.filter((s) => s.enabled && !s.error && !s.shadowed).length;
+  const selectedCost = selected ? perSkill.get(selected.name) : undefined;
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -252,36 +153,48 @@ export function SkillsPane() {
         }
       />
 
-      <div style={{ padding: 'var(--space-5)', overflow: 'auto', flex: 1 }}>
+      {/* Above the split, not inside the detail column: this says how skills are paid
+          for, which is true of all of them. Repeated over each one you clicked it would
+          read as part of that skill. */}
+      <div
+        style={{
+          padding: 'var(--space-3) var(--space-5)',
+          borderBottom: '1px solid var(--border)',
+          fontSize: 'var(--fs-meta)',
+          color: 'var(--text-dim)',
+          lineHeight: 1.5,
+        }}
+      >
+        Each skill's <em>description</em> rides every turn so the agent knows it exists; the
+        instructions are read only when it calls <code>use_skill</code>. Switch off the ones that
+        never fire — a disabled skill costs exactly nothing.
+      </div>
+
+      {error && (
         <div
+          role="alert"
           style={{
-            fontSize: 'var(--fs-meta)',
-            color: 'var(--text-dim)',
-            marginBottom: 'var(--space-5)',
-            lineHeight: 1.5,
+            color: 'var(--danger)',
+            fontSize: 'var(--fs-body)',
+            padding: 'var(--space-3) var(--space-5)',
           }}
         >
-          Each skill's <em>description</em> rides every turn so the agent knows it exists; the
-          instructions are read only when it calls <code>use_skill</code>. Switch off the ones that
-          never fire — a disabled skill costs exactly nothing.
+          {error}
         </div>
+      )}
 
-        {error && (
-          <div
-            role="alert"
-            style={{
-              color: 'var(--danger)',
-              fontSize: 'var(--fs-body)',
-              marginBottom: 'var(--space-4)',
-            }}
-          >
-            {error}
-          </div>
-        )}
-
-        {loading ? (
-          <div style={{ color: 'var(--text-dim)', fontSize: 'var(--fs-body)' }}>Loading…</div>
-        ) : skills.length === 0 ? (
+      {loading ? (
+        <div
+          style={{
+            padding: 'var(--space-5)',
+            color: 'var(--text-dim)',
+            fontSize: 'var(--fs-body)',
+          }}
+        >
+          Loading…
+        </div>
+      ) : skills.length === 0 ? (
+        <div style={{ padding: 'var(--space-5)', overflow: 'auto', flex: 1 }}>
           <EmptyState
             title="No skills"
             actions={
@@ -294,35 +207,86 @@ export function SkillsPane() {
             Code reads — so one written here works there too. Anything in the project's
             <code> .claude/skills</code> is picked up automatically.
           </EmptyState>
-        ) : (
-          <DataList label="Skills">
-            {skills.map((s, i) => (
-              <SkillRow
-                key={`${s.scope}:${s.name}`}
-                skill={s}
-                index={i}
-                tokens={perSkill.get(s.name)}
-                onChanged={refresh}
-                onEdit={() => openEditor(s)}
-              />
-            ))}
-          </DataList>
-        )}
-
-        <div
-          style={{
-            fontSize: 'var(--fs-micro)',
-            fontFamily: 'var(--font-mono)',
-            color: 'var(--text-faint)',
-            marginTop: 'var(--space-6)',
-            lineHeight: 1.6,
-          }}
-        >
-          Yours: {dirs.userDir}
-          <br />
-          Project: {dirs.projectDir}
         </div>
-      </div>
+      ) : (
+        // `narrowBelow` measures the container, not the viewport: a skills pane docked
+        // in a three-column workspace is narrow at any screen size.
+        <SplitPane
+          id="skills.index"
+          initial={280}
+          min={200}
+          minOther={360}
+          narrowBelow={700}
+          label="Skill list width"
+        >
+          <div
+            style={{
+              height: '100%',
+              overflow: 'auto',
+              padding: 'var(--space-4) var(--space-3)',
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            <DataList label="Skills" size="lead">
+              {skills.map((s, i) => (
+                <DataRow
+                  key={keyOf(s)}
+                  index={i}
+                  kind={skillKind(s)}
+                  hideMark={!s.error && !s.shadowed}
+                  title={s.name}
+                  meta={
+                    perSkill.get(s.name) !== undefined
+                      ? [`${perSkill.get(s.name)?.tokens} tok`]
+                      : undefined
+                  }
+                  metaTone={s.error ? 'fail' : undefined}
+                  badge={
+                    <>
+                      {s.scope === 'project' && <Chip>project</Chip>}
+                      {!s.enabled && !s.error && !s.shadowed && <Chip>off</Chip>}
+                    </>
+                  }
+                  selected={selected ? keyOf(selected) === keyOf(s) : false}
+                  onClick={() => setSelectedKey(keyOf(s))}
+                />
+              ))}
+            </DataList>
+
+            {/* Under the index, not the detail: these are where skills live, which is a
+                fact about the pane rather than about whichever row is selected — and a
+                path that reappeared under every skill you clicked would read as part of
+                it. `marginTop: auto` floats it to the bottom of a short list. */}
+            <div
+              style={{
+                marginTop: 'auto',
+                paddingTop: 'var(--space-6)',
+                fontSize: 'var(--fs-micro)',
+                fontFamily: 'var(--font-mono)',
+                color: 'var(--text-faint)',
+                lineHeight: 1.6,
+                overflowWrap: 'anywhere',
+              }}
+            >
+              Yours: {dirs.userDir}
+              <br />
+              Project: {dirs.projectDir}
+            </div>
+          </div>
+
+          <div style={{ height: '100%', overflow: 'auto', padding: 'var(--space-5)' }}>
+            <SkillDetail
+              skill={selected}
+              tokens={selectedCost?.tokens}
+              bodyTokens={selectedCost?.bodyTokens}
+              onChanged={refresh}
+              onEdit={() => selected && openEditor(selected)}
+              onNew={() => openEditor(null)}
+            />
+          </div>
+        </SplitPane>
+      )}
     </div>
   );
 }

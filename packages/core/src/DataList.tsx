@@ -103,22 +103,37 @@ export function RowMark({ kind }: { kind: RowKind }) {
  * rather than records read in order — a model picker, not a result log. A
  * column of six checkboxes is the shape that reads as an unstyled form; a grid
  * of tiles reads as a loadout.
+ *
+ * `size="lead"` sets the titles at reading size. It is a property of the *list*,
+ * not a style prop on the row: "these items are identities being chosen between,
+ * and the name is the thing you are choosing" is a fact about the list, whereas a
+ * row that can be handed a font size is a row whose caller will eventually pick one
+ * that means nothing. The treatment is otherwise unchanged — still uppercase, still
+ * tracked — because only the size was ever wrong.
  */
 export function DataList({
   children,
   layout = 'column',
+  size = 'default',
   label,
   style,
 }: {
   children: ReactNode;
   layout?: 'column' | 'grid';
+  size?: 'default' | 'lead';
   /** Accessible name. A list of results and a list of cases are different
    * landmarks even when they are drawn the same. */
   label?: string;
   style?: CSSProperties;
 }) {
   return (
-    <ul className="hd-list" data-layout={layout} aria-label={label} style={style}>
+    <ul
+      className="hd-list"
+      data-layout={layout}
+      data-size={size === 'default' ? undefined : size}
+      aria-label={label}
+      style={style}
+    >
       {children}
     </ul>
   );

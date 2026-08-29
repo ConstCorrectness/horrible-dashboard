@@ -57,6 +57,29 @@ MAX_DESCRIPTION_CHARS = 500
 # file (a log accidentally saved as SKILL.md) from being pasted into a turn.
 MAX_BODY_CHARS = 60_000
 
+# A skill directory is a handful of markdown files beside SKILL.md. The cap is not a
+# real limit so much as a refusal to walk a directory someone has pointed at a source
+# tree: a listing of ten thousand entries is not a listing anyone reads.
+MAX_FILES = 200
+
+# What the file viewer will hand back. Large enough for any reference document a skill
+# ships, small enough that the pane never has to stream.
+MAX_FILE_BYTES = 256 * 1024
+
+
+@dataclass
+class SkillFile:
+    """One file inside a skill's directory.
+
+    `name` is the path **relative to that directory** (`references/rules.md`), not an
+    absolute one: it is what the skill's own markdown links to, and it is what the read
+    route takes back. Handing out absolute paths would make the client's job to
+    reconstruct the relative form, and would leak the layout of the machine.
+    """
+
+    name: str
+    bytes: int = 0
+
 
 @dataclass
 class Skill:
@@ -71,6 +94,11 @@ class Skill:
     error: str = ""
     # True for a project skill that a user skill of the same name is hiding.
     shadowed: bool = False
+    # Everything in the skill's directory, SKILL.md included. A skill is a directory,
+    # not a file — `copy_to_user` has always copied the siblings — but nothing until
+    # now said what they were, so a skill's own references were invisible in the app
+    # that hosts it.
+    files: list[SkillFile] = field(default_factory=list)
     # Extra frontmatter keys are preserved on write. Claude Code and future versions
     # of the format may carry fields this app has no opinion about, and dropping them
     # on a round trip would silently degrade someone's skill.
@@ -91,6 +119,7 @@ class Skill:
             "path": self.path,
             "error": self.error,
             "shadowed": self.shadowed,
+            "files": [{"name": f.name, "bytes": f.bytes} for f in self.files],
         }
 
 
@@ -139,12 +168,79 @@ def format_skill(skill: Skill) -> str:
     return f"{_FENCE}\n{dumped}\n{_FENCE}\n\n{body}\n"
 
 
+def files_for(directory: Path) -> list[SkillFile]:
+    """Every file in a skill's directory, SKILL.md first.
+
+    Returns `[]` on any OSError rather than raising. Every caller here is building a
+    list for a pane, and this module's rule is that one unreadable skill must not take
+    the list with it — a directory that cannot be walked is exactly that case.
+    """
+    try:
+        found: list[SkillFile] = []
+        for child in directory.rglob("*"):
+            if not child.is_file():
+                continue
+            rel = child.relative_to(directory)
+            # Nothing the user put there: editor swap files, __pycache__ from a script
+            # a skill ships, .DS_Store. Listing them makes the real files harder to see.
+            if any(part.startswith(".") or part == "__pycache__" for part in rel.parts):
+                continue
+            found.append(SkillFile(name=rel.as_posix(), bytes=child.stat().st_size))
+    except OSError:
+        return []
+    # SKILL.md first, then alphabetical: the entry point is not just another sibling,
+    # and sorting it into the middle of a list of references buries it.
+    found.sort(key=lambda f: (f.name != "SKILL.md", f.name))
+    return found[:MAX_FILES]
+
+
+def read_file(name: str, rel: str) -> tuple[str | None, str | None]:
+    """One file's text from a skill's directory. Returns `(text, error)`.
+
+    **The containment check is here, not in the route.** A route that passed a
+    caller-supplied path through to `read_text` is an arbitrary-file-read route, and
+    the guard belongs beside the thing it guards — the same reasoning as the database
+    module's write gate, which lives in the driver because a route-only check leaves
+    every other caller as a back door.
+    """
+    skill = get(name)
+    if skill is None:
+        return None, f"no skill '{name}'"
+    root = Path(skill.path).parent.resolve()
+    try:
+        target = (root / rel).resolve()
+    except OSError as exc:
+        return None, str(exc)
+    # `..` and an absolute `rel` both land outside the root, and both fail here.
+    if not target.is_relative_to(root) or not target.is_file():
+        return None, f"no file '{rel}' in {name}"
+    try:
+        size = target.stat().st_size
+        if size > MAX_FILE_BYTES:
+            return None, f"{rel} is {size} bytes — too large to show here"
+        raw = target.read_bytes()
+    except OSError as exc:
+        return None, str(exc)
+    # A NUL byte means this is not text. Decoding it with `errors="replace"` would
+    # render a PNG as a page of replacement characters, which looks like a broken
+    # viewer rather than the honest answer that the file is not readable as text.
+    if b"\x00" in raw:
+        return None, f"{rel} is a binary file"
+    return raw.decode("utf-8", errors="replace"), None
+
+
 def _skill_from_file(path: Path, scope: Scope) -> Skill:
     directory = path.parent.name
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
-        return Skill(name=directory, scope=scope, path=str(path), error=str(exc))
+        return Skill(
+            name=directory,
+            scope=scope,
+            path=str(path),
+            error=str(exc),
+            files=files_for(path.parent),
+        )
 
     front, body, error = parse(text, fallback_name=directory)
     # The **directory** is the identity, not the frontmatter's `name`. Everything that
@@ -184,6 +280,7 @@ def _skill_from_file(path: Path, scope: Scope) -> Skill:
         scope=scope,
         path=str(path),
         error=error,
+        files=files_for(path.parent),
         extra={
             k: v
             for k, v in front.items()

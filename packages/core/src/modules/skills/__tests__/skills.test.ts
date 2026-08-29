@@ -24,6 +24,7 @@ function skill(overrides: Partial<Skill>): Skill {
     error: '',
     shadowed: false,
     enabled: true,
+    files: [],
     ...overrides,
   };
 }

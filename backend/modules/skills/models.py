@@ -15,6 +15,13 @@ from pydantic import BaseModel, Field
 Scope = Literal["user", "project"]
 
 
+class SkillFileModel(BaseModel):
+    """One file in a skill's directory, named relative to it."""
+
+    name: str
+    bytes: int = 0
+
+
 class SkillModel(BaseModel):
     name: str
     description: str = ""
@@ -30,6 +37,11 @@ class SkillModel(BaseModel):
     # has no explanation.
     shadowed: bool = False
     enabled: bool = True
+    # A skill is a directory, so its references are part of what it is. Declared here
+    # and not only on the dataclass: `response_model` filters out anything this model
+    # does not name, so a field added to `Skill.public()` alone reaches the browser as
+    # `undefined` with nothing anywhere reporting a problem.
+    files: list[SkillFileModel] = Field(default_factory=list)
 
 
 class SkillListResponse(BaseModel):
@@ -76,6 +88,14 @@ class PreviewResponse(BaseModel):
     catalog: str = ""
     instructions: str = ""
     groups: list[str] = Field(default_factory=list)
+
+
+class SkillFileContent(BaseModel):
+    """One resource file's text, for the detail pane's viewer."""
+
+    name: str
+    bytes: int = 0
+    text: str = ""
 
 
 class ExportResponse(BaseModel):

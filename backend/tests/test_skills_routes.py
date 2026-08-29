@@ -190,3 +190,100 @@ def test_export_puts_a_readable_skill_in_the_project_dir(client, dirs):
 def test_a_missing_skill_is_a_404(client, dirs):
     assert client.get("/api/skills/nope/preview").status_code == 404
     assert client.delete("/api/skills/nope").status_code == 404
+
+
+# --- a skill's own files ------------------------------------------------------
+#
+# A skill is a directory, not a file. `copy_to_user` has always copied the siblings
+# along, so they demonstrably exist — but nothing served them, so a skill's own
+# references were invisible in the app that hosts it.
+
+
+def test_the_list_response_carries_the_skill_s_files(client, dirs):
+    user, _ = dirs
+    _write(user, "tidy", GOOD)
+    (user / "tidy" / "references").mkdir()
+    (user / "tidy" / "references" / "rules.md").write_text("rules", encoding="utf-8")
+    # Read off the HTTP body, never `Skill.public()`: the response model is what
+    # decides whether the browser ever sees this field.
+    row = next(s for s in client.get("/api/skills").json()["skills"] if s["name"] == "tidy")
+    names = [f["name"] for f in row["files"]]
+    # SKILL.md first — the entry point is not just another sibling.
+    assert names == ["SKILL.md", "references/rules.md"]
+    # Against the file on disk, not against `GOOD`: `write_text` translates newlines
+    # on Windows, so a length computed from the source string is short there and the
+    # test would fail on one OS for a reason that has nothing to do with skills.
+    assert row["files"][0]["bytes"] == (user / "tidy" / "SKILL.md").stat().st_size
+
+
+def test_dotfiles_and_pycache_are_not_listed(client, dirs):
+    user, _ = dirs
+    _write(user, "tidy", GOOD)
+    (user / "tidy" / ".DS_Store").write_text("x", encoding="utf-8")
+    (user / "tidy" / "__pycache__").mkdir()
+    (user / "tidy" / "__pycache__" / "x.pyc").write_text("x", encoding="utf-8")
+    row = next(s for s in client.get("/api/skills").json()["skills"] if s["name"] == "tidy")
+    assert [f["name"] for f in row["files"]] == ["SKILL.md"]
+
+
+def test_reading_a_resource_file_returns_its_text(client, dirs):
+    user, _ = dirs
+    _write(user, "tidy", GOOD)
+    (user / "tidy" / "references").mkdir()
+    (user / "tidy" / "references" / "rules.md").write_text(
+        "# Rules\n", encoding="utf-8", newline=""
+    )
+    body = client.get("/api/skills/tidy/files/references/rules.md").json()
+    assert body["text"] == "# Rules\n"
+    assert body["name"] == "references/rules.md"
+
+
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "../../../secret.txt",
+        "references/../../../secret.txt",
+        "/etc/passwd",
+        "C:/Windows/win.ini",
+        "..",
+    ],
+)
+def test_a_path_outside_the_skill_directory_is_refused(dirs, tmp_path, rel):
+    """The whole security argument for the viewer.
+
+    Asserted against `store.read_file` rather than over HTTP on purpose: an HTTP client
+    collapses `..` segments before the request is ever sent, so a route-level test of
+    an escape mostly measures the client's URL normalizer. The guard is what has to
+    hold, for every shape — relative, mid-path, and absolute on either OS.
+    """
+    user, _ = dirs
+    _write(user, "tidy", GOOD)
+    (tmp_path / "secret.txt").write_text("nope", encoding="utf-8")
+    text, err = store.read_file("tidy", rel)
+    assert text is None
+    assert err
+
+
+def test_an_escaping_path_never_returns_content_over_http(client, dirs, tmp_path):
+    user, _ = dirs
+    _write(user, "tidy", GOOD)
+    (tmp_path / "secret.txt").write_text("nope", encoding="utf-8")
+    res = client.get("/api/skills/tidy/files/../../../secret.txt")
+    assert res.status_code != 200
+    assert "nope" not in res.text
+
+
+def test_a_binary_file_is_refused_rather_than_mangled(client, dirs):
+    user, _ = dirs
+    _write(user, "tidy", GOOD)
+    (user / "tidy" / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00")
+    # Listed — it is genuinely part of the skill — but not readable as text.
+    row = next(s for s in client.get("/api/skills").json()["skills"] if s["name"] == "tidy")
+    assert "logo.png" in [f["name"] for f in row["files"]]
+    res = client.get("/api/skills/tidy/files/logo.png")
+    assert res.status_code == 404
+    assert "binary" in res.json()["detail"]
+
+
+def test_a_file_read_on_a_missing_skill_is_a_404(client, dirs):
+    assert client.get("/api/skills/nope/files/SKILL.md").status_code == 404

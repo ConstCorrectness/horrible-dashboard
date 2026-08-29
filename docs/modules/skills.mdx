@@ -219,8 +219,57 @@ Mounted at `/api/skills`:
 | `POST` | `/{name}/enabled` | Switch its catalog line on or off |
 | `GET` | `/cost` | Per-turn catalog cost, and each skill's share |
 | `GET` | `/{name}/preview` | The literal catalog text + the literal `use_skill` result |
+| `GET` | `/{name}/files/{path}` | One file from the skill's directory, as text (read-only) |
 | `POST` | `/{name}/copy` | Copy a project skill into the user's own |
 | `POST` | `/{name}/export` | Copy a user skill into `.claude/skills/` |
+
+## The library is an index and a detail, not one wide list
+
+Every skill used to be one full-bleed row carrying its name, its description, a token
+figure and six controls. Nothing capped the width, so in a maximised pane the Delete
+button sat two thousand pixels from the name it belonged to — and the name, at 11px
+uppercase, was *smaller* than the description underneath it.
+
+So the row's job was split from the record's, across a `SplitPane` (persisted width,
+and `narrowBelow` measures the pane rather than the viewport, because a skills pane
+docked in a three-column workspace is narrow at any screen size):
+
+- The **index** holds identities and nothing else — name, `tok`, and a `project`/`off`
+  chip — which is what lets it be 280px wide. Its titles are set through `DataList`'s
+  `size="lead"` variant, so the name is read at 15px instead of being the smallest text
+  in its own row.
+- The **detail** holds everything that is *about* a skill: description, tools, files,
+  path, and every action, inside a 72ch reading measure.
+
+**The index rows carry no buttons, and that is a rule rather than a preference.**
+`DataRow` renders a real `<button>` once it is clickable, and a `<button>` may not
+contain interactive descendants — an enable checkbox and five buttons inside a
+selectable row is invalid content that browsers and screen readers each recover from
+differently. Moving them to the detail is also what collapses the width.
+
+## A skill is a directory, so its files are part of it
+
+`GET /api/skills` now carries a `files` list per skill (paths relative to the skill's
+own directory, `SKILL.md` first, dotfiles and `__pycache__` skipped), and
+`GET /api/skills/{name}/files/{path}` returns one of them as text. `copy_to_user` had
+always taken a skill's sibling resources along — the format lets a body reference files
+beside it — but nothing ever *served* them, so a skill's own references were invisible
+in the app that hosts it.
+
+Two things are load-bearing:
+
+- **The containment check lives in `store.read_file`, not the route.** A route that
+  passed a caller-supplied path through to `read_text` is an arbitrary-file-read route.
+  The path is resolved and required to be `is_relative_to` the skill directory, which
+  is what fails `../../../.env` and an absolute path alike — the same reasoning as the
+  database module's write gate living in the driver.
+- **A binary file is refused, not decoded.** Rendering a PNG through
+  `errors="replace"` produces a page of replacement characters, which reads as a broken
+  viewer rather than the honest answer that the file is not text.
+
+The viewer is read-only. The editor writes `SKILL.md` and nothing else, exactly as
+`store.save` does, and a viewer that could write would first need an answer for what
+happens to a project skill's git-tracked resources.
 
 ## The creator shows the string, not the intent
 

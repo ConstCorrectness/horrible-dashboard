@@ -12,6 +12,7 @@ from backend.modules.skills.models import (
     ExportResponse,
     PreviewResponse,
     SkillCostResponse,
+    SkillFileContent,
     SkillInput,
     SkillListResponse,
     SkillModel,
@@ -127,6 +128,21 @@ def preview(name: str) -> PreviewResponse:
         instructions=skill.body,
         groups=agent.groups_for(skill),
     )
+
+
+@router.get("/{name}/files/{rel:path}", response_model=SkillFileContent)
+def read_file(name: str, rel: str) -> SkillFileContent:
+    """One file from a skill's directory, as text.
+
+    Read-only, and the containment check lives in `store.read_file` rather than here —
+    see its docstring. This route's only job is turning that function's error string
+    into a status code.
+    """
+    _require(name)
+    text, err = store.read_file(name, rel)
+    if err or text is None:
+        raise HTTPException(status_code=404, detail=err or f"no file '{rel}'")
+    return SkillFileContent(name=rel, bytes=len(text.encode("utf-8")), text=text)
 
 
 @router.post("/{name}/copy", response_model=SkillModel)

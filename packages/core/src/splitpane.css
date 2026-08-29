@@ -119,13 +119,25 @@
  */
 .hd-split[data-narrow] {
   flex-direction: column;
+  /* Stacked, the two children size to their content and the whole stack scrolls as
+     one document. Without this the container's own `overflow: hidden` clips whatever
+     the first child did not leave room for, and the second child is unreachable by
+     any means the pane offers — which is what a two-column layout collapsing into one
+     usually gets wrong. */
+  overflow: auto;
 }
 
-.hd-split[data-narrow] > .hd-split-a,
-.hd-split[data-narrow] > .hd-split-b {
+/* `[data-orientation][data-side]` is not decoration. The sizing rules above are
+   `.hd-split[data-orientation='row'][data-side='start'] > .hd-split-a`, four
+   selectors' worth of specificity, so a bare `.hd-split[data-narrow] > .hd-split-a`
+   loses to them and the stacked child keeps the dragged column width — leaving the
+   index 280px wide in a pane that had just been told it is too narrow for columns. */
+.hd-split[data-narrow][data-orientation][data-side] > .hd-split-a,
+.hd-split[data-narrow][data-orientation][data-side] > .hd-split-b {
   width: auto;
   height: auto;
   flex: 0 0 auto;
+  overflow: visible;
 }
 
 .hd-split[data-narrow] > .hd-split-handle {

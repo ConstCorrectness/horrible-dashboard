@@ -146,6 +146,27 @@
   white-space: nowrap;
 }
 
+/* A list whose rows are identities being picked from rather than records being read
+   in order: the name is the thing you are choosing, so it is set at reading size
+   instead of at caption size under a description that was larger than it. */
+.hd-list[data-size='lead'] .hd-row-title {
+  font-size: var(--fs-lead, 15px);
+  letter-spacing: 0.1em;
+  /* Wraps, where the default row ellipsises. A name set at reading size in a 280px
+     index is wider than the line it shares with a figure and a badge, and a title
+     truncated to `WANDB-AUT…` is the identity failing at the one job it has. The head
+     line wraps with it, so a long name pushes the telemetry underneath rather than
+     squeezing it. */
+  white-space: normal;
+  overflow: visible;
+  overflow-wrap: anywhere;
+}
+
+.hd-list[data-size='lead'] .hd-row-head {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
 /* Telemetry. Monospace and muted, always — an id, a duration and a count are
    figures, and figures that share the title's treatment stop being scannable. */
 .hd-row-meta {
