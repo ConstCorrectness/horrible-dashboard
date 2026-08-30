@@ -293,6 +293,236 @@ test named the two stranded quadrants by their exact bounds. Nothing else in the
 suite would have failed, and the map would simply have had two ledges nobody
 could get to.
 
+## The map designer
+
+Everything above describes a map *pipeline* with no way to author a map. Making
+`hd_atrium` meant typing rect coordinates into a text editor and running the
+playability tests to find out that its gallery ring had been cut into four pieces
+by its own gates. The designer closes that: **author the map where you can see
+it**, and save the same reviewable brush list.
+
+Four decisions shape it, and the rest follows from them.
+
+### The document stays the source of truth
+
+The editor edits the JSON brush list, not the cube grid. `.cgz` remains an export.
+This is the rule the map format section already states — a committed binary cannot
+be reviewed or diffed, whereas a map here is a few dozen rectangles — and an
+editor that wrote cubes directly would quietly repeal it.
+
+So a saved map is still a file a reviewer can read, and `git diff` on it still
+shows which room moved.
+
+### A draft is addressed as a map
+
+This is the piece everything else hangs on. `drafts.py` holds the document being
+edited in memory, and `assets.load_map` — the single chokepoint every map route
+and all three clients already go through — grows one branch:
+
+```python
+if name.startswith(drafts.PREFIX):        # "draft:"
+    return drafts.compiled(name[len(drafts.PREFIX):])
+```
+
+That is the whole read path. `GET /maps/draft:<id>` and
+`GET /maps/draft:<id>/cubes` serve an unsaved document through the routes the
+clients already call, so the native client's boot sequence (`map_info` →
+`map_cubes` → `World::new` → `build_world_mesh`) works on a draft **unchanged**,
+and an edit is just a re-fetch of a map. There are no designer read routes for the
+map itself, and that absence is the design rather than an omission.
+
+A draft never touches the filesystem until it is saved, so `find_map`'s path
+validation is untouched by it — a draft id that looks like a traversal is simply
+not an open draft.
+
+### `mapsource.build` stays the only compiler
+
+It is a pure function over a plain dict, so compiling an unsaved document needs no
+disk and costs nothing extra. The alternative — a compiler in the editor, or a
+port into the native client — would fail the way this module's three physics ports
+fail when they drift: not with an error, but with an editor showing you a
+different map from the one the server will serve.
+
+Two consequences worth knowing. `mapsource.load_bundled` and `bundled_names` are
+`lru_cache`d with no mtime in the key, because bundled maps ship with the code and
+were never meant to change under a running process — saving now clears both. And
+`build_with_owners` returns, alongside the map, **the index of the brush that
+painted each cell**: brushes compose by overwrite, so ownership is only knowable
+while they are being applied, and it is what turns a crosshair on a wall into a
+brush you can drag.
+
+That ownership map is served as its own binary route at its own width
+(`GET /maps/drafts/{id}/owners`, little-endian `uint16`, `65535` for untouched
+rock) and is deliberately **not** a tenth entry in `plane_order`: that tuple
+describes the map *format*, which has no such field, and all three clients
+validate their cube payload length against it.
+
+### Edits are typed, because the edit is also the undo record
+
+A `PATCH` carries one operation, never a whole document. A whole-document write
+cannot be inverted, so an editor built on one has to grow a second, separate
+history — and the two disagree the first time an edit does something the history
+did not model.
+
+There are ten ops, closed under inversion: `brush.add` / `.remove` / `.update` /
+`.replace` / `.reorder`, the same five for `ent.`, and `map.set`. The inverse of
+each is another of the ten, replayed through the same `_apply_one` that made the
+original, so there is no backwards code path that can disagree with the forwards
+one. `.update` merges a patch and an explicit `null` clears a field — which is why
+its inverse is always a whole-object `.replace`: there is no patch that says "put
+the key back".
+
+This is the first undo stack in the repo. It lives on the server because the
+document does, so the native client and the browser share one history rather than
+forking two.
+
+**An edit that would not compile is refused and nothing changes.** Not strictness
+for its own sake: a client re-fetches the map after every edit, so a document left
+half-mutated in a state that will not build is not a draft with a problem in it —
+it is a client with nothing to draw and no way back to something that draws.
+
+### Lint: the playability tests, live
+
+The checks that were assertions in `test_hassault_bundled.py` now live in
+`maplint.py`, and the tests call it. One definition, two callers — a second copy
+is how an editor ends up happily saving a map the suite would reject.
+
+Every check is there: the solid border, spawns a body fits in, the reachability
+flood fill, spawn spread, item count and kinds, items that are buried, stranded or
+sitting on a spawn, ladders that actually arrive somewhere, water that covers
+everything, and whether `write_cgz` would accept every cube — that last one asked
+at edit time rather than at export, because "your map cannot be saved" is the
+worst possible moment to learn it.
+
+A finding carries **the cells it is about**, not just a count, and that is the
+point of moving them here. "2348 standable cells cannot be walked to" is a number;
+the same 2348 cells painted red on the floor of the map you are standing in is an
+answer. The list is capped at 512 with the real total in `cellCount`.
+
+Lint is reported on every edit and on save, and **never enforced**. A map that
+plays badly is still a map somebody is halfway through making, and refusing to
+save it would break the editor exactly when it is most useful.
+
+### The texture palette is ours
+
+A texture is a bare integer slot, and AssaultCube resolves one through a map
+`.cfg` naming an image in its own package — content this project does not ship,
+which is why nothing has ever resolved a slot here and both renderers tint by
+hashing the id through a golden-ratio hue step.
+
+`textures.py` makes that a named catalogue: a slot has a name, a group, a colour
+and a **procedural** pattern, and no image file exists anywhere. Served at
+`GET /api/hassault/textures` so neither client holds a second copy — the
+`plane_order` / `zoom_levels` precedent.
+
+It is additive by construction. `textures.color_for` is the existing hue step
+ported to Python, and every catalogued entry's colour is *read off* it rather than
+chosen, so **a slot that nobody has named renders exactly as it does today** and
+naming one cannot change how it looks. The port is checked against the value at id
+255, which is where an f32 implementation with a truncated constant would have
+drifted from the f64 one both clients actually use.
+
+### Where the editor lives
+
+In the **native client**, because that is where the pixels are: it is the only one
+with real lighting, shadows and raw mouse input, so lights get authored in the
+renderer that shows them. It follows AssaultCube's own model — an in-world edit
+mode plus a typed console — which is also the one UI shape the native client can
+afford, its entire widget vocabulary being a 5×7 glyph font and a rectangle
+painter.
+
+The structured half is typed into the console, and costs nothing on either client
+because `console.py` already owns the registry and serves it: a command declared
+there is rendered by the native client *and* by the browser's `hassault.console`
+pane without either learning anything new. Eighteen `edit.*` commands arrive that
+way — enough to build a whole playable map without touching the mouse, which is
+what the backend suite does to prove it.
+
+`--mode=edit --map=hd_pit` opens one (`--new` starts from solid rock). It has no
+socket, exactly like Train and for a stronger version of the same reason: there
+is no match to be in, so there is no server to lie to about a camera that ignores
+gravity and walls.
+
+| | |
+| --- | --- |
+| WASD, space / shift | Fly. Forward follows the **aim**, pitch included — a walking camera's W is yaw-only because its feet are on the ground |
+| Scroll | Fly speed, multiplicatively, so one notch does the same proportional thing at any scale |
+| Click | Select what the crosshair is on. An entity in front of a floor wins: you are pointing at the thing in front |
+| Drag | A wall face resizes that side; a floor moves the whole brush; open rock draws a new room |
+| `[` `]` | Raise or lower the selected brush's floor |
+| E | Place an entity at the crosshair |
+| Z / Y / R | Undo, redo, save |
+
+Three things about that loop are load-bearing.
+
+**A drag draws a wireframe ghost and nothing else** — no request, no compile, no
+mesh. The edit goes out once, on release. **A press that does not move is a
+selection**, so click-to-select and drag-to-reshape are one gesture told apart by
+what it did rather than by a modifier nobody remembers.
+
+**The rebuild is a full one.** `build_world_mesh` is a flat loop over the grid and
+finishes in single-digit milliseconds in Rust, so there is nothing to gain from a
+dirty-region scheme that could disagree with the mesh a fresh load produces — and
+a mesh that is subtly wrong only after an edit is the worst kind to debug. It
+re-bakes the shadow map too: that is rendered once from a static sun onto static
+geometry, so a rebuilt world keeping the old one would light a room you just
+carved with the shadow of the rock that used to be there.
+
+**Edits run on a worker thread.** `NodeApi` is blocking HTTP — three requests
+stand a world up, and a runtime for three requests would be absurd — but an edit
+is a PATCH, a compile and two fetches, and doing that on the frame thread is a
+visible hitch every time you let go of the mouse. So it goes to a thread and the
+frame drains whatever finished, the way `prop::preload` already does.
+
+A refused edit is **surfaced, not swallowed**. The document is unchanged and the
+map on screen is still right, but an editor that silently ignored a gesture would
+be indistinguishable from one that had stopped working. The status line keeps the
+HTTP status's meaning rather than flattening it: a 409 from a save means "that map
+exists, pass overwrite" and a 422 means "this document will not build".
+
+`editor.rs` itself imports neither the renderer's pipeline nor winit, the same
+rule `world.rs` and `geometry.rs` follow, so the camera, the picking, the rect
+arithmetic and the gesture logic are all unit-tested with no GPU and no window.
+`FlyCamera` deliberately holds **no angles**: `Camera` already owns yaw and pitch,
+in degrees, and a second copy in radians would be two owners of the same two
+numbers with a conversion at every seam.
+
+### Backend surface
+
+| Route | Purpose |
+| --- | --- |
+| `POST /api/hassault/maps/drafts` | Open a draft, blank or seeded from a bundled map |
+| `GET /api/hassault/maps/drafts/{id}` | The document, revision and lint |
+| `PATCH /api/hassault/maps/drafts/{id}` | One typed edit; returns the new revision and lint |
+| `POST /api/hassault/maps/drafts/{id}/undo` \| `/redo` | Walk the history |
+| `GET /api/hassault/maps/drafts/{id}/lint` | Playability findings, with cells |
+| `GET /api/hassault/maps/drafts/{id}/owners` | Per cell, the brush that painted it (`uint16`) |
+| `POST /api/hassault/maps/drafts/{id}/save` | Write `maps/hd_<name>.json` atomically |
+| `DELETE /api/hassault/maps/drafts/{id}` | Close it |
+| `GET /api/hassault/maps/schema` | Brush ops, entity types and document fields |
+| `GET /api/hassault/textures` | The texture palette |
+
+`/maps/schema` is declared **before** `/maps/{name}`: the two are the same shape
+and FastAPI matches in declaration order, so the designer routes have to come
+first or `schema` is read as a map name.
+
+The schema is served for the same reason the weapon table is. An editor holding
+its own copy would eventually offer a field the compiler had stopped accepting,
+and the failure is a form that looks right attached to a map that will not build.
+
+### What it does not do yet
+
+- **No heightfields or corners.** The brush vocabulary is three ops, so `FHF`,
+  `CHF` and `CORNER` cells cannot be expressed and sloped terrain is not
+  authorable. A fourth `heightfield` op is the natural follow-up.
+- **`mapmodel` placement has nothing to place.** The entity is parsed and consumed
+  by nothing in either client, and its attr names a model slot resolved through
+  `.cfg` files this project does not read — pointing at content it could not ship.
+  It needs a prop catalogue of our own first.
+- **No live hot-swap into a running match.** `server.map` will load a
+  `draft:<id>` (that is what fixing it bought), but an edit does not reach a match
+  already in progress.
+
 ## The renderer
 
 `packages/core/src/modules/hassault/`. three is **lazy-loaded** on first render
@@ -4889,6 +5119,10 @@ against, and nothing to be MVP of.
   full field of view behave the way the game assumes. See
   [desktop-shell.mdx](../architecture/desktop-shell.mdx#presenting-a-pane).
 - **Commands:** `hassault.open` (HorribleAssault: Open).
+- **Console commands** (namespace `edit`, served to both clients): `edit.new`,
+  `.open`, `.close`, `.status`, `.save`, `.list`, `.select`, `.brush.add`,
+  `.brush.set`, `.brush.remove`, `.ent.add`, `.ent.set`, `.ent.remove`, `.undo`,
+  `.redo`, `.lint`, `.textures`, `.playtest`.
 - **Settings:** `hassault.installPath` — the folder containing `packages/maps`.
   Blank auto-detects the usual per-platform locations. **Optional**: it only adds
   an AssaultCube install's maps to the ones already bundled.
@@ -4918,6 +5152,11 @@ against, and nothing to be MVP of.
 - **Agent tools** (group `hassault`): `list_maps`, `list_matches`, `host`,
   `invite`, `status`, `surroundings`, `add_bot`, `remove_bot`, `console_exec`,
   `run_macro`.
+
+The [map designer](#the-map-designer) adds no pane of its own on the backend
+side: it is a set of routes plus an edit mode in the native client, and the
+console commands it declares are rendered by the existing `hassault.console` pane
+because that pane draws a *served* registry rather than a list of its own.
 
 Escape opens the in-game pause menu (`GameMenu.tsx`) rather than any shell
 surface — it releases pointer lock and keyboard capture the same way leaving a
@@ -5003,8 +5242,16 @@ it into an X rather than fading a second element in and out.
 | `GET /api/hassault/status` | What is playable: `map_count` (bundled + installed), `bundled_count`, and whether an AssaultCube install was found. `found: false` is **not** a gate — the bundled maps play without one |
 | `GET /api/hassault/maps` | Every playable map, bundled first, each tagged with its `source` |
 | `GET /api/hassault/maps/{name}` | Header, entities, spawn counts (JSON) |
-| `GET /api/hassault/maps/{name}/cubes` | The cube grid as raw byte planes |
-| `GET /api/hassault/maps/{name}/download` | A **bundled** map as a real `.cgz`, openable in AssaultCube's editor. 404 for anything else |
+| `GET /api/hassault/maps/{name}/cubes` | The cube grid as raw byte planes. `{name}` may be `draft:<id>`, which is how an unsaved map reaches every client through the path it already uses |
+| `GET /api/hassault/maps/{name}/download` | A **bundled** map — or a draft — as a real `.cgz`, openable in AssaultCube's editor. 404 for anything else, because re-serving an install's copyright maps is the thing this module does not do |
+| `POST /api/hassault/maps/drafts` | Open a map for editing, blank or seeded from a bundled one. See [The map designer](#the-map-designer) |
+| `GET`/`PATCH`/`DELETE /api/hassault/maps/drafts/{id}` | The document; one typed edit; close it |
+| `POST /api/hassault/maps/drafts/{id}/undo` \| `/redo` | Walk the edit history |
+| `GET /api/hassault/maps/drafts/{id}/lint` | Playability findings, each carrying the cells it is about |
+| `GET /api/hassault/maps/drafts/{id}/owners` | Per cell, the brush that painted it, as `uint16` |
+| `POST /api/hassault/maps/drafts/{id}/save` | Write `maps/hd_<name>.json` atomically |
+| `GET /api/hassault/maps/schema` | Brush ops, entity types and document fields — declared **before** `/maps/{name}`, which would otherwise match it |
+| `GET /api/hassault/textures` | The texture palette, ours and procedural |
 | `GET /api/hassault/weapons` | The loadout, in slot order — served so the client cannot drift from it |
 | `GET /api/hassault/hitbox` | The body a shot is resolved against — served for the same reason, and the one both clients draw to. See [The hitbox is served, and it is not finished](#the-hitbox-is-served-and-it-is-not-finished) |
 | `PUT /api/hassault/hitbox` | Tune the live body, or `{"reset": true}`. Not persisted |
@@ -5240,10 +5487,28 @@ Every CVar and ConCommand is strictly structured into modular namespaces:
 | `player.noclip` | `bool` CVar | Freely fly through walls and level geometry |
 | `player.infinite_ammo` | `bool` CVar | Infinite magazine and reserve ammunition |
 | `player.speed_scale` | `float` CVar | Movement speed modifier (0.1 to 10.0) |
-| `player.give(weapon)` | Command | Equips knife, pistol, carbine, shotgun, or sniper |
+| `player.give(weapon)` | Command | Equips a weapon with full ammo, by id (`knife`, `pistol`, `assault`, `shotgun`, `sniper`), by display name (`Sniper Rifle`), or by slot number. The offered list is **derived from the weapon table**, not written out here or in the command — see below |
 | `player.teleport(x, y, z)` | Command | Warps player to specified world coordinates |
 | `player.respawn()` | Command | Forces immediate respawn at a team spawn point |
 | `player.get_pos()` | Command | Returns player coordinate tuple `(x, y, z)` |
+
+`player.give` is the one command in this table worth a paragraph, because it
+spent its whole life broken in two ways that a served registry is supposed to
+prevent.
+
+It resolved its argument against a `weapons.WEAPON_NAMES` that has never existed,
+so every invocation raised `AttributeError` — and it *advertised* `carbine` and
+`subgun`, neither of which has ever been a weapon here, while omitting `assault`,
+which is one. That enum is served to both clients, so the autocomplete in the
+native console and the browser pane offered weapons the node had never heard of.
+
+Both halves now come from `weapons.WEAPONS` itself, via `weapon_slots()` and
+`resolve_slot()`. The argument is resolved with `is None` rather than truthiness,
+because **slot 0 is the knife and 0 is falsy** — `player.give 0` used to hand out
+the default rifle. And an out-of-range slot is refused rather than clamped, unlike
+`weapon_at`: that clamps because a bad slot arriving on the wire is a typo which
+must not drop a whole input frame, whereas a person typing one at a console wants
+to be told.
 
 #### `physics.*` & `hitbox.*` — World & Hitbox Tuning
 | Name | Type | Description |

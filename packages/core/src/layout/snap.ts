@@ -23,6 +23,37 @@ export interface SnapConfig {
 
 export const DEFAULT_SNAP: SnapConfig = { edge: 12, corner: 72, gap: 0 };
 
+/**
+ * Every snap zone, as data — the one list, and the only place a new zone is added.
+ *
+ * It used to be spelled out three more times: a `Set` in `serialize.ts`, an array in
+ * `window-placement.ts` and another in the agent's `tool-exec.ts`. Each is a *filter*
+ * that drops anything it does not recognize, so a zone added to the type and to
+ * `rectForZone` but missed in one of them fails in the quietest possible way — the
+ * snap works, and then the window comes back somewhere else after a reload, or the
+ * agent is told a zone it can see in the docs is not a zone.
+ */
+export const SNAP_ZONES: readonly SnapZone[] = [
+  'left',
+  'right',
+  'top',
+  'bottom',
+  'tl',
+  'tr',
+  'bl',
+  'br',
+  'center',
+  'third-l',
+  'third-c',
+  'third-r',
+  'max',
+];
+
+/** Narrow an untrusted string to a zone. Never guesses. */
+export function isSnapZone(value: unknown): value is SnapZone {
+  return typeof value === 'string' && (SNAP_ZONES as readonly string[]).includes(value);
+}
+
 /** Smallest a window may be dragged to. Below this the chrome stops being usable. */
 export const MIN_WINDOW_SIZE = { w: 240, h: 140 };
 
@@ -39,6 +70,12 @@ export interface Size {
  *
  * Corners are tested before edges: inside a corner box the pointer is within `edge`
  * of *two* sides at once, and whichever edge test ran first would win arbitrarily.
+ *
+ * This returns edges, corners and `max` only — never `center` or a `third-*`. Those
+ * are keyboard and palette zones. There is no unambiguous pointer gesture for "the
+ * middle third" that does not also redefine what dragging near an edge means, and the
+ * gesture below is tuned; a zone reachable only deliberately is better than an edge
+ * drag that sometimes yields a third.
  */
 export function snapZoneAt(
   p: { x: number; y: number },
@@ -71,8 +108,12 @@ export function snapZoneAt(
 }
 
 /**
- * The rect a zone occupies. Halves and quarters tile the surface exactly (the two
- * halves of an odd width differ by a pixel rather than overlapping or leaving a seam).
+ * The rect a zone occupies. Halves, quarters and thirds tile the surface exactly (the
+ * two halves of an odd width differ by a pixel rather than overlapping or leaving a
+ * seam; the last third absorbs whatever the first two floored away).
+ *
+ * `center` does not tile — it is a centred box, deliberately inset, for the one window
+ * you want to read rather than arrange.
  */
 export function rectForZone(
   zone: SnapZone,
@@ -91,6 +132,12 @@ export function rectForZone(
   const restH = fullH - halfH - g;
   const midX = x0 + halfW + g;
   const midY = y0 + halfH + g;
+  // Thirds, same rule one step further: the first two floor, the last takes the
+  // remainder, so the three always sum to `fullW` exactly at any width.
+  const thirdW = Math.floor((fullW - g * 2) / 3);
+  const lastThirdW = fullW - thirdW * 2 - g * 2;
+  const third2X = x0 + thirdW + g;
+  const third3X = third2X + thirdW + g;
 
   switch (zone) {
     case 'max':
@@ -111,6 +158,26 @@ export function rectForZone(
       return { x: x0, y: midY, w: halfW, h: restH };
     case 'br':
       return { x: midX, y: midY, w: restW, h: restH };
+    case 'third-l':
+      return { x: x0, y: y0, w: thirdW, h: fullH };
+    case 'third-c':
+      return { x: third2X, y: y0, w: thirdW, h: fullH };
+    case 'third-r':
+      return { x: third3X, y: y0, w: lastThirdW, h: fullH };
+    case 'center': {
+      // Two thirds of each axis, centred. Clamped so that on a surface smaller than
+      // twice the minimum this still yields a usable window rather than a sliver:
+      // `center` is the "read this one" zone, and a zone that can produce something
+      // undraggable is worse than one that just stops shrinking.
+      const w = Math.min(fullW, Math.max(MIN_WINDOW_SIZE.w, Math.round(fullW * (2 / 3))));
+      const h = Math.min(fullH, Math.max(MIN_WINDOW_SIZE.h, Math.round(fullH * (2 / 3))));
+      return {
+        x: x0 + Math.max(0, Math.round((fullW - w) / 2)),
+        y: y0 + Math.max(0, Math.round((fullH - h) / 2)),
+        w,
+        h,
+      };
+    }
   }
 }
 

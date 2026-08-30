@@ -61,8 +61,9 @@ export interface PaneState {
    * It is a flag rather than a parking list on the frame, so the pane stays in
    * its area at its index: the split geometry, the tab order and the area itself
    * all survive, and restoring puts the pane back exactly where it was. Pulling
-   * it out of the tree instead would collapse a single-pane area and there is no
-   * verb that can rebuild a split (see `move_pane` in the layout tools).
+   * it out of the tree instead would collapse a single-pane area, and rebuilding
+   * the split afterwards means guessing at the orientation and sizes it had
+   * (`movePaneTo`'s `edge` form can *make* a split, but not restore that one).
    */
   minimized?: boolean;
   /**
@@ -141,11 +142,30 @@ export type WindowMode = 'normal' | 'minimized' | 'maximized';
 
 /**
  * Where a window has been snapped. `max` is the whole surface; the four edges are
- * halves and the four corners are quarters. Stored rather than re-derived from the
+ * halves, the four corners are quarters, `center` is a centred two-thirds box and
+ * `third-*` are full-height vertical thirds. Stored rather than re-derived from the
  * rect, because a window the user dragged to exactly half-width is not snapped and
  * must not spring back to the restore rect when nudged.
+ *
+ * `center` and the thirds are **keyboard/palette-only** zones: `snapZoneAt` never
+ * returns them. A pointer drag has no unambiguous gesture for "the middle third"
+ * that would not also change what dragging near an edge means, and the edge/corner
+ * gesture is tuned. See `snap.ts`.
  */
-export type SnapZone = 'left' | 'right' | 'top' | 'bottom' | 'tl' | 'tr' | 'bl' | 'br' | 'max';
+export type SnapZone =
+  | 'left'
+  | 'right'
+  | 'top'
+  | 'bottom'
+  | 'tl'
+  | 'tr'
+  | 'bl'
+  | 'br'
+  | 'center'
+  | 'third-l'
+  | 'third-c'
+  | 'third-r'
+  | 'max';
 
 /**
  * One OS-style window on the desktop.

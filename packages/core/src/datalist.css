@@ -177,7 +177,14 @@
   font-size: 10.5px;
   color: var(--text-dim, #8a909c);
   white-space: nowrap;
-  min-width: 0;
+  /* Rigid. The figures are short and each one is atomic — "12 steps" clipped to
+     "12 ste" is not a shorter label, it is a broken one — so the *title* is the
+     elastic half of the head line and truncates with an ellipsis, which is a
+     shape readers already understand. Left to shrink alongside it (the default
+     `0 1 auto` plus `min-width: 0`) both halves gave way at once: the title lost
+     its tail and the figures were sliced mid-glyph, and in a 320px index the row
+     grew a horizontal scrollbar with the last figure under the split handle. */
+  flex: none;
 }
 
 /* A hairline divider rather than a middot: it is a technical rule, and it does

@@ -5,9 +5,11 @@ import {
   cascadeRect,
   clampRect,
   DEFAULT_SNAP,
+  isSnapZone,
   MIN_WINDOW_SIZE,
   rectForZone,
   rescaleRect,
+  SNAP_ZONES,
   snapZoneAt,
   TITLEBAR_KEEP,
 } from '../snap';
@@ -80,6 +82,69 @@ describe('rectForZone', () => {
 
   it('max fills the surface', () => {
     expect(rectForZone('max', VIEW)).toEqual({ x: 0, y: 0, w: 1000, h: 800 });
+  });
+
+  it('tiles the surface exactly with thirds, at any width', () => {
+    // Same invariant as the halves one width down: the last cell absorbs whatever
+    // the first two floored away, so three thirds always sum to the full extent
+    // rather than leaving a seam a window can never cover.
+    for (const w of [1000, 1001, 1002, 1003, 999]) {
+      const view = { w, h: 800 };
+      const [l, c, r] = (['third-l', 'third-c', 'third-r'] as const).map((z) =>
+        rectForZone(z, view),
+      );
+      expect(l.x).toBe(0);
+      expect(l.x + l.w).toBe(c.x);
+      expect(c.x + c.w).toBe(r.x);
+      expect(r.x + r.w).toBe(w);
+      // Full height, all three.
+      expect([l.h, c.h, r.h]).toEqual([800, 800, 800]);
+    }
+  });
+
+  it('centres the center zone at two thirds of each axis', () => {
+    const c = rectForZone('center', VIEW);
+    expect(c.w).toBe(667);
+    expect(c.h).toBe(533);
+    // Equal margins either side, to the pixel available: rects are integers, so
+    // an odd remainder cannot split evenly and one side keeps the extra pixel.
+    // Anything looser than ±1 is a box that sits visibly off-centre, which is the
+    // only way this zone can be wrong and still look plausible.
+    expect(Math.abs(c.x - (VIEW.w - (c.x + c.w)))).toBeLessThanOrEqual(1);
+    expect(Math.abs(c.y - (VIEW.h - (c.y + c.h)))).toBeLessThanOrEqual(1);
+  });
+
+  it('never shrinks the center zone below a usable window', () => {
+    // Two thirds of a tiny surface is smaller than the chrome needs. `center` is
+    // the "read this one" zone, so it stops shrinking rather than producing
+    // something that cannot be dragged back out.
+    const tiny = { w: 300, h: 180 };
+    const c = rectForZone('center', tiny);
+    expect(c.w).toBeGreaterThanOrEqual(Math.min(MIN_WINDOW_SIZE.w, tiny.w));
+    expect(c.h).toBeGreaterThanOrEqual(Math.min(MIN_WINDOW_SIZE.h, tiny.h));
+    expect(c.w).toBeLessThanOrEqual(tiny.w);
+    expect(c.h).toBeLessThanOrEqual(tiny.h);
+  });
+
+  it('has a rect for every declared zone', () => {
+    // `SNAP_ZONES` is what `serialize`, `window-placement` and the agent tool all
+    // filter against. A zone in that list with no case here would round-trip
+    // through persistence and then land nowhere.
+    for (const zone of SNAP_ZONES) {
+      const r = rectForZone(zone, VIEW);
+      expect(Number.isFinite(r.x + r.y + r.w + r.h)).toBe(true);
+      expect(r.w).toBeGreaterThan(0);
+      expect(r.h).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe('isSnapZone', () => {
+  it('accepts every declared zone and nothing else', () => {
+    for (const zone of SNAP_ZONES) expect(isSnapZone(zone)).toBe(true);
+    for (const bad of ['', 'middle', 'tl ', 'TL', null, undefined, 3, {}]) {
+      expect(isSnapZone(bad)).toBe(false);
+    }
   });
 });
 

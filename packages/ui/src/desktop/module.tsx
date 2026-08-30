@@ -14,7 +14,7 @@ import {
   cycleWindows,
   focusWindowDirection,
   setPaneWindowed,
-  snapWindow,
+  snapFocused,
   toggleWindowMaximized,
   toggleWindowMinimized,
   getSetting,
@@ -33,6 +33,7 @@ import {
 } from '@horrible/core';
 
 import { BUILTIN_BACKDROPS } from './backdrops';
+import { SNAP_ARROWS, SNAP_CELLS, SNAP_PREFIX, snapCommandId } from './snap-palette';
 import { isHomeCollapsed, SPLASH_BACKDROP_ID, toggleHomeCollapsed } from './backdrops/Splash';
 
 /** The four directions, in the order the frame's own bindings use. */
@@ -138,17 +139,14 @@ export const desktopModule: ModuleManifest = {
       title: `Window: Focus ${dir}`,
       run: () => void focusWindowDirection(dir),
     })),
-    ...(
-      [
-        ['left', 'left half'],
-        ['right', 'right half'],
-        ['top', 'maximized'],
-        ['bottom', 'bottom half'],
-      ] as const
-    ).map(([zone, label]) => ({
-      id: `window.snap:${zone}`,
-      title: `Window: Snap ${label}`,
-      run: () => void snapWindow(undefined, zone),
+    // Every zone in `snap-palette.ts` gets a command, so the palette, the chords
+    // and the command palette can never list different sets. `snapFocused` rather
+    // than `snapWindow`: on a tiling desktop the focused pane is not a window, and
+    // a snap verb that silently no-ops there reads as an unregistered binding.
+    ...SNAP_CELLS.map((cell) => ({
+      id: snapCommandId(cell.zone),
+      title: `Window: Snap ${cell.label}`,
+      run: () => void snapFocused(cell.zone),
     })),
   ],
   keybindings: [
@@ -166,11 +164,23 @@ export const desktopModule: ModuleManifest = {
     // something a mistyped chord should be able to do. It is a palette verb.
     // Snapping is `mod+shift+arrow` rather than `mod+alt+arrow`, which the frame
     // already uses to split an area — the two would collide on a tiling desktop,
-    // where both are live.
+    // where both are live. These four halves are the fast path and stay bare.
     { key: 'mod+shift+left', command: 'window.snap:left' },
     { key: 'mod+shift+right', command: 'window.snap:right' },
     { key: 'mod+shift+up', command: 'window.snap:top' },
     { key: 'mod+shift+down', command: 'window.snap:bottom' },
+    // The other nine zones (corners, centre, thirds) go behind the `mod+alt+s`
+    // prefix. There is no free third-modifier arrow family left, and thirteen
+    // zones want a palette anyway — `SnapAssist` renders this same table as a
+    // grid while the prefix is pending.
+    ...SNAP_CELLS.map((cell) => ({
+      key: `${SNAP_PREFIX} ${cell.key}`,
+      command: snapCommandId(cell.zone),
+    })),
+    ...SNAP_ARROWS.map((arrow) => ({
+      key: `${SNAP_PREFIX} ${arrow.key}`,
+      command: snapCommandId(arrow.zone),
+    })),
     // Directional window focus only while a window has focus, so on a tiling
     // desktop the identical frame bindings (`alt+arrow` = focus area) keep
     // working and these do not shadow them.

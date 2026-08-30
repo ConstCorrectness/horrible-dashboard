@@ -37,6 +37,7 @@ import { Oobe } from './desktop/Oobe';
 import { OOBE_COMPLETE_KEY } from './desktop/constants';
 import { Taskbar } from './desktop/Taskbar';
 import { registerDesktopModule } from './desktop/module';
+import { SnapAssist } from './desktop/SnapAssist';
 import { WindowLayer } from './desktop/WindowLayer';
 import { Frame } from './layout/Frame';
 import { Minibuffer } from './layout/Minibuffer';
@@ -242,8 +243,7 @@ export function AppShell({
           // wizard asked again on every fresh browser profile.
           key: NAME_SETTING_KEY,
           title: 'What the app calls you',
-          description:
-            'Used in the greeting on the desktop backdrop. Leave it blank for no name.',
+          description: 'Used in the greeting on the desktop backdrop. Leave it blank for no name.',
           type: 'string',
           default: '',
         },
@@ -350,6 +350,11 @@ export function AppShell({
       {/* Half-typed chord (mod+k …) — without this the keyboard just goes quiet
           for a second and the user has no idea the shell is waiting. */}
       {chordHint && <div className="shell-chord-hint">{chordHint}&nbsp;…</div>}
+      {/* The snap prefix gets a grid rather than the bare hint above: thirteen
+          zones is more than anyone memorizes, and the palette is where the
+          corners and thirds are discovered at all. It renders nothing unless the
+          pending chord is that prefix. */}
+      <SnapAssist hint={chordHint} />
       <CaptureHud />
       <Spotlight open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       <SymbolSearchModal />

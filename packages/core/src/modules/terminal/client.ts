@@ -14,11 +14,24 @@ export class TerminalSession {
     onOutput: (data: string) => void,
     onExit: () => void,
     onError?: (message: string) => void,
+    /**
+     * The shell the backend actually spawned. It reports a fallback rather than
+     * hiding one, so a pane whose picker says "Git Bash" over a PowerShell prompt
+     * is impossible — see `manager.py`.
+     */
+    onStarted?: (shell: string | null, requested: string | null) => void,
   ) {
     this.unsub = subscribeChannel('terminal', (msg) => {
-      const data = (msg.data ?? {}) as { id?: string; data?: string; message?: string };
+      const data = (msg.data ?? {}) as {
+        id?: string;
+        data?: string;
+        message?: string;
+        shell?: string | null;
+        requestedShell?: string | null;
+      };
       if (data.id !== this.id) return;
       if (msg.event === 'output') onOutput(data.data ?? '');
+      else if (msg.event === 'started') onStarted?.(data.shell ?? null, data.requestedShell ?? null);
       else if (msg.event === 'exit') onExit();
       // Spawn/IO failures (e.g. the shell isn't found on this host) — surface
       // them instead of leaving a blank, dead pane.
@@ -26,8 +39,9 @@ export class TerminalSession {
     });
   }
 
-  start(cols: number, rows: number, cwd?: string): void {
-    sendChannel('terminal', 'start', { id: this.id, cols, rows, cwd });
+  /** `shell` is an **id** from `GET /api/terminal/shells`, never a path. */
+  start(cols: number, rows: number, cwd?: string, shell?: string): void {
+    sendChannel('terminal', 'start', { id: this.id, cols, rows, cwd, shell });
   }
 
   input(data: string): void {

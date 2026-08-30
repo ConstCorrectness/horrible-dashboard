@@ -7,7 +7,7 @@ sidebar_label: Terminal
 
 Embedded terminals for working on a machine from inside the app.
 
-**Status: frontend implemented (D2).** The `terminal.instance` panel (xterm.js)
+**Status: implemented.** The `terminal.instance` panel (xterm.js)
 binds to a backend PTY session over the `terminal` channel — input/resize up,
 output down — and kills its PTY **on close, not on unmount**. That distinction is
 the whole reason a shell now survives a workspace switch: panes unmount whenever
@@ -18,7 +18,11 @@ and its xterm element is kept and re-attached so scrollback returns intact. A
 consequence worth knowing: `initialCommand` is now typed once per *pane*, where it
 used to be retyped on every return. `runCommand` opens a terminal
 pre-running a command (via an `initialCommand` pane param). The agent's gated
-`terminal.exec` tool is D3.
+`terminal.exec` tool is implemented and gated.
+
+**Which shell** is a choice, not a fixed platform default — see
+[Choosing a shell](#choosing-a-shell). On Windows that is what makes real bash
+available out of the box when Git for Windows is installed.
 
 ## Contributions to the layout shell
 
@@ -40,6 +44,12 @@ pre-running a command (via an `initialCommand` pane param). The agent's gated
   to the system monospace if the chosen font isn't installed) and
   `terminal.fontSize` (px). Read live via `useSetting` in `TerminalPane`; changes
   apply to open terminals immediately (xterm re-fits and the PTY is resized).
+  `terminal.shell` is the standing default shell **id** (blank = the platform
+  default); the pane's shell button is the discoverable way to set it.
+- **Pane params:** `cwd`, `initialCommand`, and `shell` — so
+  `openTerminal({ cwd, shell })` opens a specific shell in a specific directory.
+  A pane param beats the setting: it is a specific request, the setting is a
+  preference.
 
 ## Backend surface
 
@@ -50,7 +60,8 @@ where the backend runs** — there is no client-side shell in either layout, so
 browser and desktop are byte-for-byte identical and agents and humans share the
 same terminals. Cross-platform PTYs unify on `ptyprocess` (POSIX) and `pywinpty`
 (Windows ConPTY), which expose the same `PtyProcess.spawn` API behind
-`pty.py`; the default shell is PowerShell on Windows. On POSIX it prefers
+`pty.py`; the default shell is PowerShell on Windows (`terminal.shell` and the
+pane's picker override it — see below). On POSIX it prefers
 `$SHELL`, but that is often unset when the app is launched from a GUI launcher
 rather than a terminal (and `/bin/bash` doesn't exist on every distro, e.g.
 NixOS), so it falls back through common shells down to `/bin/sh`. Each PTY's
@@ -61,10 +72,54 @@ spawn/IO failures are sent to the pane as an `error` event and shown inline
 
 Channel protocol (`{channel:'terminal', event, data}`):
 
-| Direction     | event                                | data                     |
-| ------------- | ------------------------------------ | ------------------------ |
-| client→server | `start` / `input` / `resize` / `kill`| `{id, …}`                |
-| server→client | `started` / `output` / `exit` / `error` | `{id, …}`             |
+| Direction     | event                                | data                                |
+| ------------- | ------------------------------------ | ----------------------------------- |
+| client→server | `start`                              | `{id, cols, rows, cwd?, shell?}`    |
+| client→server | `input` / `resize` / `kill`          | `{id, …}`                           |
+| server→client | `started`                            | `{id, shell, requestedShell?}`      |
+| server→client | `output` / `exit` / `error`          | `{id, …}`                           |
+
+`started` echoes the shell that actually started, and carries `requestedShell`
+**only when that differs from what was asked for**. A silent fallback would leave
+the pane captioned with a shell it is not running, so the pane also prints the
+substitution into the terminal itself.
+
+## Choosing a shell
+
+`GET /api/terminal/shells` returns what this machine can launch —
+`{shells: [{id, label, kind, path, note}], default}` — discovered by
+`backend/modules/terminal/shells.py` and cached process-wide.
+`POST /api/terminal/shells/refresh` re-probes, for a shell installed mid-session.
+
+On Windows that is Git Bash, MSYS2 bash, PowerShell 7, Windows PowerShell, the
+Command Prompt, and one entry per installed WSL distribution. On POSIX it is
+`$SHELL` plus whichever of bash/zsh/fish/sh are on PATH.
+
+Three rules are load-bearing:
+
+**The wire carries an id, never a path.** `shells.resolve()` matches an id against
+the discovered set and falls back to the platform default for anything else.
+Anything that can open the websocket can send a `start` frame; if that frame could
+name an executable, the terminal channel would be an arbitrary-exec route with a
+PTY attached. This is the security boundary, and it is why `path` in the catalog is
+display-only.
+
+**Git Bash is found by absolute path, never through PATH.** On Windows
+`shutil.which("bash")` resolves to `C:\Windows\System32\bash.exe` — the **WSL
+launcher shim**, not Git Bash. Offering that under a bash label would hand the user
+a shell whose filesystem is `/mnt/c/...`, where every `cwd` the app passes is wrong
+and every path it prints is unusable by the file explorer beside it. Nothing errors;
+the shell just quietly means somewhere else. WSL is offered, but only under its own
+name with that difference stated. `backend/tests/test_terminal.py` pins this.
+
+**Three states, not two** — the [hardware](hardware.mdx) module's rule. "WSL is
+installed but would not answer" is a different fact from "there is no WSL", so such
+an entry appears in the catalog with a `note` and no `path`, and the picker shows it
+as unlaunchable rather than omitting it.
+
+Switching a pane's shell is a **respawn**: a PTY is bound to the process it started,
+so the old session is killed and a new one created. The picker says so before you
+choose.
 
 ## Agent integration
 

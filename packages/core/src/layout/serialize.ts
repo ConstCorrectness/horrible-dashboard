@@ -17,6 +17,7 @@ import {
   normalize,
   windowId,
 } from './model';
+import { isSnapZone } from './snap';
 import { DEFAULT_BACKDROP } from './types';
 import type {
   AreaNode,
@@ -29,7 +30,6 @@ import type {
   PaneState,
   RegionPosition,
   RegionState,
-  SnapZone,
   WindowMode,
   WindowRect,
   WindowState,
@@ -48,7 +48,6 @@ export const FRAME_SCHEMA = 'horrible.frame';
  */
 export const FRAME_VERSION = 2;
 
-const SNAP_ZONES = new Set(['left', 'right', 'top', 'bottom', 'tl', 'tr', 'bl', 'br', 'max']);
 /** Where a v2 window with an unreadable rect lands. */
 const DEFAULT_WINDOW_RECT: WindowRect = { x: 60, y: 48, w: 720, h: 480 };
 /** The v1 default, in the old fractional basis. */
@@ -315,7 +314,7 @@ export function deserialize(
         trackNodeSeq(aid);
         const mode: WindowMode =
           entry.mode === 'minimized' || entry.mode === 'maximized' ? entry.mode : 'normal';
-        const snap = SNAP_ZONES.has(entry.snap as string) ? (entry.snap as SnapZone) : undefined;
+        const snap = isSnapZone(entry.snap) ? entry.snap : undefined;
         return {
           id,
           area: {

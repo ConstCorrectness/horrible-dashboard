@@ -26,11 +26,14 @@ from backend.version import app_version
 from backend.modules.hassault import (
     assets,
     client_install,
+    drafts,
     fabric,
     hitbox,
     lore,
+    maplint,
     mapsource,
     pickups,
+    textures,
     weapons,
 )
 from backend.modules.hassault.cgz import PLANE_ORDER, CgzError, write_cgz
@@ -45,6 +48,14 @@ from backend.modules.hassault.match import MAX_PLAYERS, match_server
 from backend.modules.hassault.physics import World as SimWorld
 from backend.modules.hassault.models import (
     BrowseMatch,
+    DraftCreateRequest,
+    DraftInfo,
+    DraftSaveRequest,
+    DraftSaveResponse,
+    LintFinding,
+    MapEdit,
+    MapSchema,
+    TextureOut,
     BrowsePlayer,
     CreateMatchRequest,
     EntityOut,
@@ -82,6 +93,8 @@ def _load(name: str):
     the match server reads through too — one parse serves both."""
     try:
         world = assets.load_map(name)
+    except drafts.DraftError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except CgzError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if world is None:
@@ -158,6 +171,204 @@ async def get_maps() -> list[MapSummary]:
         MapSummary(name=m["name"], source=m["source"], size=int(m["size"]))
         for m in assets.list_maps()
     ]
+
+
+# ---- the map designer -------------------------------------------------------------
+#
+# There are no designer *read* routes for the map itself, and that is the design
+# rather than an omission: a draft is addressed as `draft:<id>`, `assets.load_map`
+# resolves it, and so `GET /maps/{name}` and `/maps/{name}/cubes` already serve an
+# unsaved document. All three clients' boot paths work on a draft unchanged.
+#
+# What is here is the write half, plus the two things a draft has that a map does
+# not: the source document it is painted from, and which brush owns each cell.
+
+
+def _draft_info(draft: drafts.Draft, with_lint: bool = True) -> DraftInfo:
+    info = draft.info()
+    findings = (
+        [LintFinding(**f.to_dict()) for f in maplint.lint(drafts.compiled(draft.id))]
+        if with_lint
+        else []
+    )
+    return DraftInfo(**info, lint=findings)
+
+
+def _draft(draft_id: str) -> drafts.Draft:
+    """A draft, as HTTP errors.
+
+    `DraftError` is a 404 or a 400 depending on what went wrong, and `CgzError` is
+    a 422 — the same split `_load` makes, because they are the same two failures:
+    a thing that is not there, and a thing that is there and cannot be built.
+    """
+    try:
+        return drafts.require(draft_id)
+    except drafts.DraftError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/maps/drafts", response_model=DraftInfo)
+async def create_draft(body: DraftCreateRequest) -> DraftInfo:
+    """Open a map for editing, blank or seeded from one this app ships.
+
+    Only bundled maps can be seeded from, and not for the licensing reason this
+    module usually gives: an install's maps are `.cgz` files, and a compiled grid
+    cannot be turned back into the rectangles it was painted from. The document is
+    what gets edited, and only ours have one.
+    """
+    try:
+        draft = drafts.create(body.from_map)
+    except drafts.DraftError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except CgzError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _draft_info(draft)
+
+
+@router.get("/maps/drafts/{draft_id}", response_model=DraftInfo)
+async def get_draft(draft_id: str) -> DraftInfo:
+    return _draft_info(_draft(draft_id))
+
+
+@router.delete("/maps/drafts/{draft_id}")
+async def delete_draft(draft_id: str) -> dict[str, bool]:
+    return {"closed": drafts.close(draft_id)}
+
+
+@router.patch("/maps/drafts/{draft_id}", response_model=DraftInfo)
+async def edit_draft(draft_id: str, body: MapEdit) -> DraftInfo:
+    """One edit, which is also its own undo record.
+
+    An edit that would leave a document that cannot compile is refused and nothing
+    changes — see `drafts._mutate`. That is not strictness for its own sake: a
+    client re-fetches the map after every edit, so a document that will not build
+    leaves it with nothing to draw and no way back to something that does.
+    """
+    _draft(draft_id)
+    edit = body.model_dump(by_alias=True, exclude_none=True)
+    # `value` is the one field where a null is meaningful — `map.set` with a null
+    # clears the key — so it survives the pruning above.
+    if body.op == "map.set":
+        edit["value"] = body.value
+    try:
+        draft = drafts.apply(draft_id, edit)
+    except drafts.DraftError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except CgzError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _draft_info(draft)
+
+
+@router.post("/maps/drafts/{draft_id}/undo", response_model=DraftInfo)
+async def undo_draft(draft_id: str) -> DraftInfo:
+    _draft(draft_id)
+    try:
+        return _draft_info(drafts.undo(draft_id))
+    except drafts.DraftError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/maps/drafts/{draft_id}/redo", response_model=DraftInfo)
+async def redo_draft(draft_id: str) -> DraftInfo:
+    _draft(draft_id)
+    try:
+        return _draft_info(drafts.redo(draft_id))
+    except drafts.DraftError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/maps/drafts/{draft_id}/lint", response_model=list[LintFinding])
+async def lint_draft(draft_id: str) -> list[LintFinding]:
+    """Would this map play? Every check the bundled test suite makes, on demand.
+
+    The findings carry the cells they are about, because the useful form of "2348
+    standable cells cannot be walked to" is not a sentence — it is those cells,
+    painted red on the floor of the map you are standing in.
+    """
+    _draft(draft_id)
+    return [LintFinding(**f.to_dict()) for f in drafts.lint(draft_id)]
+
+
+@router.get("/maps/drafts/{draft_id}/owners")
+async def draft_owners(draft_id: str) -> Response:
+    """Per cell, the index of the brush that painted it, as little-endian uint16.
+
+    This is what turns a crosshair on a wall into a brush you can drag. Brushes
+    compose by overwrite, so ownership is only knowable while they are being
+    applied — recovering it afterwards means replaying the whole list.
+
+    Binary, and **not** a tenth entry in `plane_order`: that tuple describes the
+    map *format*, which has no such field, and all three clients check their cube
+    payload against its length. `65535` is "untouched rock", which is why this is
+    unsigned 16-bit rather than the signed -1 the document uses.
+    """
+    _draft(draft_id)
+    owned = drafts.owners(draft_id)
+    body = b"".join(
+        (65535 if owner < 0 else owner).to_bytes(2, "little") for owner in owned
+    )
+    return Response(
+        content=body,
+        media_type="application/octet-stream",
+        headers={
+            "X-Map-Cells": str(len(owned)),
+            "X-Map-Owner-None": "65535",
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@router.post("/maps/drafts/{draft_id}/save", response_model=DraftSaveResponse)
+async def save_draft(draft_id: str, body: DraftSaveRequest) -> DraftSaveResponse:
+    """Write the document to `maps/<name>.json`.
+
+    The saved artifact is the **brush list**, not a `.cgz`. That is the whole
+    reason this format is the source of truth: a committed binary is unreviewable
+    and undiffable, whereas a map here is a few dozen rectangles and a reviewer
+    can see what changed. `.cgz` remains an export, on the route below.
+
+    Lint is returned rather than enforced. A map that plays badly is still a map
+    somebody is halfway through making, and refusing to save it would make the
+    editor unusable exactly when it is most useful.
+    """
+    _draft(draft_id)
+    try:
+        name = drafts.save(draft_id, body.name, overwrite=body.overwrite)
+    except drafts.DraftError as exc:
+        # "already exists" is a conflict the caller can resolve by asking again
+        # with `overwrite`; everything else here is a bad name.
+        status = 409 if "already exists" in str(exc) else 400
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    except CgzError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return DraftSaveResponse(
+        name=name,
+        path=str(mapsource.MAPS_DIR / f"{name}.json"),
+        lint=[LintFinding(**f.to_dict()) for f in drafts.lint(draft_id)],
+    )
+
+
+@router.get("/maps/schema", response_model=MapSchema)
+async def get_map_schema() -> MapSchema:
+    """Every brush op, entity type and document field an editor can offer.
+
+    Served for the `plane_order` reason. An editor that held its own copy of this
+    would eventually offer a field the compiler had stopped accepting, and the
+    failure would be a form that looks right and a map that will not build.
+    """
+    return MapSchema(**mapsource.schema())
+
+
+@router.get("/textures", response_model=list[TextureOut])
+async def get_textures() -> list[TextureOut]:
+    """The texture palette.
+
+    Ours, not AssaultCube's — a slot there resolves through a map `.cfg` naming an
+    image in its package, which is content this project does not ship. Served so
+    neither client holds a second copy of the table, and additive by construction:
+    an uncatalogued slot keeps exactly the colour both renderers already give it.
+    """
+    return [TextureOut(**t) for t in textures.catalog()]
 
 
 @router.get("/maps/{name}", response_model=MapInfo)
@@ -480,7 +691,7 @@ async def download_map(name: str) -> Response:
     own disk, and re-serving copyright content over HTTP is exactly the thing
     this module does not do.
     """
-    if name not in mapsource.bundled_names():
+    if name not in mapsource.bundled_names() and not name.startswith(drafts.PREFIX):
         raise HTTPException(
             status_code=404,
             detail=f"{name!r} is not a bundled map; only maps this app ships can be exported",

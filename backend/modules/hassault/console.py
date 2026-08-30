@@ -27,7 +27,17 @@ from typing import Any, Callable, Coroutine, Literal
 from pydantic import BaseModel, Field
 
 from backend.paths import data_dir
-from backend.modules.hassault import assets, bots, hitbox, weapons
+from backend.modules.hassault import (
+    assets,
+    bots,
+    drafts,
+    hitbox,
+    pickups,
+    textures,
+    weapons,
+)
+from backend.modules.hassault.cgz import ENTITY_NAMES, CgzError
+from backend.modules.hassault.physics import World as SimWorld
 from backend.modules.hassault.match import MAX_PLAYERS, match_server
 
 logger = logging.getLogger(__name__)
@@ -171,6 +181,37 @@ BUILTIN_MACROS: list[MacroDefinition] = [
 ]
 
 
+def _edit_value(field: str, raw: Any) -> Any:
+    """Coerce a console argument into what a map document field wants.
+
+    A colour is the case that needs it: `edit.ent.set(field='color',
+    value='255,240,206')` is how you say a colour on a command line, and the
+    document wants `[255, 240, 206]`. Everything else is already a scalar by the
+    time it gets here.
+    """
+    if field in ("color", "watercolor", "rect", "attrs") and isinstance(raw, str):
+        parts = [p.strip() for p in raw.replace("[", "").replace("]", "").split(",")]
+        try:
+            return [int(p) for p in parts if p]
+        except ValueError:
+            raise ValueError(f"{field} wants a list of numbers, got {raw!r}") from None
+    return raw
+
+
+def _split_named(token: str) -> tuple[str, str, str]:
+    """Split `k:v` / `k=v` on whichever separator comes first, or `("", "", token)`.
+
+    Whichever comes *first* matters: `radius=1:2` is the key `radius`, and
+    splitting on the colon instead would invent a key of `radius=1`.
+    """
+    colon, equals = token.find(":"), token.find("=")
+    candidates = [i for i in (colon, equals) if i > 0]
+    if not candidates:
+        return "", "", token
+    at = min(candidates)
+    return token[:at].strip(), token[at], token[at + 1 :].strip()
+
+
 class ConsoleRegistry:
     """Central registry of Console Variables (CVars), Console Commands (ConCommands),
     and Macros for hAssault."""
@@ -185,6 +226,13 @@ class ConsoleRegistry:
             ],
         ] = {}
         self.macros: dict[str, MacroDefinition] = {}
+        #: The map being edited, and what is selected in it. Process-global for
+        #: the reason the match server is: this is one person's node, and
+        #: threading a draft id through every `edit.*` command would be ceremony
+        #: around a number that is always the same one. The native client's
+        #: crosshair writes the same selection the typed commands read.
+        self.active_draft: str = ""
+        self.selection: dict[str, int] = {}
         self._init_defaults()
         self._load_macros()
 
@@ -691,21 +739,20 @@ class ConsoleRegistry:
             "player.give",
             "player",
             self._cmd_player_give,
-            description="Equip a weapon by name or ID (knife, pistol, carbine, shotgun, sniper, subgun)",
+            description="Equip a weapon by name or slot, with full ammo",
             signature="player.give(weapon: str)",
             params=[
                 ConCommandParameter(
                     name="weapon",
-                    type="string",
+                    type="enum",
                     required=True,
-                    enum_values=[
-                        "knife",
-                        "pistol",
-                        "carbine",
-                        "shotgun",
-                        "sniper",
-                        "subgun",
-                    ],
+                    # Derived from the weapon table, not written out again. The
+                    # hardcoded list this replaces offered `carbine` and `subgun`
+                    # — neither has ever been a weapon here — and omitted
+                    # `assault`, which is one. This registry is *served*, so that
+                    # list was the autocomplete in both clients.
+                    enum_values=weapons.weapon_slots(),
+                    description="A weapon id, its display name, or its slot number.",
                 )
             ],
             flags=["cheat"],
@@ -814,6 +861,231 @@ class ConsoleRegistry:
             signature="help(query: str = '')",
             params=[ConCommandParameter(name="query", type="string", default="")],
             example='help("bot")',
+        )
+
+        # ---- the map designer -------------------------------------------------
+        #
+        # Declared here rather than anywhere client-side, because this registry is
+        # *served*: `GET /console/definitions` hands the list to the native client
+        # and to the browser's console pane, and both render what they are given.
+        # So the editor's typed half arrives in two clients at once, and neither
+        # can offer a command the node has never heard of.
+        #
+        # The commands operate on **the active draft**, which is process-global
+        # for the same reason the match server is: this is one person's node, and
+        # threading a draft id through every command would be ceremony around a
+        # number that is always the same one.
+
+        self._register_command(
+            "edit.new",
+            "edit",
+            self._cmd_edit_new,
+            description="Open a blank map for editing",
+            signature="edit.new(name: str = '')",
+            example="edit.new(name='arena')",
+            params=[ConCommandParameter(name="name", type="string", default="")],
+        )
+        self._register_command(
+            "edit.open",
+            "edit",
+            self._cmd_edit_open,
+            description="Open one of this app's maps for editing",
+            signature="edit.open(map: str)",
+            example="edit.open(map='hd_pit')",
+            params=[
+                ConCommandParameter(
+                    name="map",
+                    type="string",
+                    required=True,
+                    description="A bundled map name. Only ours have a source document to edit.",
+                )
+            ],
+        )
+        self._register_command(
+            "edit.close",
+            "edit",
+            self._cmd_edit_close,
+            description="Discard the active draft without saving",
+            signature="edit.close()",
+            example="edit.close()",
+        )
+        self._register_command(
+            "edit.status",
+            "edit",
+            self._cmd_edit_status,
+            description="What is being edited, and what is selected",
+            signature="edit.status()",
+            example="edit.status()",
+        )
+        self._register_command(
+            "edit.save",
+            "edit",
+            self._cmd_edit_save,
+            description="Write the draft to its JSON brush list",
+            signature="edit.save(name: str = '', overwrite: bool = False)",
+            example="edit.save(name='arena')",
+            params=[
+                ConCommandParameter(name="name", type="string", default=""),
+                ConCommandParameter(name="overwrite", type="boolean", default=False),
+            ],
+        )
+        self._register_command(
+            "edit.list",
+            "edit",
+            self._cmd_edit_list,
+            description="The draft's brushes in paint order, or its entities",
+            signature="edit.list(what: str = 'brushes')",
+            example="edit.list(what='entities')",
+            params=[
+                ConCommandParameter(
+                    name="what",
+                    type="enum",
+                    default="brushes",
+                    enum_values=["brushes", "entities"],
+                )
+            ],
+        )
+        self._register_command(
+            "edit.select",
+            "edit",
+            self._cmd_edit_select,
+            description="Choose the brush or entity the set/remove commands act on",
+            signature="edit.select(what: str, index: int)",
+            example="edit.select(what='brush', index=3)",
+            params=[
+                ConCommandParameter(
+                    name="what",
+                    type="enum",
+                    required=True,
+                    enum_values=["brush", "entity"],
+                ),
+                ConCommandParameter(name="index", type="integer", required=True),
+            ],
+        )
+        self._register_command(
+            "edit.brush.add",
+            "edit",
+            self._cmd_edit_brush_add,
+            description="Paint a room, a block of solid rock, or a staircase",
+            signature="edit.brush.add(op, x, y, w, h, floor=0, ceil=16)",
+            example="edit.brush.add(op='room', x=8, y=8, w=24, h=16, ceil=14)",
+            params=[
+                ConCommandParameter(
+                    name="op",
+                    type="enum",
+                    required=True,
+                    enum_values=["room", "solid", "stairs"],
+                ),
+                ConCommandParameter(name="x", type="integer", required=True),
+                ConCommandParameter(name="y", type="integer", required=True),
+                ConCommandParameter(name="w", type="integer", required=True),
+                ConCommandParameter(name="h", type="integer", required=True),
+                ConCommandParameter(name="floor", type="integer", default=0),
+                ConCommandParameter(name="ceil", type="integer", default=16),
+                ConCommandParameter(
+                    name="to",
+                    type="integer",
+                    description="Stairs only: the height the run climbs to.",
+                ),
+            ],
+        )
+        self._register_command(
+            "edit.brush.set",
+            "edit",
+            self._cmd_edit_brush_set,
+            description="Change one field on the selected brush",
+            signature="edit.brush.set(field: str, value, index: int = -1)",
+            example="edit.brush.set(field='ceil', value=18)",
+            params=[
+                ConCommandParameter(name="field", type="string", required=True),
+                ConCommandParameter(name="value", type="string", required=True),
+                ConCommandParameter(name="index", type="integer", default=-1),
+            ],
+        )
+        self._register_command(
+            "edit.brush.remove",
+            "edit",
+            self._cmd_edit_brush_remove,
+            description="Delete the selected brush",
+            signature="edit.brush.remove(index: int = -1)",
+            example="edit.brush.remove()",
+            params=[ConCommandParameter(name="index", type="integer", default=-1)],
+        )
+        self._register_command(
+            "edit.ent.add",
+            "edit",
+            self._cmd_edit_ent_add,
+            description="Place a spawn, a light, an item or a ladder",
+            signature="edit.ent.add(type: str, x: int, y: int)",
+            example="edit.ent.add(type='playerstart', x=12, y=12)",
+            params=[
+                ConCommandParameter(name="type", type="string", required=True),
+                ConCommandParameter(name="x", type="integer", required=True),
+                ConCommandParameter(name="y", type="integer", required=True),
+            ],
+        )
+        self._register_command(
+            "edit.ent.set",
+            "edit",
+            self._cmd_edit_ent_set,
+            description="Change one field on the selected entity",
+            signature="edit.ent.set(field: str, value, index: int = -1)",
+            example="edit.ent.set(field='radius', value=112)",
+            params=[
+                ConCommandParameter(name="field", type="string", required=True),
+                ConCommandParameter(name="value", type="string", required=True),
+                ConCommandParameter(name="index", type="integer", default=-1),
+            ],
+        )
+        self._register_command(
+            "edit.ent.remove",
+            "edit",
+            self._cmd_edit_ent_remove,
+            description="Delete the selected entity",
+            signature="edit.ent.remove(index: int = -1)",
+            example="edit.ent.remove()",
+            params=[ConCommandParameter(name="index", type="integer", default=-1)],
+        )
+        self._register_command(
+            "edit.undo",
+            "edit",
+            self._cmd_edit_undo,
+            description="Walk the draft back one edit",
+            signature="edit.undo()",
+            example="edit.undo()",
+        )
+        self._register_command(
+            "edit.redo",
+            "edit",
+            self._cmd_edit_redo,
+            description="Replay the edit undo took back",
+            signature="edit.redo()",
+            example="edit.redo()",
+        )
+        self._register_command(
+            "edit.lint",
+            "edit",
+            self._cmd_edit_lint,
+            description="Would this map play? Every check the bundled suite makes",
+            signature="edit.lint()",
+            example="edit.lint()",
+        )
+        self._register_command(
+            "edit.textures",
+            "edit",
+            self._cmd_edit_textures,
+            description="The texture palette, by name and slot",
+            signature="edit.textures(group: str = '')",
+            example="edit.textures(group='floor')",
+            params=[ConCommandParameter(name="group", type="string", default="")],
+        )
+        self._register_command(
+            "edit.playtest",
+            "edit",
+            self._cmd_edit_playtest,
+            description="Load the draft into a match on this node and walk it",
+            signature="edit.playtest()",
+            example="edit.playtest()",
         )
 
     # -------------------------------------------------------------------------
@@ -948,17 +1220,26 @@ class ConsoleRegistry:
         map_name = str(args.get("map_name") or args.get("map") or "").strip()
         if not map_name:
             raise ValueError("map name required")
-        world = assets.load_map(map_name)
-        if world is None:
+        parsed = assets.load_map(map_name)
+        if parsed is None:
             raise ValueError(f"no map named {map_name!r}")
         room = ctx.resolve_room()
         if room is None:
             room = match_server.create(map_name)
             ctx.print(f"[server] Started new match on '{map_name}' (room {room.id}).")
             return {"room": room.id, "map": map_name}
+        # Everything `match_server.create` derives from a parsed map, derived the
+        # same way. This used to assign the `CgzMap` itself to `room.world` — the
+        # simulation wants a `physics.World` — and to call an `assets.player_spawns`
+        # that has never existed, so changing a live room's map raised
+        # `AttributeError` before it could reach the type error behind it. The
+        # items were never swapped at all, which would have left the old map's
+        # pickups lying at their old coordinates on the new one.
+        world = SimWorld.from_map(parsed)
         room.map_name = map_name
         room.world = world
-        room.spawns = assets.player_spawns(map_name)
+        room.spawns = parsed.spawns()
+        room.items = pickups.Field(items=pickups.place(world, parsed.entities))
         room.scores = [0, 0]
         for p in room.players.values():
             room.respawn(p)
@@ -1044,15 +1325,22 @@ class ConsoleRegistry:
     async def _cmd_player_give(
         self, args: dict[str, Any], ctx: ConsoleExecutionContext
     ) -> Any:
-        weapon_query = str(args.get("weapon") or "carbine").strip().lower()
-        weapon_idx = weapons.WEAPON_NAMES.get(weapon_query)
+        # `is None`, never falsiness: the parser turns "0" into the integer 0,
+        # and `0 or ""` is `""` — so `player.give 0` silently handed out the
+        # default instead of the knife, which is slot 0. The one argument this
+        # command takes has a legitimate falsy value.
+        raw = args.get("weapon")
+        weapon_query = "" if raw is None else str(raw).strip()
+        # Resolved against the weapon table itself. This used to read a
+        # `weapons.WEAPON_NAMES` that has never existed, so the command failed
+        # with an `AttributeError` every time it was run — and defaulted to a
+        # "carbine" that is not a weapon here either.
+        weapon_idx = weapons.resolve_slot(weapon_query or "assault")
         if weapon_idx is None:
-            try:
-                weapon_idx = int(weapon_query)
-            except ValueError:
-                weapon_idx = None
-        if weapon_idx is None or weapon_idx not in range(len(weapons.WEAPONS)):
-            raise ValueError(f"unknown weapon {weapon_query!r}")
+            raise ValueError(
+                f"unknown weapon {weapon_query!r}; try one of "
+                + ", ".join(weapons.weapon_slots())
+            )
         w = weapons.weapon_at(weapon_idx)
         player = ctx.resolve_player()
         if player:
@@ -1402,19 +1690,22 @@ class ConsoleRegistry:
         self, cmd: ConCommandDefinition, raw_tokens: list[str]
     ) -> dict[str, Any]:
         args: dict[str, Any] = {}
+        names = {p.name for p in cmd.parameters}
         pos_idx = 0
         for token in raw_tokens:
-            if ":" in token and not token.startswith("http"):
-                k, v = token.split(":", 1)
-                args[k.strip()] = self._parse_scalar(v.strip())
-            elif "=" in token:
-                k, v = token.split("=", 1)
-                args[k.strip()] = self._parse_scalar(v.strip())
-            else:
-                if pos_idx < len(cmd.parameters):
-                    param_name = cmd.parameters[pos_idx].name
-                    args[param_name] = self._parse_scalar(token)
-                    pos_idx += 1
+            # `k:v` and `k=v` are named arguments only when `k` is a parameter
+            # this command actually has. Anything else is a positional value that
+            # happens to contain the separator — `draft:9f2c` is a map name, not
+            # an argument called `draft`, and `server.map` silently lost its only
+            # parameter to that reading. The old rule exempted one prefix
+            # (`http`), which is the same bug with a shorter list: the parser
+            # already knows the parameter names, so it can just ask.
+            key, separator, value = _split_named(token)
+            if separator and key in names:
+                args[key] = self._parse_scalar(value)
+            elif pos_idx < len(cmd.parameters):
+                args[cmd.parameters[pos_idx].name] = self._parse_scalar(token)
+                pos_idx += 1
         return args
 
     def _parse_scalar(self, raw: str) -> Any:
@@ -1429,6 +1720,384 @@ class ConsoleRegistry:
             return int(clean)
         except ValueError:
             return clean
+
+    # -------------------------------------------------------------------------
+    # Map Designer
+    # -------------------------------------------------------------------------
+    #
+    # The console half of the editor. The pointing half — fly the map, put the
+    # crosshair on a wall, drag it — lives in the native client; this is the half
+    # that wants exact numbers, and it works from either client because the
+    # registry above is served rather than duplicated.
+
+    def _edit_draft(self) -> drafts.Draft:
+        if not self.active_draft:
+            raise ValueError("nothing is open; run edit.open or edit.new first")
+        try:
+            return drafts.require(self.active_draft)
+        except drafts.DraftError:
+            # The draft was swept or closed underneath us. Say so plainly rather
+            # than reporting "no open draft <id>", which reads as a bug.
+            self.active_draft = ""
+            raise ValueError(
+                "the draft that was open is gone; open one again"
+            ) from None
+
+    def _edit_apply(self, ctx: ConsoleExecutionContext, edit: dict[str, Any]) -> Any:
+        """Apply an edit and report what it did to the map, not just that it ran.
+
+        The lint summary rides along on every edit for the reason the whole
+        designer exists: a brush that seals a corridor looks completely ordinary
+        in a document, and finding out at save time is finding out too late.
+        """
+        draft = self._edit_draft()
+        try:
+            drafts.apply(draft.id, edit)
+        except (drafts.DraftError, CgzError) as exc:
+            raise ValueError(str(exc)) from None
+        findings = drafts.lint(draft.id)
+        errors = [f for f in findings if f.severity == "error"]
+        ctx.print(f"[edit] rev {draft.revision}: {edit['op']}")
+        for finding in findings[:6]:
+            ctx.print(f"[edit]   {finding.severity}: {finding.message}")
+        if len(findings) > 6:
+            ctx.print(f"[edit]   ... and {len(findings) - 6} more (edit.lint)")
+        return {
+            "revision": draft.revision,
+            "errors": len(errors),
+            "warnings": len(findings) - len(errors),
+        }
+
+    def _edit_index(self, args: dict[str, Any], items: list, what: str) -> int:
+        """The index a command acts on: an explicit one, else the selection."""
+        raw = args.get("index")
+        index = int(raw) if raw is not None else -1
+        if index < 0:
+            index = self.selection.get(what, -1)
+        if not 0 <= index < len(items):
+            raise ValueError(
+                f"no {what} {index} to act on; select one with edit.select "
+                f"(there are {len(items)})"
+            )
+        return index
+
+    async def _cmd_edit_new(
+        self, args: dict[str, Any], ctx: ConsoleExecutionContext
+    ) -> Any:
+        draft = drafts.create()
+        if name := str(args.get("name") or "").strip():
+            drafts.apply(draft.id, {"op": "map.set", "key": "title", "value": name})
+            draft.name = name
+        self.active_draft = draft.id
+        self.selection = {}
+        ctx.print(
+            f"[edit] New map open as '{drafts.PREFIX}{draft.id}'. It is solid rock — "
+            "carve a room with edit.brush.add."
+        )
+        return {"draft": draft.id, "map": drafts.PREFIX + draft.id}
+
+    async def _cmd_edit_open(
+        self, args: dict[str, Any], ctx: ConsoleExecutionContext
+    ) -> Any:
+        name = str(args.get("map") or args.get("name") or "").strip()
+        if not name:
+            raise ValueError("map name required")
+        try:
+            draft = drafts.create(name)
+        except drafts.DraftError as exc:
+            raise ValueError(str(exc)) from None
+        self.active_draft = draft.id
+        self.selection = {}
+        ctx.print(
+            f"[edit] Editing {name} as '{drafts.PREFIX}{draft.id}' — "
+            f"{len(draft.doc.get('brushes', []))} brushes, "
+            f"{len(draft.doc.get('entities', []))} entities."
+        )
+        return {"draft": draft.id, "map": drafts.PREFIX + draft.id, "from": name}
+
+    async def _cmd_edit_close(
+        self, _args: dict[str, Any], ctx: ConsoleExecutionContext
+    ) -> Any:
+        draft = self._edit_draft()
+        drafts.close(draft.id)
+        self.active_draft = ""
+        self.selection = {}
+        ctx.print("[edit] Draft discarded. Anything unsaved is gone.")
+        return {"closed": draft.id}
+
+    async def _cmd_edit_status(
+        self, _args: dict[str, Any], ctx: ConsoleExecutionContext
+    ) -> Any:
+        if not self.active_draft:
+            ctx.print("[edit] Nothing open. edit.open(map='hd_pit') or edit.new().")
+            return {"draft": None}
+        draft = self._edit_draft()
+        findings = drafts.lint(draft.id)
+        errors = sum(1 for f in findings if f.severity == "error")
+        ctx.print(
+            f"[edit] {drafts.PREFIX}{draft.id} (from {draft.name or 'nothing'}) "
+            f"rev {draft.revision} — {len(draft.doc.get('brushes', []))} brushes, "
+            f"{len(draft.doc.get('entities', []))} entities, "
+            f"{errors} errors / {len(findings) - errors} warnings"
+        )
+        if self.selection:
+            ctx.print(f"[edit] selected: {self.selection}")
+        return {
+            "draft": draft.id,
+            "map": drafts.PREFIX + draft.id,
+            "revision": draft.revision,
+            "selection": dict(self.selection),
+            "errors": errors,
+        }
+
+    async def _cmd_edit_save(
+        self, args: dict[str, Any], ctx: ConsoleExecutionContext
+    ) -> Any:
+        draft = self._edit_draft()
+        name = str(args.get("name") or "").strip() or None
+        try:
+            saved = drafts.save(
+                draft.id, name, overwrite=bool(args.get("overwrite", False))
+            )
+        except (drafts.DraftError, CgzError) as exc:
+            raise ValueError(str(exc)) from None
+        findings = drafts.lint(draft.id)
+        errors = sum(1 for f in findings if f.severity == "error")
+        ctx.print(f"[edit] Saved as {saved}.json — a brush list, not a binary.")
+        if errors:
+            # Saved anyway, and told plainly. A map somebody is halfway through
+            # making is still worth keeping; refusing to save it would break the
+            # editor exactly when it is most useful.
+            ctx.print(f"[edit] {errors} playability errors remain — run edit.lint.")
+        return {"saved": saved, "errors": errors}
+
+    async def _cmd_edit_list(
+        self, args: dict[str, Any], ctx: ConsoleExecutionContext
+    ) -> Any:
+        draft = self._edit_draft()
+        what = str(args.get("what") or "brushes").lower()
+        if what.startswith("ent"):
+            rows = draft.doc.get("entities", [])
+            for index, row in enumerate(rows):
+                extra = {k: v for k, v in row.items() if k != "type"}
+                ctx.print(f"[edit] {index:3} {row.get('type', '?'):12} {extra}")
+        else:
+            what = "brushes"
+            rows = draft.doc.get("brushes", [])
+            for index, row in enumerate(rows):
+                # Paint order matters — a later brush overwrites an earlier one —
+                # so the index is the useful part of this listing, not decoration.
+                extra = {k: v for k, v in row.items() if k not in ("op", "rect")}
+                ctx.print(
+                    f"[edit] {index:3} {row.get('op', '?'):7} "
+                    f"rect={row.get('rect')} {extra}"
+                )
+        if not rows:
+            ctx.print(f"[edit] no {what} yet")
+        return {what: rows}
+
+    async def _cmd_edit_select(
+        self, args: dict[str, Any], ctx: ConsoleExecutionContext
+    ) -> Any:
+        draft = self._edit_draft()
+        what = "entity" if str(args.get("what", "")).startswith("ent") else "brush"
+        items = draft.doc.get("brushes" if what == "brush" else "entities", [])
+        index = int(args.get("index", -1))
+        if not 0 <= index < len(items):
+            raise ValueError(f"no {what} at {index} (there are {len(items)})")
+        self.selection[what] = index
+        ctx.print(f"[edit] selected {what} {index}: {items[index]}")
+        return {"selected": what, "index": index, "value": items[index]}
+
+    async def _cmd_edit_brush_add(
+        self, args: dict[str, Any], ctx: ConsoleExecutionContext
+    ) -> Any:
+        draft = self._edit_draft()
+        op = str(args.get("op") or "room").lower()
+        brush: dict[str, Any] = {
+            "op": op,
+            "rect": [
+                int(args.get("x", 0)),
+                int(args.get("y", 0)),
+                int(args.get("w", 1)),
+                int(args.get("h", 1)),
+            ],
+        }
+        # `solid` stores only wtex — everything else on it would be a field the
+        # writer refuses, so the extras are simply not offered for it.
+        if op != "solid":
+            brush["ceil"] = int(args.get("ceil", 16))
+            if op == "stairs":
+                # Stairs climb *between* two heights, so `floor` is where the run
+                # starts and `to` is where it ends. Defaulting `to` to `floor`
+                # makes a flat run rather than an error, which is a shape you can
+                # then drag into place.
+                brush["from"] = int(args.get("floor", 0))
+                brush["to"] = int(args.get("to", args.get("floor", 0)))
+            else:
+                brush["floor"] = int(args.get("floor", 0))
+        result = self._edit_apply(ctx, {"op": "brush.add", "brush": brush})
+        self.selection["brush"] = len(draft.doc["brushes"]) - 1
+        result["index"] = self.selection["brush"]
+        return result
+
+    async def _cmd_edit_brush_set(
+        self, args: dict[str, Any], ctx: ConsoleExecutionContext
+    ) -> Any:
+        draft = self._edit_draft()
+        index = self._edit_index(args, draft.doc.get("brushes", []), "brush")
+        field = str(args.get("field") or "").strip()
+        if not field:
+            raise ValueError("field required")
+        return self._edit_apply(
+            ctx,
+            {
+                "op": "brush.update",
+                "index": index,
+                "patch": {field: _edit_value(field, args.get("value"))},
+            },
+        )
+
+    async def _cmd_edit_brush_remove(
+        self, args: dict[str, Any], ctx: ConsoleExecutionContext
+    ) -> Any:
+        draft = self._edit_draft()
+        index = self._edit_index(args, draft.doc.get("brushes", []), "brush")
+        self.selection.pop("brush", None)
+        return self._edit_apply(ctx, {"op": "brush.remove", "index": index})
+
+    async def _cmd_edit_ent_add(
+        self, args: dict[str, Any], ctx: ConsoleExecutionContext
+    ) -> Any:
+        draft = self._edit_draft()
+        kind = str(args.get("type") or "").strip()
+        if kind not in ENTITY_NAMES:
+            raise ValueError(
+                f"unknown entity type {kind!r}; try one of "
+                + ", ".join(n for n in ENTITY_NAMES if n != "notused")
+            )
+        entity: dict[str, Any] = {
+            "type": kind,
+            "x": int(args.get("x", 0)),
+            "y": int(args.get("y", 0)),
+        }
+        # No z: `mapsource` resolves it from the floor actually built underneath,
+        # which is the whole reason a spawn moved in the source does not silently
+        # keep an old height.
+        result = self._edit_apply(ctx, {"op": "ent.add", "entity": entity})
+        self.selection["entity"] = len(draft.doc["entities"]) - 1
+        result["index"] = self.selection["entity"]
+        return result
+
+    async def _cmd_edit_ent_set(
+        self, args: dict[str, Any], ctx: ConsoleExecutionContext
+    ) -> Any:
+        draft = self._edit_draft()
+        index = self._edit_index(args, draft.doc.get("entities", []), "entity")
+        field = str(args.get("field") or "").strip()
+        if not field:
+            raise ValueError("field required")
+        return self._edit_apply(
+            ctx,
+            {
+                "op": "ent.update",
+                "index": index,
+                "patch": {field: _edit_value(field, args.get("value"))},
+            },
+        )
+
+    async def _cmd_edit_ent_remove(
+        self, args: dict[str, Any], ctx: ConsoleExecutionContext
+    ) -> Any:
+        draft = self._edit_draft()
+        index = self._edit_index(args, draft.doc.get("entities", []), "entity")
+        self.selection.pop("entity", None)
+        return self._edit_apply(ctx, {"op": "ent.remove", "index": index})
+
+    async def _cmd_edit_undo(
+        self, _args: dict[str, Any], ctx: ConsoleExecutionContext
+    ) -> Any:
+        draft = self._edit_draft()
+        try:
+            drafts.undo(draft.id)
+        except drafts.DraftError as exc:
+            raise ValueError(str(exc)) from None
+        self.selection = {}
+        ctx.print(f"[edit] undone; rev {draft.revision}")
+        return {"revision": draft.revision}
+
+    async def _cmd_edit_redo(
+        self, _args: dict[str, Any], ctx: ConsoleExecutionContext
+    ) -> Any:
+        draft = self._edit_draft()
+        try:
+            drafts.redo(draft.id)
+        except drafts.DraftError as exc:
+            raise ValueError(str(exc)) from None
+        self.selection = {}
+        ctx.print(f"[edit] redone; rev {draft.revision}")
+        return {"revision": draft.revision}
+
+    async def _cmd_edit_lint(
+        self, _args: dict[str, Any], ctx: ConsoleExecutionContext
+    ) -> Any:
+        draft = self._edit_draft()
+        findings = drafts.lint(draft.id)
+        if not findings:
+            ctx.print("[edit] Clean — this map clears the bar the bundled ones do.")
+            return {"findings": []}
+        for finding in findings:
+            where = ""
+            if finding.cells:
+                first = finding.cells[0]
+                where = f" (first at {first[0]},{first[1]})"
+            ctx.print(f"[edit] {finding.severity}: {finding.message}{where}")
+        return {"findings": [f.to_dict() for f in findings]}
+
+    async def _cmd_edit_textures(
+        self, args: dict[str, Any], ctx: ConsoleExecutionContext
+    ) -> Any:
+        group = str(args.get("group") or "").strip().lower()
+        rows = [t for t in textures.catalog() if not group or t["group"] == group]
+        for row in rows:
+            ctx.print(
+                f"[edit] {row['id']:3}  {row['name']:18} {row['group']:10} "
+                f"{row['pattern']:9} {row['color']}"
+            )
+        if not rows:
+            groups = sorted({t["group"] for t in textures.catalog()})
+            ctx.print(f"[edit] no group {group!r}; try {', '.join(groups)}")
+        return {"textures": rows}
+
+    async def _cmd_edit_playtest(
+        self, _args: dict[str, Any], ctx: ConsoleExecutionContext
+    ) -> Any:
+        """Walk the draft. The only way to find out a ledge is one cube too high.
+
+        The draft is addressed as a map, so this is `server.map` with no special
+        handling anywhere — the match server loads `draft:<id>` through the same
+        `assets.load_map` every other map goes through.
+        """
+        draft = self._edit_draft()
+        map_name = drafts.PREFIX + draft.id
+        room = ctx.resolve_room()
+        if room is None:
+            room = match_server.create(map_name)
+            ctx.print(f"[edit] Playtesting in a new match, room {room.id}.")
+        else:
+            world = SimWorld.from_map(drafts.compiled(draft.id))
+            parsed = drafts.compiled(draft.id)
+            room.map_name = map_name
+            room.world = world
+            room.spawns = parsed.spawns()
+            room.items = pickups.Field(items=pickups.place(world, parsed.entities))
+            for player in room.players.values():
+                room.respawn(player)
+            ctx.print(f"[edit] Room {room.id} is now on the draft.")
+        errors = sum(1 for f in drafts.lint(draft.id) if f.severity == "error")
+        if errors:
+            ctx.print(f"[edit] Note: {errors} playability errors — see edit.lint.")
+        return {"room": room.id, "map": map_name, "errors": errors}
 
 
 # -----------------------------------------------------------------------------

@@ -1,0 +1,31 @@
+/* Trajectories: the one animation this pane owns.
+ *
+ * A stylesheet rather than an inline `<style>` tag with a template-literal
+ * keyframe, because `prefers-reduced-motion` needs a media query and the previous
+ * inline version had none — DESIGN.md's reduced-motion rule went unmet for the
+ * whole pane.
+ *
+ * `--traj-i` is the row's index, set inline and capped by the caller so a 200-step
+ * run does not take twenty seconds to finish arriving. */
+
+@keyframes traj-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.traj-in {
+  animation: traj-in var(--dur-base) var(--ease-entrance) both;
+  animation-delay: calc(var(--traj-i, 0) * var(--stagger-step));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .traj-in {
+    animation: none;
+  }
+}

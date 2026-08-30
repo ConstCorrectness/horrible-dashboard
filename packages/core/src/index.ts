@@ -222,6 +222,7 @@ export {
   setPaneMinimized,
   setPaneWindowed,
   setWindowMode,
+  snapFocused,
   snapWindow,
   toggleDesktopMode,
   toggleWindowMaximized,

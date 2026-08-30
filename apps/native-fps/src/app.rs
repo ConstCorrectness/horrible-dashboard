@@ -38,14 +38,16 @@ use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
 use hassault_native::animator::Squad;
-use hassault_native::api::{HitboxSpec, ItemsResponse, TacticalSpec, WeaponSpec};
+use hassault_native::api::LintFinding;
+use hassault_native::api::{HitboxSpec, ItemsResponse, NodeApi, TacticalSpec, WeaponSpec};
 use hassault_native::audio::GameAudio;
 use hassault_native::bodies;
 use hassault_native::camera::{blast_trauma, damage_trauma, fire_trauma, Camera, Shake};
 use hassault_native::console::{self, ClientCvars, Console, Definitions, Dispatch};
 use hassault_native::damage::{DamageNumbers, Placed};
+use hassault_native::editor::{self, EditRequest, Editor, Selection};
 use hassault_native::effects::EffectsPool;
-use hassault_native::geometry::MeshData;
+use hassault_native::geometry::{build_world_mesh, MeshData};
 use hassault_native::held;
 use hassault_native::hud::{
     self, ConsoleView, Hud, HudView, OverlayVertex, RadarView, ScoreRow, UtilitySlot, UtilityView,
@@ -63,10 +65,10 @@ use hassault_native::radar::{self, Blip, Run};
 use hassault_native::renderer::{Renderer, Vertex, VolumeVertex};
 use hassault_native::reveal::Reveal;
 use hassault_native::settings::{Crosshair, CrosshairStyle, Settings, SettingsWriter, FOV_RANGE};
+use hassault_native::summary::{MatchTally, Summary, SummaryScreen};
 use hassault_native::trace::kick_vector;
 use hassault_native::training::TrainingRange;
 use hassault_native::utility::GrenadeController;
-use hassault_native::summary::{MatchTally, Summary, SummaryScreen};
 use hassault_native::viewmodel::{self, Skin, WeaponViewModel};
 use hassault_native::world::World;
 
@@ -244,6 +246,13 @@ pub struct App {
     /// See `radar::floor_plan`: it is a property of the map, and rebuilding it
     /// per frame is how a minimap costs more than the map.
     radar_plan: Vec<Run>,
+    /// The map designer, when this window is one. `None` is every other mode —
+    /// edit mode is a thing a window becomes, not a flag every window carries.
+    editor: Option<Editor>,
+    /// Edits in flight. The node API is blocking HTTP, and an edit is a PATCH, a
+    /// compile and two fetches; doing that on the frame thread is a visible
+    /// hitch every time you let go of the mouse.
+    edit_jobs: Option<EditJobs>,
     /// This frame's radar contacts. A kept buffer rather than a fresh `Vec`, for
     /// the same reason `overlay` is: the render path does not allocate.
     blips: Vec<Blip>,
@@ -457,6 +466,8 @@ impl App {
             summary: SummaryScreen::default(),
             volume_verts: Vec::new(),
             radar_plan,
+            editor: None,
+            edit_jobs: None,
             blips: Vec::new(),
             console: Console::default(),
             cvars: ClientCvars::default(),
@@ -936,6 +947,240 @@ impl App {
 
     /// Bots to add once we are in a room. Ignored without a socket, which is not
     /// a case to guard against — the launcher only sends a count with `host`.
+    // -------------------------------------------------------------------------
+    // Edit mode
+    // -------------------------------------------------------------------------
+
+    /// Turn this window into the map designer.
+    ///
+    /// A setter rather than a thirteenth constructor argument, the way
+    /// `queue_bots` is: edit mode is a thing a window becomes, not a thing every
+    /// window has to be told it is not.
+    pub fn enter_edit_mode(
+        &mut self,
+        server: &str,
+        draft: hassault_native::api::DraftInfo,
+        owners: Vec<u16>,
+    ) {
+        let mut editor = Editor::new(draft.id.clone(), &self.world.info);
+        editor.owners = owners;
+        editor.brush_rects = brush_rects(&draft.doc);
+        editor.brush_ops = brush_ops(&draft.doc);
+        editor.problem_cells = problem_cells(&draft.lint);
+        editor.status = describe_lint(&draft.lint);
+        self.camera.yaw = editor::START_YAW;
+        self.camera.pitch = editor::START_PITCH;
+        self.camera.x = editor.camera.x;
+        self.camera.y = editor.camera.y;
+        self.camera.z = editor.camera.z;
+        self.editor = Some(editor);
+        self.edit_jobs = Some(spawn_edit_worker(server, draft.id));
+    }
+
+    pub fn editing(&self) -> bool {
+        self.editor.is_some()
+    }
+
+    /// Move the free camera, and work out what the crosshair is on.
+    ///
+    /// Replaces the whole prediction/reconciliation path for this frame. There
+    /// is no body here and nothing to reconcile against: edit mode has no socket.
+    fn fly_and_pick(&mut self, dt: f32) {
+        let Some(editor) = self.editor.as_mut() else {
+            return;
+        };
+        let yaw = self.camera.yaw.to_radians();
+        let pitch = self.camera.pitch.to_radians();
+        editor.camera.fly(
+            yaw,
+            pitch,
+            axis(self.keys.forward, self.keys.back),
+            axis(self.keys.right, self.keys.left),
+            axis(self.keys.jump, self.keys.crouch),
+            self.keys.scores,
+            dt.clamp(0.0, MAX_DT),
+        );
+        self.camera.x = editor.camera.x;
+        self.camera.y = editor.camera.y;
+        self.camera.z = editor.camera.z;
+
+        editor.hover = editor::pick(
+            &self.world,
+            [editor.camera.x, editor.camera.y, editor.camera.z],
+            hassault_native::trace::aim_vector(yaw, pitch),
+        );
+        // A drag follows the crosshair, so the ghost tracks the wall you are
+        // pointing at rather than the one you started on.
+        if let Some(hit) = editor.hover {
+            if editor.drag.is_some() {
+                editor.update_drag(&hit);
+            }
+        }
+    }
+
+    /// Hand a finished gesture to the worker. Never blocks the frame: the node
+    /// API is blocking HTTP, and a compile plus a re-fetch is tens of
+    /// milliseconds — enough to be a visible hitch every time you let go of the
+    /// mouse.
+    fn submit_edit(&mut self, request: EditRequest) {
+        let Some(editor) = self.editor.as_mut() else {
+            return;
+        };
+        let body = match &request {
+            EditRequest::Reshape { index, rect } => serde_json::json!({
+                "op": "brush.update", "index": index, "patch": { "rect": rect }
+            }),
+            EditRequest::Height {
+                index,
+                field,
+                value,
+            } => serde_json::json!({
+                "op": "brush.update", "index": index, "patch": { *field: value }
+            }),
+            EditRequest::Add { op, rect } => serde_json::json!({
+                "op": "brush.add", "brush": { "op": op, "rect": rect }
+            }),
+            EditRequest::Place { kind, cell } => serde_json::json!({
+                "op": "ent.add", "entity": { "type": kind, "x": cell.0, "y": cell.1 }
+            }),
+            EditRequest::Remove { index } => serde_json::json!({
+                "op": "brush.remove", "index": index
+            }),
+        };
+        editor.status = "working…".to_string();
+        if let Some(jobs) = &self.edit_jobs {
+            let _ = jobs.send.send(EditJob::Patch(body));
+        }
+    }
+
+    /// Take whatever the worker finished, and rebuild the world from it.
+    ///
+    /// The rebuild is a **full** `build_world_mesh`, deliberately. It is a flat
+    /// loop over the grid and finishes in single-digit milliseconds here, so
+    /// there is nothing to gain from a dirty-region scheme that could disagree
+    /// with the mesh a fresh load produces — and a mesh that is subtly wrong
+    /// only after an edit is the worst kind of wrong to debug.
+    fn drain_edits(&mut self) {
+        let Some(jobs) = &self.edit_jobs else {
+            return;
+        };
+        while let Ok(outcome) = jobs.recv.try_recv() {
+            match outcome {
+                EditOutcome::Applied {
+                    doc,
+                    lint,
+                    world,
+                    owners,
+                } => {
+                    self.world = *world;
+                    self.mesh = build_world_mesh(&self.world);
+                    self.radar_plan = hassault_native::radar::floor_plan(&self.world);
+                    if let Some(renderer) = &mut self.renderer {
+                        renderer.set_world(&self.mesh);
+                    }
+                    if let Some(editor) = self.editor.as_mut() {
+                        editor.brush_rects = brush_rects(&doc);
+                        editor.brush_ops = brush_ops(&doc);
+                        editor.entities = self.world.info.entities.clone();
+                        editor.owners = owners;
+                        editor.problem_cells = problem_cells(&lint);
+                        editor.status = describe_lint(&lint);
+                    }
+                }
+                EditOutcome::Failed(message) => {
+                    if let Some(editor) = self.editor.as_mut() {
+                        // Surfaced, not swallowed. A refused edit leaves the
+                        // document exactly as it was, so the map on screen is
+                        // still correct — but an editor that silently ignored
+                        // a gesture would be indistinguishable from one that
+                        // had stopped working.
+                        editor.status = message;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Send a job that is not a gesture — undo, redo, save.
+    fn edit_job(&mut self, job: EditJob) {
+        if let Some(editor) = self.editor.as_mut() {
+            editor.status = "working…".to_string();
+        }
+        if let Some(jobs) = &self.edit_jobs {
+            let _ = jobs.send.send(job);
+        }
+    }
+
+    /// Place the current entity kind at the crosshair.
+    ///
+    /// The **cell only** — no height. `mapsource` resolves an entity's `z` from
+    /// the floor actually built underneath it, which is what stops a spawn moved
+    /// in the source from silently keeping an old height. A client that sent the
+    /// height it happened to be looking at would be re-introducing exactly the
+    /// mapper's-eye problem that put all 1741 official spawns in mid-air.
+    fn place_selected_entity(&mut self) {
+        let Some(editor) = self.editor.as_ref() else {
+            return;
+        };
+        let Some(hit) = editor.hover else {
+            return;
+        };
+        let kind = editor.place_kind.clone();
+        self.submit_edit(EditRequest::Place {
+            kind,
+            cell: hit.cell,
+        });
+    }
+
+    /// Raise or lower the selected brush's floor.
+    ///
+    /// Only a `room` has one — a `solid` stores nothing but `wtex`, and asking
+    /// the node to put a floor on one would be refused. So this reads the op off
+    /// the document rather than assuming, and says why when it declines.
+    fn nudge_height(&mut self, delta: i32) {
+        // Everything needed is copied out before anything is written back: the
+        // decline below writes to `self.editor`, and a borrow still open across
+        // it would not compile.
+        let (index, rect, op) = {
+            let Some(editor) = self.editor.as_ref() else {
+                return;
+            };
+            let Selection::Brush(index) = editor.selection else {
+                return;
+            };
+            let Some(rect) = editor.brush_rects.get(index).copied() else {
+                return;
+            };
+            (index, rect, editor.brush_ops.get(index).cloned())
+        };
+        // Which field the height lives in depends on the op, and one op has no
+        // height at all. Declining here rather than sending it is the difference
+        // between "this brush has no floor" and a 422 the mapper has to read
+        // backwards.
+        let field = match op.as_deref() {
+            Some("room") => "floor",
+            Some("stairs") => "from",
+            other => {
+                if let Some(editor) = self.editor.as_mut() {
+                    editor.status = format!(
+                        "a {} brush has no floor to raise — it stores only its texture",
+                        other.unwrap_or("solid")
+                    );
+                }
+                return;
+            }
+        };
+        // The current height comes from the world rather than the document,
+        // because a brush may omit the field entirely and mean the default.
+        let centre = (rect[0] + rect[2] / 2, rect[1] + rect[3] / 2);
+        let current = self.world.floor_at(centre.0, centre.1).round() as i32;
+        self.submit_edit(EditRequest::Height {
+            index,
+            field,
+            value: (current + delta).clamp(-128, 127),
+        });
+    }
+
     pub fn queue_bots(&mut self, count: u32, skill: String) {
         if count > 0 {
             self.pending_bots = Some((count, skill));
@@ -1147,8 +1392,7 @@ impl App {
                             // nothing since shots existed. It gates the dust:
                             // sparks read as a strike on anything, masonry dust
                             // off a player does not.
-                            self.effects
-                                .shot(*origin, ends, id == &self.self_id, *hit);
+                            self.effects.shot(*origin, ends, id == &self.self_id, *hit);
                         }
                         if let Fx::Detonate {
                             nade, at, radius, ..
@@ -2359,6 +2603,17 @@ impl ApplicationHandler for App {
             // The wheel scrolls the console and nothing else. In play it is
             // deliberately inert: a weapon-cycle bound to it is the one binding
             // people rebind first, and guessing wrong is worse than nothing.
+            WindowEvent::MouseWheel { delta, .. } if self.editing() => {
+                // Multiplicative, so one notch does the same proportional thing
+                // whether you are inching along a wall or crossing the map.
+                let notches = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y,
+                    MouseScrollDelta::PixelDelta(p) => p.y as f32 / 40.0,
+                };
+                if let Some(editor) = self.editor.as_mut() {
+                    editor.camera.adjust_speed(notches);
+                }
+            }
             WindowEvent::MouseWheel { delta, .. } if self.console.open => {
                 let lines = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,
@@ -2431,6 +2686,24 @@ impl ApplicationHandler for App {
                         if state == ElementState::Pressed {
                             self.set_grab(true);
                         }
+                    } else if self.editing() {
+                        // The trigger is a drag here. A press that does not move
+                        // is a selection — `end_drag` returns nothing for it —
+                        // so click-to-select and drag-to-reshape are the same
+                        // gesture distinguished by what it did, not by a
+                        // modifier the user has to remember.
+                        if state == ElementState::Pressed {
+                            if let Some(editor) = self.editor.as_mut() {
+                                if let Some(hit) = editor.hover {
+                                    editor.select_at(&hit);
+                                    editor.begin_drag(&hit);
+                                }
+                            }
+                        } else if let Some(request) =
+                            self.editor.as_mut().and_then(|e| e.end_drag())
+                        {
+                            self.submit_edit(request);
+                        }
                     } else {
                         self.keys.fire = state == ElementState::Pressed;
                     }
@@ -2495,6 +2768,27 @@ impl ApplicationHandler for App {
                         if let Some(cmd) = self.console.bound(&key_name(code)) {
                             self.run_console(&cmd);
                             return;
+                        }
+                    }
+                    if self.editing() {
+                        match code {
+                            // Movement is shared with the game's keys — the
+                            // struct is the same, only what reads it differs —
+                            // so only the verbs edit mode adds are here.
+                            KeyCode::KeyZ if down => self.edit_job(EditJob::Undo),
+                            KeyCode::KeyY if down => self.edit_job(EditJob::Redo),
+                            KeyCode::KeyR if down => self.edit_job(EditJob::Save(String::new())),
+                            KeyCode::Delete if down => {
+                                if let Some(Selection::Brush(index)) =
+                                    self.editor.as_ref().map(|e| e.selection)
+                                {
+                                    self.submit_edit(EditRequest::Remove { index });
+                                }
+                            }
+                            KeyCode::KeyE if down => self.place_selected_entity(),
+                            KeyCode::BracketLeft if down => self.nudge_height(-1),
+                            KeyCode::BracketRight if down => self.nudge_height(1),
+                            _ => {}
                         }
                     }
                     match code {
@@ -2605,6 +2899,12 @@ impl ApplicationHandler for App {
                 // same clock as the reveal, so the ripple does not restart when
                 // something else does.
                 hassault_native::water::vertices(&self.world, self.elapsed, &mut self.volume_verts);
+                // The designer's markers, ghosts and lint cells, into the same
+                // translucent pass. Last, so a wireframe reads over the water it
+                // is standing in rather than under it.
+                if let Some(editor) = &self.editor {
+                    editor.overlay(&self.world, &mut self.volume_verts);
+                }
                 self.viewmodel.vertices(&mut self.weapon_verts);
                 // Built here rather than in the painter: sorting is a game-mode
                 // question and the painter has no business having an opinion.
@@ -2854,7 +3154,15 @@ impl ApplicationHandler for App {
         // is aimed at what is on screen, so what is on screen has to be decided
         // first. See `interp.rs`.
         self.drawn = self.snapshots.sample(Self::clock_ms(), &self.self_id);
-        self.send_input(dt);
+        if self.editing() {
+            // No command goes on the wire and none is predicted: edit
+            // mode has no socket and no body. The camera is the whole
+            // simulation.
+            self.drain_edits();
+            self.fly_and_pick(dt);
+        } else {
+            self.send_input(dt);
+        }
         // After the input, so the weapon sways to the angles this frame is about
         // to be drawn with rather than to the previous one's.
         self.animate(dt.clamp(0.0, MAX_DT));
@@ -2871,6 +3179,209 @@ impl ApplicationHandler for App {
         if let Some(window) = &self.window {
             window.request_redraw();
         }
+    }
+}
+
+// ---- the edit worker ---------------------------------------------------------------
+//
+// `NodeApi` is blocking HTTP on purpose — three requests stand a world up, and a
+// tokio runtime for three requests would be absurd. That choice is fine until a
+// request happens *per gesture*, which is what the designer does: an edit is a
+// PATCH, a compile, a map fetch and a cube fetch, and doing that on the frame
+// thread is a visible hitch every time you let go of the mouse.
+//
+// So edits go to a thread, exactly the way `prop::preload` sends parsed weapon
+// props back over a channel. The frame thread never waits; it drains whatever
+// finished.
+
+/// What the frame thread asks for.
+enum EditJob {
+    Patch(serde_json::Value),
+    Undo,
+    Redo,
+    Save(String),
+}
+
+/// What comes back. A successful edit carries the **whole rebuilt world**, not a
+/// diff: the compiler lives on the node, and a client that patched its own grid
+/// would be a second implementation of `mapsource.build` free to disagree with
+/// the one the server serves.
+enum EditOutcome {
+    Applied {
+        doc: serde_json::Value,
+        lint: Vec<LintFinding>,
+        world: Box<World>,
+        owners: Vec<u16>,
+    },
+    Failed(String),
+}
+
+struct EditJobs {
+    send: std::sync::mpsc::Sender<EditJob>,
+    recv: std::sync::mpsc::Receiver<EditOutcome>,
+}
+
+fn spawn_edit_worker(server: &str, draft_id: String) -> EditJobs {
+    let (job_tx, job_rx) = std::sync::mpsc::channel::<EditJob>();
+    let (out_tx, out_rx) = std::sync::mpsc::channel::<EditOutcome>();
+    let base = server.to_string();
+    std::thread::spawn(move || {
+        let node = NodeApi::new(&base);
+        while let Ok(job) = job_rx.recv() {
+            let result = match job {
+                EditJob::Patch(body) => node.edit_draft(&draft_id, body),
+                EditJob::Undo => node.undo_draft(&draft_id),
+                EditJob::Redo => node.redo_draft(&draft_id),
+                EditJob::Save(name) => match node.save_draft(&draft_id, &name) {
+                    // A save changes no geometry, so it reports through the same
+                    // channel without a rebuild — the status line is the whole
+                    // point of it.
+                    Ok(saved) => {
+                        let _ = out_tx.send(EditOutcome::Failed(format!(
+                            "saved as {}{}",
+                            saved.name,
+                            if saved.lint.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" ({} findings)", saved.lint.len())
+                            }
+                        )));
+                        continue;
+                    }
+                    Err(e) => Err(e),
+                },
+            };
+            let sent = match result {
+                Ok(draft) => match refetch(&node, &draft) {
+                    Ok((world, owners)) => out_tx.send(EditOutcome::Applied {
+                        doc: draft.doc,
+                        lint: draft.lint,
+                        world: Box::new(world),
+                        owners,
+                    }),
+                    Err(e) => out_tx.send(EditOutcome::Failed(e)),
+                },
+                Err(e) => out_tx.send(EditOutcome::Failed(describe_api_error(&e))),
+            };
+            if sent.is_err() {
+                // The window is gone. Nothing left to answer.
+                break;
+            }
+        }
+    });
+    EditJobs {
+        send: job_tx,
+        recv: out_rx,
+    }
+}
+
+/// Reload the draft as a map. The same two calls that stand a world up at
+/// startup, which is exactly why there is no third code path here.
+fn refetch(
+    node: &NodeApi,
+    draft: &hassault_native::api::DraftInfo,
+) -> Result<(World, Vec<u16>), String> {
+    let info = node
+        .map_info(&draft.map_name)
+        .map_err(|e| describe_api_error(&e))?;
+    let expected = info.cubic_size * info.plane_order.len();
+    let cubic = info.cubic_size;
+    let cubes = node
+        .map_cubes(&draft.map_name, expected)
+        .map_err(|e| describe_api_error(&e))?;
+    let world = World::new(info, &cubes).map_err(|e| e.to_string())?;
+    let owners = node
+        .draft_owners(&draft.id, cubic)
+        .ok()
+        .and_then(|bytes| editor::decode_owners(&bytes, cubic))
+        .unwrap_or_default();
+    Ok((world, owners))
+}
+
+/// A status line a mapper can act on.
+///
+/// The status codes carry real meaning here and flattening them would throw it
+/// away: a 409 from a save means "that map exists, pass overwrite", and a 422
+/// means "this document will not build" — different problems with different
+/// answers.
+fn describe_api_error(error: &hassault_native::api::ApiError) -> String {
+    match error {
+        hassault_native::api::ApiError::Status(409, _) => {
+            "that map already exists — save under another name".to_string()
+        }
+        hassault_native::api::ApiError::Status(422, _) => {
+            "that edit would not build — the map is unchanged".to_string()
+        }
+        hassault_native::api::ApiError::Status(400, _) => {
+            "that edit was refused — the map is unchanged".to_string()
+        }
+        other => format!("{other}"),
+    }
+}
+
+/// The `rect` of every brush, in document order, so a pick's owner index lands
+/// on the right one.
+///
+/// A brush with no readable rect still takes a slot. Indices are the whole
+/// contract between this and the node — dropping a malformed brush would shift
+/// every later one and silently point a drag at its neighbour.
+fn brush_rects(doc: &serde_json::Value) -> Vec<[i32; 4]> {
+    doc.get("brushes")
+        .and_then(|b| b.as_array())
+        .map(|brushes| {
+            brushes
+                .iter()
+                .map(|brush| {
+                    let mut rect = [0i32; 4];
+                    if let Some(values) = brush.get("rect").and_then(|r| r.as_array()) {
+                        for (slot, value) in rect.iter_mut().zip(values) {
+                            *slot = value.as_i64().unwrap_or(0) as i32;
+                        }
+                    }
+                    rect
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Each brush's op, in document order and parallel to `brush_rects`.
+fn brush_ops(doc: &serde_json::Value) -> Vec<String> {
+    doc.get("brushes")
+        .and_then(|b| b.as_array())
+        .map(|brushes| {
+            brushes
+                .iter()
+                .map(|brush| {
+                    brush
+                        .get("op")
+                        .and_then(|op| op.as_str())
+                        .unwrap_or_default()
+                        .to_string()
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The cells the lint complained about, for painting on the floor. Errors only —
+/// a warning is worth a line of text, not a red floor.
+fn problem_cells(lint: &[LintFinding]) -> Vec<(i32, i32)> {
+    lint.iter()
+        .filter(|f| f.severity == "error")
+        .flat_map(|f| f.cells.iter().map(|cell| (cell[0], cell[1])))
+        .collect()
+}
+
+fn describe_lint(lint: &[LintFinding]) -> String {
+    if lint.is_empty() {
+        return "clean".to_string();
+    }
+    let errors = lint.iter().filter(|f| f.severity == "error").count();
+    match lint.first() {
+        Some(first) if errors > 0 => format!("{errors} errors — {}", first.message),
+        Some(first) => format!("{} warnings — {}", lint.len(), first.message),
+        None => "clean".to_string(),
     }
 }
 

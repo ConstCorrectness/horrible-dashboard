@@ -16,6 +16,7 @@
  * it hydrates at boot and persists server-side for free.
  */
 import { getSetting, setSetting } from '../settings';
+import { isSnapZone } from './snap';
 import type { SnapZone, WindowRect } from './types';
 
 export const WINDOW_PLACEMENT_KEY = 'frame.windowPlacement';
@@ -32,18 +33,6 @@ export interface WindowPlacement {
    */
   snap?: SnapZone;
 }
-
-const SNAP_ZONES: readonly SnapZone[] = [
-  'left',
-  'right',
-  'top',
-  'bottom',
-  'tl',
-  'tr',
-  'bl',
-  'br',
-  'max',
-];
 
 function isRect(value: unknown): value is WindowRect {
   if (!value || typeof value !== 'object') return false;
@@ -65,7 +54,7 @@ function parse(raw: string | undefined): Record<string, WindowPlacement> {
       if (!entry || !isRect(entry.rect)) continue;
       out[viewId] = {
         rect: entry.rect,
-        ...(SNAP_ZONES.includes(entry.snap as SnapZone) ? { snap: entry.snap as SnapZone } : {}),
+        ...(isSnapZone(entry.snap) ? { snap: entry.snap } : {}),
       };
     }
     return out;

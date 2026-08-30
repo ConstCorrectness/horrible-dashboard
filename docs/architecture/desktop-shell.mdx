@@ -640,9 +640,20 @@ another is a bug nobody reports precisely.
   arbitrarily.
 - The **top edge maximizes** rather than snapping to a top half — the near-universal
   convention, and a "top half" is the one snap nobody reaches for.
-- Halves and quarters tile the surface exactly; the far half absorbs the odd pixel of
-  an odd width, so the two always sum to the full extent instead of overlapping or
-  leaving a seam.
+- Halves, quarters and thirds tile the surface exactly; the far cell absorbs the odd
+  pixel of an odd width, so they always sum to the full extent instead of overlapping
+  or leaving a seam.
+- The zones are `left`/`right`/`top`/`bottom`, the four corners, `center` (a centred
+  two-thirds box), the three full-height `third-*`, and `max`. `center` and the thirds
+  are **keyboard and palette only** — `snapZoneAt` never returns them. There is no
+  unambiguous pointer gesture for "the middle third" that does not also redefine what
+  dragging near an edge means, and the edge gesture is tuned.
+- `SNAP_ZONES` in `snap.ts` is the **one** list. It used to be spelled out three more
+  times — a `Set` in `serialize.ts`, an array in `window-placement.ts`, another in the
+  agent's `tool-exec.ts` — and each is a *filter* that drops what it does not
+  recognize. A zone added to the type and to `rectForZone` but missed in one of them
+  fails silently: the snap works, and the window comes back somewhere else after a
+  reload.
 - A snapped or maximized window **re-derives** its rect from the zone when the surface
   resizes, rather than being scaled: half of the new surface is exactly half, where a
   scaled rect would carry the rounding of the old one.
@@ -651,6 +662,36 @@ The drop decision is resolved **synchronously** during the drag and kept in a re
 Reading it back from React state at pointerup loses the last frame's zone whenever the
 move and the release land in the same frame — an intermittent failure to snap that
 only shows up when moving fast.
+
+### The snap palette
+
+The four halves are bare chords (`mod+shift+<arrow>`). The other nine zones sit behind
+a **two-stroke prefix**, `mod+alt+s`, laid out as the 3x3 block under the left hand:
+
+```
+q w e    top-left    top half     top-right
+a s d    left half   centred      right half
+z x c    bottom-left bottom half  bottom-right
+1 2 3    left third  middle third right third
+f        maximized       arrows   the four halves
+```
+
+`mod+shift+<arrow>` was already the halves family and `mod+alt+<arrow>` is
+`area.split:<dir>` in the frame module — both live at once on a tiling desktop, so a
+third modifier on either risks a collision that shows up on one platform only. A
+prefix has room for all thirteen zones and gives the palette something to draw.
+
+`SnapAssist.tsx` renders that grid while the prefix is pending. It owns **no keyboard
+handling**: the two-stroke bindings are the only listener, and the component is a pure
+renderer of the dispatcher's pending-chord state — so it cannot fall out of step with
+what the keys do, and the Escape ladder's first rung (abandon a half-typed chord) keeps
+working. Each cell's thumbnail is drawn from `rectForZone` on a unit surface, the same
+trick `SnapOverlay` uses, so a cell pictures the rect it will actually produce.
+
+The commands run `snapFocused`, not `snapWindow`. On a tiling desktop the focused pane
+is not a window and `snapWindow` returns `false`, which makes every snap chord silently
+inert — indistinguishable from an unregistered binding. A snap chord is an unambiguous
+request for floating geometry, so `snapFocused` floats the pane first and then snaps it.
 
 ### Merging and tearing
 
@@ -826,8 +867,8 @@ on demand, or when the prompt mentions a theme, wallpaper, backdrop or taskbar.
 ids the model cannot guess without two more always-on `list_*` schemas.
 
 Every one of these refuses bad input **with the valid options** rather than guessing:
-an unknown backdrop returns the registered ids, an unknown snap zone returns the nine
-zones.
+an unknown backdrop returns the registered ids, an unknown snap zone returns every
+zone in `SNAP_ZONES`.
 
 ## Theming
 

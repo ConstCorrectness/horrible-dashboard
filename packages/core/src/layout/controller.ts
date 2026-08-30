@@ -1185,6 +1185,29 @@ export function snapWindow(idOrInstance: string | undefined, zone: SnapZone | nu
   );
 }
 
+/**
+ * Snap whatever the user is looking at, floating it first if it is not a window.
+ *
+ * `snapWindow` needs a window and returns `false` without one, which on a tiling
+ * desktop makes every snap chord silently inert — the failure mode a keyboard user
+ * reads as "the shortcut is broken", since nothing distinguishes it from an
+ * unregistered binding. A snap chord is an unambiguous request for floating
+ * geometry, so honour it by making the focused pane a window and then snapping.
+ *
+ * Shared by the chords, the snap palette and the `window_state` agent tool so all
+ * three behave identically.
+ */
+export function snapFocused(zone: SnapZone | null): boolean {
+  const f = frame();
+  if (!f.focusedWindowId) {
+    const instanceId = f.focusedInstanceId;
+    if (!instanceId) return false;
+    if (!setPaneWindowed(instanceId, true)) return false;
+    return snapWindow(instanceId, zone);
+  }
+  return snapWindow(undefined, zone);
+}
+
 export function setWindowMode(idOrInstance: string | undefined, mode: WindowMode): boolean {
   const windowId = targetWindowId(idOrInstance);
   if (!windowId) return false;

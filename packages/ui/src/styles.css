@@ -1031,15 +1031,112 @@ body {
   font-size: 0.8rem;
 }
 
+/* The terminal's surface is the theme's, not a hardcoded near-black: this pane
+ * used to be the one that stayed dark under the light themes, which reads as a
+ * rendering bug rather than a choice. xterm's own palette is set to match in
+ * `themePalette()` — the element and the canvas have to agree or the padding
+ * around the cells shows the seam. */
 .terminal-pane {
+  display: flex;
+  flex-direction: column;
   height: 100%;
   width: 100%;
-  background: #0b0b12;
+  background: var(--bg-primary);
+}
+
+.terminal-pane__bar {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.terminal-pane__surface {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+/* xterm's own host, created in JS. It needs a *definite* box: FitAddon measures
+ * this element to decide rows/cols, and with the default `height: auto` that
+ * measurement is the terminal's current height — circular, so the pane could grow
+ * and the terminal would keep its original 24 rows with dead space below it. */
+.terminal-pane__surface > .terminal-surface {
+  position: absolute;
+  inset: 0;
 }
 
 .terminal-pane .xterm {
   height: 100%;
-  padding: 4px 6px;
+  padding: var(--space-2) var(--space-3);
+}
+
+.terminal-pane__menu {
+  position: absolute;
+  z-index: 20;
+  top: 100%;
+  left: var(--space-3);
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-2);
+  /* Two layers, not one. `--bg-elevated` is translucent in the glass theme, which
+   * is the point of it — but a popover over a *terminal* has live text behind it,
+   * and 78% opacity there is unreadable rather than atmospheric. Compositing the
+   * elevated colour over the opaque page background keeps the glass look where it
+   * is wanted and guarantees the menu is legible everywhere. */
+  background-color: var(--bg-primary);
+  background-image: linear-gradient(var(--bg-elevated), var(--bg-elevated));
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--elev-2);
+}
+
+.terminal-pane__warn {
+  margin: 0 0 var(--space-2);
+  padding: 0 var(--space-2);
+  font-size: var(--fs-micro);
+  color: var(--text-secondary);
+}
+
+.terminal-pane__option {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: var(--space-2);
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
+.terminal-pane__option:hover,
+.terminal-pane__option:focus-visible {
+  background: var(--bg-secondary);
+}
+
+.terminal-pane__option-label {
+  font-size: var(--fs-body);
+}
+
+.terminal-pane__option-path,
+.terminal-pane__option-note {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+.terminal-pane__option-note {
+  margin: 0;
+  padding: var(--space-2);
+  font-family: inherit;
 }
 
 /* Widget forms (e.g. clubhouse onboarding) */

@@ -352,3 +352,113 @@
     width 90ms ease,
     height 90ms ease;
 }
+
+/* --- snap palette -------------------------------------------------------- *
+ * The grid shown while the `mod+alt+s` prefix is pending. Centred over the
+ * surface rather than anchored to a window: it acts on whatever is focused,
+ * and pinning it to one window would suggest otherwise.
+ */
+
+.os-snap-assist {
+  position: absolute;
+  z-index: 60;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  /* Composited over an opaque base — `--bg-elevated` is translucent in the glass
+   * theme and this sits over whatever windows are on the desktop. */
+  background-color: var(--bg-primary);
+  background-image: linear-gradient(var(--bg-elevated), var(--bg-elevated));
+  border: 1px solid var(--border);
+  /* A 2px accent edge on one side only — the house rule, in place of a glowing
+   * full perimeter. */
+  border-top: 2px solid var(--accent);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elev-2);
+}
+
+.os-snap-assist__grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-3);
+}
+
+.os-snap-assist__row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-3);
+}
+
+.os-snap-assist__cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  width: 86px;
+  padding: var(--space-3);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) ease,
+    color var(--dur-fast) ease;
+}
+
+.os-snap-assist__cell:hover,
+.os-snap-assist__cell:focus-visible {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.os-snap-assist__thumb {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.os-snap-assist__fill {
+  position: absolute;
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  border: 1px solid var(--accent);
+}
+
+.os-snap-assist__key {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  text-transform: uppercase;
+  padding: 0 var(--space-2);
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.os-snap-assist__label {
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-display);
+  text-align: center;
+  line-height: 1.3;
+}
+
+.os-snap-assist__foot {
+  margin: 0;
+  font-size: var(--fs-micro);
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.os-snap-assist__foot kbd {
+  font-family: var(--font-mono);
+}

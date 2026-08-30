@@ -33,6 +33,7 @@ import {
   toggleRegion,
 } from '../../layout/controller';
 import { windowOfInstance } from '../../layout/model';
+import { isSnapZone, SNAP_ZONES } from '../../layout/snap';
 import { layoutStore } from '../../layout/store';
 import type {
   DesktopMode,
@@ -52,17 +53,6 @@ const SPLIT_DIRS: readonly SplitDirection[] = ['left', 'right', 'above', 'below'
 const NAV_DIRS: readonly NavDirection[] = ['left', 'right', 'up', 'down'];
 const DOCK_SIDES: readonly DockSide[] = ['left', 'right', 'bottom'];
 const REGION_POSITIONS: readonly RegionPosition[] = ['left', 'right', 'bottom'];
-const SNAP_ZONES: readonly SnapZone[] = [
-  'left',
-  'right',
-  'top',
-  'bottom',
-  'tl',
-  'tr',
-  'bl',
-  'br',
-  'max',
-];
 const ARRANGE_STYLES = ['grid', 'cascade', 'columns', 'rows'] as const;
 
 /**
@@ -76,8 +66,7 @@ const TASKBAR_SETTING_KEY = 'desktop.taskbar';
 
 /** A snap zone from the wire, or null - never a guess. */
 function resolveSnapZone(value: unknown): SnapZone | null {
-  const v = String(value);
-  return (SNAP_ZONES as readonly string[]).includes(v) ? (v as SnapZone) : null;
+  return isSnapZone(value) ? value : null;
 }
 
 /**

@@ -120,6 +120,13 @@ class _Grid:
     def __init__(self, ssize: int) -> None:
         self.ssize = ssize
         n = ssize * ssize
+        # Which brush last painted each cell, or -1 for untouched rock. Brushes
+        # compose by overwrite, so "who owns this cell" is only answerable while
+        # they are being applied — recovering it afterwards would mean replaying
+        # the list, which is the same work done twice. The editor needs it to
+        # turn a crosshair on a wall into a brush you can drag.
+        self.owners = [-1] * n
+        self.brush = -1
         self.type = bytearray([SOLID]) * n
         self.floor = bytearray(n)
         self.ceil = bytearray([16]) * n
@@ -174,6 +181,7 @@ class _Grid:
         self.utex[index] = utex
         self.tag[index] = tag
         self.vdelta[index] = 0
+        self.owners[index] = self.brush
 
     def floor_of(self, index: int) -> int:
         v = self.floor[index]
@@ -323,6 +331,22 @@ def _build_entity(grid: _Grid, spec: dict[str, Any]) -> MapEntity:
 
 def build(source: dict[str, Any], name: str = "") -> CgzMap:
     """Turn a map source document into a parsed map, ready to serve or write."""
+    return _build(source, name)[0]
+
+
+def build_with_owners(
+    source: dict[str, Any], name: str = ""
+) -> tuple[CgzMap, list[int]]:
+    """`build`, plus the index of the brush that painted each cell (-1 for rock).
+
+    A separate entry point rather than a second parameter on `build`, because
+    every existing caller wants the map and nothing else, and an out-parameter
+    they all have to pass `None` to is how a hot path grows a wart.
+    """
+    return _build(source, name)
+
+
+def _build(source: dict[str, Any], name: str) -> tuple[CgzMap, list[int]]:
     sfactor = source.get("sfactor", 7)
     if not isinstance(sfactor, int) or not SMALLEST_FACTOR <= sfactor <= LARGEST_FACTOR:
         raise _fail(
@@ -339,7 +363,9 @@ def build(source: dict[str, Any], name: str = "") -> CgzMap:
         op = _OPS.get(brush.get("op"))
         if op is None:
             raise _fail(f"brush {position} has unknown op {brush.get('op')!r}")
+        grid.brush = position
         op(grid, brush)
+    grid.brush = -1
 
     entity_specs = source.get("entities", [])
     if not isinstance(entity_specs, list):
@@ -350,7 +376,7 @@ def build(source: dict[str, Any], name: str = "") -> CgzMap:
     if not isinstance(watercolor, list) or len(watercolor) != 4:
         raise _fail(f"watercolor must be [r, g, b, a], got {watercolor!r}")
 
-    return CgzMap(
+    built = CgzMap(
         name=name or str(source.get("name", "")),
         magic="ACMP",
         version=10,
@@ -374,12 +400,13 @@ def build(source: dict[str, Any], name: str = "") -> CgzMap:
         utex=bytes(grid.utex),
         tag=bytes(grid.tag),
     )
+    return built, grid.owners
 
 
 # ---- the bundled catalog ----------------------------------------------------------
 
 
-def _is_bundled_name(name: str) -> bool:
+def is_bundled_name(name: str) -> bool:
     """Bundled names index into a directory, so they are validated, not trusted —
     the same rule `assets.find_map` applies to an install's map names."""
     return (
@@ -396,7 +423,7 @@ def bundled_names() -> tuple[str, ...]:
     if not MAPS_DIR.is_dir():
         return ()
     return tuple(
-        sorted(p.stem for p in MAPS_DIR.glob("*.json") if _is_bundled_name(p.stem))
+        sorted(p.stem for p in MAPS_DIR.glob("*.json") if is_bundled_name(p.stem))
     )
 
 
@@ -407,7 +434,7 @@ def load_bundled(name: str) -> CgzMap | None:
     Cached by name rather than by mtime — unlike an install's maps these ship
     with the code and cannot change under a running process.
     """
-    if not _is_bundled_name(name):
+    if not is_bundled_name(name):
         return None
     path = MAPS_DIR / f"{name}.json"
     if not path.is_file():
@@ -419,3 +446,233 @@ def load_bundled(name: str) -> CgzMap | None:
     if not isinstance(source, dict):
         raise _fail(f"{name} is not an object")
     return build(source, name=name)
+
+
+# ---- what a document may contain --------------------------------------------------
+#
+# Served to the editors rather than written out again in TypeScript and Rust, the
+# `plane_order` / `zoom_levels` precedent — and for the reason the Model
+# Designer's inspector gives: a form hand-maintained beside a schema is a form
+# that eventually describes a field the backend no longer has.
+#
+# It lives here, next to the ops it describes, so a new field and its spec are one
+# diff apart. Two files apart is how they drift.
+
+
+def _f(
+    name: str,
+    ftype: str,
+    default: Any = None,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+    choices: list[str] | None = None,
+    required: bool = False,
+    description: str = "",
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "type": ftype,
+        "default": default,
+        "minimum": minimum,
+        "maximum": maximum,
+        "choices": choices,
+        "required": required,
+        "description": description,
+    }
+
+
+_RECT = _f(
+    "rect",
+    "rect",
+    None,
+    required=True,
+    description=(
+        "[x, y, width, height] in cells. The outer ring is refused rather than "
+        "clipped: the physics reads out-of-bounds as solid, and that border is "
+        "the only thing keeping a player on the map."
+    ),
+)
+_HEIGHT = {"minimum": _MIN_HEIGHT, "maximum": _MAX_HEIGHT}
+
+
+def schema() -> dict[str, Any]:
+    """Every brush op, entity type and document field an editor can offer."""
+    return {
+        "brushes": [
+            {
+                "name": "room",
+                "description": "Carve open space: a floor, a ceiling, and the walls that fall out of it.",
+                "fields": [
+                    _RECT,
+                    _f(
+                        "floor",
+                        "int",
+                        0,
+                        description="Signed; a floor may go below zero.",
+                        **_HEIGHT,
+                    ),
+                    _f(
+                        "ceil",
+                        "int",
+                        16,
+                        description="Must be above the floor.",
+                        **_HEIGHT,
+                    ),
+                    _f("wtex", "texture", DEFAULT_WALL),
+                    _f("ftex", "texture", DEFAULT_FLOOR),
+                    _f("ctex", "texture", DEFAULT_CEIL),
+                    _f(
+                        "utex",
+                        "texture",
+                        None,
+                        description="The upper wall, used by an overhang. Defaults to wtex, so a room with one wall texture gets one look.",
+                    ),
+                    _f(
+                        "tag",
+                        "int",
+                        0,
+                        minimum=0,
+                        maximum=255,
+                        description="Clip bits: 0x40 clip, 0x80 player-clip.",
+                    ),
+                ],
+            },
+            {
+                "name": "solid",
+                "description": "Put rock back: pillars, cover, and the walls between carved rooms.",
+                "fields": [
+                    _RECT,
+                    _f(
+                        "wtex",
+                        "texture",
+                        ROCK_WTEX,
+                        description="The only thing a solid cube can carry. Everything else must stay at its default or the writer refuses the cube.",
+                    ),
+                ],
+            },
+            {
+                "name": "stairs",
+                "description": "A floor that climbs across the rect, one column of whole cubes per step.",
+                "fields": [
+                    _RECT,
+                    _f(
+                        "axis",
+                        "enum",
+                        "x",
+                        choices=["x", "y"],
+                        description="Needs at least two cells along it.",
+                    ),
+                    _f(
+                        "from",
+                        "int",
+                        0,
+                        description="Floor height at the start of the run.",
+                        **_HEIGHT,
+                    ),
+                    _f(
+                        "to",
+                        "int",
+                        0,
+                        description="Floor height at the end.",
+                        **_HEIGHT,
+                    ),
+                    _f("ceil", "int", 16, **_HEIGHT),
+                    _f("wtex", "texture", DEFAULT_WALL),
+                    _f("ftex", "texture", DEFAULT_FLOOR),
+                    _f("ctex", "texture", DEFAULT_CEIL),
+                ],
+            },
+        ],
+        "entities": [
+            {
+                "name": "playerstart",
+                "description": "Where a player enters. The height is resolved from the world, so z is optional.",
+                "fields": [
+                    _f("x", "int", None, required=True),
+                    _f("y", "int", None, required=True),
+                    _f(
+                        "z",
+                        "int",
+                        None,
+                        description="The mapper's eye, not the ground. Omit and it is placed above the floor actually built underneath.",
+                    ),
+                    _f(
+                        "yaw",
+                        "number",
+                        0,
+                        minimum=0,
+                        maximum=360,
+                        description="Degrees.",
+                    ),
+                    _f(
+                        "team",
+                        "enum",
+                        0,
+                        choices=["0", "1"],
+                        description="0 CLA, 1 RVSF.",
+                    ),
+                ],
+            },
+            {
+                "name": "light",
+                "description": "A point light. Radius is in cubes.",
+                "fields": [
+                    _f("x", "int", None, required=True),
+                    _f("y", "int", None, required=True),
+                    _f("z", "int", None),
+                    _f("radius", "int", 32, minimum=0, maximum=255),
+                    _f("color", "color", [255, 255, 255]),
+                ],
+            },
+            {
+                "name": "ladder",
+                "description": "A volume you cannot fall out of, spanning upward from the floor.",
+                "fields": [
+                    _f("x", "int", None, required=True),
+                    _f("y", "int", None, required=True),
+                    _f("z", "int", None),
+                    _f(
+                        "attrs",
+                        "int",
+                        [7],
+                        description="[height in cubes]. A height of 0 is dropped, never unbounded.",
+                    ),
+                ],
+            },
+        ]
+        + [
+            {
+                "name": kind,
+                "description": "A pickup. Its height is resolved onto the floor beneath it.",
+                "fields": [
+                    _f("x", "int", None, required=True),
+                    _f("y", "int", None, required=True),
+                    _f("z", "int", 0),
+                ],
+            }
+            for kind in ("health", "ammo", "clips", "grenade", "helmet", "armour")
+        ],
+        "map_fields": [
+            _f("title", "string", "Untitled"),
+            _f("author", "string", ""),
+            _f("license", "string", "CC0-1.0"),
+            _f(
+                "sfactor",
+                "int",
+                7,
+                minimum=SMALLEST_FACTOR,
+                maximum=LARGEST_FACTOR,
+                description="The map is (1 << sfactor) cells square. Changing it does not move any brush.",
+            ),
+            _f(
+                "waterlevel",
+                "number",
+                -100,
+                description="In cubes. Below every floor is how a map says it has no water.",
+            ),
+            _f("watercolor", "color", [20, 40, 60, 140]),
+            _f("ambient", "int", 40, minimum=0, maximum=255),
+        ],
+        "entity_names": list(ENTITY_NAMES),
+    }

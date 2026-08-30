@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -526,3 +526,159 @@ class LoreOut(BaseModel):
     ranks: dict[str, str]
     #: Keyed by map name, and only for the maps this repo ships.
     mapBriefs: dict[str, MapBriefOut]  # noqa: N815
+
+
+# ---- the map designer -------------------------------------------------------------
+
+
+class LintFinding(BaseModel):
+    """One thing wrong with a map, and where.
+
+    `cells` is the field that matters: it is what lets a client paint the failure
+    onto the floor it happens on, which is the whole reason a live validator beats
+    a test run. "37 cells are cut off" is a number; the same thing drawn in red is
+    an answer. It is capped, so `cellCount` is the real total.
+    """
+
+    code: str
+    severity: Literal["error", "warn"]
+    message: str
+    cells: list[list[int]] = Field(default_factory=list)
+    cellCount: int = 0
+    entity: int | None = None
+
+
+class DraftInfo(BaseModel):
+    """A map being edited.
+
+    `mapName` is the draft addressed as a map — pass it to `GET /maps/{name}` and
+    `/maps/{name}/cubes` and they serve this document. That is the whole designer
+    read path; there are no designer-specific read routes because there did not
+    need to be any.
+    """
+
+    id: str
+    #: The map this was seeded from, and where `save` puts it by default.
+    name: str
+    mapName: str
+    doc: dict[str, Any]
+    #: Bumped by every accepted edit. A client re-fetches cubes when it changes.
+    revision: int
+    canUndo: bool = False
+    canRedo: bool = False
+    lint: list[LintFinding] = Field(default_factory=list)
+
+
+class DraftCreateRequest(BaseModel):
+    #: A bundled map to seed from. Absent means a blank document.
+    from_map: str | None = Field(default=None, alias="from")
+
+    model_config = {"populate_by_name": True}
+
+
+class MapEdit(BaseModel):
+    """One edit, which is also its own undo record.
+
+    Deliberately not a whole-document write. A document write cannot be inverted,
+    so an editor built on one has to grow a second, separate history — and the two
+    disagree the first time an edit does something the history did not model. Here
+    the inverse of an edit is another edit of the same eight kinds, so undo replays
+    through the code that made the change rather than through a mirror of it.
+    """
+
+    op: Literal[
+        "brush.add",
+        "brush.remove",
+        "brush.update",
+        "brush.replace",
+        "brush.reorder",
+        "ent.add",
+        "ent.remove",
+        "ent.update",
+        "ent.replace",
+        "map.set",
+    ]
+    #: Which brush or entity, for everything but `brush.reorder` and `map.set`.
+    index: int | None = None
+    brush: dict[str, Any] | None = None
+    entity: dict[str, Any] | None = None
+    #: For `.update`: fields to merge. An explicit null clears one.
+    patch: dict[str, Any] | None = None
+    #: For `brush.reorder`.
+    from_index: int | None = Field(default=None, alias="from")
+    to_index: int | None = Field(default=None, alias="to")
+    #: For `map.set`.
+    key: str | None = None
+    value: Any = None
+
+    model_config = {"populate_by_name": True}
+
+
+class DraftSaveRequest(BaseModel):
+    #: Defaults to the map the draft was opened from. An `hd_` prefix is added
+    #: if it is missing — every map this project ships carries one.
+    name: str | None = None
+    overwrite: bool = False
+
+
+class DraftSaveResponse(BaseModel):
+    name: str
+    path: str
+    lint: list[LintFinding] = Field(default_factory=list)
+
+
+class FieldSpec(BaseModel):
+    """One editable field on a brush or an entity.
+
+    Served rather than written out twice, the `plane_order` / `zoomLevels`
+    precedent — and for the reason the Model Designer's inspector gives: a form
+    hand-maintained beside a schema is a form that eventually describes a field
+    the backend no longer has.
+    """
+
+    name: str
+    type: Literal["int", "number", "string", "bool", "texture", "color", "enum", "rect"]
+    default: Any = None
+    minimum: float | None = None
+    maximum: float | None = None
+    choices: list[str] | None = None
+    required: bool = False
+    description: str = ""
+
+
+class OpSpec(BaseModel):
+    name: str
+    description: str = ""
+    fields: list[FieldSpec] = Field(default_factory=list)
+
+
+class MapSchema(BaseModel):
+    """What a map document may contain: three brush ops, the entity types, and the
+    document's own fields."""
+
+    brushes: list[OpSpec]
+    entities: list[OpSpec]
+    map_fields: list[FieldSpec] = Field(default_factory=list)
+    #: The whole entity vocabulary, by on-disk type index. Ones with no `OpSpec`
+    #: are placeable only through raw `attrs`.
+    entity_names: list[str] = Field(default_factory=list)
+
+
+class TextureOut(BaseModel):
+    """One slot in the texture palette.
+
+    A slot is a bare integer in the map format, and AssaultCube resolves it
+    through map `.cfg` files this project does not read — pointing at content it
+    could not ship anyway. So the palette is ours: named, procedural, and served
+    so that neither client holds a second copy of the table.
+    """
+
+    id: int
+    name: str
+    group: str
+    #: `#rrggbb`. The colour both renderers already tint this slot with, so a
+    #: slot with no catalogue entry keeps exactly the look it has today.
+    color: str
+    #: Which procedural generator draws it. `flat` is no pattern at all.
+    pattern: Literal["flat", "grid", "brick", "plate", "concrete", "grate", "panel"]
+    roughness: float = 0.8

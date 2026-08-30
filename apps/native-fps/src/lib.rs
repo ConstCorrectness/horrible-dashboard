@@ -23,6 +23,7 @@ pub mod console;
 pub mod damage;
 pub mod detail;
 pub mod divergence;
+pub mod editor;
 pub mod effects;
 pub mod geometry;
 pub mod held;

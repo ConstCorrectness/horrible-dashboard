@@ -8,16 +8,21 @@ docs/modules/terminal.md.
 
 Channel protocol (`{channel:'terminal', event, data}`):
 
-| Direction     | event     | data                          |
-| ------------- | --------- | ----------------------------- |
-| client→server | `start`   | `{id, cols, rows, cwd?}`      |
-| client→server | `input`   | `{id, data}`                  |
-| client→server | `resize`  | `{id, cols, rows}`            |
-| client→server | `kill`    | `{id}`                        |
-| server→client | `started` | `{id}`                        |
-| server→client | `output`  | `{id, data}`                  |
-| server→client | `exit`    | `{id}`                        |
-| server→client | `error`   | `{id?, message}`              |
+| Direction     | event     | data                                  |
+| ------------- | --------- | ------------------------------------- |
+| client→server | `start`   | `{id, cols, rows, cwd?, shell?}`      |
+| client→server | `input`   | `{id, data}`                          |
+| client→server | `resize`  | `{id, cols, rows}`                    |
+| client→server | `kill`    | `{id}`                                |
+| server→client | `started` | `{id, shell, requestedShell?}`        |
+| server→client | `output`  | `{id, data}`                          |
+| server→client | `exit`    | `{id}`                                |
+| server→client | `error`   | `{id?, message}`                      |
+
+`shell` is an **id from `shells.discover()`, never a path** — see `shells.resolve`.
+`started` echoes back what was actually spawned, and carries `requestedShell` only when
+that differs from what was asked for: a silent fallback would leave the pane captioned
+"Git Bash" over a PowerShell prompt.
 """
 
 from __future__ import annotations
@@ -27,7 +32,8 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from backend.modules.terminal.pty import PtyProcess, default_shell, spawn_pty
+from backend.modules.terminal import shells
+from backend.modules.terminal.pty import PtyProcess, spawn_pty
 
 logger = logging.getLogger(__name__)
 
@@ -75,10 +81,14 @@ class TerminalManager:
         rows = int(data.get("rows", 24))
         cols = int(data.get("cols", 80))
         cwd = data.get("cwd")
+        requested = data.get("shell")
+        requested_id = str(requested) if requested else None
+        # An id, resolved against the discovered set. `resolve` never takes a path —
+        # if it did, this frame would be an arbitrary-exec route with a PTY attached.
+        argv = shells.resolve(requested_id)
+        honoured = shells.is_known(requested_id)
         try:
-            proc = self._spawn(
-                [default_shell()], cwd=cwd, env=None, rows=rows, cols=cols
-            )
+            proc = self._spawn(argv, cwd=cwd, env=None, rows=rows, cols=cols)
         except Exception as exc:  # noqa: BLE001 — surface any spawn failure to the UI
             logger.warning("pty spawn failed: %s", exc)
             await self._conn.send_json(
@@ -88,7 +98,20 @@ class TerminalManager:
         session = TerminalSession(session_id, proc)
         self.sessions[session_id] = session
         session.task = asyncio.create_task(self._pump(session))
-        await self._conn.send_json(_evt("started", {"id": session_id}))
+        # The id actually running — which is the request only when there was one and
+        # it was honoured. A session that asked for nothing still reports the default
+        # by name, so the pane's caption never has to guess.
+        started: dict[str, Any] = {
+            "id": session_id,
+            "shell": requested_id
+            if (requested_id and honoured)
+            else shells.default_shell_id(),
+        }
+        # Only present when the request was not honoured. The pane needs to know it is
+        # showing a different shell than the one its caption claims.
+        if not honoured:
+            started["requestedShell"] = requested_id
+        await self._conn.send_json(_evt("started", started))
 
     def _input(self, data: dict[str, Any]) -> None:
         session = self.sessions.get(str(data.get("id", "")))

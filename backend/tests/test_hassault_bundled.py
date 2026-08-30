@@ -11,16 +11,22 @@ has no independent specification, so agreement with a reader validated on 44 rea
 maps is the whole of its correctness argument. And **playability**, because a map
 that builds is not the same as a map you can play: every spawn has to be somewhere
 a body can stand, and has to be able to reach every other one.
+
+The playability checks themselves now live in `maplint`, and these tests call it.
+They were written here and they still run here, but the map designer has to ask
+the same questions of a document that is not on disk yet — and a second copy of
+them is how an editor ends up happily saving a map this suite would reject. One
+definition, two callers; the test names below are what makes a failure say which
+rule broke.
 """
 
 from __future__ import annotations
 
-import math
-from collections import deque
+import json
 
 import pytest
 
-from backend.modules.hassault import assets, mapsource, physics, pickups
+from backend.modules.hassault import assets, maplint, mapsource
 from backend.modules.hassault.cgz import (
     PLANE_ORDER,
     SOLID,
@@ -104,11 +110,29 @@ def test_round_trip_preserves_every_entity(name):
         assert read.attr2 == wrote.attr2
 
 
+def _own_copy(name: str):
+    """A bundled map nobody else is holding.
+
+    `mapsource.load_bundled` is `lru_cache`d and a `CgzMap` is mutable, so a test
+    that poked the map it got back was poking the one every later test would be
+    handed. Two of them did: one left `hd_atrium` with a solid cube carrying a
+    floor of 5, and the other left `legacy_unscaled_attrs` set on it. Nothing
+    downstream read those fields, so it stayed invisible until `maplint` started
+    asking whether every cube was one the writer could store — and reported a map
+    that is perfectly fine on disk.
+    """
+    return mapsource.build(_read_source(name), name=name)
+
+
+def _read_source(name: str) -> dict:
+    path = mapsource.MAPS_DIR / f"{name}.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def test_writer_scales_legacy_angles_to_v10():
     """A map parsed from a pre-v10 file holds whole degrees; v10 means tenths, so
     writing one through unscaled would silently turn 90° into 9°."""
-    world = mapsource.load_bundled(BUNDLED[0])
-    assert world is not None
+    world = _own_copy(BUNDLED[0])
     spawn = world.spawns()[0]
     spawn.attr1 = 90  # as a pre-v10 file would have stored it
     spawn.yaw = 90.0
@@ -121,8 +145,7 @@ def test_writer_scales_legacy_angles_to_v10():
 def test_writer_refuses_a_solid_cube_it_cannot_represent():
     """A SOLID record stores only wtex and vdelta. Silently dropping the rest is
     exactly the kind of loss a round trip is supposed to catch."""
-    world = mapsource.load_bundled(BUNDLED[0])
-    assert world is not None
+    world = _own_copy(BUNDLED[0])
     floor = bytearray(world.floor)
     floor[world.type.index(SOLID)] = 5
     world.floor = bytes(floor)
@@ -147,47 +170,39 @@ def test_run_lengths_longer_than_255_survive():
 # ---- playability ------------------------------------------------------------------
 
 
-def _standable(world: physics.World) -> set[tuple[int, int]]:
-    """Cells a player's body actually fits in, standing on that cell's floor."""
-    return {
-        (cx, cy)
-        for cy in range(world.ssize)
-        for cx in range(world.ssize)
-        if not world.is_solid(cx, cy)
-        and physics.can_stand(world, cx + 0.5, cy + 0.5, world.floor_at(cx, cy))
-    }
+def _findings(name: str) -> dict[str, "maplint.Finding"]:
+    """Every playability complaint about a bundled map, keyed by code.
+
+    The checks themselves live in `maplint`, not here. They were written as these
+    tests and they still run as these tests, but the map *designer* needs to ask
+    the same questions of a document that is not on disk yet — and asking them
+    twice is how the editor ends up accepting a map this suite would reject. So
+    there is one definition, with two callers.
+    """
+    world = mapsource.load_bundled(name)
+    assert world is not None
+    return {f.code: f for f in maplint.lint(world)}
 
 
-def _reachable(world: physics.World, start: tuple[int, int], cells: set) -> set:
-    """Flood fill on foot: a step up costs nothing below `STEP_HEIGHT`, and any
-    drop is free — which is what walking (and falling) can actually do."""
-    seen = {start}
-    queue = deque([start])
-    while queue:
-        cx, cy = queue.popleft()
-        here = world.floor_at(cx, cy)
-        for neighbour in ((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)):
-            if neighbour in seen or neighbour not in cells:
-                continue
-            if world.floor_at(*neighbour) - here > physics.STEP_HEIGHT:
-                continue
-            seen.add(neighbour)
-            queue.append(neighbour)
-    return seen
+@pytest.mark.parametrize("name", BUNDLED)
+def test_bundled_map_is_playable(name):
+    """The bar every bundled map clears, in one assertion.
+
+    Named individually below so a failure says *which* rule broke, but this is
+    the one that matters: these three maps are the worked examples, and the
+    editor refuses to be more permissive than they are.
+    """
+    complaints = _findings(name)
+    assert not complaints, f"{name}: " + "; ".join(
+        f"[{f.severity}] {f.message}" for f in complaints.values()
+    )
 
 
 @pytest.mark.parametrize("name", BUNDLED)
 def test_every_spawn_is_somewhere_a_body_fits(name):
     """`spawn_at` resolves the height, but nothing resolves a spawn wedged in a
     wall — the player would simply be unable to move."""
-    world = mapsource.load_bundled(name)
-    assert world is not None
-    sim = physics.World.from_map(world)
-    for spawn in world.spawns():
-        state = physics.spawn_at(sim, spawn)
-        assert physics.can_stand(sim, state.x, state.y, state.z), (
-            f"{name}: spawn at ({spawn.x}, {spawn.y}) is not standable"
-        )
+    assert "spawn.blocked" not in _findings(name)
 
 
 @pytest.mark.parametrize("name", BUNDLED)
@@ -195,15 +210,7 @@ def test_the_whole_map_is_reachable_on_foot(name):
     """Every standable cell connects to every other one. This is what catches a
     raised gallery whose stairs do not reach it, or a room walled off by an
     off-by-one rect — neither of which fails any other check."""
-    world = mapsource.load_bundled(name)
-    assert world is not None
-    sim = physics.World.from_map(world)
-    cells = _standable(sim)
-    assert cells
-
-    first = physics.spawn_at(sim, world.spawns()[0])
-    reached = _reachable(sim, (int(first.x), int(first.y)), cells)
-    assert reached == cells, f"{name}: {len(cells - reached)} cells are cut off"
+    assert "world.cutoff" not in _findings(name)
 
 
 @pytest.mark.parametrize("name", BUNDLED)
@@ -211,12 +218,8 @@ def test_every_map_carries_items(name):
     """A bundled map with no items would make pickups a feature only the people
     who own AssaultCube can see, which is the exact asymmetry this module keeps
     refusing: their content is optional, ours is the game."""
-    world = mapsource.load_bundled(name)
-    assert world is not None
-    placed = pickups.place(physics.World.from_map(world), world.entities)
-    kinds = {item.kind for item in placed}
-    assert len(placed) >= 8, f"{name}: only {len(placed)} items"
-    assert {"health", "ammo", "armour"} <= kinds, f"{name}: has only {sorted(kinds)}"
+    complaints = _findings(name)
+    assert "item.few" not in complaints and "item.kinds" not in complaints
 
 
 @pytest.mark.parametrize("name", BUNDLED)
@@ -227,35 +230,15 @@ def test_every_item_is_somewhere_a_body_can_reach(name):
     never be *floating*; what it can be is resting inside a pillar, or in a
     sealed room. Either one is invisible until a player spends a match looking
     for an armour that cannot be picked up."""
-    world = mapsource.load_bundled(name)
-    assert world is not None
-    sim = physics.World.from_map(world)
-    cells = _standable(sim)
-    first = physics.spawn_at(sim, world.spawns()[0])
-    reached = _reachable(sim, (int(first.x), int(first.y)), cells)
-
-    for item in pickups.place(sim, world.entities):
-        assert physics.can_stand(sim, item.x, item.y, item.z), (
-            f"{name}: {item.kind} at ({item.x}, {item.y}) is inside something"
-        )
-        assert (int(item.x), int(item.y)) in reached, (
-            f"{name}: {item.kind} at ({item.x}, {item.y}) cannot be walked to"
-        )
+    complaints = _findings(name)
+    assert "item.buried" not in complaints and "item.stranded" not in complaints
 
 
 @pytest.mark.parametrize("name", BUNDLED)
 def test_items_are_not_on_top_of_a_spawn(name):
     """An item within reach of a spawn is a free pickup for whoever died last,
     which turns dying into a resupply."""
-    world = mapsource.load_bundled(name)
-    assert world is not None
-    sim = physics.World.from_map(world)
-    spawns = [physics.spawn_at(sim, s) for s in world.spawns()]
-    for item in pickups.place(sim, world.entities):
-        for state in spawns:
-            assert not pickups.in_reach(item, state.x, state.y, state.z), (
-                f"{name}: {item.kind} at ({item.x}, {item.y}) is on a spawn"
-            )
+    assert "item.on_spawn" not in _findings(name)
 
 
 @pytest.mark.parametrize("name", BUNDLED)
@@ -266,37 +249,10 @@ def test_every_ladder_actually_gets_you_somewhere(name):
     a ladder placed flush against the lip it serves is already stood on by anyone
     at its foot (`_support` takes the highest floor the body overlaps), and one
     placed too far back drops you off the top before you reach the ledge. Both
-    look fine in the map source. So the test climbs each one, the way a player
+    look fine in the map source. So the check climbs each one, the way a player
     would, and insists on arriving.
     """
-    world = mapsource.load_bundled(name)
-    assert world is not None
-    sim = physics.World.from_map(world)
-
-    for ladder in sim.ladders:
-        arrived = False
-        # Approached from either side: a mapper decides which way a ladder faces
-        # by where they put it, and this asks only that *one* approach works.
-        for sign in (1.0, -1.0):
-            state = physics.PlayerState(
-                x=ladder.x,
-                y=ladder.y - sign,
-                z=ladder.base,
-                yaw=math.pi / 2 if sign > 0 else -math.pi / 2,
-            )
-            for _ in range(600):
-                physics.step(
-                    sim, state, physics.MoveInput(forward=1.0, dt=1 / 60), 1 / 60
-                )
-                if state.on_ground and state.z >= ladder.top - physics.STEP_HEIGHT:
-                    arrived = True
-                    break
-            if arrived:
-                break
-        assert arrived, (
-            f"{name}: the ladder at ({ladder.x}, {ladder.y}) cannot be climbed to "
-            f"anywhere you can stand — it spans {ladder.base} to {ladder.top}"
-        )
+    assert "ladder.dead_end" not in _findings(name)
 
 
 @pytest.mark.parametrize("name", BUNDLED)
@@ -308,33 +264,30 @@ def test_water_never_covers_the_whole_map(name):
     is: the whole map becomes a swimming pool, nobody can jump, and the map
     source looks completely ordinary.
     """
-    world = mapsource.load_bundled(name)
-    assert world is not None
-    sim = physics.World.from_map(world)
-    floors = [
-        sim.floor_at(x, y)
-        for y in range(sim.ssize)
-        for x in range(sim.ssize)
-        if not sim.is_solid(x, y)
-    ]
-    assert max(floors) > sim.waterlevel, f"{name}: the water covers the whole map"
+    assert "water.floods" not in _findings(name)
 
 
 @pytest.mark.parametrize("name", BUNDLED)
 def test_spawns_are_spread_out(name):
     """Two spawns in the same spot means two players telefragged into each other
     on the first frame of a match."""
-    world = mapsource.load_bundled(name)
-    assert world is not None
-    spawns = world.spawns()
-    assert len(spawns) >= 8, "enough spawns for a full match"
-    places = {(s.x, s.y) for s in spawns}
-    assert len(places) == len(spawns)
-    for a in spawns:
-        nearest = min(max(abs(a.x - b.x), abs(a.y - b.y)) for b in spawns if b is not a)
-        assert nearest >= 4, (
-            f"{name}: spawns at ({a.x}, {a.y}) are on top of each other"
-        )
+    complaints = _findings(name)
+    assert "spawn.few" not in complaints and "spawn.crowded" not in complaints
+
+
+@pytest.mark.parametrize("name", BUNDLED)
+def test_the_border_stays_solid(name):
+    """Out of bounds reads as solid, and that is the only thing keeping a player
+    on the map — so a brush that opens the ring is a hole in the world."""
+    assert "border.open" not in _findings(name)
+
+
+@pytest.mark.parametrize("name", BUNDLED)
+def test_every_cube_is_one_the_writer_can_store(name):
+    """A map that builds but cannot be written is one you find out about at
+    export. `maplint` asks the question at edit time instead."""
+    complaints = _findings(name)
+    assert not {"cube.type", "cube.semisolid", "cube.solid_lossy"} & set(complaints)
 
 
 # ---- the catalog ------------------------------------------------------------------

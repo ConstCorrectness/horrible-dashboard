@@ -837,6 +837,34 @@ impl Renderer {
     }
 
     /// Replace the body geometry for this frame.
+    /// Replace the world mesh, and re-bake the shadow it casts.
+    ///
+    /// The map designer is the only caller. Everywhere else the world is uploaded
+    /// once at startup and never touched again, because a map does not change
+    /// during a match — which is exactly why the **shadow has to be re-baked
+    /// here**. It is rendered once from a static sun onto static geometry, so a
+    /// rebuilt world with the old shadow map would light the new walls with the
+    /// old ones' shadows: a room you just carved would sit in the dark of the
+    /// rock that used to be there, and nothing would say why.
+    pub fn set_world(&mut self, mesh: &MeshData) {
+        let vertices = mesh_vertices(mesh);
+        self.world_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("world"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+        self.world_verts = vertices.len() as u32;
+        self.shadow = crate::shadow::ShadowMap::new(
+            &self.device,
+            &self.queue,
+            &self.world_buffer,
+            self.world_verts,
+            crate::shadow::bounds_of(&vertices),
+        );
+    }
+
     pub fn set_bodies(&mut self, vertices: &[Vertex]) {
         if vertices.len() > MAX_BODY_VERTS {
             // Truncation is still the behaviour — a frame that reallocated would

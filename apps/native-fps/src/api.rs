@@ -408,6 +408,74 @@ pub struct SkinInstance {
 }
 
 /// The node's HTTP origin, e.g. `http://127.0.0.1:8000`.
+/// A map being edited. Mirrors `models.DraftInfo`.
+///
+/// `map_name` is the draft addressed as a map — hand it to `map_info` and
+/// `map_cubes` and they serve this document. That is the whole read path.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct DraftInfo {
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub id: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub name: String,
+    #[serde(rename = "mapName", default, deserialize_with = "null_as_default")]
+    pub map_name: String,
+    /// The brush list itself, kept as raw JSON. This client shows and moves
+    /// brushes; it does not need a typed mirror of a schema the node serves, and
+    /// a partial one would be a second definition of the document format.
+    #[serde(default)]
+    pub doc: serde_json::Value,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub revision: i64,
+    #[serde(rename = "canUndo", default, deserialize_with = "null_as_default")]
+    pub can_undo: bool,
+    #[serde(rename = "canRedo", default, deserialize_with = "null_as_default")]
+    pub can_redo: bool,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub lint: Vec<LintFinding>,
+}
+
+/// One playability complaint. `cells` is why this is worth drawing rather than
+/// printing: a count is a number, and the same cells painted on the floor are an
+/// answer.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct LintFinding {
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub code: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub severity: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub message: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub cells: Vec<[i32; 2]>,
+    #[serde(rename = "cellCount", default, deserialize_with = "null_as_default")]
+    pub cell_count: i32,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SavedMap {
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub name: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub lint: Vec<LintFinding>,
+}
+
+/// One slot in the texture palette. The colour is the one both renderers already
+/// tint this slot with, so a slot with no catalogue entry keeps its present look.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct TextureRow {
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub id: i32,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub name: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub group: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub color: String,
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub pattern: String,
+}
+
 pub struct NodeApi {
     base: String,
     agent: ureq::Agent,
@@ -569,6 +637,103 @@ impl NodeApi {
         self.get("/api/hassault/skins/inventory")?
             .into_json()
             .map_err(|e| ApiError::Decode(e.to_string()))
+    }
+    // ---- the map designer ---------------------------------------------------
+    //
+    // There is no route here for reading a draft's *map*, and that absence is
+    // the design. A draft is addressed as `draft:<id>`, so `map_info` and
+    // `map_cubes` above already serve one — the same two calls that stand a
+    // world up for a match stand one up for a map being edited. What follows is
+    // only the half a match has no use for: the document, the edits, and the
+    // ownership overlay.
+
+    /// Open a map for editing. `from` is a bundled map name, or empty for blank.
+    pub fn create_draft(&self, from: &str) -> Result<DraftInfo, ApiError> {
+        let url = format!("{}/api/hassault/maps/drafts", self.base);
+        let body = if from.is_empty() {
+            ureq::json!({})
+        } else {
+            ureq::json!({ "from": from })
+        };
+        self.send(self.agent.post(&url).send_json(body), "maps/drafts")
+    }
+
+    pub fn draft(&self, id: &str) -> Result<DraftInfo, ApiError> {
+        self.get(&format!("/api/hassault/maps/drafts/{id}"))?
+            .into_json()
+            .map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    /// One typed edit. The response carries the new revision and the lint, so a
+    /// caller never has to ask a second time to know whether to re-fetch.
+    pub fn edit_draft(&self, id: &str, edit: serde_json::Value) -> Result<DraftInfo, ApiError> {
+        let url = format!("{}/api/hassault/maps/drafts/{id}", self.base);
+        self.send(
+            self.agent.request("PATCH", &url).send_json(edit),
+            "maps/drafts/edit",
+        )
+    }
+
+    pub fn undo_draft(&self, id: &str) -> Result<DraftInfo, ApiError> {
+        let url = format!("{}/api/hassault/maps/drafts/{id}/undo", self.base);
+        self.send(self.agent.post(&url).call(), "maps/drafts/undo")
+    }
+
+    pub fn redo_draft(&self, id: &str) -> Result<DraftInfo, ApiError> {
+        let url = format!("{}/api/hassault/maps/drafts/{id}/redo", self.base);
+        self.send(self.agent.post(&url).call(), "maps/drafts/redo")
+    }
+
+    pub fn save_draft(&self, id: &str, name: &str) -> Result<SavedMap, ApiError> {
+        let url = format!("{}/api/hassault/maps/drafts/{id}/save", self.base);
+        self.send(
+            self.agent
+                .post(&url)
+                .send_json(ureq::json!({ "name": name })),
+            "maps/drafts/save",
+        )
+    }
+
+    /// Which brush painted each cell, as little-endian `uint16`.
+    ///
+    /// Fetched rather than derived, because it is only knowable while the
+    /// brushes are being applied — they compose by overwrite, so recovering it
+    /// afterwards means replaying the whole list, which is the compile again.
+    pub fn draft_owners(&self, id: &str, cubic_size: usize) -> Result<Vec<u8>, ApiError> {
+        let res = self.get(&format!("/api/hassault/maps/drafts/{id}/owners"))?;
+        let expected = cubic_size * 2;
+        let mut buf = Vec::with_capacity(expected.min(1 << 22));
+        res.into_reader()
+            .take((expected as u64) + 1)
+            .read_to_end(&mut buf)
+            .map_err(|e| ApiError::Http(e.to_string()))?;
+        Ok(buf)
+    }
+
+    /// The texture palette. Served for the `plane_order` reason: a local copy
+    /// would eventually name a slot the node no longer catalogues.
+    pub fn textures(&self) -> Result<Vec<TextureRow>, ApiError> {
+        self.get("/api/hassault/textures")?
+            .into_json()
+            .map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
+    /// Shared tail for the write calls above: one place that turns a `ureq`
+    /// result into an `ApiError` and decodes the body, so eight methods do not
+    /// carry eight copies of the same match.
+    fn send<T: serde::de::DeserializeOwned>(
+        &self,
+        result: Result<ureq::Response, ureq::Error>,
+        path: &str,
+    ) -> Result<T, ApiError> {
+        match result {
+            Ok(res) => res.into_json().map_err(|e| ApiError::Decode(e.to_string())),
+            // The status is kept rather than flattened: a 409 from `save` means
+            // "that map exists, pass overwrite" and a 422 means "this document
+            // will not build", and the editor says different things about them.
+            Err(ureq::Error::Status(code, _)) => Err(ApiError::Status(code, path.to_string())),
+            Err(e) => Err(ApiError::Http(e.to_string())),
+        }
     }
 }
 

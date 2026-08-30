@@ -59,6 +59,10 @@ enum Mode {
     Host,
     /// Enter a match that exists — a room id, or any room on the map.
     Join,
+    /// Build a map. No socket and no match, like Train — plus a draft on the
+    /// node, which is served as a map named `draft:<id>`, so the boot sequence
+    /// below needs no special case at all.
+    Edit,
     /// A **rated** match, simulated by the game server rather than by any node.
     /// The client's only difference is a flag on the join: this node proxies, and
     /// every frame after it is the wire this client already speaks.
@@ -71,6 +75,7 @@ impl Mode {
             "train" => Some(Mode::Train),
             "host" => Some(Mode::Host),
             "join" => Some(Mode::Join),
+            "edit" => Some(Mode::Edit),
             "ranked" => Some(Mode::Ranked),
             _ => None,
         }
@@ -92,6 +97,8 @@ struct Args {
     /// stored setting — it *is* the stored setting, as the pane last saw it.
     sensitivity: Option<f32>,
     headless: bool,
+    /// `--mode=edit --new`: start from solid rock rather than from a map.
+    blank: bool,
     /// Load and mesh the map, print what it found, and exit without connecting.
     check_only: bool,
 }
@@ -107,6 +114,7 @@ impl Default for Args {
             // Joining is the least surprising default and the one the old
             // argument-free launch effectively did.
             mode: Mode::Join,
+            blank: false,
             room: String::new(),
             host: String::new(),
             name: "player".into(),
@@ -132,7 +140,7 @@ fn parse_args() -> Args {
                 // Refused rather than defaulted: a typo'd mode silently becoming
                 // "join" is how Train quietly turns back into a match.
                 None => {
-                    eprintln!("hassault: unknown --mode={v} (train, host, join or ranked)");
+                    eprintln!("hassault: unknown --mode={v} (train, edit, host, join or ranked)");
                     std::process::exit(2);
                 }
             }
@@ -160,6 +168,8 @@ fn parse_args() -> Args {
             // Accepted and ignored, for the launcher's older request shape.
             // There is no frame cap to set — the present mode decides — and raw
             // input is not an option, it is how the mouse is read.
+        } else if arg == "--new" {
+            args.blank = true;
         } else if arg == "--headless" {
             args.headless = true;
         } else if arg == "--check" {
@@ -178,6 +188,7 @@ fn parse_args() -> Args {
                    --host=<node id>    that room is on a friend's node\n\
                    --name=<label>      wire label only; the node uses your account's username\n\
                    --sensitivity=<n>   turn per unit of raw mouse movement (default 1)\n\
+                   --new               --mode=edit: start from solid rock\n\
                    --headless          no window: connect, join, and log\n\
                    --check             load and mesh the map, print it, and exit\n"
             );
@@ -201,16 +212,39 @@ fn main() {
 fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     let node = NodeApi::new(&args.server);
 
-    eprintln!("hassault: loading {} from {}", args.map, args.server);
-    let info = node.map_info(&args.map)?;
+    // Edit mode opens a draft first, and then loads it **as a map**. That is the
+    // whole of the special-casing: a draft is served at `draft:<id>` through the
+    // same two routes a match uses, so everything below this point — the parse,
+    // the mesh, the radar plan, the check — is the ordinary boot sequence and
+    // knows nothing about the designer.
+    let mut draft: Option<hassault_native::api::DraftInfo> = None;
+    let map_name = if args.mode == Mode::Edit {
+        let opened = node.create_draft(if args.blank { "" } else { &args.map })?;
+        eprintln!(
+            "hassault: editing {} as {}",
+            if args.blank { "a new map" } else { &args.map },
+            opened.map_name
+        );
+        let name = opened.map_name.clone();
+        draft = Some(opened);
+        name
+    } else {
+        args.map.clone()
+    };
+
+    eprintln!("hassault: loading {} from {}", map_name, args.server);
+    let info = node.map_info(&map_name)?;
     let expected = info.cubic_size * info.plane_order.len();
-    let cubes = node.map_cubes(&args.map, expected)?;
+    let cubes = node.map_cubes(&map_name, expected)?;
     let ssize = info.ssize;
     let spawn_count = info
         .entities
         .iter()
         .filter(|e| e.name == "playerstart")
         .count();
+    // Captured before `info` is moved into the world: edit mode sizes its
+    // ownership fetch from it.
+    let info_cubic = info.cubic_size;
     let world = World::new(info, &cubes)?;
     let mesh = geometry::build_world_mesh(&world);
     // The radar's floor plan, merged once here beside the mesh rather than per
@@ -375,6 +409,53 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if args.check_only {
+        return Ok(());
+    }
+
+    if args.mode == Mode::Edit {
+        // No socket, exactly like Train, and for a stronger version of the same
+        // reason: there is no match to be in, so there is no server to lie to
+        // about a camera that ignores gravity and walls.
+        let Some(opened) = draft else {
+            return Err("edit mode opened no draft".into());
+        };
+        if args.headless {
+            return Err("--headless watches a match; --mode=edit has none".into());
+        }
+        // Which brush painted each cell. Fetched rather than derived: brushes
+        // compose by overwrite, so ownership is only knowable while they are
+        // being applied, and it is what turns a crosshair on a wall into a brush
+        // you can drag. Non-fatal — without it the camera still flies and the
+        // console still edits; only picking goes quiet.
+        let owners = match node.draft_owners(&opened.id, info_cubic) {
+            Ok(bytes) => {
+                hassault_native::editor::decode_owners(&bytes, info_cubic).unwrap_or_default()
+            }
+            Err(e) => {
+                eprintln!("hassault: warning — no brush ownership ({e}); picking is off");
+                Vec::new()
+            }
+        };
+        eprintln!(
+            "hassault: edit mode — fly with WASD, space/shift for height, scroll for speed, click to select, drag to reshape, [ and ] for floor height, E to place, Z/Y undo, R save. Everything else is `edit.*` in the console."
+        );
+        let event_loop = EventLoop::new()?;
+        let mut app = App::new(
+            world,
+            mesh,
+            None,
+            settings,
+            writer,
+            weapons,
+            tacticals,
+            skins,
+            hitbox,
+            item_table.clone(),
+            definitions,
+            plan,
+        );
+        app.enter_edit_mode(&args.server, opened, owners);
+        event_loop.run_app(&mut app)?;
         return Ok(());
     }
 

@@ -308,7 +308,10 @@ impl EffectsPool {
 /// 7cm across is geometry nobody will ever see. Both faces are drawn by the
 /// volume pipeline (`cull_mode: None`), so the winding does not matter here —
 /// which it would if this ever moved to the opaque pass.
-fn push_beam(
+/// A capsule-ish beam between two points. `pub(crate)` because the map
+/// editor draws its wireframes out of the same primitive — a second beam
+/// builder would be two things that have to keep looking alike.
+pub(crate) fn push_beam(
     out: &mut Vec<VolumeVertex>,
     from: [f32; 3],
     to: [f32; 3],

@@ -11,18 +11,22 @@ import { getActiveTerminal, siblingTerminal } from './store';
 
 export interface RunCommandOpts {
   cwd?: string;
+  /** A shell **id** from `GET /api/terminal/shells` — never a path. */
+  shell?: string;
 }
 
 /** Open a new terminal, optionally rooted at `cwd` (e.g. file explorer's
- * "open terminal here"). */
-export function openTerminal(opts?: { cwd?: string }): void {
-  registry.openPanel('terminal.instance', { params: { cwd: opts?.cwd } });
+ * "open terminal here") and running a specific shell. */
+export function openTerminal(opts?: { cwd?: string; shell?: string }): void {
+  registry.openPanel('terminal.instance', {
+    params: { cwd: opts?.cwd, shell: opts?.shell },
+  });
 }
 
 /** Open a new terminal and run `command` in it (visibly). */
 export function runCommand(command: string, opts?: RunCommandOpts): void {
   registry.openPanel('terminal.instance', {
-    params: { initialCommand: command, cwd: opts?.cwd },
+    params: { initialCommand: command, cwd: opts?.cwd, shell: opts?.shell },
   });
 }
 
@@ -103,6 +107,18 @@ export const terminalModule: ModuleManifest = {
       description: 'Font size, in pixels, for terminal panes.',
       type: 'number',
       default: 13,
+    },
+    {
+      key: 'terminal.shell',
+      title: 'Default shell',
+      // A free-text id rather than an enum: the valid values are whatever this
+      // machine has, which the backend discovers at runtime, and a settings enum
+      // is a static declaration. The picker in the pane is the discoverable way
+      // to set it; this is the standing default it writes.
+      description:
+        "Shell id for new terminals — e.g. `git-bash`, `pwsh`, `powershell`, `cmd`, `wsl:Ubuntu`, `zsh`. Blank means this machine's default. The terminal pane's shell button lists what is actually installed; an id that is not, falls back to the default and says so.",
+      type: 'string',
+      default: '',
     },
   ],
 };

@@ -340,17 +340,65 @@ One pane, `trajectories.hub` (`role: document`, singleton), three sections:
 
 | Section | Key | What it is |
 | --- | --- | --- |
-| **Runs** | `r` | Run list + step-by-step detail, with inline grading |
-| **Datasets** | `d` | Collections, the capture toggle, headline counts, tool usage |
-| **Harness** | `h` | The A/B comparison |
+| **Runs** | `r` | Run index + step-by-step detail, with grading, deletion and search |
+| **Datasets** | `d` | Collections, the capture toggle, headline counts, tool usage, import/export |
+| **Harness** | `h` | The A/B comparison and the harness inspector |
 
 Three sections rather than three panes, per the pane-consolidation rule: they are
 three views of one object. No `RENAMED_VIEWS` entry is needed — no view id was
 removed.
 
-Iconography inside the pane is inline stroke SVG (`icons.tsx`) rather than native
-emoji. The manifest's `icon:` field is the activity-rail glyph, typed as a string,
-and follows the rail's existing emoji convention.
+Each section lives in `panels/` (`RunsSection`, `RunDetail`, `DatasetsSection`,
+`HarnessSection`, plus a shared `common.tsx`); `TrajectoriesHub.tsx` is only the
+switch. That split is what let the pane move onto the shared primitives —
+`PaneHeader`, `DataList`/`DataRow`, `SplitPane`, `Button`, `Chip`, `EmptyState`,
+`RollingNumber` — and onto the theme scale.
+
+Three things the restyle fixed, each of which had been invisible:
+
+- **The pane rendered dark under the light themes.** It styled itself from a local
+  object of raw pixels and *legacy alias* tokens, and an undefined `var()` falls
+  silently through to its hex fallback. `no-hex-literals.test.ts` holds every file
+  here at **zero** hardcoded colours, and its list names each `panels/` path —
+  splitting a guarded file moves its code out from under the guard, so the new paths
+  had to be added in the same change.
+- **Every section showed its empty state while loading.** "No trajectories yet —
+  capture is off by default" flashed on each mount and read as an answer. There is now
+  an explicit loading branch, and errors carry `role="alert"`.
+- **The 340px fixed list column did not survive a 320px dock.** It is a `SplitPane`
+  (`initial 320`, `min 240`, `minOther 360`, `narrowBelow 720`).
+
+A run's row carries the goal, its verdict as the leading rail, and two figures.
+Ungraded is stated in the row *body* rather than a badge: a badge shares the head
+line with the figures, and at the column's 240px floor the two land on top of each
+other.
+
+Iconography inside the pane is inline stroke SVG (`icons.tsx` and the shared
+`glyphs.tsx`) rather than native emoji. The manifest's `icon:` field is the
+activity-rail glyph, typed as a string, and follows the rail's existing emoji
+convention.
+
+### What the pane surfaces
+
+Search runs a **mode toggle**, not a second box. Plain mode is `GET /runs?q=`
+(substring over goals); Semantic mode is `POST /search`, and **the method it
+actually used is shown as a chip** — `semantic`, `substring` ("no embedder
+answered") or `recent` ("the query was empty"). The backend degrades rather than
+failing, and a silent fall back to `recent` looks exactly like a semantic search that
+found nothing relevant. Semantic mode searches every outcome, unlike the route's
+successes-only default: that default is right for retrieval feeding examples to a
+model, and wrong for a human reading failures.
+
+Export reports what it **skipped** (`{examples, candidates, skippedCount}`), because
+"42 examples" with no mention of the 300 ungraded runs it passed over reads as a
+complete dataset. It asks for `label_source: 'human'` — an `agent-critic` label is a
+model grading a model.
+
+The Datasets scope selector is server-side (`GET /stats?dataset=`,
+`GET /tools?dataset=`), not a filter over an already-truncated page. A run's
+**Inspect** button opens the Harness section on that fingerprint
+(`GET /harnesses/{fingerprint}`) with its system prompt, tool list and sampling
+params — a fingerprint is a hash, and "a3f2 beats 91cd" is unusable without it.
 
 ### Settings
 
@@ -369,7 +417,5 @@ server-side, and nothing here touches a platform capability.
 - **Filtering inside the vector search.** Dataset and outcome filters are applied
   after the LanceDB query, so it over-fetches to keep `limit` reachable. Pushing them
   into the query is an optimisation, not a correctness fix.
-- **A frontend surface for import, export and reindex.** All three are routes and
-  agent tools today; the pane has no buttons for them.
 - **Publishing to PyPI.** The package builds (`uv build sdk/horrible-trajectories`)
   and installs from its wheel into a clean environment; it has not been uploaded.

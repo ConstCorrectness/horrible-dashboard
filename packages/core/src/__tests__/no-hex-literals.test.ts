@@ -153,13 +153,23 @@ describe('hardcoded colours', () => {
     });
   }
 
-  it('keeps the three cleaned files clean', () => {
+  it('keeps the cleaned files clean', () => {
     // These were the reachable half of the worst offenders and were cleared to
     // zero. A regression here is a straight undo, so it is worth naming.
+    //
+    // The trajectories entries are every file the old 816-line `TrajectoriesHub`
+    // was split into. Splitting a guarded file moves its code out from under the
+    // guard, so the new paths are listed here in the same change — otherwise the
+    // ratchet silently stops covering the code it was written for.
     const cleaned = [
       'packages/core/src/modules/evals/EvalsHub.tsx',
       'packages/core/src/modules/localtrack/components/RunDetailsModal.tsx',
       'packages/core/src/modules/trajectories/TrajectoriesHub.tsx',
+      'packages/core/src/modules/trajectories/panels/common.tsx',
+      'packages/core/src/modules/trajectories/panels/RunsSection.tsx',
+      'packages/core/src/modules/trajectories/panels/RunDetail.tsx',
+      'packages/core/src/modules/trajectories/panels/DatasetsSection.tsx',
+      'packages/core/src/modules/trajectories/panels/HarnessSection.tsx',
     ];
     for (const rel of cleaned) {
       const hits = readFileSync(join(REPO, rel), 'utf8').match(HEX) ?? [];

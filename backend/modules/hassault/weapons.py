@@ -368,6 +368,45 @@ WEAPON_BY_ID = {w.id: w for w in WEAPONS}
 DEFAULT_WEAPON = 2  # the assault rifle, index into WEAPONS
 
 
+def weapon_slots() -> list[str]:
+    """Every weapon id, in slot order.
+
+    Served rather than written out again wherever a list of weapons is needed —
+    the console's `player.give` renders its autocomplete from this. It used to
+    carry its own hardcoded list, which offered `carbine` and `subgun` (neither
+    has ever been a weapon here) and omitted `assault` (which is one). A console
+    that offers a weapon the node has never had is the exact failure the served
+    registry exists to prevent.
+    """
+    return [w.id for w in WEAPONS]
+
+
+def resolve_slot(query: str) -> int | None:
+    """The slot a weapon name or index refers to, or `None`.
+
+    Accepts the `id` (`sniper`), the display name (`Sniper Rifle`) and a bare
+    slot number, because all three are things a person reasonably types at a
+    console — the id is what the wire uses, the display name is what the HUD
+    shows them, and the number is what the weapon keys are labelled with.
+
+    A number outside the table is `None` rather than clamped. `weapon_at` clamps
+    because an out-of-range slot arriving on the wire is a typo that must not
+    drop a whole input frame; here it is a person asking for a weapon that does
+    not exist, and telling them so is the useful answer.
+    """
+    clean = query.strip().lower()
+    if not clean:
+        return None
+    for index, weapon in enumerate(WEAPONS):
+        if clean in (weapon.id.lower(), weapon.name.lower()):
+            return index
+    try:
+        slot = int(clean)
+    except ValueError:
+        return None
+    return slot if 0 <= slot < len(WEAPONS) else None
+
+
 def weapon_at(index: int) -> Weapon:
     """The weapon in a slot, clamped. An out-of-range slot on the wire is a
     typo or a probe, not a reason to drop the player's whole input frame."""

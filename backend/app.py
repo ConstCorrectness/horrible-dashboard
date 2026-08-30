@@ -85,6 +85,7 @@ from backend.modules.audio import register_agent_tools as register_audio_tools
 from backend.modules.audio import router as audio_router
 from backend.modules.audio import shutdown_voicemeeter
 from backend.modules.hardware import router as hardware_router
+from backend.modules.terminal import router as terminal_router
 from backend.modules.interpretability import (
     register_agent_tools as register_model_designer_tools,
 )
@@ -310,6 +311,7 @@ app.include_router(arxiv_router, prefix="/api")
 app.include_router(interpretability_router, prefix="/api")
 app.include_router(agentpedia_router, prefix="/api")
 app.include_router(hardware_router, prefix="/api")
+app.include_router(terminal_router, prefix="/api")
 app.include_router(audio_router, prefix="/api")
 app.include_router(llamacpp_router, prefix="/api")
 app.include_router(connectors_router, prefix="/api")

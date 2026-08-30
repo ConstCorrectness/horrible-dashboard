@@ -27,7 +27,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from backend import paths
-from backend.modules.hassault import mapsource
+from backend.modules.hassault import drafts, mapsource
 from backend.modules.hassault.cgz import CgzMap, read_cgz
 from backend.modules.settings.routes import get_value
 
@@ -166,6 +166,13 @@ def load_map(name: str) -> CgzMap | None:
     `hd_pit.cgz` there decide what the game loads would be a surprise with no
     upside, since the names are ours by construction.
     """
+    # A map being edited resolves first, and it is the reason this function is
+    # the only place that needed to change for the designer to work: every map
+    # route, and all three clients' boot paths, go through here. A draft never
+    # touches the filesystem, so `find_map`'s path validation is untouched by it.
+    if name.startswith(drafts.PREFIX):
+        return drafts.compiled(name[len(drafts.PREFIX) :])
+
     bundled = mapsource.load_bundled(name)
     if bundled is not None:
         return bundled
