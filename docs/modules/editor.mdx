@@ -33,6 +33,8 @@ the component.
   same file/note focuses the existing buffer (generic windowing support added with
   `openPanel(id, { instanceId, params })`).
 - **Commands (C3):** `editor.newNote` (create + open a note, `/new`),
+  `editor.newBuffer` (an untitled scratch **file**, `/scratch` — see
+  [Untitled buffers](#untitled-buffers-and-language-detection)),
   `editor.save` (`/save`), `editor.saveAs` (`/save-as`), `editor.saveAll`
   (`/save-all`), `editor.visualizeBuffer` (open the active buffer in the
   visualizer, inferring the engine from its language). The `/…` names are the
@@ -47,7 +49,8 @@ the component.
   quick-open is still to come.) App-level keys route through the shell service;
   **editor-internal keys are CodeMirror keymaps scoped to the view** (they act on
   cursor/selection state, so a global command can't express them): **Tab** accepts an
-  open completion popup, else indents (**Shift-Tab** dedents); **F12** go-to-definition
+  open completion popup, else **opens one** where completions could plausibly come from,
+  else indents (**Shift-Tab** dedents); **F12** go-to-definition
   and **F2** rename (see the LSP section); **Tab**/**Esc** accept/dismiss inline
   autosuggest at higher precedence. Binding Tab is deliberate — `basicSetup` leaves it
   unbound for accessibility, which made it escape to the browser's focus traversal
@@ -88,6 +91,101 @@ the component.
 - **Left region strip:** `editor.recentNotes` (**`embedded`**) — the most-recently-updated notes
   (`GET /notes`); click a row to open it as a `note:` buffer, with a "New note"
   affordance. Refreshes on window focus so notes created/saved elsewhere appear.
+
+### Untitled buffers and language detection
+
+`editor.newBuffer` (`/scratch`) opens a buffer with **no source** — an unsaved *file*,
+not a note. It appears as `untitled.md`, and `editor.buffer` supported this shape all
+along (`saveDir` resolution, `adoptSource` retargeting on Save As); nothing opened it.
+
+One resolver, `editor/language.ts`, answers "what language is this?" for both the
+grammar and the LSP. It used to be two maps that disagreed: a regex over the tab title
+chose the highlighting (JS/TS, Python, else Markdown — so a `.rs` or `.cpp` file
+rendered as **Markdown** and nothing said so), and a separate extension switch chose the
+LSP language id. Filename matching now comes from `@codemirror/language-data`, so the
+grammar set is CodeMirror's rather than a table we maintain, and each grammar is a
+dynamic import — nothing loads until a buffer needs it.
+
+Precedence: **a manual pin, then the opener's `language` hint, then the filename, then a
+content sniff, then Markdown.**
+
+The sniff (`sniffLanguage`, pure and unit-tested) runs **only for a sourceless
+buffer**. That gate is the whole design: a buffer with a name has already been told
+what it is, and a `.py` file momentarily holding prose is still Python. A shebang is
+decisive on its own; every other family needs **two** corroborating signals and a clear
+winner, because a language that flickers mid-word under the cursor is worse than one
+that arrives a beat late — `import x` alone is Python, JavaScript, Rust and Java at
+once. It reads a debounced snapshot (600ms), not every keystroke.
+
+Saving pins the answer: Save As proposes an extension from the *resolved* language (a
+sniffed-Python scratch buffer offers `.py`), and once the file has a name the name
+decides. The buffer header carries a compact language control that reports the resolved
+language and lets you override it — the answer is sometimes a guess now, and a buffer
+silently highlighting as the wrong language with the wrong completions is exactly what
+saying so out loud prevents.
+
+Adding a language is now **two** places, not three: `language.ts` and `LSP_SERVERS` in
+`backend/modules/lsp/manager.py` (which gained `cpp` and `clangd`).
+
+### Completion is no longer gated on the language server
+
+`autocompletion()` used to be configured in exactly one place — inside `lspExtension` —
+which meant only a `workspace-file:` in one of five languages had **any** completion
+source. A note, an unsaved buffer, a `.json`, a Drive file had none, even though the
+`code_symbols` index that would serve them was already built.
+
+`editor/completion.ts` owns the stack instead, and the language server is one optional
+source among several. `BufferView` mounts it through its own compartment for buffers
+with no server; `lspExtension` calls the same builder with the server's source added.
+
+:::caution One `autocompletion()` at a time
+CodeMirror merges configuration across instances, but `override` is a **replacing**
+field — a second live instance's override silently wins and the first one's sources
+vanish with no error. The LSP compartment and the standalone compartment are therefore
+configured from one predicate (`usesLanguageServer`) and are never both non-empty.
+:::
+
+### Completing an import statement
+
+`from <Tab>` and `from vllm import <Tab>` ask questions the identifier prefix query
+cannot answer: the first has no prefix at all, the second wants one module's importable
+names rather than a global scan. `editor/importContext.ts` classifies the cursor
+(`importContextAt`, pure) and queries two routes:
+
+| Route | Answers |
+| --- | --- |
+| `GET /api/editor/complete/modules` | Module names for a `from` / `import` statement. |
+| `GET /api/editor/complete/members` | The names importable from one module. |
+
+Both accept an **empty prefix** — unlike `/complete`, whose "no prefix, no rows" fast
+path is correct for the hot identifier lookup and would be the exact bug here. With no
+prefix the module query returns top-level modules only; listing every dotted submodule
+of every indexed package is thousands of rows and none of them is the question.
+
+Two rules do real work:
+
+- **The member query filters on `imp`, not `module`.** For a method, `module` holds the
+  *class* it belongs to (`extract_packages` stores `member_of or module`), so filtering
+  on `module` would answer `from vllm import …` with `LLM`'s methods and miss the
+  package's own names. `imp` is by construction "the module this symbol can be imported
+  from", and is empty for methods.
+- **A member completion applies as a bare name**, never through `applyImport`. We are
+  already inside the import statement; routing through it would insert a second
+  `from vllm import LLM` line above the one being typed.
+
+Modules rank by import **depth** first, so `vllm` beats `vllm.lora.request` — the same
+rationale that tiers the identifier query.
+
+### Tab opens the popup
+
+Tab accepts an open popup, then tries to open one, then indents. The middle rung is the
+whole design risk: `startCompletion` returns true whether or not it finds anything, so
+calling it unconditionally would swallow indentation everywhere. `tabStartCompletion`
+therefore declines — falling through to `indentWithTab` — unless the selection is empty,
+the text before the cursor on this line is **not** entirely whitespace (that is
+indentation, unambiguously), and either a word character precedes the cursor or the
+cursor is in an import context. Ghost-text autosuggest keeps its `Prec.highest` Tab, so
+an inline suggestion is still accepted ahead of all of it.
 
 ## Backend surface
 
@@ -476,9 +574,11 @@ things close that gap:
 
 ### Intellisense settings
 
-Declared in the editor manifest and edited on the [settings](settings.mdx) page. All
-of them are captured when a buffer opens (the LSP extension lives in a compartment
-reconfigured on load), so a change takes effect for **buffers opened after it**.
+Declared in the editor manifest and edited on the [settings](settings.mdx) page. The
+language-server ones are captured when a buffer opens (the LSP extension lives in a
+compartment reconfigured on load), so a change takes effect for **buffers opened after
+it**. The last two below reach the *live* completion compartment instead and apply
+immediately.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
@@ -490,6 +590,8 @@ reconfigured on load), so a change takes effect for **buffers opened after it**.
 | `editor.pythonPath` | `''` | Interpreter basedpyright analyzes against. Empty auto-detects a project `.venv` or system Python. |
 | `editor.frameworkImports` | `true` | The curated framework-import suggestions (see above). |
 | `editor.autosuggest` | `false` | Inline ghost-text completions from the local model. |
+| `editor.completionTrigger` | `auto` | When the popup opens. `auto` opens it as you type (and on Tab/Ctrl-Space); `manual` keeps the buffer quiet until you ask. Tab still indents wherever there is nothing to complete. Applies live. |
+| `editor.importCompletions` | `true` | Complete module names and members inside `import` statements, including on an empty prefix. Python only. Applies live. |
 
 A small **by-URI registry** (`editor/lsp-registry.ts`, keyed by the buffer's
 `workspace-file:` source URI — the same key the [agent edit tools](#agent-integration)

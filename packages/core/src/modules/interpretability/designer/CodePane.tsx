@@ -16,8 +16,14 @@
  * highlighted `<pre>`. The overlay is the prettier trick and it depends on two
  * elements agreeing about font metrics to the pixel; when they disagree the caret
  * drifts from the text, which is a far worse failure than a button press.
+ *
+ * Read mode is syntax-highlighted by `tokenizeLines` — spans *inside* the per-line
+ * DOM, so the node-highlight and the gutter keep working untouched. Edit mode stays a
+ * plain textarea for exactly the reason above.
  */
 import { useEffect, useMemo, useState } from 'react';
+
+import { tokenizeLines } from './highlight';
 
 export function CodePane({
   source,
@@ -46,7 +52,7 @@ export function CodePane({
     if (!editing) setDraft(source);
   }, [editing, source]);
 
-  const rows = useMemo(() => source.split('\n'), [source]);
+  const rows = useMemo(() => tokenizeLines(source), [source]);
   const lit = useMemo(() => {
     if (!highlightNode) return new Set<number>();
     return new Set(
@@ -154,13 +160,21 @@ export function CodePane({
           />
         ) : (
           <pre className="mg-code-body">
-            {rows.map((row, index) => (
+            {rows.map((tokens, index) => (
               <code
                 key={index}
                 className={lit.has(index + 1) ? 'mg-code-line mg-code-lit' : 'mg-code-line'}
               >
                 <span className="mg-code-num">{index + 1}</span>
-                {row}
+                {tokens.map((tok, i) =>
+                  tok.cls ? (
+                    <span key={i} className={tok.cls}>
+                      {tok.text}
+                    </span>
+                  ) : (
+                    tok.text
+                  ),
+                )}
                 {'\n'}
               </code>
             ))}

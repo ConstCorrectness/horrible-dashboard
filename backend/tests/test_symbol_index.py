@@ -175,3 +175,100 @@ def test_orphan_buffer_rows_are_purged_on_init(tmp_path, monkeypatch):
     assert [h["symbol"] for h in symbol_store.query("python", "live", 5)] == [
         "live_sym"
     ]
+
+
+# --- Import-statement completion ---------------------------------------------
+#
+# `from <Tab>` and `from vllm import <Tab>` ask questions the identifier prefix
+# query cannot answer: the first has no prefix at all, the second wants one module's
+# importable names rather than a global scan.
+
+
+def _seed_package_rows():
+    """A miniature symdex projection: two modules of one package, plus a method.
+
+    The method matters — it is stored with `module` = its *class* and an empty `imp`,
+    which is the whole reason the member query filters on `imp` rather than `module`."""
+    symbol_store.replace_source(
+        "pkg:vllm",
+        "python",
+        [
+            {
+                "symbol": "LLM",
+                "kind": "class",
+                "detail": "class vllm.LLM",
+                "imp": "vllm",
+            },
+            {"symbol": "SamplingParams", "kind": "class", "detail": "", "imp": "vllm"},
+            {
+                "symbol": "LoRARequest",
+                "kind": "class",
+                "detail": "",
+                "imp": "vllm.lora.request",
+            },
+            # A method: belongs to a class, importable from nothing.
+            {"symbol": "generate", "kind": "function", "module": "LLM", "imp": ""},
+        ],
+    )
+
+
+def test_query_modules_ranks_shallow_first():
+    _seed_package_rows()
+    names = [r["module"] for r in symbol_store.query_modules("python", "vllm")]
+    # The module you reach at the top of a package is the one people mean.
+    assert names.index("vllm") < names.index("vllm.lora.request")
+
+
+def test_query_modules_with_no_prefix_lists_top_level_only():
+    _seed_package_rows()
+    names = [r["module"] for r in symbol_store.query_modules("python", "")]
+    # `from <Tab>` is a real question; listing every dotted submodule is not the answer.
+    assert "vllm" in names
+    assert "vllm.lora.request" not in names
+
+
+def test_query_import_members_accepts_an_empty_prefix():
+    _seed_package_rows()
+    # The exact regression copying `query`'s `if not prefix: return []` would cause —
+    # `from vllm import <Tab>` is the case this whole path exists for.
+    names = [
+        r["symbol"] for r in symbol_store.query_import_members("python", "vllm", "")
+    ]
+    assert names == sorted(["LLM", "SamplingParams"], key=lambda s: (len(s), s))
+
+
+def test_query_import_members_filters_on_imp_not_module():
+    _seed_package_rows()
+    # `generate` lives on the class LLM (module='LLM', imp=''); a `module = ?` filter
+    # would answer `from LLM import <Tab>` with it, and miss the package's own names.
+    assert symbol_store.query_import_members("python", "LLM") == []
+    names = [r["symbol"] for r in symbol_store.query_import_members("python", "vllm")]
+    assert "generate" not in names
+
+
+def test_import_completion_routes_return_the_new_fields():
+    """Through HTTP, not the store — a response model that omits a field drops it
+    silently, and the browser sees `undefined` rather than an error."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from backend.modules.lsp.routes import router
+
+    _seed_package_rows()
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    client = TestClient(app)
+
+    mods = client.get(
+        "/api/editor/complete/modules", params={"lang": "python", "prefix": "vllm"}
+    )
+    assert mods.status_code == 200
+    assert "vllm" in [i["module"] for i in mods.json()["items"]]
+
+    members = client.get(
+        "/api/editor/complete/members", params={"lang": "python", "module": "vllm"}
+    )
+    assert members.status_code == 200
+    items = members.json()["items"]
+    assert {i["symbol"] for i in items} == {"LLM", "SamplingParams"}
+    assert next(i for i in items if i["symbol"] == "LLM")["detail"] == "class vllm.LLM"

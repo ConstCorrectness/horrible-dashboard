@@ -36,6 +36,18 @@
   --mg-activation: #4db6ac;
   --mg-op: #90a4ae;
   --mg-structure: #f06292;
+
+  /* Syntax tokens for the generated module (read mode). Literals like the category
+     colours above rather than theme tokens: the theme has no syntax vocabulary, and
+     a var() pointing at nothing would silently render everything as body text. */
+  --mg-tok-keyword: #c678dd;
+  --mg-tok-string: #98c379;
+  --mg-tok-comment: #7f848e;
+  --mg-tok-number: #d19a66;
+  --mg-tok-type: #e5c07b;
+  --mg-tok-name: #61afef;
+  --mg-tok-property: #56b6c2;
+  --mg-tok-operator: #abb2bf;
 }
 
 /* Toolbar ------------------------------------------------------------------ */
@@ -787,6 +799,55 @@
 }
 .mg-code-lit {
   background: color-mix(in srgb, var(--mg-accent) 16%, transparent);
+}
+
+/* classHighlighter emits one or more `tok-*` classes per span
+   (`tok-variableName tok-definition`), so these compose rather than assume one. */
+.mg-code-body .tok-keyword,
+.mg-code-body .tok-modifier,
+.mg-code-body .tok-controlKeyword,
+.mg-code-body .tok-operatorKeyword {
+  color: var(--mg-tok-keyword);
+}
+.mg-code-body .tok-string,
+.mg-code-body .tok-string2,
+.mg-code-body .tok-regexp {
+  color: var(--mg-tok-string);
+}
+.mg-code-body .tok-comment,
+.mg-code-body .tok-lineComment,
+.mg-code-body .tok-blockComment {
+  color: var(--mg-tok-comment);
+  font-style: italic;
+}
+.mg-code-body .tok-number,
+.mg-code-body .tok-bool,
+.mg-code-body .tok-null,
+.mg-code-body .tok-atom {
+  color: var(--mg-tok-number);
+}
+.mg-code-body .tok-typeName,
+.mg-code-body .tok-className,
+.mg-code-body .tok-namespace {
+  color: var(--mg-tok-type);
+}
+.mg-code-body .tok-variableName,
+.mg-code-body .tok-function {
+  color: var(--mg-tok-name);
+}
+.mg-code-body .tok-propertyName,
+.mg-code-body .tok-attributeName {
+  color: var(--mg-tok-property);
+}
+.mg-code-body .tok-operator,
+.mg-code-body .tok-punctuation,
+.mg-code-body .tok-separator,
+.mg-code-body .tok-bracket {
+  color: var(--mg-tok-operator);
+}
+/* A definition site reads as the thing being named, not as a reference to it. */
+.mg-code-body .tok-definition {
+  font-weight: 600;
 }
 .mg-code-num {
   display: inline-block;

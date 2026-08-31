@@ -367,6 +367,28 @@ body {
   padding: 0.15rem 0.6rem;
 }
 
+/* The buffer's language. A compact dev-tool control: it is metadata most of the time
+   and a decision occasionally, so it reads as the former until you reach for it. */
+.editor-language {
+  height: 30px;
+  padding: 0 0.4rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+
+.editor-language:hover,
+.editor-language:focus-visible {
+  border-color: var(--border-strong, var(--border));
+  background: var(--bg-raised);
+  color: var(--text);
+}
+
 /* Stands where Save would be, so the absence of a Save button reads as a property of
    the source rather than a missing control. */
 .editor-readonly {

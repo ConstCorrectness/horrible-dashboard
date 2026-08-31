@@ -402,6 +402,30 @@ the module in a training project's venv — a separate, slower question, and a s
 answer. Where they disagree, the estimate is the one that is wrong.
 :::
 
+### The code pane is highlighted, per line
+
+Read mode is syntax-highlighted by `designer/highlight.ts`, which parses the generated
+module with the same lezer grammar CodeMirror uses and hands back **one token array per
+line**. Spans go *inside* the existing per-line DOM rather than replacing it with an
+editor view, because the pane does two things per line that an editor would have to
+re-derive as decorations: light the lines a hovered node generated, and render the
+gutter number.
+
+Two things are bugs if missed, and both are pinned by tests:
+
+- **A styled range can span newlines** (a docstring, a bracketed expression), so every
+  emitted run is split on `\n`. Otherwise the line count moves and every
+  `# horrible:node=` marker points at the wrong line.
+- **Highlighting may not alter the text.** `highlightTree` only reports *styled* ranges;
+  the gaps between them are real source and must be emitted too. The test rejoins every
+  token and compares against the original — a dropped gap would still render as
+  plausible-looking code.
+
+Edit mode stays a plain textarea. A textarea overlaid on a highlighted `<pre>` is the
+prettier trick and it depends on two elements agreeing about font metrics to the pixel;
+when they disagree the caret drifts from the text, which is a far worse failure than a
+button press.
+
 ### Edits go both ways
 
 The code pane is editable. Change a number in the generated module, hit **Apply**, and

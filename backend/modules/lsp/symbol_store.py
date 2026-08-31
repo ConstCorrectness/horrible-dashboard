@@ -222,3 +222,81 @@ def query(
             }
             for r in cur.fetchall()
         ]
+
+
+def _like(prefix: str) -> str:
+    """A LIKE pattern for `prefix`, with the wildcards in the typed text escaped so
+    `_` and `%` match literally."""
+    return prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+
+def query_modules(lang: str, prefix: str, limit: int = 40) -> list[dict[str, object]]:
+    """Importable module paths for `from <prefix>` / `import <prefix>`.
+
+    Unlike `query`, an **empty prefix is legal** — `from <Tab>` is a real question and
+    the answer is "the top-level modules". Without a prefix the result is restricted to
+    depth 0 (`imp NOT LIKE '%.%'`), because listing every dotted submodule of every
+    indexed package is thousands of rows and none of them is what was asked.
+
+    Ranked by import depth first, so `vllm` beats `vllm.lora.request` — the module you
+    reach at the top of a package is the one people mean, the same rationale that tiers
+    `query`.
+    """
+    init()
+    sql = (
+        "SELECT imp AS module, MAX(freq) AS freq, "
+        "(length(imp) - length(replace(imp, '.', ''))) AS depth "
+        "FROM code_symbols WHERE lang = ? AND imp != '' "
+    )
+    params: list[object] = [lang]
+    if prefix:
+        sql += "AND imp LIKE ? ESCAPE '\\' "
+        params.append(_like(prefix))
+    else:
+        sql += "AND imp NOT LIKE '%.%' "
+    sql += "GROUP BY imp ORDER BY depth ASC, freq DESC, length(imp), imp LIMIT ?"
+    params.append(max(1, limit))
+    with _conn() as conn:
+        return [
+            {"module": r["module"], "freq": int(r["freq"] or 1)}
+            for r in conn.execute(sql, params).fetchall()
+        ]
+
+
+def query_import_members(
+    lang: str, module: str, prefix: str = "", limit: int = 50
+) -> list[dict[str, str]]:
+    """The names importable from `module` — the answer to `from vllm import <Tab>`.
+
+    Filters on **`imp`, not `module`**. For a method the `module` column holds the
+    *class* it belongs to (`extract_packages` stores `member_of or module`), so a
+    `module = ?` filter would answer with `Marshaller`'s methods rather than with the
+    package's importable names. `imp` is by construction "the module this symbol can be
+    imported from", and is empty for methods — exactly the distinction wanted here.
+
+    An empty prefix is legal for the same reason as `query_modules`.
+    """
+    init()
+    if not module:
+        return []
+    sql = (
+        "SELECT symbol, MIN(kind) AS kind, MIN(detail) AS detail, "
+        "MAX(freq) AS freq, MAX(doc) AS doc "
+        "FROM code_symbols WHERE lang = ? AND imp = ? "
+    )
+    params: list[object] = [lang, module]
+    if prefix:
+        sql += "AND symbol LIKE ? ESCAPE '\\' "
+        params.append(_like(prefix))
+    sql += "GROUP BY symbol ORDER BY freq DESC, length(symbol), symbol LIMIT ?"
+    params.append(max(1, limit))
+    with _conn() as conn:
+        return [
+            {
+                "symbol": r["symbol"],
+                "kind": r["kind"],
+                "detail": r["detail"],
+                "doc": r["doc"] or "",
+            }
+            for r in conn.execute(sql, params).fetchall()
+        ]

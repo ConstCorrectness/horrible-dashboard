@@ -20,14 +20,12 @@ import {
 } from '@codemirror/view';
 import { lintGutter, setDiagnostics, type Diagnostic } from '@codemirror/lint';
 import {
-  autocompletion,
   pickedCompletion,
   snippetCompletion,
   startCompletion,
   type Completion,
   type CompletionContext,
   type CompletionResult,
-  type CompletionSource,
 } from '@codemirror/autocomplete';
 
 import { dialogs } from '../../dialogs';
@@ -36,6 +34,8 @@ import { renderDocEntry, symbolAt } from '../../docs/cm-docs';
 import { renderMarkdown } from '../../docs/markdown';
 import { sendChannel, subscribeChannel, type WsMessage } from '../../ws';
 import { getBuffer } from './buffers';
+import { buildCompletion, type CompletionTrigger } from './completion';
+import { lspLanguageId } from './language';
 import {
   recordDiagnostics,
   registerLspClient,
@@ -47,8 +47,6 @@ import {
   type RenameOutcome,
 } from './lsp-registry';
 import { loadSource, saveSource } from './sources';
-import { frameworkImportSource } from './pythonImports';
-import { dbSymbolSource } from './symbolCompletion';
 import { fetchPythonEnv } from './pythonEnv';
 
 /** LSP CompletionItemKind → CodeMirror completion `type` (drives the icon). */
@@ -150,31 +148,9 @@ function markupText(doc: MarkupContent | undefined): string {
 // docstrings to markdown, aligning columns with `&nbsp;` and escaping `<`/`>`/`&`).
 // We decode these to their characters so they don't render literally as `&nbsp;`.
 
-/** Map a file extension to an LSP languageId the backend has a server for, or null
- * (no LSP). Kept in sync with `LSP_SERVERS` in the backend manager. */
-export function lspLanguageId(nameOrPath: string): string | null {
-  const ext = nameOrPath.toLowerCase().split('.').pop() ?? '';
-  switch (ext) {
-    case 'py':
-      return 'python';
-    case 'ts':
-    case 'mts':
-    case 'cts':
-      return 'typescript';
-    case 'tsx':
-      return 'typescriptreact';
-    case 'js':
-    case 'mjs':
-    case 'cjs':
-      return 'javascript';
-    case 'jsx':
-      return 'javascriptreact';
-    case 'rs':
-      return 'rust';
-    default:
-      return null;
-  }
-}
+// The filename -> language answer lives in language.ts (one authority for both the
+// grammar and the LSP id); re-exported here so existing importers keep working.
+export { lspLanguageId };
 
 /** The directory of an absolute path (its own separator). */
 export function dirOf(path: string): string {
@@ -862,6 +838,12 @@ export interface LspOptions {
   /** Whether to merge the indexed stdlib/package symbols (the symdex prefix index)
    * into the completion popup (`editor.indexedSymbols`). Defaults to on. */
   indexedSymbols?: boolean;
+  /** Whether to complete module names and members inside `import` statements
+   * (`editor.importCompletions`; Python only). Defaults to on. */
+  importCompletions?: boolean;
+  /** Whether the popup opens as you type or only on Tab/Ctrl-Space
+   * (`editor.completionTrigger`). Defaults to 'auto'. */
+  trigger?: CompletionTrigger;
 }
 
 /**
@@ -1474,54 +1456,24 @@ export function lspExtension(opts: LspOptions): Extension {
     if (last && p.triggerChars.includes(last)) startCompletion(update.view);
   });
 
-  // The DB symbol index (prefix lookup, no model) is merged into the same popup as
-  // an instant identifier source — it fills in while the LSP warms up and covers
-  // symbols the server doesn't surface. Ranked below the LSP's type-aware results.
-  const dbSource = dbSymbolSource(() => opts.languageId);
-  // Python buffers also get the curated framework-import source (basedpyright can't
-  // auto-import installed libraries) — merged into the same popup, ranked below LSP.
-  const useFrameworkImports = opts.languageId === 'python' && opts.frameworkImports !== false;
-  const fallbackSources: CompletionSource[] = [
-    ...(opts.indexedSymbols === false ? [] : [dbSource]),
-    ...(useFrameworkImports ? [frameworkImportSource(() => env.packages)] : []),
-  ];
-
-  // One merged source rather than three parallel ones, so the offline sources can be
-  // **deduped against the server's own results**. basedpyright ships typeshed, so once
-  // it's warm it already offers `defaultdict`, `Path`, … as auto-imports — listing the
-  // indexed copy beside it showed every stdlib symbol twice. The server wins any label
-  // it provides (it's type-aware and scope-aware); the indexed sources only fill in
-  // what it didn't offer, which is what makes them useful during the cold start and
-  // for third-party packages it can't auto-import.
-  const mergedSource = async (context: CompletionContext): Promise<CompletionResult | null> => {
-    const [lsp, ...rest] = await Promise.all([
-      completionSource(context),
-      ...fallbackSources.map((src) => src(context)),
-    ]);
-    const extras = rest.filter((r): r is CompletionResult => r != null);
-    if (!lsp && !extras.length) return null;
-    const seen = new Set((lsp?.options ?? []).map((o) => o.label));
-    const options = [...(lsp?.options ?? [])];
-    for (const result of extras) {
-      for (const option of result.options) {
-        if (seen.has(option.label)) continue;
-        seen.add(option.label);
-        options.push(option);
-      }
-    }
-    if (!options.length) return null;
-    // Every source anchors on the same typed word, so any non-null `from` agrees.
-    return {
-      from: lsp?.from ?? extras[0].from,
-      options,
-      validFor: /^[A-Za-z_]\w*$/,
-    };
-  };
+  // Every other completion source (indexed symbols, curated framework imports,
+  // import-statement modules/members) lives in completion.ts, so a buffer with no
+  // language server gets the same stack minus this one source. `buildCompletion`
+  // owns the merge and the dedupe-against-the-server rule.
+  const completion = buildCompletion({
+    languageId: opts.languageId,
+    lspSource: completionSource,
+    getPackages: () => env.packages,
+    indexedSymbols: opts.indexedSymbols,
+    frameworkImports: opts.frameworkImports,
+    importCompletions: opts.importCompletions,
+    trigger: opts.trigger,
+  });
 
   return [
     ...(opts.diagnostics === false ? [] : [lintGutter()]),
     plugin,
-    autocompletion({ override: [mergedSource] }),
+    completion,
     hover,
     gotoDefinition,
     renameSymbol,

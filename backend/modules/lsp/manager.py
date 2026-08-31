@@ -61,6 +61,7 @@ LSP_SERVERS: dict[str, list[list[str]]] = {
     "typescriptreact": [["typescript-language-server", "--stdio"]],
     "javascriptreact": [["typescript-language-server", "--stdio"]],
     "rust": [["rust-analyzer"]],
+    "cpp": [["clangd"]],
 }
 
 

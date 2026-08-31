@@ -97,6 +97,26 @@ async function newNote(): Promise<void> {
   openBuffer(await createNote());
 }
 
+// Untitled buffers are distinguished only by a counter — they have no source URI to
+// key on, and two scratch buffers must be able to coexist.
+let untitledSeq = 0;
+
+/**
+ * A scratch buffer with no source: an unsaved *file*, not a note. It opens as
+ * `untitled.md` and detects its own language from what you type, until you Save As and
+ * the name settles it. A blank current buffer is reused rather than adding a second
+ * empty editor, the same rule `openBuffer` follows.
+ */
+function newBuffer(): void {
+  const blank = blankBufferPane('');
+  const params = { title: 'untitled.md' };
+  const instanceId = `editor.buffer:untitled:${++untitledSeq}`;
+  if (blank && retargetPane(blank, instanceId, params)) return;
+  const area = areaHostingView('editor.buffer');
+  if (area && openPaneInArea('editor.buffer', area, params, instanceId)) return;
+  registry.openPanel('editor.buffer', { instanceId, params });
+}
+
 async function saveActive(): Promise<void> {
   const source = getActiveBufferSource();
   const buffer = source ? getBuffer(source) : undefined;
@@ -175,6 +195,12 @@ export const editorModule: ModuleManifest = {
   ],
   commands: [
     { id: 'editor.newNote', title: 'Editor: New note', run: newNote, slash: 'new' },
+    {
+      id: 'editor.newBuffer',
+      title: 'Editor: New buffer',
+      run: newBuffer,
+      slash: 'scratch',
+    },
     { id: 'editor.save', title: 'Editor: Save', run: saveActive, slash: 'save' },
     { id: 'editor.saveAs', title: 'Editor: Save as…', run: saveActiveAs, slash: 'save-as' },
     { id: 'editor.saveAll', title: 'Editor: Save all', run: saveAll, slash: 'save-all' },
@@ -240,6 +266,23 @@ export const editorModule: ModuleManifest = {
       key: 'editor.hover',
       title: 'Hover tooltips',
       description: 'Show the language server’s type and documentation tooltip on hover.',
+      type: 'boolean',
+      default: true,
+    },
+    {
+      key: 'editor.completionTrigger',
+      title: 'Completion popup',
+      description:
+        'When the completion popup opens. “As you type” also opens it on Tab and Ctrl-Space; “Only on Tab” keeps the buffer quiet until you ask. Tab still indents wherever there is nothing to complete.',
+      type: 'enum',
+      enumValues: ['auto', 'manual'],
+      default: 'auto',
+    },
+    {
+      key: 'editor.importCompletions',
+      title: 'Import statement completions',
+      description:
+        'Complete module names after “from”/“import”, and that module’s importable names after “from x import” — including on an empty prefix, so Tab lists what a package offers. Python only; reads the same indexed corpus as the symbol completions.',
       type: 'boolean',
       default: true,
     },

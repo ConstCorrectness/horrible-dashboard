@@ -9,13 +9,9 @@
  */
 import { useContext, useEffect, useRef, useState } from 'react';
 import { basicSetup } from 'codemirror';
-import { EditorView, keymap } from '@codemirror/view';
-import { Compartment, EditorState, Prec } from '@codemirror/state';
-import { indentWithTab } from '@codemirror/commands';
-import { acceptCompletion } from '@codemirror/autocomplete';
+import { EditorView } from '@codemirror/view';
+import { Compartment, EditorState, type Extension } from '@codemirror/state';
 import { markdown } from '@codemirror/lang-markdown';
-import { javascript } from '@codemirror/lang-javascript';
-import { python } from '@codemirror/lang-python';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { unifiedMergeView } from '@codemirror/merge';
 
@@ -38,9 +34,16 @@ import { useSetting } from '../../settings';
 import { isVirtualPath } from '../files/api';
 import { getRoots, loadRoots } from '../files/store';
 import { autosuggest } from './autosuggest';
+import { buildCompletion, completionKeymap, type CompletionTrigger } from './completion';
+import {
+  extensionForLanguage,
+  hasExtension,
+  PICKABLE_LANGUAGES,
+  resolveLanguage,
+} from './language';
 import { registerBuffer, type BufferSnapshot } from './buffers';
 import { openBuffer, setActiveBufferSource, setActiveSaveAs } from './index';
-import { dirOf, lspExtension, lspLanguageId } from './lsp';
+import { dirOf, lspExtension } from './lsp';
 import { readDiagnostics } from './lsp-registry';
 import { dirname, joinPath, loadSource, saveSource, sourceTitle } from './sources';
 import { dbGhostFetch, indexBuffer, indexBufferNow } from './symbolCompletion';
@@ -80,28 +83,66 @@ interface IntellisenseSettings {
   diagnostics?: boolean;
   /** `editor.hover` — hover tooltips. */
   hover?: boolean;
+  /** `editor.importCompletions` — module/member completion in import statements. */
+  importCompletions?: boolean;
+  /** `editor.completionTrigger` — popup on typing, or only on Tab/Ctrl-Space. */
+  trigger?: CompletionTrigger;
 }
 
-/** The LSP extension for a just-loaded source, or `[]` when there's no language
- * server for it (only `workspace-file:` buffers with a known language get one). */
-function lspFor(source: string | null, title: string, settings: IntellisenseSettings) {
-  if (!source || !source.startsWith(FILE_URI)) return [];
-  const language = lspLanguageId(title);
-  if (!language) return [];
+/**
+ * Whether this buffer gets a language server: only a `workspace-file:` in a language
+ * the backend has a server for. Everything else — notes, Drive files, and every
+ * unsaved buffer — gets the standalone completion stack instead.
+ *
+ * The two are mutually exclusive by construction, and that is load-bearing: both
+ * configure `autocompletion()`, whose `override` is a *replacing* field, so two live
+ * instances mean one silently wins and the other's sources vanish with no error.
+ */
+function usesLanguageServer(source: string | null, lspId: string | null): boolean {
+  return !!source && source.startsWith(FILE_URI) && !!lspId;
+}
+
+/** The LSP extension for a just-loaded source, or `[]` when {@link usesLanguageServer}
+ * says no. */
+function lspFor(
+  source: string | null,
+  lspId: string | null,
+  settings: IntellisenseSettings,
+): Extension {
+  if (!usesLanguageServer(source, lspId) || !source || !lspId) return [];
   const path = source.slice(FILE_URI.length);
   return lspExtension({
     path,
-    languageId: language,
+    languageId: lspId,
     root: dirOf(path),
     bufferUri: source,
     openFile: goToFile,
     pythonPathOverride: settings.pythonPath || undefined,
     frameworkImports: settings.frameworkImports,
     indexedSymbols: settings.indexedSymbols,
+    importCompletions: settings.importCompletions,
+    trigger: settings.trigger,
     warmupMs: settings.warmupMs,
     changeDebounceMs: settings.changeDebounceMs,
     diagnostics: settings.diagnostics,
     hover: settings.hover,
+  });
+}
+
+/** The standalone completion stack for a buffer with no language server — the same
+ * sources, minus the one the server would have provided. `[]` when the LSP owns it. */
+function completionFor(
+  source: string | null,
+  lspId: string | null,
+  settings: IntellisenseSettings,
+): Extension {
+  if (usesLanguageServer(source, lspId)) return [];
+  return buildCompletion({
+    languageId: lspId,
+    indexedSymbols: settings.indexedSymbols,
+    frameworkImports: settings.frameworkImports,
+    importCompletions: settings.importCompletions,
+    trigger: settings.trigger,
   });
 }
 
@@ -119,28 +160,16 @@ async function defaultSaveDir(): Promise<string | null> {
 
 /** A filename for an untitled buffer: its tab title if it has a real one, else
  * `untitled`. An extension is appended only when the title carries none, so
- * "notes.md" stays as typed and "notes" becomes a markdown file. */
-function suggestedFilename(title: string, langHint: string | null): string {
-  const base = title && title !== 'Untitled' && title !== '…' ? title : 'untitled';
-  if (/\.[a-z0-9]{1,8}$/i.test(base)) return base;
-  const ext = langHint === 'python' ? 'py' : langHint === 'javascript' ? 'js' : 'md';
-  return `${base}.${ext}`;
-}
-
-function languageFor(title: string) {
-  if (/\.(tsx?|jsx?|mjs|cjs)$/i.test(title)) {
-    return javascript({ typescript: /\.tsx?$/i.test(title), jsx: /x$/i.test(title) });
-  }
-  if (/\.py$/i.test(title)) return python();
-  return markdown();
-}
-
-/** An explicit language hint (e.g. a note opened by the visualizer) wins over the
- * title-based guess, since notes have no extension. */
-function languageForHint(hint: string | null, title: string) {
-  if (hint === 'javascript') return javascript();
-  if (hint === 'python') return python();
-  return languageFor(title);
+ * "notes.md" stays as typed and "notes" becomes a markdown file; the extension comes
+ * from the *resolved* language, so a sniffed-Python scratch buffer saves as `.py`. */
+function suggestedFilename(title: string, language: string): string {
+  // `untitled.md` is the scratch buffer's placeholder, not a name the user chose, so
+  // its extension must not outrank a detected language — a buffer full of Python
+  // offering to save itself as `.md` is the thing detection exists to avoid.
+  const placeholder = !title || title === 'Untitled' || title === '…' || /^untitled\b/i.test(title);
+  const base = placeholder ? 'untitled' : title;
+  if (!placeholder && hasExtension(base)) return base;
+  return `${base}.${extensionForLanguage(language)}`;
 }
 
 export function BufferView() {
@@ -167,6 +196,9 @@ export function BufferView() {
   const mergeRef = useRef(new Compartment());
   const autoRef = useRef(new Compartment());
   const lspRef = useRef(new Compartment());
+  // Completion for buffers with no language server. Mutually exclusive with `lspRef`
+  // (see usesLanguageServer) — two live `autocompletion()` instances silently fight.
+  const completionRef = useRef(new Compartment());
   // Read-only-ness arrives with the content (Drive files, GitHub blobs), so it's a
   // compartment reconfigured on load rather than a mount-time extension.
   const readOnlyRef = useRef(new Compartment());
@@ -175,7 +207,9 @@ export function BufferView() {
   const originalRef = useRef('');
   const dirtyBeforeProposalRef = useRef(false);
 
-  const [title, setTitle] = useState(source ? '…' : 'Untitled');
+  const [title, setTitle] = useState(source ? '…' : (params.title as string) || 'untitled.md');
+  // A language the user chose by hand, which outranks the filename and the sniffer.
+  const [pinnedLang, setPinnedLang] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [readOnly, setReadOnly] = useState(false);
   const [proposing, setProposing] = useState(false);
@@ -196,6 +230,11 @@ export function BufferView() {
   const changeDebounceMs = useSetting<number>('editor.changeDebounceMs') ?? 300;
   const diagnosticsOn = useSetting<boolean>('editor.diagnostics') ?? true;
   const hoverOn = useSetting<boolean>('editor.hover') ?? true;
+  // These two reach the *live* completion compartment rather than being captured on
+  // open like the LSP knobs above, so changing them doesn't need a buffer reopen.
+  const importCompletions = useSetting<boolean>('editor.importCompletions') ?? true;
+  const completionTrigger =
+    (useSetting<string>('editor.completionTrigger') as CompletionTrigger) ?? 'auto';
 
   // Save As, published to the module so `/save-as` can reach the active buffer.
   // Assigned each render (below, once `saveAs` is defined) and cleared on unmount
@@ -210,11 +249,47 @@ export function BufferView() {
   // The LSP language id of the loaded buffer ('' when unknown), read live by the
   // mount-time change listener so it can push edits to the symbol index.
   const indexLangRef = useRef('');
+  // The resolved language, read by handlers registered at mount (which would
+  // otherwise close over first render's value). Assigned once `resolved` exists.
+  const languageRef = useRef<ReturnType<typeof resolveLanguage>>({
+    name: 'Markdown',
+    desc: null,
+    lspId: null,
+  });
   // Live dirty/title, read by the close guard (registered once, called on close).
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
   const titleRef = useRef(title);
   titleRef.current = title;
+
+  // The debounced content snapshot an untitled buffer's language is guessed from.
+  const [sniffedContent, setSniffedContent] = useState('');
+  const sniffTimerRef = useRef<number | undefined>(undefined);
+  // Held in a ref because the mount-time change listener is registered once.
+  const scheduleSniffRef = useRef((text: string) => {
+    if (sniffTimerRef.current !== undefined) window.clearTimeout(sniffTimerRef.current);
+    sniffTimerRef.current = window.setTimeout(() => setSniffedContent(text), 600);
+  });
+  useEffect(
+    () => () => {
+      if (sniffTimerRef.current !== undefined) window.clearTimeout(sniffTimerRef.current);
+    },
+    [],
+  );
+
+  /**
+   * What language this buffer is. A **sourceless** buffer has no filename at all — its
+   * title (`untitled.md`) is a placeholder, not a name — so it is resolved from its
+   * content. Once it has a source the name is the answer, and the sniffer stops
+   * mattering: a `.py` file that momentarily holds prose is still Python.
+   */
+  const resolved = resolveLanguage({
+    title: source ? title : '',
+    hint: langHint,
+    content: source ? undefined : sniffedContent,
+    pinned: pinnedLang,
+  });
+  languageRef.current = resolved;
 
   // Mount CodeMirror once.
   useEffect(() => {
@@ -226,17 +301,15 @@ export function BufferView() {
         extensions: [
           basicSetup,
           oneDark,
-          // Tab does editor work instead of moving focus to the next control —
-          // `basicSetup` deliberately leaves Tab unbound (accessibility), which is why
-          // it otherwise escapes to the browser's focus traversal. With a completion
-          // popup open Tab accepts it (Enter-style, like VS Code); otherwise it indents,
-          // and Shift-Tab dedents. Ghost-text autosuggest binds Tab at `Prec.highest`,
-          // so an inline suggestion is still accepted first when one is showing.
-          Prec.high(keymap.of([{ key: 'Tab', run: acceptCompletion }, indentWithTab])),
+          // Accept an open popup, else open one where completions could plausibly come
+          // from (`from <Tab>`), else indent. See completion.ts for why the middle rung
+          // has to be conditional.
+          completionKeymap,
           langRef.current.of(markdown()),
           mergeRef.current.of([]),
           autoRef.current.of([]),
           lspRef.current.of([]),
+          completionRef.current.of([]),
           readOnlyRef.current.of([]),
           EditorView.updateListener.of((u) => {
             if (u.docChanged && !isProgrammaticRef.current) {
@@ -252,6 +325,12 @@ export function BufferView() {
                 // Keep the buffer's symbols current in the completion index
                 // (debounced; harvest is a no-op for languages we don't parse yet).
                 if (indexLangRef.current) indexBuffer(src, indexLangRef.current, content);
+              } else {
+                // No source means no filename, so the content is the only signal for
+                // what language this is. Debounced: re-resolving a grammar per
+                // keystroke would be absurd, and a language that flickers mid-word is
+                // worse than one that arrives a beat late.
+                scheduleSniffRef.current(u.state.doc.toString());
               }
             }
             // Track the focused buffer as "active" (Mod-s etc. route through the
@@ -290,7 +369,10 @@ export function BufferView() {
   // Load (or reload) the source content into the editor.
   useEffect(() => {
     if (!source) {
-      setTitle('Untitled');
+      // A sourceless buffer keeps the name its opener gave it (`untitled.md`), which
+      // is also what Save As proposes. It is a placeholder, not a filename — the
+      // language comes from the content until the file is actually named.
+      setTitle(typeof params.title === 'string' ? params.title : 'Untitled');
       return;
     }
     setActiveBufferSource(source);
@@ -330,12 +412,14 @@ export function BufferView() {
         view.dispatch({
           changes: { from: 0, to: view.state.doc.length, insert: insertContent },
           effects: [
-            langRef.current.reconfigure(languageForHint(langHint, loaded.title)),
+            // The grammar is owned by the language effect below (it may change without
+            // the source changing, and loading one is async).
+            //
             // Connect (or disconnect) a language server for this buffer. The
             // reconfigure tears down any prior session (didClose + stop) and the
             // new plugin sees the just-applied content for its didOpen.
             lspRef.current.reconfigure(
-              lspFor(source, loaded.title, {
+              lspFor(source, resolveLanguage({ title: loaded.title, hint: langHint }).lspId, {
                 pythonPath,
                 frameworkImports,
                 indexedSymbols,
@@ -343,6 +427,8 @@ export function BufferView() {
                 changeDebounceMs,
                 diagnostics: diagnosticsOn,
                 hover: hoverOn,
+                importCompletions,
+                trigger: completionTrigger,
               }),
             ),
             readOnlyRef.current.reconfigure(EditorState.readOnly.of(loaded.readOnly ?? false)),
@@ -353,10 +439,8 @@ export function BufferView() {
         });
         isProgrammaticRef.current = false;
 
-        // Seed the completion index with this buffer's symbols right away, and
-        // remember its language for the live change listener above.
-        const indexLang = lspLanguageId(loaded.title) ?? '';
-        indexLangRef.current = indexLang;
+        // Seed the completion index with this buffer's symbols right away.
+        const indexLang = resolveLanguage({ title: loaded.title, hint: langHint }).lspId ?? '';
         if (indexLang) indexBufferNow(source, indexLang, insertContent);
 
         setDirty(initialDirty);
@@ -373,6 +457,49 @@ export function BufferView() {
       cancelled = true;
     };
   }, [source]);
+
+  /**
+   * Keep the grammar and the completion stack pointed at the resolved language.
+   *
+   * Its own effect rather than part of the load dispatch, for two reasons: the
+   * language can change without the source changing (an untitled buffer being typed
+   * into, a manual pin), and `@codemirror/language-data` grammars are dynamic imports
+   * — loading one is async, so it cannot ride a synchronous load dispatch.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    const view = viewRef.current;
+    if (!view) return;
+    indexLangRef.current = resolved.lspId ?? '';
+    const settings = {
+      indexedSymbols,
+      frameworkImports,
+      importCompletions,
+      trigger: completionTrigger,
+    };
+    void (async () => {
+      const support = resolved.desc ? await resolved.desc.load().catch(() => null) : null;
+      if (cancelled || !viewRef.current) return;
+      viewRef.current.dispatch({
+        effects: [
+          langRef.current.reconfigure(support ?? markdown()),
+          completionRef.current.reconfigure(completionFor(source, resolved.lspId, settings)),
+        ],
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // `resolved` is derived fresh each render; the identity that matters is its name.
+  }, [
+    resolved.name,
+    resolved.lspId,
+    source,
+    indexedSymbols,
+    frameworkImports,
+    importCompletions,
+    completionTrigger,
+  ]);
 
   // Resolve the untitled buffer's would-be destination (a sourced buffer already
   // shows its own path).
@@ -495,7 +622,7 @@ export function BufferView() {
           setStatus('No workspace root configured — add one in Settings → Files to save.');
           return false;
         }
-        defaultValue = joinPath(dir, suggestedFilename(title, langHint));
+        defaultValue = joinPath(dir, suggestedFilename(title, resolved.name));
       }
       const dest = await dialogs.prompt({
         title: 'Save As',
@@ -508,7 +635,12 @@ export function BufferView() {
       setStatus('Saving…');
       await saveSource(`${FILE_URI}${path}`, content);
 
-      if (untitled && adoptSource(`${FILE_URI}${path}`)) return true;
+      if (untitled) {
+        // The file now has a name, and a name outranks a guess — pin it so a later
+        // edit can't sniff the buffer back to some other language.
+        setPinnedLang(null);
+        if (adoptSource(`${FILE_URI}${path}`)) return true;
+      }
       const label = untitled ? `Saved ${path}` : 'Saved a copy';
       setStatus(label);
       setTimeout(() => setStatus((s) => (s === label ? null : s)), 1500);
@@ -663,7 +795,8 @@ export function BufferView() {
             // index the dropdown uses — not a model. It returns the tail of the
             // single best-matching symbol for the token at the cursor, so there's
             // no round-trip latency and no hallucinated multi-line guesses.
-            fetch: (prefix, suffix) => dbGhostFetch(prefix, suffix, lspLanguageId(title) ?? ''),
+            fetch: (prefix, suffix) =>
+              dbGhostFetch(prefix, suffix, languageRef.current.lspId ?? ''),
           })
         : [];
     view.dispatch({ effects: autoRef.current.reconfigure(ext) });
@@ -692,7 +825,8 @@ export function BufferView() {
   // without this two `index.ts` buffers are indistinguishable and an untitled buffer
   // gives no clue where Save writes.
   const pathLabel =
-    filePath ?? (source ? null : saveDir && joinPath(saveDir, suggestedFilename(title, langHint)));
+    filePath ??
+    (source ? null : saveDir && joinPath(saveDir, suggestedFilename(title, resolved.name)));
 
   return (
     <div className="editor-buffer">
@@ -710,6 +844,34 @@ export function BufferView() {
           </span>
         )}
         <span className="editor-status">{status}</span>
+        {/* The resolved language, and the override. It says so out loud because the
+            answer is now sometimes a guess — a buffer silently highlighting as the
+            wrong language, with the wrong completions, is the failure this prevents. */}
+        <select
+          className="editor-language"
+          value={resolved.name}
+          onChange={(e) => setPinnedLang(e.target.value)}
+          title={
+            pinnedLang
+              ? `Language pinned to ${pinnedLang}`
+              : source
+                ? `Detected from the file name`
+                : `Detected from the content — save the buffer to fix it`
+          }
+          aria-label="Buffer language"
+        >
+          {/* The resolved language may be one language-data knows but the menu does
+              not list (an .ini, a .toml); include it so the control never shows a
+              value it doesn't have. */}
+          {(PICKABLE_LANGUAGES.includes(resolved.name)
+            ? PICKABLE_LANGUAGES
+            : [resolved.name, ...PICKABLE_LANGUAGES]
+          ).map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
         {readOnly ? (
           <span className="editor-readonly" title="This source can't be written back">
             Read-only

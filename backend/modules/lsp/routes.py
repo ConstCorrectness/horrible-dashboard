@@ -156,3 +156,50 @@ async def complete(
         symbol_store.query, lang, prefix, limit, member_of or None
     )
     return CompletionResult(items=[CompletionItem(**it) for it in items])
+
+
+class ModuleItem(BaseModel):
+    """An importable module path, for `from <Tab>` / `import <Tab>`."""
+
+    module: str
+    freq: int = 1
+
+
+class ModuleResult(BaseModel):
+    items: list[ModuleItem]
+
+
+@router.get("/complete/modules")
+async def complete_modules(
+    lang: str, prefix: str = "", limit: int = 40
+) -> ModuleResult:
+    """Module names for an `import` statement.
+
+    Unlike `/complete`, an **empty prefix is a real question** — `from <Tab>` asks for
+    the top-level modules — so this route deliberately does not require one."""
+    items = await asyncio.to_thread(symbol_store.query_modules, lang, prefix, limit)
+    return ModuleResult(items=[ModuleItem(**it) for it in items])
+
+
+class MemberItem(BaseModel):
+    """A name importable from one module."""
+
+    symbol: str
+    kind: str
+    detail: str = ""
+    doc: str = ""
+
+
+class MemberResult(BaseModel):
+    items: list[MemberItem]
+
+
+@router.get("/complete/members")
+async def complete_members(
+    lang: str, module: str, prefix: str = "", limit: int = 50
+) -> MemberResult:
+    """The names importable from `module` — the answer to `from vllm import <Tab>`."""
+    items = await asyncio.to_thread(
+        symbol_store.query_import_members, lang, module, prefix, limit
+    )
+    return MemberResult(items=[MemberItem(**it) for it in items])
