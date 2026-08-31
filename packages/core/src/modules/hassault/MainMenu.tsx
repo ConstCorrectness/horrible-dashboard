@@ -83,6 +83,12 @@ export interface MainMenuProps {
   onTrain: () => void;
   /** Host a match on `mapName` and enter it, optionally with bots already in. */
   onHost: (bots: number) => void;
+  /**
+   * Open the map designer — the native client only, seeded from `mapName`, or
+   * from solid rock when `blank`. Disabled in the UI when `nativeClient` is
+   * off: unlike Train and Host, there is no in-pane fallback to fall back to.
+   */
+  onEditMap: (blank: boolean) => void;
   /** Join the best match anyone is running, or host one when there is none. */
   onQuickPlay: (bots: number) => void;
   /** Play a match the **game server** adjudicates. */
@@ -544,6 +550,28 @@ function PlaySection(props: MainMenuProps) {
             title={props.loadoutError ? 'No loadout — nothing would be able to fire' : undefined}
           >
             Host
+          </button>
+        </div>
+      </div>
+
+      <div style={panel.row}>
+        <div style={panel.rowMain}>
+          <span>Map designer</span>
+          <span style={panel.dim}>
+            {props.nativeClient
+              ? 'Fly the map, drag rooms into shape. Native client only.'
+              : 'Needs the native client — turn it on in Settings.'}
+          </span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+          <button onClick={() => props.onEditMap(true)} disabled={!props.nativeClient}>
+            New
+          </button>
+          <button
+            onClick={() => props.onEditMap(false)}
+            disabled={!props.nativeClient || !props.ready}
+          >
+            Edit
           </button>
         </div>
       </div>

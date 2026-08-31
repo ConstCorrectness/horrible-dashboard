@@ -392,8 +392,8 @@ symbols** — it never indexes installed third-party libraries (a documented lim
 unlike Pylance), so `torch`/`numpy`/`pandas`/… symbols aren't offered in a file until
 you've imported them. The editor ships a curated **framework-import completion source**
 (`editor/pythonImports.ts`) to fill the gap: typing a known symbol or alias (`np`, `pd`,
-`plt`, `nn`, `DataFrame`, `Tensor`, `AutoModelForCausalLM`, `LLM`, …) offers it in any
-`.py` buffer, and accepting **inserts the symbol and prepends the matching `import`**
+`plt`, `nn`, `DataFrame`, `Tensor`, `AutoModelForCausalLM`, `LLM`, `AsyncLLMEngine`, …)
+offers it in any `.py` buffer, and accepting **inserts the symbol and prepends the matching `import`**
 (deduped, skipped when already imported). It merges into the same completion popup as
 the LSP and DB-symbol results but ranks below them (`boost: -99`), works even when no
 language server is running, and is toggled by the **`editor.frameworkImports`** setting

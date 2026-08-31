@@ -121,16 +121,46 @@ pub struct Summary {
     pub won: bool,
     /// Nobody equalled you either.
     pub mvp: bool,
+    /// Whether this was a match at all — see [`Summary::is_recordable`].
+    pub recordable: bool,
 }
 
 impl Summary {
+    /// Whether this session was a match worth calling a result.
+    ///
+    /// The mirror of `results.is_recordable` on the node: somebody to play
+    /// against, and something that happened. Without it, quitting a room you had
+    /// just joined printed **TOP OF THE BOARD** — alone, `best` is `-1` and
+    /// `0 >= -1` — which is the same bug the dashboard card had, arrived at
+    /// independently by the same arithmetic.
+    ///
+    /// **The third term differs from the server's on purpose.** The node tests
+    /// `damageDealt > 0`; this tests `tally.hits > 0`, because as the module
+    /// header explains this client cannot reproduce `damage_dealt` (the wire's
+    /// `HitMarker` is uncapped, the server's counter is capped at the victim's
+    /// remaining health). They agree in every reachable case: armour absorbs a
+    /// share and the remainder always goes through, so a hit that registered
+    /// always cost somebody health. If that ever stops being true — a hit that
+    /// lands for zero — this card and the dashboard's would begin to disagree
+    /// about whether a match happened, which is why the claim is written down
+    /// here rather than left to be rediscovered.
+    pub fn is_recordable(&self) -> bool {
+        self.opponents > 0 && (self.kills > 0 || self.deaths > 0 || self.tally.hits > 0)
+    }
+
     /// The one word at the top of the card.
     ///
     /// `won` and `mvp` are relative to the room rather than to a team score,
     /// because deathmatch is the only mode — `MatchRoom.result_for` defines them
     /// the same way, and this client must not invent a second definition.
+    ///
+    /// A session that was never a match is called what it was. It is checked
+    /// first because `won` and `mvp` are meaningless without an opponent, not
+    /// merely unflattering.
     pub fn verdict(&self) -> &'static str {
-        if self.mvp {
+        if !self.recordable {
+            "NO CONTEST"
+        } else if self.mvp {
             "MVP"
         } else if self.won {
             "TOP OF THE BOARD"
@@ -369,7 +399,13 @@ mod tests {
         // `won` is "nobody outscored you" and `mvp` is "nobody equalled you" —
         // `MatchRoom.result_for`'s words. A second definition here would make
         // the two cards disagree about the same match.
-        let base = Summary::default();
+        // Recordable, because `won`/`mvp` only mean anything once there was
+        // somebody to beat — an unrecordable card says so instead, and that is
+        // its own test below.
+        let base = Summary {
+            recordable: true,
+            ..Summary::default()
+        };
         assert_eq!(base.verdict(), "MATCH OVER");
         assert_eq!(
             Summary {
@@ -388,6 +424,34 @@ mod tests {
             .verdict(),
             "MVP"
         );
+    }
+
+    #[test]
+    fn an_empty_session_is_no_contest() {
+        // The bug this exists for: alone in a room `best` is `-1`, so `0 >= -1`
+        // congratulated a player for quitting. Both cards had it, arrived at
+        // independently by the same arithmetic.
+        let quit = Summary {
+            opponents: 0,
+            ..Summary::default()
+        };
+        assert!(!quit.is_recordable());
+        assert_eq!(quit.verdict(), "NO CONTEST");
+    }
+
+    #[test]
+    fn a_hit_is_enough_to_have_been_a_match() {
+        // The native half of the predicate counts hits where the node counts
+        // damage — see `is_recordable` for why the two agree.
+        let brushed = Summary {
+            opponents: 1,
+            tally: MatchTally {
+                hits: 1,
+                ..MatchTally::default()
+            },
+            ..Summary::default()
+        };
+        assert!(brushed.is_recordable());
     }
 
     #[test]

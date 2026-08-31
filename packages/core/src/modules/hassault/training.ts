@@ -27,8 +27,12 @@ import {
   damageAt,
   eyePosition,
   rayHitsBody,
-  raycastWorld,
+  FACE_NONE,
+  raycastWorldFace,
+  applySpray,
+  residualSpread,
   spreadVector,
+  sprayOffset,
   type Vec,
 } from './trace';
 import type { World } from './world';
@@ -70,6 +74,14 @@ export interface RangeShot {
   origin: Vec;
   /** One endpoint per pellet — a wall, a body, or the end of the shot's range. */
   ends: Vec[];
+  /**
+   * Which surface each pellet stopped against, parallel to `ends`.
+   *
+   * The same shape the server puts on the wire (`ShotFx.faces`), so the panel
+   * draws bullet marks through one code path in Train and in a match.
+   * `FACE_NONE` for a pellet that hit a target or ran out of range.
+   */
+  faces: number[];
   hits: TargetHit[];
 }
 
@@ -247,6 +259,10 @@ export class TrainingRange {
       // timer keeps running on a weapon you are no longer holding and fills it
       // while you are somewhere else.
       this.reloadIn = 0;
+      // And puts you back at the top of the pattern, the same rule
+      // `_handle_combat` follows: a weapon you just drew must not fire from
+      // halfway down someone else's recoil curve.
+      this.sprayIndex = 0;
     }
   }
 
@@ -256,7 +272,20 @@ export class TrainingRange {
     if (this.ammo[this.slot] >= weapon.mag) return;
     if (this.reserve[this.slot] === 0) return;
     this.reloadIn = weapon.reloadTime;
+    // A magazine change is the end of a burst by definition — `_begin_reload`.
+    this.sprayIndex = 0;
   }
+
+  /**
+   * How far into the spray pattern this burst is, and when it last fired.
+   *
+   * Kept here rather than in `ShotController` because on the range there is no
+   * server to adopt an index from — this class plays both parts. Measured on
+   * `clock`, the range's own simulated time, which is the same quantity
+   * `player.sim_time` is on the server.
+   */
+  private sprayIndex = 0;
+  private lastRangeFireAt = -Infinity;
 
   /** Advance reload timers and stand downed targets back up. */
   update(dt: number): void {
@@ -315,16 +344,39 @@ export class TrainingRange {
     }
 
     const origin = eyePosition(x, y, z, eye);
-    const direction = aimVector(yaw, pitch);
+    // **The recoil pattern applies here too, and it has to.** A range that
+    // taught a different recoil than a match would be worse than no range: the
+    // whole point of Train is learning the spray, and learning the wrong one is
+    // the failure this cannot have — the same argument the cone below already
+    // makes for the scope.
+    //
+    // The index is kept here rather than in `ShotController` because the range
+    // is the server as well as the client — there is nobody to adopt it from.
+    // The reset gate is the served `sprayReset`, on the range's own clock.
+    if (this.clock - this.lastRangeFireAt > (weapon.sprayReset ?? 0)) {
+      this.sprayIndex = 0;
+    }
+    this.lastRangeFireAt = this.clock;
+    const [aimYaw, aimPitch] = applySpray(yaw, pitch, sprayOffset(weapon, this.sprayIndex));
+    this.sprayIndex += 1;
+    const direction = aimVector(aimYaw, aimPitch);
     // The scope's whole mechanical effect, mirroring `effective_spread`
-    // server-side: which cone this pull uses.
-    const cone = scoped > 0 ? weapon.spread : weapon.hipfireSpread;
+    // server-side: which cone this pull uses. `residualSpread` is what a weapon
+    // with a pattern is left with — the full cone here would make the range's
+    // rifle five times less accurate than a match's.
+    const cone = residualSpread(weapon, scoped);
     const ends: Vec[] = [];
+    const faces: number[] = [];
     const hits: TargetHit[] = [];
 
     for (let pellet = 0; pellet < Math.max(1, weapon.pellets); pellet++) {
       const [pdx, pdy, pdz] = spreadVector(direction, cone, rand);
-      const wall = raycastWorld(world, origin, [pdx, pdy, pdz], weapon.range);
+      const { distance: wall, face } = raycastWorldFace(
+        world,
+        origin,
+        [pdx, pdy, pdz],
+        weapon.range,
+      );
 
       let best: { distance: number; target: Target } | null = null;
       for (const target of this.targets) {
@@ -338,6 +390,7 @@ export class TrainingRange {
 
       if (best === null) {
         ends.push([origin[0] + pdx * wall, origin[1] + pdy * wall, origin[2] + pdz * wall]);
+        faces.push(face);
         continue;
       }
 
@@ -363,10 +416,14 @@ export class TrainingRange {
       }
       hits.push({ id: target.id, damage: amount, head, killed });
       ends.push(point);
+      // A body is not a surface — the wall behind it was never reached, and a
+      // mark on it would be a lie about where the shot went. `resolve_shot`
+      // makes the same call.
+      faces.push(FACE_NONE);
     }
 
     if (hits.length > 0) this.pendingHits.push(...hits);
-    return { origin, ends, hits };
+    return { origin, ends, faces, hits };
   }
 
   /**

@@ -13,6 +13,9 @@ from those rows rather than stored beside them where it could disagree.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from backend.modules.hassault import results, weapons
@@ -421,3 +424,85 @@ def test_the_card_shows_the_skin_the_drop_resolves_to():
     assert body["earnedDrop"] is not None
     assert body["earnedDrop"]["instanceId"] == drop.instance_id
     assert body["earnedDrop"]["definition"]["name"]
+
+
+# ---------------------------------------------------------------------------
+# Was this a match at all?
+# ---------------------------------------------------------------------------
+
+
+def _result_vectors() -> dict:
+    """The shared fixture, or a loud failure.
+
+    Read from the repo rather than duplicated here for the same reason
+    `physics-vectors.json` is: `apps/native-fps/tests/conformance.rs` replays the
+    identical cases, and a copy in each language is two things to forget to
+    update.
+    """
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "packages"
+        / "core"
+        / "src"
+        / "modules"
+        / "hassault"
+        / "__tests__"
+        / "result-vectors.json"
+    )
+    assert path.exists(), (
+        f"result vectors missing at {path} — regenerate with "
+        "scripts/gen_hassault_result_vectors.py"
+    )
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("case", _result_vectors()["verdicts"], ids=lambda c: c["name"])
+def test_is_recordable_matches_the_shared_fixture(case):
+    """The predicate the native client mirrors, replayed case for case."""
+    assert results.is_recordable(case) is case["expect"]["recordable"]
+
+
+def test_an_empty_session_is_not_a_match():
+    """The bug in one line: open the pane, deploy, leave. No opponent, nothing
+    happened, and it used to be filed as a win."""
+    assert not results.is_recordable(
+        {"opponents": 0, "kills": 0, "deaths": 0, "damageDealt": 0}
+    )
+
+
+def test_a_lopsided_loss_is_still_a_match():
+    """Deliberately not a quality bar. `XP_BASE` exists because turning up
+    counts; what is excluded is the empty session, not the bad one."""
+    assert results.is_recordable(
+        {"opponents": 5, "kills": 0, "deaths": 15, "damageDealt": 0}
+    )
+
+
+def test_solo_is_never_a_victory():
+    """`max(others, default=-1)` meant `0 >= -1`, so every abandoned session
+    came back green."""
+    room = make_room()
+    alone = room.add("Alone", None)
+    result = room.result_for(alone.id)
+    assert result is not None
+    assert result["recordable"] is False
+    assert result["won"] is False
+    assert result["mvp"] is False
+
+
+def test_a_match_played_survives_the_bots_being_kicked():
+    """`result_for` runs at leave time and reads the room, so a host who removes
+    every bot before quitting would otherwise file a real match as an empty one."""
+    room = make_room()
+    you = room.add("You", None)
+    room.add("Bot", None)
+    # One tick is all it takes to latch: the room had two people in it.
+    room.simulate(1 / 60)
+    you.kills = 3
+    room.remove_bots()
+
+    result = room.result_for(you.id)
+    assert result is not None
+    assert result["opponents"] == 1
+    assert result["recordable"] is True
+    assert result["won"] is True

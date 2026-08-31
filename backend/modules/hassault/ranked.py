@@ -191,6 +191,11 @@ def _record(result: dict[str, Any]) -> None:
     computed none of it. That flag is the difference between a personal record and
     a result something comparative may be built on, so it is never inferred from
     "we were in a ranked room".
+
+    **Deliberately not gated by `results.is_recordable`.** That predicate exists
+    to stop *this node* filing its own empty sessions; a result the referee
+    reported is the referee's call, and second-guessing it here would mean a
+    ranked match the server counted quietly vanishing from the local history.
     """
     from backend.modules.games import server_auth
     from backend.modules.hassault import results

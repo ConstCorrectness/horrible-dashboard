@@ -20,6 +20,7 @@
  * Deliberately free of three and of React so all of it is unit-testable headless.
  */
 import type { WeaponSpec } from './api';
+import { residualSpread, sprayOffset } from './trace';
 import type { SelfState, ShotIntent, Vec3 } from './net';
 
 /** No shot intent at all — offline, dead, or between matches. */
@@ -76,8 +77,15 @@ export function recoilKick(weapon: WeaponSpec): number {
   return 0.011 + weapon.spread * 0.85;
 }
 
-/** Radians per second the view drifts back down after a burst. */
-const RECOVERY_RATE = 0.9;
+/**
+ * Radians per second the view drifts back down after a burst.
+ *
+ * Tuned against a whole pattern rather than against a single kick: the rifle's
+ * table climbs about 0.086 rad over twenty rounds, and a recovery that took
+ * longer than the burst did would leave the crosshair drifting for a second
+ * after a fight was over.
+ */
+const RECOVERY_RATE = 1.6;
 
 export class ShotController {
   weapons: WeaponSpec[] = [];
@@ -93,6 +101,27 @@ export class ShotController {
    * yours. The server reads it only to pick a shot's cone, and clamps it.
    */
   scoped = 0;
+  /**
+   * How far into the spray pattern we are.
+   *
+   * Predicted on the frame we fire and **adopted from `you.sprayIndex`** on the
+   * next snapshot, exactly as `ammo` is. That correction is what removes the
+   * whole class of index drift: a shot the server refused would otherwise leave
+   * us one step ahead of the pattern for the rest of the magazine, kicking the
+   * camera for bullets that never left.
+   */
+  sprayIndex = 0;
+
+  /**
+   * Whether the trigger is disabled because something else is in your hand.
+   *
+   * One flag rather than a guard at three call sites, and it deliberately sits
+   * *after* the reconciliation half of `frame`: the slot, the scope clamp, the
+   * ammo and the reload correction are the server's word about what you are
+   * holding and must land whether or not you can currently shoot it. Skipping
+   * them would leave the HUD describing a weapon you put away two seconds ago.
+   */
+  private blocked = false;
 
   private held = false;
   /** Semi-automatic weapons need the button released between shots. */
@@ -113,6 +142,22 @@ export class ShotController {
 
   get weapon(): WeaponSpec | undefined {
     return this.weapons[this.slot];
+  }
+
+  /**
+   * Block or unblock the trigger. Set while a grenade is in hand.
+   *
+   * Cosmetic to the wire: nothing here changes the slot the server thinks you
+   * hold. That is the whole reason it exists rather than `select`-ing something
+   * else — `select` puts `weapon: n` on the wire and `_handle_combat` **cancels
+   * an in-flight reload** on a switch, so equipping a grenade would silently
+   * abort a reload and cost a real switch delay.
+   */
+  setBlocked(blocked: boolean): void {
+    this.blocked = blocked;
+    // Releasing here as well: a trigger left held while the grenade came up
+    // would fire on the frame the weapon came back.
+    if (blocked) this.release();
   }
 
   press(): void {
@@ -151,6 +196,9 @@ export class ShotController {
    * consuming the click, so the button stays free to mean something else later.
    */
   cycleScope(): void {
+    // The right button is the toss while a grenade is up. A scope that still
+    // stepped would leave a sniper zoomed at 4x with a grenade in hand.
+    if (this.blocked) return;
     const levels = this.weapon?.zoomLevels ?? [];
     if (levels.length === 0) return;
     this.scoped = this.scoped >= levels.length ? 0 : this.scoped + 1;
@@ -194,6 +242,10 @@ export class ShotController {
       this.slot = you.weapon;
       this.ammo = you.ammo;
     }
+    // The server's word on where we are in the pattern. Taken whenever it is on
+    // the wire, including through a pending switch — the index is about the
+    // trigger, not about which slot the switch settles on.
+    if (you && you.sprayIndex !== undefined) this.sprayIndex = you.sprayIndex;
 
     // Re-clamped every frame against whatever we are *now* holding, because the
     // slot above may have just been overwritten by the server. A switch we did
@@ -212,6 +264,9 @@ export class ShotController {
     }
 
     const weapon = this.weapon;
+    // Everything above this line is the server's word about what we hold, and
+    // lands regardless — see `blocked`.
+    if (this.blocked) return intent;
     if (!weapon || !you || !you.alive) return intent;
     if (you.reloading) return intent;
     if (weapon.mag > 0 && this.ammo <= 0) {
@@ -228,12 +283,34 @@ export class ShotController {
     if (weapon.mag > 0) this.ammo -= 1;
     intent.fire = true;
 
-    const kick = recoilKick(weapon);
-    this.pendingKick += kick;
-    // Horizontal component is signed noise rather than a pattern: a learnable
-    // spray pattern is a feature of games with a much longer time-to-kill.
-    this.pendingYawKick += (Math.random() - 0.5) * kick * 0.7;
-    this.owed += kick;
+    if (weapon.spray && weapon.spray.length > 0) {
+      // **The pattern, as a delta.** The served table is absolute — it is a
+      // shape on a wall that a player memorises — but the camera accumulates,
+      // so what goes on it is the step from the last shot to this one.
+      //
+      // Applying the absolute instead is the mistake this comment exists for:
+      // the crosshair walks away by the running sum of the whole table, and the
+      // weapon becomes unusable within half a magazine while reading exactly
+      // like a number somebody tuned badly.
+      const here = sprayOffset(weapon, this.sprayIndex);
+      const previous =
+        this.sprayIndex > 0 ? sprayOffset(weapon, this.sprayIndex - 1) : ([0, 0] as const);
+      this.pendingYawKick += here[0] - previous[0];
+      this.pendingKick += here[1] - previous[1];
+      // Only the climb is owed back. Recovery pulls the view down, and giving
+      // back the lateral drift too would drag the crosshair sideways after a
+      // burst — the one motion a player cannot anticipate.
+      this.owed += Math.max(0, here[1] - previous[1]);
+      this.sprayIndex += 1;
+    } else {
+      // No pattern — four of the five weapons, and any server too old to send
+      // one. A rifle with *no* recoil would be worse than the noise this
+      // replaces, so the old behaviour is kept rather than skipped.
+      const kick = recoilKick(weapon);
+      this.pendingKick += kick;
+      this.pendingYawKick += (Math.random() - 0.5) * kick * 0.7;
+      this.owed += kick;
+    }
     return intent;
   }
 
@@ -268,7 +345,12 @@ export class ShotController {
   crosshairSpread(): number {
     const weapon = this.weapon;
     if (!weapon) return 4;
-    const cone = this.scoped > 0 ? weapon.spread : weapon.hipfireSpread;
+    // The cone the *next* shot would actually use, through the one function that
+    // answers that — `residualSpread`, which the range and the server both ask
+    // too. Drawing `spread` for a patterned weapon would advertise a cone five
+    // times the real one: a crosshair telling you not to take a shot the weapon
+    // would have made.
+    const cone = residualSpread(weapon, this.scoped);
     return 4 + cone * 260 + this.owed * 90;
   }
 
@@ -282,5 +364,7 @@ export class ShotController {
     this.pendingKick = 0;
     this.pendingYawKick = 0;
     this.scoped = 0;
+    this.sprayIndex = 0;
+    this.blocked = false;
   }
 }

@@ -68,6 +68,18 @@ pub struct GrenadeController {
     want_throw: bool,
     want_lob: bool,
     last_throw_at: f64,
+    /// The slot currently **in your hand**, or `None` when a weapon is.
+    ///
+    /// Selecting used to only *ready* a grenade — the gun stayed up and throwing
+    /// was its own key. Equipping is what lets the two mouse buttons mean throw
+    /// and toss without taking the right button away from the sniper's scope,
+    /// whose whole identity is that scope.
+    ///
+    /// Entirely client-side. The server has no concept of an equipped grenade
+    /// and needs none: `_throw` reads `command.nade` and nothing else.
+    equipped: Option<usize>,
+    /// True for exactly the frame after a throw left the hand.
+    threw: bool,
 }
 
 impl GrenadeController {
@@ -133,6 +145,39 @@ impl GrenadeController {
         }
     }
 
+    /// Whether a grenade is in your hand rather than a weapon.
+    pub fn equipped(&self) -> bool {
+        self.equipped.is_some()
+    }
+
+    /// Take a grenade in hand: ready it *and* put the weapon away.
+    ///
+    /// What the number keys now do. Empty slots still equip — `select`'s
+    /// reasoning, and the auto-holster below means nobody is ever left holding
+    /// nothing.
+    pub fn equip(&mut self, slot: usize) {
+        if slot < self.specs.len() {
+            self.slot = slot;
+            self.equipped = Some(slot);
+        }
+    }
+
+    /// Put the grenade away. A weapon key, Escape, dying, or the last one gone.
+    pub fn holster(&mut self) {
+        self.equipped = None;
+        // A throw queued on the frame the pouch was put away must not come out
+        // on the next one.
+        self.want_throw = false;
+        self.want_lob = false;
+    }
+
+    /// Whether a throw left the hand on the frame just resolved.
+    ///
+    /// Read once by the app to bring the previous weapon back up.
+    pub fn just_threw(&self) -> bool {
+        self.threw
+    }
+
     /// A throw key went down this frame. Edge, not level — see the module docs.
     pub fn press(&mut self, lob: bool) {
         self.want_throw = true;
@@ -152,6 +197,14 @@ impl GrenadeController {
             if !you.nades.is_empty() {
                 self.counts = you.nades.clone();
             }
+        }
+
+        self.threw = false;
+        // Dying puts the grenade away. Coming back holding one you readied in a
+        // previous life, with the weapon stowed, is a spawn you cannot shoot
+        // from.
+        if you.is_some_and(|y| !y.alive) {
+            self.equipped = None;
         }
 
         let wanted = std::mem::take(&mut self.want_throw);
@@ -185,16 +238,31 @@ impl GrenadeController {
             nade: self.slot as i32,
             lob,
         };
+        self.threw = true;
         // Ready the next one you actually have. Standing there holding an empty
         // hand after your last smoke is a state with nothing to do in it.
         if emptied {
             self.cycle();
+            // Nothing left of *anything*: put the pouch away rather than leaving
+            // the weapon stowed and both mouse buttons doing nothing.
+            if self
+                .specs
+                .iter()
+                .all(|s| self.counts.get(&s.id).copied().unwrap_or(0) <= 0)
+            {
+                self.equipped = None;
+            }
         }
+        // The grenade has left the hand. The weapon comes back up on the same
+        // frame — a throw is one action, not a mode you have to leave.
+        self.equipped = None;
         intent
     }
 
     /// Spawning refills, matching `reset_loadout` on the server.
     pub fn reset(&mut self) {
+        self.equipped = None;
+        self.threw = false;
         self.counts.clear();
         for spec in &self.specs {
             self.counts.insert(spec.id.clone(), spec.carried);

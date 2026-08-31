@@ -172,6 +172,310 @@ fn the_fog_colour_is_the_browsers_horizon_decoded() {
     );
 }
 
+// -- bullet marks --------------------------------------------------------------
+
+const DECALS_TS: &str = include_str!("../../../packages/core/src/modules/hassault/decals.ts");
+const DECALS_RS: &str = include_str!("../src/decals.rs");
+const TRACE_TS: &str = include_str!("../../../packages/core/src/modules/hassault/trace.ts");
+const TRACE_RS: &str = include_str!("../src/trace.rs");
+
+#[test]
+fn both_clients_remember_the_same_number_of_marks_for_the_same_time() {
+    // A wall of bullet holes is how a player reads their own spray pattern back.
+    // If one client keeps 128 for 22 seconds and the other keeps 32 for 5, the
+    // same magazine teaches two different things — and each client looks
+    // perfectly reasonable on its own.
+    let native_cap: u32 = between(DECALS_RS, "pub const MAX_MARKS: usize = ", ";")
+        .trim()
+        .parse()
+        .expect("a mark cap");
+    assert_eq!(
+        native_cap,
+        browser_f32(DECALS_TS, "DECAL_MAX").round() as u32,
+        "how many marks the world remembers"
+    );
+    for (rust_name, ts_name) in [
+        ("DECAL_LIFE", "DECAL_LIFE"),
+        ("DECAL_FADE", "DECAL_FADE"),
+        ("DECAL_LIFT", "DECAL_LIFT"),
+        ("DECAL_SIZE", "DECAL_SIZE"),
+    ] {
+        assert_eq!(
+            rust_f32(DECALS_RS, rust_name),
+            browser_f32(DECALS_TS, ts_name),
+            "{ts_name}"
+        );
+    }
+}
+
+#[test]
+fn all_three_implementations_agree_on_the_six_face_normals() {
+    // The index is on the wire, so its *meaning* is a contract between the
+    // server and both clients. Get the order wrong and every mark lands on the
+    // wrong face of the right cube, which is inside a wall about half the time
+    // — invisible, and reported by nothing.
+    let ts = between(TRACE_TS, "export const FACE_PX = ", "export const FACE_NONE");
+    let rs = between(TRACE_RS, "pub const FACE_PX: i32 = ", "pub const FACE_NONE");
+    for (i, name) in ["FACE_PX", "FACE_NX", "FACE_PY", "FACE_NY", "FACE_PZ", "FACE_NZ"]
+        .iter()
+        .enumerate()
+    {
+        if i == 0 {
+            continue;
+        }
+        assert!(
+            ts.contains(&format!("{name} = {i};")),
+            "the browser does not give {name} the index {i}"
+        );
+        assert!(
+            rs.contains(&format!("{name}: i32 = {i};")),
+            "this client does not give {name} the index {i}"
+        );
+    }
+    // And both agree a body hit is negative rather than a seventh face.
+    assert!(TRACE_TS.contains("export const FACE_NONE = -1;"));
+    assert!(TRACE_RS.contains("pub const FACE_NONE: i32 = -1;"));
+}
+
+// -- the first-person arms -----------------------------------------------------
+
+const ARMS_TS: &str = include_str!("../../../packages/core/src/modules/hassault/arms.ts");
+const ARMS_RS: &str = include_str!("../src/arms.rs");
+const VIEWCLIPS_TS: &str =
+    include_str!("../../../packages/core/src/modules/hassault/viewclips.ts");
+const VIEWCLIPS_RS: &str = include_str!("../src/viewclips.rs");
+
+#[test]
+fn both_clients_read_the_same_grips_and_the_same_clips() {
+    // **Not two copies compared — one file, read twice.** The browser imports
+    // `models/grips.json` and this client `include_str!`s the very same bytes,
+    // which is the only arrangement in which forty keyframes cannot drift. This
+    // test exists to catch somebody replacing either read with a local table,
+    // which is the change that would look like a harmless refactor.
+    assert!(
+        ARMS_TS.contains("from './models/grips.json'"),
+        "the browser stopped reading the shared grips"
+    );
+    assert!(
+        ARMS_RS.contains("models/grips.json"),
+        "this client stopped reading the shared grips"
+    );
+    assert!(
+        VIEWCLIPS_TS.contains("from './models/viewclips.json'"),
+        "the browser stopped reading the shared clips"
+    );
+    assert!(
+        VIEWCLIPS_RS.contains("models/viewclips.json"),
+        "this client stopped reading the shared clips"
+    );
+}
+
+#[test]
+fn both_clients_build_an_arm_to_the_same_dimensions() {
+    // A shoulder in a different place, or a forearm a different length, and the
+    // hands reach the same grip from two different postures — one game, two
+    // pairs of arms. Nothing errors; the two just look like different games.
+    for (rust, ts) in [("UPPER_LEN", "UPPER_LEN"), ("LOWER_LEN", "LOWER_LEN")] {
+        assert_eq!(
+            rust_f32(ARMS_RS, rust),
+            browser_f32(ARMS_TS, ts),
+            "{ts}"
+        );
+    }
+    // The shoulders are a `Vec3::new(..)` here and a tuple there, so they are
+    // compared component by component rather than by a shared parser.
+    for name in ["SHOULDER_R", "SHOULDER_L"] {
+        let rs = between(ARMS_RS, &format!("pub const {name}: Vec3 = Vec3::new("), ")");
+        let ts = between(ARMS_TS, &format!("export const {name}: Vec3 = ["), "]");
+        let parse = |text: &str| -> Vec<f32> {
+            text.split(',')
+                .map(|p| p.trim().parse().expect("a float"))
+                .collect()
+        };
+        assert_eq!(parse(rs), parse(ts), "{name}");
+    }
+}
+
+#[test]
+fn both_clients_time_the_hand_animations_the_same() {
+    // A landing dip that lasts twice as long in one client is a different feel,
+    // and feel is the whole reason these exist.
+    for name in ["LAND_DURATION", "DRAW_DURATION", "THROW_DURATION"] {
+        assert_eq!(
+            rust_f32(VIEWCLIPS_RS, name),
+            browser_f32(VIEWCLIPS_TS, name),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn both_clients_layer_the_action_over_locomotion_rather_than_blending_it() {
+    // The rule `clips.rs` already documents for the third-person rig: two poses
+    // averaged on one bone give you half a reload, a motion belonging to neither
+    // animation. A client that blended would play a visibly different reload
+    // while agreeing about every number in the file.
+    assert!(
+        VIEWCLIPS_RS.contains("action.primary.or(self.primary)"),
+        "this client blends rather than replaces"
+    );
+    assert!(
+        VIEWCLIPS_TS.contains("{ ...base, ...action }"),
+        "the browser blends rather than replaces"
+    );
+}
+
+// -- the swap animation --------------------------------------------------------
+
+#[test]
+fn both_clients_stow_and_draw_on_the_same_numbers() {
+    // **This had already drifted.** The native client grew `holster`, `stow`,
+    // `DRAW_TIME` and a fraction-based reload dip; the browser kept a fixed-rate
+    // exponential approach that neither reached the bottom on a fast reload nor
+    // came back up on time on a slow one. Nothing caught it, because a weapon
+    // animation looks plausible whatever it does — so the numbers are pinned now
+    // that both clients have them.
+    for (name, browser) in [
+        ("HOLSTER_TIME", "HOLSTER_TIME"),
+        ("DRAW_TIME", "DRAW_TIME"),
+        ("HOLSTER_HOLD", "HOLSTER_HOLD"),
+        ("RELOAD_DIP_IN", "RELOAD_DIP_IN"),
+        ("RELOAD_DIP_OUT", "RELOAD_DIP_OUT"),
+    ] {
+        assert_eq!(
+            rust_f32(VIEWMODEL_RS, name),
+            browser_f32(VIEWMODEL_TS, browser),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn both_clients_equip_a_grenade_rather_than_merely_readying_one() {
+    // The design that lets the mouse mean throw and toss without taking the
+    // right button away from the sniper's scope. A client where a number key
+    // only *readied* would leave the two buttons doing something else entirely
+    // while the other client threw — one game, two control schemes.
+    assert!(
+        UTILITY_RS.contains("pub fn equip(&mut self, slot: usize)"),
+        "the native client has no equip"
+    );
+    assert!(
+        UTILITY_TS.contains("equip(slot: number): void"),
+        "the browser has no equip"
+    );
+    for source in [UTILITY_RS, UTILITY_TS] {
+        assert!(
+            source.contains("holster"),
+            "a client can equip a grenade but never put it away"
+        );
+    }
+}
+
+const UTILITY_RS: &str = include_str!("../src/utility.rs");
+const UTILITY_TS: &str = include_str!("../../../packages/core/src/modules/hassault/utility.ts");
+
+// -- the muzzle flash ----------------------------------------------------------
+
+/// The browser's flash, read at test time.
+const FLASH_TS: &str = include_str!("../../../packages/core/src/modules/hassault/flash.ts");
+
+/// One weapon's `{ radius: r, stretch: s }` out of `flash.ts`'s `SHAPES` table.
+fn browser_flash_shape(id: &str) -> (f32, f32) {
+    let row = between(FLASH_TS, &format!("{id}: {{ radius: "), " },");
+    let (radius, rest) = row.split_once(", stretch: ").expect("a shape row");
+    (
+        radius.trim().parse().expect("a radius"),
+        rest.trim().parse().expect("a stretch"),
+    )
+}
+
+/// One weapon's `Some((radius, stretch, segments))` out of `viewmodel.rs`.
+fn native_flash_shape(id: &str) -> (f32, f32) {
+    let row = between(VIEWMODEL_RS, &format!("\"{id}\" => Some(("), ")),");
+    let mut parts = row.split(',');
+    (
+        parts.next().unwrap().trim().parse().expect("a radius"),
+        parts.next().unwrap().trim().parse().expect("a stretch"),
+    )
+}
+
+#[test]
+fn both_clients_shape_the_flash_per_weapon_identically() {
+    // The flash's shape is a real cue: at the far end of a corridor it is often
+    // the only thing that says whether a shotgun or a sniper just fired at you.
+    // A shotgun that blooms wide in one client and narrow in the other teaches
+    // two different games, and each looks deliberate from inside itself.
+    for id in ["pistol", "assault", "shotgun", "sniper"] {
+        let (bw, bs) = browser_flash_shape(id);
+        let (nw, ns) = native_flash_shape(id);
+        assert!(
+            (bw - nw).abs() < 1e-6,
+            "{id}: browser radius {bw}, native {nw}"
+        );
+        assert!(
+            (bs - ns).abs() < 1e-6,
+            "{id}: browser stretch {bs}, native {ns}"
+        );
+    }
+}
+
+#[test]
+fn both_clients_flash_for_the_same_length_and_cap_it_the_same() {
+    // `FLASH_LIFE` is two frames at 60fps in both, and the cap is what keeps
+    // the flash from becoming a screen effect again — the complaint that
+    // started all of this was that firing lit up the whole viewport.
+    assert_eq!(
+        rust_f32(VIEWMODEL_RS, "FLASH_LIFE"),
+        browser_f32(FLASH_TS, "FLASH_LIFE"),
+        "how long the flash is lit"
+    );
+    assert_eq!(
+        rust_f32(VIEWMODEL_RS, "FLASH_MAX_SCREEN_FRACTION"),
+        browser_f32(FLASH_TS, "FLASH_MAX_SCREEN_FRACTION"),
+        "the largest fraction of the viewport one flash may cover"
+    );
+    assert_eq!(
+        rust_f32(VIEWMODEL_RS, "FLASH_HALO_SCALE"),
+        browser_f32(FLASH_TS, "FLASH_HALO_SCALE"),
+        "how much wider the halo is than the core"
+    );
+}
+
+#[test]
+fn both_clients_use_the_same_flash_colours() {
+    // The browser spells them as hex and this client as linear triples, so the
+    // parity is only checkable by decoding one into the other. Sprites are drawn
+    // unlit and the fan carries its colour on the vertex, so neither goes
+    // through a lighting term — these are the colours as seen.
+    for (hex_name, rust_name) in [("FLASH_CORE", "FLASH_CORE"), ("FLASH_HALO", "FLASH_HALO")] {
+        let hex = between(FLASH_TS, &format!("export const {hex_name} = "), ";");
+        assert_close(
+            &format!("{rust_name} against the browser's {hex_name}"),
+            rust_vec3(rust_name),
+            hex_channels(hex),
+            // The Rust side spells four decimals, which is the whole precision
+            // available to it.
+            1e-4,
+        );
+    }
+}
+
+#[test]
+fn neither_client_gives_the_knife_a_flash() {
+    // The one weapon whose entire value is that carrying it gives nothing away.
+    // A swing resolves as a `Shot` like everything else, so it reaches the flash
+    // code in both clients and both have to refuse it explicitly.
+    assert!(
+        VIEWMODEL_RS.contains("\"knife\" => None"),
+        "the native client flashes for the knife"
+    );
+    assert!(
+        FLASH_TS.contains("if (weaponId === 'knife') return null;"),
+        "the browser flashes for the knife"
+    );
+}
+
 // -- weapon props --------------------------------------------------------------
 
 /// The browser's list of which weapons have a prop.

@@ -431,6 +431,19 @@ mode plus a typed console — which is also the one UI shape the native client c
 afford, its entire widget vocabulary being a 5×7 glyph font and a rectangle
 painter.
 
+**The dashboard `hassault.play` pane is the way in**, not a second implementation
+of it. `MainMenu`'s Play section carries a *Map designer* row beside Train and
+Host — **New** opens a blank draft (`--new`), **Edit** seeds one from the
+selected map — and both go through the same `launchNative`/`useNativeLaunch`
+path Train and Host already use: `POST /hassault/launch_native` with
+`mode: "edit"` (and `blank` for New), which the route turns into
+`--mode=edit [--new]` on the native client's command line — the same flags this
+section's `--mode=edit --map=hd_pit` / `--new` describe by hand. Unlike Train
+and Host, **the row has no in-pane fallback**: there is no browser-side visual
+editor, only the structured `edit.*` console commands (which do work in
+`hassault.console` either way), so the row is disabled whenever
+`hassault.nativeClient` is off rather than silently doing nothing.
+
 The structured half is typed into the console, and costs nothing on either client
 because `console.py` already owns the registry and serves it: a command declared
 there is rendered by the native client *and* by the browser's `hassault.console`
@@ -901,6 +914,20 @@ are independently suppressed while the pane holds keyboard capture (`useCapture`
 in `HorribleAssaultPanel.tsx`), so the two tables never compete for the same
 keystroke either.
 
+### The mouse is not in the table, and the grenade keys changed
+
+`controls.ts` binds keyboard codes; the two mouse buttons are handled directly in
+the pane's pointer-locked handler because what they mean depends on **what is in
+your hand**. With a weapon up, left is the trigger and right is the scope. With a
+grenade equipped, left is the overhand throw and right is the underhand toss —
+see [Equipping a grenade](#equipping-a-grenade-and-what-the-mouse-buttons-mean)
+for why the grenade is *equipped* rather than merely readied, and why a global
+right-click toss would have been wrong.
+
+`Digit6`–`Digit9` therefore equip rather than select, and a weapon key puts the
+pouch away. `KeyG` and `KeyH` are unchanged and still throw: a player who has
+learned them should not lose them because the default moved.
+
 Bindings are keyed by `KeyboardEvent.code` (the physical key), not `key` (the
 character it produces) — WASD is a *shape* under the fingers, and reading `key`
 would move it to ZQSD on an AZERTY layout. Storage is a **diff against the
@@ -948,6 +975,150 @@ has a position in front of the eyes, and recomputing that transform from the
 camera every frame is how it goes subtly wrong on the one frame the camera moves.
 three only renders camera children when the camera itself is in the scene graph,
 which is why the constructor adds it there once.
+
+### First-person arms, and the two-bone solve
+
+There were no hands. The view model was a weapon floating in front of the camera —
+which reads as a weapon floating in front of the camera, and no amount of bob or
+sway fixes it, because the thing missing is the body it is attached to.
+
+Two arms now (`arms.ts` / `arms.rs`), each an upper arm, a forearm and a gloved
+hand built from primitives — the module's licensing rule again, and the same
+construction the weapons themselves use.
+
+**The shoulders are fixed in camera space and each hand is solved onto a grip
+anchor _on the weapon_**, by two-bone analytic IK. That one decision is most of
+what makes this work. The anchors are points in the weapon's own space, so they
+inherit the view model's entire transform for free: every bob, every sway, the
+recoil kick, the reload dip, the stow, the inspect roll — the arms follow all of
+it without knowing any of it exists, and there is no second animation to keep in
+step with the first.
+
+> **The solve must clamp, never NaN.** An unreachable target puts `acos` outside
+> `[-1, 1]`, which yields `NaN`, a `NaN` matrix, and a mesh three silently
+> declines to draw. An arm that vanishes with no error anywhere is the failure
+> this file has to not have, so both bounds are clamped explicitly: out of reach
+> the arm straightens, folded past its own reach it stops folding. Both suites
+> sweep the whole reachable space asserting no NaN, because the symptom is *no
+> symptom*.
+
+#### Grip anchors live in one JSON, not in two clients
+
+`models/grips.json`, imported by the browser and `include_str!`d by the native
+client, pinned together by `browser_parity.rs`. Deliberately **not served**: an
+anchor is a fact about the *model*, not about the weapon's balance, so putting it
+in `weapons.py` would give the simulation's table a rendering column, need a
+`WeaponOut` field, and hand it the `response_model` failure mode for nothing.
+
+Only the exceptions are listed. A weapon with no entry gets defaults derived from
+its own fitted bounding box, in the spirit of `fitWeaponModel` — so a weapon the
+server grows later has hands that look plausible rather than being empty-handed
+until somebody notices. The knife's `support` is `null` rather than an off-screen
+coordinate: an empty hand is a real state, and a hand parked somewhere arbitrary
+is a hand the player will eventually see. `undefined` (not listed) and `null` (no
+off hand) are kept distinct, or the knife grows a second hand gripping thin air.
+
+A test asserts **every anchor lies within the weapon's own fitted bounding box**.
+An anchor floating in space is the silent failure here: the solve reaches it
+happily, the arms are drawn, the elbows bend, and a hand hovers a few centimetres
+off the handguard forever.
+
+#### Two pose layers, and why they must be channel-disjoint
+
+`models/viewclips.json` — again one file, read by both clients — carries keyframed
+**offsets from the grip anchors**. That is what makes a partial keyframe legal: a
+track that says nothing about a hand leaves it on the gun, so `reload` is written
+entirely in terms of the support hand and never mentions the trigger hand it is
+not moving.
+
+The base layer is **locomotion** (idle / walk / run / jump / land), looping, and
+phase-driven off the view model's own `bobPhase` so it cannot drift out of step
+with the bob. The upper layer is **actions** (reload / inspect / throw / draw),
+one-shot.
+
+> **The action layer _replaces_ the channels it names; locomotion supplies the
+> rest.** Not a weighted average — `models/clips.ts` already explains that two
+> poses averaged on one bone give you half a reload, a motion belonging to
+> neither animation, and makes its own track sets disjoint via `isUpperBody`.
+> This does the same thing with four channels instead of a skeleton.
+
+`t` is a **fraction, never seconds**, so the reload track stretches to whatever
+`reloadTime` the server served: one authored motion serves a 1.4 s pistol and a
+2.6 s shotgun, and both come back up on the frame the magazine is full. The
+reload's `t` is driven by the server's own progress rather than by a clock of its
+own, so the magazine goes in exactly when the magazine fills.
+
+The reload's keyframes are the beats a reload actually has: off the handguard to
+the magazine well (0.18), magazine out (0.35), fresh one in (0.55), charging
+handle with the trigger hand briefly off the grip (0.72), back home (1.0). That
+last-but-one beat is what makes a reload read as mechanical rather than as the
+gun dipping.
+
+`PoseSource` is the seam. The authored tracks are one implementation; rigged
+clips off a skeleton would be another, and nothing in `arms.ts` or the view model
+would change. One interface, no speculative machinery.
+
+#### Porting the swap animation, which had already drifted
+
+The native client had `holster`, `stow`, `HOLSTER_TIME`, `DRAW_TIME`,
+`HOLSTER_HOLD` and a fraction-based reload envelope; the browser still had a
+fixed-rate exponential approach that did neither end well — a fast reload was
+still on its way down when the magazine filled, and a slow one sat at the bottom
+and then snapped back. Nothing caught it, because a weapon animation looks
+plausible whatever it does. The browser has all six numbers now and
+`browser_parity.rs` pins them.
+
+That port is also what equipping a grenade uses. The holster is **purely
+cosmetic**: it changes nothing about what is held, what can be fired, or what the
+wire says — which is exactly why it is the right tool, and `ShotController.select`
+is not.
+
+### Muzzle flash: a billboard, not a cone
+
+The complaint was "the pistol seems to just show a simple square in response to us
+shooting", and it was a literal description of the geometry. The flash was
+`ConeGeometry(0.16, 0.42, 5)` in an unlit `MeshBasicMaterial` at opacity 0.9, on the
+view model's pivot with `renderOrder = 2` so it drew over everything — and the
+direction it was pointed was **down the barrel, which points away from the camera**.
+A five-sided cone seen end-on is a pentagon. Close to the eye, over the whole view,
+for two frames at a time, it read as the *screen* flashing rather than the *gun*.
+
+It is now three billboards (`flash.ts`): a hot core, a wider dimmer halo, and a
+smoke wisp that outlives both. In the browser they are `THREE.Sprite`s, which are
+square-on to the camera by construction — there is no orientation left to get
+wrong, which is the point of the change rather than the soft texture being prettier.
+Natively they are triangle fans lying in the XY plane, placed by **translation only**:
+the view-model pass draws with the view matrix as identity, so a shape in XY is
+already exactly facing the camera, and multiplying by the model matrix (which
+carries every bob, sway and kick) would tilt it a few degrees — the cone's failure
+in miniature.
+
+**No light is added, and no exposure is touched.** The obvious way to make a gun
+feel punchier is a `PointLight` at the muzzle, and that is exactly what was being
+asked against: firing must not change the lighting of the viewport.
+
+The flash is **screen-size clamped** rather than simply made smaller.
+`FLASH_MAX_SCREEN_FRACTION` caps it at a fraction of the viewport's height, computed
+against the camera's FOV **as it is right now** — scoping divides the FOV by the
+magnification, so a cap read from the base value would be correct hipfiring and four
+times too generous at 4×, which is precisely the view a flash must not fill.
+
+Two smaller corrections came with it. The per-shot size variation used to be a
+`Math.random()` re-rolled *every frame the flash was lit*, so one shot was two or
+three unrelated sizes; it is now seeded once per shot, with a decay over the flash's
+life, so one shot is one event. And the **knife no longer flashes in the browser** —
+a swing resolves as a `Shot` like everything else, so it reaches the flash code, and
+a flare would light up the one weapon whose whole value is that carrying it gives
+nothing away. The native client had always refused it; that divergence had no test.
+
+`browser_parity.rs` now pins the per-weapon shape table, the flash life, the screen
+cap, the halo ratio, the two colours, and that neither client flashes for a knife.
+
+The smoke wisp is **deliberately browser-only**, and recorded under
+[Known limitations](#known-limitations) rather than half-shipped: the native
+view-model pass is opaque and its `Vertex` carries no alpha, so a wisp would have to
+go through the world-space volume pass, which has a real z-order hazard against the
+view model's cleared depth buffer.
 
 ### Materials, not just colours
 
@@ -1637,6 +1808,63 @@ runs every 1.5 s:
   *native* match exits, but the card outlives the match that made it, and one left
   over from an earlier game would otherwise sit on top of a browser match still
   being played.
+
+#### The card is for a match played in *this* pane session
+
+The remembered timestamp used to start at `0` on every mount, which means "no match
+has ever been closed" — so *any* undismissed row reopened the card the moment the
+pane appeared. A failed dismiss, or simply the last match of a previous session, was
+enough; docking, undocking or switching workspaces brought it back. The pane now
+asks the server once on mount what is already there and treats all of it as **seen**,
+and suppresses the summary half of the poll until that answer lands, because
+otherwise the first interval can win the race and show the stale card exactly once.
+
+Deliberately not clock arithmetic. `played_at` is the backend's `time.time()` and has
+no relationship to the browser's clock, so "newer than now" would either swallow a
+real card or replay an old one depending on which way the two machines were skewed.
+
+### Was this a match at all?
+
+The other half of the same complaint — the card came up for sessions nobody would
+call a match. Two independent causes:
+
+- **A row was written on every leave.** `channel._leave_any` files whatever
+  `result_for` returns, so opening the pane, deploying and pressing Menu produced a
+  match.
+- **That row said VICTORY.** `result_for` scored a player against
+  `max(others, default=-1)`, and alone in a room `0 >= -1`. The native client's own
+  card had the identical bug, arrived at independently by the same arithmetic
+  (`app.rs`, `build_summary`).
+
+`results.is_recordable` is now the one place the rule lives: **somebody to play
+against, and something that happened** — an opponent (bots count, the same call
+`result_for` makes about `won`), and at least one kill, death, or point of damage.
+`won` and `mvp` are gated on it, `channel._record_result` refuses to write a row
+without it, and the native card says **NO CONTEST** rather than ranking a session
+that had nobody in it.
+
+It is deliberately **not a quality bar**. A match you lost 0–15 is recordable and
+should be — `XP_BASE` exists precisely because turning up counts. What is excluded
+is the empty session, not the bad one.
+
+Two details are load-bearing:
+
+- **`opponents` counts everyone you ever shared the room with**, via
+  `MatchPlayer.faced_opponents`, not who is still standing in it. `result_for` runs
+  at leave time, so a host who kicks the bots before quitting would otherwise file a
+  real match as an empty one.
+- **The native predicate's third term differs on purpose.** The node tests
+  `damageDealt > 0`; the native client tests `tally.hits > 0`, because as
+  `summary.rs`'s header explains it cannot reproduce `damage_dealt` (the wire's
+  hitmarker is uncapped, the server's counter is capped at the victim's remaining
+  health). They agree in every reachable case, and
+  `__tests__/result-vectors.json` is a shared fixture replayed by
+  `test_hassault_results.py` and `conformance.rs` whose generator **refuses to write
+  a case where they disagree**.
+
+A **server-refereed** result (`ranked.py`) is not gated by any of this. That
+predicate exists to stop this node filing its own empty sessions; a result the
+referee reported is the referee's call.
 
 ## Identity: sign in, enlist, play
 
@@ -2620,6 +2848,137 @@ Two rules do more work than they look like they do:
 Spread is sampled uniformly over the cone's *area* rather than uniformly in angle,
 or every pellet clusters at the centre and a shotgun behaves like a rifle at range.
 
+#### Which face a pellet hit, and why it is on the wire
+
+`raycast_world_face` returns the distance **and which of the six faces stopped the
+ray**, as a small integer: the cell it stepped into was solid (and the step says
+through which side), the ray fell below a floor, or it rose above a ceiling. It is
+the **outward normal — the direction pointing back at the shooter** — so a ray
+stepping `+x` into a block reports that block's `-x` face. Backwards, every bullet
+mark is drawn on the inside of the wall it hit: invisible, and reported by nothing.
+
+`ShotResult.faces` runs parallel to `endpoints`, and `match.py` puts it on the wire
+as `faces` alongside `ends`. It is **served rather than derived** for the usual
+reason: the server already knows it at the instant its own ray returns, and a client
+recomputing it would be a fourth and fifth implementation of the world ray whose
+only job is to agree with the first about the exact point the first chose. Half a
+cube of disagreement is a mark inside a wall.
+
+An index rather than a vector, because a grid has exactly six faces: a shotgun costs
+eight small integers against the twenty-four floats `ends` already carries. `-1`
+(`FACE_NONE`) means a body, or a shot that ran out of range — negative rather than a
+seventh value, so a client that forgets to check gets nothing rather than a mark
+quietly facing `+x`.
+
+The per-pellet form also fixed something the per-shot `hit` flag could not: a
+shotgun landing one pellet in a body and seven in a wall is `hit: true`, and the
+native client's masonry dust was gated on it, so all seven lost their debris.
+
+The fixture carries the face for every trace case — and carries `null` for one of
+them. A shot fired at exactly 45° from a cell corner crosses its `x` and `y`
+boundaries at the same instant, and which face wins is decided by the last bit of
+`cos(yaw)`: Python's `math.cos(π/4)` and `math.sin(π/4)` return the *same* double,
+V8's return values one ULP apart. The generator probes for that by nudging the aim
+vector by one ULP and dropping the face where the answer moves. The distance stays
+pinned; only the coin flip is dropped.
+
+### Recoil is a pattern, not noise
+
+Recoil used to be noise: a fixed upward kick plus `(Math.random() - 0.5)` sideways,
+with the server resolving every shot inside a random cone. Nothing about that is
+learnable, which for the game's one automatic weapon is the difference between a
+skill and a dice roll.
+
+The **assault rifle** now has a `spray`: a table of twenty **absolute** `(yaw, pitch)`
+offsets from where you are aiming, indexed by how many rounds have gone out in this
+burst. A near-vertical climb for the first seven, then a lateral wander — left, then
+right, then a shallower drift — so the counter-motion is a shape rather than a
+direction and the reward for learning it is real.
+
+Three decisions that are each easy to get wrong in the opposite direction:
+
+- **Only the rifle has one.** It is the only `auto: True` weapon. A pattern on a
+  62 rpm sniper never survives its own reset gate — every shot is the first shot —
+  and one on an 8-pellet shotgun would be fighting a cone twenty times its size.
+  For the other four `spray = ()`, the index never advances, and the behaviour is
+  bit-for-bit what it was before patterns existed.
+- **The random cone is reduced, never removed.** `residual_spread` is about a fifth
+  of the cone it replaces. Zero makes the rifle a laser at two hundred cubes and
+  erases the sniper's reason to exist; a residual is what keeps a pattern
+  *counterable* rather than *solved*.
+- **The table is at least a magazine long**, so a full spray never has to hold at
+  its last entry. Past the end it holds rather than wraps — a pattern that restarted
+  mid-magazine would be unlearnable, which defeats the only reason it is a pattern.
+
+The offsets are **served** on `GET /api/hassault/weapons`, and that is load-bearing
+rather than tidy: the server aims the bullets with them and each client kicks its
+camera with them, so the crosshair goes where the rounds go. A copy in TypeScript
+or Rust would be a crosshair that lies, which is worse than having no pattern at
+all. `apply_spray` works in **view angles**, not in the direction vector, so the
+number the server adds to a shot is bit-for-bit the number a client adds to its
+camera.
+
+> **The `response_model` trap.** `WeaponOut` has to declare `spray`, `sprayReset`
+> and `residualSpread` as well as `Weapon.to_dict` returning them — a Pydantic
+> response model silently drops what it does not declare, and `spray: []` reads to
+> every client as "this weapon has no pattern". `TacticalOut` has carried that
+> warning for a while and `WeaponOut` did not, which is exactly why it is now
+> written on both. The test asserts the **route's JSON**, not `to_dict()`.
+
+#### Absolute on the wire, a delta on the camera
+
+The single easiest thing here to get wrong. The table is absolute because a spray
+pattern is a *shape on a wall* that a player memorises; the camera accumulates, so
+what goes on it is `spray[i] - spray[i-1]`. Applying the absolute walks the
+crosshair away by the running sum of the whole table, and the weapon is unusable
+within half a magazine — while looking exactly like a number somebody tuned badly.
+All three suites replay a `sprays` block from `physics-vectors.json` that pins the
+application, and `combat.test.ts` asserts the accumulated camera offset after N
+shots equals `spray[N-1]` rather than their sum.
+
+Only the *climb* is owed back to recovery. Giving back the lateral drift too would
+drag the crosshair sideways after a burst — the one motion a player cannot
+anticipate, because they did not put it there.
+
+#### The spray index rides the simulated clock
+
+`MatchPlayer.spray_index` resets when the trigger has been off for `spray_reset` of
+**`player.sim_time`**, never of `time.monotonic()`. Commands arrive in batches —
+`simulate` drains a whole queue per tick — so a wall-clock gate would disagree with
+the fire-rate check about how much time passed inside one tick and pin every shot at
+index 0: a rifle with no recoil, and nothing anywhere saying why. `last_throw_at`
+documents the identical reasoning for grenades, and
+`test_two_commands_drained_in_one_tick_do_not_reset_the_spray` is the direct
+regression.
+
+It advances only for a shot that actually went out; every early return in `_fire` is
+a trigger pull that produced nothing. It resets on a weapon switch, on a reload, and
+on respawn — every event that is recognisably "starting again".
+
+The index is **echoed to that player** in their private view, and both clients adopt
+it rather than counting locally — predicted on the frame you fire, corrected on the
+next snapshot, exactly as ammo is. Without that, a shot the server refused (rate
+limit, empty magazine, dead) would kick the camera for a bullet that never left and
+leave the client one step out of phase for the rest of the magazine.
+
+#### Four consumers, not two
+
+The pattern is applied by the server, by the browser's camera, by the browser's
+training range, and by the native client — and a range that taught a different
+recoil than a match would be worse than no range, since learning the spray is what
+Train is *for*.
+
+The native client is the one that needed new machinery. It had **no view recoil at
+all**: `cmd.fire` rode every frame the key was held and `try_fire` was range-only,
+so a deterministic pattern would have walked its bullets away from a crosshair that
+never moved. It now rate-limits the trigger to the weapon's interval — the courtesy
+the browser always extended, and without which a 700 rpm rifle sent thirty pulls a
+second for the server to discard all but eleven of — and kicks the camera from
+`you.sprayIndex` whenever it advances. Driving it from the server's index is a frame
+or two late and **exact**, which is the right trade. `Shake` is untouched: it is a
+*copy* of the camera by design, and turning it into recoil the server honours would
+make a screen effect part of the aim.
+
 ### The sniper's scope
 
 The sniper is the one weapon with a scope, and the right mouse button steps
@@ -2857,6 +3216,44 @@ driven by **one clock shared by every item**, so a whole map's items rise and fa
 together — a synchronised field is much easier to pick a _missing_ item out of than a
 field with per-item phase.
 
+### Bullet marks
+
+The world used to keep no memory of being shot at: a tracer for 75 ms, a blob at the
+endpoint for 300 ms, and then a room that looked exactly as it had before the
+firefight. Now every pellet that stops on a surface leaves a mark
+(`decals.ts` / `decals.rs`), and they are not decoration — since recoil is a
+**learnable pattern** (below), the marks on a wall are how you read back the pattern
+you are supposed to be learning.
+
+Both clients hold a **fixed ring** of `DECAL_MAX = 128` marks: allocated once,
+reused in order, so nothing is created per shot and the cap holds by construction
+rather than by a trim that runs after every push. An automatic weapon puts thirty
+marks on a wall in two seconds.
+
+Orientation comes from the served face (above), through **six fixed quaternions
+indexed by that face — never `lookAt`**, whose axis convention differs between
+cameras and everything else and is the kind of thing that is wrong by exactly 180°.
+A mark is lifted `DECAL_LIFT` along its own normal and drawn with `polygonOffset`,
+because a decal coplanar with its wall z-fights, and flicker reads as a bad
+graphics driver rather than as a bug worth reporting. Depth is **tested but never
+written**: marks overlap constantly, and a written depth makes the newer one fight
+the older.
+
+A mark holds full opacity for most of its life and fades only over the last
+`DECAL_FADE` seconds. One that began fading immediately would never be quite
+legible, and legibility across a whole magazine is the point.
+
+Natively the marks ride the **translucent volume pass** — the one water and smoke
+use — because alpha-blended, depth-tested, non-depth-writing is exactly what that
+pipeline is for, so this needed no pipeline, bind group or shader of its own. They
+are written into that pass's buffer **first**, deliberately: its vertex budget is
+shared, an overflow only reaches `divergence::note_overflow`, and if it ever bites
+it should be the newest transient effects that are dropped rather than the world's
+record of the fight.
+
+`browser_parity.rs` pins the cap, the lifetime, the fade, the lift, the size, and
+the order of the six face normals across all three implementations.
+
 ### On the range
 
 Train places the same items, from the same served placements, and resolves **only the
@@ -3023,6 +3420,82 @@ defining property rather than a detail: it is aimed at a *place*, so a throw tha
 lands right must not then be spoiled by the grenade rolling somewhere else.
 Everything else cooks on a timer, which is what makes bouncing one round a corner
 work at all.
+
+### Equipping a grenade, and what the mouse buttons mean
+
+Selecting used to only *ready* a grenade: the gun stayed up and throwing was its
+own key (`G` overhand, `H` underhand). A number key now **equips** — the weapon
+holsters, the grenade comes into your hand, and the two mouse buttons become
+**left to throw, right to toss**.
+
+That is why it equips rather than merely readying. A global right-click toss
+would take the scope away from the sniper, whose entire identity is that scope;
+with the grenade in hand there is nothing else the two buttons could be doing, so
+they are free. A weapon key puts the pouch away, and a throw auto-holsters on the
+frame the grenade leaves — a throw is one action, not a mode you have to leave.
+`G` and `H` still work: a player who has learned them should not lose them
+because the default moved.
+
+> **None of this goes on the wire.** The obvious implementation — asking for a
+> weapon switch while a grenade is up — puts `weapon: n` on the next command, and
+> `_handle_combat` **cancels an in-flight reload** on a switch. Taking out a
+> grenade would silently abort a reload and cost a real switch delay. So the
+> holster is the view model's cosmetic one and the trigger is stopped by a local
+> `blocked` flag. The server has no concept of an equipped grenade and needs
+> none: `_throw` reads `command.nade` and nothing else.
+
+`ShotController.setBlocked` sits **after** the reconciliation half of `frame`,
+deliberately: the slot, the scope clamp, the ammo and the reload correction are
+the server's word about what you are holding, and they have to land whether or
+not you can currently shoot it. Skipping them would leave the HUD describing a
+weapon you put away two seconds ago.
+
+Selecting an empty slot still equips — the HUD shows the zero, which is a better
+answer to "why did nothing happen" than silently readying a different grenade —
+and the pouch auto-holsters when the last one is gone, so nobody is left with the
+weapon stowed and both buttons doing nothing.
+
+### The predicted arc, and the constants it is served
+
+**Running and jumping have always fed a throw.** `throw_velocity` has added the
+thrower's own velocity at `THROW_INHERIT` (0.6 of it) since grenades existed, and
+nothing on screen ever said so: the only way to learn it was to notice grenades
+sometimes going further than expected and guess why. While a grenade is equipped
+both clients now draw the arc it would take.
+
+Two things make it honest.
+
+**Everything is served**, on a route of its own — `GET /api/hassault/throw` →
+`ThrowPhysicsOut`, read from `grenades.py` and `physics.GRAVITY` rather than
+retyped. A preview integrated with numbers a client invented would be an aiming
+aid confidently pointing somewhere the grenade will not go, which is worse than
+drawing none; a client that cannot reach the route draws nothing.
+
+> **A new route, not a reshaped `/tacticals`.** That one is
+> `response_model=list[TacticalOut]`, and turning it into an object to carry the
+> throw constants would make every already-installed native binary deserialise an
+> empty list and show **no grenades at all**, with no error anywhere. A test pins
+> its shape rather than leaving it to a future refactor's judgement.
+
+**It stops at first contact.** `step_grenade` bounces, and bouncing is chaotic: a
+1e-6 disagreement in the floor comparison flips a bounce and puts the marker in
+the next room. A *learnable* feature that is confidently wrong is worse than one
+that stops early, so the arc ends where the grenade first touches something —
+which is stable, and is what a player actually aims with. The landing ring is
+drawn only when that contact was the **ground**: a grenade that clipped a wall
+carries on somewhere the preview does not follow. Full bounce prediction is on
+the roadmap.
+
+The arc is built from the **locally predicted** velocity, not the last snapshot's.
+A velocity half a round trip old would lag exactly the movement the preview
+exists to show.
+
+`physics-vectors.json` carries a `throws` block replayed by all three suites —
+the origin, the velocity and the contact point — with a **deliberately looser
+tolerance than the rest of the file, stated in the file**: 1e-9 is right for a
+single movement step and wrong for an integrator run for two seconds, where the
+three ports' float widths diverge steadily. Pinned tighter it goes flaky, and a
+flaky test gets deleted rather than fixed.
 
 ### A throw is a flag on a movement command
 
@@ -3608,6 +4081,21 @@ A ladder is drawn at the width of the **volume that catches you**, not of a real
 ladder, in both clients — a slender ladder drawn in the middle of a two-cube catch
 radius teaches players to aim for a rung when what actually grabs them is a
 cylinder.
+
+Since then it also pins the **muzzle flash** (its per-weapon shape table, how long
+it is lit, the screen-fraction cap, the halo ratio, the two colours, and that
+neither client flashes for a knife), the **bullet marks** (how many the world
+remembers, how long for, the lift and the size, and the order of the six face
+normals — which is a contract with the server as well, since the index is on the
+wire), the **swap animation**'s five timings, and the **arms** (segment lengths,
+shoulder positions, the three clip durations, and that both clients still read the
+shared `grips.json` and `viewclips.json` rather than a local table).
+
+That last one is the odd one out and worth naming: it pins that a *file is being
+read*, not that two numbers agree. The grips and the clips are one file compiled
+into both clients, so they cannot drift — the failure mode it guards against is
+somebody replacing either read with a local table, which is the change that would
+look like a harmless refactor.
 
 #### The range gives ammunition too
 
@@ -5255,6 +5743,8 @@ it into an X rather than fading a second element in and out.
 | `GET /api/hassault/weapons` | The loadout, in slot order — served so the client cannot drift from it |
 | `GET /api/hassault/hitbox` | The body a shot is resolved against — served for the same reason, and the one both clients draw to. See [The hitbox is served, and it is not finished](#the-hitbox-is-served-and-it-is-not-finished) |
 | `PUT /api/hassault/hitbox` | Tune the live body, or `{"reset": true}`. Not persisted |
+| `GET /api/hassault/tacticals` | The four grenades, in slot order — the table the simulation runs on. Deliberately still a **bare list**: reshaping it would make every installed native binary see no grenades at all |
+| `GET /api/hassault/throw` | The constants a throw is integrated with, for the trajectory preview. A route of its own for exactly the reason above — see [The predicted arc](#the-predicted-arc-and-the-constants-it-is-served) |
 | `GET /api/hassault/lore` | The setting: factions, palette, insignia, rank names, map briefs |
 | `GET /api/hassault/matches` | Live matches on this node — enough to render a lobby row |
 | `POST /api/hassault/matches` | Open a match **without joining**, so its id can be handed to a friend |
@@ -6079,6 +6569,15 @@ The skin system provides distinct faction styling and collectible operator skins
   works, but nothing on the wire says a player started reloading — `PlayerRow`
   carries no reload state and there is no `ReloadFx`. Adding one is a server
   change, not a renderer one.
+- **The muzzle flash's smoke wisp is browser-only.** The native view-model pass is
+  opaque and its `Vertex` carries no alpha, so a wisp would have to be transformed
+  into the world-space volume pass — which has a real z-order hazard against the
+  view model's cleared depth buffer, and is not what makes the flash read
+  correctly. The core and the halo are in both clients and pinned against each
+  other.
+- **Bullet marks have one appearance.** `decals.ts` has a `tint` parameter and the
+  world knows each cell's `wtex`/`ftex`, so a mark on concrete could differ from one
+  on metal, but nothing reads that yet — every mark is the same crater.
 
 - ~~**Grenades are browser-only.**~~ Fixed — see
   [Throwing in the native client](#throwing-in-the-native-client). The drawing

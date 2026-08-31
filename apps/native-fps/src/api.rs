@@ -192,6 +192,45 @@ pub struct MapSummary {
     pub size: u64,
 }
 
+/// The constants a grenade's flight is integrated with.
+///
+/// Served by `GET /api/hassault/throw` so a client can draw the arc a throw
+/// would actually take — including the part a player cannot otherwise see,
+/// which is that **running and jumping feed the throw** (`throwInherit`). The
+/// server has always added the thrower's own velocity; nothing on screen said
+/// so.
+///
+/// A route of its own rather than a field on `/tacticals`, because reshaping
+/// that response would make this very binary deserialise an empty list and show
+/// no grenades at all, with no error anywhere. A 404 here draws no preview:
+/// degraded, not broken.
+///
+/// **Every field is `camelCase` on the wire.** Without the renames each reads as
+/// `0.0`, and a preview integrated with a zero gravity is a straight line — an
+/// aiming aid that is confidently wrong, which is worse than none.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ThrowPhysics {
+    #[serde(default)]
+    pub gravity: f32,
+    #[serde(rename = "throwSpeed", default)]
+    pub throw_speed: f32,
+    #[serde(rename = "lobScale", default)]
+    pub lob_scale: f32,
+    /// The invisible one, and the reason the preview exists.
+    #[serde(rename = "throwInherit", default)]
+    pub throw_inherit: f32,
+    #[serde(rename = "throwForward", default)]
+    pub throw_forward: f32,
+    #[serde(rename = "throwDrop", default)]
+    pub throw_drop: f32,
+    #[serde(rename = "restSpeed", default)]
+    pub rest_speed: f32,
+    #[serde(default)]
+    pub substep: f32,
+    #[serde(rename = "maxSubsteps", default)]
+    pub max_substeps: i32,
+}
+
 /// Mirrors one row of `GET /api/hassault/weapons`.
 ///
 /// Fetched rather than hardcoded for the same reason `plane_order` is: the client
@@ -263,6 +302,76 @@ pub struct WeaponSpec {
     /// exactly like "no weapon in this game has a scope".
     #[serde(rename = "zoomLevels", default)]
     pub zoom_levels: Vec<f32>,
+    /// The recoil pattern: **absolute** `[yaw, pitch]` offsets from the aim,
+    /// indexed by how many shots have gone out in this burst. Empty means no
+    /// pattern, which is four of the five weapons.
+    ///
+    /// Served rather than tabulated because the server aims the bullets with
+    /// these exact offsets — a local copy would be a crosshair that disagrees
+    /// with where the rounds went, which is worse than having no pattern.
+    #[serde(default)]
+    pub spray: Vec<[f32; 2]>,
+    /// Simulated seconds without firing that resets the pattern to its first
+    /// shot.
+    ///
+    /// **`camelCase` on the wire.** Without the rename this silently reads as
+    /// `0.0`, which resets the pattern on *every* shot — a rifle with no recoil
+    /// at all, and nothing anywhere saying why. The `reloadTime` note above is
+    /// the same trap.
+    #[serde(rename = "sprayReset", default)]
+    pub spray_reset: f32,
+    /// The random cone left once the pattern is doing the aiming.
+    ///
+    /// The same rename trap, with a nastier failure: read as `0.0` this makes
+    /// the training range's rifle a perfect laser, which looks like a feature
+    /// rather than like a missing field.
+    #[serde(rename = "residualSpread", default)]
+    pub residual_spread: f32,
+}
+
+impl WeaponSpec {
+    /// The absolute `[yaw, pitch]` offset for the `index`-th shot of a burst.
+    ///
+    /// `weapons.spray_offset`. Held at the last entry past the end of the table
+    /// rather than wrapping: a pattern that restarted mid-magazine would be
+    /// unlearnable, which defeats the only reason it is a pattern.
+    pub fn spray_offset(&self, index: usize) -> [f32; 2] {
+        match self.spray.last() {
+            None => [0.0, 0.0],
+            Some(last) => *self.spray.get(index).unwrap_or(last),
+        }
+    }
+
+    /// The random cone a shot still gets once the pattern has aimed it.
+    ///
+    /// Falls back to the weapon's own cone for anything with no pattern, so this
+    /// is the one function every caller can ask. `weapons.residual_spread`.
+    pub fn residual_cone(&self, scoped: i32) -> f32 {
+        let own = if scoped > 0 {
+            self.spread
+        } else {
+            self.hipfire_spread
+        };
+        if self.spray.is_empty() || self.residual_spread <= 0.0 {
+            own
+        } else {
+            // Scoping tightens and must never *loosen* a cone the pattern
+            // already narrowed. No weapon is both scoped and patterned today;
+            // the rule is stated rather than assumed.
+            self.residual_spread.min(own)
+        }
+    }
+}
+
+/// Add a pattern offset to a shot's view angles.
+///
+/// **In view angles, not in the direction vector** — `weapons.apply_spray`'s own
+/// rule, and the reason this is a function: the number the server adds to a shot
+/// has to be bit-for-bit the number a client adds to its camera, or the
+/// crosshair drifts away from where the bullets go.
+pub fn apply_spray(yaw: f32, pitch: f32, offset: [f32; 2]) -> (f32, f32) {
+    let limit = std::f32::consts::FRAC_PI_2 - 1e-4;
+    (yaw + offset[0], (pitch + offset[1]).clamp(-limit, limit))
 }
 
 /// One thrown grenade's numbers, as `GET /api/hassault/tacticals` serves them.
@@ -611,6 +720,18 @@ impl NodeApi {
             .map_err(|e| ApiError::Decode(e.to_string()))
     }
 
+    /// The constants a grenade's flight is integrated with.
+    ///
+    /// Non-fatal at the call site, and the fallback is *no preview at all*
+    /// rather than a guessed one: a trajectory integrated with numbers this
+    /// client invented would be an aiming aid confidently pointing somewhere the
+    /// grenade will not go, which is worse than not drawing one.
+    pub fn throw_physics(&self) -> Result<ThrowPhysics, ApiError> {
+        self.get("/api/hassault/throw")?
+            .into_json()
+            .map_err(|e| ApiError::Decode(e.to_string()))
+    }
+
     /// The developer console's registry: every CVar, ConCommand and macro.
     ///
     /// **Fetched, never declared.** `console.py` owns this table and
@@ -782,6 +903,68 @@ mod tests {
         assert_eq!(weapons[0].id, "sniper");
         assert_eq!(weapons[0].zoom_levels, vec![2.0, 4.0]);
         assert!((weapons[0].hipfire_spread - 0.027).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_spray_pattern_survives_the_wire_s_camel_case() {
+        // The same trap as `zoomLevels`, with two nastier failures. Read as
+        // `spray_reset`, the reset arrives as `0.0` and the pattern restarts on
+        // *every* shot — a rifle with no recoil at all. Read as
+        // `residual_spread`, the cone arrives as `0.0` and the training range's
+        // rifle becomes a perfect laser. Both look like features.
+        let json = r#"[{"id":"assault","name":"rifle","interval":0.0857,"mag":20,
+            "kickback":1.6,"spread":0.021,"hipfireSpread":0.021,"damage":21,"pellets":1,
+            "spray":[[0.0,0.0],[0.0004,0.0092],[0.0009,0.0192]],
+            "sprayReset":0.35,"residualSpread":0.004}]"#;
+        let weapons: Vec<WeaponSpec> = serde_json::from_str(json).unwrap();
+        let rifle = &weapons[0];
+        assert_eq!(rifle.spray.len(), 3);
+        assert!((rifle.spray_reset - 0.35).abs() < 1e-6, "sprayReset was dropped");
+        assert!(
+            (rifle.residual_spread - 0.004).abs() < 1e-6,
+            "residualSpread was dropped"
+        );
+        // The cone the pattern leaves, not the one it replaced.
+        assert!((rifle.residual_cone(0) - 0.004).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_spray_offset_holds_at_the_last_entry_rather_than_wrapping() {
+        // A pattern that restarted mid-magazine would be unlearnable, which
+        // defeats the only reason it is a pattern.
+        let json = r#"[{"id":"assault","name":"rifle","interval":0.1,"mag":20,
+            "spread":0.02,"hipfireSpread":0.02,"damage":21,"pellets":1,
+            "spray":[[0.0,0.0],[0.001,0.01]],"sprayReset":0.35,"residualSpread":0.004}]"#;
+        let weapons: Vec<WeaponSpec> = serde_json::from_str(json).unwrap();
+        let rifle = &weapons[0];
+        assert_eq!(rifle.spray_offset(1), [0.001, 0.01]);
+        assert_eq!(rifle.spray_offset(2), [0.001, 0.01]);
+        assert_eq!(rifle.spray_offset(999), [0.001, 0.01]);
+    }
+
+    #[test]
+    fn a_weapon_with_no_pattern_keeps_its_own_cone() {
+        // Four of the five weapons, and any server too old to send one.
+        let json = r#"[{"id":"sniper","name":"sniper","interval":1.0,"mag":5,
+            "spread":0.002,"hipfireSpread":0.055,"damage":90,"pellets":1,
+            "zoomLevels":[2.0,4.0]}]"#;
+        let weapons: Vec<WeaponSpec> = serde_json::from_str(json).unwrap();
+        let sniper = &weapons[0];
+        assert!(sniper.spray.is_empty());
+        assert_eq!(sniper.spray_offset(4), [0.0, 0.0]);
+        assert!((sniper.residual_cone(0) - 0.055).abs() < 1e-6);
+        assert!((sniper.residual_cone(1) - 0.002).abs() < 1e-6);
+    }
+
+    #[test]
+    fn apply_spray_cannot_flip_the_aim_over_the_pole() {
+        // A real pattern is a small climb and can never reach vertical, but a
+        // table edited to something silly should bend the aim rather than invert
+        // it — an unclamped pitch makes the view matrix NaN.
+        let (_, pitch) = apply_spray(0.0, 1.5, [0.0, 5.0]);
+        assert!(pitch < std::f32::consts::FRAC_PI_2);
+        let (_, pitch) = apply_spray(0.0, -1.5, [0.0, -5.0]);
+        assert!(pitch > -std::f32::consts::FRAC_PI_2);
     }
 
     #[test]

@@ -32,6 +32,9 @@ use std::collections::HashMap;
 
 use glam::{Mat4, Vec3};
 
+use crate::arms::{self, GripAnchors};
+use crate::viewclips::{self, Action, ArmPose, Locomotion};
+
 use crate::renderer::Vertex;
 
 /// Where the weapon rests, in camera space: right hand, below the sight line.
@@ -131,7 +134,20 @@ const METAL: [f32; 3] = [0.2275, 0.2510, 0.2824];
 const DARK: [f32; 3] = [0.1098, 0.1255, 0.1490];
 const GRIP: [f32; 3] = [0.2902, 0.2471, 0.2000];
 const ACCENT: [f32; 3] = [0.5412, 0.5725, 0.6118];
-const FLASH: [f32; 3] = [1.0, 0.82, 0.48];
+/// The flash's two colours, matching `flash.ts`'s `FLASH_CORE` (`0xfff0c8`) and
+/// `FLASH_HALO` (`0xffb257`). Pinned by `browser_parity.rs` — a flash that is
+/// warm in one client and white in the other reads as deliberate from either one
+/// alone, which is exactly why it needs a test.
+const FLASH_CORE: [f32; 3] = [1.0, 0.9412, 0.7843];
+const FLASH_HALO: [f32; 3] = [1.0, 0.6980, 0.3412];
+
+/// The largest fraction of the viewport's height one flash may cover.
+/// `flash.ts`'s `FLASH_MAX_SCREEN_FRACTION`.
+const FLASH_MAX_SCREEN_FRACTION: f32 = 0.16;
+
+/// How much wider the halo is than the core, before the weapon's own stretch.
+/// `flash.ts`'s `FLASH_HALO_SCALE`.
+const FLASH_HALO_SCALE: f32 = 2.1;
 
 /// The equipped skin for the weapon in your hands.
 ///
@@ -317,6 +333,23 @@ pub struct Frame {
     pub visible: bool,
     /// The run speed the walk cycle is measured against.
     pub move_speed: f32,
+    /// The camera's vertical field of view, in **radians**, as it is this frame.
+    ///
+    /// Only the muzzle flash reads it, and only to cap how much of the screen a
+    /// flash may cover. It has to be the *live* value rather than the base one:
+    /// scoping divides the FOV by the magnification, so a cap computed against
+    /// the base would be right hipfiring and four times too generous at 4x —
+    /// which is precisely the view a flash must not fill.
+    ///
+    /// Taken as a field rather than reached for through `Camera`, because this
+    /// module is deliberately renderer-free and knows nothing about one.
+    pub fov: f32,
+    /// Seconds since the player last landed, for the landing dip.
+    ///
+    /// A duration rather than a timestamp, the same shape `you.move.since_landed`
+    /// has and for the same reason: the two simulated clocks are unrelated, so a
+    /// timestamp from one measured against the other means nothing.
+    pub since_landed: f32,
     /// How far through the reload we are, 0..1, or `None` when that cannot be
     /// known — the weapon's `reloadTime` has not been served, or is zero.
     ///
@@ -471,6 +504,21 @@ pub struct WeaponViewModel {
     /// stride.
     walk: f32,
     flash_age: f32,
+    /// Which shot this is. Seeds the per-shot size variation, so one shot is one
+    /// size rather than a new roll of the dice every frame it is lit.
+    flash_seed: u32,
+    /// The last frame's FOV, so `vertices` can cap the flash without being
+    /// handed the frame again.
+    fov: f32,
+    /// Where this weapon's hands go. Re-read on every swap.
+    grips: GripAnchors,
+    /// The pose the hands hold this frame, resolved in `update` and consumed by
+    /// `vertices` — the same split every other animated quantity here uses.
+    arm_pose: ArmPose,
+    /// The one-shot action running now, how far into it, and how long it is.
+    /// A `duration` of 1.0 means the caller drives `t` directly, which is how a
+    /// reload rides the server's own progress.
+    action: Option<(Action, f32, f32)>,
     /// How far out of frame the weapon is, 0..1. 1 is fully stowed.
     stow: f32,
     /// Seconds left of a holster that was *asked for* but not yet confirmed.
@@ -498,9 +546,6 @@ pub struct WeaponViewModel {
     /// working weapon and always were.
     prop: Option<PropFit>,
     visible: bool,
-    /// A flash that is a different size every frame it is lit reads better than
-    /// a fade, and needs no crate: two shots never look identical.
-    rng: u32,
 }
 
 impl Default for WeaponViewModel {
@@ -522,10 +567,17 @@ impl Default for WeaponViewModel {
             holster_hold: 0.0,
             draw_on_return: true,
             flash_age: FLASH_LIFE,
+            flash_seed: 0,
+            // A sane default rather than zero: `vertices` can run before the
+            // first `update` (a paused frame, a test), and a zero FOV would make
+            // the cap collapse the flash to nothing.
+            fov: std::f32::consts::FRAC_PI_3,
+            grips: arms::grips_for(""),
+            arm_pose: ArmPose::default(),
+            action: None,
             transform: Mat4::IDENTITY,
             prop: None,
             visible: false,
-            rng: 0x9e37_79b9,
         }
     }
 }
@@ -547,6 +599,7 @@ impl WeaponViewModel {
         // weapon dive out of frame in the middle of a firefight.
         let swapped = id != self.weapon;
         self.weapon = id.to_string();
+        self.grips = arms::grips_for(id);
         self.skin = skin.cloned();
         self.shape = if id.is_empty() {
             None
@@ -580,6 +633,20 @@ impl WeaponViewModel {
         }
     }
 
+    /// Start a one-shot hand animation.
+    ///
+    /// Replaces whatever was running rather than queueing: two actions on one
+    /// pair of hands is the blend `clips.rs` warns about, and the newer one is
+    /// always the one the player just asked for.
+    fn start_action(&mut self, clip: Action, duration: f32) {
+        self.action = Some((clip, 0.0, duration.max(1e-3)));
+    }
+
+    /// The grenade throw's pull-pin, windup and release.
+    pub fn throw_nade(&mut self) {
+        self.start_action(Action::Throw, viewclips::THROW_DURATION);
+    }
+
     pub fn weapon(&self) -> &str {
         &self.weapon
     }
@@ -596,6 +663,13 @@ impl WeaponViewModel {
         // shake, not to a weapon behind the player's ear.
         self.kick = (self.kick + 0.8).min(1.0);
         self.flash_age = 0.0;
+        // One seed per shot, not per frame — see `flash_seed`.
+        self.flash_seed = self.flash_seed.wrapping_add(1);
+        // Firing cancels a hand animation for the reason it cancels an inspect:
+        // the pose has the support hand somewhere other than the gun, and a shot
+        // drawn with a hand in the magazine well is a shot that did not happen
+        // that way.
+        self.action = None;
         // Firing cancels an inspect. It has to: the animation swings the barrel
         // away from the crosshair, and a shot that came out of a weapon pointing
         // at the floor would be a picture of a shot that did not happen. The
@@ -616,6 +690,7 @@ impl WeaponViewModel {
     pub fn inspect(&mut self) {
         if self.shape.is_some() {
             self.inspect = Some(0.0);
+            self.start_action(Action::Inspect, INSPECT_DURATION);
         }
     }
 
@@ -682,7 +757,21 @@ impl WeaponViewModel {
         // is `None` only when there is no length to stretch across, and the old
         // fixed-rate approach is kept for exactly that case — see `RELOAD_RATE`.
         self.reload_t = match frame.reload_progress {
-            Some(p) => reload_envelope(p),
+            Some(p) => {
+                // The hands run on the reload's own progress rather than on a
+                // clock of their own, so the magazine goes in exactly when the
+                // magazine fills — one authored motion stretched to whatever
+                // `reloadTime` was served.
+                if frame.reloading {
+                    self.action = Some((Action::Reload, p, 1.0));
+                } else if matches!(self.action, Some((Action::Reload, _, _))) {
+                    // Ended without a final progress of 1 — a switch, a death, a
+                    // correction. Dropped rather than leaving the hand in the
+                    // magazine well.
+                    self.action = None;
+                }
+                reload_envelope(p)
+            }
             None => {
                 let target = if frame.reloading { 1.0 } else { 0.0 };
                 self.reload_t + (target - self.reload_t) * (dt * RELOAD_RATE).min(1.0)
@@ -776,6 +865,71 @@ impl WeaponViewModel {
         self.transform = Mat4::from_translation(position)
             * Mat4::from_euler(glam::EulerRot::XYZ, rotation.x, rotation.y, rotation.z);
         self.flash_age += dt;
+        self.fov = if frame.fov > 0.0 {
+            frame.fov
+        } else {
+            std::f32::consts::FRAC_PI_3
+        };
+        self.update_arms(dt, frame, walk);
+    }
+
+    /// Pose the hands for this frame.
+    ///
+    /// Two layers merged per channel; where they *go* is `vertices`, which runs
+    /// the resulting offsets through the same transform the weapon uses. Because
+    /// the anchors are points on the weapon, everything the transform is already
+    /// doing — bob, sway, recoil, the reload dip, the stow, the inspect roll —
+    /// reaches the hands with nothing here knowing it happened.
+    fn update_arms(&mut self, dt: f32, frame: &Frame, walk: f32) {
+        // A reload's `t` is driven by the server's progress above rather than by
+        // `dt`, so only the self-timed actions tick here.
+        if let Some((clip, t, duration)) = self.action {
+            if duration != 1.0 {
+                let next = t + dt / duration;
+                self.action = if next >= 1.0 {
+                    None
+                } else {
+                    Some((clip, next, duration))
+                };
+            }
+        }
+
+        let clip = viewclips::select_locomotion(
+            frame.speed,
+            frame.move_speed,
+            frame.on_ground,
+            frame.since_landed,
+        );
+        // Phase-driven off `bob_phase`, so the stride and the weapon bob cannot
+        // drift apart. Scaled by `walk` on the two moving clips only: at a
+        // standstill the idle track is the whole of it.
+        let base = viewclips::locomotion_pose(clip, self.bob_phase / std::f32::consts::TAU);
+        let base = if matches!(clip, Locomotion::Walk | Locomotion::Run) {
+            base.scaled(walk)
+        } else {
+            base
+        };
+        self.arm_pose = match self.action {
+            Some((action, t, _)) => base.merged_with(viewclips::action_pose(action, t.min(1.0))),
+            None => base,
+        };
+    }
+
+    /// The grip anchors with this frame's pose applied.
+    ///
+    /// An absent channel leaves that hand on the gun — the whole reason a
+    /// partial keyframe is legal.
+    fn posed_grips(&self) -> GripAnchors {
+        let pose = self.arm_pose;
+        GripAnchors {
+            primary: self.grips.primary + pose.primary.unwrap_or(Vec3::ZERO),
+            support: self
+                .grips
+                .support
+                .map(|s| s + pose.support.unwrap_or(Vec3::ZERO)),
+            primary_roll: self.grips.primary_roll + pose.primary_roll.unwrap_or(0.0),
+            support_roll: self.grips.support_roll + pose.support_roll.unwrap_or(0.0),
+        }
     }
 
     /// Fit a prop to the weapon currently held, and start drawing it.
@@ -849,20 +1003,27 @@ impl WeaponViewModel {
         if !self.visible {
             return;
         }
-        // Copied out before the borrow of `self.shape`: the flare's random scale
-        // needs `&mut self`, and holding a reference into the shape across it
-        // borrows `self` twice.
         let Some((muzzle, rest)) = self.shape.as_ref().map(|s| (s.muzzle, s.rest)) else {
             return;
         };
-        let flare = self.flash_age < FLASH_LIFE;
-        let scale = if flare {
-            0.85 + self.next_random() * 0.5
-        } else {
-            1.0
-        };
+        // The core's size for *this* shot, decaying over its life. Zero for a
+        // weapon with no muzzle, which is what keeps the knife dark.
+        let core = flash_scale(&self.weapon, self.flash_age, self.flash_seed);
+        let flare = self.flash_age < FLASH_LIFE && core > 0.0;
         let Some(shape) = &self.shape else { return };
+        // The hands, before the weapon: both go through the same depth-cleared
+        // pass, so a hand that should be *behind* the receiver is sorted by
+        // depth rather than by order — but drawing them first keeps the gun the
+        // last thing written, which is the thing a player is looking at.
         let model = self.transform * Mat4::from_euler(glam::EulerRot::XYZ, rest.x, rest.y, rest.z);
+        // The weapon's model space into camera space — the same matrix the boxes
+        // are drawn with, which is exactly what makes the arms follow every
+        // animation this module has without knowing about any of them. Hidden
+        // while fully stowed: at `stow` 1 the weapon is out of frame, and two
+        // arms reaching for it are two arms pointing at nothing.
+        if self.stow < 0.92 {
+            arms::vertices(&self.posed_grips(), &model, out);
+        }
         if self.prop.is_none() {
             for v in &shape.verts {
                 out.push(transform_vertex(&model, v));
@@ -879,45 +1040,52 @@ impl WeaponViewModel {
             None => (model, muzzle),
         };
         if flare {
-            if let Some((radius, length, sides)) = flash_shape(&self.weapon) {
-                // Squeezed in x/y only, exactly as the browser scales it, so the
-                // flare's length stays put and only its girth varies.
-                let flash = model
-                    * Mat4::from_translation(muzzle - Vec3::new(0.0, 0.0, 0.2))
-                    * Mat4::from_scale(Vec3::new(scale, scale, 1.0));
-                // **The bloom is a second cone, not a post-process.** There is
-                // no bright-pass, no blur target and no second pipeline here —
-                // the view model is drawn with the world pipeline — so a halo
-                // wider and shorter than the core, at a fraction of its
-                // opacity, is the whole of it. Drawn *first*, so the core lands
-                // on top of it rather than being averaged into it.
+            if let Some((_, _, segments)) = flash_shape(&self.weapon) {
+                // Just clear of the barrel: at the muzzle exactly, half the disc
+                // is inside the gun.
+                let at = muzzle - Vec3::new(0.0, 0.0, 0.06);
+                // **Translation only, and that is the billboard.** `model`
+                // carries the weapon's rest rotation and every bob, sway and
+                // recoil kick on the pivot; multiplying the fan by it would tilt
+                // the disc away from the camera by a few degrees per frame,
+                // which is the cone's failure in miniature. Taking the muzzle's
+                // camera-space *position* and drawing an unrotated disc there
+                // makes it exactly square-on, which is what the browser's
+                // `THREE.Sprite` does for free.
+                let flash = Mat4::from_translation(model.transform_point3(at));
+                // **How far the muzzle is from the eye**, which is what turns a
+                // size in cube units into a fraction of the screen. The view
+                // model pass draws with the view matrix as identity, so a point
+                // through `model` is already in camera space and its length *is*
+                // the distance — no inverse, no world-space round trip.
+                let distance = flash.transform_point3(Vec3::ZERO).length().max(0.05);
+                let core = clamp_flash_scale(core, distance, self.fov);
+                let halo = clamp_flash_scale(halo_scale(&self.weapon, core), distance, self.fov);
+
+                // **The bloom is a second fan, not a post-process.** There is no
+                // bright-pass, no blur target and no second pipeline here — the
+                // view model is drawn with the world pipeline — so a wider,
+                // dimmer disc behind the core is the whole of it. Drawn *first*,
+                // so the core lands on top of it rather than being averaged into
+                // it.
                 //
-                // Alpha rides the flare's own age, which is the difference
-                // between a bloom and a second flash: the halo is already
-                // fading while the core is still at full brightness.
+                // Its brightness rides the flare's own age, which is the
+                // difference between a bloom and a second flash: the halo is
+                // already fading while the core is still at full.
                 let fade = 1.0 - (self.flash_age / FLASH_LIFE).clamp(0.0, 1.0);
-                for v in flash_cone(radius * 2.1, length * 0.55, sides) {
-                    let mut v = transform_vertex(&flash, &v);
-                    v.color = [
-                        v.color[0] * 0.55 * fade,
-                        v.color[1] * 0.48 * fade,
-                        v.color[2] * 0.36 * fade,
-                    ];
-                    out.push(v);
+                let dim = [
+                    FLASH_HALO[0] * 0.55 * fade,
+                    FLASH_HALO[1] * 0.55 * fade,
+                    FLASH_HALO[2] * 0.55 * fade,
+                ];
+                for v in flash_fan(halo, segments, dim) {
+                    out.push(transform_vertex(&flash, &v));
                 }
-                for v in flash_cone(radius, length, sides) {
+                for v in flash_fan(core, segments, FLASH_CORE) {
                     out.push(transform_vertex(&flash, &v));
                 }
             }
         }
-    }
-
-    /// A cheap xorshift. Not for anything that matters — see `vertices`.
-    fn next_random(&mut self) -> f32 {
-        self.rng ^= self.rng << 13;
-        self.rng ^= self.rng >> 17;
-        self.rng ^= self.rng << 5;
-        (self.rng >> 8) as f32 / (1u32 << 24) as f32
     }
 }
 
@@ -954,7 +1122,7 @@ fn transform_vertex(m: &Mat4, v: &Vertex) -> Vertex {
 /// The muzzle flare: a five-sided cone lying along -Z, pointing away.
 /// How a weapon's muzzle flash is shaped, by weapon id.
 ///
-/// `(radius, length, sides)`, or `None` for a weapon that has no muzzle.
+/// `(radius, stretch, segments)`, or `None` for a weapon that has no muzzle.
 ///
 /// **Matched on the id, like `build`, and deliberately not served.** This is the
 /// same call `audio::weapon_voice` documents: a served number is one the client
@@ -962,7 +1130,15 @@ fn transform_vertex(m: &Mat4, v: &Vertex) -> Vertex {
 /// a gun look wrong rather than making a shot land somewhere else. The shapes
 /// come from what the weapon is — a shotgun throws a wide short bloom, a sniper
 /// a long narrow lance — which is the cue that tells a player at the far end of
-/// a corridor what is being fired at them.
+/// a corridor what is being fired at them. `browser_parity.rs` pins the radius
+/// and the stretch against `flash.ts`'s own table.
+///
+/// **`stretch` is no longer a length.** It used to be the cone's depth along the
+/// barrel, and the cone was the bug: a cone pointed away from the camera is seen
+/// end-on, which is a flat polygon filling the view — "the pistol shows a simple
+/// square when I shoot". A fan facing the camera has no depth to give, so the
+/// same number now says how much wider the *halo* is, which is what a longer
+/// flash actually looks like from behind the gun.
 ///
 /// The knife returns `None`. It reaches here because a swing is resolved as a
 /// `Shot` like everything else, and a flare on it would light up the one weapon
@@ -970,32 +1146,86 @@ fn transform_vertex(m: &Mat4, v: &Vertex) -> Vertex {
 fn flash_shape(id: &str) -> Option<(f32, f32, usize)> {
     match id {
         "knife" => None,
-        "pistol" => Some((0.13, 0.30, 5)),
-        "shotgun" => Some((0.30, 0.34, 7)),
-        "sniper" => Some((0.13, 0.78, 6)),
-        // The rifle, and anything the server has grown since this client was
-        // built — a new weapon should look ordinary, not invisible.
-        _ => Some((0.17, 0.44, 5)),
+        "pistol" => Some((0.13, 1.15, 12)),
+        "assault" => Some((0.16, 1.35, 12)),
+        "shotgun" => Some((0.26, 0.85, 14)),
+        "sniper" => Some((0.15, 1.90, 12)),
+        // Anything the server has grown since this client was built — a new
+        // weapon should look ordinary, not invisible.
+        _ => Some((0.15, 1.20, 12)),
     }
 }
 
-/// A cone of `sides` triangles, `length` long and `radius` across at the base.
-fn flash_cone(radius: f32, length: f32, sides: usize) -> Vec<Vertex> {
-    let mut out = Vec::with_capacity(sides * 3);
-    for i in 0..sides {
-        let a0 = (i as f32 / sides as f32) * std::f32::consts::TAU;
-        let a1 = ((i + 1) as f32 / sides as f32) * std::f32::consts::TAU;
-        let p0 = [a0.cos() * radius, a0.sin() * radius, 0.0];
-        let p1 = [a1.cos() * radius, a1.sin() * radius, 0.0];
-        let apex = [0.0, 0.0, -length];
-        // Wound so the outward side faces the viewer standing behind the gun.
-        for p in [p1, p0, apex] {
+/// How big this weapon's flash is, `t` seconds into its life.
+///
+/// The mirror of `flash.ts`'s `flashScale`, down to the constants. It used to be
+/// `0.85 + random * 0.5` re-rolled **every frame the flare was lit**, so one shot
+/// was two or three unrelated sizes; the variation is now seeded once per shot
+/// and the shape over the flash's life is a decay.
+fn flash_scale(id: &str, t: f32, seed: u32) -> f32 {
+    let Some((radius, _, _)) = flash_shape(id) else {
+        return 0.0;
+    };
+    let life = (t / FLASH_LIFE).clamp(0.0, 1.0);
+    let decay = 1.0 - life * life * 0.45;
+    radius * (0.85 + hash01(seed) * 0.45) * decay
+}
+
+/// The halo's size for one weapon, given its core size. `flash.ts`'s `haloScale`.
+fn halo_scale(id: &str, core: f32) -> f32 {
+    match flash_shape(id) {
+        Some((_, stretch, _)) => core * FLASH_HALO_SCALE * stretch,
+        None => 0.0,
+    }
+}
+
+/// `flash.ts`'s `hash`, so a shot is the same size in both clients.
+fn hash01(n: u32) -> f32 {
+    let x = (n as f32 * 127.1 + 311.7).sin() * 43758.5453123;
+    x - x.floor()
+}
+
+/// Cap a flash so it can never take over the view. `flash.ts`'s `clampFlashScale`.
+fn clamp_flash_scale(scale: f32, distance: f32, fov: f32) -> f32 {
+    if !(distance > 0.0) || !(fov > 0.0) {
+        return scale;
+    }
+    let half_height = (fov * 0.5).tan() * distance;
+    scale.min(FLASH_MAX_SCREEN_FRACTION * half_height * 2.0)
+}
+
+/// A disc of `segments` triangles in the XY plane, `radius` across.
+///
+/// **The billboard, and why it is free here.** The view model pass draws with the
+/// view matrix as identity (see the module header), so camera space *is* the
+/// space these vertices are in — a shape lying in XY is already square-on to the
+/// camera, exactly and with no per-frame work. That is the property the old cone
+/// lacked and the whole reason for the change.
+///
+/// The centre vertex carries the colour and the rim vertices carry black, so the
+/// interpolator draws the radial falloff for nothing. That is the native answer
+/// to the browser's soft texture: `Vertex` carries position, normal and colour
+/// and has nowhere to put a UV, and adding one would mean a second pipeline for
+/// a gradient Gouraud already gives away.
+fn flash_fan(radius: f32, segments: usize, color: [f32; 3]) -> Vec<Vertex> {
+    let mut out = Vec::with_capacity(segments * 3);
+    let rim = |a: f32| [a.cos() * radius, a.sin() * radius, 0.0];
+    for i in 0..segments {
+        let a0 = (i as f32 / segments as f32) * std::f32::consts::TAU;
+        let a1 = ((i + 1) as f32 / segments as f32) * std::f32::consts::TAU;
+        // Wound so the front face points at the viewer standing behind the gun,
+        // matching the cone this replaced.
+        for (p, c) in [
+            ([0.0, 0.0, 0.0], color),
+            (rim(a0), [0.0, 0.0, 0.0]),
+            (rim(a1), [0.0, 0.0, 0.0]),
+        ] {
             out.push(Vertex {
                 position: p,
                 // See the module header: the shader's own light direction, so the
                 // flare lands at full brightness without a second pipeline.
                 normal: LIGHT_DIR,
-                color: FLASH,
+                color: c,
             });
         }
     }
@@ -1295,6 +1525,12 @@ mod tests {
             visible,
             move_speed: 22.0,
             reload_progress: None,
+            // The client's own default, so a test measures the flash the player
+            // hipfiring sees rather than one at some invented FOV.
+            fov: 75.0_f32.to_radians(),
+            // Long since landed, so a test that means "standing still" gets the
+            // idle track rather than a landing dip that never expires.
+            since_landed: 99.0,
         }
     }
 
@@ -1608,13 +1844,20 @@ mod tests {
         // renderer must key on instead.
         let mut vm = WeaponViewModel::default();
         vm.set_weapon("assault", None);
-        vm.update(0.016, &frame(true));
+        settle(&mut vm);
         with_prop(&mut vm);
         vm.update(0.016, &frame(true));
 
-        assert!(
-            drawn(&mut vm).is_empty(),
-            "a fitted prop suppresses the box model, flare aside",
+        // Everything left in the stream is the **hands**: the box model is gone
+        // and the flare is unlit. Compared against a rig rendered on its own
+        // rather than against zero, because the arms are also in this pass now —
+        // an empty stream would mean the hands had gone too.
+        let mut rig = Vec::new();
+        arms::vertices(&arms::grips_for("assault"), &Mat4::IDENTITY, &mut rig);
+        assert_eq!(
+            drawn(&mut vm).len(),
+            rig.len(),
+            "a fitted prop suppresses the box model, hands and flare aside",
         );
         assert!(
             vm.prop_model().is_some(),
@@ -1643,7 +1886,11 @@ mod tests {
     fn the_muzzle_flash_is_lit_for_two_frames_and_then_gone() {
         let mut vm = WeaponViewModel::default();
         vm.set_weapon("assault", None);
-        vm.update(0.016, &frame(true));
+        // Settled, not one frame in: equipping plays a draw, and while the
+        // weapon is stowed the hands are not drawn at all — so a count taken on
+        // the first frame is a count of the boxes alone and would not match the
+        // one taken later.
+        settle(&mut vm);
         let quiet = drawn(&mut vm).len();
         vm.fire();
         vm.update(0.016, &frame(true));
@@ -1669,38 +1916,108 @@ mod tests {
         assert_eq!(drawn(&mut vm).len(), quiet, "the knife flashed");
     }
 
+    /// Split one shot's flare into its two fans: the halo, drawn first, then the
+    /// core on top of it. Both are `segments * 3` vertices, so the halves are
+    /// exact rather than searched for.
+    fn flare_halves(vm: &mut WeaponViewModel, quiet: usize) -> (Vec<Vertex>, Vec<Vertex>) {
+        let lit = drawn(vm);
+        let flare = &lit[quiet..];
+        assert!(!flare.is_empty(), "nothing was drawn for the flash");
+        let half = flare.len() / 2;
+        (flare[..half].to_vec(), flare[half..].to_vec())
+    }
+
+    fn width(verts: &[Vertex]) -> f32 {
+        let lo = verts.iter().map(|v| v.position[0]).fold(f32::MAX, f32::min);
+        let hi = verts.iter().map(|v| v.position[0]).fold(f32::MIN, f32::max);
+        hi - lo
+    }
+
     #[test]
-    fn a_shotgun_blooms_wide_and_a_sniper_lances_long() {
-        // The shape is the cue that tells a player at the far end of a corridor
-        // what is being fired at them. Measured on the geometry rather than on
-        // the table, so a shape that stopped reaching the vertices would fail.
+    fn the_flash_lies_flat_in_the_camera_plane() {
+        // **The whole fix.** The old flash was a cone pointed down the barrel,
+        // which points away from the camera — so what the player saw was that
+        // cone end-on: a flat five-sided polygon filling the view. "The pistol
+        // shows a simple square when I shoot" was a literal description.
+        //
+        // A shape lying in XY is square-on to the camera by construction here,
+        // because this pass draws with the view matrix as identity. If a z
+        // extent ever comes back, so does the pentagon.
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("pistol", None);
+        settle(&mut vm);
+        let quiet = drawn(&mut vm).len();
+        vm.fire();
+        vm.update(0.001, &frame(true));
+        let (halo, core) = flare_halves(&mut vm, quiet);
+        for verts in [&halo, &core] {
+            let lo = verts.iter().map(|v| v.position[2]).fold(f32::MAX, f32::min);
+            let hi = verts.iter().map(|v| v.position[2]).fold(f32::MIN, f32::max);
+            assert!(
+                (hi - lo).abs() < 1e-4,
+                "the flash has depth again: {lo} to {hi}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_shotgun_blooms_wide_and_a_sniper_glows_broad() {
+        // The shape is still the cue that tells a player at the far end of a
+        // corridor what is being fired at them — but the two halves of it moved
+        // when the cone became a fan. A shotgun's *core* is the widest; a
+        // sniper's long lance now reads as a halo far wider than its core, which
+        // is what a long flash looks like from behind the gun.
+        //
+        // Measured on the geometry rather than on the table, so a shape that
+        // stopped reaching the vertices would fail.
         let span = |id: &str| {
             let mut vm = WeaponViewModel::default();
             vm.set_weapon(id, None);
             settle(&mut vm);
-            let quiet: Vec<Vertex> = drawn(&mut vm);
+            let quiet = drawn(&mut vm).len();
             vm.fire();
             vm.update(0.001, &frame(true));
-            let lit = drawn(&mut vm);
-            // Only the vertices the flare added, so the weapon's own model does
-            // not dominate the measurement.
-            let flare = &lit[quiet.len()..];
-            let axis = |i: usize| {
-                let lo = flare.iter().map(|v| v.position[i]).fold(f32::MAX, f32::min);
-                let hi = flare.iter().map(|v| v.position[i]).fold(f32::MIN, f32::max);
-                hi - lo
-            };
-            (axis(0), axis(2))
+            let (halo, core) = flare_halves(&mut vm, quiet);
+            (width(&core), width(&halo))
         };
-        let (shotgun_w, shotgun_l) = span("shotgun");
-        let (sniper_w, sniper_l) = span("sniper");
+        let (shotgun_core, shotgun_halo) = span("shotgun");
+        let (sniper_core, sniper_halo) = span("sniper");
         assert!(
-            shotgun_w > sniper_w,
-            "shotgun {shotgun_w} was not wider than sniper {sniper_w}"
+            shotgun_core > sniper_core,
+            "shotgun core {shotgun_core} was not wider than sniper core {sniper_core}"
         );
         assert!(
-            sniper_l > shotgun_l,
-            "sniper {sniper_l} was not longer than shotgun {shotgun_l}"
+            sniper_halo / sniper_core > shotgun_halo / shotgun_core,
+            "sniper halo/core {} was not broader than the shotgun's {}",
+            sniper_halo / sniper_core,
+            shotgun_halo / shotgun_core
+        );
+    }
+
+    #[test]
+    fn a_narrow_field_of_view_shrinks_the_flash() {
+        // Scoping divides the FOV, so a cap computed against the base value
+        // would be right hipfiring and four times too generous at 4x — which is
+        // precisely the view a flash must not fill.
+        let span = |fov_degrees: f32| {
+            let mut vm = WeaponViewModel::default();
+            vm.set_weapon("sniper", None);
+            let mut f = frame(true);
+            f.fov = fov_degrees.to_radians();
+            for _ in 0..80 {
+                vm.update(1.0 / 60.0, &f);
+            }
+            let quiet = drawn(&mut vm).len();
+            vm.fire();
+            vm.update(0.001, &f);
+            let (halo, _) = flare_halves(&mut vm, quiet);
+            width(&halo)
+        };
+        let hip = span(75.0);
+        let scoped = span(75.0 / 4.0);
+        assert!(
+            scoped < hip,
+            "scoped flash {scoped} was not smaller than hipfire {hip}"
         );
     }
 
@@ -1714,30 +2031,31 @@ mod tests {
     #[test]
     fn the_bloom_is_dimmer_than_the_core_and_fades_first() {
         // It is a halo, not a second flash. If the two were equally bright the
-        // flare would just be a fatter cone.
+        // flare would just be a fatter disc.
+        //
+        // Measured on the **centre** vertices of each fan, not on the extremes:
+        // every rim vertex is black by construction (that is what draws the
+        // radial falloff), so a min over all of them is zero for both fans and
+        // would compare nothing.
+        let peak = |verts: &[Vertex]| verts.iter().map(|v| v.color[1]).fold(0.0f32, f32::max);
         let mut vm = WeaponViewModel::default();
         vm.set_weapon("assault", None);
         settle(&mut vm);
         let quiet = drawn(&mut vm).len();
         vm.fire();
         vm.update(0.001, &frame(true));
-        let lit = drawn(&mut vm);
-        let flare = &lit[quiet..];
-        let brightest = flare.iter().map(|v| v.color[0]).fold(0.0f32, f32::max);
-        let dimmest = flare.iter().map(|v| v.color[0]).fold(f32::MAX, f32::min);
+        let (halo, core) = flare_halves(&mut vm, quiet);
+        let early = peak(&halo);
         assert!(
-            dimmest < brightest * 0.8,
-            "the halo ({dimmest}) is as bright as the core ({brightest})"
+            early < peak(&core) * 0.8,
+            "the halo ({early}) is as bright as the core ({})",
+            peak(&core)
         );
 
         // And it is already on its way out while the core still is not.
-        let early = dimmest;
         vm.update(FLASH_LIFE * 0.7, &frame(true));
-        let late_all = drawn(&mut vm);
-        let late = late_all[quiet..]
-            .iter()
-            .map(|v| v.color[0])
-            .fold(f32::MAX, f32::min);
+        let (halo, _) = flare_halves(&mut vm, quiet);
+        let late = peak(&halo);
         assert!(late < early, "the halo did not fade: {early} then {late}");
     }
 

@@ -329,6 +329,19 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    // The constants a throw is integrated with, for the trajectory preview.
+    // Non-fatal, and the fallback is **no preview** rather than a guessed one: a
+    // trajectory drawn with numbers this client invented would be an aiming aid
+    // confidently pointing somewhere the grenade will not go, which is worse
+    // than not drawing one.
+    let throw_physics = match node.throw_physics() {
+        Ok(physics) => Some(physics),
+        Err(e) => {
+            eprintln!("hassault: warning — no throw constants ({e}); no trajectory preview");
+            None
+        }
+    };
+
     // What each item kind gives, and how close you have to get. Non-fatal like
     // the loadout: a node too old to serve it leaves the range's items drawn but
     // inert — a missing convenience, not a client that refuses to start. In a
@@ -448,6 +461,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             writer,
             weapons,
             tacticals,
+            throw_physics.clone(),
             skins,
             hitbox,
             item_table.clone(),
@@ -480,6 +494,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             writer,
             weapons,
             tacticals,
+            throw_physics.clone(),
             skins,
             hitbox,
             item_table.clone(),
@@ -523,6 +538,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         writer,
         weapons,
         tacticals,
+        throw_physics.clone(),
         skins,
         hitbox,
         item_table,

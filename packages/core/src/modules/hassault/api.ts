@@ -111,6 +111,38 @@ export interface MatchSummary {
 }
 
 /**
+ * The constants a grenade's flight is integrated with.
+ *
+ * Served by `GET /api/hassault/throw` so a client can draw the arc a throw would
+ * actually take — including the part a player cannot otherwise see, which is
+ * that **running and jumping feed the throw** (`throwInherit`). The server has
+ * always added the thrower's own velocity; nothing on screen said so.
+ *
+ * A route of its own rather than a field on `/tacticals`, because reshaping that
+ * response would make every already-installed native binary deserialise an empty
+ * list and show no grenades at all, with no error anywhere. A 404 here draws no
+ * preview: degraded, not broken.
+ */
+export interface ThrowPhysics {
+  /** Cubes per second squared. `physics.GRAVITY`. */
+  gravity: number;
+  /** Speed a full overhand throw leaves the hand at. */
+  throwSpeed: number;
+  /** Fraction of that an underhand lob leaves at. */
+  lobScale: number;
+  /** How much of the thrower's own velocity is added. The invisible one. */
+  throwInherit: number;
+  /** How far in front of the eye, and below it, a grenade appears. */
+  throwForward: number;
+  throwDrop: number;
+  /** How small a bounce gets before the grenade is treated as settled. */
+  restSpeed: number;
+  /** The integrator's own step, and how many of them one tick may take. */
+  substep: number;
+  maxSubsteps: number;
+}
+
+/**
  * One weapon's numbers, as the backend defines them.
  *
  * Fetched rather than hardcoded here. The client needs the fire interval so it
@@ -158,6 +190,35 @@ export interface WeaponSpec {
    * without a scope, so this can be read unconditionally.
    */
   hipfireSpread: number;
+  /**
+   * The recoil pattern: **absolute** `[yaw, pitch]` offsets from the aim, indexed
+   * by how many shots have gone out in this burst. Empty means no pattern.
+   *
+   * Served, not duplicated, because the server aims the bullets with these exact
+   * offsets and the client kicks the camera with them — so the crosshair goes
+   * where the rounds go and the pattern is learnable. A second copy here would
+   * be a crosshair that lies, which is worse than having no pattern at all.
+   *
+   * **Absolute, not deltas**, which is the single easiest thing here to get
+   * wrong: applying the absolute to a camera that accumulates walks the
+   * crosshair away by the running sum, and the weapon is unusable within half a
+   * magazine while looking exactly like a tuning problem. See
+   * `ShotController.frame`.
+   *
+   * **Optional**, and not merely for the tests: a guest joining a friend's node
+   * over the peer fabric may be talking to a backend older than this field, and
+   * the absent case has to mean "no pattern, fall back to noise" rather than
+   * being a type error nobody can hit but everybody has to satisfy.
+   */
+  spray?: [number, number][];
+  /** Simulated seconds without firing that resets the pattern to its first shot. */
+  sprayReset?: number;
+  /**
+   * The random cone left once the pattern is doing the aiming. Equal to `spread`
+   * for a weapon with no pattern, so this can be read unconditionally — when the
+   * server is new enough to send it at all.
+   */
+  residualSpread?: number;
 }
 
 /**
@@ -281,15 +342,19 @@ export interface LaunchNativeOptions {
    * What was pressed. `train` is not a match at all — the client stays off the
    * socket, because the server's roomless join is join-*or*-create and would seat
    * a learner in whatever firefight is already on that map. `host` opens one and
-   * fields `bots`; `join` enters one that exists.
+   * fields `bots`; `join` enters one that exists. `edit` is the map designer —
+   * also no socket, and it opens a draft rather than a map (see `blank`).
    */
   /** `ranked` opens a match the game server adjudicates; the rest are local. */
-  mode?: 'train' | 'host' | 'join' | 'ranked';
+  mode?: 'train' | 'host' | 'join' | 'ranked' | 'edit';
   /** A specific room; empty means "any match on this map, or open one". */
   room_id?: string;
   map_name: string;
   /** A friend's node id, when the room is on their machine. */
   host?: string;
+  /** `mode: 'edit'` only: start the draft from solid rock instead of seeding it
+   * from `map_name`. Mirrors the native client's `--new`. */
+  blank?: boolean;
   /** A wire label only — the node plays you as your account's username. */
   username?: string;
   fullscreen?: boolean;
@@ -348,6 +413,17 @@ export function getItems(): Promise<ItemsResponse> {
 
 export function listTacticals(): Promise<TacticalSpec[]> {
   return apiGet<TacticalSpec[]>('/hassault/tacticals');
+}
+
+/**
+ * The constants a grenade's flight is integrated with.
+ *
+ * Separate from `listTacticals` on purpose — see `ThrowPhysics`. A caller that
+ * cannot reach it draws no trajectory preview rather than integrating with
+ * zeros, which would draw a straight line into the floor.
+ */
+export function getThrowPhysics(): Promise<ThrowPhysics> {
+  return apiGet<ThrowPhysics>('/hassault/throw');
 }
 
 /**

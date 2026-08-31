@@ -54,6 +54,7 @@ from backend.modules.hassault import (
     noise,
     physics,
     pickups,
+    results,
     weapons,
 )
 from backend.modules.hassault.cgz import CgzError
@@ -312,6 +313,18 @@ class MatchPlayer:
     # bounded by the same budget as movement, so it cannot outrun real time.
     sim_time: float = 0.0
     last_fire_at: float = -999.0
+    #: How many shots into the current burst this player is.
+    #:
+    #: Indexes the weapon's spray pattern (`weapons.ASSAULT_SPRAY`). Reset when
+    #: the trigger has been off for `spray_reset` of **simulated** time, on a
+    #: weapon switch, on a reload, and on respawn — every event that is
+    #: recognisably "starting again".
+    #:
+    #: Echoed to that player in their private view so the client can adopt it
+    #: rather than keeping a count of its own, exactly as it does with ammo:
+    #: predicted locally, corrected authoritatively, which removes the whole
+    #: class of index drift.
+    spray_index: int = 0
     reload_until: float = -999.0
     """Wall clock, unlike the two above: a dead player stops sending commands, so
     a respawn measured on their simulated time would never come."""
@@ -358,6 +371,14 @@ class MatchPlayer:
     # happens to be `None` (which is every player in the unit tests).
     brain: BotBrain | None = None
     bot_seq: int = 0
+    #: Whether this player has ever shared the room with anybody else.
+    #:
+    #: A latch, not a query. `result_for` runs at *leave* time and reads
+    #: `self.players`, so a host who kicks every bot before quitting would file a
+    #: real match as an empty one — `results.is_recordable` would refuse it and
+    #: the debrief would never appear. Set once and never cleared, so "there was
+    #: a match here" survives everybody else leaving first.
+    faced_opponents: bool = False
 
     @property
     def is_bot(self) -> bool:
@@ -375,6 +396,8 @@ class MatchPlayer:
         self.reserve = {i: w.reserve for i, w in enumerate(weapons.WEAPONS)}
         self.reload_until = -999.0
         self.last_fire_at = -999.0
+        # A respawn is the clearest "starting again" there is.
+        self.spray_index = 0
         self.nades.reset()
         self.last_throw_at = -999.0
         # Dying clears a flash. Being blinded through a respawn would be a
@@ -460,6 +483,13 @@ class MatchPlayer:
             "reserve": self.reserve.get(self.weapon, 0),
             "reloading": self.sim_time < self.reload_until,
             "reloadIn": max(0.0, round(self.reload_until - self.sim_time, 2)),
+            # How far into the spray pattern this player is. Echoed so the client
+            # can *adopt* it rather than keeping its own count — predicted
+            # locally, corrected authoritatively, exactly as ammo is. Without it
+            # a client whose shot the server refused (rate, empty, dead) would
+            # kick its camera for a bullet that never left, and stay one step out
+            # of phase with the pattern for the rest of the magazine.
+            "sprayIndex": self.spray_index,
             "respawnIn": (
                 0.0 if self.alive else max(0.0, round(self.respawn_at - now, 2))
             ),
@@ -607,12 +637,33 @@ class MatchRoom:
         you are the MVP if nobody equalled you either. Bots count — losing to one
         is losing, and a card that quietly excluded them would be flattering
         rather than true.
+
+        **Both are gated on the match being recordable at all**, which is the fix
+        for the card that congratulated you for opening the pane: alone in a
+        room, `best` is `-1` and `0 >= -1`, so every empty session was a
+        VICTORY. `results.is_recordable` is the one place that rule lives, and it
+        is asked here rather than reimplemented — the same predicate then decides
+        whether a row is written (`channel._record_result`) and what the native
+        client's own card says.
+
+        `opponents` counts **everyone this player ever shared the room with**,
+        not who is still standing in it: this runs at leave time, and a host who
+        removes the bots before quitting has still played a match.
         """
         player = self.players.get(player_id)
         if player is None:
             return None
         others = [p for p in self.players.values() if p.id != player_id]
         best = max((p.kills for p in others), default=-1)
+        opponents = len(others) or (1 if player.faced_opponents else 0)
+        recordable = results.is_recordable(
+            {
+                "opponents": opponents,
+                "kills": player.kills,
+                "deaths": player.deaths,
+                "damageDealt": round(player.damage_dealt),
+            }
+        )
         return {
             "map": self.map_name,
             "room": self.id,
@@ -621,9 +672,10 @@ class MatchRoom:
             "deaths": player.deaths,
             "headKills": player.head_kills,
             "damageDealt": round(player.damage_dealt),
-            "won": player.kills >= best,
-            "mvp": player.kills > best,
-            "opponents": len(others),
+            "won": recordable and player.kills >= best,
+            "mvp": recordable and player.kills > best,
+            "recordable": recordable,
+            "opponents": opponents,
             # Wall clock, so a summary can be told from a stale one. The room's
             # own clock starts when it opens, which is not when this player
             # joined it.
@@ -693,6 +745,9 @@ class MatchRoom:
         now_ms = time.time() * 1000.0
         self._respawn_due(now)
         self._think(elapsed)
+        if len(self.players) > 1:
+            for player in self.players.values():
+                player.faced_opponents = True
 
         for player in self.players.values():
             player.budget = min(
@@ -1223,6 +1278,10 @@ class MatchRoom:
             # Switching cancels a reload rather than queueing behind it: that is
             # what every player expects the switch to be *for*.
             player.reload_until = -999.0
+            # And it puts you back at the top of the pattern. Carrying a spray
+            # index across a switch would mean a weapon you just drew firing from
+            # halfway down someone else's recoil curve.
+            player.spray_index = 0
         # Every frame, not only on the next trigger pull. Resolving it lazily
         # deadlocks anyone who reloads and then waits — including every bot, which
         # stops firing precisely because it is empty.
@@ -1299,6 +1358,8 @@ class MatchRoom:
         if player.reserve.get(player.weapon, 0) == 0:
             return
         player.reload_until = player.sim_time + weapon.reload_time
+        # A magazine change is the end of a burst by definition.
+        player.spray_index = 0
 
     def _finish_reload(self, player: MatchPlayer) -> None:
         """Move rounds from the reserve into the magazine, if a reload has run
@@ -1341,6 +1402,16 @@ class MatchRoom:
                 self._begin_reload(player)
                 return
             player.ammo[player.weapon] -= 1
+        # **Read before `last_fire_at` moves**, because the gap being measured is
+        # the one that just ended.
+        #
+        # `player.sim_time`, never `time.monotonic()`. Commands arrive in batches
+        # — `simulate` drains a whole queue per tick — so a wall-clock gate would
+        # disagree with the fire-rate check above about how much time passed
+        # inside one tick and pin every shot at pattern index 0. `last_throw_at`
+        # documents the identical reasoning for grenades.
+        if player.sim_time - player.last_fire_at > weapon.spray_reset:
+            player.spray_index = 0
         player.last_fire_at = player.sim_time
         # Shooting forfeits spawn protection. Otherwise it is not protection, it
         # is a three-second licence.
@@ -1355,7 +1426,16 @@ class MatchRoom:
             player.state.z,
             physics.eye_height(player.state),
         )
-        direction = weapons.aim_vector(command.yaw, command.pitch)
+        # The recoil pattern, applied **in view angles** so the number added here
+        # is bit-for-bit the number the client adds to its camera. Anything else
+        # and the crosshair drifts away from where the bullets go, which is the
+        # one thing a learnable pattern cannot survive.
+        aim_yaw, aim_pitch = weapons.apply_spray(
+            command.yaw,
+            command.pitch,
+            weapons.spray_offset(weapon, player.spray_index),
+        )
+        direction = weapons.aim_vector(aim_yaw, aim_pitch)
 
         rewind_to = self.history.clamp(command.view_t, now_ms)
         rewound = self.history.rewind(rewind_to)
@@ -1384,7 +1464,11 @@ class MatchRoom:
             direction,
             targets,
             self.rng,
-            spread=weapons.effective_spread(weapon, command.scoped),
+            # The residual cone, not the full one: for a weapon with a pattern
+            # the pattern is doing the aiming and the cone is only what keeps it
+            # counterable rather than solved. Falls back to `effective_spread`
+            # for the four weapons that have no pattern.
+            spread=weapons.residual_spread(weapon, command.scoped),
             rewound_ms=max(0.0, now_ms - rewind_to),
             heights=heights,
         )
@@ -1392,6 +1476,9 @@ class MatchRoom:
         # Recoil shoves the shooter, opposite their aim — AC's `attackphysics`, and
         # the whole of shoot-jumping. Applied here, after the step, which is the
         # order the client's `Predictor` replays it in.
+        # The **commanded** angles, not the sprayed ones: the shove is about
+        # where the player was pointing, and threading a recoil offset into it
+        # would make the shoot-jump drift as a burst went on.
         kick = weapons.kick_vector(weapon, command.yaw, command.pitch, crouching)
         if kick != (0.0, 0.0, 0.0):
             physics.apply_impulse(player.state, *kick)
@@ -1401,6 +1488,11 @@ class MatchRoom:
         # The weapon rides along so the listener hears *which* gun: a shot's
         # loudness already comes from the weapon, and its voice does too.
         self._noise(player, "shot", noise.shot_loudness(weapon), weapon.id)
+
+        # Advanced only for a shot that actually went out — every early return
+        # above is a trigger pull that produced nothing, and counting those would
+        # walk the pattern for a player who never fired.
+        player.spray_index += 1
 
         for hit in result.hits:
             victim = self.players.get(hit.victim)
@@ -1415,6 +1507,16 @@ class MatchRoom:
                 "weapon": player.weapon,
                 "origin": [round(v, 2) for v in result.origin],
                 "ends": [[round(v, 2) for v in end] for end in result.endpoints],
+                # Which surface each pellet stopped against, parallel to `ends`.
+                # One small integer per pellet — a shotgun costs eight, against
+                # the twenty-four floats `ends` already carries — and it is the
+                # only thing that lets a client orient a bullet mark without
+                # re-deriving the world ray it would then have to agree with.
+                "faces": list(result.faces),
+                # Kept for the clients that read it, but the per-pellet `faces`
+                # is strictly better: a shotgun with one pellet in a body and
+                # seven in a wall is `hit: true` and used to lose all its wall
+                # debris.
                 "hit": bool(result.hits),
             }
         )

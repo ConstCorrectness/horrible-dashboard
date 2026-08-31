@@ -643,3 +643,177 @@ def test_ping_echoes_the_client_clock_untouched():
         assert pong[0]["serverT"] > 0
 
     asyncio.run(go())
+
+
+# ---------------------------------------------------------------------------
+# The spray pattern's index
+# ---------------------------------------------------------------------------
+
+
+def _rifleman(room):
+    """A player holding the one weapon that has a recoil pattern, with time to
+    spend and no spawn shield to forfeit."""
+    from backend.modules.hassault import weapons
+
+    player = room.add("Shooter", None)
+    player.state.x, player.state.y, player.state.z = 8.0, 8.0, 0.0
+    player.state.on_ground = True
+    player.weapon = weapons.WEAPONS.index(weapons.WEAPON_BY_ID["assault"])
+    player.ammo[player.weapon] = 20
+    player.budget = 10.0
+    return player
+
+
+def _shot(seq: int, dt: float) -> Command:
+    return Command(
+        seq=seq,
+        forward=0.0,
+        strafe=0.0,
+        jump=False,
+        yaw=0.0,
+        pitch=0.0,
+        dt=dt,
+        fire=True,
+    )
+
+
+def _spend(room, player, seconds: float, seq: int) -> int:
+    """Advance a player's simulated clock by `seconds`, doing nothing else.
+
+    A helper rather than one long command, because two limits bite otherwise and
+    both are silent: `dt` is clamped to `physics.MAX_STEP_DT` per command, and a
+    tick only hands out `BUDGET_CEILING` of time however much a test assigns.
+    Returns the next sequence number.
+    """
+    from backend.modules.hassault import physics
+
+    left = seconds
+    while left > 1e-9:
+        step = min(left, physics.MAX_STEP_DT)
+        left -= step
+        room.enqueue(player, walk(seq, dt=step, forward=0.0))
+        seq += 1
+        # One command per tick, so the budget is replenished between them.
+        room.simulate(step)
+    return seq
+
+
+def test_two_commands_drained_in_one_tick_do_not_reset_the_spray():
+    """**The wall-clock trap, directly.**
+
+    `simulate` drains a whole queue per tick, so two commands sent 20ms apart can
+    be simulated microseconds apart in real time. A reset gated on
+    `time.monotonic()` would see no gap between them, decide the burst had ended,
+    and pin every shot at pattern index 0 — a rifle with no recoil at all, and
+    nothing anywhere saying why.
+    """
+    from backend.modules.hassault import weapons
+
+    room = make_room()
+    player = _rifleman(room)
+    interval = weapons.WEAPON_BY_ID["assault"].interval
+
+    # Two trigger pulls, one tick, spaced by exactly the fire interval in
+    # *simulated* time.
+    room.enqueue(player, _shot(1, interval))
+    room.enqueue(player, _shot(2, interval))
+    room.simulate(1 / 60)
+
+    assert player.spray_index == 2, "the burst restarted inside a single tick"
+
+
+def test_letting_go_long_enough_puts_you_back_at_the_top_of_the_pattern():
+    """The trade the whole mechanic is made of: hold it and the pattern climbs,
+    let go and you get the first shot back."""
+    from backend.modules.hassault import weapons
+
+    room = make_room()
+    player = _rifleman(room)
+    rifle = weapons.WEAPON_BY_ID["assault"]
+
+    room.enqueue(player, _shot(1, rifle.interval))
+    room.enqueue(player, _shot(2, rifle.interval))
+    room.simulate(1 / 60)
+    assert player.spray_index == 2
+
+    # A gap longer than the reset, spent walking rather than shooting.
+    seq = _spend(room, player, rifle.spray_reset + 0.05, seq=3)
+    room.enqueue(player, _shot(seq, rifle.interval))
+    room.simulate(1 / 60)
+    assert player.spray_index == 1, "the pattern did not restart after the gap"
+
+
+def test_a_refused_trigger_pull_does_not_walk_the_pattern():
+    """Every early return in `_fire` is a pull that produced nothing. Counting
+    those would advance the pattern for a player who never fired — and the client
+    adopts this number, so its camera would kick for a bullet that never left."""
+    room = make_room()
+    player = _rifleman(room)
+    player.ammo[player.weapon] = 0
+
+    room.enqueue(player, _shot(1, 1 / 60))
+    room.simulate(1 / 60)
+
+    assert player.spray_index == 0
+
+
+def test_switching_and_reloading_both_start_the_pattern_again():
+    """A weapon you just drew must not fire from halfway down someone else's
+    recoil curve, and a magazine change is the end of a burst by definition."""
+    from backend.modules.hassault import weapons
+
+    rifle_slot = weapons.WEAPONS.index(weapons.WEAPON_BY_ID["assault"])
+    pistol_slot = weapons.WEAPONS.index(weapons.WEAPON_BY_ID["pistol"])
+
+    room = make_room()
+    player = _rifleman(room)
+    room.enqueue(player, _shot(1, 1 / 60))
+    room.simulate(1 / 60)
+    assert player.spray_index == 1
+
+    switch = walk(2, dt=1 / 60)
+    switch.weapon = pistol_slot
+    room.enqueue(player, switch)
+    room.simulate(1 / 60)
+    assert player.spray_index == 0
+
+    # Enough simulated time that the next pull clears the rate gate — otherwise
+    # the shot below is refused and the test would be reading a spray index that
+    # never moved for a reason unrelated to switching.
+    seq = _spend(room, player, weapons.WEAPON_BY_ID["assault"].interval * 2, seq=3)
+    back = walk(seq, dt=1 / 60)
+    back.weapon = rifle_slot
+    room.enqueue(player, back)
+    room.enqueue(player, _shot(seq + 1, 1 / 60))
+    room.simulate(1 / 60)
+    assert player.spray_index == 1
+
+    player.ammo[player.weapon] = 5
+    reload_cmd = walk(seq + 2, dt=1 / 60)
+    reload_cmd.reload = True
+    room.enqueue(player, reload_cmd)
+    room.simulate(1 / 60)
+    assert player.spray_index == 0
+
+
+def test_the_index_reaches_the_client_that_has_to_predict_it():
+    """Echoed in the private view, so the client adopts it rather than keeping a
+    count that can drift out of phase for the rest of a magazine."""
+    room = make_room()
+    player = _rifleman(room)
+    room.enqueue(player, _shot(1, 1 / 60))
+    room.simulate(1 / 60)
+
+    view = player.private_view(0.0)
+    assert view["sprayIndex"] == player.spray_index
+
+
+def test_respawning_starts_the_pattern_again():
+    room = make_room()
+    player = _rifleman(room)
+    room.enqueue(player, _shot(1, 1 / 60))
+    room.simulate(1 / 60)
+    assert player.spray_index == 1
+
+    player.reset_loadout()
+    assert player.spray_index == 0

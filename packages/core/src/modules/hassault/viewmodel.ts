@@ -23,7 +23,34 @@
  */
 import type * as THREE from 'three';
 
+import { ArmRig, gripsFor, type GripAnchors, type Vec3 } from './arms';
 import { PROP_ENV_INTENSITY, fitWeaponModel, loadWeaponModel } from './models/weapons';
+import {
+  AuthoredPoseSource,
+  DRAW_DURATION,
+  THROW_DURATION,
+  mergePose,
+  selectLocomotion,
+  type ActionClip,
+  type PartialPose,
+  type PoseSource,
+} from './viewclips';
+
+import {
+  FLASH_CORE,
+  FLASH_HALO,
+  FLASH_LIFE,
+  FLASH_SMOKE,
+  FLASH_SMOKE_LIFE,
+  FLASH_SMOKE_RISE,
+  clampFlashScale,
+  createFlashTexture,
+  drawFlashTile,
+  drawSmokeTile,
+  flashScale,
+  haloScale,
+  smokePuff,
+} from './flash';
 
 import { MOVE_SPEED } from './player';
 import { createDetailTexture } from './surfaces';
@@ -38,23 +65,104 @@ import { createDetailTexture } from './surfaces';
  */
 const HOME = { x: 0.92, y: -0.86, z: -1.35 };
 
-/** How long the muzzle flash stays lit. Two frames at 60 fps. */
-const FLASH_LIFE = 0.055;
-
 /** Recoil decay and reload-dip rates, per second. */
 const KICK_DECAY = 11;
 const RELOAD_RATE = 6;
+
+/**
+ * Fractions of a reload spent taking the weapon down, and bringing it back.
+ *
+ * **Fractions, not seconds**, so the dip stretches to whatever `reloadTime` the
+ * server serves: a 1.4s pistol reload and a 2.6s shotgun reload both come back
+ * up on the frame the magazine is full. Written in seconds the two would need a
+ * table nobody would keep in step with `weapons.py`.
+ *
+ * This is a port of the native client's `reload_envelope`, which has had it for
+ * a while — the browser kept a fixed-rate exponential approach that did neither
+ * end well: a fast reload was still on its way down when the magazine filled,
+ * and a slow one sat at the bottom and then snapped back. Nothing caught that
+ * divergence, so `browser_parity.rs` now pins all six numbers here.
+ */
+const RELOAD_DIP_IN = 0.22;
+const RELOAD_DIP_OUT = 0.3;
+
+/**
+ * Seconds to take a weapon out of frame, and to bring the next one up.
+ *
+ * The holster is faster than the draw on purpose: putting something away is a
+ * motion you have already committed to, while bringing one up is the moment that
+ * has to read as an *arrival*. Equal times make a swap look like one mechanical
+ * sweep in a single direction.
+ */
+const HOLSTER_TIME = 0.13;
+const DRAW_TIME = 0.25;
+
+/**
+ * How long the weapon waits down after a switch was *asked for*.
+ *
+ * The client does not own the slot — in a match `select` sends a request and the
+ * server decides — so the holster is an anticipation, and this is how long it is
+ * willing to be wrong for: comfortably past a round trip, and short enough that
+ * a refused switch does not leave a player staring at their own knees. A
+ * confirmed swap cancels the hold outright rather than waiting out the rest.
+ */
+const HOLSTER_HOLD = 0.4;
+
+/**
+ * The reload dip's weight across the reload's own length: down, hold, up.
+ *
+ * Takes a **fraction**, so the shape is the same on every weapon and its
+ * duration is whatever the server said.
+ */
+export function reloadEnvelope(progress: number): number {
+  const p = Math.max(0, Math.min(1, progress));
+  if (p < RELOAD_DIP_IN) return ease(p / RELOAD_DIP_IN);
+  if (p > 1 - RELOAD_DIP_OUT) return ease((1 - p) / RELOAD_DIP_OUT);
+  return 1;
+}
+
+/**
+ * Move `value` toward `target` at a fixed rate, arriving exactly.
+ *
+ * Linear rather than the exponential approach used for sway and kick, because a
+ * swap is an *action with a length*: an exponential never arrives, so the weapon
+ * would be perpetually a few percent stowed and the draw would have no moment at
+ * which it is over.
+ */
+function approach(value: number, target: number, seconds: number, dt: number): number {
+  const step = dt / Math.max(1e-4, seconds);
+  return target > value ? Math.min(target, value + step) : Math.max(target, value - step);
+}
 
 export interface ViewModelFrame {
   /** Horizontal speed in cubes per second, for the walk cycle. */
   speed: number;
   onGround: boolean;
   reloading: boolean;
+  /**
+   * How far through the reload we are, 0..1, or `null` when that cannot be known
+   * — the weapon's `reloadTime` has not been served, or is zero.
+   *
+   * `null` rather than a bare number, and the distinction is load-bearing: `0`
+   * is "the reload has just started" and `null` is "there is no length to
+   * measure against". Collapsed into one number, a server that serves no
+   * `reloadTime` would look like a reload permanently at its first frame — the
+   * weapon would go down and stay there.
+   */
+  reloadProgress?: number | null;
   /** View angles, so the weapon can lag a turn slightly instead of being welded on. */
   yaw: number;
   pitch: number;
   /** False while dead, spectating, or before deploying. */
   visible: boolean;
+  /**
+   * Seconds since the player last landed, for the landing dip.
+   *
+   * A duration rather than a timestamp, the same shape `you.move.sinceLanded`
+   * has and for the same reason: the two simulated clocks are unrelated, and a
+   * timestamp from one measured against the other is a number with no meaning.
+   */
+  sinceLanded?: number;
 }
 
 /**
@@ -249,6 +357,22 @@ function paletteFor(skin: WeaponSkin | null): Palette {
   };
 }
 
+/** Scale every channel of a pose. Used to fade a walk cycle in with the bob. */
+function scalePose(pose: PartialPose, k: number): PartialPose {
+  const out: PartialPose = {};
+  if (pose.primary) out.primary = [pose.primary[0] * k, pose.primary[1] * k, pose.primary[2] * k];
+  if (pose.support) out.support = [pose.support[0] * k, pose.support[1] * k, pose.support[2] * k];
+  if (pose.primaryRoll !== undefined) out.primaryRoll = pose.primaryRoll * k;
+  if (pose.supportRoll !== undefined) out.supportRoll = pose.supportRoll * k;
+  return out;
+}
+
+/** A grip anchor plus a pose offset. An absent offset leaves the hand on the gun. */
+function offsetBy(anchor: Vec3, offset: Vec3 | undefined): Vec3 {
+  if (!offset) return anchor;
+  return [anchor[0] + offset[0], anchor[1] + offset[1], anchor[2] + offset[2]];
+}
+
 /** One weapon's geometry, as `build` hands it back. */
 interface Shape {
   group: THREE.Group;
@@ -380,11 +504,55 @@ export class WeaponViewModel {
    */
   private propToken = '';
 
-  private flash: THREE.Mesh | null = null;
+  /**
+   * The muzzle flash, as three billboards rather than one cone — see `flash.ts`
+   * for what was wrong with the cone and why a sprite cannot repeat it.
+   *
+   * Three because they are three different events sharing one moment: a hot
+   * core, a wider warm fringe, and the wisp that outlives both. Two additive,
+   * one not — smoke that adds light is a dimmer flash, not smoke.
+   */
+  private flashCore: THREE.Sprite | null = null;
+  private flashHalo: THREE.Sprite | null = null;
+  private flashSmoke: THREE.Sprite | null = null;
   private flashAge = FLASH_LIFE;
+  private smokeAge = FLASH_SMOKE_LIFE;
+  /** Where the smoke started, so it can drift from there. */
+  private smokeOrigin: [number, number, number] = [0, 0, 0];
+  /**
+   * Which shot this is. Seeds the per-shot size variation, replacing a
+   * `Math.random()` that ran *every frame the flash was lit* — so one shot was
+   * two or three differently-sized flashes rather than one event.
+   */
+  private flashSeed = 0;
+  /**
+   * The hands. Built once and solved onto the weapon's grip anchors every frame
+   * — see `arms.ts` for why that means they inherit every animation this class
+   * already has, for free.
+   */
+  private arms: ArmRig | null = null;
+  /** Where this weapon's hands go. Re-read on every swap. */
+  private grips: GripAnchors = gripsFor('');
+  /** Where the poses come from. One implementation today — see `PoseSource`. */
+  private poses: PoseSource = new AuthoredPoseSource();
+  /** The one-shot action running now, and how far into it, or `null`. */
+  private action: { clip: ActionClip; t: number; duration: number } | null = null;
+  /** Built once per view model and shared by every weapon it ever holds. */
+  private flashTexture: THREE.Texture | null = null;
+  private smokeTexture: THREE.Texture | null = null;
   private kick = 0;
   private bobPhase = 0;
   private reloadT = 0;
+  /** How far out of frame the weapon is, 0..1. 1 is fully stowed. */
+  private stow = 0;
+  /** Seconds left of a holster that was *asked for* but not yet confirmed. */
+  private holsterHold = 0;
+  /**
+   * Set while the weapon is not being drawn at all, so coming back — respawning,
+   * or the match starting — plays a draw rather than having the gun materialise
+   * at rest. A spawn is an arrival.
+   */
+  private drawOnReturn = true;
   private lastYaw: number | null = null;
   private lastPitch = 0;
   private swayX = 0;
@@ -435,6 +603,11 @@ export class WeaponViewModel {
     camera.add(this.pivot);
     // Camera children are only rendered when the camera is in the scene graph.
     if (!camera.parent) scene.add(camera);
+    // **On the camera, not on the pivot.** The pivot carries the weapon's bob,
+    // sway, kick and stow; the arms have to reach a *point on the weapon* from a
+    // shoulder that does not move with it, so they live one level up and the
+    // pivot's transform reaches them through the grip anchor instead.
+    this.arms = new ArmRig(three, this.pivot.parent ?? camera);
   }
 
   /**
@@ -450,6 +623,7 @@ export class WeaponViewModel {
       ? `${skin.baseColor}|${skin.accentColor}|${skin.patternType}|${skin.floatValue}`
       : '';
     if (id === this.weaponId && skinKey === this.skinKey) return;
+    const swapped = id !== this.weaponId;
     this.weaponId = id;
     this.skinKey = skinKey;
     this.release();
@@ -458,31 +632,28 @@ export class WeaponViewModel {
 
     this.building = [];
     const shape = this.build(id);
+    this.grips = gripsFor(id);
     this.pivot.add(shape.group);
     shape.group.rotation.set(shape.rest[0], shape.rest[1], shape.rest[2]);
 
     // The flash lives on the model, not the pivot: it belongs at the end of
     // *this* barrel, and a shared one would sit at the wrong place after a swap.
-    const flashGeo = new this.three.ConeGeometry(0.16, 0.42, 5);
-    const flashMat = new this.three.MeshBasicMaterial({
-      color: 0xffd27a,
-      transparent: true,
-      opacity: 0.9,
-    });
-    this.building.push(flashGeo);
-    const flash = new this.three.Mesh(flashGeo, flashMat);
-    // Cone points +Y by default; lay it along -Z, pointing away from the shooter.
-    flash.rotation.x = -Math.PI / 2;
-    flash.position.set(shape.muzzle[0], shape.muzzle[1], shape.muzzle[2] - 0.2);
-    flash.visible = false;
-    shape.group.add(flash);
-    this.flash = flash;
+    const flashMats = this.buildFlash(shape.group, shape.muzzle);
     this.built = {
       ...shape,
       geometries: this.building,
-      materials: [flashMat],
+      materials: flashMats,
     };
     this.building = [];
+
+    if (swapped) {
+      // Snapped fully stowed rather than eased there: the model has *already*
+      // changed, so there is nothing left to take down — easing from here would
+      // lower the new weapon out of frame and then raise it again. The hold is
+      // cleared because the swap it was waiting for has arrived.
+      this.stow = 1;
+      this.holsterHold = 0;
+    }
 
     // The boxes are already in your hands by this point. The prop, if there is
     // one, arrives behind them — see `models/weapons.ts` for why this is not
@@ -535,8 +706,13 @@ export class WeaponViewModel {
         // position is recomputed from the prop's own muzzle. Removing the
         // children rather than the group keeps the group's rest rotation and
         // everything hanging off it, including the flash.
+        const keep = new Set<THREE.Object3D>(
+          [this.flashCore, this.flashHalo, this.flashSmoke].filter(
+            (s): s is THREE.Sprite => s !== null,
+          ),
+        );
         for (const child of [...built.group.children]) {
-          if (child !== this.flash) built.group.remove(child);
+          if (!keep.has(child)) built.group.remove(child);
         }
         for (const geo of built.geometries) geo.dispose();
         built.geometries = [];
@@ -546,7 +722,7 @@ export class WeaponViewModel {
         // built, not of how a weapon is held.
         built.group.rotation.set(0, 0, 0);
         built.muzzle = muzzle;
-        if (this.flash) this.flash.position.set(muzzle[0], muzzle[1], muzzle[2] - 0.2);
+        this.placeFlash(muzzle);
         // Tracked so `release` frees them: a clone owns its own materials.
         built.materials.push(...materials);
       })
@@ -585,12 +761,53 @@ export class WeaponViewModel {
     });
   }
 
+  /**
+   * A switch was asked for: take the weapon down while we wait to hear.
+   *
+   * Called from the key, **not** from the server's answer, and that is the point
+   * — a swap that only began once the server confirmed would start a round trip
+   * after the press and read as input lag. In a match the server owns the slot,
+   * so this is a guess; `HOLSTER_HOLD` is how long the guess is allowed to stand
+   * before the weapon comes back up on its own.
+   *
+   * Purely cosmetic: nothing here changes what is held, what can be fired, or
+   * what the wire says. A refused switch costs a dip and nothing else — which is
+   * also why equipping a grenade uses it rather than `ShotController.select`,
+   * whose request would cancel an in-flight reload server-side.
+   */
+  holster(): void {
+    if (this.built) this.holsterHold = HOLSTER_HOLD;
+  }
+
+  /**
+   * Start a one-shot hand animation.
+   *
+   * Replaces whatever was running rather than queueing: two actions on one pair
+   * of hands is the blend `models/clips.ts` warns about, and the newer one is
+   * always the one the player just asked for.
+   */
+  private startAction(clip: ActionClip, duration: number): void {
+    this.action = { clip, t: 0, duration: Math.max(1e-3, duration) };
+  }
+
+  /** The grenade throw's pull-pin, windup and release. */
+  throwNade(): void {
+    this.startAction('throw', THROW_DURATION);
+  }
+
   /** A shot left the barrel this frame: kick the model and light the muzzle. */
   fire(): void {
     // Additive but capped: holding down an assault rifle should climb to a steady
     // shake, not to a weapon behind the player's ear.
     this.kick = Math.min(1, this.kick + 0.8);
     this.flashAge = 0;
+    this.smokeAge = 0;
+    // One seed per shot, not per frame — see `flashSeed`.
+    this.flashSeed += 1;
+    // Firing cancels a hand animation for the reason it cancels an inspect: the
+    // pose has the support hand somewhere other than the gun, and a shot drawn
+    // with a hand in the magazine well is a shot that did not happen that way.
+    this.action = null;
     // Firing cancels an inspect, and has to: the pose swings the barrel away
     // from the crosshair, so a shot fired mid-animation would be drawn leaving a
     // weapon pointed at the floor. The server resolved it against the real view
@@ -610,7 +827,10 @@ export class WeaponViewModel {
    * the key means "show me the gun", and it should answer every press.
    */
   inspect(): void {
-    if (this.built) this.inspectT = 0;
+    if (this.built) {
+      this.inspectT = 0;
+      this.startAction('inspect', INSPECT_DURATION);
+    }
   }
 
   /** Whether the animation is running, so the HUD can name what the weapon is
@@ -637,7 +857,24 @@ export class WeaponViewModel {
       // Dying mid-inspect must not resume it on respawn: the animation is
       // something you asked for, not a state of the weapon.
       this.inspectT = null;
+      // Nor may a half-finished holster: the request that started it belongs to
+      // a life that has ended.
+      this.holsterHold = 0;
+      this.drawOnReturn = true;
+      // The hands go with the weapon. Left drawn, they hang in the middle of a
+      // dead player's spectator view holding nothing.
+      this.arms?.update(this.grips, (p) => p, false);
+      this.action = null;
       return;
+    }
+
+    if (this.drawOnReturn) {
+      // First frame back. Start fully stowed so the weapon comes up into frame
+      // rather than materialising at rest — a spawn is an arrival.
+      this.drawOnReturn = false;
+      this.stow = 1;
+      // A spawn is an arrival, and the hands arrive with the gun.
+      this.startAction('draw', DRAW_DURATION);
     }
 
     const target = Math.min(1, Math.max(0, frame.speed / MOVE_SPEED));
@@ -658,8 +895,32 @@ export class WeaponViewModel {
     this.swayY += (clamp(-pitchDelta * 1.6, -0.18, 0.18) - this.swayY) * settle;
 
     this.kick -= this.kick * Math.min(1, dt * KICK_DECAY);
-    const reloadTarget = frame.reloading ? 1 : 0;
-    this.reloadT += (reloadTarget - this.reloadT) * Math.min(1, dt * RELOAD_RATE);
+    // The dip, on the server's clock where there is one. `reloadProgress` is
+    // `null` only when there is no length to stretch across, and the fixed-rate
+    // approach is what the whole client used to do — kept as the fallback so a
+    // server that serves no `reloadTime` still dips rather than doing nothing.
+    if (frame.reloading && frame.reloadProgress !== null && frame.reloadProgress !== undefined) {
+      this.reloadT = reloadEnvelope(frame.reloadProgress);
+      // The hands run on the reload's own progress rather than on a clock of
+      // their own, so the mag goes in exactly when the magazine fills — one
+      // authored motion stretched to whatever `reloadTime` was served.
+      this.action = {
+        clip: 'reload',
+        t: frame.reloadProgress,
+        duration: 1,
+      };
+    } else {
+      const reloadTarget = frame.reloading ? 1 : 0;
+      this.reloadT += (reloadTarget - this.reloadT) * Math.min(1, dt * RELOAD_RATE);
+    }
+
+    // The stow: down while a switch is pending or one was asked for, back up
+    // otherwise. Linear, because a swap is an action with a length — see
+    // `approach`.
+    if (this.holsterHold > 0) this.holsterHold = Math.max(0, this.holsterHold - dt);
+    const stowTarget = this.holsterHold > 0 ? 1 : 0;
+    this.stow = approach(this.stow, stowTarget, stowTarget > this.stow ? HOLSTER_TIME : DRAW_TIME, dt);
+    const stow = ease(this.stow);
 
     // A reload takes the weapon away for an animation of its own, and two poses
     // fighting over one pivot is a weapon that looks broken. The reload wins,
@@ -703,27 +964,239 @@ export class WeaponViewModel {
     // keeps it moving in between.
     this.pivot.position.set(
       HOME.x + bobX + this.swayX - lift * 0.3,
-      HOME.y + bobY + this.swayY - this.reloadT * 0.55 + lift * 0.16,
+      // The stow drops the weapon out of frame entirely. Applied to the same
+      // axis as the reload dip and *added* rather than blended, so a switch
+      // asked for mid-reload takes the gun the rest of the way down instead of
+      // fighting the dip for the pivot.
+      HOME.y + bobY + this.swayY - this.reloadT * 0.55 + lift * 0.16 - stow * 1.15,
       // Recoil is mostly backwards: a gun that only rotates looks hinged.
       HOME.z + this.kick * 0.28 + lift * 0.2,
     );
     this.pivot.rotation.set(
-      this.kick * -0.16 + this.reloadT * 0.7 + bobY * 0.4 + inspect * 0.34,
+      this.kick * -0.16 + this.reloadT * 0.7 + bobY * 0.4 + inspect * 0.34 + stow * 0.9,
       this.swayX * 0.7 + this.reloadT * 0.25 - inspect * 0.95,
-      this.swayX * 0.5 + bobX * 0.6 + inspect * (INSPECT_ROLL + INSPECT_TURN * turn),
+      this.swayX * 0.5 +
+        bobX * 0.6 +
+        inspect * (INSPECT_ROLL + INSPECT_TURN * turn) +
+        stow * 0.35,
     );
 
-    if (this.flash) {
-      this.flashAge += dt;
-      const lit = this.flashAge < FLASH_LIFE;
-      this.flash.visible = lit;
-      if (lit) {
-        // A different size every frame it is lit, so two shots never flash
-        // identically — cheaper and more convincing than a fade.
-        const scale = 0.85 + Math.random() * 0.5;
-        this.flash.scale.set(scale, 1, scale);
-      }
+    this.flashAge += dt;
+    this.smokeAge += dt;
+    this.updateFlash();
+    this.updateArms(dt, frame, walk, stow);
+  }
+
+  /**
+   * Pose the hands and solve them onto the weapon.
+   *
+   * Two layers merged per channel and then run through one transform: the grip
+   * anchor plus the pose offset, pushed through the pivot chain into camera
+   * space. Because the anchors are points on the *weapon*, everything the pivot
+   * is already doing — bob, sway, recoil, the reload dip, the stow, the inspect
+   * roll — reaches the hands with nothing here knowing it happened.
+   */
+  private updateArms(dt: number, frame: ViewModelFrame, walk: number, stow: number): void {
+    const arms = this.arms;
+    const built = this.built;
+    if (!arms || !built) return;
+
+    // The action layer, advanced. A reload's `t` is driven by the server's own
+    // progress above rather than by `dt`, so only the self-timed ones tick here.
+    if (this.action && this.action.duration !== 1) {
+      this.action.t += dt / this.action.duration;
+      if (this.action.t >= 1) this.action = null;
+    } else if (this.action && !frame.reloading && this.action.clip === 'reload') {
+      // The reload ended without a final progress of 1 — a switch, a death, a
+      // correction. Drop it rather than leaving the hand in the magazine well.
+      this.action = null;
     }
+
+    const clip = selectLocomotion({
+      speed: frame.speed,
+      moveSpeed: MOVE_SPEED,
+      onGround: frame.onGround,
+      sinceLanded: frame.sinceLanded ?? Infinity,
+    });
+    // Phase-driven off `bobPhase`, so the stride and the weapon bob cannot drift
+    // apart. Scaled by `walk` on the two moving clips only: at a standstill the
+    // idle track is the whole of it.
+    const base = this.poses.locomotion(clip, this.bobPhase / (Math.PI * 2));
+    const scaled: PartialPose =
+      clip === 'walk' || clip === 'run' ? scalePose(base, walk) : base;
+    const pose = this.action
+      ? mergePose(scaled, this.poses.action(this.action.clip, Math.min(1, this.action.t)))
+      : scaled;
+
+    const grips = this.grips;
+    const anchors: GripAnchors = {
+      primary: offsetBy(grips.primary, pose.primary),
+      support:
+        grips.support === null ? null : offsetBy(grips.support, pose.support),
+      primaryRoll: grips.primaryRoll + (pose.primaryRoll ?? 0),
+      supportRoll: grips.supportRoll + (pose.supportRoll ?? 0),
+    };
+
+    // The weapon's model space into camera space, through the same two matrices
+    // the flash's distance uses. Recomputed here rather than cached, because the
+    // pivot moves every frame and that motion is the entire point.
+    built.group.updateMatrix();
+    this.pivot.updateMatrix();
+    const toCamera = (p: Vec3): Vec3 => {
+      const v = new this.three.Vector3(p[0], p[1], p[2]);
+      v.applyMatrix4(built.group.matrix).applyMatrix4(this.pivot.matrix);
+      return [v.x, v.y, v.z];
+    };
+    // Hidden while fully stowed: at `stow` 1 the weapon is out of frame, and two
+    // arms reaching for it are two arms pointing at nothing.
+    arms.update(anchors, toCamera, stow < 0.92);
+  }
+
+  /**
+   * Size and fade the three billboards.
+   *
+   * Split out of `update` because it is the whole of the change described in
+   * `flash.ts` and reads as one thing: how big, how far from the eye, and
+   * whether the cap bites.
+   */
+  private updateFlash(): void {
+    const core = this.flashCore;
+    const halo = this.flashHalo;
+    const smoke = this.flashSmoke;
+    if (!core || !halo || !smoke) return;
+
+    const base = flashScale(this.weaponId, this.flashAge, this.flashSeed);
+    // `base` is zero for a weapon with no muzzle — the knife, whose whole value
+    // is that carrying it gives nothing away. Checked here rather than at the
+    // build so a weapon swap needs no teardown.
+    const lit = this.flashAge < FLASH_LIFE && base > 0;
+    core.visible = lit;
+    halo.visible = lit;
+    if (lit) {
+      // The muzzle's distance from the eye, which is what turns a size in cube
+      // units into a fraction of the screen. Measured rather than assumed: the
+      // pivot moves with every bob, sway and recoil kick, so a constant here
+      // would be wrong exactly when the gun is furthest out.
+      const distance = this.muzzleDistance();
+      const fov = this.currentFov();
+      const coreScale = clampFlashScale(base, distance, fov);
+      const halo2 = clampFlashScale(haloScale(this.weaponId, base), distance, fov);
+      core.scale.set(coreScale, coreScale, 1);
+      halo.scale.set(halo2, halo2, 1);
+    }
+
+    const puff = smokePuff(this.weaponId, this.smokeAge);
+    const smoking = this.smokeAge < FLASH_SMOKE_LIFE && puff.opacity > 0.002 && puff.scale > 0;
+    smoke.visible = smoking;
+    if (smoking) {
+      const scale = clampFlashScale(puff.scale, this.muzzleDistance(), this.currentFov());
+      smoke.scale.set(scale, scale, 1);
+      (smoke.material as THREE.SpriteMaterial).opacity = puff.opacity;
+      // Drifts up and a little further down the barrel, from where the shot was
+      // taken rather than from wherever the muzzle has since moved to.
+      const rise = (this.smokeAge / FLASH_SMOKE_LIFE) * FLASH_SMOKE_RISE;
+      smoke.position.set(
+        this.smokeOrigin[0],
+        this.smokeOrigin[1] + rise,
+        this.smokeOrigin[2] - 0.12 - rise * 0.4,
+      );
+    }
+  }
+
+  /**
+   * How far the muzzle is from the eye, in cube units.
+   *
+   * The camera is the pivot's parent, so a point in the model's space becomes a
+   * point in camera space — whose length is the distance, since the eye is the
+   * camera's origin. No matrix inverse and no world-space round trip.
+   */
+  private muzzleDistance(): number {
+    const built = this.built;
+    if (!built) return 1;
+    const p = new this.three.Vector3(built.muzzle[0], built.muzzle[1], built.muzzle[2]);
+    built.group.updateMatrix();
+    this.pivot.updateMatrix();
+    p.applyMatrix4(built.group.matrix).applyMatrix4(this.pivot.matrix);
+    return Math.max(0.05, p.length());
+  }
+
+  /**
+   * The camera's vertical FOV in radians, **as it is right now**.
+   *
+   * Read live rather than captured, because scoping divides it: a cap computed
+   * against the base FOV would be right hipfiring and four times too generous at
+   * 4x, which is exactly the view a flash must not fill. A camera with no `fov`
+   * (orthographic, or a test double) falls back to the perspective default
+   * rather than disabling the cap.
+   */
+  private currentFov(): number {
+    const fov = (this.camera as THREE.PerspectiveCamera).fov;
+    return (typeof fov === 'number' && fov > 0 ? fov : 50) * (Math.PI / 180);
+  }
+
+  /**
+   * Build the three sprites onto a freshly-built model, returning their
+   * materials so `release` frees them with the rest of it.
+   *
+   * The *textures* are not among them: they are built once per view model and
+   * shared by every weapon it holds, so they belong to `dispose`.
+   */
+  private buildFlash(group: THREE.Group, muzzle: [number, number, number]): THREE.Material[] {
+    const three = this.three;
+    if (!this.flashTexture) this.flashTexture = createFlashTexture(three, drawFlashTile());
+    if (!this.smokeTexture) this.smokeTexture = createFlashTexture(three, drawSmokeTile());
+
+    const sprite = (
+      map: THREE.Texture,
+      color: number,
+      opacity: number,
+      additive: boolean,
+    ): { sprite: THREE.Sprite; material: THREE.SpriteMaterial } => {
+      const material = new three.SpriteMaterial({
+        map,
+        color,
+        transparent: true,
+        opacity,
+        // Never writes depth and never tests it: the flash belongs to the gun in
+        // your hands, and a barrel poking a millimetre into a wall must not
+        // clip it away on the one frame it matters.
+        depthWrite: false,
+        depthTest: false,
+        blending: additive ? three.AdditiveBlending : three.NormalBlending,
+      });
+      const s = new three.Sprite(material);
+      s.visible = false;
+      // **Zero, not one.** These sprites live on the same group `fitWeaponModel`
+      // measures when a prop lands, and `Box3.setFromObject` does not skip
+      // invisible children — so a default 1x1 quad at the muzzle would enlarge
+      // the target box and translate the arriving model to fit a bounding volume
+      // that is mostly muzzle flash. At zero the sprite contributes only its own
+      // position, which is inside the box already. Every visible frame sets a
+      // real scale before drawing.
+      s.scale.set(0, 0, 1);
+      group.add(s);
+      return { sprite: s, material };
+    };
+
+    const halo = sprite(this.flashTexture, FLASH_HALO, 0.55, true);
+    const core = sprite(this.flashTexture, FLASH_CORE, 0.95, true);
+    const smoke = sprite(this.smokeTexture, FLASH_SMOKE, 0.22, false);
+    this.flashHalo = halo.sprite;
+    this.flashCore = core.sprite;
+    this.flashSmoke = smoke.sprite;
+    this.placeFlash(muzzle);
+    return [halo.material, core.material, smoke.material];
+  }
+
+  /** Move the three sprites to a muzzle — a new model, or a prop that just landed. */
+  private placeFlash(muzzle: [number, number, number]): void {
+    // Just clear of the barrel: at the muzzle exactly, half the sprite is inside
+    // the gun.
+    const at: [number, number, number] = [muzzle[0], muzzle[1], muzzle[2] - 0.06];
+    this.flashHalo?.position.set(at[0], at[1], at[2]);
+    this.flashCore?.position.set(at[0], at[1], at[2]);
+    this.flashSmoke?.position.set(at[0], at[1], at[2]);
+    this.smokeOrigin = at;
   }
 
   dispose(): void {
@@ -732,6 +1205,14 @@ export class WeaponViewModel {
     for (const mat of [this.metal, this.dark, this.grip, this.accent]) mat.dispose();
     this.grain?.dispose();
     this.grain = null;
+    // Owned here rather than by `release`: one pair per view model, shared by
+    // every weapon it ever holds, so a loadout cycle must not free them.
+    this.flashTexture?.dispose();
+    this.flashTexture = null;
+    this.smokeTexture?.dispose();
+    this.smokeTexture = null;
+    this.arms?.dispose();
+    this.arms = null;
   }
 
   /**
@@ -794,7 +1275,9 @@ export class WeaponViewModel {
   private release(): void {
     const built = this.built;
     this.built = null;
-    this.flash = null;
+    this.flashCore = null;
+    this.flashHalo = null;
+    this.flashSmoke = null;
     // Any prop still in flight now belongs to nothing. Cleared rather than
     // cancelled because a fetch cannot be un-sent — the arrival checks this.
     this.propToken = '';

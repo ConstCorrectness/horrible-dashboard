@@ -48,6 +48,34 @@ pub fn eye_position(x: f32, y: f32, z: f32, eye: f32) -> Vec3 {
     [x, y, z + eye]
 }
 
+/// Which face of the world a shot stopped against, as an index.
+///
+/// **The outward normal of the surface hit — the direction pointing back at the
+/// shooter.** A ray stepping `+x` that enters a solid has hit that block's `-x`
+/// face, so it reports `FACE_NX`. These mirror `weapons.py`'s constants exactly,
+/// because the server puts the index on the wire once per pellet; they are
+/// re-derived here only for the training range, which has no server to ask.
+pub const FACE_PX: i32 = 0;
+pub const FACE_NX: i32 = 1;
+pub const FACE_PY: i32 = 2;
+pub const FACE_NY: i32 = 3;
+pub const FACE_PZ: i32 = 4;
+pub const FACE_NZ: i32 = 5;
+/// No surface: a body, or a shot that reached its range. Negative rather than a
+/// sixth value, so a caller that forgets to check cannot index a table with it.
+pub const FACE_NONE: i32 = -1;
+
+/// The six faces as unit vectors, in cube coordinates. Mirrors
+/// `weapons.FACE_NORMALS` and `decals.ts`'s table; pinned by `browser_parity.rs`.
+pub const FACE_NORMALS: [[f32; 3]; 6] = [
+    [1.0, 0.0, 0.0],
+    [-1.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0],
+    [0.0, -1.0, 0.0],
+    [0.0, 0.0, 1.0],
+    [0.0, 0.0, -1.0],
+];
+
 /// Distance along `direction` to the first surface, or `max_distance`.
 ///
 /// A grid DDA, because the world *is* a grid: the ray is walked cell by cell,
@@ -59,13 +87,28 @@ pub fn eye_position(x: f32, y: f32, z: f32, eye: f32) -> Vec3 {
 /// hundredths of a cube; the alternative is per-triangle intersection against a
 /// mesh this does not have.
 pub fn raycast_world(world: &World, origin: Vec3, direction: Vec3, max_distance: f32) -> f32 {
+    raycast_world_face(world, origin, direction, max_distance).0
+}
+
+/// Distance along `direction` to the first surface, and **which face**.
+///
+/// The walk itself. `raycast_world` is the wrapper most callers want, exactly as
+/// `raycast_world` wraps `raycast_world_face` on the server.
+pub fn raycast_world_face(
+    world: &World,
+    origin: Vec3,
+    direction: Vec3,
+    max_distance: f32,
+) -> (f32, i32) {
     let [ox, oy, oz] = origin;
     let [dx, dy, dz] = direction;
     let mut cx = ox.floor() as i32;
     let mut cy = oy.floor() as i32;
 
     if world.is_solid(cx, cy) {
-        return 0.0;
+        // The muzzle is inside geometry. There is no surface and no direction
+        // the ray arrived from, so there is nothing to orient a mark against.
+        return (0.0, FACE_NONE);
     }
 
     let step_x = if dx > 0.0 { 1 } else { -1 };
@@ -100,6 +143,9 @@ pub fn raycast_world(world: &World, origin: Vec3, direction: Vec3, max_distance:
     };
 
     let mut t = 0.0f32;
+    // Which face the ray came through to reach the cell being examined. There is
+    // none for the cell the muzzle is in, which is why it starts at `FACE_NONE`.
+    let mut entered = FACE_NONE;
     // Bounded rather than a `loop`: a direction of (0, 0, ±1) never leaves its
     // cell, and an iteration that only ends on a boundary crossing would never
     // end at all.
@@ -113,33 +159,42 @@ pub fn raycast_world(world: &World, origin: Vec3, direction: Vec3, max_distance:
         if dz < 0.0 {
             let t_hit = (floor - oz) / dz;
             if t <= t_hit && t_hit <= t_exit {
-                return t_hit;
+                // Descending onto a floor: the surface faces up.
+                return (t_hit, FACE_PZ);
             }
         } else if dz > 0.0 {
             let t_hit = (ceil - oz) / dz;
             if t <= t_hit && t_hit <= t_exit {
-                return t_hit;
+                return (t_hit, FACE_NZ);
             }
         } else if oz < floor || oz > ceil {
-            return t;
+            // Dead level, and this cell's gap does not contain the ray — a step,
+            // or a low ceiling. There is no floor or ceiling *crossing* to name,
+            // but the ray did stop against the side of that step, through the
+            // face it came in by.
+            return (t, entered);
         }
         if t_exit >= max_distance {
-            return max_distance;
+            return (max_distance, FACE_NONE);
         }
         if t_max_x < t_max_y {
             cx += step_x;
             t = t_max_x;
             t_max_x += t_delta_x;
+            entered = if step_x > 0 { FACE_NX } else { FACE_PX };
         } else {
             cy += step_y;
             t = t_max_y;
             t_max_y += t_delta_y;
+            entered = if step_y > 0 { FACE_NY } else { FACE_PY };
         }
         if world.is_solid(cx, cy) {
-            return t;
+            // Stepping in +x means arriving at the block's -x face — the one
+            // pointing back at the shooter.
+            return (t, entered);
         }
     }
-    max_distance
+    (max_distance, FACE_NONE)
 }
 
 /// Distance at which the ray enters a body's cylinder, or `None`.

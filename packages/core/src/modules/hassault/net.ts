@@ -182,6 +182,18 @@ export interface SelfState {
   /** `-1` is unlimited. */
   reserve: number;
   reloading: boolean;
+  /**
+   * How far into the spray pattern the **server** thinks we are.
+   *
+   * Adopted rather than counted locally, exactly as `ammo` is: predicted on the
+   * frame we fire, corrected on the next snapshot. Without it a shot the server
+   * refused — rate limit, empty magazine, dead — would kick our camera for a
+   * bullet that never left, and leave us one step out of phase with the pattern
+   * for the rest of the magazine.
+   *
+   * Optional, because a peer on the fabric may be running an older backend.
+   */
+  sprayIndex?: number;
   reloadIn: number;
   respawnIn: number;
   protected: boolean;
@@ -285,6 +297,27 @@ export interface ShotFx {
   origin: [number, number, number];
   /** One endpoint per pellet — a wall, a body, or the end of its range. */
   ends: [number, number, number][];
+  /**
+   * Which surface each pellet stopped against, parallel to `ends`.
+   *
+   * An index into `FACE_NORMALS`, or `FACE_NONE` (`-1`) for a pellet that hit a
+   * body or simply ran out of range. Taken from the server rather than derived
+   * here because the server already knows it at the moment its ray returns, and
+   * a client working it out again would be a copy whose only job is to agree
+   * about the exact point the server chose — a half-cube disagreement puts a
+   * bullet mark inside a wall, invisible and silent.
+   *
+   * **Optional**, because a peer on the fabric may be running a backend older
+   * than this field. An absent list means "no marks", never "mark everything".
+   */
+  faces?: number[];
+  /**
+   * Whether *any* pellet reached a body.
+   *
+   * Superseded by the per-pellet `faces` for anything to do with debris: a
+   * shotgun that lands one pellet in a body and seven in a wall is `hit: true`,
+   * and gating wall dust on this used to lose all seven.
+   */
   hit: boolean;
 }
 

@@ -777,3 +777,103 @@ def test_spotting_is_per_recipient_and_never_shared():
     assert enemy.id in packet["you"]["spotted"]
     # Not in the shared half, which every client gets a copy of.
     assert all("spotted" not in row for row in packet["players"])
+
+
+# ---------------------------------------------------------------------------
+# The throw constants, served
+# ---------------------------------------------------------------------------
+
+
+def test_the_throw_route_publishes_every_constant_the_arc_needs():
+    """The `response_model` gate, on the route a trajectory preview reads.
+
+    Missing from `ThrowPhysicsOut`, a constant reaches the client as `undefined`
+    and the preview integrates with a zero — a straight line into the floor, or a
+    grenade that never falls. An aiming aid that is confidently wrong is worse
+    than none, so this asserts the **wire** rather than the module.
+    """
+    from fastapi.testclient import TestClient
+
+    from backend.app import app
+
+    with TestClient(app) as client:
+        res = client.get("/api/hassault/throw")
+        assert res.status_code == 200
+        served = res.json()
+
+    for key in (
+        "gravity",
+        "throwSpeed",
+        "lobScale",
+        "throwInherit",
+        "throwForward",
+        "throwDrop",
+        "restSpeed",
+        "substep",
+        "maxSubsteps",
+    ):
+        assert key in served, key
+
+
+def test_the_served_constants_are_the_modules_own():
+    """Read from `grenades`/`physics`, never retyped.
+
+    Compared by identity against the modules rather than against literals: a
+    literal here is a *third* copy, and it would pass while the route quietly
+    served a stale one.
+    """
+    from fastapi.testclient import TestClient
+
+    from backend.app import app
+    from backend.modules.hassault import grenades, physics
+
+    with TestClient(app) as client:
+        served = client.get("/api/hassault/throw").json()
+
+    assert served["gravity"] == physics.GRAVITY
+    assert served["throwSpeed"] == grenades.THROW_SPEED
+    assert served["lobScale"] == grenades.LOB_SCALE
+    assert served["throwInherit"] == grenades.THROW_INHERIT
+    assert served["throwForward"] == grenades.THROW_FORWARD
+    assert served["throwDrop"] == grenades.THROW_DROP
+    assert served["restSpeed"] == grenades.REST_SPEED
+    assert served["substep"] == grenades.SUBSTEP
+    assert served["maxSubsteps"] == grenades.MAX_SUBSTEPS
+
+
+def test_tacticals_is_still_a_bare_list():
+    """The reason `/throw` is its own route.
+
+    `/tacticals` is `response_model=list[TacticalOut]`, and every installed
+    native client deserialises it as a list. Reshaping it into an object to carry
+    the throw constants would make all of them see **no grenades at all**, with
+    no error anywhere — so the shape is pinned rather than left to a future
+    refactor's judgement.
+    """
+    from fastapi.testclient import TestClient
+
+    from backend.app import app
+
+    with TestClient(app) as client:
+        served = client.get("/api/hassault/tacticals").json()
+
+    assert isinstance(served, list)
+    assert served, "the grenade catalogue is empty"
+
+
+def test_running_and_jumping_actually_change_where_a_grenade_goes():
+    """`THROW_INHERIT` — the thing the trajectory preview exists to make visible.
+
+    The server has done this since grenades existed and nothing on screen ever
+    said so; a preview that did not reproduce it would be an aiming aid that is
+    wrong exactly when a player is moving, which is most of the time.
+    """
+    still = grenades.throw_velocity(0.0, 0.0, False, (0.0, 0.0, 0.0))
+    running = grenades.throw_velocity(0.0, 0.0, False, (20.0, 0.0, 0.0))
+    jumping = grenades.throw_velocity(0.0, 0.0, False, (0.0, 0.0, 22.0))
+
+    assert running[0] > still[0]
+    assert jumping[2] > still[2]
+    # At a fraction, not in full: at 1.0 a player running backwards can drop a
+    # grenade that never leaves them, which reads as the throw having failed.
+    assert running[0] - still[0] < 20.0

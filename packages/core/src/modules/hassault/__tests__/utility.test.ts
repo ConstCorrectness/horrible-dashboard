@@ -196,3 +196,112 @@ describe('reset', () => {
     expect(c.countOf(1)).toBe(2);
   });
 });
+
+
+/**
+ * Equipping a grenade.
+ *
+ * Selecting used to only *ready* one — the gun stayed up and throwing was its
+ * own key. Equipping is what lets the two mouse buttons mean throw and toss
+ * without taking the right button away from the sniper's scope, which is the
+ * whole of that weapon's identity.
+ */
+describe('equipping', () => {
+  it('starts with a weapon in hand, not a grenade', () => {
+    const nades = controller();
+    expect(nades.equipped).toBe(false);
+  });
+
+  it('takes a grenade in hand and puts it away again', () => {
+    const nades = controller();
+    nades.equip(0);
+    expect(nades.equipped).toBe(true);
+    nades.holster();
+    expect(nades.equipped).toBe(false);
+  });
+
+  it('ignores a slot that does not exist', () => {
+    // The number keys are real input, and `9` on a three-grenade loadout means
+    // nothing rather than "the last one".
+    const nades = controller();
+    nades.equip(99);
+    expect(nades.equipped).toBe(false);
+  });
+
+  it('puts the grenade away the instant it leaves the hand', () => {
+    // A throw is one action, not a mode you have to leave: the weapon comes back
+    // up on the same frame the grenade goes out.
+    const nades = controller();
+    nades.equip(0);
+    nades.press(false);
+    const intent = nades.frame(1000, you());
+    expect(intent.throw).toBe(true);
+    expect(nades.justThrew).toBe(true);
+    expect(nades.equipped).toBe(false);
+  });
+
+  it('reports the throw for exactly one frame', () => {
+    // The panel reads `justThrew` to bring the weapon back. Left latched, it
+    // would re-equip on every subsequent frame.
+    const nades = controller();
+    nades.equip(0);
+    nades.press(false);
+    nades.frame(1000, you());
+    expect(nades.justThrew).toBe(true);
+    nades.frame(2000, you());
+    expect(nades.justThrew).toBe(false);
+  });
+
+  it('throws overhand or underhand depending on which button', () => {
+    // Left is the full throw, right is the short lob — the two the server has
+    // always known about (`LOB_SCALE`), now on the buttons a hand is already on.
+    const over = controller();
+    over.equip(0);
+    over.press(false);
+    expect(over.frame(1000, you()).lob).toBe(false);
+
+    const under = controller();
+    under.equip(0);
+    under.press(true);
+    expect(under.frame(1000, you()).lob).toBe(true);
+  });
+
+  it('puts the pouch away when the last grenade is gone', () => {
+    // Standing there with the weapon stowed and both mouse buttons doing nothing
+    // is a state with nothing to do in it.
+    const nades = controller();
+    const specs = nades.catalogue;
+    let now = 0;
+    for (const spec of specs) {
+      const slot = specs.indexOf(spec);
+      for (let i = 0; i < spec.carried; i++) {
+        now += THROW_COOLDOWN_MS + 1;
+        nades.equip(slot);
+        nades.press(false);
+        nades.frame(now, you());
+      }
+    }
+    expect(nades.equipped).toBe(false);
+    now += THROW_COOLDOWN_MS + 1;
+    nades.equip(0);
+    nades.press(false);
+    expect(nades.frame(now, you()).throw).toBe(false);
+  });
+
+  it('drops the grenade when you die', () => {
+    // Coming back holding one you readied in a previous life, with the weapon
+    // stowed, is a spawn you cannot shoot from.
+    const nades = controller();
+    nades.equip(0);
+    nades.frame(1000, you({ alive: false }));
+    expect(nades.equipped).toBe(false);
+  });
+
+  it('does not fire a throw queued on the frame it was holstered', () => {
+    const nades = controller();
+    nades.equip(0);
+    nades.press(false);
+    nades.holster();
+    expect(nades.frame(1000, you()).throw).toBe(false);
+  });
+});

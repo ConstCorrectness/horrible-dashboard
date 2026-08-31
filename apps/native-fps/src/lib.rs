@@ -13,6 +13,8 @@
 
 pub mod animator;
 pub mod api;
+pub mod arc;
+pub mod arms;
 pub mod audio;
 pub mod bodies;
 pub mod camera;
@@ -21,6 +23,7 @@ pub mod characters_gpu;
 pub mod clips;
 pub mod console;
 pub mod damage;
+pub mod decals;
 pub mod detail;
 pub mod divergence;
 pub mod editor;
@@ -47,6 +50,7 @@ pub mod summary;
 pub mod trace;
 pub mod training;
 pub mod utility;
+pub mod viewclips;
 pub mod viewmodel;
 pub mod water;
 pub mod world;

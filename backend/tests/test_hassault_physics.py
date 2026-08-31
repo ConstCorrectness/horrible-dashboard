@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import math
+import random
 from pathlib import Path
 
 import pytest
@@ -27,9 +28,19 @@ from backend.modules.hassault.cgz import FHF, SOLID, SPACE
 from backend.modules.hassault.weapons import (
     BODY_HEIGHT,
     aim_vector,
+    FACE_NONE,
+    FACE_NORMALS,
+    FACE_NX,
+    FACE_NY,
+    FACE_NZ,
+    FACE_PX,
+    FACE_PY,
+    FACE_PZ,
     ray_hits_body,
     raycast_world,
+    raycast_world_face,
 )
+from backend.modules.hassault import weapons
 from backend.modules.hassault.physics import (
     CROUCH_HEIGHT,
     LADDER_ENTITY,
@@ -651,10 +662,235 @@ def test_conformance_shot_trace(index: int):
     world = build_world(data["worlds"][case["world"]])
     direction = aim_vector(case["yaw"], case["pitch"])
     origin = (case["origin"][0], case["origin"][1], case["origin"][2])
-    distance = raycast_world(world, origin, direction, case["max_distance"])
+    distance, face = raycast_world_face(
+        world, origin, direction, case["max_distance"]
+    )
     assert distance == pytest.approx(case["expect"], abs=data["tolerance"]), case[
         "name"
     ]
+    # The face is on the wire and both clients orient a bullet mark from it. A
+    # port that got the sign backwards draws every mark on the *inside* of the
+    # wall it hit, which is invisible and reports nothing — so it is pinned here
+    # rather than left to be noticed.
+    #
+    # `None` is a case the generator found genuinely ambiguous — a shot into a
+    # cell corner, where the answer is a coin flip decided by whose `cos` ran.
+    if case["face"] is not None:
+        assert face == case["face"], case["name"]
+
+
+def _boxed_room(ssize: int = 24, ceil: int = 16) -> World:
+    """An open room inside solid rock, the shape `build_world` makes.
+
+    Two cells of margin on every side, so a shot in any direction has a wall to
+    find and the border the engine guarantees stays intact.
+    """
+    return build_world(
+        {
+            "ssize": ssize,
+            "rects": [
+                {
+                    "x0": 2,
+                    "y0": 2,
+                    "x1": ssize - 3,
+                    "y1": ssize - 3,
+                    "type": SPACE,
+                    "floor": 0,
+                    "ceil": ceil,
+                }
+            ],
+        }
+    )
+
+
+def test_the_face_is_the_normal_pointing_back_at_the_shooter():
+    """The one thing about a face index that is easy to get exactly backwards.
+
+    A mark drawn on the wrong side of its wall is inside the wall, so the failure
+    has no symptom at all — it looks like the decals were never implemented.
+    """
+    world = _boxed_room()
+    origin = (12.0, 12.0, 4.0)
+
+    # East into the far wall: its west face, whose normal points back west at us.
+    _, face = raycast_world_face(world, origin, aim_vector(0.0, 0.0), 60.0)
+    assert face == FACE_NX
+    assert FACE_NORMALS[face] == (-1.0, 0.0, 0.0)
+
+    # West: the opposite wall's east face.
+    _, face = raycast_world_face(world, origin, aim_vector(math.pi, 0.0), 60.0)
+    assert face == FACE_PX
+
+    # North and south, so all four side faces are covered rather than assumed
+    # by symmetry.
+    _, face = raycast_world_face(world, origin, aim_vector(math.pi / 2, 0.0), 60.0)
+    assert face == FACE_NY
+    _, face = raycast_world_face(world, origin, aim_vector(-math.pi / 2, 0.0), 60.0)
+    assert face == FACE_PY
+
+    # Down onto the floor: the floor faces up.
+    _, face = raycast_world_face(world, origin, aim_vector(0.0, -math.pi / 2), 60.0)
+    assert face == FACE_PZ
+    assert FACE_NORMALS[face] == (0.0, 0.0, 1.0)
+
+    # Up into the ceiling: it faces down.
+    _, face = raycast_world_face(world, origin, aim_vector(0.0, math.pi / 2), 60.0)
+    assert face == FACE_NZ
+
+
+def test_a_shot_with_nothing_to_stop_it_claims_no_face():
+    """Reaching the range limit is not hitting anything.
+
+    `FACE_NONE` is negative rather than a sixth value precisely so a client that
+    forgets to check cannot index a table with it and quietly draw a mark facing
+    `+x` in mid-air.
+    """
+    world = _boxed_room()
+    distance, face = raycast_world_face(
+        world, (12.0, 12.0, 4.0), aim_vector(0.0, 0.0), 3.0
+    )
+    assert distance == pytest.approx(3.0)
+    assert face == FACE_NONE
+    assert face < 0
+    assert all(0 <= f < len(FACE_NORMALS) for f in range(len(FACE_NORMALS)))
+
+
+def test_a_muzzle_inside_geometry_claims_no_face():
+    """Standing in a wall: the shot stops at zero, and there is no surface it
+    arrived at from anywhere."""
+    world = _boxed_room()
+    # (0.5, 0.5) is inside the border the room is carved out of.
+    distance, face = raycast_world_face(
+        world, (0.5, 0.5, 4.0), aim_vector(0.0, 0.0), 60.0
+    )
+    assert distance == 0.0
+    assert face == FACE_NONE
+
+
+def test_every_pellet_reports_its_own_face():
+    """Parallel to `endpoints`, not filtered.
+
+    The case that matters is the shotgun that lands one pellet in a body and the
+    rest in the wall behind it: a compacted list loses which was which, and the
+    debris for those wall hits used to disappear entirely because the *shot*
+    counted as a hit.
+    """
+    # Close to the wall on purpose: a shotgun's range is short, and pellets that
+    # simply ran out of it would report `FACE_NONE` for a reason unrelated to
+    # what this is testing.
+    world = _boxed_room(ssize=24)
+    shotgun = weapons.WEAPON_BY_ID["shotgun"]
+    result = weapons.resolve_shot(
+        world,
+        shotgun,
+        (12.0, 12.0, 4.0),
+        aim_vector(0.0, 0.0),
+        {},
+        random.Random(7),
+    )
+    assert len(result.faces) == len(result.endpoints) == shotgun.pellets
+    # Every pellet went into the same wall, so every face is the same one.
+    assert set(result.faces) == {FACE_NX}
+
+
+def test_a_pellet_that_stops_in_a_body_has_no_face():
+    """A body is not a surface. The wall behind it is still there, but the pellet
+    never reached it, and a mark on it would be a lie about where the shot went."""
+    world = _boxed_room(ssize=64)
+    sniper = weapons.WEAPON_BY_ID["sniper"]
+    result = weapons.resolve_shot(
+        world,
+        sniper,
+        (12.0, 32.0, 4.0),
+        aim_vector(0.0, 0.0),
+        {"victim": (24.0, 32.0, 0.0)},
+        random.Random(3),
+    )
+    assert result.hits, "the test shot was supposed to connect"
+    assert result.faces == [FACE_NONE]
+
+
+@pytest.mark.parametrize("index", range(len(_load_vectors()["sprays"])))
+def test_conformance_spray(index: int):
+    """The recoil pattern's *application*, replayed by all three clients.
+
+    The offsets themselves are served, so there is one copy of them by
+    construction. What can drift is what each port does with one — and the
+    mistake that matters is silent: the table is absolute and the camera
+    accumulates, so applying the absolute walks the crosshair away by the running
+    sum and reads as a tuning problem rather than as a bug.
+    """
+    data = _load_vectors()
+    case = data["sprays"][index]
+    weapon = weapons.WEAPON_BY_ID[case["weapon"]]
+    offset = weapons.spray_offset(weapon, case["index"])
+    yaw, pitch = weapons.apply_spray(case["yaw"], case["pitch"], offset)
+    expect = case["expect"]
+    tol = data["tolerance"]
+    assert offset[0] == pytest.approx(expect["offset"][0], abs=tol), case["name"]
+    assert offset[1] == pytest.approx(expect["offset"][1], abs=tol), case["name"]
+    assert yaw == pytest.approx(expect["yaw"], abs=tol), case["name"]
+    assert pitch == pytest.approx(expect["pitch"], abs=tol), case["name"]
+    cone = weapons.residual_spread(weapon, case.get("scoped", 0))
+    assert cone == pytest.approx(expect["cone"], abs=tol), case["name"]
+
+
+def test_the_pattern_holds_at_its_last_entry_rather_than_wrapping():
+    """A pattern that restarted mid-magazine would be unlearnable, which defeats
+    the only reason it is a pattern."""
+    rifle = weapons.WEAPON_BY_ID["assault"]
+    last = weapons.spray_offset(rifle, len(rifle.spray) - 1)
+    assert weapons.spray_offset(rifle, len(rifle.spray)) == last
+    assert weapons.spray_offset(rifle, 10_000) == last
+    # And a negative index is the first shot, not the end of the table.
+    assert weapons.spray_offset(rifle, -3) == rifle.spray[0]
+
+
+def test_the_pattern_covers_a_whole_magazine():
+    """Twenty rounds and twenty entries, so a full spray never has to hold."""
+    rifle = weapons.WEAPON_BY_ID["assault"]
+    assert len(rifle.spray) >= rifle.mag
+
+
+def test_only_the_automatic_weapon_has_a_pattern():
+    """A pattern on a 62 rpm sniper never survives its own reset gate, and one on
+    an 8-pellet shotgun would be fighting a cone twenty times its size."""
+    for weapon in weapons.WEAPONS:
+        if weapon.spray:
+            assert weapon.auto, f"{weapon.id} has a pattern but is not automatic"
+
+
+def test_the_residual_cone_is_smaller_but_never_zero():
+    """Zero makes the rifle a laser at two hundred cubes and erases the sniper. A
+    residual is what keeps a pattern counterable rather than solved."""
+    rifle = weapons.WEAPON_BY_ID["assault"]
+    cone = weapons.residual_spread(rifle)
+    assert 0 < cone < rifle.spread
+
+
+def test_a_weapon_with_no_pattern_behaves_exactly_as_before():
+    """Four of the five weapons are untouched by any of this."""
+    for weapon in weapons.WEAPONS:
+        if weapon.spray:
+            continue
+        assert weapons.spray_offset(weapon, 7) == (0.0, 0.0)
+        assert weapons.apply_spray(0.4, 0.1, weapons.spray_offset(weapon, 7)) == (
+            0.4,
+            0.1,
+        )
+        for scoped in (0, 1, 2):
+            assert weapons.residual_spread(weapon, scoped) == weapons.effective_spread(
+                weapon, scoped
+            )
+
+
+def test_apply_spray_cannot_flip_the_aim_over_the_pole():
+    """A real pattern is a small climb and can never reach vertical, but a table
+    edited to something silly should bend the aim rather than invert it."""
+    _, pitch = weapons.apply_spray(0.0, 1.5, (0.0, 5.0))
+    assert pitch < math.pi / 2
+    _, pitch = weapons.apply_spray(0.0, -1.5, (0.0, -5.0))
+    assert pitch > -math.pi / 2
 
 
 @pytest.mark.parametrize("index", range(len(_load_vectors()["bodies"])))

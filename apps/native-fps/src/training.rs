@@ -24,12 +24,12 @@
 //!   That is the whole trick, and it is why native Train now shows ammo, counts
 //!   a magazine down, reloads, and lights a hitmarker.
 
-use crate::api::{ItemReach, ItemRow, ItemSpec, WeaponSpec};
+use crate::api::{apply_spray, ItemReach, ItemRow, ItemSpec, WeaponSpec};
 use crate::physics::{spawn_at, Spawn};
 use crate::protocol::{HitMarker, PlayerRow, SelfState};
 use crate::trace::{
-    aim_vector, damage_at, eye_position, falloff_start, ray_hits_body, raycast_world,
-    spread_vector, Vec3, BODY_HEIGHT, HEAD_BAND,
+    aim_vector, damage_at, eye_position, falloff_start, ray_hits_body, raycast_world_face,
+    spread_vector, Vec3, BODY_HEIGHT, FACE_NONE, HEAD_BAND,
 };
 use crate::world::World;
 
@@ -57,6 +57,13 @@ pub struct TargetHit {
 pub struct RangeShot {
     pub origin: Vec3,
     pub ends: Vec<Vec3>,
+    /// Which surface each pellet stopped against, parallel to `ends`.
+    ///
+    /// The same shape the server puts on the wire (`Fx::Shot::faces`), so bullet
+    /// marks take one code path on the range and in a match. A range that left
+    /// no marks would be the one place a player cannot look at their own spray
+    /// pattern, which is what the range is for.
+    pub faces: Vec<i32>,
     pub hits: Vec<TargetHit>,
 }
 
@@ -126,6 +133,14 @@ pub struct TrainingRange {
     /// radius this client made up.
     reach: Option<ItemReach>,
     clock: f32,
+    /// How far into the spray pattern this burst is, and when it last fired.
+    ///
+    /// Kept here rather than in a trigger controller because on the range this
+    /// class plays both parts — there is no server to adopt an index from.
+    /// Measured on `clock`, the range's own simulated time, which is the same
+    /// quantity `player.sim_time` is on the server.
+    spray_index: usize,
+    last_range_fire_at: f32,
 }
 
 /// One item the range will actually give you.
@@ -292,6 +307,10 @@ impl TrainingRange {
             // otherwise the timer keeps running on a weapon you are no longer
             // holding and fills it while you are somewhere else.
             self.reload_in = 0.0;
+            // And puts you back at the top of the pattern, the same rule
+            // `_handle_combat` follows: a weapon you just drew must not fire
+            // from halfway down someone else's recoil curve.
+            self.spray_index = 0;
         }
     }
 
@@ -318,6 +337,8 @@ impl TrainingRange {
             return;
         }
         self.reload_in = weapon.reload_time;
+        // A magazine change is the end of a burst by definition — `_begin_reload`.
+        self.spray_index = 0;
     }
 
     /// Advance reload timers and stand downed targets back up.
@@ -394,22 +415,33 @@ impl TrainingRange {
         }
 
         let origin = eye_position(x, y, z, eye);
-        let direction = aim_vector(yaw, pitch);
+        // **The recoil pattern applies here too, and it has to.** A range that
+        // taught a different recoil than a match would be worse than no range:
+        // learning the spray is the whole point of Train, and learning the wrong
+        // one is the failure this cannot have — the same argument the cone below
+        // already makes for the scope.
+        if self.clock - self.last_range_fire_at > weapon.spray_reset {
+            self.spray_index = 0;
+        }
+        self.last_range_fire_at = self.clock;
+        let (aim_yaw, aim_pitch) =
+            apply_spray(yaw, pitch, weapon.spray_offset(self.spray_index));
+        self.spray_index += 1;
+        let direction = aim_vector(aim_yaw, aim_pitch);
         // The scope's whole mechanical effect, mirroring `effective_spread`
-        // server-side: which cone this pull uses.
-        let cone = if scoped > 0 {
-            weapon.spread
-        } else {
-            weapon.hipfire_spread
-        };
+        // server-side: which cone this pull uses. `residual_cone` is what a
+        // weapon with a pattern is left with — the full cone here would make the
+        // range's rifle five times less accurate than a match's.
+        let cone = weapon.residual_cone(scoped);
         let mut ends = Vec::new();
+        let mut faces = Vec::new();
         let mut hits = Vec::new();
 
         for _ in 0..weapon.pellets.max(1) {
             let mut rng = std::mem::take(&mut self.rng);
             let dir = spread_vector(direction, cone, &mut || rng.next_f32());
             self.rng = rng;
-            let wall = raycast_world(world, origin, dir, weapon.range);
+            let (wall, face) = raycast_world_face(world, origin, dir, weapon.range);
 
             let mut best: Option<(f32, usize)> = None;
             for (i, target) in self.targets.iter().enumerate() {
@@ -436,6 +468,7 @@ impl TrainingRange {
                     origin[1] + dir[1] * wall,
                     origin[2] + dir[2] * wall,
                 ]);
+                faces.push(face);
                 continue;
             };
 
@@ -463,10 +496,18 @@ impl TrainingRange {
                 killed,
             });
             ends.push(point);
+            // A body is not a surface — the wall behind it was never reached,
+            // and a mark on it would be a lie about where the shot went.
+            faces.push(FACE_NONE);
         }
 
         self.pending_hits.extend(hits.iter().cloned());
-        Some(RangeShot { origin, ends, hits })
+        Some(RangeShot {
+            origin,
+            ends,
+            faces,
+            hits,
+        })
     }
 
     /// What a snapshot would have told us about ourselves.
@@ -529,6 +570,8 @@ impl TrainingRange {
         self.targets.clear();
         self.pending_hits.clear();
         self.reload_in = 0.0;
+        self.spray_index = 0;
+        self.last_range_fire_at = f32::NEG_INFINITY;
         self.ammo = self.weapons.iter().map(|w| w.mag).collect();
         self.reserve = self.weapons.iter().map(|w| w.reserve).collect();
         // The items stay placed — a reset restocks *you*, and putting every item

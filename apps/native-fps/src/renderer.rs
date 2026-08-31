@@ -1874,7 +1874,7 @@ mod budget {
         for i in 0..MAX_PLAYERS {
             // A shotgun is eight pellets, so eight tracers and eight impacts.
             let ends: Vec<[f32; 3]> = (0..8).map(|p| [i as f32, p as f32, 2.0]).collect();
-            fx.shot([i as f32, 0.0, 2.0], &ends, false, false);
+            fx.shot([i as f32, 0.0, 2.0], &ends, &[], false, false);
         }
         fx.vertices(&mut out);
 

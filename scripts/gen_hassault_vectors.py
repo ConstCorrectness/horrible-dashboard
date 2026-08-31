@@ -17,6 +17,7 @@ implementations in the same commit, and make both suites pass before committing.
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 from backend.modules.hassault.physics import (
@@ -33,9 +34,14 @@ from backend.modules.hassault.physics import (
 from backend.modules.hassault import hitbox
 from backend.modules.hassault.weapons import (
     BODY_HEIGHT,
+    WEAPON_BY_ID as weapon_by_id,
+    WEAPONS,
     aim_vector,
+    apply_spray,
     ray_hits_body,
-    raycast_world,
+    raycast_world_face,
+    residual_spread,
+    spray_offset,
 )
 
 OUT = Path("packages/core/src/modules/hassault/__tests__/physics-vectors.json")
@@ -720,6 +726,241 @@ BODY_CASES = [
 ]
 
 
+#: `{name, weapon, index, yaw, pitch}` — one shot of a burst.
+#:
+#: What these pin is the **application**, not the table: the offsets themselves
+#: are served on `GET /api/hassault/weapons`, so there is one copy of them by
+#: construction. What can drift is what each port does with one — and the
+#: absolute-versus-delta mistake is silent, reading as a tuning problem rather
+#: than as a bug.
+SPRAY_CASES: list[dict] = [
+    {
+        "name": "the first shot of a burst is exactly where you aimed",
+        "weapon": "assault",
+        "index": 0,
+        "yaw": 0.4,
+        "pitch": 0.1,
+    },
+    {
+        "name": "the third shot has climbed",
+        "weapon": "assault",
+        "index": 2,
+        "yaw": 0.4,
+        "pitch": 0.1,
+    },
+    {
+        "name": "the tenth shot has drifted left as well",
+        "weapon": "assault",
+        "index": 9,
+        "yaw": 0.0,
+        "pitch": 0.0,
+    },
+    {
+        "name": "the last entry of the table",
+        "weapon": "assault",
+        "index": 19,
+        "yaw": -1.2,
+        "pitch": -0.3,
+    },
+    {
+        "name": "past the end of the table the pattern holds rather than wrapping",
+        "weapon": "assault",
+        "index": 40,
+        "yaw": -1.2,
+        "pitch": -0.3,
+    },
+    {
+        "name": "a weapon with no pattern is aimed exactly where it is pointed",
+        "weapon": "pistol",
+        "index": 5,
+        "yaw": 2.0,
+        "pitch": 0.2,
+    },
+    {
+        "name": "the shotgun keeps its whole cone",
+        "weapon": "shotgun",
+        "index": 3,
+        "yaw": 0.0,
+        "pitch": 0.0,
+    },
+    {
+        "name": "an unscoped sniper keeps its hipfire cone",
+        "weapon": "sniper",
+        "index": 1,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "scoped": 0,
+    },
+    {
+        "name": "a scoped sniper keeps its scoped cone",
+        "weapon": "sniper",
+        "index": 1,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "scoped": 1,
+    },
+]
+
+
+#: `{name, world, x, y, eyeZ, yaw, pitch, lob, inherit}` — one throw.
+#:
+#: What these pin is the **integration**: the origin, the velocity (including the
+#: thrower's own, which is the whole reason the preview exists) and where the
+#: flight first touches something. Bounces are deliberately not in the table —
+#: the preview stops at first contact, because a bounce is chaotic enough that a
+#: 1e-6 disagreement in the floor comparison puts the marker in the next room.
+THROW_CASES: list[dict] = [
+    {
+        "name": "a flat throw from a standstill",
+        "world": "field",
+        "x": 8.0,
+        "y": 32.0,
+        "eyeZ": 4.5,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "lob": False,
+        "inherit": [0.0, 0.0, 0.0],
+    },
+    {
+        "name": "the same throw while running at it",
+        "world": "field",
+        "x": 8.0,
+        "y": 32.0,
+        "eyeZ": 4.5,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "lob": False,
+        "inherit": [20.0, 0.0, 0.0],
+    },
+    {
+        "name": "the same throw while jumping",
+        "world": "field",
+        "x": 8.0,
+        "y": 32.0,
+        "eyeZ": 4.5,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "lob": False,
+        "inherit": [0.0, 0.0, 22.0],
+    },
+    {
+        "name": "an underhand lob goes nowhere near as far",
+        "world": "field",
+        "x": 8.0,
+        "y": 32.0,
+        "eyeZ": 4.5,
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "lob": True,
+        "inherit": [0.0, 0.0, 0.0],
+    },
+    {
+        "name": "thrown at the floor it lands almost underfoot",
+        "world": "field",
+        "x": 32.0,
+        "y": 32.0,
+        "eyeZ": 4.5,
+        "yaw": 0.0,
+        "pitch": -1.1,
+        "lob": True,
+        "inherit": [0.0, 0.0, 0.0],
+    },
+    {
+        "name": "thrown up and across, it carries a long way",
+        "world": "field",
+        "x": 32.0,
+        "y": 32.0,
+        "eyeZ": 4.5,
+        "yaw": 1.57079632679,
+        "pitch": 0.7,
+        "lob": False,
+        "inherit": [0.0, 0.0, 0.0],
+    },
+]
+
+
+def _simulate_throw(world, case, seconds: float, substeps_per_sample: int):
+    """The reference integration, in the shape a client's preview draws.
+
+    Deliberately **not** `step_grenade`: that one bounces, and the preview stops
+    at first contact. What is shared is the arithmetic up to that point — the
+    same substep, the same gravity, the same axis order, and the same three
+    questions `_blocked` asks — which is exactly the part a client has to agree
+    about.
+    """
+    from backend.modules.hassault import grenades
+
+    origin = grenades.throw_origin(
+        case["x"], case["y"], case["eyeZ"], case["yaw"], case["pitch"]
+    )
+    velocity = grenades.throw_velocity(
+        case["yaw"],
+        case["pitch"],
+        case["lob"],
+        tuple(case["inherit"]),
+    )
+    x, y, z = origin
+    vx, vy, vz = velocity
+    points = [[x, y, z]]
+    steps = max(1, int(round(seconds / grenades.SUBSTEP)))
+    for step in range(steps):
+        h = grenades.SUBSTEP
+        vz -= grenades.GRAVITY * h
+        contact = None
+        landed = False
+        nx = x + vx * h
+        if grenades._blocked(world, nx, y, z):
+            contact = [x, y, z]
+        else:
+            x = nx
+        if contact is None:
+            ny = y + vy * h
+            if grenades._blocked(world, x, ny, z):
+                contact = [x, y, z]
+            else:
+                y = ny
+        if contact is None:
+            nz = z + vz * h
+            if grenades._blocked(world, x, y, nz):
+                contact = [x, y, z]
+                landed = vz < 0
+            else:
+                z = nz
+        if contact is not None:
+            points.append(contact)
+            return origin, velocity, points, contact, landed
+        if step % substeps_per_sample == 0:
+            points.append([x, y, z])
+    points.append([x, y, z])
+    return origin, velocity, points, None, False
+
+
+def _face_is_ambiguous(world, case) -> bool:
+    """Whether a one-ULP change in the aim vector would report a different face.
+
+    A probe rather than a geometric argument, and **one ULP is exactly the right
+    size** because that is the disagreement being modelled. At yaw = pi/4,
+    Python's `math.cos` and `math.sin` return the *same* double, so the ray
+    crosses its x and y boundaries at literally the same instant; V8's return
+    values one ULP apart, so it does not. Which face is reported then depends on
+    whose trigonometry ran, and no port can be held to that.
+
+    The distance is unaffected — the corner is where the ray stops either way —
+    so only the face is dropped.
+    """
+    origin = (case["origin"][0], case["origin"][1], case["origin"][2])
+    dx, dy, dz = aim_vector(case["yaw"], case["pitch"])
+    faces = set()
+    for ndx in (math.nextafter(dx, -math.inf), dx, math.nextafter(dx, math.inf)):
+        for ndy in (math.nextafter(dy, -math.inf), dy, math.nextafter(dy, math.inf)):
+            faces.add(
+                raycast_world_face(
+                    world, origin, (ndx, ndy, dz), case["max_distance"]
+                )[1]
+            )
+    return len(faces) > 1
+
+
 def main() -> None:
     out_cases = []
     for case in CASES:
@@ -790,13 +1031,76 @@ def main() -> None:
     for case in TRACE_CASES:
         world = build(WORLDS[case["world"]])
         direction = aim_vector(case["yaw"], case["pitch"])
-        distance = raycast_world(
-            world,
-            (case["origin"][0], case["origin"][1], case["origin"][2]),
-            direction,
-            case["max_distance"],
+        origin = (case["origin"][0], case["origin"][1], case["origin"][2])
+        distance, face = raycast_world_face(
+            world, origin, direction, case["max_distance"]
         )
-        out_traces.append({**case, "expect": distance})
+        # `face` is which surface stopped the ray, as an index into
+        # `weapons.FACE_NORMALS`. Carried here because it is now on the wire and
+        # both clients orient a bullet mark from it — a fourth implementation
+        # that disagreed about the face would draw every mark inside its wall,
+        # where nothing would ever report it.
+        #
+        # **`null` where the geometry has no answer.** A ray fired at exactly 45°
+        # from a cell corner crosses its x and y boundaries at the same instant,
+        # so which face it "hit" is decided by the last bit of `cos(yaw)` — and
+        # Python's libm and V8's `Math.cos` do not agree to the last bit. The
+        # distance is unaffected and stays pinned; the face is genuinely
+        # ambiguous, and asserting one would make the suite hostage to whose
+        # trigonometry ran. Detected rather than hand-marked, so a case that
+        # becomes degenerate later is caught the day it does.
+        out_traces.append(
+            {
+                **case,
+                "expect": distance,
+                "face": None if _face_is_ambiguous(world, case) else face,
+            }
+        )
+
+    out_sprays = []
+    for case in SPRAY_CASES:
+        weapon = weapon_by_id[case["weapon"]]
+        offset = spray_offset(weapon, case["index"])
+        yaw, pitch = apply_spray(case["yaw"], case["pitch"], offset)
+        out_sprays.append(
+            {
+                **case,
+                "expect": {
+                    "offset": [offset[0], offset[1]],
+                    "yaw": yaw,
+                    "pitch": pitch,
+                    "direction": list(aim_vector(yaw, pitch)),
+                    "cone": residual_spread(weapon, case.get("scoped", 0)),
+                },
+            }
+        )
+
+    out_throws = []
+    #: Must match `ARC_PREVIEW_SECONDS` and `ARC_SAMPLES` in `arc.ts` / `arc.rs`.
+    #: Carried in the payload rather than assumed, so a client reading a longer
+    #: window than the fixture was generated for fails loudly.
+    preview_seconds = 2.0
+    arc_samples = 48
+    from backend.modules.hassault import grenades as _g
+
+    per_sample = max(1, int(preview_seconds / _g.SUBSTEP) // arc_samples)
+    for case in THROW_CASES:
+        world = build(WORLDS[case["world"]])
+        origin, velocity, points, contact, landed = _simulate_throw(
+            world, case, preview_seconds, per_sample
+        )
+        out_throws.append(
+            {
+                **case,
+                "expect": {
+                    "origin": list(origin),
+                    "velocity": list(velocity),
+                    "points": points,
+                    "contact": contact,
+                    "landed": landed,
+                },
+            }
+        )
 
     out_bodies = []
     for case in BODY_CASES:
@@ -837,11 +1141,28 @@ def main() -> None:
         "spawns": out_spawns,
         "traces": out_traces,
         "bodies": out_bodies,
+        # The served weapon table, verbatim from `Weapon.to_dict`. The spray
+        # cases below index into it rather than carrying their own copy of the
+        # offsets — the whole point of serving the pattern is that there is one
+        # copy of it, and a fixture with a second one would be exactly the thing
+        # this design refuses.
+        "weapons": {w.id: w.to_dict() for w in WEAPONS},
+        "sprays": out_sprays,
+        # The throw preview. **A looser tolerance than the rest of this file, on
+        # purpose**: the global 1e-9 is right for a single movement step and
+        # wrong for an integrator run for two seconds, where the three ports'
+        # float widths diverge steadily. Stated here rather than left to be
+        # discovered as flakiness and then deleted.
+        "throwTolerance": 1e-4,
+        "throwPreviewSeconds": preview_seconds,
+        "throwArcSamples": arc_samples,
+        "throws": out_throws,
     }
     OUT.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     print(
         f"wrote {OUT} with {len(out_cases)} step cases, {len(out_spawns)} spawn "
-        f"cases, {len(out_traces)} traces, {len(out_bodies)} body cases"
+        f"cases, {len(out_traces)} traces, {len(out_bodies)} body cases, "
+        f"{len(out_sprays)} spray cases, {len(out_throws)} throws"
     )
     for c in out_cases:
         e = c["expect"]

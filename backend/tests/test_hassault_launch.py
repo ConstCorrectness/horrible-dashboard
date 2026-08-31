@@ -196,6 +196,28 @@ def test_a_ranked_launch_carries_no_bots(client: TestClient) -> None:
     assert not any(a.startswith("--bots=") for a in args)
 
 
+def test_edit_seeds_the_draft_from_the_map(client: TestClient) -> None:
+    """The dashboard's Edit button: no `--new`, so the native client opens a
+    draft seeded from `map_name` rather than solid rock."""
+    args = args_for(client, mode="edit")
+    assert "--mode=edit" in args
+    assert "--new" not in args
+
+
+def test_new_starts_the_draft_from_solid_rock(client: TestClient) -> None:
+    """The dashboard's New button. Mirrors the native client's own `--new`."""
+    args = args_for(client, mode="edit", blank=True)
+    assert "--mode=edit" in args
+    assert "--new" in args
+
+
+def test_blank_is_ignored_outside_edit_mode(client: TestClient) -> None:
+    """`blank` means nothing to Train, Host, Join or Ranked — only `mode="edit"`
+    reads it, so a stray `true` on another launch must not turn into `--new`."""
+    args = args_for(client, mode="train", blank=True)
+    assert "--new" not in args
+
+
 class DeadProc(FakeProc):
     """A client that is gone before the route answers.
 

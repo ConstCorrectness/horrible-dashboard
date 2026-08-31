@@ -313,6 +313,15 @@ def _record_result(result: dict[str, Any]) -> None:
     from backend.modules.games import server_auth
     from backend.modules.hassault import results
 
+    # Not every leave is a match. Opening the pane, deploying and pressing Menu
+    # used to write a row — which then showed as a VICTORY, because a lone player
+    # outscores `default=-1`. The gate is `results.is_recordable` rather than a
+    # condition spelled out here, so the rule that decides whether a row exists
+    # is the same one `result_for` used to decide `won`.
+    if not results.is_recordable(result):
+        logger.debug("hassault: nothing to record for this session")
+        return
+
     account = server_auth.signed_in_account()
     account_id = str((account or {}).get("account_id") or "local_player")
     try:

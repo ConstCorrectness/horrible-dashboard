@@ -32,6 +32,15 @@ export interface ThrowIntent {
   lob: boolean;
 }
 
+/**
+ * How a grenade left the hand.
+ *
+ * `overhand` is the full throw, `underhand` the short lob — the two the server
+ * already knew about (`LOB_SCALE`), now reachable from the two mouse buttons
+ * rather than from two keys on the far side of the keyboard.
+ */
+export type ThrowStyle = 'overhand' | 'underhand';
+
 export const NO_THROW: ThrowIntent = { throw: false, nade: -1, lob: false };
 
 /**
@@ -53,6 +62,20 @@ export class GrenadeController {
   private wantThrow = false;
   private wantLob = false;
   private lastThrowAt = -Infinity;
+  /**
+   * The slot currently **in your hand**, or `-1` when a weapon is.
+   *
+   * Selecting used to only *ready* a grenade — the gun stayed up and throwing
+   * was its own key. Equipping is what lets the mouse mean throw and toss
+   * without taking the right button away from the sniper's scope, whose whole
+   * identity is that scope.
+   *
+   * Entirely client-side. The server has no concept of an equipped grenade and
+   * needs none: `_throw` reads `command.nade` and nothing else.
+   */
+  private equippedSlot = -1;
+  /** True for exactly the frame after a throw left the hand. */
+  private threw = false;
 
   setSpecs(specs: TacticalSpec[]): void {
     this.specs = specs;
@@ -94,6 +117,44 @@ export class GrenadeController {
     if (slot >= 0 && slot < this.specs.length) this.slot = slot;
   }
 
+  /** Whether a grenade is in your hand rather than a weapon. */
+  get equipped(): boolean {
+    return this.equippedSlot >= 0;
+  }
+
+  /**
+   * Take a grenade in hand: ready it *and* put the weapon away.
+   *
+   * What the number keys now do. Empty slots still equip — `select`'s reasoning,
+   * and the auto-holster below means nobody is ever left holding nothing.
+   */
+  equip(slot: number): void {
+    if (slot < 0 || slot >= this.specs.length) return;
+    this.slot = slot;
+    this.equippedSlot = slot;
+  }
+
+  /** Put the grenade away. A weapon key, Escape, dying, or throwing the last one. */
+  holster(): void {
+    this.equippedSlot = -1;
+    // A throw queued on the frame the pouch was put away must not come out on
+    // the next one.
+    this.wantThrow = false;
+    this.wantLob = false;
+  }
+
+  /**
+   * Whether a throw left the hand on the frame just resolved.
+   *
+   * Read once by the panel to bring the previous weapon back up. A flag rather
+   * than a callback because `frame` already returns everything else about the
+   * frame, and a second channel out of this class is a second thing to keep in
+   * step.
+   */
+  get justThrew(): boolean {
+    return this.threw;
+  }
+
   /** Step to the next slot that still has something in it. */
   cycle(): void {
     if (this.specs.length === 0) return;
@@ -129,6 +190,11 @@ export class GrenadeController {
     const lob = this.wantLob;
     this.wantThrow = false;
     this.wantLob = false;
+    this.threw = false;
+
+    // Dying puts the grenade away. Coming back holding one you readied in a
+    // previous life, with the weapon stowed, is a spawn you cannot shoot from.
+    if (you && !you.alive) this.equippedSlot = -1;
 
     if (!wanted) return NO_THROW;
     // Dead men throw nothing. Checked here rather than at the key, because the
@@ -147,7 +213,16 @@ export class GrenadeController {
     // hand after your last smoke is a state with nothing to do in it.
     const emptied = this.counts[spec.id] <= 0;
     const intent: ThrowIntent = { throw: true, nade: this.slot, lob };
-    if (emptied) this.cycle();
+    this.threw = true;
+    if (emptied) {
+      this.cycle();
+      // Nothing left of *anything*: put the pouch away rather than leaving the
+      // weapon stowed and both mouse buttons doing nothing.
+      if (this.specs.every((s) => (this.counts[s.id] ?? 0) <= 0)) this.equippedSlot = -1;
+    }
+    // The grenade has left the hand. The panel brings the weapon back up on the
+    // same frame — a throw is one action, not a mode you have to leave.
+    if (this.equippedSlot >= 0) this.equippedSlot = -1;
     return intent;
   }
 
@@ -158,5 +233,7 @@ export class GrenadeController {
     this.lastThrowAt = -Infinity;
     this.wantThrow = false;
     this.wantLob = false;
+    this.equippedSlot = -1;
+    this.threw = false;
   }
 }

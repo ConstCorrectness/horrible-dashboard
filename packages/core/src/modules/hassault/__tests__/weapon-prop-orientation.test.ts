@@ -25,6 +25,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
+import { gripsFor } from '../arms';
 import { WEAPON_MODEL_URLS } from '../models/weapons';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../../../../../../apps/web/public/', import.meta.url));
@@ -223,5 +224,42 @@ describe('the shipped weapon props', () => {
     // "backwards": measured, the four score 2.14 (shotgun), 2.45 (pistol), 4.26
     // (sniper) and 4.35 (assault), and a flipped prop scores the reciprocal.
     expect(back.diagonal / front.diagonal).toBeGreaterThan(1.8);
+  });
+
+  it.each(entries)('has both %s grips on the weapon itself', (weapon, url) => {
+    // **An anchor floating in space is the silent failure.** The two-bone solve
+    // will happily reach an empty point beside the gun, so the arms are drawn,
+    // the elbows bend, nothing errors — and a hand hovers a few centimetres off
+    // the handguard forever.
+    //
+    // The prop is fitted onto the box model's own bounding volume, so an anchor
+    // written against the boxes lands on the prop too. Checked with a margin,
+    // because a grip is *on* a surface rather than inside the hull: a trigger
+    // hand sits just under the receiver and a support hand just under a barrel.
+    const points = worldPositions(fileFor(url));
+    const lo = [Infinity, Infinity, Infinity];
+    const hi = [-Infinity, -Infinity, -Infinity];
+    for (const p of points) {
+      for (let i = 0; i < 3; i++) {
+        if (p[i] < lo[i]) lo[i] = p[i];
+        if (p[i] > hi[i]) hi[i] = p[i];
+      }
+    }
+    // The box the prop occupies, centred like `fitWeaponModel` leaves it.
+    const half = [0, 1, 2].map((i) => (hi[i] - lo[i]) / 2);
+    const grips = gripsFor(weapon);
+    const margin = 0.45;
+    for (const [name, anchor] of [
+      ['primary', grips.primary],
+      ['support', grips.support],
+    ] as const) {
+      if (anchor === null) continue;
+      for (let i = 0; i < 3; i++) {
+        expect(
+          Math.abs(anchor[i]),
+          `${weapon} ${name} axis ${i} is ${anchor[i]}, outside a ${half[i].toFixed(2)}-cube weapon`,
+        ).toBeLessThanOrEqual(half[i] + margin);
+      }
+    }
   });
 });

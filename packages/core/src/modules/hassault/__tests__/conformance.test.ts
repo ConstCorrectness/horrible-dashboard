@@ -15,31 +15,22 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import type { MapEntity, MapInfo } from '../api';
 import { DEFAULT_HITBOX } from '../hitbox';
 import { applyImpulse, createPlayer, spawnAt, step, type PlayerState } from '../player';
-import { aimVector, BODY_HEIGHT, raycastWorld, rayHitsBody, type Vec } from '../trace';
-import { LADDER_ENTITY, NO_WATER, PLAYER_RADIUS, SOLID, SPACE, World } from '../world';
+import type { WeaponSpec } from '../api';
+import { buildWorld, type WorldSpec } from './build-world';
+import {
+  aimVector,
+  applySpray,
+  BODY_HEIGHT,
+  raycastWorldFace,
+  rayHitsBody,
+  residualSpread,
+  sprayOffset,
+  type Vec,
+} from '../trace';
+import { PLAYER_RADIUS } from '../world';
 
-const PLANES = ['type', 'floor', 'ceil', 'wtex', 'ftex', 'ctex', 'vdelta', 'utex', 'tag'];
-
-interface Rect {
-  x0: number;
-  y0: number;
-  x1: number;
-  y1: number;
-  type?: number;
-  floor?: number;
-  ceil?: number;
-  vdelta?: number;
-}
-
-interface WorldSpec {
-  ssize: number;
-  rects: Rect[];
-  waterlevel?: number;
-  ladders?: { x: number; y: number; height: number }[];
-}
 
 interface Vectors {
   tolerance: number;
@@ -86,6 +77,32 @@ interface Vectors {
     pitch: number;
     max_distance: number;
     expect: number;
+    /**
+     * Which surface stopped the ray, as an index into `FACE_NORMALS`.
+     *
+     * `null` where the geometry has no answer — a ray fired at exactly 45° from
+     * a cell corner crosses both boundaries at once, and which face wins is
+     * decided by the last bit of `cos(yaw)`, which Python and V8 do not agree
+     * on. The distance is still pinned; only the face is dropped.
+     */
+    face: number | null;
+  }[];
+  /** The served weapon table, verbatim from `Weapon.to_dict`. */
+  weapons: Record<string, WeaponSpec>;
+  sprays: {
+    name: string;
+    weapon: string;
+    index: number;
+    yaw: number;
+    pitch: number;
+    scoped?: number;
+    expect: {
+      offset: [number, number];
+      yaw: number;
+      pitch: number;
+      direction: Vec;
+      cone: number;
+    };
   }[];
   bodies: {
     name: string;
@@ -105,73 +122,6 @@ const vectors = JSON.parse(
   readFileSync(new URL('./physics-vectors.json', import.meta.url), 'utf-8'),
 ) as Vectors;
 
-/** Mirrored by `build_world` in the Python suite. Everything starts SOLID. */
-function buildWorld(spec: WorldSpec): World {
-  const { ssize } = spec;
-  const n = ssize * ssize;
-  const buf = new ArrayBuffer(n * PLANES.length);
-  const plane = (name: string) => {
-    const off = PLANES.indexOf(name) * n;
-    return name === 'floor' || name === 'ceil'
-      ? new Int8Array(buf, off, n)
-      : new Uint8Array(buf, off, n);
-  };
-  const type = plane('type');
-  const floor = plane('floor');
-  const ceil = plane('ceil');
-  const vdelta = plane('vdelta');
-  type.fill(SOLID);
-  ceil.fill(16);
-
-  for (const rect of spec.rects) {
-    for (let y = rect.y0; y <= rect.y1; y++) {
-      for (let x = rect.x0; x <= rect.x1; x++) {
-        const i = y * ssize + x;
-        type[i] = rect.type ?? SPACE;
-        floor[i] = rect.floor ?? 0;
-        ceil[i] = rect.ceil ?? 16;
-        vdelta[i] = rect.vdelta ?? 0;
-      }
-    }
-  }
-
-  const ladderEntities: MapEntity[] = (spec.ladders ?? []).map((l) => ({
-    type: LADDER_ENTITY,
-    name: 'ladder',
-    x: l.x,
-    y: l.y,
-    z: 0,
-    yaw: null,
-    attrs: [l.height, 0, 0, 0, 0, 0, 0],
-  }));
-
-  const info: MapInfo = {
-    name: 'conformance',
-    title: 'conformance',
-    magic: 'ACMP',
-    version: 10,
-    sfactor: Math.log2(ssize),
-    ssize,
-    cubic_size: n,
-    waterlevel: spec.waterlevel ?? NO_WATER,
-    watercolor: [0, 0, 0, 0],
-    maprevision: 1,
-    ambient: 0,
-    flags: 0,
-    timestamp: 0,
-    entity_count: ladderEntities.length,
-    // Ladders go in as *entities*, so the World's own `laddersFrom` resolves
-    // them exactly as it does for a real map — the derivation is part of what
-    // these vectors pin, not a span handed to both sides.
-    entities: ladderEntities,
-    spawns: {},
-    truncated: false,
-    legacy_unscaled_attrs: false,
-    plane_order: PLANES,
-    items: [],
-  };
-  return new World(info, buf);
-}
 
 describe('the client body matches the server body', () => {
   // The fixture is stamped by the Python side, which is the authority. This is the
@@ -284,13 +234,59 @@ describe('cross-language shot trace conformance', () => {
   for (const testCase of vectors.traces) {
     it(testCase.name, () => {
       const world = buildWorld(vectors.worlds[testCase.world]);
-      const distance = raycastWorld(
+      const { distance, face } = raycastWorldFace(
         world,
         testCase.origin,
         aimVector(testCase.yaw, testCase.pitch),
         testCase.max_distance,
       );
       expect(distance).toBeCloseTo(testCase.expect, -Math.log10(vectors.tolerance));
+      // The face is what a bullet mark is oriented by. A port that got the sign
+      // backwards draws every mark on the inside of the wall it hit — invisible,
+      // and indistinguishable from decals never having been implemented.
+      if (testCase.face !== null) expect(face).toBe(testCase.face);
+    });
+  }
+});
+
+/**
+ * The recoil pattern's *application*.
+ *
+ * The offsets themselves are served on `GET /api/hassault/weapons` and appear in
+ * this fixture verbatim, so there is one copy of the numbers by construction.
+ * What can drift is what each of the four consumers does with one — the server,
+ * this client's camera, this client's training range, and the native client —
+ * and the mistake that matters is silent: the table is **absolute** and a camera
+ * accumulates, so applying the absolute walks the crosshair away by the running
+ * sum and reads as a number somebody tuned badly rather than as a bug.
+ */
+describe('cross-language spray conformance', () => {
+  it('has spray vectors to check', () => {
+    expect(vectors.sprays.length).toBeGreaterThan(0);
+    expect(Object.keys(vectors.weapons).length).toBeGreaterThan(0);
+  });
+
+  for (const testCase of vectors.sprays) {
+    it(testCase.name, () => {
+      const weapon = vectors.weapons[testCase.weapon];
+      const offset = sprayOffset(weapon, testCase.index);
+      const [yaw, pitch] = applySpray(testCase.yaw, testCase.pitch, offset);
+      const digits = -Math.log10(vectors.tolerance);
+      expect(offset[0]).toBeCloseTo(testCase.expect.offset[0], digits);
+      expect(offset[1]).toBeCloseTo(testCase.expect.offset[1], digits);
+      expect(yaw).toBeCloseTo(testCase.expect.yaw, digits);
+      expect(pitch).toBeCloseTo(testCase.expect.pitch, digits);
+      // And the direction the server built from those angles, so a port that
+      // applied the offset to the *vector* instead of to the angles is caught
+      // rather than agreeing on every intermediate number and missing.
+      const direction = aimVector(yaw, pitch);
+      for (let i = 0; i < 3; i++) {
+        expect(direction[i]).toBeCloseTo(testCase.expect.direction[i], digits);
+      }
+      expect(residualSpread(weapon, testCase.scoped ?? 0)).toBeCloseTo(
+        testCase.expect.cone,
+        digits,
+      );
     });
   }
 });

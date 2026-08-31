@@ -695,3 +695,38 @@ def test_the_route_actually_publishes_the_scope_not_just_the_dataclass():
         assert "hipfireSpread" in weapon, wid
         if not weapon["zoomLevels"]:
             assert weapon["hipfireSpread"] == weapon["spread"], wid
+
+
+def test_the_route_actually_publishes_the_spray_pattern():
+    """The same gate, for the same reason, on the three fields recoil needs.
+
+    Missing from `WeaponOut`, `spray` arrives as `[]` — which every client reads
+    as "this weapon has no pattern" and falls back to noise. The crosshair then
+    stops agreeing with where the bullets go, and nothing anywhere reports it.
+    """
+    from fastapi.testclient import TestClient
+
+    from backend.app import app
+
+    with TestClient(app) as client:
+        res = client.get("/api/hassault/weapons")
+        assert res.status_code == 200
+        served = {w["id"]: w for w in res.json()}
+
+    rifle = served["assault"]
+    assert len(rifle["spray"]) == len(weapons.WEAPON_BY_ID["assault"].spray)
+    assert rifle["spray"][0] == [0.0, 0.0]
+    # Pairs, not a flattened list: two parallel lists is one more thing that can
+    # end up different lengths.
+    assert all(len(step) == 2 for step in rifle["spray"])
+    assert rifle["sprayReset"] > 0
+    assert 0 < rifle["residualSpread"] < rifle["spread"]
+
+    for wid, weapon in served.items():
+        assert "spray" in weapon, wid
+        assert "sprayReset" in weapon, wid
+        assert "residualSpread" in weapon, wid
+        # A weapon with no pattern reports its own cone, so the client reads the
+        # field unconditionally — the `hipfireSpread` rule.
+        if not weapon["spray"]:
+            assert weapon["residualSpread"] == weapon["spread"], wid

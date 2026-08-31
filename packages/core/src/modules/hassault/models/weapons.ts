@@ -116,7 +116,15 @@ export function fitWeaponModel(
   // an inverted box whose centre is ±Infinity, and a model translated by
   // infinity vanishes with no error anywhere. Fall back to leaving it where the
   // converter put it.
-  if (!targetBox.isEmpty() && !modelBox.isEmpty()) {
+  if (targetBox.isEmpty() || modelBox.isEmpty()) {
+    // Said out loud. The fallback is safe, but its symptom — a weapon sitting a
+    // little off from where the boxes were — looks like a bad export rather than
+    // like a measurement that never happened, and the grip anchors are measured
+    // in this same space.
+    console.warn(
+      'hassault: could not measure the weapon fit; leaving the model where the converter put it',
+    );
+  } else {
     const targetCentre = targetBox.getCenter(new three.Vector3());
     const modelCentre = modelBox.getCenter(new three.Vector3());
     model.position.copy(targetCentre.sub(modelCentre));

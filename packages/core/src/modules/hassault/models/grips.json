@@ -1,0 +1,46 @@
+{
+  "_comment": "Where the hands go on each weapon, in the fitted model's own space. Read by BOTH packages/core/src/modules/hassault/arms.ts and apps/native-fps/src/arms.rs (include_str!), and pinned together by apps/native-fps/tests/browser_parity.rs. NOT served: an anchor is a fact about the model rather than about the weapon's balance, so putting it in weapons.py would give the simulation's table a rendering column and hand it the response_model failure mode for nothing. Coordinates are cube units, x right / y up / z forward-negative — the same space build() and fitWeaponModel() leave a weapon in. Only exceptions are listed; anything absent is measured from the fitted bounding box by defaultGrips(), so a weapon added later looks plausible rather than empty-handed.",
+  "defaults": {
+    "_comment": "Fractions of the weapon's own fitted bounding box, in the spirit of fitWeaponModel: derived rather than tuned, so a new weapon gets hands without anybody hand-placing them. `primary` is the trigger hand, back of centre and below the bore; `support` is the off hand, forward on the handguard.",
+    "primary": [0.0, -0.3, 0.22],
+    "support": [0.0, -0.22, -0.55],
+    "primaryRoll": 0.0,
+    "supportRoll": 0.0
+  },
+  "weapons": {
+    "pistol": {
+      "_comment": "One hand on the grip and the other cupped under it — a pistol is held, not shouldered, so the support hand comes back and in rather than reaching down a handguard.",
+      "primary": [0.0, -0.16, 0.18],
+      "support": [-0.16, -0.3, 0.1],
+      "primaryRoll": 0.0,
+      "supportRoll": 0.35
+    },
+    "assault": {
+      "primary": [0.0, -0.32, 0.28],
+      "support": [0.0, -0.26, -0.62],
+      "primaryRoll": 0.0,
+      "supportRoll": -0.12
+    },
+    "shotgun": {
+      "_comment": "The support hand is on a pump, which sits lower and further forward than a rifle's handguard — and is where the reload animation's whole motion happens.",
+      "primary": [0.0, -0.3, 0.34],
+      "support": [0.0, -0.34, -0.7],
+      "primaryRoll": 0.0,
+      "supportRoll": -0.08
+    },
+    "sniper": {
+      "_comment": "Longest of the four, so the support hand is furthest out; the trigger hand sits further back behind a longer receiver.",
+      "primary": [0.0, -0.32, 0.44],
+      "support": [0.0, -0.24, -0.84],
+      "primaryRoll": 0.0,
+      "supportRoll": -0.1
+    },
+    "knife": {
+      "_comment": "One hand only. `support` is null rather than an off-screen coordinate: an empty hand is a real state, and a hand parked somewhere arbitrary is a hand the player will eventually see.",
+      "primary": [0.0, -0.1, 0.16],
+      "support": null,
+      "primaryRoll": 0.5,
+      "supportRoll": 0.0
+    }
+  }
+}

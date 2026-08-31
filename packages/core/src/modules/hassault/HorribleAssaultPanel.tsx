@@ -16,10 +16,12 @@ import {
   getSkinInventory,
   listInvitees,
   listMaps,
+  getThrowPhysics,
   listTacticals,
   getItems,
   listWeapons,
   type TacticalSpec,
+  type ThrowPhysics,
   type BrowseMatch,
   type InstallStatus,
   type LaunchNativeOptions,
@@ -59,6 +61,9 @@ import {
   type GameAction,
 } from './controls';
 import { DeveloperConsole, NetGraphHUD } from './console';
+import { ArcLine } from './arcline';
+import { simulateThrow, throwOrigin, throwVelocity } from './arc';
+import { DecalPool } from './decals';
 import { EffectsPool } from './effects';
 import { GameMenu } from './GameMenu';
 import { buildWorldMesh } from './geometry';
@@ -435,8 +440,28 @@ export function HorribleAssaultPanel() {
    * it over again. Every route to "the victory screen will not go away" runs
    * through trusting the server's copy to be gone; keying on the timestamp we
    * closed means the same match can never be shown twice.
+   *
+   * **Baselined from the server on mount, not from `0`.** A ref starting at zero
+   * means "no match has ever been closed", so *any* undismissed row — one left
+   * behind by a failed dismiss, or simply the last match of a previous session —
+   * reopened the card the moment the pane was mounted. Docking, undocking or
+   * switching workspaces was enough. What the pane actually wants to show is a
+   * card earned *while it was open*, so it asks once what is already there and
+   * treats all of it as seen.
+   *
+   * Not clock arithmetic: `played_at` is the backend's `time.time()` and has no
+   * relationship to this browser's clock, so "newer than now" would either
+   * swallow a real card or replay an old one depending on which way the two
+   * machines were skewed.
    */
   const dismissedSummaryAt = useRef(0);
+  /**
+   * Whether that baseline has landed. The poll is suppressed until it has —
+   * otherwise the first interval can win the race against the baseline request
+   * and show the stale card exactly once, which is the whole bug wearing a
+   * 1.5-second delay.
+   */
+  const summaryBaselined = useRef(false);
 
   const closeSummary = useCallback((summary: PostMatchSummary) => {
     dismissedSummaryAt.current = Math.max(dismissedSummaryAt.current, summary.timestamp);
@@ -488,6 +513,18 @@ export function HorribleAssaultPanel() {
 
   useEffect(() => {
     let active = true;
+    // Everything the server is already holding counts as seen — see
+    // `dismissedSummaryAt`. A failure leaves the pane unbaselined and the poll
+    // parked, which is the safe direction: no card at all beats somebody else's.
+    void getLatestMatchSummary()
+      .then((sum) => {
+        if (!active) return;
+        dismissedSummaryAt.current = sum?.timestamp ?? 0;
+        summaryBaselined.current = true;
+      })
+      .catch(() => {
+        if (active) summaryBaselined.current = true;
+      });
     const interval = setInterval(async () => {
       try {
         const [proc, sum] = await Promise.all([getProcessStatus(), getLatestMatchSummary()]);
@@ -507,6 +544,10 @@ export function HorribleAssaultPanel() {
           setPostMatchSummary(null);
           return;
         }
+        // Gated on the *summary* half only, not on the whole poll: the native
+        // process status above has nothing to do with the debrief and should
+        // keep updating while the baseline request is in flight.
+        if (!summaryBaselined.current) return;
         if (!proc.running && sum.timestamp > dismissedSummaryAt.current) {
           setPostMatchSummary(sum);
         }
@@ -553,6 +594,22 @@ export function HorribleAssaultPanel() {
   const localYouRef = useRef<SelfState | null>(null);
   /** Read by the view model, which runs in the same loop and cannot await React. */
   const localReloadingRef = useRef(false);
+  /**
+   * Whether a grenade was in hand on the previous frame.
+   *
+   * An edge, not a level: `setBlocked` and `holster` are both things to do *on
+   * the change*, and calling `holster` every frame would restart the stow
+   * animation sixty times a second and leave the weapon permanently down.
+   */
+  const nadeHeldRef = useRef(false);
+  /**
+   * The served throw constants, or `null` while they are in flight or absent.
+   *
+   * `null` draws no arc at all rather than integrating with zeros — which would
+   * be a straight line into the floor, i.e. an aiming aid that is confidently
+   * wrong. A peer's node too old to serve `/throw` is a real case.
+   */
+  const throwPhysicsRef = useRef<ThrowPhysics | null>(null);
   /** Last zoom step pushed to React, so the loop only pushes transitions. */
   const scopedRef = useRef(0);
   const audioRef = useRef<GameAudio | null>(null);
@@ -720,6 +777,17 @@ export function HorribleAssaultPanel() {
         // route leaves you with no grenades, which is a smaller game rather than
         // a broken one — the trigger still works.
         if (!cancelled) setTacticals([]);
+      });
+    // The constants a throw is integrated with, on a route of their own — see
+    // `ThrowPhysics` for why they are not a field on `/tacticals`. Failure
+    // leaves the ref `null`, which draws no arc rather than a straight line into
+    // the floor: an aiming aid that is confidently wrong is worse than none.
+    void getThrowPhysics()
+      .then((physics) => {
+        if (!cancelled) throwPhysicsRef.current = physics;
+      })
+      .catch(() => {
+        // A node too old to serve it. Quiet for the same reason as above.
       });
     return () => {
       cancelled = true;
@@ -952,6 +1020,8 @@ export function HorribleAssaultPanel() {
       const backdrop = createBackdrop(THREE, scene);
       const avatars = new AvatarPool(THREE, scene);
       const effects = new EffectsPool(THREE, scene);
+      const decals = new DecalPool(THREE, scene);
+      const arcLine = new ArcLine(THREE, scene);
       // Grenades in the air and the smoke/fire they leave. A renderer only: what
       // it draws is what the snapshot said, never anything it worked out.
       const nadePool = new NadePool(THREE, scene);
@@ -1218,6 +1288,14 @@ export function HorribleAssaultPanel() {
               );
               if (shot) {
                 effects.shot(shot.origin, shot.ends, TEAM_COLORS[0] ?? 0xffffff, true);
+                // The range resolves its own shots, so its faces come from
+                // `trace.ts` rather than off the wire — the same numbers, pinned
+                // against the server's by `physics-vectors.json`. A range that
+                // left no marks would be the one place you cannot see your own
+                // spray pattern, which is what it is for.
+                for (let i = 0; i < shot.ends.length; i++) {
+                  decals.mark(shot.ends[i], shot.faces[i] ?? -1);
+                }
                 if (shot.hits.length > 0) {
                   const killed = shot.hits.some((h) => h.killed);
                   setFlash((f) => ({
@@ -1333,6 +1411,13 @@ export function HorribleAssaultPanel() {
                 TEAM_COLORS[teamOf.get(fx.id) ?? 0] ?? 0xffffff,
                 fx.id === session.state.playerId,
               );
+              // One mark per pellet that stopped on a surface. `faces` is
+              // optional on the wire — a fabric peer may be running an older
+              // backend — and an absent list means "no marks", never "mark
+              // everything": `-1` is refused by `mark` itself.
+              for (let i = 0; i < fx.ends.length; i++) {
+                decals.mark(fx.ends[i], fx.faces?.[i] ?? -1);
+              }
               // Flash and kick the shooter's own avatar. Our body is not drawn
               // (we are inside it), so this only ever lands on someone else.
               avatars.fired(fx.id);
@@ -1372,6 +1457,7 @@ export function HorribleAssaultPanel() {
           }
         }
         effects.update(dt);
+        decals.update(dt);
         nadePool.update(dt);
         itemPool.update(dt);
 
@@ -1401,17 +1487,81 @@ export function HorribleAssaultPanel() {
           // is what the camera just did (angles) and what the player just did
           // (moved, fired, reloading).
           if (fired) viewmodel.fire();
+          // **What is in your hand this frame.** The trigger is blocked and the
+          // weapon stowed while a grenade is up, and both come back the instant
+          // it leaves — a throw is one action, not a mode you have to leave.
+          //
+          // Cosmetic on the wire, deliberately: the alternative (`shots.select`
+          // to some other slot) puts `weapon: n` on the next command, and
+          // `_handle_combat` cancels an in-flight reload on a switch. Equipping
+          // a grenade would then silently abort a reload.
+          const nades = nadesRef.current;
+          const holdingNade = nades?.equipped ?? false;
+          if (holdingNade !== nadeHeldRef.current) {
+            nadeHeldRef.current = holdingNade;
+            shots?.setBlocked(holdingNade);
+            if (holdingNade) viewmodel.holster();
+          }
+          // Pull the pin, wind up, release. Played on the frame the grenade
+          // actually left — `justThrew` rather than the key press, so a throw
+          // the cooldown refused does not animate one that never happened.
+          if (nades?.justThrew) viewmodel.throwNade();
+          // **The predicted arc.** Drawn from the *locally predicted* velocity,
+          // not from the last snapshot's: the whole reason it exists is to make
+          // `THROW_INHERIT` visible — running and jumping feed the throw — and a
+          // velocity half a round trip old would lag exactly the movement it is
+          // meant to be showing.
+          const throwPhysics = throwPhysicsRef.current;
+          if (holdingNade && throwPhysics && world) {
+            const eyeZ = eyeHeight(player);
+            const arc = simulateThrow(
+              world,
+              throwOrigin(player.x, player.y, eyeZ, player.yaw, player.pitch, throwPhysics),
+              throwVelocity(
+                player.yaw,
+                player.pitch,
+                // The right button is the lob, and the preview has to show the
+                // one the button under your finger would throw — but nothing is
+                // held down while aiming, so the arc shows the full throw and
+                // the lob is read off it as "much shorter than that".
+                false,
+                [player.velX ?? 0, player.velY ?? 0, player.velZ ?? 0],
+                throwPhysics,
+              ),
+              throwPhysics,
+            );
+            arcLine.show(arc);
+          } else {
+            arcLine.hide();
+          }
           const heldWeapon = shots?.weapon?.id ?? '';
           viewmodel.setWeapon(heldWeapon, skinsRef.current[heldWeapon] ?? null);
+          // The reload's *progress*, from the two served numbers: how long it
+          // takes (`reloadTime`, on the weapon) and how much is left
+          // (`reloadIn`, on the snapshot). `null` when there is no length to
+          // measure against, which is a different fact from "just started" — see
+          // `ViewModelFrame.reloadProgress`. The range fills both, so a reload
+          // dips identically in Train and in a match with no second code path.
+          const reloadTime = shots?.weapon?.reloadTime ?? 0;
+          const reloadLeft = online
+            ? (session?.state.you?.reloadIn ?? 0)
+            : (rangeRef.current?.selfState().reloadIn ?? 0);
           viewmodel.update(dt, {
             speed: moving ? MOVE_SPEED : 0,
             onGround: player.onGround,
             reloading: online
               ? (session?.state.you?.reloading ?? false)
               : localReloadingRef.current,
+            reloadProgress:
+              reloadTime > 0 ? Math.max(0, Math.min(1, 1 - reloadLeft / reloadTime)) : null,
             yaw: player.yaw,
             pitch: player.pitch,
             visible: alive,
+            // For the landing dip. A *duration*, which is also what the server
+            // sends (`you.move.sinceLanded`) and for the same reason: the two
+            // simulated clocks are unrelated, so a timestamp from one measured
+            // against the other means nothing.
+            sinceLanded: Math.max(0, player.t - player.landedAt),
           });
         } else {
           // Before you deploy the camera flies the map rather than standing in
@@ -1522,6 +1672,8 @@ export function HorribleAssaultPanel() {
         observer.disconnect();
         avatars.dispose();
         effects.dispose();
+        decals.dispose();
+        arcLine.dispose();
         nadePool.dispose();
         itemPool.dispose();
         water?.dispose();
@@ -1733,6 +1885,20 @@ export function HorribleAssaultPanel() {
     };
     const onMouseDown = (e: MouseEvent) => {
       if (!isLocked()) return;
+      // **With a grenade in hand the mouse means throw and toss.** Left is the
+      // full overhand throw, right is the short underhand lob — the two the
+      // server has always known about, now on the two buttons a hand is already
+      // on rather than on `G` and `H`.
+      //
+      // This is why selecting a grenade *equips* it rather than merely readying
+      // one: a global right-click toss would take the scope away from the
+      // sniper, whose whole identity is that scope.
+      if (nadesRef.current?.equipped) {
+        if (e.button !== 0 && e.button !== 2) return;
+        e.preventDefault();
+        nadesRef.current.press(e.button === 2);
+        return;
+      }
       // Right is the scope, left is the trigger. A weapon with no scope ignores
       // the right button entirely rather than consuming it.
       if (e.button === 2) {
@@ -1810,16 +1976,23 @@ export function HorribleAssaultPanel() {
         crouchRef.current = crouchToggleRef.current ? !crouchRef.current : true;
       }
       if (action.startsWith('weapon')) {
+        // A weapon key puts the grenade away — the counterpart of a number key
+        // taking one out. Purely cosmetic on the wire: `holster` sets no slot.
+        nadesRef.current?.holster();
         shotsRef.current?.select(Number(action.slice(6)) - 1);
       }
-      // Selecting only readies a grenade; throwing is its own key, so picking one
-      // and choosing the moment are two decisions rather than one.
+      // Selecting **equips**: the weapon goes down and the two mouse buttons
+      // become throw and toss. Picking a grenade and choosing the moment are
+      // still two decisions — the second one is now a click rather than a
+      // second key on the other side of the keyboard.
       const nadeSlot = NADE_ACTIONS.findIndex((n) => n.action === action);
-      if (nadeSlot >= 0) nadesRef.current?.select(nadeSlot);
+      if (nadeSlot >= 0) nadesRef.current?.equip(nadeSlot);
       // Edge-triggered here, at the key, and not read from `keysRef` in the
       // frame loop: `throw` rides on a movement command, so a held key read as a
       // level would set the flag sixty times a second. `e.repeat` is already
       // filtered above, which is what makes this one press.
+      // Still bound, and still working: a player who has rebound the mouse, or
+      // simply learned these, should not lose them because the default moved.
       if (action === 'throw') nadesRef.current?.press(false);
       if (action === 'lob') nadesRef.current?.press(true);
       keysRef.current.add(action);
@@ -1975,6 +2148,24 @@ export function HorribleAssaultPanel() {
     }
     deploy();
   }, [deploy, weapons, nativeClient, launchNative, itemTable, info]);
+
+  /**
+   * Open the map designer, seeded from the selected map or (`blank`) from solid
+   * rock.
+   *
+   * Native-only: there is no in-pane fallback, unlike Train and Host — the
+   * visual half of the editor (`apps/native-fps/src/editor.rs`) exists only in
+   * the native client (real lighting, raw mouse input; see
+   * docs/modules/hassault.mdx#the-map-designer). `MainMenu` disables the row
+   * when `nativeClient` is off rather than this silently doing nothing.
+   */
+  const editMap = useCallback(
+    (blank: boolean) => {
+      if (!nativeClient) return;
+      void launchNative({ mode: 'edit', blank });
+    },
+    [launchNative, nativeClient],
+  );
 
   /**
    * Play a match the **game server** adjudicates.
@@ -2639,6 +2830,7 @@ export function HorribleAssaultPanel() {
                 onBotSkill={setBotSkill}
                 onTrain={train}
                 onHost={host}
+                onEditMap={editMap}
                 onQuickPlay={quickPlay}
                 onRanked={ranked}
                 rankedMaps={rankedMaps}

@@ -176,6 +176,48 @@ class Weapon:
     other would tie a balance knob to a fix for a balance problem.
     """
     hipfire_spread: float | None = None
+    """The recoil pattern, as **absolute** `(yaw, pitch)` offsets from the aim,
+    indexed by how many shots have gone out in this burst.
+
+    Empty — every weapon but the rifle — means "no pattern": the index never
+    advances and the full random cone applies, which is exactly the behaviour
+    that existed before this.
+
+    **Absolute, not per-shot deltas.** A spray pattern is a *shape on a wall* that
+    a player memorises and learns to counter by hand; the shape is the sequence of
+    positions, and storing increments would put the shape one integration away
+    from anything anybody can read. Both clients convert to a delta when they
+    apply it to the camera (`spray[i] - spray[i-1]`), which is the single easiest
+    thing in this feature to get wrong: applying the absolute walks the crosshair
+    away by the running sum, and a rifle becomes unusable within half a magazine
+    while looking exactly like a tuning problem.
+
+    Indexed with `min(index, len - 1)`, so a burst longer than the table holds at
+    its last entry rather than wrapping — a pattern that restarted mid-magazine
+    would be unlearnable.
+
+    Served on `GET /api/hassault/weapons`, because the client applies the identical
+    offsets to its camera so the crosshair goes where the bullets go. A second
+    copy in TypeScript would be a crosshair that lies, which is worse than no
+    pattern at all.
+    """
+    spray: tuple[tuple[float, float], ...] = ()
+    """Simulated seconds without firing that resets the pattern to its first shot.
+
+    Long enough that a controlled burst chains, short enough that letting go and
+    re-acquiring gives you the top of the pattern back — which is the trade the
+    whole mechanic is made of.
+    """
+    spray_reset: float = 0.35
+    """The random cone left once a pattern is doing the work.
+
+    `None` means "unchanged" — a weapon with no pattern keeps its full cone.
+
+    **Deliberately not zero for a weapon that has one.** A fully deterministic
+    direction makes the rifle a laser at two hundred cubes and erases the sniper;
+    a residual is what keeps a pattern *counterable* rather than *solved*.
+    """
+    residual_spread: float | None = None
 
     @property
     def interval(self) -> float:
@@ -203,6 +245,18 @@ class Weapon:
             # special case that only the sniper ever exercises.
             "hipfireSpread": (
                 self.spread if self.hipfire_spread is None else self.hipfire_spread
+            ),
+            # The recoil pattern, so both clients kick the camera by the same
+            # offsets the server aims the bullets with. Rounded hard: these are
+            # radians of a few thousandths, and the digits past the fifth are
+            # noise the wire would carry for every weapon on every fetch.
+            "spray": [[round(y, 5), round(p, 5)] for y, p in self.spray],
+            "sprayReset": self.spray_reset,
+            # A real number rather than `null`, same as `hipfireSpread`: one
+            # unconditional "what cone is left" rule beats a special case only
+            # the rifle exercises.
+            "residualSpread": (
+                self.spread if self.residual_spread is None else self.residual_spread
             ),
         }
 
@@ -272,6 +326,49 @@ TACTICALS: tuple[TacticalUtility, ...] = (
 # copying its damage table would produce a different game wearing its numbers.
 #
 # Order is the slot order — weapon 1 through 5 on the number row.
+#: The assault rifle's spray pattern: absolute `(yaw, pitch)` offsets per shot.
+#:
+#: **Only the rifle has one, and that is a decision rather than an omission.** It
+#: is the only `auto: True` weapon in the game. A pattern on a 62 rpm sniper never
+#: survives its own reset gate — every shot is the first shot — and one on an
+#: 8-pellet shotgun would be fighting a cone twenty times its own size. For the
+#: other four, `spray = ()` means the index never advances and the full random
+#: cone applies: exactly the behaviour that existed before patterns did.
+#:
+#: The shape is the classic one and it is chosen to be *learnable*, not to be
+#: interesting: a near-vertical climb for the first seven rounds, which is the
+#: part a player counters by pulling down, then a lateral wander that has to be
+#: fought sideways. Left first, then right, then a shallower drift — so the
+#: counter-motion is a shape rather than a direction, and the reward for learning
+#: it is real.
+#:
+#: Twenty entries for a twenty-round magazine, so a full spray never has to hold
+#: at the last entry. Radians: the whole pattern spans about 0.09 rad of climb,
+#: which at fifty cubes is a couple of bodies' height.
+ASSAULT_SPRAY: tuple[tuple[float, float], ...] = (
+    (0.0000, 0.0000),
+    (0.0004, 0.0092),
+    (0.0009, 0.0192),
+    (0.0011, 0.0298),
+    (0.0008, 0.0402),
+    (-0.0002, 0.0498),
+    (-0.0021, 0.0578),
+    (-0.0052, 0.0640),
+    (-0.0092, 0.0684),
+    (-0.0136, 0.0714),
+    (-0.0174, 0.0738),
+    (-0.0196, 0.0758),
+    (-0.0193, 0.0776),
+    (-0.0162, 0.0792),
+    (-0.0108, 0.0806),
+    (-0.0042, 0.0818),
+    (0.0026, 0.0828),
+    (0.0086, 0.0838),
+    (0.0132, 0.0847),
+    (0.0158, 0.0856),
+)
+
+
 WEAPONS: tuple[Weapon, ...] = (
     Weapon(
         id="knife",
@@ -320,6 +417,10 @@ WEAPONS: tuple[Weapon, ...] = (
         falloff_start=80.0,
         auto=True,
         kickback=1.6,
+        spray=ASSAULT_SPRAY,
+        # About a fifth of the cone the pattern replaces. Not zero — see
+        # `Weapon.residual_spread`.
+        residual_spread=0.004,
     ),
     Weapon(
         id="shotgun",
@@ -523,6 +624,88 @@ def spread_vector(
     return (ox / length, oy / length, oz / length)
 
 
+
+
+def spray_offset(weapon: Weapon, index: int) -> tuple[float, float]:
+    """The absolute `(yaw, pitch)` offset for the `index`-th shot of a burst.
+
+    Held at the last entry past the end of the table rather than wrapping: a
+    pattern that restarted mid-magazine would be unlearnable, which defeats the
+    only reason it is a pattern.
+    """
+    if not weapon.spray:
+        return (0.0, 0.0)
+    return weapon.spray[min(max(index, 0), len(weapon.spray) - 1)]
+
+
+def apply_spray(
+    yaw: float, pitch: float, offset: tuple[float, float]
+) -> tuple[float, float]:
+    """Add a pattern offset to a shot's view angles.
+
+    **In view angles, not in the direction vector**, which is the whole reason
+    this is a function rather than three lines at the call site: the number the
+    server adds to the shot has to be bit-for-bit the number the client adds to
+    its camera, or the crosshair drifts away from where the bullets go and the
+    pattern stops being learnable.
+
+    Pitch is clamped just short of vertical. A pattern is a small climb and can
+    never reach it, but a table edited to something silly should bend the aim
+    rather than flip it over the pole.
+    """
+    limit = math.pi / 2 - 1e-4
+    return (yaw + offset[0], max(-limit, min(limit, pitch + offset[1])))
+
+
+def residual_spread(weapon: Weapon, scoped: int = 0) -> float:
+    """The random cone a shot still gets once the pattern has aimed it.
+
+    Falls back to `effective_spread` for a weapon with no pattern, so this is the
+    one function every caller can ask and there is no branch at the call site.
+    """
+    if not weapon.spray or weapon.residual_spread is None:
+        return effective_spread(weapon, scoped)
+    # A scoped weapon with a pattern does not exist yet (only the rifle has one
+    # and it has no scope), but the rule is stated rather than assumed: scoping
+    # tightens, and it must never *loosen* a cone the pattern already narrowed.
+    return min(weapon.residual_spread, effective_spread(weapon, scoped))
+
+
+#: Which face of the world a shot stopped against, as an index.
+#:
+#: **The outward normal of the surface hit — the direction pointing back at the
+#: shooter.** A ray stepping `+x` that enters a solid has hit that block's `-x`
+#: face, so it reports `FACE_NX`. Getting the sign backwards is the failure mode
+#: worth naming: nothing errors, and every bullet mark is drawn on the *inside*
+#: of the wall it hit, where it cannot be seen.
+#:
+#: An index rather than a vector because it goes on the wire once per pellet, and
+#: a grid has exactly six faces. A shotgun then costs eight small integers a
+#: shot, against the twenty-four floats its endpoints already carry.
+FACE_PX = 0
+FACE_NX = 1
+FACE_PY = 2
+FACE_NY = 3
+FACE_PZ = 4
+FACE_NZ = 5
+#: No surface: a body, or a shot that reached its range without stopping. Read
+#: as an axis by a client that does not check, this would be `+x` — so it is
+#: negative rather than a sixth value, which no lookup table can accidentally
+#: accept.
+FACE_NONE = -1
+
+#: The six faces as unit vectors, in cube coordinates. Mirrored by `FACE_NORMALS`
+#: in `decals.ts` and `decals.rs`, and pinned by `browser_parity.rs`.
+FACE_NORMALS: tuple[tuple[float, float, float], ...] = (
+    (1.0, 0.0, 0.0),
+    (-1.0, 0.0, 0.0),
+    (0.0, 1.0, 0.0),
+    (0.0, -1.0, 0.0),
+    (0.0, 0.0, 1.0),
+    (0.0, 0.0, -1.0),
+)
+
+
 def raycast_world(
     world: World,
     origin: tuple[float, float, float],
@@ -530,6 +713,22 @@ def raycast_world(
     max_distance: float,
 ) -> float:
     """Distance along `direction` to the first surface, or `max_distance`.
+
+    A thin wrapper over `raycast_world_face`, which is where the walk lives. Kept
+    because most callers — `grenades`, `bots`, the conformance fixture — want the
+    distance and nothing else, and threading a face through them would be noise
+    at every call site.
+    """
+    return raycast_world_face(world, origin, direction, max_distance)[0]
+
+
+def raycast_world_face(
+    world: World,
+    origin: tuple[float, float, float],
+    direction: tuple[float, float, float],
+    max_distance: float,
+) -> tuple[float, int]:
+    """Distance along `direction` to the first surface, and **which face**.
 
     A grid DDA, because the world *is* a grid: the ray is walked cell by cell,
     and within each cell only two things can stop it — the cell being solid, or
@@ -541,13 +740,25 @@ def raycast_world(
     treated as a step. Shots graze slopes they might have clipped by a few
     hundredths of a cube; the alternative is per-triangle intersection against a
     mesh the server does not build.
+
+    **The face is recovered here rather than derived by the clients**, and that
+    is the whole reason this function exists in this shape. At the moment the
+    walk returns it already knows exactly which of three things stopped the ray:
+    the cell it just stepped into was solid (and the step says through which
+    face), the ray fell below the floor, or it rose above the ceiling. A client
+    working the same thing out from the endpoint would be a fourth and a fifth
+    implementation of the world ray whose only job is to agree with this one
+    about the exact point *this one* chose — and a disagreement of half a cube
+    puts a bullet mark inside a wall, where it is invisible and reports nothing.
     """
     ox, oy, oz = origin
     dx, dy, dz = direction
     cx, cy = math.floor(ox), math.floor(oy)
 
     if world.is_solid(cx, cy):
-        return 0.0
+        # The muzzle is inside geometry. There is no surface and no direction
+        # the ray arrived from, so there is nothing to orient a mark against.
+        return 0.0, FACE_NONE
 
     step_x = 1 if dx > 0 else -1
     step_y = 1 if dy > 0 else -1
@@ -558,6 +769,10 @@ def raycast_world(
     t_max_y = ((cy + 1 - oy) / dy if dy > 0 else (cy - oy) / dy) if dy != 0 else inf
 
     t = 0.0
+    #: Which face the ray came through to reach the cell being examined. There is
+    #: none for the cell the muzzle is in, which is why it starts at `FACE_NONE`
+    #: rather than at an axis.
+    entered = FACE_NONE
     # Bounded rather than `while True`: a direction of (0, 0, ±1) never leaves its
     # cell, and a loop that only exits on a boundary crossing would never end.
     for _ in range(4 * world.ssize + 8):
@@ -568,27 +783,37 @@ def raycast_world(
         if dz < 0:
             t_hit = (floor - oz) / dz
             if t <= t_hit <= t_exit:
-                return t_hit
+                # Descending onto a floor: the surface faces up.
+                return t_hit, FACE_PZ
         elif dz > 0:
             t_hit = (ceil - oz) / dz
             if t <= t_hit <= t_exit:
-                return t_hit
+                return t_hit, FACE_NZ
         else:
             if oz < floor or oz > ceil:
-                return t
+                # Dead level, and this cell's gap does not contain the ray — a
+                # step, or a low ceiling. There is no floor or ceiling *crossing*
+                # to name, but the ray did stop against the side of that step,
+                # through the face it came in by. `FACE_NONE` only in the muzzle's
+                # own cell, where there is no such face.
+                return t, entered
         if t_exit >= max_distance:
-            return max_distance
+            return max_distance, FACE_NONE
         if t_max_x < t_max_y:
             cx += step_x
             t = t_max_x
             t_max_x += t_delta_x
+            entered = FACE_NX if step_x > 0 else FACE_PX
         else:
             cy += step_y
             t = t_max_y
             t_max_y += t_delta_y
+            entered = FACE_NY if step_y > 0 else FACE_PY
         if world.is_solid(cx, cy):
-            return t
-    return max_distance
+            # Stepping in +x means arriving at the block's -x face — the one
+            # pointing back at the shooter.
+            return t, entered
+    return max_distance, FACE_NONE
 
 
 def ray_hits_body(
@@ -802,6 +1027,15 @@ class ShotResult:
     origin: tuple[float, float, float]
     """Where each pellet ended up — a wall, a body, or the end of its range."""
     endpoints: list[tuple[float, float, float]]
+    """Which surface each pellet stopped against, parallel to `endpoints`.
+
+    `FACE_NONE` for a pellet that hit a body or simply ran out of range — a mark
+    is drawn only where there is a surface to draw it on. **Parallel, not
+    filtered**, because a shotgun that lands one pellet in a body and seven in a
+    wall has to be able to say which was which, and a compacted list loses the
+    correspondence.
+    """
+    faces: list[int]
     hits: list[PelletHit]
     rewound_ms: float
 
@@ -842,13 +1076,14 @@ def resolve_shot(
     _standing = _spec.standing_height
 
     endpoints: list[tuple[float, float, float]] = []
+    faces: list[int] = []
     hits: list[PelletHit] = []
     ox, oy, oz = origin
     cone = weapon.spread if spread is None else spread
 
     for _ in range(max(1, weapon.pellets)):
         pdx, pdy, pdz = spread_vector(direction, cone, rng)
-        wall = raycast_world(world, origin, (pdx, pdy, pdz), weapon.range)
+        wall, face = raycast_world_face(world, origin, (pdx, pdy, pdz), weapon.range)
 
         best: tuple[float, str] | None = None
         for pid, feet in targets.items():
@@ -863,6 +1098,7 @@ def resolve_shot(
 
         if best is None:
             endpoints.append((ox + pdx * wall, oy + pdy * wall, oz + pdz * wall))
+            faces.append(face)
             continue
 
         distance, pid = best
@@ -882,7 +1118,15 @@ def resolve_shot(
             )
         )
         endpoints.append(point)
+        # A body is not a surface. The wall behind it is still there, but the
+        # pellet stopped short of it, and a mark on a wall a bullet never
+        # reached is a lie about where the shot went.
+        faces.append(FACE_NONE)
 
     return ShotResult(
-        origin=origin, endpoints=endpoints, hits=hits, rewound_ms=rewound_ms
+        origin=origin,
+        endpoints=endpoints,
+        faces=faces,
+        hits=hits,
+        rewound_ms=rewound_ms,
     )

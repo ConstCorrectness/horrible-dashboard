@@ -407,3 +407,177 @@ describe('ShotController scope', () => {
     expect(shots.scoped).toBe(0);
   });
 });
+
+
+/**
+ * The recoil pattern.
+ *
+ * What is being pinned is the *application*, not the table — the offsets are
+ * served, so there is one copy of them. The thing that can go wrong here is
+ * silent and reads as a tuning problem: the table is absolute and the camera
+ * accumulates, so applying the absolute walks the crosshair away by the running
+ * sum of everything so far.
+ */
+describe('the spray pattern', () => {
+  // A small, obviously-shaped table: a straight climb of 0.01 rad a shot with a
+  // lateral drift that reverses, so a delta bug and a sign bug look different.
+  const PATTERN: [number, number][] = [
+    [0, 0],
+    [0.002, 0.01],
+    [0.004, 0.02],
+    [-0.002, 0.03],
+  ];
+  const PATTERNED = spec({ spray: PATTERN, sprayReset: 0.35, residualSpread: 0.004 });
+
+  /** Fire `n` shots and total the view-angle deltas the controller asked for. */
+  function burst(shots: ShotController, n: number): { yaw: number; pitch: number } {
+    let yaw = 0;
+    let pitch = 0;
+    for (let i = 0; i < n; i++) {
+      shots.press();
+      const intent = shots.frame(i * 200, 100, you());
+      expect(intent.fire).toBe(true);
+      // `dt` of zero, so recovery cannot contribute — this is measuring the
+      // kick, and a recovery term mixed into it would hide a delta bug behind a
+      // number that happens to look plausible.
+      const delta = shots.recoil(0);
+      yaw += delta.yaw;
+      pitch += delta.pitch;
+      shots.release();
+    }
+    return { yaw, pitch };
+  }
+
+  it('lands the camera exactly on the pattern, not on its running sum', () => {
+    // **The absolute-versus-delta test.** After N shots the accumulated camera
+    // offset must equal `spray[N-1]` — the position, not the sum of positions.
+    // Getting this wrong is unusable within half a magazine and looks exactly
+    // like a badly-chosen constant.
+    const shots = controller([PATTERNED]);
+    for (let n = 1; n <= PATTERN.length; n++) {
+      const fresh = controller([PATTERNED]);
+      const total = burst(fresh, n);
+      expect(total.yaw).toBeCloseTo(PATTERN[n - 1][0], 9);
+      expect(total.pitch).toBeCloseTo(PATTERN[n - 1][1], 9);
+    }
+    expect(shots.sprayIndex).toBe(0);
+  });
+
+  it('holds at the last entry past the end of the table', () => {
+    // A pattern that restarted mid-magazine would be unlearnable, and the extra
+    // shots must contribute nothing rather than wrapping back to the start.
+    const shots = controller([PATTERNED]);
+    const total = burst(shots, PATTERN.length + 5);
+    expect(total.yaw).toBeCloseTo(PATTERN[PATTERN.length - 1][0], 9);
+    expect(total.pitch).toBeCloseTo(PATTERN[PATTERN.length - 1][1], 9);
+  });
+
+  it('adopts the server’s index rather than keeping its own count', () => {
+    // Without this, a shot the server refused — rate, empty, dead — leaves the
+    // client one step ahead of the pattern for the rest of the magazine, kicking
+    // the camera for a bullet that never left.
+    const shots = controller([PATTERNED]);
+    shots.press();
+    shots.frame(0, 100, you());
+    shots.recoil(0);
+    expect(shots.sprayIndex).toBe(1);
+
+    shots.release();
+    shots.press();
+    shots.frame(200, 100, you({ sprayIndex: 0 }));
+    const delta = shots.recoil(0);
+    // Back at the top: the step from nothing to `spray[0]`, which is zero.
+    expect(delta.yaw).toBeCloseTo(PATTERN[0][0], 9);
+    expect(delta.pitch).toBeCloseTo(PATTERN[0][1], 9);
+  });
+
+  it('falls back to noise for a weapon with no pattern', () => {
+    // Four of the five weapons, and any server too old to send one. A rifle with
+    // *no* recoil would be worse than the noise this replaces.
+    const shots = controller([spec({ spray: [] })]);
+    shots.press();
+    shots.frame(0, 100, you());
+    expect(shots.recoil(0).pitch).toBeGreaterThan(0);
+  });
+
+  it('draws the crosshair at the cone the next shot actually uses', () => {
+    // A patterned weapon is left with `residualSpread`; drawing `spread` would
+    // advertise a cone five times the real one, telling a player not to take a
+    // shot the weapon would have made.
+    const patterned = controller([PATTERNED]);
+    const plain = controller([spec({ spray: [] })]);
+    expect(patterned.crosshairSpread()).toBeLessThan(plain.crosshairSpread());
+  });
+
+  it('gives back the climb but never the drift', () => {
+    // Recovery pulls the view down. Giving back the lateral component too would
+    // drag the crosshair sideways after a burst — the one motion a player cannot
+    // anticipate, because they did not put it there.
+    const shots = controller([PATTERNED]);
+    burst(shots, 3);
+    const settle = shots.recoil(1);
+    expect(settle.yaw).toBe(0);
+    expect(settle.pitch).toBeLessThan(0);
+  });
+});
+
+
+/**
+ * Blocking the trigger while a grenade is in hand.
+ *
+ * The flag is cosmetic on the wire, deliberately. The obvious alternative —
+ * `select`-ing some other slot — puts `weapon: n` on the next command, and
+ * `_handle_combat` **cancels an in-flight reload** on a switch, so equipping a
+ * grenade would silently abort a reload and cost a real switch delay.
+ */
+describe('setBlocked', () => {
+  it('refuses to fire while something else is in hand', () => {
+    const shots = controller();
+    shots.setBlocked(true);
+    shots.press();
+    expect(shots.frame(0, 100, you()).fire).toBe(false);
+  });
+
+  it('refuses to scope, so the right button is free to be the toss', () => {
+    // Without this a sniper would be left zoomed at 4x with a grenade up.
+    // `SEMI` carries no `zoomLevels`, so the scope needs a weapon that has one.
+    const shots = controller([spec({ id: 'sniper', zoomLevels: [2, 4] })]);
+    shots.cycleScope();
+    expect(shots.scoped).toBe(1);
+    shots.setBlocked(true);
+    shots.cycleScope();
+    expect(shots.scoped).toBe(1);
+  });
+
+  it('still adopts the server’s word about what we are holding', () => {
+    // Everything above the trigger check in `frame` is reconciliation, and it
+    // has to land whether or not we can currently shoot — otherwise the HUD
+    // describes the weapon we put away two seconds ago.
+    const shots = controller();
+    shots.setBlocked(true);
+    shots.frame(0, 100, you({ weapon: 1, ammo: 3 }));
+    expect(shots.slot).toBe(1);
+    expect(shots.ammo).toBe(3);
+  });
+
+  it('fires again the moment the grenade is gone', () => {
+    const shots = controller();
+    shots.setBlocked(true);
+    shots.press();
+    shots.frame(0, 100, you());
+    shots.setBlocked(false);
+    shots.press();
+    expect(shots.frame(1000, 100, you()).fire).toBe(true);
+  });
+
+  it('releases the trigger on the way in', () => {
+    // A button left held while the grenade came up would fire on the frame the
+    // weapon came back — a shot nobody asked for, at whatever you happened to be
+    // looking at.
+    const shots = controller();
+    shots.press();
+    shots.setBlocked(true);
+    shots.setBlocked(false);
+    expect(shots.frame(1000, 100, you()).fire).toBe(false);
+  });
+});

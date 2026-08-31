@@ -2985,6 +2985,7 @@ mod tests {
                 hit: true,
                 origin: [0.0; 3],
                 ends: Vec::new(),
+                faces: Vec::new(),
             },
             "me",
         );

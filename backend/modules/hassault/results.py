@@ -55,6 +55,7 @@ import sqlite3
 import time
 import uuid
 from contextlib import contextmanager
+from collections.abc import Mapping
 from typing import Any, Generator
 
 from backend.modules.database.app_db import ensure_app_db_dir
@@ -145,6 +146,41 @@ def _ensure_column(conn: sqlite3.Connection, name: str, decl: str) -> None:
     columns = {r[1] for r in conn.execute("PRAGMA table_info(hassault_matches)")}
     if name not in columns:
         conn.execute(f"ALTER TABLE hassault_matches ADD COLUMN {name} {decl}")
+
+
+def is_recordable(result: Mapping[str, Any]) -> bool:
+    """Whether a finished match is worth writing down at all.
+
+    The post-match card used to appear for sessions nobody would call a match:
+    open the pane, deploy, press Menu, and a row was written — a row that then
+    read as a **VICTORY**, because `result_for` scored a lone player against
+    `max(others, default=-1)` and `0 >= -1`. The card became something that
+    happened *to* you rather than something you earned.
+
+    Two conditions, and both are about the match rather than about how well it
+    went:
+
+    - **Somebody to play against.** A solo session on a map has no result. Bots
+      count — losing to one is losing, the same argument `result_for` makes about
+      `won`.
+    - **Something happened.** A kill, a death, or damage dealt. A round you spent
+      walking is not a round.
+
+    Deliberately *not* a quality bar: a match where you were flattened 0-15 is
+    recordable, and it should be. What is being excluded is the *empty* session,
+    not the bad one — XP has a `XP_BASE` term precisely so turning up counts.
+
+    Takes a plain mapping rather than a `MatchPlayer` so the same three numbers
+    can be replayed from a fixture by the backend suite and by the native
+    client's own conformance tests, which have no `MatchRoom` to build.
+    """
+    if int(result.get("opponents", 0)) <= 0:
+        return False
+    return (
+        int(result.get("kills", 0)) > 0
+        or int(result.get("deaths", 0)) > 0
+        or int(result.get("damageDealt", 0)) > 0
+    )
 
 
 def xp_for(result: dict[str, Any]) -> int:

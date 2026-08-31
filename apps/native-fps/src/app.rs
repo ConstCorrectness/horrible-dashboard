@@ -39,7 +39,9 @@ use winit::window::{CursorGrabMode, Window, WindowId};
 
 use hassault_native::animator::Squad;
 use hassault_native::api::LintFinding;
-use hassault_native::api::{HitboxSpec, ItemsResponse, NodeApi, TacticalSpec, WeaponSpec};
+use hassault_native::api::{
+    HitboxSpec, ItemsResponse, NodeApi, TacticalSpec, ThrowPhysics, WeaponSpec,
+};
 use hassault_native::audio::GameAudio;
 use hassault_native::bodies;
 use hassault_native::camera::{blast_trauma, damage_trauma, fire_trauma, Camera, Shake};
@@ -62,7 +64,9 @@ use hassault_native::prediction::Prediction;
 use hassault_native::prop;
 use hassault_native::protocol::{Command, Event, Fx, HitMarker, PlayerRow, SelfState};
 use hassault_native::radar::{self, Blip, Run};
-use hassault_native::renderer::{Renderer, Vertex, VolumeVertex};
+use hassault_native::arc::{self, ThrowArc};
+use hassault_native::decals::DecalPool;
+use hassault_native::renderer::{Renderer, Vertex, VolumeVertex, MODE_FLAT};
 use hassault_native::reveal::Reveal;
 use hassault_native::settings::{Crosshair, CrosshairStyle, Settings, SettingsWriter, FOV_RANGE};
 use hassault_native::summary::{MatchTally, Summary, SummaryScreen};
@@ -242,6 +246,23 @@ pub struct App {
     summary: SummaryScreen,
     /// Kept buffers, like `overlay`: the render path does not allocate.
     volume_verts: Vec<VolumeVertex>,
+    /// The served throw constants, or `None`. See `App::new`.
+    throw_physics: Option<ThrowPhysics>,
+    /// The arc drawn this frame, rebuilt while a grenade is up and empty
+    /// otherwise. A field rather than a local so the render pass can read it
+    /// without the simulation handing it across.
+    throw_arc: Option<ThrowArc>,
+    /// Whether a grenade was in hand on the previous frame. See the stow above.
+    nade_held: bool,
+    /// The spray index the last snapshot reported, so the camera can be kicked
+    /// by the step between two of them. See `apply_match_recoil`.
+    match_spray_index: i32,
+    /// Simulated-clock instant of the last command that carried `fire`, so the
+    /// trigger is rate-limited to the weapon's own interval.
+    last_fire_sent_ms: f64,
+    /// The world's memory of being shot at. Rides the translucent pass with the
+    /// clouds and the water — see `decals.rs` for why that is the right one.
+    decals: DecalPool,
     /// The map's floor plan, merged into runs **once** when the world loads.
     /// See `radar::floor_plan`: it is a property of the map, and rebuilding it
     /// per frame is how a minimap costs more than the map.
@@ -388,6 +409,11 @@ impl App {
         // a throw key that does nothing rather than a client-side guess at what
         // the four are.
         tacticals: Vec<TacticalSpec>,
+        // The constants a throw is integrated with, for the trajectory preview.
+        // `None` is a node too old to serve them, and draws **no preview** — a
+        // trajectory integrated with numbers this client invented would be an
+        // aiming aid confidently pointing somewhere the grenade will not go.
+        throw_physics: Option<ThrowPhysics>,
         skins: HashMap<String, Skin>,
         hitbox: HitboxSpec,
         // What each item kind gives, and the reach. Another fetched thing this
@@ -465,6 +491,12 @@ impl App {
             tally: MatchTally::default(),
             summary: SummaryScreen::default(),
             volume_verts: Vec::new(),
+            throw_physics,
+            throw_arc: None,
+            nade_held: false,
+            match_spray_index: 0,
+            last_fire_sent_ms: f64::NEG_INFINITY,
+            decals: DecalPool::default(),
             radar_plan,
             editor: None,
             edit_jobs: None,
@@ -719,6 +751,7 @@ impl App {
         self.nades.update(dt);
         self.items.update(dt);
         self.effects.update(dt);
+        self.decals.update(dt);
         self.damage.update(dt);
         self.shake.update(dt);
         // Advanced here rather than at draw time so every player's clip runs on
@@ -754,6 +787,49 @@ impl App {
         }
         self.viewmodel.set_weapon(&weapon, self.skins.get(&weapon));
         self.sync_prop(&weapon);
+        // **What is in your hand this frame.** The weapon is stowed while a
+        // grenade is up and comes back the instant it leaves — a throw is one
+        // action, not a mode you have to leave.
+        //
+        // An edge, not a level: `holster` starts an animation, and calling it
+        // every frame would restart the stow sixty times a second and leave the
+        // weapon permanently down.
+        let holding_nade = self.utility.equipped();
+        // **The predicted arc.** Drawn from the *locally predicted* velocity,
+        // not from the last snapshot's: the whole reason it exists is to make
+        // `THROW_INHERIT` visible — running and jumping feed the throw — and a
+        // velocity half a round trip old would lag exactly the movement it is
+        // meant to be showing.
+        self.throw_arc = match (holding_nade, self.throw_physics.as_ref()) {
+            (true, Some(physics)) => {
+                let state = &self.prediction.state;
+                let (yaw, pitch) = self.view_angles();
+                let eye_z = state.z + physics::eye_offset(state);
+                Some(arc::simulate_throw(
+                    &self.world,
+                    arc::throw_origin(state.x, state.y, eye_z, yaw, pitch, physics),
+                    // The full throw, not the lob: nothing is held down while
+                    // aiming, so the arc shows the overhand and the underhand is
+                    // read off it as "much shorter than that".
+                    arc::throw_velocity(
+                        yaw,
+                        pitch,
+                        false,
+                        [state.vel_x, state.vel_y, state.vel_z],
+                        physics,
+                    ),
+                    physics,
+                    arc::ARC_PREVIEW_SECONDS,
+                ))
+            }
+            _ => None,
+        };
+        if holding_nade != self.nade_held {
+            self.nade_held = holding_nade;
+            if holding_nade {
+                self.viewmodel.holster();
+            }
+        }
         // Alive unless the server says otherwise. **Not** gated on the pointer
         // being captured: releasing it here is not a menu, it is a mouse you can
         // move — the world is still drawn behind it, so a world with no weapon
@@ -768,6 +844,16 @@ impl App {
             pitch: self.camera.pitch.to_radians(),
             visible: self.joined && alive,
             move_speed: MOVE_SPEED,
+            // `camera.fov`, not `base_fov`: line 610 divides it by the scope's
+            // magnification every frame, and the flash cap has to see the FOV
+            // the player is actually looking through — otherwise it is right
+            // hipfiring and four times too generous at 4x.
+            fov: self.camera.fov.to_radians(),
+            // For the landing dip. A *duration*, which is also what the server
+            // sends (`you.move.since_landed`) and for the same reason: the two
+            // simulated clocks are unrelated, so a timestamp from one measured
+            // against the other means nothing.
+            since_landed: (self.prediction.state.t - self.prediction.state.landed_at).max(0.0),
             // The reload's *progress*, from the two served numbers: how long it
             // takes (`reloadTime`, on the weapon) and how much is left
             // (`reloadIn`, on the snapshot). The range fills both as well, so a
@@ -883,7 +969,7 @@ impl App {
             .map(|p| p.kills)
             .max()
             .unwrap_or(-1);
-        Summary {
+        let mut summary = Summary {
             map: self.world.info.name.clone(),
             name: self
                 .players
@@ -895,9 +981,18 @@ impl App {
             deaths: you.map(|y| y.deaths).unwrap_or(0),
             tally: self.tally,
             opponents: self.players.iter().filter(|p| p.id != self.self_id).count(),
-            won: mine >= best,
-            mvp: mine > best,
-        }
+            won: false,
+            mvp: false,
+            recordable: false,
+        };
+        // Asked of the assembled card rather than recomputed from these locals,
+        // so the predicate has one home — and `won`/`mvp` are gated on it for the
+        // reason `result_for` gates its own: alone in a room `best` is `-1`, so
+        // `0 >= -1` used to congratulate a player for quitting.
+        summary.recordable = summary.is_recordable();
+        summary.won = summary.recordable && mine >= best;
+        summary.mvp = summary.recordable && mine > best;
+        summary
     }
 
     /// File one tick's hitmarkers as floating damage numbers.
@@ -1073,6 +1168,10 @@ impl App {
                     owners,
                 } => {
                     self.world = *world;
+                    // A rebuilt world is a different world: marks recorded
+                    // against the old geometry would hang in mid-air, or sit
+                    // inside a wall that was not there when they were made.
+                    self.decals.clear();
                     self.mesh = build_world_mesh(&self.world);
                     self.radar_plan = hassault_native::radar::floor_plan(&self.world);
                     if let Some(renderer) = &mut self.renderer {
@@ -1384,15 +1483,22 @@ impl App {
                             id,
                             origin,
                             ends,
+                            faces,
                             hit,
                             ..
                         } = fx
                         {
                             // `hit` has been on the wire and parsed into
-                            // nothing since shots existed. It gates the dust:
-                            // sparks read as a strike on anything, masonry dust
-                            // off a player does not.
-                            self.effects.shot(*origin, ends, id == &self.self_id, *hit);
+                            // nothing since shots existed. It is now only the
+                            // fallback for a shooter whose backend predates
+                            // `faces` — which says per *pellet* whether there
+                            // was a surface, and which one.
+                            self.effects
+                                .shot(*origin, ends, faces, id == &self.self_id, *hit);
+                            // And the surface remembers being shot at. Every
+                            // player's shots, not only ours: reading the room
+                            // afterwards is most of what marks are for.
+                            self.decals.shot(ends, faces);
                         }
                         if let Fx::Detonate {
                             nade, at, radius, ..
@@ -1462,6 +1568,7 @@ impl App {
                     // would pop every taken item back once a tick.
                     self.items.sync(s.items_out.as_ref());
                     self.scores = s.scores.clone();
+                    self.apply_match_recoil(s.you.spray_index, s.you.weapon);
                     self.you = Some(s.you.clone());
                     // Filed for interpolation *before* the roster is replaced,
                     // and cloned rather than moved: the roster is what
@@ -1654,7 +1761,24 @@ impl App {
         // Firing rides on the movement command rather than being its own message,
         // which is the server's design: the shot then carries the exact angles and
         // sequence number of the frame it was fired on.
-        cmd.fire = self.keys.fire;
+        //
+        // **Rate-limited to the weapon's own interval**, which the browser has
+        // always done (`combat.ts`) and this client never did: the flag used to
+        // ride *every* command the key was held for, so a 700rpm rifle sent the
+        // server thirty trigger pulls a second and it discarded all but eleven.
+        // That was invisible while recoil was random; with a pattern the discards
+        // are what decide how far the pattern has walked, so the courtesy became
+        // load-bearing.
+        //
+        // Semi-automatic weapons still need the button released between shots,
+        // which the server enforces for everyone — this only avoids sending
+        // input that is certain to be thrown away.
+        // A grenade in hand blocks the trigger, and the block is **client-side
+        // only**: the server has no concept of an equipped grenade and needs
+        // none. The obvious alternative — asking for a weapon switch — would put
+        // `weapon: n` on this command, and `_handle_combat` cancels an in-flight
+        // reload on a switch, so taking out a grenade would silently abort one.
+        cmd.fire = self.keys.fire && !self.utility.equipped() && self.trigger_ready();
         // And the instant it was aimed at. Bodies are drawn `INTERP_DELAY_MS` in
         // the past, so without this every shot is resolved against positions a
         // tenth of a second newer than the ones on screen when the trigger was
@@ -1666,6 +1790,7 @@ impl App {
         // never existed. The clamp on the far side is a bound, not a repair.
         if cmd.fire {
             cmd.view_t = self.snapshots.render_time(Self::clock_ms());
+            self.last_fire_sent_ms = Self::clock_ms();
         }
         // Which cone the server should use for it. Clamped there against the
         // weapon this command lands on — the wire parser cannot know that.
@@ -1788,6 +1913,12 @@ impl App {
     /// frame, which at this client's frame rate is roughly two thousand rounds a
     /// second and makes the mode useless for learning anything about timing.
     fn try_fire(&mut self) {
+        // A grenade in hand blocks the range's trigger too. Train is where a
+        // player learns which button does what, and a range where the left
+        // button both threw a grenade and fired the rifle would teach neither.
+        if self.utility.equipped() {
+            return;
+        }
         let Some(weapon) = self.held().cloned() else {
             return;
         };
@@ -1842,7 +1973,78 @@ impl App {
         // behaves differently would be learning the wrong thing.
         self.shake.add(fire_trauma(weapon.kickback));
         self.play_own("shot", 0.55, true);
-        let _ = shot;
+        // The range resolves its own shots, so its faces come from `trace.rs`
+        // rather than off the wire — the same numbers, pinned against the
+        // server's by `physics-vectors.json`. Tracers and impacts too: the range
+        // is where a spray pattern is learnt, and it is not learnable without
+        // seeing where the rounds went.
+        self.effects
+            .shot(shot.origin, &shot.ends, &shot.faces, true, false);
+        self.decals.shot(&shot.ends, &shot.faces);
+    }
+
+    /// Whether enough time has passed to bother sending another `fire`.
+    ///
+    /// A courtesy to the server rather than a second enforcement — it owns the
+    /// fire rate and this cannot beat it. What it buys is that the commands the
+    /// server *keeps* are the ones this client thinks it sent, which is what
+    /// makes the spray index it reports back line up with the shots the player
+    /// took.
+    fn trigger_ready(&self) -> bool {
+        let Some(weapon) = self.held() else {
+            return true;
+        };
+        Self::clock_ms() - self.last_fire_sent_ms >= (weapon.interval as f64) * 1000.0
+    }
+
+    /// Kick the camera by however far the server says the pattern has moved.
+    ///
+    /// **Driven from the server's index, not from the trigger.** This client has
+    /// no local trigger controller, so a kick applied when the fire key went down
+    /// would move the view for shots the server refused — rate limiting, an empty
+    /// magazine, being dead — and the crosshair would drift permanently away from
+    /// where the bullets go. Reading the index off the snapshot is a frame or two
+    /// late and *exact*, which is the right trade for a pattern whose only value
+    /// is being learnable.
+    ///
+    /// **The step, not the position.** The served table is absolute — it is a
+    /// shape on a wall a player memorises — while the camera accumulates, so what
+    /// goes on it is `spray[i] - spray[i-1]`. Applying the absolute walks the
+    /// view away by the running sum and is unusable within half a magazine, while
+    /// reading exactly like a badly-chosen constant.
+    ///
+    /// `Shake` is deliberately untouched: it is a *copy* of the camera by design
+    /// (`camera.rs`), never a mutation, and turning it into recoil the server
+    /// honours would make a screen effect part of the aim.
+    fn apply_match_recoil(&mut self, index: i32, slot: i32) {
+        let previous = std::mem::replace(&mut self.match_spray_index, index);
+        // Only a burst *advancing*. A reset to zero is the pattern starting
+        // again, and giving that back as a downward kick would drag the view
+        // every time somebody stopped shooting.
+        if index <= previous {
+            return;
+        }
+        let Some(weapon) = self.weapons.get(slot.max(0) as usize) else {
+            return;
+        };
+        if weapon.spray.is_empty() {
+            return;
+        }
+        for i in previous.max(0)..index {
+            let here = weapon.spray_offset(i as usize);
+            let before = if i > 0 {
+                weapon.spray_offset((i - 1) as usize)
+            } else {
+                [0.0, 0.0]
+            };
+            self.camera.yaw += (here[0] - before[0]).to_degrees();
+            self.camera.pitch += (here[1] - before[1]).to_degrees();
+        }
+        // The camera's own clamp lives in `look`, which this does not go through.
+        // Re-applied here for the reason `camera.rs` documents for `shaken`: an
+        // unclamped pitch reaches vertical, where the view matrix's up vector
+        // becomes parallel to the forward one and every number in it turns NaN.
+        self.camera.pitch = self.camera.pitch.clamp(-89.9, 89.9);
     }
 
     /// Reload, in whichever half of the game is running.
@@ -1863,6 +2065,10 @@ impl App {
     /// does, so this is a request on the next command rather than a local change
     /// — setting it locally would show a weapon the server has not given us.
     fn select_weapon(&mut self, slot: usize) {
+        // A weapon key puts the grenade away — the counterpart of a number key
+        // taking one out. Purely cosmetic: `holster` sets no slot and puts
+        // nothing on the wire.
+        self.utility.holster();
         if slot >= self.weapons.len() {
             return;
         }
@@ -2675,7 +2881,23 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
-                if button == MouseButton::Right && self.focused {
+                // **With a grenade in hand the mouse means throw and toss.**
+                // Left is the full overhand throw, right is the short underhand
+                // lob — the two the server has always known about, now on the
+                // two buttons a hand is already on rather than on `G` and `H`.
+                //
+                // This is why selecting a grenade *equips* it rather than merely
+                // readying one: a global right-click toss would take the scope
+                // away from the sniper, whose whole identity is that scope.
+                if self.focused && !self.editing() && self.utility.equipped() {
+                    if state == ElementState::Pressed {
+                        match button {
+                            MouseButton::Left => self.utility.press(false),
+                            MouseButton::Right => self.utility.press(true),
+                            _ => {}
+                        }
+                    }
+                } else if button == MouseButton::Right && self.focused {
                     if state == ElementState::Pressed {
                         self.cycle_scope();
                     }
@@ -2817,18 +3039,21 @@ impl ApplicationHandler for App {
                         // `DEFAULT_CONTROLS` in the browser's `controls.ts`:
                         // one game, one set of keys.
                         //
-                        // **Selecting only readies.** Throwing is its own key,
-                        // because the moment you throw a smoke is a different
-                        // decision from which smoke you are holding — and a
-                        // select-that-throws cannot express waiting.
-                        KeyCode::Digit6 if down => self.utility.select(0),
-                        KeyCode::Digit7 if down => self.utility.select(1),
-                        KeyCode::Digit8 if down => self.utility.select(2),
-                        KeyCode::Digit9 if down => self.utility.select(3),
-                        // `KeyG` is where every shooter since Half-Life has put
-                        // it. The underhand gets a modifier-free key of its own
-                        // rather than being Shift+G: a throw you have to hold two
-                        // keys for is one you will fumble under fire.
+                        // **Selecting equips.** The weapon goes down and the two
+                        // mouse buttons become throw and toss. Picking a grenade
+                        // and choosing the moment are still two decisions — the
+                        // second one is now a click rather than a second key on
+                        // the other side of the keyboard.
+                        KeyCode::Digit6 if down => self.utility.equip(0),
+                        KeyCode::Digit7 if down => self.utility.equip(1),
+                        KeyCode::Digit8 if down => self.utility.equip(2),
+                        KeyCode::Digit9 if down => self.utility.equip(3),
+                        // Still bound, and still working: a player who has
+                        // learned these should not lose them because the default
+                        // moved. `KeyG` is where every shooter since Half-Life
+                        // has put it, and the underhand gets a modifier-free key
+                        // of its own rather than being Shift+G — a throw you have
+                        // to hold two keys for is one you will fumble under fire.
                         KeyCode::KeyG if down => self.utility.press(false),
                         KeyCode::KeyH if down => self.utility.press(true),
                         // F3 steps the *fallback*, and clears any override so
@@ -2892,6 +3117,37 @@ impl ApplicationHandler for App {
                     verts.extend(bodies::build_hitboxes(rows, &self.self_id, &self.hitbox));
                 }
                 self.volume_verts.clear();
+                // **Written first, deliberately.** This pass has a fixed vertex
+                // budget shared with the clouds, the tracers and the water, and
+                // an overflow only reaches `divergence::note_overflow` — so if
+                // it ever bites, it should be the newest transient effects that
+                // are dropped rather than the world's record of the fight.
+                self.decals.quads(|position, rgb, alpha| {
+                    self.volume_verts.push(VolumeVertex {
+                        position,
+                        // Flat-shaded, so a mark reads the same on every face
+                        // rather than being lit as though it were a surface of
+                        // its own sitting a millimetre off the wall.
+                        normal: [0.0, 0.0, 1.0],
+                        color: [rgb[0], rgb[1], rgb[2], alpha],
+                        mode: MODE_FLAT,
+                    });
+                });
+                if let Some(preview) = &self.throw_arc {
+                    let out = &mut self.volume_verts;
+                    arc::arc_vertices(preview, &mut |position, rgb, alpha| {
+                        out.push(VolumeVertex {
+                            position,
+                            // Flat-shaded: the arc is a readout, not a surface,
+                            // and lighting it would make the far half of a
+                            // curve darker than the near half for no reason a
+                            // player could act on.
+                            normal: [0.0, 0.0, 1.0],
+                            color: [rgb[0], rgb[1], rgb[2], alpha],
+                            mode: MODE_FLAT,
+                        });
+                    });
+                }
                 nades::volume_vertices(&self.nades, &mut self.volume_verts);
                 self.effects.vertices(&mut self.volume_verts);
                 // The water plane rides the translucent pass with the clouds —
@@ -3478,6 +3734,10 @@ mod tests {
             SettingsWriter::disabled(),
             weapons(),
             tacticals(),
+            // No throw constants: these tests are about the match loop, and a
+            // client that was served none draws no trajectory preview — which is
+            // the honest default rather than one integrated with zeros.
+            None,
             HashMap::new(),
             Default::default(),
             // No item table: these tests are about the match loop, and a range
@@ -3557,6 +3817,10 @@ mod tests {
             SettingsWriter::disabled(),
             weapons(),
             tacticals(),
+            // No throw constants: these tests are about the match loop, and a
+            // client that was served none draws no trajectory preview — which is
+            // the honest default rather than one integrated with zeros.
+            None,
             HashMap::new(),
             // The shipped body. A test that fetched one would depend on a node.
             Default::default(),

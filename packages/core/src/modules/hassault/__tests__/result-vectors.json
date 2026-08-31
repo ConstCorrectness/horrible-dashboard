@@ -1,0 +1,140 @@
+{
+  "_comment": "Cross-language conformance vectors for 'was this a match?'. Read by BOTH backend/tests/test_hassault_results.py (results.is_recordable) and apps/native-fps/tests/conformance.rs (summary::Summary::is_recordable + verdict). These pin that the two agree, not that either is right in the abstract. Regenerate with scripts/gen_hassault_result_vectors.py and make both suites pass before committing. 'damageDealt' is what the node counts and 'hits' is what the native client counts; every case is chosen so the two reach the same answer, and the generator refuses to write a case where they do not.",
+  "verdicts": [
+    {
+      "name": "opened the pane and left",
+      "kills": 0,
+      "deaths": 0,
+      "damageDealt": 0,
+      "hits": 0,
+      "opponents": 0,
+      "bestOther": -1,
+      "expect": {
+        "recordable": false,
+        "won": false,
+        "mvp": false,
+        "verdict": "NO CONTEST"
+      }
+    },
+    {
+      "name": "alone on a map, shot a wall",
+      "kills": 0,
+      "deaths": 0,
+      "damageDealt": 0,
+      "hits": 0,
+      "opponents": 0,
+      "bestOther": -1,
+      "expect": {
+        "recordable": false,
+        "won": false,
+        "mvp": false,
+        "verdict": "NO CONTEST"
+      }
+    },
+    {
+      "name": "joined a room with a bot and left immediately",
+      "kills": 0,
+      "deaths": 0,
+      "damageDealt": 0,
+      "hits": 0,
+      "opponents": 1,
+      "bestOther": 0,
+      "expect": {
+        "recordable": false,
+        "won": false,
+        "mvp": false,
+        "verdict": "NO CONTEST"
+      }
+    },
+    {
+      "name": "landed one hit on a bot",
+      "kills": 0,
+      "deaths": 0,
+      "damageDealt": 34,
+      "hits": 1,
+      "opponents": 1,
+      "bestOther": 0,
+      "expect": {
+        "recordable": true,
+        "won": true,
+        "mvp": false,
+        "verdict": "TOP OF THE BOARD"
+      }
+    },
+    {
+      "name": "died once without landing anything",
+      "kills": 0,
+      "deaths": 1,
+      "damageDealt": 0,
+      "hits": 0,
+      "opponents": 1,
+      "bestOther": 1,
+      "expect": {
+        "recordable": true,
+        "won": false,
+        "mvp": false,
+        "verdict": "MATCH OVER"
+      }
+    },
+    {
+      "name": "traded one for one",
+      "kills": 1,
+      "deaths": 1,
+      "damageDealt": 118,
+      "hits": 4,
+      "opponents": 1,
+      "bestOther": 1,
+      "expect": {
+        "recordable": true,
+        "won": true,
+        "mvp": false,
+        "verdict": "TOP OF THE BOARD"
+      }
+    },
+    {
+      "name": "outscored the room",
+      "kills": 9,
+      "deaths": 3,
+      "damageDealt": 1240,
+      "hits": 41,
+      "opponents": 3,
+      "bestOther": 5,
+      "expect": {
+        "recordable": true,
+        "won": true,
+        "mvp": true,
+        "verdict": "MVP"
+      }
+    },
+    {
+      "name": "tied at the top",
+      "kills": 5,
+      "deaths": 5,
+      "damageDealt": 700,
+      "hits": 24,
+      "opponents": 2,
+      "bestOther": 5,
+      "expect": {
+        "recordable": true,
+        "won": true,
+        "mvp": false,
+        "verdict": "TOP OF THE BOARD"
+      }
+    },
+    {
+      "name": "flattened, but it was a match",
+      "kills": 0,
+      "deaths": 15,
+      "damageDealt": 0,
+      "hits": 0,
+      "opponents": 5,
+      "bestOther": 15,
+      "expect": {
+        "recordable": true,
+        "won": false,
+        "mvp": false,
+        "verdict": "MATCH OVER"
+      }
+    }
+  ]
+}

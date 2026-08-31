@@ -75,6 +75,7 @@ from backend.modules.hassault.models import (
     ServerBrowse,
     SessionInfo,
     TacticalOut,
+    ThrowPhysicsOut,
     WeaponOut,
     ClientInstallRequest,
     ClientRemoveRequest,
@@ -718,6 +719,34 @@ async def list_tacticals() -> list[TacticalOut]:
     return [TacticalOut(**g.to_dict()) for g in grenades.GRENADES]
 
 
+@router.get("/throw", response_model=ThrowPhysicsOut)
+async def throw_physics() -> ThrowPhysicsOut:
+    """The constants a grenade's flight is integrated with.
+
+    **Read from the modules, never retyped.** These are the same names
+    `step_grenade` and `throw_velocity` use, so a tuning change reaches every
+    client that draws an arc without anybody remembering to update a second
+    table — the `plane_order` / `zoomLevels` / `kickback` precedent.
+
+    A route of its own rather than a field on `/tacticals`: see
+    `ThrowPhysicsOut` for why reshaping that response would silently break every
+    installed native client.
+    """
+    from backend.modules.hassault import grenades, physics
+
+    return ThrowPhysicsOut(
+        gravity=physics.GRAVITY,
+        throwSpeed=grenades.THROW_SPEED,
+        lobScale=grenades.LOB_SCALE,
+        throwInherit=grenades.THROW_INHERIT,
+        throwForward=grenades.THROW_FORWARD,
+        throwDrop=grenades.THROW_DROP,
+        restSpeed=grenades.REST_SPEED,
+        substep=grenades.SUBSTEP,
+        maxSubsteps=grenades.MAX_SUBSTEPS,
+    )
+
+
 def _local_client_candidates(repo_root: Path) -> list[str]:
     """Every place a *locally built* native client can be, newest wins.
 
@@ -1251,6 +1280,12 @@ async def _launch_now(
         connect_args.append(f"--room={req.room_id}")
     if req.host:
         connect_args.append(f"--host={req.host}")
+    if req.mode == "edit" and req.blank:
+        # Mirrors the native client's `--new`: start the draft from solid rock
+        # rather than seeding it from `map_name`. `--map=` still rides along
+        # above — the client simply ignores it once this is set (see
+        # `parse_args`/`run` in main.rs).
+        connect_args.append("--new")
     if req.mode == "host" and req.bots > 0:
         # Clamped against the match server's own ceiling, and only sent for the one
         # mode that can act on it — `add_bot` is host-only on the channel, so a bot

@@ -253,6 +253,20 @@ pub struct SelfState {
     pub mag: i32,
     #[serde(default)]
     pub reloading: bool,
+    /// How far into the spray pattern the **server** thinks we are.
+    ///
+    /// The only honest cue this client has for its own recoil. It has no local
+    /// trigger controller, so a kick driven off the fire key would move the
+    /// camera for shots the server refused — rate limiting, an empty magazine,
+    /// being dead — and leave the crosshair permanently out of phase with where
+    /// the bullets are actually going. Driving it from this number is a frame or
+    /// two late and **exact**, which is the right trade for a pattern whose
+    /// whole value is being learnable.
+    ///
+    /// `camelCase` on the wire; without the rename it reads as zero on every
+    /// snapshot, which looks exactly like a rifle with no recoil.
+    #[serde(rename = "sprayIndex", default)]
+    pub spray_index: i32,
     #[serde(rename = "reloadIn", default)]
     pub reload_in: f32,
     #[serde(rename = "respawnIn", default)]
@@ -440,6 +454,22 @@ pub enum Fx {
         /// whole pattern — which is why this is a list and not a point.
         #[serde(default)]
         ends: Vec<[f32; 3]>,
+        /// Which surface each pellet stopped against, parallel to `ends`.
+        ///
+        /// An index into `trace::FACE_NORMALS`, or `trace::FACE_NONE` (`-1`) for
+        /// a pellet that found a body or ran out of range. It is what a bullet
+        /// mark is oriented by, and it is taken from the server rather than
+        /// re-derived here because the server already knows it the moment its
+        /// own ray returns — a client that worked it out again would be a copy
+        /// whose only job is to agree about the exact point the server chose,
+        /// and half a cube of disagreement puts the mark inside the wall.
+        ///
+        /// **Empty means "this server does not say", never "none of them hit
+        /// anything".** A guest joining a friend's node over the fabric may be
+        /// talking to a backend older than this field, and the two cases have to
+        /// stay distinguishable or every wall hit silently loses its debris.
+        #[serde(default)]
+        faces: Vec<i32>,
     },
     /// A grenade going off. A kind of its own rather than a flag on anything:
     /// it has a place and a radius, and until now this client had no variant

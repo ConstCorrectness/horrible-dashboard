@@ -202,6 +202,13 @@ class WeaponOut(BaseModel):
     only discard), the magazine size, and a name to put on the HUD. A second copy
     of those constants in the frontend is a drift trap for no gain — the same
     reasoning as `plane_order` on `MapInfo`.
+
+    Note every field here has to be **added to this model as well as returned by
+    `Weapon.to_dict`**: a Pydantic response model silently drops what it does not
+    declare, so a new field reaches the browser as `undefined` and the native
+    client as a zero, with nothing anywhere saying why. `TacticalOut` has carried
+    that warning for a while and this one did not, which is exactly why it is
+    worth writing twice.
     """
 
     id: str
@@ -232,6 +239,61 @@ class WeaponOut(BaseModel):
     """Cone half-angle while not scoped. Equal to `spread` for every weapon
     without a scope, so the client can read it unconditionally."""
     hipfireSpread: float = 0.0  # noqa: N815
+    """The recoil pattern: absolute `(yaw, pitch)` offsets from the aim, indexed
+    by how many shots have gone out in this burst. Empty means no pattern.
+
+    Served because both clients apply the identical offsets to the camera, so the
+    crosshair goes where the bullets go and the pattern is learnable. A copy in
+    TypeScript would be a crosshair that lies, which is worse than no pattern.
+
+    A list of pairs rather than two parallel lists: the pair is the unit a player
+    thinks in, and two lists is one more thing that can end up different lengths.
+    """
+    spray: list[list[float]] = []
+    """Simulated seconds without firing that resets the pattern to its first shot."""
+    sprayReset: float = 0.0  # noqa: N815
+    """The random cone left once the pattern is doing the aiming. Equal to
+    `spread` for a weapon with no pattern, so the client can read it
+    unconditionally — the `hipfireSpread` rule."""
+    residualSpread: float = 0.0  # noqa: N815
+
+
+class ThrowPhysicsOut(BaseModel):
+    """The constants a grenade's flight is integrated with.
+
+    Served so a client can draw the arc a throw would actually take — including
+    the part a player cannot otherwise see, which is that **running and jumping
+    feed the throw** (`throwInherit`). The server has always added the thrower's
+    own velocity; nothing on screen said so.
+
+    **A route of its own rather than a reshaping of `/tacticals`.** That one is
+    `response_model=list[TacticalOut]`, and turning it into an object would make
+    every already-installed native binary deserialise an empty list and show *no
+    grenades at all*, with no error anywhere. A client that gets a 404 here draws
+    no preview: degraded, not broken.
+
+    Note every field here has to be **added to this model as well as returned by
+    the route**: a Pydantic response model silently drops what it does not
+    declare, so a new constant reaches the browser as `undefined` and a
+    trajectory quietly integrates with a zero.
+    """
+
+    #: Cubes per second squared. `physics.GRAVITY`, not a second copy.
+    gravity: float
+    #: Speed a full overhand throw leaves the hand at.
+    throwSpeed: float  # noqa: N815 — read verbatim by the browser
+    #: Fraction of that an underhand lob leaves at.
+    lobScale: float  # noqa: N815
+    #: How much of the thrower's own velocity is added. The invisible one.
+    throwInherit: float  # noqa: N815
+    #: How far in front of the eye, and below it, a grenade appears.
+    throwForward: float  # noqa: N815
+    throwDrop: float  # noqa: N815
+    #: How small a bounce gets before the grenade is treated as settled.
+    restSpeed: float  # noqa: N815
+    #: The integrator's own step, and how many of them one tick may take.
+    substep: float
+    maxSubsteps: int  # noqa: N815
 
 
 class ItemOut(BaseModel):
@@ -352,12 +414,17 @@ class LaunchNativeRequest(BaseModel):
     #: `match_server.join` with no room id is join-*or*-create, so "alone on this
     #: map" is not something the wire can ask for. `host` opens (or joins) a match
     #: here and fills it with `bots`; `join` enters one that already exists.
-    mode: Literal["train", "host", "join", "ranked"] = "join"
+    #: `edit` is the map designer — also no socket, and it opens a draft on the
+    #: node rather than a map (see `blank`).
+    mode: Literal["train", "host", "join", "ranked", "edit"] = "join"
     #: A specific room; empty means "any match on this map, or open one".
     room_id: str = ""
     map_name: str
     #: A friend's node id, when the room is on their machine.
     host: str = ""
+    #: `mode="edit"` only: start the draft from solid rock instead of seeding it
+    #: from `map_name`. Mirrors the native client's `--new`.
+    blank: bool = False
     #: Bots to field, `host` only — the client sends `add_bot` once its welcome
     #: lands, because a bot needs a room to be added to and the room is only ours
     #: at that point. Clamped to the match server's own ceiling rather than

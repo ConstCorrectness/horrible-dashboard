@@ -44,7 +44,41 @@ export function eyePosition(x: number, y: number, z: number, eye = PLAYER_EYE_HE
 }
 
 /**
+ * Which face of the world a shot stopped against, as an index.
+ *
+ * **The outward normal of the surface hit — the direction pointing back at the
+ * shooter.** A ray stepping `+x` that enters a solid has hit that block's `-x`
+ * face, so it reports `FACE_NX`. These mirror `weapons.py`'s constants exactly
+ * (the server puts the index on the wire per pellet) and are re-derived here
+ * only because the training range has no server to ask.
+ */
+export const FACE_PX = 0;
+export const FACE_NX = 1;
+export const FACE_PY = 2;
+export const FACE_NY = 3;
+export const FACE_PZ = 4;
+export const FACE_NZ = 5;
+/** No surface: a body, or a shot that reached its range. Negative rather than a
+ * sixth value, so a caller that forgets to check cannot index a table with it. */
+export const FACE_NONE = -1;
+
+/**
  * Distance along `direction` to the first surface, or `maxDistance`.
+ *
+ * A thin wrapper over `raycastWorldFace`. Kept because most callers want the
+ * distance and nothing else, exactly as `raycast_world` is kept on the server.
+ */
+export function raycastWorld(
+  world: World,
+  origin: Vec,
+  direction: Vec,
+  maxDistance: number,
+): number {
+  return raycastWorldFace(world, origin, direction, maxDistance).distance;
+}
+
+/**
+ * Distance along `direction` to the first surface, and **which face**.
  *
  * A grid DDA, because the world *is* a grid: the ray is walked cell by cell, and
  * within each cell only two things stop it — the cell being solid, or the ray
@@ -54,19 +88,26 @@ export function eyePosition(x: number, y: number, z: number, eye = PLAYER_EYE_HE
  * treated as a step. Shots graze slopes they might have clipped by a few
  * hundredths of a cube; the alternative is per-triangle intersection against a
  * mesh this does not have.
+ *
+ * In a match the face comes off the wire and this is never consulted for it —
+ * the server owns where a shot stopped. This exists for the training range,
+ * which has no server, and its agreement with the server's copy is pinned by
+ * `physics-vectors.json`.
  */
-export function raycastWorld(
+export function raycastWorldFace(
   world: World,
   origin: Vec,
   direction: Vec,
   maxDistance: number,
-): number {
+): { distance: number; face: number } {
   const [ox, oy, oz] = origin;
   const [dx, dy, dz] = direction;
   let cx = Math.floor(ox);
   let cy = Math.floor(oy);
 
-  if (world.isSolid(cx, cy)) return 0;
+  // The muzzle is inside geometry. There is no surface and no direction the ray
+  // arrived from, so there is nothing to orient a mark against.
+  if (world.isSolid(cx, cy)) return { distance: 0, face: FACE_NONE };
 
   const stepX = dx > 0 ? 1 : -1;
   const stepY = dy > 0 ? 1 : -1;
@@ -76,6 +117,10 @@ export function raycastWorld(
   let tMaxY = dy !== 0 ? (dy > 0 ? (cy + 1 - oy) / dy : (cy - oy) / dy) : Infinity;
 
   let t = 0;
+  // Which face the ray came through to reach the cell being examined. There is
+  // none for the cell the muzzle is in, which is why it starts at `FACE_NONE`
+  // rather than at an axis.
+  let entered = FACE_NONE;
   // Bounded rather than `while (true)`: a direction of (0, 0, ±1) never leaves
   // its cell, and a loop that only exits on a boundary crossing would never end.
   const limit = 4 * world.ssize + 8;
@@ -86,26 +131,34 @@ export function raycastWorld(
     // The ray is linear in z, so the crossing solves directly.
     if (dz < 0) {
       const tHit = (floor - oz) / dz;
-      if (t <= tHit && tHit <= tExit) return tHit;
+      // Descending onto a floor: the surface faces up.
+      if (t <= tHit && tHit <= tExit) return { distance: tHit, face: FACE_PZ };
     } else if (dz > 0) {
       const tHit = (ceil - oz) / dz;
-      if (t <= tHit && tHit <= tExit) return tHit;
+      if (t <= tHit && tHit <= tExit) return { distance: tHit, face: FACE_NZ };
     } else if (oz < floor || oz > ceil) {
-      return t;
+      // Dead level, and this cell's gap does not contain the ray — a step, or a
+      // low ceiling. There is no floor or ceiling *crossing* to name, but the ray
+      // did stop against the side of that step, through the face it came in by.
+      return { distance: t, face: entered };
     }
-    if (tExit >= maxDistance) return maxDistance;
+    if (tExit >= maxDistance) return { distance: maxDistance, face: FACE_NONE };
     if (tMaxX < tMaxY) {
       cx += stepX;
       t = tMaxX;
       tMaxX += tDeltaX;
+      entered = stepX > 0 ? FACE_NX : FACE_PX;
     } else {
       cy += stepY;
       t = tMaxY;
       tMaxY += tDeltaY;
+      entered = stepY > 0 ? FACE_NY : FACE_PY;
     }
-    if (world.isSolid(cx, cy)) return t;
+    // Stepping in +x means arriving at the block's -x face — the one pointing
+    // back at the shooter.
+    if (world.isSolid(cx, cy)) return { distance: t, face: entered };
   }
-  return maxDistance;
+  return { distance: maxDistance, face: FACE_NONE };
 }
 
 /**
@@ -196,6 +249,61 @@ export function damageAt(weapon: WeaponSpec, distance: number, falloffStart: num
  * `rand` is injected so a test can pin the cone with a known sequence; the
  * server's equivalent takes a seeded `random.Random` for the same reason.
  */
+/**
+ * The absolute `[yaw, pitch]` offset for the `index`-th shot of a burst.
+ *
+ * A direct port of `weapons.spray_offset`, over the **served** table — so there
+ * is one copy of the numbers themselves and this is only the lookup.
+ *
+ * Held at the last entry past the end of the table rather than wrapping: a
+ * pattern that restarted mid-magazine would be unlearnable, which defeats the
+ * only reason it is a pattern.
+ */
+export function sprayOffset(weapon: WeaponSpec, index: number): [number, number] {
+  const table = weapon.spray;
+  if (!table || table.length === 0) return [0, 0];
+  return table[Math.min(Math.max(index, 0), table.length - 1)];
+}
+
+/**
+ * Add a pattern offset to a shot's view angles.
+ *
+ * **In view angles, not in the direction vector** — `weapons.apply_spray`'s own
+ * rule, and the reason this is a function rather than two additions at the call
+ * site: the number the server adds to a shot has to be bit-for-bit the number
+ * the client adds to its camera, or the crosshair drifts away from where the
+ * bullets go and the pattern stops being learnable.
+ *
+ * Pitch is clamped just short of vertical. A real pattern is a small climb and
+ * can never reach it, but a table edited to something silly should bend the aim
+ * rather than flip it over the pole.
+ */
+export function applySpray(
+  yaw: number,
+  pitch: number,
+  offset: [number, number],
+): [number, number] {
+  const limit = Math.PI / 2 - 1e-4;
+  return [yaw + offset[0], Math.max(-limit, Math.min(limit, pitch + offset[1]))];
+}
+
+/**
+ * The random cone a shot still gets once the pattern has aimed it.
+ *
+ * Falls back to the weapon's own cone for anything with no pattern, so this is
+ * the one function every caller can ask and there is no branch at the call site.
+ * `weapons.residual_spread`.
+ */
+export function residualSpread(weapon: WeaponSpec, scoped = 0): number {
+  const patterned = weapon.spray !== undefined && weapon.spray.length > 0;
+  const own = scoped > 0 ? weapon.spread : weapon.hipfireSpread;
+  if (!patterned || weapon.residualSpread === undefined) return own;
+  // Scoping tightens, and must never *loosen* a cone the pattern already
+  // narrowed. No weapon is both scoped and patterned today; the rule is stated
+  // rather than assumed.
+  return Math.min(weapon.residualSpread, own);
+}
+
 export function spreadVector(
   direction: Vec,
   spread: number,

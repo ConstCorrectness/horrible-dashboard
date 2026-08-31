@@ -107,11 +107,17 @@ enum Shape {
     Ball { at: [f32; 3], radius: f32 },
     /// A burst of short beams thrown back out of a surface.
     ///
-    /// `back` is the unit vector **back along the incoming ray**, which is the
-    /// only thing available: the server sends where a bullet stopped, never the
-    /// normal of what stopped it. Spraying back the way the round came is both
-    /// roughly what happens and the one direction that cannot be wrong — a
-    /// guessed normal would put half the sparks inside the wall.
+    /// `back` is the unit vector the burst is sprayed about. It is **the
+    /// surface's own normal** when the server said which face was hit, and the
+    /// reverse of the incoming ray otherwise.
+    ///
+    /// The fallback used to be the only option: the wire carried where a bullet
+    /// stopped and never what stopped it, so spraying back the way the round
+    /// came was the one direction that could not be wrong. It is still not
+    /// wrong, just blunter — a round arriving at a grazing angle throws its
+    /// sparks along the wall rather than off it. `ShotFx.faces` now carries the
+    /// face per pellet, so the better answer is available whenever the shooter's
+    /// backend is new enough to send it.
     Sparks {
         at: [f32; 3],
         back: [f32; 3],
@@ -144,18 +150,34 @@ impl EffectsPool {
     /// brightness your own tracer is a line down the middle of the screen and
     /// nothing else.
     ///
-    /// `hit` is the server's own account of whether the shot found a **body**.
-    /// It gates the dust and nothing else: sparks read as a strike on anything,
-    /// but a puff of masonry dust off a player does not, and it is the one part
-    /// of an impact that would look plainly wrong.
+    /// `faces` is which surface each pellet stopped against, parallel to `ends`
+    /// — an index into [`trace::FACE_NORMALS`], or [`trace::FACE_NONE`] for a
+    /// pellet that found a body or simply ran out of range. It decides two
+    /// things per pellet: whether masonry dust is thrown, and which way the
+    /// sparks go.
     ///
-    /// It is per *shot*, not per pellet, so a shotgun with one pellet in a body
-    /// and seven in a wall loses the wall dust. That is the honest reading of
-    /// what the wire carries — the alternative is inventing a per-pellet fact
-    /// the server never sent, which is the mistake this whole module's header
-    /// is about.
-    pub fn shot(&mut self, origin: [f32; 3], ends: &[[f32; 3]], mine: bool, hit: bool) {
+    /// `hit` is the server's older, per-*shot* account of whether the shot found
+    /// a body, and is now only the **fallback** for a shooter whose backend
+    /// predates `faces`. It was never good enough: a shotgun with one pellet in
+    /// a body and seven in a wall is `hit: true`, so all seven lost their dust.
+    /// An empty `faces` means "this shooter's server does not say", never "none
+    /// of them hit anything" — which is why the two cases are distinguished
+    /// rather than collapsed into `unwrap_or(FACE_NONE)`.
+    pub fn shot(
+        &mut self,
+        origin: [f32; 3],
+        ends: &[[f32; 3]],
+        faces: &[i32],
+        mine: bool,
+        hit: bool,
+    ) {
         for (i, end) in ends.iter().enumerate() {
+            let face = faces.get(i).copied().unwrap_or(crate::trace::FACE_NONE);
+            let on_a_surface = if faces.is_empty() {
+                !hit
+            } else {
+                face >= 0
+            };
             self.push(Live {
                 shape: Shape::Beam {
                     from: origin,
@@ -177,11 +199,17 @@ impl EffectsPool {
                 age: 0.0,
                 life: IMPACT_LIFE,
             });
-            let back = normalize([
-                origin[0] - end[0],
-                origin[1] - end[1],
-                origin[2] - end[2],
-            ]);
+            // The surface's own normal where the server named one, and the
+            // reverse of the incoming ray where it did not.
+            let back = if face >= 0 {
+                crate::trace::FACE_NORMALS[face as usize]
+            } else {
+                normalize([
+                    origin[0] - end[0],
+                    origin[1] - end[1],
+                    origin[2] - end[2],
+                ])
+            };
             self.push(Live {
                 shape: Shape::Sparks {
                     at: *end,
@@ -196,7 +224,7 @@ impl EffectsPool {
                 age: 0.0,
                 life: SPARK_LIFE,
             });
-            if !hit {
+            if on_a_surface {
                 self.push(Live {
                     shape: Shape::Puff {
                         at: *end,
@@ -501,7 +529,7 @@ mod tests {
         // sparks, dust. The spark burst is **one** entry for all five of its
         // beams — see `SPARKS`, and the budget arithmetic on `MAX_LIVE`.
         let mut fx = EffectsPool::default();
-        fx.shot([0.0; 3], &[[10.0, 0.0, 0.0], [10.0, 2.0, 0.0]], false, false);
+        fx.shot([0.0; 3], &[[10.0, 0.0, 0.0], [10.0, 2.0, 0.0]], &[], false, false);
         assert_eq!(fx.count(), 8);
     }
 
@@ -510,9 +538,9 @@ mod tests {
         // Masonry dust off a player is the one part of an impact that reads as
         // plainly wrong; sparks read as a strike on anything.
         let mut wall = EffectsPool::default();
-        wall.shot([0.0; 3], &[[10.0, 0.0, 0.0]], false, false);
+        wall.shot([0.0; 3], &[[10.0, 0.0, 0.0]], &[], false, false);
         let mut body = EffectsPool::default();
-        body.shot([0.0; 3], &[[10.0, 0.0, 0.0]], false, true);
+        body.shot([0.0; 3], &[[10.0, 0.0, 0.0]], &[], false, true);
         assert_eq!(wall.count(), 4);
         assert_eq!(body.count(), 3);
     }
@@ -523,7 +551,7 @@ mod tests {
         // model; the deceleration is what makes it debris.
         let reach = |t: f32| {
             let mut fx = EffectsPool::default();
-            fx.shot([0.0; 3], &[[10.0, 0.0, 0.0]], false, true);
+            fx.shot([0.0; 3], &[[10.0, 0.0, 0.0]], &[], false, true);
             fx.update(SPARK_LIFE * t);
             let mut out = Vec::new();
             fx.vertices(&mut out);
@@ -551,7 +579,7 @@ mod tests {
         // It is the cue that says a shot has *already* happened. A puff that
         // expired with the flash would say nothing the flash had not.
         let mut fx = EffectsPool::default();
-        fx.shot([0.0; 3], &[[10.0, 0.0, 0.0]], false, false);
+        fx.shot([0.0; 3], &[[10.0, 0.0, 0.0]], &[], false, false);
         fx.update(IMPACT_LIFE + SPARK_LIFE);
         assert_eq!(fx.count(), 1, "only the dust should be left");
         fx.update(DUST_LIFE);
@@ -562,7 +590,7 @@ mod tests {
     fn a_shot_with_no_endpoints_draws_nothing() {
         // The server sends an empty `ends` for a shot that resolved to nothing.
         let mut fx = EffectsPool::default();
-        fx.shot([0.0; 3], &[], false, false);
+        fx.shot([0.0; 3], &[], &[], false, false);
         assert_eq!(fx.count(), 0);
     }
 
@@ -571,16 +599,16 @@ mod tests {
         // It leaves the camera, so at full brightness it is a line down the
         // middle of the screen and nothing else.
         let mut mine = EffectsPool::default();
-        mine.shot([0.0; 3], &[[10.0, 0.0, 0.0]], true, false);
+        mine.shot([0.0; 3], &[[10.0, 0.0, 0.0]], &[], true, false);
         let mut theirs = EffectsPool::default();
-        theirs.shot([0.0; 3], &[[10.0, 0.0, 0.0]], false, false);
+        theirs.shot([0.0; 3], &[[10.0, 0.0, 0.0]], &[], false, false);
         assert!(tracer_alpha(&mine) < tracer_alpha(&theirs));
     }
 
     #[test]
     fn effects_fade_to_nothing_and_are_retired() {
         let mut fx = EffectsPool::default();
-        fx.shot([0.0; 3], &[[10.0, 0.0, 0.0]], false, false);
+        fx.shot([0.0; 3], &[[10.0, 0.0, 0.0]], &[], false, false);
         fx.update(TRACER_LIFE + 0.001);
         // The tracer is the shortest-lived thing a shot makes; sparks, the
         // impact flash and the dust all outlive it, in that order.
@@ -597,7 +625,7 @@ mod tests {
         // `base * (1 - t)` rather than a compounding decay, which would leave an
         // effect asymptotically nearly gone forever and eat the cap.
         let mut fx = EffectsPool::default();
-        fx.shot([0.0; 3], &[[10.0, 0.0, 0.0]], false, false);
+        fx.shot([0.0; 3], &[[10.0, 0.0, 0.0]], &[], false, false);
         fx.update(TRACER_LIFE * 0.999);
         let max = tracer_alpha(&fx);
         assert!(max < 0.02, "still {max} bright at the end of its life");
@@ -608,10 +636,10 @@ mod tests {
         // The shot that just happened is the one worth seeing.
         let mut fx = EffectsPool::default();
         for _ in 0..MAX_LIVE {
-            fx.shot([0.0; 3], &[[1.0, 0.0, 0.0]], false, false);
+            fx.shot([0.0; 3], &[[1.0, 0.0, 0.0]], &[], false, false);
         }
         assert_eq!(fx.count(), MAX_LIVE);
-        fx.shot([0.0; 3], &[[99.0, 0.0, 0.0]], false, false);
+        fx.shot([0.0; 3], &[[99.0, 0.0, 0.0]], &[], false, false);
         assert_eq!(fx.count(), MAX_LIVE, "capped, not grown");
         let mut out = Vec::new();
         fx.vertices(&mut out);
@@ -628,7 +656,7 @@ mod tests {
         // shot at somebody on a gantry — rare enough to ship broken, common
         // enough to be noticed.
         let mut fx = EffectsPool::default();
-        fx.shot([10.0, 10.0, 0.0], &[[10.0, 10.0, 20.0]], false, false);
+        fx.shot([10.0, 10.0, 0.0], &[[10.0, 10.0, 20.0]], &[], false, false);
         let mut out = Vec::new();
         fx.vertices(&mut out);
         let span = |axis: usize| {
@@ -652,7 +680,7 @@ mod tests {
         // along the wrong axis, means the cube → render mapping was applied to
         // one end and not the other.
         let mut fx = EffectsPool::default();
-        fx.shot([0.0, 0.0, 0.0], &[[0.0, 30.0, 0.0]], false, false);
+        fx.shot([0.0, 0.0, 0.0], &[[0.0, 30.0, 0.0]], &[], false, false);
         let mut out = Vec::new();
         fx.vertices(&mut out);
         let hi = out.iter().map(|v| v.position[2]).fold(f32::MIN, f32::max);
@@ -683,7 +711,7 @@ mod tests {
         // Sharing the cloud's pass is deliberate; sharing its noise is not. A
         // tracer 7cm across would be eaten by it rather than textured.
         let mut fx = EffectsPool::default();
-        fx.shot([0.0; 3], &[[10.0, 0.0, 0.0]], false, false);
+        fx.shot([0.0; 3], &[[10.0, 0.0, 0.0]], &[], false, false);
         fx.detonate("he", [0.0; 3], 8.0);
         let mut out = Vec::new();
         fx.vertices(&mut out);

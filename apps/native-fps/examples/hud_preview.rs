@@ -305,6 +305,7 @@ async fn run(path: &str, width: u32, height: u32, summary: bool) {
                 opponents: 5,
                 won: false,
                 mvp: false,
+                recordable: true,
             },
             width as f32,
             height as f32,
