@@ -55,23 +55,57 @@ async def start_network() -> None:
     # shared-pane ops, and peer chat forwarded by peers.
     from backend.modules.network import agent_bridge, chat, collab, protocol
 
+    # `inline` although a remote turn takes minutes: the handler spawns the turn
+    # itself and returns immediately, because it must keep a cancellable handle in
+    # `_active_remote_turns` for `agent_cancel` to find. A generic `detach` would
+    # hand the task to the hub, where nothing can cancel one turn by request id.
     peer_hub.register_handler(
         protocol.AGENT_REQUEST, agent_bridge.handle_remote_agent_request
     )
     peer_hub.register_handler(
         protocol.AGENT_CANCEL, agent_bridge.handle_remote_agent_cancel
     )
-    peer_hub.register_handler(protocol.COLLAB_OP, collab.handle_peer_collab_op)
+    # Collab ops are the case `serial` exists for: applying them is slower than a
+    # dict write, and applying two backwards corrupts the document.
+    peer_hub.register_handler(
+        protocol.COLLAB_OP, collab.handle_peer_collab_op, mode="serial"
+    )
     peer_hub.register_handler(protocol.PEER_CHAT, chat.handle_peer_chat)
     from backend.modules.network import remote_control
 
+    # Detached: a remote command opens panes and plays media, awaiting the
+    # browser. Inline, a phone could stall every other window on the link.
     peer_hub.register_handler(
-        protocol.REMOTE_COMMAND, remote_control.handle_remote_command
+        protocol.REMOTE_COMMAND, remote_control.handle_remote_command, mode="detach"
     )
 
     from backend.modules.network.mobile_tools import register_mobile_tools
 
     register_mobile_tools()
+    # The fabric's own agent surface: survey, measure, find peers, and the three
+    # lease verbs. All loadable (`group="network"`) — the always-on peer verbs
+    # stay `list_peers` and `agent.ask_peer`, which live in the orchestrator.
+    from backend.modules.network.agent_tools import register_network_tools
+
+    register_network_tools()
+    # The bench's echo handler, so a peer can measure the link to *us*. Trivial by
+    # design: an echo that did real work would measure the work.
+    from backend.modules.network import bench
+
+    bench.register(peer_hub)
+    # Advertise this node's inference capacity (accelerator, VRAM, models, and
+    # which one is loaded) so "find a peer with a GPU" is answerable without
+    # asking every friend in turn.
+    from backend.modules.llamacpp.capability import register as register_inference
+
+    register_inference()
+    # Compute lending: the lease protocol and the byte tunnel it authorizes.
+    # Registered unconditionally — the handlers exist, but every one of them is
+    # gated on `network.allowComputeLending`, which is default-off, so a node that
+    # has not opted in refuses with a reason instead of going silent.
+    from backend.modules.network import lease as lease_module
+
+    lease_module.register(peer_hub)
     # Training fabric: advertise/receive "GPU offered / help wanted" ads.
     from backend.modules.training import fabric as training_fabric
 

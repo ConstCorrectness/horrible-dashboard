@@ -51,14 +51,21 @@ def available() -> tuple[bool, str]:
     imported, not used) and gives the pane a real reason to show rather than a
     subprocess that dies with an ImportError two seconds after the user clicks.
     """
-    try:
-        import llama_cpp  # noqa: F401
-    except Exception as exc:  # noqa: BLE001 — a broken native load is not an ImportError
+    from backend import extras
+
+    # `extras.probe` keeps the distinction this function's original comment
+    # already noticed: a broken native load is not an ImportError, and saying
+    # "not installed" about a wheel that is present sends people to reinstall it.
+    verdict = extras.probe("llamacpp")
+    if verdict.available:
+        return True, ""
+    detail = verdict.reason or "llama-cpp-python is not available here"
+    if verdict.certain:
         return False, (
-            "llama-cpp-python is not installed here, so activations are "
-            f"unavailable ({exc}). Install it with: uv sync --extra llamacpp"
+            f"activations are unavailable: {detail}. "
+            f"Install it with: {verdict.install}"
         )
-    return True, ""
+    return False, f"could not determine whether activations are available: {detail}"
 
 
 async def run_trace(spec: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:

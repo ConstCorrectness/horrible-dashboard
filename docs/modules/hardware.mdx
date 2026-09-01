@@ -97,6 +97,29 @@ have a card.
 | `traceTokenCap`  | 64 / 128 / 256 / 512 by **RAM** — the tracer runs on the CPU wheel           |
 | `localTraining`  | recommended only at 6 GB+ of accelerator memory                              |
 
+### `gpuLayers` is 0-or-999, and it stays that way
+
+It looks like the place a fractional offload belongs, and it is not. Every caller
+of `defaults()` depends on that number meaning "all of it" or "none of it", so
+teaching it to return 9 would change what an unrelated caller receives without
+changing a single line at that caller.
+
+Fractional budgeting lives one layer up, in `llamacpp/offload.py:layer_plan` and
+`llamacpp/speculative.py:spec_plan`, where the question is different: not "does
+this machine have a card?" but "do *these two models plus their KV caches* fit in
+*this* card at *this* context length?". `spec_plan` — which places a target and a
+draft model together — is a good illustration of why it cannot live here:
+
+- it takes headroom as a **caller-supplied parameter**, honouring `layer_plan`'s
+  contract of reporting weights and KV only rather than inventing a compute-buffer
+  fudge factor, and
+- it returns **`None` with a reason** when `layerBytes` is incomplete, because a
+  guessed split that OOMs on load is worse than a refusal that says why.
+
+So the probe answers "is there a usable accelerator, and how much memory does it
+report", and the byte arithmetic asks it questions. See
+[llama.cpp](llamacpp.mdx#speculative-decoding).
+
 `localTraining` never *blocks* a run. It decides what the app recommends; Kaggle
 and Colab push exist precisely because most machines are under that line.
 

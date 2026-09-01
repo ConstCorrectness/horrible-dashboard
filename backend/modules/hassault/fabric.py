@@ -37,7 +37,7 @@ from backend.modules.ws import WsConnection
 
 if TYPE_CHECKING:
     from backend.modules.network.hub import PeerHub, PeerSession
-    from backend.modules.network.models import PeerEnvelope
+    from backend.modules.network.models import PeerCapability, PeerEnvelope
 
 logger = logging.getLogger(__name__)
 
@@ -693,5 +693,35 @@ def register(hub: PeerHub) -> None:
     hub.register_handler(HASSAULT_INPUT, handle_input)
     hub.register_handler(HASSAULT_LEAVE, handle_leave)
     hub.register_handler(HASSAULT_FRAME, handle_frame)
-    hub.register_handler(HASSAULT_BROWSE, handle_browse)
+    # Detached to close a latent deadlock by construction: `browse_peers` fans out
+    # with `hub.request`, and those replies arrive on this very pump. Today it is
+    # only ever called from a route, so the deadlock is unreachable -- but nothing
+    # stopped a future caller from reaching it from inside a handler.
+    hub.register_handler(HASSAULT_BROWSE, handle_browse, mode="detach")
+    # Upgrade the statically-registered `hassault` capability to one that reports
+    # how many matches are actually open.
+    from backend.modules.network import capabilities
+
+    capabilities.register(CAPABILITY, _capability)
     hub.subscribe(_on_peer_event)
+
+
+def _capability() -> "PeerCapability":
+    """Advertise how many matches are actually open here, not just that this node
+    can play. It is what lets `browse_peers` skip a friend hosting nothing instead
+    of fanning out to everyone and waiting on the deadline."""
+    # Imported here, like `node_identity` in `handle_browse`: this module keeps its
+    # network imports local so the two packages can be loaded in either order.
+    from backend.modules.network.models import PeerCapability
+
+    rooms = match_server.listing()
+    return PeerCapability(
+        id=CAPABILITY,
+        attrs={
+            "openMatches": sum(
+                1 for room in rooms if room.get("players", 0) < MAX_PLAYERS
+            ),
+            "matches": len(rooms),
+            "maxPlayers": MAX_PLAYERS,
+        },
+    )

@@ -63,13 +63,18 @@ _MAX_PIXELS = 50_000_000
 
 
 def clip_installed() -> bool:
-    """True when the `clip` extra is importable (`uv sync --extra clip`)."""
-    try:
-        import onnxruntime  # noqa: F401
-        import tokenizers  # noqa: F401
-    except Exception:  # noqa: BLE001
-        return False
-    return True
+    """True when the `clip` extra is importable (`uv sync --extra clip`).
+
+    Delegates to `backend.extras` so every optional extra answers in one shape.
+    Note this collapses three states into two on purpose: a caller asking
+    "installed?" wants a yes/no, and an ONNX runtime that is present but will not
+    load must answer *no* here. Anything that needs to explain the difference --
+    a settings page, a peer advertisement -- reads `extras.probe("clip")` and
+    checks `certain`.
+    """
+    from backend import extras
+
+    return extras.probe("clip").available
 
 
 def clip_enabled() -> bool:

@@ -458,6 +458,79 @@ have silently lost that retry**, which is gated on `info.dialect == "openai"`.
 It is deliberately not `can_pull`: weights are fetched by this module's catalog, not
 by asking the inference server to pull them the way Ollama does.
 
+## Speculative decoding
+
+A small **draft** model proposes tokens and the large **target** verifies a batch
+of them in one pass. It is local — `-md`/`--model-draft` takes a file path, and
+there is no remote-draft mode in llama.cpp, so a peer cannot supply draft tokens
+however convenient that would be.
+
+### Flags are probed, never hardcoded
+
+`features.probe_flags()` shells `llama-server --help` and reports which spelling
+*this* build wants, cached by binary path **and mtime**.
+
+Two reasons, both silent failures otherwise. Upstream renamed the tuning flags
+under a `--spec-` prefix in 2026 (`--draft-max` → `--spec-draft-n-max`), and both
+spellings are in the wild; passing the wrong one does not warn — the server exits
+during load and `wait_ready` reports the generic "did not start", which reads as a
+broken model. And `--rpc` is a compile-time feature whose presence in upstream's
+*release* binaries has changed over time: b10453-cuda, which this module
+downloads, **does** have it, so a documented constant would have been true when
+written and quietly wrong later.
+
+The probe answers in **three states** (`hardware/probe.py`'s rule): present,
+absent, or could-not-ask. A knob the build does not advertise is **dropped** from
+the command line rather than swapped for the other spelling — its absence means
+the build uses its own default, which works, where a wrong flag does not.
+
+### A draft must share the target's tokenizer
+
+`speculative.check_compatible` compares `tokenizer.ggml.model`, `tokenizer.ggml.pre`,
+vocabulary size, a hash over a stride of the token list, and the BOS/EOS ids.
+
+It **refuses** rather than warning, because the failure is invisible: the draft
+proposes token *ids*, so a mismatched tokenizer collapses the acceptance rate and
+makes generation **slower than not drafting at all**, while looking like it
+worked. A warning on a feature whose only symptom is "mysteriously slower" gets
+ignored. For the same reason an unreadable header is a refusal, not a pass, and
+compatibility is read from headers rather than inferred from names — files sharing
+a name prefix routinely have different tokenizers.
+
+`llamacpp.find_drafts` lists compatible candidates smallest-first, and also
+reports whether the build can draft at all, which saves a doomed spawn.
+
+### Dividing the card
+
+`hardware.defaults().gpu_layers` stays 0-or-999 — every caller depends on that
+number, and this is the only place that needs to split a card between two models.
+`speculative.spec_plan` does the division, reusing `offload.layer_plan` and
+inheriting its honesty: that function reports weights and KV cache and explicitly
+declines to invent a compute-buffer allowance, so **headroom is a caller-supplied
+parameter here too**.
+
+The draft goes on the card **whole or not at all**. Splitting an already-small
+model across host and device costs a PCIe round trip per token on the very path
+whose cheapness is the entire premise of drafting. If it will not fit alongside
+anything, `spec_plan` offers no plan and says why, rather than guessing — a guess
+here is an out-of-memory error at load.
+
+### Measuring it, because it may not help
+
+`specbench.py` is the deliverable, not garnish. On a single consumer card the
+draft's VRAM comes out of the target's KV cache, and drafting costs a forward pass
+per batch whether the guesses land or not; the trade can genuinely be negative.
+
+It reports **p50 and p10, never a mean** (variance is the defining property — a
+mean hides that a code prompt got 2.4× and a prose prompt 0.8×), **per prompt,
+never only aggregated** (an aggregate over mostly-boilerplate prompts is how you
+convince yourself of a speedup you will never see), and A/B back-to-back on the
+same machine, since tokens/sec is not comparable across runs on a laptop that
+throttles. `compare()` may return a verdict of "slower" — that is a result.
+
+The acceptance rate is included because it explains the outcome: 20% acceptance
+and slower is a *model pairing* problem, 70% and slower is a *memory* problem.
+
 ## Per-agent provider selection
 
 `model`, `temperature`, `contextSize`, `maxTokens` and `topP` have been per-agent

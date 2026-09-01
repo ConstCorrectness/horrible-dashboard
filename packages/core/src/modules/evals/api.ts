@@ -126,6 +126,10 @@ export interface EvalRun {
   finished_at: string;
   error: string;
   localtrack_run_id: string;
+  /** The peer this ran on, empty for local. Recorded rather than inferred: a peer
+   *  target reaches its lender through a *local* tunnel port, so the endpoint on
+   *  the row reads as `127.0.0.1` either way. */
+  node: string;
   /** Content hash of the tool catalog this run saw — enabled skills plus connected
    *  MCP servers. Empty on runs recorded before it existed, which reads as "cannot
    *  tell", never as agreement. */
@@ -196,6 +200,8 @@ export const startRun = (body: {
     model: string;
     model_path?: string;
     label?: string;
+    /** Run this target on a peer instead, via a compute lease. */
+    node?: string;
   }[];
   case_ids?: string[];
   localtrack_project?: string;

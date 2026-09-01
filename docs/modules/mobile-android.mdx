@@ -93,6 +93,20 @@ object: Moshi widens every JSON number to `Double`, which would turn the desktop
 `backend/tests/test_network_mobile_conformance.py` pins these vectors so the
 Python side cannot drift away from the Kotlin.
 
+### The `caps` field (not yet sent by the phone)
+
+The desktop now advertises a richer `caps` array beside `capabilities` — see
+[Capabilities](network.mdx#capabilities). **The phone does not have to send it.**
+A peer that omits `caps` has it synthesized from the flat list backend-side, so
+the existing Kotlin handshake keeps working unchanged, and
+`mobile_tools`' `'mobile' in p.capabilities` check is untouched.
+
+A vector is pinned for it anyway (`test_caps_field_canonical_bytes_are_pinned`),
+so that whenever Android does adopt it there is an exact target rather than an
+inferred one. It signs like any other field, which means rule 2 above applies at a
+depth Kotlin usually stops at: `caps` is a **list of objects**, and those objects'
+keys sort too.
+
 ### Debugging a failed handshake
 
 `PeerHub.accept_link` logs every step of the acceptor side — HELLO received,

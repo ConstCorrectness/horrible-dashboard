@@ -42,9 +42,14 @@ class RelayLink(PeerLink):
 
     async def send(self, env: PeerEnvelope) -> None:
         # Stamp the routing dst so the broker can forward (excluded from the sig).
+        # This is why `send` takes an envelope rather than a pre-encoded string:
+        # the relay legitimately rewrites a routing header, and a pre-encoded
+        # frame could only be patched by editing JSON text.
         if env.dst is None:
             env = env.model_copy(update={"dst": self.peer_node_id})
-        await self._transport._send_raw(protocol.encode(env))
+        raw = protocol.encode(env)
+        self.last_sent_bytes = len(raw.encode("utf-8"))
+        await self._transport._send_raw(raw)
 
     async def recv(self) -> PeerEnvelope:
         getter = asyncio.ensure_future(self._inbox.get())

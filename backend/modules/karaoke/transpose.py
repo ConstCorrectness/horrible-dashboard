@@ -44,6 +44,8 @@ def ffmpeg_path() -> str | None:
 
 
 def available() -> bool:
+    """Whether pitch shifting can run here. Bare bool for its callers; the
+    three-state answer is `extras.probe("ffmpeg")`."""
     return ffmpeg_path() is not None
 
 

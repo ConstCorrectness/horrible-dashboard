@@ -15,7 +15,7 @@ import asyncio
 import logging
 from typing import Any
 
-from backend.modules.research import engine, runstore
+from backend.modules.research import engine, peer_subagent, runstore
 from backend.modules.research.broadcast import (
     publish_run,
     publish_step,
@@ -215,19 +215,30 @@ class ResearchRunner:
                 )
                 self._publish_step(step["id"])
                 return
+
+            async def factory() -> Any:
+                """Run this subagent, on a friend's node when one was assigned.
+
+                A peer that declines, times out or answers with nothing returns
+                None and we run it here instead — so distribution can only make a
+                wave faster, never make it fail.
+                """
+                node = remote_assignments.get(step["id"])
+                if node:
+                    result = await peer_subagent.run_remote(step["input"], node)
+                    if result is not None:
+                        return result
+                return await engine.run_subagent_step(
+                    run,
+                    step["input"],
+                    sub,
+                    is_cancelled=lambda: self._cancelled(run_id),
+                    on_tool=self._tool_observer(run_id, step["id"]),
+                )
+
             async with semaphore:
                 try:
-                    await self._run_step(
-                        run_id,
-                        step,
-                        lambda: engine.run_subagent_step(
-                            run,
-                            step["input"],
-                            sub,
-                            is_cancelled=lambda: self._cancelled(run_id),
-                            on_tool=self._tool_observer(run_id, step["id"]),
-                        ),
-                    )
+                    await self._run_step(run_id, step, factory)
                 except RunCancelled:
                     raise
                 except Exception:  # noqa: BLE001 — a failed subagent doesn't fail the run
@@ -267,6 +278,26 @@ class ResearchRunner:
                     publish_step(step)
             if not wave:
                 break
+
+            # Hand a couple of this wave's steps to friends, if any are around and
+            # the setting allows it. Keyed by step id rather than index so a
+            # follow-up posted mid-wave cannot inherit somebody else's assignment.
+            remote_assignments = {}
+            if bool(get_value("research.distributeSubagents", False)):
+                peers = peer_subagent.eligible_peers()
+                if peers:
+                    picked = peer_subagent.assign(
+                        [s["input"] for s in wave], peers
+                    )
+                    remote_assignments = {
+                        wave[i]["id"]: node for i, node in picked.items()
+                    }
+                    logger.info(
+                        "research run %s: dispatching %d of %d subagents to peers",
+                        run_id,
+                        len(remote_assignments),
+                        len(wave),
+                    )
 
             # A `while` rather than a single gather: a follow-up posted mid-wave
             # creates a subagent step in this round, and this picks it up in the

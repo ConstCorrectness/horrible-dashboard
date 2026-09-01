@@ -23,7 +23,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from contextlib import AsyncExitStack
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any
 
 from backend.modules.evals import fingerprint, llama_target, store
@@ -66,6 +67,27 @@ async def _emit(event: str, data: dict[str, Any]) -> None:
         # re-reads the run on its next poll; a sweep that died mid-way because
         # nobody was listening is unrecoverable.
         logger.debug("evals: progress broadcast failed", exc_info=True)
+
+
+@asynccontextmanager
+async def _peer_endpoint(node: str, target: RunTarget) -> AsyncIterator[str]:
+    """Hold a compute lease on `target.node` for the length of this target.
+
+    Released in a `finally` like `llama_target.serving`: a sweep that dies must not
+    leave a friend's GPU reserved until the lease expires on its own.
+    """
+    from backend.modules.network.hub import peer_hub
+    from backend.modules.network.lease import leases
+
+    borrowed = await leases.request(
+        peer_hub, node, "llama", model=getattr(target, "model", "") or None
+    )
+    try:
+        if not borrowed.endpoint:
+            raise RuntimeError(f"{node} granted a lease with no endpoint")
+        yield borrowed.endpoint
+    finally:
+        await leases.release_borrowed(borrowed.lease_id)
 
 
 def _resolve_target(target: RunTarget) -> tuple[Any, str]:
@@ -121,6 +143,9 @@ async def _run_one_target(
         total=len(cases),
         harness_hash=harness[0],
         harness_json=harness[1],
+        # Stamped at creation, not on completion: a sweep that dies mid-target
+        # still has to say whose machine it was on.
+        node=getattr(target, "node", "") or "",
     )
     # Reported upward the moment the row exists, so a cancel can name the runs it
     # has to close out. Cancellation arrives as a `CancelledError` raised inside
@@ -164,11 +189,32 @@ async def _run_one_target(
             )
 
     async with AsyncExitStack() as stack:
+        # A peer target: take a lease and point at the tunnel. Everything below is
+        # unchanged, because a borrowed endpoint is just an endpoint — which is
+        # why this is plumbing rather than a second runner.
+        # `getattr` because `node` is optional with an empty default, and targets
+        # reach here duck-typed as well as as `RunTarget` — the existing
+        # `target.model_path` read below survives only by short-circuiting on
+        # `provider`, which is luck rather than design.
+        peer_node = getattr(target, "node", "") or ""
+        if peer_node:
+            try:
+                endpoint = await stack.enter_async_context(
+                    _peer_endpoint(peer_node, target)
+                )
+            except Exception as exc:  # noqa: BLE001
+                # Same rule as an unloadable GGUF: "your friend said no" and "this
+                # model gets everything wrong" must not look alike on a scoreboard.
+                store.update_run(
+                    run.id, status="failed", error=str(exc), finished_at=_now()
+                )
+                await _emit("run_failed", {"runId": run.id, "error": str(exc)})
+                return store.get_run(run.id) or run
         # A llama.cpp target names a GGUF, and the server holds one model at a time,
         # so the weights are loaded for the length of this target and the user's own
         # server is put back afterwards (see evals/llama_target.py). The endpoint is
         # whatever the load produced — the port is picked at spawn.
-        if target.provider == "llamacpp" and target.model_path:
+        elif target.provider == "llamacpp" and target.model_path:
             try:
                 endpoint = await stack.enter_async_context(
                     llama_target.serving(target.model_path)
@@ -183,7 +229,13 @@ async def _run_one_target(
                 await _emit("run_failed", {"runId": run.id, "error": str(exc)})
                 return store.get_run(run.id) or run
 
-        async with _target_semaphore:
+        # `_target_semaphore` serializes targets because this node has one
+        # llama.cpp process to fight over. A peer target uses *their* process, so
+        # holding it here would serialize the very parallelism that makes
+        # distributing a sweep worth doing.
+        async with AsyncExitStack() as gate:
+            if not peer_node:
+                await gate.enter_async_context(_target_semaphore)
             for index, case in enumerate(cases):
                 result: CaseResult
                 if case.type == "hf_benchmark":

@@ -6,7 +6,14 @@
  */
 import { onSocketOpen, sendChannel, subscribeChannel } from '../../ws';
 import { toastsStore } from '../../toasts';
-import type { NodeIdentity, PairResult, PeerInfo, PeerMetrics, PeersSnapshot } from './api';
+import type {
+  LeaseSnapshot,
+  NodeIdentity,
+  PairResult,
+  PeerInfo,
+  PeerMetrics,
+  PeersSnapshot,
+} from './api';
 
 export interface NetworkState {
   self: NodeIdentity | null;
@@ -112,6 +119,19 @@ export function subscribeMetrics(handler: (metrics: PeerMetrics[]) => void): () 
     if (msg.event === 'peer_metrics') {
       handler((msg.data as { metrics: PeerMetrics[] }).metrics ?? []);
     }
+  });
+}
+
+/**
+ * Subscribe to compute-lease changes in both directions.
+ *
+ * Pushed rather than polled because the transitions that matter originate on the
+ * *other* node — a peer revoking mid-turn, a lease expiring — so a view that only
+ * refreshed on its own actions would keep showing a lease already taken away.
+ */
+export function subscribeLeases(handler: (snapshot: LeaseSnapshot) => void): () => void {
+  return subscribeChannel('network', (msg) => {
+    if (msg.event === 'lease_update') handler(msg.data as LeaseSnapshot);
   });
 }
 

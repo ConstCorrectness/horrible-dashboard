@@ -1,0 +1,107 @@
+# Optional extras: probing and borrowing
+
+**Status: implemented.** `backend/extras.py` answers whether an optional extra is
+usable here; `backend/modules/network/borrow.py` decides whether work needing one
+runs locally, on a friend's machine, or not at all.
+
+- **Probe:** `backend/extras.py` (`probe`, `available`, `snapshot`)
+- **Routing:** `backend/modules/network/borrow.py` (`route`, `acquire`, `capability`)
+- **Consent:** the compute lease — see [network](../modules/network.mdx#compute-lending)
+
+## Why this exists
+
+This repo has several `uv sync --extra …` groups, and some are genuinely painful
+to install: `voice` pulls torch (1–2 GB), `llamacpp` builds llama.cpp from an
+sdist and needs cmake plus a C++ compiler, `browser-engine` fetches ~150 MB of
+Chromium, `clip` downloads ~350 MB of weights on first use.
+
+A laptop that lacks them should be able to borrow the desktop in the next room
+that has them — and that starts with being able to ask the question in one shape.
+Before this, every extra answered differently: `karaoke.downloader.available()`
+and `library.clip.clip_installed()` returned a bare `bool`,
+`llamacpp.trace_runner.available()` returned `(bool, reason)`, and the voice
+services were lazy imports turned into a 503 at the route. None of them could say
+the third thing.
+
+## Three states, not two
+
+The rule [hardware](../modules/hardware.mdx) exists to enforce, applied here:
+
+| state | `available` | `certain` | meaning |
+| --- | --- | --- | --- |
+| `installed` | `true` | `true` | it imported |
+| `absent` | `false` | `true` | `ImportError` — genuinely not here |
+| `unknown` | `false` | `false` | present but would not load, or we could not look |
+
+:::danger The third row is the whole point
+A native library that fails to load is **not** the same fact as a package that was
+never installed. Reporting it as "not installed" sends someone to reinstall a
+package already sitting on disk, and they will find the reinstall changes nothing.
+
+So an `ImportError` is the *only* exception read as absence. Anything else — a
+missing DLL, an `OSError` from a data file, a broken wheel — is reported as what
+it was, with the error attached.
+:::
+
+An extra name the code does not declare is also `certain: false`: that is our bug,
+not the user's environment, and it must not render as "you have not installed
+this".
+
+Probes import in **this** process, which is cheap (the package is imported, not
+used) and gives a real reason rather than a subprocess that dies two seconds after
+the user clicks something. Results are cached per process; `reset_cache()` exists
+for tests and for after an install.
+
+`extras.py` deliberately decides **no policy**. Whether an absent extra means a
+503, a disabled setting, or a request to borrow a peer's is the caller's business.
+
+## The borrow-or-hint rule
+
+```
+probe locally
+  ├── available            → run locally
+  ├── absent  + a peer has it + lending arranged → run there
+  └── otherwise            → the install hint, now naming the borrow attempt
+```
+
+Two things it will not do, and both are the interesting half:
+
+**"Could not ask" never routes to a peer.** An extra that is installed but failing
+to load is a broken *local* install — a problem the user can actually fix. Quietly
+answering it by shipping their audio to a friend's machine hides it. Only a
+`certain` absence is grounds for borrowing.
+
+**Nothing is silently remoted.** Every result says which node produced it (`ranOn`
+on the voice routes), the same way `get_embeddings` returns a `method` so callers
+can refuse to persist a fallback. A borrowed transcript that looks local is how a
+user comes to believe their laptop has Whisper installed.
+
+A peer that declines is an *answer*, not an error: `acquire` turns a refused lease
+into an `unavailable` route carrying the reason, because the caller's job is to do
+the work or explain why it cannot.
+
+## Advertisement
+
+`borrow.capability()` contributes an `extras` [capability](../modules/network.mdx#capabilities)
+listing only what is **installed**, which is what makes `network.find_peers`
+able to answer "who can transcribe this?".
+
+Absent extras are not advertised — that would make a peer's UI offer something
+every request against it would refuse. Neither are *uncertain* ones, which would
+be worse: it would send a friend's work to a machine whose own install is broken.
+
+## Which extras are borrowable
+
+| extra | lease `service` | borrowable |
+| --- | --- | --- |
+| `voice` | `voice` | yes |
+| `clip` | `clip` | yes |
+| `llamacpp` | `trace` | yes |
+| `browser-engine` | `browser` | yes |
+| `geoip`, `webrtc` | — | no: properties of *this* node's own networking |
+| `games-native` | — | no: renders frames for a local pane |
+| `ffmpeg`, `yt-dlp` | — | no: probed, but local-only |
+
+Borrowable extras are HTTP routes on the backend rather than separate processes,
+so they resolve to the same address through the tunnel. The lease `service` is
+what the authorizer checks, so holding one of them does **not** grant the others.

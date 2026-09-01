@@ -136,7 +136,9 @@ async def _embed_batch(
     return None
 
 
-async def get_embeddings(texts: list[str]) -> tuple[list[list[float]], str]:
+async def get_embeddings(
+    texts: list[str], *, allow_peer: bool = True
+) -> tuple[list[list[float]], str]:
     """Embed many texts in as few round-trips as possible.
 
     The bulk path behind index builds. Three things it does that calling
@@ -163,6 +165,20 @@ async def get_embeddings(texts: list[str]) -> tuple[list[list[float]], str]:
         model, endpoint, dialect, kind = resolved
         method = f"{'ollama' if dialect == 'ollama' else kind}/{model}"
 
+        # A batch is the one embedding shape worth sending off-machine: a 200 ms
+        # round trip is nothing against a multi-second batch. Opt-in
+        # (`database.embedOnPeer`, default off) because shipping every index build
+        # to a friend's node is a surprising thing to do quietly, and
+        # `allow_peer=False` on the lender's own route so serving a batch can
+        # never re-borrow it from a third node.
+        if allow_peer and _peer_offload_enabled():
+            from backend.modules.database import embed_peer
+
+            peered = await embed_peer.try_peer_batch(texts, method)
+            if peered is not None:
+                vectors, peer_method = peered
+                return vectors, peer_method
+
         batched = await _embed_batch(client, texts, model, endpoint, dialect, kind)
         if batched is not None:
             return batched, method
@@ -186,6 +202,12 @@ async def get_embeddings(texts: list[str]) -> tuple[list[list[float]], str]:
             )
             return [get_local_fallback_embedding(t) for t in texts], "local-fallback"
         return [r for r in results if r is not None], method
+
+
+def _peer_offload_enabled() -> bool:
+    from backend.modules.settings.routes import get_value
+
+    return bool(get_value("database.embedOnPeer", False))
 
 
 async def _embed_one(

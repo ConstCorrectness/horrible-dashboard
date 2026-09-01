@@ -217,3 +217,41 @@ guard (`fetch_readable`) instead of a bare HTTP client.
   extractor branch, same as `pdf` did.
 - **Browser clipper extension** (Obsidian-web-clipper style): a separate
   distributable that POSTs to `/api/library/sources` — that endpoint is its contract.
+
+## Embedding on a peer
+
+`get_embeddings` can route a batch to a friend's machine through an `embed`
+[lease](network.mdx#compute-lending). Embedding is the best-shaped work on the
+fabric: a big batch with no latency sensitivity, where a 200 ms round trip is
+irrelevant against several seconds of honest work.
+
+:::danger The safety property is the model, not the network
+`get_embeddings` already returns `(vectors, method)` so callers can refuse to
+persist a hash fallback. A peer running a **different embedding model** is exactly
+as dangerous and far less obvious: the vectors are real, the right width, and
+nothing errors. They simply live in a different space, so mixing them into one
+LanceDB table silently ruins retrieval — with no recovery short of a full reindex.
+
+So the model id travels with the request and a mismatch is **refused**, on both
+sides independently: the lender rejects it with a 409, and the borrower checks
+again on receipt rather than depending on a remote node's diligence for the
+integrity of its own index. A dimension check would not be enough — two
+768-dimension models disagree completely while agreeing on width.
+:::
+
+Routing is **opt-in** (`database.embedOnPeer`, default off): shipping every index
+build to a friend's machine should be a choice rather than a default. When it does
+run remotely the result says so — `method` comes back as `peer:<node>/<model>`,
+named at the point that knows the node, because `embed_via_peer` sees only a
+`127.0.0.1` tunnel endpoint and a result carrying that would read as local.
+
+This is the batch path (`get_embeddings`), which serves the symdex index, the
+webindex crawler, trajectory search and the search rerank. Library **ingest**
+embeds per chunk through `get_embedding`, so it does not take this route — sending
+single chunks to a peer is exactly the chatty shape the design rejects, and
+batching ingest is a separate change.
+
+A lender with no embedding provider of its own returns 503 rather than serving
+hash-fallback vectors, so the borrower learns about it as an error instead of as a
+quietly degraded index. Ordinary failures — no peer, a refused lease, a dropped
+connection — are not errors at all: the batch simply runs locally.

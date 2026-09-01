@@ -315,6 +315,42 @@ The deliberately *separate* job system: `tasks/queue.py` stays the serial
 short-job queue (library ingest, Drive sync) — a ten-minute research run on
 that worker would starve every ingest behind it.
 
+## Distributing a wave to friends
+
+A research wave is embarrassingly parallel, and both halves of distributing it
+already existed: a subagent is an isolated unit of work with a spec in and a report
+out, and `agent.ask_peer` is an authenticated agent-to-agent RPC. So this needs
+**no tunnel, no lease and no new wire type** — `research.distributeSubagents`
+(default off) hands at most two steps per wave to trusted, connected peers
+advertising the `agent` capability.
+
+Four things keep it honest:
+
+- **A remote turn runs under the *peer's* permissions.** The callee gates on its own
+  `network.allowRemoteAgent` and `network.remoteAgentMode`, which defaults to
+  read-only `plan`. A remote subagent can therefore have **fewer tools than a local
+  one**, so the brief asks for read-only research and nothing that acts.
+- **A decline is never fatal.** A peer that refuses, times out, or answers with
+  nothing returns `None` and the step runs locally instead. Distribution can make a
+  wave faster; it cannot make one fail. An *empty* answer counts as a decline —
+  recording it as done would let synthesis proceed believing that angle was covered.
+- **Provenance travels with the report** (`ran_on`). The verification pass grades
+  claims by *independent publisher*, so two peers citing the same domain must count
+  as one source rather than two, and that arithmetic needs to know where each
+  finding came from. The console prints `ran on <node>` beside such a step, and only
+  such a step — its absence already means the work stayed here.
+- **Remote tokens are not charged to this run's budget.** They were spent on the
+  peer's, and charging them here would throttle a run for work it did not pay for.
+
+Research uses its own `PEER_SUBAGENT_TIMEOUT_S` rather than raising
+`agent_bridge`'s: a deep subagent turn is minutes of tool calls, while `ask_peer`'s
+default is sized for a conversational question, and a chat user waiting on "ask
+Rob's agent" should not inherit a ten-minute ceiling.
+
+Assignments are keyed by **step id**, not index — a follow-up posted mid-wave joins
+the round (see [Depth](#depth-rounds-verification-steering)), and indices would
+shift under it.
+
 ## Obsidian export
 
 The node is the source of truth; the vault gets a **readable mirror**. With

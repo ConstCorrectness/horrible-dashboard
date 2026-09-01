@@ -86,8 +86,10 @@ class WebRtcLink(PeerLink):
     async def send(self, env: PeerEnvelope) -> None:
         if self._closed.is_set():
             raise LinkClosed
+        raw = protocol.encode(env)
+        self.last_sent_bytes = len(raw.encode("utf-8"))
         try:
-            self._channel.send(protocol.encode(env))
+            self._channel.send(raw)
         except Exception as exc:  # channel torn down mid-send
             raise LinkClosed from exc
 

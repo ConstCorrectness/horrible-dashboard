@@ -84,6 +84,28 @@ export const networkModule: ModuleManifest = {
       type: 'boolean',
       default: false,
     },
+    // Compute lending. Basic rather than advanced: these are "who may use my
+    // machine", the same class of question as allowRemoteAgent above — not
+    // NAT-traversal plumbing copied from whoever runs your infrastructure.
+    {
+      key: 'network.allowComputeLending',
+      title: 'Allow compute lending',
+      description:
+        'Let a trusted friend borrow this machine — its loaded model, its GPU, or an optional extra it has installed. Off means nothing is ever lent, whatever the policy below says.',
+      type: 'boolean',
+      default: false,
+    },
+    {
+      key: 'network.computeLeasePolicy',
+      title: 'Compute lease policy',
+      description:
+        'Who may hold a lease. ask = every request needs approval; trusted = any accepted friend may borrow; off = refuse everything. An unrecognised value is read as off.',
+      type: 'enum',
+      default: 'ask',
+      // Fails closed, like network.remoteAgentMode: a typo or a downgrade from a
+      // newer version must narrow access, never widen it.
+      enumValues: ['ask', 'trusted', 'off'],
+    },
 
     // ---- Advanced: NAT traversal, rendezvous, and remote-agent gating ----------
     {
@@ -153,6 +175,15 @@ export const networkModule: ModuleManifest = {
       description: 'Password/credential for the TURN server (if it requires auth).',
       type: 'string',
       default: '',
+      advanced: true,
+    },
+    {
+      key: 'network.computeAllowModelSwap',
+      title: 'Let a borrower swap the loaded model',
+      description:
+        'By default a lease is granted only against the model already loaded, so a friend’s request can never evict your own chat model — they are told what is loaded and can ask for that instead. Turn this on to let a borrower load a different one.',
+      type: 'boolean',
+      default: false,
       advanced: true,
     },
     {

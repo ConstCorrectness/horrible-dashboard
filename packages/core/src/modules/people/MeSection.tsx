@@ -15,6 +15,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { CommonsProfileEditor } from '../commons';
 import { AgentRelayPanel } from '../network/AgentRelayPanel';
+import { LinkHealth } from '../network/LinkHealth';
 import { PeerMonitor } from '../network/PeerMonitor';
 import { bindHandle, getSelfProfile, updateSelfProfile, type SelfProfile } from '../social/api';
 import { getSocialState, subscribeSocial } from '../social/ws';
@@ -175,6 +176,12 @@ export function MeSection() {
         <summary>Connection diagnostics</summary>
         <div className="people-embed">
           <PeerMonitor />
+        </div>
+      </details>
+      <details className="people-fold">
+        <summary>Link health</summary>
+        <div className="people-embed">
+          <LinkHealth />
         </div>
       </details>
       <details className="people-fold">

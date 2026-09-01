@@ -381,6 +381,36 @@ several windows are connected, the *richest* manifest wins, so a second window
 still registering its panes cannot hand the sweep a shorter catalog than the one
 you are looking at.
 
+## Peer targets
+
+A `RunTarget` may name a `node`. The Run section picks one for the whole sweep
+("run on"), offering only peers advertising the `inference`
+[capability](network.mdx#capabilities) — a lease on a peer with no llama.cpp of
+its own would be granted and then fail every case, which on a scoreboard is
+indistinguishable from a model that gets everything wrong.
+
+The run row records the node it ran on, and shows it only when that was somebody
+else's machine. **Recorded, not inferred:** a peer target reaches its lender
+through a *local* tunnel port, so the endpoint on the row reads `127.0.0.1` for a
+remote run exactly as it does for a local one. The sweep then takes a compute
+[lease](network.mdx#compute-lending) on that peer and points the target at the
+tunnel endpoint — everything downstream is unchanged, because a borrowed endpoint
+is just an endpoint. That is why this is plumbing rather than a second runner.
+
+The point is not remoteness. `_llama_lock` and `_target_semaphore` exist because
+**this** node has one llama.cpp process to fight over, and that constraint does not
+apply to somebody else's machine. So a peer target holds **neither**: N peers means
+N processes, which is the entire speedup. Holding the semaphore for a peer target
+would serialize away the whole reason for distributing a sweep.
+
+Two rules carry over unchanged from `llama_target.serving`:
+
+- **A lease that cannot be granted fails the *run*, not the cases.** "Your friend
+  said no" and "this model gets everything wrong" must not look alike on a
+  scoreboard — the same reasoning as an unloadable GGUF.
+- **The lease is released in a `finally`.** A sweep that dies must not leave a
+  friend's GPU reserved until the lease expires on its own.
+
 ## Contributions to the layout shell
 
 | Kind | Id | Notes |

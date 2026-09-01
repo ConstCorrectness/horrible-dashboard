@@ -802,6 +802,13 @@ _GROUP_DESCRIPTIONS: dict[str, str] = {
         "or display name."
     ),
     "mobile": "The user's paired phone: capture a photo, send it a notification.",
+    "network": (
+        "The peer fabric between the user's machines and their friends': survey "
+        "who is reachable and what each offers, measure link latency, find a peer "
+        "by capability (a free GPU, an open game, an installed extra), and borrow "
+        "compute from one under a revocable lease. (Listing peers and asking a "
+        "peer's agent a question need no load — those verbs are always present.)"
+    ),
     "watch": (
         "Standing watches on people: tell the user when a friend comes online or "
         "goes offline. Survives the turn — use it for 'let me know when X logs in'."
@@ -985,10 +992,22 @@ _GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
         "embedding",
         "similarity",
     ),
-    # No `network` entry: there are no `network.*` tools, so the group never appears
-    # in `_group_catalog` and any keywords here could never fire. The peer verbs
-    # (`list_peers`, `agent.ask_peer`) are always-on core, not a loadable group.
-    #
+    # The fabric verbs beyond the always-on two (`list_peers`, `agent.ask_peer`):
+    # surveying, measuring, finding peers by capability, and the lease tools.
+    # Deliberate omissions: "model" and "gpu" belong to `training` (a word in two
+    # groups preloads both, spending the budget twice), and "connect"/"remote" are
+    # too common to claim. "borrow"/"lend" carry the compute-lending intent, which
+    # has no synonym anywhere else in the app.
+    "network": (
+        "peer",
+        "fabric",
+        "node id",
+        "latency",
+        "borrow",
+        "lend",
+        "lease",
+        "another machine",
+    ),
     # `social` is what "who are my friends" should reach. Two deliberate omissions:
     # "contact" (already claimed by `records` — a word in two groups preloads both,
     # spending the budget twice) and "@" (the system prompt uses `@path` for file
@@ -1087,7 +1106,10 @@ _GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
         "crm",
         "pipeline",
         "form",
-        "row",
+        # "a row", not "row": matching is substring, so the bare word fired on
+        # "browser", "arrow", "throw" — and on `network`'s "borrow", preloading
+        # two groups for one intent every time compute lending came up.
+        "a row",
         "spreadsheet",
         "data entry",
     ),

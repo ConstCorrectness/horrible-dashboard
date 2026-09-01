@@ -308,6 +308,12 @@ class RunTarget(BaseModel):
     #: right weights — and it is the whole of "eval the checkpoint I just converted",
     #: which used to be unexpressible because the picker offered builds, not models.
     model_path: str = ""
+    #: Run this target on a **peer's** machine instead of here, via a compute
+    #: lease. The point is not remoteness for its own sake: `_llama_lock` and
+    #: `_target_semaphore` exist because *this* node has one llama.cpp process, and
+    #: that constraint does not apply to somebody else's. N peers means N
+    #: processes, which is the whole speedup.
+    node: str = ""
     #: What the scoreboard column is called. Defaults to the model name; set it
     #: when you are comparing a base against its own fine-tune, where the model
     #: names are unhelpfully similar.
@@ -340,6 +346,10 @@ class EvalRun(BaseModel):
     #: written before this existed, which Compare reports as "cannot tell" rather
     #: than as agreement.
     harness_hash: str = ""
+    #: The node this ran on, empty for local. Recorded rather than inferred: a
+    #: peer target reaches its lender through a *local* tunnel port, so the
+    #: endpoint on the row is `127.0.0.1` either way.
+    node: str = ""
     #: The harness itself, so a differing hash can say *what* differed.
     harness_json: str = ""
 

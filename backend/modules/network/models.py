@@ -37,6 +37,25 @@ class NodeIdentity(BaseModel):
     capabilities: list[str] = Field(default_factory=list)
 
 
+class PeerCapability(BaseModel):
+    """One thing a node offers, with live detail.
+
+    The flat `list[str]` form (`PeerInfo.capabilities`) answers *whether* a peer
+    does hassault; this answers *whether it has a game open right now*, which is
+    what turns "find a friend", "find an open game" and "find a peer with a GPU"
+    into one mechanism instead of three.
+
+    `attrs` is deliberately untyped: each capability's owner defines its own keys,
+    and a schema here would mean editing the fabric core to add a feature. It must
+    be JSON-serializable — these bytes are signed, so a value `json.dumps` chokes
+    on would fail the handshake rather than merely being dropped.
+    """
+
+    id: str
+    version: int = 1
+    attrs: dict[str, Any] = Field(default_factory=dict)
+
+
 class PeerInfo(BaseModel):
     """What a node knows about one peer, surfaced to the browser via the `network`
     channel + `/api/network/peers`."""
@@ -49,7 +68,12 @@ class PeerInfo(BaseModel):
     status: PeerStatus
     trusted: bool = False
     last_seen: float | None = None
+    #: The flat capability ids. **This field can never change type**: it is what
+    #: every existing consumer reads, what the Kotlin client sends, and what
+    #: `CommonsProfile.agent_capabilities` signs. `caps` is the additive richer
+    #: form, synthesized from this one when a peer is too old to send it.
     capabilities: list[str] = Field(default_factory=list)
+    caps: list[PeerCapability] = Field(default_factory=list)
 
 
 class PeerEnvelope(BaseModel):
@@ -117,6 +141,19 @@ class AskPeerResult(BaseModel):
     ok: bool
     answer: str | None = None
     error: str | None = None
+
+
+class BenchRequest(BaseModel):
+    """Ask the bench to time a link (`POST /api/network/bench`).
+
+    `mode="local"` needs no peer at all -- it measures this machine's own
+    sign/serialize/verify floor, which is what separates "that peer is far away"
+    from "this box is slow".
+    """
+
+    node_id: NodeId = ""
+    mode: Literal["echo", "sweep", "local"] = "echo"
+    count: int = 40
 
 
 class PeerMetrics(BaseModel):

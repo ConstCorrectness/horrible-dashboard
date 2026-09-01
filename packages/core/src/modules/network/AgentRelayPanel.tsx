@@ -1,7 +1,14 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 
-import { askPeer } from './api';
-import { getNetworkState, initNetwork, requestPeers, subscribeNetwork } from './ws';
+import type { BorrowedLease } from './api';
+import { askPeer, getLeases } from './api';
+import {
+  getNetworkState,
+  initNetwork,
+  requestPeers,
+  subscribeLeases,
+  subscribeNetwork,
+} from './ws';
 
 function useNetworkState() {
   return useSyncExternalStore(subscribeNetwork, getNetworkState, getNetworkState);
@@ -28,10 +35,19 @@ export function AgentRelayPanel() {
   const [active, setActive] = useState('');
   const [prompt, setPrompt] = useState('');
   const [log, setLog] = useState<Exchange[]>([]);
+  const [borrowed, setBorrowed] = useState<BorrowedLease[]>([]);
 
   useEffect(() => {
     initNetwork();
     requestPeers();
+    // This is the pane about routing turns off-node, so it is where a borrowed
+    // model belongs on screen: an agent whose provider is `peer` answers from
+    // somebody else's GPU, and nothing else in the UI says so.
+    const unsub = subscribeLeases((snap) => setBorrowed(snap.borrowed ?? []));
+    void getLeases()
+      .then((snap) => setBorrowed(snap.borrowed ?? []))
+      .catch(() => undefined);
+    return unsub;
   }, []);
 
   useEffect(() => {
@@ -82,6 +98,26 @@ export function AgentRelayPanel() {
           ))}
         </select>
       </div>
+
+      {borrowed.length > 0 ? (
+        <div
+          style={{
+            padding: '0.3rem 0.5rem',
+            borderBottom: '1px solid var(--border)',
+            borderLeft: '2px solid var(--accent, #3B82F6)',
+            fontSize: '0.75rem',
+            fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+            color: 'var(--text-secondary, var(--text-dim))',
+          }}
+        >
+          {borrowed.map((l) => (
+            <div key={l.leaseId}>
+              borrowing {l.service}
+              {l.model ? ` (${l.model})` : ''} from {peers[l.nodeId]?.node_name ?? l.nodeId}
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       <div style={{ flex: 1, overflow: 'auto', padding: '0.5rem' }}>
         {log.length === 0 ? (

@@ -105,6 +105,91 @@ The standalone broker is `relay_broker.py`
 (`uv run uvicorn backend.modules.network.relay_broker:app --port 9000`): a stateless
 forwarder mapping `node_id → connection`, routing frames by `dst`.
 
+## What belongs on this fabric
+
+Every envelope is **signed**, and Ed25519 hashes the whole message — so signing
+costs roughly 525 MB/s per core, *linear in payload*. Measured on loopback (the CPU
+floor, no wire at all), one 1 MB frame occupies the pump for **19 ms**, and a
+sustained 64 KB bulk stream tops out near **57 MiB/s** while pushing a competing
+20 Hz stream's latency from 0.29 ms to 1.81 ms p50.
+
+That one number decides what may live here, and the rule generalizes past any
+particular feature:
+
+| Tier | Budget | Work | Verdict |
+|---|---|---|---|
+| **A** | seconds–minutes | eval sweeps, embedding batches, research subagent waves, crawls | **Best fit.** WAN-tolerant; unaffected by the throughput ceiling |
+| **B** | tens of ms, streaming | borrowed-model chat (SSE), Whisper/TTS, browser frames | **Works.** Needs the tunnel; degrades gracefully |
+| **C** | sub-frame | remote speculative drafting, ggml RPC tensor traffic | **Not worth it.** Per-message crypto dominates |
+
+The tiers are why the compute work landed the way it did: borrowing a peer's
+*whole model* (Tier B) rather than reimplementing speculative decoding across the
+wire (Tier C), and why ggml `--rpc` is deliberately not wired even though the
+official builds do ship the flag — tensor traffic is gigabytes against a ~57 MiB/s
+signed pipe. The honest version of Tier C is a binary side-channel authenticated
+**once at open** instead of per frame, which is a different and larger project.
+
+Two consequences are already in the code. Handlers declare a **dispatch mode**
+(`inline` / `detach` / `serial`) so one slow handler cannot head-of-line-block
+every other window on a link — and a handler that calls `hub.request` *must* be
+`detach`, since its reply arrives on the very pump it would otherwise be blocking.
+And bulk traffic is **rate-limited below saturation** rather than merely split into
+64 KB frames: a frame cap alone still leaves a game sharing the link paying 6×.
+Both are detailed in [network](../modules/network.mdx#dispatch-policy).
+
+## Borrowing compute
+
+A node can lend another node its GPU, its installed extras, or its embedding
+provider. Two pieces: a **lease** (the consent) and a **tunnel** (the pipe).
+
+```mermaid
+sequenceDiagram
+    participant B as Borrower
+    participant L as Lender
+    B->>L: compute_request {service, model?, duration_s}
+    Note over L: trusted? + allowComputeLending + policy + model already loaded?
+    alt refused
+        L-->>B: compute_deny {reason}
+        Note over B: a refusal is an answer, and it says what IS loaded
+    else granted
+        L-->>B: compute_grant {lease_id, service, model, expires}
+        B->>B: bind 127.0.0.1:0 — each TCP connection becomes one stream
+        B->>L: stream_open {lease_id, service}
+        Note over L: authorize() re-checked PER stream, not once at grant
+        loop while borrowed
+            B->>L: stream_data (64 KB frames, credit-limited)
+            L-->>B: stream_data + stream_credit
+        end
+        opt either side
+            L->>B: compute_revoke {reason}
+            Note over B: streams close → local socket closes → the partial answer is kept
+        end
+    end
+```
+
+Four things that are load-bearing:
+
+- **Consent is three gates, not one**: `session.info.trusted`, the default-off
+  `network.allowComputeLending`, and `network.computeLeasePolicy`, which **fails
+  closed** on an unrecognised value. `ask` currently denies, because treating it as
+  "yes" would grant access the user believes they still have to approve.
+- **Authorization is re-checked per `stream_open`.** A lease can expire or be
+  revoked between two sockets, and a borrower holding an old id must not keep
+  getting service.
+- **The lease is service-generic** (`llama`, `embed`, `voice`, `clip`, `trace`,
+  `browser`), which is why one protocol covers a borrowed GPU, a borrowed Whisper
+  and a borrowed embedding batch. Holding one service does **not** grant another.
+- **A raw byte tunnel, not an HTTP proxy.** SSE *is* bytes on a socket, so httpx
+  against the tunnel port is byte-identical to httpx against a local server — and
+  an HTTP proxy would mean reimplementing chunked transfer and preserving SSE
+  chunk boundaries by hand.
+
+Because a borrowed endpoint is `127.0.0.1`, **nothing may infer locality from an
+address**. Provenance is recorded explicitly instead: an eval run stores `node`, a
+peer-embedded batch returns `method: "peer:<node>/<model>"`, a remote research
+subagent stores `ran_on`. See
+[network](../modules/network.mdx#compute-lending).
+
 ## Trust
 
 `trust.py` gates who may pair, per `network.trustMode`:

@@ -54,6 +54,8 @@ def _ytdlp() -> Any | None:
 
 
 def available() -> bool:
+    """Whether downloads can run here. Kept as a bare bool for its callers; the
+    three-state answer (and the install hint) is `extras.probe("yt-dlp")`."""
     return _ytdlp() is not None
 
 

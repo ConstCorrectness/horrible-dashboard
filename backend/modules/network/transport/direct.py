@@ -31,8 +31,10 @@ class ClientPeerLink(PeerLink):
         self.address = address
 
     async def send(self, env: PeerEnvelope) -> None:
+        raw = protocol.encode(env)
+        self.last_sent_bytes = len(raw.encode("utf-8"))
         try:
-            await self._ws.send(protocol.encode(env))
+            await self._ws.send(raw)
         except ConnectionClosed as exc:
             raise LinkClosed from exc
 
@@ -41,7 +43,12 @@ class ClientPeerLink(PeerLink):
             raw = await self._ws.recv()
         except ConnectionClosed as exc:
             raise LinkClosed from exc
-        return protocol.decode(raw if isinstance(raw, str) else raw.decode("utf-8"))
+        if isinstance(raw, str):
+            self.last_recv_bytes = len(raw.encode("utf-8"))
+        else:
+            self.last_recv_bytes = len(raw)
+            raw = raw.decode("utf-8")
+        return protocol.decode(raw)
 
     async def close(self) -> None:
         await self._ws.close()
@@ -59,8 +66,10 @@ class ServerPeerLink(PeerLink):
         self.address = f"{peer.host}:{peer.port}" if peer else None
 
     async def send(self, env: PeerEnvelope) -> None:
+        raw = protocol.encode(env)
+        self.last_sent_bytes = len(raw.encode("utf-8"))
         try:
-            await self._ws.send_text(protocol.encode(env))
+            await self._ws.send_text(raw)
         except Exception as exc:  # WebSocketDisconnect or transport error
             raise LinkClosed from exc
 
@@ -69,6 +78,7 @@ class ServerPeerLink(PeerLink):
             raw = await self._ws.receive_text()
         except Exception as exc:  # WebSocketDisconnect when the peer goes away
             raise LinkClosed from exc
+        self.last_recv_bytes = len(raw.encode("utf-8"))
         return protocol.decode(raw)
 
     async def close(self) -> None:

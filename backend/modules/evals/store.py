@@ -141,6 +141,10 @@ def init_evals_db() -> None:
         # change is not a comparison of models (see evals/fingerprint.py).
         _ensure_column(conn, "eval_runs", "harness_hash", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "eval_runs", "harness_json", "TEXT NOT NULL DEFAULT ''")
+        # Which machine actually ran it. Recorded rather than inferred from the
+        # endpoint: a peer target's endpoint is a *local* tunnel port, so it looks
+        # exactly like a local run to anything reading the row afterwards.
+        _ensure_column(conn, "eval_runs", "node", "TEXT NOT NULL DEFAULT ''")
 
         # The two questions the scoreboard asks: every result for one run, and
         # every run's verdict on one case (the "which model fixed this" column).
@@ -361,6 +365,7 @@ def create_run(
     total: int,
     harness_hash: str = "",
     harness_json: str = "",
+    node: str = "",
 ) -> EvalRun:
     run = EvalRun(
         id=uuid.uuid4().hex[:12],
@@ -374,13 +379,14 @@ def create_run(
         started_at=_now(),
         harness_hash=harness_hash,
         harness_json=harness_json,
+        node=node,
     )
     with get_db_conn() as conn:
         conn.execute(
             "INSERT INTO eval_runs (id, suite_id, label, provider, endpoint, model,"
             " status, total, passed, completed, started_at, finished_at, error,"
-            " localtrack_run_id, harness_hash, harness_json)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, '', '', '', ?, ?)",
+            " localtrack_run_id, harness_hash, harness_json, node)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, '', '', '', ?, ?, ?)",
             (
                 run.id,
                 run.suite_id,
@@ -393,6 +399,7 @@ def create_run(
                 run.started_at,
                 run.harness_hash,
                 run.harness_json,
+                run.node,
             ),
         )
     return run

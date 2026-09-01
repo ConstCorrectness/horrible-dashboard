@@ -76,6 +76,24 @@ PROVIDERS: dict[str, ProviderInfo] = {
         can_pull=False,
         can_spawn=True,
     ),
+    "peer": ProviderInfo(
+        kind="peer",
+        label="Borrowed peer",
+        # Same reasoning as `llamacpp` above, and for the same reason: what is on
+        # the other end of the tunnel *is* a llama-server, reached through a local
+        # port. A bespoke dialect would duplicate six branches and silently lose
+        # the `tool_choice="required"` retry gated on `dialect == "openai"`.
+        dialect="openai",
+        # No default: the endpoint is a tunnel port chosen when the lease is
+        # granted, so `_endpoint_for` resolves it from the live lease and there is
+        # nothing sensible to fall back to. Without a lease this provider is
+        # simply unreachable, which is the truth.
+        default_endpoint="",
+        install_url="",
+        can_pull=False,
+        # The lender spawns; a borrower never does.
+        can_spawn=False,
+    ),
     "vllm": ProviderInfo(
         kind="vllm",
         label="vLLM",

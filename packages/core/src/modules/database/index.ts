@@ -35,6 +35,14 @@ export const databaseModule: ModuleManifest = {
       type: 'number',
       default: 1000,
     },
+    {
+      key: 'database.embedOnPeer',
+      title: 'Embed batches on a peer',
+      description:
+        'Send whole embedding batches to a trusted peer that has lent this node compute, instead of embedding them here. Off by default: shipping every index build to a friend’s machine should be a choice, not a default. A peer running a different embedding model is refused rather than adapted to — mixing embedding spaces in one table silently ruins retrieval.',
+      type: 'boolean',
+      default: false,
+    },
   ],
   widgets: [
     {

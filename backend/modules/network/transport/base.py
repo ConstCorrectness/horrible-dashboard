@@ -24,6 +24,19 @@ class PeerLink(ABC):
     # The dialed address (ws url / relay route), for reconnect + display.
     address: str | None = None
 
+    # Wire size of the most recent frame, in **bytes**, set by transports that
+    # know it (all of them do -- they hold the encoded string). The hub reads
+    # these for its per-session counters instead of serializing the envelope a
+    # second time purely to measure it, which is what it used to do in both
+    # directions. Optional rather than abstract so a transport that cannot answer
+    # simply leaves them None and the hub falls back to counting.
+    #
+    # They are bytes and not `len(str)` on purpose: the old counter measured
+    # characters, so every non-ASCII payload was under-counted -- a node name
+    # with an accent in it made the observability panel quietly wrong.
+    last_sent_bytes: int | None = None
+    last_recv_bytes: int | None = None
+
     @abstractmethod
     async def send(self, env: PeerEnvelope) -> None: ...
 

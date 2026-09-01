@@ -64,6 +64,53 @@ def test_canonical_bytes_are_pinned():
     assert canonical_bytes(_envelope()).decode("utf-8") == expected
 
 
+def _caps_envelope() -> PeerEnvelope:
+    """A hello carrying the richer `caps` field alongside `capabilities`.
+
+    The Kotlin client does not send `caps` yet, and does not have to -- a peer
+    that omits it has its capabilities synthesized from the flat list. This vector
+    exists so that when Android *does* adopt it, there is an exact target rather
+    than an inferred one.
+    """
+    return PeerEnvelope(
+        type="hello",
+        msg_id="0123456789abcdef0123456789abcdef",
+        src=_NODE_ID,
+        dst=None,
+        ts=1753632000.123456,
+        data={
+            "capabilities": ["mobile"],
+            "caps": [{"attrs": {"battery": 82}, "id": "mobile", "version": 1}],
+            "node_name": "Pixel 9",
+            "nonce": "n1",
+            "public_key": _PUBLIC_KEY,
+        },
+    )
+
+
+def test_caps_field_canonical_bytes_are_pinned():
+    """`caps` signs like any other field: sorted recursively, nulls kept, no
+    special casing. Nested dicts inside a list are where a second implementation
+    most often stops sorting."""
+    expected = (
+        '{"data":{"capabilities":["mobile"],'
+        '"caps":[{"attrs":{"battery":82},"id":"mobile","version":1}],'
+        '"node_name":"Pixel 9","nonce":"n1","public_key":"' + _PUBLIC_KEY + '"},'
+        '"msg_id":"0123456789abcdef0123456789abcdef",'
+        '"re":null,"src":"' + _NODE_ID + '",'
+        '"ts":1753632000.123456,"type":"hello","v":1}'
+    )
+    assert canonical_bytes(_caps_envelope()).decode("utf-8") == expected
+
+
+def test_caps_is_additive_not_a_replacement():
+    """`capabilities` must still be on the wire when `caps` is. A node that sent
+    only `caps` would be invisible to every existing peer and to the phone."""
+    payload = json.loads(canonical_bytes(_caps_envelope()).decode("utf-8"))
+    assert payload["data"]["capabilities"] == ["mobile"]
+    assert payload["data"]["caps"][0]["id"] == "mobile"
+
+
 def test_canonical_bytes_properties_a_second_implementation_must_match():
     """The four rules a reimplementation gets wrong in practice."""
     raw = canonical_bytes(_envelope()).decode("utf-8")

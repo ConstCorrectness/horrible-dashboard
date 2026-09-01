@@ -274,6 +274,14 @@ export const researchModule: ModuleManifest = {
       default: 2,
     },
     {
+      key: 'research.distributeSubagents',
+      title: 'Distribute subagents to friends',
+      description:
+        "Hand some of each research wave to a trusted friend's agent. A peer runs under THEIR permission mode (read-only by default), so a remote subagent may have fewer tools than a local one — and one that declines or times out simply runs here instead.",
+      type: 'boolean',
+      default: false,
+    },
+    {
       key: 'research.tokenBudget',
       title: 'Run token budget',
       description:

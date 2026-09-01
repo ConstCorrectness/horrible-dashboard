@@ -83,6 +83,53 @@ def _as_info(record: dict[str, Any]) -> ConnectionInfo:
     return ConnectionInfo(**safe, dialect=get_dialect(str(safe.get("provider") or "")))
 
 
+@router.post("/embeddings/batch")
+async def embed_batch(payload: dict) -> dict:
+    """Embed a batch of texts for a peer holding an `embed` lease.
+
+    Reached **only through the compute tunnel** — this backend binds loopback, so
+    there is no path to it from another machine except a lease the user granted.
+
+    `expectModel` is the borrower's embedding model, and a mismatch is refused
+    here as well as checked on their side. Two independent checks because the
+    consequence is silent: vectors from a different model are real, the right
+    width, and land in the borrower's table where they quietly ruin retrieval with
+    no error and no recovery short of a reindex.
+    """
+    from backend.modules.database.embeddings import get_embeddings
+
+    texts = payload.get("texts")
+    if not isinstance(texts, list) or not all(isinstance(t, str) for t in texts):
+        raise HTTPException(status_code=422, detail="texts must be a list of strings")
+    if len(texts) > 2048:
+        raise HTTPException(status_code=413, detail="batch too large (max 2048)")
+
+    # `allow_peer=False`: this *is* the lending side. Without it a lender whose
+    # own offload setting is on would answer a borrowed batch by borrowing it
+    # again, and a two-node pair would hand one batch back and forth.
+    vectors, method = await get_embeddings(texts, allow_peer=False)
+
+    if method.endswith("fallback"):
+        # The borrower's own code would refuse these; refusing here means they
+        # find out as an error rather than as a silently degraded index.
+        raise HTTPException(
+            status_code=503,
+            detail="this node has no embedding provider, only the hash fallback",
+        )
+
+    expect = str(payload.get("expectModel") or "")
+    if expect and method != expect:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"this node embeds with {method!r}, you asked for {expect!r}; "
+                "mixing embedding spaces would silently ruin your index"
+            ),
+        )
+
+    return {"vectors": vectors, "method": method, "count": len(vectors)}
+
+
 @router.get("/connections", response_model=ConnectionsResponse)
 async def get_connections() -> ConnectionsResponse:
     return ConnectionsResponse(

@@ -88,6 +88,45 @@ async def _list_models(_args: dict[str, Any]) -> Any:
     return {"models": out, "serving": _status_payload()}
 
 
+def tuning_vram() -> int | None:
+    """VRAM for the offload arithmetic, or None when we could not ask.
+
+    None rather than a default: `spec_plan` refuses to plan without a real figure,
+    and a guessed one is an out-of-memory error at load time rather than a
+    diagnosable refusal.
+    """
+    from backend.modules.hardware import probe as hardware
+
+    primary = hardware.get_profile().primary
+    return primary.vram_mb if primary else None
+
+
+async def _find_drafts(args: dict[str, Any]) -> Any:
+    """Which local GGUFs could serve as a draft for a target model.
+
+    Compatibility is read from the file headers, never inferred from names: two
+    files whose names share a prefix routinely have different tokenizers, and such
+    a pair does not fail at load — it collapses the acceptance rate and makes
+    generation slower while looking like it worked.
+    """
+    from backend.modules.llamacpp import features, speculative
+
+    model_path = str(args.get("modelPath", "")).strip()
+    if not model_path:
+        return {"error": "modelPath is required; call llamacpp.list_models first"}
+
+    info = features.probe_flags()
+    candidates = speculative.find_drafts(model_path)
+    return {
+        "target": model_path,
+        "drafts": candidates,
+        # Reported even when candidates exist: a build that cannot draft makes
+        # every one of them unusable, and saying so here saves a failed spawn.
+        "buildSupportsSpeculative": info.speculative,
+        "buildReason": info.draft_model.reason,
+    }
+
+
 async def _serve(args: dict[str, Any]) -> Any:
     """Load a GGUF into the local llama-server.
 
@@ -119,14 +158,56 @@ async def _serve(args: dict[str, Any]) -> Any:
         }
 
     tuning = hardware.defaults()
+    # `is None`, never falsiness: an explicit 0 means pure CPU and has to survive
+    # being passed through.
+    gpu_layers = args.get("gpuLayers")
+    gpu_layers = tuning.gpu_layers if gpu_layers is None else int(gpu_layers)
+    extra_args: list[str] = []
+    spec_note = ""
+
+    draft_path = str(args.get("draftModelPath", "") or "").strip()
+    if draft_path:
+        # Deliberately NOT a free-form `extraArgs` passthrough. A raw arg list is
+        # how an agent bricks a server load with a flag this build does not have,
+        # and the failure surfaces only as "did not start".
+        from backend.modules.llamacpp import features, speculative
+
+        verdict = speculative.check_compatible(model_path, draft_path)
+        if not verdict["compatible"]:
+            # Refused, not warned. A mismatched tokenizer does not error at load —
+            # the acceptance rate collapses and generation gets *slower* while
+            # looking like it worked, which is the one failure nobody would catch.
+            return {"error": f"that draft model is incompatible: {verdict['reason']}"}
+
+        info = features.probe_flags()
+        if not info.speculative:
+            detail = info.draft_model.reason or "no draft-model flag"
+            return {"error": f"this llama.cpp build cannot draft: {detail}"}
+
+        plan = speculative.spec_plan(
+            model_path,
+            draft_path,
+            vram_mb=tuning_vram(),
+            context=int(args.get("contextSize") or 4096),
+        )
+        if plan["targetGpuLayers"] is not None:
+            gpu_layers = plan["targetGpuLayers"]
+        try:
+            extra_args = features.speculative_args(
+                draft_path,
+                draft_gpu_layers=plan["draftGpuLayers"],
+                features=info,
+            )
+        except RuntimeError as exc:
+            return {"error": str(exc)}
+        spec_note = plan["reason"]
+
     try:
-        # `is None`, never falsiness: an explicit 0 means pure CPU and has to
-        # survive being passed through.
-        gpu_layers = args.get("gpuLayers")
         llama_manager.spawn(
             model_path,
-            gpu_layers=tuning.gpu_layers if gpu_layers is None else int(gpu_layers),
+            gpu_layers=gpu_layers,
             threads=tuning.threads,
+            extra_args=extra_args,
         )
     except RuntimeError as exc:
         return {"error": str(exc)}
@@ -135,6 +216,8 @@ async def _serve(args: dict[str, Any]) -> Any:
 
     ready = await llama_manager.wait_ready()
     payload = _status_payload()
+    if spec_note:
+        payload["speculative"] = {"draftModelPath": draft_path, "plan": spec_note}
     if not ready:
         # `wait_ready` returns False rather than raising when a model is too large
         # to load. Reporting success here is how a caller comes to score a model
@@ -298,11 +381,44 @@ LLAMACPP_TOOLS: list[AgentTool] = [
                 "type": "integer",
                 "description": "Layers to offload. Omit to let the hardware probe decide; 0 forces CPU.",
             },
+            "draftModelPath": {
+                "type": "string",
+                "description": (
+                    "Optional smaller model for speculative decoding. Must share "
+                    "the target's tokenizer — an incompatible one is refused, "
+                    "since it would silently make generation slower rather than "
+                    "failing. Use llamacpp.find_drafts to get valid candidates."
+                ),
+            },
+            "contextSize": {
+                "type": "integer",
+                "description": (
+                    "Context length, used to size the KV cache when dividing the "
+                    "card between the two models."
+                ),
+            },
         },
         required=["modelPath"],
         side_effect=True,
         specifier_template="{modelPath}",
         handler=_serve,
+        group="llamacpp",
+    ),
+    AgentTool(
+        name="llamacpp.find_drafts",
+        description=(
+            "List local GGUFs that can be used as a draft model for a target, for "
+            "speculative decoding. Checks tokenizer compatibility by reading file "
+            "headers, and reports whether the installed build supports drafting."
+        ),
+        parameters={
+            "modelPath": {
+                "type": "string",
+                "description": "The target model, from llamacpp.list_models.",
+            },
+        },
+        required=["modelPath"],
+        handler=_find_drafts,
         group="llamacpp",
     ),
     AgentTool(

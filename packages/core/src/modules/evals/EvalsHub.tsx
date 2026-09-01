@@ -1,9 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 
 import { DataList, DataRow, PickRow, RollingNumber } from '../../DataList';
 import { dialogs } from '../../dialogs';
 import { usePaneSection } from '../../layout/use-sections';
 import { subscribeChannel } from '../../ws';
+import {
+  getNetworkState,
+  initNetwork,
+  requestPeers,
+  subscribeNetwork,
+} from '../network/ws';
 import {
   benchmarkPresets,
   cancelSweep,
@@ -1298,11 +1304,21 @@ function Run({ suites, selected }: { suites: EvalSuite[]; selected: string }) {
   const [message, setMessage] = useState('');
   const [runs, setRuns] = useState<EvalRun[]>([]);
   const [sweeps, setSweeps] = useState<ActiveSweep[]>([]);
+  const [runOn, setRunOn] = useState('');
+  const { peers } = useSyncExternalStore(subscribeNetwork, getNetworkState, getNetworkState);
+  // Peers that advertise inference. A sweep on a peer without a llama.cpp of its
+  // own would be granted a lease and then fail every case, which on a scoreboard
+  // is indistinguishable from a model that gets everything wrong.
+  const lenders = Object.values(peers).filter(
+    (p) => p.status === 'connected' && p.caps.some((c) => c.id === 'inference'),
+  );
 
   useEffect(() => {
     suggestTargets()
       .then(setTargets)
       .catch(() => setTargets([]));
+    initNetwork();
+    requestPeers();
   }, []);
 
   const reload = useCallback(() => {
@@ -1349,6 +1365,10 @@ function Run({ suites, selected }: { suites: EvalSuite[]; selected: string }) {
                 // wrong weights under the right name.
                 model_path: t.modelPath,
                 label: t.label,
+                // One node for the whole sweep, not per target: the reason to run
+                // elsewhere is that *this* node has one llama.cpp process, and
+                // that is a property of the machine, not of a model.
+                node: runOn || undefined,
               })),
               // Per suite, not one 'evals' bucket for everything: localtrack
               // charts a project's runs against each other, so pouring a
@@ -1370,7 +1390,24 @@ function Run({ suites, selected }: { suites: EvalSuite[]; selected: string }) {
           <span style={S.mono}>
             {chosen.size} of {targets.length} selected
           </span>
+          <span style={{ flex: 1 }} />
+          <span style={S.mono}>run on</span>
+          <select style={S.select} value={runOn} onChange={(e) => setRunOn(e.target.value)}>
+            <option value="">this node</option>
+            {lenders.map((p) => (
+              <option key={p.node_id} value={p.node_id}>
+                {p.node_name}
+              </option>
+            ))}
+          </select>
         </div>
+        {runOn ? (
+          <div style={S.mono}>
+            Each target takes a compute lease on {peers[runOn]?.node_name ?? runOn}. Their node
+            decides — lending is off by default, and a refusal fails the target with its reason
+            rather than scoring it zero.
+          </div>
+        ) : null}
         {targets.length === 0 && <div style={S.mono}>No models resolved on this node.</div>}
         {/* A grid, not a column of checkboxes: these are peers being chosen
             between for one sweep, and the stacked-label form is exactly the
@@ -1458,6 +1495,9 @@ function Run({ suites, selected }: { suites: EvalSuite[]; selected: string }) {
                   /{r.completed || r.total}
                 </>,
                 pct(r),
+                // Only when it was somebody else's machine: "ran on this node" on
+                // every row would be noise, and its absence already means local.
+                ...(r.node ? [`ran on ${peers[r.node]?.node_name ?? r.node}`] : []),
               ]}
               metaTone={r.error ? 'fail' : undefined}
               footnotes={

@@ -24,6 +24,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from backend.modules.hardware import probe as hardware
 from backend.modules.llamacpp import (
     binaries,
+    capability,
     catalog,
     findings,
     lens as lens_module,
@@ -222,6 +223,7 @@ async def start(req: SpawnRequest) -> StatusResponse:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if req.wait:
         await llama_manager.wait_ready()
+    capability.changed()
     return StatusResponse(
         **llama_manager.status(), isAgentProvider=_is_agent_provider()
     )
@@ -229,7 +231,9 @@ async def start(req: SpawnRequest) -> StatusResponse:
 
 @router.post("/stop", response_model=StatusResponse)
 def stop() -> StatusResponse:
-    return StatusResponse(**llama_manager.stop(), isAgentProvider=_is_agent_provider())
+    status = llama_manager.stop()
+    capability.changed()
+    return StatusResponse(**status, isAgentProvider=_is_agent_provider())
 
 
 # ── traces ──────────────────────────────────────────────────────────────────

@@ -235,6 +235,84 @@ sequenceDiagram
 
 ---
 
+## Scenario 7 — borrowing a peer's model
+
+The user sets `agent.coder.provider = "peer"` and their coder agent answers from a
+friend's GPU while the orchestrator stays local. **No `run_agent_loop` call site
+knows about any of this**: they all reach `roster.resolve_provider` →
+`routes._endpoint_for`, which returns the lease's local tunnel port.
+
+```mermaid
+sequenceDiagram
+    actor U as User A
+    participant A as Node A (borrower)
+    participant T as Tunnel (127.0.0.1:ephemeral)
+    participant B as Node B (lender)
+    participant S as llama-server on B
+
+    U->>A: chat turn (agent.coder, provider "peer")
+    A->>B: compute_request {service: "llama", model: "the one you're serving"}
+    B-->>A: compute_grant {lease_id, expires}
+    A->>T: bind 127.0.0.1:0
+    Note over A: _endpoint_for returns the tunnel port,<br/>checked BEFORE the saved config
+    A->>T: POST /v1/chat/completions (stream)
+    T->>B: stream_open {lease_id, service} + stream_data
+    B->>S: the same bytes, to its own loopback
+    S-->>B: SSE tokens
+    B-->>T: stream_data (64 KB frames, credit-limited)
+    T-->>A: the identical byte stream
+    A-->>U: streamed tokens
+```
+
+Three things this scenario pins:
+
+**`peer` is `dialect="openai"`, not a new dialect.** It inherits streamed
+reasoning, tool-call assembly and the `tool_choice="required"` retry with zero new
+branches. A bespoke dialect would have meant six branches in `providers.py` and
+would have silently lost that retry.
+
+**The raw tunnel is what makes SSE free.** `_openai_chat_stream` parses `data:`
+lines straight off httpx's byte stream, so httpx against `http://127.0.0.1:<tunnel>`
+is byte-identical to httpx against a local server. An HTTP proxy would have had to
+preserve chunk boundaries by hand.
+
+**Revocation mid-turn keeps the partial answer.** The lender revokes → streams
+close → the local socket closes → httpx raises inside the stream parser, which is
+re-raised as a `ProviderStreamError` naming the lender and the reason. Eight
+hundred tokens plus a clear note beats an empty bubble.
+
+### Tunnel framing
+
+| Type | Direction | Carries |
+|---|---|---|
+| `stream_open` | borrower → lender | `{stream_id, lease_id, service}`; `detach`, since it awaits a TCP connect |
+| `stream_data` | both | one ≤64 KB chunk, base64 in the signed envelope; **`serial`**, because reordering corrupts a stream |
+| `stream_credit` | both | window replenishment (~256 KB initial) |
+| `stream_close` | both | end of one stream |
+
+Declared in `tunnel.py`, **not** in `protocol.py` — the same convention
+`hassault/fabric.py` follows for its own wire types: a module's vocabulary belongs
+to the module.
+
+Note the cost being paid: bytes in a JSON envelope means base64 (+33%) plus JSON
+escaping plus a **sign and a verify per frame**. That is fine for chat tokens
+(kilobytes) and fatal for tensors (gigabytes), which is the whole content of the
+[latency-tier rule](distributed.mdx#what-belongs-on-this-fabric).
+
+### Dispatch policy
+
+`register_handler(msg_type, handler, *, mode=…)` decides *where* a handler runs,
+and the choice is a correctness question rather than a tuning one:
+
+- **`detach` is mandatory for any handler that calls `hub.request`** — that reply
+  is delivered by the very pump the handler would be blocking. `agent_bridge`
+  already did this by hand; `stream_open` and `hassault_browse` need it too.
+- **`serial`** is for handlers that must not block the pump *and* must not
+  reorder: `collab_op` and `stream_data`.
+- **`inline`** is everything else. `agent_request` stays inline deliberately: it
+  only spawns its turn and returns, and it must keep a cancellable handle in
+  `_active_remote_turns` that a generic detach cannot offer.
+
 ## The lobby system
 
 Beyond **manual invite link**, **direct address**, and **LAN mDNS**, the **official
@@ -382,6 +460,17 @@ without one, the store-and-forward relay remains the guaranteed fallback.
 | ICE-lite candidates (host/LAN + STUN server-reflexive, prioritized dial) | ✅ implemented (`ice.py`) |
 | WebRTC datachannel transport (ICE/STUN hole-punching) | ✅ implemented (`webrtc.py`, opt-in `webrtc` extra) |
 | TURN-relayed WebRTC (symmetric NAT) | ✅ supported (`network.turnUrl`); store-and-forward relay is the default fallback |
+| Latency bench (`bench.py`, four modes, percentiles) | ✅ implemented |
+| Per-message-type dispatch policy (`inline`/`detach`/`serial`) | ✅ implemented |
+| Capability advertisement v2 (`caps` beside a frozen `capabilities`) | ✅ implemented |
+| Compute leases (`compute_request`/`grant`/`deny`/`renew`/`revoke`) | ✅ implemented (`lease.py`), default-off |
+| Byte tunnel (`stream_*`, credit-limited, 64 KB frames) | ✅ implemented (`tunnel.py`) |
+| Borrowed model as an agent provider (`peer`, `dialect="openai"`) | ✅ implemented |
+| Borrowed extras (voice / clip / trace / browser) | ✅ implemented (`borrow.py`); only `stt` is wired as a consumer |
+| Distributed eval targets and embedding batches | ✅ implemented (opt-in) |
+| Remote research subagents (`research.distributeSubagents`) | ✅ implemented, default-off |
+| ggml `--rpc` tensor offload | ❌ **cut on bandwidth**, not availability — the flag exists, the pipe is ~57 MiB/s |
+| Approval UI for `computeLeasePolicy: ask` | ❌ proposed — until then `ask` denies |
 
 See [Distributed peer fabric](distributed.mdx) for identity, the envelope format, and
 the transport abstraction; [Module: network](../modules/network.mdx) for the channel

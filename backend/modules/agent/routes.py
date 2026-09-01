@@ -53,6 +53,15 @@ def _endpoint_for(info: P.ProviderInfo, config: AgentConfig | None) -> str:
 
         if llama_manager.running():
             return llama_manager.endpoint
+    # Same placement, same reason: a borrowed peer is reached through a tunnel on
+    # an ephemeral loopback port, chosen when the lease was granted. A saved
+    # endpoint for this provider can only be stale.
+    if info.kind == "peer":
+        from backend.modules.network.lease import leases
+
+        borrowed = leases.active_borrow("llama")
+        if borrowed is not None and borrowed.endpoint:
+            return borrowed.endpoint
     if config and config.provider == info.kind and config.endpoint:
         return config.endpoint
     if info.kind == "ollama":
@@ -87,7 +96,15 @@ async def _probe(
 @router.get("/status", response_model=AgentStatus)
 async def status() -> AgentStatus:
     config = _load_config()
-    infos = list(P.PROVIDERS.values())
+    # `peer` is listed only while a lease is actually held. It is the one provider
+    # nobody can install or fix: without a lease it has no endpoint by design, so
+    # probing it would put a permanently-unreachable row in a list whose whole
+    # purpose is telling the user what they could switch to.
+    infos = [
+        info
+        for info in P.PROVIDERS.values()
+        if info.kind != "peer" or _endpoint_for(info, config)
+    ]
     async with instrumented_client(timeout=2) as client:
         detected = await asyncio.gather(
             *(_probe(client, info, _endpoint_for(info, config)) for info in infos)
@@ -347,9 +364,11 @@ async def list_tts_voices() -> list[dict[str, Any]]:
     """List available TTS neural voices."""
     try:
         from backend.modules.agent.edge_tts_service import edge_tts_service
+
         return await edge_tts_service.list_voices()
     except ImportError:
         from backend.modules.agent.edge_tts_service import POPULAR_VOICES
+
         return POPULAR_VOICES
 
 
@@ -359,18 +378,40 @@ async def stt(file: UploadFile, language: str | None = None) -> dict[str, str]:
 
     Same optionality as :func:`tts` — Whisper pulls in torch, which is far too
     heavy to make every install pay for."""
-    try:
+    from backend.modules.network import borrow
+
+    audio_bytes = await file.read()
+    decision = borrow.route("voice")
+
+    if decision.local:
         from backend.modules.agent.stt_service import stt_service
-    except ImportError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail="Speech-to-text unavailable — install it with `uv sync --extra voice`",
-        ) from exc
 
-    try:
-        audio_bytes = await file.read()
-        return {"text": await stt_service.transcribe(audio_bytes)}
-    except Exception as exc:
-        logger.warning("STT transcription error: %s", exc)
-        return {"text": ""}
+        try:
+            return {"text": await stt_service.transcribe(audio_bytes), "ranOn": "local"}
+        except Exception as exc:
+            logger.warning("STT transcription error: %s", exc)
+            return {"text": "", "ranOn": "local"}
 
+    if decision.where == "peer":
+        endpoint, decision = await borrow.acquire("voice")
+        if endpoint:
+            try:
+                async with httpx.AsyncClient(timeout=120) as client:
+                    res = await client.post(
+                        f"{endpoint}/api/agent/stt",
+                        files={"file": ("audio.webm", audio_bytes)},
+                    )
+                    res.raise_for_status()
+                    # Which node produced this is part of the answer, not a
+                    # detail: a borrowed transcript that looks local is how a user
+                    # comes to believe their laptop has Whisper installed.
+                    return {**res.json(), "ranOn": decision.node_id or "peer"}
+            except Exception as exc:  # noqa: BLE001
+                logger.info("STT via peer failed: %s", exc)
+
+    # 503 with an install hint, as before -- now also naming the borrow attempt
+    # when there was one, so "why did it not use my desktop" has an answer.
+    detail = f"Speech-to-text unavailable — {decision.reason}"
+    if decision.install:
+        detail = f"{detail}. Install it with `{decision.install}`"
+    raise HTTPException(status_code=503, detail=detail)

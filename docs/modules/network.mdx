@@ -79,6 +79,9 @@ They're documented in [Agent chat](agent-chat.mdx).
 | `POST /connect` | Dial an address directly `{ address, transport }`. |
 | `DELETE /peers/{node_id}` | Disconnect a peer. |
 | `POST /ask-peer` | Ask a peer's agent `{ peer_id, prompt }` → `{ ok, answer?, error? }` (REST entry to `agent.ask_peer`; the remote turn is gated read-only). |
+| `POST /bench` | Time a link `{ node_id?, mode: echo\|sweep\|local, count }`. **409 while one is already running** — two benches each measure the other's traffic. |
+| `GET /leases` | Every live lease in both directions, plus this node's lending stance. |
+| `DELETE /leases/{lease_id}` | End a lease: give back one borrowed, or reclaim one lent. |
 
 ### WebSocket endpoints
 
@@ -188,6 +191,359 @@ read-only — it never mutates peer state beyond stamping each session's `rtt_ms
 Each `PeerMetrics` row: `{ node_id, node_name, transport, status, rtt_ms,
 bytes_in, bytes_out, msgs_in, msgs_out, last_seen }`.
 
+Note that `rtt_ms` is **not** a wire latency. `ping` is answered inside
+`_dispatch`, so a ping queued behind a slow handler measures the network *plus*
+the remote pump's head-of-line delay. That makes it a useful blocked-pump
+detector and a poor network measurement — which is what the bench exists for.
+
+## Bench
+
+`bench.py` measures the fabric itself. `PeerMonitor` keeps one latest RTT sample
+per peer, which cannot answer the question that actually matters — *what did a
+20 Hz stream's p99 do while something bulky ran* — because that distribution is
+bimodal. **Every number the bench reports is a percentile; none is a mean.**
+
+Four modes:
+
+| mode | what it answers |
+| --- | --- |
+| `local` | the CPU floor: construct, sign, serialize, deserialize, verify, with no link at all |
+| `echo` | round-trip latency against a peer's `bench_echo` handler, one message at a time |
+| `sweep` | how that round trip grows with payload size |
+| `sustained` | what bulk traffic does to a concurrent 20 Hz **victim** stream |
+
+`local` rather than loopback is the zero-wire baseline: `LoopbackLink.send` does
+`decode(encode(env))` inline on the *sender*, so it charges deserialization to the
+wrong side and adds a queue and a task switch.
+
+Results carry the bench's **own** transport label, never `PeerInfo.transport` —
+`LoopbackLink.transport_name` is `"direct"`, so reading the peer's field would
+file every loopback run under the wrong transport.
+
+Cross-node wire time is not measurable without clock sync, and the bench does not
+pretend otherwise: what remains after subtracting the local phases from the round
+trip is reported as `wire_residual_ms`, named for the weaker claim it can support.
+
+### Observation must not be what it observes
+
+The hub hook is a module-level `_probe` read behind a single
+`if _probe is not None`, installed by `hub.set_probe()` only while a run is in
+flight. Not a decorator, not a context manager, not `logging` — at 20 Hz across
+several peers each of those costs enough to appear in its own measurement.
+Samples land in preallocated `array('d')` rings (`Ring`), so recording one
+allocates nothing; percentiles are computed at snapshot time.
+
+## Capabilities
+
+A node advertises what it offers during the handshake, and refreshes it live via
+`presence`. Modules contribute through a registry (`capabilities.py`) rather than
+a hardcoded list, so adding a capability never edits the fabric core.
+
+### Two fields, and why they can never be merged
+
+| field | shape | who reads it |
+| --- | --- | --- |
+| `capabilities` | `list[str]` | everything that exists today, incl. the Android client |
+| `caps` | `list[PeerCapability]` | anything wanting live detail |
+
+**`capabilities` is frozen forever.** `commons.build_profile` feeds it into
+`CommonsProfile.agent_capabilities`, which is Ed25519-signed over
+`canonical_profile_bytes` and re-served by a federated index — changing the
+element type invalidates every profile already published. The lobby also puts it
+on the rendezvous wire typed `string[]`, and the Kotlin client sends exactly this
+shape.
+
+So `caps` is **additive**. A peer that sends only `capabilities` — any Android
+build, any node older than this — has its `caps` synthesized from it, and every
+existing consumer (`'agent' in p.capabilities` in the relay panel, hassault's
+fabric and routes, `mobile_tools`) is untouched. `PeerHub.capabilities()` still
+returns exactly `["agent", "collab", "hassault", "share"]`, pinned by a test.
+
+### `PeerCapability`
+
+`{ id, version, attrs }`. `attrs` is deliberately untyped — each capability's
+owner defines its own keys, and a schema here would mean editing the fabric core
+to add a feature. It must be JSON-serializable: these bytes are **signed**, so a
+value `json.dumps` chokes on would fail the handshake rather than merely being
+dropped. `snapshot()` therefore discards an unserializable attr and logs it,
+rather than letting a module make its node unreachable by putting a `datetime` in
+its attrs.
+
+Providers are called **at advertisement time**, not registration, so attrs are
+current rather than whatever was true at boot. Returning `None` withdraws the
+capability — "not offering this right now" has to be expressible, or a node with
+no models would advertise inference and fail every request against it. A provider
+that raises is logged and skipped: one module's bad probe costs that module's
+capability, never the node's ability to connect.
+
+Built-ins register at **import**, not in `start_network`, because a bare
+`PeerHub()` must report them.
+
+### What each module contributes
+
+- **`hassault`** — `openMatches`, `matches`, `maxPlayers`. This is what lets
+  `browse_peers` skip a friend hosting nothing instead of fanning out to everyone
+  and waiting on the deadline.
+- **`inference`** (`llamacpp/capability.py`) — `accelerator`, `vramMb`, `ramMb`,
+  `models`, `modelCount`, and `serving`. Three rules it follows: it reports
+  `certain: false` rather than claiming there is no accelerator when the probe
+  could not ask (the `hardware` module's three-state rule, which would become a
+  fiction acted on by a peer if flattened here); it caches, because a model list
+  is a filesystem walk and presence can fire every few seconds; and it sends model
+  **names, never paths**, since a path leaks the machine's directory layout and
+  username for no benefit.
+
+`serving` is the field the compute-lease policy turns on — granting against the
+already-loaded model needs no eviction — so `capability.changed()` invalidates the
+cache and announces whenever a model is loaded or stopped.
+
+### Presence is debounced
+
+`announce_presence()` enforces a 5-second minimum gap with a **trailing** edge. A
+filling hassault match would otherwise broadcast to every peer on every join; and
+dropping the last call of a burst rather than deferring it would leave peers
+believing a match is still open after it filled.
+
+## Dispatch policy
+
+Every inbound message type declares how its handler runs relative to the
+session's receive pump, via `register_handler(..., mode=…)`:
+
+| mode | behaviour | when |
+| --- | --- | --- |
+| `inline` (default) | awaited on the pump | the handler is a dict write and a send |
+| `detach` | its own task | **required** if the handler calls `hub.request` |
+| `serial` | per-(session, type) FIFO worker | slow *and* order-sensitive |
+
+`detach` is not a preference for anything that awaits a reply, it is a
+correctness requirement: a reply arrives on the very pump an inline handler is
+occupying, so such a handler deadlocks the session against itself.
+
+`serial` exists because `detach` cannot promise order — detached tasks race for
+the send lock, and two collab ops applied backwards is a silently corrupted
+document. Current assignments: `collab_op` is `serial`; `remote_command` and
+`hassault_browse` are `detach`; everything else is `inline`.
+
+`agent_request` stays `inline` despite running for minutes, because the handler
+only *spawns* the turn and returns — it has to keep a cancellable handle in
+`_active_remote_turns` so `agent_cancel` can find one turn by request id, which a
+generic detach cannot offer.
+
+A `serial` queue that overflows (256 deep) **closes the session** rather than
+dropping the envelope. An ordered stream with a hole in it has no correct
+continuation the transport can invent, so closing forces the feature layer's
+existing reconnect-and-resync path — a defined recovery, where a silent drop is
+not. Only that one peer is affected, and only by its own flooding.
+
+Failures in a detached or queued handler no longer unwind into `_pump`, so
+`_invoke` catches and logs them. Without it they would vanish entirely, which is
+a worse failure than the blocking that moving them off the pump cures.
+
+## Compute lending
+
+Borrowing a friend's machine: their loaded model, their GPU, or an optional extra
+they have installed. Two pieces — a **lease** (`lease.py`) that says who may use
+what until when, and a **tunnel** (`tunnel.py`) that makes their loopback service
+reachable as a local port.
+
+### Consent is three gates
+
+| gate | default | effect |
+| --- | --- | --- |
+| `network.allowComputeLending` | **off** | nothing is lent at all |
+| `network.computeLeasePolicy` | **`ask`** | `ask` / `trusted` / `off` |
+| `session.info.trusted` | — | checked unconditionally |
+
+They are independent, and each alone is sufficient to refuse. Trust is checked
+first because friendship grants *reachability*, not authority — accepting a friend
+is not agreeing to run their workloads, and knowing a lease id is not friendship.
+
+`computeLeasePolicy` **fails closed** on any unrecognised value, the way
+`remoteAgentMode` falls back to read-only `plan`: a typo or a downgrade from a
+newer version must narrow access, never widen it. `ask` currently **denies**,
+because there is no approval UI yet — silently treating "ask" as "yes" would grant
+access the user believes they still have to approve.
+
+### Only what is already loaded
+
+A lease naming a model is granted only if that model is **already loaded**
+(`network.computeAllowModelSwap` opts out). Evicting somebody's own chat model
+because a friend asked should not be reachable by default, and the refusal names
+what *is* loaded ("this node is serving `gemma`; ask for that") so the borrower
+can simply ask again. This is what makes the `serving` attr on the `inference`
+capability load-bearing: a borrower reads it first and the eviction problem
+disappears for the common case.
+
+Authorization is re-checked on **every** connection, not once at grant time — a
+lease can expire or be revoked between opening two sockets.
+
+### The tunnel is a raw byte pipe
+
+Not an HTTP proxy. For `rpc-server` there is no choice; it is raw TCP. For the
+chat endpoint a proxy is tempting — per-request accounting, clean cancellation —
+but it would mean reimplementing chunked transfer and, worse, preserving SSE chunk
+boundaries, when `_openai_chat_stream` parses `data:` lines straight off httpx's
+byte stream. A raw tunnel gets SSE for free, because SSE *is* bytes on a socket:
+`httpx` against `http://127.0.0.1:<tunnel_port>` is byte-identical to `httpx`
+against a local server. That is precisely what lets a borrowed model be **an
+`openai`-dialect provider with no new provider code**.
+
+Three limits, and the third exists because of a measurement:
+
+- **64 KB frame cap** — a 1 MB frame occupies the receiving pump for 19 ms,
+  uninterruptibly, against a 50 ms budget at 20 Hz.
+- **Credit-based flow control**, returned only after bytes are *drained* to the
+  local socket. Returning credit on receipt would let a sender outrun a slow
+  service and rebuild the unbounded buffer this exists to prevent — and the
+  producer is a remote peer, so that buffer is a remote memory-exhaustion lever.
+- **A rate limit below saturation** (16 MiB/s default). This is the one that is
+  easy to leave out. Saturating the fabric moves ~57 MiB/s but costs a concurrent
+  20 Hz stream **6×** its latency, and because the cost is *signing the bytes*
+  rather than scheduling them, neither smaller frames nor a dispatch mode fixes
+  it. A tunnel that may share a link with a game has to stay below saturation.
+
+**One `TunnelManager` per node.** Stream ids are unique per node, not globally, so
+two hubs sharing a manager would have one end of a stream overwrite the other
+under the same id — impossible across real processes, but the default in an
+in-process test, where it silently proxies a stream back to itself.
+
+### Borrowing installed extras, not just a GPU
+
+A lease also carries an optional **extra** a peer has installed and this node does
+not — `voice` (torch), `llamacpp` (the tracer, needing cmake and a compiler),
+`browser-engine` (Chromium), `clip` (ONNX weights). No GPU is involved; the
+scarce thing is the install.
+
+`borrow.route(extra)` decides where work runs: local if the extra is here, a peer
+if it is **certainly** absent and a friend advertises it, otherwise the install
+hint the feature always gave. An *uncertain* local answer — installed but failing
+to load — never routes to a peer, because that would paper over a broken local
+install by silently shipping the user's data elsewhere.
+
+See [optional extras](../architecture/extras.mdx) for the probe convention and
+the full rule.
+
+### ggml `--rpc` offload: available, but not through this pipe
+
+`--rpc` distributes a *single* model's layers across machines, and the build this
+node downloads turns out to have it (probed, not assumed — see
+[speculative decoding](llamacpp.mdx#speculative-decoding); an earlier reading of
+upstream's docs said release binaries lacked it, and that is no longer true).
+Tunnelling `rpc-server` over the fabric would also be the right answer to
+upstream's warning never to expose it to an untrusted network.
+
+It is still **not wired up**, and the reason is bandwidth rather than
+availability. ggml RPC moves tensors — gigabytes — and the fabric signs every byte
+it carries: measured, Ed25519 signing alone caps the link near 57 MiB/s, and this
+tunnel deliberately runs below that. Distributed inference through it would be
+slower than staying on the CPU. Getting there needs a binary side-channel
+authenticated once at open rather than per frame, which is a different and larger
+piece of work.
+
+### Borrowing, and losing a lease mid-turn
+
+The `peer` provider has `dialect="openai"` — not a new dialect, because what is on
+the far end *is* a `llama-server`. `_endpoint_for` resolves it from the live lease
+and does so **before** the saved-config check, for the same reason the `llamacpp`
+branch does: the tunnel port is ephemeral and chosen at lease time, so a saved
+endpoint for this provider can only be stale. Setting `agent.coder.provider` to
+`peer` runs one agent on a friend's GPU while the orchestrator stays local.
+
+`peer` is listed in `GET /api/agent/status` **only while a lease is held**. It is
+the one provider nobody can install or fix, so a permanently-unreachable row would
+be noise in a list whose purpose is telling the user what they could switch to.
+
+Revocation closes the lease's streams immediately, which is what makes it
+*visible*: the borrower's socket closes, so httpx raises inside an already-200
+response rather than the answer silently truncating.
+
+## Byte accounting
+
+Per-session `bytes_in`/`bytes_out` come from the transport, which already holds
+the encoded frame (`PeerLink.last_sent_bytes` / `last_recv_bytes`). The hub used
+to serialize every envelope a second time in each direction purely to length it.
+
+Two notes. The counters are **bytes, not characters** — the old `len(str)`
+under-counted every non-ASCII payload, so an accented node name or a message in
+any non-Latin script made the observability panel quietly wrong. And `send` still
+takes an envelope rather than a pre-encoded string, because `RelayLink.send`
+legitimately rewrites the `dst` routing header (excluded from the signature)
+before encoding; a pre-encoded frame could only be patched by editing JSON text.
+
+### What the first run found
+
+Measured on loopback, so these are a CPU floor rather than a wire result:
+
+- Sustained 64 KB bulk moves ~57 MiB/s, and a competing 20 Hz stream degrades
+  from **0.29 ms to 1.80 ms p50 (6.1×)**.
+
+  This one is worth reading carefully, because the dispatch policy **did not fix
+  it** — the number is unchanged after that work. Two different problems were
+  hiding under "head-of-line blocking": a *slow handler* occupying the pump,
+  which `detach`/`serial` cure (a 500 ms handler went from stalling an unrelated
+  echo for >300 ms to under 100 ms), and a *bulk payload* occupying the pump with
+  signing and verification, which they do not, because the handler is trivial and
+  the cost is the bytes. The second needs rate limiting, not a dispatch mode:
+  bulk traffic sharing a link with a game must stay **below saturation**, not
+  merely be split into smaller frames.
+- **The throughput ceiling is signing, not serialization.** At 256 KB,
+  `sign_envelope` costs 0.74 ms of which the raw Ed25519 sign is 0.49 ms —
+  Ed25519 hashes the whole message, so signing is linear in payload at roughly
+  525 MB/s per core. Serialization changes cannot get past that; only *not
+  signing bulk bytes per frame* can.
+- A single 1 MB frame occupies the pump for **19 ms**, against a 50 ms budget at
+  20 Hz. Bulk traffic on the fabric needs a frame cap well below that.
+
+## What the panes show
+
+Three readouts, folded into **Me → Connection diagnostics / Link health / Agent
+relay** rather than given panes of their own — they answer questions, they are not
+destinations.
+
+**Peer Monitor** gained a capability chip per peer (`inference · 12.0 GB · serving
+gemma4:e2b`, `extras · voice, clip`, `hassault · 1 open`) and a **Leases** table
+covering both directions, with Revoke on one lent and Release on one borrowed.
+Lease rows arrive on the `lease_update` push rather than a poll, because the
+transitions that matter start on the *other* node — a peer revoking mid-turn, a
+lease expiring — and a view that refreshed only on its own actions would keep
+showing a lease already taken away. Revoke re-reads rather than removing the row
+optimistically: a row that vanished locally while the lease survived would be a
+lie in the one view whose job is saying what is currently granted.
+
+**Link health** runs the [bench](#bench) and shows the phase split as
+p50/p90/p99/max. `local` mode needs no peer, and that is the point — it is the
+only way to tell "that peer is far away" from "this machine is slow".
+
+**Agent relay** shows a borrowed provider when one is live. It is the pane about
+routing turns off-node, so it is where "this answer came from somebody else's GPU"
+belongs; nothing else in the UI says so.
+
+:::danger A peer's work must never look local
+A borrowed lease is reached through a **`127.0.0.1` tunnel port**, so anything
+derived from an endpoint reports "local" for a remote run. Every honest signal is
+therefore recorded explicitly rather than inferred:
+
+- an eval run stores `node` (see [evals](evals.mdx#peer-targets)),
+- a peer-embedded batch returns `method: "peer:<node>/<model>"` (see
+  [library](library.mdx)),
+- a remote research subagent stores `ran_on` (see [research](research.mdx)).
+
+Each renders only when it is set, because "ran on this node" on every row is noise
+and its absence already means local.
+:::
+
+### Embedding offload is opt-in
+
+`database.embedOnPeer` (default **off**) routes whole embedding batches through a
+lease. A batch is the one embedding shape worth sending off-machine — a 200 ms
+round trip is nothing against a multi-second batch — but shipping every index
+build to a friend's machine should be a choice, not a default.
+
+The lender's own `/api/database/embeddings/batch` calls `get_embeddings` with
+`allow_peer=False`. Without that, a lender whose offload setting is also on would
+answer a borrowed batch by borrowing it again, and a two-node pair would hand one
+batch back and forth.
+
 ## Peer Chat
 
 The transport half of direct messaging: `ChatManager` (`chat.py`) relays a message
@@ -208,6 +564,61 @@ agent-capable peer, ask a question, and read the answer. It calls `POST
 `agent.ask_peer` tool uses, so the remote turn runs gated and read-only-by-default
 on the peer's node (which must have `network.allowRemoteAgent` enabled). See
 [Agent chat](agent-chat.mdx#agent-to-agent-talking-to-a-peers-agent).
+
+## Agent tools
+
+`network/agent_tools.py` is the agent's surface over everything on this page:
+capability advertisement, the bench, leases, the tunnel and borrowable extras were
+all machinery the agent could not reach.
+
+| tool | what it answers |
+| --- | --- |
+| `network.survey` | who is reachable, what each offers, at what latency, which leases exist, and whether this node lends |
+| `network.measure_peer` | link latency as p50/p90/p99 per phase (`echo`, `sweep`, or `local` for this machine's own crypto floor) |
+| `network.find_peers` | peers offering a capability, filtered on its live attributes |
+| `network.request_compute` | ask a peer for a lease and open its tunnel |
+| `network.renew_lease` / `network.release_lease` | extend one, or end one in either direction |
+
+### One find, not four
+
+"Find a friend", "find an open game", "find a peer with a GPU" and "who can
+transcribe this?" were three separate mechanisms before
+[capability v2](#capabilities). They are now one query over `PeerCapability.attrs`:
+
+```
+find_peers(capability="inference", attr="vramMb",     atLeast=8000)   → a free GPU
+find_peers(capability="extras",    attr="installed",  contains="voice") → a transcriber
+find_peers(capability="hassault",  attr="openMatches", atLeast=1)      → an open game
+```
+
+The tool count therefore does not grow when the next capability is added — and for
+the same reason the three lease tools take the **generic `service` string**
+(`llama`, `embed`, `voice`, `clip`, `trace`, `browser`) rather than one tool per
+borrowable thing.
+
+:::danger A missing attribute never matches
+Not "matches as zero", and not "matches because we could not tell". Answering
+"who has 8 GB of VRAM?" with a node that never reported its VRAM is worse than an
+empty answer — the same three-state discipline the [hardware
+probe](hardware.mdx) exists to enforce. `find_peers` also reports how many peers
+it `searched`, so an empty list is not read as "nobody has one" when the real
+answer is "nobody is connected".
+:::
+
+### All six are loadable, and that is the point
+
+They register with `group="network"`, so they cost nothing on a turn that is not
+about the fabric. An ungrouped backend tool is in **every** turn's schema, and the
+always-on core was cut from 34 tools to 11 against a reasoning cliff that appears
+around 40 — six new always-on tools would quietly undo a chunk of that. The two
+peer verbs that stay always-on are unchanged: `list_peers` (the prerequisite
+`agent.ask_peer` documents) and `agent.ask_peer` itself, the one peer verb a user
+names mid-conversation. See [Agent chat](agent-chat.mdx) for the group mechanism.
+
+`survey` reports **why** this node will or will not lend as a sentence, not as two
+flags. The commonest confusion here is a user who has turned
+`network.allowComputeLending` on and still sees every request refused, because
+`network.computeLeasePolicy` defaults to `ask` and there is no approval UI yet.
 
 ## Remote control (`remote_command`)
 
@@ -248,6 +659,8 @@ weight taught people to skim past the six that matter.
 | `network.trustMode` | enum | `manual` | `manual` (an invite you generated) or `open-lan`. |
 | `network.lobbyUrl` | string | `""` | Lobby server `ws://…/lobby-ws` for discovery + rooms (blank = off). |
 | `network.allowRemoteAgent` | boolean | `false` | Let a trusted peer's agent ask yours. |
+| `network.allowComputeLending` | boolean | `false` | Let a trusted friend borrow this machine (loaded model, GPU, installed extras). Off means nothing is lent whatever the policy says. |
+| `network.computeLeasePolicy` | enum | `ask` | Who may hold a lease: `ask` (approval required — currently denies, no UI yet), `trusted`, `off`. Unrecognised values read as `off`. |
 
 ### Advanced
 
@@ -261,6 +674,7 @@ weight taught people to skim past the six that matter.
 | `network.turnUrl` | string | `""` | Optional TURN relay for WebRTC (`turn:host:3478`) for NATs STUN can't punch (blank = STUN only). |
 | `network.turnUsername` | string | `""` | TURN username credential (if required). |
 | `network.turnCredential` | string | `""` | TURN password/credential (if required). |
+| `network.computeAllowModelSwap` | boolean | `false` | Let a borrower load a *different* model. Off means a lease is granted only against the model already loaded, so a friend's request can never evict your own chat model. |
 | `network.remoteAgentMode` | enum | `plan` | Permission mode for a remote turn (`plan` = read-only, then `acceptEdits`, `autonomous`). |
 
 **Restart** marks the four settings `build_transports()` reads once at startup. A

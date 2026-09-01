@@ -46,6 +46,12 @@ const STEP_ICON: Record<string, string> = {
   skipped: '⤼',
 };
 
+/** The peer that produced this step, or '' when it ran here. */
+function ranOn(step: StepModel): string {
+  const output = step.output as Record<string, unknown> | null | undefined;
+  return typeof output?.ran_on === 'string' ? output.ran_on : '';
+}
+
 /** What a step's body shows when expanded, by kind. */
 function stepBody(step: StepModel): string {
   if (!step.output) return '';
@@ -139,6 +145,20 @@ function StepRow({
           {step.attempt > 1 ? ` · attempt ${step.attempt}` : ''}
           {step.tokens_used ? ` · ~${step.tokens_used} tok` : ''}
         </span>
+        {/* Only when a friend's node answered. The verification pass grades by
+            independent publisher, so two peers citing one domain are one source —
+            which is only checkable if the step says where it ran. */}
+        {ranOn(step) ? (
+          <span
+            style={{
+              fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+              fontSize: '0.7rem',
+              color: 'var(--text-secondary, var(--text-dim))',
+            }}
+          >
+            ran on {ranOn(step)}
+          </span>
+        ) : null}
         {step.error && (
           <span style={{ color: 'var(--danger, #d66)', marginLeft: 'auto' }}>{step.error}</span>
         )}
