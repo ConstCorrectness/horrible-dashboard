@@ -202,6 +202,9 @@ let retryTimer = null;
 // How long to wait for a path after the relay has answered, before saying so.
 const CONNECT_TIMEOUT_MS = 12000;
 let connectDeadline = null;
+// Whether a frame has actually decoded on this attempt. The page is only ever
+// 'live' when this is true -- see `watchFirstFrame`.
+let gotFrame = false;
 // Bumped by every connect() attempt. An attempt whose generation is no longer
 // current has been superseded and must touch neither `pc` nor the UI.
 let generation = 0;
@@ -366,6 +369,32 @@ function sysLine(text) {
 
 // --- playback (WHEP) -------------------------------------------------------
 
+/**
+ * Go 'live' on the first frame that actually decodes, and never before.
+ *
+ * `loadeddata` is the portable "a frame exists" signal; engines with
+ * `requestVideoFrameCallback` give the same answer one frame earlier. Both are
+ * registered because neither fires for a track that carries no media -- which is
+ * the entire point. A stream that never produces a picture keeps saying so
+ * instead of quietly going green.
+ */
+function watchFirstFrame(stale) {
+  const arrive = () => {
+    if (gotFrame || stale()) return;
+    gotFrame = true;
+    if (connectDeadline !== null) { clearTimeout(connectDeadline); connectDeadline = null; }
+    diagLine('first frame decoded');
+    setPhase('live');
+    hideOverlay();
+    setStatus('live', true);
+  };
+  if ('requestVideoFrameCallback' in video) video.requestVideoFrameCallback(arrive);
+  video.addEventListener('loadeddata', arrive, { once: true });
+  // A reconnect can land on an element that already holds a decoded frame, and
+  // neither event fires again for it.
+  if (video.readyState >= 2) arrive();
+}
+
 async function connect() {
   if (!CFG.found) {
     showOverlay('Link not available', 'This link has expired, been revoked, or never existed. Ask whoever shared it for a new one.', false);
@@ -396,6 +425,7 @@ async function connect() {
   // previous one. A superseded attempt closes its own connection and returns
   // without touching a pixel of UI that now belongs to somebody else.
   const gen = ++generation;
+  gotFrame = false;
   const self = new RTCPeerConnection({ iceServers: CFG.iceServers });
   pc = self;
   const stale = () => gen !== generation;
@@ -443,11 +473,20 @@ async function connect() {
     if (stale()) return;
     diagLine('connection ' + self.connectionState);
     if (self.connectionState === 'connected') {
-      if (connectDeadline !== null) { clearTimeout(connectDeadline); connectDeadline = null; }
-      setPhase('live');
-      hideOverlay();
-      setStatus('live', true);
+      // Deliberately does NOT hide the overlay, clear the deadline, or go green.
+      //
+      // A peer connection reaches 'connected' when ICE and DTLS complete, which
+      // says the two ends can talk -- not that one byte of media crossed. The
+      // relay answers a WHEP offer for a room whose track is yielding nothing
+      // just as happily as for a live one, so promoting to 'live' here produced
+      // the exact failure this page exists to explain: a black rectangle under a
+      // green 'live' chip, with the overlay that would have said so hidden by
+      // the very event that proved nothing about the picture. The first decoded
+      // frame is the only event that means "watching".
+      setStatus('connected', false);
+      setPhase('path', 'Waiting for video');
       startStats();
+      watchFirstFrame(stale);
     }
     if (self.connectionState === 'failed') {
       stopStats();
@@ -552,15 +591,24 @@ async function connect() {
   if (connectDeadline !== null) clearTimeout(connectDeadline);
   connectDeadline = setTimeout(() => {
     if (stale()) return;
-    if (self.connectionState === 'connected') return;
-    diagLine('no path after ' + (CONNECT_TIMEOUT_MS / 1000) + 's; state=' + self.connectionState);
+    // Guarded on a decoded FRAME, not on the connection state. Returning early
+    // just because the peer connection said 'connected' is what let the silent
+    // case run out the clock unreported: the one watchdog that could have named
+    // it disarmed itself on the evidence of the thing that was not the problem.
+    if (gotFrame) return;
+    const connected = self.connectionState === 'connected';
+    diagLine((connected ? 'connected but no frame' : 'no path') +
+      ' after ' + (CONNECT_TIMEOUT_MS / 1000) + 's; state=' + self.connectionState);
     void sampleStats('timeout');
-    setStatus('no path', false);
+    setStatus(connected ? 'no video' : 'no path', false);
     showOverlay(
-      'Could not reach the stream',
-      'The relay answered but no connection formed — usually a restrictive ' +
-      'network on one end. Try another network, or ask the host to enable TURN ' +
-      'for viewers.',
+      connected ? 'Connected, but no video' : 'Could not reach the stream',
+      connected
+        ? 'The connection is up and the relay is sending nothing. The host is ' +
+          'probably no longer sharing — ask them to start again.'
+        : 'The relay answered but no connection formed — usually a restrictive ' +
+          'network on one end. Try another network, or ask the host to enable TURN ' +
+          'for viewers.',
       false,
     );
   }, CONNECT_TIMEOUT_MS);

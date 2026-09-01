@@ -277,7 +277,7 @@ JavaScript inside a Python string, with no compiler, linter or type checker
 between writing it and a stranger watching through it, so `node --check` is the
 only build step it will ever get.
 
-## A viewer says 'live' only when a path exists
+## A viewer says 'live' only when a frame has decoded
 
 The page used to call itself live the moment the relay's SDP answer arrived. An
 answer means the relay agreed to send; it says nothing about whether a path
@@ -286,12 +286,29 @@ hidden overlay, a green `live` chip and a black rectangle — indistinguishable
 from a host who really was sharing a black screen, and the single most confusing
 state this page can produce.
 
-`live` now comes only from `connectionstatechange`. Between the answer and a real
-connection the chip reads `negotiated` and the overlay says what is happening. A
-12s deadline then reports "could not reach the stream" with the likely cause,
-because ICE can sit in `checking` for a long time and may settle on
-`disconnected` rather than `failed` — in which case the failure handler never
-runs at all and nothing would ever be said.
+Moving `live` onto `connectionstatechange` fixed half of that and left the other
+half, because **`connected` is not a picture either**. It means ICE and DTLS
+completed — that the two ends can talk. The relay answers a WHEP offer for a
+room whose track has stopped yielding frames exactly as happily as for a live
+one, so a host who stopped sharing left viewers on the same black rectangle
+under the same green chip, with the overlay that would have explained it hidden
+by an event that had proved nothing about the video.
+
+`live` therefore comes from the **first decoded frame** and nothing else:
+`requestVideoFrameCallback` where it exists, `loadeddata` everywhere else. Both,
+because neither fires for a track that carries no media — which is the whole
+point. Until one does, the chip reads `connected` and the phase says "waiting for
+video".
+
+The 12s deadline is guarded on that same frame rather than on the connection
+state, and reports which of the two failures happened: "could not reach the
+stream" when no path formed, "connected, but no video" when one did and nothing
+came down it. Guarding it on `connectionState === 'connected'` is what let the
+silent case run out the clock unreported — the one watchdog that could have
+named it disarmed itself on the evidence of the thing that was not wrong. The
+deadline is needed at all because ICE can sit in `checking` for a long time and
+may settle on `disconnected` rather than `failed`, in which case the failure
+handler never runs.
 
 ## The viewer page retries, but only once at a time
 
