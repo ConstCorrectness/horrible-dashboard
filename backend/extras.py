@@ -93,7 +93,13 @@ class ExtraSpec:
 EXTRAS: dict[str, ExtraSpec] = {
     "voice": ExtraSpec(
         name="voice",
-        modules=("whisper", "edge_tts"),
+        # Whisper here is `openai/whisper-tiny.en` run through **transformers**
+        # (see `agent/stt_service.py`), not the `openai-whisper` package — which
+        # this repo has never depended on and `uv.lock` has never contained.
+        # Probing for a module named `whisper` therefore reported the extra
+        # absent with `certain=True` no matter what was installed, and told the
+        # user to run the very `uv sync --extra voice` they had already run.
+        modules=("torch", "transformers", "edge_tts"),
         install="uv sync --extra voice",
         summary="Whisper speech-to-text and Edge text-to-speech",
     ),

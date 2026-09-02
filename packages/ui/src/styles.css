@@ -3191,6 +3191,52 @@ body {
   user-select: all;
 }
 
+/* The working state's copy control (`showCopy`). The link keeps its own colour;
+   the button is a quiet 30px-family square beside it that only lights up on
+   hover, so a URL row reads as one thing rather than two competing controls. */
+.copyable-link-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  /* The link is what shrinks — never the button. */
+  max-width: 100%;
+}
+
+.copyable-link-row > .copyable-link {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.copyable-link-icon {
+  --icon-size: 13px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition:
+    color 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.copyable-link-icon:hover {
+  color: var(--text);
+  border-color: var(--accent, #6ea8fe);
+}
+
+.copyable-link-icon[data-copied='true'] {
+  color: var(--success, #3fb950);
+  border-color: var(--success, #3fb950);
+}
+
 .copyable-link-btn {
   flex: 0 0 auto;
   font-size: 0.68rem;

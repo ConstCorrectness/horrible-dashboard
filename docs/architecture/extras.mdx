@@ -90,6 +90,24 @@ Absent extras are not advertised — that would make a peer's UI offer something
 every request against it would refuse. Neither are *uncertain* ones, which would
 be worse: it would send a friend's work to a machine whose own install is broken.
 
+## Probe the module the extra actually installs
+
+`ExtraSpec.modules` must name modules the extra's own dependencies provide. This
+sounds obvious and was wrong for `voice` from the start: it probed for a module
+named `whisper`, but the extra installs `torch`, `transformers` and `edge-tts` —
+STT is `openai/whisper-tiny.en` run *through transformers*, and the
+`openai-whisper` package has never been a dependency (it appears nowhere in
+`uv.lock`).
+
+Because every module in the tuple must import, `voice` reported
+`available=False, certain=True` — "it is genuinely not here" — on a machine with
+the whole extra installed, and told the user to run the `uv sync --extra voice`
+they had already run. It also meant a node with working speech never advertised
+`voice` to its peers, and would try to borrow one.
+
+The failure mode is quiet in both directions, so when adding an extra, check the
+probe against the installed distribution rather than the feature's name.
+
 ## Which extras are borrowable
 
 | extra | lease `service` | borrowable |

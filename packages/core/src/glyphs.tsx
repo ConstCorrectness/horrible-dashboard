@@ -88,6 +88,16 @@ export function IconTrash(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+/** Put this on the clipboard. Two offset sheets — the copy and the original. */
+export function IconCopy(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <rect x="6" y="6" width="7.5" height="7.5" rx="1.5" />
+      <path d="M10 6V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v4.5A1.5 1.5 0 0 0 4 10h2" />
+    </Glyph>
+  );
+}
+
 /** Confirmed / present. */
 export function IconCheck(props: SVGProps<SVGSVGElement>) {
   return (

@@ -158,17 +158,20 @@ def test_stt_handles_empty_or_corrupt_audio(client: TestClient) -> None:
     pytest.importorskip("torch")
     pytest.importorskip("transformers")
 
+    # Assert on the transcript, not the whole envelope: the response also carries
+    # `ranOn` (local vs a borrowed peer), and an exact-dict match made adding that
+    # field look like an STT regression.
     res = client.post(
         "/api/agent/stt",
         files={"file": ("empty.webm", b"", "audio/webm")},
     )
     assert res.status_code == 200
-    assert res.json() == {"text": ""}
+    assert res.json()["text"] == ""
 
     res = client.post(
         "/api/agent/stt",
         files={"file": ("corrupt.webm", b"garbage-bytes-12345", "audio/webm")},
     )
     assert res.status_code == 200
-    assert res.json() == {"text": ""}
+    assert res.json()["text"] == ""
 

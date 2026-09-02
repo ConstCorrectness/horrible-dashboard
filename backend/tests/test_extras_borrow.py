@@ -169,13 +169,13 @@ def _patch_peers(monkeypatch, peers):
 
 
 def test_local_wins(monkeypatch):
-    _fake_import(monkeypatch, {"whisper": None, "edge_tts": None})
+    _fake_import(monkeypatch, {"torch": None, "edge_tts": None})
     _patch_peers(monkeypatch, [_peer("friend", ["voice"])])
     assert borrow.route("voice").where == "local"
 
 
 def test_a_peer_is_used_when_the_extra_is_certainly_absent(monkeypatch):
-    _fake_import(monkeypatch, {"whisper": ImportError("no torch")})
+    _fake_import(monkeypatch, {"torch": ImportError("no torch")})
     _patch_peers(monkeypatch, [_peer("friend", ["voice"])])
     decision = borrow.route("voice")
     assert decision.where == "peer"
@@ -185,7 +185,7 @@ def test_a_peer_is_used_when_the_extra_is_certainly_absent(monkeypatch):
 def test_an_uncertain_local_answer_never_routes_to_a_peer(monkeypatch):
     """A broken local install is a problem the user can fix. Silently shipping
     their audio to a friend's machine instead hides it."""
-    _fake_import(monkeypatch, {"whisper": OSError("torch is present but broken")})
+    _fake_import(monkeypatch, {"torch": OSError("torch is present but broken")})
     _patch_peers(monkeypatch, [_peer("friend", ["voice"])])
     decision = borrow.route("voice")
     assert decision.where == "unavailable"
@@ -193,19 +193,19 @@ def test_an_uncertain_local_answer_never_routes_to_a_peer(monkeypatch):
 
 
 def test_an_untrusted_peer_is_not_a_candidate(monkeypatch):
-    _fake_import(monkeypatch, {"whisper": ImportError("no torch")})
+    _fake_import(monkeypatch, {"torch": ImportError("no torch")})
     _patch_peers(monkeypatch, [_peer("stranger", ["voice"], trusted=False)])
     assert borrow.route("voice").where == "unavailable"
 
 
 def test_a_disconnected_peer_is_not_a_candidate(monkeypatch):
-    _fake_import(monkeypatch, {"whisper": ImportError("no torch")})
+    _fake_import(monkeypatch, {"torch": ImportError("no torch")})
     _patch_peers(monkeypatch, [_peer("friend", ["voice"], status="disconnected")])
     assert borrow.route("voice").where == "unavailable"
 
 
 def test_a_peer_without_the_extra_is_not_a_candidate(monkeypatch):
-    _fake_import(monkeypatch, {"whisper": ImportError("no torch")})
+    _fake_import(monkeypatch, {"torch": ImportError("no torch")})
     _patch_peers(monkeypatch, [_peer("friend", ["clip"])])
     decision = borrow.route("voice")
     assert decision.where == "unavailable"
@@ -214,14 +214,14 @@ def test_a_peer_without_the_extra_is_not_a_candidate(monkeypatch):
 
 def test_the_install_hint_survives_the_borrow_attempt(monkeypatch):
     """The fallback is the hint the feature always gave, not a new dead end."""
-    _fake_import(monkeypatch, {"whisper": ImportError("no torch")})
+    _fake_import(monkeypatch, {"torch": ImportError("no torch")})
     _patch_peers(monkeypatch, [])
     decision = borrow.route("voice")
     assert decision.install == "uv sync --extra voice"
 
 
 def test_allow_peer_false_skips_the_fabric_entirely(monkeypatch):
-    _fake_import(monkeypatch, {"whisper": ImportError("no torch")})
+    _fake_import(monkeypatch, {"torch": ImportError("no torch")})
     _patch_peers(monkeypatch, [_peer("friend", ["voice"])])
     assert borrow.route("voice", allow_peer=False).where == "unavailable"
 
@@ -233,7 +233,7 @@ def test_capability_lists_only_installed_extras(monkeypatch):
     _fake_import(
         monkeypatch,
         {
-            "whisper": None,
+            "torch": None,
             "edge_tts": None,
             "onnxruntime": ImportError("no"),
             "llama_cpp": ImportError("no"),
@@ -253,7 +253,7 @@ def test_capability_withdraws_when_nothing_is_installed(monkeypatch):
         {
             name: ImportError("no")
             for name in (
-                "whisper",
+                "torch",
                 "edge_tts",
                 "onnxruntime",
                 "tokenizers",
@@ -271,7 +271,7 @@ def test_an_uncertain_extra_is_not_advertised(monkeypatch):
     _fake_import(
         monkeypatch,
         {
-            "whisper": OSError("present but broken"),
+            "torch": OSError("present but broken"),
             "onnxruntime": ImportError("no"),
             "llama_cpp": ImportError("no"),
             "playwright": ImportError("no"),

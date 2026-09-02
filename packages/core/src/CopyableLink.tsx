@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { openExternal } from './external';
+import { IconCheck, IconCopy } from './glyphs';
 
 /**
  * A link that cannot dead-end.
@@ -16,16 +17,25 @@ import { openExternal } from './external';
  * through the browser's own navigation, and when that fails it stops offering a
  * link — clicking is what just failed — and shows the address as selectable text
  * with a Copy button instead. The address stays on screen from then on.
+ *
+ * `showCopy` adds a copy control to the *working* state as well. Off by default,
+ * because for most callers the link is somewhere to go and copying it is not the
+ * point. It is opt-in rather than universal for the share link's reason: there
+ * the URL **is** the artefact being handed to someone else, so clicking it is the
+ * least useful thing you can do with it.
  */
 export function CopyableLink({
   url,
   label,
   className,
+  showCopy = false,
 }: {
   url: string;
   /** Link text. The URL itself is shown once opening has failed. */
   label: string;
   className?: string;
+  /** Show a copy button beside the link, not only in the failed state. */
+  showCopy?: boolean;
 }) {
   const [failed, setFailed] = useState(false);
   const [copied, setCopied] = useState<boolean | null>(null);
@@ -43,6 +53,15 @@ export function CopyableLink({
       .catch(() => setCopied(false));
   };
 
+  // The tick is feedback, not a state worth keeping: a button still reading
+  // "Copied" a minute later says nothing about the clipboard, which by then may
+  // hold something else entirely.
+  useEffect(() => {
+    if (copied !== true) return;
+    const t = setTimeout(() => setCopied(null), 1600);
+    return () => clearTimeout(t);
+  }, [copied]);
+
   if (failed) {
     return (
       <span className={`copyable-link failed${className ? ` ${className}` : ''}`}>
@@ -54,7 +73,7 @@ export function CopyableLink({
     );
   }
 
-  return (
+  const anchor = (
     <a
       className={`copyable-link${className ? ` ${className}` : ''}`}
       href={url}
@@ -71,6 +90,28 @@ export function CopyableLink({
     >
       {label}
     </a>
+  );
+
+  if (!showCopy) return anchor;
+
+  return (
+    <span className="copyable-link-row">
+      {anchor}
+      <button
+        type="button"
+        className="copyable-link-icon"
+        onClick={copy}
+        // The label carries the state, because the icon swap is the one part of
+        // this a screen reader cannot see.
+        aria-label={
+          copied === true ? 'Copied' : copied === false ? 'Could not copy' : 'Copy link'
+        }
+        title={copied === false ? 'Could not copy — select the link instead' : 'Copy link'}
+        data-copied={copied === true ? 'true' : undefined}
+      >
+        {copied === true ? <IconCheck /> : <IconCopy />}
+      </button>
+    </span>
   );
 }
 

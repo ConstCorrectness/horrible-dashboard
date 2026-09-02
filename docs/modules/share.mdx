@@ -483,6 +483,14 @@ silently published a screen to the open internet because somebody was looking fo
 a link would be the most surprising thing this module could do. The pane puts it
 on its own row with its own button, and an optional passphrase beside it.
 
+Once minted, the link row carries a **copy button** — `CopyableLink`'s opt-in
+`showCopy`, off for every other caller. Elsewhere in the app a link is somewhere
+to *go*, and clicking it is the point; here the URL **is** the artefact being
+handed to somebody else, so opening it yourself is the least useful thing you can
+do with it. It duplicates the `share.copyLink` command deliberately: the command
+is for someone who already knows it exists, and the pane is where everyone else
+is looking.
+
 Six things about the link are worth knowing:
 
 - **The view URL is public; the ingest URL is authority.** The session model

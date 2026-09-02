@@ -515,7 +515,7 @@ export function SessionPanel() {
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             {hosting.link ? (
               <>
-                <CopyableLink url={hosting.link} label={hosting.link} />
+                <CopyableLink url={hosting.link} label={hosting.link} showCopy />
                 <Button size="sm" intent="danger" onClick={() => void dropLink()}>
                   Revoke link
                 </Button>
