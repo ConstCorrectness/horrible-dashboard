@@ -366,7 +366,10 @@ fn fs_volume(in: VolumeOut) -> @location(0) vec4<f32> {
     // it would eat the line entirely rather than texture it. Fogged like
     // everything else, so a tracer across a long hall still fades with distance.
     if (in.mode > 0.5) {
-        let far_fog = clamp(in.view_depth / max(camera.params.x, 1.0), 0.0, 1.0);
+        // `params.x` is the fog **density** the world pass integrates, not a
+        // distance to divide by — see `fog_amount`, which this pass got wrong
+        // and which made everything here invisible past one cube.
+        let far_fog = fog_amount(in.view_depth, camera.params.x);
         return vec4<f32>(tonemap(in.color.rgb), in.color.a * (1.0 - far_fog));
     }
     // Two octaves is enough at this scale and costs sixteen hashes; a third
@@ -381,7 +384,7 @@ fn fs_volume(in: VolumeOut) -> @location(0) vec4<f32> {
     var alpha = in.color.a * density;
     // Fade the last stretch into the fog, so a cloud at the edge of sight does
     // not sit as a hard disc against the haze.
-    let fog = clamp(in.view_depth / max(camera.params.x, 1.0), 0.0, 1.0);
+    let fog = fog_amount(in.view_depth, camera.params.x);
     alpha = alpha * (1.0 - fog);
     return vec4<f32>(tonemap(shaded), alpha);
 }

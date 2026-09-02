@@ -101,12 +101,18 @@ buffers, terminal + file explorer.
   distribution `uv` manages) with every locked dependency in its own `site-packages`
   and the `backend/` tree beside it, written to
   `apps/desktop/src-tauri/backend-runtime/` where `bundle.resources` picks it up. ~1 GB
-  and a few minutes; git-ignored, and only needed to *package* — `pnpm dev:desktop`
+  and a few minutes; git-ignored, and only needed to _package_ — `pnpm dev:desktop`
   runs the checkout. A real interpreter rather than PyInstaller because the import
   graph isn't knowable at build time (backend plugins come from pip entry points), and
   freezing it breaks that silently. See docs/architecture/releases.mdx.
 - `pnpm typecheck`, `pnpm lint` — whole workspace, from the root
 - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` — Rust check
+- `pnpm build:hassault` / `pnpm build:hassault:debug` — build the **native
+  hassault client** and hard-link the result into `apps/native-fps/bin/`, where
+  the launcher looks. Use these rather than a bare `cargo build`: `pick_binary`
+  starts the _newest_ of six candidate paths by mtime, so a sibling build (the
+  other profile, or a stale `bin/` copy) can silently win and run a binary
+  without the change you just made.
 - **Android companion:** open `apps/mobile-android/` in Android Studio and run `app`.
   There's no committed Gradle wrapper yet, so there is no CLI build; `local.properties`
   is git-ignored (machine-local `sdk.dir`). The phone reaches the backend only when it's
@@ -158,7 +164,6 @@ The docs are authored as **MDX with Mermaid diagrams** and published as a
 [Docusaurus](https://docusaurus.io) site (`website/`, which reads this `docs/`
 tree directly). `pnpm --filter @horrible/docs build` builds it locally; pushing to
 `main` deploys to GitHub Pages via `.github/workflows/docs.yml`.
-
 
 ## UI and Design Standards
 

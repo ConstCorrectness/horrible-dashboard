@@ -163,6 +163,14 @@ impl DecalPool {
     /// `push` takes the same `(position, color, alpha)` shape the volume pass
     /// wants; the caller supplies it so this module needs no renderer type and
     /// stays unit-testable headless, exactly as `effects.rs` does.
+    ///
+    /// **Positions come out in render coordinates**, like every other producer
+    /// feeding this pass (`effects.rs`, `nades.rs`, `water.rs`). The wire, the
+    /// face normals and the quad's own arithmetic are all cube space — `x`, `y`
+    /// horizontal and `z` up — and the renderer is y-up, so the mapping happens
+    /// once, here, at the push. Emitting cube coordinates instead does not fail:
+    /// every mark simply lands with its height and its depth swapped, which
+    /// buries it inside the geometry and reads as decals not working at all.
     pub fn quads(&self, mut push: impl FnMut([f32; 3], [f32; 3], f32)) {
         for mark in self.marks.iter() {
             if !mark.live {
@@ -194,8 +202,11 @@ impl DecalPool {
             // Two triangles. Wound the same way for both, so a mark is visible
             // from the side its surface faces and from nowhere else — which is
             // what stops a floor mark showing through the ceiling below it.
+            //
+            // Cube (x, y, z-up) → render (x, height, y), the same mapping
+            // `nades.rs` and `effects.rs` apply at their own push.
             for p in [a, b, c, a, c, d] {
-                push(p, MARK_COLOR, alpha);
+                push([p[0], p[2], p[1]], MARK_COLOR, alpha);
             }
         }
     }
@@ -282,13 +293,36 @@ mod tests {
     }
 
     #[test]
+    fn a_mark_comes_out_in_render_coordinates() {
+        // The one thing every other producer feeding the volume pass does and
+        // this one did not: cube (x, y, z-up) → render (x, height, y). Without
+        // it a mark's height and depth are swapped, so it is drawn inside the
+        // map instead of on it — and every other assertion here still passed,
+        // because they were all written in cube space too.
+        let mut pool = DecalPool::default();
+        pool.mark([10.0, 20.0, 30.0], FACE_PZ);
+        let mut out = Vec::new();
+        pool.quads(|p, _, _| out.push(p));
+        assert_eq!(out.len(), 6);
+        for p in out {
+            // x is untouched, the mark's own height (30 + the lift) is render y,
+            // and the cube's y is render z.
+            assert!((p[0] - 10.0).abs() <= DECAL_SIZE, "x moved: {p:?}");
+            assert!((p[1] - (30.0 + DECAL_LIFT)).abs() < 1e-4, "height: {p:?}");
+            assert!((p[2] - 20.0).abs() <= DECAL_SIZE, "depth: {p:?}");
+        }
+    }
+
+    #[test]
     fn a_mark_is_lifted_off_its_own_surface() {
         // Coplanar with the wall it is on, a decal z-fights — which reads as
         // flicker rather than as a bug, so it is never reported as one.
+        // Render y, not cube z: this reads a mark on a *floor*, whose height is
+        // the axis it is lifted along.
         let mut pool = DecalPool::default();
         pool.mark([5.0, 5.0, 0.0], FACE_PZ);
         let mut heights = Vec::new();
-        pool.quads(|p, _, _| heights.push(p[2]));
+        pool.quads(|p, _, _| heights.push(p[1]));
         assert_eq!(heights.len(), 6);
         for z in heights {
             assert!((z - DECAL_LIFT).abs() < 1e-6, "mark sat at {z}");

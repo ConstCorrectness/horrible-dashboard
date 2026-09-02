@@ -3254,6 +3254,30 @@ record of the fight.
 `browser_parity.rs` pins the cap, the lifetime, the fade, the lift, the size, and
 the order of the six face normals across all three implementations.
 
+The native marks are emitted **in render coordinates** — cube `(x, y, z-up)` →
+render `(x, height, y)`, mapped once at the push, the same way `effects.rs`,
+`nades.rs` and `water.rs` do it. This is the one thing about them that failed
+silently and did: the wire, the face normals and the quad's own arithmetic are all
+cube space, so emitting the corners unmapped compiles, draws, and puts every mark
+somewhere with its height and depth swapped — inside the geometry, invisible, and
+indistinguishable from decals never having been wired up at all. Every unit test
+passed throughout, because they were written in cube space too;
+`a_mark_comes_out_in_render_coordinates` is the one that now reads the mapping.
+
+Underneath that sat a second fault, and it was **not the decals' own**: the
+volume pass faded itself with `view_depth / max(camera.params.x, 1.0)`, reading
+`params.x` as the distance at which fog is total. It is a fog **density** —
+`Quality::fog_density()`, 0.0055 to 0.011 — which the world pass integrates as
+`1 - exp(-(density·depth)²)`. Being under 1, the `max` pinned the divisor at 1,
+so **every fragment of that pass more than one cube from the eye came out at
+zero alpha**: bullet marks, tracers, impact flashes, smoke, water and the throw
+arc alike, all invisible except within arm's reach of the muzzle — which is why
+the marks read as "stuck at the viewport where the gun is shooting". Both passes
+now go through one shared `fog_amount` in `lighting.wgsl.inc` so they cannot
+disagree about what the number means, and `shaders.rs` pins it as **text**: the
+wrong version parses, validates and runs at full frame rate, so nothing else in
+that suite could have caught it.
+
 ### On the range
 
 Train places the same items, from the same served placements, and resolves **only the
@@ -3918,9 +3942,20 @@ in the client: it skips the window entirely and logs the join and the incoming
 ticks, which proves the wire with no GPU involved.
 
 ```bash
-cargo build --release --manifest-path apps/native-fps/Cargo.toml
+pnpm build:hassault        # optimized; `pnpm build:hassault:debug` for the other profile
 ./apps/native-fps/target/release/hassault-native --server=http://127.0.0.1:8000 --map=hd_pit --check
 ```
+
+`pnpm build:hassault` is `cargo build --release --manifest-path
+apps/native-fps/Cargo.toml` plus the step that makes a manual rebuild reliable:
+it **hard-links the fresh binary into `apps/native-fps/bin/`**, the launcher's
+third candidate tier. `pick_binary` runs the *newest* of the six candidates by
+mtime, so the risk of building by hand is a sibling path — the other profile, or
+a `bin/` copy from a previous session — quietly winning that comparison and
+starting a build without the change you just made. Linking rather than copying
+makes the two paths one file with one mtime, and both profiles share the one
+link name so building either retires the other's. Anything after `--` goes
+through to cargo.
 
 `--check` loads and meshes a map and exits, which is the fastest way to see
 whether a map the browser renders is one this client agrees about.

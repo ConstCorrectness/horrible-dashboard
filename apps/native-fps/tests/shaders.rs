@@ -113,3 +113,31 @@ fn every_entry_point_a_pipeline_names_exists() {
         );
     }
 }
+
+#[test]
+fn the_volume_pass_reads_the_fog_density_as_a_density() {
+    // `camera.params.x` is `Quality::fog_density()` — 0.0055 to 0.011. This pass
+    // used to fade itself with `view_depth / max(params.x, 1.0)`, reading it as
+    // "the distance at which fog is total"; the `max` then pinned the divisor at
+    // 1, so every fragment more than one cube from the eye came out at **zero
+    // alpha**. Bullet marks, tracers, impacts, smoke, water and the throw arc
+    // are all this pass, and all of them were invisible past arm's reach — which
+    // reads as a feature that was never wired up rather than as a shader bug.
+    //
+    // Checked as text because the failure is arithmetic, not a compile error:
+    // the wrong version parses, validates and runs at full frame rate.
+    let src = include_str!("../src/shader.wgsl");
+    let volume = src
+        .split_once("fn fs_volume")
+        .expect("fs_volume is still in shader.wgsl")
+        .1;
+    assert!(
+        !volume.contains("/ max(camera.params.x"),
+        "fs_volume divides by the fog density again; use fog_amount"
+    );
+    assert_eq!(
+        volume.matches("fog_amount(in.view_depth, camera.params.x)").count(),
+        2,
+        "both the flat and the cloud branch fade through fog_amount"
+    );
+}

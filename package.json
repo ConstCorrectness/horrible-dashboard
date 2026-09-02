@@ -12,6 +12,8 @@
     "build:desktop": "pnpm --filter @horrible/desktop build",
     "build:backend-runtime": "node scripts/build-backend-runtime.mjs",
     "build:icons": "node scripts/build_icons.mjs",
+    "build:hassault": "node scripts/build-hassault.mjs --release",
+    "build:hassault:debug": "node scripts/build-hassault.mjs --debug",
     "build:hassault-character": "node scripts/build_hassault_character.mjs",
     "build:hassault-weapon": "node scripts/build_hassault_weapon.mjs",
     "typecheck": "pnpm -r typecheck",

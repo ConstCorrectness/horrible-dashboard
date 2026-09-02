@@ -203,8 +203,23 @@ fn tonemap(color: vec3<f32>) -> vec3<f32> {
 // of receding.
 const FOG_COLOR: vec3<f32> = vec3<f32>(0.0056, 0.0080, 0.0137);
 
-fn apply_fog(color: vec3<f32>, view_depth: f32, density: f32) -> vec3<f32> {
+/// How much fog stands between the eye and something `view_depth` away.
+///
+/// **`density` is a density, not a distance.** It is `Quality::fog_density()`,
+/// which is 0.0055 to 0.011 — the reciprocal of a length, integrated here into
+/// the same exponential-squared curve three's `FogExp2` uses. The translucent
+/// pass used to fade itself with `view_depth / max(density, 1.0)` instead,
+/// reading that number as "how far away is fully fogged"; `max(_, 1.0)` then
+/// pinned the divisor at 1, so **every volume fragment more than one cube from
+/// the eye came out at zero alpha** — bullet marks, tracers, impacts, smoke,
+/// water and the throw arc alike, all of them invisible except within arm's
+/// reach of the muzzle. Shared as one function now so the two passes cannot
+/// disagree about what the number means again.
+fn fog_amount(view_depth: f32, density: f32) -> f32 {
     let d = density * view_depth;
-    let t = clamp(1.0 - exp(-d * d), 0.0, 1.0);
-    return mix(color, FOG_COLOR, t);
+    return clamp(1.0 - exp(-d * d), 0.0, 1.0);
+}
+
+fn apply_fog(color: vec3<f32>, view_depth: f32, density: f32) -> vec3<f32> {
+    return mix(color, FOG_COLOR, fog_amount(view_depth, density));
 }
