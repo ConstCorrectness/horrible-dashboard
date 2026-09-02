@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Annotated
 
 from pydantic import BaseModel, StringConstraints
@@ -102,9 +103,6 @@ class HandRequest(BaseModel):
     raise_hands: bool
 
 
-class AcceptSpeakerInviteRequest(BaseModel):
-    user_id: int
-
 
 class CreateChannelRequest(BaseModel):
     topic: str = ""
@@ -121,9 +119,26 @@ class SendChannelMessageRequest(BaseModel):
     message: str
 
 
+class HandraisePermission(str, Enum):
+    """Who may raise a hand, named rather than numbered.
+
+    Clubhouse's ``handraise_queue_setting`` is a bare int whose values differ
+    from the ones the retired ``update_is_ask_to_join_allowed`` took (that one
+    used 1 for "everyone"; here 1 means LOCKED).  Passing the old number
+    straight through would lock the room while the UI said "everyone" — no
+    error, just the opposite policy — so the wire int is only ever produced by
+    the mapping in ``routes._HANDRAISE_QUEUE_SETTING``.
+    """
+
+    open_mic = "open_mic"
+    locked = "locked"
+    everyone = "everyone"
+    followed_by_speakers = "followed_by_speakers"
+
+
 class HandraiseSettingsRequest(BaseModel):
     is_enabled: bool
-    handraise_permission: int
+    handraise_permission: HandraisePermission = HandraisePermission.everyone
 
 
 class UpdateTopicRequest(BaseModel):
@@ -150,67 +165,12 @@ class RejectSpeakerInviteRequest(BaseModel):
     user_id: int
 
 
-class OnlineFriendUser(BaseModel):
-    user_id: int | None = None
-    name: str | None = None
-    username: str | None = None
-    photo_url: str | None = None
-    channel: str | None = None
-    topic: str | None = None
-    is_speaker: bool | None = None
-    last_active_minutes: int | None = None
 
 
-class OnlineFriendsList(BaseModel):
-    users: list[OnlineFriendUser] = []
 
 
-class ClubDetails(BaseModel):
-    club_id: int | None = None
-    name: str | None = None
-    description: str | None = None
-    photo_url: str | None = None
-    num_members: int | None = None
-    num_followers: int | None = None
-    is_member: bool | None = None
-    is_admin: bool | None = None
-    is_community: bool | None = None
 
 
-class ClubMemberUser(BaseModel):
-    user_id: int | None = None
-    name: str | None = None
-    username: str | None = None
-    photo_url: str | None = None
-    bio: str | None = None
-    is_admin: bool | None = None
-
-
-class ClubMemberList(BaseModel):
-    users: list[ClubMemberUser] = []
-
-
-class ClubhouseEvent(BaseModel):
-    event_id: int | None = None
-    name: str | None = None
-    description: str | None = None
-    time_start_epoch: int | None = None
-    channel: str | None = None
-    club: Club | None = None
-    hosts: list[ChannelUser] = []
-
-
-class EventList(BaseModel):
-    events: list[ClubhouseEvent] = []
-
-
-class CreateEventRequest(BaseModel):
-    name: str
-    time_start_epoch: int
-    description: str = ""
-    club_id: int | None = None
-    user_ids: list[int] = []
-    is_member_only: bool = False
 
 
 class NotificationItem(BaseModel):
@@ -236,8 +196,3 @@ class UpdateNameRequest(BaseModel):
 
 class UpdateUsernameRequest(BaseModel):
     username: str
-
-
-class UpdateSkintoneRequest(BaseModel):
-    skintone: int
-

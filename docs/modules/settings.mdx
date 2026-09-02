@@ -173,6 +173,14 @@ Storage's own overrides are environment variables, not settings, because they mu
 resolve before anything is read and `settings.json` lives in the directory they
 locate.
 
+**Desktop** is the fourth, and the one that is a control the store cannot hold: it
+switches the desktop you are on between the tiled frame and free windows. Mode is a
+property of each workspace's own layout, so a `SettingDecl` — one global scalar —
+could only ever disagree with whichever desktop was in front of you. The setting
+beside it, `desktop.defaultMode`, *is* declarative, because "which kind should a new
+desktop be" really is one preference. See
+[../architecture/desktop-shell.mdx](../architecture/desktop-shell.mdx).
+
 ## The page
 
 Modelled on VS Code's Settings editor: a **search box** over a **category list**

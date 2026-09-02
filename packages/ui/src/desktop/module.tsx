@@ -38,7 +38,8 @@ import { isHomeCollapsed, SPLASH_BACKDROP_ID, toggleHomeCollapsed } from './back
 
 /** The four directions, in the order the frame's own bindings use. */
 const NAVS = ['left', 'right', 'up', 'down'] as const;
-import { OOBE_COMPLETE_KEY } from './constants';
+import { DEFAULT_DESKTOP_MODE_KEY, OOBE_COMPLETE_KEY } from './constants';
+import { DesktopModeSection } from './DesktopModeSection';
 import {
   DEFAULT_TASKBAR,
   mergeTaskbarConfig,
@@ -63,8 +64,9 @@ export const desktopModule: ModuleManifest = {
     // express split ratios as the rects they happened to occupy and `tileWindows`
     // cannot recover the ratios you dragged, so a round trip quietly degrades the
     // arrangement. The paradigm is a property of the workspace, chosen when you
-    // make one (Start ▸ New tiled / New floating); these stay for the cases where
-    // converting is genuinely what you want, but they say so in their titles and
+    // make one (Start ▸ New desktop, whose kind is `desktop.defaultMode`); these
+    // stay for the cases where converting is genuinely what you want, and the
+    // settings page offers the same conversion — but they say so in their titles and
     // live in the palette rather than under an ambient one-click control.
     {
       id: 'desktop.toggleMode',
@@ -193,6 +195,21 @@ export const desktopModule: ModuleManifest = {
   ],
   settings: [
     {
+      // The paradigm choice, moved off the Start menu: a launcher lists the
+      // things you can open, and this is a preference about the ones you make.
+      // The control that converts the desktop you are *on* is in the section
+      // below (`DesktopModeSection`) rather than here, because mode is a
+      // property of each workspace and a single global key could only ever
+      // disagree with whichever desktop was in front of you.
+      key: DEFAULT_DESKTOP_MODE_KEY,
+      title: 'New desktops use',
+      description:
+        'The paradigm a newly created desktop starts in: `tiling` splits the screen between panes, `floating` gives each one a window. Existing desktops keep whatever they were made with.',
+      type: 'enum',
+      enumValues: ['tiling', 'floating'],
+      default: 'tiling',
+    },
+    {
       key: TASKBAR_SETTING_KEY,
       title: 'Taskbar',
       description:
@@ -217,6 +234,7 @@ export const desktopModule: ModuleManifest = {
       default: false,
     },
   ],
+  settingsSections: [{ id: 'desktop.mode', title: 'Desktop', component: DesktopModeSection }],
   contextMenu: [
     { kind: 'desktop', items: () => desktopMenuItems() },
     { kind: 'taskbar.window', items: (target) => taskbarWindowMenu(target) },
@@ -237,16 +255,17 @@ export const desktopModule: ModuleManifest = {
  */
 function modeMenuItems(): ContextMenuItem[] {
   const tiling = layoutStore.getSnapshot().frame.mode === 'tiling';
+  // One row, not one per paradigm: which kind a new desktop is comes from
+  // `desktop.defaultMode` on the settings page, the same key the Start menu
+  // reads. Two menus each offering the choice is two places it can be answered
+  // differently from the setting that claims to answer it.
+  const floats = getSetting<string>(DEFAULT_DESKTOP_MODE_KEY) === 'floating';
   return [
     {
-      id: 'mode.newTiled',
-      label: 'New tiled desktop',
-      run: () => void registry.runCommand('workspace.new'),
-    },
-    {
-      id: 'mode.newFloating',
-      label: 'New floating desktop',
-      run: () => void registry.runCommand('workspace.newFloating'),
+      id: 'mode.new',
+      label: floats ? 'New floating desktop' : 'New tiled desktop',
+      detail: 'Change the kind in Settings ▸ Desktop',
+      run: () => void registry.runCommand(floats ? 'workspace.newFloating' : 'workspace.new'),
     },
     {
       id: 'mode.saveAs',

@@ -348,7 +348,6 @@ async def run_turn(
     }
 
 
-
 async def run_command(
     command: Command, room: RoomSnapshot, session: VoiceSession
 ) -> dict[str, Any] | None:
@@ -361,15 +360,23 @@ async def run_command(
     # --- People Knowledge & Memory Commands (available to everyone) ---
     if cmd in {"whois", "profile"}:
         if not command.arg:
-            return {"handled": True, "notice": "Usage: /agent whois <name or @username>"}
+            return {
+                "handled": True,
+                "notice": "Usage: /agent whois <name or @username>",
+            }
         person = people_memory_store.find_by_name_or_username(command.arg)
         if person is None:
             # Check current room members
             mem = _resolve_member(room, command.arg)
             if mem:
-                person = people_memory_store.learn_user(mem.user_id, mem.name, bio=mem.bio, room_topic=room.topic)
+                person = people_memory_store.learn_user(
+                    mem.user_id, mem.name, bio=mem.bio, room_topic=room.topic
+                )
         if person is None:
-            return {"handled": True, "notice": f"I don't have profile memory for “{command.arg}” yet."}
+            return {
+                "handled": True,
+                "notice": f"I don't have profile memory for “{command.arg}” yet.",
+            }
         parts = [f"👤 {person.name}"]
         if person.username:
             parts[0] += f" (@{person.username})"
@@ -387,24 +394,41 @@ async def run_command(
         # Format: /agent remember <name> <fact> or /agent remember @user <fact>
         parts = command.arg.split(maxsplit=1)
         if len(parts) < 2:
-            return {"handled": True, "notice": "Usage: /agent remember <name> <fact to remember>"}
+            return {
+                "handled": True,
+                "notice": "Usage: /agent remember <name> <fact to remember>",
+            }
         target_name, fact = parts[0], parts[1]
         person = people_memory_store.find_by_name_or_username(target_name)
         if person is None:
             mem = _resolve_member(room, target_name)
             if mem and mem.user_id:
-                person = people_memory_store.learn_user(mem.user_id, mem.name, bio=mem.bio, room_topic=room.topic)
+                person = people_memory_store.learn_user(
+                    mem.user_id, mem.name, bio=mem.bio, room_topic=room.topic
+                )
         if person:
             people_memory_store.add_note(person.user_id, fact)
-            return {"handled": True, "notice": f"🧠 Remembered about {person.name}: “{fact}”"}
-        return {"handled": True, "notice": f"Couldn't identify “{target_name}” in this room or memory."}
+            return {
+                "handled": True,
+                "notice": f"🧠 Remembered about {person.name}: “{fact}”",
+            }
+        return {
+            "handled": True,
+            "notice": f"Couldn't identify “{target_name}” in this room or memory.",
+        }
 
     if cmd == "forget":
         if not command.arg:
             return {"handled": True, "notice": "Usage: /agent forget <name>"}
         if people_memory_store.forget_person(command.arg):
-            return {"handled": True, "notice": f"🧹 Wiped memories for “{command.arg}”."}
-        return {"handled": True, "notice": f"No stored memory found for “{command.arg}”."}
+            return {
+                "handled": True,
+                "notice": f"🧹 Wiped memories for “{command.arg}”.",
+            }
+        return {
+            "handled": True,
+            "notice": f"No stored memory found for “{command.arg}”.",
+        }
 
     if cmd == "notes":
         if not command.arg:
@@ -412,14 +436,23 @@ async def run_command(
         person = people_memory_store.find_by_name_or_username(command.arg)
         if not person or not person.notes:
             return {"handled": True, "notice": f"No notes stored for “{command.arg}”."}
-        return {"handled": True, "notice": f"Notes for {person.name}: " + "; ".join(person.notes)}
+        return {
+            "handled": True,
+            "notice": f"Notes for {person.name}: " + "; ".join(person.notes),
+        }
 
     if cmd in {"people", "roster"}:
         known = [p for m in room.members if (p := people_memory_store.get(m.user_id))]
         if not known:
-            return {"handled": True, "notice": f"There are {len(room.members)} people in this room, none in persistent memory yet."}
+            return {
+                "handled": True,
+                "notice": f"There are {len(room.members)} people in this room, none in persistent memory yet.",
+            }
         summary = ", ".join(f"{p.name} ({len(p.notes)} notes)" for p in known[:10])
-        return {"handled": True, "notice": f"Recognized {len(known)} people in room: {summary}"}
+        return {
+            "handled": True,
+            "notice": f"Recognized {len(known)} people in room: {summary}",
+        }
 
     if cmd == "tag":
         parts = command.arg.split(maxsplit=1)
@@ -461,7 +494,8 @@ async def run_command(
             await ch.change_handraise_settings(
                 channel,
                 models.HandraiseSettingsRequest(
-                    is_enabled=enable, handraise_permission=1
+                    is_enabled=enable,
+                    handraise_permission=models.HandraisePermission.everyone,
                 ),
             )
             return {

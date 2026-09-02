@@ -20,28 +20,20 @@ import httpx
 from fastapi import APIRouter, HTTPException
 
 from backend.modules.clubhouse.models import (
-    AcceptSpeakerInviteRequest,
     BlockChannelUserRequest,
     Channel,
     ChannelList,
-    ClubDetails,
-    ClubMemberList,
-    ClubhouseEvent,
     ClubhouseStatus,
     CompleteAuthRequest,
     CreateChannelRequest,
-    CreateEventRequest,
-    EventList,
     FollowingList,
     HandRequest,
     HandraiseSettingsRequest,
     InviteUserRequest,
     JoinChannelResult,
+    HandraisePermission,
     MakeModeratorRequest,
     MuteRequest,
-    NotificationItem,
-    NotificationsList,
-    OnlineFriendsList,
     RejectSpeakerInviteRequest,
     SendChannelMessageRequest,
     StartAuthRequest,
@@ -50,7 +42,6 @@ from backend.modules.clubhouse.models import (
     UninviteSpeakerRequest,
     UpdateBioRequest,
     UpdateNameRequest,
-    UpdateSkintoneRequest,
     UpdateTopicRequest,
     UpdateUsernameRequest,
     ChatSettingsRequest,
@@ -60,6 +51,17 @@ from backend import jsonstore, paths
 
 router = APIRouter(prefix="/clubhouse", tags=["clubhouse"])
 logger = logging.getLogger(__name__)
+
+# Wire values for Clubhouse's ``handraise_queue_setting``, read off the 26.08.30
+# client's HandraiseQueueSettings enum (serialized as a bare int).  Kept as the
+# single place a number is produced so no caller passes one in — see the note on
+# HandraisePermission for why an int crossing our own boundary is a hazard.
+_HANDRAISE_QUEUE_SETTING = {
+    HandraisePermission.open_mic: 0,
+    HandraisePermission.locked: 1,
+    HandraisePermission.everyone: 2,
+    HandraisePermission.followed_by_speakers: 3,
+}
 
 
 def _data_dir() -> Path:
@@ -404,7 +406,8 @@ def _parse_channel_data(ch_raw: dict[str, Any]) -> dict[str, Any] | None:
     return {
         "channel": str(channel_id),
         "topic": ch_raw.get("topic"),
-        "num_speakers": ch_raw.get("num_speakers") or len([u for u in users_list if u.get("is_speaker")]),
+        "num_speakers": ch_raw.get("num_speakers")
+        or len([u for u in users_list if u.get("is_speaker")]),
         "num_all": ch_raw.get("num_all") or len(users_list),
         "club": club_data,
         "users": users_list,
@@ -434,7 +437,18 @@ async def channels() -> dict[str, Any]:
                 auth["user_id"],
                 auth.get("device_id"),
             )
-        except Exception:
+        except Exception as exc:
+            # A failure on the first page means the feed itself is unavailable.
+            # Swallowing it returns an empty list, which the pane renders as
+            # "no rooms are live" — a different claim, and a false one, with no
+            # error anywhere.  Later pages are only ever extra: failing there
+            # truncates a result we already have, so keep what we got.
+            if not channels_list:
+                if isinstance(exc, HTTPException):
+                    raise
+                raise HTTPException(
+                    status_code=502, detail=f"Clubhouse feed unavailable: {exc}"
+                ) from exc
             break
 
         items = raw.get("items", []) or []
@@ -461,7 +475,9 @@ async def channels() -> dict[str, Any]:
             if "items" in item and isinstance(item["items"], list):
                 for sub_item in item["items"]:
                     if isinstance(sub_item, dict):
-                        if "channel" in sub_item and isinstance(sub_item["channel"], dict):
+                        if "channel" in sub_item and isinstance(
+                            sub_item["channel"], dict
+                        ):
                             parsed = _parse_channel_data(sub_item["channel"])
                             if parsed and parsed["channel"] not in seen_channels:
                                 seen_channels.add(parsed["channel"])
@@ -474,17 +490,21 @@ async def channels() -> dict[str, Any]:
     return {"channels": channels_list}
 
 
-
 @router.get("/following", response_model=FollowingList)
-async def following() -> dict[str, Any]:
-    """People the connected account follows (Clubhouse POST /get_following)."""
+async def following(page_size: int = 50, page: int = 1) -> dict[str, Any]:
+    """People the connected account follows (Clubhouse GET /get_cofollows).
+
+    ``get_following`` was removed from the API (it 404s, and the 26.08.30
+    client does not reference it); ``get_cofollows`` is its replacement and is
+    a GET with query params rather than a POST body.
+    """
     auth = _require_auth()
-    return await _ch_authed_post(
-        "/get_following",
-        {"user_id": auth["user_id"], "page_size": 50, "page": 1},
+    return await _ch_authed_get(
+        "/get_cofollows",
         auth["auth_token"],
         auth["user_id"],
         auth.get("device_id"),
+        params={"user_id": auth["user_id"], "page": page, "page_size": page_size},
     )
 
 
@@ -673,14 +693,18 @@ async def hand_channel(channel: str, body: HandRequest) -> dict[str, Any]:
 
 
 @router.post("/channels/{channel}/accept_speaker")
-async def accept_speaker(
-    channel: str, body: AcceptSpeakerInviteRequest
-) -> dict[str, Any]:
-    """Accept invitation to speak from a moderator (Clubhouse POST /accept_speaker_invite)."""
+async def accept_speaker(channel: str) -> dict[str, Any]:
+    """Come up on stage (Clubhouse POST /become_speaker).
+
+    ``accept_speaker_invite`` was removed (404); the 26.08.30 client pairs
+    ``become_speaker`` with the ``reject_speaker_invite`` we already call, and
+    both take a plain channel rather than the inviting moderator's id — you
+    accept the stage, not a particular person's invitation.
+    """
     auth = _require_auth()
     return await _ch_authed_post(
-        "/accept_speaker_invite",
-        {"channel": channel, "user_id": auth["user_id"]},
+        "/become_speaker",
+        {"channel": channel},
         auth["auth_token"],
         auth["user_id"],
         auth.get("device_id"),
@@ -786,19 +810,44 @@ async def send_channel_message(body: SendChannelMessageRequest) -> dict[str, Any
 async def change_handraise_settings(
     channel: str, body: HandraiseSettingsRequest
 ) -> dict[str, Any]:
-    """Change the hand-raise policy for the channel."""
+    """Change the hand-raise policy for the channel.
+
+    ``update_is_ask_to_join_allowed`` was removed (404).  The replacement folds
+    the old enabled-flag and permission into one setting, so "disabled" is not
+    a separate boolean any more — it is the LOCKED value.
+    """
     auth = _require_auth()
+    permission = (
+        body.handraise_permission if body.is_enabled else HandraisePermission.locked
+    )
     return await _ch_authed_post(
-        "/update_is_ask_to_join_allowed",
+        "/update_handraise_queue_setting",
         {
             "channel": channel,
-            "is_ask_to_join_allowed": body.is_enabled,
-            "handraise_permission": body.handraise_permission,
+            "handraise_queue_setting": _HANDRAISE_QUEUE_SETTING[permission],
         },
         auth["auth_token"],
         auth["user_id"],
         auth.get("device_id"),
     )
+
+
+@router.get("/channels/{channel}/handraise_queue")
+async def get_handraise_queue(channel: str) -> dict[str, Any]:
+    """Who currently has a hand raised (Clubhouse GET /get_handraise_queue).
+
+    The read side of the hand-raise queue that replaced ``audience_reply``.
+    Note it is GET-only upstream, unlike its POST-shaped sibling.
+    """
+    auth = _require_auth()
+    res = await _ch_authed_get(
+        "/get_handraise_queue",
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+        params={"channel": channel},
+    )
+    return {"handraises": res.get("handraises", [])}
 
 
 @router.post("/channels/{channel}/topic")
@@ -835,7 +884,9 @@ async def update_chat_settings(
 
 
 @router.post("/channels/{channel}/uninvite_speaker")
-async def uninvite_speaker(channel: str, body: UninviteSpeakerRequest) -> dict[str, Any]:
+async def uninvite_speaker(
+    channel: str, body: UninviteSpeakerRequest
+) -> dict[str, Any]:
     """Move a speaker back to the audience (Clubhouse POST /uninvite_speaker)."""
     auth = _require_auth()
     return await _ch_authed_post(
@@ -888,32 +939,6 @@ async def end_channel(channel: str) -> dict[str, Any]:
     )
 
 
-@router.post("/channels/{channel}/make_public")
-async def make_channel_public(channel: str) -> dict[str, Any]:
-    """Make the room open to everyone (Clubhouse POST /make_channel_public)."""
-    auth = _require_auth()
-    return await _ch_authed_post(
-        "/make_channel_public",
-        {"channel": channel},
-        auth["auth_token"],
-        auth["user_id"],
-        auth.get("device_id"),
-    )
-
-
-@router.post("/channels/{channel}/make_social")
-async def make_channel_social(channel: str) -> dict[str, Any]:
-    """Make the room open to followed users (Clubhouse POST /make_channel_social)."""
-    auth = _require_auth()
-    return await _ch_authed_post(
-        "/make_channel_social",
-        {"channel": channel},
-        auth["auth_token"],
-        auth["user_id"],
-        auth.get("device_id"),
-    )
-
-
 @router.post("/channels/{channel}/reject_speaker")
 async def reject_speaker_invite(
     channel: str, body: RejectSpeakerInviteRequest
@@ -932,22 +957,10 @@ async def reject_speaker_invite(
 # --- Social, Online Presence, and Followers ---
 
 
-@router.get("/online_friends", response_model=OnlineFriendsList)
-async def get_online_friends() -> dict[str, Any]:
-    """List active online friends (Clubhouse POST /get_online_friends)."""
-    auth = _require_auth()
-    res = await _ch_authed_post(
-        "/get_online_friends",
-        {},
-        auth["auth_token"],
-        auth["user_id"],
-        auth.get("device_id"),
-    )
-    return {"users": res.get("users", []) or []}
-
-
 @router.get("/users/{user_id}/followers")
-async def get_followers(user_id: int, page_size: int = 50, page: int = 1) -> dict[str, Any]:
+async def get_followers(
+    user_id: int, page_size: int = 50, page: int = 1
+) -> dict[str, Any]:
     """List followers of a user (Clubhouse GET /get_followers)."""
     auth = _require_auth()
     return await _ch_authed_get(
@@ -960,132 +973,31 @@ async def get_followers(user_id: int, page_size: int = 50, page: int = 1) -> dic
 
 
 @router.get("/notifications")
-async def get_notifications(page_size: int = 25, page: int = 1) -> dict[str, Any]:
-    """Get recent notifications (Clubhouse GET /get_notifications)."""
+async def get_notifications(next_cursor: str | None = None) -> dict[str, Any]:
+    """Recent activity (Clubhouse GET /get_activities).
+
+    ``get_notifications`` was removed (404).  Its replacement paginates by
+    opaque cursor rather than page/page_size, so the page number this route
+    used to take has no meaning here and is gone rather than ignored.
+    """
     auth = _require_auth()
-    return await _ch_authed_get(
-        "/get_notifications",
+    res = await _ch_authed_get(
+        "/get_activities",
         auth["auth_token"],
         auth["user_id"],
         auth.get("device_id"),
-        params={"page_size": page_size, "page": page},
+        params={"next_cursor": next_cursor} if next_cursor else {},
     )
+    return {
+        "notifications": res.get("activities", []),
+        "next_cursor": res.get("next_cursor"),
+    }
 
 
 # --- Events & Calendar ---
 
 
-@router.get("/events")
-async def get_events(is_filtered: bool = True, page_size: int = 25, page: int = 1) -> dict[str, Any]:
-    """Get list of upcoming scheduled events (Clubhouse GET /get_events)."""
-    auth = _require_auth()
-    return await _ch_authed_get(
-        "/get_events",
-        auth["auth_token"],
-        auth["user_id"],
-        auth.get("device_id"),
-        params={
-            "is_filtered": "true" if is_filtered else "false",
-            "page_size": page_size,
-            "page": page,
-        },
-    )
-
-
-@router.post("/events")
-async def create_event(body: CreateEventRequest) -> dict[str, Any]:
-    """Create or schedule an event (Clubhouse POST /edit_event)."""
-    auth = _require_auth()
-    return await _ch_authed_post(
-        "/edit_event",
-        {
-            "name": body.name,
-            "time_start_epoch": body.time_start_epoch,
-            "description": body.description,
-            "club_id": body.club_id,
-            "user_ids": body.user_ids or [auth["user_id"]],
-            "is_member_only": body.is_member_only,
-        },
-        auth["auth_token"],
-        auth["user_id"],
-        auth.get("device_id"),
-    )
-
-
-@router.delete("/events/{event_id}")
-async def delete_event(event_id: int) -> dict[str, Any]:
-    """Delete a scheduled event (Clubhouse POST /delete_event)."""
-    auth = _require_auth()
-    return await _ch_authed_post(
-        "/delete_event",
-        {"event_id": event_id},
-        auth["auth_token"],
-        auth["user_id"],
-        auth.get("device_id"),
-    )
-
-
 # --- Clubs ---
-
-
-@router.get("/clubs/{club_id}")
-async def get_club(club_id: int) -> dict[str, Any]:
-    """Get details for a club (Clubhouse POST /get_club)."""
-    auth = _require_auth()
-    return await _ch_authed_post(
-        "/get_club",
-        {"club_id": club_id},
-        auth["auth_token"],
-        auth["user_id"],
-        auth.get("device_id"),
-    )
-
-
-@router.get("/clubs/{club_id}/members")
-async def get_club_members(
-    club_id: int, return_followers: bool = False, return_members: bool = True, page_size: int = 50, page: int = 1
-) -> dict[str, Any]:
-    """List members of a club (Clubhouse GET /get_club_members)."""
-    auth = _require_auth()
-    return await _ch_authed_get(
-        "/get_club_members",
-        auth["auth_token"],
-        auth["user_id"],
-        auth.get("device_id"),
-        params={
-            "club_id": club_id,
-            "return_followers": int(return_followers),
-            "return_members": int(return_members),
-            "page_size": page_size,
-            "page": page,
-        },
-    )
-
-
-@router.post("/clubs/{club_id}/follow")
-async def follow_club(club_id: int) -> dict[str, Any]:
-    """Follow a club (Clubhouse POST /follow_club)."""
-    auth = _require_auth()
-    return await _ch_authed_post(
-        "/follow_club",
-        {"club_id": club_id},
-        auth["auth_token"],
-        auth["user_id"],
-        auth.get("device_id"),
-    )
-
-
-@router.post("/clubs/{club_id}/unfollow")
-async def unfollow_club(club_id: int) -> dict[str, Any]:
-    """Unfollow a club (Clubhouse POST /unfollow_club)."""
-    auth = _require_auth()
-    return await _ch_authed_post(
-        "/unfollow_club",
-        {"club_id": club_id},
-        auth["auth_token"],
-        auth["user_id"],
-        auth.get("device_id"),
-    )
 
 
 # --- Profile Management ---
@@ -1128,22 +1040,6 @@ async def update_username(body: UpdateUsernameRequest) -> dict[str, Any]:
         auth["user_id"],
         auth.get("device_id"),
     )
-
-
-@router.post("/me/skintone")
-async def update_skintone(body: UpdateSkintoneRequest) -> dict[str, Any]:
-    """Update emoji hand skin tone 1-5 (Clubhouse POST /update_skintone)."""
-    auth = _require_auth()
-    if not 1 <= body.skintone <= 5:
-        raise HTTPException(status_code=400, detail="Skintone must be between 1 and 5")
-    return await _ch_authed_post(
-        "/update_skintone",
-        {"skintone": body.skintone},
-        auth["auth_token"],
-        auth["user_id"],
-        auth.get("device_id"),
-    )
-
 
 
 # --- People Knowledge & Profile Memory Endpoints ---

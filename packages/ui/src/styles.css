@@ -6272,7 +6272,6 @@ kbd {
   height: auto;
 }
 
-
 .mx-noinv {
   font-size: 11px;
   line-height: 1.4;
@@ -6982,11 +6981,7 @@ kbd {
   padding: 0 0 1px;
   border-bottom: 1px solid var(--border);
   /* A faint technical grid behind the marks, not over them. */
-  background-image: repeating-linear-gradient(
-    to top,
-    var(--border) 0 1px,
-    transparent 1px 18px
-  );
+  background-image: repeating-linear-gradient(to top, var(--border) 0 1px, transparent 1px 18px);
   background-position: bottom;
 }
 
@@ -7074,7 +7069,6 @@ kbd {
   white-space: nowrap;
 }
 
-
 .llama-linkbtn {
   margin-left: auto;
   padding: 0;
@@ -7129,7 +7123,6 @@ kbd {
 .llama-dot-on {
   background: rgb(130 210 160);
 }
-
 
 .llama-files,
 .llama-models {
@@ -7983,4 +7976,79 @@ kbd {
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
+}
+
+/* Desktop paradigm settings section (desktop/DesktopModeSection.tsx). Two cards
+   rather than a pair of radios: the choice is between two ways the whole screen
+   behaves, and a bare label cannot say what either one does. */
+.desktop-mode {
+  display: grid;
+  gap: 1.1rem;
+  margin: 0.7rem 0 0;
+}
+.desktop-mode-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0 0 0.45rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.desktop-mode-name {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.75rem;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-dim);
+}
+.desktop-mode-choice {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0.5rem;
+}
+.desktop-mode-btn {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0 0.5rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.2));
+  border-top: 2px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.desktop-mode-btn:hover {
+  border-color: var(--accent, #3b82f6);
+}
+.desktop-mode-btn.is-active {
+  border-top-color: var(--accent, #3b82f6);
+  background: var(--bg-alt, rgba(127, 127, 127, 0.1));
+}
+.desktop-mode-glyph {
+  grid-row: span 2;
+  align-self: center;
+  font-size: 1.1rem;
+  color: var(--text-dim);
+}
+.desktop-mode-btn.is-active .desktop-mode-glyph {
+  color: var(--accent, #3b82f6);
+}
+.desktop-mode-label {
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+.desktop-mode-blurb {
+  font-size: 0.76rem;
+  color: var(--text-dim);
+}
+.desktop-mode-warn {
+  margin: 0.45rem 0 0;
+  font-size: 0.76rem;
+  color: var(--text-dim);
 }

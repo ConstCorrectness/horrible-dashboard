@@ -28,10 +28,13 @@ import {
   registry,
   resolveViewIcon,
   subscribeRecents,
+  useSetting,
   useWorkspaces,
   type PanelDecl,
   type WidgetDecl,
 } from '@horrible/core';
+
+import { DEFAULT_DESKTOP_MODE_KEY } from '../constants';
 
 export function StartButton({ showLabels }: { showLabels: boolean }) {
   const [open, setOpen] = useState(false);
@@ -265,6 +268,9 @@ function RecentGroup({ views, onLaunch }: { views: View[]; onLaunch: (id: string
   );
 }
 
+/** How many desktops the group lists before it folds the rest away. */
+const DESKTOPS_SHOWN = 5;
+
 /**
  * Desktops: switch between them, and manage them.
  *
@@ -277,19 +283,42 @@ function RecentGroup({ views, onLaunch }: { views: View[]; onLaunch: (id: string
  * The pips in the taskbar switch; this switches *and* manages, which is the split
  * that made two always-visible switchers feel redundant before. Only one of them is
  * always visible now.
+ *
+ * Two things keep it from swallowing the launcher, because every module that
+ * declares a `frames:` preset contributes a desktop and there are well over a
+ * dozen of them:
+ *
+ * - **The list is folded past `DESKTOPS_SHOWN`.** Expanding is one click and the
+ *   fold never hides the *active* desktop, which is kept in the short list
+ *   wherever it sorts — a switcher whose current position is off-screen reads as
+ *   though you are on none of them.
+ * - **Creating a desktop is one row, not two.** Tiled-vs-floating is a preference
+ *   (`desktop.defaultMode`) and lives on the settings page next to the control
+ *   that converts the desktop you are on; a launcher is not where a paradigm
+ *   should be chosen. See `DesktopModeSection`.
  */
 function DesktopsGroup({ onClose }: { onClose: () => void }) {
+  const [expanded, setExpanded] = useState(false);
   const { workspaces, activeId } = useWorkspaces();
   const { frame } = useSyncExternalStore(layoutStore.subscribe, layoutStore.getSnapshot);
+  const defaultMode = useSetting<string>(DEFAULT_DESKTOP_MODE_KEY) ?? 'tiling';
+  const floats = defaultMode === 'floating';
   const presetIds = new Set(registry.framePresets.map((p) => p.id));
   const run = (command: string) => {
     void registry.runCommand(command);
     onClose();
   };
+
+  const shown = expanded ? workspaces : workspaces.slice(0, DESKTOPS_SHOWN);
+  // The active desktop is never folded away, even when it sorts past the cut.
+  const active = workspaces.find((w) => w.id === activeId);
+  const listed = active && !shown.includes(active) ? [...shown, active] : shown;
+  const hidden = workspaces.length - listed.length;
+
   return (
     <div className="os-start-group">
       <h3 className="os-start-group-head">Desktops</h3>
-      {workspaces.map((w) => (
+      {listed.map((w) => (
         <button
           key={w.id}
           type="button"
@@ -307,27 +336,45 @@ function DesktopsGroup({ onClose }: { onClose: () => void }) {
           <span className="os-start-title">{w.name}</span>
         </button>
       ))}
+      {hidden > 0 && (
+        <button
+          type="button"
+          role="menuitem"
+          className="os-start-item os-start-more"
+          onClick={() => setExpanded(true)}
+        >
+          <span className="os-start-icon" aria-hidden="true">
+            ⋯
+          </span>
+          <span className="os-start-title">{hidden} more desktops</span>
+        </button>
+      )}
+      {expanded && workspaces.length > DESKTOPS_SHOWN && (
+        <button
+          type="button"
+          role="menuitem"
+          className="os-start-item os-start-more"
+          onClick={() => setExpanded(false)}
+        >
+          <span className="os-start-icon" aria-hidden="true">
+            ⋯
+          </span>
+          <span className="os-start-title">Show fewer</span>
+        </button>
+      )}
       <button
         type="button"
         role="menuitem"
         className="os-start-item"
-        onClick={() => run('workspace.new')}
+        onClick={() => run(floats ? 'workspace.newFloating' : 'workspace.new')}
       >
         <span className="os-start-icon" aria-hidden="true">
-          ▦
+          {floats ? '❐' : '▦'}
         </span>
-        <span className="os-start-title">New tiled desktop</span>
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        className="os-start-item"
-        onClick={() => run('workspace.newFloating')}
-      >
-        <span className="os-start-icon" aria-hidden="true">
-          ❐
-        </span>
-        <span className="os-start-title">New floating desktop</span>
+        {/* The kind is reported, not chosen: it comes from `desktop.defaultMode`,
+            and saying which one you are about to get is the difference between a
+            preference and a surprise. */}
+        <span className="os-start-title">New {floats ? 'floating' : 'tiled'} desktop</span>
       </button>
       <button
         type="button"

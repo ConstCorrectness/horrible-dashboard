@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from backend.app import app
@@ -60,14 +61,106 @@ def test_channels_returns_parsed_rooms(client, tmp_path, monkeypatch) -> None:
 def test_following_returns_users(client, tmp_path, monkeypatch) -> None:
     _connect(tmp_path)
 
-    async def fake_post(path, payload, token, user_id, device_id=None):
-        assert path == "/get_following"
-        assert payload["user_id"] == 4242
+    async def fake_get(path, token, user_id, device_id=None, params=None):
+        # get_following was removed upstream; get_cofollows replaces it and is a
+        # GET with query params, not a POST body.
+        assert path == "/get_cofollows"
+        assert params["user_id"] == 4242
         return {"users": [{"user_id": 7, "username": "bob", "name": "Bob"}]}
 
-    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    monkeypatch.setattr(routes, "_ch_authed_get", fake_get)
     body = client.get("/api/clubhouse/following").json()
     assert body["users"][0]["username"] == "bob"
+
+
+def test_channels_surfaces_feed_failure(client, tmp_path, monkeypatch) -> None:
+    """A dead feed must not render as an empty room list."""
+    _connect(tmp_path)
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        raise HTTPException(status_code=502, detail="Clubhouse: unavailable")
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    res = client.get("/api/clubhouse/channels")
+    assert res.status_code == 502
+
+
+def test_channels_keeps_partial_pages(client, tmp_path, monkeypatch) -> None:
+    """Page one succeeding and a later page failing keeps what we already have."""
+    _connect(tmp_path)
+    calls: list[int] = []
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        calls.append(1)
+        if len(calls) > 1:
+            raise HTTPException(status_code=502, detail="Clubhouse: unavailable")
+        return {
+            "items": [{"channel": {"channel": "abc", "topic": "Still here"}}],
+            "next_cursor": "c2",
+        }
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    body = client.get("/api/clubhouse/channels").json()
+    assert [c["topic"] for c in body["channels"]] == ["Still here"]
+
+
+def test_notifications_use_activities_cursor(client, tmp_path, monkeypatch) -> None:
+    _connect(tmp_path)
+
+    async def fake_get(path, token, user_id, device_id=None, params=None):
+        assert path == "/get_activities"
+        assert params == {"next_cursor": "abc"}
+        return {"activities": [{"notification_id": 1}], "next_cursor": "def"}
+
+    monkeypatch.setattr(routes, "_ch_authed_get", fake_get)
+    body = client.get("/api/clubhouse/notifications?next_cursor=abc").json()
+    assert body["notifications"] == [{"notification_id": 1}]
+    assert body["next_cursor"] == "def"
+
+
+@pytest.mark.parametrize(
+    ("enabled", "permission", "expected"),
+    [
+        (True, "everyone", 2),
+        (True, "followed_by_speakers", 3),
+        (True, "open_mic", 0),
+        # Disabled is not a flag any more — it is the LOCKED value.
+        (False, "everyone", 1),
+    ],
+)
+def test_handraise_settings_map_to_wire_ints(
+    client, tmp_path, monkeypatch, enabled, permission, expected
+) -> None:
+    """The old API's 1 meant "everyone"; here it means LOCKED, so the mapping
+    must be explicit rather than a passed-through number."""
+    _connect(tmp_path)
+    sent: dict[str, object] = {}
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        sent.update({"path": path, **payload})
+        return {"success": True}
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    res = client.post(
+        "/api/clubhouse/channels/my-room/handraise_settings",
+        json={"is_enabled": enabled, "handraise_permission": permission},
+    )
+    assert res.status_code == 200
+    assert sent["path"] == "/update_handraise_queue_setting"
+    assert sent["handraise_queue_setting"] == expected
+
+
+def test_handraise_queue_reads_queue(client, tmp_path, monkeypatch) -> None:
+    _connect(tmp_path)
+
+    async def fake_get(path, token, user_id, device_id=None, params=None):
+        assert path == "/get_handraise_queue"
+        assert params == {"channel": "my-room"}
+        return {"handraises": [{"user_id": 9, "name": "Ada"}]}
+
+    monkeypatch.setattr(routes, "_ch_authed_get", fake_get)
+    body = client.get("/api/clubhouse/channels/my-room/handraise_queue").json()
+    assert body["handraises"][0]["name"] == "Ada"
 
 
 def _mock_ch(monkeypatch, responses: dict[str, dict]) -> list[tuple[str, dict]]:
@@ -346,15 +439,15 @@ def test_accept_speaker(client, tmp_path, monkeypatch) -> None:
 
     async def fake_post(path, payload, token, user_id, device_id=None):
         assert (path, token, user_id, device_id) == (
-            "/accept_speaker_invite",
+            "/become_speaker",
             "T",
             4242,
             "D",
         )
-        # The accepting user is always *us* — you can only accept your own
-        # invitation. Forwarding the body's `user_id` let a stale id from the UI
-        # accept on behalf of someone else, which upstream rejects.
-        assert payload == {"channel": "my-channel", "user_id": 4242}
+        # accept_speaker_invite was removed upstream; become_speaker takes the
+        # channel alone — you accept the stage, not a particular moderator's
+        # invitation, so no user id is carried at all.
+        assert payload == {"channel": "my-channel"}
         return {"success": True}
 
     monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
@@ -470,12 +563,19 @@ def test_uninvite_speaker(client, tmp_path, monkeypatch) -> None:
     _connect(tmp_path)
 
     async def fake_post(path, payload, token, user_id, device_id=None):
-        assert (path, token, user_id, device_id) == ("/uninvite_speaker", "T", 4242, "D")
+        assert (path, token, user_id, device_id) == (
+            "/uninvite_speaker",
+            "T",
+            4242,
+            "D",
+        )
         assert payload == {"channel": "test-room", "user_id": 999}
         return {"success": True}
 
     monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
-    res = client.post("/api/clubhouse/channels/test-room/uninvite_speaker", json={"user_id": 999})
+    res = client.post(
+        "/api/clubhouse/channels/test-room/uninvite_speaker", json={"user_id": 999}
+    )
     assert res.status_code == 200
     assert res.json() == {"success": True}
 
@@ -489,7 +589,9 @@ def test_make_moderator(client, tmp_path, monkeypatch) -> None:
         return {"success": True}
 
     monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
-    res = client.post("/api/clubhouse/channels/test-room/make_moderator", json={"user_id": 999})
+    res = client.post(
+        "/api/clubhouse/channels/test-room/make_moderator", json={"user_id": 999}
+    )
     assert res.status_code == 200
     assert res.json() == {"success": True}
 
@@ -498,7 +600,12 @@ def test_block_from_channel(client, tmp_path, monkeypatch) -> None:
     _connect(tmp_path)
 
     async def fake_post(path, payload, token, user_id, device_id=None):
-        assert (path, token, user_id, device_id) == ("/block_from_channel", "T", 4242, "D")
+        assert (path, token, user_id, device_id) == (
+            "/block_from_channel",
+            "T",
+            4242,
+            "D",
+        )
         assert payload == {"channel": "test-room", "user_id": 999}
         return {"success": True}
 
@@ -522,60 +629,6 @@ def test_end_channel(client, tmp_path, monkeypatch) -> None:
     assert res.json() == {"success": True}
 
 
-def test_online_friends(client, tmp_path, monkeypatch) -> None:
-    _connect(tmp_path)
-
-    async def fake_post(path, payload, token, user_id, device_id=None):
-        assert (path, token, user_id, device_id) == ("/get_online_friends", "T", 4242, "D")
-        return {"users": [{"user_id": 55, "name": "Friend", "topic": "Tech Talk"}]}
-
-    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
-    res = client.get("/api/clubhouse/online_friends")
-    assert res.status_code == 200
-    assert res.json()["users"][0]["name"] == "Friend"
-
-
-def test_get_events(client, tmp_path, monkeypatch) -> None:
-    _connect(tmp_path)
-
-    async def fake_get(path, token, user_id, device_id=None, params=None):
-        assert path == "/get_events"
-        return {"events": [{"event_id": 101, "name": "Weekly Sync", "hosts": []}]}
-
-    monkeypatch.setattr(routes, "_ch_authed_get", fake_get)
-    res = client.get("/api/clubhouse/events")
-    assert res.status_code == 200
-    assert res.json()["events"][0]["name"] == "Weekly Sync"
-
-
-def test_create_event(client, tmp_path, monkeypatch) -> None:
-    _connect(tmp_path)
-
-    async def fake_post(path, payload, token, user_id, device_id=None):
-        assert path == "/edit_event"
-        assert payload["name"] == "AI Summit"
-        return {"success": True, "event": {"event_id": 102, "name": "AI Summit"}}
-
-    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
-    res = client.post("/api/clubhouse/events", json={"name": "AI Summit", "time_start_epoch": 1700000000})
-    assert res.status_code == 200
-    assert res.json()["success"] is True
-
-
-def test_get_club(client, tmp_path, monkeypatch) -> None:
-    _connect(tmp_path)
-
-    async def fake_post(path, payload, token, user_id, device_id=None):
-        assert path == "/get_club"
-        assert payload["club_id"] == 88
-        return {"club_id": 88, "name": "AI Club", "num_members": 500}
-
-    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
-    res = client.get("/api/clubhouse/clubs/88")
-    assert res.status_code == 200
-    assert res.json()["name"] == "AI Club"
-
-
 def test_update_bio(client, tmp_path, monkeypatch) -> None:
     _connect(tmp_path)
 
@@ -588,22 +641,3 @@ def test_update_bio(client, tmp_path, monkeypatch) -> None:
     res = client.post("/api/clubhouse/me/bio", json={"bio": "New bio here"})
     assert res.status_code == 200
     assert res.json() == {"success": True}
-
-
-def test_update_skintone(client, tmp_path, monkeypatch) -> None:
-    _connect(tmp_path)
-
-    async def fake_post(path, payload, token, user_id, device_id=None):
-        assert path == "/update_skintone"
-        assert payload["skintone"] == 3
-        return {"success": True}
-
-    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
-    res = client.post("/api/clubhouse/me/skintone", json={"skintone": 3})
-    assert res.status_code == 200
-    assert res.json() == {"success": True}
-
-    # Invalid skintone range
-    bad_res = client.post("/api/clubhouse/me/skintone", json={"skintone": 9})
-    assert bad_res.status_code == 400
-

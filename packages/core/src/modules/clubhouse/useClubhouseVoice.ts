@@ -734,11 +734,11 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
   };
 
   // 5. Accept speaker invitation
-  const acceptSpeakerInvite = async (moderatorId: number) => {
+  const acceptSpeakerInvite = async () => {
     if (!activeChannel) return;
     session.patch({ loading: true });
     try {
-      await acceptClubhouseSpeaker(activeChannel, moderatorId);
+      await acceptClubhouseSpeaker(activeChannel);
       session.patch({ handRaised: false });
       session.patch({ speakerInvite: null });
     } catch (err) {

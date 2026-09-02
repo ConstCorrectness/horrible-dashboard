@@ -17,10 +17,10 @@ import {
   makeClubhouseModerator,
   blockFromClubhouseChannel,
   endClubhouseChannel,
-  getClubhouseOnlineFriends,
   getAgentTtsVoices,
   updateClubhouseTopic,
   updateClubhouseHandraiseSettings,
+  type HandraisePermission,
   updateClubhouseChatSettings,
   searchClubhouseUsers,
   getClubhouseFollowing,
@@ -34,7 +34,6 @@ import {
   type SearchUserResult,
   type FollowUser,
   type PersonMemory,
-  type OnlineFriendUser,
   type TtsVoiceOption,
 } from './api';
 import { MediaInsightsModal } from './MediaInsightsModal';
@@ -132,7 +131,8 @@ export function RoomsPanel() {
   const [showRoomSettingsModal, setShowRoomSettingsModal] = useState(false);
   const [settingTopic, setSettingTopic] = useState('');
   const [settingHandraiseEnabled, setSettingHandraiseEnabled] = useState(true);
-  const [settingHandraisePermission, setSettingHandraisePermission] = useState<number>(1);
+  const [settingHandraisePermission, setSettingHandraisePermission] =
+    useState<HandraisePermission>('everyone');
   const [settingChatEnabled, setSettingChatEnabled] = useState(true);
   const [savingSettings, setSavingSettings] = useState(false);
 
@@ -187,9 +187,6 @@ export function RoomsPanel() {
   const [newNoteInputs, setNewNoteInputs] = useState<{ [uid: number]: string }>({});
 
   const [ttsVoices, setTtsVoices] = useState<TtsVoiceOption[]>([]);
-  const [onlineFriends, setOnlineFriends] = useState<OnlineFriendUser[]>([]);
-  const [showOnlineFriendsModal, setShowOnlineFriendsModal] = useState(false);
-  const [loadingOnlineFriends, setLoadingOnlineFriends] = useState(false);
 
   const refreshPeopleMemory = async (q = peopleMemoryQuery) => {
     setPeopleMemoryLoading(true);
@@ -203,17 +200,6 @@ export function RoomsPanel() {
     }
   };
 
-  const loadOnlineFriends = async () => {
-    setLoadingOnlineFriends(true);
-    try {
-      const res = await getClubhouseOnlineFriends();
-      setOnlineFriends(res.users ?? []);
-    } catch (e) {
-      console.error('Failed to fetch online friends:', e);
-    } finally {
-      setLoadingOnlineFriends(false);
-    }
-  };
 
   useEffect(() => {
     void getAgentStatus().then(setAgentEngineStatus).catch(() => {});
@@ -273,7 +259,7 @@ export function RoomsPanel() {
     if (!activeRoomInfo) return;
     setSettingTopic(activeRoomInfo.topic || '');
     setSettingHandraiseEnabled(true);
-    setSettingHandraisePermission(1);
+    setSettingHandraisePermission('everyone');
     setSettingChatEnabled(true);
     setShowRoomSettingsModal(true);
   };
@@ -660,7 +646,7 @@ export function RoomsPanel() {
         new Notification('Speaker Invite', { body: `${invite.moderatorName} wants you to speak!` });
       }
       if (agentEnabled) {
-        acceptSpeakerInvite(invite.moderatorId);
+        acceptSpeakerInvite();
         toastsStore.add(
           'info',
           'Agent',
@@ -1242,7 +1228,7 @@ export function RoomsPanel() {
           </div>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             <button
-              onClick={() => void acceptSpeakerInvite(speakerInvite.moderatorId)}
+              onClick={() => void acceptSpeakerInvite()}
               style={{
                 flex: 1,
                 padding: '0.5rem',
@@ -2425,23 +2411,6 @@ export function RoomsPanel() {
               disabled={voiceLoading}
             >
               ✌️ Leave quietly
-            </button>
-            <button
-              className="ch-btn-action"
-              style={{
-                padding: '0.4rem 0.8rem',
-                borderRadius: '20px',
-                fontSize: '0.75rem',
-                fontWeight: 600,
-                flex: 'none',
-                background: 'rgba(255, 255, 255, 0.05)',
-              }}
-              onClick={() => {
-                setShowOnlineFriendsModal(true);
-                void loadOnlineFriends();
-              }}
-            >
-              👥 Online Friends
             </button>
             <button
               className="ch-btn-action"
@@ -3833,7 +3802,7 @@ export function RoomsPanel() {
                 {moderators.length > 0 && (
                   <button
                     className="ch-btn-action join-stage"
-                    onClick={() => void acceptSpeakerInvite(moderators[0].user_id!)}
+                    onClick={() => void acceptSpeakerInvite()}
                     disabled={voiceLoading}
                   >
                     📢 Join Stage
@@ -3964,12 +3933,14 @@ export function RoomsPanel() {
                       <label>Who can raise hands?</label>
                       <select
                         value={settingHandraisePermission}
-                        onChange={(e) => setSettingHandraisePermission(Number(e.target.value))}
+                        onChange={(e) =>
+                          setSettingHandraisePermission(e.target.value as HandraisePermission)
+                        }
                         className="ch-input"
                         style={{ width: '100%' }}
                       >
-                        <option value={1}>Everyone</option>
-                        <option value={2}>Followed by Speakers</option>
+                        <option value="everyone">Everyone</option>
+                        <option value="followed_by_speakers">Followed by Speakers</option>
                       </select>
                     </div>
                   )}
@@ -4483,88 +4454,6 @@ export function RoomsPanel() {
         </div>
       )}
 
-      {showOnlineFriendsModal && (
-        <div className="ch-modal-overlay" onClick={() => setShowOnlineFriendsModal(false)}>
-          <div className="ch-modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '480px' }}>
-            <div className="ch-modal-header">
-              <h3 className="ch-modal-title">👥 Online Friends</h3>
-              <button className="ch-modal-close" onClick={() => setShowOnlineFriendsModal(false)}>
-                ✕
-              </button>
-            </div>
-            <div style={{ maxHeight: '350px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.5rem' }}>
-              {loadingOnlineFriends ? (
-                <div style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-dim)' }}>
-                  <div className="ch-spinner" style={{ margin: '0 auto 0.5rem' }} />
-                  Finding active friends...
-                </div>
-              ) : onlineFriends.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-dim)' }}>
-                  No friends currently online or in active rooms.
-                </div>
-              ) : (
-                onlineFriends.map((f, i) => (
-                  <div
-                    key={f.user_id || i}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '0.6rem',
-                      borderRadius: '8px',
-                      background: 'var(--bg-raised)',
-                      border: '1px solid var(--border)',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                      <div
-                        style={{
-                          width: '36px',
-                          height: '36px',
-                          borderRadius: '50%',
-                          background: 'var(--bg-elevated)',
-                          overflow: 'hidden',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                        }}
-                      >
-                        {f.photo_url ? (
-                          <img src={f.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                        ) : (
-                          <span style={{ fontSize: '0.9rem', color: 'var(--text-strong)' }}>{f.name?.[0] || '?'}</span>
-                        )}
-                      </div>
-                      <div>
-                        <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-strong)' }}>{f.name}</div>
-                        <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>
-                          {f.channel ? `In room: ${f.topic || f.channel}` : 'Active now'}
-                        </div>
-                      </div>
-                    </div>
-                    {activeChannel && f.user_id && (
-                      <button
-                        className="ch-btn-action"
-                        style={{ padding: '0.3rem 0.6rem', fontSize: '0.72rem' }}
-                        onClick={async () => {
-                          try {
-                            await inviteToClubhouseChannel(activeChannel, f.user_id!);
-                            toastsStore.add('success', 'Ping Sent', `Pinged ${f.name} to join!`);
-                          } catch (err) {
-                            toastsStore.add('error', 'Failed', err instanceof Error ? err.message : 'Could not ping friend');
-                          }
-                        }}
-                      >
-                        🔔 Ping to Room
-                      </button>
-                    )}
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

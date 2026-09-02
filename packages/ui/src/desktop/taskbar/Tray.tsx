@@ -43,7 +43,7 @@ export function Tray({ showLabels }: { showLabels: boolean }) {
       {/* An indicator, not a toggle.
        *
        * The paradigm is a property of the **workspace** now — you pick it when you
-       * make a desktop (Start ▸ New tiled / New floating), and you switch paradigms
+       * make a desktop (Start ▸ New desktop), and you switch paradigms
        * by switching desktops. This used to be a one-click flip, which invited the
        * one operation the shell cannot do well: `explodeToWindows` cannot express
        * split ratios as anything but the rects they occupy and `tileWindows` cannot

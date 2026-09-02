@@ -67,10 +67,21 @@ in the tiling.
 
 ### The paradigm belongs to the workspace
 
-You choose it when you **make** a desktop — Start ▸ *New tiled desktop* / *New
-floating desktop*, or *Save this arrangement as a desktop* to keep what is on screen
-— and you switch paradigms by switching desktops. `createNamedWorkspace(name, {mode,
-fromCurrent})` is the one entry point; the agent tool and the commands share it.
+You choose it when you **make** a desktop — Start ▸ *New … desktop*, or *Save this
+arrangement as a desktop* to keep what is on screen — and you switch paradigms by
+switching desktops. `createNamedWorkspace(name, {mode, fromCurrent})` is the one
+entry point; the agent tool and the commands share it.
+
+**Which kind you get is a setting, not a menu row.** `desktop.defaultMode`
+(Settings ▸ Desktop) decides it, and the Start menu's single *New … desktop* row
+names the kind it is about to make rather than offering the choice again. It used
+to be two rows there and two more in the tray menu, which put a paradigm decision
+in a launcher — a surface whose job is to open things — and gave the same question
+three places to be answered. Settings ▸ Desktop also carries the switch for the
+desktop you are **on** (`DesktopModeSection`), which is a conversion and says what
+it costs; that control is deliberately *not* a `SettingDecl`, because mode lives in
+each workspace's own layout and a single global key could only ever disagree with
+whichever desktop was in front of you.
 
 This replaced a one-click tray toggle, which invited the one operation the shell
 cannot do well (see below): every flip degraded the arrangement a little, so having
@@ -104,6 +115,12 @@ Start menu.
 That the Start menu's **Desktops** group both switches and manages (rename, create,
 reset, delete) is what made removing them possible — it was the missing half that kept
 them alive, and hiding the top strip needed it moved there first.
+
+That group is **folded past five desktops** (`DESKTOPS_SHOWN`), because every module
+declaring a `frames:` preset contributes one and there are well over a dozen: the
+launcher's own list was competing with the panes it exists to launch. The fold never
+hides the *active* desktop, whatever its position — a switcher that cannot show you
+where you are reads as though you are nowhere.
 
 ### What boots
 

@@ -56,10 +56,56 @@ To communicate with Clubhouse, the backend passes specific metadata headers to a
 #### Reversed Endpoints Reference:
 
 - **POST `/get_feed_v3`:** Fetches the active hallway rooms list. (Replaces the deprecated `/get_channels` endpoint which returns a Cloudflare/Clubhouse `404 Not Found`). It returns a list of feed items; the backend filters for entries containing a `channel` dictionary to extract room lists.
-- **POST `/get_following`:** Returns profiles of followed users.
+- **GET `/get_cofollows`:** Returns profiles of followed users. Replaces `/get_following`, which was removed from the API (it 404s and the 26.08.30 client does not reference it). Note it is a **GET with query params**, not a POST body.
+- **GET `/get_activities`:** Recent activity, replacing the removed `/get_notifications`. It paginates by **opaque cursor** (`next_cursor`), so the page/page_size the old route took has no meaning and was dropped rather than ignored.
+- **GET `/get_handraise_queue`** / **POST `/update_handraise_queue_setting`:** the hand-raise queue, replacing the removed `/update_is_ask_to_join_allowed`.
 - **POST `/me`:** Used to validate an existing token and fetch the corresponding user profile.
 - **POST `/start_phone_number_auth`:** Starts phone authentication (handled by the native `ch-auth-helper`).
 - **POST `/complete_phone_number_auth`:** Verifies verification code (handled by the native `ch-auth-helper`).
+
+#### Removed features (2026-09-02)
+
+These called routes that are **404** upstream and have no successor in the
+26.08.30 client, so the panes, API functions and models for them were deleted
+rather than left to fail:
+
+- **Clubs** — `get_club`, `get_club_members`, `follow_club`, `unfollow_club`.
+  Gone product-wide; `get_house*` 404s too, so there is no renamed successor to
+  point at. The `Club` model survives only because the **feed** still carries a
+  `social_club` badge on a room — that is display data, not the clubs API.
+- **Events** — `get_events`, `edit_event`, `delete_event`.
+- **Online friends** — `get_online_friends`.
+- **Room visibility** — `make_channel_public`, `make_channel_social`.
+- **Skin tone** — `update_skintone`.
+
+`accept_speaker_invite` was **not** deleted: it migrated to `become_speaker`,
+which does still exist. Don't re-add anything above without probing it first —
+a 404 route reads as a working feature right up until someone uses it.
+
+#### Endpoint status (probed 2026-09-02, against the 26.08.30 route table)
+
+Unauthenticated probes discriminate cleanly, because Clubhouse answers three
+different ways — and the difference decides whether a fix is even possible:
+
+| Response | Meaning |
+| --- | --- |
+| `401` + JSON + an `Allow:` header | route exists; only auth is missing (the `Allow` header also confirms GET vs POST) |
+| `404` + HTML | route removed from the API |
+| `503` + Cloudflare HTML | never reaches the app; **no client-side change gets past it** |
+
+The 503 set is stable across retries and identical under a browser User-Agent,
+under the app's `CH-*` headers, and with no headers at all — so it is not bot
+detection and not rate limiting. It currently covers the whole live-room path:
+`me`, `get_feed_v3`, `get_discovery_feed`, `join_channel`, `leave_channel`,
+`active_ping`, `create_channel`, `send_channel_message`, `get_channel_messages`,
+`become_speaker`, `preview_join_channel`, `surfer_join_channel`, and the reaction
+routes. Because token-connect validates against `/me`, **connecting an account
+fails outright** while this holds, and every authed feature sits behind it.
+
+Separately, `check_for_update` answers unauthenticated and reports the current
+build as `23.08.31 (1026421)` with `is_mandatory: true` — for our pinned version
+*and* for 26.08.30. The version pin cannot be the cause of an auth failure, and
+bumping `AppVersion` cannot fix one.
 
 > [!NOTE]
 > **Token-Connect (The Backup Path):** While the C# helper bypasses standard bot gating, users can still use **Token-Connect** to link their accounts directly. Users can supply an existing `auth_token` and `user_id` (captured from an active official app session).
@@ -258,16 +304,17 @@ Raises or lowers a hand in the channel.
 
 ### 13. `POST /channels/{channel}/accept_speaker`
 
-Accepts an invitation to speak from a moderator.
+Comes up on stage after being invited to speak.
 
-- **Request Schema:** `AcceptSpeakerInviteRequest` (`user_id` integer of the moderator who invited)
+- **Request Schema:** none — takes only the channel in the path.
 - **Response Schema:** Generic success object.
 - **Errors:** **409 Conflict** if not connected.
 
 > [!NOTE]
-> The `user_id` sent upstream is **always the connected account's own**, never the
-> one in the body: you can only accept your own invitation, and forwarding a
-> stale id from the UI made upstream reject the call.
+> Upstream is `/become_speaker`, not the removed `/accept_speaker_invite` (404).
+> The 26.08.30 client pairs it with the `/reject_speaker_invite` we already call,
+> and **neither carries a moderator id** — you accept the stage itself, not one
+> particular person's invitation, so there is no user id to get stale.
 
 ### 14. Moderation & room control
 
@@ -278,7 +325,8 @@ These exist because a room you _host_ needs more than joining and muting. All
 | ------------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------- |
 | `POST /channels/{channel}/invite_speaker`   | `InviteUserRequest`                            | `/invite_speaker` — promote an audience member              |
 | `POST /channels/{channel}/topic`            | `UpdateTopicRequest`                           | `/set_channel_title`                                        |
-| `POST /channels/{channel}/handraise_settings` | `HandraiseSettingsRequest`                   | `/update_is_ask_to_join_allowed`                            |
+| `POST /channels/{channel}/handraise_settings` | `HandraiseSettingsRequest`                   | `/update_handraise_queue_setting`                           |
+| `GET /channels/{channel}/handraise_queue`   | —                                              | `/get_handraise_queue` — who has a hand up (GET-only)       |
 | `POST /channels/{channel}/chat_settings`    | `ChatSettingsRequest`                          | `/enable_channel_messages` or `/disable_channel_messages`   |
 | `POST /send_channel_message`                | `SendChannelMessageRequest`                    | `/send_channel_message`                                     |
 
@@ -298,6 +346,12 @@ subscribe.
 `GET /channels` walks up to **four pages** of `/get_feed_v3` rather than one,
 deduplicating by channel id across pages. One page is a partial hallway, which
 made the rooms list look like Clubhouse was empty.
+
+A failure on the **first** page is raised, not swallowed. Returning an empty list
+there renders as "no rooms are live", which is a different claim from "the feed is
+unavailable" and a false one — the pane looked like a quiet Clubhouse while the
+endpoint was in fact unreachable. Failures on **later** pages still break the loop
+and keep what was already collected, since those pages are only ever extra.
 
 ---
 
@@ -508,18 +562,12 @@ The Clubhouse client integrates reverse-engineered endpoints providing comprehen
   - `POST /channels/{channel}/make_moderator`: Promote speaker to moderator.
   - `POST /channels/{channel}/block`: Remove and block a user from the room.
   - `POST /channels/{channel}/end`: End the room for everyone.
-  - `POST /channels/{channel}/make_public` & `POST /channels/{channel}/make_social`: Dynamically alter room visibility.
   - `POST /channels/{channel}/reject_speaker`: Decline invitation to speak on stage.
 - **Social & Presence:**
-  - `GET /online_friends`: List online friends and rooms they are currently active in.
   - `GET /users/{user_id}/followers`: Paginated follower discovery.
-  - `GET /notifications`: Retrieve recent activity notifications.
-- **Clubs & Events:**
-  - `GET /clubs/{club_id}` & `GET /clubs/{club_id}/members`: Query club metadata and member rosters.
-  - `POST /clubs/{club_id}/follow` & `/unfollow`: Follow and unfollow clubs.
-  - `GET /events`, `POST /events`, `DELETE /events/{event_id}`: Schedule, browse, and delete calendar events.
+  - `GET /notifications`: Recent activity, via `/get_activities`.
 - **Profile Updates:**
-  - `POST /me/bio`, `/me/name`, `/me/username`, `/me/skintone`: Update bio, display name, handle, and emoji skin tone.
+  - `POST /me/bio`, `/me/name`, `/me/username`: Update bio, display name, and handle.
 - **TTS Voice & Pitch Customization:**
   - `GET /api/agent/tts/voices`: Catalog of Microsoft Edge neural voices.
   - `GET /api/agent/tts?text=...&voice=...&rate=...&pitch=...`: Customizable voice, speed multiplier, and pitch tuning.

@@ -102,32 +102,85 @@ export function pingClubhouseChannel(channel: string): Promise<{ success: boolea
   return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/ping`, {});
 }
 
-export function muteClubhouseChannel(channel: string, isMuted: boolean): Promise<{ success: boolean }> {
-  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/mute`, { is_muted: isMuted });
+export function muteClubhouseChannel(
+  channel: string,
+  isMuted: boolean,
+): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/mute`, {
+    is_muted: isMuted,
+  });
 }
 
-export function setClubhouseHand(channel: string, raiseHands: boolean): Promise<{ success: boolean }> {
-  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/hand`, { raise_hands: raiseHands });
+export function setClubhouseHand(
+  channel: string,
+  raiseHands: boolean,
+): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/hand`, {
+    raise_hands: raiseHands,
+  });
 }
 
-export function acceptClubhouseSpeaker(channel: string, userId: number): Promise<{ success: boolean }> {
-  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/accept_speaker`, { user_id: userId });
+/** Come up on stage. Takes no user id: upstream's `become_speaker` accepts the
+ *  stage itself, not one particular moderator's invitation. */
+export function acceptClubhouseSpeaker(channel: string): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/accept_speaker`, {});
 }
 
-export function inviteClubhouseSpeaker(channel: string, userId: number): Promise<{ success: boolean }> {
-  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/invite_speaker`, { user_id: userId });
+export function inviteClubhouseSpeaker(
+  channel: string,
+  userId: number,
+): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/invite_speaker`, {
+    user_id: userId,
+  });
 }
 
-export function updateClubhouseTopic(channel: string, topic: string): Promise<{ success: boolean }> {
+export function updateClubhouseTopic(
+  channel: string,
+  topic: string,
+): Promise<{ success: boolean }> {
   return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/topic`, { topic });
 }
 
-export function updateClubhouseHandraiseSettings(channel: string, isEnabled: boolean, permission: number): Promise<{ success: boolean }> {
-  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/handraise_settings`, { is_enabled: isEnabled, handraise_permission: permission });
+/** Who may raise a hand. Named, never numbered: Clubhouse's wire ints changed
+ *  meaning between API generations (1 used to be "everyone", it now means
+ *  "locked"), so the mapping to a number lives only in the backend. */
+export type HandraisePermission = 'open_mic' | 'locked' | 'everyone' | 'followed_by_speakers';
+
+export function updateClubhouseHandraiseSettings(
+  channel: string,
+  isEnabled: boolean,
+  permission: HandraisePermission,
+): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/handraise_settings`, {
+    is_enabled: isEnabled,
+    handraise_permission: permission,
+  });
 }
 
-export function updateClubhouseChatSettings(channel: string, enableChat: boolean): Promise<{ success: boolean }> {
-  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/chat_settings`, { enable_chat: enableChat });
+export interface HandraiseQueueUser {
+  user_id: number | null;
+  name: string | null;
+  username: string | null;
+  photo_url: string | null;
+}
+
+/** Who currently has a hand raised in the room. */
+export function getClubhouseHandraiseQueue(
+  channel: string,
+): Promise<{ handraises: HandraiseQueueUser[] }> {
+  return apiGet<{ handraises: HandraiseQueueUser[] }>(
+    `/clubhouse/channels/${channel}/handraise_queue`,
+  );
+}
+
+export function updateClubhouseChatSettings(
+  channel: string,
+  enableChat: boolean,
+): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/chat_settings`, {
+    enable_chat: enableChat,
+  });
 }
 
 export function getClubhouseChannelDetails(channel: string): Promise<Channel> {
@@ -204,31 +257,53 @@ export function unfollowClubhouseUser(userId: number): Promise<{ success: boolea
   return apiPost<{ success: boolean }>(`/clubhouse/users/${userId}/unfollow`, {});
 }
 
-export function inviteToClubhouseChannel(channel: string, userId: number): Promise<{ success: boolean }> {
-  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/invite`, { user_id: userId });
-}
-
-export function searchClubhouseUsers(query: string): Promise<{ users: SearchUserResult[] }> {
-  return apiGet<{ users: SearchUserResult[] }>(`/clubhouse/users/search?query=${encodeURIComponent(query)}`);
-}
-
-export function sendChannelMessage(channel: string, message: string): Promise<{ success: boolean }> {
-  return apiPost<{ success: boolean }>(`/clubhouse/send_channel_message`, {
-    channel,
-    message
+export function inviteToClubhouseChannel(
+  channel: string,
+  userId: number,
+): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/invite`, {
+    user_id: userId,
   });
 }
 
-export function uninviteClubhouseSpeaker(channel: string, userId: number): Promise<{ success: boolean }> {
-
-  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/uninvite_speaker`, { user_id: userId });
+export function searchClubhouseUsers(query: string): Promise<{ users: SearchUserResult[] }> {
+  return apiGet<{ users: SearchUserResult[] }>(
+    `/clubhouse/users/search?query=${encodeURIComponent(query)}`,
+  );
 }
 
-export function makeClubhouseModerator(channel: string, userId: number): Promise<{ success: boolean }> {
-  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/make_moderator`, { user_id: userId });
+export function sendChannelMessage(
+  channel: string,
+  message: string,
+): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/send_channel_message`, {
+    channel,
+    message,
+  });
 }
 
-export function blockFromClubhouseChannel(channel: string, userId: number): Promise<{ success: boolean }> {
+export function uninviteClubhouseSpeaker(
+  channel: string,
+  userId: number,
+): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/uninvite_speaker`, {
+    user_id: userId,
+  });
+}
+
+export function makeClubhouseModerator(
+  channel: string,
+  userId: number,
+): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/make_moderator`, {
+    user_id: userId,
+  });
+}
+
+export function blockFromClubhouseChannel(
+  channel: string,
+  userId: number,
+): Promise<{ success: boolean }> {
   return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/block`, { user_id: userId });
 }
 
@@ -236,31 +311,13 @@ export function endClubhouseChannel(channel: string): Promise<{ success: boolean
   return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/end`, {});
 }
 
-export function makeClubhouseChannelPublic(channel: string): Promise<{ success: boolean }> {
-  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/make_public`, {});
-}
-
-export function makeClubhouseChannelSocial(channel: string): Promise<{ success: boolean }> {
-  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/make_social`, {});
-}
-
-export function rejectClubhouseSpeakerInvite(channel: string, userId: number): Promise<{ success: boolean }> {
-  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/reject_speaker`, { user_id: userId });
-}
-
-export interface OnlineFriendUser {
-  user_id: number | null;
-  name: string | null;
-  username: string | null;
-  photo_url: string | null;
-  channel: string | null;
-  topic: string | null;
-  is_speaker: boolean | null;
-  last_active_minutes: number | null;
-}
-
-export function getClubhouseOnlineFriends(): Promise<{ users: OnlineFriendUser[] }> {
-  return apiGet<{ users: OnlineFriendUser[] }>('/clubhouse/online_friends');
+export function rejectClubhouseSpeakerInvite(
+  channel: string,
+  userId: number,
+): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/reject_speaker`, {
+    user_id: userId,
+  });
 }
 
 export function getClubhouseFollowers(
@@ -268,7 +325,9 @@ export function getClubhouseFollowers(
   pageSize: number = 50,
   page: number = 1,
 ): Promise<{ users: FollowUser[] }> {
-  return apiGet<{ users: FollowUser[] }>(`/clubhouse/users/${userId}/followers?page_size=${pageSize}&page=${page}`);
+  return apiGet<{ users: FollowUser[] }>(
+    `/clubhouse/users/${userId}/followers?page_size=${pageSize}&page=${page}`,
+  );
 }
 
 export interface ClubhouseNotification {
@@ -280,82 +339,16 @@ export interface ClubhouseNotification {
   channel: string | null;
 }
 
+/** Recent activity. Paginates by opaque cursor — the upstream replacement for
+ *  `get_notifications` has no page numbers, so there is nothing to pass but the
+ *  `next_cursor` handed back by the previous call. */
 export function getClubhouseNotifications(
-  pageSize: number = 25,
-  page: number = 1,
-): Promise<{ notifications: ClubhouseNotification[] }> {
-  return apiGet<{ notifications: ClubhouseNotification[] }>(`/clubhouse/notifications?page_size=${pageSize}&page=${page}`);
-}
-
-export interface ClubhouseEvent {
-  event_id: number | null;
-  name: string | null;
-  description: string | null;
-  time_start_epoch: number | null;
-  channel: string | null;
-  club: { name: string | null } | null;
-  hosts: ChannelUser[];
-}
-
-export function getClubhouseEvents(
-  isFiltered: boolean = true,
-  pageSize: number = 25,
-  page: number = 1,
-): Promise<{ events: ClubhouseEvent[] }> {
-  return apiGet<{ events: ClubhouseEvent[] }>(
-    `/clubhouse/events?is_filtered=${isFiltered}&page_size=${pageSize}&page=${page}`,
+  nextCursor?: string,
+): Promise<{ notifications: ClubhouseNotification[]; next_cursor: string | null }> {
+  const query = nextCursor ? `?next_cursor=${encodeURIComponent(nextCursor)}` : '';
+  return apiGet<{ notifications: ClubhouseNotification[]; next_cursor: string | null }>(
+    `/clubhouse/notifications${query}`,
   );
-}
-
-export function createClubhouseEvent(event: {
-  name: string;
-  time_start_epoch: number;
-  description?: string;
-  club_id?: number | null;
-  user_ids?: number[];
-  is_member_only?: boolean;
-}): Promise<{ success: boolean; event: ClubhouseEvent }> {
-  return apiPost<{ success: boolean; event: ClubhouseEvent }>('/clubhouse/events', event);
-}
-
-export function deleteClubhouseEvent(eventId: number): Promise<{ success: boolean }> {
-  return apiDelete<{ success: boolean }>(`/clubhouse/events/${eventId}`);
-}
-
-export interface ClubDetails {
-  club_id: number | null;
-  name: string | null;
-  description: string | null;
-  photo_url: string | null;
-  num_members: number | null;
-  num_followers: number | null;
-  is_member: boolean | null;
-  is_admin: boolean | null;
-  is_community: boolean | null;
-}
-
-export function getClubhouseClub(clubId: number): Promise<ClubDetails> {
-  return apiGet<ClubDetails>(`/clubhouse/clubs/${clubId}`);
-}
-
-export function getClubhouseClubMembers(
-  clubId: number,
-  returnFollowers: boolean = false,
-  returnMembers: boolean = true,
-  pageSize: number = 50,
-  page: number = 1,
-): Promise<{ users: ChannelUser[] }> {
-  return apiGet<{ users: ChannelUser[] }>(
-    `/clubhouse/clubs/${clubId}/members?return_followers=${returnFollowers ? 1 : 0}&return_members=${returnMembers ? 1 : 0}&page_size=${pageSize}&page=${page}`,
-  );
-}
-
-export function followClubhouseClub(clubId: number): Promise<{ success: boolean }> {
-  return apiPost<{ success: boolean }>(`/clubhouse/clubs/${clubId}/follow`, {});
-}
-
-export function unfollowClubhouseClub(clubId: number): Promise<{ success: boolean }> {
-  return apiPost<{ success: boolean }>(`/clubhouse/clubs/${clubId}/unfollow`, {});
 }
 
 export function updateClubhouseBio(bio: string): Promise<{ success: boolean }> {
@@ -368,10 +361,6 @@ export function updateClubhouseName(name: string): Promise<{ success: boolean }>
 
 export function updateClubhouseUsername(username: string): Promise<{ success: boolean }> {
   return apiPost<{ success: boolean }>('/clubhouse/me/username', { username });
-}
-
-export function updateClubhouseSkintone(skintone: number): Promise<{ success: boolean }> {
-  return apiPost<{ success: boolean }>('/clubhouse/me/skintone', { skintone });
 }
 
 export interface TtsVoiceOption {
@@ -405,7 +394,9 @@ export interface PersonMemory {
 }
 
 export function listPeopleMemory(query: string = ''): Promise<PersonMemory[]> {
-  return apiGet<PersonMemory[]>(`/clubhouse/people-memory${query ? `?q=${encodeURIComponent(query)}` : ''}`);
+  return apiGet<PersonMemory[]>(
+    `/clubhouse/people-memory${query ? `?q=${encodeURIComponent(query)}` : ''}`,
+  );
 }
 
 export function getPersonMemory(userId: number): Promise<PersonMemory> {
@@ -425,11 +416,13 @@ export function addPersonTag(userId: number, tag: string): Promise<PersonMemory>
 }
 
 export function removePersonTag(userId: number, tag: string): Promise<PersonMemory> {
-  return apiDelete<PersonMemory>(`/clubhouse/people-memory/${userId}/tags/${encodeURIComponent(tag)}`);
+  return apiDelete<PersonMemory>(
+    `/clubhouse/people-memory/${userId}/tags/${encodeURIComponent(tag)}`,
+  );
 }
 
-export function forgetPersonMemory(userId: number): Promise<{ user_id: number; forgotten: boolean }> {
+export function forgetPersonMemory(
+  userId: number,
+): Promise<{ user_id: number; forgotten: boolean }> {
   return apiDelete<{ user_id: number; forgotten: boolean }>(`/clubhouse/people-memory/${userId}`);
 }
-
-
