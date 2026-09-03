@@ -1,15 +1,24 @@
-import { apiGet, apiPost, apiPut, streamNdjson } from '../../api';
+import { apiDelete, apiGet, apiPost, apiPut, streamNdjson } from '../../api';
 
-/** One auto-detected local-model provider (Ollama, LM Studio, vLLM). */
+/** One auto-detected provider: a local model server (Ollama, LM Studio, vLLM,
+ * llama.cpp) or a hosted API (OpenAI, Anthropic, Gemini, OpenRouter). */
 export interface DetectedProvider {
   kind: string;
   label: string;
   endpoint: string;
+  /** For a hosted provider this means "we hold a key", not "a port answered". */
   reachable: boolean;
   models: string[];
   can_pull: boolean;
   can_spawn: boolean;
   install_url: string;
+  /** A hosted API reached with a key rather than a server on this machine. */
+  hosted: boolean;
+  /** Whether a key is stored, or exported in the backend's environment. Never the
+   * key itself — it is write-only and the browser is never sent one. */
+  has_api_key: boolean;
+  /** Where the user creates a key. */
+  api_key_url: string;
 }
 
 /** Lifecycle of an optional backend-spawned vLLM server. */
@@ -66,6 +75,20 @@ export function saveAgentConfig(
   endpoint?: string,
 ): Promise<unknown> {
   return apiPut('/agent/config', { model, provider, ...(endpoint ? { endpoint } : {}) });
+}
+
+/** Store a hosted provider's API key. Write-only: the response says only whether a
+ * key is now held. An empty `key` removes the stored one. */
+export function saveProviderKey(kind: string, key: string): Promise<{ has_api_key: boolean }> {
+  return apiPut<{ has_api_key: boolean }>(`/agent/providers/${encodeURIComponent(kind)}/key`, {
+    key,
+  });
+}
+
+/** Forget a hosted provider's stored key. `has_api_key` can still come back true —
+ * an environment variable set outside the app is not ours to delete. */
+export function deleteProviderKey(kind: string): Promise<{ has_api_key: boolean }> {
+  return apiDelete<{ has_api_key: boolean }>(`/agent/providers/${encodeURIComponent(kind)}/key`);
 }
 
 /** Spawn a backend vLLM server to serve `model`; returns the new vLLM status. */

@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, HTTPException, UploadFile
 from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel
 
 from backend.modules.agent import providers as P
 from backend.modules.agent.models import (
@@ -90,6 +91,9 @@ async def _probe(
         can_pull=info.can_pull,
         can_spawn=info.can_spawn,
         install_url=info.install_url,
+        hosted=info.hosted,
+        has_api_key=P.api_key_for(info) is not None,
+        api_key_url=info.api_key_url,
     )
 
 
@@ -121,6 +125,57 @@ async def status() -> AgentStatus:
         providers=list(detected),
         vllm=vllm_manager.status(),
     )
+
+
+class ProviderKeyRequest(BaseModel):
+    key: str
+
+
+def _hosted_provider(kind: str) -> P.ProviderInfo:
+    info = P.PROVIDERS.get(kind)
+    if info is None or not info.hosted:
+        raise HTTPException(
+            status_code=404, detail=f"{kind} is not a hosted provider with an API key"
+        )
+    return info
+
+
+@router.put("/providers/{kind}/key")
+def put_provider_key(kind: str, req: ProviderKeyRequest) -> dict[str, bool]:
+    """Store the API key for a hosted provider.
+
+    Write-only by design: nothing reads a key back out to the browser, so the
+    response says only whether one is now held. The key is Fernet-encrypted in
+    `secrets.db` under the provider kind — the same name `providers.api_key_for`
+    reads, which is why this route exists instead of the UI posting to the generic
+    secrets endpoint and having to know that convention.
+    """
+    from backend.modules.database.secrets_store import delete_secret, upsert_secret
+
+    info = _hosted_provider(kind)
+    value = req.key.strip()
+    # An emptied field means "remove it", not "store an empty key" — an empty
+    # secret would shadow the environment variable and report as configured.
+    if value:
+        upsert_secret(info.kind, value)
+    else:
+        delete_secret(info.kind)
+    return {"has_api_key": P.api_key_for(info) is not None}
+
+
+@router.delete("/providers/{kind}/key")
+def delete_provider_key(kind: str) -> dict[str, bool]:
+    """Forget a hosted provider's stored key.
+
+    `has_api_key` can still come back true: an environment variable litellm reads
+    is not ours to delete, and claiming the provider is now unconfigured when the
+    next turn would still succeed is the lie this return value avoids.
+    """
+    from backend.modules.database.secrets_store import delete_secret
+
+    info = _hosted_provider(kind)
+    delete_secret(info.kind)
+    return {"has_api_key": P.api_key_for(info) is not None}
 
 
 @router.put("/config", response_model=AgentConfig)

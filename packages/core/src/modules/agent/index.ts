@@ -1,5 +1,6 @@
 import { registry, type ModuleManifest } from '../../registry';
 import { ChatWidget } from './ChatWidget';
+import { ApiKeysSettings } from './ApiKeysSettings';
 import { OrchestratorSettings } from './OrchestratorSettings';
 import { PermissionsSettings } from './PermissionsSettings';
 import { resetSetting, setSetting, type SettingValue } from '../../settings';
@@ -141,6 +142,11 @@ export const agentModule: ModuleManifest = {
   // rides along with it. See OrchestratorSettings.
   settingsSections: [
     { id: 'agent.orchestrator', title: 'Agent orchestrator', component: OrchestratorSettings },
+    // API keys are a custom section for the same reason the model dropdown is, and a
+    // stronger one: a key can never be a SettingDecl, because `GET /api/settings`
+    // hands the whole settings bag to the browser and to every plugin. See
+    // ApiKeysSettings.
+    { id: 'agent.apiKeys', title: 'Model provider API keys', component: ApiKeysSettings },
     { id: 'agent.permissions', title: 'Agent permissions', component: PermissionsSettings },
   ],
 };

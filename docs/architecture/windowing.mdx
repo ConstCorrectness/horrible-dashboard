@@ -34,7 +34,7 @@ tiling-vs-floating desktops) belongs to that page.
   store), `serialize.ts` (versioned schema), `controller.ts` (role routing,
   regions, the `LayoutController` seam), `persistence.ts` (autosave/switch),
   `presets.ts` (frame seeds) — all unit-tested (`pnpm --filter @horrible/core
-  test`). `packages/ui/src/layout/` renders it: `Frame`, `WorkspaceTabs`,
+test`). `packages/ui/src/layout/` renders it: `Frame`, `WorkspaceTabs`,
   `ActivityRail`, `Dock`, `CenterGrid`, `Area`, `AreaHeader`, `Region`,
   `PaneHost`, `CornerGrip`, `Sash` — plus `packages/ui/src/desktop/` for the window
   layer, the backdrops and the taskbar, and `layout/install.ts`, which installs the
@@ -68,18 +68,18 @@ tiling-vs-floating desktops) belongs to that page.
   is the whole point of splitting the two axes.
 
   **Which role a view should declare.** The three are easy to pick between by
-  what the pane *is*, rather than by where you first imagined putting it:
-  - a **document** is a surface you work *in* — one per subject, several open at
+  what the pane _is_, rather than by where you first imagined putting it:
+  - a **document** is a surface you work _in_ — one per subject, several open at
     once, and it benefits from tabs;
-  - a **tool** is a *companion* to whatever you are working on — narrow,
+  - a **tool** is a _companion_ to whatever you are working on — narrow,
     singleton, always the same thing, useful alongside a document;
-  - a **widget** is a *readout* — glanceable, no interaction depth, sized to a
+  - a **widget** is a _readout_ — glanceable, no interaction depth, sized to a
     tile, and the thing you would put on the `board` backdrop.
 
   That last clause is the one test that distinguishes `widget` from `document`
   outside the tiling grid, and it settled several miscategorised panes. The
   giveaway is the preset: `widget` takes a centre area **alone**, so any pane
-  that a frame preset *tabs* with others cannot be one. `lab.hub`,
+  that a frame preset _tabs_ with others cannot be one. `lab.hub`,
   `interpretability.context`, `interpretability.architecture` and
   `llamacpp.server` were all declared `widget` purely to make them
   centre-placeable — while the `lab` preset tabs all four into a single area,
@@ -103,11 +103,12 @@ tiling-vs-floating desktops) belongs to that page.
   content. `dockable` is for views with no host to hang off — currently
   `clubhouse.account` and `commons.directory`.
 
-  A view that has become *purely* a companion says so with **`embedded: true`**,
+  A view that has become _purely_ a companion says so with **`embedded: true`**,
   which removes the second home rather than merely discouraging it. See
   [Embedded views and sections](#embedded-views-and-sections).
+
 - **Workspaces are full frames (Blender model).** A workspace persists
-  *everything*: the center tree, dock visibility/sizes/contents, windows, its own
+  _everything_: the center tree, dock visibility/sizes/contents, windows, its own
   `mode` and `backdrop`,
   region state, focus, fullscreen. Switching workspaces switches the whole
   picture. `FramePreset`s (contributed via `ModuleManifest.frames`) seed
@@ -125,13 +126,14 @@ tiling-vs-floating desktops) belongs to that page.
   install boots into (`hydrate` seeds it rather than `dashboard` on an empty
   slate). Landing on Dashboard meant the app's opening move was to fill the screen
   with somebody else's arrangement of nine panes before the user had asked for
-  anything, and the presets beside it stop reading as *choices* once one of them
+  anything, and the presets beside it stop reading as _choices_ once one of them
   has already been made for you. Only the empty slate is affected — an install
   that already has workspaces still opens whichever one it was left on.
+
 - **A workspace carries a role, not just furniture.** A preset may declare
   `agent: '<roster id>'` — the roster agent its docked chat opens as. Switching to
   Data Ops makes the agent the `dba`; switching to Data Entry makes it `intake`,
-  which can only *propose* record values. Because an `AgentSpec` carries a system
+  which can only _propose_ record values. Because an `AgentSpec` carries a system
   prompt, a tool scope and a preload set, the persona, its capabilities and its
   token cost all switch with the layout. An unknown id falls back to `main`, the
   same way `seedFromPreset` skips unknown views; picking a different agent by hand
@@ -221,22 +223,22 @@ another pane. It stays fully registered — regions, sections, `openPaneInArea` 
 dragging a strip out into the center all keep working — but it drops out of every
 affordance that would present it as a competing home:
 
-| Surface | Effect |
-| --- | --- |
-| `pane.open:<id>` command | not synthesized (`registry.ts`) |
-| area-header type switcher / empty-area picker | filtered (`AreaHeader.tsx`) |
-| activity rails | `dockSidesOf` returns `[]`, so **embedded ⇒ never dockable** |
-| `list_available_panes` | no top-level row — listed under its host instead |
+| Surface                                       | Effect                                                       |
+| --------------------------------------------- | ------------------------------------------------------------ |
+| `pane.open:<id>` command                      | not synthesized (`registry.ts`)                              |
+| area-header type switcher / empty-area picker | filtered (`AreaHeader.tsx`)                                  |
+| activity rails                                | `dockSidesOf` returns `[]`, so **embedded ⇒ never dockable** |
+| `list_available_panes`                        | no top-level row — listed under its host instead             |
 
 The last row is the one that matters for the agent, and it is why `show` learned to
-resolve an embedded view to *where it lives*: `show("Outline")` reveals it in its
+resolve an embedded view to _where it lives_: `show("Outline")` reveals it in its
 host's region strip or section rather than failing to open it standalone. An
 embedded view that **nothing hosts** is a declaration error, and fails loudly
 (`ok: false`) rather than quietly opening a pane the flag said shouldn't exist.
 
 ### A view that stops being dockable
 
-`role` and `embedded` decide where *new* opens go; neither touches a layout that is
+`role` and `embedded` decide where _new_ opens go; neither touches a layout that is
 already saved. So a view that was a docked `tool` and became a centre-only
 `document` — as `settings.home` did when the settings page grew two columns — stays
 pinned in its old dock in every workspace the user has, forever, and looks like the
@@ -250,7 +252,7 @@ the next view changes its mind. Centre panes and region placements are untouched
 those are placements the user made deliberately.
 
 **`sections?: SectionDecl[]`** are in-pane tabs — the sibling of a region strip. A
-region is a *companion* beside the main content; a section *replaces* it. Each
+region is a _companion_ beside the main content; a section _replaces_ it. Each
 section declares an `id`, a `label` (what `show("friends")` matches), an optional
 pick `key`, and its body as either an inline `component` or the `view` id of a
 registered (usually embedded) view.
@@ -287,14 +289,14 @@ host with the active section would put it and its inner bodies back on one key).
 Keying on the instance alone was a silent-overwrite bug: whichever provider mounted
 last won, its unmount restored nothing, and the workaround was a standing rule that
 a pane may have only one. Now a pane-level snapshot and the mounted section's
-**merge**, section last, and reads are pinned to the *active* section so a provider
+**merge**, section last, and reads are pinned to the _active_ section so a provider
 that outlives its switch cannot answer for the tab that replaced it.
 
 The active section **and the list of siblings** are stamped onto every snapshot
 centrally by `readPaneAgentContext`, not left to each module — a merged pane's
 snapshot is ambiguous without the first, and a module that forgot would produce a
 plausible-looking snapshot the agent then reasons about wrongly. The sibling list is
-there because many sections still have no provider at all (only the *mounted* body
+there because many sections still have no provider at all (only the _mounted_ body
 can provide): a bare `{section}` gave the model nothing to answer from, and a pane
 that returns nothing does not produce "I don't know" — it produces a confident
 answer sourced from whatever else was in the context window. `hasPayload: false`
@@ -302,7 +304,7 @@ now names that case explicitly.
 
 **Contributed sections.** Sections are declared by the pane that owns them, which is
 right when the tabs are the pane's own — and wrong for [Explorer](../modules/explorer.mdx),
-whose entire purpose is to be the one place you go to find *something*, wherever it
+whose entire purpose is to be the one place you go to find _something_, wherever it
 lives. A view opts in with `explorerHost: true`, and any module (or plugin) adds a
 tab through `ModuleManifest.explorerSources`. `ExplorerSourceDecl` **is** a
 `SectionDecl`, so nothing downstream is a second mechanism.
@@ -320,11 +322,11 @@ and echo area, not a fourth dock. State and command matching live in
 `core/src/minibuffer.ts` (pure, unit-tested); the strip is
 `packages/ui/src/layout/Minibuffer.tsx`. Three states, in priority order:
 
-| State | When | What it shows |
-| --- | --- | --- |
+| State      | When                            | What it shows                                         |
+| ---------- | ------------------------------- | ----------------------------------------------------- |
 | **prompt** | a `dialogs.prompt()` is pending | the prompt inline — label, prefilled input, OK/Cancel |
-| **input** | `alt+x` (M-x) | slash-command entry with live completions |
-| **status** | idle | `workspace › focused pane`, plus the echo area |
+| **input**  | `alt+x` (M-x)                   | slash-command entry with live completions             |
+| **status** | idle                            | `workspace › focused pane`, plus the echo area        |
 
 **Slash commands** resolve against the same `registry.commands` the palette uses,
 so nothing is registered twice. A command opts into a short name with
@@ -362,18 +364,18 @@ design. `railEntries` (core/layout/rail.ts) derives the glyphs as pure data over
 `FrameState` + the user's rail prefs; `ActivityRail` (packages/ui) only renders
 and routes clicks and gestures.
 
-A rail lists what is actually docked on its side — by where a pane *is*, not
+A rail lists what is actually docked on its side — by where a pane _is_, not
 where it declared it wanted to be, so a tool that ended up somewhere unusual
 still has a switcher — plus any view declaring `dockable` for that side which
 isn't docked anywhere yet, shown dimmed so a module stays discoverable before it
 has ever been opened. Each glyph carries one of four states:
 
-| State | Meaning | Click |
-| --- | --- | --- |
-| `active` | the dock's visible tool | hide the dock |
-| `docked` | in the dock's list, not showing | reveal it |
+| State    | Meaning                               | Click                                                |
+| -------- | ------------------------------------- | ---------------------------------------------------- |
+| `active` | the dock's visible tool               | hide the dock                                        |
+| `docked` | in the dock's list, not showing       | reveal it                                            |
 | `center` | open out in a center area or floating | **focus it** — never re-docks or opens a second copy |
-| `closed` | not open anywhere | open it in this dock |
+| `closed` | not open anywhere                     | open it in this dock                                 |
 
 The **left rail also carries the bottom dock**, in a second section below its
 own. The bottom edge is reserved for the minibuffer rather than a third rail,
@@ -392,10 +394,10 @@ The rails are user-customizable, VS Code activity-bar style
   targets while a dockable drag is in flight. Right-clicking a glyph offers the
   same moves as menu items. If the view is open in a dock, the pane moves with
   the glyph (the `MOVE_TOOL` action); a center pane is re-docked.
-- **Hide**: right-click a glyph → *Hide*, or right-click the rail background
+- **Hide**: right-click a glyph → _Hide_, or right-click the rail background
   for a visibility checklist (check to show, uncheck to hide). Hiding a view
   that is currently docked closes it first (guarded) — a tool with no glyph
-  would be unswitchable. *Reset rail layout* (also the `rail.reset` command,
+  would be unswitchable. _Reset rail layout_ (also the `rail.reset` command,
   the escape hatch when a rail has been hidden entirely) drops all
   customization.
 
@@ -404,7 +406,7 @@ per-dock `order` — stored **globally, not per-workspace** (where your tools
 live is a habit, not a layout) as one JSON blob riding the settings store under
 `frame.railPrefs`, which buys boot hydration, live reactivity, and server-side
 persistence for free. A side override reorders `dockSidesOf`, so role routing
-and `openToolInDock` follow the user's placement; it never *makes* a view
+and `openToolInDock` follow the user's placement; it never _makes_ a view
 dockable — declarations still decide that.
 
 #### Where a window opens
@@ -426,7 +428,7 @@ Two details are load-bearing:
   window keeps a `restoreRect` to un-snap back to and re-derives its geometry when
   the desktop resizes. Replaying only the pixels produces a window that looks
   identical until either of those matters — and it re-snaps to the right half of
-  *today's* desktop rather than to stale pixels from a differently sized one.
+  _today's_ desktop rather than to stale pixels from a differently sized one.
 - **Only single-pane windows are recorded.** A window holding three merged tabs has
   one rect and three views; filing that rect under each would teach every pane in
   the group a placement that belonged to the group.
@@ -457,7 +459,7 @@ existing instance instead of duplicating.
 
   The tab row renders **whenever the area holds a pane**, not only past two. It
   used to fall back to a plain title for a single pane, which cost nothing until
-  the strip grew a `+` — the affordance for adding a pane *to this group* has to
+  the strip grew a `+` — the affordance for adding a pane _to this group_ has to
   be reachable from a group of one, since that is exactly when you want it. The
   `+` opens the same role-grouped view list as the type switcher and routes
   through `openPaneInArea`, deliberately not the role router: the user pointed at
@@ -472,7 +474,7 @@ existing instance instead of duplicating.
   started on the close button would swallow its click. Right-clicking a tab opens
   the `area.tab` [context menu](context-menus.mdx) (Close / Close Others / Close
   to the Right / Close All, then Minimize / Split Right / Split Down / Float).
-  *Minimize* names the taskbar in its hint, because a minimized tile leaves no
+  _Minimize_ names the taskbar in its hint, because a minimized tile leaves no
   trace in the frame and its taskbar button is the only way back.
 
   `REORDER_TAB` carries `activeTab` **by identity, not by index**. Every naive
@@ -480,11 +482,12 @@ existing instance instead of duplicating.
   and the area silently switches to a different pane. Rearranging the strip must
   not change what is on screen.
 
-  *Split Right* on a tab goes through `moveTabToSplit`, not `splitAreaBy`. The
+  _Split Right_ on a tab goes through `moveTabToSplit`, not `splitAreaBy`. The
   latter **copies** the active view into the new area, which is right for "give me
   another editor" and wrong here — a tab sent to a split has to arrive as itself,
   same instance, same scroll position, same live socket, or the user has two of
   something they meant to have one of.
+
 - **Keyboard-first** (see the table in [layout-shell.mdx](layout-shell.mdx)):
   `alt+arrows` move focus between areas, `alt+shift+arrows` move the active
   pane, `mod+alt+arrows` split, `mod+alt+j` join, `ctrl+space` fullscreens the
@@ -504,7 +507,7 @@ existing instance instead of duplicating.
 
   The payload rides in a small observable atom rather than `dataTransfer`,
   because `dataTransfer.getData` is unreadable during `dragover`: a drop target
-  has to decide whether to accept the drop *while the drag is over it*, which the
+  has to decide whether to accept the drop _while the drag is over it_, which the
   HTML5 API alone can't answer.
 
   Tabs now drag between center areas as well (see **Tab gestures** above).
@@ -559,7 +562,7 @@ the agent's vocabulary).
 `areaHostingView(viewId)` returns the center area a view already occupies (the
 focused one when several qualify), so a module that opens **many documents of one
 kind** can stack them as tabs in the area it already owns. `openPane`'s default is
-to split — right for a *first* document, wrong for the second, which is why
+to split — right for a _first_ document, wrong for the second, which is why
 clicking a second file in the tree used to carve the frame in half. The editor
 pairs it with `openPaneInArea(viewId, areaId, params, instanceId)`, whose optional
 `instanceId` applies the same focus-or-create identity rule `openPane` uses.
@@ -622,7 +625,7 @@ generalizes it to the frontend.
 Three details are load-bearing:
 
 - **Keys are workspace-scoped.** `paneSeq` lives on `FrameState`, so instance ids are
-  unique only *within* a frame: two workspaces can each hold a
+  unique only _within_ a frame: two workspaces can each hold a
   `terminal.instance#1`. A globally keyed store would hand the second one the first
   one's shell.
 - **The terminal keeps its DOM element**, not just its session. Moving the xterm host
@@ -651,6 +654,33 @@ The store holds `{ workspaceId, frame }` as **one atom**; the debounced (~600ms)
 autosave reads both from the same snapshot at fire time, so a workspace switch
 (which flushes first, then atomically loads the next frame) can never write a
 layout under the wrong id — this retired the old engine's race-guard refs.
+
+### Losing an edit: the four ways, and why none of them are open
+
+A layout edit is invisible until it is written, and a window that is still on screen
+looks saved whether or not it is. Every one of these presented as "refreshing reset
+my desktop", so each is closed deliberately rather than by luck:
+
+- **A save that fails is retried.** `lastSavedRevision` advances only _after_ the PUT
+  resolves. It used to advance before, so a failed write — the backend restarting
+  under `--reload`, a dropped connection — left the store believing it was clean and
+  no retry was ever attempted. The frame is a full snapshot, so the retry needs no
+  record of what was lost: one later success carries every edit since.
+- **Saves never overlap.** Each serializes the frame before awaiting, so a slow save
+  of revision 5 landing after a fast save of revision 6 would write the older layout
+  last. They are strictly sequential, and a request arriving mid-flight waits rather
+  than skipping (skipping would report an unsent edit as saved).
+- **The last edit before a refresh is flushed.** `pagehide` / tab-hidden writes the
+  pending frame with a `keepalive` PUT — a normal `fetch` started during unload is
+  cancelled with the document, which made the 600ms debounce a window in which every
+  edit was lost. `sendBeacon` is the obvious tool and the wrong one: it can only POST.
+- **A boot that cannot read the layout never overwrites it.** `hydrate` retries the
+  read (boot races the backend: the Tauri shell spawns it alongside the UI, `pnpm dev`
+  restarts it on every save), and on real failure the store stays **un-hydrated** —
+  which is what keeps autosave switched off, so the blank frame on screen can never be
+  written over the layout still safely on disk. The shell then says so and offers a
+  reload, because an empty desktop with no message is indistinguishable from one that
+  was erased.
 
 Layouts serialize as a **versioned envelope**
 `{ schema: 'horrible.frame', version: 2, frame }` to
@@ -721,7 +751,7 @@ nothing in the UI.
 
 `open_external` shipped with neither. `openExternal` caught the rejection and
 returned `false`, the link bridge discarded that `false`, and the result was that
-OAuth sign-in and *every external link in the desktop app* silently did nothing.
+OAuth sign-in and _every external link in the desktop app_ silently did nothing.
 `acl_coverage::every_command_is_permitted_and_capable` (`src/main.rs`) now asserts
 both halves for every registered command; a new permissions TOML must be added to
 its `PERMISSION_FILES` list. See
@@ -729,7 +759,7 @@ its `PERMISSION_FILES` list. See
 :::
 
 **Both mechanisms fail quietly**, so `openExternal` returns whether it actually
-opened and callers that need the user to *arrive* somewhere must check it. The
+opened and callers that need the user to _arrive_ somewhere must check it. The
 bridge reports failure through `onExternalOpenFailed`, which `AppShell` turns into
 a persistent toast carrying the URL — necessary because the bridge cancels the
 browser's own navigation before substituting its own, so a failed substitute means
@@ -754,5 +784,5 @@ phase-2 native shell — all three capabilities (`window.fullscreen` native
 OS-window fullscreen; `chrome.workspaceTabs` undecorated window with the tab
 strip as its titlebar; `window.perWorkspace` a workspace in its own OS window).
 Not yet: pointer **tab** drag-docking between center areas (deliberate; drag-out
-from the rails, docks, and region strips *is* implemented), region view cycling
+from the rails, docks, and region strips _is_ implemented), region view cycling
 on repeat-press, and workspace reorder/import-export.

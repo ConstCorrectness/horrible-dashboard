@@ -3,6 +3,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app import app
+from backend.modules.agent import providers as P
 from backend.modules.agent import routes
 
 
@@ -29,6 +30,12 @@ class _UnreachableClient:
 @pytest.fixture
 def client(tmp_path, monkeypatch) -> TestClient:
     monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path))
+    # A hosted provider counts a key exported in the environment, so a developer
+    # who happens to have one set would otherwise see it reported as configured
+    # here and the status assertions would fail on their machine only.
+    for info in P.PROVIDERS.values():
+        if info.env_var:
+            monkeypatch.delenv(info.env_var, raising=False)
     # No real network: agent status treats Ollama as unreachable.
     monkeypatch.setattr(
         routes, "instrumented_client", lambda *a, **k: _UnreachableClient()
@@ -54,13 +61,15 @@ def test_status_unconfigured_and_unreachable(client: TestClient) -> None:
         "openai",
         "anthropic",
         "gemini",
+        "openrouter",
     }
-    # litellm providers are always considered reachable since we can't reliably ping them
-    assert all(
-        p["reachable"] is False
-        for p in body["providers"]
-        if p["kind"] in {"ollama", "lmstudio", "vllm"}
-    )
+    assert all(p["reachable"] is False for p in body["providers"])
+    # A hosted provider's readiness is whether we hold a key, not whether a port
+    # answers — with no key configured it must not report itself usable.
+    hosted = {p["kind"]: p for p in body["providers"] if p["hosted"]}
+    assert set(hosted) == {"openai", "anthropic", "gemini", "openrouter"}
+    assert all(not p["has_api_key"] and not p["reachable"] for p in hosted.values())
+    assert hosted["openrouter"]["api_key_url"]
 
 
 def test_chat_requires_onboarding(client: TestClient) -> None:
@@ -175,3 +184,106 @@ def test_stt_handles_empty_or_corrupt_audio(client: TestClient) -> None:
     assert res.status_code == 200
     assert res.json()["text"] == ""
 
+
+def test_provider_key_roundtrip(client: TestClient) -> None:
+    """A stored key is what makes a hosted provider usable, and it is never read back."""
+    status = {p["kind"]: p for p in client.get("/api/agent/status").json()["providers"]}
+    assert status["openrouter"]["has_api_key"] is False
+
+    res = client.put("/api/agent/providers/openrouter/key", json={"key": "sk-or-test"})
+    assert res.status_code == 200
+    assert res.json() == {"has_api_key": True}
+
+    info = P.PROVIDERS["openrouter"]
+    assert P.api_key_for(info) == "sk-or-test"
+    # The key is not on any response the browser sees.
+    body = client.get("/api/agent/status").text
+    assert "sk-or-test" not in body
+
+    assert client.delete("/api/agent/providers/openrouter/key").json() == {
+        "has_api_key": False
+    }
+    assert P.api_key_for(info) is None
+
+
+def test_provider_key_rejects_local_provider(client: TestClient) -> None:
+    """Ollama has no API key; storing one under its name would be a secret nothing
+    ever reads."""
+    res = client.put("/api/agent/providers/ollama/key", json={"key": "x"})
+    assert res.status_code == 404
+
+
+def test_blank_key_removes_rather_than_stores(client: TestClient) -> None:
+    """An emptied field must delete: an empty stored secret would shadow the
+    environment variable and still report the provider as configured."""
+    client.put("/api/agent/providers/openai/key", json={"key": "sk-test"})
+    assert client.put("/api/agent/providers/openai/key", json={"key": "  "}).json() == {
+        "has_api_key": False
+    }
+
+
+def test_env_var_counts_as_configured(client: TestClient, monkeypatch) -> None:
+    """litellm reads the variable itself, so reporting "no key" for a provider that
+    would work is a failure the user cannot debug."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-env")
+    assert P.api_key_for(P.PROVIDERS["openrouter"]) == "sk-or-env"
+    providers = {
+        p["kind"]: p for p in client.get("/api/agent/status").json()["providers"]
+    }
+    assert providers["openrouter"]["has_api_key"] is True
+
+
+def test_qualify_model_adds_routing_prefix() -> None:
+    """A bare OpenRouter id is not a model litellm can place; an already-prefixed
+    one must not be prefixed twice."""
+    orouter = P.PROVIDERS["openrouter"]
+    assert P.qualify_model(orouter, "minimax/minimax-m3:free") == (
+        "openrouter/minimax/minimax-m3:free"
+    )
+    assert P.qualify_model(orouter, "openrouter/minimax/minimax-m3:free") == (
+        "openrouter/minimax/minimax-m3:free"
+    )
+    assert P.qualify_model(P.PROVIDERS["gemini"], "gemini-2.5-pro") == (
+        "gemini/gemini-2.5-pro"
+    )
+    # Providers whose ids are already unambiguous are left alone.
+    assert P.qualify_model(P.PROVIDERS["openai"], "gpt-4o") == "gpt-4o"
+
+
+@pytest.mark.anyio
+async def test_catalog_orders_tool_capable_models_first() -> None:
+    """A model without tool support never calls a tool in the orchestrator loop,
+    which reads as the agent ignoring you rather than as a model that cannot."""
+
+    class _Catalog:
+        async def get(self, url, **kwargs):
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"id": "chat-only", "supported_parameters": ["temperature"]},
+                        {"id": "tools-a", "supported_parameters": ["tools"]},
+                    ]
+                },
+                request=httpx.Request("GET", url),
+            )
+
+    P._CATALOG_CACHE.clear()
+    models = await P._catalog_models(_Catalog(), P.PROVIDERS["openrouter"])
+    assert models == ["tools-a", "chat-only"]
+    P._CATALOG_CACHE.clear()
+
+
+@pytest.mark.anyio
+async def test_catalog_failure_falls_back_rather_than_raising() -> None:
+    """The key decides usability; an unreachable catalog must not make a working
+    provider look broken."""
+
+    class _Down:
+        async def get(self, url, **kwargs):
+            raise httpx.ConnectError("no network")
+
+    P._CATALOG_CACHE.clear()
+    models = await P._catalog_models(_Down(), P.PROVIDERS["openrouter"])
+    assert models == list(P.PROVIDERS["openrouter"].static_models)
+    P._CATALOG_CACHE.clear()

@@ -2946,6 +2946,7 @@ body {
 
 .provider-list {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.4rem;
 }
 
@@ -2977,6 +2978,60 @@ body {
 
 .provider-dot.on {
   background: #2ed573;
+  opacity: 1;
+}
+
+/* Hosted-provider key entry — onboarding's answer to "this provider needs a key"
+   where a local provider gets "install and start it". Same vocabulary as
+   .vllm-controls, which occupies the same slot for the other kind of not-ready. */
+.api-key-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.api-key-controls > .home-hint {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.api-key-controls input {
+  flex: 1 1 16rem;
+  height: 30px;
+  padding: 0 0.5rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.8rem;
+}
+
+/* API keys settings section. The dot is the whole readout: a key is write-only, so
+   "we hold one" is the only thing this UI can honestly show about it. */
+.api-keys-settings .setting-control {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.api-keys-settings .setting-control input {
+  font-family: var(--font-mono, monospace);
+  letter-spacing: 0.04em;
+}
+
+.api-key-dot {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--text-dim);
+  opacity: 0.4;
+}
+
+.api-key-dot.on {
+  background: var(--success);
   opacity: 1;
 }
 
@@ -3158,14 +3213,14 @@ body {
 /* "Nothing opened" — the same amber the tile's error dot uses, because it is the
    same category of thing: the flow is fine, something around it is not. */
 .integration-blocked {
-  color: var(--warn, #d9a441);
+  color: var(--warn);
   font-weight: 600;
 }
 
 /* CopyableLink (packages/core/src/CopyableLink.tsx). Two states in one place:
    a link while opening still might work, then the raw address once it hasn't. */
 .copyable-link {
-  color: var(--accent, #6ea8fe);
+  color: var(--accent);
 }
 
 .copyable-link.failed {
@@ -3229,12 +3284,12 @@ body {
 
 .copyable-link-icon:hover {
   color: var(--text);
-  border-color: var(--accent, #6ea8fe);
+  border-color: var(--accent);
 }
 
 .copyable-link-icon[data-copied='true'] {
-  color: var(--success, #3fb950);
-  border-color: var(--success, #3fb950);
+  color: var(--success);
+  border-color: var(--success);
 }
 
 .copyable-link-btn {
@@ -3250,7 +3305,7 @@ body {
 
 .copyable-link-btn:hover {
   color: var(--text);
-  border-color: var(--accent, #6ea8fe);
+  border-color: var(--accent);
 }
 
 /* A literal the user must transcribe. The recessed well plus the mono treatment
@@ -3683,7 +3738,7 @@ kbd {
   justify-content: space-between;
   gap: 1rem;
   padding: 0.6rem 0.75rem;
-  border: 1px solid var(--border, #444);
+  border: 1px solid var(--border);
   border-radius: 6px;
 }
 
@@ -3710,7 +3765,7 @@ kbd {
   font-size: 0.75rem;
   padding: 0.05rem 0.4rem;
   border-radius: 999px;
-  border: 1px solid var(--border, #444);
+  border: 1px solid var(--border);
 }
 
 .mk-badge.mk-on {
@@ -4000,6 +4055,21 @@ kbd {
   border-radius: 6px;
   padding: 0.2rem 0.4rem;
   font: inherit;
+}
+
+/* The model picker is an *id*, so it is monospace and sized to sit beside the
+   session title rather than compete with it: three equal selects in a narrow pane
+   leaves all three unreadable, and the session title is the one that identifies
+   the conversation you are in. */
+.agent-session-bar select.agent-model-picker {
+  flex: 0 1 11rem;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.agent-session-bar select.agent-model-picker:hover:not(:disabled) {
+  color: var(--text);
 }
 
 .agent-session-bar button {
@@ -5119,7 +5189,7 @@ kbd {
 
 .toast-copy-btn:hover {
   color: var(--text);
-  border-color: var(--accent, #6ea8fe);
+  border-color: var(--accent);
 }
 
 /* The one action a toast may offer. Styled as the affirmative thing in the
@@ -5129,16 +5199,16 @@ kbd {
   margin-top: 0.5rem;
   font-size: 0.72rem;
   padding: 0.28rem 0.6rem;
-  border: 1px solid var(--accent, #6ea8fe);
+  border: 1px solid var(--accent);
   border-radius: 4px;
   background: transparent;
-  color: var(--accent, #6ea8fe);
+  color: var(--accent);
   cursor: pointer;
 }
 
 .toast-action:hover {
-  background: var(--accent, #6ea8fe);
-  color: var(--bg, #101014);
+  background: var(--accent);
+  color: var(--bg);
 }
 
 .toast-close {
@@ -5408,7 +5478,7 @@ kbd {
 }
 
 .lib-error {
-  color: var(--danger, #e06c75);
+  color: var(--danger);
   padding: 8px 10px;
 }
 
@@ -5492,8 +5562,8 @@ kbd {
 }
 
 .lib-status-failed {
-  color: var(--danger, #e06c75);
-  border-color: var(--danger, #e06c75);
+  color: var(--danger);
+  border-color: var(--danger);
 }
 
 .lib-status-fetching,
@@ -5505,7 +5575,7 @@ kbd {
 
 .lib-errmark {
   cursor: help;
-  color: var(--danger, #e06c75);
+  color: var(--danger);
 }
 
 .lib-results {
@@ -5668,7 +5738,7 @@ kbd {
 }
 
 .interp-budget-over {
-  background: var(--danger, #f08c8c);
+  background: var(--danger);
 }
 
 .interp-budget-label {
@@ -6117,7 +6187,7 @@ kbd {
 }
 
 .mx-stage-on {
-  outline: 1px solid var(--accent, #6ea8fe);
+  outline: 1px solid var(--accent);
   outline-offset: -1px;
 }
 
@@ -6201,7 +6271,7 @@ kbd {
 
 .mx-clear {
   margin-left: auto;
-  color: var(--accent, #6ea8fe);
+  color: var(--accent);
 }
 
 /* Layer picker. A 64-layer model has to stay one glanceable grid, so these are
@@ -6226,8 +6296,8 @@ kbd {
 }
 
 .mx-layer-on {
-  background: var(--accent, #6ea8fe);
-  border-color: var(--accent, #6ea8fe);
+  background: var(--accent);
+  border-color: var(--accent);
   color: #000;
 }
 
@@ -6291,7 +6361,7 @@ kbd {
   padding: 0.2rem 0.4rem 0.2rem 0;
   position: sticky;
   top: 0;
-  background: var(--bg, #111);
+  background: var(--bg);
 }
 
 .mx-tensors td {
@@ -6309,7 +6379,7 @@ kbd {
 }
 
 .mx-more {
-  color: var(--accent, #6ea8fe);
+  color: var(--accent);
   padding: 0.25rem 0;
 }
 
@@ -6472,7 +6542,7 @@ kbd {
 }
 
 .lab-hit-on {
-  border-color: var(--accent, #6ea8fe);
+  border-color: var(--accent);
   background: rgb(110 168 254 / 12%);
 }
 
@@ -7120,7 +7190,7 @@ kbd {
   padding: 0;
   border: 0;
   background: none;
-  color: var(--accent, #6ea8fe);
+  color: var(--accent);
   font: inherit;
   cursor: pointer;
   text-decoration: underline;
@@ -7130,7 +7200,7 @@ kbd {
   margin: 0;
   font-size: 11px;
   line-height: 1.45;
-  color: var(--danger, #f08a8a);
+  color: var(--danger);
   overflow-wrap: anywhere;
 }
 
@@ -7153,8 +7223,8 @@ kbd {
 /* A model this app manages can be deleted from here; one that belongs to Ollama
    or LM Studio cannot, and the tag is the only thing saying so. */
 .llama-origin-managed {
-  border-color: var(--accent, #6ea8fe);
-  color: var(--accent, #6ea8fe);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .llama-dot {
@@ -7247,7 +7317,7 @@ kbd {
 }
 
 .llama-record-on {
-  border-color: var(--accent, #6ea8fe);
+  border-color: var(--accent);
 }
 
 .llama-record-name {
@@ -7384,8 +7454,8 @@ kbd {
 }
 
 .llama-chip-on {
-  border-color: var(--accent, #6ea8fe);
-  color: var(--accent, #6ea8fe);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 /* Fidelity is the honesty knob and has to be visible at a glance: a `summary`
@@ -7531,7 +7601,7 @@ kbd {
   top: 0;
   z-index: 1;
   padding: 0.15rem 0.3rem;
-  background: var(--surface, #16181d);
+  background: var(--surface);
   color: var(--text-dim);
   font-weight: 500;
   white-space: pre;
@@ -7569,7 +7639,7 @@ kbd {
 }
 
 .llama-lens-cell-on {
-  border-color: var(--accent, #6ea8fe);
+  border-color: var(--accent);
 }
 
 /* A cell whose top word changed between a trace and its fork. Outlined rather
@@ -7593,11 +7663,11 @@ kbd {
 }
 
 .llama-lens-strip .llama-token-swap:hover {
-  border-color: var(--accent, #6ea8fe);
+  border-color: var(--accent);
 }
 
 .llama-token-swapping {
-  border-color: var(--accent, #6ea8fe) !important;
+  border-color: var(--accent) !important;
 }
 
 .llama-lens-pins {
@@ -8070,10 +8140,10 @@ kbd {
   cursor: pointer;
 }
 .desktop-mode-btn:hover {
-  border-color: var(--accent, #3b82f6);
+  border-color: var(--accent);
 }
 .desktop-mode-btn.is-active {
-  border-top-color: var(--accent, #3b82f6);
+  border-top-color: var(--accent);
   background: var(--bg-alt, rgba(127, 127, 127, 0.1));
 }
 .desktop-mode-glyph {
@@ -8083,7 +8153,7 @@ kbd {
   color: var(--text-dim);
 }
 .desktop-mode-btn.is-active .desktop-mode-glyph {
-  color: var(--accent, #3b82f6);
+  color: var(--accent);
 }
 .desktop-mode-label {
   font-weight: 600;
@@ -8097,4 +8167,67 @@ kbd {
   margin: 0.45rem 0 0;
   font-size: 0.76rem;
   color: var(--text-dim);
+}
+
+/* A layout that could not be read. The desktop behind it is empty but the user's
+   real one is still on disk — the banner exists because a blank screen otherwise
+   reads as "the refresh deleted everything". */
+.layout-load-error {
+  position: fixed;
+  z-index: 9999;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.9rem;
+  background: var(--bg-raised);
+  border-bottom: 2px solid var(--danger);
+  color: var(--text);
+  font-size: 0.82rem;
+}
+
+.layout-load-error code {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+.layout-load-error button {
+  height: 30px;
+  padding: 0 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+/* "Couldn't read your conversations" — never rendered as an empty transcript,
+   because empty is indistinguishable from deleted. */
+.agent-restore-failed {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.35rem 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border-left: 2px solid var(--danger);
+  background: var(--bg-raised);
+  color: var(--text-dim);
+  font-size: 0.78rem;
+}
+
+.agent-restore-failed button {
+  margin-left: auto;
+  height: 26px;
+  padding: 0 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
 }

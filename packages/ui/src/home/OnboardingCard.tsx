@@ -4,6 +4,7 @@ import {
   DEFAULT_VLLM_MODEL,
   pullAgentModel,
   saveAgentConfig,
+  saveProviderKey,
   spawnVllm,
   stopVllm,
   type AgentStatus,
@@ -12,8 +13,15 @@ import {
 
 import { getUserName, setUserName } from './constants';
 
-/** First-run setup for the local model: pick a provider, get a model, name yourself.
- * Shown on home until the agent is both configured and reachable. */
+/** First-run setup for the model: pick a provider, get a model, name yourself.
+ * Shown on home until the agent is both configured and reachable.
+ *
+ * A provider is either a **local server** (Ollama, LM Studio, llama.cpp, vLLM) or a
+ * **hosted API** (OpenAI, Anthropic, Gemini, OpenRouter). The difference shows up in
+ * exactly one place — what an unreachable provider needs from you. A local one needs
+ * installing and starting; a hosted one needs a key, entered here rather than sending
+ * the user off to the settings page mid-onboarding. The key is written straight to the
+ * backend's encrypted store and never comes back. */
 export function OnboardingCard({
   status,
   onChanged,
@@ -41,7 +49,8 @@ export function OnboardingCard({
 
   const hasModel = provider.models.includes(model);
   // Ollama needs the model pulled first; OpenAI-dialect providers serve whatever
-  // is already loaded, so reachability + a model name is enough.
+  // is already loaded and hosted ones serve everything in their catalog, so
+  // reachability + a model name is enough for both.
   const canFinish =
     provider.reachable && model.trim().length > 0 && (hasModel || !provider.can_pull) && !saving;
 
@@ -88,7 +97,9 @@ export function OnboardingCard({
     <section className="onboarding">
       <h2>Set up your dashboard friend</h2>
       <p className="home-hint">
-        Answers come from a local model running on your machine — nothing leaves it.
+        {provider.hosted
+          ? `Answers come from ${provider.label}, so your prompts leave this machine. Pick a local provider below to keep everything here.`
+          : 'Answers come from a local model running on your machine — nothing leaves it.'}
       </p>
       <ol>
         <li>
@@ -114,13 +125,19 @@ export function OnboardingCard({
         <li>
           <span className={hasModel ? 'step done' : 'step'}>2</span>
           <div className="onboarding-field">
-            Local model:
+            {provider.hosted ? 'Model:' : 'Local model:'}
             <input
               list="agent-models"
               value={model}
               onChange={(e) => setModel(e.target.value)}
               spellCheck={false}
-              placeholder={provider.kind === 'ollama' ? DEFAULT_AGENT_MODEL : 'loaded model id'}
+              placeholder={
+                provider.kind === 'ollama'
+                  ? DEFAULT_AGENT_MODEL
+                  : provider.hosted
+                    ? 'model id'
+                    : 'loaded model id'
+              }
             />
             <datalist id="agent-models">
               {[...new Set(provider.models)].map((m) => (
@@ -166,6 +183,9 @@ function ProviderStatus({
       </p>
     );
   }
+  if (provider.hosted) {
+    return <ApiKeyControls provider={provider} onChanged={onChanged} />;
+  }
   if (provider.kind === 'vllm') {
     return <VllmControls onChanged={onChanged} />;
   }
@@ -177,6 +197,61 @@ function ProviderStatus({
       </a>
       , then <button onClick={onChanged}>Re-check</button>
     </p>
+  );
+}
+
+/** Key entry for a hosted provider. The one thing standing between an unreachable
+ * hosted provider and a usable one, so it belongs in the flow rather than behind a
+ * link to settings. Write-only: nothing reads a key back, here or anywhere. */
+function ApiKeyControls({
+  provider,
+  onChanged,
+}: {
+  provider: DetectedProvider;
+  onChanged: () => void;
+}) {
+  const [key, setKey] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      await saveProviderKey(provider.kind, key);
+      setKey('');
+      onChanged();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="api-key-controls">
+      <p className="home-hint">
+        {provider.label} runs in the cloud, so answers do leave this machine. Paste an API key to
+        use it — it is stored encrypted here and never sent to the browser.{' '}
+        {provider.api_key_url && (
+          <a href={provider.api_key_url} target="_blank" rel="noreferrer">
+            Get a key
+          </a>
+        )}
+      </p>
+      <input
+        type="password"
+        value={key}
+        spellCheck={false}
+        autoComplete="off"
+        placeholder="Paste API key"
+        onChange={(e) => setKey(e.target.value)}
+      />
+      <button disabled={saving || key.trim() === ''} onClick={() => void save()}>
+        {saving ? 'Saving…' : 'Save key'}
+      </button>
+      {error && <p className="widget-error">{error}</p>}
+    </div>
   );
 }
 

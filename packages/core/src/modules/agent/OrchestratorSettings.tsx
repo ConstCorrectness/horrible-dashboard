@@ -5,14 +5,16 @@
  * (consumed by backend/modules/agent/orchestrator.py); a specialized agent uses
  * `agent.<id>.*`, which fall back to the orchestrator keys server-side
  * (backend/modules/agent/roster.py, `agent_setting`). The model override is a
- * dropdown of the configured provider's live models — fetched from
- * `/agent/status` rather than a static enum — with a blank-equivalent choice
- * that clears the override.
+ * dropdown of the **selected provider's** live models — the one named by the
+ * provider override, else the configured one — fetched from `/agent/status`
+ * rather than a static enum, with a blank-equivalent choice that clears the
+ * override. Hosted providers (OpenAI, Anthropic, Gemini, OpenRouter) appear here
+ * once a key is saved in the API-keys section; see ApiKeysSettings.
  */
 import { useEffect, useState } from 'react';
 
 import { isSettingOverridden, resetSetting, setSetting, useSetting } from '../../settings';
-import { getAgentRoster, getAgentStatus, type RosterAgent } from './api';
+import { getAgentRoster, getAgentStatus, type DetectedProvider, type RosterAgent } from './api';
 
 const MODES = ['default', 'plan', 'acceptEdits', 'autonomous'] as const;
 
@@ -51,7 +53,7 @@ export function OrchestratorSettings() {
   const [models, setModels] = useState<string[]>([]);
   const [configuredModel, setConfiguredModel] = useState<string | null>(null);
   const [configuredProvider, setConfiguredProvider] = useState<string | null>(null);
-  const [providers, setProviders] = useState<{ kind: string; label: string }[]>([]);
+  const [providers, setProviders] = useState<DetectedProvider[]>([]);
 
   useEffect(() => {
     void getAgentStatus()
@@ -59,7 +61,7 @@ export function OrchestratorSettings() {
         setModels(s.available_models ?? []);
         setConfiguredModel(s.model);
         setConfiguredProvider(s.provider);
-        setProviders((s.providers ?? []).map((p) => ({ kind: p.kind, label: p.label })));
+        setProviders(s.providers ?? []);
       })
       .catch(() => {
         // Provider/backend down — the current override still stays selectable below.
@@ -75,8 +77,15 @@ export function OrchestratorSettings() {
   const isMain = agentId === 'main';
   const fallbackNote = isMain ? '' : ' Blank falls back to the orchestrator’s value.';
 
+  // The model list must follow the *provider override*, not the configured
+  // provider. `available_models` is the configured provider's list, so before this
+  // an agent pointed at OpenRouter was offered Ollama's models — every one of which
+  // means nothing on that server, and the failure only shows up mid-turn.
+  const overrideProvider = provider ? providers.find((p) => p.kind === provider) : undefined;
+  const providerModels = overrideProvider ? overrideProvider.models : models;
   // Keep an override that isn't in the live list (e.g. provider offline) selectable.
-  const options = model && !models.includes(model) ? [model, ...models] : models;
+  const options =
+    model && !providerModels.includes(model) ? [model, ...providerModels] : providerModels;
 
   const onModelChange = (value: string): void => {
     if (value === '') void resetSetting(MODEL_KEY);
@@ -110,7 +119,8 @@ export function OrchestratorSettings() {
         <div className="setting-label">
           <label>Provider override</label>
           <p className="setting-desc">
-            Which local-model server this agent's turns run against. Blank uses the provider you
+            Which model server this agent's turns run against — a local one, or a hosted API you
+            have a key for (see <b>Model provider API keys</b> below). Blank uses the provider you
             configured during onboarding
             {configuredProvider ? ` (${configuredProvider})` : ''}. Pointing one agent at the node's
             own llama.cpp server while the rest stay on Ollama is the reason this is per-agent — but
@@ -134,6 +144,7 @@ export function OrchestratorSettings() {
             {providers.map((p) => (
               <option key={p.kind} value={p.kind}>
                 {p.label}
+                {p.reachable ? '' : p.hosted ? ' — no API key' : ' — not running'}
               </option>
             ))}
           </select>

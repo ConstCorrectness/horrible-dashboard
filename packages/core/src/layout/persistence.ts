@@ -12,8 +12,10 @@ import {
   deleteWorkspace as apiDeleteWorkspace,
   getWorkspaces,
   saveWorkspace,
+  saveWorkspaceOnUnload,
   setActiveWorkspace,
   type Workspace as WorkspaceModel,
+  type WorkspacesState,
 } from '../workspace';
 import { workspaceStore } from '../workspace-store';
 import { areaId, createEmptyFrame, listPanes, windowId } from './model';
@@ -137,11 +139,57 @@ function load(workspaceId: string, frameState: FrameState): void {
   lastSavedRevision = layoutStore.getSnapshot().revision;
 }
 
+/**
+ * A save in flight. Two overlapping PUTs are not merely wasteful: each serializes
+ * the frame *before* awaiting, so if a slow save of revision 5 lands after a fast
+ * save of revision 6, the older layout wins and the newer one is gone. Saves are
+ * therefore strictly sequential, and a request arriving mid-flight waits.
+ */
+let saveInFlight: Promise<void> | null = null;
+
 async function saveSnapshotNow(): Promise<void> {
+  if (saveInFlight) {
+    // Chain rather than skip: the in-flight save serialized an older frame, so
+    // returning here would report a newer edit as saved when it was never sent.
+    await saveInFlight.catch(() => {});
+  }
   const snap = layoutStore.getSnapshot();
   if (!snap.hydrated || !snap.workspaceId || snap.revision === lastSavedRevision) return;
-  lastSavedRevision = snap.revision;
-  await saveWorkspace(snap.workspaceId, { layout: serialize(snap.frame) });
+  const revision = snap.revision;
+  const run = saveWorkspace(snap.workspaceId, { layout: serialize(snap.frame) }).then(() => {
+    // Marked saved only once the backend has it. This used to be set *before* the
+    // await, so a PUT that failed — the backend restarting under `--reload`, a
+    // dropped connection — left the revision marked saved and no retry was ever
+    // attempted: the edit was silently gone on the next reload. The window stayed
+    // on screen, which is what made it look like the refresh had discarded it.
+    lastSavedRevision = revision;
+  });
+  saveInFlight = run.then(
+    () => {},
+    () => {},
+  );
+  try {
+    await run;
+  } catch (err) {
+    // Reschedule rather than swallow. The frame is a full snapshot, so one later
+    // successful save carries every edit since the last one — the retry does not
+    // need to remember what failed, only that something is still unsaved.
+    scheduleSave();
+    throw err;
+  } finally {
+    saveInFlight = null;
+  }
+}
+
+/** Arm the debounced autosave. Shared by the store subscription and the retry. */
+function scheduleSave(): void {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    void saveSnapshotNow().catch(() => {
+      /* already rescheduled above; nothing here can do better than try again */
+    });
+  }, AUTOSAVE_MS);
 }
 
 /**
@@ -200,11 +248,40 @@ export function bindAutosave(): void {
   layoutStore.subscribe(() => {
     const snap = layoutStore.getSnapshot();
     if (!snap.hydrated || snap.revision === lastSavedRevision) return;
-    if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
-      saveTimer = null;
-      void saveSnapshotNow();
-    }, AUTOSAVE_MS);
+    scheduleSave();
+  });
+  bindUnloadFlush();
+}
+
+/**
+ * Save the pending edit when the page goes away.
+ *
+ * Without this the 600ms debounce is a window in which every edit is lost: open a
+ * window and hit refresh, and the layout that comes back is the one from before —
+ * which reads as "refreshing reset my desktop", because the pane really was open
+ * a moment ago.
+ *
+ * `pagehide` rather than `beforeunload`: it fires on mobile and on tab discard,
+ * where `beforeunload` does not, and it is the event that is actually guaranteed
+ * before a page is thrown away. `visibilitychange` to hidden covers the tab being
+ * backgrounded and never coming back.
+ *
+ * The request is `keepalive` (see `saveWorkspaceOnUnload`), because a page being
+ * unloaded is not allowed to await anything: a normal `fetch` started here is
+ * cancelled with the document. It cannot report failure, so the debounced save
+ * stays the primary path — this is the backstop for the edit not yet written.
+ */
+function bindUnloadFlush(): void {
+  if (typeof window === 'undefined') return;
+  const flushBeacon = (): void => {
+    const snap = layoutStore.getSnapshot();
+    if (!snap.hydrated || !snap.workspaceId || snap.revision === lastSavedRevision) return;
+    if (saveWorkspaceOnUnload(snap.workspaceId, serialize(snap.frame)))
+      lastSavedRevision = snap.revision;
+  };
+  window.addEventListener('pagehide', flushBeacon);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushBeacon();
   });
 }
 
@@ -228,10 +305,43 @@ function resolveBootWorkspace(workspaces: WorkspaceModel[]): string | null {
   return null;
 }
 
+/**
+ * Read the workspace list, retrying a failure before giving up.
+ *
+ * Boot is the one moment this call is *expected* to fail: the Tauri shell spawns
+ * the backend and loads the UI concurrently, `pnpm dev` restarts the backend on
+ * every save, and either way the first request can land on a port that is not
+ * serving yet. A single attempt turns a half-second startup race into an empty
+ * desktop with the user's real layout still sitting on disk — which is precisely
+ * what "refreshing reset all my windows" looks like from the outside.
+ *
+ * Retries only the *read*. There is nothing to lose by asking again, and the
+ * alternative — presenting an empty desktop — is the outcome worth avoiding.
+ */
+async function getWorkspacesWithRetry(attempts = 4): Promise<WorkspacesState> {
+  let lastError: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await getWorkspaces();
+    } catch (err) {
+      lastError = err;
+      // 250ms, 500ms, 1s — about two seconds in total, which covers a backend
+      // reload without making a genuinely absent backend feel hung.
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 250 * 2 ** i));
+    }
+  }
+  throw lastError;
+}
+
 /** Boot: fetch workspaces (seeding the default preset on an empty slate) and
- * load the active one into the store. */
+ * load the active one into the store.
+ *
+ * Rejects if the layout could not be read. The caller must **not** treat that as
+ * a loaded-but-empty desktop: the store stays un-hydrated on purpose, which keeps
+ * autosave switched off so a blank screen can never be written over the layout
+ * that is still safely on disk. */
 export async function hydrate(): Promise<void> {
-  let state = await getWorkspaces();
+  let state = await getWorkspacesWithRetry();
   // The empty floating `desktop`, not `dashboard`: a first launch should land on
   // a bare desktop the way logging into a machine does, not on a pre-arranged
   // nine-pane workspace. Only the *empty slate* is affected — an install that

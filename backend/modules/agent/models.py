@@ -35,6 +35,14 @@ class DetectedProvider(BaseModel):
     can_pull: bool
     can_spawn: bool
     install_url: str
+    #: A hosted API reached with a key rather than a server on this machine. The UI
+    #: branches on this to offer a key field instead of an "install it" link.
+    hosted: bool = False
+    #: Whether a key is stored (or exported in the environment) for this provider.
+    #: Never the key itself — this response goes to the browser.
+    has_api_key: bool = False
+    #: Where to create a key, for the link in the API-keys settings section.
+    api_key_url: str = ""
 
 
 class AgentStatus(BaseModel):

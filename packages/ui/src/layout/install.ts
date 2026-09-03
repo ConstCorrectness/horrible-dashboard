@@ -213,11 +213,49 @@ export function installFrameShell(): void {
       })),
     ],
   });
-  void framePersistence.hydrate().finally(() => {
-    hydrated = true;
-    const queued = pending.splice(0);
-    for (const run of queued) run();
-  });
+  void framePersistence
+    .hydrate()
+    .catch((err: unknown) => {
+      // A boot that could not read the layout must not look like a boot that read
+      // an empty one. `hydrate` already retried; reaching here means the backend is
+      // genuinely not answering, and the user's desktop is still safely on disk.
+      //
+      // The store stays un-hydrated, so autosave is off and nothing can overwrite
+      // that layout with the blank frame on screen — but the screen is blank, and
+      // saying nothing makes a refresh look like it discarded every window. So say
+      // it, and offer the only action that helps.
+      console.error('Could not load your desktop layout', err);
+      reportLayoutLoadFailure(err);
+    })
+    .finally(() => {
+      hydrated = true;
+      const queued = pending.splice(0);
+      for (const run of queued) run();
+    });
+}
+
+/**
+ * Surface a failed layout load. Kept as a plain DOM banner rather than a React
+ * toast because it has to work when the shell may not have mounted, and its only
+ * job is to make an empty desktop legible plus offer a reload.
+ */
+function reportLayoutLoadFailure(err: unknown): void {
+  if (typeof document === 'undefined' || document.getElementById('layout-load-error')) return;
+  const bar = document.createElement('div');
+  bar.id = 'layout-load-error';
+  bar.className = 'layout-load-error';
+  bar.setAttribute('role', 'alert');
+  const text = document.createElement('span');
+  text.textContent =
+    'Could not load your desktop — the backend did not answer. Your windows are saved; nothing has been lost.';
+  const retry = document.createElement('button');
+  retry.type = 'button';
+  retry.textContent = 'Retry';
+  retry.onclick = () => window.location.reload();
+  const detail = document.createElement('code');
+  detail.textContent = err instanceof Error ? err.message : String(err);
+  bar.append(text, detail, retry);
+  document.body.appendChild(bar);
 }
 
 /**

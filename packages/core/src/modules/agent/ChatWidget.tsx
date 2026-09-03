@@ -11,7 +11,7 @@
  * edits surface as an accept/decline diff in the editor — not here.
  * See docs/modules/agent-chat.md.
  */
-import { Fragment, useEffect, useRef, useState, type FormEvent } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 
 import { Avatar3D, DEFAULT_AVATAR_MOOD, DEFAULT_AVATAR_MOODS } from '../../Avatar3D';
 import { dialogs } from '../../dialogs';
@@ -20,6 +20,7 @@ import { useSetting } from '../../settings';
 import { AgentReadiness } from './AgentReadiness';
 import { getAgentRoster, getAgentStatus, type AgentStatus, type RosterAgent } from './api';
 import { compactHistory, MAX_HISTORY_TURNS } from './history';
+import { ModelPicker } from './ModelPicker';
 import { askAgent } from './orchestrator-client';
 import {
   createSession,
@@ -158,6 +159,9 @@ export function ChatWidget() {
   // It follows the *workspace*: a preset declares the persona its layout is for
   // (`FramePreset.agent`), so switching to Data Entry or Data Ops switches who answers.
   const [roster, setRoster] = useState<RosterAgent[]>([]);
+  // Whether this agent's conversations could be read. 'failed' is distinct from
+  // "no conversations yet" on purpose — see `loadSessions`.
+  const [restore, setRestore] = useState<'loading' | 'ok' | 'failed'>('loading');
   const { activeId: workspaceId } = useWorkspaces();
   const [agentId, setAgentId] = useState(() => agentForWorkspace(workspaceId));
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -222,30 +226,57 @@ export function ChatWidget() {
     setAgentId(id);
   };
 
-  // Restore the selected agent's active session (on mount, after a pane remount,
-  // and whenever the user switches agents — each agent has its own sessions).
+  /**
+   * Load the selected agent's conversations and restore its active one.
+   *
+   * The failure path is the whole point. This used to swallow the error and leave
+   * the pane showing an empty transcript, which is indistinguishable from "your
+   * conversation was deleted" — and it was worse than cosmetic: with no `activeId`,
+   * the next message `ensureSession` sent created a *second* session, so the real
+   * history was orphaned rather than merely hidden. `restore` records the
+   * difference so the pane can say which one happened and refuse to fork.
+   */
+  const loadSessions = useCallback(async (): Promise<boolean> => {
+    setRestore('loading');
+    try {
+      const list = await getSessions(agentIdRef.current);
+      setSessions(list.sessions);
+      if (!list.active) {
+        setActiveId(null);
+        setTurns([]);
+      } else {
+        setActiveId(list.active);
+        setTurns(toTurns((await getSession(list.active)).messages));
+      }
+      setRestore('ok');
+      return true;
+    } catch {
+      // Deliberately leaves `sessions`/`turns` untouched: whatever was on screen is
+      // closer to the truth than a blank pane.
+      setRestore('failed');
+      return false;
+    }
+  }, []);
+
+  // Restore on mount, after a pane remount, and whenever the user switches agents
+  // — each agent has its own sessions.
   useEffect(() => {
     let cancelled = false;
-    void getSessions(agentId)
-      .then(async (list) => {
-        if (cancelled) return;
-        setSessions(list.sessions);
-        if (!list.active) {
-          setActiveId(null);
-          setTurns([]);
-          return;
-        }
-        setActiveId(list.active);
-        const session = await getSession(list.active);
-        if (!cancelled) setTurns(toTurns(session.messages));
-      })
-      .catch(() => {
-        /* backend down — start fresh; persistence resumes when it returns */
-      });
+    void (async () => {
+      const ok = await loadSessions();
+      // One retry: boot races the backend (the Tauri shell spawns it alongside the
+      // UI, `pnpm dev` restarts it on every save), and a pane that gives up on the
+      // first refused connection shows an empty chat for a backend that is fine a
+      // second later.
+      if (!ok && !cancelled) {
+        await new Promise((r) => setTimeout(r, 700));
+        if (!cancelled) await loadSessions();
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, [agentId]);
+  }, [agentId, loadSessions]);
 
   useEffect(() => {
     if (!animateAvatar) return;
@@ -341,6 +372,14 @@ export function ChatWidget() {
   // Lazily create a session on the first real message, titled from the prompt.
   const ensureSession = async (firstPrompt: string): Promise<void> => {
     if (activeIdRef.current) return;
+    // A null `activeId` means "no conversation yet" only when the list was actually
+    // read. If the read failed, creating one here would fork the history: the real
+    // session is still on the node, and this turn would start a second one beside
+    // it. Try the read once more and adopt what it finds first.
+    if (restore === 'failed') {
+      await loadSessions();
+      if (activeIdRef.current) return;
+    }
     try {
       const session = await createSession(firstPrompt.slice(0, 40), agentIdRef.current);
       setActiveId(session.id);
@@ -580,6 +619,11 @@ export function ChatWidget() {
             destructive one fired immediately. Now they are drawn glyphs with
             accessible names, and deleting names the conversation it is about to
             destroy — there is no undo behind it. */}
+        <ModelPicker
+          agentId={agentId}
+          status={typeof status === 'object' ? status : null}
+          disabled={busy}
+        />
         <button
           type="button"
           title="New chat"
@@ -599,6 +643,17 @@ export function ChatWidget() {
           <IconTrash />
         </button>
       </div>
+      {restore === 'failed' && (
+        <div className="agent-restore-failed" role="alert">
+          <span>
+            Couldn’t load your conversations — the backend didn’t answer. They’re still saved on
+            this node.
+          </span>
+          <button type="button" onClick={() => void loadSessions()}>
+            Retry
+          </button>
+        </div>
+      )}
       {animateAvatar && (
         <div className="agent-chat-avatar">
           <Avatar3D size={120} mood={mood} />

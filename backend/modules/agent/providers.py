@@ -16,6 +16,8 @@ provider-agnostic. See docs/modules/agent-chat.md.
 from __future__ import annotations
 
 import json
+import os
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -33,11 +35,39 @@ from backend.modules.telemetry.instrument import tee_stream
 class ProviderInfo:
     kind: str  # stable id stored in AgentConfig
     label: str  # human label for the UI
-    dialect: str  # "ollama" | "openai"
+    dialect: str  # "ollama" | "openai" | "litellm"
     default_endpoint: str
     install_url: str
     can_pull: bool  # supports `/api/pull`-style model download
     can_spawn: bool  # the backend can launch a server process for it
+
+    # --- hosted (`litellm`) providers only -------------------------------------
+    #: This provider is a hosted API reached over the internet with a key, not a
+    #: server on this machine. Its readiness is "do we hold a key", not "is a port
+    #: open", which is why `list_models` raises `MissingApiKey` without one instead
+    #: of reporting a provider the user cannot actually use as reachable.
+    hosted: bool = False
+    #: Where a human goes to create the key. Rendered as the link in the API-keys
+    #: settings section; empty means we have nowhere to point them.
+    api_key_url: str = ""
+    #: Environment variable litellm itself honours for this provider. Checked as a
+    #: fallback so a key already exported in the shell counts as configured — the
+    #: stored secret is not the only way a key can be present, and reporting
+    #: "no key" for a provider that works would be a lie the user cannot debug.
+    env_var: str = ""
+    #: Prefix litellm needs on the model id to route to this provider. OpenAI and
+    #: Anthropic model ids are unambiguous and take none; Google AI Studio and
+    #: OpenRouter both need one, and a bare id there is routed to the wrong vendor
+    #: (or to nothing) with no error we could attribute.
+    model_prefix: str = ""
+    #: Public catalog listing the provider's models, used to fill the model
+    #: dropdown. OpenRouter serves one without authentication; the others do not,
+    #: so they fall back to `static_models`.
+    catalog_url: str = ""
+    #: Last-resort model list when there is no catalog to fetch. Deliberately short
+    #: — the field is a starting point for a dropdown, never a claim to be the
+    #: provider's full range, and the model field stays free-text everywhere.
+    static_models: tuple[str, ...] = ()
 
 
 PROVIDERS: dict[str, ProviderInfo] = {
@@ -111,6 +141,10 @@ PROVIDERS: dict[str, ProviderInfo] = {
         install_url="",
         can_pull=False,
         can_spawn=False,
+        hosted=True,
+        api_key_url="https://platform.openai.com/api-keys",
+        env_var="OPENAI_API_KEY",
+        static_models=("gpt-4o", "gpt-4o-mini", "o1-preview", "o1-mini"),
     ),
     "anthropic": ProviderInfo(
         kind="anthropic",
@@ -120,6 +154,10 @@ PROVIDERS: dict[str, ProviderInfo] = {
         install_url="",
         can_pull=False,
         can_spawn=False,
+        hosted=True,
+        api_key_url="https://console.anthropic.com/settings/keys",
+        env_var="ANTHROPIC_API_KEY",
+        static_models=("claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"),
     ),
     "gemini": ProviderInfo(
         kind="gemini",
@@ -129,6 +167,34 @@ PROVIDERS: dict[str, ProviderInfo] = {
         install_url="",
         can_pull=False,
         can_spawn=False,
+        hosted=True,
+        api_key_url="https://aistudio.google.com/app/apikey",
+        env_var="GEMINI_API_KEY",
+        # Google AI Studio ids collide with Vertex's, so litellm routes on this
+        # prefix; without it `gemini-2.5-pro` is not a model litellm can place.
+        model_prefix="gemini/",
+        static_models=("gemini-2.5-pro", "gemini-2.5-flash", "gemini-1.5-pro"),
+    ),
+    "openrouter": ProviderInfo(
+        kind="openrouter",
+        label="OpenRouter",
+        dialect="litellm",
+        default_endpoint="",
+        install_url="",
+        can_pull=False,
+        can_spawn=False,
+        hosted=True,
+        api_key_url="https://openrouter.ai/keys",
+        env_var="OPENROUTER_API_KEY",
+        model_prefix="openrouter/",
+        # The one provider whose catalog is public: the model list is fetched live
+        # rather than pinned here, because OpenRouter's range (and which entries
+        # are `:free`) changes weekly and a hardcoded list would be wrong within
+        # the month.
+        catalog_url="https://openrouter.ai/api/v1/models",
+        # Only a fallback for a catalog fetch that times out — never the range on
+        # offer. `:free` entries are rate-limited rather than unlimited.
+        static_models=("minimax/minimax-m3:free", "minimax/minimax-m3"),
     ),
 }
 
@@ -138,6 +204,56 @@ DEFAULT_PROVIDER = "ollama"
 def provider_for(kind: str | None) -> ProviderInfo:
     """The provider for a kind, falling back to the default for unknown/None."""
     return PROVIDERS.get(kind or DEFAULT_PROVIDER, PROVIDERS[DEFAULT_PROVIDER])
+
+
+class MissingApiKey(httpx.HTTPError):
+    """A hosted provider was asked for something and we hold no key for it.
+
+    Deliberately an `httpx.HTTPError`: a hosted provider's *readiness* is whether we
+    can call it, and the probe in `backend/modules/agent/routes.py` already treats
+    that error as "not reachable". Before this existed, a keyless OpenAI reported
+    itself reachable with a list of models, so onboarding happily offered a provider
+    that failed on the first turn.
+    """
+
+
+def api_key_for(info: ProviderInfo) -> str | None:
+    """The API key for a hosted provider: the stored secret first, then the
+    environment variable litellm would have read anyway.
+
+    The env fallback is not redundant. litellm picks the variable up on its own, so
+    without checking it here a key that *works* would still be reported as missing —
+    and the user would be told to fix something that isn't broken.
+    """
+    if not info.hosted:
+        return None
+    from backend.modules.database.secrets_store import get_secret_or_none
+
+    stored = (get_secret_or_none(info.kind) or "").strip()
+    if stored:
+        return stored
+    if info.env_var:
+        return os.environ.get(info.env_var, "").strip() or None
+    return None
+
+
+def qualify_model(info: ProviderInfo, model: str) -> str:
+    """The model id as litellm needs to see it — prefixed for the providers whose
+    ids are ambiguous, and left alone when the caller already prefixed it."""
+    prefix = info.model_prefix
+    if not prefix or not model or model.startswith(prefix):
+        return model
+    return prefix + model
+
+
+def litellm_call_kwargs(info: ProviderInfo) -> dict[str, Any]:
+    """The auth kwargs for a litellm call. Raises when a hosted provider has no key,
+    so the failure names the missing credential instead of surfacing as whatever the
+    vendor returns for an unauthenticated request."""
+    key = api_key_for(info)
+    if not key:
+        raise MissingApiKey(f"No API key configured for {info.label}")
+    return {"api_key": key}
 
 
 @dataclass(frozen=True)
@@ -275,21 +391,72 @@ def normalize_system_messages(
     return merged + rest
 
 
+#: Catalogs are fetched on every `/agent/status`, which the home page and the
+#: settings page both hit. A vendor's model range does not change by the minute, so
+#: a short TTL keeps a settings page from re-downloading a few hundred KB per visit.
+_CATALOG_TTL = 600.0
+_CATALOG_CACHE: dict[str, tuple[float, list[str]]] = {}
+
+
+async def _catalog_models(client: httpx.AsyncClient, info: ProviderInfo) -> list[str]:
+    """Model ids from a hosted provider's public catalog, cheapest/most useful
+    ordering left exactly as the provider returned it.
+
+    Ids are returned **unprefixed** (`minimax/minimax-m2:free`, not
+    `openrouter/minimax/minimax-m2:free`) because that is the id the provider's own
+    docs and dashboard use, and it is what a user pastes in. `qualify_model` adds
+    the routing prefix at the call, so the two never have to agree by hand.
+
+    A catalog that fails to load falls back to `static_models` rather than raising:
+    the key is what decides usability, and an empty dropdown for a provider that
+    works is a worse failure than a short one. The model field is free text
+    everywhere, so a missing entry is never a dead end.
+    """
+    cached = _CATALOG_CACHE.get(info.kind)
+    if cached and time.monotonic() - cached[0] < _CATALOG_TTL:
+        return list(cached[1])
+    try:
+        # An explicit timeout, because the caller's client is the *probe* client and
+        # its 2s budget is sized for a loopback port. This is a few hundred KB from
+        # the other side of the internet, and timing out here does not read as a
+        # slow network — it reads as a provider with two models.
+        res = await client.get(info.catalog_url, timeout=10)
+        res.raise_for_status()
+        data = res.json().get("data") or []
+    except (httpx.HTTPError, ValueError):
+        return list(info.static_models)
+
+    # Tool-capable models first. The orchestrator is a tool-calling loop, so a
+    # model without tool support does not merely do worse there — it never calls a
+    # tool at all, which reads as "the agent ignored me" rather than as a model
+    # that cannot do this. Ordering rather than filtering, because the same list
+    # feeds plain chat, where those models are perfectly good.
+    tools_first: list[str] = []
+    rest: list[str] = []
+    for m in data:
+        if not isinstance(m, dict) or not m.get("id"):
+            continue
+        params = m.get("supported_parameters") or []
+        (tools_first if "tools" in params else rest).append(str(m["id"]))
+    models = tools_first + rest
+    _CATALOG_CACHE[info.kind] = (time.monotonic(), models)
+    return models
+
+
 async def list_models(
     client: httpx.AsyncClient, info: ProviderInfo, endpoint: str
 ) -> list[str]:
     """Reachability probe doubling as a model list. Raises httpx.HTTPError when
     the provider is down."""
     if info.dialect == "litellm":
-        # Cannot easily list models dynamically for external providers via litellm without keys.
-        # Fallback to returning a static list or empty list if they have to type it manually.
-        if info.kind == "openai":
-            return ["gpt-4o", "gpt-4o-mini", "o1-preview", "o1-mini"]
-        if info.kind == "anthropic":
-            return ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"]
-        if info.kind == "gemini":
-            return ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.5-pro"]
-        return []
+        # A hosted provider is "reachable" when we hold a key for it, not when a
+        # port answers. Raising here is what keeps a keyless provider out of the
+        # onboarding picker's reachable set.
+        if info.hosted and not api_key_for(info):
+            raise MissingApiKey(f"No API key configured for {info.label}")
+        if info.catalog_url:
+            return await _catalog_models(client, info)
+        return list(info.static_models)
 
     if info.dialect == "ollama":
         res = await client.get(f"{endpoint}/api/tags")
@@ -311,18 +478,11 @@ async def chat(
     """One non-streaming tool-calling round, normalized to a `ChatResult`."""
     messages = normalize_system_messages(messages)
     if info.dialect == "litellm":
-        from backend.modules.database.secrets_store import get_secret_or_none
-
-        key = get_secret_or_none(info.kind)
-
-        # litellm expects keys in environment variables usually, or passed directly
-        # depending on the provider.
-        api_key_kwargs = {}
-        if key:
-            api_key_kwargs["api_key"] = key
-
         response = await litellm.acompletion(
-            model=model, messages=messages, tools=tools or None, **api_key_kwargs
+            model=qualify_model(info, model),
+            messages=messages,
+            tools=tools or None,
+            **litellm_call_kwargs(info),
         )
         msg = response.choices[0].message
         msg_dict = msg.model_dump()
@@ -726,17 +886,14 @@ async def _litellm_chat_stream(
     if tools:
         kwargs["tools"] = tools
 
-    from backend.modules.database.secrets_store import get_secret_or_none
-
-    key = get_secret_or_none(provider_kind)
-    if key:
-        kwargs["api_key"] = key
+    info = provider_for(provider_kind)
+    kwargs.update(litellm_call_kwargs(info))
 
     extractor = ThinkingExtractor(on_delta)
     tool_acc: dict[int, dict[str, Any]] = {}
 
     response = await litellm.acompletion(
-        model=model, messages=messages, stream=True, **kwargs
+        model=qualify_model(info, model), messages=messages, stream=True, **kwargs
     )
 
     async for chunk in response:
@@ -823,19 +980,12 @@ async def generate(
     messages.append({"role": "user", "content": prompt})
 
     if info.dialect == "litellm":
-        from backend.modules.database.secrets_store import get_secret_or_none
-
-        key = get_secret_or_none(info.kind)
-        api_key_kwargs = {}
-        if key:
-            api_key_kwargs["api_key"] = key
-
         response = await litellm.acompletion(
-            model=model,
+            model=qualify_model(info, model),
             messages=messages,
             max_tokens=max_tokens,
             temperature=temperature,
-            **api_key_kwargs,
+            **litellm_call_kwargs(info),
         )
         return response.choices[0].message.content or ""
 
@@ -877,18 +1027,11 @@ async def generate_stream(
     normalizing Ollama's ``/api/generate`` and the OpenAI ``/v1/chat/completions``
     SSE stream into the one shape the frontend already understands."""
     if info.dialect == "litellm":
-        from backend.modules.database.secrets_store import get_secret_or_none
-
-        key = get_secret_or_none(info.kind)
-        api_key_kwargs = {}
-        if key:
-            api_key_kwargs["api_key"] = key
-
         response = await litellm.acompletion(
-            model=model,
+            model=qualify_model(info, model),
             messages=[{"role": "user", "content": prompt}],
             stream=True,
-            **api_key_kwargs,
+            **litellm_call_kwargs(info),
         )
         async for chunk in response:
             token = chunk.choices[0].delta.content or ""

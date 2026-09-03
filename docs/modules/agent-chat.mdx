@@ -57,13 +57,13 @@ what it found, what it looked for and failed to find, and what it could not ask.
 `AgentReadiness` (`modules/agent/AgentReadiness.tsx`) maps the status to one
 banner above the input:
 
-| State                       | Says                       | Offers                        |
-| --------------------------- | -------------------------- | ----------------------------- |
-| unresolved                  | Checking the agent         | nothing — it is not a verdict |
-| backend unreachable         | Backend not answering      | Retry                         |
-| `configured: false`         | No model selected          | Choose a model → Settings     |
-| `reachable: false`          | Can't reach `<provider>`   | Retry · Change provider       |
-| ready                       | nothing                    | —                             |
+| State               | Says                     | Offers                        |
+| ------------------- | ------------------------ | ----------------------------- |
+| unresolved          | Checking the agent       | nothing — it is not a verdict |
+| backend unreachable | Backend not answering    | Retry                         |
+| `configured: false` | No model selected        | Choose a model → Settings     |
+| `reachable: false`  | Can't reach `<provider>` | Retry · Change provider       |
+| ready               | nothing                  | —                             |
 
 The endpoint appears only in the `reachable: false` case, as telemetry in mono:
 nothing was tried yet when no model is configured, so naming an endpoint there
@@ -94,6 +94,28 @@ the session, `?agent=` on the list endpoint), so each agent keeps its own
 conversations and active pointer. See
 [Specialized agents & delegation](#specialized-agents--delegation).
 Frontend client: `packages/core/src/modules/agent/sessions.ts`.
+
+**A failed read is never rendered as an empty transcript.** `loadSessions` records
+`loading` / `ok` / `failed` rather than catching into a blank pane, because empty is
+indistinguishable from deleted — and it was worse than cosmetic: with no `activeId`,
+the next message `ensureSession` sent created a _second_ session, orphaning the real
+history rather than merely hiding it. So `ensureSession` re-reads before creating
+anything when the last read failed, the restore retries once on its own (boot races
+the backend), and the pane shows what happened with a Retry instead of a chat that
+looks wiped.
+
+A **model picker** (`ModelPicker`) sits in the same bar, listing every reachable
+provider's models as `<optgroup>`s — so a hosted provider appears there the moment a
+key is saved, and switching models does not mean leaving the conversation for the
+settings page. It writes the _provider and the model together_: they are two settings
+(`agent.<id>.provider`, `agent.<id>.model`), and the settings page edits them as two
+controls, but here one option carries both, because a model name means nothing on a
+server that does not have it — `minimax/minimax-m3:free` selected while the provider
+still says Ollama is not half-configured, it is broken, and it fails mid-turn rather
+than at the click. The blank choice clears both back to the configured model. A saved
+override the live list does not contain (a provider that went down, an id typed on the
+settings page) stays selectable, so the control never silently renders as something
+other than what will run.
 
 ## Slash commands
 
@@ -178,10 +200,10 @@ same flow visually.
 2. **Ask.** The chat widget (or home ask bar) calls `askAgent(prompt, cb, history)`.
    `askAgent` attaches the user's **focused-pane snapshot** (`readActiveAgentContext`
    — currently the active editor buffer) and sends `ask {turnId, prompt, history,
-   context}` on the `agent` channel.
+context}` on the `agent` channel.
 3. **Turn setup (backend).** `handle_agent_message` routes the `ask` to a **detached**
    `run_agent_turn` task — it must run detached (`asyncio.create_task`) because it
-   awaits `tool_result`s that arrive on the *same* receive loop; awaiting inline would
+   awaits `tool_result`s that arrive on the _same_ receive loop; awaiting inline would
    deadlock. The task assembles the messages (`SYSTEM_PROMPT` + sanitized `history` +
    the focused-buffer system message from `_active_editor_message` + the user prompt),
    resolves the tool list (`_tools_for`), the model (`_orchestrator_model` — the
@@ -204,7 +226,7 @@ same flow visually.
    can react to it.
 6. **Completion.** When a round returns no tool calls, the backend sends the
    authoritative `answer` then `done` (or `error` on an HTTP failure). If the model
-   *narrated* an action without emitting a call, the loop first grants **one** nudged
+   _narrated_ an action without emitting a call, the loop first grants **one** nudged
    retry — on **every** dialect, with `tool_choice:"required"` added where the provider
    supports it — before giving up and
    answering. The widget renders the reply plus the per-turn action log, and a completed
@@ -217,7 +239,7 @@ prompt, then the [skill catalog](./skills.mdx), then the guides for the groups t
 starts with. That split is deliberate — the
 [interpretability recorder](./interpretability.mdx) tells the blocks apart by position
 and content marker (`CATALOG_MARKER`) to attribute each one's per-turn token cost, and
-one glued string would make that impossible. The forced-tool nudge adds a *fourth*,
+one glued string would make that impossible. The forced-tool nudge adds a _fourth_,
 mid-conversation.
 
 Many models' Jinja chat templates reject both shapes:
@@ -237,7 +259,7 @@ call site passes through:
 
 It runs on every dialect, not just the strict ones: the flattened form is semantically
 identical, and branching would let a template's strictness decide whether the nudge was
-delivered at all. Because the recorder captures in the orchestrator, *before* the
+delivered at all. Because the recorder captures in the orchestrator, _before_ the
 provider call, it still sees the unflattened blocks.
 
 The tool-calling loop itself is factored into a reusable
@@ -259,7 +281,7 @@ reject it (400) and the round transparently retries without, still streaming con
 
 **Tool-calling reliability.** Turns decode **greedily** (`temperature` 0, via
 `chat_stream`'s new `temperature` arg → Ollama `options` / OpenAI payload) — at
-higher temperatures small local models *narrate* an action ("I'll call …") instead
+higher temperatures small local models _narrate_ an action ("I'll call …") instead
 of emitting the structured call. The temperature is overridable through the settings
 store (`agent.orchestrator.temperature`). Other model hyperparameters can be overridden
 using setting keys `agent.orchestrator.contextSize` (context window limit, maps to Ollama's
@@ -281,7 +303,7 @@ meant the call **ran with no arguments at all** (`close_pane` with no instanceId
 `files.delete` with no path) and the model saw a plain failure with no hint its JSON
 was to blame. It now returns an error alongside the args, carried on
 `ToolCall.arg_error`, and `_dispatch_call` refuses the call — nothing is relayed to
-the browser — returning a message the model can actually act on. An *empty* payload
+the browser — returning a message the model can actually act on. An _empty_ payload
 is still a valid no-arg call.
 
 **Unknown tool names get a suggestion.** A name the relay can't resolve comes back
@@ -295,7 +317,7 @@ orchestrator's model — leave it on the configured agent model to reuse it, so
 chat/autosuggest can stay on a smaller, faster model while the tool-calling loop runs
 a stronger one. All knobs live in the **Agent orchestrator** section of the Settings
 page (a custom section — `OrchestratorSettings` — because the model is a **dropdown of
-the provider's live models** from `/agent/status`, not a static enum); the blank
+the selected provider's live models** from `/agent/status`, not a static enum); the blank
 "Configured agent model" choice clears the override. These hyperparameters can also
 be inspected/configured directly in chat using the `/llm` slash command, or modified
 by the agent itself using the gated `agent.setHyperparameters` tool. The ghost-text
@@ -304,21 +326,21 @@ are stable, not creative.
 
 **Channel protocol** (`{channel:'agent', event, data:{turnId, …}}`):
 
-| Direction     | event               | data                                              |
-| ------------- | ------------------- | ------------------------------------------------- |
-| client→server | `manifest`          | `{tools: SerializedTool[]}`                       |
-| client→server | `ask`               | `{turnId, prompt, history?, context?, agentId?}`  |
-| server→client | `tool_call`         | `{turnId, callId, name, args}`                    |
-| client→server | `tool_result`       | `{turnId, callId, ok, result?, error?}`           |
-| server→client | `approval_request`  | `{turnId, approvalId, tool, specifier, mode}`     |
-| client→server | `approval_response` | `{approvalId, decision, rule?}`                   |
-| client→server | `list_tools`        | `{}` — request the live tool catalog              |
-| server→client | `tools`             | `{tools: [{name, description, source}]}`          |
-| server→client | `reasoning`         | `{turnId, agentId, delta}` — streamed thinking    |
-| server→client | `token`             | `{turnId, agentId, delta}` — streamed answer      |
-| server→client | `delegate_token`    | `{turnId, agentId, delta}` — sub-agent's stream   |
-| server→client | `answer`            | `{turnId, agentId, text}` — final, authoritative  |
-| server→client | `done` / `error`    | `{turnId, agentId, …}`                            |
+| Direction     | event               | data                                             |
+| ------------- | ------------------- | ------------------------------------------------ |
+| client→server | `manifest`          | `{tools: SerializedTool[]}`                      |
+| client→server | `ask`               | `{turnId, prompt, history?, context?, agentId?}` |
+| server→client | `tool_call`         | `{turnId, callId, name, args}`                   |
+| client→server | `tool_result`       | `{turnId, callId, ok, result?, error?}`          |
+| server→client | `approval_request`  | `{turnId, approvalId, tool, specifier, mode}`    |
+| client→server | `approval_response` | `{approvalId, decision, rule?}`                  |
+| client→server | `list_tools`        | `{}` — request the live tool catalog             |
+| server→client | `tools`             | `{tools: [{name, description, source}]}`         |
+| server→client | `reasoning`         | `{turnId, agentId, delta}` — streamed thinking   |
+| server→client | `token`             | `{turnId, agentId, delta}` — streamed answer     |
+| server→client | `delegate_token`    | `{turnId, agentId, delta}` — sub-agent's stream  |
+| server→client | `answer`            | `{turnId, agentId, text}` — final, authoritative |
+| server→client | `done` / `error`    | `{turnId, agentId, …}`                           |
 
 `agentId` selects (and tags) the **roster agent** driving the turn — omitted it
 means `main`, so pre-roster clients keep working. See
@@ -345,14 +367,14 @@ The orchestrator is one of several **roster agents** — fully separate loops, e
 with its own system prompt, tool-group scope, per-agent settings, and chat
 sessions. Built-ins (`backend/modules/agent/roster.py`):
 
-| id           | scope (`tool_groups`)                        | preloaded          | default mode  |
-| ------------ | -------------------------------------------- | ------------------ | ------------- |
-| `main`       | unrestricted (keyword preloading, delegate)  | by prompt keywords | session mode  |
-| `coder`      | files, editor, terminal, code, symbols       | editor, files, symbols | `acceptEdits` |
-| `dba`        | database, symbols                            | database           | session mode  |
+| id           | scope (`tool_groups`)                                              | preloaded                | default mode  |
+| ------------ | ------------------------------------------------------------------ | ------------------------ | ------------- |
+| `main`       | unrestricted (keyword preloading, delegate)                        | by prompt keywords       | session mode  |
+| `coder`      | files, editor, terminal, code, symbols                             | editor, files, symbols   | `acceptEdits` |
+| `dba`        | database, symbols                                                  | database                 | session mode  |
 | `researcher` | browser, search, library, github, google, research, arxiv, records | research, library, arxiv | session mode  |
-| `intake`     | records, browser, research, library           | records, research  | session mode  |
-| `trainer`    | training, evals, localtrack, editor, files    | training           | session mode  |
+| `intake`     | records, browser, research, library                                | records, research        | session mode  |
+| `trainer`    | training, evals, localtrack, editor, files                         | training                 | session mode  |
 
 Two of `researcher`'s groups are load-bearing for the workspaces it backs, and both
 were **dead buttons** before: Research and Web Ops dock the Review pane (`records` —
@@ -362,7 +384,7 @@ docked pane whose agent lacks the matching group is the failure mode to watch fo
 when adding a preset.
 
 `trainer` backs the [fine-tuning workspace](training.mdx#the-fine-tuning-workspace)
-and shows the *other* half of that trap. It scopes to `training`/`evals`/`localtrack`
+and shows the _other_ half of that trap. It scopes to `training`/`evals`/`localtrack`
 and pointedly **not** to `llamacpp` or `hardware`, even though the workspace docks a
 llama.cpp pane: a group is a tool name's prefix (`_group_of`), and those two
 namespaces hold settings keys rather than tools, so naming one would permit nothing
@@ -396,7 +418,7 @@ Mechanics (`run_agent_turn(agent_id=…)`):
 - **Per-agent provider** (`roster.resolve_provider`). `provider`/`endpoint` used to be
   global while `model` was per-agent, which made "run the coder on the node's
   [llama.cpp](./llamacpp.mdx) server and leave the orchestrator on Ollama"
-  unexpressible: a model *name* means nothing on a server that does not have that
+  unexpressible: a model _name_ means nothing on a server that does not have that
   model. An override naming an unknown provider is ignored rather than fatal, so a
   stale settings value cannot take the agent down. It must be resolved at **all three**
   `run_agent_loop` call sites — the orchestrator, `delegate.py`, and the flow
@@ -492,7 +514,7 @@ Peer-wire message types (on `/peer-ws`, not the `agent` channel):
 `agent_request` → `agent_result` (caller awaits the reply via `PeerHub.request`).
 
 **Focused-pane context.** Pane snapshots are normally read on demand (the model
-calls `get_pane_context` — pull, not push). As a convenience the frontend *also*
+calls `get_pane_context` — pull, not push). As a convenience the frontend _also_
 attaches the user's **focused pane** snapshot to every `ask` as `context`: the
 editor's `BufferView` marks its instance active on focus/load (and clears it on
 unmount) through core's `agent-context` ambient slot
@@ -508,7 +530,7 @@ This buffer rides on every turn too, and was long the **one context injection wi
 cap at all** — a single large file could dwarf everything else in a small model's
 window. `agent.activeBufferBudget` (24000 chars, `0` = unlimited) now clips it in the
 frontend. The clip sets a `truncated` flag, and honouring that flag is **safety-critical
-rather than cosmetic**: the normal message tells the model to write the *complete*
+rather than cosmetic**: the normal message tells the model to write the _complete_
 buffer back via `editor.proposeEdit`, so doing that from a clipped copy would silently
 delete everything past the cut. A truncated snapshot therefore flips the instruction —
 the model is told the code is cut off and must re-read the file before any whole-buffer
@@ -516,7 +538,7 @@ write. Pinned by
 `test_agent_orchestrator.py::test_truncated_buffer_forbids_writing_the_whole_file_back`.
 
 **Workspace context.** Alongside the focused pane, `askAgent` attaches
-`context.panes` — a snapshot of every *visible* pane that exposes one
+`context.panes` — a snapshot of every _visible_ pane that exposes one
 (`readVisibleAgentContexts`: each area's active tab, each visible dock's active
 tool, floating panes; background tabs are unmounted, so their state isn't readable
 anyway). The backend formats it as a compact index just before the user turn
@@ -526,7 +548,7 @@ and the intake agent which document is on screen, without spending a
 `list_open_panes` +
 `get_pane_context` round on it. It rides on **every** turn, so it is budgeted —
 `agent.workspaceContext` (on/off), `agent.workspaceContextPanes` (6) and
-`agent.workspaceContextBudget` (1500 chars per pane, clipping oversized *fields*
+`agent.workspaceContextBudget` (1500 chars per pane, clipping oversized _fields_
 rather than the whole object, so the JSON stays parseable and the note points the
 model at `get_pane_context` for the full read).
 
@@ -562,7 +584,7 @@ takes the model-friendly orientations **`vertical`** (areas side by side) and
 **`horizontal`** (stacked) as well as the four concrete sides
 (`left`/`right`/`above`/`below`), resolved in `tool-exec.ts`. `move_pane`'s `edge`
 takes the same vocabulary and is what lets a pane opened in the wrong place be moved
-*beside* another one — without it, `move_pane` could only tab into an existing area
+_beside_ another one — without it, `move_pane` could only tab into an existing area
 or step to an adjacent one, which is why the guide used to say "do not open then
 move". `edge` alone is a valid call: it means "split where this pane already is".
 
@@ -616,7 +638,7 @@ that forgot.
 **Loaded tool groups reset every turn.** `active_groups` was rebuilt from prompt
 keywords each turn, so the model spent a `load_tools` round to reach `files` in turn
 one, used it, and in turn two the tools were simply gone — a follow-up like "now
-delete it" arrived with nothing to delete it *with*. `_carried` / `_remember_groups`
+delete it" arrived with nothing to delete it _with_. `_carried` / `_remember_groups`
 keep them for the session, keyed on the socket (weakly, so a reload starts clean) and
 per `agent_id`. **Empty `history` resets the carry** — that is the widget saying "new
 chat", an exact signal needing no extra protocol. The carry is bounded to
@@ -627,37 +649,99 @@ can only re-activate a group `spec.tool_groups` already allows.
 
 ## Providers & HTTP endpoints
 
-The model is always a **local** server reached over HTTP — there is no cloud /
-hosted-API path anywhere in the agent. `backend/modules/agent/providers.py` is the
-source of truth; it collapses every provider onto one of two **dialects**:
+A provider is either a **local server** reached over HTTP on this machine, or a
+**hosted API** reached over the internet with a key. `backend/modules/agent/providers.py`
+is the source of truth; it collapses every one of them onto one of three **dialects**:
 
-| Provider   | Dialect  | Default endpoint         | Pull | Spawn |
-| ---------- | -------- | ------------------------ | ---- | ----- |
-| Ollama     | `ollama` | `http://localhost:11434` | yes  | no    |
-| LM Studio  | `openai` | `http://localhost:1234`  | no   | no    |
-| llama.cpp  | `openai` | `http://127.0.0.1:8080`  | no   | yes   |
-| vLLM       | `openai` | `http://localhost:8001`  | no   | yes   |
+| Provider      | Dialect   | Default endpoint         | Pull | Spawn | Key |
+| ------------- | --------- | ------------------------ | ---- | ----- | --- |
+| Ollama        | `ollama`  | `http://localhost:11434` | yes  | no    | —   |
+| LM Studio     | `openai`  | `http://localhost:1234`  | no   | no    | —   |
+| llama.cpp     | `openai`  | `http://127.0.0.1:8080`  | no   | yes   | —   |
+| vLLM          | `openai`  | `http://localhost:8001`  | no   | yes   | —   |
+| OpenAI        | `litellm` | —                        | no   | no    | yes |
+| Anthropic     | `litellm` | —                        | no   | no    | yes |
+| Google Gemini | `litellm` | —                        | no   | no    | yes |
+| OpenRouter    | `litellm` | —                        | no   | no    | yes |
 
 `llamacpp` is the node's **own** server — the backend downloads the `llama-server`
 binary, picks the GGUF and supervises the process, which is why it is the one
-provider whose model *path* is known rather than inferred. See
+provider whose model _path_ is known rather than inferred. See
 [llamacpp](./llamacpp.mdx). It is an `openai`-dialect entry rather than a new
 dialect on purpose: a bespoke one would have meant six new branches here and would
 have silently lost the `tool_choice="required"` retry, which is gated on
 `info.dialect == "openai"`.
 
-The dialect — **not** an online/offline switch — decides the wire format and the
-request paths. "OpenAI-compatible" refers to LM Studio's, llama.cpp's and vLLM's wire format;
-it does not mean any request leaves the machine. Everything runs offline against a
-localhost server.
+The dialect decides the wire format and the request paths — it is **not** the
+online/offline switch, `hosted` is. "OpenAI-compatible" refers to LM Studio's,
+llama.cpp's and vLLM's wire format; it does not mean any request leaves the machine.
+Everything on the `ollama` and `openai` dialects runs offline against a localhost
+server; only the `litellm` dialect calls out.
 
-| Operation                | `ollama` dialect                  | `openai` dialect                             | Used by                                  |
-| ------------------------ | --------------------------------- | -------------------------------------------- | ---------------------------------------- |
-| List models / probe      | `GET /api/tags`                   | `GET /v1/models`                             | `list_models` — `/agent/status`          |
-| Tool-calling round (streamed) | `POST /api/chat` (`stream:true`, `think`) | `POST /v1/chat/completions` (`stream:true`) | `chat_stream` — the orchestrator loop    |
-| One-shot streamed answer | `POST /api/generate`              | `POST /v1/chat/completions` (SSE)            | `generate_stream` — legacy `/agent/chat` |
-| Short fill-in completion | `POST /api/generate` (`stream:false`) | `POST /v1/chat/completions` (`stream:false`) | `generate` — `/agent/complete` (autosuggest) |
-| Pull a model             | `POST /api/pull`                  | — (unsupported)                              | `/agent/pull`                            |
+### Hosted providers and their API keys
+
+Four things make a hosted provider work, and each exists because the obvious
+alternative fails silently:
+
+- **The key is never a setting.** `GET /api/settings` hands the whole settings bag
+  to the browser and to every plugin, so a credential there is a credential given
+  away. Keys are Fernet-encrypted in `secrets.db` under the provider kind (the same
+  store [connectors](./connectors.mdx) use) and written through
+  `PUT /agent/providers/<kind>/key`, which returns only `has_api_key`. Nothing reads
+  a key back out, which is why the settings field is write-only: it shows a key as
+  _saved_, never as its value.
+- **A key already in the environment counts.** litellm reads `OPENAI_API_KEY`,
+  `OPENROUTER_API_KEY` and friends on its own, so `api_key_for` falls back to the
+  variable. Without that check a key that _works_ would be reported as missing, and
+  the user would be sent to fix something that isn't broken. `DELETE` says so too:
+  it can return `has_api_key: true`, because an exported variable is not ours to
+  delete.
+- **"Reachable" means "we hold a key".** `list_models` raises `MissingApiKey` (an
+  `httpx.HTTPError`, which is what the probe already catches) for a keyless hosted
+  provider. Before this, a keyless OpenAI reported itself reachable with a list of
+  models, so onboarding cheerfully offered a provider that failed on the first turn.
+- **The model id needs a routing prefix.** `qualify_model` adds `ProviderInfo.model_prefix`
+  — `openrouter/` for OpenRouter, `gemini/` for Google AI Studio, nothing for OpenAI
+  and Anthropic, whose ids are unambiguous. A bare `minimax/minimax-m3:free` is not a
+  model litellm can place, and a bare `gemini-2.5-pro` routes to the wrong vendor.
+  Applied at the call, so the id stored in settings stays the one the provider's own
+  dashboard shows.
+
+**OpenRouter's model list is fetched live** from its public catalog
+(`https://openrouter.ai/api/v1/models`, no key needed to read) rather than pinned in
+code: its range — and which entries are `:free` — changes weekly, so a hardcoded list
+would be wrong within the month. Ids come back **tool-capable first**, because a model
+without tool support does not merely do worse in the orchestrator loop, it never calls
+a tool at all — which reads as the agent ignoring you rather than as a model that
+cannot do this. The fetch is cached for 10 minutes and carries its own 10s timeout
+(the probe client's 2s budget is sized for a loopback port, not for a few hundred KB
+from across the internet), and a failed fetch falls back to `static_models` rather
+than raising: the key decides usability, and an empty dropdown for a working provider
+is the worse failure. The other three hosted providers have no public catalog, so
+they list `static_models` — a starting point for the dropdown, never a claim to be
+the provider's full range. Every model field in the UI stays free text.
+
+`orjson` is a hard dependency because litellm's OpenRouter transformation imports it;
+without it every OpenRouter call fails as an `APIConnectionError` naming a missing
+module, which reads as a network fault.
+
+Keys are entered in two places, both writing the same route: the **Model provider API
+keys** section of the Settings page (`ApiKeysSettings`), and inline in onboarding —
+where an unreachable hosted provider offers a key field in the same slot an
+unreachable local one offers "install and start it". A provider with a key then
+appears in the per-agent **provider override** dropdown like any local one, and the
+**model override** dropdown lists that provider's models (not the configured
+provider's — an agent pointed at OpenRouter used to be offered Ollama's model names,
+every one of which means nothing on that server, and the failure only showed up
+mid-turn).
+
+| Operation                     | `ollama` dialect                          | `openai` dialect                             | Used by                                      |
+| ----------------------------- | ----------------------------------------- | -------------------------------------------- | -------------------------------------------- |
+| List models / probe           | `GET /api/tags`                           | `GET /v1/models`                             | `list_models` — `/agent/status`              |
+| Tool-calling round (streamed) | `POST /api/chat` (`stream:true`, `think`) | `POST /v1/chat/completions` (`stream:true`)  | `chat_stream` — the orchestrator loop        |
+| One-shot streamed answer      | `POST /api/generate`                      | `POST /v1/chat/completions` (SSE)            | `generate_stream` — legacy `/agent/chat`     |
+| Short fill-in completion      | `POST /api/generate` (`stream:false`)     | `POST /v1/chat/completions` (`stream:false`) | `generate` — `/agent/complete` (autosuggest) |
+| Pull a model                  | `POST /api/pull`                          | — (unsupported)                              | `/agent/pull`                                |
 
 Ollama's default URL can be overridden with `HORRIBLE_OLLAMA_URL`; a backend-spawned
 vLLM advertises its own port, and so does a spawned `llama-server` — for that one
@@ -682,12 +766,12 @@ Tools belong to **groups** by name prefix (`files`, `editor`, `terminal`,
 `visualizer`, `database`, `records`, `network`, …; the dotless layout verbs are the
 `layout` group). Each turn the model sees only:
 
-* the **core** — the layout verbs (see below), the peer tools (`list_peers`,
+- the **core** — the layout verbs (see below), the peer tools (`list_peers`,
   `agent.ask_peer`), and two **meta-tools**: `list_tool_groups()` (discover groups
-  + counts) and `load_tools(groups[])` (enable a group); plus
-* `use_skill(name)`, but **only when a [skill](skills.mdx) is enabled** — a third
+  - counts) and `load_tools(groups[])` (enable a group); plus
+- `use_skill(name)`, but **only when a [skill](skills.mdx) is enabled** — a third
   meta-tool that is absent (costing nothing) on an install with no skills; plus
-* the tools of every **active** group.
+- the tools of every **active** group.
 
 Skills are the same idea one tier up, and they reuse this machinery rather than
 paralleling it: a one-line description per skill rides every turn (that is the
@@ -696,15 +780,15 @@ trigger), the instructions arrive only when `use_skill` asks, and a skill's
 instructions never name tools the model cannot see. See [Skills](skills.mdx).
 
 The **layout verbs split by cost**, because they were the largest always-on block
-and most agents never rearrange anything. The five *read* verbs
+and most agents never rearrange anything. The five _read_ verbs
 (`list_available_panes`, `list_workspaces`, `list_open_panes`, `get_layout`,
 `get_pane_context`) plus [`show`](../architecture/agent-tools.mdx#show-the-intent-verb)
 stay in every agent's core — any agent may need to see what the user is looking at, and
-`show` is how it puts something there. The sixteen *arrangement* verbs are loaded on
+`show` is how it puts something there. The sixteen _arrangement_ verbs are loaded on
 demand via `load_tools("layout")`.
 
 **Including for `main`.** They used to stay in `main`'s core on the reasoning that
-driving the shell is its job — but that made the *loosely prompted* agent the most
+driving the shell is its job — but that made the _loosely prompted_ agent the most
 starved one, carrying ~1,455 tokens of geometry schemas on turns that only wanted to
 read a file. `show` covers "open/go to X" in a single call, and the narrow `layout`
 keyword list preloads the arrangement verbs on the turns that genuinely rearrange
@@ -723,10 +807,10 @@ on most turns would give back exactly what the split saves.
 so a group loaded this round is **injected** into the next model call (true dynamic
 injection — nothing is ever dropped, just not-yet-loaded). `active_groups` is:
 
-* **seeded** by a keyword preload (`_preload_groups`): a prompt mentioning a file,
+- **seeded** by a keyword preload (`_preload_groups`): a prompt mentioning a file,
   shell command, etc. auto-activates that group so common asks stay single-round;
-* **grown** when the model calls `load_tools`; and
-* **grown forgivingly** — if the model calls a known tool from a group it never
+- **grown** when the model calls `load_tools`; and
+- **grown forgivingly** — if the model calls a known tool from a group it never
   loaded, `_dispatch_call` activates the group and runs the call anyway.
 
 A `TOOL_BUDGET = 38` cap remains only as a backstop (core is always kept first). The
@@ -734,7 +818,7 @@ A `TOOL_BUDGET = 38` cap remains only as a backstop (core is always kept first).
 by group, independent of what any single turn has loaded.
 
 :::caution Watch the core, not the cap
-The cap was 44 — deliberately *above* the ≤39 ceiling, so that a legitimate
+The cap was 44 — deliberately _above_ the ≤39 ceiling, so that a legitimate
 `training`+`notebook` turn would not be truncated. A backstop above the cliff protects
 nothing, though: it lets a turn through in exactly the state the cliff warns about.
 What actually keeps a turn safe is a small **always-on core**, and once the arrangement
@@ -749,16 +833,15 @@ exactly like a model that chose not to use one.
 The core has come down in two steps, both measured with the interpretability
 recorder's own counter:
 
-| | tools | always-on schema |
-| --- | --- | --- |
-| Originally | 34 | — |
-| After grouping `research.*`/`arxiv.*` (see the danger note in [agent-tools](../architecture/agent-tools.mdx#a-tools-group-is-its-name-prefix)) | 26 | — |
-| After moving the arrangement verbs out | **11** | **-68%** (15,299 → 4,867 chars) |
+|                                                                                                                                                | tools  | always-on schema                |
+| ---------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ------------------------------- |
+| Originally                                                                                                                                     | 34     | —                               |
+| After grouping `research.*`/`arxiv.*` (see the danger note in [agent-tools](../architecture/agent-tools.mdx#a-tools-group-is-its-name-prefix)) | 26     | —                               |
+| After moving the arrangement verbs out                                                                                                         | **11** | **-68%** (15,299 → 4,867 chars) |
 
 The system prompt halved alongside it (3,017 → 1,375 chars), because the geometry
 rules it used to carry moved into the `layout` group's guide.
 :::
-
 
 ## Contributions to the layout shell
 
