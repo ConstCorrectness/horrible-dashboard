@@ -42,7 +42,8 @@ export type GameAction =
   | 'nadeSmoke'
   | 'nadeMolotov'
   | 'throw'
-  | 'lob';
+  | 'lob'
+  | 'use';
 
 /** Two keys per action: the one you expect, and the one somebody else expects. */
 export type Bindings = Record<GameAction, string[]>;
@@ -101,6 +102,12 @@ export const ACTIONS: readonly ActionDoc[] = [
   { action: 'nadeSmoke', label: 'Select Smoke', group: 'Utility' },
   { action: 'nadeMolotov', label: 'Select Incendiary', group: 'Utility' },
   {
+    action: 'use',
+    label: 'Use / objective',
+    group: 'Utility',
+    note: 'Held, not tapped: plant, defuse, take a flag.',
+  },
+  {
     action: 'throw',
     label: 'Throw',
     group: 'Utility',
@@ -148,6 +155,9 @@ export const DEFAULT_CONTROLS: Bindings = {
   nadeMolotov: ['Digit9'],
   throw: ['KeyG'],
   lob: ['KeyH'],
+  // E, where every shooter puts the objective key and where the native client
+  // puts it too: one game, one set of keys.
+  use: ['KeyE'],
 };
 
 /**

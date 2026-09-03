@@ -324,6 +324,7 @@ class Defuse(GameMode):
     id = "defuse"
     name = "Bomb Defuse"
     score_label = "Rounds"
+    teams = True
 
     def __init__(self) -> None:
         self.state = RoundState()
@@ -546,7 +547,7 @@ class Defuse(GameMode):
             "name": self.name,
             "scoreLabel": self.score_label,
             "v": self.version,
-            "teams": True,
+            "teams": self.teams,
             "config": {
                 "roundsToWin": ROUNDS_TO_WIN,
                 "halfAt": HALF_AT,

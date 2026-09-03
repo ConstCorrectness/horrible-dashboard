@@ -90,6 +90,19 @@ export interface Command {
   nade?: number;
   /** Underhand — a short throw, for putting a smoke at your own feet. */
   lob?: boolean;
+  /**
+   * The action key: plant, defuse, take a flag.
+   *
+   * **One flag, not three.** All of those are "hold the action key where I am
+   * standing", and the server already knows what standing there means — three
+   * separate flags would be three ways to claim it meant a different one.
+   *
+   * Sent raw, with no local guess about whether it means anything here. Only the
+   * server knows whether we are the carrier, on a site, and in a live round, and
+   * a client filtering on its own copy of that would stop sending the key at
+   * exactly the moments its copy was a frame stale.
+   */
+  use?: boolean;
 }
 
 /** The combat half of a command, decided by `ShotController` rather than by keys. */
@@ -239,6 +252,8 @@ export interface SelfState {
    * saying so every tick would be a per-player id list that never changes.
    */
   spotted?: string[];
+  /** The mode's answer for us. Absent when the server has no mode. */
+  mode?: ModeSelf;
 }
 
 /** One item lying on the map. Sent once, with the welcome: placements never move. */
@@ -361,7 +376,148 @@ export interface PickupFx {
   what: string;
 }
 
-export type Fx = ShotFx | KillFx | SpawnFx | DetonateFx | PickupFx;
+/**
+ * Something happened to the objective.
+ *
+ * One shape for the whole family rather than a variant each, because what a
+ * client does with all of them is the same: say what happened, briefly, in one
+ * place. `team` is whose it is about and `by` is who did it — both optional,
+ * since "the flag returned itself" has neither.
+ */
+export interface ObjectiveFx {
+  kind:
+    | 'flag_take'
+    | 'flag_drop'
+    | 'flag_return'
+    | 'capture'
+    | 'bomb_planted'
+    | 'bomb_defused'
+    | 'bomb_exploded'
+    | 'round_start'
+    | 'round_live'
+    | 'round_end'
+    | 'eliminated'
+    | 'time_out'
+    | 'half'
+    | 'match_over';
+  team?: number;
+  by?: string;
+  /** A site id for a plant, a round number for a round start. */
+  detail?: string;
+}
+
+export type Fx = ShotFx | KillFx | SpawnFx | DetonateFx | PickupFx | ObjectiveFx;
+
+/** A bomb site or a flag stand, already resolved onto the floor server-side. */
+export interface ModeSite {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
+  radius: number;
+}
+
+export interface ModeFlag {
+  team: number;
+  /** `home` | `carried` | `dropped`. */
+  state?: string;
+  x: number;
+  y: number;
+  z: number;
+  /** Player id of the carrier, while carried. */
+  by?: string;
+  /** Seconds until a dropped flag takes itself home. */
+  returnIn?: number;
+}
+
+/**
+ * A mode's static configuration, from the welcome.
+ *
+ * Every number here is one the server decided and no client may re-derive — a
+ * plant time, a fuse, a site's position. The `planeOrder` precedent: a second
+ * copy of a served number is a HUD that disagrees with the simulation about
+ * what is happening.
+ */
+export interface ModeInfo {
+  id: string;
+  name: string;
+  /**
+   * What the number in `scores` counts. Rendered verbatim, so a mode that
+   * counts something new needs no change in any client.
+   */
+  scoreLabel: string;
+  /**
+   * The mode wire version. Compared against `SUPPORTED_MODE_V` once, because
+   * nothing else would report a mismatch: an unknown key inside this blob is
+   * simply absent on an older client, and the symptom is a pane that renders
+   * none of the mode and says nothing about why.
+   */
+  v?: number;
+  teams?: boolean;
+  config?: {
+    roundsToWin?: number;
+    capturesToWin?: number;
+    halfAt?: number;
+    plantTime?: number;
+    defuseTime?: number;
+    fuseTime?: number;
+  };
+  sites?: ModeSite[];
+  stands?: ModeFlag[];
+}
+
+export interface ModeBomb {
+  /** `carried` | `planted` | `defused`. Absent when the mode has no bomb. */
+  state?: string;
+  carrier?: string;
+  site?: string;
+  x?: number;
+  y?: number;
+  z?: number;
+  fuseIn?: number;
+}
+
+/** The mode's public state, every tick. */
+export interface ModeShared {
+  /**
+   * `warmup` | `freeze` | `live` | `post` | `over`, or absent for a mode with
+   * no phases at all — which is how deathmatch and capture the flag arrive.
+   * Absent rather than a phase called `none`, so there is nothing to draw and
+   * no branch to forget.
+   */
+  phase?: string;
+  phaseIn?: number;
+  round?: number;
+  attackers?: number;
+  swapped?: boolean;
+  bomb?: ModeBomb;
+  flags?: ModeFlag[];
+  over?: boolean;
+}
+
+/**
+ * The mode's answer for *us*, inside `you`.
+ *
+ * Everything here is per recipient by construction: a progress bar is about one
+ * player's own hands. Anything in this interface that arrived in `ModeShared`
+ * instead would be world-readable, and nothing on either side would say so.
+ */
+export interface ModeSelf {
+  attacking?: boolean;
+  carrying?: boolean;
+  /** 0..1 through a held action, and which one. */
+  progress?: number;
+  progressKind?: string;
+  captures?: number;
+}
+
+/**
+ * The mode wire version this build understands.
+ *
+ * Kept beside the types it describes rather than in the pane, because it is a
+ * property of what this file can parse.
+ */
+export const SUPPORTED_MODE_V = 1;
 
 export interface Snapshot {
   room: string;
@@ -386,6 +542,15 @@ export interface Snapshot {
    * not the same as "every item is here" — hence optional rather than defaulted.
    */
   itemsOut?: number[];
+  /**
+   * The mode's public state.
+   *
+   * Optional for the same reason `itemsOut` is, and with the same trap: absent
+   * means "this server has no mode to describe", which is not the same as "an
+   * empty one". Defaulted, a deathmatch tick would blank a round clock a mode
+   * server had just set.
+   */
+  mode?: ModeShared;
 }
 
 /** A three-component offset, in cube units. */
@@ -448,6 +613,7 @@ export class Predictor {
     shot?: ShotIntent,
     kick?: Vec3,
     thrown?: { throw: boolean; nade: number; lob: boolean },
+    use?: boolean,
   ): Command {
     this.seq += 1;
     // The server clamps dt the same way; recording the unclamped value would
@@ -487,6 +653,14 @@ export class Predictor {
       command.nade = thrown.nade;
       if (thrown.lob) command.lob = true;
     }
+    // **Held, not edge-triggered** — the opposite of `throw` directly above,
+    // and for the opposite reason. A throw is instantaneous, so a key read as
+    // held would send sixty of them a second and the server's cooldown would
+    // discard fifty-nine. An action takes *seconds* of continuous input: the
+    // server accrues it from each command's own `dt` and resets the moment a
+    // command arrives without it, so an edge would send one frame of the several
+    // hundred the action needs.
+    if (use) command.use = true;
     this.pending.push(command);
     step(world, player, input, clamped);
     if (kick && (kick.x !== 0 || kick.y !== 0 || kick.z !== 0)) {

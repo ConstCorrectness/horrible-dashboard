@@ -12,10 +12,13 @@ import {
   PingTracker,
   Predictor,
   SnapshotBuffer,
+  SUPPORTED_MODE_V,
   type Command,
   type DetonateFx,
   type Fx,
   type ItemRow,
+  type ModeInfo,
+  type ModeShared,
   type MoveState,
   type NoiseEvent,
   type SelfState,
@@ -84,6 +87,96 @@ export interface SessionState {
   items: ItemRow[];
   /** Ids of items currently taken, from the last snapshot. */
   itemsOut: number[];
+  /**
+   * Which mode this room is running, and its static configuration.
+   *
+   * `null` means the server sent none, which is a different claim from
+   * "deathmatch": a pane that defaulted it would draw a round clock reading zero
+   * over a game that has no rounds.
+   */
+  mode: ModeInfo | null;
+  /** Its public state, from the last snapshot that carried one. */
+  modeState: ModeShared | null;
+  /**
+   * The banner for the last objective event, and when it arrived.
+   *
+   * Held here rather than in the pane because the events arrive on the socket
+   * and a component that missed one while unmounted would silently skip it —
+   * the same argument the kill feed makes for living here.
+   */
+  objective: ObjectiveNote | null;
+}
+
+/** One objective banner, already phrased. */
+export interface ObjectiveNote {
+  id: number;
+  text: string;
+  /** Whether it was our side's doing, which is the only thing deciding colour. */
+  mine: boolean;
+  ts: number;
+}
+
+/**
+ * How long an objective banner stays up.
+ *
+ * Longer than a hitmarker and shorter than the round it belongs to: a plant is
+ * a thing you want to have noticed, and one still up when the next arrives is
+ * two sentences fighting for one line.
+ */
+const OBJECTIVE_TTL_MS = 2600;
+
+/**
+ * One line for an objective event, and whether it was ours.
+ *
+ * Returns `null` for anything that is not one, so `absorb` can use it as the
+ * test as well as the phrasing — a second list of the same fourteen kinds is
+ * exactly the pair that drifts.
+ *
+ * `self` decides "ours" for the events that name a player. The ones that only
+ * name a team — a round ending, the bomb going off — cannot say which side we
+ * are on from an fx alone, so they are phrased neutrally rather than guessed at.
+ */
+export function objectiveNote(fx: Fx, self: string): { text: string; mine: boolean } | null {
+  const by = 'by' in fx ? fx.by : undefined;
+  const mine = by !== undefined && by === self;
+  switch (fx.kind) {
+    case 'flag_take':
+      return { text: mine ? 'FLAG TAKEN' : 'OUR FLAG IS OUT', mine };
+    case 'flag_drop':
+      return { text: 'FLAG DROPPED', mine: false };
+    case 'flag_return':
+      return { text: 'FLAG RETURNED', mine };
+    case 'capture':
+      return { text: mine ? 'YOU CAPTURED' : 'FLAG CAPTURED', mine };
+    case 'bomb_planted':
+      return {
+        text: fx.detail ? `BOMB PLANTED AT ${fx.detail.toUpperCase()}` : 'BOMB PLANTED',
+        mine: false,
+      };
+    case 'bomb_defused':
+      return { text: 'BOMB DEFUSED', mine: false };
+    case 'bomb_exploded':
+      return { text: 'BOMB DETONATED', mine: false };
+    case 'round_start':
+      return { text: fx.detail ? `ROUND ${fx.detail}` : 'ROUND START', mine: false };
+    // Deliberately silent: the phase clock already says LIVE, and a banner that
+    // only repeats a readout is one people learn to ignore — including on the
+    // events that matter.
+    case 'round_live':
+      return null;
+    case 'round_end':
+      return { text: 'ROUND OVER', mine: false };
+    case 'eliminated':
+      return { text: 'TEAM ELIMINATED', mine: false };
+    case 'time_out':
+      return { text: 'TIME', mine: false };
+    case 'half':
+      return { text: 'SWITCHING SIDES', mine: false };
+    case 'match_over':
+      return { text: 'MATCH OVER', mine: false };
+    default:
+      return null;
+  }
 }
 
 const PING_INTERVAL_MS = 1000;
@@ -114,6 +207,9 @@ export class MatchSession {
     invites: [],
     items: [],
     itemsOut: [],
+    mode: null,
+    modeState: null,
+    objective: null,
   };
 
   /** Fires on any change worth re-rendering the surrounding UI for. */
@@ -181,7 +277,14 @@ export class MatchSession {
    * identical either way — which is the point: the client speaks one protocol
    * and the node decides where the room is.
    */
-  join(map: string, name: string, room?: string, host?: string, ranked?: boolean): void {
+  join(
+    map: string,
+    name: string,
+    room?: string,
+    host?: string,
+    ranked?: boolean,
+    mode?: string,
+  ): void {
     this.connect();
     const invites = this.state.invites;
     this.reset('joining');
@@ -192,7 +295,13 @@ export class MatchSession {
     this.state.host = host ?? '';
     this.state.ranked = ranked ?? false;
     this.emit();
-    sendChannel('hassault', 'join', { map, name, room, host, ranked });
+    // `mode` is **ignored by the server when `room` is set**, and that is the
+    // right way round: a room id names a match already in progress, and what
+    // mode it is running is the room's answer rather than the joiner's. An
+    // invite is an invite to a game, not a request to change it. Undefined asks
+    // for the server's default, so a caller that knows nothing about modes keeps
+    // working unchanged.
+    sendChannel('hassault', 'join', { map, name, room, host, ranked, mode });
   }
 
   /** Invite a friend to the match we are hosting. */
@@ -282,6 +391,27 @@ export class MatchSession {
         // unlike `itemsOut`, where absent and empty mean different things.
         this.state.items = Array.isArray(data.items) ? (data.items as ItemRow[]) : [];
         this.state.itemsOut = Array.isArray(data.itemsOut) ? (data.itemsOut as number[]) : [];
+        // Assigned unconditionally, `null` included: joining a deathmatch room
+        // after a capture-the-flag one has to *clear* the flags, or the pane
+        // keeps drawing the last match's objectives over this one.
+        this.state.mode = (data.mode as ModeInfo | undefined) ?? null;
+        // The server spreads the mode's current public state into the welcome
+        // beside its static half, so the pane has a real phase on the first
+        // frame instead of a blank one until the next snapshot. Joining
+        // mid-round otherwise shows a round clock reading zero, which looks
+        // exactly like the round having just ended.
+        this.state.modeState = (data.mode as ModeShared | undefined) ?? null;
+        if (this.state.mode && (this.state.mode.v ?? 0) > SUPPORTED_MODE_V) {
+          // The one thing that would otherwise fail in silence. An unknown key
+          // inside this blob is simply absent to an older build — no error, no
+          // warning — so a pane too old for the mode renders none of it and says
+          // nothing at all. The version stamp is the only thing to compare.
+          console.warn(
+            `hassault: this server runs '${this.state.mode.id}' at mode wire ` +
+              `version ${this.state.mode.v}, and this build understands ` +
+              `${SUPPORTED_MODE_V} — parts of the mode will not be drawn`,
+          );
+        }
         // The invitation has been taken up; leaving it on screen would invite
         // the same room twice. It is cleared from the notification surfaces too —
         // the toast, the bell and any OS notification are showing the same
@@ -348,6 +478,9 @@ export class MatchSession {
           // not do items, and reading its silence as "every item is back" would
           // pop every taken item into existence once a tick.
           if (Array.isArray(snapshot.itemsOut)) this.state.itemsOut = snapshot.itemsOut;
+          // Guarded, not defaulted, exactly like `itemsOut` above: an absent
+          // blob means this server has no mode, not that it has an empty one.
+          if (snapshot.mode) this.state.modeState = snapshot.mode;
           this.emit();
         } else {
           // Still adopt it — the render loop reads `you.alive` every frame even
@@ -404,6 +537,18 @@ export class MatchSession {
       if (this.pendingBlasts.length < 16) this.pendingBlasts.push(fx);
       return;
     }
+    const note = objectiveNote(fx, this.state.playerId);
+    if (note) {
+      this.killSeq += 1;
+      this.state.objective = { id: this.killSeq, ...note, ts: Date.now() };
+      // **The kill feed is cleared on a swap.** Its entries are coloured by
+      // whether they were ours, and after the sides change every one from
+      // before is coloured for a side that player is no longer on — which reads
+      // as the feed having got the kills wrong rather than as the colours
+      // meaning something else now.
+      if (fx.kind === 'half') this.state.killfeed = [];
+      return;
+    }
     if (fx.kind !== 'kill') return;
     const me = this.state.playerId;
     const mine = fx.killer === me || fx.victim === me;
@@ -421,10 +566,19 @@ export class MatchSession {
 
   /** Drop expired kill notes. Returns whether anything went. */
   private pruneKillfeed(): boolean {
-    if (this.state.killfeed.length === 0) return false;
+    let changed = false;
+    // The objective banner ages on the same tick as the feed, for the same
+    // reason: nothing else in this class runs on a clock, and a banner that only
+    // cleared when the *next* snapshot happened to change something else would
+    // sit on screen through a lull.
+    if (this.state.objective && this.state.objective.ts < Date.now() - OBJECTIVE_TTL_MS) {
+      this.state.objective = null;
+      changed = true;
+    }
+    if (this.state.killfeed.length === 0) return changed;
     const cutoff = Date.now() - KILL_TTL_MS;
     const kept = this.state.killfeed.filter((k) => k.ts > cutoff);
-    if (kept.length === this.state.killfeed.length) return false;
+    if (kept.length === this.state.killfeed.length) return changed;
     this.state.killfeed = kept;
     return true;
   }
@@ -507,9 +661,14 @@ export class MatchSession {
       host: '',
       ranked: false,
       invites: this.state.invites,
-      // A reset is leaving a room: its items go with it.
+      // A reset is leaving a room: its items, its mode and anything the mode
+      // was saying go with it. Carrying a mode across a reset is how a pane
+      // ends up drawing the last match's round clock over the next one.
       items: [],
       itemsOut: [],
+      mode: null,
+      modeState: null,
+      objective: null,
     };
     this.predictor.reset();
     this.snapshots.clear();

@@ -86,6 +86,17 @@ class GameMode:
     id: str = "none"
     name: str = "None"
 
+    #: Whether this mode is scored by side.
+    #:
+    #: A class attribute rather than something each mode happens to set in
+    #: `__init__`, because `catalog()` reads it off an instance to answer the
+    #: lobby — and `getattr(mode, "teams", False)` on a mode that only declared
+    #: it inside `welcome_state` reported every objective mode as a free-for-all.
+    #: The welcome said one thing and the catalog another, both plausibly, and
+    #: the only place it showed was a lobby offering one scoreboard for a game
+    #: with two sides.
+    teams: bool = False
+
     #: What the number in `scores` counts, for the HUD to label its own display
     #: with. Served rather than duplicated per client, the `plane_order`
     #: precedent: a client that hardcodes "KILLS" is a client that lies as soon

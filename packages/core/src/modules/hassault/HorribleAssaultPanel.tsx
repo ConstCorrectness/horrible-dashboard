@@ -37,6 +37,7 @@ import { GameAudio } from './audio';
 import { AvatarPool } from './avatars';
 import { createBackdrop, type Backdrop } from './backdrop';
 import { MatchCompanion } from './panels/MatchCompanion';
+import { ModeHud, ModeProgress } from './panels/ModeHud';
 import { useNativeLaunch } from './native-launch';
 import { FlashOverlay, NadeTray, Radar } from './panels/Radar';
 import { PostMatchDebrief } from './panels/PostMatchDebrief';
@@ -238,6 +239,9 @@ const EMPTY_SESSION: SessionState = {
   killfeed: [],
   host: '',
   invites: [],
+  mode: null,
+  modeState: null,
+  objective: null,
   items: [],
   itemsOut: [],
 };
@@ -1232,7 +1236,22 @@ export function HorribleAssaultPanel() {
             // the server refused puts the number back on the HUD rather than
             // leaving it one short until the next respawn.
             const thrown = nadesRef.current?.frame(now, session.state.you ?? null);
-            session.queue(session.predictor.record(world, player, input, dt, intent, kick, thrown));
+            // Held rather than edge-triggered, unlike `thrown` above: the
+            // server accrues progress from each command's own `dt` and resets
+            // the moment one arrives without it, so a single edge would be one
+            // frame of the several hundred a plant takes.
+            session.queue(
+              session.predictor.record(
+                world,
+                player,
+                input,
+                dt,
+                intent,
+                kick,
+                thrown,
+                alive && keys.has('use'),
+              ),
+            );
             session.predictor.decay(dt);
           } else {
             // Offline the training range plays the part of the server: it owns
@@ -2579,6 +2598,21 @@ export function HorribleAssaultPanel() {
             ))}
           </div>
         )}
+
+        {online && (
+          <ModeHud
+            mode={net.mode}
+            state={net.modeState}
+            // Out of `you`, which is the only per-recipient part of a snapshot:
+            // a progress bar is about one player's own hands, and in the shared
+            // blob it would be public.
+            mine={net.you?.mode}
+            scores={net.scores}
+            team={net.peers.find((p) => p.id === net.playerId)?.team ?? 0}
+            objective={net.objective}
+          />
+        )}
+        {online && <ModeProgress mine={net.you?.mode} />}
 
         {online && net.killfeed.length > 0 && (
           <div

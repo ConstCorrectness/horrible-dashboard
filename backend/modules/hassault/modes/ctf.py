@@ -125,6 +125,7 @@ class CaptureTheFlag(GameMode):
     id = "ctf"
     name = "Capture the Flag"
     score_label = "Captures"
+    teams = True
 
     def __init__(self, captures_to_win: int = CAPTURES_TO_WIN) -> None:
         self.captures_to_win = captures_to_win
@@ -281,7 +282,7 @@ class CaptureTheFlag(GameMode):
             "name": self.name,
             "scoreLabel": self.score_label,
             "v": self.version,
-            "teams": True,
+            "teams": self.teams,
             "config": {
                 "capturesToWin": self.captures_to_win,
                 "dropReturnAfter": DROP_RETURN_AFTER,

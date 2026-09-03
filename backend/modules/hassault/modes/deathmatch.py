@@ -24,6 +24,8 @@ class Deathmatch(GameMode):
     """Kills are the score. With `teams`, they are the *team's* score."""
 
     def __init__(self, teams: bool = False) -> None:
+        # Shadows the class attribute on `GameMode` on purpose: this is the one
+        # mode whose answer depends on which of the two it is.
         self.teams = teams
         self.id = "tdm" if teams else "dm"
         self.name = "Team Deathmatch" if teams else "Deathmatch"

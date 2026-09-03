@@ -55,8 +55,13 @@ describe('storage', () => {
   });
 
   it('stores only what differs, so later default changes still reach the player', () => {
-    const next = setBinding(defaultControls(), 'jump', 0, 'KeyE');
-    expect(JSON.parse(serializeControls(next))).toEqual({ jump: ['KeyE'] });
+    // `KeyP`, which nothing is bound to. This case is about the *diff*, and a
+    // key that is already somebody else's default makes it about two things:
+    // rebinding steals the key, so the action losing it also differs from the
+    // default and lands in the same document. That is correct behaviour — the
+    // round-trip case above covers it — and it is not what this one measures.
+    const next = setBinding(defaultControls(), 'jump', 0, 'KeyP');
+    expect(JSON.parse(serializeControls(next))).toEqual({ jump: ['KeyP'] });
   });
 
   it('falls back to defaults on anything unreadable', () => {

@@ -1784,6 +1784,49 @@ were ours, and after the sides change every one from before is coloured for a
 side that player is no longer on — which reads as the feed having got the kills
 wrong rather than as the colours meaning something else now.
 
+#### The same layer in the browser pane
+
+`panels/ModeHud.tsx`, in the same place on screen and saying the same things, so
+the two clients read alike. It draws from the wire the same way — `scoreLabel`
+verbatim, the server's own countdowns, `you.mode.progress` rather than a local
+timer — and the reasons are the same ones written up for the native client above.
+
+One structural difference worth knowing: this one stacks in **normal document
+flow**, where the native HUD advances a `y` by hand. The two collisions the
+native version shipped with — a line advance one scale too tight, and a label
+placed by its top across the bar it labelled — cannot happen here by
+construction. That is not an argument that this file needs less care; it is the
+reason it needed less of the *same* care.
+
+`objectiveNote` lives in `session.ts` beside the class that consumes it rather
+than in the component, because `absorb` uses it as the **test** as well as the
+phrasing: returning `null` for anything that is not an objective event is what
+lets one function decide both. A second list of the same fourteen kinds is
+exactly the pair that drifts, and a kind with no phrasing renders no banner at
+all — silent, and only on the event nobody happened to try.
+
+`__tests__/mode-wire.test.ts` reads **the same captured fixture the Rust test
+does**, `apps/native-fps/tests/mode-wire.json`. One artefact, two readers: it is
+the only thing that can catch the two clients drifting from each other *and* from
+the server at once.
+
+#### Two bugs the live API found that the tests did not
+
+Worth recording because both were invisible to everything else:
+
+- **`catalog()` reported capture the flag and defuse as free-for-alls.** `teams`
+  was declared only inside each mode's `welcome_state`, so
+  `getattr(mode, "teams", False)` found nothing on them. The welcome said one
+  thing and the catalog another, both plausibly, and the only place it showed was
+  a lobby offering one scoreboard for a game with two sides. `teams` is now a
+  `GameMode` class attribute and a test asserts the catalog and the welcome
+  agree, per mode.
+- **`use: ['KeyE']` collided with a controls test's example key.** Rebinding
+  steals a key, so `setBinding(defaults, 'jump', 0, 'KeyE')` began producing a
+  diff for `use` as well. The behaviour is right and the round-trip case covers
+  it; the case about *storing only what differs* now uses a key nothing is bound
+  to, so it measures one thing again.
+
 #### The version probe, and why `Extra` could not cover it
 
 `divergence` reports unknown event names and unknown fx kinds. It reports nothing

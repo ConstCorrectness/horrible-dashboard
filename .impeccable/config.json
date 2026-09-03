@@ -32,6 +32,120 @@
         "value": "rgba(255,255,255,0.12)",
         "createdAt": "2026-08-26T09:26:20.006Z",
         "reason": "hassault HUD: hairline border on canvas-overlay tiles; the module is the documented theme-ratchet exception"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "#6fc0f5",
+        "createdAt": "2026-09-03T20:48:14.221Z",
+        "reason": "hassault game HUD over a 3D canvas: the module is the repo's documented theme-ratchet exception (see the existing #ffffff / rgba(255,255,255,0.12) entries). These are the objective layer's status colours, matched to the pane's own TEAM_COLORS and to the native client's HUD, which browser_parity.rs compares against"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "#7fb2e5",
+        "createdAt": "2026-09-03T20:48:14.277Z",
+        "reason": "hassault game HUD over a 3D canvas: the module is the repo's documented theme-ratchet exception (see the existing #ffffff / rgba(255,255,255,0.12) entries). These are the objective layer's status colours, matched to the pane's own TEAM_COLORS and to the native client's HUD, which browser_parity.rs compares against"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "#8ac4fb",
+        "createdAt": "2026-09-03T20:48:14.337Z",
+        "reason": "hassault game HUD over a 3D canvas: the module is the repo's documented theme-ratchet exception (see the existing #ffffff / rgba(255,255,255,0.12) entries). These are the objective layer's status colours, matched to the pane's own TEAM_COLORS and to the native client's HUD, which browser_parity.rs compares against"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "#8fce93",
+        "createdAt": "2026-09-03T20:48:14.398Z",
+        "reason": "hassault game HUD over a 3D canvas: the module is the repo's documented theme-ratchet exception (see the existing #ffffff / rgba(255,255,255,0.12) entries). These are the objective layer's status colours, matched to the pane's own TEAM_COLORS and to the native client's HUD, which browser_parity.rs compares against"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "#9fe0a4",
+        "createdAt": "2026-09-03T20:48:14.456Z",
+        "reason": "hassault game HUD over a 3D canvas: the module is the repo's documented theme-ratchet exception (see the existing #ffffff / rgba(255,255,255,0.12) entries). These are the objective layer's status colours, matched to the pane's own TEAM_COLORS and to the native client's HUD, which browser_parity.rs compares against"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "#e0b96a",
+        "createdAt": "2026-09-03T20:48:14.513Z",
+        "reason": "hassault game HUD over a 3D canvas: the module is the repo's documented theme-ratchet exception (see the existing #ffffff / rgba(255,255,255,0.12) entries). These are the objective layer's status colours, matched to the pane's own TEAM_COLORS and to the native client's HUD, which browser_parity.rs compares against"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "#f0ad52",
+        "createdAt": "2026-09-03T20:48:14.573Z",
+        "reason": "hassault game HUD over a 3D canvas: the module is the repo's documented theme-ratchet exception (see the existing #ffffff / rgba(255,255,255,0.12) entries). These are the objective layer's status colours, matched to the pane's own TEAM_COLORS and to the native client's HUD, which browser_parity.rs compares against"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "#f28b7d",
+        "createdAt": "2026-09-03T20:48:14.631Z",
+        "reason": "hassault game HUD over a 3D canvas: the module is the repo's documented theme-ratchet exception (see the existing #ffffff / rgba(255,255,255,0.12) entries). These are the objective layer's status colours, matched to the pane's own TEAM_COLORS and to the native client's HUD, which browser_parity.rs compares against"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "#f8635a",
+        "createdAt": "2026-09-03T20:48:14.691Z",
+        "reason": "hassault game HUD over a 3D canvas: the module is the repo's documented theme-ratchet exception (see the existing #ffffff / rgba(255,255,255,0.12) entries). These are the objective layer's status colours, matched to the pane's own TEAM_COLORS and to the native client's HUD, which browser_parity.rs compares against"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "#fbd76b",
+        "createdAt": "2026-09-03T20:48:14.747Z",
+        "reason": "hassault game HUD over a 3D canvas: the module is the repo's documented theme-ratchet exception (see the existing #ffffff / rgba(255,255,255,0.12) entries). These are the objective layer's status colours, matched to the pane's own TEAM_COLORS and to the native client's HUD, which browser_parity.rs compares against"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "rgba(13,17,23,0.75)",
+        "createdAt": "2026-09-03T20:48:14.810Z",
+        "reason": "hassault game HUD over a 3D canvas: the module is the repo's documented theme-ratchet exception (see the existing #ffffff / rgba(255,255,255,0.12) entries). These are the objective layer's status colours, matched to the pane's own TEAM_COLORS and to the native client's HUD, which browser_parity.rs compares against"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "rgba(255,255,255,0.75)",
+        "createdAt": "2026-09-03T20:48:14.875Z",
+        "reason": "hassault game HUD over a 3D canvas: the module is the repo's documented theme-ratchet exception (see the existing #ffffff / rgba(255,255,255,0.12) entries). These are the objective layer's status colours, matched to the pane's own TEAM_COLORS and to the native client's HUD, which browser_parity.rs compares against"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "rgba(255,255,255,0.95)",
+        "createdAt": "2026-09-03T20:48:14.934Z",
+        "reason": "hassault game HUD over a 3D canvas: the module is the repo's documented theme-ratchet exception (see the existing #ffffff / rgba(255,255,255,0.12) entries). These are the objective layer's status colours, matched to the pane's own TEAM_COLORS and to the native client's HUD, which browser_parity.rs compares against"
+      },
+      {
+        "rule": "design-system-font-size",
+        "value": "1.05rem",
+        "createdAt": "2026-09-03T20:48:23.776Z",
+        "reason": "hassault game HUD: canvas-overlay type sizes, matching the sizes the pane's kill feed and scoreboard already use (0.72rem / 0.75rem). The module is the repo's documented theme-ratchet exception"
+      },
+      {
+        "rule": "design-system-font-size",
+        "value": "0.9rem",
+        "createdAt": "2026-09-03T20:48:23.836Z",
+        "reason": "hassault game HUD: canvas-overlay type sizes, matching the sizes the pane's kill feed and scoreboard already use (0.72rem / 0.75rem). The module is the repo's documented theme-ratchet exception"
+      },
+      {
+        "rule": "design-system-font-size",
+        "value": "0.8rem",
+        "createdAt": "2026-09-03T20:48:23.894Z",
+        "reason": "hassault game HUD: canvas-overlay type sizes, matching the sizes the pane's kill feed and scoreboard already use (0.72rem / 0.75rem). The module is the repo's documented theme-ratchet exception"
+      },
+      {
+        "rule": "design-system-font-size",
+        "value": "0.72rem",
+        "createdAt": "2026-09-03T20:48:23.954Z",
+        "reason": "hassault game HUD: canvas-overlay type sizes, matching the sizes the pane's kill feed and scoreboard already use (0.72rem / 0.75rem). The module is the repo's documented theme-ratchet exception"
+      },
+      {
+        "rule": "design-system-font-size",
+        "value": "0.7rem",
+        "createdAt": "2026-09-03T20:48:24.016Z",
+        "reason": "hassault game HUD: canvas-overlay type sizes, matching the sizes the pane's kill feed and scoreboard already use (0.72rem / 0.75rem). The module is the repo's documented theme-ratchet exception"
+      },
+      {
+        "rule": "design-system-font-size",
+        "value": "0.68rem",
+        "createdAt": "2026-09-03T20:48:24.075Z",
+        "reason": "hassault game HUD: canvas-overlay type sizes, matching the sizes the pane's kill feed and scoreboard already use (0.72rem / 0.75rem). The module is the repo's documented theme-ratchet exception"
       }
     ]
   }

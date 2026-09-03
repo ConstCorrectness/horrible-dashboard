@@ -108,8 +108,15 @@ def test_the_catalog_covers_every_buildable_mode():
     catalog = modes.catalog()
     assert {m["id"] for m in catalog} == {"dm", "tdm", "ctf", "defuse"}
     for entry in catalog:
-        assert modes.build(entry["id"]).name == entry["name"]
+        mode = modes.build(entry["id"])
+        assert mode.name == entry["name"]
         assert entry["scoreLabel"]
+        # The catalog and the welcome must agree about whether a mode has sides.
+        # They did not: `teams` lived only inside each mode's `welcome_state`, so
+        # `getattr(mode, "teams", False)` reported capture the flag and defuse as
+        # free-for-alls. Both answers were plausible and the only place it showed
+        # was a lobby offering one scoreboard for a game with two.
+        assert entry["teams"] == mode.welcome_state(None)["teams"], entry["id"]
 
 
 # ---------------------------------------------------------------------------
