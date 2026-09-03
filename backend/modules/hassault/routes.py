@@ -47,6 +47,7 @@ from backend.modules.hassault.console import (
 )
 from backend.modules.hassault.match import MAX_PLAYERS, match_server
 from backend.modules.hassault.physics import World as SimWorld
+from backend.modules.hassault.modes import objectives
 from backend.modules.hassault.models import (
     BrowseMatch,
     DraftCreateRequest,
@@ -374,6 +375,12 @@ async def get_textures() -> list[TextureOut]:
     return [TextureOut(**t) for t in textures.catalog()]
 
 
+def _objectives(world) -> objectives.Objectives:
+    """This map's flags and sites, resolved. Small enough to recompute; the world
+    itself is what `_load` caches."""
+    return objectives.place(SimWorld.from_map(world), world)
+
+
 @router.get("/maps/{name}", response_model=MapInfo)
 async def get_map(name: str) -> MapInfo:
     world = _load(name)
@@ -401,6 +408,13 @@ async def get_map(name: str) -> MapInfo:
             ItemPlacement(**item.placement())
             for item in pickups.place(SimWorld.from_map(world), world.entities)
         ],
+        modes=list(world.modes),
+        # Resolved onto the floor here, the same way `items` is and for the same
+        # reason: an entity's `z` is the mapper's eye and the editor flies, so a
+        # client re-deriving it would draw a site somewhere the server does not
+        # think it is.
+        sites=[s.to_dict() for s in _objectives(world).sites],
+        flagStands=[f.to_dict() for f in _objectives(world).flags],
         entities=[
             EntityOut(
                 type=e.type,

@@ -206,6 +206,31 @@ class CgzMap:
     legacy_unscaled_attrs: bool = False
     truncated: bool = False
 
+    #: Modes this map declares itself playable in, from its **source** document.
+    #:
+    #: Empty for anything read from an actual `.cgz`, and that is the honest
+    #: answer rather than a gap: a community map has no idea what a bomb site is.
+    #: Every mode-specific lint rule is conditional on this, because a deathmatch
+    #: map failing "no bomb sites" would make the whole lint advisory and
+    #: therefore ignored.
+    modes: list[str] = field(default_factory=list)
+
+    #: Objective geometry — bomb sites today — from the source document.
+    #:
+    #: **Deliberately not an entity type.** `ENTITY_NAMES.index(kind)` is the
+    #: on-disk byte, so a new name would take byte 18, past AssaultCube's
+    #: `MAXENTTYPES`: an exported `.cgz` would be rejected or read as garbage, and
+    #: re-importing it here would round-trip through a byte nobody else agrees
+    #: on. That trades a real property — our maps are real AC maps — for a
+    #: marker. CTF flags need none of this and use `ctf_flag` (type 13), which has
+    #: always parsed.
+    #:
+    #: The cost, stated rather than hidden: sites do not survive an export to
+    #: `.cgz` and back, and a `.cgz`-only map has none. Which is exactly why
+    #: opening a defuse room on a map with no sites has to raise — see
+    #: `modes.objectives.place`.
+    objectives: dict = field(default_factory=dict)
+
     @property
     def ssize(self) -> int:
         return 1 << self.sfactor

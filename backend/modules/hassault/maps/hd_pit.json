@@ -354,6 +354,25 @@
       "attrs": [
         7
       ]
+    },
+    {
+      "type": "ctf_flag",
+      "x": 10,
+      "y": 20,
+      "yaw": 90,
+      "team": 0
+    },
+    {
+      "type": "ctf_flag",
+      "x": 53,
+      "y": 43,
+      "yaw": 270,
+      "team": 1
     }
+  ],
+  "modes": [
+    "dm",
+    "tdm",
+    "ctf"
   ]
 }

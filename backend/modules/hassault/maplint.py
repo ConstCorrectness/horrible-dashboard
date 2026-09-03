@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from backend.modules.hassault import physics, pickups
+from backend.modules.hassault.modes import objectives
 from backend.modules.hassault.cgz import (
     MAXTYPE,
     SEMISOLID,
@@ -497,6 +498,128 @@ def _check_water(sim: physics.World, out: list[Finding]) -> None:
         )
 
 
+def _check_objectives(
+    cmap: CgzMap,
+    sim: physics.World,
+    reached: set[tuple[int, int]],
+    out: list[Finding],
+) -> None:
+    """Flags and bomb sites, for the modes this map says it supports.
+
+    **Every rule here is conditional on `cmap.modes`.** A deathmatch map failing
+    "no bomb sites" would make the whole lint advisory, and an advisory lint is
+    one nobody reads — which would cost more than these checks are worth. A map
+    read from a real `.cgz` declares no modes at all and is checked for none of
+    this, correctly: a community map has no idea what a bomb site is.
+    """
+    declared = set(cmap.modes or [])
+    if not declared:
+        return
+
+    placed = objectives.place(sim, cmap)
+    spawns = cmap.spawns()
+
+    # Team balance matters to every mode with sides, not only to the objective
+    # ones — a 6-2 split is a map that plays as a handicap match.
+    if declared & {"tdm", "ctf", "defuse"}:
+        cla = sum(1 for s in spawns if not s.attr2)
+        rvsf = len(spawns) - cla
+        if not cla or not rvsf or abs(cla - rvsf) > 1:
+            out.append(
+                Finding(
+                    code="spawn.unbalanced",
+                    severity="warn",
+                    message=(
+                        f"team spawns are {cla} to {rvsf}; a mode with sides wants "
+                        "them even"
+                    ),
+                    cells=[[s.x, s.y] for s in spawns],
+                )
+            )
+
+    if "ctf" in declared:
+        teams = sorted(f.team for f in placed.flags)
+        if teams != [0, 1]:
+            out.append(
+                Finding(
+                    code="flag.count",
+                    severity="error",
+                    message=(
+                        f"capture the flag needs one ctf_flag per team; this map has "
+                        f"{len(placed.flags)}"
+                    ),
+                    cells=[[int(f.x), int(f.y)] for f in placed.flags],
+                )
+            )
+        for flag in placed.flags:
+            # The same question `_check_spawns` asks, and for the same reason: a
+            # flag inside geometry is one nobody can take.
+            if not physics.can_stand(sim, flag.x, flag.y, flag.z):
+                out.append(
+                    Finding(
+                        code="flag.blocked",
+                        severity="error",
+                        message="a flag stand is inside something; it cannot be reached",
+                        cells=[[int(flag.x), int(flag.y)]],
+                    )
+                )
+            elif reached and (int(flag.x), int(flag.y)) not in reached:
+                out.append(
+                    Finding(
+                        code="flag.reach",
+                        severity="error",
+                        message="a flag stand cannot be walked to from the first spawn",
+                        cells=[[int(flag.x), int(flag.y)]],
+                    )
+                )
+
+    if "defuse" in declared:
+        if not placed.sites:
+            out.append(
+                Finding(
+                    code="site.none",
+                    severity="error",
+                    message=(
+                        "defuse is declared but the map has no objectives.sites; a "
+                        "round could never end"
+                    ),
+                )
+            )
+        for site in placed.sites:
+            if reached and (int(site.x), int(site.y)) not in reached:
+                out.append(
+                    Finding(
+                        code="site.reach",
+                        severity="error",
+                        message=(
+                            f"site {site.id} cannot be walked to from the first spawn"
+                        ),
+                        cells=[[int(site.x), int(site.y)]],
+                    )
+                )
+            # Planting inside a spawn is not a round. The margin is the site's own
+            # radius plus an item's reach, which is roughly "you would be taking
+            # fire from people arriving".
+            near = [
+                s
+                for s in spawns
+                if (s.x - site.x) ** 2 + (s.y - site.y) ** 2
+                < (site.radius + pickups.PICKUP_RADIUS) ** 2
+            ]
+            if near:
+                out.append(
+                    Finding(
+                        code="site.near_spawn",
+                        severity="error",
+                        message=(
+                            f"site {site.id} is on top of a spawn; planting there is "
+                            "not a round"
+                        ),
+                        cells=[[int(site.x), int(site.y)]],
+                    )
+                )
+
+
 def lint(cmap: CgzMap) -> list[Finding]:
     """Every playability check, over a built map. Errors first, then warnings.
 
@@ -512,6 +635,7 @@ def lint(cmap: CgzMap) -> list[Finding]:
     _check_spawns(cmap, sim, out)
     reached = _check_reachable(cmap, sim, out)
     _check_items(cmap, sim, reached, out)
+    _check_objectives(cmap, sim, reached, out)
     _check_ladders(sim, out)
     _check_water(sim, out)
 

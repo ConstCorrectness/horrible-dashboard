@@ -58,6 +58,7 @@ from typing import Any
 
 from backend.modules.hassault.cgz import (
     ANGLED_TYPES,
+    CTF_FLAG,
     DEFAULT_CEIL,
     DEFAULT_FLOOR,
     DEFAULT_WALL,
@@ -274,6 +275,56 @@ def _op_stairs(grid: _Grid, brush: dict[str, Any]) -> None:
 
 _OPS = {"room": _op_room, "solid": _op_solid, "stairs": _op_stairs}
 
+#: Default radius of a bomb site, in cubes, when the source does not say.
+#: Roughly a small room's worth — large enough that "at the site" is somewhere
+#: you can fight over rather than a tile you have to stand on exactly.
+SITE_RADIUS = 4.0
+
+
+def _build_objectives(grid: _Grid, spec: Any) -> dict[str, Any]:
+    """The `objectives` block of a map source: bomb sites, today.
+
+    Validated here rather than where a mode reads it, so a broken site is a map
+    that fails to build instead of a match that silently cannot be won. `z` is
+    left to `modes.objectives.place` to resolve onto the floor at load time — the
+    mapper's-eye problem every other placement in this module has.
+    """
+    if not spec:
+        return {}
+    if not isinstance(spec, dict):
+        raise _fail(f"objectives must be an object, got {spec!r}")
+    out: dict[str, Any] = {}
+    sites = spec.get("sites", [])
+    if sites:
+        if not isinstance(sites, list):
+            raise _fail("objectives.sites must be a list")
+        built = []
+        seen: set[str] = set()
+        for site in sites:
+            if not isinstance(site, dict):
+                raise _fail(f"site {site!r} is not an object")
+            site_id = str(site.get("id", "")).strip().upper()
+            # Server-chosen and short, never free text: a site id ends up inside
+            # the snapshot's mode blob, and anything a client could influence
+            # there risks colliding with the template's sentinels — which does
+            # not crash, it silently turns the fragmentation off.
+            if not site_id or len(site_id) > 2 or not site_id.isalnum():
+                raise _fail(f"site id must be 1-2 alphanumerics, got {site_id!r}")
+            if site_id in seen:
+                raise _fail(f"duplicate site id {site_id!r}")
+            seen.add(site_id)
+            x, y = site.get("x"), site.get("y")
+            if not isinstance(x, int) or not isinstance(y, int):
+                raise _fail(f"site {site_id} needs integer x and y, got {site!r}")
+            if not (0 <= x < grid.ssize and 0 <= y < grid.ssize):
+                raise _fail(f"site {site_id} at ({x}, {y}) is outside the map")
+            radius = float(site.get("radius", SITE_RADIUS))
+            if not 1.0 <= radius <= 16.0:
+                raise _fail(f"site {site_id} radius must be 1..16, got {radius}")
+            built.append({"id": site_id, "x": x, "y": y, "radius": radius})
+        out["sites"] = built
+    return out
+
 
 def _build_entity(grid: _Grid, spec: dict[str, Any]) -> MapEntity:
     """One entity. `playerstart` and `light` are typed; anything else is raw."""
@@ -290,6 +341,16 @@ def _build_entity(grid: _Grid, spec: dict[str, Any]) -> MapEntity:
     attrs = [0] * 7
     yaw: float | None = None
     if etype == PLAYERSTART:
+        yaw = float(spec.get("yaw", 0)) % 360.0
+        attrs[0] = round(yaw * ENTSCALE10)
+        attrs[1] = 1 if spec.get("team") in (1, "rvsf") else 0
+    elif etype == CTF_FLAG:
+        # Typed for the same reason `playerstart` is, and it fixes a silent
+        # failure: without this branch a flag falls through to the raw-attrs path
+        # below, where `ANGLED_TYPES` decodes `attrs[0]` as **tenths of a
+        # degree**. A mapper writing `"attrs": [45]` meaning 45 degrees silently
+        # gets 4.5, and nothing anywhere errors — the flag simply faces the wrong
+        # way.
         yaw = float(spec.get("yaw", 0)) % 360.0
         attrs[0] = round(yaw * ENTSCALE10)
         attrs[1] = 1 if spec.get("team") in (1, "rvsf") else 0
@@ -372,6 +433,13 @@ def _build(source: dict[str, Any], name: str) -> tuple[CgzMap, list[int]]:
         raise _fail("entities must be a list")
     entities = [_build_entity(grid, spec) for spec in entity_specs]
 
+    declared_modes = source.get("modes", [])
+    if not isinstance(declared_modes, list) or not all(
+        isinstance(m, str) for m in declared_modes
+    ):
+        raise _fail("modes must be a list of strings")
+    objectives = _build_objectives(grid, source.get("objectives", {}))
+
     watercolor = source.get("watercolor", [20, 40, 60, 140])
     if not isinstance(watercolor, list) or len(watercolor) != 4:
         raise _fail(f"watercolor must be [r, g, b, a], got {watercolor!r}")
@@ -399,6 +467,8 @@ def _build(source: dict[str, Any], name: str) -> tuple[CgzMap, list[int]]:
         vdelta=bytes(grid.vdelta),
         utex=bytes(grid.utex),
         tag=bytes(grid.tag),
+        modes=list(declared_modes),
+        objectives=objectives,
     )
     return built, grid.owners
 

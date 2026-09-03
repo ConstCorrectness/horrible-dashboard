@@ -117,6 +117,19 @@ class MapInfo(BaseModel):
     spawns: dict[str, int] = Field(default_factory=dict)
     truncated: bool = False
     legacy_unscaled_attrs: bool = False
+    """Modes this map declares itself playable in, and the objective geometry
+    that makes them possible — flag stands and bomb sites, already resolved onto
+    the floor.
+
+    Served rather than re-derived per client, the `plane_order` precedent: a site
+    is a property of the map, so one source serves a lobby's mode picker and a
+    client's HUD alike. Empty for a map read from a real `.cgz`, which is the
+    honest answer — a community map has no idea what a bomb site is."""
+    modes: list[str] = Field(default_factory=list)
+    sites: list[dict] = Field(default_factory=list)
+    #: `flagStands`, not `flags`: this model already has a `flags` — the map
+    #: header's bitfield — and the two have nothing to do with each other.
+    flagStands: list[dict] = Field(default_factory=list)  # noqa: N815
     # Byte offsets of each plane inside the `/cubes` payload, so the client can
     # slice one download into typed arrays without guessing the field order.
     plane_order: list[str] = Field(default_factory=list)

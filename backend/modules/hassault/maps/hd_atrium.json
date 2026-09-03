@@ -714,6 +714,42 @@
       "x": 81,
       "y": 63,
       "z": 0
+    },
+    {
+      "type": "ctf_flag",
+      "x": 22,
+      "y": 63,
+      "yaw": 90,
+      "team": 0
+    },
+    {
+      "type": "ctf_flag",
+      "x": 106,
+      "y": 63,
+      "yaw": 270,
+      "team": 1
     }
-  ]
+  ],
+  "modes": [
+    "dm",
+    "tdm",
+    "ctf",
+    "defuse"
+  ],
+  "objectives": {
+    "sites": [
+      {
+        "id": "A",
+        "x": 63,
+        "y": 28,
+        "radius": 4.0
+      },
+      {
+        "id": "B",
+        "x": 63,
+        "y": 98,
+        "radius": 4.0
+      }
+    ]
+  }
 }

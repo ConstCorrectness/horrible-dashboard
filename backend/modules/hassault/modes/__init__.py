@@ -12,17 +12,19 @@ from __future__ import annotations
 
 from typing import Any
 
+from . import objectives
 from .base import GameMode, Goal
 from .deathmatch import Deathmatch
 
 __all__ = [
+    "DEFAULT_MODE",
+    "Deathmatch",
     "GameMode",
     "Goal",
-    "Deathmatch",
-    "DEFAULT_MODE",
     "build",
     "catalog",
     "is_mode",
+    "objectives",
 ]
 
 #: What a room is when nobody said. Free-for-all deathmatch — the behaviour every

@@ -59,7 +59,8 @@ from backend.modules.hassault import (
     weapons,
 )
 from backend.modules.hassault.cgz import CgzError
-from backend.modules.hassault.modes import GameMode
+from backend.modules.hassault.modes import GameMode, objectives
+from backend.modules.hassault.modes.objectives import Objectives
 from backend.modules.hassault.noise import Noise
 from backend.modules.hassault.physics import MoveInput, PlayerState, World
 from backend.modules.hassault.weapons import (
@@ -526,6 +527,7 @@ class MatchRoom:
         spawns: list,
         items: list | None = None,
         mode: GameMode | None = None,
+        objectives: Objectives | None = None,
     ) -> None:
         """Takes a world and its spawns rather than a parsed map, so a test can
         build a room without AssaultCube content — which this repo cannot ship.
@@ -561,6 +563,10 @@ class MatchRoom:
         # knew it was playing deathmatch.
         self.scores: list[int] = [0, 0]
         self.mode: GameMode = mode if mode is not None else modes.build()
+        #: Flag stands and bomb sites, already resolved onto the floor. Optional
+        #: and empty by default for the same reason `items` is: a room built out
+        #: of four numbers in a test has no objectives, and that is not an error.
+        self.objectives: Objectives = objectives or Objectives()
         # Effects produced this tick — shots and kills — flushed with the next
         # snapshot rather than sent as they happen. A rifle at 700 rpm would
         # otherwise be its own message stream; batching makes combat cost the
@@ -1886,13 +1892,19 @@ class MatchServer:
             raise LookupError(f"no map named {map_name!r}")
         rid = room_id or uuid.uuid4().hex[:8]
         world = World.from_map(cgz)
+        game_mode = modes.build(mode)
+        placed = objectives.place(world, cgz)
+        # Before the room exists, so a map that cannot host this mode is a
+        # refusal rather than a room nobody can finish a round in.
+        objectives.check_playable(game_mode.id, placed)
         room = MatchRoom(
             rid,
             map_name,
             world,
             cgz.spawns(),
             pickups.place(world, cgz.entities),
-            mode=modes.build(mode),
+            mode=game_mode,
+            objectives=placed,
         )
         self.rooms[rid] = room
         # Start ticking even though the room is empty: the tick loop is also what
