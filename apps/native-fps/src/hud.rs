@@ -33,7 +33,7 @@ use std::collections::VecDeque;
 
 use crate::console::{LogLine, Tone};
 use crate::damage::Placed;
-use crate::protocol::{Fx, HitMarker, HurtMarker, SelfState};
+use crate::protocol::{Fx, HitMarker, HurtMarker, ModeInfo, ModeSelf, ModeShared, SelfState};
 use crate::radar::{self, Blip, Run};
 use crate::settings::{Crosshair, CrosshairStyle};
 
@@ -268,6 +268,25 @@ pub struct UtilityView {
 pub struct HudView<'a> {
     pub width: u32,
     pub height: u32,
+    /// Our own team, 0 or 1.
+    ///
+    /// Needed because everything the objective layer says is said from one
+    /// side's point of view — "OURS" and "THEIRS", and which half of the score
+    /// is yours. Passed rather than looked up out of `players` each frame: the
+    /// caller already knows who it is, and a HUD searching a roster for itself
+    /// is a HUD that draws the wrong side for a frame after a join.
+    pub team: i32,
+    /// What the mode is, statically — its name, what `scores` counts, where the
+    /// sites are. From the welcome, so it does not change during a match.
+    ///
+    /// `None` means this server sent no mode at all, which is a different claim
+    /// from "deathmatch": a client that defaulted it would draw a round clock
+    /// reading zero over a game that has no rounds.
+    pub mode: Option<&'a ModeInfo>,
+    /// The mode's public state this tick.
+    pub mode_state: Option<&'a ModeShared>,
+    /// The mode's answer for us, out of `you`.
+    pub mode_self: Option<&'a ModeSelf>,
     /// A multiplier on the HUD's derived unit, from the player's settings.
     ///
     /// 1.0 is the derived size. Kept as a separate field rather than folded into
@@ -393,6 +412,12 @@ pub struct Hud {
     /// Seconds since the last landed hit, and whether it killed.
     hit_age: f32,
     hit_killed: bool,
+    objective_notice: String,
+    objective_age: f32,
+    /// Whether the last objective event was our side's doing, which is the only
+    /// thing that decides its colour. Two colours and not one per event: the
+    /// question a glance asks is "good or bad for me".
+    objective_mine: bool,
     /// Seconds since we last took damage.
     damage_age: f32,
     /// The health we last saw, so a drop can be told from a snapshot repeating.
@@ -442,6 +467,9 @@ impl Default for Hud {
             feed: VecDeque::new(),
             hit_age: f32::MAX,
             hit_killed: false,
+            objective_notice: String::new(),
+            objective_age: f32::MAX,
+            objective_mine: false,
             damage_age: f32::MAX,
             last_hp: f32::MAX,
             ghost_hp: 0.0,
@@ -461,6 +489,22 @@ impl Default for Hud {
 impl Hud {
     /// Fold one effect into the feed.
     pub fn on_fx(&mut self, fx: &Fx, self_id: &str) {
+        // Objective events first, since none of them is a kill and the `let
+        // else` below returns on everything that is not.
+        if let Some((text, mine)) = objective_notice(fx, self_id) {
+            self.objective_notice = text;
+            self.objective_age = 0.0;
+            self.objective_mine = mine;
+            // **The kill feed is cleared on a swap**, not merely added to. Its
+            // entries are coloured by whether they were ours, and after the
+            // sides change every one from before is coloured for a side that
+            // player is no longer on — which reads as the feed having got the
+            // kills wrong rather than as the colours meaning something else now.
+            if matches!(fx, Fx::Half) {
+                self.feed.clear();
+            }
+            return;
+        }
         let Fx::Kill {
             victim,
             victim_name,
@@ -620,6 +664,7 @@ impl Hud {
     pub fn update(&mut self, dt: f32, board_open: bool) {
         self.board_age = if board_open { self.board_age + dt } else { 0.0 };
         self.hit_age = advance(self.hit_age, dt);
+        self.objective_age = advance(self.objective_age, dt);
         self.damage_age = advance(self.damage_age, dt);
         self.fell_age = advance(self.fell_age, dt);
         self.kill_age = advance(self.kill_age, dt);
@@ -716,6 +761,11 @@ impl Hud {
             if let Some(utility) = view.utility {
                 paint_utility(&mut p, view, utility, u);
             }
+            // Above the centre notices and below the scoreboard: the round
+            // clock is glanceable furniture, not something to read *over* a
+            // board you deliberately opened.
+            paint_mode(&mut p, view, u);
+            self.paint_objective_notice(&mut p, u);
             self.paint_center(&mut p, view, u);
             // After the centre notices and before the scoreboard: a damage
             // number belongs to the world, so it must sit under the panels you
@@ -950,6 +1000,31 @@ impl Hud {
             let right = (cx + rs * radius, cy - rc * radius);
             p.tri(left, right, tip, [0.97, 0.32, 0.28, 0.85 * alpha]);
         }
+    }
+
+    /// The banner for whatever just happened to the objective.
+    ///
+    /// Deliberately one line in one place rather than a variant per event: what
+    /// the player needs from "the bomb was planted on A" and "they took our
+    /// flag" is identical — a short sentence, briefly, where they are already
+    /// looking. Nine bespoke treatments would be nine things to keep consistent.
+    fn paint_objective_notice(&self, p: &mut Painter, u: f32) {
+        if self.objective_age >= OBJECTIVE_NOTICE_LIFE || self.objective_notice.is_empty() {
+            return;
+        }
+        let fade = ((OBJECTIVE_NOTICE_LIFE - self.objective_age) / (OBJECTIVE_NOTICE_LIFE * 0.3))
+            .clamp(0.0, 1.0);
+        let base = if self.objective_mine {
+            [0.62, 0.90, 0.68, 1.0]
+        } else {
+            [0.99, 0.66, 0.42, 1.0]
+        };
+        let colour = [base[0], base[1], base[2], 0.95 * fade];
+        let scale = u * 1.15;
+        // Above the crosshair, where the kill notice is *below* it: the two can
+        // land in the same second — planting while somebody shoots you off the
+        // site is the ordinary case — and stacked they would overprint.
+        p.center_text(p.height * 0.30, scale, colour, &self.objective_notice);
     }
 
     fn paint_center(&self, p: &mut Painter, view: &HudView, u: f32) {
@@ -1388,6 +1463,236 @@ const BOARD_STEP: f32 = 0.035;
 const BOARD_CASCADE: f32 = 0.22;
 /// How long one row takes to fade and slide in, once its turn comes.
 const BOARD_ROW_RISE: f32 = 0.12;
+
+/// The objective layer: a round clock, the score under its own label, the state
+/// of a bomb or a flag, and a progress bar for whatever is being held.
+///
+/// Drawn top-centre, which is where every game in this genre puts it and where
+/// nothing else in this HUD lives — the kill feed is top-right, health is
+/// bottom-left, ammo bottom-right.
+///
+/// **Everything here is drawn from what the server sent and nothing is
+/// re-derived.** The score's label comes off the wire (`scoreLabel`) rather than
+/// being a match on the mode id, so a mode that counts something new needs no
+/// change here at all; the fuse and the phase clock are the server's own
+/// countdowns, not local timers started on an event, which is what keeps them
+/// right after a stall.
+fn paint_mode(p: &mut Painter, view: &HudView, u: f32) {
+    let (Some(info), Some(state)) = (view.mode, view.mode_state) else {
+        return;
+    };
+    let scale = u * 0.85;
+    let cx = p.width * 0.5;
+    let mut y = u * 2.0;
+
+    // The score, as two numbers either side of its own label. Two numbers and a
+    // word rather than "3 - 1": which side is yours is the thing you actually
+    // read, and the label is what stops "3" meaning kills to somebody who joined
+    // a defuse match expecting deathmatch.
+    if view.scores.len() >= 2 {
+        let (mine, theirs) = if view.team == 0 {
+            (view.scores[0], view.scores[1])
+        } else {
+            (view.scores[1], view.scores[0])
+        };
+        let label = if info.score_label.is_empty() {
+            "SCORE"
+        } else {
+            &info.score_label
+        };
+        let big = scale * 1.5;
+        let line = format!("{mine}   {}   {theirs}", label.to_uppercase());
+        p.center_text(y, big, [0.92, 0.94, 0.98, 0.95], &line);
+        y += 9.0 * big;
+    }
+
+    // The phase clock. Absent for a mode with no phases, which is how deathmatch
+    // and capture the flag arrive — an empty string rather than a phase called
+    // "none", so there is nothing to draw and no branch to forget.
+    if !state.phase.is_empty() {
+        // A planted bomb's fuse replaces the round clock, because once it is
+        // down the round clock is not what anybody is counting.
+        let (text, colour) = if state.bomb.state == "planted" {
+            (
+                format!("BOMB  {:.1}", state.bomb.fuse_in.max(0.0)),
+                // Reddening over the last five seconds. The one colour change in
+                // this block, and it is the one number worth panicking about.
+                if state.bomb.fuse_in < 5.0 {
+                    [0.99, 0.35, 0.30, 0.98]
+                } else {
+                    [0.98, 0.68, 0.32, 0.95]
+                },
+            )
+        } else {
+            let phase = state.phase.to_uppercase();
+            let secs = state.phase_in.max(0.0);
+            (
+                if state.round > 0 {
+                    format!("R{}  {phase}  {secs:.0}", state.round)
+                } else {
+                    format!("{phase}  {secs:.0}")
+                },
+                if state.phase == "freeze" {
+                    [0.55, 0.78, 0.99, 0.9]
+                } else {
+                    [0.80, 0.84, 0.90, 0.85]
+                },
+            )
+        };
+        p.center_text(y, scale, colour, &text);
+        y += 9.0 * scale;
+    }
+
+    // Which side we are on this round. Only worth saying in a mode that has
+    // sides *and swaps them* — in one that does not, it is a constant.
+    if let Some(mine) = view.mode_self {
+        if !state.phase.is_empty() {
+            let (word, colour) = if mine.attacking {
+                ("ATTACK", [0.98, 0.72, 0.42, 0.85])
+            } else {
+                ("DEFEND", [0.52, 0.80, 0.98, 0.85])
+            };
+            p.center_text(y, scale * 0.85, colour, word);
+            y += 8.0 * scale;
+        }
+        if mine.carrying {
+            let word = if state.bomb.state.is_empty() {
+                "YOU HAVE THE FLAG"
+            } else {
+                "YOU HAVE THE BOMB"
+            };
+            p.center_text(y, scale * 0.9, [0.99, 0.84, 0.42, 0.95], word);
+            y += 8.0 * scale;
+        }
+    }
+
+    // Flags, one line each, from our side's point of view.
+    for flag in &state.flags {
+        let whose = if flag.team == view.team {
+            "OUR FLAG"
+        } else {
+            "ENEMY FLAG"
+        };
+        let what = match flag.state.as_str() {
+            "carried" => "TAKEN".to_string(),
+            "dropped" => format!("DROPPED {:.0}", flag.return_in.max(0.0)),
+            _ => "HOME".to_string(),
+        };
+        let colour = match flag.state.as_str() {
+            "home" => [0.62, 0.86, 0.66, 0.8],
+            "carried" => [0.99, 0.55, 0.45, 0.9],
+            _ => [0.98, 0.80, 0.42, 0.9],
+        };
+        p.center_text(y, scale * 0.8, colour, &format!("{whose}  {what}"));
+        y += 7.5 * scale;
+    }
+
+    paint_action_progress(p, view, u);
+}
+
+/// The bar for a held plant or defuse.
+///
+/// Under the crosshair rather than over it: what you are looking at while you
+/// plant is the doorway somebody is about to come through, and a bar across the
+/// aim would be the interface taking the one thing that matters away at the one
+/// moment it matters.
+///
+/// The fill is `progress` from the server and not a local timer. A local one
+/// would keep running through a stall, through the interruption that resets it
+/// server-side, and through dying — every one of which is a bar that finishes
+/// while nothing happens.
+fn paint_action_progress(p: &mut Painter, view: &HudView, u: f32) {
+    let Some(mine) = view.mode_self else { return };
+    if mine.progress <= 0.0 || mine.progress_kind.is_empty() {
+        return;
+    }
+    let width = u * 52.0;
+    let height = u * 2.4;
+    let x = (p.width - width) * 0.5;
+    let y = p.height * 0.62;
+    let colour = if mine.progress_kind == "defuse" {
+        [0.42, 0.78, 0.99, 0.95]
+    } else {
+        [0.99, 0.66, 0.32, 0.95]
+    };
+    p.rect(x, y, width, height, [0.05, 0.06, 0.09, 0.75]);
+    p.rect(x, y, width * mine.progress.clamp(0.0, 1.0), height, colour);
+    // A glyph is seven units of its own scale tall and `center_text` places its
+    // *top*, so a label at `y - 3.2u` at scale `0.8u` ran from `y - 3.2u` down
+    // to `y + 2.4u` — straight through the bar it was labelling. Caught by
+    // rendering it, which is the whole reason `hud_preview` exists.
+    let label = mine.progress_kind.to_uppercase();
+    p.center_text(y - u * 8.0, u * 0.9, colour, &label);
+}
+
+/// How long an objective banner stays up.
+///
+/// Longer than a hitmarker and shorter than the round it belongs to: a plant is
+/// a thing you want to have noticed, and a banner still up when the next one
+/// arrives is two sentences fighting for one line.
+const OBJECTIVE_NOTICE_LIFE: f32 = 2.6;
+
+/// One line for an objective event, and whether it was ours.
+///
+/// Returns `None` for everything that is not one, so `on_fx` can use it as the
+/// test as well as the phrasing — a second `matches!` listing the same fourteen
+/// variants is the kind of pair that drifts.
+///
+/// `self_id` decides "ours" for the events that name a player. For the ones that
+/// only name a team — a round ending, the bomb going off — the caller cannot
+/// know which side we are on from an fx alone, so those are phrased neutrally
+/// and coloured as not-ours rather than guessed at.
+fn objective_notice(fx: &Fx, self_id: &str) -> Option<(String, bool)> {
+    let by_us = |by: &String| by == self_id;
+    Some(match fx {
+        Fx::FlagTake { by, .. } => (
+            if by_us(by) {
+                "FLAG TAKEN".into()
+            } else {
+                "OUR FLAG IS OUT".into()
+            },
+            by_us(by),
+        ),
+        Fx::FlagDrop { .. } => ("FLAG DROPPED".to_string(), false),
+        Fx::FlagReturn { by, .. } => ("FLAG RETURNED".to_string(), by_us(by)),
+        Fx::Capture { by, .. } => (
+            if by_us(by) {
+                "YOU CAPTURED".into()
+            } else {
+                "FLAG CAPTURED".to_string()
+            },
+            by_us(by),
+        ),
+        Fx::BombPlanted { detail, .. } => (
+            if detail.is_empty() {
+                "BOMB PLANTED".to_string()
+            } else {
+                format!("BOMB PLANTED AT {}", detail.to_uppercase())
+            },
+            false,
+        ),
+        Fx::BombDefused => ("BOMB DEFUSED".to_string(), false),
+        Fx::BombExploded => ("BOMB DETONATED".to_string(), false),
+        Fx::RoundStart { detail, .. } => (
+            if detail.is_empty() {
+                "ROUND START".to_string()
+            } else {
+                format!("ROUND {detail}")
+            },
+            false,
+        ),
+        // Deliberately silent. The phase clock already says LIVE, and a banner
+        // that only repeats a readout is a banner people learn to ignore —
+        // including on the events that matter.
+        Fx::RoundLive => return None,
+        Fx::RoundEnd { .. } => ("ROUND OVER".to_string(), false),
+        Fx::Eliminated { .. } => ("TEAM ELIMINATED".to_string(), false),
+        Fx::TimeOut => ("TIME".to_string(), false),
+        Fx::Half => ("SWITCHING SIDES".to_string(), false),
+        Fx::MatchOver { .. } => ("MATCH OVER".to_string(), false),
+        _ => return None,
+    })
+}
 
 fn paint_scoreboard(p: &mut Painter, rows: &[ScoreRow], scores: &[i32], age: f32, u: f32) {
     let scale = u * 0.85;
@@ -2877,6 +3182,13 @@ mod tests {
     fn view<'a>(you: Option<&'a SelfState>) -> HudView<'a> {
         HudView {
             hud_scale: 1.0,
+            team: 0,
+            // No mode by default: every older test in this file is about a HUD
+            // with no objective layer, and defaulting one in would draw a round
+            // clock into their vertex counts.
+            mode: None,
+            mode_state: None,
+            mode_self: None,
             // No grenades, no flash and no damage numbers: the default view is
             // the one every older test builds, and inventing a pouch or a
             // floating number in it would draw them into assertions about the
@@ -3702,6 +4014,184 @@ mod tests {
             reticle(&hud, Crosshair::default()).len(),
             "opacity changed the geometry rather than the colour"
         );
+    }
+
+    fn defuse_view(phase: &str) -> (ModeInfo, ModeShared) {
+        (
+            ModeInfo {
+                id: "defuse".into(),
+                score_label: "Rounds".into(),
+                v: 1,
+                teams: true,
+                ..Default::default()
+            },
+            ModeShared {
+                phase: phase.into(),
+                phase_in: 40.0,
+                round: 3,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Everything the HUD draws, with a mode attached.
+    ///
+    /// Scores are set here rather than left at the harness's empty slice,
+    /// because the objective layer's first line is the score and a mode with no
+    /// scores to show draws none of it — which would make every count below
+    /// measure the same thing.
+    fn with_mode(
+        info: Option<&ModeInfo>,
+        state: Option<&ModeShared>,
+        mine: Option<&ModeSelf>,
+    ) -> usize {
+        let hud = Hud::default();
+        let you = alive();
+        let mut v = view(Some(&you));
+        v.scores = &[3, 1];
+        v.mode = info;
+        v.mode_state = state;
+        v.mode_self = mine;
+        let mut out = Vec::new();
+        hud.build(&v, &mut out);
+        out.len()
+    }
+
+    #[test]
+    fn a_server_with_no_mode_draws_no_objective_layer() {
+        // A HUD with no mode is the whole of the old behaviour.
+        let bare = with_mode(None, None, None);
+        let (info, state) = defuse_view("live");
+        assert!(
+            with_mode(Some(&info), Some(&state), None) > bare,
+            "the objective layer drew nothing"
+        );
+    }
+
+    #[test]
+    fn a_mode_with_no_phases_draws_no_round_clock() {
+        // Deathmatch and capture the flag arrive with an empty phase rather than
+        // one called "none", so there is nothing to draw and no branch to
+        // forget. A clock reading zero over a game with no rounds is worse than
+        // no clock.
+        let (info, live) = defuse_view("live");
+        let (_, phaseless) = defuse_view("");
+        assert!(
+            with_mode(Some(&info), Some(&phaseless), None)
+                < with_mode(Some(&info), Some(&live), None)
+        );
+    }
+
+    #[test]
+    fn the_score_label_comes_off_the_wire_rather_than_from_the_mode_id() {
+        // Which is what lets a mode counting something new need no change here
+        // at all. A longer word is more glyphs, and glyphs are triangles.
+        let (mut info, state) = defuse_view("live");
+        let short = with_mode(Some(&info), Some(&state), None);
+        info.score_label = "SOMETHING MUCH LONGER".into();
+        assert!(with_mode(Some(&info), Some(&state), None) > short);
+    }
+
+    #[test]
+    fn a_progress_bar_is_drawn_only_while_something_is_being_held() {
+        let (info, state) = defuse_view("live");
+        let idle = ModeSelf::default();
+        let planting = ModeSelf {
+            progress: 0.5,
+            progress_kind: "plant".into(),
+            ..Default::default()
+        };
+        assert!(
+            with_mode(Some(&info), Some(&state), Some(&planting))
+                > with_mode(Some(&info), Some(&state), Some(&idle))
+        );
+    }
+
+    #[test]
+    fn a_progress_bar_with_no_kind_is_not_drawn() {
+        // `progress` without `progressKind` is a half-populated blob, not a
+        // half-finished action — drawing an unlabelled bar for it would invent a
+        // state the server never described.
+        let (info, state) = defuse_view("live");
+        let odd = ModeSelf {
+            progress: 0.9,
+            progress_kind: String::new(),
+            ..Default::default()
+        };
+        let idle = ModeSelf::default();
+        assert_eq!(
+            with_mode(Some(&info), Some(&state), Some(&odd)),
+            with_mode(Some(&info), Some(&state), Some(&idle))
+        );
+    }
+
+    #[test]
+    fn the_side_swap_clears_the_kill_feed() {
+        // Feed entries are coloured by whether they were ours, and after the
+        // sides change every one from before is coloured for a side that player
+        // is no longer on — which reads as the feed having got the kills wrong.
+        let mut hud = Hud::default();
+        hud.on_fx(
+            &Fx::Kill {
+                victim: "v".into(),
+                victim_name: "VIC".into(),
+                killer: "me".into(),
+                killer_name: "ME".into(),
+                head: false,
+                weapon: String::new(),
+            },
+            "me",
+        );
+        assert!(!hud.feed.is_empty());
+        hud.on_fx(&Fx::Half, "me");
+        assert!(hud.feed.is_empty(), "the feed survived a side swap");
+    }
+
+    #[test]
+    fn an_objective_event_puts_a_banner_up_and_it_expires() {
+        let mut hud = Hud::default();
+        hud.on_fx(
+            &Fx::BombPlanted {
+                team: 0,
+                detail: "A".into(),
+            },
+            "me",
+        );
+        assert!(hud.objective_notice.contains('A'));
+        assert!(hud.objective_age < OBJECTIVE_NOTICE_LIFE);
+        hud.update(OBJECTIVE_NOTICE_LIFE + 0.1, false);
+        assert!(hud.objective_age >= OBJECTIVE_NOTICE_LIFE);
+    }
+
+    #[test]
+    fn a_round_going_live_says_nothing_because_the_clock_already_does() {
+        // A banner that only repeats a readout is one people learn to ignore,
+        // including on the events that matter.
+        assert!(objective_notice(&Fx::RoundLive, "me").is_none());
+    }
+
+    #[test]
+    fn taking_their_flag_and_losing_ours_read_differently() {
+        let (mine, ours) = (
+            objective_notice(
+                &Fx::FlagTake {
+                    team: 1,
+                    by: "me".into(),
+                },
+                "me",
+            )
+            .expect("a notice"),
+            objective_notice(
+                &Fx::FlagTake {
+                    team: 0,
+                    by: "them".into(),
+                },
+                "me",
+            )
+            .expect("a notice"),
+        );
+        assert_ne!(mine.0, ours.0);
+        assert!(mine.1 && !ours.1, "both read as the same side's doing");
     }
 
     #[test]

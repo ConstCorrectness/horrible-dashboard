@@ -64,7 +64,9 @@ use hassault_native::net::{Incoming, MatchSocket};
 use hassault_native::physics::{self, eye_height, MoveInput, JUMP_SPEED, MOVE_SPEED};
 use hassault_native::prediction::Prediction;
 use hassault_native::prop;
-use hassault_native::protocol::{Command, Event, Fx, HitMarker, PlayerRow, SelfState};
+use hassault_native::protocol::{
+    Command, Event, Fx, HitMarker, ModeInfo, ModeShared, PlayerRow, SelfState,
+};
 use hassault_native::radar::{self, Blip, Run};
 use hassault_native::renderer::{Renderer, Vertex, VolumeVertex, MODE_FLAT};
 use hassault_native::reveal::Reveal;
@@ -311,6 +313,10 @@ pub struct App {
     /// Team scores from the last snapshot. Two numbers, and they are the only
     /// statement of who is winning anywhere in this client.
     scores: Vec<i32>,
+    /// The mode this room is running, from the welcome. Static for the match.
+    mode: Option<ModeInfo>,
+    /// Its public state, refreshed every snapshot that carries one.
+    mode_state: Option<ModeShared>,
     /// The private half of the last snapshot — health, ammo, the reload clock.
     /// `None` in Train, which has no server to have said any of it.
     you: Option<SelfState>,
@@ -389,6 +395,14 @@ struct Keys {
     /// scores *during* a lull, and a toggle is a scoreboard you leave up by
     /// accident and then die behind.
     scores: bool,
+    /// The action key: plant, defuse, take a flag.
+    ///
+    /// **Held, not pressed**, which is why it lives here with `fire` rather than
+    /// being an event. The server accrues progress from each command's own `dt`
+    /// and *resets* it the moment the key is not held — so a client that sent a
+    /// press and a release would be sending two frames out of the several
+    /// hundred the action actually takes.
+    use_key: bool,
 }
 
 impl App {
@@ -512,6 +526,8 @@ impl App {
             skins,
             hitbox,
             scores: Vec::new(),
+            mode: None,
+            mode_state: None,
             you: None,
             hud: Hud::default(),
             viewmodel: WeaponViewModel::default(),
@@ -1395,6 +1411,17 @@ impl App {
                     self.room = w.room.clone();
                     self.self_id = w.player_id;
                     self.players = w.players;
+                    // Static for the match, so it is taken once here rather than
+                    // read off every tick. Taken *unconditionally*, including
+                    // when it is `None`: joining a deathmatch room after a CTF
+                    // one has to clear the flags, or the HUD keeps drawing the
+                    // last match's objectives over this one.
+                    self.mode = w.mode.clone();
+                    // The welcome flattens the mode's current public state in
+                    // beside its static half, so the HUD has a real phase and a
+                    // real bomb on the *first* frame rather than a blank one
+                    // until the next snapshot.
+                    self.mode_state = w.mode.as_ref().map(|m| m.state.clone());
                     self.joined = true;
                     // A new room is a new match. The tally is for the whole of
                     // one, so it survives a death and not a join.
@@ -1568,6 +1595,14 @@ impl App {
                     // would pop every taken item back once a tick.
                     self.items.sync(s.items_out.as_ref());
                     self.scores = s.scores.clone();
+                    // `if let`, not `unwrap_or_default`, and the same reason
+                    // `items_out` is guarded above: an absent mode blob means
+                    // this server has no mode to describe, which is a different
+                    // fact from "an empty one". Defaulted, a deathmatch tick
+                    // would blank a round clock a mode server had just set.
+                    if let Some(mode) = &s.mode {
+                        self.mode_state = Some(mode.clone());
+                    }
                     self.apply_match_recoil(s.you.spray_index, s.you.weapon);
                     self.you = Some(s.you.clone());
                     // Filed for interpolation *before* the roster is replaced,
@@ -1779,6 +1814,12 @@ impl App {
         // `weapon: n` on this command, and `_handle_combat` cancels an in-flight
         // reload on a switch, so taking out a grenade would silently abort one.
         cmd.fire = self.keys.fire && !self.utility.equipped() && self.trigger_ready();
+        // Sent raw, with no local guess about whether it means anything here.
+        // Only the server knows whether we are the carrier, standing on a site,
+        // and in a live round — and a client that filtered on its own copy of
+        // those would stop sending the key at exactly the moments its copy was
+        // a frame stale.
+        cmd.use_key = self.keys.use_key;
         // And the instant it was aimed at. Bodies are drawn `INTERP_DELAY_MS` in
         // the past, so without this every shot is resolved against positions a
         // tenth of a second newer than the ones on screen when the trigger was
@@ -3044,6 +3085,10 @@ impl ApplicationHandler for App {
                         KeyCode::Space => self.keys.jump = down,
                         KeyCode::ShiftLeft => self.keys.crouch = down,
                         KeyCode::Tab => self.keys.scores = down,
+                        // E for the objective, which is where every shooter puts
+                        // it and where `DEFAULT_CONTROLS` in the browser's
+                        // `controls.ts` puts it too: one game, one set of keys.
+                        KeyCode::KeyE => self.keys.use_key = down,
                         KeyCode::KeyR if down => self.reload(),
                         // Inspect. Purely local — see `WeaponViewModel::inspect`
                         // — so it is not a command and never touches the wire.
@@ -3307,6 +3352,18 @@ impl ApplicationHandler for App {
                 });
                 let view = HudView {
                     hud_scale: self.settings.video.hud_scale,
+                    team: self
+                        .players
+                        .iter()
+                        .find(|p| p.id == self.self_id)
+                        .map(|p| p.team)
+                        .unwrap_or(0),
+                    mode: self.mode.as_ref(),
+                    mode_state: self.mode_state.as_ref(),
+                    // Out of `you`, which is the only per-recipient part of a
+                    // snapshot — money and a progress bar are about one player's
+                    // own hands, and in the shared blob they would be public.
+                    mode_self: self.you.as_ref().and_then(|y| y.mode.as_ref()),
                     radar,
                     utility: utility.as_ref(),
                     // Straight off the snapshot. Parsed and then ignored until

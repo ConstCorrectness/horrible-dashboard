@@ -59,6 +59,18 @@ impl<'a, T> Outbound<'a, T> {
 #[derive(Debug, Serialize, Default)]
 pub struct JoinRequest {
     pub map: String,
+    /// Which game mode to open, when no `room` is named.
+    ///
+    /// **Ignored by the server when `room` is set**, and that is the right way
+    /// round: a room id names a match already in progress, and what mode it is
+    /// running is the room's answer rather than the joiner's. An invite is an
+    /// invite to a game, not a request to change it.
+    ///
+    /// Empty means "whatever the default is", which keeps this wire-compatible
+    /// with a server that predates modes and with a launcher that does not pass
+    /// one.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub mode: String,
     /// Empty asks the server to place us in (or open) a room on this map.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub room: String,
@@ -133,6 +145,21 @@ pub struct Command {
     /// that never existed.
     #[serde(rename = "viewT", skip_serializing_if = "Option::is_none")]
     pub view_t: Option<f64>,
+    /// The action key: plant, defuse, take a flag.
+    ///
+    /// **Read as held**, unlike `throw` — and that is the opposite of the trap
+    /// documented on `throw`, for the opposite reason. A throw is instantaneous
+    /// and a key read as held would send sixty of them a second; an action takes
+    /// seconds of continuous input, and the server accrues it from each
+    /// command's own `dt` and resets the moment a command arrives without it. A
+    /// press-and-release would send two frames of the several hundred the action
+    /// needs.
+    ///
+    /// `use` is a Rust keyword, hence the rename. Not skipped when false: the
+    /// server reads its absence as a release, which is the same thing, but
+    /// sending it explicitly keeps the wire readable in the observability panel.
+    #[serde(rename = "use")]
+    pub use_key: bool,
 }
 
 impl Command {
@@ -323,6 +350,11 @@ pub struct SelfState {
     pub spotted: Vec<String>,
     #[serde(rename = "move", default)]
     pub movement: Option<MoveState>,
+    /// The mode's answer for us. `Option` for the same reason `movement` is: a
+    /// server with no mode sends none, and an all-zeroes default is a different
+    /// claim from "there is nothing to say".
+    #[serde(default)]
+    pub mode: Option<ModeSelf>,
     /// Wire keys this struct does not name. See `divergence::Extra` — the point
     /// is that adding a real field below makes the key disappear from here on
     /// its own, so the check cannot rot the way a hand-kept list would.
@@ -521,6 +553,84 @@ pub enum Fx {
         #[serde(default)]
         what: String,
     },
+    /// An objective changed hands or state.
+    ///
+    /// One variant for the whole family rather than nine, because what the HUD
+    /// does with all of them is the same — say what happened, in a banner, for a
+    /// moment. Splitting them would be nine arms that differ only in a string.
+    /// `team` is whose it is about, `by` is who did it, and both are optional
+    /// because "the flag returned itself" has neither.
+    #[serde(rename = "flag_take")]
+    FlagTake {
+        #[serde(default)]
+        team: i32,
+        #[serde(default)]
+        by: String,
+    },
+    #[serde(rename = "flag_drop")]
+    FlagDrop {
+        #[serde(default)]
+        team: i32,
+        #[serde(default)]
+        by: String,
+    },
+    #[serde(rename = "flag_return")]
+    FlagReturn {
+        #[serde(default)]
+        team: i32,
+        #[serde(default)]
+        by: String,
+    },
+    #[serde(rename = "capture")]
+    Capture {
+        #[serde(default)]
+        team: i32,
+        #[serde(default)]
+        by: String,
+    },
+    #[serde(rename = "bomb_planted")]
+    BombPlanted {
+        #[serde(default)]
+        team: i32,
+        /// The site's id, so a banner can name it.
+        #[serde(default)]
+        detail: String,
+    },
+    #[serde(rename = "bomb_defused")]
+    BombDefused,
+    #[serde(rename = "bomb_exploded")]
+    BombExploded,
+    #[serde(rename = "round_start")]
+    RoundStart {
+        #[serde(default)]
+        team: i32,
+        #[serde(default)]
+        detail: String,
+    },
+    #[serde(rename = "round_live")]
+    RoundLive,
+    #[serde(rename = "round_end")]
+    RoundEnd {
+        #[serde(default)]
+        team: i32,
+    },
+    #[serde(rename = "eliminated")]
+    Eliminated {
+        #[serde(default)]
+        team: i32,
+    },
+    #[serde(rename = "time_out")]
+    TimeOut,
+    /// The sides swapped. Both clients clear their kill feed on this, or entries
+    /// from before the swap are coloured for the side that player is no longer
+    /// on.
+    #[serde(rename = "half")]
+    Half,
+    #[serde(rename = "match_over")]
+    MatchOver {
+        #[serde(default)]
+        team: i32,
+    },
     #[serde(other)]
     Other,
 }
@@ -546,6 +656,12 @@ pub struct Snapshot {
     pub you: SelfState,
     #[serde(default)]
     pub scores: Vec<i32>,
+    /// The mode's public state. **Absent means the server has no mode blob to
+    /// send**, which is not the same as "an empty one" — read the second way, a
+    /// deathmatch tick would clear a round clock that a CTF server had set.
+    /// Guarded at the call site the way `items_out` is.
+    #[serde(default)]
+    pub mode: Option<ModeShared>,
     /// This tick's effects — shots, kills, spawns. The kill feed is built from
     /// these and nothing else.
     #[serde(default, deserialize_with = "fx_noting_unknown_kinds")]
@@ -839,11 +955,186 @@ pub struct Welcome {
     pub snapshot_hz: f32,
     #[serde(default)]
     pub players: Vec<PlayerRow>,
+    /// Which mode this room is running, and its static configuration.
+    ///
+    /// Rides once, like item placements: timings, prices and site positions do
+    /// not change during a match. This is also the field that carries the mode
+    /// across the peer fabric, because a guest's welcome *is* the host's
+    /// `state_payload()` forwarded verbatim.
+    #[serde(default)]
+    pub mode: Option<ModeInfo>,
     /// Wire keys this struct does not name. See `divergence::Extra` — the point
     /// is that adding a real field below makes the key disappear from here on
     /// its own, so the check cannot rot the way a hand-kept list would.
     #[serde(flatten)]
     pub extra: Extra,
+}
+
+/// The mode wire version this build understands.
+///
+/// **The whole reason this exists**: `divergence` reports unknown *event names*
+/// and unknown *fx kinds*, but nothing reports an unknown key inside `you` or
+/// `shared` — `#[serde(default)]` swallows those without a word. So an old build
+/// joining a capture-the-flag match would render no flags, score nothing, and
+/// say nothing at all about why. The server stamps `v` into every mode blob and
+/// this compares against it, once.
+pub const SUPPORTED_MODE_V: i32 = 1;
+
+/// A mode's static configuration, sent once with the welcome.
+///
+/// Everything here is a number the server decided and the client must not
+/// re-derive: a plant time, a price, a site's position. The `plane_order`
+/// precedent — a second copy of a served number is a HUD that disagrees with the
+/// simulation about what is happening.
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct ModeInfo {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    /// What the number in `scores` counts. Drawn verbatim, so a mode counting
+    /// rounds does not need this client to learn the word "rounds".
+    #[serde(rename = "scoreLabel", default)]
+    pub score_label: String,
+    #[serde(default)]
+    pub v: i32,
+    #[serde(default)]
+    pub teams: bool,
+    #[serde(default)]
+    pub config: ModeConfig,
+    /// Bomb sites, resolved onto the floor server-side.
+    #[serde(default)]
+    pub sites: Vec<ModeSite>,
+    /// Flag stands. Where a flag lives when it is home.
+    #[serde(default)]
+    pub stands: Vec<ModeFlag>,
+    /// The mode's public state at the moment we joined.
+    ///
+    /// The server spreads `shared_state()` into the welcome alongside the static
+    /// half, so these keys really are here — flattened rather than duplicated,
+    /// which means the HUD has a real phase and a real bomb on the *first* frame
+    /// instead of a blank one until the next snapshot lands. Joining mid-round
+    /// otherwise shows a round clock reading zero for up to a twentieth of a
+    /// second, which looks like the round just ended.
+    #[serde(flatten)]
+    pub state: ModeShared,
+}
+
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct ModeConfig {
+    #[serde(rename = "roundsToWin", default)]
+    pub rounds_to_win: i32,
+    #[serde(rename = "capturesToWin", default)]
+    pub captures_to_win: i32,
+    #[serde(rename = "halfAt", default)]
+    pub half_at: i32,
+    #[serde(rename = "plantTime", default)]
+    pub plant_time: f32,
+    #[serde(rename = "defuseTime", default)]
+    pub defuse_time: f32,
+    #[serde(rename = "fuseTime", default)]
+    pub fuse_time: f32,
+}
+
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct ModeSite {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub x: f32,
+    #[serde(default)]
+    pub y: f32,
+    #[serde(default)]
+    pub z: f32,
+    #[serde(default)]
+    pub radius: f32,
+}
+
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct ModeFlag {
+    #[serde(default)]
+    pub team: i32,
+    /// `"home"`, `"carried"` or `"dropped"`.
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub x: f32,
+    #[serde(default)]
+    pub y: f32,
+    #[serde(default)]
+    pub z: f32,
+    /// Player id of the carrier, while carried. Public on purpose: the flag's
+    /// position already is, and hiding the name while showing the body would be
+    /// incoherent rather than secret.
+    #[serde(default)]
+    pub by: String,
+    #[serde(rename = "returnIn", default)]
+    pub return_in: f32,
+}
+
+/// The mode's public state, every tick.
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct ModeShared {
+    /// `"warmup"`, `"freeze"`, `"live"`, `"post"` or `"over"`. Empty for a mode
+    /// with no phases at all, which is how deathmatch and CTF arrive.
+    #[serde(default)]
+    pub phase: String,
+    #[serde(rename = "phaseIn", default)]
+    pub phase_in: f32,
+    #[serde(default)]
+    pub round: i32,
+    #[serde(default)]
+    pub attackers: i32,
+    #[serde(default)]
+    pub swapped: bool,
+    #[serde(default)]
+    pub bomb: ModeBomb,
+    #[serde(default)]
+    pub flags: Vec<ModeFlag>,
+    #[serde(default)]
+    pub over: bool,
+}
+
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct ModeBomb {
+    /// `"carried"`, `"planted"` or `"defused"`. Empty when the mode has no bomb.
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub carrier: String,
+    #[serde(default)]
+    pub site: String,
+    #[serde(default)]
+    pub x: f32,
+    #[serde(default)]
+    pub y: f32,
+    #[serde(default)]
+    pub z: f32,
+    #[serde(rename = "fuseIn", default)]
+    pub fuse_in: f32,
+}
+
+/// The mode's answer for **us**, inside `you`.
+///
+/// Everything here is per recipient by construction: a progress bar is about one
+/// player's own hands, and money is what one player has to spend. Anything in
+/// this struct that appeared in `ModeShared` instead would be world-readable,
+/// and nothing on either side would report it.
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct ModeSelf {
+    /// Whether we are on the attacking side this round. Derived server-side from
+    /// `(team, half)`, never stored, so it is correct across a swap.
+    #[serde(default)]
+    pub attacking: bool,
+    #[serde(default)]
+    pub carrying: bool,
+    /// 0..1 through a held action, and which one it is.
+    #[serde(default)]
+    pub progress: f32,
+    #[serde(rename = "progressKind", default)]
+    pub progress_kind: String,
+    #[serde(default)]
+    pub captures: i32,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -945,6 +1236,18 @@ fn report_welcome(w: &Welcome) {
     divergence::note_extra("welcome", &w.extra);
     for p in &w.players {
         divergence::note_extra("welcome.players[]", &p.extra);
+    }
+    // **The one check `note_extra` cannot make.** `Extra` catches keys this
+    // build does not declare, but a mode blob is a *declared* field whose
+    // contents this build may simply be too old to understand — every unknown
+    // key inside it is swallowed by `#[serde(default)]`, and the result is a
+    // client that joins a capture-the-flag match, renders no flags, and reports
+    // nothing at all. The server stamps a version so there is something to
+    // compare.
+    if let Some(mode) = &w.mode {
+        if mode.v > SUPPORTED_MODE_V {
+            divergence::note_mode_version(&mode.id, mode.v, SUPPORTED_MODE_V);
+        }
     }
 }
 

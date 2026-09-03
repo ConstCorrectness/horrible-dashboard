@@ -66,6 +66,22 @@ pub fn note_event(name: &str) {
     );
 }
 
+/// A game mode whose wire shape is newer than this build understands.
+///
+/// The gap `note_extra` cannot cover: the mode blob is a field this build *does*
+/// declare, so nothing about it looks unknown — every key inside it that this
+/// build has no field for is swallowed by `#[serde(default)]` in silence. An old
+/// client would join a mode it cannot draw and say nothing, which is the exact
+/// failure the version stamp exists to make loud.
+pub fn note_mode_version(mode: &str, sent: i32, supported: i32) {
+    report(
+        format!("mode-version:{mode}:{sent}"),
+        &format!(
+            "the server is running '{mode}' at mode wire version {sent} and this              build understands {supported} — parts of the mode will not be drawn"
+        ),
+    );
+}
+
 /// Keys present on the wire that no field of `context` declares.
 ///
 /// `context` is a dotted path into the message — `snapshot.you`, not just

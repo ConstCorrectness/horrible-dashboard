@@ -89,6 +89,15 @@ struct Args {
     room: String,
     host: String,
     name: String,
+    /// Which **game** mode to open: `dm`, `tdm`, `ctf`, `defuse`.
+    ///
+    /// Distinct from `mode` above, which is how this *client* was launched —
+    /// train, host, join, edit, ranked. Two different things that both want the
+    /// word, so the wire one is spelled out: `--game=`.
+    ///
+    /// Empty asks the server for its default, which keeps a launcher that knows
+    /// nothing about modes working unchanged.
+    game: String,
     /// Bots to field, `--mode=host` only.
     bots: u32,
     bot_skill: String,
@@ -118,6 +127,9 @@ impl Default for Args {
             room: String::new(),
             host: String::new(),
             name: "player".into(),
+            // Empty, not "dm": the server owns the default, and a client that
+            // named one here would be a second place that decides it.
+            game: String::new(),
             bots: 0,
             bot_skill: "normal".into(),
             sensitivity: None,
@@ -150,6 +162,8 @@ fn parse_args() -> Args {
             }
         } else if let Some(v) = arg.strip_prefix("--bot-skill=") {
             args.bot_skill = v.to_string();
+        } else if let Some(v) = arg.strip_prefix("--game=") {
+            args.game = v.to_string();
         } else if let Some(v) = arg.strip_prefix("--room=") {
             args.room = v.to_string();
         } else if let Some(v) = arg.strip_prefix("--host=") {
@@ -184,6 +198,7 @@ fn parse_args() -> Args {
                    \x20                   ranked (the game server adjudicates)\n\
                    --bots=<n>          bots to field, --mode=host only\n\
                    --bot-skill=<s>     easy, normal or hard (default normal)\n\
+                   --game=<mode>       dm, tdm, ctf or defuse (ignored with --room)\n\
                    --room=<id>         join a specific room rather than any on the map\n\
                    --host=<node id>    that room is on a friend's node\n\
                    --name=<label>      wire label only; the node uses your account's username\n\
@@ -523,6 +538,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         &args.host,
         &args.name,
         matches!(args.mode, Mode::Ranked),
+        &args.game,
     )?;
 
     if args.headless {

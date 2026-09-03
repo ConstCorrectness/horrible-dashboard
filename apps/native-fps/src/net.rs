@@ -170,6 +170,7 @@ impl MatchSocket {
     /// proxies, because a room inside a player's own backend cannot adjudicate
     /// that player. Everything after the join is the same wire either way, which
     /// is why this is one method with a flag rather than a second client.
+    #[allow(clippy::too_many_arguments)]
     pub fn join(
         &self,
         map: &str,
@@ -177,11 +178,13 @@ impl MatchSocket {
         host: &str,
         name: &str,
         ranked: bool,
+        mode: &str,
     ) -> Result<(), NetError> {
         self.send(&Outbound::new(
             "join",
             JoinRequest {
                 map: map.to_string(),
+                mode: mode.to_string(),
                 room: room.to_string(),
                 host: host.to_string(),
                 name: name.to_string(),

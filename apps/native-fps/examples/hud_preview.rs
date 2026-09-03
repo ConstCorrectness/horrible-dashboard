@@ -16,8 +16,9 @@
 //! cargo run --manifest-path apps/native-fps/Cargo.toml --example hud_preview
 //! ```
 //!
-//! Takes an optional output path, an optional `WIDTHxHEIGHT`, and an optional
-//! `summary` to draw the post-match card over the top. The size is a parameter
+//! Takes an optional output path, an optional `WIDTHxHEIGHT`, an optional
+//! `summary` to draw the post-match card over the top, and an optional `defuse`
+//! or `ctf` to draw the objective layer. The size is a parameter
 //! because the whole layout is derived from one unit, `u = height / 360`, so a
 //! HUD that reads at 1080p can still be a smear at 720p and overlapping at 4K —
 //! and the only way to know is to render all three.
@@ -35,6 +36,7 @@
 use hassault_native::damage::Placed;
 use hassault_native::hud::{Hud, HudView, OverlayVertex, ScoreRow, UtilitySlot, UtilityView};
 use hassault_native::protocol::{Fx, HitMarker, HurtMarker, SelfState};
+use hassault_native::protocol::{ModeBomb, ModeFlag, ModeInfo, ModeSelf, ModeShared};
 use hassault_native::summary::{MatchTally, Summary, SummaryScreen};
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -49,8 +51,17 @@ fn main() {
             Some((w.parse().ok()?, h.parse().ok()?))
         })
         .unwrap_or((1600u32, 900u32));
-    let summary = args.any(|a| a == "summary");
-    pollster::block_on(run(&path, width, height, summary));
+    let rest: Vec<String> = args.collect();
+    let summary = rest.iter().any(|a| a == "summary");
+    // Which objective layer to draw, if any. A parameter because there is no
+    // other way to see it: the mode HUD is the part of this client with no unit
+    // test that could catch a banner printing through the round clock, which is
+    // exactly what this example exists for.
+    let mode = rest
+        .iter()
+        .find(|a| matches!(a.as_str(), "defuse" | "ctf"))
+        .cloned();
+    pollster::block_on(run(&path, width, height, summary, mode.as_deref()));
 }
 
 /// A player mid-firefight: hurt, part way through a magazine, reloading, with
@@ -111,7 +122,82 @@ fn rows() -> Vec<ScoreRow> {
     ]
 }
 
-async fn run(path: &str, width: u32, height: u32, summary: bool) {
+/// A defuse or capture-the-flag state worth looking at.
+///
+/// Deliberately the *awkward* moment in each rather than a tidy one: a defuse
+/// with the bomb down and the fuse nearly out, and a CTF with our flag taken and
+/// theirs dropped. A HUD checked against the calm case passes with a layout that
+/// collides the moment two things are true at once.
+fn mode_fixture(which: &str) -> (ModeInfo, ModeShared, ModeSelf) {
+    match which {
+        "defuse" => (
+            ModeInfo {
+                id: "defuse".into(),
+                name: "Bomb Defuse".into(),
+                score_label: "Rounds".into(),
+                v: 1,
+                teams: true,
+                ..Default::default()
+            },
+            ModeShared {
+                phase: "live".into(),
+                phase_in: 41.0,
+                round: 7,
+                attackers: 1,
+                swapped: true,
+                bomb: ModeBomb {
+                    state: "planted".into(),
+                    site: "A".into(),
+                    x: 63.5,
+                    y: 28.5,
+                    fuse_in: 4.2,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ModeSelf {
+                attacking: false,
+                progress: 0.62,
+                progress_kind: "defuse".into(),
+                ..Default::default()
+            },
+        ),
+        _ => (
+            ModeInfo {
+                id: "ctf".into(),
+                name: "Capture the Flag".into(),
+                score_label: "Captures".into(),
+                v: 1,
+                teams: true,
+                ..Default::default()
+            },
+            ModeShared {
+                flags: vec![
+                    ModeFlag {
+                        team: 0,
+                        state: "carried".into(),
+                        by: "someone".into(),
+                        ..Default::default()
+                    },
+                    ModeFlag {
+                        team: 1,
+                        state: "dropped".into(),
+                        return_in: 12.0,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            ModeSelf {
+                carrying: true,
+                captures: 2,
+                ..Default::default()
+            },
+        ),
+    }
+}
+
+async fn run(path: &str, width: u32, height: u32, summary: bool, mode_name: Option<&str>) {
     let instance = wgpu::Instance::default();
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions::default())
@@ -252,8 +338,13 @@ async fn run(path: &str, width: u32, height: u32, summary: bool) {
         },
     ];
 
+    let fixture = mode_name.map(mode_fixture);
     let view = HudView {
         hud_scale: 1.0,
+        team: 0,
+        mode: fixture.as_ref().map(|f| &f.0),
+        mode_state: fixture.as_ref().map(|f| &f.1),
+        mode_self: fixture.as_ref().map(|f| &f.2),
         width,
         height,
         you: Some(&you),

@@ -1738,6 +1738,93 @@ tick has seen every consequence of the commands in it, and a round reset that
 teleports everybody happens before the positions those bodies will be rewound to
 are written down.
 
+### The mode HUD, in the native client
+
+Top-centre, which is the one region of this HUD nothing else uses — the kill feed
+is top-right, health bottom-left, ammo bottom-right. It draws the score under its
+own label, a round clock or a bomb fuse, which side you are on, the state of each
+flag, and a bar for whatever is being held.
+
+**Everything is drawn from what the server sent and nothing is re-derived.** The
+score's label is `scoreLabel` off the wire rather than a match on the mode id, so
+a mode that counts something new needs no change in the HUD at all. The fuse and
+the phase clock are the server's own countdowns rather than local timers started
+on an event, which is what keeps them right after a stall. The progress bar is
+`you.mode.progress`, not a local one — a local timer keeps running through the
+interruption that resets it server-side, through a stall, and through dying, each
+of which is a bar that finishes while nothing happens.
+
+Two collisions the unit tests could never have caught, both found by rendering
+`examples/hud_preview` and looking:
+
+- The score line and the bomb line overlapped. A 5×7 glyph is `7 * scale` tall,
+  so the `8.0 * scale` line advance left one scale of gap and the two touched.
+  `paint_center` already used `9.0`; now so does this.
+- The progress bar's label printed straight through the bar. `center_text` places
+  a glyph's **top**, so a label at `y - 3.2u` at scale `0.8u` ran from `y - 3.2u`
+  down to `y + 2.4u` — across the thing it was labelling.
+
+`hud_preview` takes `defuse` or `ctf` now, and the fixtures it draws are
+deliberately the *awkward* moment in each — a planted bomb with four seconds left
+while you are defusing it, a CTF with our flag taken and theirs dropped. A HUD
+checked against the calm case passes with a layout that collides the moment two
+things are true at once.
+
+Objective events all share one banner rather than getting a treatment each: what
+a player needs from "bomb planted at A" and "they took our flag" is the same
+short sentence, briefly, where they are already looking. It sits **above** the
+crosshair because the kill notice sits below it, and both landing in the same
+second is the ordinary case — planting while somebody shoots you off the site.
+`Fx::RoundLive` deliberately produces no banner: the phase clock already says
+LIVE, and a banner that only repeats a readout is one people learn to ignore,
+including on the events that matter.
+
+A `Fx::Half` **clears the kill feed**. Its entries are coloured by whether they
+were ours, and after the sides change every one from before is coloured for a
+side that player is no longer on — which reads as the feed having got the kills
+wrong rather than as the colours meaning something else now.
+
+#### The version probe, and why `Extra` could not cover it
+
+`divergence` reports unknown event names and unknown fx kinds. It reports nothing
+at all about an unknown key **inside** the mode blob, because the blob is a field
+this build *does* declare and `#[serde(default)]` swallows the rest without a
+word. An old client would join a capture-the-flag match, render no flags, score
+nothing, and say nothing about why.
+
+So the server stamps `v` into every mode blob and `report_welcome` compares it
+against `SUPPORTED_MODE_V`, once. That is the only thing there is to compare —
+which is also why `tests/mode_wire.rs` asserts the stamp is actually on the wire.
+
+#### `tests/mode-wire.json`
+
+A welcome and a snapshot **captured out of a live defuse room** mid-round with
+the bomb planted, not written by hand. Every other test of these types builds the
+struct it then asserts on, so all of them would pass just as happily against a
+wire shape the server has never sent.
+
+This is the one seam where the two sides can disagree in silence: `serde(default)`
+is on every field — it has to be, so an older server does not break a newer client
+— and the cost is that a renamed key, a `camelCase` slip or a struct nested one
+level differently all deserialize to a default with no error. The symptom is a HUD
+drawing zeros over a round that is really happening.
+
+Regenerate it by driving a room to a plant and dumping
+`state_payload()` + `snapshot_message(...)` as `{"welcome": …, "snapshot": …}`.
+
+#### Joining a mode
+
+`--game=dm|tdm|ctf|defuse` on the client's command line, carried in the join.
+Spelled `--game` and not `--mode` because `--mode` already means how the *client*
+was launched (train, host, join, edit, ranked) — two different things that both
+want the word.
+
+The server **ignores it when a room id is given**, and that is the right way
+round: a room id names a match already in progress, and what mode it is running
+is the room's answer rather than the joiner's. An invite is an invite to a game,
+not a request to change it. Empty asks for the server's default, so a launcher
+that knows nothing about modes keeps working.
+
 #### The square that froze on the viewport while spraying
 
 The most-reported thing about the native client, and one geometry bug rather than
