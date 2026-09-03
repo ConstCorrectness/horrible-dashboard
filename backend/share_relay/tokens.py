@@ -38,6 +38,23 @@ MAX_TTL_S = 24 * 60 * 60
 #: principle, so it must not be guessable in practice.
 TOKEN_BYTES = 32
 
+#: How many viewers one stream may hold before the relay starts refusing them.
+#:
+#: Six, not the twenty-five this used to be, and the change was forced rather
+#: than tidied: a `performance-2x` was OOM-killed 2m21s into a single desktop
+#: share, which takes the whole registry with it and kills every link on the
+#: relay at once (see `Registry`). Twenty-five was never a number this machine
+#: could honour — `fanout` re-encodes the frames **per viewer** in software at
+#: whatever resolution the host is capturing, so the cost is linear in viewers
+#: and the docs already put the honest figure at "a handful".
+#:
+#: Refusing the seventh viewer is the cheap failure; accepting them and killing
+#: the process is the expensive one, because it takes the six who were already
+#: watching *and* everybody else's links with it. Override with
+#: `SHARE_RELAY_MAX_VIEWERS` once a bigger machine has actually been measured —
+#: not before, and not from the number a demo happened to survive.
+DEFAULT_MAX_VIEWERS = 6
+
 
 def _hash_passphrase(passphrase: str, salt: bytes) -> str:
     return hashlib.pbkdf2_hmac("sha256", passphrase.encode(), salt, 100_000).hex()
@@ -86,7 +103,7 @@ class Registry:
     path, and re-minting is one click.
     """
 
-    def __init__(self, *, max_viewers_per_stream: int = 25) -> None:
+    def __init__(self, *, max_viewers_per_stream: int = DEFAULT_MAX_VIEWERS) -> None:
         self._streams: dict[str, Stream] = {}
         self.max_viewers_per_stream = max_viewers_per_stream
 

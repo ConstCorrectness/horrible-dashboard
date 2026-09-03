@@ -36,6 +36,14 @@ export const databaseModule: ModuleManifest = {
       default: 1000,
     },
     {
+      key: 'database.embedModel',
+      title: 'Embedding model',
+      description:
+        'Model used to embed text for every vector collection on this node. Leave blank to auto-discover the best embedding model the provider is serving. Pin it once you have built an index you care about: a collection’s vector width is fixed when it is created, so discovery picking a different model — which happens on its own when the provider’s catalog changes — breaks every existing collection rather than degrading it. Changing this does not re-embed anything; rebuild the affected indexes.',
+      type: 'string',
+      default: '',
+    },
+    {
       key: 'database.embedOnPeer',
       title: 'Embed batches on a peer',
       description:

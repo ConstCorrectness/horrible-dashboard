@@ -158,6 +158,49 @@ one publisher and two viewers, no restream running. `fly.share.toml` now asks fo
 2 GB, and the machine has since moved off shared CPU entirely (below), so the
 budget is 4 GB.
 
+### Memory is a queue-discipline bug, not a sizing problem
+
+The 4 GB machine was OOM-killed too, 2m21s into a **single** share. That kill is
+what established the real mechanism, and it is worth stating precisely because
+every instinct here points at the wrong lever: it was not the viewer count, and
+raising the memory only moves the deadline.
+
+**Every queue on aiortc's receive path is unbounded, and nothing anywhere drops a
+frame.** `decoder_worker` decodes each inbound frame and `put_nowait`s it onto
+`RemoteStreamTrack._queue` whether or not anyone is reading it, and
+`MediaRelay.subscribe()` defaults to `buffered=True`, giving each consumer its own
+unbounded queue filled the same way. A decoded frame is freed only when somebody
+pulls it, and the host is never told to slow down. A 1080p frame is ~3 MB of
+YUV420; at the capture's 15 fps that is ~45 MB/s of accumulation from any consumer
+that is slow — or absent.
+
+Absent is the sharper half, because it needs no viewers at all. `MediaRelay` does
+not read a source until some proxy of it calls `recv()`, so a host who mints a
+link and starts sharing *before anyone opens it* was not idling. The relay was
+filling memory at line rate while reporting a perfectly healthy stream.
+
+So `fanout.py` holds two rules, both pinned by
+`backend/tests/test_share_relay_backpressure.py` against real aiortc:
+
+1. **The ingest is pumped from the moment it is published** (`Room._start_pump`),
+   not from the moment somebody watches. The pump discards what it reads; the
+   point is the side effect of keeping `MediaRelay`'s reader running.
+2. **Video subscribers are unbuffered** (`_buffered_for`), so a slow encoder skips
+   to the newest frame instead of growing a backlog — one frame of memory per
+   viewer regardless of how far behind they fall. Audio stays buffered, because
+   dropped audio is *audible* where a dropped video frame is merely coarser, and
+   a decoded Opus frame is three orders of magnitude smaller.
+
+For live video, skipping is the correct semantics rather than a compromise: a
+frame that arrives late is worthless, and the alternative is latency that climbs
+until the process dies. Re-encoding removes the usual hazard — dropping *decoded*
+input cannot desynchronise a downstream decoder, because each viewer's encoder
+emits its own keyframes on PLI.
+
+The test file asserts the failure mode as well as the fix. If aiortc ever bounds
+its own queues, the control case goes red, and that is a signal to revisit the
+approach rather than a test to repair.
+
 **CPU is the quality ceiling.** The decode and every encode are software, in
 Python. A shared vCPU is throttled to a fraction of a core under sustained load,
 and a continuous encode is exactly that — the burst credits that make shared CPUs
@@ -174,11 +217,24 @@ share is running.
 
 That ceiling is real: **tens of concurrent viewers per small machine, not
 thousands** — and at desktop capture resolution the honest number is far closer
-to "a handful" than to 25. `max_viewers_per_stream` (25 by default) refuses the next viewer
-with a 503 and a plain sentence, because accepting them and degrading the stream
-for everyone already watching is the worse failure. Write the number down rather
-than discovering it during a demo; an HLS branch is the answer when it matters
-(Phase 6).
+to "a handful" than to 25. The ceiling refuses the next viewer with a 503 and a
+plain sentence, because accepting them and degrading the stream for everyone
+already watching is the worse failure. An HLS branch is the answer when it
+matters (Phase 6).
+
+The number is **six**, and it is six because the twenty-five it replaced was
+disproved rather than doubted: the deployed relay was OOM-killed 2m21s into a
+single share on a 4 GB `performance-2x` (`exit_code=137, oom_killed=true`). It is
+`SHARE_RELAY_MAX_VIEWERS`, set in `fly.share.toml` next to the machine it was
+sized for, because the right value is a property of the box — how many software
+encodes it carries at the host's capture resolution — and not of the code.
+`DEFAULT_MAX_VIEWERS` in `tokens.py` is the same six for a relay run with no env
+at all. Raise it from a measurement, not from a demo that happened to survive.
+
+Note the ceiling is **per stream**, not per machine: two concurrent shares at six
+viewers each is twelve encodes, and nothing enforces a machine-wide total. Six is
+therefore a floor on what one popular link costs, not a cap on what the relay can
+be asked to do.
 
 ## Viewers need TURN too, and that costs something
 

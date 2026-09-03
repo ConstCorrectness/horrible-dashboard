@@ -18,7 +18,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from backend.share_relay import app as relay_app
-from backend.share_relay.tokens import Registry
+from backend.share_relay.tokens import DEFAULT_MAX_VIEWERS, Registry
 
 #: Every test here drives a real peer connection, so the whole module needs the
 #: optional `webrtc` extra (`uv sync --extra webrtc`). Skipping is the honest
@@ -350,3 +350,25 @@ async def test_revoking_stops_the_restream_too(client, monkeypatch) -> None:
     token = (await client.post("/streams", json={})).json()["token"]
     await client.delete(f"/streams/{token}")
     assert stopped == [token]
+
+
+def test_max_viewers_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ceiling is a deployment knob, and a bad value never stops the boot.
+
+    A relay that refuses to start because somebody typed a word into an env var
+    would take down every link on it to protect a number that has a perfectly
+    good default.
+    """
+    monkeypatch.delenv("SHARE_RELAY_MAX_VIEWERS", raising=False)
+    assert relay_app._max_viewers() == DEFAULT_MAX_VIEWERS
+
+    monkeypatch.setenv("SHARE_RELAY_MAX_VIEWERS", "12")
+    assert relay_app._max_viewers() == 12
+
+    monkeypatch.setenv("SHARE_RELAY_MAX_VIEWERS", "lots")
+    assert relay_app._max_viewers() == DEFAULT_MAX_VIEWERS
+
+    # Zero would refuse every viewer, which reads as a broken link rather than a
+    # setting -- so it is floored, not honoured.
+    monkeypatch.setenv("SHARE_RELAY_MAX_VIEWERS", "0")
+    assert relay_app._max_viewers() == 1

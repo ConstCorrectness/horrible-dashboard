@@ -52,11 +52,42 @@ from backend.share_relay.chat import parse as parse_chat
 from backend.share_relay import ice
 from backend.share_relay.fanout import Rooms
 from backend.share_relay.restream import Restreams, ffmpeg_available
-from backend.share_relay.tokens import Registry, Stream
+from backend.share_relay.tokens import DEFAULT_MAX_VIEWERS, Registry, Stream
 
 logger = logging.getLogger(__name__)
 
-registry = Registry()
+
+def _max_viewers() -> int:
+    """The per-stream viewer ceiling, overridable per deployment.
+
+    An env var rather than a constant because the right number is a property of
+    the *machine*, not of this code: it is set by how many software encodes the
+    box can carry at the host's capture resolution. A garbage value falls back to
+    the default rather than raising — a relay that refuses to boot because
+    somebody typed `SHARE_RELAY_MAX_VIEWERS=lots` is worse than one that serves
+    six.
+    """
+    raw = os.environ.get("SHARE_RELAY_MAX_VIEWERS", "").strip()
+    if not raw:
+        return DEFAULT_MAX_VIEWERS
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "SHARE_RELAY_MAX_VIEWERS=%r is not a number; using %d",
+            raw,
+            DEFAULT_MAX_VIEWERS,
+        )
+        return DEFAULT_MAX_VIEWERS
+    if value < 1:
+        # Zero would refuse every viewer, which reads as "the link is broken"
+        # rather than as a deliberate setting. Say so instead of serving it.
+        logger.warning("SHARE_RELAY_MAX_VIEWERS=%d is below 1; using 1", value)
+        return 1
+    return value
+
+
+registry = Registry(max_viewers_per_stream=_max_viewers())
 rooms = Rooms()
 chat = Chat()
 restreams = Restreams()

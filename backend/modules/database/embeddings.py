@@ -59,18 +59,36 @@ def get_local_fallback_embedding(text: str) -> list[float]:
     return vector
 
 
-# Resolved (model, endpoint, dialect, kind) cache. Model discovery costs a
+# Resolved (pin, model, endpoint, dialect, kind) cache. Model discovery costs a
 # `GET /api/tags` round-trip, and `get_embedding` did it on **every single call** — in
 # a bulk index that's one discovery request per document, for an answer that never
 # changes mid-run. Cached with a short TTL so a newly pulled embedding model is still
-# picked up within a minute.
+# picked up within a minute. The pin is part of the key, not just the value: a pinned
+# model must take effect on the next call, not up to a TTL later, or a rebuild
+# started right after setting it silently indexes with the old model.
 _MODEL_CACHE_TTL_S = 60.0
-_model_cache: tuple[float, str, str, str, str] | None = None
+_model_cache: tuple[float, str, str, str, str, str] | None = None
 
 # How many embeddings to request concurrently when the provider has no batch endpoint.
 # The server processes one at a time per slot, but overlapping the request/response
 # round-trips still removes most of the per-call latency.
 EMBED_CONCURRENCY = 8
+
+
+def _pinned_embedding_model() -> str:
+    """The `database.embedModel` setting, or "" to discover one.
+
+    Discovery is a keyword *priority* over whatever the provider happens to offer, so
+    it silently changes model — and therefore vector width — when the provider's
+    catalog changes. Switching this node from Ollama to LM Studio dropped
+    `all-minilm` (384-dim) from the list and the next keyword, `nomic-embed`, took
+    over at 768, breaking every collection built before the switch. A collection's
+    width is fixed at creation, so that is not a degradation but a hard stop. Pinning
+    is how a node says which embedding space its indexes are in.
+    """
+    from backend.modules.settings.routes import get_value
+
+    return str(get_value("database.embedModel", "") or "").strip()
 
 
 def _select_embedding_model(available: list[str], default: str) -> str:
@@ -87,22 +105,34 @@ async def _resolve_model(client: httpx.AsyncClient) -> tuple[str, str, str, str]
     Cached for `_MODEL_CACHE_TTL_S` so bulk indexing doesn't re-probe per document."""
     global _model_cache
     now = time.monotonic()
-    if _model_cache and now - _model_cache[0] < _MODEL_CACHE_TTL_S:
-        return _model_cache[1:]
+    pin = _pinned_embedding_model()
+    if (
+        _model_cache
+        and _model_cache[1] == pin
+        and now - _model_cache[0] < _MODEL_CACHE_TTL_S
+    ):
+        return _model_cache[2:]
     config = _load_config()
     if not config:
         return None
     info = P.provider_for(config.provider)
     endpoint = config.endpoint or info.default_endpoint
-    model = config.model
-    try:
-        model = _select_embedding_model(
-            await P.list_models(client, info, endpoint), model
-        )
-    except Exception as exc:  # noqa: BLE001 — discovery is best-effort
-        logger.debug(f"Failed to query available models list: {exc}")
-    _model_cache = (now, model, endpoint, info.dialect, info.kind)
-    return _model_cache[1:]
+    if pin:
+        # Deliberately not validated against the provider's catalog. A pin that names
+        # a model the server isn't serving must fail as a loud request error, not
+        # quietly fall back to discovery — falling back is what would reintroduce the
+        # silent width change this setting exists to prevent.
+        model = pin
+    else:
+        model = config.model
+        try:
+            model = _select_embedding_model(
+                await P.list_models(client, info, endpoint), model
+            )
+        except Exception as exc:  # noqa: BLE001 — discovery is best-effort
+            logger.debug(f"Failed to query available models list: {exc}")
+    _model_cache = (now, pin, model, endpoint, info.dialect, info.kind)
+    return _model_cache[2:]
 
 
 async def _embed_batch(

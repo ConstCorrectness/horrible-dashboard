@@ -9,7 +9,12 @@ from __future__ import annotations
 
 import time
 
-from backend.share_relay.tokens import DEFAULT_TTL_S, MAX_TTL_S, Registry
+from backend.share_relay.tokens import (
+    DEFAULT_MAX_VIEWERS,
+    DEFAULT_TTL_S,
+    MAX_TTL_S,
+    Registry,
+)
 
 
 def test_minted_tokens_are_unique_and_long() -> None:
@@ -106,3 +111,14 @@ def test_viewer_ceiling_is_enforced_per_stream() -> None:
 def test_title_is_bounded() -> None:
     stream = Registry().mint(title="x" * 500)
     assert len(stream.title) == 120
+
+
+def test_default_ceiling_is_a_handful_not_twenty_five() -> None:
+    """The default is the measured number, not an aspirational one.
+
+    Pinned because the failure it guards against is silent and total: the ceiling
+    only ever shows up as a refused viewer, so a default drifting back upward
+    would be invisible until a relay was OOM-killed and took every link with it.
+    """
+    assert DEFAULT_MAX_VIEWERS == 6
+    assert Registry().max_viewers_per_stream == DEFAULT_MAX_VIEWERS

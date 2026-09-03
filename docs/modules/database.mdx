@@ -339,8 +339,42 @@ endpoint. See [symdex](symdex.mdx#build-cost).
 - **Widget**: `database.console` — the connection bar + schema sidebar + query console.
 - **Command**: `database.open` (`Database: Open Console`) — opens the console in the
   workspace center.
-- **Settings**: `database.defaultConnection` (default `app`) and `database.rowLimit`
-  (default `1000`), read live via `useSetting()` — see [settings](settings.mdx).
+- **Settings**: `database.defaultConnection` (default `app`), `database.rowLimit`
+  (default `1000`), and `database.embedModel` (default blank), read live via
+  `useSetting()` — see [settings](settings.mdx).
+
+### Pinning the embedding model
+
+`database.embedModel` names the model used to embed text for **every** vector
+collection on the node. Left blank, the model is *discovered*: `_select_embedding_model`
+walks a keyword priority — `all-minilm`, `nomic-embed`, `bge-`, `embed` — over whatever
+the configured provider happens to be serving, and takes the first hit.
+
+Discovery is convenient on a fresh node and a hazard on an established one, because the
+answer depends on the provider's catalog rather than on anything the node decided. Moving
+this node's agent from Ollama to LM Studio dropped `all-minilm` from the list, so
+discovery fell through one slot to `nomic-embed` and the embedding width went 384 → 768
+with no configuration change to point at. A collection's vector width is **fixed when it
+is created**, so that is not a degradation but a hard stop: `default` began raising
+`DimensionMismatch` on every ingest, and `symdex` — which records its own
+`embed_model`/`dim` and compares them at query time — started answering every search with
+`reindex_needed` and zero results. Loud in one case, silent in the other.
+
+Pin the model once an index exists that you would not enjoy rebuilding. Two properties
+matter:
+
+- The pin is **used verbatim, never validated against the catalog**. A pin naming a model
+  the provider is not serving fails as a request error rather than quietly reverting to
+  discovery — falling back is precisely what would reintroduce the silent width change.
+- The pin is part of the **resolution cache key**, not a value behind its 60-second TTL,
+  so it takes effect on the next call. Otherwise a rebuild kicked off immediately after
+  changing this setting would embed with the previous model and write a whole collection
+  into the wrong space.
+
+Changing the pin re-embeds nothing. Rebuild the affected indexes: `POST
+/api/symdex/reindex` handles symdex (a changed `embed_model` forces a full rebuild of
+every kind by itself), while a library collection must be dropped and its sources
+re-ingested, since nothing else drops the table.
 
 ## Backend REST API
 

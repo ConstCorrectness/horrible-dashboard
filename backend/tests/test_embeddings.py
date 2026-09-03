@@ -47,8 +47,14 @@ class _Recorder:
 
 @pytest.fixture(autouse=True)
 def _reset_model_cache(monkeypatch):
-    """The resolution cache is process-global; keep tests independent."""
+    """The resolution cache is process-global; keep tests independent.
+
+    Also unpins the embedding model. `_pinned_embedding_model` reads the real
+    settings file, so without this every test here would assert against whatever
+    this machine happens to have pinned rather than against discovery.
+    """
     monkeypatch.setattr(em, "_model_cache", None)
+    monkeypatch.setattr(em, "_pinned_embedding_model", lambda: "")
     yield
     monkeypatch.setattr(em, "_model_cache", None)
 
@@ -144,3 +150,56 @@ def test_no_config_uses_fallback_without_network(monkeypatch):
 def test_empty_input_is_a_noop(monkeypatch):
     vectors, method = asyncio.run(em.get_embeddings([]))
     assert vectors == [] and method == "noop"
+
+
+def test_pinned_model_overrides_discovery(monkeypatch):
+    """A pin is used verbatim and skips discovery entirely.
+
+    Discovery is a keyword priority over the provider's catalog, so it changes model
+    — and vector width — on its own when that catalog changes. That is what broke
+    every 384-dim collection on this node when the provider moved from Ollama to
+    LM Studio. A pin is how a node states which embedding space its indexes are in.
+    """
+    rec = _Recorder()
+    _install(monkeypatch, rec)
+    monkeypatch.setattr(em, "_pinned_embedding_model", lambda: "nomic-embed-text-v1.5")
+
+    _vectors, method = asyncio.run(em.get_embeddings(["a", "b"]))
+
+    assert method == "ollama/nomic-embed-text-v1.5"
+    # The pin is authoritative, so the catalog is never even asked for.
+    assert rec.tags == 0
+
+
+def test_changing_the_pin_takes_effect_immediately(monkeypatch):
+    """The pin is part of the cache key, not a value behind its TTL.
+
+    Resolution is cached for a minute. If the pin were only read on a cache miss, a
+    rebuild kicked off right after changing this setting would index with the old
+    model — writing a whole collection in the wrong embedding space, silently.
+    """
+    rec = _Recorder()
+    _install(monkeypatch, rec)
+
+    monkeypatch.setattr(em, "_pinned_embedding_model", lambda: "first-model")
+    _v, first = asyncio.run(em.get_embeddings(["a"]))
+    monkeypatch.setattr(em, "_pinned_embedding_model", lambda: "second-model")
+    _v, second = asyncio.run(em.get_embeddings(["b"]))
+
+    assert first == "ollama/first-model"
+    assert second == "ollama/second-model"
+
+
+def test_unpinning_returns_to_discovery(monkeypatch):
+    """Blank means discover, and a blank pin must not be cached as a pinned model."""
+    rec = _Recorder()
+    _install(monkeypatch, rec)
+
+    monkeypatch.setattr(em, "_pinned_embedding_model", lambda: "pinned-model")
+    _v, pinned = asyncio.run(em.get_embeddings(["a"]))
+    monkeypatch.setattr(em, "_pinned_embedding_model", lambda: "")
+    _v, discovered = asyncio.run(em.get_embeddings(["b"]))
+
+    assert pinned == "ollama/pinned-model"
+    assert discovered == "ollama/all-minilm:latest"
+    assert rec.tags == 1

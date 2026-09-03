@@ -37,6 +37,17 @@ primary_region = 'iad'
   # The origin viewers reach this relay on. Baked in rather than a secret: it appears
   # verbatim in every link the relay mints, so it is public by construction.
   SHARE_RELAY_PUBLIC_URL = 'https://horrible-share.fly.dev'
+  # The per-stream viewer ceiling. Set here rather than left to the default so the
+  # number this machine was sized for is visible next to the machine.
+  #
+  # Lowered from 25 after this relay was OOM-killed 2m21s into a single share
+  # (exit_code=137, oom_killed=true, on the 4gb performance-2x below). That kill
+  # takes the in-memory registry with it, so it does not degrade one stream -- it
+  # kills EVERY link on the relay at once, and each host's browser goes on
+  # publishing into nothing because WebRTC to a departed peer does not raise.
+  # Raising this needs a measurement, not an optimistic guess; see the note under
+  # [[vm]].
+  SHARE_RELAY_MAX_VIEWERS = '6'
 
 # SHARE_RELAY_KEY is NOT here. It gates minting, so it is a real secret:
 #   fly secrets set SHARE_RELAY_KEY=... -a horrible-share
@@ -108,6 +119,11 @@ primary_region = 'iad'
   memory = '4gb'
   memory_mb = 4096
 
-  # Watch BOTH before raising `max_viewers_per_stream`: 25 is not a number this
-  # machine can honour at desktop resolution, on either axis. Restreaming adds an
-  # ffmpeg process on top of all of it.
+  # Watch BOTH before raising `SHARE_RELAY_MAX_VIEWERS`: 25 was not a number this
+  # machine could honour at desktop resolution, on either axis, and it proved that
+  # by being OOM-killed rather than by getting laggy. Restreaming adds an ffmpeg
+  # process on top of all of it.
+  #
+  # The ceiling is per stream, not per machine: two concurrent shares at six
+  # viewers each is twelve software encodes. Nothing enforces a machine-wide
+  # total, so treat this number as a floor on what a single popular link costs.

@@ -105,6 +105,12 @@ index therefore keeps a meta sidecar (`$HORRIBLE_DATA_DIR/symdex.meta.json`,
   real-model collection); search returns `status: "reindex_needed"` with empty
   results — never a `DimensionMismatch` crash.
 
+The sidecar makes a model change *survivable*, not invisible: between the change and
+the rebuild, search answers `reindex_needed` and returns nothing, which is easy to
+read as "the index is empty" rather than "the index is in the wrong space". Set
+[`database.embedModel`](database.mdx#pinning-the-embedding-model) to stop discovery
+changing the model on its own when the provider's catalog changes.
+
 ## Triggers & status
 
 - `POST /api/symdex/reindex` `{kinds: ["packages"|"stdlib"|"schema"|"docs"]}` —
