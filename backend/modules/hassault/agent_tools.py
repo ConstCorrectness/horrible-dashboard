@@ -24,7 +24,7 @@ import logging
 import math
 from typing import Any
 
-from backend.modules.hassault import assets, bots, fabric, weapons
+from backend.modules.hassault import assets, bots, fabric, modes, weapons
 from backend.modules.hassault.channel import invite_friend
 from backend.modules.hassault.match import MAX_PLAYERS, match_server
 from backend.modules.hassault.physics import PLAYER_RADIUS
@@ -67,10 +67,16 @@ async def host_match(args: dict[str, Any]) -> dict[str, Any]:
     map_name = str(args.get("map") or "").strip()
     if not map_name:
         return {"error": "which map?"}
+    mode = str(args.get("mode") or "").strip() or None
     try:
-        room = match_server.create(map_name)
+        room = match_server.create(map_name, mode=mode)
     except LookupError:
         return {"error": f"no map named {map_name!r} in this install"}
+    except ValueError as exc:
+        # An unknown mode names the ones that exist rather than just refusing:
+        # the agent picked this string and can pick again.
+        known = ", ".join(m["id"] for m in modes.catalog())
+        return {"error": f"{exc}. Modes here: {known}"}
     except Exception as exc:
         return {"error": str(exc)}
 
@@ -78,6 +84,8 @@ async def host_match(args: dict[str, Any]) -> dict[str, Any]:
         "ok": True,
         "room": room.id,
         "map": room.map_name,
+        "mode": room.mode.id,
+        "modeName": room.mode.name,
         # Said plainly because it is the next thing the human has to do, and an
         # agent that opens a room and says nothing else is unhelpful.
         "next": "open the HorribleAssault pane and Join to play in it",
@@ -129,6 +137,10 @@ async def match_status(args: dict[str, Any]) -> dict[str, Any]:
     return {
         "room": room.id,
         "map": room.map_name,
+        "mode": room.mode.id,
+        # Labelled, because what `scores` counts is the mode's business — the
+        # agent should say "3 rounds" rather than "3 kills" when it is rounds.
+        "scoreLabel": room.mode.score_label,
         "scores": {"CLA": room.scores[0], "RVSF": room.scores[1]},
         "players": [
             {
@@ -381,6 +393,14 @@ def register_hassault_tools() -> None:
         group="hassault",
         parameters={
             "map": {"type": "string", "description": "Map name, e.g. hd_atrium."},
+            "mode": {
+                "type": "string",
+                "enum": [m["id"] for m in modes.catalog()],
+                "description": (
+                    "Game mode. Defaults to dm (deathmatch, scored per player); "
+                    "tdm is the same game scored per side."
+                ),
+            },
             "invite": {
                 "type": "string",
                 "description": "Optional friend to invite: their name or friend code.",

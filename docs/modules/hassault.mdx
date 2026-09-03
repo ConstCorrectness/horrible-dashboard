@@ -1499,6 +1499,122 @@ is a reason to run the pass on its own**, so the predicate is
   on screen at the one moment there is meant to be none — the mirror image of the
   same bug.
 
+## Game modes
+
+`MatchRoom` used to encode "the only mode is deathmatch" in exactly five places,
+and `modes/` exists to *be* those five places rather than to be a framework:
+
+| What | Where it lived |
+| --- | --- |
+| `scores[attacker.team] += 1` | `_apply_damage` |
+| `other.team == player.team` | `_fire`, `_detonate`, `_burn` |
+| unconditional timed respawn | `_respawn_due` |
+| room-relative `won` / `mvp` | `result_for` |
+| no clock at all | absent from `simulate` |
+
+Everything else in the simulation — physics, weapons, noise, radar, grenades,
+pickups, prediction, the peer fabric, the time budget — is genuinely
+mode-invariant, and no hook was added for it. The rest of `GameMode` is three
+wire methods and lifecycle plumbing that was already a method body somewhere.
+
+**Every hook has a working default.** A `MatchRoom` built without a mode gets
+`Deathmatch()` and behaves exactly as it did before, which is what made this
+landable: no existing test needed changing, and a new mode overrides only what it
+actually changes.
+
+`Deathmatch(teams=True)` shipped in the same change as the proof that the
+abstraction is real — team deathmatch needed no new hook and no new mechanic.
+Note that **both deathmatch modes have friendly fire off**: `MatchRoom.add`
+auto-balances every joiner into team 0 or 1 and `_spawn_state` picks a spawn by
+that team, so the game always had sides whether or not anything called them that.
+The difference between the two is what the score *means*, not who you can shoot.
+A genuine free-for-all is a third mode and a real change to how a match plays.
+
+### `damage_scale` returns a float, and both halves matter
+
+The three damage sites ask it as a legality filter (`> 0`) because
+`weapons.resolve_shot` is pure geometry and expects the caller to have filtered;
+`_apply_damage` multiplies the amount by it. A float rather than a bool because a
+defuse mode wants CS-style *partial* friendly fire, and a bool would need a second
+hook beside it.
+
+Applying it as a filter but not to the amount is the half-fix that looks
+complete: a mode returning `0.0` still behaves correctly, because nobody is a
+candidate in the first place. The omission only surfaces as a mode asking for
+partial friendly fire and getting all of it — which is why there is a test for a
+`0.5` scale specifically, and one per damage site. Honouring it at two of three
+is the regression this refactor most invites.
+
+Bots keep their own hardcoded `other.team == me.team` targeting filter, and that
+is deliberate rather than an inconsistency: a bot must never *deliberately* team
+kill even in a mode where friendly fire is on.
+
+### Where mode state goes on the wire
+
+Three methods onto the three places the snapshot already has:
+
+- **`welcome_state`** rides once in `state_payload()`, like item placements —
+  timings, prices, site positions. This is also what carries the mode across the
+  peer fabric with **no fabric changes at all**, because `fabric.handle_join`
+  sends that payload verbatim as a guest's welcome.
+- **`shared_state`** is public, per tick, one `mode` key in `shared_view()`.
+- **`private_state`** is per recipient and goes inside `you`.
+
+**`snapshot_message` gains no new top-level key**, and there is a test asserting
+its exact key set.
+
+The dangerous mistake, and the reason the split is worth stating twice: **putting
+per-recipient data in `shared_state` does not raise, does not warn, and does not
+break the snapshot template's fragmentation.** It simply sends every player's
+money to every player. The `_ACK_HOLE` / `_YOU_HOLE` split only guards `ack` and
+`you`.
+
+Relatedly, **never echo a client-supplied string into a mode blob**. A sentinel
+collision *is* caught, but it falls back to `send_json` — so the failure is not a
+crash, it is the bandwidth optimisation silently switching itself off. Site ids
+and phase names are server-chosen enums for exactly that reason.
+
+The blob carries a **`v`** so the native client can report a mismatch once.
+`divergence.rs` reports unknown event names and unknown fx kinds, but **not**
+unknown keys inside `you` or `shared` — serde's `#[serde(default)]` swallows
+those. Without the version probe, an old build joins a CTF match, renders no
+flags, and says nothing.
+
+### Discovery, and two silent failures in it
+
+`find_or_create` is keyed on **`(map, mode)`**, not on the map alone. Keyed on the
+map, "join hd_pit" drops a player into a stranger's defuse round holding a HUD
+for a different game — and it looks like a successful join from every angle.
+
+`listing()` carries `mode` and `modeName`, **and so must `MatchSummary`**. A
+Pydantic response model drops undeclared keys without a word (the trap
+`TacticalOut` already records), so leaving them off means the server browser shows
+every match as deathmatch. There is a test that round-trips every key `listing()`
+produces through the model and asserts nothing was lost.
+
+`modes.build` **raises on an unknown id** rather than falling back to deathmatch.
+A silent substitution would open a room that looks right and plays as something
+else, and since each client renders whatever the welcome describes, nothing
+anywhere would report it.
+
+### Which clock
+
+Three, and the choice is load-bearing in each:
+
+- **Plant / defuse progress → the player's `sim_time`**, accrued one
+  `command.dt` at a time in `on_command`, so it is bounded by the same budget as
+  movement and a client cannot plant faster than time passes. On the wall clock a
+  stuttering client would plant *more slowly* than a smooth one, invisibly.
+- **Round clock and bomb fuse → the room clock** in `tick`. The same argument
+  `_step_grenades` makes: a planted bomb belongs to nobody, so pacing it by the
+  planter's command stream would freeze the fuse when they disconnect.
+- **Freeze-time buy window → the room clock**, so a dead player can still buy.
+
+`tick` runs after grenades and before `history.record`, so a round ending on a
+tick has seen every consequence of the commands in it, and a round reset that
+teleports everybody happens before the positions those bodies will be rewound to
+are written down.
+
 #### The square that froze on the viewport while spraying
 
 The most-reported thing about the native client, and one geometry bug rather than

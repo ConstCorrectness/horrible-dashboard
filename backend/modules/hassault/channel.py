@@ -54,6 +54,7 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
     if event == "join":
         map_name = str(data.get("map") or "")
         room_id = str(data.get("room") or "") or None
+        mode = str(data.get("mode") or "") or None
         host = str(data.get("host") or "")
 
         # Identity is the account's username, never `data["name"]` — a name the
@@ -111,7 +112,7 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
             return
 
         try:
-            room, player = await match_server.join(conn, map_name, name, room_id)
+            room, player = await match_server.join(conn, map_name, name, room_id, mode)
         except (LookupError, ValueError, CgzError) as exc:
             await conn.send_json(_evt("error", {"message": str(exc)}))
             return
@@ -230,7 +231,10 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
         await conn.send_json(_evt("matches", {"matches": match_server.listing()}))
 
     elif event == "console_exec":
-        from backend.modules.hassault.console import ConsoleExecRequest, console_registry
+        from backend.modules.hassault.console import (
+            ConsoleExecRequest,
+            console_registry,
+        )
 
         cmd = str(data.get("command") or "")
         req_id = data.get("reqId")
@@ -259,7 +263,6 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
                 },
             )
         )
-
 
 
 def _signed_in_username() -> str | None:

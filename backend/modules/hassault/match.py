@@ -51,6 +51,7 @@ from typing import TYPE_CHECKING, Any
 from backend.modules.hassault import (
     assets,
     grenades,
+    modes,
     noise,
     physics,
     pickups,
@@ -58,6 +59,7 @@ from backend.modules.hassault import (
     weapons,
 )
 from backend.modules.hassault.cgz import CgzError
+from backend.modules.hassault.modes import GameMode
 from backend.modules.hassault.noise import Noise
 from backend.modules.hassault.physics import MoveInput, PlayerState, World
 from backend.modules.hassault.weapons import (
@@ -523,6 +525,7 @@ class MatchRoom:
         world: World,
         spawns: list,
         items: list | None = None,
+        mode: GameMode | None = None,
     ) -> None:
         """Takes a world and its spawns rather than a parsed map, so a test can
         build a room without AssaultCube content — which this repo cannot ship.
@@ -532,6 +535,10 @@ class MatchRoom:
         spawns are passed in: a physics test builds a room out of four numbers,
         and a map with no items is a room where nothing is lying around, not an
         error.
+
+        `mode` defaults to free-for-all deathmatch, which is what this class was
+        before modes existed — so a room built without one behaves exactly as it
+        did, and every test that constructs a bare `MatchRoom` keeps passing.
         """
         self.id = room_id
         self.map_name = map_name
@@ -548,8 +555,12 @@ class MatchRoom:
         self.empty_since: float | None = time.monotonic()
         # Where everyone was, for rewinding shots. See `weapons.py`.
         self.history = PositionHistory()
-        # Kills per team, index by team number.
+        # What the mode counts, per team. Kills in deathmatch; rounds or
+        # captures elsewhere. Only `mode.on_kill` and `mode.tick` write to it —
+        # `_apply_damage` used to, and that was one of the five places this class
+        # knew it was playing deathmatch.
         self.scores: list[int] = [0, 0]
+        self.mode: GameMode = mode if mode is not None else modes.build()
         # Effects produced this tick — shots and kills — flushed with the next
         # snapshot rather than sent as they happen. A rifle at 700 rpm would
         # otherwise be its own message stream; batching makes combat cost the
@@ -578,6 +589,7 @@ class MatchRoom:
         # and the shot count, which is worth nothing to a cheat and worth a lot
         # when a test needs a shotgun to pattern the same way twice.
         self.rng = random.Random(room_id)
+        self.mode.attach(self)
 
     # -- membership ---------------------------------------------------------
 
@@ -619,9 +631,11 @@ class MatchRoom:
             brain=brain,
         )
         player.reset_loadout()
+        self.mode.outfit(self, player)
         self.players[player.id] = player
         if not player.is_bot:
             self.empty_since = None
+        self.mode.on_join(self, player)
         return player
 
     def result_for(self, player_id: str) -> dict[str, Any] | None:
@@ -632,10 +646,12 @@ class MatchRoom:
         this world. The route used to invent all of them with `random.randint`,
         which made the card a screensaver.
 
-        `won` and `mvp` are **relative to the room** rather than to a team score,
-        because the only mode is deathmatch: you won if nobody outscored you, and
-        you are the MVP if nobody equalled you either. Bots count — losing to one
-        is losing, and a card that quietly excluded them would be flattering
+        `won` and `mvp` come from `mode.outcome_for`, because what winning means
+        is the one thing every mode disagrees about. The deathmatch rule — and
+        the paragraph that used to be here arguing for it — now lives in
+        `modes/deathmatch.py` beside the code that implements it. Bots count in
+        every mode: losing to one is losing, and a card that quietly excluded
+        them would be flattering
         rather than true.
 
         **Both are gated on the match being recordable at all**, which is the fix
@@ -654,8 +670,8 @@ class MatchRoom:
         if player is None:
             return None
         others = [p for p in self.players.values() if p.id != player_id]
-        best = max((p.kills for p in others), default=-1)
         opponents = len(others) or (1 if player.faced_opponents else 0)
+        won, mvp = self.mode.outcome_for(self, player)
         recordable = results.is_recordable(
             {
                 "opponents": opponents,
@@ -672,8 +688,8 @@ class MatchRoom:
             "deaths": player.deaths,
             "headKills": player.head_kills,
             "damageDealt": round(player.damage_dealt),
-            "won": recordable and player.kills >= best,
-            "mvp": recordable and player.kills > best,
+            "won": recordable and won,
+            "mvp": recordable and mvp,
             "recordable": recordable,
             "opponents": opponents,
             # Wall clock, so a summary can be told from a stale one. The room's
@@ -684,6 +700,11 @@ class MatchRoom:
 
     def remove(self, player_id: str) -> MatchPlayer | None:
         gone = self.players.pop(player_id, None)
+        if gone is not None:
+            # After the pop, so a mode counting who is left sees the room it is
+            # actually in — and it must not keep its own dict keyed by player id,
+            # which is why anything per-player lives on `MatchPlayer`.
+            self.mode.on_leave(self, gone)
         if not self.humans:
             self.empty_since = time.monotonic()
         return gone
@@ -794,6 +815,11 @@ class MatchRoom:
                 player.ack = command.seq
 
         self._step_grenades(elapsed, now)
+        # After grenades and before the history: a round that ends on this tick
+        # has already seen every consequence of the commands in it, and a round
+        # reset that teleports everybody happens before the positions those
+        # bodies will be rewound to are written down.
+        self.mode.tick(self, elapsed, now)
 
         self.history.record(
             now_ms,
@@ -933,7 +959,12 @@ class MatchRoom:
         for other in self.players.values():
             if not other.alive or other.protected:
                 continue
-            if other.id != nade.owner and other.team == nade.team:
+            thrower = self.players.get(nade.owner)
+            if (
+                other.id != nade.owner
+                and thrower is not None
+                and self.mode.damage_scale(self, thrower, other) <= 0.0
+            ):
                 continue
             targets[other.id] = (
                 other.state.x,
@@ -963,7 +994,11 @@ class MatchRoom:
         for player in self.players.values():
             if not player.alive or player.protected:
                 continue
-            if player.id != zone.owner and player.team == zone.team:
+            if (
+                player.id != zone.owner
+                and owner is not None
+                and self.mode.damage_scale(self, owner, player) <= 0.0
+            ):
                 continue
             # Feet, not centre: fire is on the floor, and testing a body's middle
             # would let a player wade through the edge of one untouched.
@@ -1265,6 +1300,14 @@ class MatchRoom:
     def _respawn_due(self, now: float) -> None:
         for player in self.players.values():
             if not player.alive and now >= player.respawn_at:
+                # The timer expiring is a *necessary* condition, not a sufficient
+                # one. A round-based mode holds the dead out until the next
+                # round, and expresses that as one predicate here rather than by
+                # pushing `respawn_at` into the future — which would work and
+                # would make "when does this player come back" a number nothing
+                # owns.
+                if not self.mode.may_respawn(self, player, now):
+                    continue
                 self.respawn(player)
                 self._emit({"kind": "spawn", "id": player.id})
 
@@ -1292,6 +1335,9 @@ class MatchRoom:
             self._fire(player, command, now, now_ms)
         if command.throw:
             self._throw(player, command)
+        # Last, and with this command's own `dt` already spent from the budget,
+        # so a progress bar accrued here is bounded by the same clock movement is.
+        self.mode.on_command(self, player, command, now)
 
     def _throw(self, player: MatchPlayer, command: Command) -> None:
         """Put a grenade in the air, if this player has one and is allowed to.
@@ -1445,9 +1491,11 @@ class MatchRoom:
         for other in self.players.values():
             if other.id == player.id or not other.alive or other.protected:
                 continue
-            # Friendly fire is off. A four-player match on a map with team spawns
-            # is otherwise decided by who turns around first.
-            if other.team == player.team:
+            # Whether this is even a legal target is the mode's call. Asked as
+            # `> 0` here because `weapons.resolve_shot` is pure geometry and
+            # expects the caller to have filtered; `_apply_damage` multiplies by
+            # the same number. One rule, two call shapes.
+            if self.mode.damage_scale(self, player, other) <= 0.0:
                 continue
             live = (other.state.x, other.state.y, other.state.z)
             targets[other.id] = (
@@ -1530,7 +1578,20 @@ class MatchRoom:
         weapon: weapons.Weapon,
         now: float,
     ) -> None:
-        # Armour first: it decides how much of this ever reaches health, and
+        # The mode's say on this pairing, and it must be applied to the *amount*
+        # as well as used as the filter the three damage sites ask it for.
+        #
+        # Gating who can be hit without scaling what lands is the half-fix that
+        # looks complete: a mode returning 0.0 behaves correctly (nobody is a
+        # candidate), so friendly fire being off keeps working and the omission
+        # only shows up as a mode asking for *partial* friendly fire and getting
+        # all of it. Applied before armour, because armour absorbs a fraction of
+        # what actually arrives.
+        amount *= self.mode.damage_scale(self, attacker, victim)
+        if amount <= 0.0:
+            return
+
+        # Armour next: it decides how much of this ever reaches health, and
         # every number below — the hitmarker, `damage_dealt`, the kill — is about
         # health. It spends itself point for point on what it absorbs, so a vest
         # is a fixed amount of protection rather than a permanent discount.
@@ -1585,11 +1646,13 @@ class MatchRoom:
         victim.deaths += 1
         victim.respawn_at = now + RESPAWN_DELAY
         victim.queue.clear()
+        # `kills` is a stat and is credited unconditionally, a team kill
+        # included. Whether that team kill *scores* is a different question and
+        # the mode answers it below, in what it does to `self.scores`.
         attacker.kills += 1
         if head:
             attacker.head_kills += 1
-        if 0 <= attacker.team < len(self.scores):
-            self.scores[attacker.team] += 1
+        self.mode.on_kill(self, victim, attacker, head, weapon)
         self._emit(
             {
                 "kind": "kill",
@@ -1633,6 +1696,16 @@ class MatchRoom:
             # missing, so this is a few numbers per tick rather than sixty. The
             # placements themselves ride once, with the map.
             "itemsOut": self.items.taken_ids(),
+            # The mode's public state — a round clock, a bomb, a flag. One key,
+            # and `None` for a mode with nothing to say, so a deathmatch tick is
+            # four bytes longer rather than carrying an empty object.
+            #
+            # **Public** is the operative word and the trap: anything per
+            # recipient put in here goes to everybody, and nothing raises, warns
+            # or breaks the snapshot template — money would simply be
+            # world-readable. Per-recipient mode state belongs in
+            # `private_view_for` below.
+            "mode": self.mode.shared_state(self),
         }
 
     def private_view_for(
@@ -1671,6 +1744,10 @@ class MatchRoom:
             player.id,
             self.noises,
         )
+        # The mode's answer for *this* player: money, a progress bar, whether
+        # they are carrying something. Inside `you`, which is the only part of a
+        # snapshot the template rebuilds per recipient — see `snapshot_template`.
+        you["mode"] = self.mode.private_state(self, player)
         return you
 
     def snapshot_message(
@@ -1767,6 +1844,15 @@ class MatchRoom:
             "zones": [z.snapshot() for z in self.zones],
             "items": self.items.placements(),
             "itemsOut": self.items.taken_ids(),
+            # Static configuration plus the current public state, sent once. The
+            # same argument `items` makes two lines up: timings, prices and site
+            # positions do not change during a match, so paying for them twenty
+            # times a second would be paying for nothing.
+            #
+            # This is also what carries the mode across the peer fabric with no
+            # fabric changes at all, because `fabric.handle_join` sends this
+            # payload verbatim as a guest's welcome.
+            "mode": self.mode.welcome_state(self),
         }
 
 
@@ -1782,7 +1868,19 @@ class MatchServer:
 
     # -- rooms --------------------------------------------------------------
 
-    def create(self, map_name: str, room_id: str | None = None) -> MatchRoom:
+    def create(
+        self,
+        map_name: str,
+        room_id: str | None = None,
+        mode: str | None = None,
+    ) -> MatchRoom:
+        """Open a room on `map_name` in `mode`.
+
+        An unknown mode raises out of `modes.build` rather than falling back to
+        deathmatch: a silent substitution would open a room that looks right and
+        plays as something else, and since the client renders whatever the
+        welcome describes, nothing anywhere would report it.
+        """
         cgz = assets.load_map(map_name)
         if cgz is None:
             raise LookupError(f"no map named {map_name!r}")
@@ -1794,6 +1892,7 @@ class MatchServer:
             world,
             cgz.spawns(),
             pickups.place(world, cgz.entities),
+            mode=modes.build(mode),
         )
         self.rooms[rid] = room
         # Start ticking even though the room is empty: the tick loop is also what
@@ -1810,22 +1909,40 @@ class MatchServer:
     def get(self, room_id: str) -> MatchRoom | None:
         return self.rooms.get(room_id)
 
-    def find_or_create(self, map_name: str) -> MatchRoom:
-        """The first room on `map_name` with space, else a new one.
+    def find_or_create(self, map_name: str, mode: str | None = None) -> MatchRoom:
+        """The first room on `map_name` **in `mode`** with space, else a new one.
 
         "Join a map" is what a player actually wants; explicit room ids exist for
         the friends-list invite path, which hands one over.
+
+        Keyed on the pair and not on the map alone. Matching by map would drop
+        somebody who asked for a deathmatch into the middle of a stranger's
+        defuse round, holding a HUD for a different game — and it would look like
+        a successful join from every angle.
         """
+        want = mode or modes.DEFAULT_MODE
         for room in self.rooms.values():
-            if room.map_name == map_name and len(room.players) < MAX_PLAYERS:
+            if (
+                room.map_name == map_name
+                and room.mode.id == want
+                and len(room.players) < MAX_PLAYERS
+            ):
                 return room
-        return self.create(map_name)
+        return self.create(map_name, mode=mode)
 
     def listing(self) -> list[dict[str, Any]]:
         return [
             {
                 "id": room.id,
                 "map": room.map_name,
+                # The mode belongs in the browse row for the same reason the map
+                # does: it decides whether a player wants this room at all.
+                # NOTE these keys must also be declared on `MatchSummary` in
+                # `models.py` — a Pydantic response model drops what it does not
+                # declare, silently, and the browser would show every match as
+                # deathmatch.
+                "mode": room.mode.id,
+                "modeName": room.mode.name,
                 "players": len(room.players),
                 "bots": sum(1 for p in room.players.values() if p.is_bot),
                 "maxPlayers": MAX_PLAYERS,
@@ -1985,15 +2102,23 @@ class MatchServer:
     # -- membership ---------------------------------------------------------
 
     async def join(
-        self, conn: WsConnection, map_name: str, name: str, room_id: str | None = None
+        self,
+        conn: WsConnection,
+        map_name: str,
+        name: str,
+        room_id: str | None = None,
+        mode: str | None = None,
     ) -> tuple[MatchRoom, MatchPlayer]:
         await self.leave(conn)
         if room_id:
+            # An explicit id wins over `mode`: it names *this* match, and what
+            # mode that match is running is the room's answer, not the joiner's.
+            # An invite is an invite to a game already in progress.
             room = self.get(room_id)
             if room is None:
                 raise LookupError(f"no match {room_id!r}")
         else:
-            room = self.find_or_create(map_name)
+            room = self.find_or_create(map_name, mode)
         if len(room.players) >= MAX_PLAYERS:
             raise ValueError("that match is full")
         player = room.add(name[:MAX_NAME_LEN] or "player", conn)

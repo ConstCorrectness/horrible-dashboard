@@ -32,6 +32,7 @@ from backend.modules.hassault import (
     lore,
     maplint,
     mapsource,
+    modes,
     pickups,
     textures,
     weapons,
@@ -54,6 +55,7 @@ from backend.modules.hassault.models import (
     DraftSaveResponse,
     LintFinding,
     MapEdit,
+    ModeOut,
     MapSchema,
     TextureOut,
     BrowsePlayer,
@@ -434,18 +436,35 @@ async def post_match(body: CreateMatchRequest) -> MatchSummary:
     arrives).
     """
     try:
-        room = match_server.create(body.map, body.id)
+        room = match_server.create(body.map, body.id, mode=body.mode)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except CgzError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ValueError as exc:
+        # An unknown mode. 422 rather than 404: the map was found, the request
+        # was the problem.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return MatchSummary(
         id=room.id,
         map=room.map_name,
+        mode=room.mode.id,
+        modeName=room.mode.name,
         players=0,
         maxPlayers=MAX_PLAYERS,
         createdAt=room.created_at,
     )
+
+
+@router.get("/modes", response_model=list[ModeOut])
+async def get_modes() -> list[ModeOut]:
+    """Every mode this build can host.
+
+    Served for the reason `/weapons` and `/items` are: a client carrying its own
+    copy of the list is a client that offers a mode this server does not have, or
+    hides one it does — and neither shows up until somebody tries to host.
+    """
+    return [ModeOut(**m) for m in modes.catalog()]
 
 
 @router.get("/weapons", response_model=list[WeaponOut])

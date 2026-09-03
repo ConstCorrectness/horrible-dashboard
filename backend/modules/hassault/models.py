@@ -136,6 +136,16 @@ class MatchSummary(BaseModel):
 
     id: str
     map: str
+    """The mode's id and display name.
+
+    Declared here and not only produced by `MatchServer.listing`, because **a
+    response model drops undeclared keys without a word**. Left off, the server
+    browser would show every match as deathmatch, let somebody join a defuse
+    round, and render a deathmatch HUD over it — with no error at any layer. The
+    same trap `TacticalOut` records further down.
+    """
+    mode: str = "dm"
+    modeName: str = ""  # noqa: N815 — the browser reads this verbatim
     players: int
     """How many of `players` are bots, so a lobby row can say "1 + 3 bots"
     rather than advertising a busy match that nobody is in."""
@@ -365,11 +375,26 @@ class MatchInvite(BaseModel):
     expiresAt: float = 0.0  # noqa: N815
 
 
+class ModeOut(BaseModel):
+    """One game mode, served rather than duplicated in each client."""
+
+    id: str
+    name: str
+    scoreLabel: str  # noqa: N815 — the browser reads this verbatim
+    """Whether the mode is scored by side. A client uses it to decide whether to
+    show one scoreboard or two, and the HUD to decide whether a team score means
+    anything."""
+    teams: bool = False
+
+
 class CreateMatchRequest(BaseModel):
     map: str
     """An explicit id, for handing a friend an invite that resolves to *this*
     match rather than to whatever happens to be open on the map."""
     id: str | None = None
+    """Which mode to open. Defaults to deathmatch, so a caller that predates
+    modes keeps getting exactly what it got before."""
+    mode: str = "dm"
 
 
 class TacticalOut(BaseModel):
