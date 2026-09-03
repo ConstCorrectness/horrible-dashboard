@@ -596,6 +596,14 @@ Omitting `canReuse` opts out of step 2 and gives identity-only behavior. A pane
 that genuinely wants one instance per invocation (a terminal) uses neither and
 calls `openPanel` directly.
 
+Such an opener should also pass a **`title` param** naming the thing it opened.
+A view's declared title names a *kind* of pane, so without it every open notebook
+is a tab and a taskbar button reading "Notebook Editor". `paneDisplayTitle(pane)`
+(`layout/controller.ts`) is the one rule — `title` → `name` → `path` → the view's
+declared title — and the document tab strip, the floating window titlebar and the
+taskbar all resolve through it, so a pane is never labelled two different ways at
+once.
+
 The **user's gestures**, the **keybinding commands**, and the **agent's layout
 tools** (`show`, `split_area`, `join_area`, `move_pane`, `fullscreen_area`,
 `toggle_region`, `open_tool_in_dock`, `get_layout`, … relayed through

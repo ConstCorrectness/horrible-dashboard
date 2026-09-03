@@ -118,7 +118,7 @@ export const trainingModule: ModuleManifest = {
     {
       // Non-singleton: one pane per open notebook (params: {projectId, notebook}).
       id: 'training.notebook',
-      title: 'Notebook',
+      title: 'Training Notebook',
       component: NotebookPane,
       role: 'document',
       editor: true,

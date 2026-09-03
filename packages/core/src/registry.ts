@@ -203,9 +203,48 @@ class ModuleRegistry {
   /** Idempotent: re-registering the same module id is a no-op (StrictMode-safe). */
   register(manifest: ModuleManifest): void {
     if (this.modules.has(manifest.id)) return;
+    this.warnOnTitleCollision(manifest);
     this.modules.set(manifest.id, manifest);
     this.generation += 1;
     this.changeListeners.forEach((l) => l());
+  }
+
+  /** Every view a manifest declares, without the read-time explorer wrapping. */
+  private static declaredViews(m: ModuleManifest): Array<PanelDecl | WidgetDecl> {
+    return [...(m.panels ?? []), ...(m.widgets ?? [])];
+  }
+
+  /**
+   * Two views with the same title are two identical rows.
+   *
+   * A pane's title is the *only* thing separating it from another one in three
+   * places: the synthesized `Open: <title>` palette entries below, the tab and
+   * taskbar labels when a pane has no `title` param, and `show`'s exact-title
+   * pass — which has no ambiguity guard, so a duplicate resolves by registration
+   * order and the agent opens the wrong pane while reporting success. Two panes
+   * were both called "Notebook" for exactly this reason and nothing said so.
+   *
+   * A warning rather than a throw, and the same call for a plugin as for a
+   * built-in: a third-party pane must not fail to load over a cosmetic clash, and
+   * a static scan of this repo could never see it in the first place.
+   */
+  private warnOnTitleCollision(manifest: ModuleManifest): void {
+    const incoming = ModuleRegistry.declaredViews(manifest);
+    if (!incoming.length) return;
+    const taken = new Map<string, string>();
+    for (const m of this.modules.values()) {
+      for (const v of ModuleRegistry.declaredViews(m)) taken.set(v.title.toLowerCase(), v.id);
+    }
+    for (const v of incoming) {
+      const other = taken.get(v.title.toLowerCase());
+      if (other && other !== v.id) {
+        console.warn(
+          `[registry] duplicate pane title "${v.title}": ${v.id} and ${other}. ` +
+            'Two panes with one name are two identical palette rows and an ambiguous `show` target.',
+        );
+      }
+      taken.set(v.title.toLowerCase(), v.id);
+    }
   }
 
   /** Test-only: drop every registered module (mirrors `layoutStore.resetForTests`). */

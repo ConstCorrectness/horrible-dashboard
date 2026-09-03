@@ -188,22 +188,35 @@ dict), `cells_changed` `{notebook}`, `mode` `{mode}`, `graph`
 
 ## Contributions to the Layout Shell
 
-- **Panels** — `notebook.browser` (singleton, left: file catalog + create) and
-  `notebook.editor` (non-singleton, center: the cell UI, params `{path}`).
+- **Panels** — `notebook.browser` ("Notebooks", singleton, left: file catalog +
+  create) and `notebook.editor` ("Notebook Editor", non-singleton, center: the
+  cell UI, params `{path}`). The editor is titled **Notebook Editor** rather than
+  plain "Notebook" because [training](training.mdx) contributes a second, genuinely
+  different notebook pane (`training.notebook`, "Training Notebook", running on a
+  project's own venv). Sharing one title made two identical `Open: Notebook`
+  palette rows, two tabs a person could not tell apart, and a `show "notebook"`
+  that resolved by module registration order; `registry.register` now warns when a
+  pane title is already taken.
 - **Opening a notebook** — always through `openNotebook(path)`
   (`modules/notebook/open.ts`), never a bare `openPanel`. It calls
   [`openDocument`](../architecture/windowing.mdx) with the instance id
   `notebook.editor:<path>`, so picking a notebook from the browser **focuses**
   the pane already showing it, or **takes over** an open notebook pane in place
   when that pane has no unsaved edits — rather than splitting the area and
-  leaving two "Notebook" documents open. Notebook cells sync to the kernel
+  leaving two notebook documents open. Each pane is also labelled with its file
+  name (a `title` param), because the view's own title is the same string for
+  every notebook. Notebook cells sync to the kernel
   session as you type, so a clean pane holds nothing to lose; the reuse
   predicate is therefore "any clean notebook pane". To get two notebooks
   side by side, split the area first and open the second from the empty area's
   view picker.
 - **Commands** — `notebook.open` (open the catalog).
 - **Regions** — `notebook.editor` hosts the notebook browser as a left region strip (`k`). The browser is no longer a dock tool of its own: it is the **Notebooks** section of [Explorer](explorer.mdx) (`embedded`), which is exactly the doubling `embedded` exists to remove.
-- **Layout preset** — `notebook`.
+- **Layout preset** — `notebook`, named **Notebooks** in the workspace strip. The
+  preset *id* stays `notebook` (it is persisted on workspace rows and is what
+  `switch_workspace` takes); only the display name changed. `show "notebook"` is
+  pinned by a `VIEW_ALIASES` entry to the editor pane, since the workspace pass
+  runs before pane titles and would otherwise claim the word.
 - **Settings** — `notebook.root`, `notebook.python`, `notebook.python.version`.
 
 ## Roadmap

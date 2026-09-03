@@ -21,6 +21,7 @@ import {
   focusWindow,
   layoutStore,
   MIN_WINDOW_SIZE,
+  paneDisplayTitle,
   presentPane,
   releaseCapture,
   resolveView,
@@ -265,14 +266,14 @@ export function DesktopWindow({
                   if (e.button === 1) void closePaneGuarded(tab.instanceId);
                 }}
               >
-                {resolveView(tab.viewId)?.title ?? tab.viewId}
+                {paneDisplayTitle(tab)}
               </button>
             ))}
           </div>
         ) : (
           <span className="os-window-title">
             {decl?.icon ? <span className="os-window-icon">{decl.icon}</span> : null}
-            {decl?.title ?? active?.viewId ?? 'Window'}
+            {active ? paneDisplayTitle(active) : 'Window'}
           </span>
         )}
         <div className="os-window-controls">

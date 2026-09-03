@@ -11,7 +11,13 @@ import { openDocument } from '../../layout/controller';
  * edits is taken over in place (a notebook autosaves through the kernel session,
  * so a clean pane holds nothing to lose). Only when every notebook pane is dirty
  * — or none is open — does a new pane appear.
+ *
+ * The `title` param is what the tab and the taskbar button actually read
+ * (`layout/taskbar.ts`, `AreaHeader.tsx`), so it carries the file name: two open
+ * notebooks both labelled "Notebook Editor" tell you nothing about which is which.
+ * The header prefers `title` alone, so passing `path` is not enough.
  */
 export function openNotebook(path: string): void {
-  openDocument('notebook.editor', `notebook.editor:${path}`, { path }, () => true);
+  const title = path.split(/[\\/]/).pop() || path;
+  openDocument('notebook.editor', `notebook.editor:${path}`, { path, title }, () => true);
 }

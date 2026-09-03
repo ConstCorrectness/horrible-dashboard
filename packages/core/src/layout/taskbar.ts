@@ -158,6 +158,8 @@ function paneTitle(declared: string, params?: Record<string, unknown>): string {
   const t = params?.title ?? params?.name ?? params?.path;
   return typeof t === 'string' && t.trim() ? t : declared;
 }
+// Kept as a local because the caller already holds the decl; `paneDisplayTitle`
+// in the controller is the same rule for callers that hold only a pane.
 
 /**
  * Order by the numeric suffix of `viewId#n` when both have one, falling back to

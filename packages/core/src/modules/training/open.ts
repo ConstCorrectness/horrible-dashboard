@@ -8,12 +8,16 @@ import { openDocument } from '../../layout/controller';
 /**
  * Open a project's notebook. Reopening the same one focuses the pane that holds
  * it; otherwise a clean training-notebook pane is taken over in place.
+ *
+ * The `title` param names the notebook on the tab and the taskbar button — the
+ * view's own title is the same string for every project, so without it two open
+ * projects are two identical buttons.
  */
 export function openTrainingNotebook(projectId: string, notebook: string): void {
   openDocument(
     'training.notebook',
     `training.notebook:${projectId}/${notebook}`,
-    { projectId, notebook },
+    { projectId, notebook, title: notebook },
     () => true,
   );
 }

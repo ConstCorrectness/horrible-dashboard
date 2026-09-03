@@ -54,7 +54,7 @@ export const notebookModule: ModuleManifest = {
     {
       // Non-singleton: one pane per open notebook (params: {path}).
       id: 'notebook.editor',
-      title: 'Notebook',
+      title: 'Notebook Editor',
       component: NotebookEditor,
       role: 'document',
       editor: true,
@@ -109,7 +109,7 @@ export const notebookModule: ModuleManifest = {
   frames: [
     {
       id: 'notebook',
-      name: 'Notebook',
+      name: 'Notebooks',
       icon: '📓',
       frame: {
         // Empty document area: pick a notebook from the browser in the left dock.

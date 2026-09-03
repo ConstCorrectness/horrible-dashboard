@@ -84,6 +84,13 @@ REPL with `dash.layout.toggle_region()` / `set_region_view()`.
 A view being someone's region view doesn't stop it opening standalone (e.g. the
 Agent Harness is also a left-dock tool; the Game Board is also a document).
 
+The two notebook hosts above are different documents on different kernels, and
+they are titled apart to say so: `notebook.editor` is **Notebook Editor** (the
+domain-neutral `.ipynb` editor) and `training.notebook` is **Training Notebook**
+(a project's own notebook, on that project's venv). Both were called "Notebook"
+once, which made two identical `Open: Notebook` palette rows and an ambiguous
+`show` target — `registry.register` now warns on a duplicate pane title.
+
 ## Compared to panel groups
 
 The old system kept companion state in unmounted React state (lost on reload),

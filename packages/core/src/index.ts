@@ -197,6 +197,7 @@ export {
   openPane as openFramePane,
   openPaneInArea,
   openToolInDock,
+  paneDisplayTitle,
   readPaneAgentContext,
   regionsFor,
   resizeAreaPx,

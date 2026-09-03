@@ -22,6 +22,7 @@ import {
   paneDrag,
   registerTransient,
   registry,
+  paneDisplayTitle,
   resolveView,
   roleOf,
   splitAreaBy,
@@ -64,11 +65,9 @@ function switchableViews(area: AreaNode) {
   });
 }
 
-/** A pane's display name: its own `title` param (a file name) before the view's. */
+/** A pane's display name — the shared rule, so a tab and its taskbar button agree. */
 function paneTitle(pane: PaneState): string {
-  return (
-    (pane.params?.title as string | undefined) ?? resolveView(pane.viewId)?.title ?? pane.viewId
-  );
+  return paneDisplayTitle(pane);
 }
 
 /**

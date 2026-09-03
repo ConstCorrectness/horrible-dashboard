@@ -74,6 +74,26 @@ export function resolveView(viewId: string): ViewDecl | undefined {
   );
 }
 
+/**
+ * A pane's display name: its own `title` param before the view's declared title.
+ *
+ * The one rule for every surface that labels a pane — document tabs, floating
+ * window titlebars, taskbar buttons. A view title names a *kind* of pane, so
+ * without the param six open notebooks are six buttons reading "Notebook
+ * Editor"; the param is how an editor buffer, a terminal or a notebook says
+ * which file or shell it holds. Shared rather than reimplemented per surface,
+ * because it had drifted: the taskbar honoured it and the floating titlebar did
+ * not, so the same pane was labelled two different ways at once.
+ */
+export function paneDisplayTitle(pane: {
+  viewId: string;
+  params?: Record<string, unknown>;
+}): string {
+  const t = pane.params?.title ?? pane.params?.name ?? pane.params?.path;
+  if (typeof t === 'string' && t.trim()) return t;
+  return resolveView(pane.viewId)?.title ?? pane.viewId;
+}
+
 /** A view's layout role; unannotated panels/widgets fall back per their kind. */
 export function roleOf(viewId: string): PaneRole {
   const panel = registry.panels.find((p) => p.id === viewId);
@@ -765,6 +785,18 @@ export const VIEW_ALIASES: Readonly<Record<string, ShowTarget>> = {
   Flows: { kind: 'region', regionViewId: 'flow.library' },
   'records.list': { kind: 'region', regionViewId: 'records.list' },
   Tables: { kind: 'region', regionViewId: 'records.list' },
+
+  // Notebook: two panes and a workspace all answered to this one word. The panes
+  // are now "Notebook Editor" and "Training Notebook", so the bare name resolves
+  // through nothing on its own — and the workspace pass, which runs *before*
+  // titles, would claim it via the `notebook` preset id. Aliases run first, so
+  // this pins the word to the pane a person means by it. The workspace keeps its
+  // id and stays reachable through the workspace strip and `switch_workspace`.
+  //
+  // Its new name, "Notebooks", is likewise shadowed by the `Notebooks` entry
+  // above — deliberately. Both are "the list of notebooks", and that preset seeds
+  // `explorer.home` in its left dock, so the alias lands on the same content.
+  Notebook: { kind: 'view', viewId: 'notebook.editor' },
 };
 
 /** The candidate set `show` matches against, gathered from the live registry. */
