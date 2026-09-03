@@ -37,7 +37,27 @@ import { GameAudio } from './audio';
 import { AvatarPool } from './avatars';
 import { createBackdrop, type Backdrop } from './backdrop';
 import { MatchCompanion } from './panels/MatchCompanion';
+import { BuyMenu } from './panels/BuyMenu';
 import { ModeHud, ModeProgress } from './panels/ModeHud';
+
+/**
+ * Digit codes in catalogue order, so key `n` buys entry `n - 1`.
+ *
+ * Nine of them: the catalogue is eight today and a tenth entry would need a row
+ * of keys that does not exist, which is the moment to scroll rather than to
+ * bind `Digit0`.
+ */
+const BUY_KEYS = [
+  'Digit1',
+  'Digit2',
+  'Digit3',
+  'Digit4',
+  'Digit5',
+  'Digit6',
+  'Digit7',
+  'Digit8',
+  'Digit9',
+];
 import { useNativeLaunch } from './native-launch';
 import { FlashOverlay, NadeTray, Radar } from './panels/Radar';
 import { PostMatchDebrief } from './panels/PostMatchDebrief';
@@ -345,6 +365,26 @@ export function HorribleAssaultPanel() {
   const [loadoutError, setLoadoutError] = useState('');
   const [botSkill, setBotSkill] = useState('normal');
   const [showScores, setShowScores] = useState(false);
+  /** Whether the buy menu is being held open. Local: only the *menu* is. */
+  const [showBuy, setShowBuy] = useState(false);
+  /**
+   * A purchase to put on the next command, or `-1`.
+   *
+   * A ref rather than state, and drained by the frame loop: a buy is edge
+   * triggered, so re-rendering on it would be a render per purchase for
+   * something the render never reads.
+   */
+  const pendingBuyRef = useRef(-1);
+  /**
+   * `showBuy`, readable from the key handler.
+   *
+   * The handler is installed once in an effect, so reading the state directly
+   * would close over whatever it was when that effect ran — the menu would open
+   * and the number row would keep switching weapons. The repo's usual shape for
+   * this: state for rendering, a ref for the listener.
+   */
+  const showBuyRef = useRef(false);
+  showBuyRef.current = showBuy;
   /** Timestamps, compared against `Date.now()` so a stale one simply expires. */
   const [flash, setFlash] = useState({ hit: 0, killed: 0, hurt: 0 });
   /**
@@ -1250,6 +1290,12 @@ export function HorribleAssaultPanel() {
                 kick,
                 thrown,
                 alive && keys.has('use'),
+                // Taken, not read: the next command must not repeat it.
+                (() => {
+                  const queued = pendingBuyRef.current;
+                  pendingBuyRef.current = -1;
+                  return queued;
+                })(),
               ),
             );
             session.predictor.decay(dt);
@@ -1988,6 +2034,20 @@ export function HorribleAssaultPanel() {
       // it needs no server, works in Train, and costs the wire nothing.
       if (action === 'inspect') sceneRef.current?.weapon.inspect();
       if (action === 'scores') setShowScores(true);
+      if (action === 'buy') setShowBuy(true);
+      // While the menu is held, the number row buys instead of selecting. Two
+      // jobs for one row rather than a second set of keys elsewhere: the menu is
+      // *held*, so which job is which is never ambiguous — the other hand is on
+      // it. Returns before the weapon and grenade handlers below, so a buy is
+      // never also a weapon switch.
+      if (showBuyRef.current) {
+        const slot = BUY_KEYS.indexOf(e.code);
+        if (slot >= 0) {
+          pendingBuyRef.current = slot;
+          keysRef.current.add(action);
+          return;
+        }
+      }
       // Two modes, one ref. In hold mode the key up clears it; in toggle mode
       // nothing does but the next press, which is exactly why crouch cannot live
       // in `keysRef` with the rest of the movement keys.
@@ -2024,6 +2084,7 @@ export function HorribleAssaultPanel() {
       const action = codesRef.current.get(e.code);
       if (!action) return;
       if (action === 'scores') setShowScores(false);
+      if (action === 'buy') setShowBuy(false);
       if (action === 'crouch' && !crouchToggleRef.current) crouchRef.current = false;
       keysRef.current.delete(action);
     };
@@ -2613,6 +2674,16 @@ export function HorribleAssaultPanel() {
           />
         )}
         {online && <ModeProgress mine={net.you?.mode} />}
+        {online && (
+          <BuyMenu
+            mode={net.mode}
+            mine={net.you?.mode}
+            open={showBuy}
+            onBuy={(index) => {
+              pendingBuyRef.current = index;
+            }}
+          />
+        )}
 
         {online && net.killfeed.length > 0 && (
           <div

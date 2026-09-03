@@ -1705,6 +1705,95 @@ be called.
 
 Money, kills and deaths persist: they are the match, not the round.
 
+#### The economy
+
+Money on `MatchPlayer` (not a mode-side dict, which leaks its entries when
+`remove` fires), and **every number served** in `welcome_state().config` plus a
+`catalog` — the `/weapons` and `/items` precedent. A client with its own copy of
+a price is a menu that offers a purchase the server then refuses, and that fails
+as money still sitting there with nothing saying why.
+
+The catalogue is `{id, name, kind, slot, price}` rather than raw `WEAPONS`
+indices, so armour and grenades ride the same integer as a rifle and
+`Command.buy` stays one number. **The index into it is what goes on the wire**,
+which is why a duplicate id is a tested-for error: two rows would buy the same
+thing while the menu showed two.
+
+`Command.buy` and not a `/ws` event, for the reason `throw` gives: commands are
+forwarded *verbatim* by `fabric.handle_input`, so a field crosses the peer wire,
+the ranked relay and the console with no changes at all. An event needs a
+`channel.py` branch, a `fabric.py` send and handle pair, a new frame kind, a
+guest-side normaliser and a `ranked.py` relay — five touch points, four of them
+security boundaries, for something that costs nine bytes here. It is `-1` when
+absent, the `weapon`/`nade` shape: a default of zero names the first entry and
+would make every movement command a request to buy a rifle.
+
+Rules with reasons:
+
+- **A purchase that would give nothing spends nothing** — the `pickups.apply`
+  shape. Armour at full armour, or a rifle you hold, must not quietly cost you
+  the round's money.
+- **A dead player may still buy.** They are buying for the *next* round and the
+  freeze is when that is decided, so `alive` is deliberately not one of the
+  checks — see the `on_command` note below, which is what makes it possible.
+- **A loss pays, and pays more the longer it goes on.** Without it a side that
+  loses once buys nothing, loses again, and the scoreline stops being about
+  play. That is the failure an economy is most likely to introduce and the one it
+  is least obvious it has. Capped at `MAX_LOSS_STREAK`, or a side that never wins
+  ends richer than the one beating them.
+- **Planting and defusing pay even on a losing round.** Planting and then being
+  wiped is still the play that nearly worked. Paid at the objective rather than
+  at round end, which also avoids having to remember who the planter was — they
+  may not be alive by then.
+- **Half time levels the purses**, or the first half's economy decides a match
+  whose sides have just swapped.
+- **A team kill charges rather than pays**, floored at zero: friendly fire here
+  is partial, so a teammate in a doorway is already a cost, and this stops
+  shooting through them being free. A debt would follow somebody into a round
+  they had nothing to do with.
+
+#### Two ordering bugs the economy exposed
+
+Both were invisible until something was actually bought.
+
+**`outfit` was never called on respawn.** It ran in `MatchRoom.add` only, so
+`reset_loadout`'s full grant won at the start of every round: you paid, you
+spawned, and you were holding the whole loadout anyway. There is no error
+anywhere in that — the buy menu simply appears not to work. `respawn` now calls
+it immediately after `reset_loadout`, and the docstring on both says why that
+order is the contract.
+
+**`mode.on_command` sat inside `if player.alive:`.** It was called from
+`_handle_combat`, which is gated on being alive, so a dead player's commands
+never reached the mode at all and the buy window was closed to exactly the people
+using it. It now runs in the queue drain **outside** that guard: what a dead
+player's command may do is the mode's decision, not the loop's. Still inside the
+drain, so the command's `dt` has already been spent from the budget and a
+progress bar accrued from it is bounded by the same clock movement is.
+
+#### The buy menu, in both clients
+
+A **held** panel like the scoreboard rather than a mode you toggle into: it is
+read during the freeze while the round is being decided around you, and a menu
+you can leave up by accident is one you die behind. `B` holds it; the number row
+buys while it is open, which is two jobs for one row and unambiguous precisely
+because the menu is held — the other hand is on it.
+
+Three row states, and they are three because they mean three things: owned,
+buyable, out of reach. Collapsing the first two gives a menu that keeps offering
+what you already have. `canBuy` comes off the wire rather than being a phase
+check either client repeats, and a closed window **says so** instead of hiding
+the panel — hidden, a player pressing `B` during a live round cannot tell whether
+the key is broken or the window is.
+
+Two things the native render caught that no test would have: the key column and
+the item name touched (`"2Shotgun"`) at a gutter sized for the digit rather than
+for a column, and the scoreboard drew *over* the menu. Both are held panels, so
+they rarely overlap in play — but the buy menu is the one being typed into, and a
+panel you are pressing keys at must not be the one underneath. It is drawn last
+now, and near-opaque, unlike the scoreboard: that one is glanced at while the game
+carries on behind it, and this one is read.
+
 #### Bots, honestly
 
 Bots play defuse through the same `bot_goal` hook, and one thing had to move for

@@ -280,6 +280,22 @@ class Command:
     pauses, or walking away and back would finish a plant instantly.
     """
     use: bool = False
+    """Buy the catalogue entry at this index, or `-1` for none.
+
+    **A field on the command rather than a `/ws` event of its own**, and the
+    reason is the fabric. `fabric.handle_input` forwards commands *verbatim*, as
+    does `channel.py` for the remote and ranked paths, so a `Command` field
+    crosses the peer wire, the ranked relay and the console with no changes at
+    all — the property `throw` already relies on. A new event would need a
+    `channel.py` branch, a `fabric.py` send and handle pair, a new frame kind, a
+    guest-side normaliser and a `ranked.py` relay: five touch points, four of
+    them security boundaries, for something that costs nine bytes here.
+
+    `-1` and not `0`, the same shape as `weapon` and `nade` and for the same
+    reason: a default of zero names the first catalogue entry, which would make
+    every movement command a request to buy a rifle.
+    """
+    buy: int = -1
 
 
 @dataclass(slots=True)
@@ -309,6 +325,22 @@ class MatchPlayer:
     #: walk back, it finishes instantly" bug.
     action_progress: float = 0.0
     action_kind: str = ""
+    #: What this player has to spend, in a mode with an economy.
+    #:
+    #: On `MatchPlayer` and not in a dict the mode keeps, for the reason `base`
+    #: gives: a mode-side dict keyed by player id leaks its entries when `remove`
+    #: fires, and `private_view` is already the per-player drain point.
+    money: int = 0
+    #: Weapon slots bought for this round, and grenade slots, and everything
+    #: else — armour today.
+    #:
+    #: Three sets rather than one, because they index three different tables and
+    #: a single set would need its members tagged to say which. They are cleared
+    #: by whoever owns the round, never by `reset_loadout`: what you bought
+    #: survives dying, and only a new round takes it away.
+    owned: set[int] = field(default_factory=set)
+    owned_nades: set[int] = field(default_factory=set)
+    owned_extras: set[str] = field(default_factory=set)
     #: Objectives completed: flags captured, bombs planted or defused.
     #:
     #: On `MatchPlayer` rather than in a dict the mode keeps, for the reason
@@ -772,6 +804,12 @@ class MatchRoom:
     def respawn(self, player: MatchPlayer) -> None:
         player.state = self._spawn_state(player.team)
         player.reset_loadout()
+        # **Immediately after, never instead of.** `reset_loadout` hands out
+        # every weapon with full magazines — right for deathmatch, and exactly
+        # what a mode with an economy has to undo. Leave this out and the grant
+        # wins with no symptom at all but a buy menu that appears to do nothing:
+        # you pay, you spawn, and you are holding the full loadout anyway.
+        self.mode.outfit(self, player)
         # Drop queued commands: they were predicted against the old position, and
         # simulating them after a teleport walks the player away from the spawn.
         player.queue.clear()
@@ -853,6 +891,17 @@ class MatchRoom:
                     )
                     self._movement_consequences(player, before, was_airborne, now)
                     self._handle_combat(player, command, now, now_ms)
+                # **Outside the `alive` guard**, unlike combat, and that is the
+                # point: what a *dead* player's command is allowed to do is the
+                # mode's decision, not this loop's. A buy menu is the case —
+                # freeze time is exactly when the next round is decided, and a
+                # player waiting to respawn is the one deciding it. Gated here
+                # instead, they would press the key and nothing would happen.
+                #
+                # Still inside the queue drain, so this command's own `dt` has
+                # already been spent from the budget and a progress bar accrued
+                # from it is bounded by the same clock movement is.
+                self.mode.on_command(self, player, command, now)
                 # The ack advances even for a dead player's commands: their client
                 # is still predicting and still needs to know what was consumed,
                 # and a frozen ack makes it replay an ever-growing tail.
@@ -1379,9 +1428,6 @@ class MatchRoom:
             self._fire(player, command, now, now_ms)
         if command.throw:
             self._throw(player, command)
-        # Last, and with this command's own `dt` already spent from the budget,
-        # so a progress bar accrued here is bounded by the same clock movement is.
-        self.mode.on_command(self, player, command, now)
 
     def _throw(self, player: MatchPlayer, command: Command) -> None:
         """Put a grenade in the air, if this player has one and is allowed to.
@@ -2297,6 +2343,12 @@ def parse_command(raw: Any) -> Command | None:
         scoped=max(0, int(_num(raw.get("scoped")))),
         throw=bool(raw.get("throw")),
         use=bool(raw.get("use")),
+        # Floored to `-1` for anything absent or nonsensical, so a bad value buys
+        # nothing rather than picking an entry. The *upper* bound is deliberately
+        # not applied here: the catalogue belongs to the mode, and this parser
+        # does not know which mode the command lands in — the same division
+        # `scoped` documents.
+        buy=int(_clamp(_num(raw.get("buy"), -1.0), -1.0, 63.0)),
         # `-1` for absent or out of range, which `grenades.spec_at` reads as "no
         # grenade" — the same shape as `weapon`, and for the same reason: a
         # nonsensical slot must do nothing rather than pick one.

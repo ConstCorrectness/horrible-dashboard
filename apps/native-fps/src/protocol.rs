@@ -160,6 +160,23 @@ pub struct Command {
     /// sending it explicitly keeps the wire readable in the observability panel.
     #[serde(rename = "use")]
     pub use_key: bool,
+    /// Buy the catalogue entry at this index, or `-1` for none.
+    ///
+    /// A field on the command rather than an event of its own, and the reason is
+    /// the fabric: commands are forwarded *verbatim*, so this crosses the peer
+    /// wire, the ranked relay and the console with no changes at all. An event
+    /// would need five touch points, four of them security boundaries.
+    ///
+    /// Skipped when `-1`, unlike `use`: a buy is one frame in several hundred,
+    /// so the field is worth omitting; the action key is on most of them.
+    #[serde(skip_serializing_if = "is_no_buy")]
+    pub buy: i32,
+}
+
+/// `-1` is "no purchase". A free function because `skip_serializing_if` needs
+/// one, and a method would have to be public on `Command` for no other reason.
+fn is_no_buy(value: &i32) -> bool {
+    *value < 0
 }
 
 impl Command {
@@ -168,6 +185,10 @@ impl Command {
             seq,
             weapon: -1,
             nade: -1,
+            // `-1`, not the `0` a `Default` would give: zero names the first
+            // catalogue entry, which would make every movement command a
+            // request to buy a rifle.
+            buy: -1,
             ..Default::default()
         }
     }
@@ -1008,6 +1029,10 @@ pub struct ModeInfo {
     /// Flag stands. Where a flag lives when it is home.
     #[serde(default)]
     pub stands: Vec<ModeFlag>,
+    /// What can be bought, in the order a menu lists it. Empty for a mode with
+    /// no economy, which is how every mode but defuse arrives.
+    #[serde(default)]
+    pub catalog: Vec<BuyItem>,
     /// The mode's public state at the moment we joined.
     ///
     /// The server spreads `shared_state()` into the welcome alongside the static
@@ -1034,6 +1059,29 @@ pub struct ModeConfig {
     pub defuse_time: f32,
     #[serde(rename = "fuseTime", default)]
     pub fuse_time: f32,
+    #[serde(rename = "startMoney", default)]
+    pub start_money: i32,
+}
+
+/// One thing the buy menu can sell.
+///
+/// **The index into `ModeInfo::catalog` is `Command::buy`**, so no client ever
+/// invents an id or a price — both are the server's, and a second copy of a
+/// price is a menu that offers a purchase the server then refuses, with the
+/// money still there and nothing saying why.
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct BuyItem {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    /// `weapon`, `armour` or `nade`.
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub slot: i32,
+    #[serde(default)]
+    pub price: i32,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -1135,6 +1183,21 @@ pub struct ModeSelf {
     pub progress_kind: String,
     #[serde(default)]
     pub captures: i32,
+    /// What we have to spend.
+    ///
+    /// Per recipient by construction, and this is the field that makes that
+    /// matter: in the shared blob it would be every player's purse, world
+    /// readable, with nothing on either side raising a word about it.
+    #[serde(default)]
+    pub money: i32,
+    /// Whether the buy window is open — the server's answer, not a phase check
+    /// this client repeats.
+    #[serde(rename = "canBuy", default)]
+    pub can_buy: bool,
+    /// Catalogue indices already owned, so a menu can grey them out without
+    /// keeping its own idea of what "owned" means.
+    #[serde(default)]
+    pub bought: Vec<i32>,
 }
 
 #[derive(Debug, Deserialize, Default)]

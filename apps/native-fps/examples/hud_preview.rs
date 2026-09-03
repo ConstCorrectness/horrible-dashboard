@@ -35,8 +35,8 @@
 
 use hassault_native::damage::Placed;
 use hassault_native::hud::{Hud, HudView, OverlayVertex, ScoreRow, UtilitySlot, UtilityView};
+use hassault_native::protocol::{BuyItem, ModeBomb, ModeFlag, ModeInfo, ModeSelf, ModeShared};
 use hassault_native::protocol::{Fx, HitMarker, HurtMarker, SelfState};
-use hassault_native::protocol::{ModeBomb, ModeFlag, ModeInfo, ModeSelf, ModeShared};
 use hassault_native::summary::{MatchTally, Summary, SummaryScreen};
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -137,6 +137,68 @@ fn mode_fixture(which: &str) -> (ModeInfo, ModeShared, ModeSelf) {
                 score_label: "Rounds".into(),
                 v: 1,
                 teams: true,
+                // A real catalogue, because the menu is the half of an economy
+                // that has to be *looked at*: prices right-aligned against
+                // names of very different lengths is exactly the layout a unit
+                // test would pass and a screenshot would not.
+                catalog: vec![
+                    BuyItem {
+                        id: "assault".into(),
+                        name: "Assault Rifle".into(),
+                        kind: "weapon".into(),
+                        slot: 2,
+                        price: 2700,
+                    },
+                    BuyItem {
+                        id: "shotgun".into(),
+                        name: "Shotgun".into(),
+                        kind: "weapon".into(),
+                        slot: 3,
+                        price: 1800,
+                    },
+                    BuyItem {
+                        id: "sniper".into(),
+                        name: "Sniper Rifle".into(),
+                        kind: "weapon".into(),
+                        slot: 4,
+                        price: 4750,
+                    },
+                    BuyItem {
+                        id: "armour".into(),
+                        name: "Armour".into(),
+                        kind: "armour".into(),
+                        slot: -1,
+                        price: 1000,
+                    },
+                    BuyItem {
+                        id: "he".into(),
+                        name: "HE Grenade".into(),
+                        kind: "nade".into(),
+                        slot: 0,
+                        price: 300,
+                    },
+                    BuyItem {
+                        id: "flash".into(),
+                        name: "Flashbang".into(),
+                        kind: "nade".into(),
+                        slot: 1,
+                        price: 200,
+                    },
+                    BuyItem {
+                        id: "smoke".into(),
+                        name: "Smoke Grenade".into(),
+                        kind: "nade".into(),
+                        slot: 2,
+                        price: 300,
+                    },
+                    BuyItem {
+                        id: "molotov".into(),
+                        name: "Incendiary".into(),
+                        kind: "nade".into(),
+                        slot: 3,
+                        price: 600,
+                    },
+                ],
                 ..Default::default()
             },
             ModeShared {
@@ -159,6 +221,11 @@ fn mode_fixture(which: &str) -> (ModeInfo, ModeShared, ModeSelf) {
                 attacking: false,
                 progress: 0.62,
                 progress_kind: "defuse".into(),
+                // Mid-range on purpose: some rows affordable and some not is
+                // what makes the three states visible at once.
+                money: 2000,
+                can_buy: true,
+                bought: vec![3, 5],
                 ..Default::default()
             },
         ),
@@ -342,6 +409,9 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, mode_name: Opti
     let view = HudView {
         hud_scale: 1.0,
         team: 0,
+        // Held open when a mode fixture is drawn, since the menu is the half
+        // of an economy that has to be looked at rather than asserted on.
+        buy_open: fixture.is_some(),
         mode: fixture.as_ref().map(|f| &f.0),
         mode_state: fixture.as_ref().map(|f| &f.1),
         mode_self: fixture.as_ref().map(|f| &f.2),

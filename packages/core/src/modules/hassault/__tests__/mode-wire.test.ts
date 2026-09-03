@@ -102,6 +102,51 @@ describe('the mode wire, from a captured payload', () => {
   });
 });
 
+describe('the buy catalogue', () => {
+  it('arrives with the welcome, priced by the server', () => {
+    const mode = wire().welcome.data.mode;
+    const catalog = mode?.catalog ?? [];
+    expect(catalog.length).toBeGreaterThan(0);
+    expect(mode?.config?.startMoney).toBeGreaterThan(0);
+    for (const item of catalog) {
+      expect(item.id).not.toBe('');
+      expect(item.name, 'a row with no name is a blank line').not.toBe('');
+      expect(item.price).toBeGreaterThan(0);
+      expect(['weapon', 'armour', 'nade']).toContain(item.kind);
+    }
+  });
+
+  it('has no duplicate ids, because the index is what goes on the wire', () => {
+    const ids = (wire().welcome.data.mode?.catalog ?? []).map((i) => i.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('leaves the knife and pistol out, since you always have them', () => {
+    const slots = (wire().welcome.data.mode?.catalog ?? [])
+      .filter((i) => i.kind === 'weapon')
+      .map((i) => i.slot);
+    expect(slots).not.toContain(0);
+    expect(slots).not.toContain(1);
+  });
+
+  it('puts the purse and what it bought in that player own envelope', () => {
+    // Captured from the buyer on the tick after they bought the first entry.
+    // The defender's envelope in the same fixture has neither, which is the
+    // point: this is per recipient, and in the shared blob it would be every
+    // player's money.
+    const raw = JSON.parse(readFileSync(FIXTURE, 'utf8')) as {
+      buyerYou: { mode: ModeSelf };
+    };
+    expect(raw.buyerYou.mode.attacking).toBe(true);
+    expect(raw.buyerYou.mode.money).toBeGreaterThan(0);
+    expect(raw.buyerYou.mode.bought).toEqual([0]);
+
+    const defender = wire().snapshot.data.you?.mode;
+    expect(defender?.attacking).toBe(false);
+    expect(defender?.bought).toEqual([]);
+  });
+});
+
 describe('objective phrasing', () => {
   it('reads a flag taken by us differently from one taken from us', () => {
     const mine = objectiveNote({ kind: 'flag_take', by: 'me' } as Fx, 'me');

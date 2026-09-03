@@ -69,6 +69,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
+from .. import grenades, weapons
 from .base import GameMode, Goal
 from .objectives import Site
 
@@ -113,6 +114,101 @@ POST_TIME = 5.0
 #: Equal times make the last seconds of a round a coin flip rather than a read.
 PLANT_TIME = 3.2
 DEFUSE_TIME = 5.0
+
+# ---------------------------------------------------------------------------
+# The economy
+# ---------------------------------------------------------------------------
+#
+# Every number here is **served** in `welcome_state().config`, the `/weapons` and
+# `/items` precedent. A second copy of a price in a client is a buy menu that
+# disagrees with the server about what you can afford — and the way that fails is
+# a purchase the menu offered and the server refused, with the money still there
+# and nothing saying why.
+
+
+#: What everybody starts a half with.
+#:
+#: Enough for a rifle *or* armour and a grenade, not both. The first round being
+#: a real decision rather than a formality is most of what an economy is for.
+START_MONEY = 800
+
+#: Hard ceiling, so a long half cannot make the last rounds free.
+MAX_MONEY = 16000
+
+#: Paid to the killer, per kill. Flat rather than per weapon: a weapon-scaled
+#: reward makes the cheap guns a *worse* buy the better you are with them, which
+#: is backwards.
+KILL_REWARD = 300
+
+#: Charged to the killer for a team kill, and the reason it is a charge rather
+#: than nothing: friendly fire here is partial, so a teammate in a doorway is
+#: already a cost, and this is what stops "shoot through them" being free.
+TEAMKILL_PENALTY = 300
+
+#: The round rewards.
+WIN_REWARD = 3000
+#: A loss pays too, or a side that loses once loses the match: they buy nothing,
+#: lose again, and the scoreline stops being about play.
+LOSS_REWARD = 1400
+#: Added per consecutive loss, up to `MAX_LOSS_STREAK` of them.
+LOSS_STREAK_BONUS = 500
+MAX_LOSS_STREAK = 4
+
+#: Paid to the planter and the defuser, on top of the round reward.
+#:
+#: Paid **even on a losing round** — planting and then being wiped is still the
+#: play that nearly worked, and an economy that only pays the winner punishes the
+#: side already losing.
+PLANT_REWARD = 300
+DEFUSE_REWARD = 300
+
+
+@dataclass(slots=True, frozen=True)
+class BuyItem:
+    """One thing you can buy.
+
+    Not raw `WEAPONS` indices, so armour and grenades ride the same integer as a
+    rifle and `Command.buy` stays one number.
+    """
+
+    id: str
+    name: str
+    #: `weapon`, `armour` or `nade`.
+    kind: str
+    #: Index into `weapons.WEAPONS` or `grenades.GRENADES`; unused for armour.
+    slot: int
+    price: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "kind": self.kind,
+            "slot": self.slot,
+            "price": self.price,
+        }
+
+
+#: The catalogue, in the order a menu lists it.
+#:
+#: The knife and the pistol are absent because you always have them — an entry
+#: for something you cannot not own would be a row that never does anything.
+CATALOG: tuple[BuyItem, ...] = (
+    BuyItem("assault", "Assault Rifle", "weapon", 2, 2700),
+    BuyItem("shotgun", "Shotgun", "weapon", 3, 1800),
+    BuyItem("sniper", "Sniper Rifle", "weapon", 4, 4750),
+    BuyItem("armour", "Armour", "armour", -1, 1000),
+    BuyItem("he", "HE Grenade", "nade", 0, 300),
+    BuyItem("flash", "Flashbang", "nade", 1, 200),
+    BuyItem("smoke", "Smoke Grenade", "nade", 2, 300),
+    BuyItem("molotov", "Incendiary", "nade", 3, 600),
+)
+
+#: What you are given at the start of every round regardless of money.
+#:
+#: The knife and the pistol, and the pistol has unlimited reserve already, so
+#: being broke is a bad round rather than an unplayable one.
+FREE_SLOTS = (0, 1)
 
 #: Phases, in the order they occur.
 WARMUP = "warmup"
@@ -337,6 +433,10 @@ class Defuse(GameMode):
         # outside the function that owns rounds.
         self._planted_this_tick = ""
         self._defused_this_tick = False
+        #: Consecutive rounds lost, per team, for the loss bonus. Per team and
+        #: not per player: it is the *side* that has been losing, and a player
+        #: who joined two rounds ago is on the same footing as one who did not.
+        self._loss_streak = [0, 0]
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -348,6 +448,9 @@ class Defuse(GameMode):
         room.scores[:] = [0, 0]
         self._reset_round(room)
 
+    def _seed_money(self, player: MatchPlayer) -> None:
+        player.money = START_MONEY
+
     def on_join(self, room: MatchRoom, player: MatchPlayer) -> None:
         """A mid-round joiner waits for the next one.
 
@@ -355,6 +458,11 @@ class Defuse(GameMode):
         to shoot, which decides the round on when somebody's browser finished
         loading.
         """
+        # A joiner buys in at the starting purse rather than at whatever the
+        # room has accumulated: arriving in round nine with nothing is a player
+        # who cannot participate, and arriving with the round's average is a
+        # reward for having missed it.
+        self._seed_money(player)
         if self.state.phase in (LIVE, FREEZE) and self.state.round:
             player.alive = False
             player.health = 0.0
@@ -392,8 +500,39 @@ class Defuse(GameMode):
                 **({"detail": emit.detail} if emit.detail else {}),
             }
         )
-        if emit.kind == "round_start":
+        if emit.kind == "round_end":
+            self._pay_round(room, emit.team)
+        elif emit.kind == "half":
+            # Both sides start the second half level, or the first half's economy
+            # decides a match whose sides have just been swapped.
+            for player in room.players.values():
+                player.money = START_MONEY
+            self._loss_streak = [0, 0]
+        elif emit.kind == "round_start":
             self._reset_round(room)
+
+    def _pay_round(self, room: MatchRoom, winner: int) -> None:
+        """The round's wages, and the loss streak that keeps a match alive.
+
+        A loss pays as well as a win, and pays *more* the longer the losing side
+        has been losing. Without it a side that loses once buys nothing, loses
+        again, and the scoreline stops being about play — which is the failure
+        mode an economy is most likely to introduce and the one it is least
+        obvious it has.
+        """
+        for team in (0, 1):
+            if team == winner:
+                self._loss_streak[team] = 0
+                reward = WIN_REWARD
+            else:
+                streak = min(self._loss_streak[team], MAX_LOSS_STREAK)
+                reward = LOSS_REWARD + LOSS_STREAK_BONUS * streak
+                self._loss_streak[team] = min(
+                    self._loss_streak[team] + 1, MAX_LOSS_STREAK
+                )
+            for player in room.players.values():
+                if player.team == team:
+                    player.money = min(MAX_MONEY, player.money + reward)
 
     def _reset_round(self, room: MatchRoom) -> None:
         """Everything that has to go back to the start, and nothing that does not.
@@ -409,6 +548,13 @@ class Defuse(GameMode):
         # for the first few ticks, which makes it near-impossible to reproduce.
         room.history.clear()
         for player in room.players.values():
+            # What you bought lasts one round. Cleared *before* the respawn, so
+            # `outfit` — which runs inside it — sees the round you are entering
+            # rather than the one you just left. After it, every player would
+            # spawn with the previous round's kit and lose it a frame later.
+            player.owned.clear()
+            player.owned_nades.clear()
+            player.owned_extras.clear()
             room.respawn(player)
             player.action_progress = 0.0
             player.action_kind = ""
@@ -466,6 +612,16 @@ class Defuse(GameMode):
         killer's team score, which under a scoreboard labelled "Rounds" would
         make the number mean two things at once.
         """
+        if attacker.id != victim.id:
+            if attacker.team == victim.team:
+                # Friendly fire is partial here, so a teammate in a doorway is
+                # already a cost; this is what stops shooting through them being
+                # free. Floored at zero — a debt would follow somebody into a
+                # round they had nothing to do with.
+                attacker.money = max(0, attacker.money - TEAMKILL_PENALTY)
+            else:
+                attacker.money = min(MAX_MONEY, attacker.money + KILL_REWARD)
+
         if self.state.bomb.carrier == victim.id:
             # The bomb goes to somebody still standing rather than to the floor.
             # A dropped bomb on maps this size is a hunt, not a round.
@@ -474,7 +630,14 @@ class Defuse(GameMode):
     def on_command(
         self, room: MatchRoom, player: MatchPlayer, command: Command, now: float
     ) -> None:
-        """Plant and defuse, both spent from this command's own `dt`."""
+        """Plant, defuse and buy.
+
+        Buying first, and not gated on `LIVE` like the rest: the whole point of
+        it is that it happens in the freeze.
+        """
+        if command.buy >= 0:
+            self._buy(room, player, command.buy)
+
         if self.state.phase != LIVE or not player.alive:
             self._clear_action(player)
             return
@@ -502,6 +665,12 @@ class Defuse(GameMode):
             if site is None:
                 return
             player.objectives += 1
+            # Paid here rather than at round end, and paid **even if this round
+            # is then lost**: planting and being wiped is still the play that
+            # nearly worked, and an economy that only pays the winner punishes
+            # the side already losing. Paying it now also avoids having to
+            # remember who the planter was, since they may not be alive later.
+            player.money = min(MAX_MONEY, player.money + PLANT_REWARD)
             self._planted_this_tick = site.id
             self.state = replace(
                 self.state,
@@ -515,7 +684,61 @@ class Defuse(GameMode):
             )
         else:
             player.objectives += 1
+            player.money = min(MAX_MONEY, player.money + DEFUSE_REWARD)
             self._defused_this_tick = True
+
+    def _buy(self, room: MatchRoom, player: MatchPlayer, index: int) -> None:
+        """Spend, if every one of the reasons not to is absent.
+
+        Checked here and not trusted from the client for the usual reason — a
+        client that decided whether it could afford something would have infinite
+        money — but also because these are the checks a *menu* cannot make: what
+        phase the room is in, and what this player already owns.
+
+        **A purchase that would give nothing spends nothing.** That is the
+        `pickups.apply` shape and it is the same argument: taking armour at full
+        armour, or a second rifle you already hold, should not quietly cost you
+        the round's money. Every branch below returns without touching `money`.
+        """
+        if index >= len(CATALOG):
+            return
+        # The buy window. A dead player may still buy — they are buying for the
+        # *next* round, and freeze time is exactly when that is decided — so
+        # `alive` is deliberately not checked.
+        if self.state.phase != FREEZE:
+            return
+        item = CATALOG[index]
+        if self._owns(player, item):
+            return
+        if player.money < item.price:
+            return
+        player.money -= item.price
+        if item.kind == "weapon":
+            player.owned.add(item.slot)
+            # Handed over now rather than at the next spawn: the buy happens
+            # during the freeze of the round it is for, and a rifle that only
+            # arrived next round would be a menu that lies about what it sold.
+            spec = weapons.weapon_at(item.slot)
+            player.ammo[item.slot] = spec.mag
+            player.reserve[item.slot] = spec.reserve
+            player.weapon = item.slot
+        elif item.kind == "nade":
+            player.owned_nades.add(item.slot)
+            player.nades.counts[item.slot] = 1
+        else:
+            player.owned_extras.add(item.id)
+            player.armour = weapons.MAX_ARMOUR
+        # No public effect. What somebody bought is revealed by the gun in their
+        # hands, which `PlayerRow.weapon` already broadcasts — an fx would be
+        # telling the other side what to expect before they could see it.
+
+    def _owns(self, player: MatchPlayer, item: BuyItem) -> bool:
+        if item.kind == "weapon":
+            return item.slot in player.owned
+        if item.kind == "nade":
+            return item.slot in player.owned_nades
+        # Armour you already have at full is armour this would not add to.
+        return item.id in player.owned_extras or player.armour >= weapons.MAX_ARMOUR
 
     def _clear_action(self, player: MatchPlayer) -> None:
         player.action_progress = 0.0
@@ -537,7 +760,34 @@ class Defuse(GameMode):
         return ""
 
     def outfit(self, room: MatchRoom, player: MatchPlayer) -> None:
-        """Nothing yet. The economy lands here, after `reset_loadout` has run."""
+        """Take back what `reset_loadout` just gave, and hand over what was bought.
+
+        **Order is the whole contract.** `reset_loadout` grants every weapon with
+        full magazines, which is what deathmatch wants and what an economy has to
+        undo; this runs immediately after it, and reversing the two would let the
+        grant silently win with no symptom but an economy that does nothing.
+
+        Not a parameter on `reset_loadout` for the same reason: that method is
+        deathmatch's, and changing it would change deathmatch.
+        """
+        for slot in range(len(weapons.WEAPONS)):
+            if slot in FREE_SLOTS or slot in player.owned:
+                continue
+            # Zero rather than absent: `ammo.get(slot, 0)` reads the same either
+            # way, but a missing key would make a weapon that was never bought
+            # indistinguishable from one whose table entry has gone.
+            player.ammo[slot] = 0
+            player.reserve[slot] = 0
+        player.nades.counts = {
+            i: (1 if i in player.owned_nades else 0)
+            for i in range(len(grenades.GRENADES))
+        }
+        player.armour = weapons.MAX_ARMOUR if "armour" in player.owned_extras else 0.0
+        # Hold something you actually have. Defaulting to the rifle leaves a
+        # player who could not afford one holding an empty gun and wondering why
+        # the trigger does nothing.
+        if player.weapon not in FREE_SLOTS and player.weapon not in player.owned:
+            player.weapon = 1
 
     # -- wire ---------------------------------------------------------------
 
@@ -557,7 +807,23 @@ class Defuse(GameMode):
                 "postTime": POST_TIME,
                 "plantTime": PLANT_TIME,
                 "defuseTime": DEFUSE_TIME,
+                # The economy, served whole. A client with its own copy of a
+                # price is a buy menu that disagrees with the server about what
+                # you can afford, and the way that fails is a purchase the menu
+                # offered and the server refused — money still there, nothing
+                # saying why.
+                "startMoney": START_MONEY,
+                "maxMoney": MAX_MONEY,
+                "killReward": KILL_REWARD,
+                "winReward": WIN_REWARD,
+                "lossReward": LOSS_REWARD,
+                "lossStreakBonus": LOSS_STREAK_BONUS,
+                "plantReward": PLANT_REWARD,
+                "defuseReward": DEFUSE_REWARD,
             },
+            #: What can be bought, in the order a menu lists it. The index into
+            #: this list *is* `Command.buy`, so a client never invents an id.
+            "catalog": [item.to_dict() for item in CATALOG],
             "sites": [s.to_dict() for s in self.sites],
             **(self.shared_state(room) or {}),
         }
@@ -595,6 +861,18 @@ class Defuse(GameMode):
             "carrying": self.state.bomb.carrier == player.id,
             "progress": round(player.action_progress, 3),
             "progressKind": player.action_kind,
+            # **Per recipient, and this is the field that makes that matter.**
+            # In `shared_state` it would be every player's purse, world-readable,
+            # with nothing raising, warning or breaking the snapshot template to
+            # say so. `private_view` is the only half of a snapshot rebuilt per
+            # player, so this is the only place it can go.
+            "money": player.money,
+            "canBuy": self.state.phase == FREEZE,
+            # Indices into the served catalogue, so a menu can grey out what is
+            # already owned without keeping its own idea of what that means.
+            "bought": sorted(
+                index for index, item in enumerate(CATALOG) if self._owns(player, item)
+            ),
         }
 
     # -- results ------------------------------------------------------------

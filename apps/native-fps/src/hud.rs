@@ -287,6 +287,11 @@ pub struct HudView<'a> {
     pub mode_state: Option<&'a ModeShared>,
     /// The mode's answer for us, out of `you`.
     pub mode_self: Option<&'a ModeSelf>,
+    /// Whether the buy menu is being held open.
+    ///
+    /// Local, and the only piece of mode UI that is: what the *menu* is doing is
+    /// this client's business, and everything it displays comes off the wire.
+    pub buy_open: bool,
     /// A multiplier on the HUD's derived unit, from the player's settings.
     ///
     /// 1.0 is the derived size. Kept as a separate field rather than folded into
@@ -782,6 +787,12 @@ impl Hud {
             if let Some(rows) = view.scoreboard {
                 paint_scoreboard(&mut p, rows, view.scores, self.board_age, u);
             }
+            // **After the scoreboard**, which is otherwise the topmost panel.
+            // Both are held, so in play they rarely overlap — but the buy menu
+            // is the one being *typed into*, and a panel you are pressing keys
+            // at must not be the one underneath. Found by rendering the two
+            // together, which no test would have done.
+            paint_buy_menu(&mut p, view, u);
         }
 
         // Underwater, under everything else the HUD draws: it is a property of
@@ -1482,7 +1493,8 @@ fn paint_mode(p: &mut Painter, view: &HudView, u: f32) {
         return;
     };
     let scale = u * 0.85;
-    let cx = p.width * 0.5;
+    // No `cx`: every line here is drawn with `center_text`, which centres
+    // itself. One was held for an earlier layout that positioned by hand.
     let mut y = u * 2.0;
 
     // The score, as two numbers either side of its own label. Two numbers and a
@@ -1623,6 +1635,108 @@ fn paint_action_progress(p: &mut Painter, view: &HudView, u: f32) {
     // rendering it, which is the whole reason `hud_preview` exists.
     let label = mine.progress_kind.to_uppercase();
     p.center_text(y - u * 8.0, u * 0.9, colour, &label);
+}
+
+/// The buy menu.
+///
+/// A held panel like the scoreboard rather than a mode you toggle into, and for
+/// the same reason: it is read *during* the freeze while the round is being
+/// decided around you, and a menu you can leave up by accident is one you die
+/// behind. Number keys buy while it is held.
+///
+/// **Every number on it is the server's.** Prices come off the served catalogue,
+/// what you own comes off `you.mode.bought`, and whether the window is open at
+/// all is `you.mode.canBuy` — not a phase check this client repeats. A menu with
+/// its own copy of any of those is one that offers a purchase the server then
+/// refuses, leaving the money there and saying nothing.
+fn paint_buy_menu(p: &mut Painter, view: &HudView, u: f32) {
+    if !view.buy_open {
+        return;
+    }
+    let (Some(info), Some(mine)) = (view.mode, view.mode_self) else {
+        return;
+    };
+    if info.catalog.is_empty() {
+        return;
+    }
+
+    let scale = u * 0.85;
+    let line = 8.0 * scale;
+    let width = (p.width * 0.34).max(u * 62.0);
+    let header = line * 2.2;
+    let height = header + line * info.catalog.len() as f32 + u * 3.0;
+    let x = (p.width - width) * 0.5;
+    let y = (p.height - height) * 0.5;
+
+    // Near-opaque, unlike the scoreboard's 0.86. The scoreboard is a thing you
+    // glance at while the game carries on behind it; this is a panel you are
+    // pressing number keys at, and the crosshair and damage numbers showing
+    // through a price list is a menu you can misread.
+    p.rect(x, y, width, height, [0.04, 0.05, 0.07, 0.97]);
+    p.rect(x, y, width, u * 0.4, [0.42, 0.72, 0.98, 0.9]);
+
+    let pad = u * 3.0;
+    p.text(x + pad, y + u * 2.0, scale, [0.92, 0.94, 0.98, 0.95], "BUY");
+    // The purse, right-aligned in the header. Amber when the window has closed,
+    // because at that point the number is the only thing on the panel that is
+    // still true.
+    let purse = format!("${}", mine.money);
+    let purse_colour = if mine.can_buy {
+        [0.62, 0.88, 0.68, 0.95]
+    } else {
+        [0.82, 0.72, 0.48, 0.8]
+    };
+    p.text(
+        x + width - pad - text_width(&purse, scale),
+        y + u * 2.0,
+        scale,
+        purse_colour,
+        &purse,
+    );
+    if !mine.can_buy {
+        p.text(
+            x + pad,
+            y + u * 2.0 + line * 0.9,
+            scale * 0.8,
+            [0.82, 0.72, 0.48, 0.75],
+            "THE WINDOW IS CLOSED",
+        );
+    }
+
+    for (index, item) in info.catalog.iter().enumerate() {
+        let row = y + header + line * index as f32;
+        let owned = mine.bought.contains(&(index as i32));
+        let afford = mine.money >= item.price;
+        // Three states, and they are three because they mean three things: this
+        // is yours already, this is buyable, this is out of reach. Collapsing
+        // the first two would make a menu that keeps offering what you have.
+        let colour = if owned {
+            [0.55, 0.72, 0.60, 0.75]
+        } else if afford && mine.can_buy {
+            [0.92, 0.94, 0.98, 0.95]
+        } else {
+            [0.62, 0.64, 0.70, 0.55]
+        };
+        // 1-based, matching the key you press. The index on the wire is 0-based
+        // and stays that way — the *label* is the thing being made friendly.
+        // The key column is a fixed gutter wide rather than "the digit plus a
+        // bit": at `u * 4` the number and the name touched — "2Shotgun" — which
+        // is invisible to any test that only counts vertices.
+        p.text(x + pad, row, scale, colour, &format!("{}", index + 1));
+        p.text(x + pad + u * 7.0, row, scale, colour, &item.name);
+        let price = if owned {
+            "OWNED".to_string()
+        } else {
+            format!("${}", item.price)
+        };
+        p.text(
+            x + width - pad - text_width(&price, scale),
+            row,
+            scale,
+            colour,
+            &price,
+        );
+    }
 }
 
 /// How long an objective banner stays up.
@@ -3183,6 +3297,7 @@ mod tests {
         HudView {
             hud_scale: 1.0,
             team: 0,
+            buy_open: false,
             // No mode by default: every older test in this file is about a HUD
             // with no objective layer, and defaulting one in would draw a round
             // clock into their vertex counts.
@@ -4192,6 +4307,127 @@ mod tests {
         );
         assert_ne!(mine.0, ours.0);
         assert!(mine.1 && !ours.1, "both read as the same side's doing");
+    }
+
+    fn catalog() -> Vec<crate::protocol::BuyItem> {
+        vec![
+            crate::protocol::BuyItem {
+                id: "assault".into(),
+                name: "Assault Rifle".into(),
+                kind: "weapon".into(),
+                slot: 2,
+                price: 2700,
+            },
+            crate::protocol::BuyItem {
+                id: "flash".into(),
+                name: "Flashbang".into(),
+                kind: "nade".into(),
+                slot: 1,
+                price: 200,
+            },
+        ]
+    }
+
+    /// The HUD with a buy menu held open, and how much it drew.
+    fn with_menu(open: bool, mine: &ModeSelf, items: Vec<crate::protocol::BuyItem>) -> usize {
+        let hud = Hud::default();
+        let you = alive();
+        let info = ModeInfo {
+            id: "defuse".into(),
+            score_label: "Rounds".into(),
+            v: 1,
+            teams: true,
+            catalog: items,
+            ..Default::default()
+        };
+        let state = ModeShared {
+            phase: "freeze".into(),
+            round: 1,
+            ..Default::default()
+        };
+        let mut v = view(Some(&you));
+        v.scores = &[1, 0];
+        v.buy_open = open;
+        v.mode = Some(&info);
+        v.mode_state = Some(&state);
+        v.mode_self = Some(mine);
+        let mut out = Vec::new();
+        hud.build(&v, &mut out);
+        out.len()
+    }
+
+    #[test]
+    fn the_buy_menu_is_drawn_only_while_it_is_held() {
+        let mine = ModeSelf {
+            money: 3000,
+            can_buy: true,
+            ..Default::default()
+        };
+        assert!(with_menu(true, &mine, catalog()) > with_menu(false, &mine, catalog()));
+    }
+
+    #[test]
+    fn a_mode_with_no_catalogue_has_no_menu_to_hold_open() {
+        // Every mode but defuse arrives with an empty one, and a panel drawn for
+        // it would be an empty box over the game with a key that opens it.
+        let mine = ModeSelf {
+            money: 3000,
+            can_buy: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            with_menu(true, &mine, Vec::new()),
+            with_menu(false, &mine, Vec::new())
+        );
+    }
+
+    #[test]
+    fn an_owned_row_says_owned_rather_than_a_price() {
+        // Two different strings of different lengths, so this shows as a vertex
+        // count. What it is really pinning is that the three row states are
+        // three: owned, buyable, out of reach — collapsing the first two makes a
+        // menu that keeps offering what you already have.
+        let poor = ModeSelf {
+            money: 0,
+            can_buy: true,
+            ..Default::default()
+        };
+        let owner = ModeSelf {
+            money: 0,
+            can_buy: true,
+            bought: vec![0, 1],
+            ..Default::default()
+        };
+        assert_ne!(
+            with_menu(true, &poor, catalog()),
+            with_menu(true, &owner, catalog())
+        );
+    }
+
+    #[test]
+    fn a_closed_window_says_so_rather_than_hiding_the_menu() {
+        // `canBuy` is the server's answer, not a phase check this client
+        // repeats. Hiding the panel on it would leave a player pressing B during
+        // a live round with no idea whether the key is broken or the window is.
+        let open = ModeSelf {
+            money: 3000,
+            can_buy: true,
+            ..Default::default()
+        };
+        let shut = ModeSelf {
+            money: 3000,
+            can_buy: false,
+            ..Default::default()
+        };
+        let drawn = with_menu(true, &shut, catalog());
+        assert!(
+            drawn > with_menu(false, &shut, catalog()),
+            "nothing was drawn"
+        );
+        assert!(
+            drawn > with_menu(true, &open, catalog()),
+            "no notice was added"
+        );
     }
 
     #[test]

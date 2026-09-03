@@ -43,7 +43,8 @@ export type GameAction =
   | 'nadeMolotov'
   | 'throw'
   | 'lob'
-  | 'use';
+  | 'use'
+  | 'buy';
 
 /** Two keys per action: the one you expect, and the one somebody else expects. */
 export type Bindings = Record<GameAction, string[]>;
@@ -102,6 +103,12 @@ export const ACTIONS: readonly ActionDoc[] = [
   { action: 'nadeSmoke', label: 'Select Smoke', group: 'Utility' },
   { action: 'nadeMolotov', label: 'Select Incendiary', group: 'Utility' },
   {
+    action: 'buy',
+    label: 'Buy menu',
+    group: 'Utility',
+    note: 'Held. The number row buys while it is open.',
+  },
+  {
     action: 'use',
     label: 'Use / objective',
     group: 'Utility',
@@ -158,6 +165,8 @@ export const DEFAULT_CONTROLS: Bindings = {
   // E, where every shooter puts the objective key and where the native client
   // puts it too: one game, one set of keys.
   use: ['KeyE'],
+  // B, and held rather than toggled — the same shape as the scoreboard.
+  buy: ['KeyB'],
 };
 
 /**

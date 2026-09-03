@@ -317,6 +317,16 @@ pub struct App {
     mode: Option<ModeInfo>,
     /// Its public state, refreshed every snapshot that carries one.
     mode_state: Option<ModeShared>,
+    /// Whether the buy menu is being held open.
+    buy_open: bool,
+    /// A purchase to put on the next command, or `-1`.
+    ///
+    /// **Edge-triggered and drained**, the `throw` shape rather than the `use`
+    /// one: a buy is a single decision, and a key read as held would send sixty
+    /// of them a second — of which the server accepts the first and silently
+    /// refuses fifty-nine as "already owned", which looks identical to a menu
+    /// that does not work.
+    pending_buy: i32,
     /// The private half of the last snapshot — health, ammo, the reload clock.
     /// `None` in Train, which has no server to have said any of it.
     you: Option<SelfState>,
@@ -528,6 +538,8 @@ impl App {
             scores: Vec::new(),
             mode: None,
             mode_state: None,
+            buy_open: false,
+            pending_buy: -1,
             you: None,
             hud: Hud::default(),
             viewmodel: WeaponViewModel::default(),
@@ -1820,6 +1832,9 @@ impl App {
         // those would stop sending the key at exactly the moments its copy was
         // a frame stale.
         cmd.use_key = self.keys.use_key;
+        // Taken, not copied: the next command must not repeat it. See
+        // `pending_buy`.
+        cmd.buy = std::mem::replace(&mut self.pending_buy, -1);
         // And the instant it was aimed at. Bodies are drawn `INTERP_DELAY_MS` in
         // the past, so without this every shot is resolved against positions a
         // tenth of a second newer than the ones on screen when the trigger was
@@ -2219,6 +2234,20 @@ impl App {
             c.alpha = v.clamp(0.15, 1.0);
         }
         c
+    }
+
+    /// Queue a purchase for the next command.
+    ///
+    /// Bounds-checked against the **served** catalogue rather than a length this
+    /// client knows, so a build that predates an entry cannot ask for one. The
+    /// server checks again — it is the only side that knows the phase, the purse
+    /// and what is already owned — and this is only about not sending an index
+    /// that names nothing.
+    fn buy(&mut self, index: usize) {
+        let len = self.mode.as_ref().map(|m| m.catalog.len()).unwrap_or(0);
+        if index < len {
+            self.pending_buy = index as i32;
+        }
     }
 
     /// Mouse sensitivity, CVar over setting. Same resolution as the crosshair.
@@ -3089,6 +3118,12 @@ impl ApplicationHandler for App {
                         // it and where `DEFAULT_CONTROLS` in the browser's
                         // `controls.ts` puts it too: one game, one set of keys.
                         KeyCode::KeyE => self.keys.use_key = down,
+                        // B holds the buy menu open. Held rather than toggled,
+                        // like the scoreboard and for the same reason: it is
+                        // read *during* the freeze while the round is being
+                        // decided around you, and a menu you can leave up by
+                        // accident is one you die behind.
+                        KeyCode::KeyB => self.buy_open = down,
                         KeyCode::KeyR if down => self.reload(),
                         // Inspect. Purely local — see `WeaponViewModel::inspect`
                         // — so it is not a command and never touches the wire.
@@ -3097,6 +3132,20 @@ impl ApplicationHandler for App {
                         // matching the server's slot order — which is the order
                         // `GET /api/hassault/weapons` serves them in, so the two
                         // cannot drift.
+                        // While the buy menu is held, the number row buys
+                        // instead of selecting. Two jobs for one row rather than
+                        // a second set of keys somewhere else on the keyboard:
+                        // the menu is *held*, so which job is which is never
+                        // ambiguous to the player — their other hand is on B.
+                        KeyCode::Digit1 if down && self.buy_open => self.buy(0),
+                        KeyCode::Digit2 if down && self.buy_open => self.buy(1),
+                        KeyCode::Digit3 if down && self.buy_open => self.buy(2),
+                        KeyCode::Digit4 if down && self.buy_open => self.buy(3),
+                        KeyCode::Digit5 if down && self.buy_open => self.buy(4),
+                        KeyCode::Digit6 if down && self.buy_open => self.buy(5),
+                        KeyCode::Digit7 if down && self.buy_open => self.buy(6),
+                        KeyCode::Digit8 if down && self.buy_open => self.buy(7),
+                        KeyCode::Digit9 if down && self.buy_open => self.buy(8),
                         KeyCode::Digit1 if down => self.select_weapon(0),
                         KeyCode::Digit2 if down => self.select_weapon(1),
                         KeyCode::Digit3 if down => self.select_weapon(2),
@@ -3358,6 +3407,7 @@ impl ApplicationHandler for App {
                         .find(|p| p.id == self.self_id)
                         .map(|p| p.team)
                         .unwrap_or(0),
+                    buy_open: self.buy_open,
                     mode: self.mode.as_ref(),
                     mode_state: self.mode_state.as_ref(),
                     // Out of `you`, which is the only per-recipient part of a

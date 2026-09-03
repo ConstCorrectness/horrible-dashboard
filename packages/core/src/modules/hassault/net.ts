@@ -103,6 +103,16 @@ export interface Command {
    * exactly the moments its copy was a frame stale.
    */
   use?: boolean;
+  /**
+   * Buy the catalogue entry at this index.
+   *
+   * Omitted rather than sent as `-1` when there is nothing to buy: a purchase is
+   * one frame in several hundred, and the server reads an absent field the same
+   * way. Edge-triggered, unlike `use` — a key read as held would send sixty
+   * buys a second, of which the server accepts one and refuses the rest as
+   * "already owned", which looks exactly like a menu that does not work.
+   */
+  buy?: number;
 }
 
 /** The combat half of a command, decided by `ShotController` rather than by keys. */
@@ -408,6 +418,22 @@ export interface ObjectiveFx {
 
 export type Fx = ShotFx | KillFx | SpawnFx | DetonateFx | PickupFx | ObjectiveFx;
 
+/**
+ * One thing the buy menu can sell.
+ *
+ * **The index into `ModeInfo.catalog` is `Command.buy`**, so no client invents
+ * an id or a price. A second copy of a price is a menu that offers a purchase
+ * the server then refuses, with the money still there and nothing saying why.
+ */
+export interface BuyItem {
+  id: string;
+  name: string;
+  /** `weapon` | `armour` | `nade`. */
+  kind: string;
+  slot: number;
+  price: number;
+}
+
 /** A bomb site or a flag stand, already resolved onto the floor server-side. */
 export interface ModeSite {
   id: string;
@@ -461,7 +487,13 @@ export interface ModeInfo {
     plantTime?: number;
     defuseTime?: number;
     fuseTime?: number;
+    startMoney?: number;
   };
+  /**
+   * What can be bought, in the order a menu lists it. Absent for a mode with no
+   * economy, which is how every mode but defuse arrives.
+   */
+  catalog?: BuyItem[];
   sites?: ModeSite[];
   stands?: ModeFlag[];
 }
@@ -509,6 +541,18 @@ export interface ModeSelf {
   progress?: number;
   progressKind?: string;
   captures?: number;
+  /**
+   * What we have to spend.
+   *
+   * Per recipient by construction, and the field that makes that matter: in the
+   * shared blob it would be every player's purse, world-readable, with nothing
+   * on either side raising a word about it.
+   */
+  money?: number;
+  /** Whether the window is open — the server's answer, not a phase check. */
+  canBuy?: boolean;
+  /** Catalogue indices already owned, so a menu can grey them out. */
+  bought?: number[];
 }
 
 /**
@@ -614,6 +658,7 @@ export class Predictor {
     kick?: Vec3,
     thrown?: { throw: boolean; nade: number; lob: boolean },
     use?: boolean,
+    buy?: number,
   ): Command {
     this.seq += 1;
     // The server clamps dt the same way; recording the unclamped value would
@@ -661,6 +706,10 @@ export class Predictor {
     // command arrives without it, so an edge would send one frame of the several
     // hundred the action needs.
     if (use) command.use = true;
+    // Only on the frame it happened, the `throw` rule rather than the `use` one:
+    // a purchase is a single decision, and repeating it every frame the key is
+    // down would be sixty buys a second.
+    if (buy !== undefined && buy >= 0) command.buy = buy;
     this.pending.push(command);
     step(world, player, input, clamped);
     if (kick && (kick.x !== 0 || kick.y !== 0 || kick.z !== 0)) {

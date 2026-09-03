@@ -100,6 +100,72 @@ fn the_private_half_rides_inside_you_and_not_in_the_shared_blob() {
 }
 
 #[test]
+fn the_buy_catalogue_arrives_with_the_welcome() {
+    // Prices are the server's, and a second copy of one is a menu that offers a
+    // purchase the server then refuses — money still there, nothing saying why.
+    let Some(Event::Welcome(w)) = classify(&line("welcome")) else {
+        panic!("not a welcome");
+    };
+    let mode = w.mode.expect("no mode");
+    assert!(!mode.catalog.is_empty(), "the catalogue did not survive");
+    assert!(mode.config.start_money > 0, "startMoney did not survive");
+    for item in &mode.catalog {
+        assert!(!item.id.is_empty());
+        assert!(!item.name.is_empty(), "a row with no name is a blank line");
+        assert!(item.price > 0);
+        assert!(matches!(item.kind.as_str(), "weapon" | "armour" | "nade"));
+    }
+    // The index *is* `Command::buy`, so a duplicated id would make two rows buy
+    // the same thing while the menu showed two.
+    let mut ids: Vec<&str> = mode.catalog.iter().map(|i| i.id.as_str()).collect();
+    ids.sort_unstable();
+    let before = ids.len();
+    ids.dedup();
+    assert_eq!(ids.len(), before, "the catalogue has duplicate ids");
+}
+
+#[test]
+fn a_purse_and_what_it_bought_ride_in_that_players_own_envelope() {
+    // Captured from the buyer, on the tick after they bought the first entry.
+    // The defender's envelope in the same fixture has neither, which is the
+    // whole point: this is per recipient, and in the shared blob it would be
+    // every player's money.
+    let buyer: hassault_native::protocol::ModeSelf =
+        serde_json::from_value(fixture()["buyerYou"]["mode"].clone()).expect("a ModeSelf");
+    assert!(buyer.attacking);
+    assert!(buyer.money > 0, "money did not survive");
+    assert_eq!(buyer.bought, vec![0], "`bought` did not survive");
+
+    let Some(Event::Snapshot(s)) = classify(&line("snapshot")) else {
+        panic!("not a snapshot");
+    };
+    let defender = s.you.mode.expect("no mode blob");
+    assert!(!defender.attacking);
+    assert!(
+        defender.bought.is_empty(),
+        "the defender was told what to buy"
+    );
+}
+
+#[test]
+fn a_command_names_no_purchase_unless_one_was_made() {
+    // `-1`, not the `0` a `Default` gives: zero names the first catalogue entry,
+    // so a defaulted field would make every movement command a request to buy a
+    // rifle. Skipped on the wire entirely when there is nothing to buy.
+    let cmd = hassault_native::protocol::Command::new(9);
+    assert_eq!(cmd.buy, -1);
+    let wire: serde_json::Value =
+        serde_json::from_str(&serde_json::to_string(&cmd).unwrap()).expect("an object");
+    assert!(wire.get("buy").is_none(), "an empty buy was sent");
+
+    let mut buying = hassault_native::protocol::Command::new(10);
+    buying.buy = 3;
+    let wire: serde_json::Value =
+        serde_json::from_str(&serde_json::to_string(&buying).unwrap()).expect("an object");
+    assert_eq!(wire["buy"], serde_json::json!(3));
+}
+
+#[test]
 fn a_client_that_is_too_old_for_the_mode_wire_is_told_so() {
     // The gap nothing else covers. `divergence` reports unknown *events* and
     // unknown *fx kinds*; an unknown key inside a mode blob is swallowed by
