@@ -253,6 +253,7 @@ async fn run(path: &str, width: u32, height: u32, summary: bool) {
     ];
 
     let view = HudView {
+        hud_scale: 1.0,
         width,
         height,
         you: Some(&you),

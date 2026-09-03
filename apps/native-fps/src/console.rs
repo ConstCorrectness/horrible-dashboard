@@ -80,7 +80,10 @@ const MAX_HISTORY: usize = 100;
 /// Kept sorted, and kept honest: a name belongs here when something reads it,
 /// not when someone intends to write the reader.
 pub const HONORED: &[&str] = &[
+    "draw.crosshair.alpha",
+    "draw.crosshair.dot",
     "draw.crosshair.gap",
+    "draw.crosshair.outline",
     "draw.crosshair.size",
     "draw.crosshair.style",
     "draw.crosshair.thickness",

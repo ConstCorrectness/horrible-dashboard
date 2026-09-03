@@ -119,6 +119,13 @@ const DIM: [f32; 4] = [0.72, 0.76, 0.80, 0.65];
 const FAINT: [f32; 4] = [0.52, 0.57, 0.62, 0.40];
 const AMBER: [f32; 4] = [0.94, 0.83, 0.54, 0.95];
 const RED: [f32; 4] = [0.97, 0.32, 0.28, 0.95];
+/// The crosshair's outline.
+///
+/// Near-black rather than black, and not fully opaque: an outline is meant to
+/// separate the reticle from the wall behind it, not to be a second reticle. Its
+/// alpha is multiplied by the crosshair's own, so turning the crosshair down
+/// turns the whole thing down together.
+const OUTLINE: [f32; 4] = [0.02, 0.02, 0.03, 0.85];
 const GREEN: [f32; 4] = [0.49, 0.91, 0.53, 0.95];
 /// `0x6f97c4` — the browser's armour colour, unchanged.
 const ARMOUR: [f32; 4] = [0.4353, 0.5922, 0.7686, 0.95];
@@ -261,6 +268,13 @@ pub struct UtilityView {
 pub struct HudView<'a> {
     pub width: u32,
     pub height: u32,
+    /// A multiplier on the HUD's derived unit, from the player's settings.
+    ///
+    /// 1.0 is the derived size. Kept as a separate field rather than folded into
+    /// `height` before it arrives, because `height` is also what everything is
+    /// *positioned* against — scaling that would move the HUD off the screen
+    /// rather than enlarging it.
+    pub hud_scale: f32,
     /// The private half of the snapshot. `None` in Train, which has no server
     /// and therefore no health, ammo or respawn clock to report — drawing a
     /// hundred hit points there would be a number this client made up.
@@ -662,7 +676,7 @@ impl Hud {
         // One unit of HUD, in pixels. Derived from the window rather than fixed,
         // so the same layout is legible on a 720p laptop and on a 4K monitor
         // instead of shrinking to a smear on the second.
-        let u = (p.height / 360.0).round().max(2.0);
+        let u = ((p.height / 360.0).round() * view.hud_scale.clamp(0.75, 1.5)).max(2.0);
         let hit = self.hit_age < MARKER_LIFE;
 
         if self.damage_age < FLASH_LIFE {
@@ -967,8 +981,8 @@ impl Hud {
             //
             // Faded out over its last third rather than cut, so a notice on its
             // way out cannot be mistaken for one that has just arrived.
-            let fade = ((KILL_NOTICE_LIFE - self.kill_age) / (KILL_NOTICE_LIFE * 0.33))
-                .clamp(0.0, 1.0);
+            let fade =
+                ((KILL_NOTICE_LIFE - self.kill_age) / (KILL_NOTICE_LIFE * 0.33)).clamp(0.0, 1.0);
             let colour = [AMBER[0], AMBER[1], AMBER[2], AMBER[3] * fade];
             let big = scale * 1.15;
             let y = p.height * 0.65;
@@ -2161,19 +2175,30 @@ impl<'a> Painter<'a> {
         self.rect(w - band, 0.0, band, h, color);
     }
 
-    /// The crosshair, and the hitmarker that replaces it.
+    /// The crosshair, the hitmarker over it, and the shapes people actually
+    /// play with.
     ///
-    /// The marker rotates the ticks into an X rather than adding a second
-    /// element, which reads instantly and needs nothing to fade in and out —
-    /// the browser client does exactly the same with a CSS transform.
-    /// The crosshair, the hitmarker that replaces it, and the shapes people
-    /// actually play with.
+    /// Three things here are deliberate and were each wrong first.
     ///
-    /// The marker rotates the ticks into an X rather than adding a second
-    /// element, which reads instantly and needs nothing to fade in and out —
-    /// the browser client does exactly the same with a CSS transform. It
-    /// overrides the chosen style on purpose: a hit is the one thing the reticle
-    /// has to say louder than a preference.
+    /// **Every element is drawn twice**: once in near-black at
+    /// `thick + 2 * outline`, then in the chosen colour on top. A one-colour
+    /// reticle disappears against any surface near its own brightness, and the
+    /// player only finds out by missing. The outline is what makes a single
+    /// colour work on every wall in the game, and it costs six triangles.
+    ///
+    /// **The marker is drawn *around* the reticle rather than replacing it.**
+    /// It used to `return` early with an X in its place, which meant that while
+    /// spraying into somebody — the exact moment aim matters most — the thing
+    /// you are aiming with swapped shape roughly ten times a second. The ticks
+    /// now sit outside the arms, so a hit adds information instead of removing
+    /// the aim.
+    ///
+    /// **The elements are feathered.** This painter has no texture and no MSAA
+    /// on the overlay pass, so an axis-aligned rect an odd number of pixels wide
+    /// lands half on a pixel and reads as a hard, chunky square — which is
+    /// exactly what a "dot" at the default thickness was. `soft_rect` ramps the
+    /// outer half-pixel down, which is enough to make the same shape read as
+    /// deliberate at every size.
     fn crosshair(&mut self, gap: f32, u: f32, hit: bool, killed: bool, style: &Crosshair) {
         let color = if killed {
             RED
@@ -2182,62 +2207,128 @@ impl<'a> Painter<'a> {
         } else {
             style.color.rgba()
         };
+        let color = [color[0], color[1], color[2], color[3] * style.alpha];
         let (cx, cy) = (self.width / 2.0, self.height / 2.0);
         let arm = u * style.size;
-        let thick = (u * style.thickness).max(1.0);
+        // No `.max(1.0)`: that snapped every sub-pixel thickness up to a whole
+        // pixel, which is what turned the centre dot into a blocky square at the
+        // default 0.6. `soft_rect` handles thin shapes by feathering instead.
+        let thick = (u * style.thickness).max(0.35);
+        // Scaled with the reticle so the outline neither swamps a small
+        // crosshair nor vanishes on a large one.
+        let grow = if style.outline {
+            (u * 0.3).max(1.0)
+        } else {
+            0.0
+        };
 
-        if hit {
-            for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
-                let d = std::f32::consts::FRAC_1_SQRT_2;
-                self.line(
-                    cx + sx * gap * d,
-                    cy + sy * gap * d,
-                    cx + sx * (gap + arm) * d,
-                    cy + sy * (gap + arm) * d,
-                    thick * 2.0,
-                    color,
-                );
+        // Each element is a closure taking its own extra width and colour, so
+        // the outline pass and the fill pass are the same geometry by
+        // construction and cannot drift apart.
+        let dot = |p: &mut Self, g: f32, c: [f32; 4]| {
+            let r = thick + g;
+            p.soft_rect(cx - r, cy - r, r * 2.0, r * 2.0, c);
+        };
+        let arms = |p: &mut Self, g: f32, c: [f32; 4]| {
+            let t = thick + g;
+            let a = arm + g;
+            p.soft_rect(cx - gap - a, cy - t, a, t * 2.0, c);
+            p.soft_rect(cx + gap, cy - t, a, t * 2.0, c);
+            p.soft_rect(cx - t, cy - gap - a, t * 2.0, a, c);
+            p.soft_rect(cx - t, cy + gap, t * 2.0, a, c);
+        };
+        let pip = |p: &mut Self, g: f32, c: [f32; 4]| {
+            let r = thick * 2.0 + g;
+            p.soft_rect(cx - r, cy - r, r * 2.0, r * 2.0, c);
+        };
+
+        // Outline first, fill second: two passes over the same closures rather
+        // than a branch inside each one.
+        let passes: [(f32, [f32; 4]); 2] = [
+            (
+                grow,
+                [OUTLINE[0], OUTLINE[1], OUTLINE[2], OUTLINE[3] * color[3]],
+            ),
+            (0.0, color),
+        ];
+        for (g, c) in passes {
+            if g <= 0.0 && c[3] < color[3] {
+                // The outline pass with outlines off.
+                continue;
             }
+            match style.style {
+                // The default keeps the centre dot the original always drew: it
+                // is where the shot goes, and the four arms are where it might
+                // go.
+                CrosshairStyle::Cross => {
+                    if style.dot {
+                        dot(self, g, c);
+                    }
+                    arms(self, g, c);
+                }
+                CrosshairStyle::CrossDot => {
+                    if style.dot {
+                        dot(self, g, c);
+                    }
+                    arms(self, g, c);
+                    // A second, larger pip so the centre survives a busy
+                    // background, which is the whole reason to pick this over
+                    // the plain cross.
+                    pip(self, g, [c[0], c[1], c[2], c[3] * 0.45]);
+                }
+                CrosshairStyle::Dot => dot(self, g, c),
+                // The honest picture of a cone: a ring *at* the spread radius,
+                // so it grows with the weapon exactly as the arms' gap does.
+                CrosshairStyle::Circle => {
+                    self.ring(cx, cy, (gap - g).max(1.0), gap + thick + g, c);
+                    if style.dot {
+                        dot(self, g, c);
+                    }
+                }
+            }
+        }
+
+        // The marker last and *outside* the arms, so it reads over whatever the
+        // reticle is instead of taking its place.
+        if hit {
+            let d = std::f32::consts::FRAC_1_SQRT_2;
+            let (near, far) = (gap + arm * 0.7, gap + arm * 1.9);
+            for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+                for (g, c) in passes {
+                    if g <= 0.0 && c[3] < color[3] {
+                        continue;
+                    }
+                    self.line(
+                        cx + sx * (near - g) * d,
+                        cy + sy * (near - g) * d,
+                        cx + sx * (far + g) * d,
+                        cy + sy * (far + g) * d,
+                        thick * 2.0 + g * 2.0,
+                        c,
+                    );
+                }
+            }
+        }
+    }
+
+    /// A rect whose outer edge is drawn dim rather than stopping dead.
+    ///
+    /// The overlay pass has no multisampling and this painter has no texture, so
+    /// a hard-edged rect at a fractional width lands between pixels and reads as
+    /// chunky — the crosshair dot being the case anybody actually notices. A
+    /// dim skirt half a pixel proud of the shape approximates the ramp. It is
+    /// not real anti-aliasing and does not need to be; it needs the edge to stop
+    /// being a step.
+    fn soft_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [f32; 4]) {
+        if w <= 0.0 || h <= 0.0 || color[3] <= 0.0 {
             return;
         }
-
-        let dot = |p: &mut Self| {
-            p.rect(cx - thick, cy - thick, thick * 2.0, thick * 2.0, color);
-        };
-        let arms = |p: &mut Self| {
-            p.rect(cx - gap - arm, cy - thick, arm, thick * 2.0, color);
-            p.rect(cx + gap, cy - thick, arm, thick * 2.0, color);
-            p.rect(cx - thick, cy - gap - arm, thick * 2.0, arm, color);
-            p.rect(cx - thick, cy + gap, thick * 2.0, arm, color);
-        };
-        match style.style {
-            // The default keeps the centre dot the original always drew: it is
-            // where the shot goes, and the four arms are where it might go.
-            CrosshairStyle::Cross => {
-                dot(self);
-                arms(self);
-            }
-            CrosshairStyle::CrossDot => {
-                dot(self);
-                arms(self);
-                // A second, larger pip so the centre survives a busy background,
-                // which is the whole reason to pick this over the plain cross.
-                self.rect(
-                    cx - thick * 2.0,
-                    cy - thick * 2.0,
-                    thick * 4.0,
-                    thick * 4.0,
-                    [color[0], color[1], color[2], color[3] * 0.45],
-                );
-            }
-            CrosshairStyle::Dot => dot(self),
-            // The honest picture of a cone: a ring *at* the spread radius, so it
-            // grows with the weapon exactly as the arms' gap does.
-            CrosshairStyle::Circle => {
-                self.ring(cx, cy, gap, gap + thick.max(1.0), color);
-                dot(self);
-            }
-        }
+        // Never wider than a third of the shape: on a 1px arm a full half-pixel
+        // skirt either side would leave no solid core at all.
+        let f = 0.5f32.min(w / 3.0).min(h / 3.0);
+        let dim = [color[0], color[1], color[2], color[3] * 0.35];
+        self.rect(x - f, y - f, w + f * 2.0, h + f * 2.0, dim);
+        self.rect(x, y, w, h, color);
     }
 
     /// A filled annulus, as a fan of quads.
@@ -2785,6 +2876,7 @@ mod tests {
 
     fn view<'a>(you: Option<&'a SelfState>) -> HudView<'a> {
         HudView {
+            hud_scale: 1.0,
             // No grenades, no flash and no damage numbers: the default view is
             // the one every older test builds, and inventing a pouch or a
             // floating number in it would draw them into assertions about the
@@ -3185,10 +3277,7 @@ mod tests {
             killed: false,
             fade: 1.0,
         }];
-        let off = [Placed {
-            x: -900.0,
-            ..on[0]
-        }];
+        let off = [Placed { x: -900.0, ..on[0] }];
         let count = |numbers: &[Placed]| {
             let mut v = view(Some(&you));
             v.playing = true;
@@ -3233,8 +3322,7 @@ mod tests {
             Hud::default().build(&v, &mut out);
             out.iter()
                 .filter(|q| {
-                    (0.35..0.65).contains(&q.position[0])
-                        && (-0.15..0.15).contains(&q.position[1])
+                    (0.35..0.65).contains(&q.position[0]) && (-0.15..0.15).contains(&q.position[1])
                 })
                 .map(|q| q.color)
                 .collect()
@@ -3505,6 +3593,115 @@ mod tests {
         hud.build(&view(Some(&you)), &mut out);
         assert!(without > 0, "no crosshair in training");
         assert!(out.len() > without, "health and ammo were not drawn");
+    }
+
+    /// Everything the crosshair draws, as (x, y) pixel pairs around the centre.
+    ///
+    /// Built through `Hud::build` rather than by calling `Painter::crosshair`
+    /// directly, so these tests exercise the same path the game does — including
+    /// the gap the weapon's cone contributes.
+    fn reticle(hud: &Hud, style: Crosshair) -> Vec<(f32, f32)> {
+        let mut out = Vec::new();
+        let you = alive();
+        let mut v = view(Some(&you));
+        v.crosshair = style;
+        hud.build(&v, &mut out);
+        let (cx, cy) = (v.width as f32 / 2.0, v.height as f32 / 2.0);
+        out.iter()
+            // Back out of clip space, and keep only what is near the centre —
+            // the health block and the kill feed are in this buffer too.
+            .map(|p| {
+                (
+                    (p.position[0] + 1.0) * 0.5 * v.width as f32 - cx,
+                    (1.0 - (p.position[1] + 1.0) * 0.5) * v.height as f32 - cy,
+                )
+            })
+            .filter(|(x, y)| x.abs() < 60.0 && y.abs() < 60.0)
+            .collect()
+    }
+
+    #[test]
+    fn a_hitmarker_adds_to_the_reticle_rather_than_replacing_it() {
+        // The regression this is here for: the marker used to `return` with an X
+        // in the reticle's place, so while spraying into somebody — the moment
+        // aim matters most — the thing you aim with changed shape about ten
+        // times a second.
+        let style = Crosshair::default();
+        let calm = Hud::default();
+        let mut hot = Hud::default();
+        hot.on_hits(&[HitMarker::default()]);
+
+        let quiet = reticle(&calm, style);
+        let marked = reticle(&hot, style);
+        assert!(!quiet.is_empty(), "no reticle at rest");
+        assert!(
+            marked.len() > quiet.len(),
+            "a hit removed geometry ({} -> {}) instead of adding it",
+            quiet.len(),
+            marked.len()
+        );
+    }
+
+    #[test]
+    fn the_hitmarker_sits_outside_the_arms_it_reads_over() {
+        // If the ticks overlapped the arms they would read as a thicker
+        // crosshair rather than as a separate signal.
+        let style = Crosshair::default();
+        let arms_reach = reticle(&Hud::default(), style)
+            .iter()
+            .map(|(x, y)| x.hypot(*y))
+            .fold(0.0f32, f32::max);
+        let mut hot = Hud::default();
+        hot.on_hits(&[HitMarker::default()]);
+        let marked_reach = reticle(&hot, style)
+            .iter()
+            .map(|(x, y)| x.hypot(*y))
+            .fold(0.0f32, f32::max);
+        assert!(
+            marked_reach > arms_reach,
+            "the marker ({marked_reach}) did not clear the arms ({arms_reach})"
+        );
+    }
+
+    #[test]
+    fn an_outlined_crosshair_draws_more_than_a_bare_one() {
+        // The outline is the difference between a reticle that works on every
+        // wall in the game and one that vanishes on about a third of them.
+        let hud = Hud::default();
+        let mut bare = Crosshair::default();
+        bare.outline = false;
+        let outlined = Crosshair::default();
+        assert!(
+            reticle(&hud, outlined).len() > reticle(&hud, bare).len(),
+            "the outline drew nothing"
+        );
+    }
+
+    #[test]
+    fn the_centre_dot_can_be_turned_off_without_changing_style() {
+        // It used to be baked into the style, so choosing a ring cost you the
+        // choice of whether to have a dot at all.
+        let hud = Hud::default();
+        let mut no_dot = Crosshair::default();
+        no_dot.dot = false;
+        assert!(
+            reticle(&hud, no_dot).len() < reticle(&hud, Crosshair::default()).len(),
+            "turning the dot off changed nothing"
+        );
+    }
+
+    #[test]
+    fn a_transparent_crosshair_is_still_drawn_just_fainter() {
+        // Opacity must not silently drop geometry: a reticle at 20% is a
+        // preference, and a reticle that is *gone* is a bug report.
+        let hud = Hud::default();
+        let mut faint = Crosshair::default();
+        faint.alpha = 0.2;
+        assert_eq!(
+            reticle(&hud, faint).len(),
+            reticle(&hud, Crosshair::default()).len(),
+            "opacity changed the geometry rather than the colour"
+        );
     }
 
     #[test]

@@ -1499,6 +1499,126 @@ is a reason to run the pass on its own**, so the predicate is
   on screen at the one moment there is meant to be none — the mirror image of the
   same bug.
 
+#### The square that froze on the viewport while spraying
+
+The most-reported thing about the native client, and one geometry bug rather than
+the performance problem it read as.
+
+A tracer is drawn as a square prism from the shot's origin to the pellet's
+endpoint (`effects.rs`, `push_beam`). The origin is the server's
+`weapons.eye_position` — **exactly the camera**. The prism's radius is `0.035`
+and the near plane sits at `0.05`, *further out than the beam is wide*, so the
+camera sat inside its own tracer; and because the volume pass draws both faces
+(`cull_mode: None`) the prism's side quads straddled the near plane and
+rasterized as one large blended quad centred on the view. A tracer lives 75 ms
+and a rifle fires every ~90 ms, so while spraying it never went away. Marking
+`mine` only lowered its alpha to 0.35, which made it translucent rather than
+absent. The point-blank impact `Ball` did the same thing against a near wall.
+
+Two things about the fix are worth keeping:
+
+- **It clips every beam, not only your own.** Somebody shooting *at* you sends a
+  tracer that ends at your body and passes straight through your eye — the same
+  bug from the other end, which a `mine`-only fix would have left in place.
+- **It clips against the live camera in `vertices`, not against the origin in
+  `shot`.** The eye keeps moving during the beam's 75 ms, so a strafe can walk
+  the camera into a beam that was clear when it was born.
+
+`clip_from_eye` returns *up to two* pieces, and that is the interesting case: a
+round going past you enters the clear sphere and leaves it again, so collapsing
+it to one piece would either erase a near miss or bridge it back through the near
+plane. That doubles a tracer's 24 vertices to 48 in the worst case, which the
+volume-buffer budget test in `renderer.rs` now exercises deliberately by firing
+with the eye inside the pattern.
+
+Separately, your own tracer starts `0.6` cubes down range so it leaves the barrel
+rather than your face, and a pellet that stopped closer than that gets no tracer
+at all — only its impact.
+
+#### The crosshair was drawing the wrong cone
+
+`HudView.spread` fed the reticle's gap from the weapon's `spread` /
+`hipfire_spread`. Those are the cone a weapon **without a pattern** uses. A
+patterned weapon is aimed by `apply_spray` first and then scattered by the much
+tighter `residual_spread`, and the server passes exactly that to `resolve_shot`
+for *every* shot — so the rifle's reticle was drawn at 0.021 against a real cone
+of 0.004, five times too wide, permanently. It reads as "this gun is inaccurate".
+Nothing errored, because both are real numbers about the same weapon.
+`api::WeaponInfo::residual_cone` already mirrored the server's rule and simply
+was not being called.
+
+Note the reticle still *moves* with a burst — recoil walks the camera through the
+same pattern the server aims by — so it follows the shots rather than opening
+around them. That is what makes a pattern learnable, and it is why this is a cone
+question rather than a spread-over-time one.
+
+#### Crosshair legibility
+
+Three changes, each of which was a bug first:
+
+- **Every element is drawn twice**, once in near-black at `thick + 2 * outline`
+  and then in colour. A one-colour reticle vanishes against any surface near its
+  own brightness and the player finds out by missing.
+- **The hitmarker is drawn around the reticle rather than replacing it.** It used
+  to `return` early with an X in its place, so while spraying into somebody the
+  thing you aim with changed shape about ten times a second.
+- **Elements are feathered** (`soft_rect`). The overlay pass has no MSAA and this
+  painter has no texture, so the old `thickness.max(1.0)` pixel-snap turned the
+  centre dot into a hard square at the default 0.6.
+
+`outline`, `dot` and `alpha` are settings and `draw.crosshair.*` cvars; `dot` is
+now independent of `style`, so choosing a ring no longer costs you the choice.
+
+#### Mipmaps, anisotropy and supersampling
+
+The world used to shimmer, and the cause was that **no sampler uploaded mips at
+all** — one level, `mipmap_filter: Nearest`, no anisotropy. The map's UVs are in
+cube units, so a floor down a corridor covers hundreds of detail tiles per pixel
+row and the sampler picked one of them per pixel, near enough at random. That
+boils as you walk.
+
+`mipmap.rs` builds the chains on the CPU, which is possible here because every
+texture this client uses is *already* CPU-side — the detail tile is drawn by
+`draw_tile`, character and prop maps arrive as decoded RGBA out of a glTF. So
+none of the GPU machinery a mip generator usually needs (a blit chain or a
+compute pass, plus `RENDER_ATTACHMENT` on every texture) has to exist.
+
+**The colour-space rule is the whole reason it is one shared function**, and both
+ways of getting it wrong are silent and look like a lighting bug:
+
+| Texture | Format | Space | Getting it wrong |
+| --- | --- | --- | --- |
+| detail tile | `Rgba8Unorm` | `Linear` — it is a *multiplier*, not a colour | decoding as sRGB dims every level below the first; the world darkens with distance and reads as fog |
+| character / prop maps | `Rgba8UnormSrgb` | `Srgb` — decode, average, re-encode | averaging raw bytes comes out darker, worst in the mid-tones; a character dims as they walk away |
+
+`Space` has no `Default` for that reason: the caller states which it has. Alpha is
+coverage and is averaged linearly in both cases — running it through the transfer
+function is the third version of the same bug and it eats soft edges.
+
+**`anisotropy_clamp > 1` requires `mag_filter`, `min_filter` *and* `mipmap_filter`
+all `Linear`.** Any of the three left on `Nearest` is a validation error at
+sampler creation — a hard stop on the first frame, not a softer picture — so
+`mipmap::ANISOTROPY` lives next to the chain builder and the two changes are made
+together.
+
+`render_scale` now goes to **2.0**, which is supersampling: the world is drawn
+larger than the window and the blit's existing linear filter averages it down. It
+needed no renderer change at all — `create_scene` already allocated at
+`width * scale` — only the clamp, which makes it the cheapest real image-quality
+knob here, and the only anti-aliasing that touches shader aliasing and alpha
+edges. It did make an oversized allocation reachable, so `create_scene` now
+clamps both axes together against `device.limits().max_texture_dimension_2d`;
+without that, 2.0 on a 4K display asks for 7680×4320 and some adapters refuse it
+with a validation error rather than a picture.
+
+Two smaller ones: `WindowEvent::ScaleFactorChanged` is handled, because winit does
+not guarantee a `Resized` alongside it and the surface is configured in physical
+pixels — dragging the window to a monitor with a different scale used to leave a
+stale swapchain, which reads as "the game went blurry on my second screen". And
+`hassault.video.hudScale` multiplies the HUD's derived `round(height / 360)` unit,
+which is a whole-pixel step and so lands on the same value across wide resolution
+bands.
+
 #### A metal with nothing to reflect renders black
 
 The browser needed one thing the boxes never did. A metallic surface in a

@@ -44,6 +44,10 @@ pub const KEY_CROSSHAIR_SIZE: &str = "hassault.crosshair.size";
 pub const KEY_CROSSHAIR_GAP: &str = "hassault.crosshair.gap";
 pub const KEY_CROSSHAIR_THICKNESS: &str = "hassault.crosshair.thickness";
 pub const KEY_CROSSHAIR_COLOR: &str = "hassault.crosshair.color";
+pub const KEY_CROSSHAIR_OUTLINE: &str = "hassault.crosshair.outline";
+pub const KEY_CROSSHAIR_DOT: &str = "hassault.crosshair.dot";
+pub const KEY_CROSSHAIR_ALPHA: &str = "hassault.crosshair.alpha";
+pub const KEY_HUD_SCALE: &str = "hassault.video.hudScale";
 pub const KEY_SHOW_HITBOXES: &str = "hassault.debug.hitboxes";
 
 /// How much the renderer is allowed to spend on looking good.
@@ -268,6 +272,21 @@ pub struct Crosshair {
     pub gap: f32,
     pub thickness: f32,
     pub color: CrosshairColor,
+    /// A dark border around every element.
+    ///
+    /// On by default, and the one setting here that changes whether the reticle
+    /// *works* rather than how it looks: a single colour is invisible against
+    /// any surface near its own brightness, and the way a player finds that out
+    /// is by missing. Offered as a setting anyway, because somebody running a
+    /// very thin reticle may prefer the cleaner line.
+    pub outline: bool,
+    /// Whether the centre dot is drawn, independent of the style.
+    ///
+    /// Separate from `style` because "cross, no dot" and "cross with dot" were
+    /// two of the four styles, which meant picking a ring cost you the choice.
+    pub dot: bool,
+    /// Overall opacity, 0.15–1.0.
+    pub alpha: f32,
 }
 
 impl Default for Crosshair {
@@ -278,6 +297,9 @@ impl Default for Crosshair {
             gap: 4.0,
             thickness: 0.6,
             color: CrosshairColor::default(),
+            outline: true,
+            dot: true,
+            alpha: 1.0,
         }
     }
 }
@@ -285,9 +307,20 @@ impl Default for Crosshair {
 #[derive(Debug, Clone, Copy)]
 pub struct Video {
     pub fullscreen: bool,
-    /// Fraction of the window's pixels the world is rendered at, 0.5–1.0. The
+    /// Fraction of the window's pixels the world is rendered at, 0.5–2.0. The
     /// HUD is **not** scaled with it — text drawn at half resolution and stretched
     /// is unreadable, and the HUD costs nothing to draw at native size.
+    ///
+    /// Above 1.0 this is **supersampling**: the world is drawn larger than the
+    /// window and the blit's linear filter averages it back down. It needed no
+    /// renderer change at all — `create_scene` already allocated at
+    /// `width * scale` and the blit already sampled linearly — only this clamp,
+    /// which is why it is the cheapest real image-quality knob here. It is also
+    /// the only anti-aliasing that touches shader aliasing and alpha edges,
+    /// which MSAA does not.
+    ///
+    /// The cost is quadratic: 2.0 is four times the pixels, so it is offered but
+    /// not defaulted.
     pub render_scale: f32,
     pub quality: Quality,
     /// Vertical sync. Off by default and first in the present-mode list, because
@@ -323,6 +356,15 @@ pub struct Video {
     /// performance setting would be the placebo this file's other comments keep
     /// refusing to ship.
     pub shadows: bool,
+    /// How large the HUD is drawn, 0.75–1.5 of its derived size.
+    ///
+    /// The HUD's one unit is `round(height / 360)`, derived from the window so
+    /// the same layout is legible on a 720p laptop and a 4K monitor. Derived is
+    /// the right default and a poor rule for everyone: the step is whole pixels,
+    /// so 1440p and 4K land on the same unit as 1080p over wide bands, and there
+    /// is no way to ask for a larger reticle and readouts without also changing
+    /// what they mean. This multiplies that unit and nothing else.
+    pub hud_scale: f32,
     /// Frames per second to cap at, or **0 for uncapped**.
     ///
     /// Uncapped by default, which is the whole argument of the note on `MAX_DT`
@@ -377,6 +419,7 @@ impl Default for Video {
             // a game, and borderless fullscreen costs nothing to leave.
             fullscreen: true,
             render_scale: 1.0,
+            hud_scale: 1.0,
             quality: Quality::default(),
             vsync: false,
             fov: 75.0,
@@ -428,7 +471,10 @@ impl Settings {
             s.video.fullscreen = v;
         }
         if let Some(v) = get(KEY_RENDER_SCALE).and_then(|v| v.as_f64()) {
-            s.video.render_scale = (v as f32).clamp(0.5, 1.0);
+            s.video.render_scale = (v as f32).clamp(0.5, 2.0);
+        }
+        if let Some(v) = get(KEY_HUD_SCALE).and_then(|v| v.as_f64()) {
+            s.video.hud_scale = (v as f32).clamp(0.75, 1.5);
         }
         if let Some(v) = get(KEY_QUALITY).and_then(|v| v.as_str()) {
             s.video.quality = Quality::parse(v);
@@ -476,6 +522,15 @@ impl Settings {
         if let Some(v) = get(KEY_CROSSHAIR_COLOR).and_then(|v| v.as_str()) {
             s.crosshair.color = CrosshairColor::parse(v);
         }
+        if let Some(v) = get(KEY_CROSSHAIR_OUTLINE).and_then(|v| v.as_bool()) {
+            s.crosshair.outline = v;
+        }
+        if let Some(v) = get(KEY_CROSSHAIR_DOT).and_then(|v| v.as_bool()) {
+            s.crosshair.dot = v;
+        }
+        if let Some(v) = get(KEY_CROSSHAIR_ALPHA).and_then(|v| v.as_f64()) {
+            s.crosshair.alpha = (v as f32).clamp(0.15, 1.0);
+        }
         s
     }
 
@@ -486,6 +541,7 @@ impl Settings {
             KEY_SENSITIVITY => json!(self.sensitivity),
             KEY_FULLSCREEN => json!(self.video.fullscreen),
             KEY_RENDER_SCALE => json!(self.video.render_scale),
+            KEY_HUD_SCALE => json!(self.video.hud_scale),
             KEY_QUALITY => json!(self.video.quality.key()),
             KEY_VSYNC => json!(self.video.vsync),
             KEY_FOV => json!(self.video.fov),
@@ -497,6 +553,9 @@ impl Settings {
             KEY_CROSSHAIR_GAP => json!(self.crosshair.gap),
             KEY_CROSSHAIR_THICKNESS => json!(self.crosshair.thickness),
             KEY_CROSSHAIR_COLOR => json!(self.crosshair.color.key()),
+            KEY_CROSSHAIR_OUTLINE => json!(self.crosshair.outline),
+            KEY_CROSSHAIR_DOT => json!(self.crosshair.dot),
+            KEY_CROSSHAIR_ALPHA => json!(self.crosshair.alpha),
             KEY_SHOW_HITBOXES => json!(self.show_hitboxes),
             _ => return None,
         })
@@ -587,7 +646,9 @@ mod tests {
             "hassault.sensitivity": 0.0,
             "hassault.crosshair.thickness": -3.0,
         }));
-        assert_eq!(s.video.render_scale, 1.0);
+        // The ceiling is 2.0, not 1.0: above 1.0 the scale is supersampling.
+        // 40 is still nonsense and still clamps.
+        assert_eq!(s.video.render_scale, 2.0);
         assert_eq!(s.sensitivity, 0.05);
         assert_eq!(s.crosshair.thickness, 0.2);
     }
@@ -625,6 +686,7 @@ mod tests {
             KEY_SENSITIVITY,
             KEY_FULLSCREEN,
             KEY_RENDER_SCALE,
+            KEY_HUD_SCALE,
             KEY_QUALITY,
             KEY_VSYNC,
             KEY_CROSSHAIR_STYLE,
@@ -632,6 +694,9 @@ mod tests {
             KEY_CROSSHAIR_GAP,
             KEY_CROSSHAIR_THICKNESS,
             KEY_CROSSHAIR_COLOR,
+            KEY_CROSSHAIR_OUTLINE,
+            KEY_CROSSHAIR_DOT,
+            KEY_CROSSHAIR_ALPHA,
             KEY_SHOW_HITBOXES,
         ] {
             bag.insert(key.into(), original.value_for(key).expect("a value"));
@@ -640,8 +705,12 @@ mod tests {
         assert_eq!(read.crosshair.style, original.crosshair.style);
         assert_eq!(read.crosshair.color, original.crosshair.color);
         assert_eq!(read.crosshair.gap, original.crosshair.gap);
+        assert_eq!(read.crosshair.outline, original.crosshair.outline);
+        assert_eq!(read.crosshair.dot, original.crosshair.dot);
+        assert_eq!(read.crosshair.alpha, original.crosshair.alpha);
         assert_eq!(read.video.quality, original.video.quality);
         assert_eq!(read.video.render_scale, original.video.render_scale);
+        assert_eq!(read.video.hud_scale, original.video.hud_scale);
         assert_eq!(read.video.vsync, original.video.vsync);
         assert_eq!(read.video.fullscreen, original.video.fullscreen);
         assert_eq!(read.sensitivity, original.sensitivity);

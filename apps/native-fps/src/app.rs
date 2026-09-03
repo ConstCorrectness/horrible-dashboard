@@ -42,11 +42,13 @@ use hassault_native::api::LintFinding;
 use hassault_native::api::{
     HitboxSpec, ItemsResponse, NodeApi, TacticalSpec, ThrowPhysics, WeaponSpec,
 };
+use hassault_native::arc::{self, ThrowArc};
 use hassault_native::audio::GameAudio;
 use hassault_native::bodies;
 use hassault_native::camera::{blast_trauma, damage_trauma, fire_trauma, Camera, Shake};
 use hassault_native::console::{self, ClientCvars, Console, Definitions, Dispatch};
 use hassault_native::damage::{DamageNumbers, Placed};
+use hassault_native::decals::DecalPool;
 use hassault_native::editor::{self, EditRequest, Editor, Selection};
 use hassault_native::effects::EffectsPool;
 use hassault_native::geometry::{build_world_mesh, MeshData};
@@ -64,8 +66,6 @@ use hassault_native::prediction::Prediction;
 use hassault_native::prop;
 use hassault_native::protocol::{Command, Event, Fx, HitMarker, PlayerRow, SelfState};
 use hassault_native::radar::{self, Blip, Run};
-use hassault_native::arc::{self, ThrowArc};
-use hassault_native::decals::DecalPool;
 use hassault_native::renderer::{Renderer, Vertex, VolumeVertex, MODE_FLAT};
 use hassault_native::reveal::Reveal;
 use hassault_native::settings::{Crosshair, CrosshairStyle, Settings, SettingsWriter, FOV_RANGE};
@@ -2168,6 +2168,15 @@ impl App {
         if let Some(v) = self.cvars.string("draw.crosshair.style") {
             c.style = CrosshairStyle::parse(v);
         }
+        if let Some(v) = self.cvars.boolean("draw.crosshair.outline") {
+            c.outline = v;
+        }
+        if let Some(v) = self.cvars.boolean("draw.crosshair.dot") {
+            c.dot = v;
+        }
+        if let Some(v) = self.cvars.number("draw.crosshair.alpha") {
+            c.alpha = v.clamp(0.15, 1.0);
+        }
         c
     }
 
@@ -2805,6 +2814,20 @@ impl ApplicationHandler for App {
                     r.resize(size.width, size.height);
                 }
             }
+            // Dragging the window to a monitor with a different scale factor.
+            //
+            // winit does **not** guarantee a `Resized` alongside this, and the
+            // surface is configured in *physical* pixels — so without this arm
+            // the swapchain keeps the old monitor's size and the picture is
+            // stretched or cropped until something else happens to resize the
+            // window. It reads as "the game went blurry on my second screen",
+            // which is a long way from the actual cause.
+            WindowEvent::ScaleFactorChanged { .. } => {
+                if let (Some(r), Some(w)) = (&mut self.renderer, &self.window) {
+                    let size = w.inner_size();
+                    r.resize(size.width, size.height);
+                }
+            }
             WindowEvent::Focused(false) => self.set_grab(false),
             // The wheel scrolls the console and nothing else. In play it is
             // deliberately inert: a weapon-cycle bound to it is the one binding
@@ -3149,7 +3172,12 @@ impl ApplicationHandler for App {
                     });
                 }
                 nades::volume_vertices(&self.nades, &mut self.volume_verts);
-                self.effects.vertices(&mut self.volume_verts);
+                // The live camera, not the shot's origin: a beam is clipped
+                // clear of wherever the eye got to this frame. See `EYE_CLEAR`.
+                self.effects.vertices(
+                    &mut self.volume_verts,
+                    [self.camera.x, self.camera.y, self.camera.z],
+                );
                 // The water plane rides the translucent pass with the clouds —
                 // it is the one piece of the *map* that is not opaque. On the
                 // same clock as the reveal, so the ripple does not restart when
@@ -3191,19 +3219,28 @@ impl ApplicationHandler for App {
                 // a `&str` into `self.weapons` would borrow `self` twice.
                 let held = self.held();
                 let weapon_name = held.map(|w| w.name.clone()).unwrap_or_default();
-                // The cone the **next** shot would use: the scoped one while
-                // scoped, the hip-fire one otherwise. Drawing `spread`
-                // unconditionally would hide the hip-fire penalty, which is the
-                // whole of what an unscoped sniper is — and it is 27× wider.
-                let spread = held
-                    .map(|w| {
-                        if self.scoped > 0 {
-                            w.spread
-                        } else {
-                            w.hipfire_spread
-                        }
-                    })
-                    .unwrap_or(0.0);
+                // The cone the **next** shot actually gets, which is
+                // `residual_cone` and not `spread`/`hipfire_spread`.
+                //
+                // Those two are the cone a weapon *without* a pattern uses. A
+                // patterned weapon is aimed by `apply_spray` first and then
+                // scattered by the much tighter `residual_spread` — the server
+                // passes exactly that to `resolve_shot` for **every** shot, not
+                // only for the ones after the first. Drawing the wide number
+                // here made the rifle's reticle 5× wider than its own cone
+                // (0.021 against 0.004), which reads as "this gun is
+                // inaccurate" when it is the drawing that is wrong. Nothing
+                // errored, because both numbers are real numbers about the same
+                // weapon.
+                //
+                // The reticle still *moves* with the burst: recoil walks the
+                // camera through the same pattern the server aims by
+                // (`apply_match_recoil`), so the crosshair follows the shots
+                // rather than opening around them. That is what makes a pattern
+                // learnable, and it is why this is a cone question and not a
+                // spread-over-time one. `residual_cone` keeps the hip-fire
+                // penalty for the sniper, which has no pattern.
+                let spread = held.map(|w| w.residual_cone(self.scoped)).unwrap_or(0.0);
                 let magnification = self.magnification();
                 let mut overlay = std::mem::take(&mut self.overlay);
                 // Filtered here rather than in the painter: the rule that keeps
@@ -3269,6 +3306,7 @@ impl ApplicationHandler for App {
                     selected: self.utility.selected(),
                 });
                 let view = HudView {
+                    hud_scale: self.settings.video.hud_scale,
                     radar,
                     utility: utility.as_ref(),
                     // Straight off the snapshot. Parsed and then ignored until

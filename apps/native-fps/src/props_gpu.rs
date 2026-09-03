@@ -127,8 +127,10 @@ impl Props {
             address_mode_w: wgpu::AddressMode::Repeat,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            // One mip level is uploaded, so this only has to be valid.
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            // Legal only because all three filters above are `Linear` — see
+            // `mipmap::ANISOTROPY`.
+            anisotropy_clamp: crate::mipmap::ANISOTROPY,
             ..Default::default()
         });
 
@@ -316,10 +318,18 @@ fn upload_texture(
         height: image.height.max(1),
         depth_or_array_layers: 1,
     };
+    // `Space::Srgb` to match the format below — averaging these bytes raw comes
+    // out darker than the surface they represent, worst in the mid-tones.
+    let levels = crate::mipmap::chain(
+        image.rgba.clone(),
+        size.width,
+        size.height,
+        crate::mipmap::Space::Srgb,
+    );
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("prop-texture"),
         size,
-        mip_level_count: 1,
+        mip_level_count: levels.len() as u32,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         // `Srgb`: the maps are authored in sRGB and the shader relies on the
@@ -329,21 +339,27 @@ fn upload_texture(
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
-    queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture: &texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        &image.rgba,
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(4 * size.width),
-            rows_per_image: Some(size.height),
-        },
-        size,
-    );
+    for (level, (w, h, pixels)) in levels.iter().enumerate() {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: level as u32,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * w),
+                rows_per_image: Some(*h),
+            },
+            wgpu::Extent3d {
+                width: *w,
+                height: *h,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
     texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 

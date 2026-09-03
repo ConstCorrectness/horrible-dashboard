@@ -34,6 +34,7 @@ pub mod hud;
 pub mod interp;
 pub mod items;
 pub mod menu;
+pub mod mipmap;
 pub mod nades;
 pub mod net;
 pub mod physics;

@@ -1513,8 +1513,23 @@ fn create_scene(
 ) -> SceneTargets {
     // At least one pixel each way: a window dragged to nothing, times a 50%
     // scale, is a zero-sized texture and a validation error.
-    let width = ((config.width as f32 * scale).round() as u32).max(1);
-    let height = ((config.height as f32 * scale).round() as u32).max(1);
+    //
+    // And at most what the adapter will actually allocate. Supersampling made
+    // this reachable: 2.0 on a 4K display asks for 7680×4320, which is past what
+    // some adapters allow, and the failure is a validation error at texture
+    // creation — a hard stop on the frame the setting is applied, not a picture
+    // that quietly stays sharp. The device's own limit is the honest bound
+    // (`request_device` raised it to the adapter's via `using_resolution`), and
+    // clamping preserves the aspect ratio by scaling both axes together rather
+    // than squashing one.
+    let cap = device.limits().max_texture_dimension_2d.max(1);
+    let mut width = ((config.width as f32 * scale).round() as u32).max(1);
+    let mut height = ((config.height as f32 * scale).round() as u32).max(1);
+    if width > cap || height > cap {
+        let shrink = (cap as f32 / width.max(height) as f32).min(1.0);
+        width = ((width as f32 * shrink).round() as u32).clamp(1, cap);
+        height = ((height as f32 * shrink).round() as u32).clamp(1, cap);
+    }
     let size = wgpu::Extent3d {
         width,
         height,
@@ -1876,7 +1891,10 @@ mod budget {
             let ends: Vec<[f32; 3]> = (0..8).map(|p| [i as f32, p as f32, 2.0]).collect();
             fx.shot([i as f32, 0.0, 2.0], &ends, &[], false, false);
         }
-        fx.vertices(&mut out);
+        // The eye placed *inside* the field of fire on purpose: a beam that
+        // passes the camera is clipped into two pieces rather than one, so this
+        // is the worst case for the budget as well as for the count.
+        fx.vertices(&mut out, [8.0, 4.0, 2.0]);
 
         assert!(
             out.len() <= MAX_VOLUME_VERTS,

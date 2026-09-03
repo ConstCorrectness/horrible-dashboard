@@ -42,6 +42,9 @@ pub enum Action {
     CrosshairSize,
     CrosshairGap,
     CrosshairThickness,
+    CrosshairOutline,
+    CrosshairDot,
+    CrosshairAlpha,
     CrosshairColor,
     Fullscreen,
     RenderScale,
@@ -185,6 +188,26 @@ impl Menu {
                     "COLOUR",
                     settings.crosshair.color.label().to_string(),
                     Action::CrosshairColor,
+                ),
+                row(
+                    "OUTLINE",
+                    if settings.crosshair.outline {
+                        "ON"
+                    } else {
+                        "OFF"
+                    }
+                    .to_string(),
+                    Action::CrosshairOutline,
+                ),
+                row(
+                    "CENTRE DOT",
+                    if settings.crosshair.dot { "ON" } else { "OFF" }.to_string(),
+                    Action::CrosshairDot,
+                ),
+                row(
+                    "OPACITY",
+                    format!("{:.0}%", settings.crosshair.alpha * 100.0),
+                    Action::CrosshairAlpha,
                 ),
                 row("BACK", String::new(), Action::Back),
             ],
@@ -455,6 +478,18 @@ pub fn apply(action: Action, step: i32, settings: &mut Settings) -> Vec<&'static
                 step_value(settings.crosshair.thickness, step, 0.2, 0.2, 3.0);
             vec![KEY_CROSSHAIR_THICKNESS]
         }
+        Action::CrosshairOutline => {
+            settings.crosshair.outline = !settings.crosshair.outline;
+            vec![KEY_CROSSHAIR_OUTLINE]
+        }
+        Action::CrosshairDot => {
+            settings.crosshair.dot = !settings.crosshair.dot;
+            vec![KEY_CROSSHAIR_DOT]
+        }
+        Action::CrosshairAlpha => {
+            settings.crosshair.alpha = step_value(settings.crosshair.alpha, step, 0.05, 0.15, 1.0);
+            vec![KEY_CROSSHAIR_ALPHA]
+        }
         Action::Fullscreen => {
             settings.video.fullscreen = !settings.video.fullscreen;
             vec![KEY_FULLSCREEN]
@@ -503,7 +538,7 @@ pub fn apply(action: Action, step: i32, settings: &mut Settings) -> Vec<&'static
             // Discrete steps rather than a continuous slider: the render target
             // is reallocated on every change, and a value that lands on 73%
             // helps nobody.
-            const SCALES: [f32; 4] = [0.5, 0.75, 0.9, 1.0];
+            const SCALES: [f32; 7] = [0.5, 0.75, 0.9, 1.0, 1.25, 1.5, 2.0];
             let current = SCALES
                 .iter()
                 .position(|s| (*s - settings.video.render_scale).abs() < 0.01)
@@ -653,7 +688,7 @@ mod tests {
         for _ in 0..10 {
             apply(Action::RenderScale, 1, &mut s);
         }
-        assert_eq!(s.video.render_scale, 1.0);
+        assert_eq!(s.video.render_scale, 2.0);
         for _ in 0..10 {
             apply(Action::RenderScale, -1, &mut s);
         }

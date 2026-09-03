@@ -61,7 +61,48 @@ const BLAST_LIFE: f32 = 0.5;
 /// adding them raises how *fast* the cap is reached without raising the cap's
 /// own worst case at all. That arithmetic is the thing to redo before raising
 /// this number.
+///
+/// `clip_from_eye` can split one beam into two, which doubles a tracer's 24
+/// vertices to 48 — still an order of magnitude under a ball, so the worst case
+/// above is unchanged and it is still a ball that sets it. `renderer.rs`'s
+/// budget test now fires with the eye inside the pattern so that split is
+/// actually exercised rather than assumed harmless.
 const MAX_LIVE: usize = 192;
+
+/// How far a beam must stay clear of the camera, in cubes.
+///
+/// **This is the fix for the shot that draws a translucent square over the
+/// middle of the screen.** A tracer's origin is the shooter's eye
+/// (`weapons.eye_position` on the server), a beam is a prism of radius
+/// `BEAM_RADIUS`, and the near plane sits at [`camera::NEAR`] = 0.05 — *further
+/// out than the prism is wide*. So the camera sits inside its own tracer, and
+/// because the volume pipeline draws both faces (`cull_mode: None`) the four
+/// side quads straddle the near plane and rasterize as one big blended quad
+/// centred on the view. At 700 rpm a tracer is re-armed every ~90ms and its life
+/// is 75ms, so while spraying it never goes away: it reads as a square frozen to
+/// the viewport rather than as a bullet.
+///
+/// The clip is applied to **every** beam and against the **live camera**, not
+/// only to `mine` at the moment the shot arrives. Two reasons, both real:
+/// somebody shooting *at* you sends a tracer that ends at your body and passes
+/// straight through your eye, which is the same bug from the other end; and the
+/// camera keeps moving during the beam's life, so a strafe can walk the eye into
+/// a beam that was clear when it was born.
+///
+/// Comfortably past the near plane, and small enough that a round going by is
+/// still a round going by rather than a visibly chopped one.
+const EYE_CLEAR: f32 = 0.35;
+
+/// Where your own tracer starts, measured from the muzzle.
+///
+/// Separate from [`EYE_CLEAR`], which is a correctness clip: this one is taste.
+/// A tracer that begins at the eye looks like it is fired *from your face*; one
+/// that begins a little ahead reads as leaving the barrel. Only applied to
+/// `mine`, because everyone else's tracer is already seen from outside.
+const MINE_TRACER_START: f32 = 0.6;
+
+/// The half-width of a tracer.
+const BEAM_RADIUS: f32 = 0.035;
 
 /// Hex, like the browser's, so the two can be compared without arithmetic.
 const TRACER_COLOR: u32 = 0xffdb8c;
@@ -173,69 +214,91 @@ impl EffectsPool {
     ) {
         for (i, end) in ends.iter().enumerate() {
             let face = faces.get(i).copied().unwrap_or(crate::trace::FACE_NONE);
-            let on_a_surface = if faces.is_empty() {
-                !hit
+            let on_a_surface = if faces.is_empty() { !hit } else { face >= 0 };
+            // Your own tracer leaves the barrel rather than your eye. A pellet
+            // that stopped closer than the barrel gets no tracer at all: there
+            // is no line to see at that range, only the impact.
+            let from = if mine {
+                match advance(origin, *end, MINE_TRACER_START) {
+                    Some(p) => p,
+                    None => {
+                        self.impact(*end, origin, face, on_a_surface, i);
+                        continue;
+                    }
+                }
             } else {
-                face >= 0
+                origin
             };
             self.push(Live {
                 shape: Shape::Beam {
-                    from: origin,
+                    from,
                     to: *end,
-                    radius: 0.035,
+                    radius: BEAM_RADIUS,
                 },
                 color: rgb(TRACER_COLOR),
                 base: if mine { 0.35 } else { 0.8 },
                 age: 0.0,
                 life: TRACER_LIFE,
             });
+            self.impact(*end, origin, face, on_a_surface, i);
+        }
+    }
+
+    /// The flash, sparks and dust one pellet leaves where it stopped.
+    ///
+    /// Split out of [`EffectsPool::shot`] so the two ways a pellet can be drawn
+    /// — with a tracer, and point blank with none — cannot drift apart. A shot
+    /// that lost its tracer must still leave the mark it made.
+    fn impact(
+        &mut self,
+        end: [f32; 3],
+        origin: [f32; 3],
+        face: i32,
+        on_a_surface: bool,
+        pellet: usize,
+    ) {
+        self.push(Live {
+            shape: Shape::Ball {
+                at: end,
+                radius: 0.16,
+            },
+            color: rgb(IMPACT_COLOR),
+            base: 0.9,
+            age: 0.0,
+            life: IMPACT_LIFE,
+        });
+        // The surface's own normal where the server named one, and the
+        // reverse of the incoming ray where it did not.
+        let back = if face >= 0 {
+            crate::trace::FACE_NORMALS[face as usize]
+        } else {
+            normalize([origin[0] - end[0], origin[1] - end[1], origin[2] - end[2]])
+        };
+        self.push(Live {
+            shape: Shape::Sparks {
+                at: end,
+                back,
+                // The pellet index is in the seed, so the eight impacts of
+                // one shotgun blast are eight different bursts rather than
+                // the same fan drawn eight times a few centimetres apart.
+                seed: 0x9e37_79b9 ^ (pellet as u32).wrapping_mul(0x85eb_ca6b),
+            },
+            color: rgb(SPARK_COLOR),
+            base: 0.85,
+            age: 0.0,
+            life: SPARK_LIFE,
+        });
+        if on_a_surface {
             self.push(Live {
-                shape: Shape::Ball {
-                    at: *end,
-                    radius: 0.16,
+                shape: Shape::Puff {
+                    at: end,
+                    radius: 0.22,
                 },
-                color: rgb(IMPACT_COLOR),
-                base: 0.9,
+                color: rgb(DUST_COLOR),
+                base: 0.3,
                 age: 0.0,
-                life: IMPACT_LIFE,
+                life: DUST_LIFE,
             });
-            // The surface's own normal where the server named one, and the
-            // reverse of the incoming ray where it did not.
-            let back = if face >= 0 {
-                crate::trace::FACE_NORMALS[face as usize]
-            } else {
-                normalize([
-                    origin[0] - end[0],
-                    origin[1] - end[1],
-                    origin[2] - end[2],
-                ])
-            };
-            self.push(Live {
-                shape: Shape::Sparks {
-                    at: *end,
-                    back,
-                    // The pellet index is in the seed, so the eight impacts of
-                    // one shotgun blast are eight different bursts rather than
-                    // the same fan drawn eight times a few centimetres apart.
-                    seed: 0x9e37_79b9 ^ (i as u32).wrapping_mul(0x85eb_ca6b),
-                },
-                color: rgb(SPARK_COLOR),
-                base: 0.85,
-                age: 0.0,
-                life: SPARK_LIFE,
-            });
-            if on_a_surface {
-                self.push(Live {
-                    shape: Shape::Puff {
-                        at: *end,
-                        radius: 0.22,
-                    },
-                    color: rgb(DUST_COLOR),
-                    base: 0.3,
-                    age: 0.0,
-                    life: DUST_LIFE,
-                });
-            }
         }
     }
 
@@ -291,7 +354,12 @@ impl EffectsPool {
     }
 
     /// This frame's effect geometry.
-    pub fn vertices(&self, out: &mut Vec<VolumeVertex>) {
+    /// `eye` is the camera **this frame**, in cube coordinates, and everything
+    /// here is kept clear of it — see [`EYE_CLEAR`]. It is a parameter rather
+    /// than something the pool remembers because the pool is written once per
+    /// shot and read once per frame, and it is the *read* that has to know where
+    /// the camera got to.
+    pub fn vertices(&self, out: &mut Vec<VolumeVertex>, eye: [f32; 3]) {
         for e in &self.live {
             let t = (e.age / e.life).clamp(0.0, 1.0);
             let alpha = e.base * (1.0 - t);
@@ -300,7 +368,12 @@ impl EffectsPool {
             }
             match &e.shape {
                 Shape::Beam { from, to, radius } => {
-                    push_beam(out, *from, *to, *radius, e.color, alpha);
+                    // Up to two pieces: a round passing the camera is cut either
+                    // side of it rather than dropped, so a near miss still
+                    // reads as a round going by.
+                    for (a, b) in clip_from_eye(*from, *to, eye, EYE_CLEAR) {
+                        push_beam(out, a, b, *radius, e.color, alpha);
+                    }
                 }
                 Shape::Ball { at, radius } => {
                     // A blast grows as it fades, which is what makes a pop read
@@ -308,6 +381,13 @@ impl EffectsPool {
                     // Tracer impacts have the short life that makes this a
                     // negligible growth for them.
                     let grown = radius * (0.55 + 0.45 * t);
+                    // A ball the camera is inside is drawn from the inside —
+                    // the volume pass draws both faces — which is a wash over
+                    // the whole screen, not an impact. Shooting a wall you are
+                    // pressed against is exactly that case.
+                    if dist(*at, eye) < grown + EYE_CLEAR {
+                        continue;
+                    }
                     push_ball(out, *at, grown, e.color, alpha, 8, 6);
                 }
                 Shape::Sparks { at, back, seed } => {
@@ -322,11 +402,91 @@ impl EffectsPool {
                     // opposite budget to everything else here, which is why it
                     // is drawn at less than half a ball's detail. Nothing about
                     // a cloud rewards more triangles.
-                    push_ball(out, *at, radius * (0.5 + 2.0 * t), e.color, alpha, 5, 3);
+                    let grown = radius * (0.5 + 2.0 * t);
+                    if dist(*at, eye) < grown + EYE_CLEAR {
+                        continue;
+                    }
+                    push_ball(out, *at, grown, e.color, alpha, 5, 3);
                 }
             }
         }
     }
+}
+
+/// The distance between two points.
+fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {
+    let d = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
+}
+
+/// The point `along` cubes from `from` toward `to`, or `None` if the segment is
+/// shorter than that.
+///
+/// `None` is a real answer and not a failure: it is how a point-blank shot says
+/// it has no tracer worth drawing.
+fn advance(from: [f32; 3], to: [f32; 3], along: f32) -> Option<[f32; 3]> {
+    let d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+    let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    if len <= along {
+        return None;
+    }
+    let f = along / len;
+    Some([from[0] + d[0] * f, from[1] + d[1] * f, from[2] + d[2] * f])
+}
+
+/// The parts of the segment `from`→`to` that lie outside a sphere of `radius`
+/// around `eye`.
+///
+/// Zero, one or two pieces. Two is the interesting case and the reason this
+/// returns a list rather than an `Option<(a, b)>`: a round that goes *past* the
+/// camera — fired at somebody behind you — enters the sphere and leaves it
+/// again, and collapsing that to one piece would either erase the whole tracer
+/// or bridge it straight back through the near plane, which is the bug this
+/// exists to prevent.
+///
+/// The maths is the standard ray/sphere quadratic, in the segment's own
+/// parameter `s ∈ [0, 1]`, so the results come back as fractions of the beam and
+/// no length is recomputed.
+fn clip_from_eye(
+    from: [f32; 3],
+    to: [f32; 3],
+    eye: [f32; 3],
+    radius: f32,
+) -> Vec<([f32; 3], [f32; 3])> {
+    let d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+    let m = [from[0] - eye[0], from[1] - eye[1], from[2] - eye[2]];
+    let a = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+    if a < 1e-9 {
+        return Vec::new();
+    }
+    let b = 2.0 * (m[0] * d[0] + m[1] * d[1] + m[2] * d[2]);
+    let c = m[0] * m[0] + m[1] * m[1] + m[2] * m[2] - radius * radius;
+    let disc = b * b - 4.0 * a * c;
+    let whole = || vec![(from, to)];
+    if disc <= 0.0 {
+        // The beam never comes within `radius` of the eye. The overwhelmingly
+        // common case, and it costs one square root fewer than the alternative.
+        return whole();
+    }
+    let root = disc.sqrt();
+    let (s0, s1) = ((-b - root) / (2.0 * a), (-b + root) / (2.0 * a));
+    if s1 <= 0.0 || s0 >= 1.0 {
+        // The sphere is crossed, but off the ends of the segment.
+        return whole();
+    }
+    let at = |s: f32| [from[0] + d[0] * s, from[1] + d[1] * s, from[2] + d[2] * s];
+    // A piece shorter than this is not worth a prism: at typical beam lengths it
+    // is well under a pixel, and emitting it would put geometry right at the
+    // clip boundary where the whole point was to have none.
+    let min_piece = 0.02 / a.sqrt();
+    let mut parts = Vec::new();
+    if s0 > min_piece {
+        parts.push((from, at(s0)));
+    }
+    if s1 < 1.0 - min_piece {
+        parts.push((at(s1), to));
+    }
+    parts
 }
 
 /// A square prism between two points, in cube coordinates, emitted in render
@@ -503,6 +663,10 @@ fn normalize(v: [f32; 3]) -> [f32; 3] {
 mod tests {
     use super::*;
 
+    /// A camera nowhere near anything a test draws, so the eye clip is out of
+    /// the picture unless a test is specifically about it.
+    const AWAY: [f32; 3] = [-500.0, -500.0, -500.0];
+
     /// The brightest thing drawn **near the muzzle**.
     ///
     /// A shot produces a tracer and an impact, and the impact is far brighter
@@ -512,7 +676,7 @@ mod tests {
     /// the beam reaches back to the origin, so position is what separates them.
     fn tracer_alpha(fx: &EffectsPool) -> f32 {
         let mut out = Vec::new();
-        fx.vertices(&mut out);
+        fx.vertices(&mut out, AWAY);
         out.iter()
             .filter(|v| v.position[0].abs() < 1.0)
             .map(|v| v.color[3])
@@ -529,7 +693,13 @@ mod tests {
         // sparks, dust. The spark burst is **one** entry for all five of its
         // beams — see `SPARKS`, and the budget arithmetic on `MAX_LIVE`.
         let mut fx = EffectsPool::default();
-        fx.shot([0.0; 3], &[[10.0, 0.0, 0.0], [10.0, 2.0, 0.0]], &[], false, false);
+        fx.shot(
+            [0.0; 3],
+            &[[10.0, 0.0, 0.0], [10.0, 2.0, 0.0]],
+            &[],
+            false,
+            false,
+        );
         assert_eq!(fx.count(), 8);
     }
 
@@ -554,7 +724,7 @@ mod tests {
             fx.shot([0.0; 3], &[[10.0, 0.0, 0.0]], &[], false, true);
             fx.update(SPARK_LIFE * t);
             let mut out = Vec::new();
-            fx.vertices(&mut out);
+            fx.vertices(&mut out, AWAY);
             // Sparks spray *back* toward the muzzle, so the near edge of what is
             // drawn around the endpoint is how far they have got.
             10.0 - out
@@ -616,7 +786,7 @@ mod tests {
         fx.update(DUST_LIFE);
         assert_eq!(fx.count(), 0);
         let mut out = Vec::new();
-        fx.vertices(&mut out);
+        fx.vertices(&mut out, AWAY);
         assert!(out.is_empty());
     }
 
@@ -642,7 +812,7 @@ mod tests {
         fx.shot([0.0; 3], &[[99.0, 0.0, 0.0]], &[], false, false);
         assert_eq!(fx.count(), MAX_LIVE, "capped, not grown");
         let mut out = Vec::new();
-        fx.vertices(&mut out);
+        fx.vertices(&mut out, AWAY);
         let far = out
             .iter()
             .any(|v| v.position[0] > 50.0 || v.position[2] > 50.0);
@@ -658,7 +828,7 @@ mod tests {
         let mut fx = EffectsPool::default();
         fx.shot([10.0, 10.0, 0.0], &[[10.0, 10.0, 20.0]], &[], false, false);
         let mut out = Vec::new();
-        fx.vertices(&mut out);
+        fx.vertices(&mut out, AWAY);
         let span = |axis: usize| {
             let lo = out
                 .iter()
@@ -682,7 +852,7 @@ mod tests {
         let mut fx = EffectsPool::default();
         fx.shot([0.0, 0.0, 0.0], &[[0.0, 30.0, 0.0]], &[], false, false);
         let mut out = Vec::new();
-        fx.vertices(&mut out);
+        fx.vertices(&mut out, AWAY);
         let hi = out.iter().map(|v| v.position[2]).fold(f32::MIN, f32::max);
         let lo = out.iter().map(|v| v.position[2]).fold(f32::MAX, f32::min);
         assert!((hi - 30.0).abs() < 0.2, "far end at {hi}, want 30");
@@ -698,12 +868,110 @@ mod tests {
         // Sampled at the end of its life, where the growth curve reaches 1.
         fx.update(BLAST_LIFE * 0.99);
         let mut out = Vec::new();
-        fx.vertices(&mut out);
+        fx.vertices(&mut out, AWAY);
         let reach = out
             .iter()
             .map(|v| (v.position[0].powi(2) + v.position[1].powi(2) + v.position[2].powi(2)).sqrt())
             .fold(0.0f32, f32::max);
         assert!((reach - 12.0).abs() < 0.2, "shell reached {reach}, want 12");
+    }
+
+    /// The regression that this whole clip exists for.
+    ///
+    /// A tracer's origin is the shooter's eye and a beam is a prism 7cm across,
+    /// while the near plane sits at 0.05 — so the camera used to be *inside* its
+    /// own tracer, and the volume pass draws both faces. The result was a
+    /// translucent quad over the middle of the screen, re-armed faster than it
+    /// faded, which read as a square frozen to the viewport while spraying.
+    ///
+    /// The invariant is geometric and cheap: no effect vertex may land inside
+    /// the sphere the near plane cannot see past.
+    fn nearest_vertex(fx: &EffectsPool, eye: [f32; 3]) -> f32 {
+        let mut out = Vec::new();
+        fx.vertices(&mut out, eye);
+        out.iter()
+            // `push_beam` emits render coordinates (cube y is render z), so the
+            // eye has to be swizzled the same way to be compared against them.
+            .map(|v| dist(v.position, [eye[0], eye[2], eye[1]]))
+            .fold(f32::MAX, f32::min)
+    }
+
+    #[test]
+    fn your_own_tracer_never_reaches_the_camera() {
+        let eye = [10.0, 10.0, 5.0];
+        let mut fx = EffectsPool::default();
+        fx.shot(eye, &[[40.0, 10.0, 5.0]], &[], true, false);
+        let near = nearest_vertex(&fx, eye);
+        assert!(
+            near >= EYE_CLEAR - 0.01,
+            "geometry {near} from the eye, inside the {EYE_CLEAR} clip"
+        );
+        assert!(near > crate::camera::NEAR, "inside the near plane");
+    }
+
+    #[test]
+    fn a_round_fired_at_you_is_cut_around_your_eye_not_through_it() {
+        // The same bug from the other end, and the reason the clip is applied to
+        // every beam rather than only to `mine`: somebody shooting at you sends
+        // a tracer that ends at your body, passing through your camera.
+        let eye = [10.0, 10.0, 5.0];
+        let mut fx = EffectsPool::default();
+        fx.shot([40.0, 10.0, 5.0], &[[9.0, 10.0, 5.0]], &[], false, true);
+        let near = nearest_vertex(&fx, eye);
+        assert!(near >= EYE_CLEAR - 0.01, "tracer came {near} from the eye");
+    }
+
+    #[test]
+    fn a_round_going_past_you_stays_a_round_going_past_you() {
+        // Cut into two pieces around the camera, not dropped: a near miss is
+        // information, and erasing it would be a different bug.
+        let eye = [10.0, 10.0, 5.0];
+        let mut fx = EffectsPool::default();
+        fx.shot([0.0, 10.0, 5.0], &[[40.0, 10.0, 5.0]], &[], false, true);
+        let mut out = Vec::new();
+        fx.vertices(&mut out, eye);
+        let before = out.iter().any(|v| v.position[0] < 9.0);
+        let after = out.iter().any(|v| v.position[0] > 11.0);
+        assert!(before && after, "the beam lost a side: {before}/{after}");
+        assert!(nearest_vertex(&fx, eye) >= EYE_CLEAR - 0.01);
+    }
+
+    #[test]
+    fn a_point_blank_shot_draws_an_impact_and_no_tracer() {
+        // Shorter than the barrel: there is no line to see at that range, and
+        // the impact must survive losing it.
+        let eye = [10.0, 10.0, 5.0];
+        let mut fx = EffectsPool::default();
+        fx.shot(eye, &[[10.3, 10.0, 5.0]], &[], true, false);
+        // Impact flash, sparks, dust — but no tracer.
+        assert_eq!(fx.count(), 3, "a tracer was drawn at point-blank range");
+    }
+
+    #[test]
+    fn an_impact_the_camera_is_inside_is_not_drawn() {
+        // Shooting a wall you are pressed against. A ball drawn from within is
+        // a wash over the whole screen, not an impact.
+        let eye = [10.0, 10.0, 5.0];
+        let mut fx = EffectsPool::default();
+        fx.shot(eye, &[[10.1, 10.0, 5.0]], &[], true, false);
+        let mut out = Vec::new();
+        fx.vertices(&mut out, eye);
+        assert!(out.is_empty(), "{} vertices drawn over the eye", out.len());
+    }
+
+    #[test]
+    fn a_distant_shot_is_untouched_by_the_clip() {
+        // The clip must cost nothing to the overwhelmingly common case, and in
+        // particular must not shorten a tracer that was never near the camera.
+        let eye = [0.0, 0.0, 0.0];
+        let mut fx = EffectsPool::default();
+        fx.shot([50.0, 50.0, 5.0], &[[80.0, 50.0, 5.0]], &[], false, true);
+        let mut out = Vec::new();
+        fx.vertices(&mut out, eye);
+        let lo = out.iter().map(|v| v.position[0]).fold(f32::MAX, f32::min);
+        let hi = out.iter().map(|v| v.position[0]).fold(f32::MIN, f32::max);
+        assert!((lo - 50.0).abs() < 0.2, "near end moved to {lo}");
+        assert!((hi - 80.0).abs() < 0.3, "far end moved to {hi}");
     }
 
     #[test]
@@ -714,7 +982,7 @@ mod tests {
         fx.shot([0.0; 3], &[[10.0, 0.0, 0.0]], &[], false, false);
         fx.detonate("he", [0.0; 3], 8.0);
         let mut out = Vec::new();
-        fx.vertices(&mut out);
+        fx.vertices(&mut out, AWAY);
         assert!(!out.is_empty());
         assert!(out.iter().all(|v| v.mode == MODE_FLAT));
     }
