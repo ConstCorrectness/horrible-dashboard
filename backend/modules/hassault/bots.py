@@ -279,6 +279,23 @@ class BotBrain:
                 return heading
         return wanted + math.pi
 
+    def _objective(self, room: MatchRoom, me: MatchPlayer, dt: float) -> Goal | None:
+        """What the mode wants of this bot, cached until it expires.
+
+        Cached rather than asked twice a tick, because it *is* asked from two
+        places — where to walk, and whether to hold the action key — and those
+        two disagreeing about which objective is being pursued is a bot that
+        walks to one site while trying to plant on another.
+
+        A mode with no opinion is re-asked in a second rather than every tick:
+        `bot_goal` walks the room, and deathmatch will keep saying no.
+        """
+        self.goal_in -= dt
+        if self.goal is None or self.goal_in <= 0:
+            self.goal = room.mode.bot_goal(room, me)
+            self.goal_in = self.goal.expires_in if self.goal else 1.0
+        return self.goal
+
     def _pick_roam(self, room: MatchRoom, me: MatchPlayer) -> None:
         """Somewhere to go when there is nobody to fight.
 
@@ -468,19 +485,12 @@ class BotBrain:
             # which `maplint` has already proved standable and connected. That is
             # the same class of position `_pick_roam` steers to, and `_steer`'s
             # avoidance is what gets round what is in between.
-            self.goal_in -= dt
-            if self.goal is None or self.goal_in <= 0:
-                self.goal = room.mode.bot_goal(room, me)
-                self.goal_in = self.goal.expires_in if self.goal else 1.0
-            goal = self.goal
+            goal = self._objective(room, me, dt)
             if goal is not None:
-                gap = math.hypot(goal.x - me.state.x, goal.y - me.state.y)
-                if gap <= goal.radius:
-                    # Arrived. Hold the action key if the goal wanted one held,
-                    # and re-ask next tick rather than standing there: what the
-                    # mode wants of a bot standing *on* the objective is usually
+                if math.hypot(goal.x - me.state.x, goal.y - me.state.y) <= goal.radius:
+                    # Arrived: re-ask next tick rather than standing there, since
+                    # what the mode wants of a bot *on* the objective is usually
                     # different from what it wanted on the way.
-                    use = use or goal.use
                     self.goal_in = 0.0
                 wanted_heading = math.atan2(goal.y - me.state.y, goal.x - me.state.x)
             else:
@@ -493,6 +503,17 @@ class BotBrain:
                 wanted_heading = math.atan2(
                     self.roam[1] - me.state.y, self.roam[0] - me.state.x
                 )
+
+        # **Outside the fight/roam branch on purpose.** A bot standing on the
+        # objective holds the action key whether or not it can see somebody:
+        # planting is a commitment, and one that breaks off every time an enemy
+        # appears never plants at all. Measured — on the larger of the two defuse
+        # maps every round timed out with the bomb still in a bot's hands until
+        # this moved out of the `else`.
+        objective = self._objective(room, me, dt)
+        if objective is not None and objective.use:
+            gap = math.hypot(objective.x - me.state.x, objective.y - me.state.y)
+            use = use or gap <= objective.radius
 
         heading = self._steer(room, me, wanted_heading)
         self.avoid_bias *= 0.9

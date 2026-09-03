@@ -1644,6 +1644,82 @@ than "the pathing is dumb". Verified by running bot-only matches on all three
 bundled maps: six captures apiece in sixty seconds, with take / drop / return /
 capture all firing.
 
+### Bomb defuse
+
+Rounds, a plant, a defuse and a side swap. The phase machine —
+`warmup → freeze → live → post → (freeze | over)` — is a **pure function**,
+`advance(state, dt, facts) -> (state, emits)`, with everything that touches
+`MatchRoom` in the `tick` wrapper around it. That is not tidiness: three clients
+have to agree about *when a round ends*, and the cheapest way to keep them
+agreeing is for the rule to be a function with no world in it, the way
+`physics-vectors.json` binds the three physics ports.
+
+`Facts` is the whole of the world's influence on the machine — two head counts
+and two flags — and `Emit` is the whole of its influence back.
+
+Rules with a reason:
+
+- **`HALF_AT = ROUNDS_TO_WIN - 1`, and the minus one is the point.** Set equal, a
+  side takes every round of the first half and wins the match without the other
+  ever having attacked, which makes the map's balance the entire result. One
+  short of winning means the swap always happens. This is CS's structure and the
+  same arithmetic is why.
+- **The swap changes roles, not teams.** CS moves the players; here it flips one
+  boolean and `attackers` is derived from it, so nobody's `team` changes, nobody
+  moves spawn, and `wins` stays indexed by the people who earned it — no score to
+  reverse. That is sound *only* because the bundled maps place their sites
+  neutrally, equidistant from both sides. On a map with a defender-favouring
+  site, keeping your spawn across the swap would mean one team attacks the hard
+  site twice, and that is the moment to move players instead.
+- **A plant swaps the round clock for the fuse**, which is what makes planting
+  with four seconds left a winning play rather than a wasted one.
+- **Wiping the attackers after a plant does not win the round.** It only means
+  nobody is left to stop the defuse, and that asymmetry is the whole reason to
+  plant early.
+- **Time out with no bomb down is a defender win.** The attackers had a job.
+- **The bomb moves to another attacker when its carrier dies**, rather than
+  dropping. A dropped bomb on maps this size is a hunt, not a round.
+- **A mid-round joiner waits for the next one.** Dropping them in alive hands one
+  side a body the other did not have to shoot, deciding the round on when
+  somebody's browser finished loading.
+- **`on_kill` does not call `super()`**, same as CTF: rounds are the score.
+
+Freeze time turns damage off (`damage_scale` returns 0) but deliberately does
+*not* freeze movement — that would need a physics hook and every mode would pay
+for a branch one of them uses. Walking to your side of the map during the buy is
+not an exploit.
+
+Friendly fire is **0.35**, and this is the mode that makes `damage_scale` a float
+rather than a bool: a teammate you spray through should be a real cost, and one
+you cannot hurt at all makes a doorway a place to stand.
+
+#### What a round reset must clear
+
+`room.items.reset()`, every player respawned, `nades` and `zones` cleared — and
+**`room.history.clear()`**, which is the one that hides. Every body has just
+teleported, so without it a shot in the first quarter-second of the new round is
+rewound against last round's positions and registers on somebody who was
+somewhere else. It is silent, lasts a few ticks, and is close to impossible to
+reproduce deliberately. `PositionHistory.clear` already existed; it simply had to
+be called.
+
+Money, kills and deaths persist: they are the match, not the round.
+
+#### Bots, honestly
+
+Bots play defuse through the same `bot_goal` hook, and one thing had to move for
+it to work at all: **the action key is decided outside the fight-or-roam branch**.
+Planting is a commitment, and a bot that breaks off every time an enemy appears
+never plants — measured, every round on the larger map timed out with the bomb
+still in a carrier's hands until that moved out of the `else`.
+
+With that fixed, bot-only matches on `hd_crossing` play the whole mode: plants,
+defuses, a half-time swap and a match won. On `hd_atrium` they still do not
+reach the sites — 128 cubes of ring is more than `_steer`'s local avoidance
+handles, so those rounds time out. That is a pathing limit on one map rather than
+a mode bug (a human plants there fine), and `expires_in` keeps a stuck bot from
+parking against a wall for the match.
+
 ### Which clock
 
 Three, and the choice is load-bearing in each:

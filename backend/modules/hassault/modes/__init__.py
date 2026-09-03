@@ -16,11 +16,13 @@ from . import objectives
 from .base import GameMode, Goal
 from .ctf import CaptureTheFlag
 from .deathmatch import Deathmatch
+from .defuse import Defuse
 
 __all__ = [
     "DEFAULT_MODE",
     "CaptureTheFlag",
     "Deathmatch",
+    "Defuse",
     "GameMode",
     "Goal",
     "build",
@@ -39,6 +41,7 @@ def _builders() -> dict[str, Any]:
         "dm": lambda: Deathmatch(teams=False),
         "tdm": lambda: Deathmatch(teams=True),
         "ctf": CaptureTheFlag,
+        "defuse": Defuse,
     }
 
 
