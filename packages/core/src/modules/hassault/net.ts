@@ -222,6 +222,15 @@ export interface SelfState {
   protected: boolean;
   kills: number;
   deaths: number;
+  /**
+   * Bombs planted or defused, flags captured.
+   *
+   * Beside `kills` rather than inside `mode`, because it is a player counter and
+   * not a mode's own state — every mode replaces the mode blob wholesale, so one
+   * of them would eventually forget to pass it on. Optional so an older server
+   * that never sends it reads as zero rather than `NaN`.
+   */
+  objectives?: number;
   mag: number;
   /** Hitmarkers since the last snapshot. Drained server-side, so each is sent once. */
   hits: { victim: string; damage: number; head: boolean; killed: boolean }[];

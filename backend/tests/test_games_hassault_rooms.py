@@ -366,3 +366,28 @@ def test_traffic_on_another_channel_is_not_ours(server):
             )
         )
         assert json.loads(ws.receive_text())["event"] == "welcome"
+
+
+def test_a_rated_room_is_deathmatch_and_the_absence_of_a_choice_is_the_point():
+    """Ranked is pinned to deathmatch, and pinned by the *signature*.
+
+    A rated round-based mode is a different project, not a flag: defuse is scored
+    by round, a round is settled between two full sides, and a server-hosted room
+    people join and leave one at a time has no such thing to report. `join` takes
+    no `mode` precisely so adding one is a decision somebody has to make on
+    purpose rather than a default that quietly fills a ladder with half-played
+    rounds.
+
+    This asserts both halves — that the room really is deathmatch, and that there
+    is no parameter through which it could have been anything else.
+    """
+    import inspect
+
+    from backend.games_server.hassault_rooms import HassaultReferee
+    from backend.modules.hassault import modes
+
+    assert "mode" not in inspect.signature(HassaultReferee.join).parameters
+    # And what it therefore falls to. Named rather than assumed, so a change to
+    # the default that made ranked round-based would fail here instead of showing
+    # up as a ladder of unfinished rounds.
+    assert modes.build(modes.DEFAULT_MODE).id == "dm"

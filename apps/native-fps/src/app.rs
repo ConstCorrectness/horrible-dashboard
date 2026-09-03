@@ -1007,6 +1007,10 @@ impl App {
                 .unwrap_or_default(),
             kills: mine,
             deaths: you.map(|y| y.deaths).unwrap_or(0),
+            // Read off the wire rather than tallied like `hits`, because there
+            // is nothing here to tally: `bomb_planted` and `bomb_defused` carry
+            // no `by`, so an objective cannot be attributed client-side at all.
+            objectives: you.map(|y| y.objectives).unwrap_or(0),
             tally: self.tally,
             opponents: self.players.iter().filter(|p| p.id != self.self_id).count(),
             won: false,

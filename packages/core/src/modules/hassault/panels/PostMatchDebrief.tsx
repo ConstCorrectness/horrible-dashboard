@@ -1,5 +1,28 @@
 import type { PostMatchSummary } from '../api';
 
+/**
+ * What the fifth stat cell is called, per mode.
+ *
+ * One word each rather than "Objectives" everywhere, because the number means
+ * something different in each: three captures and three defuses are not the same
+ * achievement, and a shared label would be the card describing neither.
+ *
+ * A mode absent from this map falls back to the generic word rather than to
+ * nothing — a new mode's card should be vague, never blank.
+ */
+const OBJECTIVE_LABELS: Record<string, string> = {
+  ctf: 'Captures',
+  defuse: 'Plants/Defuses',
+};
+
+/** How the mode reads in the header. Unknown ids are shown as they arrived. */
+const MODE_LABELS: Record<string, string> = {
+  dm: 'Deathmatch',
+  tdm: 'Team Deathmatch',
+  ctf: 'Capture the Flag',
+  defuse: 'Defuse',
+};
+
 export interface PostMatchDebriefProps {
   summary: PostMatchSummary;
   onDismiss: () => void;
@@ -20,6 +43,13 @@ export interface PostMatchDebriefProps {
  */
 export function PostMatchDebrief({ summary, onDismiss, onRequeue }: PostMatchDebriefProps) {
   const isVictory = summary.won;
+  // Both default rather than being required, because a card can be rendered from
+  // a row written before either column existed — where the honest answer is zero
+  // objectives and a mode of `dm`, which is what those matches were.
+  const objectives = summary.objectives ?? 0;
+  const mode = summary.mode || 'dm';
+  const objectiveLabel = OBJECTIVE_LABELS[mode] ?? 'Objectives';
+  const modeLabel = MODE_LABELS[mode] ?? mode.toUpperCase();
 
   return (
     <div
@@ -70,7 +100,14 @@ export function PostMatchDebrief({ summary, onDismiss, onRequeue }: PostMatchDeb
           <div
             style={{ color: 'var(--text-dim, #8b949e)', fontSize: '0.85rem', marginTop: '0.2rem' }}
           >
-            Map: <strong>{summary.mapName}</strong> · Match Concluded
+            Map: <strong>{summary.mapName}</strong>
+            {modeLabel && (
+              <>
+                {' '}
+                · <strong>{modeLabel}</strong>
+              </>
+            )}{' '}
+            · Match Concluded
           </div>
         </div>
 
@@ -78,7 +115,10 @@ export function PostMatchDebrief({ summary, onDismiss, onRequeue }: PostMatchDeb
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(4, 1fr)',
+            // Five columns only when there is a fifth number. A mode with no
+            // objectives would otherwise get an empty cell, and a blank column
+            // under a heading reads as a figure that failed to load.
+            gridTemplateColumns: `repeat(${objectives > 0 ? 5 : 4}, 1fr)`,
             gap: '0.5rem',
             background: 'var(--bg-tertiary, #161b22)',
             padding: '0.8rem',
@@ -127,6 +167,18 @@ export function PostMatchDebrief({ summary, onDismiss, onRequeue }: PostMatchDeb
               Damage
             </div>
           </div>
+          {objectives > 0 && (
+            <div>
+              <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#8fce93' }}>
+                {objectives}
+              </div>
+              <div
+                style={{ fontSize: '0.7rem', color: 'var(--text-dim)', textTransform: 'uppercase' }}
+              >
+                {objectiveLabel}
+              </div>
+            </div>
+          )}
         </div>
 
         {summary.isMvp && (

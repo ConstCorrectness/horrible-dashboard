@@ -225,6 +225,17 @@ class GameMode:
         """`(won, mvp)` for the debrief card."""
         return (False, False)
 
+    def rounds_won(self, room: MatchRoom, player: MatchPlayer) -> int:
+        """How many rounds this player's side took. Zero unless there are rounds.
+
+        A hook rather than `room.scores[player.team]` read directly at the call
+        site, because `scores` means whatever the mode counts: in deathmatch it
+        is kills, so reading it there would pay a per-round XP bonus once per
+        frag. A mode with no rounds says so by returning nothing, which is the
+        honest answer rather than a number that happens to exist.
+        """
+        return 0
+
     # -- bots ---------------------------------------------------------------
 
     def bot_goal(self, room: MatchRoom, me: MatchPlayer) -> Goal | None:

@@ -73,6 +73,24 @@ XP_WIN = 250
 #: even when somebody else took the kills.
 XP_PER_100_DAMAGE = 10
 
+#: Per bomb planted or defused, per flag captured.
+#:
+#: Deliberately worth six kills. It is not generosity — it is the same argument
+#: `XP_PER_100_DAMAGE` makes, taken to the mode that needs it most: in defuse the
+#: player who plants under fire and dies for it decided the round, and paying
+#: them by their kill count describes a different game than the one the scoreline
+#: showed. `outcome_for` already weights an objective at three kills for MVP; XP
+#: weights it higher because MVP is a comparison within a team and this is not.
+XP_PER_OBJECTIVE = 150
+
+#: Per round their side took.
+#:
+#: Small on purpose. Winning the match already pays `XP_WIN`, and a large
+#: per-round term would make a 5-4 grind worth more than a 5-0 — which would be
+#: rewarding length rather than play. It exists so a side that loses 4-5 is not
+#: recorded as having done the same as one that lost 0-5.
+XP_ROUND_WIN = 40
+
 #: XP for level *n* → *n+1*. Flat rather than a curve: a curve is a balance
 #: decision, and there is nothing yet for levels to gate.
 XP_PER_LEVEL = 2000
@@ -103,10 +121,18 @@ def init_results_db() -> None:
                 player_name  TEXT NOT NULL DEFAULT '',
                 map_name     TEXT NOT NULL,
                 room         TEXT NOT NULL DEFAULT '',
+                -- What was being played. Recorded because it cannot be
+                -- recovered afterwards: a 5-3 in rounds and a 5-3 in kills are
+                -- the same two numbers, and only this column tells them apart.
+                mode         TEXT NOT NULL DEFAULT 'dm',
                 kills        INTEGER NOT NULL DEFAULT 0,
                 deaths       INTEGER NOT NULL DEFAULT 0,
                 head_kills   INTEGER NOT NULL DEFAULT 0,
                 damage_dealt INTEGER NOT NULL DEFAULT 0,
+                -- Bombs planted or defused, flags captured. Stored rather than
+                -- folded into `xp`, or the card can show what it was paid for
+                -- but not what earned it.
+                objectives   INTEGER NOT NULL DEFAULT 0,
                 opponents    INTEGER NOT NULL DEFAULT 0,
                 won          INTEGER NOT NULL DEFAULT 0,
                 mvp          INTEGER NOT NULL DEFAULT 0,
@@ -139,6 +165,12 @@ def init_results_db() -> None:
         # nullable because a match genuinely may not have earned one.
         _ensure_column(conn, "authority", "TEXT NOT NULL DEFAULT 'local'")
         _ensure_column(conn, "drop_id", "TEXT")
+        # `dm` is the honest backfill rather than a placeholder: before modes
+        # existed deathmatch was the only thing a room could be, so every row
+        # written without this column genuinely was one. `objectives` backfills
+        # to zero for the same reason — those modes had none to score.
+        _ensure_column(conn, "mode", "TEXT NOT NULL DEFAULT 'dm'")
+        _ensure_column(conn, "objectives", "INTEGER NOT NULL DEFAULT 0")
 
 
 def _ensure_column(conn: sqlite3.Connection, name: str, decl: str) -> None:
@@ -163,8 +195,15 @@ def is_recordable(result: Mapping[str, Any]) -> bool:
     - **Somebody to play against.** A solo session on a map has no result. Bots
       count — losing to one is losing, the same argument `result_for` makes about
       `won`.
-    - **Something happened.** A kill, a death, or damage dealt. A round you spent
-      walking is not a round.
+    - **Something happened.** A kill, a death, damage dealt — **or an objective**.
+      A round you spent walking is not a round.
+
+    That last term is not a nicety. The first three describe a *fight*, and in
+    defuse the fight is not the game: a player who planted the bomb twice, was
+    traded for both times by somebody else's shot and never landed one of their
+    own has `kills == deaths == damageDealt == 0`. Without it they file as "not a
+    match", get no card and no XP, and the mode most likely to produce that
+    player is the one this predicate was never updated for.
 
     Deliberately *not* a quality bar: a match where you were flattened 0-15 is
     recordable, and it should be. What is being excluded is the *empty* session,
@@ -180,6 +219,7 @@ def is_recordable(result: Mapping[str, Any]) -> bool:
         int(result.get("kills", 0)) > 0
         or int(result.get("deaths", 0)) > 0
         or int(result.get("damageDealt", 0)) > 0
+        or int(result.get("objectives", 0)) > 0
     )
 
 
@@ -192,6 +232,8 @@ def xp_for(result: dict[str, Any]) -> int:
         + int(result.get("headKills", 0)) * XP_PER_HEAD_KILL
         + (XP_WIN if result.get("won") else 0)
         + int(result.get("damageDealt", 0)) // 100 * XP_PER_100_DAMAGE
+        + int(result.get("objectives", 0)) * XP_PER_OBJECTIVE
+        + int(result.get("roundsWon", 0)) * XP_ROUND_WIN
     )
 
 
@@ -214,10 +256,10 @@ def record(
         conn.execute(
             """
             INSERT INTO hassault_matches
-                (id, account_id, player_name, map_name, room, kills, deaths,
-                 head_kills, damage_dealt, opponents, won, mvp, xp, authority,
-                 drop_id, played_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, account_id, player_name, map_name, room, mode, kills,
+                 deaths, head_kills, damage_dealt, objectives, opponents, won,
+                 mvp, xp, authority, drop_id, played_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 match_id,
@@ -225,10 +267,12 @@ def record(
                 str(result.get("name", "")),
                 str(result.get("map", "")),
                 str(result.get("room", "")),
+                str(result.get("mode") or "dm"),
                 int(result.get("kills", 0)),
                 int(result.get("deaths", 0)),
                 int(result.get("headKills", 0)),
                 int(result.get("damageDealt", 0)),
+                int(result.get("objectives", 0)),
                 int(result.get("opponents", 0)),
                 1 if result.get("won") else 0,
                 1 if result.get("mvp") else 0,
@@ -316,6 +360,30 @@ def latest(account_id: str) -> dict[str, Any] | None:
     return to_summary(dict(row), progression(account_id))
 
 
+def _int(row: Any, key: str, default: int = 0) -> int:
+    """One integer column, tolerating a mapping that predates it.
+
+    `_ensure_column` backfills the table itself, so a real row always has these.
+    What does not is a **hand-built mapping** — the fixtures and the odd caller
+    that assembles a row to render one card — and a `KeyError` there would turn a
+    missing column into a 500 on the debrief.
+    """
+    try:
+        value = row[key]
+    except (KeyError, IndexError):
+        return default
+    return default if value is None else int(value)
+
+
+def _str(row: Any, key: str, default: str = "") -> str:
+    """One text column, on the same terms as [`_int`]."""
+    try:
+        value = row[key]
+    except (KeyError, IndexError):
+        return default
+    return default if value is None else str(value)
+
+
 def to_summary(row: dict[str, Any], level: dict[str, int]) -> dict[str, Any]:
     """One row plus the running total, in the shape the card reads."""
     kills = int(row["kills"])
@@ -331,6 +399,11 @@ def to_summary(row: dict[str, Any], level: dict[str, int]) -> dict[str, Any]:
         # the division is unlikely — a card is shown for those matches too.
         "headshotPercent": round(heads / kills * 100, 1) if kills else 0.0,
         "damageDealt": int(row["damage_dealt"]),
+        # Read with the same `_row` guard the rest of this uses: a row selected
+        # from a table that predates a column has the column (SQLite backfills on
+        # `ALTER`), but a caller replaying a hand-built dict in a test may not.
+        "objectives": _int(row, "objectives"),
+        "mode": _str(row, "mode", "dm"),
         "opponents": int(row["opponents"]),
         "isMvp": bool(row["mvp"]),
         "xpGained": int(row["xp"]),

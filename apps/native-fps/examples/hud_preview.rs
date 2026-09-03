@@ -465,6 +465,9 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, mode_name: Opti
                     head_kills: 3,
                 },
                 opponents: 5,
+                // Non-zero so the preview renders the substituted cell — the
+                // one a defuse card shows and a deathmatch card does not.
+                objectives: 3,
                 won: false,
                 mvp: false,
                 recordable: true,

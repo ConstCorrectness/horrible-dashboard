@@ -1,5 +1,5 @@
 {
-  "_comment": "Cross-language conformance vectors for 'was this a match?'. Read by BOTH backend/tests/test_hassault_results.py (results.is_recordable) and apps/native-fps/tests/conformance.rs (summary::Summary::is_recordable + verdict). These pin that the two agree, not that either is right in the abstract. Regenerate with scripts/gen_hassault_result_vectors.py and make both suites pass before committing. 'damageDealt' is what the node counts and 'hits' is what the native client counts; every case is chosen so the two reach the same answer, and the generator refuses to write a case where they do not.",
+  "_comment": "Cross-language conformance vectors for 'was this a match?'. Read by BOTH backend/tests/test_hassault_results.py (results.is_recordable) and apps/native-fps/tests/conformance.rs (summary::Summary::is_recordable + verdict). These pin that the two agree, not that either is right in the abstract. Regenerate with scripts/gen_hassault_result_vectors.py and make both suites pass before committing. 'damageDealt' is what the node counts and 'hits' is what the native client counts; every case is chosen so the two reach the same answer, and the generator refuses to write a case where they do not. 'objectives' is served identically to both, so it needs no such care.",
   "verdicts": [
     {
       "name": "opened the pane and left",
@@ -7,6 +7,7 @@
       "deaths": 0,
       "damageDealt": 0,
       "hits": 0,
+      "objectives": 0,
       "opponents": 0,
       "bestOther": -1,
       "expect": {
@@ -22,6 +23,7 @@
       "deaths": 0,
       "damageDealt": 0,
       "hits": 0,
+      "objectives": 0,
       "opponents": 0,
       "bestOther": -1,
       "expect": {
@@ -37,6 +39,7 @@
       "deaths": 0,
       "damageDealt": 0,
       "hits": 0,
+      "objectives": 0,
       "opponents": 1,
       "bestOther": 0,
       "expect": {
@@ -52,6 +55,7 @@
       "deaths": 0,
       "damageDealt": 34,
       "hits": 1,
+      "objectives": 0,
       "opponents": 1,
       "bestOther": 0,
       "expect": {
@@ -67,6 +71,7 @@
       "deaths": 1,
       "damageDealt": 0,
       "hits": 0,
+      "objectives": 0,
       "opponents": 1,
       "bestOther": 1,
       "expect": {
@@ -82,6 +87,7 @@
       "deaths": 1,
       "damageDealt": 118,
       "hits": 4,
+      "objectives": 0,
       "opponents": 1,
       "bestOther": 1,
       "expect": {
@@ -97,6 +103,7 @@
       "deaths": 3,
       "damageDealt": 1240,
       "hits": 41,
+      "objectives": 0,
       "opponents": 3,
       "bestOther": 5,
       "expect": {
@@ -112,6 +119,7 @@
       "deaths": 5,
       "damageDealt": 700,
       "hits": 24,
+      "objectives": 0,
       "opponents": 2,
       "bestOther": 5,
       "expect": {
@@ -127,8 +135,57 @@
       "deaths": 15,
       "damageDealt": 0,
       "hits": 0,
+      "objectives": 0,
       "opponents": 5,
       "bestOther": 15,
+      "expect": {
+        "recordable": true,
+        "won": false,
+        "mvp": false,
+        "verdict": "MATCH OVER"
+      }
+    },
+    {
+      "name": "planted twice and never landed a shot",
+      "kills": 0,
+      "deaths": 0,
+      "damageDealt": 0,
+      "hits": 0,
+      "objectives": 2,
+      "opponents": 4,
+      "bestOther": 3,
+      "expect": {
+        "recordable": true,
+        "won": false,
+        "mvp": false,
+        "verdict": "MATCH OVER"
+      }
+    },
+    {
+      "name": "planted the bomb in an empty room",
+      "kills": 0,
+      "deaths": 0,
+      "damageDealt": 0,
+      "hits": 0,
+      "objectives": 1,
+      "opponents": 0,
+      "bestOther": -1,
+      "expect": {
+        "recordable": false,
+        "won": false,
+        "mvp": false,
+        "verdict": "NO CONTEST"
+      }
+    },
+    {
+      "name": "defused three, fragged one",
+      "kills": 1,
+      "deaths": 4,
+      "damageDealt": 96,
+      "hits": 3,
+      "objectives": 3,
+      "opponents": 5,
+      "bestOther": 7,
       "expect": {
         "recordable": true,
         "won": false,

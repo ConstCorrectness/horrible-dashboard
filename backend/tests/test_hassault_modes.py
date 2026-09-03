@@ -567,3 +567,23 @@ def test_find_or_create_does_not_hand_you_a_room_in_another_mode():
     assert server.find_or_create("testmap", "dm") is dm
     assert server.find_or_create("testmap", "tdm") is tdm
     assert server.find_or_create("testmap") is dm, "the default stopped meaning dm"
+
+
+def test_the_objective_counter_rides_beside_kills_and_not_inside_the_mode_blob():
+    """Where it is matters, and the failure of getting it wrong is silent.
+
+    All three modes replace `you.mode` wholesale, so a counter living in there
+    depends on each of them remembering to pass it on — and the one that forgot
+    would file a player who defused twice as having done nothing. Beside `kills`,
+    which is what it is, no mode can drop it.
+
+    Deathmatch is the case that pins it: it has no objectives and no mode blob at
+    all, and the key must still be there rather than being a thing clients test
+    for.
+    """
+    room = make_room()
+    player = room.add("p", None)
+    player.objectives = 3
+    you = room.private_view_for(player)
+    assert you["objectives"] == 3
+    assert you["mode"] is None

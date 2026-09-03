@@ -377,6 +377,10 @@ fn match_verdicts_match_the_server() {
                 ..MatchTally::default()
             },
             opponents: case["opponents"].as_u64().unwrap_or(0) as usize,
+            // Served, not derived — so unlike `hits` this term is the same
+            // number on both sides by construction, and the generator needs no
+            // care to keep the two predicates agreeing about it.
+            objectives: case["objectives"].as_i64().unwrap_or(0) as i32,
             ..Summary::default()
         };
         summary.recordable = summary.is_recordable();

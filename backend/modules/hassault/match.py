@@ -569,6 +569,17 @@ class MatchPlayer:
             "protected": self.protected,
             "kills": self.kills,
             "deaths": self.deaths,
+            # Bombs planted or defused, flags captured. **Here beside the two
+            # counters it belongs with, and not inside `you.mode`**, because it
+            # is a `MatchPlayer` number rather than a mode-specific one: all
+            # three modes replace the mode blob wholesale, so each would have to
+            # remember to put it back, and the one that forgot would file a
+            # player who defused twice as having done nothing at all.
+            #
+            # Sent in every mode, including deathmatch where it is always zero —
+            # the same bargain `kills` makes. A key present only in some modes is
+            # a key every client has to test for.
+            "objectives": self.objectives,
             "mag": weapon.mag,
             "hits": hits,
             #: Damage taken, as bearings. Private for the same reason `hits` is:
@@ -738,6 +749,11 @@ class MatchRoom:
         whether a row is written (`channel._record_result`) and what the native
         client's own card says.
 
+        `objectives` and `roundsWon` are why this method could not stay as it
+        was. Both feed `results.is_recordable` and `results.xp_for`, and without
+        them a defuse specialist who planted every round and took no fights was
+        recorded as having played nothing.
+
         `opponents` counts **everyone this player ever shared the room with**,
         not who is still standing in it: this runs at leave time, and a host who
         removes the bots before quitting has still played a match.
@@ -754,16 +770,30 @@ class MatchRoom:
                 "kills": player.kills,
                 "deaths": player.deaths,
                 "damageDealt": round(player.damage_dealt),
+                "objectives": player.objectives,
             }
         )
         return {
             "map": self.map_name,
             "room": self.id,
+            # What was being played, recorded because it cannot be recovered
+            # afterwards: without it every historical row reads as deathmatch,
+            # and a 5-3 in rounds is indistinguishable from a 5-3 in kills.
+            "mode": self.mode.id,
+            "modeName": self.mode.name,
             "name": player.name,
             "kills": player.kills,
             "deaths": player.deaths,
             "headKills": player.head_kills,
             "damageDealt": round(player.damage_dealt),
+            # Bombs planted or defused, flags captured — the reason this method
+            # stopped being able to describe a match by kills alone. A player who
+            # defused twice and never fired filed as "not a match".
+            "objectives": player.objectives,
+            # Rounds their side took. Asked of the mode rather than read off
+            # `scores`, which counts kills in deathmatch: reading it directly
+            # would pay round XP for a mode that has no rounds.
+            "roundsWon": self.mode.rounds_won(self, player),
             "won": recordable and won,
             "mvp": recordable and mvp,
             "recordable": recordable,

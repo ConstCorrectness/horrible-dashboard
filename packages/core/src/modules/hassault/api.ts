@@ -759,6 +759,20 @@ export interface PostMatchSummary {
   headshots: number;
   headshotPercent: number;
   damageDealt: number;
+  /**
+   * Bombs planted or defused, flags captured — the numbers a fight-shaped card
+   * could not describe. A defuse specialist can finish a match with zero of
+   * everything above this line.
+   */
+  objectives: number;
+  /**
+   * Which mode was played (`dm`, `tdm`, `ctf`, `defuse`).
+   *
+   * Recorded because it cannot be recovered afterwards: a 5-3 in rounds and a
+   * 5-3 in kills are the same two numbers. Rows written before modes existed
+   * read `dm`, which is what they genuinely were.
+   */
+  mode: string;
   isMvp: boolean;
   /** How many other players were in the room — bots included. Zero is a solo
    * warm-up, and the card says so rather than calling it a victory. */

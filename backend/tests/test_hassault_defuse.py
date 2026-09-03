@@ -10,6 +10,7 @@ touches the world.
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 
 import pytest
 
@@ -514,3 +515,69 @@ def test_the_phase_and_the_fuse_are_public_and_progress_is_not(game):
     assert mine["attacking"] is True
     assert "progress" in mine
     assert room.private_view_for(dfn)["mode"]["attacking"] is False
+
+
+# ---------------------------------------------------------------------------
+# What the match gets recorded as
+# ---------------------------------------------------------------------------
+
+
+def test_a_result_carries_the_mode_and_the_objectives_it_was_scored_by(game):
+    """The three fields a fight-shaped result could not hold.
+
+    `mode` because a 5-3 in rounds and a 5-3 in kills are the same two numbers,
+    `objectives` because in defuse they can be the whole of what a player did,
+    and `roundsWon` because it is what an economy-shaped match is actually
+    counting.
+    """
+    room, att, _dfn, _mode = game
+    att.objectives = 2
+    room.scores[att.team] = 3
+    result = room.result_for(att.id)
+    assert result is not None
+    assert result["mode"] == "defuse"
+    assert result["modeName"]
+    assert result["objectives"] == 2
+    assert result["roundsWon"] == 3
+
+
+def test_a_player_who_only_planted_still_played_a_match(game):
+    """The exact case B-6 exists for.
+
+    Every fight-shaped counter is zero — no kills, no deaths, nothing landed —
+    and this is unmistakably a match: they planted the bomb twice. The predicate
+    used to say otherwise, so they got no card and no XP.
+    """
+    room, att, _dfn, _mode = game
+    att.kills = att.deaths = 0
+    att.damage_dealt = 0.0
+    att.objectives = 2
+    result = room.result_for(att.id)
+    assert result is not None
+    assert result["recordable"] is True
+
+
+def test_rounds_won_follows_the_player_across_the_half_time_swap(game):
+    """Read off `room.scores`, which is indexed by team and never reversed here.
+
+    The swap flips which side *attacks*; nobody's `team` changes, so a player
+    keeps the rounds they won. Reading it from `RoundState` instead would need a
+    second update at half time, and that is the one that gets forgotten.
+    """
+    room, att, _dfn, mode = game
+    room.scores[att.team] = 2
+    before = mode.rounds_won(room, att)
+    mode.state = replace(mode.state, swapped=True)
+    assert mode.rounds_won(room, att) == before == 2
+
+
+def test_deathmatch_reports_no_rounds_even_though_it_has_scores():
+    """`scores` counts kills there, so reading it directly would pay round XP
+    once per frag. The hook is what makes the two different questions."""
+    cmap = assets.load_map("hd_atrium")
+    world = physics.World.from_map(cmap)
+    room = MatchRoom("dm", "hd_atrium", world, cmap.spawns())
+    player = room.add("p", None)
+    room.scores[player.team] = 12
+    assert room.mode.rounds_won(room, player) == 0
+    assert room.result_for(player.id)["roundsWon"] == 0

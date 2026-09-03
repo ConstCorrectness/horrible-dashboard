@@ -236,6 +236,36 @@ def test_xp_is_a_function_of_what_happened():
     assert results.xp_for(sample()) > won
 
 
+def test_objectives_and_rounds_are_paid_for():
+    """Both new terms move the number, and by the amount they say they do.
+
+    Asserted as a *difference* rather than against a total, so the test says
+    "an objective is worth `XP_PER_OBJECTIVE`" and keeps saying it when another
+    term is added. A test pinned to a total is one that fails for every future
+    change and tells you nothing about which.
+    """
+    plain = results.xp_for(sample(objectives=0, roundsWon=0))
+    assert results.xp_for(sample(objectives=3, roundsWon=0)) == (
+        plain + 3 * results.XP_PER_OBJECTIVE
+    )
+    assert results.xp_for(sample(objectives=0, roundsWon=5)) == (
+        plain + 5 * results.XP_ROUND_WIN
+    )
+
+
+def test_an_objective_outweighs_a_kill_but_a_round_does_not_outweigh_the_match():
+    """The two new terms are sized against the old ones on purpose.
+
+    An objective is worth more than a kill because in defuse the player who
+    planted under fire decided the round and paying them by frags describes a
+    different game. A round is worth *less* than winning the match, or a 5-4
+    grind would earn more than a 5-0 — which would be rewarding length rather
+    than play.
+    """
+    assert results.XP_PER_OBJECTIVE > results.XP_PER_KILL
+    assert results.XP_ROUND_WIN * 5 < results.XP_WIN
+
+
 def test_progression_is_summed_from_the_matches_not_stored_beside_them():
     """A running total in its own column is a number that can disagree with the
     rows it claims to summarise, with no way to tell which is wrong."""
@@ -336,6 +366,62 @@ def test_a_table_from_before_the_column_gains_it(tmp_path):
     row = results.latest("acct")
     assert row["kills"] == 7
     assert row["authority"] == "local"
+
+
+def test_a_row_records_the_mode_and_the_objectives_it_was_scored_by():
+    """Both are unrecoverable after the fact, which is why they are columns.
+
+    A 5-3 in rounds and a 5-3 in kills are the same two numbers; nothing else in
+    the row tells them apart, so a history without this reads as if every match
+    ever played was deathmatch.
+    """
+    results.record("acct", sample(mode="defuse", objectives=4))
+    row = results.latest("acct")
+    assert row is not None
+    assert row["mode"] == "defuse"
+    assert row["objectives"] == 4
+
+
+def test_a_row_written_without_a_mode_is_deathmatch_rather_than_blank():
+    """The honest backfill, not a placeholder.
+
+    Before modes existed a room could only be one thing, so `dm` is what those
+    matches genuinely were. An empty string would be a third state — "nobody
+    recorded which" — for rows where that is not true.
+    """
+    results.record("acct", sample())
+    row = results.latest("acct")
+    assert row is not None
+    assert row["mode"] == "dm"
+    assert row["objectives"] == 0
+
+
+def test_a_defuse_specialist_gets_a_row_at_all():
+    """End to end, through the gate that used to drop them.
+
+    `record` is only reached when `is_recordable` says so (`channel._record_result`
+    asks first), so this asserts the two agree about a player whose entire match
+    was objectives — and that the XP they are paid is not merely the base.
+    """
+    result = sample(
+        kills=0,
+        deaths=0,
+        headKills=0,
+        damageDealt=0,
+        won=False,
+        mvp=False,
+        mode="defuse",
+        objectives=2,
+        roundsWon=3,
+    )
+    assert results.is_recordable(result)
+    results.record("acct", result)
+    row = results.latest("acct")
+    assert row is not None
+    assert row["objectives"] == 2
+    assert row["xpGained"] == (
+        results.XP_BASE + 2 * results.XP_PER_OBJECTIVE + 3 * results.XP_ROUND_WIN
+    )
 
 
 def test_a_drop_is_attached_to_the_match_that_earned_it():
@@ -467,6 +553,45 @@ def test_an_empty_session_is_not_a_match():
     happened, and it used to be filed as a win."""
     assert not results.is_recordable(
         {"opponents": 0, "kills": 0, "deaths": 0, "damageDealt": 0}
+    )
+
+
+def test_an_objective_is_enough_on_its_own():
+    """The case the first three terms could not describe.
+
+    Every fight-shaped number is zero and it is unambiguously a match: two bombs
+    planted, traded for both times by somebody else's shot. Before `objectives`
+    joined the predicate this filed as "not a match" — no row, no card, no XP —
+    for the player who decided two rounds. The mode most likely to produce that
+    player is the one the predicate was never updated for.
+    """
+    assert results.is_recordable(
+        {
+            "opponents": 4,
+            "kills": 0,
+            "deaths": 0,
+            "damageDealt": 0,
+            "objectives": 2,
+        }
+    )
+
+
+def test_an_objective_alone_in_a_room_is_still_not_a_match():
+    """`opponents` gates it, and has to.
+
+    Standing on a site until the bar fills is something you can do in an empty
+    room. An objective is evidence that something happened, never evidence that
+    there was anybody to have played against — which is why the two conditions
+    are `and`, not `or`.
+    """
+    assert not results.is_recordable(
+        {
+            "opponents": 0,
+            "kills": 0,
+            "deaths": 0,
+            "damageDealt": 0,
+            "objectives": 1,
+        }
     )
 
 

@@ -325,6 +325,20 @@ pub struct SelfState {
     pub kills: i32,
     #[serde(default)]
     pub deaths: i32,
+    /// Bombs planted or defused, flags captured — **served, never derived.**
+    ///
+    /// It rides here beside `kills` rather than inside `mode` because it is a
+    /// player counter and not a mode's own state; every mode replaces the mode
+    /// blob wholesale, so one of them would eventually forget to pass it on.
+    ///
+    /// This client cannot derive it: `bomb_planted` and `bomb_defused` carry no
+    /// `by`, so there is nothing to attribute them with. That is the *opposite*
+    /// arrangement from `damage_dealt` — which the server has and this client
+    /// deliberately does not show because it cannot reproduce it — and the two
+    /// together are the rule: a number the client can count exactly, it counts;
+    /// one it cannot, it is told or it does without.
+    #[serde(default)]
+    pub objectives: i32,
     /// Damage the last landing cost, so the HUD can say the map did it.
     #[serde(default)]
     pub fell: f32,

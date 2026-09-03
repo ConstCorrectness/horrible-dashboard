@@ -117,6 +117,10 @@ pub struct Summary {
     /// is losing, and a card that quietly excluded them would be flattering
     /// rather than true — the same call `result_for` makes.
     pub opponents: usize,
+    /// Bombs planted or defused, flags captured. **Taken from
+    /// `SelfState::objectives`, not counted here** — see that field for why this
+    /// client has nothing to count it from.
+    pub objectives: i32,
     /// Nobody outscored you.
     pub won: bool,
     /// Nobody equalled you either.
@@ -144,8 +148,21 @@ impl Summary {
     /// lands for zero — this card and the dashboard's would begin to disagree
     /// about whether a match happened, which is why the claim is written down
     /// here rather than left to be rediscovered.
+    ///
+    /// **The fourth term is the one the first three could not cover.** All of
+    /// them describe a *fight*, and in defuse the fight is not the game: a
+    /// player who planted twice, was traded for both times by somebody else's
+    /// shot and never landed one of their own has zero of each — and used to be
+    /// told they had not played a match. Unlike `hits`, `objectives` is served
+    /// rather than derived, so this term is identical on both sides by
+    /// construction rather than by choosing the fixture's cases carefully.
+    ///
+    /// `opponents > 0` still gates it. Standing on a site alone until the bar
+    /// fills is something you can do in an empty room, and an objective is not
+    /// evidence of anybody to have played against.
     pub fn is_recordable(&self) -> bool {
-        self.opponents > 0 && (self.kills > 0 || self.deaths > 0 || self.tally.hits > 0)
+        self.opponents > 0
+            && (self.kills > 0 || self.deaths > 0 || self.tally.hits > 0 || self.objectives > 0)
     }
 
     /// The one word at the top of the card.
@@ -261,7 +278,13 @@ impl SummaryScreen {
         // panel follow: the house style is a top edge, never a full perimeter.
         p.rect(cx, cy, CARD_W * k, 2.0 * k, ACCENT);
 
-        p.text(cx + 24.0 * k, cy + 26.0 * k, 3.0 * k, TEXT, summary.verdict());
+        p.text(
+            cx + 24.0 * k,
+            cy + 26.0 * k,
+            3.0 * k,
+            TEXT,
+            summary.verdict(),
+        );
         let subtitle = if summary.map.is_empty() {
             summary.name.to_uppercase()
         } else {
@@ -276,13 +299,26 @@ impl SummaryScreen {
         // Two rows of three. A grid rather than a list because these are figures
         // to be compared at a glance, and a column of labelled lines is read one
         // line at a time.
+        //
+        // The last cell is the only one that changes: in a mode with objectives
+        // it is what you did with them, and otherwise it is who was there. That
+        // substitution rather than a seventh cell, because the grid is two rows
+        // of three and a third row of one would sit where the leave button is.
+        // OPPONENTS is the one it replaces because that figure is on the card to
+        // explain **NO CONTEST** — a session with nobody in it — and a card
+        // showing objectives is by construction not that card.
+        let last = if summary.objectives > 0 {
+            ("OBJECTIVES", summary.objectives.to_string())
+        } else {
+            ("OPPONENTS", summary.opponents.to_string())
+        };
         let cells: [(&str, String); 6] = [
             ("KILLS", summary.kills.max(0).to_string()),
             ("DEATHS", summary.deaths.max(0).to_string()),
             ("K/D", summary.ratio()),
             ("HEADSHOTS", summary.tally.head_kills.to_string()),
             ("HITS", summary.tally.hits.to_string()),
-            ("OPPONENTS", summary.opponents.to_string()),
+            (last.0, last.1),
         ];
         let col_w = (CARD_W - 48.0) / 3.0 * k;
         for (i, (label, value)) in cells.iter().enumerate() {
@@ -342,6 +378,60 @@ mod tests {
             head,
             killed,
         }
+    }
+
+    #[test]
+    fn an_objective_is_a_match_even_with_nothing_else_on_the_card() {
+        // The case the first three terms could not describe: planted twice,
+        // traded for both times by somebody else's shot, nothing landed. This
+        // card used to read NO CONTEST.
+        let summary = Summary {
+            opponents: 4,
+            objectives: 2,
+            ..Summary::default()
+        };
+        assert!(summary.is_recordable());
+    }
+
+    #[test]
+    fn an_objective_alone_in_a_room_is_still_not_a_match() {
+        // `opponents` gates it and has to: standing on a site until the bar
+        // fills is something you can do with nobody else there at all.
+        let summary = Summary {
+            opponents: 0,
+            objectives: 3,
+            ..Summary::default()
+        };
+        assert!(!summary.is_recordable());
+    }
+
+    #[test]
+    fn the_last_cell_says_objectives_only_when_there_were_any() {
+        // The substitution, asserted through the painted text rather than
+        // through the branch — the grid is two rows of three and a seventh cell
+        // would sit exactly where the leave button is, so this is the layout
+        // constraint and not a preference.
+        let screen = SummaryScreen {
+            open: true,
+            hover: false,
+        };
+        let painted = |objectives: i32| {
+            let mut out = Vec::new();
+            screen.build(
+                &Summary {
+                    opponents: 4,
+                    objectives,
+                    ..Summary::default()
+                },
+                1280.0,
+                800.0,
+                &mut out,
+            );
+            out.len()
+        };
+        // A different label is a different number of glyph quads, which is the
+        // cheapest observable difference that does not require reading pixels.
+        assert_ne!(painted(0), painted(3));
     }
 
     #[test]
@@ -478,7 +568,12 @@ mod tests {
         // The card is centred, so a small window is where a button placed by a
         // constant ends up off screen — and a button you cannot click is a page
         // with one way out instead of two.
-        for (w, h) in [(1280.0, 720.0), (1280.0, 800.0), (1920.0, 1080.0), (3840.0, 2160.0)] {
+        for (w, h) in [
+            (1280.0, 720.0),
+            (1280.0, 800.0),
+            (1920.0, 1080.0),
+            (3840.0, 2160.0),
+        ] {
             let k = scale(h);
             let (bx, by, bw, bh) = button_rect(w, h);
             let (cx, cy) = card_origin(w, h);
@@ -487,8 +582,14 @@ mod tests {
             // And the whole card is on the window, which the clamp is what
             // guarantees: unclamped, a tall enough screen makes it wider than
             // the screen is.
-            assert!(cx >= 0.0 && cx + CARD_W * k <= w, "{w}x{h}: card off screen");
-            assert!(cy >= 0.0 && cy + CARD_H * k <= h, "{w}x{h}: card off screen");
+            assert!(
+                cx >= 0.0 && cx + CARD_W * k <= w,
+                "{w}x{h}: card off screen"
+            );
+            assert!(
+                cy >= 0.0 && cy + CARD_H * k <= h,
+                "{w}x{h}: card off screen"
+            );
         }
     }
 

@@ -117,7 +117,27 @@ class HassaultReferee:
     async def join(
         self, conn: SeatConn, map_name: str, room_id: str | None = None
     ) -> dict[str, Any]:
-        """Seat a player, opening a room if there is none on that map."""
+        """Seat a player, opening a room if there is none on that map.
+
+        **Deathmatch only, and there is no `mode` parameter on purpose.** Rooms
+        here fall to `MatchServer`'s default, which is free-for-all deathmatch,
+        and that is the decision rather than an oversight left over from before
+        modes existed.
+
+        A rated round-based mode is a different project, not a flag. Defuse is
+        scored by *round*, and a round is settled between two full sides; a
+        server-hosted room people join and leave one at a time has no such thing
+        to report. The referee would have to hold a side together for the length
+        of a match, decide what a leaver does to the round in progress, and
+        report a per-round result the store has no shape for — none of which is
+        made true by accepting a string here.
+
+        So the absence is enforced by the signature: adding the parameter is the
+        moment somebody has to think about the paragraph above, rather than
+        discovering it from a ladder full of half-played rounds. `mode` is
+        recorded in the ruleset all the same, so the day it stops being one value
+        the rows already say which.
+        """
         if not self.playable(map_name):
             raise ValueError(f"{map_name!r} is not a bundled map")
         room, player = await self.server.join(
@@ -194,10 +214,16 @@ class HassaultReferee:
                 rated=False,
                 ruleset={
                     "map": result.get("map"),
+                    # Always `dm` today — see `join`. Written anyway so a row
+                    # from before a second mode existed is distinguishable from
+                    # one where nobody recorded which, which is not the same
+                    # fact.
+                    "mode": result.get("mode", "dm"),
                     "kills": result.get("kills"),
                     "deaths": result.get("deaths"),
                     "headKills": result.get("headKills"),
                     "damageDealt": result.get("damageDealt"),
+                    "objectives": result.get("objectives"),
                     "opponents": result.get("opponents"),
                 },
             )

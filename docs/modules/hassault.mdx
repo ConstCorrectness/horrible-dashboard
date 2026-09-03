@@ -2416,7 +2416,8 @@ call a match. Two independent causes:
 
 `results.is_recordable` is now the one place the rule lives: **somebody to play
 against, and something that happened** — an opponent (bots count, the same call
-`result_for` makes about `won`), and at least one kill, death, or point of damage.
+`result_for` makes about `won`), and at least one kill, death, point of damage, or
+**objective**.
 `won` and `mvp` are gated on it, `channel._record_result` refuses to write a row
 without it, and the native card says **NO CONTEST** rather than ranking a session
 that had nobody in it.
@@ -2439,6 +2440,80 @@ Two details are load-bearing:
   `__tests__/result-vectors.json` is a shared fixture replayed by
   `test_hassault_results.py` and `conformance.rs` whose generator **refuses to write
   a case where they disagree**.
+
+#### The fourth term, and why three were not enough
+
+Kills, deaths and damage all describe a **fight**, and in defuse the fight is not
+the game. A player who planted the bomb twice, was traded for both times by
+somebody else's shot and never landed one of their own has zero of each — and used
+to file as "not a match": no row, no card, no XP, for the player who decided two
+rounds. The mode most likely to produce that player was the one the predicate had
+never been updated for.
+
+So `objectives` — bombs planted or defused, flags captured — is the fourth term.
+Three things about it are deliberate:
+
+- **It rides in `you.objectives`, beside `kills`, not inside `you.mode`.** All
+  three modes replace the mode blob wholesale, so a counter living in there
+  depends on each of them remembering to pass it on, and the one that forgot
+  would silently file a defuse specialist as having done nothing.
+- **`opponents > 0` still gates it.** Standing on a site until the bar fills is
+  something you can do in an empty room. An objective is evidence that something
+  happened, never evidence that there was anybody to have played against.
+- **It is the *opposite* arrangement from `damageDealt`**, and the contrast is the
+  rule. The native client cannot reproduce damage, so it does without it; it
+  cannot derive an objective either — `bomb_planted` and `bomb_defused` carry no
+  `by` — so it is **served** the number instead. A figure the client can count
+  exactly, it counts; one it cannot, it is told or it goes without. Nothing is
+  approximated. That also means the objective term needs no care in the shared
+  fixture: unlike `hits` versus `damageDealt`, the two sides read the same number.
+
+#### What a row records, and what cannot be recovered later
+
+Two columns arrived with the modes, both through `_ensure_column` because
+`CREATE TABLE IF NOT EXISTS` never adds one to a table that already exists:
+
+- **`mode`**, backfilling to `dm`. Not a placeholder — before modes existed a
+  room could only be deathmatch, so that is what those rows genuinely were.
+  Without the column a 5–3 in rounds and a 5–3 in kills are the same two numbers
+  and nothing else in the row tells them apart, which is unrecoverable after the
+  fact rather than merely missing.
+- **`objectives`**, so the card can show what earned the XP rather than only the
+  total.
+
+XP gained two terms with them. **`XP_PER_OBJECTIVE` is worth six kills** — the
+same argument `XP_PER_100_DAMAGE` makes, taken to the mode that needs it most:
+paying the player who planted under fire by their frag count describes a different
+game than the one the scoreline showed. (`outcome_for` weights an objective at
+three kills for MVP; XP weights it higher because MVP is a comparison *within* a
+team and this is not.) **`XP_ROUND_WIN` is deliberately small** — winning already
+pays `XP_WIN`, and a large per-round term would make a 5–4 grind worth more than a
+5–0, rewarding length rather than play. It is asked of `mode.rounds_won`, never
+read off `room.scores`, because `scores` counts kills in deathmatch and reading it
+directly would pay a round bonus once per frag.
+
+Both cards show it. The native card **substitutes** the objectives figure for
+`OPPONENTS` rather than adding a seventh cell — the grid is two rows of three and a
+third row of one would sit exactly where the leave button is, and `OPPONENTS` is
+the cell it replaces because that figure exists to explain **NO CONTEST**, which a
+card showing objectives is by construction not. The dashboard card grows to five
+columns instead, and labels the number per mode (`Captures`, `Plants/Defuses`),
+because three captures and three defuses are not the same achievement.
+
+#### Ranked stays deathmatch, and the absence is enforced
+
+`HassaultReferee.join` takes **no `mode` parameter**, and that is the decision
+rather than a leftover. A rated round-based mode is a different project, not a
+flag: defuse is scored by *round*, a round is settled between two full sides, and
+a server-hosted room people join and leave one at a time has no such thing to
+report. The referee would have to hold a side together for a whole match, decide
+what a leaver does to the round in progress, and report a per-round result the
+store has no shape for — none of which becomes true by accepting a string.
+
+Leaving the parameter out is what makes adding it a decision somebody has to make
+on purpose, instead of discovering the problem from a ladder full of half-played
+rounds. `mode` is written into the ruleset all the same, so the day it stops being
+one value the rows already say which.
 
 A **server-refereed** result (`ranked.py`) is not gated by any of this. That
 predicate exists to stop this node filing its own empty sessions; a result the

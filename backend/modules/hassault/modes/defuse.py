@@ -894,6 +894,15 @@ class Defuse(GameMode):
         )
         return (True, worth(player) >= best)
 
+    def rounds_won(self, room: MatchRoom, player: MatchPlayer) -> int:
+        """Rounds their side took — which here *is* what `scores` counts.
+
+        Read off the room rather than off `RoundState`, so a half-time swap needs
+        no second update: `scores` is reversed with the teams, so a player who
+        changed side keeps the rounds they won on the old one.
+        """
+        return room.scores[player.team] if player.team < len(room.scores) else 0
+
     # -- bots ---------------------------------------------------------------
 
     def bot_goal(self, room: MatchRoom, me: MatchPlayer) -> Goal | None:
