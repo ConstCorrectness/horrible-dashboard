@@ -14,10 +14,12 @@ from typing import Any
 
 from . import objectives
 from .base import GameMode, Goal
+from .ctf import CaptureTheFlag
 from .deathmatch import Deathmatch
 
 __all__ = [
     "DEFAULT_MODE",
+    "CaptureTheFlag",
     "Deathmatch",
     "GameMode",
     "Goal",
@@ -36,6 +38,7 @@ def _builders() -> dict[str, Any]:
     return {
         "dm": lambda: Deathmatch(teams=False),
         "tdm": lambda: Deathmatch(teams=True),
+        "ctf": CaptureTheFlag,
     }
 
 

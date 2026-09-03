@@ -1597,6 +1597,53 @@ A silent substitution would open a room that looks right and plays as something
 else, and since each client renders whatever the welcome describes, nothing
 anywhere would report it.
 
+### Capture the flag
+
+Two flags, one per team, each on a stand. Take the enemy's, carry it to your own,
+and score — **provided your own flag is home**, which is the rule that makes a
+full defence worth playing rather than a race between two teams running past each
+other.
+
+A flag is a small state machine (`home` / `carried` / `dropped`) and not a
+`pickups` item, because an item's whole lifecycle is "taken, then respawns" and a
+flag's is not: it comes *back*, and while carried it is somewhere specific.
+Running it through `Field.collect` would mean the mode reading state it does not
+own out of a structure that cannot express it.
+
+Rules that were each a bug first:
+
+- **Taking and returning are automatic on contact**, and CTF deliberately uses
+  none of `Command.use`. A player who has to press a key for a flag they just ran
+  onto will not notice the flag is there.
+- **A carrier who dies drops it where they fell**, on a timer before it returns
+  itself. Teleporting it home instantly removes every fight over a dropped flag,
+  which is most of the mode; leaving it forever lets one be parked where nobody
+  goes.
+- **The drop happens in `on_kill`, not in `tick`.** This one is not a style
+  point: `simulate` runs `_respawn_due` *before* `mode.tick`, so a player whose
+  respawn timer has elapsed is alive again — and standing somewhere else — by the
+  time a poll would look. The flag would stay carried by a dead player, or land at
+  their spawn. The `tick` poll remains as the backstop for a death with no killer,
+  since `_fall_damage` deliberately does not come through `on_kill`.
+- **A carrier who quits drops it rather than taking it with them.** Deleting it
+  would make quitting-while-carrying a way to deny a flag outright.
+- **`on_kill` does not call `super()`**, and its absence is load-bearing. The base
+  implementation adds one to the killer's team score, which is right for
+  deathmatch and wrong under a scoreboard labelled "Captures". Inherited, it
+  silently mixed the two: a bot match read **9–0 off six captures and three
+  kills**. Both numbers were real, which is exactly why it looked plausible — the
+  only way to catch it is to assert that the score *equals* the capture count,
+  which a test now does over a whole match.
+
+Bots play it through the one `bot_goal` hook: carry it home, chase the enemy
+carrier (whose position is public, so this is not knowledge a player lacks), go
+and fetch your own dropped flag, or go for theirs. Every goal carries an
+`expires_in`, and that is not politeness — a goal with no timeout parks a whole
+team against a wall for the match, which reads as "the mode is broken" rather
+than "the pathing is dumb". Verified by running bot-only matches on all three
+bundled maps: six captures apiece in sixty seconds, with take / drop / return /
+capture all firing.
+
 ### Which clock
 
 Three, and the choice is load-bearing in each:

@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from backend.modules.hassault import physics, weapons
+from backend.modules.hassault.modes import Goal
 from backend.modules.hassault.weapons import PLAYER_EYE_HEIGHT
 
 if TYPE_CHECKING:
@@ -159,6 +160,15 @@ class BotBrain:
         self.strafe_in = 0.0
         self.roam: tuple[float, float] | None = None
         self.roam_in = 0.0
+        #: The objective the mode wants this bot on, and how long it may chase it.
+        #:
+        #: The timeout is not politeness. Bots stick on concave geometry, and a
+        #: goal with no expiry parks a whole team against a wall for the match —
+        #: which reads as "the mode is broken" rather than "the pathing is dumb".
+        #: When it lapses the bot falls back to roaming, which is always
+        #: available.
+        self.goal: Goal | None = None
+        self.goal_in = 0.0
         self.switch_in = 0.0
         self.stuck_in = STUCK_WINDOW
         self.last_pos = (0.0, 0.0)
@@ -367,6 +377,10 @@ class BotBrain:
         if not me.alive:
             # Nothing to say while dead. The room respawns on its own clock.
             self.target_id = None
+            # And the goal goes with it: a respawned bot is somewhere else
+            # entirely, and the mode's answer for where it should be now is
+            # almost certainly different.
+            self.goal = None
             return None
         dt = max(1e-3, min(dt, physics.MAX_STEP_DT))
 
@@ -374,6 +388,7 @@ class BotBrain:
         yaw, pitch = me.state.yaw, me.state.pitch
         fire = False
         reload_now = False
+        use = False
         switch = -1
         distance = math.inf
 
@@ -443,15 +458,41 @@ class BotBrain:
             else:
                 wanted_heading = bearing + self.strafe_dir * 1.15
         else:
-            self.roam_in -= dt
-            if self.roam is None or self.roam_in <= 0:
-                self._pick_roam(room, me)
-            assert self.roam is not None
-            if math.hypot(self.roam[0] - me.state.x, self.roam[1] - me.state.y) < 4:
-                self._pick_roam(room, me)
-            wanted_heading = math.atan2(
-                self.roam[1] - me.state.y, self.roam[0] - me.state.x
-            )
+            # The mode's objective first, roaming as the fallback. Combat still
+            # preempts both — `_acquire` ran above, and a bot with somebody in
+            # front of it fights and picks the objective back up afterwards,
+            # which is what a player does.
+            #
+            # No navmesh is needed for this: every goal a mode produces is a flag
+            # stand, a bomb site or a position a player actually reached, all of
+            # which `maplint` has already proved standable and connected. That is
+            # the same class of position `_pick_roam` steers to, and `_steer`'s
+            # avoidance is what gets round what is in between.
+            self.goal_in -= dt
+            if self.goal is None or self.goal_in <= 0:
+                self.goal = room.mode.bot_goal(room, me)
+                self.goal_in = self.goal.expires_in if self.goal else 1.0
+            goal = self.goal
+            if goal is not None:
+                gap = math.hypot(goal.x - me.state.x, goal.y - me.state.y)
+                if gap <= goal.radius:
+                    # Arrived. Hold the action key if the goal wanted one held,
+                    # and re-ask next tick rather than standing there: what the
+                    # mode wants of a bot standing *on* the objective is usually
+                    # different from what it wanted on the way.
+                    use = use or goal.use
+                    self.goal_in = 0.0
+                wanted_heading = math.atan2(goal.y - me.state.y, goal.x - me.state.x)
+            else:
+                self.roam_in -= dt
+                if self.roam is None or self.roam_in <= 0:
+                    self._pick_roam(room, me)
+                assert self.roam is not None
+                if math.hypot(self.roam[0] - me.state.x, self.roam[1] - me.state.y) < 4:
+                    self._pick_roam(room, me)
+                wanted_heading = math.atan2(
+                    self.roam[1] - me.state.y, self.roam[0] - me.state.x
+                )
 
         heading = self._steer(room, me, wanted_heading)
         self.avoid_bias *= 0.9
@@ -553,6 +594,7 @@ class BotBrain:
             reload=reload_now,
             weapon=switch,
             scoped=scoped,
+            use=use,
             # No rewind: a bot's input is produced here, on this tick, so the
             # world it "saw" is the world as it is.
             view_t=None,

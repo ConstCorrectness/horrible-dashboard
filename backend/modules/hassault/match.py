@@ -266,6 +266,20 @@ class Command:
     nade: int = -1
     """Underhand: a short throw, for putting a smoke at your own feet."""
     lob: bool = False
+    """Hold the action key: plant, defuse, take a flag, return one.
+
+    **One flag, not three.** All of those are "hold the action key where I am
+    standing", and the mode already knows what standing there means — three
+    separate flags would be three ways for a client to claim it meant a different
+    one. A flag on the movement command rather than its own message, for the
+    reason `fire` and `throw` are: it crosses the peer fabric with no fabric
+    changes at all, because `fabric.handle_input` forwards commands verbatim.
+
+    Held, not pressed. Progress accrues from this command's own `dt`, so a client
+    cannot plant faster than time passes — and releasing it *resets* rather than
+    pauses, or walking away and back would finish a plant instantly.
+    """
+    use: bool = False
 
 
 @dataclass(slots=True)
@@ -283,6 +297,26 @@ class MatchPlayer:
     # from `ack`, which only moves when a command is simulated.
     high_seq: int = 0
     budget: float = 0.0
+    #: How far through a held action this player is, 0..1, and which one.
+    #:
+    #: Spent from `command.dt` in `mode.on_command`, so it is bounded by the same
+    #: replenishing budget movement is: a client cannot plant faster than time
+    #: passes. On the wall clock instead, a stuttering client would plant *more
+    #: slowly* than a smooth one, and nothing would say so.
+    #:
+    #: Reset — never paused — by releasing the key, leaving the volume, dying,
+    #: firing or switching weapons. Pausing gives you the classic "walk away,
+    #: walk back, it finishes instantly" bug.
+    action_progress: float = 0.0
+    action_kind: str = ""
+    #: Objectives completed: flags captured, bombs planted or defused.
+    #:
+    #: On `MatchPlayer` rather than in a dict the mode keeps, for the reason
+    #: `base` gives: a mode-side dict keyed by player id leaks its entries when
+    #: `remove` fires, and `private_view` is already the per-player drain point.
+    #: It is also what stops a pure-objective player's match filing as "nothing
+    #: happened" — see `results.is_recordable`.
+    objectives: int = 0
     last_command_at: float = field(default_factory=time.monotonic)
     joined_at: float = field(default_factory=time.monotonic)
     rtt_ms: float = 0.0
@@ -407,6 +441,10 @@ class MatchPlayer:
         # punishment for having already been punished.
         self.flash = 0.0
         self.protected_until = time.monotonic() + SPAWN_PROTECT
+        # A held action does not survive dying. Anything else and a planter who
+        # is killed on the site comes back and finishes from where they left off.
+        self.action_progress = 0.0
+        self.action_kind = ""
 
     @property
     def protected(self) -> bool:
@@ -2258,6 +2296,7 @@ def parse_command(raw: Any) -> Command | None:
         # only the simulation knows — see `weapons.clamp_zoom`.
         scoped=max(0, int(_num(raw.get("scoped")))),
         throw=bool(raw.get("throw")),
+        use=bool(raw.get("use")),
         # `-1` for absent or out of range, which `grenades.spec_at` reads as "no
         # grenade" — the same shape as `weapon`, and for the same reason: a
         # nonsensical slot must do nothing rather than pick one.
