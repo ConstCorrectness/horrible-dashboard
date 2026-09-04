@@ -37,8 +37,28 @@
 //! reproduce.
 
 use crate::hud::{OverlayVertex, Painter};
-use crate::menu::{ACCENT, PANEL_BG, SCRIM, TEXT, TEXT_DIM};
+use crate::menu::{ACCENT, SCRIM, TEXT, TEXT_DIM};
 use crate::protocol::HitMarker;
+
+/// The card's own background, and the one thing about it that matters: it is
+/// **opaque**.
+///
+/// It used to be `menu::PANEL_BG`, which is `0.96`. Four percent of a bright
+/// glyph sounds like nothing, and it is not: the killfeed, the multi-kill
+/// banner, the floating damage numbers and a held scoreboard all sit behind this
+/// card, and every one of them came through it at 7-12% Weber contrast against
+/// the panel. Brightness is not what gives it away — *structure* is. The eye
+/// picks out readable words at a contrast where it would never notice a shade.
+///
+/// Its own constant rather than a bump to `PANEL_BG`, because that one is shared
+/// with the pause menu and every HUD panel, and none of those asked for this.
+/// The buy menu already sets its own alpha for the same reason, so a panel
+/// choosing its own is the established shape here rather than a deviation.
+///
+/// The rule it comes from: **a panel that is glanced at may be translucent; a
+/// panel that is read may not.** The scoreboard is looked at during a lull with
+/// the game carrying on behind it. This is a card somebody stops to read.
+const CARD_BG: [f32; 4] = [0.04, 0.05, 0.07, 1.0];
 
 /// The card's width and height at scale 1, in window pixels.
 const CARD_W: f32 = 620.0;
@@ -273,7 +293,7 @@ impl SummaryScreen {
 
         let k = scale(height);
         let (cx, cy) = card_origin(width, height);
-        p.rect(cx, cy, CARD_W * k, CARD_H * k, PANEL_BG);
+        p.rect(cx, cy, CARD_W * k, CARD_H * k, CARD_BG);
         // An accent along the top, the same rule the pause menu and every HUD
         // panel follow: the house style is a top edge, never a full perimeter.
         p.rect(cx, cy, CARD_W * k, 2.0 * k, ACCENT);
@@ -378,6 +398,75 @@ mod tests {
             head,
             killed,
         }
+    }
+
+    #[test]
+    fn nothing_behind_the_card_can_be_read_through_it() {
+        // The bug this pins is invisible in every other kind of test and nearly
+        // invisible on screen: at `menu::PANEL_BG`'s 0.96 the killfeed, the
+        // multi-kill banner, the floating damage numbers and a held scoreboard
+        // all came through the card at 7-12% Weber contrast. Faint — but
+        // *structured*, and the eye picks out readable words long before it
+        // notices a shade.
+        //
+        // Asserted geometrically rather than against the constant, because
+        // `assert_eq!(CARD_BG[3], 1.0)` would only restate the definition. This
+        // asks the real question: is every point inside the card covered by
+        // something opaque? It therefore also fails if the fill is ever moved,
+        // shrunk, or drawn before the scrim instead of after it.
+        let screen = SummaryScreen {
+            open: true,
+            hover: false,
+        };
+        let mut out = Vec::new();
+        let (w, h) = (1280.0_f32, 800.0_f32);
+        screen.build(&Summary::default(), w, h, &mut out);
+
+        let ndc = |x: f32, y: f32| [x / w * 2.0 - 1.0, 1.0 - y / h * 2.0];
+        let inside = |t: &[OverlayVertex], p: [f32; 2]| {
+            let sign = |a: [f32; 2], b: [f32; 2]| {
+                (p[0] - b[0]) * (a[1] - b[1]) - (a[0] - b[0]) * (p[1] - b[1])
+            };
+            let (d1, d2, d3) = (
+                sign(t[0].position, t[1].position),
+                sign(t[1].position, t[2].position),
+                sign(t[2].position, t[0].position),
+            );
+            !((d1 < 0.0 || d2 < 0.0 || d3 < 0.0) && (d1 > 0.0 || d2 > 0.0 || d3 > 0.0))
+        };
+
+        let k = scale(h);
+        let (cx, cy) = card_origin(w, h);
+        // Sampled across the body rather than at one point: a fill that covered
+        // the middle and not the corners would pass a single-point check and
+        // still leak a killfeed into the card's bottom-left.
+        for (fx, fy) in [
+            (0.02, 0.04),
+            (0.5, 0.04),
+            (0.98, 0.04),
+            (0.5, 0.5),
+            (0.02, 0.98),
+            (0.5, 0.98),
+            (0.98, 0.98),
+        ] {
+            let point = ndc(cx + CARD_W * k * fx, cy + CARD_H * k * fy);
+            let covered = out
+                .chunks_exact(3)
+                .any(|t| t[0].color[3] >= 1.0 && inside(t, point));
+            assert!(
+                covered,
+                "the card is see-through at ({fx}, {fy}) of its body — anything                  the HUD draws there reads straight through it"
+            );
+        }
+
+        // And the scrim is still translucent, because that is what dims the game
+        // behind the card. An overlay opaque all the way out to the window edge
+        // would not be a fix, it would be a different bug.
+        assert!(
+            out.chunks_exact(3)
+                .any(|t| t[0].color[3] > 0.0 && t[0].color[3] < 1.0),
+            "nothing translucent is drawn at all — the scrim is gone"
+        );
     }
 
     #[test]

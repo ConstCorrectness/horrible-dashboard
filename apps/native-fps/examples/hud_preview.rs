@@ -429,7 +429,12 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, mode_name: Opti
         crouching: false,
         underwater: false,
         playing: true,
-        scoreboard: Some(&board),
+        // Withheld when the card is being previewed, because that is what the
+        // client does: a modal suppresses the scoreboard rather than covering it
+        // with a 0.96-alpha panel. Left `Some` here it would keep showing a bug
+        // the client no longer has — and this example is the only place anybody
+        // looks at either.
+        scoreboard: if summary { None } else { Some(&board) },
         damage: &numbers,
         scores: &[14, 11],
         rtt: Some(38.0),

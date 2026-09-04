@@ -2401,6 +2401,40 @@ Deliberately not clock arithmetic. `played_at` is the backend's `time.time()` an
 no relationship to the browser's clock, so "newer than now" would either swallow a
 real card or replay an old one depending on which way the two machines were skewed.
 
+#### A panel that is read may not be translucent
+
+The native card fills its body with its own **opaque** `CARD_BG`, not the shared
+`menu::PANEL_BG`, which is `0.96`. Four percent of a bright glyph sounds like
+nothing. It is not: the killfeed, the multi-kill banner, the floating damage
+numbers and a held scoreboard all sit behind that card, and every one of them
+came through it at **7–12% Weber contrast** against the panel. Brightness is not
+what gives it away — *structure* is, and the eye finds readable words at a
+contrast where it would never notice a shade.
+
+Its own constant rather than a bump to `PANEL_BG`, which is shared with the pause
+menu and every HUD panel that never asked for this; the buy menu already sets its
+own alpha, so a panel choosing one is the established shape here. The rule both
+follow: **a panel that is glanced at may be translucent, a panel that is read may
+not.** The scoreboard is looked at during a lull with the game carrying on behind
+it; these are panels somebody stops to read.
+
+Alongside it, **a modal suppresses the scoreboard rather than covering it**
+(`app.rs`, where the `HudView` is built). Two reasons, and the first is the one
+opacity cannot fix: the scoreboard is *wider than the card*, so its edges stick
+out past both sides where only the scrim attenuates them. The second is that it
+makes the claim already written beside the summary's draw call — "the card is the
+only thing on screen once it is up" — true rather than aspirational, and it hands
+back the largest single block of overlay vertices (34.2k → 26.6k, a fifth of the
+budget) at the one moment nothing can read them.
+
+Both are pinned by `nothing_behind_the_card_can_be_read_through_it`, which asks
+the question geometrically — is every sampled point of the card body covered by an
+opaque triangle? — rather than asserting the constant back at itself. It samples
+the corners as well as the middle, because a fill that covered the centre and not
+the corners would pass a single-point check and still leak a killfeed into the
+card's bottom-left. It also asserts something translucent is *still* drawn, since
+an overlay opaque out to the window edge would not be a fix but a different bug.
+
 ### Was this a match at all?
 
 The other half of the same complaint — the card came up for sessions nobody would

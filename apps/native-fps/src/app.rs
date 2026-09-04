@@ -3292,7 +3292,26 @@ impl ApplicationHandler for App {
                 // question and the painter has no business having an opinion.
                 // `None` when the key is not held, which is a different fact
                 // from "an empty match" and must not draw the same.
-                let scoreboard = self.keys.scores.then(|| self.score_rows());
+                //
+                // **And not while a modal is up.** The pause menu and the
+                // summary card each lay a scrim and then a panel over the
+                // middle of the screen, and both are `PANEL_BG` — 0.96, not 1.0.
+                // A held scoreboard underneath therefore comes through the panel
+                // it is supposed to be behind: attenuated to under two percent,
+                // which sounds like nothing and is not, because what bleeds
+                // through is a slab of structured text and the eye finds
+                // structure long before it finds brightness.
+                //
+                // Suppressing it here rather than making the card opaque,
+                // because `PANEL_BG` is shared with the pause menu and every HUD
+                // panel — bumping it to fix one of them changes all of them, for
+                // a reason none of the others asked for. This also makes the
+                // claim a few lines below ("the card is the only thing on screen
+                // once it is up") true rather than aspirational, and hands back
+                // the largest single block of overlay vertices at the one moment
+                // nothing can read them.
+                let modal = self.summary.open || self.menu.open;
+                let scoreboard = (self.keys.scores && !modal).then(|| self.score_rows());
                 let (width, height) = self.renderer.as_ref().map(|r| r.size()).unwrap_or((1, 1));
                 // **A copy, and only for the draw.** `self.camera` is what
                 // `view_angles` puts on the wire and what a shot's ray is built
