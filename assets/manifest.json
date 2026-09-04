@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "baseUrl": "https://github.com/horriblecpp/horrible-dashboard/releases/download/assets-v1",
+  "assets": {
+    "hassault-arms": {
+      "filename": "hassault-arms.glb",
+      "destination": "apps/web/public/hassault-arms.glb",
+      "sha256": "2299dd08f554c831f0966939a3b073b6a2462fde23a9312562ab1f897a234f32",
+      "size": 8933112,
+      "category": "arms",
+      "description": "Game-ready FPS Female Arms rigged viewmodel"
+    },
+    "hassault-clips": {
+      "filename": "hassault-clips.glb",
+      "destination": "apps/web/public/hassault-clips.glb",
+      "sha256": "a53cecf46122a6bc4210a7039027c3bb6be11d7d5aaa3ba9e17440431dbf1ea5",
+      "size": 1150808,
+      "category": "animation",
+      "description": "Skeletal locomotion clips for player operators"
+    },
+    "hassault-operator": {
+      "filename": "hassault-operator.glb",
+      "destination": "apps/web/public/hassault-operator.glb",
+      "sha256": "f12e283639787d1b3ab2a66cd36eefeedfe8ead338d5b09b025527ff32b8ab19",
+      "size": 7925192,
+      "category": "operator",
+      "description": "Base operator character model with 23 Mixamo animations"
+    },
+    "hassault-weapon-assault": {
+      "filename": "hassault-weapon-assault.glb",
+      "destination": "apps/web/public/hassault-weapon-assault.glb",
+      "sha256": "eee7ac80370387e5fcac6e4d49a3dce8ed1e82511d7c50dd93952a187ba3f6f7",
+      "size": 3265796,
+      "category": "weapon",
+      "description": "Tactical Assault Rifle weapon prop"
+    },
+    "hassault-weapon-fal": {
+      "filename": "hassault-weapon-fal.glb",
+      "destination": "apps/web/public/hassault-weapon-fal.glb",
+      "sha256": "d281cba794ab98a4177f799cd1adf58fbf794cc7c07a420de3588dbd9505e56d",
+      "size": 706676,
+      "category": "weapon",
+      "description": "FN FAL Rifle with animated magazine and bolt receiver"
+    },
+    "hassault-weapon-pistol": {
+      "filename": "hassault-weapon-pistol.glb",
+      "destination": "apps/web/public/hassault-weapon-pistol.glb",
+      "sha256": "34adbdde81227689e4507215afd62d437686c9a4dfa648b58125bec8311cc6ec",
+      "size": 1035088,
+      "category": "weapon",
+      "description": "9mm Semi-automatic Pistol sidearm prop"
+    },
+    "hassault-weapon-shotgun": {
+      "filename": "hassault-weapon-shotgun.glb",
+      "destination": "apps/web/public/hassault-weapon-shotgun.glb",
+      "sha256": "55ae9d339f76656fb18ff2d726dccd00042bcd892cebd95ef08d7515175cee73",
+      "size": 2798836,
+      "category": "weapon",
+      "description": "12-Gauge Pump-action Shotgun weapon prop"
+    },
+    "hassault-weapon-sniper": {
+      "filename": "hassault-weapon-sniper.glb",
+      "destination": "apps/web/public/hassault-weapon-sniper.glb",
+      "sha256": "c7a91647482b5d3b00772a0d3a4f040db61e05d35b207b4ba6f5957fb6ea7c71",
+      "size": 3277124,
+      "category": "weapon",
+      "description": "SVU-A Precision Marksman Sniper Rifle prop"
+    }
+  }
+}

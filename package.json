@@ -16,6 +16,11 @@
     "build:hassault:debug": "node scripts/build-hassault.mjs --debug",
     "build:hassault-character": "node scripts/build_hassault_character.mjs",
     "build:hassault-weapon": "node scripts/build_hassault_weapon.mjs",
+    "build:hassault-arms": "node scripts/build_hassault_arms.mjs",
+    "build:hassault-fal": "node scripts/build_hassault_fal.mjs",
+    "assets:check": "node scripts/assets.mjs check",
+    "assets:pull": "node scripts/assets.mjs pull",
+    "assets:pack": "node scripts/assets.mjs pack",
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint .",
     "format": "prettier --write ."

@@ -1,0 +1,393 @@
+{
+  "version": 1,
+  "name": "New York Urban Assault",
+  "created_at": "2026-09-03T17:00:00Z",
+  "environment": {
+    "ambientColor": "rgb(51, 57, 64)",
+    "ambientIntensity": 0.8,
+    "sunColor": "rgb(255, 250, 240)",
+    "sunIntensity": 1.6,
+    "sunPosition": [
+      25,
+      45,
+      30
+    ],
+    "fogColor": "rgb(180, 200, 220)",
+    "fogDensity": 0.005
+  },
+  "nodes": [
+    {
+      "id": "sun_light",
+      "name": "Sun Directional Light",
+      "type": "light",
+      "transform": {
+        "position": [
+          25,
+          45,
+          30
+        ],
+        "rotation": [
+          -45,
+          30,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "properties": {
+        "lightColor": "rgb(255, 250, 240)",
+        "intensity": 1.6
+      },
+      "visible": true,
+      "locked": false
+    },
+    {
+      "id": "city_newyork_mesh",
+      "name": "New York City Block Geometry",
+      "type": "mesh_prop",
+      "transform": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          0.01,
+          0.01,
+          0.01
+        ]
+      },
+      "assetPath": "/assets/horribleAssault/buildings/city-new-york/City_NewYork.fbx",
+      "assetFormat": "fbx",
+      "properties": {
+        "color": "rgb(148, 163, 184)"
+      },
+      "visible": true,
+      "locked": true
+    },
+    {
+      "id": "spawn_cla_01",
+      "name": "CLA West Avenue Spawn",
+      "type": "spawn_point",
+      "transform": {
+        "position": [
+          -20,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          90,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "properties": {
+        "team": "CLA",
+        "color": "rgb(239, 68, 68)"
+      },
+      "visible": true,
+      "locked": false
+    },
+    {
+      "id": "spawn_cla_02",
+      "name": "CLA Sub-Level Spawn",
+      "type": "spawn_point",
+      "transform": {
+        "position": [
+          -18,
+          0,
+          -8
+        ],
+        "rotation": [
+          0,
+          75,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "properties": {
+        "team": "CLA",
+        "color": "rgb(239, 68, 68)"
+      },
+      "visible": true,
+      "locked": false
+    },
+    {
+      "id": "spawn_rvs_01",
+      "name": "RVS East Plaza Spawn",
+      "type": "spawn_point",
+      "transform": {
+        "position": [
+          20,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          -90,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "properties": {
+        "team": "RVS",
+        "color": "rgb(59, 130, 246)"
+      },
+      "visible": true,
+      "locked": false
+    },
+    {
+      "id": "spawn_rvs_02",
+      "name": "RVS Rooftop Access Spawn",
+      "type": "spawn_point",
+      "transform": {
+        "position": [
+          18,
+          0,
+          8
+        ],
+        "rotation": [
+          0,
+          -105,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "properties": {
+        "team": "RVS",
+        "color": "rgb(59, 130, 246)"
+      },
+      "visible": true,
+      "locked": false
+    },
+    {
+      "id": "pickup_fal_mid",
+      "name": "FN FAL Center Crossroads Pickup",
+      "type": "weapon_pickup",
+      "transform": {
+        "position": [
+          0,
+          0.4,
+          0
+        ],
+        "rotation": [
+          0,
+          45,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "properties": {
+        "weaponId": "fal",
+        "color": "rgb(245, 158, 11)"
+      },
+      "visible": true,
+      "locked": false
+    },
+    {
+      "id": "pickup_m4a1_north",
+      "name": "M4A1 Carbine Alley Pickup",
+      "type": "weapon_pickup",
+      "transform": {
+        "position": [
+          0,
+          0.4,
+          15
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "properties": {
+        "weaponId": "m4a1",
+        "color": "rgb(245, 158, 11)"
+      },
+      "visible": true,
+      "locked": false
+    },
+    {
+      "id": "pickup_shotgun_south",
+      "name": "Remington 870 CQB Pickup",
+      "type": "weapon_pickup",
+      "transform": {
+        "position": [
+          0,
+          0.4,
+          -15
+        ],
+        "rotation": [
+          0,
+          180,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "properties": {
+        "weaponId": "shotgun",
+        "color": "rgb(245, 158, 11)"
+      },
+      "visible": true,
+      "locked": false
+    },
+    {
+      "id": "pickup_beretta_cla",
+      "name": "Beretta 92 Sidearm Pickup",
+      "type": "weapon_pickup",
+      "transform": {
+        "position": [
+          -10,
+          0.4,
+          -4
+        ],
+        "rotation": [
+          0,
+          30,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "properties": {
+        "weaponId": "beretta",
+        "color": "rgb(245, 158, 11)"
+      },
+      "visible": true,
+      "locked": false
+    },
+    {
+      "id": "pickup_svua_rvs",
+      "name": "SVU-A Marksman Sniper Pickup",
+      "type": "weapon_pickup",
+      "transform": {
+        "position": [
+          10,
+          0.4,
+          4
+        ],
+        "rotation": [
+          0,
+          -30,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "properties": {
+        "weaponId": "svua",
+        "color": "rgb(245, 158, 11)"
+      },
+      "visible": true,
+      "locked": false
+    },
+    {
+      "id": "col_perimeter_north",
+      "name": "North Boundary Collision",
+      "type": "collision_box",
+      "transform": {
+        "position": [
+          0,
+          2.5,
+          30
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "properties": {
+        "dimensions": [
+          60,
+          5,
+          1
+        ],
+        "color": "rgb(34, 197, 94)"
+      },
+      "visible": true,
+      "locked": true
+    },
+    {
+      "id": "col_perimeter_south",
+      "name": "South Boundary Collision",
+      "type": "collision_box",
+      "transform": {
+        "position": [
+          0,
+          2.5,
+          -30
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "properties": {
+        "dimensions": [
+          60,
+          5,
+          1
+        ],
+        "color": "rgb(34, 197, 94)"
+      },
+      "visible": true,
+      "locked": true
+    }
+  ]
+}

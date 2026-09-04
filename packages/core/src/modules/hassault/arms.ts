@@ -236,6 +236,17 @@ export class ArmRig {
   private tmp: THREE.Vector3;
   private tmpB: THREE.Vector3;
 
+  // Game-ready FPS Female Arms from assets/horribleAssault/free-gameready-fps-female-arms
+  private skinnedModel: THREE.Object3D | null = null;
+  private boneShoulderR: THREE.Object3D | null = null;
+  private boneUpperarmR: THREE.Object3D | null = null;
+  private boneForearmR: THREE.Object3D | null = null;
+  private boneHandR: THREE.Object3D | null = null;
+  private boneShoulderL: THREE.Object3D | null = null;
+  private boneUpperarmL: THREE.Object3D | null = null;
+  private boneForearmL: THREE.Object3D | null = null;
+  private boneHandL: THREE.Object3D | null = null;
+
   constructor(
     private readonly three: typeof THREE,
     parent: THREE.Object3D,
@@ -249,6 +260,44 @@ export class ArmRig {
     this.tmpB = new three.Vector3();
     this.right = this.buildLimb();
     this.left = this.buildLimb();
+  }
+
+  /**
+   * Asynchronously load the game-ready FPS female arms GLB (/hassault-arms.glb)
+   * into the viewport. Falls back seamlessly to procedural limbs if not available.
+   */
+  async loadArmsModel(url = '/hassault-arms.glb'): Promise<void> {
+    try {
+      const { getCachedAssetUrl } = await import('./models/assetCache');
+      const targetUrl = await getCachedAssetUrl(url);
+      const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
+      const gltf = await new GLTFLoader().loadAsync(targetUrl);
+      const scene = gltf.scene;
+
+      this.boneShoulderR = scene.getObjectByName('ShoulderR') || null;
+      this.boneUpperarmR = scene.getObjectByName('Shoulder_2R') || null;
+      this.boneForearmR = scene.getObjectByName('ForearmR') || null;
+      this.boneHandR = scene.getObjectByName('HandR') || null;
+
+      this.boneShoulderL = scene.getObjectByName('ShoulderL') || null;
+      this.boneUpperarmL = scene.getObjectByName('Shoulder_2L') || null;
+      this.boneForearmL = scene.getObjectByName('ForearmL') || null;
+      this.boneHandL = scene.getObjectByName('HandL') || null;
+
+      this.skinnedModel = scene;
+      this.skinnedModel.renderOrder = 2;
+      this.group.add(scene);
+
+      // Hide procedural primitives now that the female arms model is active
+      this.right.upper.visible = false;
+      this.right.lower.visible = false;
+      this.right.hand.visible = false;
+      this.left.upper.visible = false;
+      this.left.lower.visible = false;
+      this.left.hand.visible = false;
+    } catch {
+      // Procedural limbs continue rendering
+    }
   }
 
   private material(color: number, shininess: number): THREE.MeshPhongMaterial {
@@ -304,6 +353,45 @@ export class ArmRig {
     this.group.visible = visible;
     if (!visible) return;
 
+    if (this.skinnedModel) {
+      this.skinnedModel.visible = true;
+      const targetR = toCamera(anchors.primary);
+      this.placeSkinned(
+        this.boneShoulderR,
+        this.boneUpperarmR,
+        this.boneForearmR,
+        this.boneHandR,
+        SHOULDER_R,
+        targetR,
+        anchors.primaryRoll,
+        [1, -1, 0],
+      );
+
+      if (anchors.support === null) {
+        if (this.boneShoulderL) this.boneShoulderL.visible = false;
+        if (this.boneUpperarmL) this.boneUpperarmL.visible = false;
+        if (this.boneForearmL) this.boneForearmL.visible = false;
+        if (this.boneHandL) this.boneHandL.visible = false;
+      } else {
+        if (this.boneShoulderL) this.boneShoulderL.visible = true;
+        if (this.boneUpperarmL) this.boneUpperarmL.visible = true;
+        if (this.boneForearmL) this.boneForearmL.visible = true;
+        if (this.boneHandL) this.boneHandL.visible = true;
+        const targetL = toCamera(anchors.support);
+        this.placeSkinned(
+          this.boneShoulderL,
+          this.boneUpperarmL,
+          this.boneForearmL,
+          this.boneHandL,
+          SHOULDER_L,
+          targetL,
+          anchors.supportRoll,
+          [-1, -1, 0],
+        );
+      }
+      return;
+    }
+
     this.place(this.right, SHOULDER_R, toCamera(anchors.primary), anchors.primaryRoll, [1, -1, 0]);
     if (anchors.support === null) {
       // A one-handed weapon. The off arm is hidden rather than parked, because a
@@ -317,6 +405,45 @@ export class ArmRig {
     this.left.lower.visible = true;
     this.left.hand.visible = true;
     this.place(this.left, SHOULDER_L, toCamera(anchors.support), anchors.supportRoll, [-1, -1, 0]);
+  }
+
+  private placeSkinned(
+    shoulderBone: THREE.Object3D | null,
+    upperarmBone: THREE.Object3D | null,
+    forearmBone: THREE.Object3D | null,
+    handBone: THREE.Object3D | null,
+    shoulder: Vec3,
+    hand: Vec3,
+    roll: number,
+    pole: Vec3,
+  ): void {
+    const { elbow } = solveTwoBone(shoulder, hand, UPPER_LEN, LOWER_LEN, pole);
+    if (shoulderBone) {
+      shoulderBone.position.set(shoulder[0], shoulder[1], shoulder[2]);
+    }
+    if (upperarmBone) {
+      const dUpper = new this.three.Vector3(
+        elbow[0] - shoulder[0],
+        elbow[1] - shoulder[1],
+        elbow[2] - shoulder[2],
+      ).normalize();
+      if (dUpper.lengthSq() > 1e-4) {
+        upperarmBone.quaternion.setFromUnitVectors(new this.three.Vector3(0, 1, 0), dUpper);
+      }
+    }
+    if (forearmBone) {
+      const dFore = new this.three.Vector3(
+        hand[0] - elbow[0],
+        hand[1] - elbow[1],
+        hand[2] - elbow[2],
+      ).normalize();
+      if (dFore.lengthSq() > 1e-4) {
+        forearmBone.quaternion.setFromUnitVectors(new this.three.Vector3(0, 1, 0), dFore);
+      }
+    }
+    if (handBone) {
+      handBone.rotation.set(0, roll, 0);
+    }
   }
 
   private place(limb: Limb, shoulder: Vec3, hand: Vec3, roll: number, pole: Vec3): void {

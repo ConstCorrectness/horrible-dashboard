@@ -40,6 +40,7 @@ export const WEAPON_MODEL_URLS: Readonly<Record<string, string>> = {
 export interface WeaponModel {
   /** The loaded scene, kept as a template and never added to a live scene. */
   readonly prototype: THREE.Object3D;
+  readonly animations?: THREE.AnimationClip[];
 }
 
 const pending = new Map<string, Promise<WeaponModel>>();
@@ -56,15 +57,18 @@ const pending = new Map<string, Promise<WeaponModel>>();
  * weapon is boxes" is an ordinary answer and making callers tell it apart from a
  * network failure by catching would guarantee they eventually stop trying.
  */
+import { getCachedAssetUrl } from './assetCache';
+
 export function loadWeaponModel(id: string): Promise<WeaponModel | null> {
-  const url = WEAPON_MODEL_URLS[id];
+  const url = id === 'fal' ? '/hassault-weapon-fal.glb' : WEAPON_MODEL_URLS[id];
   if (!url) return Promise.resolve(null);
   const cached = pending.get(id);
   if (cached) return cached;
   const task = (async (): Promise<WeaponModel> => {
     const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
-    const gltf = await new GLTFLoader().loadAsync(url);
-    return { prototype: gltf.scene };
+    const targetUrl = await getCachedAssetUrl(url);
+    const gltf = await new GLTFLoader().loadAsync(targetUrl);
+    return { prototype: gltf.scene, animations: gltf.animations || [] };
   })();
   pending.set(id, task);
   task.catch(() => pending.delete(id));

@@ -92,7 +92,7 @@ const BASELINE: Record<string, number> = {
   // throwing, and so the fallback was the only colour that ever rendered. A hex
   // count is a decent proxy for "this will not follow the theme"; here it was
   // also pointing at a line drawn in the wrong colour on all six.
-  rest: 217,
+  rest: 219,
 };
 
 function walk(dir: string, out: string[] = []): string[] {

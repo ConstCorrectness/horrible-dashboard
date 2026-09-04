@@ -540,6 +540,8 @@ export class WeaponViewModel {
   /** Built once per view model and shared by every weapon it ever holds. */
   private flashTexture: THREE.Texture | null = null;
   private smokeTexture: THREE.Texture | null = null;
+  private weaponMixer: THREE.AnimationMixer | null = null;
+  private weaponReloadAction: THREE.AnimationAction | null = null;
   private kick = 0;
   private bobPhase = 0;
   private reloadT = 0;
@@ -608,6 +610,7 @@ export class WeaponViewModel {
     // shoulder that does not move with it, so they live one level up and the
     // pivot's transform reaches them through the grip anchor instead.
     this.arms = new ArmRig(three, this.pivot.parent ?? camera);
+    void this.arms.loadArmsModel('/hassault-arms.glb');
   }
 
   /**
@@ -725,6 +728,20 @@ export class WeaponViewModel {
         this.placeFlash(muzzle);
         // Tracked so `release` frees them: a clone owns its own materials.
         built.materials.push(...materials);
+
+        // If the weapon prop has animations (such as the FN FAL reload clip), initialize mixer
+        if (asset.animations && asset.animations.length > 0) {
+          const mixer = new this.three.AnimationMixer(model);
+          const reloadClip = asset.animations.find((c) => c.name === 'reload') || asset.animations[0];
+          const action = mixer.clipAction(reloadClip);
+          action.setLoop(this.three.LoopOnce, 1);
+          action.clampWhenFinished = true;
+          this.weaponMixer = mixer;
+          this.weaponReloadAction = action;
+        } else {
+          this.weaponMixer = null;
+          this.weaponReloadAction = null;
+        }
       })
       .catch((err) => {
         // Said once, not swallowed: the boxes still render, so the only symptom
@@ -909,9 +926,20 @@ export class WeaponViewModel {
         t: frame.reloadProgress,
         duration: 1,
       };
+      if (this.weaponMixer && this.weaponReloadAction) {
+        if (!this.weaponReloadAction.isRunning()) {
+          this.weaponReloadAction.play();
+        }
+        const clipDuration = this.weaponReloadAction.getClip().duration;
+        this.weaponMixer.setTime(frame.reloadProgress * clipDuration);
+      }
     } else {
       const reloadTarget = frame.reloading ? 1 : 0;
       this.reloadT += (reloadTarget - this.reloadT) * Math.min(1, dt * RELOAD_RATE);
+      if (this.weaponMixer && this.weaponReloadAction && this.weaponReloadAction.isRunning()) {
+        this.weaponReloadAction.stop();
+        this.weaponMixer.setTime(0);
+      }
     }
 
     // The stow: down while a switch is pending or one was asked for, back up
@@ -1278,6 +1306,11 @@ export class WeaponViewModel {
     this.flashCore = null;
     this.flashHalo = null;
     this.flashSmoke = null;
+    if (this.weaponMixer) {
+      this.weaponMixer.stopAllAction();
+      this.weaponMixer = null;
+      this.weaponReloadAction = null;
+    }
     // Any prop still in flight now belongs to nothing. Cleared rather than
     // cancelled because a fetch cannot be un-sent — the arrival checks this.
     this.propToken = '';

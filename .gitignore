@@ -13,7 +13,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+/lib/
+!scripts/lib/
 lib64/
 parts/
 sdist/
@@ -234,22 +235,24 @@ CLAUDE.local.md
 apps/desktop/src-tauri/backend-runtime/*
 !apps/desktop/src-tauri/backend-runtime/.gitkeep
 
-# Raw character/weapon art (~750 MB): the *input* to
-# scripts/build_hassault_character.mjs, not an input to the app. Its output —
-# apps/web/public/hassault-operator.glb — is committed and is what both clients
-# actually load, so a clone builds and runs with none of this present.
-#
-# Not fetched on demand either: the rig and all 23 clips come from Mixamo behind
-# an Adobe login with per-export options, and re-hosting them would be
-# redistributing art whose licences are not recorded. The README is committed
-# because it is the one part that cannot be downloaded again — how to regenerate
-# the character, and what each input actually is.
-#
-# The trailing `/*` matters: git never descends into an excluded *directory*, so
-# `assets/horribleAssault/` plus a negation would ignore the README too, with no
-# error. Excluding the contents leaves the directory itself visible, which is
-# what gives the negation something to apply to — the same shape as the
-# backend-runtime rule above.
+# 3D Model Raw Binaries & DCC Project Files (prevent pushing to git)
+*.fbx
+*.blend
+*.blend1
+*.obj
+*.dae
+*.max
+*.3ds
+
+# Raw character/weapon art (~1 GB): source inputs
 assets/horribleAssault/*
 !assets/horribleAssault/README.md
+!assets/horribleAssault/maps/
+!assets/horribleAssault/maps/**
+!assets/manifest.json
+
+# Compiled HorribleAssault 3D models (downloaded on demand or via `pnpm assets:pull`)
+apps/web/public/hassault-*.glb
+apps/web/public/models/*.glb
+
 

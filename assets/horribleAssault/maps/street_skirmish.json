@@ -1,0 +1,217 @@
+{
+  "version": 1,
+  "name": "City Street Skirmish",
+  "created_at": "2026-09-03T17:00:00Z",
+  "environment": {
+    "ambientColor": "rgb(40, 48, 56)",
+    "ambientIntensity": 0.7,
+    "sunColor": "rgb(255, 235, 200)",
+    "sunIntensity": 1.8,
+    "sunPosition": [
+      15,
+      35,
+      20
+    ],
+    "fogColor": "rgb(160, 180, 200)",
+    "fogDensity": 0.008
+  },
+  "nodes": [
+    {
+      "id": "sun_light",
+      "name": "Sun Directional Light",
+      "type": "light",
+      "transform": {
+        "position": [
+          15,
+          35,
+          20
+        ],
+        "rotation": [
+          -45,
+          30,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "properties": {
+        "lightColor": "rgb(255, 235, 200)",
+        "intensity": 1.8
+      },
+      "visible": true,
+      "locked": false
+    },
+    {
+      "id": "street_city_mesh",
+      "name": "Modular Street & Shopfronts",
+      "type": "mesh_prop",
+      "transform": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          0.01,
+          0.01,
+          0.01
+        ]
+      },
+      "assetPath": "/assets/horribleAssault/buildings/street-city/street_city_7.fbx",
+      "assetFormat": "fbx",
+      "properties": {
+        "color": "rgb(148, 163, 184)"
+      },
+      "visible": true,
+      "locked": true
+    },
+    {
+      "id": "spawn_cla_street",
+      "name": "CLA Terminal Spawn",
+      "type": "spawn_point",
+      "transform": {
+        "position": [
+          -25,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          90,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "properties": {
+        "team": "CLA",
+        "color": "rgb(239, 68, 68)"
+      },
+      "visible": true,
+      "locked": false
+    },
+    {
+      "id": "spawn_rvs_street",
+      "name": "RVS Depot Spawn",
+      "type": "spawn_point",
+      "transform": {
+        "position": [
+          25,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          -90,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "properties": {
+        "team": "RVS",
+        "color": "rgb(59, 130, 246)"
+      },
+      "visible": true,
+      "locked": false
+    },
+    {
+      "id": "pickup_fal_traffic",
+      "name": "FN FAL Center Barricade Pickup",
+      "type": "weapon_pickup",
+      "transform": {
+        "position": [
+          0,
+          0.4,
+          0
+        ],
+        "rotation": [
+          0,
+          90,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "properties": {
+        "weaponId": "fal",
+        "color": "rgb(245, 158, 11)"
+      },
+      "visible": true,
+      "locked": false
+    },
+    {
+      "id": "pickup_m4a1_sidewalk",
+      "name": "M4A1 Carbine Sidewalk Pickup",
+      "type": "weapon_pickup",
+      "transform": {
+        "position": [
+          -10,
+          0.4,
+          6
+        ],
+        "rotation": [
+          0,
+          45,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "properties": {
+        "weaponId": "m4a1",
+        "color": "rgb(245, 158, 11)"
+      },
+      "visible": true,
+      "locked": false
+    },
+    {
+      "id": "pickup_shotgun_alley",
+      "name": "Remington 870 Back Alley Pickup",
+      "type": "weapon_pickup",
+      "transform": {
+        "position": [
+          10,
+          0.4,
+          -6
+        ],
+        "rotation": [
+          0,
+          -45,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "properties": {
+        "weaponId": "shotgun",
+        "color": "rgb(245, 158, 11)"
+      },
+      "visible": true,
+      "locked": false
+    }
+  ]
+}

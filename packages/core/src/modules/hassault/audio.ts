@@ -65,6 +65,9 @@ const TIMBRES: Record<string, Timbre> = {
   jump: { frequency: 900, q: 1.6, decay: 0.09, gain: 0.35, body: 0 },
   shot: { frequency: 1500, q: 0.7, decay: 0.3, gain: 1, body: 78 },
   reload: { frequency: 2400, q: 3.4, decay: 0.14, gain: 0.4, body: 0 },
+  reload_magout: { frequency: 1600, q: 2.8, decay: 0.12, gain: 0.55, body: 45 },
+  reload_magin: { frequency: 2100, q: 3.2, decay: 0.15, gain: 0.7, body: 85 },
+  reload_bolt: { frequency: 2900, q: 4.0, decay: 0.18, gain: 0.75, body: 50 },
   // An item leaving the map. Bright, short and unmistakably not a gun: the
   // sound has to be legible as "somebody took the armour" from across a room,
   // where a dull one would be mistaken for a footstep.
