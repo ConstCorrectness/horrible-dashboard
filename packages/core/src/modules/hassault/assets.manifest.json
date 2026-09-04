@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "baseUrl": "https://github.com/horriblecpp/horrible-dashboard/releases/download/assets-v1",
+  "baseUrl": "https://github.com/ConstCorrectness/horrible-dashboard/releases/download/assets-v1",
   "assets": {
     "hassault-arms": {
       "filename": "hassault-arms.glb",
