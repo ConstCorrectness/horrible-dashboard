@@ -1,7 +1,7 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { PaneInstanceContext, useAgentContext } from '../../agent-context';
-import { lockEscape, unlockEscape, useCapture } from '../../keymap';
+import { lockSystemKeys, unlockEscape, useCapture } from '../../keymap';
 import { setSetting, useSetting } from '../../settings';
 import {
   dismissMatchSummary,
@@ -1881,6 +1881,11 @@ export function HorribleAssaultPanel() {
     // Escape belongs to the game (its own menu); holding it gives the mouse back
     // where the host allows it. The HUD says which of the two is actually live.
     escape: 'passthrough',
+    // Ask for the OS's own chords too — alt+tab, alt+f4 — so a fullscreen match
+    // isn't lost to a mistimed thumb. Three gates stand between asking and
+    // getting it (Chromium, document fullscreen, and a setting that is off by
+    // default), so this is a preference, not a promise; `lockSystemKeys` decides.
+    systemKeys: true,
     instanceId: useContext(PaneInstanceContext),
     viewId: 'hassault.play',
     onRelease: () => {
@@ -1895,11 +1900,23 @@ export function HorribleAssaultPanel() {
    * the canvas and from the pause menu's Resume alike. */
   const grabInput = useCallback(() => {
     if (!acceptsGameInput(phaseRef.current)) return;
-    mountRef.current?.querySelector('canvas')?.requestPointerLock();
+    const canvas = mountRef.current?.querySelector('canvas');
+    // `unadjustedMovement` is the real "raw input" of the CS settings menu: it
+    // takes movement before the OS applies pointer acceleration, so aim is a
+    // function of how far the mouse moved and nothing else. Chromium returns a
+    // promise here and rejects where it is unsupported — the plain call is the
+    // fallback, because an accelerated pointer beats no pointer lock at all.
+    const locked = canvas?.requestPointerLock({ unadjustedMovement: true }) as
+      | Promise<void>
+      | undefined;
+    if (locked && typeof locked.catch === 'function') {
+      locked.catch(() => canvas?.requestPointerLock());
+    }
     requestCapture();
-    // Keyboard Lock needs document fullscreen; without it Escape releases pointer
-    // lock outright and the hold gesture degrades (see canHoldEscape).
-    void lockEscape();
+    // Take as much of the keyboard as this host allows. Degrades to the
+    // Escape-only lock — which the hold-to-release gesture needs — whenever the
+    // system-key gates aren't all open. See lockSystemKeys.
+    void lockSystemKeys();
   }, [requestCapture]);
 
   const onCanvasClick = useCallback(() => {

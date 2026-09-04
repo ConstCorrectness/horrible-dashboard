@@ -4,6 +4,7 @@ import { Button } from '../../../Primitives';
 import { registry } from '../../../registry';
 import { startServer } from '../../llamacpp/api';
 import { usePaneParams } from '../../../panes';
+import { ProjectsPane } from './ProjectsPane';
 import {
   applyRecipe,
   convertCheckpoint,
@@ -368,8 +369,31 @@ export function RecipePane() {
     return out;
   }, [payload, recipe]);
 
+  // Same cold-open case as the notebook pane: `training.recipe` is launcher-visible
+  // but params-bound, so opening it blind used to state a fact and offer no way to
+  // fix it. `openTrainingRecipe` retargets a clean pane, so picking here rebinds
+  // this instance. (Projects rows open the recipe via their own "Recipe" button.)
   if (!projectId)
-    return <p style={{ ...dim, padding: '0.6rem' }}>No project bound to this pane.</p>;
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+        <div
+          style={{
+            padding: '0.5rem 0.75rem',
+            borderBottom: '1px solid var(--border)',
+            fontSize: '0.7rem',
+            fontWeight: 700,
+            letterSpacing: '0.14em',
+            textTransform: 'uppercase',
+            ...dim,
+          }}
+        >
+          Choose a project
+        </div>
+        <div style={{ flex: 1, minHeight: 0 }}>
+          <ProjectsPane />
+        </div>
+      </div>
+    );
   if (!payload || !recipe)
     return <p style={{ ...dim, padding: '0.6rem' }}>{status || 'Loading…'}</p>;
 

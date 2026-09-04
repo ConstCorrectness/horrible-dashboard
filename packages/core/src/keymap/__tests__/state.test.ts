@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { registry } from '../../registry';
 import { getKeymap, initKeymapHost, setKeymapOverrides, unreachableDefaults } from '../state';
+import { keyContextStore } from '../state';
+import { releaseCapture, requestCapture } from '../capture';
+import { layoutStore } from '../../layout/store';
+import { seedFromPreset } from '../../layout/presets';
 
 /** Isolate the keymap from every other module's real bindings. */
 function only(keybindings: Parameters<typeof registry.register>[0]['keybindings']): void {
@@ -120,5 +124,48 @@ describe('unreachableDefaults', () => {
     only([]);
     setKeymapOverrides([{ key: 'mod+1', command: 'mine' }]);
     expect(unreachableDefaults()).toEqual([]);
+  });
+});
+
+describe('the context store notices a capture', () => {
+  it('re-emits when a pane takes or releases the keyboard', () => {
+    // Capture is not implied by a layout dispatch: a pane grabs the keyboard
+    // *after* focus has settled, so without an explicit subscription `capture`,
+    // `captureView` and `keyboardLock` change with nobody re-reading them. The
+    // dispatcher re-reads per keystroke and so never noticed; every reactive
+    // consumer — the Shortcuts badge, the capture HUD — did.
+    registry.resetForTests();
+    layoutStore.resetForTests();
+    layoutStore.dispatch({
+      type: 'LOAD_WORKSPACE',
+      workspaceId: 'test',
+      frame: seedFromPreset(
+        { id: 't', name: 'T', frame: { center: { pane: 'hassault.play' } } },
+        { knownViews: new Set(['hassault.play']) },
+      ),
+    });
+    const center = layoutStore.getSnapshot().frame.center;
+    if (center.kind !== 'area') throw new Error('expected a single seeded area');
+    const instanceId = center.tabs[0].instanceId;
+    layoutStore.dispatch({ type: 'FOCUS_PANE', instanceId });
+
+    let emits = 0;
+    const stop = keyContextStore.subscribe(() => {
+      emits += 1;
+    });
+    try {
+      // No layout dispatch here — only the capture changes.
+      requestCapture({ mode: 'full', escape: 'passthrough', instanceId, viewId: 'hassault.play' });
+      expect(emits).toBeGreaterThan(0);
+      expect(keyContextStore.getSnapshot().capture).toBe('full');
+
+      const afterGrab = emits;
+      releaseCapture(instanceId);
+      expect(emits).toBeGreaterThan(afterGrab);
+      expect(keyContextStore.getSnapshot().capture).toBeNull();
+    } finally {
+      stop();
+      releaseCapture();
+    }
   });
 });

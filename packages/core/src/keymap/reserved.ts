@@ -29,6 +29,18 @@ export interface ReservedEntry {
   owner: string;
   /** Can `preventDefault()` reclaim it? */
   preventable: boolean;
+  /**
+   * Can **Keyboard Lock** reclaim it? Set on the chords the spec and Chromium's
+   * implementation actually hand over in document fullscreen — the browser's own
+   * tab/window shortcuts, and `alt+tab`/`alt+f4` on Windows and Linux.
+   *
+   * Deliberately *not* set on the macOS entries or on any secure-attention
+   * sequence: the spec is explicit that `ctrl+alt+del` and its equivalents stay
+   * with the platform, and this table exists to stop us promising keys we cannot
+   * deliver. Where it is unclear, unset is the honest answer — the cost is a
+   * badge that is too pessimistic, not a binding that silently never fires.
+   */
+  lockable?: boolean;
 }
 
 const digits = (n: number) => Array.from({ length: n }, (_, i) => String(i + 1));
@@ -41,43 +53,48 @@ export const RESERVED: ReservedEntry[] = [
       hosts: ['browser'],
       owner: 'Browser (switch to tab)',
       preventable: false,
+      lockable: true,
     }),
   ),
-  { key: 'mod+w', hosts: ['browser'], owner: 'Browser (close tab)', preventable: false },
-  { key: 'mod+t', hosts: ['browser'], owner: 'Browser (new tab)', preventable: false },
-  { key: 'mod+n', hosts: ['browser'], owner: 'Browser (new window)', preventable: false },
+  { key: 'mod+w', hosts: ['browser'], owner: 'Browser (close tab)', preventable: false, lockable: true },
+  { key: 'mod+t', hosts: ['browser'], owner: 'Browser (new tab)', preventable: false, lockable: true },
+  { key: 'mod+n', hosts: ['browser'], owner: 'Browser (new window)', preventable: false, lockable: true },
   {
     key: 'mod+shift+w',
     hosts: ['browser'],
+    lockable: true,
     owner: 'Browser (close window)',
     preventable: false,
   },
   {
     key: 'mod+shift+t',
     hosts: ['browser'],
+    lockable: true,
     owner: 'Browser (reopen closed tab)',
     preventable: false,
   },
   {
     key: 'mod+shift+n',
     hosts: ['browser'],
+    lockable: true,
     owner: 'Browser (incognito window)',
     preventable: false,
   },
-  { key: 'ctrl+tab', hosts: ['browser'], owner: 'Browser (next tab)', preventable: false },
+  { key: 'ctrl+tab', hosts: ['browser'], owner: 'Browser (next tab)', preventable: false, lockable: true },
   {
     key: 'ctrl+shift+tab',
     hosts: ['browser'],
+    lockable: true,
     owner: 'Browser (previous tab)',
     preventable: false,
   },
 
   // --- Browser: function keys ----------------------------------------------
-  { key: 'f3', hosts: ['browser'], owner: 'Browser (find next)', preventable: false },
-  { key: 'f5', hosts: ['browser'], owner: 'Browser (reload)', preventable: false },
-  { key: 'f6', hosts: ['browser'], owner: 'Browser (focus address bar)', preventable: false },
-  { key: 'f11', hosts: ['browser'], owner: 'Browser (fullscreen)', preventable: false },
-  { key: 'f12', hosts: ['browser'], owner: 'Browser (developer tools)', preventable: false },
+  { key: 'f3', hosts: ['browser'], owner: 'Browser (find next)', preventable: false, lockable: true },
+  { key: 'f5', hosts: ['browser'], owner: 'Browser (reload)', preventable: false, lockable: true },
+  { key: 'f6', hosts: ['browser'], owner: 'Browser (focus address bar)', preventable: false, lockable: true },
+  { key: 'f11', hosts: ['browser'], owner: 'Browser (fullscreen)', preventable: false, lockable: true },
+  { key: 'f12', hosts: ['browser'], owner: 'Browser (developer tools)', preventable: false, lockable: true },
 
   // --- Browser: preventable, but we'd be fighting a strong habit -------------
   {
@@ -115,8 +132,8 @@ export const RESERVED: ReservedEntry[] = [
     owner: 'Windows IME (toggle input method)',
     preventable: false,
   },
-  { key: 'alt+f4', platforms: ['win', 'linux'], owner: 'OS (close window)', preventable: false },
-  { key: 'alt+tab', platforms: ['win', 'linux'], owner: 'OS (switch window)', preventable: false },
+  { key: 'alt+f4', platforms: ['win', 'linux'], owner: 'OS (close window)', preventable: false, lockable: true },
+  { key: 'alt+tab', platforms: ['win', 'linux'], owner: 'OS (switch window)', preventable: false, lockable: true },
 ];
 
 /** `mod` is not a real modifier — resolve it before comparing two specs. */
@@ -162,13 +179,17 @@ export interface ReservedHit {
  */
 export function checkReserved(
   chord: Chord,
-  ctx: Pick<KeyContext, 'platform' | 'host'>,
+  ctx: Pick<KeyContext, 'platform' | 'host'> & Partial<Pick<KeyContext, 'keyboardLock'>>,
 ): ReservedHit | null {
   const first = chord[0];
   if (!first) return null;
   let best: ReservedHit | null = null;
   for (const entry of RESERVED) {
     if (entry.hosts && !entry.hosts.includes(ctx.host)) continue;
+    // Keyboard Lock is live and this is one of the chords it hands over, so the
+    // host is no longer taking it — reporting it as reserved would send the user
+    // looking for a conflict that isn't there. Absent means not locked.
+    if (entry.lockable && ctx.keyboardLock) continue;
     if (entry.platforms && !entry.platforms.includes(ctx.platform)) continue;
     const parsed = tryParseSpec(entry.key);
     if (!parsed || !sameStroke(first, parsed[0], ctx.platform)) continue;
@@ -182,7 +203,7 @@ export function checkReserved(
 /** Convenience for string specs (the Shortcuts UI and the agent tools). */
 export function checkReservedSpec(
   spec: string,
-  ctx: Pick<KeyContext, 'platform' | 'host'>,
+  ctx: Pick<KeyContext, 'platform' | 'host'> & Partial<Pick<KeyContext, 'keyboardLock'>>,
 ): ReservedHit | null {
   const chord = tryParseSpec(spec);
   return chord ? checkReserved(chord, ctx) : null;

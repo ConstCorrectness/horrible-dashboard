@@ -17,6 +17,7 @@ import type { CellRunState, NotebookCell } from '../../../notebook/types';
 import { useSession } from '../../../notebook/SessionStore';
 import { widgetManagerFor, type WidgetManager } from '../../../notebook/widgets/WidgetManager';
 import { NOTEBOOK_CHANNEL, openNotebookSession } from '../store';
+import { NotebookBrowser } from './NotebookBrowser';
 
 const dim = { color: 'var(--text-dim)' } as const;
 const EDIT_SYNC_MS = 400;
@@ -161,9 +162,31 @@ export function NotebookEditor() {
     return m;
   }, [state.diagnostics]);
 
+  // No notebook bound — opened from the start menu, the palette, or an empty
+  // area. This used to point at the Notebooks *pane*, which consolidation made an
+  // Explorer section and therefore not something the user could open. Render the
+  // browser here instead: picking a notebook calls `openNotebook`, whose
+  // `canReuse` retargets this very instance, so the pane becomes the notebook.
   if (!path) {
     return (
-      <div style={{ padding: '1rem', ...dim }}>No notebook — open one from the Notebooks pane.</div>
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+        <div
+          style={{
+            padding: '0.5rem 0.75rem',
+            borderBottom: '1px solid var(--border)',
+            fontSize: '0.7rem',
+            fontWeight: 700,
+            letterSpacing: '0.14em',
+            textTransform: 'uppercase',
+            ...dim,
+          }}
+        >
+          Choose a notebook
+        </div>
+        <div style={{ flex: 1, minHeight: 0 }}>
+          <NotebookBrowser />
+        </div>
+      </div>
     );
   }
 

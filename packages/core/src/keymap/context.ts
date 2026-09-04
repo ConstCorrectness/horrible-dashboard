@@ -28,6 +28,8 @@ export interface KeyContext {
   dialogOpen: boolean;
   /** An area is fullscreened in-window. */
   fullscreenArea: boolean;
+  /** Keyboard Lock is live and holding the OS's own chords (`alt+tab`). */
+  keyboardLock: boolean;
   /**
    * A desktop window holds focus. Lets the window bindings and the frame's
    * identical `alt+arrow` area bindings coexist on a tiling desktop, where both
@@ -75,6 +77,11 @@ export const CONTEXT_KEYS: ContextKeyDoc[] = [
   },
   { key: 'dialogOpen', type: 'boolean', description: 'A modal dialog is open.' },
   { key: 'fullscreenArea', type: 'boolean', description: 'An area is fullscreened in-window.' },
+  {
+    key: 'keyboardLock',
+    type: 'boolean',
+    description: "Keyboard Lock is holding the OS's own chords (Alt+Tab) for the focused pane.",
+  },
   {
     key: 'windowFocused',
     type: 'boolean',

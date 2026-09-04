@@ -589,7 +589,11 @@ one way a module opens "a thing" (a notebook, a project, a URL) in a
    `retargetPane` into it, so the area, tab position and region strips survive.
    Only the module can judge reuse, so the predicate is its call; a module whose
    panes autosave (notebook, training notebook, browser) passes `() => true`,
-   meaning "any clean pane of mine".
+   meaning "any clean pane of mine". A pane in a **floating window** counts here
+   as much as one in the centre area — `RETARGET_PANE` rewrites a pane wherever it
+   lives, and restricting this to areas silently switched the whole rule off in
+   floating mode, which is where the accumulation it prevents is most visible. A
+   pane in a **dock** is still excluded: a document must not take over a tool slot.
 3. **Otherwise** — a normal role-routed `openPane`.
 
 Omitting `canReuse` opts out of step 2 and gives identity-only behavior. A pane

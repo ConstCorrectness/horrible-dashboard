@@ -556,7 +556,14 @@ export function openDocument(
     const reusable = listPanes(frame()).find(
       (p) =>
         p.pane.viewId === viewId &&
-        p.location.kind === 'area' &&
+        // A window counts as much as a centre area: "holds nothing worth keeping"
+        // is a fact about the *pane*, and `RETARGET_PANE` rewrites it wherever it
+        // lives. Restricting this to `'area'` meant the whole reuse rule silently
+        // switched off in floating mode — opening a notebook from an empty editor
+        // window left the empty one behind and made a second, which is precisely
+        // the accumulation this function exists to prevent. A dock stays excluded:
+        // a document must not take over a tool slot.
+        (p.location.kind === 'area' || p.location.kind === 'window') &&
         !isPaneDirty(p.pane.instanceId) &&
         canReuse(p.pane),
     );

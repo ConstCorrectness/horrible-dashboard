@@ -10,6 +10,7 @@
  * See docs/architecture/keybindings.mdx.
  */
 import { getCapture, releaseCapture } from './capture';
+import { canHoldEscape } from './keyboard-lock';
 import { getKeymap, readKeyContext } from './state';
 import { resolveKey } from './resolve';
 import { isModifierEvent, type Chord } from './spec';
@@ -50,42 +51,6 @@ function clearPending(): void {
 
 function describePending(): string {
   return pending.map((e) => e.key).join(' ');
-}
-
-/**
- * Can the page keep Escape while a pointer/keyboard capture is held?
- *
- * Only with the Keyboard Lock API, which is Chromium-only **and** requires
- * document fullscreen. Everywhere else the browser releases pointer lock on
- * Escape no matter what we do, so a `passthrough` policy has to degrade to
- * `release` — and the HUD has to say so, rather than promising a gesture that
- * won't work.
- */
-export function canHoldEscape(): boolean {
-  if (typeof navigator === 'undefined' || typeof document === 'undefined') return false;
-  const keyboard = (navigator as Navigator & { keyboard?: { lock?: unknown } }).keyboard;
-  return typeof keyboard?.lock === 'function' && document.fullscreenElement !== null;
-}
-
-/** Ask the host to route Escape to the page. No-op where unsupported. */
-export async function lockEscape(): Promise<void> {
-  const keyboard = (
-    navigator as Navigator & { keyboard?: { lock?: (keys: string[]) => Promise<void> } }
-  ).keyboard;
-  try {
-    await keyboard?.lock?.(['Escape']);
-  } catch {
-    /* unsupported or not fullscreen — the ladder degrades to 'release' */
-  }
-}
-
-export function unlockEscape(): void {
-  const keyboard = (navigator as Navigator & { keyboard?: { unlock?: () => void } }).keyboard;
-  try {
-    keyboard?.unlock?.();
-  } catch {
-    /* nothing was locked */
-  }
 }
 
 /** The Escape ladder. Returns true when a rung consumed the key. */

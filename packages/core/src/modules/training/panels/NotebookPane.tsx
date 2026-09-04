@@ -14,6 +14,7 @@ import {
 import { openSession, useSession } from '../store';
 import { OutputRenderer } from '../outputs/OutputRenderer';
 import { CellEditor } from './CellEditor';
+import { ProjectsPane } from './ProjectsPane';
 import { useNotebookLsp } from '../../../notebook/useNotebookLsp';
 import { PaneInstanceContext, useAgentContext } from '../../../agent-context';
 import { usePaneParams } from '../../../panes';
@@ -142,10 +143,32 @@ export function NotebookPane() {
     [store],
   );
 
+  // Opened cold (start menu, palette, an empty area) this pane has no project to
+  // show. It used to say so and point at the projects *pane* — which pane
+  // consolidation turned into an Explorer section, so the instruction named
+  // something the user could not open. Show the picker itself instead: choosing a
+  // project calls `openTrainingNotebook`, whose `canReuse` retargets *this*
+  // instance in place, so the pane the user opened becomes the notebook rather
+  // than leaving an empty one behind.
   if (!projectId) {
     return (
-      <div style={{ padding: '1rem', ...dim }}>
-        No project — open me from the Training projects pane.
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+        <div
+          style={{
+            padding: '0.5rem 0.75rem',
+            borderBottom: '1px solid var(--border)',
+            fontSize: '0.7rem',
+            fontWeight: 700,
+            letterSpacing: '0.14em',
+            textTransform: 'uppercase',
+            ...dim,
+          }}
+        >
+          Choose a project
+        </div>
+        <div style={{ flex: 1, minHeight: 0 }}>
+          <ProjectsPane />
+        </div>
       </div>
     );
   }

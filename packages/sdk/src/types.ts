@@ -429,6 +429,20 @@ export interface PaneCaptureDecl {
    * Defaults to `release`.
    */
   escape?: 'release' | 'passthrough';
+  /**
+   * Ask for the keys the **operating system** normally takes — `alt+tab`,
+   * `alt+f4`, the browser's own `mod+w`/`mod+t`. Off by default, and even when
+   * set it only takes effect where all of these hold: the Keyboard Lock API
+   * exists (Chromium), the *document* is fullscreen (the spec excludes F11 and a
+   * native shell's borderless window — see `setDocumentFullscreen`), and the user
+   * has turned on `keymap.captureSystemKeys`. `ctrl+alt+del` and the platform's
+   * other secure-attention sequence are never capturable by anyone.
+   *
+   * This is deliberately hostile behaviour behind three gates: a user who cannot
+   * alt-tab and was not told is looking at what appears to be a frozen machine.
+   * Whatever declares it must also say so on screen (see `CaptureHud`).
+   */
+  systemKeys?: boolean;
 }
 
 export interface KeybindingDecl {

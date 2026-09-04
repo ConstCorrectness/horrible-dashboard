@@ -535,9 +535,18 @@ previous runs.
 
 The document area is seeded **empty** on purpose. `training.notebook` and
 `training.recipe` are params-bound (`{projectId, notebook}`) and a preset's `tabs`
-carry no params, so seeding them would open two panes reading "No project — open me
-from the Training projects pane". Which is exactly why that pane is *first* in the
-left dock: it is the entry point, and what it opens lands in the empty area.
+carry no params, so seeding them would open two panes with no project bound. Which
+is exactly why the projects pane is *first* in the left dock: it is the entry point,
+and what it opens lands in the empty area.
+
+A params-bound pane opened **cold** — from the start menu, the palette, or an empty
+area — renders the projects picker itself rather than a sentence. It used to say
+"open me from the Training projects pane", which named something the reader could
+not open: consolidation made `training.projects` `embedded`, i.e. a section of
+[Explorer](explorer.mdx). Picking a project calls `openTrainingNotebook`, whose
+`canReuse` **retargets that same instance**, so the pane you opened becomes the
+notebook instead of leaving an empty one behind. `training.recipe` and the notebook
+module's [`notebook.editor`](notebook.mdx) do the same with their own pickers.
 
 A preset that names a view the registry does not have is **skipped in silence**
 (`seedFromPreset`), so a typo is a pane that simply never appears — pinned by

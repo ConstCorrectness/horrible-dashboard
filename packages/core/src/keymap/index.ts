@@ -80,14 +80,19 @@ export {
   type KeymapOverride,
 } from './state';
 export {
-  canHoldEscape,
   DEFAULT_ESCAPE_HOLD_MS,
   installKeymap,
-  lockEscape,
   pendingChord,
-  unlockEscape,
   type KeymapHooks,
 } from './dispatch';
+export {
+  canHoldEscape,
+  canHoldSystemKeys,
+  CAPTURE_SYSTEM_KEYS_KEY,
+  lockEscape,
+  lockSystemKeys,
+  unlockEscape,
+} from './keyboard-lock';
 export {
   globalShortcuts,
   installGlobalShortcuts,

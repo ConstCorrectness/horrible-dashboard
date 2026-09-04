@@ -4,6 +4,7 @@
  * change Tab so it does X"). See docs/modules/keymap.mdx.
  */
 import { getSetting, settingsStore } from '../../settings';
+import { CAPTURE_SYSTEM_KEYS_KEY } from '../../keymap/keyboard-lock';
 import { KEYMAP_PRESET_KEY, KEYMAP_PRESETS, presetBindings } from '../../keymap/presets';
 import { setKeymapPreset } from '../../keymap/state';
 import type { ModuleManifest } from '../../registry';
@@ -50,6 +51,14 @@ export const keymapModule: ModuleManifest = {
         'How long Escape must be held to hand the mouse back from a pane that has captured it (a game). Only applies where the browser lets the page keep Escape; otherwise a single press releases.',
       type: 'number',
       default: 400,
+    },
+    {
+      key: CAPTURE_SYSTEM_KEYS_KEY,
+      title: 'Let fullscreen panes capture system keys',
+      description:
+        'While a pane that asks for it holds the keyboard in fullscreen (the game), also take the chords the OS normally owns — Alt+Tab, Alt+F4. Chromium only, and never Ctrl+Alt+Del. Off by default: hold Escape to hand the keyboard back.',
+      type: 'boolean',
+      default: false,
     },
     {
       key: KEYMAP_PRESET_KEY,

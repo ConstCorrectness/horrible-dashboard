@@ -107,15 +107,16 @@ The legacy `scope: '<viewId>'` field is shorthand for
 ## Desktop and window bindings
 
 Every chord below was checked against `reserved.ts` before it was chosen. The
-conventional ones are unavailable: `alt+tab` never reaches the page on Windows or
-Linux, `meta+m` is macOS minimize, and `meta+space` / `ctrl+space` are Spotlight and
-the IME toggle. **A binding that silently never fires is worse than a less familiar
+conventional ones are unavailable: `alt+tab` does not reach the page on Windows or
+Linux (unless [system-key capture](#system-key-capture) is live, which it is not by
+default), `meta+m` is macOS minimize, and `meta+space` / `ctrl+space` are Spotlight
+and the IME toggle. **A binding that silently never fires is worse than a less familiar
 one that does**, which is the whole reason that table exists.
 
 | Action | Binding | Why not the convention |
 | --- | --- | --- |
 | Spotlight (ask / run / open) | `mod+k` | `mod+space` is macOS Spotlight and the Windows IME switch |
-| Cycle windows | ``alt+` `` / ``alt+shift+` `` | `alt+tab` is OS-level and unpreventable |
+| Cycle windows | ``alt+` `` / ``alt+shift+` `` | `alt+tab` is OS-level; only Keyboard Lock can take it, and only in a fullscreen capturing pane |
 | Directional window focus | `alt+←↑↓→` | — |
 | Snap half / maximize | `mod+shift+←↑↓→` | `mod+alt+arrow` is already the frame's split |
 | Snap corner / centre / third | `mod+alt+s` then `q w e / a s d / z x c / 1 2 3 / f` | no free third-modifier arrow family; thirteen zones want a palette — see [the snap palette](desktop-shell.mdx#the-snap-palette) |
@@ -204,12 +205,48 @@ This is surfaced, not hidden: the capture badge reads "Hold Esc to release" or
 that silently doesn't work is worse than offering the tap.
 :::
 
+## System-key capture
+
+A pane can ask for the chords the OS itself owns by declaring `systemKeys` on its
+`capture` — `hassault.play` is the only one that does. Asking is not getting: the
+full `navigator.keyboard.lock()` runs only when **all** of these hold.
+
+| Gate | Why |
+| --- | --- |
+| Keyboard Lock exists | Chromium only; WebKitGTK and WKWebView have no implementation |
+| The **document** is fullscreen | The spec excludes F11 and, with it, a native shell's borderless window — see `setDocumentFullscreen` in `fullscreen.ts`, which is why the desktop layout now enters document fullscreen alongside the OS window |
+| `keymap.captureSystemKeys` is on | Off by default. A window that swallows `alt+tab` without saying so is indistinguishable from a frozen machine |
+
+`ctrl+alt+del` and the other platform secure-attention sequences are never
+capturable by anyone. When the gates do not all open, `lockSystemKeys()` falls back
+to the Escape-only lock — the behaviour that shipped before — so callers never
+branch. The capture badge states "Alt+Tab is captured" whenever it is in force,
+and the release gesture is then the only way out.
+
+:::note Counter-Strike does not do this
+Its fullscreen is a *display* mode (DirectX exclusive), not a keyboard grab —
+`alt+tab` still works there, it just costs a mode switch. Games that actually
+swallow `alt+tab` install a low-level OS keyboard hook, usually inside anti-cheat.
+This feature is therefore more invasive than the thing it imitates, which is why it
+is opt-in twice over. What *is* worth taking from CS is raw mouse input:
+`requestPointerLock({ unadjustedMovement: true })`, independent of all of the above.
+:::
+
 ## Host reservations
 
 Some chords never reach the page. `keymap/reserved.ts` is a table of them per
 host and platform, with `preventable` marking the ones `preventDefault()` can
 reclaim (browser Back on `alt+left`) versus the ones that never arrive at all
 (`mod+1..9` tab switching).
+
+An entry may also be `lockable`: a chord that Keyboard Lock genuinely hands over
+while [system-key capture](#system-key-capture) is in force, so `checkReserved`
+stops reporting it as taken once the `keyboardLock` context key is set. It is set
+on the browser's own tab/window chords and on `alt+tab`/`alt+f4`; it is **not** set
+on anything scoped to a single platform, because a secure-attention sequence stays
+with the OS at every setting. Where support is unclear, unset is the honest answer
+— the cost is a badge that is too pessimistic rather than a binding that never
+fires.
 
 It is consumed three ways: the Shortcuts pane badges a conflicting binding live,
 `auditKeymap()` logs unreachable defaults in dev, and `keymap.set` **refuses** to

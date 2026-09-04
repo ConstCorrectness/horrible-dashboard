@@ -37,6 +37,12 @@ export type EscapePolicy =
 export interface CaptureRequest {
   mode: CaptureMode;
   escape: EscapePolicy;
+  /**
+   * This pane wants the OS's own chords too (`alt+tab`). Advisory: it records
+   * what the pane asked for, and `lockSystemKeys` decides whether the platform,
+   * the fullscreen state and the user's setting actually allow it.
+   */
+  systemKeys?: boolean;
   /** Pane instance holding it — capture follows focus, so this must be focused. */
   instanceId: string;
   viewId: string;
@@ -47,6 +53,7 @@ export interface CaptureRequest {
 export interface CaptureState {
   mode: CaptureMode;
   escape: EscapePolicy;
+  systemKeys: boolean;
   instanceId: string;
   viewId: string;
 }
@@ -58,7 +65,13 @@ let snapshot: CaptureState | null = null;
 
 function emit(): void {
   snapshot = held
-    ? { mode: held.mode, escape: held.escape, instanceId: held.instanceId, viewId: held.viewId }
+    ? {
+        mode: held.mode,
+        escape: held.escape,
+        systemKeys: held.systemKeys ?? false,
+        instanceId: held.instanceId,
+        viewId: held.viewId,
+      }
     : null;
   for (const listener of listeners) listener();
 }
@@ -99,7 +112,7 @@ export function requestCapture(request: CaptureRequest): boolean {
   const { focusedInstanceId } = layoutStore.getSnapshot().frame;
   if (focusedInstanceId !== request.instanceId) return false;
   if (held && held.instanceId !== request.instanceId) releaseCapture();
-  held = { ...request };
+  held = { ...request, systemKeys: request.systemKeys ?? false };
   emit();
   return true;
 }
@@ -136,11 +149,12 @@ export interface CaptureHandle {
 export function useCapture(options: {
   mode: CaptureMode;
   escape: EscapePolicy;
+  systemKeys?: boolean;
   instanceId: string | null;
   viewId: string;
   onRelease?: () => void;
 }): CaptureHandle {
-  const { mode, escape, instanceId, viewId } = options;
+  const { mode, escape, systemKeys, instanceId, viewId } = options;
   // Read the latest onRelease without making request/release change identity.
   const onReleaseRef = useRef(options.onRelease);
   onReleaseRef.current = options.onRelease;
@@ -162,6 +176,7 @@ export function useCapture(options: {
       requestCapture({
         mode,
         escape,
+        systemKeys,
         instanceId,
         viewId,
         onRelease: () => onReleaseRef.current?.(),

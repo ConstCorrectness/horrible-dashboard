@@ -205,7 +205,10 @@ dict), `cells_changed` `{notebook}`, `mode` `{mode}`, `graph`
   when that pane has no unsaved edits — rather than splitting the area and
   leaving two notebook documents open. Each pane is also labelled with its file
   name (a `title` param), because the view's own title is the same string for
-  every notebook. Notebook cells sync to the kernel
+  every notebook. Opened cold with no `path`, the pane renders the **browser**
+  inline instead of the old "open one from the Notebooks pane" — which named a
+  view that is `embedded` and so cannot be opened — and picking there retargets
+  that same instance. Notebook cells sync to the kernel
   session as you type, so a clean pane holds nothing to lose; the reuse
   predicate is therefore "any clean notebook pane". To get two notebooks
   side by side, split the area first and open the second from the empty area's

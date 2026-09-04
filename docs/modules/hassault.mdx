@@ -914,6 +914,14 @@ are independently suppressed while the pane holds keyboard capture (`useCapture`
 in `HorribleAssaultPanel.tsx`), so the two tables never compete for the same
 keystroke either.
 
+That capture also declares `systemKeys`, asking for `alt+tab` and `alt+f4` as well.
+Asking is not getting: it needs Chromium, *document* fullscreen and the
+`keymap.captureSystemKeys` setting, which is off by default — see
+[system-key capture](../architecture/keybindings.mdx#system-key-capture). Pointer
+lock is requested with `unadjustedMovement: true`, which is the real "raw input" of
+a shooter's settings menu — movement before the OS applies pointer acceleration —
+falling back to a plain lock where that is unsupported.
+
 ### The mouse is not in the table, and the grenade keys changed
 
 `controls.ts` binds keyboard codes; the two mouse buttons are handled directly in

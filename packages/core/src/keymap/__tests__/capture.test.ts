@@ -175,3 +175,49 @@ describe('releaseCapture', () => {
     expect(getCapture()).toMatchObject({ viewId: 'editor.buffer', mode: 'keyboard' });
   });
 });
+
+describe('systemKeys', () => {
+  it('carries the request through to the published state', () => {
+    // `canHoldSystemKeys` reads this off the live capture, so a flag lost between
+    // the request and the snapshot would silently disable the whole feature —
+    // and it would fail *open*, looking exactly like an unsupported browser.
+    const game = instanceOf('hassault.play');
+    focus(game);
+    requestCapture({
+      mode: 'full',
+      escape: 'passthrough',
+      systemKeys: true,
+      instanceId: game,
+      viewId: 'hassault.play',
+    });
+    expect(getCapture()).toMatchObject({ systemKeys: true });
+  });
+
+  it('defaults to false when a pane does not ask', () => {
+    // Absent must never read as "yes": every pane that predates the flag, and
+    // every plugin, has to keep the OS's chords working.
+    const editor = instanceOf('editor.buffer');
+    focus(editor);
+    requestCapture({
+      mode: 'keyboard',
+      escape: 'release',
+      instanceId: editor,
+      viewId: 'editor.buffer',
+    });
+    expect(getCapture()).toMatchObject({ systemKeys: false });
+  });
+
+  it('does not survive a release', () => {
+    const game = instanceOf('hassault.play');
+    focus(game);
+    requestCapture({
+      mode: 'full',
+      escape: 'passthrough',
+      systemKeys: true,
+      instanceId: game,
+      viewId: 'hassault.play',
+    });
+    releaseCapture(game);
+    expect(getCapture()).toBeNull();
+  });
+});

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 
+import { revealSection } from '../../../layout/controller';
 import { onTrainingEvent, watchRun, type TrainingEventMap } from '../client';
 
 const dim = { color: 'var(--text-dim)' } as const;
@@ -198,12 +199,34 @@ export function MetricsPane() {
         </select>
       </div>
       <div style={{ flex: 1, padding: '0.5rem' }}>
-        {charts.length === 0 && (
-          <div style={{ fontSize: '0.8rem', ...dim }}>
-            No metrics yet — call <code>horrible_train.log(step=i, loss=…)</code> in a training loop
-            and curves stream here live.
-          </div>
-        )}
+        {/*
+          Two different facts, which one paragraph used to conflate: nothing has
+          ever reported to this node, versus a run is selected and simply hasn't
+          logged a scalar yet. The first is answered by starting a run, the second
+          by adding a `log` call — telling someone with no projects at all to add
+          a line to a training loop they don't have is the dead end here.
+        */}
+        {charts.length === 0 &&
+          (runIds.length === 0 ? (
+            <div style={{ fontSize: '0.8rem', display: 'grid', gap: '0.5rem', ...dim }}>
+              <div>No training runs have reported to this node yet.</div>
+              <div>
+                <button onClick={() => revealSection('projects', 'explorer.home')}>
+                  Browse training projects
+                </button>
+              </div>
+              <div>
+                Once a run calls <code>horrible_train.log(step=i, loss=…)</code>, its curves stream
+                here live.
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: '0.8rem', ...dim }}>
+              <strong>{run?.name ?? active}</strong> hasn&apos;t logged a scalar yet — call{' '}
+              <code>horrible_train.log(step=i, loss=…)</code> in its training loop and curves stream
+              here live.
+            </div>
+          ))}
         {charts.map(([name, series]) => (
           <MetricChart
             key={`${active}:${name}`}

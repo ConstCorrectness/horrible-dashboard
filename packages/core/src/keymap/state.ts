@@ -12,7 +12,8 @@ import { dialogsStore } from '../dialogs';
 import { layoutStore } from '../layout/store';
 import { findPaneAnywhere } from '../layout/model';
 import { registry, type KeybindingDecl } from '../registry';
-import { getCapture } from './capture';
+import { captureStore, getCapture } from './capture';
+import { canHoldSystemKeys } from './keyboard-lock';
 import type { KeyContext } from './context';
 import { checkReserved } from './reserved';
 import { type ResolvedBinding } from './resolve';
@@ -95,6 +96,10 @@ export function readKeyContext(): KeyContext {
     // is filling the screen", and a presented window is that just as much as a
     // fullscreened centre area is.
     fullscreenArea: frame.fullscreenAreaId !== null || frame.presentedInstanceId !== null,
+    // Not "did a pane ask for it" — whether the lock is actually in force right
+    // now. `reserved.ts` reads this to stop reporting alt+tab as unreachable, and
+    // reporting a capability we don't have is the failure that table exists for.
+    keyboardLock: canHoldSystemKeys(),
     windowFocused: frame.focusedWindowId !== null,
     desktopMode: frame.mode,
     shellView,
@@ -135,15 +140,31 @@ export const keyContextStore = {
 let unwatch: (() => void)[] = [];
 
 function startWatching(): void {
-  unwatch = [layoutStore.subscribe(emitContext), dialogsStore.subscribe(emitContext)];
+  unwatch = [
+    layoutStore.subscribe(emitContext),
+    dialogsStore.subscribe(emitContext),
+    // Capture is not implied by a layout dispatch. A pane takes the keyboard
+    // *after* it is focused (hassault grabs on a canvas click, with focus
+    // already settled), so `capture`, `captureView` and `keyboardLock` would
+    // otherwise change with nothing re-reading them. The dispatcher is unaffected
+    // — it calls `readKeyContext()` fresh per keystroke — but every reactive
+    // consumer is, which is why the Shortcuts badge could describe a capture that
+    // had already started.
+    captureStore.subscribe(emitContext),
+  ];
   if (typeof document !== 'undefined') {
     // focusin/focusout are the only signal for `textInput` — DOM focus moves
     // without any store dispatch (Tab, autofocus, a pane focusing its editor).
     document.addEventListener('focusin', emitContext);
     document.addEventListener('focusout', emitContext);
+    // `keyboardLock` is false the moment the document leaves fullscreen, and
+    // leaving is something the *browser* can do on its own (Escape, F11), with no
+    // store dispatch to notice it.
+    document.addEventListener('fullscreenchange', emitContext);
     unwatch.push(() => {
       document.removeEventListener('focusin', emitContext);
       document.removeEventListener('focusout', emitContext);
+      document.removeEventListener('fullscreenchange', emitContext);
     });
   }
 }
