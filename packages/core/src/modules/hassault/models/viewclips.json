@@ -59,30 +59,45 @@
     "reload": [
       { "t": 0, "pose": {} },
       {
-        "t": 0.18,
-        "_comment": "Off the handguard, down to the magazine well.",
-        "pose": { "support": [0.12, -0.42, 0.55], "supportRoll": 0.6 }
+        "t": 0.16,
+        "_comment": "FN FAL reload: support hand moves off handguard down to magazine release.",
+        "pose": { "support": [0.15, -0.38, 0.45], "supportRoll": 0.5 }
       },
       {
-        "t": 0.35,
-        "_comment": "Magazine out, and away.",
-        "pose": { "support": [0.2, -0.75, 0.5], "supportRoll": 0.9 }
+        "t": 0.32,
+        "_comment": "Magazine unlocked and pulled down and forward out of receiver.",
+        "pose": { "support": [0.22, -0.78, 0.42], "supportRoll": 0.85 }
       },
       {
-        "t": 0.55,
-        "_comment": "The fresh one, coming up.",
-        "pose": { "support": [0.16, -0.55, 0.52], "supportRoll": 0.7 }
+        "t": 0.48,
+        "_comment": "Fresh magazine retrieved and aligned with magazine well.",
+        "pose": { "support": [0.18, -0.52, 0.48], "supportRoll": 0.65 }
+      },
+      {
+        "t": 0.58,
+        "_comment": "Fresh magazine firmly inserted and locked into receiver.",
+        "pose": { "support": [0.12, -0.32, 0.5], "supportRoll": 0.45 }
       },
       {
         "t": 0.72,
-        "_comment": "Charging handle — the primary hand comes off the grip for a moment, which is the beat that makes a reload read as mechanical rather than as a dip.",
-        "pose": {
-          "primary": [0.05, 0.12, -0.3],
-          "support": [0.02, -0.12, 0.1],
-          "primaryRoll": 0.25
-        }
+        "_comment": "Support hand moves up to left-side charging handle.",
+        "pose": { "support": [0.28, -0.15, -0.12], "supportRoll": 0.35 }
       },
-      { "t": 0.9, "pose": { "support": [0, -0.04, 0.03] } },
+      {
+        "t": 0.78,
+        "_comment": "Charging handle racked backward, compressing bolt spring.",
+        "pose": { "support": [0.32, -0.12, 0.05], "supportRoll": 0.4 }
+      },
+      {
+        "t": 0.84,
+        "_comment": "Charging handle released, bolt snaps forward chambering round.",
+        "pose": { "support": [0.26, -0.16, -0.1], "supportRoll": 0.3 }
+      },
+      {
+        "t": 0.92,
+        "_comment": "Support hand returning to forward handguard grip.",
+        "pose": { "support": [0.08, -0.06, 0.04], "supportRoll": 0.1 }
+      },
       { "t": 1, "pose": {} }
     ],
     "inspect": [

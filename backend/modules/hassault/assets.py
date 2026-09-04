@@ -1,209 +1,170 @@
-"""The map catalog: maps this app ships, plus an AssaultCube install if there is one.
+"""HorribleAssault 3D Asset Cache & Sync Manager.
 
-AssaultCube's **content** is copyright: freely redistributable only as part of an
-unmodified AssaultCube package, and never commercially. Its *source* is zlib-like,
-which is why the map reader could be ported, but no map, texture, model or sound
-may be committed to this repo — which is public, deploys to GitHub Pages, and ships
-a game server image to Fly.
-
-That restriction is about *their* content. So the game ships **its own** maps
-(`mapsource.py`), built from declarative source and playable with nothing
-installed, and **supports** AssaultCube content without ever bundling it: point
-`hassault.installPath` at your own copy and its 44 maps appear alongside them.
-Same precedent as SearXNG (AGPL, supported but never bundled) and pypdf-over-PyMuPDF.
-
-The two catalogs share one flat namespace, which is safe only because every
-bundled map is named `hd_*` and bundled maps are resolved first — neither side
-can shadow the other, whatever a user drops into their install directory.
-
-Everything served from the install goes through `resolve_asset`, which refuses to
-escape the package root — an install path is user-supplied configuration, and the
-map/texture names that index into it come from files we did not write.
+Manages on-disk caching in `.cache/assets` and syncing into `apps/web/public/`
+so large binary GLBs are kept out of git history while remaining instantly
+available offline.
 """
 
 from __future__ import annotations
 
-from functools import lru_cache
+import asyncio
+import hashlib
+import json
+import logging
+import os
+import shutil
 from pathlib import Path
+from typing import Any
 
-from backend import paths
-from backend.modules.hassault import drafts, mapsource
-from backend.modules.hassault.cgz import CgzMap, read_cgz
-from backend.modules.settings.routes import get_value
+import httpx
 
-# Where AssaultCube usually lands, per platform. Only used when the setting is
-# blank; a version-suffixed directory means the glob has to do the walking.
-_CANDIDATE_GLOBS = [
-    "C:/Program Files (x86)/AssaultCube*",
-    "C:/Program Files/AssaultCube*",
-    "/usr/share/assaultcube",
-    "/usr/local/share/assaultcube",
-    "/opt/assaultcube",
-    "~/AssaultCube*",
-    "~/.assaultcube",
-    "/Applications/AssaultCube.app/Contents/gamedata",
-]
+from backend.paths import cache_dir, repo_root
+
+logger = logging.getLogger(__name__)
 
 
-def _looks_like_install(path: Path) -> bool:
-    """A directory is an install if it has the package tree we actually read."""
-    return (path / "packages" / "maps").is_dir()
-
-
-@lru_cache(maxsize=8)
-def _autodetect(_cache_key: str) -> str | None:
-    for pattern in _CANDIDATE_GLOBS:
-        expanded = Path(pattern).expanduser()
-        parent, glob = expanded.parent, expanded.name
-        if not parent.is_dir():
-            continue
-        try:
-            matches = sorted(parent.glob(glob), reverse=True)  # newest version first
-        except OSError:
-            continue
-        for match in matches:
-            if match.is_dir() and _looks_like_install(match):
-                return str(match)
+def _find_manifest() -> Path | None:
+    root = repo_root() or Path.cwd()
+    candidates = [
+        root / "assets" / "manifest.json",
+        root / "packages" / "core" / "src" / "modules" / "hassault" / "assets.manifest.json",
+    ]
+    for c in candidates:
+        if c.is_file():
+            return c
     return None
 
 
-def install_root() -> Path | None:
-    """The AssaultCube install to read content from, or None if there isn't one.
-
-    An explicit `hassault.installPath` setting always wins; otherwise the usual
-    per-platform locations are probed. Returns None rather than raising so the
-    module loads (and can explain itself in the UI) with no install present.
-    """
-    configured = str(get_value("hassault.installPath", "") or "").strip()
-    if configured:
-        path = Path(configured).expanduser()
-        return path if _looks_like_install(path) else None
-    # Keyed on the resolved data dir so a test pointing elsewhere isn't served a
-    # cached answer from the developer's real machine. The value is a cache key
-    # here, not a location — the install being looked for is AssaultCube's, not ours.
-    detected = _autodetect(str(paths.data_dir()))
-    return Path(detected) if detected else None
-
-
-def packages_root() -> Path | None:
-    root = install_root()
-    return (root / "packages") if root else None
-
-
-def map_dirs() -> list[Path]:
-    """Directories holding `.cgz` maps, official first."""
-    packages = packages_root()
-    if packages is None:
-        return []
-    maps = packages / "maps"
-    found = [maps / "official", maps / "servermaps", maps]
-    return [d for d in found if d.is_dir()]
-
-
-def find_map(name: str) -> Path | None:
-    """Locate a map by bare name (no extension, no path).
-
-    The name indexes into the install, so it is validated rather than trusted:
-    anything with a separator or a dot is refused outright instead of being
-    normalized, because a "cleaned" traversal attempt is still an attempt.
-    """
-    if not name or not all(ch.isalnum() or ch in "-_" for ch in name):
-        return None
-    for directory in map_dirs():
-        candidate = directory / f"{name}.cgz"
-        if candidate.is_file():
-            return candidate
-    return None
-
-
-def list_maps() -> list[dict[str, str]]:
-    """Every playable map: the bundled ones first, then the install's.
-
-    `size` is the size of the file each map actually comes from — a `.cgz` for an
-    install map, the JSON source for a bundled one. They are not comparable
-    numbers, which is what `source` is for.
-    """
-    seen: dict[str, dict[str, str]] = {}
-    for name in mapsource.bundled_names():
-        path = mapsource.MAPS_DIR / f"{name}.json"
-        seen[name] = {
-            "name": name,
-            "source": "bundled",
-            "size": str(path.stat().st_size if path.is_file() else 0),
-        }
-    for directory in map_dirs():
-        try:
-            entries = sorted(directory.glob("*.cgz"))
-        except OSError:
-            continue
-        for path in entries:
-            if path.stem in seen:
-                continue
-            seen[path.stem] = {
-                "name": path.stem,
-                "source": path.parent.name,
-                "size": str(path.stat().st_size),
-            }
-    return list(seen.values())
-
-
-# Parsed maps, keyed by path + mtime. The grid decode is a per-cube Python loop,
-# and a map is immutable on disk for as long as anyone cares. Small on purpose:
-# a running match and a map being browsed in the pane are the realistic worst
-# case, and each 256x256 map is ~590 KB of planes.
-_MAP_CACHE_SIZE = 3
-_map_cache: dict[str, CgzMap] = {}
-
-
-def load_map(name: str) -> CgzMap | None:
-    """Parse a map by bare name, or `None` if no catalog has such a map.
-
-    Raises `CgzError` for a map that exists but cannot be read — the two failures
-    want different messages, so they are not collapsed into one `None`.
-
-    Bundled maps are resolved first. They are the ones this project controls, and
-    an install is a directory anyone can drop a file into; letting a stray
-    `hd_pit.cgz` there decide what the game loads would be a surprise with no
-    upside, since the names are ours by construction.
-    """
-    # A map being edited resolves first, and it is the reason this function is
-    # the only place that needed to change for the designer to work: every map
-    # route, and all three clients' boot paths, go through here. A draft never
-    # touches the filesystem, so `find_map`'s path validation is untouched by it.
-    if name.startswith(drafts.PREFIX):
-        return drafts.compiled(name[len(drafts.PREFIX) :])
-
-    bundled = mapsource.load_bundled(name)
-    if bundled is not None:
-        return bundled
-    path = find_map(name)
-    if path is None:
-        return None
-    key = f"{path}:{path.stat().st_mtime_ns}"
-    cached = _map_cache.get(key)
-    if cached is not None:
-        return cached
-    parsed = read_cgz(path)
-    if len(_map_cache) >= _MAP_CACHE_SIZE:
-        _map_cache.clear()
-    _map_cache[key] = parsed
-    return parsed
-
-
-def resolve_asset(relative: str) -> Path | None:
-    """Resolve a path under `packages/`, refusing anything that escapes it.
-
-    `Path.resolve()` collapses `..` and follows symlinks, so comparing the
-    resolved child against the resolved root is what actually decides this —
-    checking the raw string for ".." would miss both symlinks and encoded forms.
-    """
-    packages = packages_root()
-    if packages is None or not relative:
-        return None
-    root = packages.resolve()
+def get_manifest_data() -> dict[str, Any]:
+    p = _find_manifest()
+    if not p:
+        return {"version": 1, "baseUrl": "", "assets": {}}
     try:
-        target = (root / relative).resolve()
-        target.relative_to(root)
-    except (ValueError, OSError):
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.warning("Failed to parse assets manifest %s: %s", p, e)
+        return {"version": 1, "baseUrl": "", "assets": {}}
+
+
+def sha256_file(path: Path) -> str | None:
+    if not path.is_file():
         return None
-    return target if target.is_file() else None
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while chunk := f.read(65536):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def get_assets_status() -> dict[str, Any]:
+    """Inspect local files against the asset manifest."""
+    root = repo_root() or Path.cwd()
+    data = get_manifest_data()
+    assets = data.get("assets", {})
+    cache_base = cache_dir() / "assets"
+
+    results: list[dict[str, Any]] = []
+    all_ok = True
+
+    for key, item in assets.items():
+        dest = root / item.get("destination", f"apps/web/public/{item['filename']}")
+        cache_dest = cache_base / item["filename"]
+
+        installed = dest.is_file()
+        installed_hash = sha256_file(dest) if installed else None
+        cached = cache_dest.is_file()
+        cached_hash = sha256_file(cache_dest) if cached else None
+
+        valid = installed and (installed_hash == item.get("sha256"))
+        if not valid:
+            all_ok = False
+
+        results.append(
+            {
+                "id": key,
+                "filename": item["filename"],
+                "category": item.get("category", "model"),
+                "expected_size": item.get("size", 0),
+                "expected_sha256": item.get("sha256", ""),
+                "installed": installed,
+                "installed_valid": valid,
+                "cached": cached,
+                "cached_valid": cached and (cached_hash == item.get("sha256")),
+            }
+        )
+
+    return {
+        "status": "ready" if all_ok else "missing_assets",
+        "total_assets": len(assets),
+        "all_valid": all_ok,
+        "assets": results,
+    }
+
+
+async def sync_assets(force: bool = False) -> dict[str, Any]:
+    """Sync missing or outdated assets from remote storage into cache and public folder."""
+    root = repo_root() or Path.cwd()
+    data = get_manifest_data()
+    base_url = os.environ.get("HORRIBLE_ASSETS_BASE_URL") or data.get("baseUrl", "")
+    assets = data.get("assets", {})
+    cache_base = cache_dir() / "assets"
+    cache_base.mkdir(parents=True, exist_ok=True)
+
+    public_base = root / "apps" / "web" / "public"
+    public_base.mkdir(parents=True, exist_ok=True)
+
+    synced: list[str] = []
+    errors: list[str] = []
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
+        for key, item in assets.items():
+            filename = item["filename"]
+            expected_hash = item.get("sha256", "")
+            dest = root / item.get("destination", f"apps/web/public/{filename}")
+            cache_file = cache_base / filename
+
+            # Check if destination already valid
+            if not force and dest.is_file() and sha256_file(dest) == expected_hash:
+                continue
+
+            # Check if cache file has valid copy
+            if cache_file.is_file() and sha256_file(cache_file) == expected_hash:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(cache_file, dest)
+                synced.append(filename)
+                continue
+
+            # Download from remote
+            if not base_url:
+                errors.append(f"Cannot download {filename}: no remote baseUrl configured")
+                continue
+
+            remote_url = f"{base_url.rstrip('/')}/{filename}"
+            logger.info("Downloading HorribleAssault asset %s from %s", filename, remote_url)
+            try:
+                resp = await client.get(remote_url)
+                resp.raise_for_status()
+                content = resp.content
+
+                downloaded_hash = hashlib.sha256(content).hexdigest()
+                if expected_hash and downloaded_hash != expected_hash:
+                    logger.warning(
+                        "Hash mismatch for downloaded %s (expected %s, got %s)",
+                        filename,
+                        expected_hash,
+                        downloaded_hash,
+                    )
+
+                cache_file.write_bytes(content)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(cache_file, dest)
+                synced.append(filename)
+            except Exception as exc:
+                logger.error("Failed to download %s: %s", remote_url, exc)
+                errors.append(f"{filename}: {exc}")
+
+    return {
+        "success": len(errors) == 0,
+        "synced": synced,
+        "errors": errors,
+    }

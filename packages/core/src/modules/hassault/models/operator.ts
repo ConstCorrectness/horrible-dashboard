@@ -36,6 +36,8 @@ let pending: Promise<OperatorAsset> | null = null;
  * clears the cache so a later attempt can retry rather than inheriting the
  * rejection forever.
  */
+import { getCachedAssetUrl } from './assetCache';
+
 export function loadOperator(url: string = OPERATOR_URL): Promise<OperatorAsset> {
   if (pending) return pending;
   pending = (async () => {
@@ -43,7 +45,8 @@ export function loadOperator(url: string = OPERATOR_URL): Promise<OperatorAsset>
       import('three/examples/jsm/loaders/GLTFLoader.js'),
       import('three/examples/jsm/utils/SkeletonUtils.js'),
     ]);
-    const gltf = await new GLTFLoader().loadAsync(url);
+    const targetUrl = await getCachedAssetUrl(url);
+    const gltf = await new GLTFLoader().loadAsync(targetUrl);
     const clips = new Map<OperatorClip, THREE.AnimationClip>();
     for (const clip of gltf.animations) clips.set(clip.name as OperatorClip, clip);
     return { prototype: gltf.scene, clips, clone: SkeletonUtils.clone };

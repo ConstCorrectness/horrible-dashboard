@@ -621,6 +621,7 @@ export function HorribleAssaultPanel() {
   if (nadesRef.current === null) nadesRef.current = new GrenadeController();
   if (rangeRef.current === null) rangeRef.current = new TrainingRange();
   if (audioRef.current === null) audioRef.current = new GameAudio();
+  const wasReloadingRef = useRef(false);
 
   // The frame loop is built once and never re-created, so anything it needs to
   // read per-frame from React state has to arrive by ref.
@@ -1350,9 +1351,24 @@ export function HorribleAssaultPanel() {
               // fall-damage rule: you hear that a drop was expensive.
               audio.own('land', Math.min(1, 0.35 + player.fallSpeed / (JUMP_SPEED * 2)));
             }
-            // Your own gun, in its own voice — and locally, because a shot that
-            // waited for the server to describe it would arrive after the recoil.
             if (fired) audio.own('shot', 0.55, shotsRef.current?.weapon);
+
+            const isReloading = online
+              ? (session?.state.you?.reloading ?? false)
+              : localReloadingRef.current;
+            if (isReloading && !wasReloadingRef.current) {
+              wasReloadingRef.current = true;
+              audio.own('reload_magout', 0.65);
+              const rTime = (shotsRef.current?.weapon?.reloadTime ?? 1.8) * 1000;
+              setTimeout(() => {
+                if (wasReloadingRef.current) audio.own('reload_magin', 0.7);
+              }, Math.round(rTime * 0.45));
+              setTimeout(() => {
+                if (wasReloadingRef.current) audio.own('reload_bolt', 0.75);
+              }, Math.round(rTime * 0.8));
+            } else if (!isReloading && wasReloadingRef.current) {
+              wasReloadingRef.current = false;
+            }
           }
         }
 

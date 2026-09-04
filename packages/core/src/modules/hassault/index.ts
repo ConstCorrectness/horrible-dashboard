@@ -2,6 +2,12 @@ import { registry, type ModuleManifest } from '../../registry';
 import { registerNotificationAction } from '../notifications';
 import { DeveloperConsole } from './console';
 import { HorribleAssaultPanel } from './HorribleAssaultPanel';
+import {
+  ModelStudioPanel,
+  ModelViewerPanel,
+  ModelEditorPanel,
+  AnimationEditorPanel,
+} from './studio/ModelStudioPanel';
 import { requestJoin } from './invite-notify';
 
 /**
@@ -52,7 +58,7 @@ export const hassaultModule: ModuleManifest = {
       // fullscreen too — which is what makes pointer lock and a full field of
       // view behave the way the game assumes.
       fullscreen: true,
-      icon: '🔫',
+      icon: '⌖',
       singleton: true,
     },
     {
@@ -60,7 +66,39 @@ export const hassaultModule: ModuleManifest = {
       title: 'hAssault Developer Console',
       component: DeveloperConsole,
       role: 'tool',
-      icon: '💻',
+      icon: '⌨',
+      singleton: false,
+    },
+    {
+      id: 'hassault.studio',
+      title: 'hAssault Model Studio',
+      component: ModelStudioPanel,
+      role: 'document',
+      icon: '◈',
+      singleton: false,
+    },
+    {
+      id: 'hassault.modelViewer',
+      title: 'hAssault Model Viewer',
+      component: ModelViewerPanel,
+      role: 'document',
+      icon: '◇',
+      singleton: false,
+    },
+    {
+      id: 'hassault.modelEditor',
+      title: 'hAssault Model Editor',
+      component: ModelEditorPanel,
+      role: 'document',
+      icon: '⚙',
+      singleton: false,
+    },
+    {
+      id: 'hassault.animEditor',
+      title: 'hAssault Animation Editor',
+      component: AnimationEditorPanel,
+      role: 'document',
+      icon: '▷',
       singleton: false,
     },
   ],
@@ -74,6 +112,26 @@ export const hassaultModule: ModuleManifest = {
       id: 'hassault.openConsole',
       title: 'HorribleAssault: Open Developer Console',
       run: () => registry.openPanel('hassault.console'),
+    },
+    {
+      id: 'hassault.openStudio',
+      title: 'HorribleAssault: Open Model Studio',
+      run: () => registry.openPanel('hassault.studio'),
+    },
+    {
+      id: 'hassault.openModelViewer',
+      title: 'HorribleAssault: Open Model Viewer',
+      run: () => registry.openPanel('hassault.modelViewer'),
+    },
+    {
+      id: 'hassault.openModelEditor',
+      title: 'HorribleAssault: Open Model Editor',
+      run: () => registry.openPanel('hassault.modelEditor'),
+    },
+    {
+      id: 'hassault.openAnimEditor',
+      title: 'HorribleAssault: Open Animation Editor',
+      run: () => registry.openPanel('hassault.animEditor'),
     },
   ],
   settings: [

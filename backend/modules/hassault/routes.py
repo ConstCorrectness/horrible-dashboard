@@ -17,11 +17,11 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Body, HTTPException, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from backend.paths import data_dir
+from backend.paths import data_dir, repo_root
 from backend.version import app_version
 from backend.modules.hassault import (
     assets,
@@ -1825,3 +1825,237 @@ async def delete_console_macro(name: str) -> dict[str, bool]:
     if not ok:
         raise HTTPException(status_code=404, detail="Macro not found or is builtin")
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Model Viewer, Model Editor, and Animation Editor API
+# ---------------------------------------------------------------------------
+
+class ArtModel(BaseModel):
+    id: str
+    name: str
+    category: str
+    format: str
+    file_path: str
+    size_bytes: int
+    textures: list[str] = []
+    animations: list[str] = []
+    is_compiled: bool = False
+
+
+@router.get("/art/models")
+async def list_art_models() -> dict[str, list[ArtModel]]:
+    """Scan and return all raw and compiled models in the repository."""
+    from backend.paths import repo_root
+    root = repo_root() or Path.cwd()
+    art_dir = root / "assets" / "horribleAssault"
+    public_dir = root / "apps" / "web" / "public"
+
+    items: list[ArtModel] = []
+
+    # 1. Compiled GLBs in apps/web/public
+    if public_dir.is_dir():
+        for glb in sorted(public_dir.glob("hassault-*.glb")):
+            cat = "weapon" if "weapon" in glb.name else "arms" if "arms" in glb.name else "operator"
+            items.append(
+                ArtModel(
+                    id=glb.stem,
+                    name=glb.name,
+                    category=f"compiled_{cat}",
+                    format="glb",
+                    file_path=str(glb.relative_to(root)),
+                    size_bytes=glb.stat().st_size,
+                    is_compiled=True,
+                )
+            )
+
+    # 2. Raw assets in assets/horribleAssault
+    if art_dir.is_dir():
+        # Scanned subdirectories (weapons, arms, characters)
+        for sub in sorted(art_dir.iterdir()):
+            if sub.is_dir():
+                if sub.name == "animations":
+                    for fbx in sorted(sub.glob("*.fbx")):
+                        items.append(
+                            ArtModel(
+                                id=f"anim_{fbx.stem}",
+                                name=fbx.stem,
+                                category="animation",
+                                format="fbx",
+                                file_path=str(fbx.relative_to(root)),
+                                size_bytes=fbx.stat().st_size,
+                                animations=[fbx.stem],
+                            )
+                        )
+                    continue
+
+                if sub.name == "buildings":
+                    for bld in sorted(sub.iterdir()):
+                        if bld.is_dir():
+                            mfiles = list(bld.glob("source/*.fbx")) + list(bld.glob("source/*.obj")) + list(bld.glob("*.fbx"))
+                            tex = [str(t.relative_to(root)) for t in bld.glob("textures/*.*")]
+                            for mf in mfiles:
+                                items.append(
+                                    ArtModel(
+                                        id=f"map_{bld.name}_{mf.stem}",
+                                        name=f"{bld.name} ({mf.name})",
+                                        category="map",
+                                        format=mf.suffix.lstrip(".").lower(),
+                                        file_path=str(mf.relative_to(root)),
+                                        size_bytes=mf.stat().st_size,
+                                        textures=tex,
+                                    )
+                                )
+                    continue
+
+                # Look for model files inside sub
+                model_files = list(sub.glob("source/*.fbx")) + list(sub.glob("source/*.obj")) + list(sub.glob("*.fbx"))
+                textures = [str(t.relative_to(root)) for t in sub.glob("textures/*.*")]
+                
+                cat = "arms" if "arms" in sub.name.lower() else "weapon" if any(w in sub.name.lower() for w in ["m4", "fal", "beretta", "remington", "svu", "carbine"]) else "character"
+                for mf in model_files:
+                    items.append(
+                        ArtModel(
+                            id=f"{sub.name}_{mf.stem}",
+                            name=f"{sub.name} ({mf.name})",
+                            category=cat,
+                            format=mf.suffix.lstrip(".").lower(),
+                            file_path=str(mf.relative_to(root)),
+                            size_bytes=mf.stat().st_size,
+                            textures=textures,
+                        )
+                    )
+            elif sub.is_file() and sub.suffix.lower() in [".fbx", ".glb", ".gltf"]:
+                cat = "operator" if "swat" in sub.name.lower() else "character"
+                items.append(
+                    ArtModel(
+                        id=sub.stem,
+                        name=sub.name,
+                        category=cat,
+                        format=sub.suffix.lstrip(".").lower(),
+                        file_path=str(sub.relative_to(root)),
+                        size_bytes=sub.stat().st_size,
+                    )
+                )
+
+    return {"models": items}
+
+
+@router.get("/art/file")
+async def get_art_file(path: str) -> FileResponse:
+    """Stream an asset file safely with proper MIME type."""
+    from backend.paths import repo_root
+    root = (repo_root() or Path.cwd()).resolve()
+    target = (root / path).resolve()
+
+    # Prevent directory traversal: target must be inside root and under assets or apps/web/public
+    art_dir = (root / "assets" / "horribleAssault").resolve()
+    public_dir = (root / "apps" / "web" / "public").resolve()
+
+    try:
+        target.relative_to(art_dir)
+    except ValueError:
+        try:
+            target.relative_to(public_dir)
+        except ValueError:
+            raise HTTPException(status_code=403, detail="Access denied: path outside allowed asset directories")
+
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+
+    ext = target.suffix.lower()
+    media_types = {
+        ".glb": "model/gltf-binary",
+        ".gltf": "model/gltf+json",
+        ".fbx": "application/octet-stream",
+        ".obj": "text/plain",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".json": "application/json",
+    }
+    media_type = media_types.get(ext, "application/octet-stream")
+    return FileResponse(target, media_type=media_type)
+
+
+@router.get("/studio/maps")
+async def list_studio_maps():
+    """List all saved Studio level design maps."""
+    root = repo_root() or Path.cwd()
+    maps_dir = root / "assets" / "horribleAssault" / "maps"
+    maps_dir.mkdir(parents=True, exist_ok=True)
+    results = []
+    for p in sorted(maps_dir.glob("*.json")):
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            results.append({
+                "id": p.stem,
+                "name": data.get("name", p.stem),
+                "nodes_count": len(data.get("nodes", [])),
+                "version": data.get("version", 1),
+                "created_at": data.get("created_at", ""),
+                "file_path": str(p.relative_to(root)),
+            })
+        except Exception as e:
+            logger.warning("Failed to parse studio map %s: %s", p, e)
+    return results
+
+
+@router.get("/studio/maps/{map_id}")
+async def get_studio_map(map_id: str):
+    """Get a specific Studio level design map by ID."""
+    root = repo_root() or Path.cwd()
+    maps_dir = root / "assets" / "horribleAssault" / "maps"
+    p = maps_dir / f"{map_id}.json"
+    if not p.is_file():
+        p = maps_dir / map_id
+    if not p.is_file():
+        raise HTTPException(status_code=404, detail=f"Studio map '{map_id}' not found")
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reading map: {e}")
+
+
+@router.post("/studio/maps/{map_id}")
+async def save_studio_map(map_id: str, scene: dict = Body(...)):
+    """Save or update a Studio level design map."""
+    root = repo_root() or Path.cwd()
+    maps_dir = root / "assets" / "horribleAssault" / "maps"
+    maps_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = "".join(c for c in map_id if c.isalnum() or c in ("-", "_")).strip()
+    if not safe_name:
+        safe_name = "custom_map"
+    target = maps_dir / f"{safe_name}.json"
+    try:
+        with open(target, "w", encoding="utf-8") as f:
+            json.dump(scene, f, indent=2)
+        return {
+            "status": "saved",
+            "id": safe_name,
+            "path": str(target.relative_to(root)),
+            "nodes_count": len(scene.get("nodes", [])),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error saving map: {e}")
+
+
+@router.get("/assets/status")
+async def get_hassault_assets_status():
+    """Check integrity and availability of HorribleAssault 3D models."""
+    from backend.modules.hassault.assets import get_assets_status
+    return get_assets_status()
+
+
+@router.post("/assets/sync")
+async def sync_hassault_assets(force: bool = False):
+    """Pull missing or corrupted 3D models from remote storage into local cache."""
+    from backend.modules.hassault.assets import sync_assets
+    return await sync_assets(force=force)
+
+
+
+
