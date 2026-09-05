@@ -212,6 +212,11 @@ def _seed_package_rows():
     )
 
 
+def _seed_rows(rows: list[dict[str, object]]) -> None:
+    """Seed an arbitrary symbol set under one source, for the fallback cases."""
+    symbol_store.replace_source("pkg:test", "python", rows)
+
+
 def test_query_modules_ranks_shallow_first():
     _seed_package_rows()
     names = [r["module"] for r in symbol_store.query_modules("python", "vllm")]
@@ -235,6 +240,61 @@ def test_query_import_members_accepts_an_empty_prefix():
         r["symbol"] for r in symbol_store.query_import_members("python", "vllm", "")
     ]
     assert names == sorted(["LLM", "SamplingParams"], key=lambda s: (len(s), s))
+
+
+def test_query_import_members_falls_back_to_submodules_when_the_package_has_none():
+    """`from transformers import <Tab>` used to answer with nothing.
+
+    `imp` is where a symbol is *defined*, and a package that assembles its public
+    surface in `__init__.py` has no rows under its own name — so the exact match was
+    empty for transformers, numpy and torch alike while the index held hundreds of
+    their symbols.
+    """
+    _seed_rows(
+        [
+            {"symbol": "AutoModel", "kind": "class", "imp": "hf.models.auto"},
+            {"symbol": "pipeline", "kind": "function", "imp": "hf.pipelines"},
+        ]
+    )
+    rows = symbol_store.query_import_members("python", "hf")
+    assert {r["symbol"] for r in rows} == {"AutoModel", "pipeline"}
+    # Legible as a guess: the row says where the name actually lives.
+    assert {r["detail"] for r in rows} == {"hf.models.auto", "hf.pipelines"}
+
+
+def test_query_import_members_never_mixes_a_guess_into_a_real_answer():
+    """The fallback fires only when the exact match is empty, and that is its safety.
+
+    `vllm` genuinely defines `LLM` and genuinely does not re-export `LoRARequest`
+    (it lives at `vllm.lora.request`). Blending submodule names into a package the
+    index already describes correctly would offer an import that fails.
+    """
+    _seed_package_rows()
+    names = {r["symbol"] for r in symbol_store.query_import_members("python", "vllm")}
+    assert names == {"LLM", "SamplingParams"}
+    assert "LoRARequest" not in names
+    # And the submodule is still reachable when named directly.
+    assert [
+        r["symbol"]
+        for r in symbol_store.query_import_members("python", "vllm.lora.request")
+    ] == ["LoRARequest"]
+
+
+def test_query_import_members_prefix_applies_to_the_fallback_too():
+    _seed_rows(
+        [
+            {"symbol": "AutoModel", "kind": "class", "imp": "hf.models.auto"},
+            {"symbol": "pipeline", "kind": "function", "imp": "hf.pipelines"},
+        ]
+    )
+    rows = symbol_store.query_import_members("python", "hf", "Auto")
+    assert [r["symbol"] for r in rows] == ["AutoModel"]
+
+
+def test_query_import_members_does_not_match_a_package_by_prefix():
+    """`hf` must not answer for `hfx`: the boundary is the dot, not the string."""
+    _seed_rows([{"symbol": "Thing", "kind": "class", "imp": "hfx.sub"}])
+    assert symbol_store.query_import_members("python", "hf") == []
 
 
 def test_query_import_members_filters_on_imp_not_module():

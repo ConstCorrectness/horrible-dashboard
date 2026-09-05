@@ -46,7 +46,11 @@ the component.
   same pattern the browser uses for its URL-bar focuser. `mod+s` is a default
   **keybinding → `editor.save`** routed through the shell keybinding service — the
   buffer has no hardcoded save handler, so the key stays rebindable. (`editor.open`
-  quick-open is still to come.) App-level keys route through the shell service;
+  quick-open is still to come.) **`ctrl+shift+space` → `editor.toggleSuggestions`**
+  opens the completion popup, or closes it if it is open — a shell binding rather than
+  a CodeMirror keymap so it is rebindable and listed with the rest, scoped
+  `when: textInput` and acting on whichever view holds the caret (a buffer or a
+  notebook cell). App-level keys route through the shell service;
   **editor-internal keys are CodeMirror keymaps scoped to the view** (they act on
   cursor/selection state, so a global command can't express them): **Tab** accepts an
   open completion popup, else **opens one** where completions could plausibly come from,
@@ -172,9 +176,47 @@ Two rules do real work:
 - **A member completion applies as a bare name**, never through `applyImport`. We are
   already inside the import statement; routing through it would insert a second
   `from vllm import LLM` line above the one being typed.
+- **A package with no rows of its own falls back to its submodules.** `imp` is where a
+  symbol is *defined*, never where it is re-exported from — `transformers` re-exports
+  `AutoModel` out of `transformers.models.auto` — so the exact match answered
+  `from transformers import <Tab>` with **nothing** while the index held 530
+  transformers symbols. Same for numpy and torch: for every package that assembles its
+  public surface in `__init__.py`, which is most large ones. Only packages that define
+  their names directly there (huggingface_hub, sympy) ever worked, which is what made
+  this read as a flaky index rather than a structural miss.
+
+  The fallback fires **only when the exact match is empty**, and that is the whole of
+  its safety. `vllm` really does define `LLM` and really does not re-export
+  `LoRARequest`, so blending submodule names into a package the index already describes
+  correctly would offer an import that fails. Where there is nothing to be wrong about
+  a guess costs nothing; where there is, the precise answer stands alone. Fallback rows
+  carry their defining module in `detail`, so the guess is legible as one.
 
 Modules rank by import **depth** first, so `vllm` beats `vllm.lora.request` — the same
 rationale that tiers the identifier query.
+
+### Opening the popup: three gestures, and why it needed all three
+
+An empty prefix is the case this whole path exists for, and it is also the one nothing
+can auto-trigger on — there is no word to match. So it is answered when the user asks
+(`explicit`), or at the one moment they are unambiguously waiting to be told:
+
+- **Typing the space after the keyword.** `importContextAt` reports `justOpened` when
+  the cursor sits directly after `import`, `from`, a comma or an open paren, and one
+  space at most. That is where VS Code opens its suggest widget, and where a person
+  reaches for it. A *second* space, or a space following a half-typed name, is not
+  that moment — opening on every space in the statement is what the empty-prefix guard
+  originally prevented, and still does.
+- **Tab** — see below.
+- **`ctrl+shift+space`**, the `editor.toggleSuggestions` command. Deliberately **not**
+  CodeMirror's own `ctrl+space`: `keymap/reserved.ts` lists that as the IME toggle on
+  Windows and the input-source switch on macOS, both `preventable: false`. It is exactly
+  the shape of binding that table exists to catch — it never reaches the page, and
+  nothing says why. Toggling rather than only opening, because the same key then
+  dismisses; a popup you can summon but must reach for Escape to close is half a
+  binding. `when: textInput` scopes it to a focused editor surface, and
+  `focusedEditorView()` resolves which one via `EditorView.findFromDOM` — a notebook has
+  one view per cell, and the only one the command can mean is the one holding the caret.
 
 ### Tab opens the popup
 
@@ -186,6 +228,31 @@ the text before the cursor on this line is **not** entirely whitespace (that is
 indentation, unambiguously), and either a word character precedes the cursor or the
 cursor is in an import context. Ghost-text autosuggest keeps its `Prec.highest` Tab, so
 an inline suggestion is still accepted ahead of all of it.
+
+### Notebook cells get the same stack
+
+They did not. `buildCompletion` only ran inside `lspExtension`, and the Tab keymap was
+added by `BufferView` alone — so a **notebook cell** had no completion source unless a
+language server was attached, and no cell ever had the keymap. The visible symptom was
+the one this section is about: `from transformers import ` in a cell offered nothing,
+Tab escaped to browser focus traversal instead of asking, and `ctrl+space` was eaten by
+the IME. Three separate gaps, one indistinguishable outcome.
+
+Both halves now reach a cell, and which one is a real decision:
+
+- With a server, `NotebookLspDoc.cellExtension` returns the LSP extension **plus**
+  `completionKeymap`.
+- Without one, `EditorService.bareCompletion('python')` returns the standalone stack
+  plus the same keymap — that is every cell on a node with no Python server, every cell
+  of a notebook opened before its absolute path resolves, and every cell during the
+  seconds a cold server takes to come up.
+
+They are alternatives and never both, for the reason in the caution above: two live
+`autocompletion()` instances mean one `override` silently replaces the other's sources.
+`useNotebookLsp` picks one and the cell's compartment swaps between them.
+
+`bareCompletion` is on `EditorService` rather than deep-imported because the notebook
+kit is domain-neutral — it knows this contract and nothing else about this module.
 
 ## Backend surface
 

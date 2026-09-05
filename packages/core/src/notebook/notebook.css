@@ -88,15 +88,16 @@
   width: 2.9rem;
   padding: 0.15rem 0 0 0.4rem;
   font-family: var(--font-mono, monospace);
-  font-size: 0.68rem;
+  font-size: var(--fs-meta);
   line-height: 1.2;
   color: var(--text-dim);
   user-select: none;
 }
 
 .nb-gutter-kind {
-  font-size: 0.58rem;
-  letter-spacing: 0.14em;
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-badge);
   text-transform: uppercase;
   opacity: 0.7;
 }
@@ -194,7 +195,7 @@
   gap: 0.1rem;
   margin-top: 0.25rem;
   font-family: var(--font-mono, monospace);
-  font-size: 0.68rem;
+  font-size: var(--fs-meta);
   color: var(--warn);
 }
 
@@ -227,7 +228,7 @@
 }
 
 .nb-output-html {
-  font-size: 0.8rem;
+  font-size: var(--fs-body);
   overflow-x: auto;
 }
 
@@ -238,14 +239,14 @@
 
 .nb-output-unsupported {
   font-family: var(--font-mono, monospace);
-  font-size: 0.68rem;
+  font-size: var(--fs-meta);
   color: var(--text-dim);
 }
 
 /* --- rendered markdown --------------------------------------------------- */
 
 .nb-markdown {
-  font-size: 0.85rem;
+  font-size: var(--fs-body);
   line-height: 1.55;
   padding: 0.1rem 0.15rem;
   cursor: text;
@@ -266,26 +267,28 @@
 .nb-markdown h5,
 .nb-markdown h6 {
   margin: 0.8rem 0 0.35rem;
-  font-weight: 700;
-  letter-spacing: 0.02em;
+  font-weight: var(--fw-bold);
+  /* `normal`: the house style has only two non-zero tracking values and neither
+     belongs on a lowercase heading. */
+  letter-spacing: normal;
   line-height: 1.25;
   color: var(--text);
 }
 
 .nb-markdown h1 {
-  font-size: 1.25rem;
+  font-size: var(--fs-display);
   padding-bottom: 0.25rem;
   border-bottom: 1px solid var(--border);
-  letter-spacing: 0.06em;
+  letter-spacing: var(--tracking-display);
   text-transform: uppercase;
 }
 
 .nb-markdown h2 {
-  font-size: 1.05rem;
+  font-size: var(--fs-lead);
 }
 
 .nb-markdown h3 {
-  font-size: 0.95rem;
+  font-size: var(--fs-body);
 }
 
 .nb-markdown p {
@@ -347,7 +350,7 @@
 .nb-markdown table {
   border-collapse: collapse;
   margin: 0.5rem 0;
-  font-size: 0.8rem;
+  font-size: var(--fs-body);
 }
 
 .nb-markdown th,
@@ -358,8 +361,9 @@
 }
 
 .nb-markdown th {
-  font-size: 0.68rem;
-  letter-spacing: 0.12em;
+  font-size: var(--fs-label);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-badge);
   text-transform: uppercase;
   color: var(--text-dim);
 }
@@ -372,7 +376,7 @@
   gap: 0.4rem;
   padding: 0.25rem 0.5rem;
   border-bottom: 1px solid var(--border);
-  font-size: 0.72rem;
+  font-size: var(--fs-label);
 }
 
 .nb-header-path {
@@ -390,8 +394,9 @@
   border-radius: 0;
   background: transparent;
   color: var(--text-secondary, var(--text-dim));
-  font-size: 0.66rem;
-  letter-spacing: 0.1em;
+  font-size: var(--fs-label);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-badge);
   text-transform: uppercase;
   cursor: pointer;
 }
@@ -417,8 +422,9 @@
   align-items: center;
   gap: 0.3rem;
   font-family: var(--font-mono, monospace);
-  font-size: 0.66rem;
-  letter-spacing: 0.08em;
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-badge);
   text-transform: uppercase;
   color: var(--text-dim);
 }
@@ -442,7 +448,7 @@
 .nb-banner {
   padding: 0.3rem 0.5rem;
   font-family: var(--font-mono, monospace);
-  font-size: 0.7rem;
+  font-size: var(--fs-meta);
   border-bottom: 1px solid var(--border);
 }
 

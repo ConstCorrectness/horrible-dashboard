@@ -17,6 +17,7 @@
 import {
   acceptCompletion,
   autocompletion,
+  closeCompletion,
   completionStatus,
   startCompletion,
   type CompletionResult,
@@ -24,7 +25,7 @@ import {
 } from '@codemirror/autocomplete';
 import { indentWithTab } from '@codemirror/commands';
 import { Prec, type Extension } from '@codemirror/state';
-import { keymap, type Command } from '@codemirror/view';
+import { EditorView, keymap, type Command } from '@codemirror/view';
 
 import { importCompletionSource, importContextAt } from './importContext';
 import { frameworkImportSource } from './pythonImports';
@@ -144,3 +145,38 @@ export const completionKeymap: Extension = Prec.high(
     indentWithTab,
   ]),
 );
+
+/**
+ * Open the completion popup, or close it if it is already open.
+ *
+ * This exists because **the popup has no usable trigger key of its own**.
+ * CodeMirror's default binding is `Ctrl-Space`, which `keymap/reserved.ts` lists as
+ * unavailable on two of our three platforms — the IME toggle on Windows and the
+ * input-source switch on macOS — so it is the exact shape of binding the reserved
+ * table exists to catch: it never fires, and nothing says why. Tab reaches the popup
+ * (see {@link completionKeymap}) but Tab is also indentation, so it can only ever
+ * open one where a completion is plausible; there was no way to simply ask.
+ *
+ * Toggling rather than only opening, because the same key then dismisses it — a
+ * popup you can summon but must reach for Escape to close is half a binding.
+ */
+export function toggleCompletionIn(view: EditorView): boolean {
+  if (completionStatus(view.state) != null) return closeCompletion(view);
+  // `explicit: true` — which is the whole point. The import source deliberately
+  // returns nothing for an empty prefix unless asked, so `from x import <here>`
+  // answers this and answers nothing typed.
+  return startCompletion(view);
+}
+
+/**
+ * The focused CodeMirror view, or null.
+ *
+ * `findFromDOM` rather than a registry of live views: a notebook has one view per
+ * cell and a buffer has one per pane, and the only one this command can mean is the
+ * one holding the caret. Asking the DOM is both the simplest answer and the correct
+ * one.
+ */
+export function focusedEditorView(): EditorView | null {
+  const el = document.activeElement;
+  return el instanceof HTMLElement ? EditorView.findFromDOM(el) : null;
+}

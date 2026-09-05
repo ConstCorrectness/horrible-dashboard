@@ -18,8 +18,8 @@ import { registry } from '../registry';
 import type { EditorService, NotebookLspHandle } from '../modules/editor/service';
 import type { NotebookCell } from './types';
 
-/** No LSP: one frozen empty array, so `extraExtensions` keeps a stable identity and
- * the cell's compartment is never pointlessly reconfigured. */
+/** Markdown cells: one frozen empty array, so `extraExtensions` keeps a stable
+ * identity and the cell's compartment is never pointlessly reconfigured. */
 const NONE: Extension[] = [];
 
 export interface NotebookLsp {
@@ -70,9 +70,30 @@ export function useNotebookLsp(path: string, cells: NotebookCell[]): NotebookLsp
     if (!handle) byCell.current.clear();
   }, [handle]);
 
+  /**
+   * The completion stack for a code cell with no language server, built once.
+   *
+   * Not `[]`. A cell used to get nothing at all here — no indexed symbols, no
+   * framework imports, no import-statement completion, and no Tab key — even though
+   * the same text in an editor buffer got all four. That is every cell on a node
+   * with no Python server installed, every cell of a notebook opened before its
+   * absolute path resolves, and every cell during the seconds a cold server takes to
+   * come up.
+   */
+  const bare = useRef<Extension[] | null>(null);
+  if (!bare.current) {
+    const editor = registry.getService<EditorService>('editor');
+    bare.current = editor ? [editor.bareCompletion('python')] : NONE;
+  }
+
   return {
     cellExtensions(cell) {
-      if (!handle || cell.cell_type !== 'code') return NONE;
+      if (cell.cell_type !== 'code') return NONE;
+      // One `autocompletion()` may be live at a time, so these two are alternatives
+      // and never both: a second instance's `override` silently replaces the first's
+      // sources. Swapping between them reconfigures the cell's compartment, which is
+      // exactly what the compartment is for.
+      if (!handle) return bare.current!;
       const cached = byCell.current.get(cell.id);
       if (cached) return cached;
       const ext = [handle.cellExtension(cell.id)];

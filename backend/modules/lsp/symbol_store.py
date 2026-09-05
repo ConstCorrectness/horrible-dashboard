@@ -275,28 +275,57 @@ def query_import_members(
     imported from", and is empty for methods — exactly the distinction wanted here.
 
     An empty prefix is legal for the same reason as `query_modules`.
+
+    **A package with no rows of its own falls back to its submodules.** `imp` records
+    where a symbol is *defined*, never where it is re-exported from: `transformers`
+    re-exports `AutoModel` out of `transformers.models.auto`, so an exact match
+    answered `from transformers import <Tab>` with **nothing** while the table held
+    530 transformers symbols. Same for numpy and torch — for every package that
+    assembles its public surface in `__init__.py`, which is most large ones. Only
+    packages that define their names directly there (huggingface_hub, sympy) ever
+    worked, which made this read as a flaky index rather than a structural miss.
+
+    The fallback fires **only when the exact match is empty**, and that is the whole
+    of its safety. A submodule name is a guess — `vllm` really does define `LLM` and
+    really does not re-export `LoRARequest`, so mixing the two in would offer an
+    import that fails for a package the index already describes correctly. Where
+    there is nothing to be wrong about, a guess costs nothing and is usually right;
+    where there is, the precise answer stands alone. Fallback rows carry their
+    defining module in `detail` so the guess is legible as one.
+
+    Resolving this properly means following `__init__` re-exports at index time —
+    a change to the indexer, not to this query.
     """
     init()
     if not module:
         return []
-    sql = (
-        "SELECT symbol, MIN(kind) AS kind, MIN(detail) AS detail, "
-        "MAX(freq) AS freq, MAX(doc) AS doc "
-        "FROM code_symbols WHERE lang = ? AND imp = ? "
-    )
-    params: list[object] = [lang, module]
-    if prefix:
-        sql += "AND symbol LIKE ? ESCAPE '\\' "
-        params.append(_like(prefix))
-    sql += "GROUP BY symbol ORDER BY freq DESC, length(symbol), symbol LIMIT ?"
-    params.append(max(1, limit))
-    with _conn() as conn:
-        return [
-            {
-                "symbol": r["symbol"],
-                "kind": r["kind"],
-                "detail": r["detail"],
-                "doc": r["doc"] or "",
-            }
-            for r in conn.execute(sql, params).fetchall()
-        ]
+
+    def run(exact: bool) -> list[dict[str, str]]:
+        sql = (
+            "SELECT symbol, MIN(kind) AS kind, MIN(detail) AS detail, MIN(imp) AS imp, "
+            "MAX(freq) AS freq, MAX(doc) AS doc "
+            "FROM code_symbols WHERE lang = ? AND "
+            + ("imp = ? " if exact else "imp LIKE ? ESCAPE '\\' ")
+        )
+        params: list[object] = [lang, module if exact else _like(module + ".")]
+        if prefix:
+            sql += "AND symbol LIKE ? ESCAPE '\\' "
+            params.append(_like(prefix))
+        sql += "GROUP BY symbol ORDER BY freq DESC, length(symbol), symbol LIMIT ?"
+        params.append(max(1, limit))
+        with _conn() as conn:
+            return [
+                {
+                    "symbol": r["symbol"],
+                    "kind": r["kind"],
+                    # A fallback row shows where the name actually lives instead of
+                    # its kind (which the popup already draws as an icon), so an
+                    # offer the package does not re-export is visibly a guess rather
+                    # than an import that silently fails.
+                    "detail": (r["detail"] if exact else r["imp"]) or "",
+                    "doc": r["doc"] or "",
+                }
+                for r in conn.execute(sql, params).fetchall()
+            ]
+
+    return run(exact=True) or run(exact=False)

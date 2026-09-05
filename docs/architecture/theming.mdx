@@ -178,6 +178,12 @@ rounding reads as a generic card stack — and `--radius-lg` keeping a couple of
 rather than dropping to 0 is what stops a window corner aliasing against its own drop
 shadow. `hud` and `retro` are square outright.
 
+The **notebook module** is the first converted end to end, and
+`design-tokens.test.ts` holds it there: a literal `font-size` fails, in CSS and in React
+style objects alike. See
+[Rendering a cell](../modules/notebook.mdx#rendering-a-cell) for the job-to-step table
+and the two rules that decided its awkward cases.
+
 ### Elevation has three steps, not five
 
 `--elev-1` and `--elev-2` alias the two shadows each theme already declares, rather
@@ -297,6 +303,15 @@ appearing, in the source, to be fully themed.
 That is the failure mode worth naming: a missing token does not look like a bug. It
 looks like a theme nobody likes. Nothing throws, nothing warns, the pane just
 quietly ignores the switcher — and the fallback makes it *look* deliberate.
+
+The mirror image is worth naming too: **`var(--token, #hex)` where the hex is not the
+token's value.** `var(--danger, #e5534b)` appeared a dozen times, and `#e5534b` is no
+theme's danger — midnight's is `#e06c75`, hud's `#ff3860`. Since the guard above
+guarantees `--danger` resolves, that fallback is dead code holding a wrong colour: it
+reads as a considered default, it is never used, and the day someone renames the token
+it becomes the one thing standing between a broken theme and a visible error. The
+notebook module now writes `var(--danger)` bare. A fallback is only honest when it
+repeats the token's own value, at which point it earns nothing.
 
 ### The other half: literals
 

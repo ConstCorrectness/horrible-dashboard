@@ -29,6 +29,7 @@
  */
 import type { Extension } from '@codemirror/state';
 
+import { completionKeymap } from './completion';
 import {
   acquireSession,
   dirOf,
@@ -238,16 +239,25 @@ export class NotebookLspDoc {
    * "reveal cell" callback.
    */
   cellExtension(cellId: string): Extension {
-    return lspExtension({
-      path: this.path,
-      languageId: 'python',
-      root: dirOf(this.path),
-      bufferUri: `notebook-cell:${this.path}#${cellId}`,
-      binding: this.binding(cellId),
-      // A notebook is the place people reach for a framework they haven't imported
-      // yet, so the curated import source earns its keep here more than anywhere.
-      frameworkImports: true,
-    });
+    return [
+      lspExtension({
+        path: this.path,
+        languageId: 'python',
+        root: dirOf(this.path),
+        bufferUri: `notebook-cell:${this.path}#${cellId}`,
+        binding: this.binding(cellId),
+        // A notebook is the place people reach for a framework they haven't imported
+        // yet, so the curated import source earns its keep here more than anywhere.
+        frameworkImports: true,
+      }),
+      // `lspExtension` configures the sources but not the keys — `BufferView` adds
+      // this itself, and a cell had nobody to add it. Without it Tab is unbound in a
+      // notebook (it escapes to browser focus traversal) and, more to the point,
+      // `from x import <Tab>` cannot be asked for at all: the import source returns
+      // nothing on an empty prefix unless the request is explicit, and Tab is how a
+      // request becomes explicit.
+      completionKeymap,
+    ];
   }
 
   private binding(cellId: string): DocumentBinding {

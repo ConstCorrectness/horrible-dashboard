@@ -49,7 +49,14 @@ export function NotebookBrowser() {
   }, [newName, refresh, open]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', fontSize: '0.8rem' }}>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        fontSize: 'var(--fs-body)',
+      }}
+    >
       <div style={{ padding: '0.5rem', borderBottom: '1px solid var(--border)' }}>
         <div style={{ display: 'flex', gap: '0.35rem' }}>
           <input
@@ -63,7 +70,16 @@ export function NotebookBrowser() {
             Create
           </button>
         </div>
-        <div style={{ marginTop: '0.35rem', ...dim }}>
+        {/* A root path and a bootstrap note are metadata about the list, not the
+            list — the `telemetry` step, and mono because one of them is a path. */}
+        <div
+          style={{
+            marginTop: '0.35rem',
+            fontSize: 'var(--fs-meta)',
+            fontFamily: 'var(--font-mono, monospace)',
+            ...dim,
+          }}
+        >
           {root && <div title="notebook.root setting">📁 {root}</div>}
           {envReady === false && (
             <div>Kernel venv bootstraps on first run (ipykernel + ipywidgets).</div>
@@ -71,7 +87,7 @@ export function NotebookBrowser() {
         </div>
       </div>
       {error && (
-        <div style={{ padding: '0.4rem 0.5rem', color: 'var(--danger, #e5534b)' }}>{error}</div>
+        <div style={{ padding: '0.4rem 0.5rem', color: 'var(--danger)' }}>{error}</div>
       )}
       <div style={{ flex: 1, overflow: 'auto', padding: '0.25rem' }}>
         {files.length === 0 && <div style={{ padding: '0.5rem', ...dim }}>No notebooks yet.</div>}
@@ -86,7 +102,7 @@ export function NotebookBrowser() {
               padding: '0.3rem 0.4rem',
               background: 'transparent',
               border: 'none',
-              borderRadius: 4,
+              borderRadius: 'var(--radius-sm)',
               cursor: 'pointer',
               color: 'inherit',
             }}

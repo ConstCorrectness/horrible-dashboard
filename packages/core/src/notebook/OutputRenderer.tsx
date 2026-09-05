@@ -9,13 +9,23 @@ const WIDGET_MIME = 'application/vnd.jupyter.widget-view+json';
 
 const mono: CSSProperties = {
   fontFamily: 'var(--font-mono, monospace)',
-  fontSize: '0.75rem',
+  // The `telemetry` step: mono, on the ramp in themes.css. Stream text and a
+  // traceback are program output, which is what that step is for.
+  fontSize: 'var(--fs-body)',
   whiteSpace: 'pre-wrap',
   wordBreak: 'break-word',
   margin: 0,
 };
 
-// Minimal SGR palette (normal + bright) for traceback/stream ANSI colors.
+/**
+ * The SGR palette (normal + bright), for traceback and stream colors.
+ *
+ * Literal hexes on purpose, and the one place in this module where that is right:
+ * these are the **ANSI/xterm** colors, defined by the terminal protocol rather than
+ * by our design system. A program that prints SGR 31 said "ANSI red"; remapping that
+ * onto `--danger` would change what the program reported, and would tint a whole
+ * traceback with the theme's failure color whichever code it actually emitted.
+ */
 const ANSI_COLORS: Record<number, string> = {
   30: '#3b4252',
   31: '#e5534b',
@@ -150,7 +160,7 @@ export function OutputRenderer({
     return (
       <pre
         className="nb-output-text"
-        style={{ ...mono, color: output.name === 'stderr' ? 'var(--danger, #e5534b)' : undefined }}
+        style={{ ...mono, color: output.name === 'stderr' ? 'var(--danger)' : undefined }}
       >
         <Ansi text={joined(output.text)} />
       </pre>
@@ -159,7 +169,7 @@ export function OutputRenderer({
   if (type === 'error') {
     const tb = Array.isArray(output.traceback) ? output.traceback.join('\n') : '';
     return (
-      <pre className="nb-output-text" style={{ ...mono, color: 'var(--danger, #e5534b)' }}>
+      <pre className="nb-output-text" style={{ ...mono, color: 'var(--danger)' }}>
         <Ansi text={tb || `${String(output.ename)}: ${String(output.evalue)}`} />
       </pre>
     );
@@ -195,8 +205,8 @@ export function OutputRenderer({
     }
     if (mime === 'image/svg+xml') {
       // Inlined rather than data-URI'd: matplotlib's svg backend and graphviz both
-      // emit text, and an <img> would lose the selectable labels that are half the
-      // reason to choose a vector backend.
+      // emit text, and wrapping it in an image element would lose the selectable
+      // labels that are half the reason to choose a vector backend.
       return (
         <div className="nb-output-media" dangerouslySetInnerHTML={{ __html: joined(value) }} />
       );

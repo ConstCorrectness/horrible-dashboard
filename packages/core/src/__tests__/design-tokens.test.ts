@@ -156,4 +156,43 @@ describe('design tokens', () => {
         'so the corner treatment follows the theme.',
     ).toEqual([]);
   });
+
+  /**
+   * The notebook module is on the type ramp, all of it.
+   *
+   * DESIGN.md documents six steps by **job** — display, headline, title, body,
+   * label, telemetry, micro — and `themes.css` declares them as `--fs-*`. A literal
+   * `font-size` is not a smaller failure than an undefined `var()`: it is a size no
+   * theme chose, sitting between two that were measured, and it reads as "slightly
+   * off" rather than as a bug. Sizes like 10.5 and 12.5 are measured values, so a
+   * hand-picked 0.68rem is a reflow nobody asked for.
+   *
+   * Scoped to this module because it is the one that has been converted end to end.
+   * Widening it is the point; widening it before the files are clean is how a rule
+   * gets disabled.
+   */
+  it('keeps the notebook module on the type ramp', () => {
+    const roots = [
+      join(REPO, 'packages', 'core', 'src', 'notebook'),
+      join(REPO, 'packages', 'core', 'src', 'modules', 'notebook'),
+    ];
+    const literals: string[] = [];
+    for (const file of roots.flatMap((r) => walk(r))) {
+      const source = read(file);
+      // Both spellings: a CSS declaration and a React style object.
+      for (const m of source.matchAll(/font-?[sS]ize:?\s*'?([^;,'\n}]+)/g)) {
+        const value = m[1].trim().replace(/'$/, '');
+        if (value.startsWith('var(') || value === 'inherit') continue;
+        // An `em` value is a RATIO to its parent, not a step — inline code inside
+        // prose should track whatever it sits in, at any step.
+        if (/^[\d.]+em$/.test(value)) continue;
+        literals.push(`${rel(file)}: ${value}`);
+      }
+    }
+    expect(
+      literals,
+      'hardcoded font-size in the notebook module — use var(--fs-micro|meta|label|' +
+        'body|lead|display), picking the step whose JOB matches (see DESIGN.md).',
+    ).toEqual([]);
+  });
 });

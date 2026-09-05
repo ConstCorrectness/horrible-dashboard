@@ -193,7 +193,7 @@ export function NotebookEditor() {
           style={{
             padding: '0.5rem 0.75rem',
             borderBottom: '1px solid var(--border)',
-            fontSize: '0.7rem',
+            fontSize: 'var(--fs-label)',
             fontWeight: 700,
             letterSpacing: '0.14em',
             textTransform: 'uppercase',
@@ -251,7 +251,7 @@ export function NotebookEditor() {
       )}
       <div className="nb-scroll" ref={scrollRef}>
         {!sessionKey && !state.error && (
-          <div style={{ fontSize: '0.8rem', ...dim }}>Starting kernel…</div>
+          <div style={{ fontSize: 'var(--fs-body)', ...dim }}>Starting kernel…</div>
         )}
         {state.cells.map((cell, i) => (
           <Cell

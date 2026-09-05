@@ -10,6 +10,7 @@ import { registry } from '../../registry';
 import { getRoots, loadRoots } from '../files/store';
 import { getBuffer, listBufferUris } from './buffers';
 import { getActiveBufferSource, openBuffer } from './index';
+import { buildCompletion, completionKeymap } from './completion';
 import { NotebookLspDoc, type LspCell } from './notebook-lsp';
 import { createNote, loadSource, saveSource } from './sources';
 
@@ -66,6 +67,22 @@ export interface EditorService {
    * instead of deep-importing the client.
    */
   openNotebookLsp(path: string): NotebookLspHandle;
+  /**
+   * The completion stack for an editor surface with **no** language server —
+   * indexed symbols, curated framework imports, import-statement modules and
+   * members, plus the Tab keymap that opens the popup.
+   *
+   * Notebook cells had neither half of this. `buildCompletion` only ran inside
+   * `lspExtension`, so a cell with no server (none installed, a relative path, or
+   * simply the seconds before one comes up) had no completion source at all — while
+   * the identical text in a buffer had four. And no cell ever had the keymap, so
+   * `from x import <Tab>`, the one gesture the import source is built around, was
+   * not bound to anything.
+   *
+   * Exposed here rather than deep-imported because the notebook kit is
+   * domain-neutral; it knows this contract and nothing else about the editor.
+   */
+  bareCompletion(languageId: string | null): Extension;
 }
 
 /** A notebook's language-server session, as the notebook panes see it. */
@@ -149,6 +166,13 @@ const editorService: EditorService = {
   },
 
   listBuffers: listBufferUris,
+
+  bareCompletion(languageId) {
+    // Mutually exclusive with the LSP stack by construction — `autocompletion()`'s
+    // `override` is a replacing field, so two live instances mean one silently wins
+    // and the other's sources vanish. Callers pick one or the other, never both.
+    return [buildCompletion({ languageId }), completionKeymap];
+  },
 
   openNotebookLsp(path) {
     const doc = new NotebookLspDoc(path);

@@ -15,6 +15,7 @@ import { editorAgentTools } from './agentTools';
 import { BufferView } from './BufferView';
 import { IndexedPackages } from './IndexedPackages';
 import { getBuffer, listBufferUris } from './buffers';
+import { focusedEditorView, toggleCompletionIn } from './completion';
 import { RecentNotesWidget } from './RecentNotes';
 import { registerEditorService } from './service';
 import { createNote, sourceTitle } from './sources';
@@ -209,10 +210,27 @@ export const editorModule: ModuleManifest = {
       title: 'Editor: Open in visualizer',
       run: visualizeActiveBuffer,
     },
+    {
+      id: 'editor.toggleSuggestions',
+      title: 'Editor: Toggle suggestions',
+      run: () => {
+        const view = focusedEditorView();
+        if (view) toggleCompletionIn(view);
+      },
+    },
   ],
   // Editing keys go through the shell keybinding service, never a hardcoded
   // handler in the component — so they stay rebindable.
-  keybindings: [{ key: 'mod+s', command: 'editor.save' }],
+  keybindings: [
+    { key: 'mod+s', command: 'editor.save' },
+    // `ctrl+shift+space`, not CodeMirror's own `ctrl+space`: that one is the IME
+    // toggle on Windows and the input-source switch on macOS (both in
+    // `keymap/reserved.ts`, both `preventable: false`), so it never reaches the
+    // page and reads as "the popup is broken". `when: textInput` scopes it to a
+    // focused editor surface, which is the only place it means anything — and it
+    // covers a notebook cell as well as a buffer, since both are contenteditable.
+    { key: 'ctrl+shift+space', command: 'editor.toggleSuggestions', when: 'textInput' },
+  ],
   settings: [
     {
       key: 'editor.autosuggest',

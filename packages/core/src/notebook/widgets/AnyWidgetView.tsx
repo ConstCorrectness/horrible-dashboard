@@ -158,7 +158,8 @@ export function AnyWidgetView({
 function errorBox(msg: string): HTMLElement {
   const div = document.createElement('div');
   div.style.cssText =
-    'color:var(--danger,#e5534b);font-size:0.75rem;font-family:var(--font-mono,monospace)';
+    'color:var(--danger);font-size:var(--fs-meta);' +
+    'font-family:var(--font-mono,monospace)';
   div.textContent = `anywidget error: ${msg}`;
   return div;
 }

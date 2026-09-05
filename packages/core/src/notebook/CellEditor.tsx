@@ -134,7 +134,7 @@ export function CellEditor({
             if (update.docChanged) callbacks.current.onChange(update.state.doc.toString());
           }),
           EditorView.theme({
-            '&': { fontSize: '0.8rem', backgroundColor: 'transparent' },
+            '&': { fontSize: 'var(--fs-body)', backgroundColor: 'transparent' },
             '.cm-content': { fontFamily: 'var(--font-mono, monospace)', padding: '0.35rem 0' },
             '&.cm-focused': { outline: 'none' },
           }),

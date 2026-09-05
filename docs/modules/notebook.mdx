@@ -258,6 +258,36 @@ rail; the run-state badges are stroke SVG inheriting `currentColor`, because an 
 a font — full-colour in a monochrome gutter and impossible to tint by state, which is
 the one thing those glyphs exist to signal.
 
+Type is on the **ramp**, everywhere in the module — `notebook.css`, the cell editor's
+CodeMirror theme, the output renderer, the browser and the widget views. DESIGN.md names
+six steps by *job* and `themes.css` declares them as `--fs-*`, so the step is chosen by
+what a piece of text **is**, not by which pixel value is nearest:
+
+| Text | Step | Why |
+| --- | --- | --- |
+| Execution counts, diagnostics, banners, a root path | `--fs-meta` | Telemetry: "every id, count, duration, path" |
+| The `md` kind badge, kernel status | `--fs-micro` | "chips and badges only" |
+| Pane headers, header buttons, table headers | `--fs-label` | A row's identity |
+| Cell source, output, rendered prose, `h3` | `--fs-body` | "prose in a pane" |
+| `h2` | `--fs-lead` | Headline |
+| `h1` | `--fs-display` | The largest identity type |
+
+Tracking and weight come from the same place (`--tracking-display`,
+`--tracking-badge`, `--fw-bold`); a size on the ramp with hand-picked tracking is only
+half on it. Two rules decided the awkward cases:
+
+- **A widget's caption is telemetry, not identity.** It shows the model's variable
+  name, and DESIGN.md's Two Jobs Rule is explicit that identity is uppercase tracked
+  sans while telemetry is muted mono, never blended — an identifier like `n` uppercased
+  and tracked stops being the name of the thing.
+- **An `em` value is a ratio, not a step.** Inline `code` inside prose stays `0.85em` so
+  it tracks whatever it sits in, at any step.
+
+`design-tokens.test.ts` fails on a literal `font-size` anywhere in the module, in CSS
+and in React style objects alike. It is scoped to this module because this is the one
+converted end to end — widening it is the goal, but widening it before the files are
+clean is how a rule gets switched off.
+
 Scroll position and the markdown cell being edited are kept in the pane's view-state bag
 (see [windowing.mdx](../architecture/windowing.mdx#view-state-the-cheap-half)), so a
 workspace switch does not scroll the notebook back to the top or close a cell mid-edit.
@@ -294,6 +324,11 @@ the store's optimistic copy hid that until the notebook was reloaded from disk.
   predicate is therefore "any clean notebook pane". To get two notebooks
   side by side, split the area first and open the second from the empty area's
   view picker.
+- **Completion in a cell** — code cells get the editor's full completion stack, whether
+  or not a language server is running, plus the Tab keymap and the
+  `ctrl+shift+space` toggle. See
+  [Notebook cells get the same stack](editor.mdx#notebook-cells-get-the-same-stack) for
+  what was missing and why the two stacks are mutually exclusive.
 - **Commands** — `notebook.open` (open the catalog).
 - **Regions** — `notebook.editor` hosts the notebook browser as a left region strip (`k`). The browser is no longer a dock tool of its own: it is the **Notebooks** section of [Explorer](explorer.mdx) (`embedded`), which is exactly the doubling `embedded` exists to remove.
 - **Layout preset** — `notebook`, named **Notebooks** in the workspace strip. The

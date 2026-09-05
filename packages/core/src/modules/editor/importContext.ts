@@ -22,9 +22,10 @@ import type { EditorState } from '@codemirror/state';
 import { apiGet } from '../../api';
 
 /** Where the cursor sits inside an import statement, if it does. */
-export type ImportContext =
-  | { kind: 'module'; from: number; prefix: string }
-  | { kind: 'member'; module: string; from: number; prefix: string };
+export type ImportContext = { from: number; prefix: string; justOpened: boolean } & (
+  | { kind: 'module' }
+  | { kind: 'member'; module: string }
+);
 
 /**
  * Classify the cursor's position within an import statement, or null. Pure — the
@@ -32,9 +33,16 @@ export type ImportContext =
  * trailing `import x` later on the line can't confuse it.
  *
  * `from vll|`            → module, prefix `vll`
- * `import |`             → module, prefix ``
+ * `import |`             → module, prefix ``, justOpened
  * `from vllm import L|`  → member of `vllm`, prefix `L`
- * `from vllm import A, |`→ member of `vllm`, prefix ``
+ * `from vllm import |`   → member of `vllm`, prefix ``, justOpened
+ * `from vllm import A, |`→ member of `vllm`, prefix ``, justOpened
+ *
+ * **`justOpened`** means the cursor sits directly after the keyword (or the comma)
+ * and exactly one space — the moment a person has finished saying *which* import
+ * they want and is waiting to be told the options. It is what lets the popup open
+ * on its own there without opening on every space in the statement: after two
+ * spaces, or a trailing space following a half-typed name, the user is not asking.
  */
 export function importContextAt(state: EditorState, pos: number): ImportContext | null {
   const line = state.doc.lineAt(pos);
@@ -42,11 +50,25 @@ export function importContextAt(state: EditorState, pos: number): ImportContext 
 
   // A `from X import ...` list — check first, since it also matches the `from` shape.
   const member = /^\s*from\s+([\w.]+)\s+import\s+(?:\(\s*)?(?:[\w\s,]*?,\s*)?(\w*)$/.exec(head);
-  if (member)
-    return { kind: 'member', module: member[1], from: pos - member[2].length, prefix: member[2] };
+  if (member) {
+    return {
+      kind: 'member',
+      module: member[1],
+      from: pos - member[2].length,
+      prefix: member[2],
+      justOpened: /(?:\bimport |[,(] ?)$/.test(head),
+    };
+  }
 
   const module = /^\s*(?:from|import)\s+([\w.]*)$/.exec(head);
-  if (module) return { kind: 'module', from: pos - module[1].length, prefix: module[1] };
+  if (module) {
+    return {
+      kind: 'module',
+      from: pos - module[1].length,
+      prefix: module[1],
+      justOpened: /\b(?:from|import) $/.test(head),
+    };
+  }
 
   return null;
 }
@@ -88,9 +110,12 @@ export function importCompletionSource(getLang: () => string | null): Completion
     if (getLang() !== 'python') return null;
     const ctx = importContextAt(context.state, context.pos);
     if (!ctx) return null;
-    // An empty prefix is the point here (`from vllm import <Tab>`), but only when the
-    // user asked — otherwise the popup would spring open on every space after `from`.
-    if (!ctx.prefix && !context.explicit) return null;
+    // An empty prefix is the point here (`from vllm import <Tab>`). Answer it when
+    // the user asked *or* when they have just typed the space after the keyword,
+    // which is the same moment VS Code opens its suggest widget and the one the
+    // feature exists for. Any other empty prefix in the statement stays quiet —
+    // opening on every space is what this guard originally prevented.
+    if (!ctx.prefix && !context.explicit && !ctx.justOpened) return null;
 
     let options: Completion[];
     if (ctx.kind === 'module') {

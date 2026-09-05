@@ -13,13 +13,25 @@ function useWidgetState(manager: WidgetManager, modelId: string): WidgetState | 
 
 const num = (v: unknown, d = 0): number => (typeof v === 'number' ? v : d);
 const str = (v: unknown, d = ''): string => (v == null ? d : String(v));
-const label = { fontSize: '0.72rem', color: 'var(--text-dim)', minWidth: '5rem' } as const;
+/**
+ * A widget's caption is its model's **variable name**, so it takes the telemetry
+ * treatment (muted mono, `--fs-meta`) rather than the identity one. DESIGN.md's Two
+ * Jobs Rule is explicit: identity is uppercase tracked sans, telemetry is muted mono,
+ * and never blended — and an identifier like `n` uppercased and tracked stops being
+ * the name of the thing.
+ */
+const label = {
+  fontSize: 'var(--fs-meta)',
+  fontFamily: 'var(--font-mono, monospace)',
+  color: 'var(--text-dim)',
+  minWidth: '5rem',
+} as const;
 const row = {
   display: 'flex',
   alignItems: 'center',
   gap: '0.5rem',
   margin: '0.2rem 0',
-  fontSize: '0.8rem',
+  fontSize: 'var(--fs-body)',
 } as const;
 
 /**
@@ -137,7 +149,7 @@ export function WidgetView({
       <button
         disabled={disabled}
         onClick={() => setValue(!on)}
-        style={{ background: on ? 'var(--accent, #539bf5)' : undefined }}
+        style={{ background: on ? 'var(--accent)' : undefined }}
       >
         {str(state.description, 'Toggle')}
       </button>
@@ -165,7 +177,7 @@ export function WidgetView({
   }
 
   if (name === 'LabelModel') {
-    return <span style={{ fontSize: '0.8rem' }}>{str(state.value)}</span>;
+    return <span style={{ fontSize: 'var(--fs-body)' }}>{str(state.value)}</span>;
   }
   if (name === 'HTMLModel' || name === 'HTMLMathModel') {
     // Trusted-local posture (same as kernel HTML output).
