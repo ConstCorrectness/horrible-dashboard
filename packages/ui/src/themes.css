@@ -76,10 +76,10 @@
   --ramp-pos: #6ebeff;
   --ramp-neg: #ff8c78;
 
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
-  --radius-xl: 14px;
+  --radius-sm: 0;
+  --radius-md: 1px;
+  --radius-lg: 2px;
+  --radius-xl: 2px;
 
   --shadow-card: 0 4px 6px rgb(0 0 0 / 15%);
   --shadow-overlay: 0 8px 24px rgb(0 0 0 / 40%);
@@ -140,10 +140,10 @@
   --ramp-pos: #74b4ff;
   --ramp-neg: #ff8f7f;
 
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 16px;
-  --radius-xl: 20px;
+  --radius-sm: 0;
+  --radius-md: 2px;
+  --radius-lg: 3px;
+  --radius-xl: 4px;
 
   --shadow-card: 0 8px 24px rgb(0 0 0 / 28%);
   --shadow-overlay: 0 16px 48px rgb(0 0 0 / 45%);
@@ -201,10 +201,10 @@
   --ramp-pos: #7cc4ff;
   --ramp-neg: #ff9a8a;
 
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 18px;
-  --radius-xl: 24px;
+  --radius-sm: 1px;
+  --radius-md: 2px;
+  --radius-lg: 4px;
+  --radius-xl: 6px;
 
   --shadow-card: 0 8px 32px rgb(0 0 0 / 32%);
   --shadow-overlay: 0 24px 64px rgb(0 0 0 / 50%);
@@ -330,10 +330,10 @@
   --ramp-pos: #1b6fd0;
   --ramp-neg: #c0392b;
 
-  --radius-sm: 5px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
+  --radius-sm: 0;
+  --radius-md: 1px;
+  --radius-lg: 2px;
+  --radius-xl: 3px;
 
   --shadow-card: 0 1px 3px rgb(16 24 40 / 10%), 0 1px 2px rgb(16 24 40 / 6%);
   --shadow-overlay: 0 12px 32px rgb(16 24 40 / 16%);
@@ -625,6 +625,9 @@
   --taskbar-backdrop-filter: none;
 
   --snap-preview-bg: color-mix(in srgb, var(--accent) 22%, transparent);
+  /* The complement half in a snap-assist preview: the same accent, weaker, because
+     it is a consequence of the drop rather than the target being aimed at. */
+  --snap-preview-fill-bg: color-mix(in srgb, var(--accent) 9%, transparent);
   /* The desktop's ground, behind every backdrop provider. */
   --desktop-bg: var(--bg);
 }

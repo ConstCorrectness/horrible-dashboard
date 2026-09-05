@@ -353,6 +353,14 @@
     height 90ms ease;
 }
 
+/* The complement half, when snap assist will move a window into it. Dimmer and
+ * dashed: it is a consequence of the drop, not the thing being aimed at. */
+.os-snap-overlay--fill {
+  background: var(--snap-preview-fill-bg, color-mix(in srgb, var(--accent) 9%, transparent));
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
 /* --- snap palette -------------------------------------------------------- *
  * The grid shown while the `mod+alt+s` prefix is pending. Centred over the
  * surface rather than anchored to a window: it acts on whatever is focused,

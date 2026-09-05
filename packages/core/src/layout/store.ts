@@ -28,7 +28,14 @@ import {
   updatePaneAnywhere,
   windowId,
 } from './model';
-import { cascadeRect, clampRect, rectForZone, rescaleRect } from './snap';
+import {
+  cascadeRect,
+  clampRect,
+  complementZone,
+  fillTarget,
+  rectForZone,
+  rescaleRect,
+} from './snap';
 import { explodeToWindows, NOMINAL_VIEWPORT, tileWindows } from './windows';
 import type {
   AreaNode,
@@ -525,7 +532,18 @@ function reduceFrame(frame: FrameState, action: LayoutAction): FrameState {
             ? // Moving or resizing by hand un-snaps and un-maximizes: the window is
               // now wherever the user put it, and springing back later would be a
               // ghost the user cannot explain.
-              { ...w, rect, mode: w.mode === 'minimized' ? w.mode : 'normal', snap: undefined }
+              {
+                ...w,
+                rect,
+                mode: w.mode === 'minimized' ? w.mode : 'normal',
+                snap: undefined,
+                // A rect placed by hand is where this window belongs now, so a
+                // minimized one must not resume its old zone on restore — and the
+                // restore rect goes with it, or un-maximizing later springs the
+                // window back to a size the user replaced by dragging.
+                minimizedFrom: undefined,
+                restoreRect: undefined,
+              }
             : w,
         ),
       };
@@ -554,7 +572,21 @@ function reduceFrame(frame: FrameState, action: LayoutAction): FrameState {
       const next = ((): WindowState => {
         if (action.mode === 'minimized') {
           // Geometry untouched: restoring must return exactly where it was.
-          return { ...win, mode: 'minimized' };
+          //
+          // The *mode* is not untouched, though — `WindowMode` is one enum, so
+          // 'minimized' overwrites 'maximized'. Record what it was, or the restore
+          // below takes the free-floating path and springs a maximized window back
+          // to its pre-maximize size. Re-minimizing must not overwrite the record
+          // with 'normal'.
+          if (win.mode === 'minimized') return win;
+          return {
+            ...win,
+            mode: 'minimized',
+            minimizedFrom: {
+              mode: win.mode === 'maximized' ? 'maximized' : 'normal',
+              ...(win.snap ? { snap: win.snap } : {}),
+            },
+          };
         }
         if (action.mode === 'maximized' || action.snap) {
           const zone: SnapZone = action.snap ?? 'max';
@@ -566,7 +598,25 @@ function reduceFrame(frame: FrameState, action: LayoutAction): FrameState {
             // maximizing an already-snapped window must not overwrite the rect it
             // was originally dragged to.
             restoreRect: win.snap || win.mode === 'maximized' ? win.restoreRect : win.rect,
+            minimizedFrom: undefined,
             rect: rectForZone(zone, viewport),
+          };
+        }
+        // Un-minimizing: go back to whatever it was, maximized or snapped
+        // included. `restoreRect` is left alone — it belongs to the maximize that
+        // is being resumed, not consumed by this restore.
+        if (win.mode === 'minimized' && win.minimizedFrom) {
+          const { mode, snap } = win.minimizedFrom;
+          const zone: SnapZone | null = snap ?? (mode === 'maximized' ? 'max' : null);
+          return {
+            ...win,
+            mode,
+            snap,
+            minimizedFrom: undefined,
+            // Re-derived rather than replayed: the surface may have resized while
+            // the window was minimized, and half of the new surface is exactly
+            // half where a stale rect would be off by the old one's rounding.
+            rect: zone ? rectForZone(zone, viewport) : clampRect(win.rect, viewport),
           };
         }
         // 'normal': come back to the remembered rect, if there is one.
@@ -574,14 +624,43 @@ function reduceFrame(frame: FrameState, action: LayoutAction): FrameState {
           ...win,
           mode: 'normal',
           snap: undefined,
+          minimizedFrom: undefined,
           rect: win.restoreRect ? clampRect(win.restoreRect, viewport) : win.rect,
           restoreRect: undefined,
+        };
+      })();
+      // Snap-assist fill: the window just took a half, so whatever was covering the
+      // other half moves into it and the user gets the split they were aiming at.
+      //
+      // One window only, the topmost candidate — filling every overlapping window
+      // into the same zone would stack them, and the second one to move would be a
+      // window the user never touched appearing from behind the first.
+      const filled = ((): WindowState | null => {
+        if (!action.fill || next.mode === 'minimized') return null;
+        const zone = next.snap ?? (next.mode === 'maximized' ? 'max' : null);
+        const other = zone ? complementZone(zone) : null;
+        if (!zone || !other) return null;
+        const target = fillTarget(frame.windows, win.id, zone, viewport);
+        if (!target) return null;
+        return {
+          ...target,
+          mode: 'normal',
+          snap: other,
+          minimizedFrom: undefined,
+          // Same rule as the branch above: only capture a restore rect when leaving
+          // a free-floating state, so filling an already-maximized window keeps the
+          // rect it had before it was maximized.
+          restoreRect:
+            target.snap || target.mode === 'maximized' ? target.restoreRect : target.rect,
+          rect: rectForZone(other, viewport),
         };
       })();
       return {
         ...frame,
         windows: raiseToFront(
-          frame.windows.map((w) => (w === win ? next : w)),
+          frame.windows.map((w) =>
+            w === win ? next : filled && w.id === filled.id ? filled : w,
+          ),
           // A window being un-minimized comes to the front; one being minimized
           // must not, or it would raise itself on the way out.
           action.mode === 'minimized' ? '' : win.id,
@@ -630,7 +709,13 @@ function reduceFrame(frame: FrameState, action: LayoutAction): FrameState {
           // A snapped or maximized window re-derives its rect from the zone rather
           // than being scaled: half of the new surface is exactly half, where a
           // scaled rect would be off by the rounding of the old one.
-          const zone: SnapZone | null = w.snap ?? (w.mode === 'maximized' ? 'max' : null);
+          // A minimized window's zone lives in `minimizedFrom`: its own `mode` is
+          // 'minimized', so reading only `mode` would rescale a maximized-then-
+          // minimized window and it would come back smaller than the surface.
+          const zone: SnapZone | null =
+            w.mode === 'minimized' && w.minimizedFrom
+              ? (w.minimizedFrom.snap ?? (w.minimizedFrom.mode === 'maximized' ? 'max' : null))
+              : (w.snap ?? (w.mode === 'maximized' ? 'max' : null));
           const rect = zone
             ? rectForZone(zone, viewport)
             : clampRect(rescaleRect(w.rect, from, viewport), viewport);

@@ -23,6 +23,8 @@ import {
   useSyncExternalStore,
 } from 'react';
 import {
+  complementZone,
+  fillTarget,
   layoutStore,
   setDesktopMeasurer,
   snapZoneAt,
@@ -39,6 +41,12 @@ export interface DragState {
   zone: SnapZone | null;
   /** A window whose titlebar the pointer is over — dropping there merges tabs. */
   mergeTargetId: string | null;
+  /**
+   * The zone snap assist would move another window into on drop, if it would.
+   * Resolved with the reducer's own `fillTarget`, so the preview and the drop can
+   * never disagree about whether the drop produces a split.
+   */
+  fillZone: SnapZone | null;
 }
 
 export function WindowLayer() {
@@ -98,6 +106,12 @@ export function WindowLayer() {
 
   const bounds = useCallback(() => ref.current?.getBoundingClientRect() ?? null, []);
 
+  // Read through a ref, not the render's `frame`: `onDragMove` is memoized and
+  // would otherwise close over the window list as it was when the drag started.
+  const frameRef = useRef(frame);
+  frameRef.current = frame;
+  const windows = useCallback(() => frameRef.current.windows, []);
+
   /**
    * Live drag feedback: which zone would apply, and which titlebar is under us.
    *
@@ -117,17 +131,21 @@ export function WindowLayer() {
       const titlebar = el?.closest<HTMLElement>('[data-window-titlebar]');
       const over = titlebar?.dataset.windowId ?? null;
       const mergeTargetId = over === windowId ? null : over;
+      const surface = { w: b.width, h: b.height };
+      // A merge target wins: the pointer is over another window's tab strip, so
+      // the user is aiming at that strip, not at the edge behind it.
+      const zone = mergeTargetId ? null : snapZoneAt(local, surface);
       const next: DragState = {
         windowId,
-        // A merge target wins: the pointer is over another window's tab strip, so
-        // the user is aiming at that strip, not at the edge behind it.
-        zone: mergeTargetId ? null : snapZoneAt(local, { w: b.width, h: b.height }),
+        zone,
         mergeTargetId,
+        fillZone:
+          zone && fillTarget(windows(), windowId, zone, surface) ? complementZone(zone) : null,
       };
       setDrag(next);
       return next;
     },
-    [bounds],
+    [bounds, windows],
   );
 
   const onDragEnd = useCallback(() => setDrag(null), []);
@@ -150,7 +168,7 @@ export function WindowLayer() {
       // clipping it — `overflow: hidden` is what keeps a dragged window from
       // scrolling the shell the rest of the time.
     >
-      {drag?.zone && <SnapOverlay zone={drag.zone} />}
+      {drag?.zone && <SnapOverlay zone={drag.zone} fill={drag.fillZone} />}
       {ordered.map((win: WindowState) => (
         <DesktopWindow
           key={win.id}

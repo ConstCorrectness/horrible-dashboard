@@ -680,6 +680,34 @@ Reading it back from React state at pointerup loses the last frame's zone whenev
 move and the release land in the same frame — an intermittent failure to snap that
 only shows up when moving fast.
 
+#### Snap assist: the other half fills itself
+
+Snapping a window to a half over a **maximized** window used to leave the maximized one
+full-width underneath, so the result was one window on top of another rather than the
+split the gesture asks for. `SET_WINDOW_MODE` now takes a `fill` flag: when the action
+lands on a half, whatever was covering the other half is snapped into it.
+
+- `complementZone` is **halves only**. A quarter leaves an L-shaped remainder that no
+  single zone describes, a third leaves two, `center` leaves a frame and `max` leaves
+  nothing. Picking a "closest" zone for those would move a second window somewhere the
+  user did not point, which is worse than not moving it — the value of the fill is that
+  the result is the split they were already looking at.
+- The candidate is the topmost window that is maximized, snapped to the *same* zone, or
+  overlapping the newly-taken half by half its own area. A window already sitting in
+  the complement is skipped: re-snapping it would overwrite the `restoreRect` it holds
+  for its own un-snap.
+- **One** window moves, never several. Filling every overlapping window into the same
+  zone would stack them, and the second one to arrive would be a window the user never
+  touched appearing from behind the first.
+- `fillTarget` lives in `snap.ts` beside `rectForZone` for the same reason everything
+  else there does: `SnapOverlay` draws the complement rect **only when a fill will
+  actually happen**, and a second copy of "is there a candidate" would drift into a
+  preview promising a split and a drop delivering an overlap.
+- `fill` is **opt-in**. The drag handler and the snap chords pass it, because a person
+  snapping is arranging a screen. The `window_state` agent tool does not: it is moving
+  one named window, and a second one shifting under it would be an effect with no
+  visible cause.
+
 ### The snap palette
 
 The four halves are bare chords (`mod+shift+<arrow>`). The other nine zones sit behind
@@ -731,6 +759,17 @@ drag never reaches the handler.
 - **Maximize** stores the rect it came from and restores to it. Capturing a restore
   rect only happens when leaving a _free-floating_ state, so maximizing an
   already-snapped window does not overwrite the rect it was originally dragged to.
+- **Minimize remembers the mode, not just the rect.** `WindowMode` is a single enum, so
+  `'minimized'` overwrites `'maximized'` — and the restore path *consumes* `restoreRect`,
+  which meant a maximized window came back at whatever small size it had before it was
+  maximized. The rect was never lost; losing the mode is what discarded it.
+  `WindowState.minimizedFrom` records `{ mode, snap }` on the way down, and un-minimizing
+  resumes exactly that, leaving `restoreRect` intact for the un-maximize that comes
+  later. It carries a zone and never a rect, so the rect is **re-derived** and a window
+  minimized before the app was resized comes back filling the new surface.
+  `minimizedFrom` is cleared by anything that redefines where the window belongs — an
+  explicit `SET_WINDOW_RECT` (which drops `restoreRect` with it), a maximize, a snap —
+  and it is persisted, so the round trip survives a reload.
 - **Close** runs the existing `closePaneGuarded`, so a dirty pane still prompts.
 
 ### Presenting a pane

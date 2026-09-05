@@ -169,6 +169,9 @@ export function DesktopWindow({
               mode: zone === 'max' ? 'maximized' : 'normal',
               ...(zone === 'max' ? {} : { snap: zone }),
               viewport: surface,
+              // Snap assist: dragging to an edge over a maximized window is a
+              // request for a split, so the window behind takes the other half.
+              fill: true,
             });
             return;
           }

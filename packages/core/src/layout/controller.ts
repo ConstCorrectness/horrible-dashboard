@@ -410,7 +410,24 @@ export function openPane(viewId: string, opts?: OpenPaneOptions): string | null 
 
 function openPaneRouted(viewId: string, opts?: OpenPaneOptions): string | null {
   const decl = resolveView(viewId);
-  if (!decl) return null;
+  if (!decl) {
+    // A retired view id. `VIEW_ALIASES` already maps every one of these onto the
+    // pane and section that replaced it — it was just consulted only by the
+    // agent's `show`, so "open my profile" worked when the model said it and did
+    // nothing when the user clicked the button next to the same words. Three
+    // buttons in the games module were inert for exactly this reason.
+    const alias = VIEW_ALIASES[viewId];
+    if (alias?.kind === 'view') {
+      return alias.section
+        ? revealSection(alias.section, alias.viewId)
+        : openPaneRouted(alias.viewId, opts);
+    }
+    // Nothing resolved: say so. `openPanel` returning null in silence is why the
+    // three dead buttons above survived a pane consolidation and two releases —
+    // there was no signal anywhere that a click had gone nowhere.
+    console.warn(`[layout] openPane: no view or alias named "${viewId}"`);
+    return null;
+  }
   const role = roleOf(viewId);
   if (role === 'tool') return openToolInDock(viewId);
 
@@ -1209,7 +1226,17 @@ export function desktopViewport(): { w: number; h: number } {
   return desktopMeasurer?.() ?? frame().windowViewport ?? NOMINAL_VIEWPORT;
 }
 
-export function snapWindow(idOrInstance: string | undefined, zone: SnapZone | null): boolean {
+/**
+ * `fill` asks for snap-assist: the window covering the other half is snapped into
+ * it, so the result is a split rather than one window over another. Deliberately a
+ * parameter — a user snapping is arranging a screen, while the `window_state` agent
+ * tool is moving one named window and must not shuffle a second.
+ */
+export function snapWindow(
+  idOrInstance: string | undefined,
+  zone: SnapZone | null,
+  fill = false,
+): boolean {
   const windowId = targetWindowId(idOrInstance);
   if (!windowId) return false;
   const before = layoutStore.getSnapshot();
@@ -1220,6 +1247,7 @@ export function snapWindow(idOrInstance: string | undefined, zone: SnapZone | nu
       mode: zone === 'max' ? 'maximized' : 'normal',
       ...(zone && zone !== 'max' ? { snap: zone } : {}),
       viewport: desktopViewport(),
+      ...(fill ? { fill: true } : {}),
     }) !== before
   );
 }
@@ -1236,15 +1264,15 @@ export function snapWindow(idOrInstance: string | undefined, zone: SnapZone | nu
  * Shared by the chords, the snap palette and the `window_state` agent tool so all
  * three behave identically.
  */
-export function snapFocused(zone: SnapZone | null): boolean {
+export function snapFocused(zone: SnapZone | null, fill = false): boolean {
   const f = frame();
   if (!f.focusedWindowId) {
     const instanceId = f.focusedInstanceId;
     if (!instanceId) return false;
     if (!setPaneWindowed(instanceId, true)) return false;
-    return snapWindow(instanceId, zone);
+    return snapWindow(instanceId, zone, fill);
   }
-  return snapWindow(undefined, zone);
+  return snapWindow(undefined, zone, fill);
 }
 
 export function setWindowMode(idOrInstance: string | undefined, mode: WindowMode): boolean {
@@ -1869,7 +1897,15 @@ function installPlacementRecorder(): void {
       // worth recording; its `mode` is not, since reopening minimized would be a
       // pane that answers a click by not appearing.
       if (win.area.tabs.length !== 1) continue;
-      rememberPlacement(win.area.tabs[0].viewId, win.rect, win.snap);
+      // A minimized window carries its zone in `minimizedFrom`, not `snap`. Read
+      // only `snap` and a maximized-then-minimized window records a full-surface
+      // rect with no zone — so the view reopens the size of the screen and un-
+      // snapped, which is neither what it was nor anything the user asked for.
+      const snap =
+        win.mode === 'minimized' && win.minimizedFrom
+          ? (win.minimizedFrom.snap ?? (win.minimizedFrom.mode === 'maximized' ? 'max' : undefined))
+          : win.snap;
+      rememberPlacement(win.area.tabs[0].viewId, win.rect, snap);
     }
   });
 }

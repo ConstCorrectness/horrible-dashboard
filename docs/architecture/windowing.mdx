@@ -660,6 +660,39 @@ If a close path is ever missed the resource leaks until the page closes, where t
 backend reaps it anyway (PTYs die with their `/ws` connection). That is deliberately
 the failure we chose: strictly better than killing a live shell on every tab switch.
 
+### View state: the cheap half
+
+Beside the resources sits `paneUiBag` — the same keys, a separate map, and the same
+close/move/reset paths, holding what a pane was *looking at*: scroll offset, caret
+position, which markdown cell was open for editing. Nobody loses work when one of
+these is dropped, which is why they are not sessions. But a notebook that jumps back
+to the top and an editor whose caret resets to zero every time you glance at another
+tab are indistinguishable, to the person using them, from having lost their place —
+and the fix is small enough that it should not be reinvented per pane.
+
+`use-pane-ui-state.ts` is the React side: `usePaneUiState(key, initial)` is shaped
+like `useState` so there is no way to update a value and forget to remember it, and
+`usePaneScroll()` returns a ref for a scroll container. Two details are easy to get
+backwards:
+
+- **Restore in an effect, not on state init.** The element has no scrollable content
+  until its children have laid out; an earlier write is clamped to 0 and the pane
+  still jumps to the top.
+- **Save on scroll, not in a cleanup.** A workspace switch tears the tree down, and a
+  cleanup that reads `scrollTop` can find the element already detached — where it
+  reads 0, which is exactly the value that looks like success.
+
+A second, separate cache lives in `BufferView` for the same reason, keyed by **source
+URI** rather than by pane: reopening a file anywhere should land where you left it,
+not only in the pane you left it in. It records caret and scroll on `view.destroy()`,
+before the teardown detaches `scrollDOM`, and restores only when no
+**code locus** claimed the buffer first — a locus is someone *asking* for a line, and
+restoring over it would silently undo a go-to-definition.
+
+None of this is written to the layout blob. `serialize.ts` carries what the user
+arranged; a scroll offset is where they happened to be looking, and persisting it
+would dirty the workspace — and drive the 600ms autosave — on every wheel tick.
+
 ## Persistence
 
 The store holds `{ workspaceId, frame }` as **one atom**; the debounced (~600ms)

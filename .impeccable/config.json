@@ -146,6 +146,15 @@
         "value": "0.68rem",
         "createdAt": "2026-09-03T20:48:24.075Z",
         "reason": "hassault game HUD: canvas-overlay type sizes, matching the sizes the pane's kill feed and scoreboard already use (0.72rem / 0.75rem). The module is the repo's documented theme-ratchet exception"
+      },
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "packages/core/src/notebook/notebook.css"
+        ],
+        "createdAt": "2026-09-04T23:17:17.878Z",
+        "reason": "CLAUDE.local.md UI standards call for 'subtle border accents (e.g. a 2px top border in the accent colour) over full-perimeter glowing borders' - this is that rule applied to the left edge. It is also semantic, not decoration: the 2px rail is the cell's run-state channel (idle / running-accent / error-danger / done-ok), the same left-gutter indicator Jupyter and VS Code notebooks use. It is a cell in a vertical stack, not a card."
       }
     ]
   }

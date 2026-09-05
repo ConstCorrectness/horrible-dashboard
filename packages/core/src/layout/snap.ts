@@ -181,6 +181,74 @@ export function rectForZone(
   }
 }
 
+/**
+ * The zone that fills the rest of the surface when `zone` is taken, or null.
+ *
+ * Halves only, and deliberately so. A quarter leaves an L-shaped remainder that no
+ * single zone describes; a third leaves two; `center` leaves a frame; `max` leaves
+ * nothing. Returning a "closest" zone for those would move a second window somewhere
+ * the user did not point at, which is worse than not moving it — the whole value of
+ * the fill is that the result is the split you were already looking at.
+ */
+export function complementZone(zone: SnapZone): SnapZone | null {
+  switch (zone) {
+    case 'left':
+      return 'right';
+    case 'right':
+      return 'left';
+    case 'top':
+      return 'bottom';
+    case 'bottom':
+      return 'top';
+    default:
+      return null;
+  }
+}
+
+/** How much of `a` lies inside `b`, as a fraction of `a`'s area (0 when either is empty). */
+export function overlapFraction(a: WindowRect, b: WindowRect): number {
+  const area = a.w * a.h;
+  if (area <= 0) return 0;
+  const w = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+  const h = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+  if (w <= 0 || h <= 0) return 0;
+  return (w * h) / area;
+}
+
+/**
+ * The window snap-assist would move into `complementZone(zone)`, or null.
+ *
+ * Lives here, beside `rectForZone`, for the same reason everything else in this file
+ * does: the drag preview draws the second rect only when a fill will actually happen,
+ * and the reducer decides whether one does. Two copies of "is there a candidate"
+ * would drift into a preview that promises a split and a drop that delivers one
+ * window on top of another.
+ */
+export function fillTarget(
+  windows: readonly WindowState[],
+  excludeId: string,
+  zone: SnapZone,
+  viewport: Size,
+  cfg: SnapConfig = DEFAULT_SNAP,
+): WindowState | null {
+  const other = complementZone(zone);
+  if (!other) return null;
+  const taken = rectForZone(zone, viewport, cfg);
+  return (
+    windows
+      .filter((w) => w.id !== excludeId && w.mode !== 'minimized')
+      // Already in the complement: nothing to do, and re-snapping it would
+      // overwrite the `restoreRect` it holds for its own un-snap.
+      .filter((w) => w.snap !== other)
+      // Covering the half just taken — maximized, snapped to the same zone, or
+      // simply overlapping it enough that it is now hidden behind the new window.
+      .filter(
+        (w) => w.mode === 'maximized' || w.snap === zone || overlapFraction(w.rect, taken) >= 0.5,
+      )
+      .sort((a, b) => b.z - a.z)[0] ?? null
+  );
+}
+
 /** Scale a rect from one surface size to another, proportionally on each axis. */
 export function rescaleRect(rect: WindowRect, from: Size, to: Size): WindowRect {
   // A zero-sized origin carries no information to scale by — a surface that was

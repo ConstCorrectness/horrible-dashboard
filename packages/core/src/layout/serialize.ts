@@ -315,6 +315,20 @@ export function deserialize(
         const mode: WindowMode =
           entry.mode === 'minimized' || entry.mode === 'maximized' ? entry.mode : 'normal';
         const snap = isSnapZone(entry.snap) ? entry.snap : undefined;
+        // What the window was before it was minimized. Additive: a blob written
+        // before this simply has none, and a minimized window restores the old
+        // way. Only meaningful while minimized — read on any other mode it would
+        // be a stale record no code path clears.
+        const from = entry.minimizedFrom as Record<string, unknown> | undefined;
+        const minimizedFrom =
+          mode === 'minimized' && from && typeof from === 'object'
+            ? {
+                mode: (from.mode === 'maximized' ? 'maximized' : 'normal') as
+                  | 'normal'
+                  | 'maximized',
+                ...(isSnapZone(from.snap) ? { snap: from.snap } : {}),
+              }
+            : undefined;
         return {
           id,
           area: {
@@ -330,6 +344,7 @@ export function deserialize(
             : {}),
           mode,
           ...(snap ? { snap } : {}),
+          ...(minimizedFrom ? { minimizedFrom } : {}),
           z: num(entry.z, index + 1),
         };
       })

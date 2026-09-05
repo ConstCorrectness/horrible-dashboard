@@ -43,7 +43,12 @@ picking colours.
 
 `hud` sets every radius to 0, which makes it the theme that **audits the radius
 tokens**: a component that hardcoded a `border-radius` is visible there and nowhere
-else.
+else. That audit is now also a test — `design-tokens.test.ts` fails on a literal
+`border-radius` in the shell sheets (`styles.css`, `frame.css`, `desktop.css`,
+`taskbar.css`), which is how ~190 of them were found and converted. `50%`, `999px` and
+`9999px` are exempt: those are circles and pills, a shape rather than a corner
+treatment. Module CSS is still being converted and is deliberately outside the rule —
+one that fails on eighty known offenders is one people disable.
 
 `daylight` and `retro` set `color-scheme: light`. That is not decoration — it is
 what flips native scrollbars, form controls and the caret. Without it a light theme
@@ -166,9 +171,12 @@ settled on, promoted so everything else can use them. Sizes that look oddly prec
 
 Unlike colour, the scale is **theme-independent**. A theme changes how the app
 looks, not how far apart things sit. `--radius-*` is the deliberate exception and
-stays per-theme, because a radius genuinely is part of a theme's character:
-midnight's 4px against studio's 6px is most of the difference between a hairline
-look and a soft one.
+stays per-theme, because a radius genuinely is part of a theme's character. The scale
+is deliberately **sharp**: `midnight` runs 0/1/2/2 and `glass`, the softest, only
+reaches 6px at `--radius-xl`. The app's look is angular and technical — full-perimeter
+rounding reads as a generic card stack — and `--radius-lg` keeping a couple of pixels
+rather than dropping to 0 is what stops a window corner aliasing against its own drop
+shadow. `hud` and `retro` are square outright.
 
 ### Elevation has three steps, not five
 

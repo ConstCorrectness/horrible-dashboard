@@ -59,6 +59,22 @@ interface UnsavedState {
 }
 const unsavedCache = new Map<string, UnsavedState>();
 
+/**
+ * Where you were in a buffer: caret and scroll offset, keyed by source URI.
+ *
+ * Separate from `unsavedCache` because it applies to a *clean* buffer too — the
+ * common case is switching tabs to check something and coming back to find the file
+ * scrolled to the top with the caret at position 0, which is indistinguishable from
+ * having lost your place. Source-keyed, like the cache above, so reopening the file
+ * anywhere lands where you left it rather than only in the pane you left it in.
+ */
+interface ViewLocus {
+  anchor: number;
+  head: number;
+  scrollTop: number;
+}
+const locusCache = new Map<string, ViewLocus>();
+
 /** Open a workspace file (go-to-definition target) and reveal it in the tree. The
  * reveal runs once the new buffer is the active one. */
 function goToFile(path: string): void {
@@ -188,7 +204,7 @@ export function BufferView() {
   // Scroll+select the current locus if it targets this file. A stable ref so both the
   // locus subscription and the load effect (once content has arrived) call the latest;
   // it reads everything live, so calling a slightly stale reference is fine.
-  const applyLocusRef = useRef<() => void>(() => {});
+  const applyLocusRef = useRef<() => boolean>(() => false);
 
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -363,7 +379,17 @@ export function BufferView() {
       }),
     });
     viewRef.current = view;
-    return () => view.destroy();
+    return () => {
+      // Record before tearing down: `scrollDOM` is detached the moment `destroy`
+      // runs, and a detached element reads a scrollTop of 0 — which looks exactly
+      // like "the user was at the top" and would overwrite a real position.
+      const src = sourceRef.current;
+      if (src) {
+        const { anchor, head } = view.state.selection.main;
+        locusCache.set(src, { anchor, head, scrollTop: view.scrollDOM.scrollTop });
+      }
+      view.destroy();
+    };
   }, []);
 
   // Load (or reload) the source content into the editor.
@@ -448,7 +474,21 @@ export function BufferView() {
         setStatus(null);
         // Content is now in the doc — re-apply any pending locus so a jump that opened
         // this file (its scroll fired against an empty doc) lands on the right line.
-        applyLocusRef.current();
+        const jumped = applyLocusRef.current();
+        // Then, only if no locus claimed this buffer, put the caret and the scroll
+        // back where the last mount left them. A locus is someone *asking* for a
+        // line and must win; restoring over it would silently undo a go-to-definition.
+        const locus = source ? locusCache.get(source) : undefined;
+        if (locus && !jumped) {
+          const max = view.state.doc.length;
+          view.dispatch({
+            selection: {
+              anchor: Math.min(locus.anchor, max),
+              head: Math.min(locus.head, max),
+            },
+          });
+          view.scrollDOM.scrollTop = locus.scrollTop;
+        }
       })
       .catch((err: unknown) => {
         if (!cancelled) setStatus(err instanceof Error ? err.message : String(err));
@@ -524,11 +564,11 @@ export function BufferView() {
   // Follow the code locus: when another pane (outline, dash, agent — anything but
   // this editor) points the locus at this file, scroll to and select the range. The
   // `source !== 'editor'` guard is the echo break — we ignore loci we published.
-  applyLocusRef.current = () => {
+  applyLocusRef.current = (): boolean => {
     const view = viewRef.current;
     const path = filePathRef.current;
     const loc = getLocus();
-    if (!view || !path || loc.source === 'editor' || loc.path !== path || !loc.range) return;
+    if (!view || !path || loc.source === 'editor' || loc.path !== path || !loc.range) return false;
     const doc = view.state.doc;
     const startLine = Math.min(Math.max(loc.range.start.line, 1), doc.lines);
     const endLine = Math.min(Math.max(loc.range.end.line, 1), doc.lines);
@@ -539,6 +579,7 @@ export function BufferView() {
       selection: { anchor: from, head: to },
       effects: EditorView.scrollIntoView(from, { y: 'center' }),
     });
+    return true;
   };
   useEffect(() => {
     const apply = () => applyLocusRef.current();

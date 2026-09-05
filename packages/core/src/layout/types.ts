@@ -192,6 +192,16 @@ export interface WindowState {
   restoreRect?: WindowRect;
   mode: WindowMode;
   snap?: SnapZone;
+  /**
+   * What this window was before it was minimized, so restoring returns to it.
+   *
+   * `WindowMode` is a single enum, so minimizing a maximized or snapped window
+   * would otherwise overwrite the only record that it was maximized — and the
+   * restore path, which consumes `restoreRect`, would bring it back at its old
+   * free-floating size. A mode plus a zone, never a rect: the rect is re-derived
+   * from the zone so a restore after an app resize still fills the new surface.
+   */
+  minimizedFrom?: { mode: 'normal' | 'maximized'; snap?: SnapZone };
   z: number;
 }
 

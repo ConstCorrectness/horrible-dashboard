@@ -4,10 +4,13 @@ import {
   arrangeWindows,
   cascadeRect,
   clampRect,
+  complementZone,
   DEFAULT_SNAP,
+  fillTarget,
   isSnapZone,
   MIN_WINDOW_SIZE,
   rectForZone,
+  overlapFraction,
   rescaleRect,
   SNAP_ZONES,
   snapZoneAt,
@@ -243,5 +246,102 @@ describe('arrangeWindows', () => {
 
   it('returns nothing for no windows', () => {
     expect(arrangeWindows([], VIEW, 'grid')).toEqual([]);
+  });
+});
+
+describe('complementZone', () => {
+  it('pairs the four halves', () => {
+    expect(complementZone('left')).toBe('right');
+    expect(complementZone('right')).toBe('left');
+    expect(complementZone('top')).toBe('bottom');
+    expect(complementZone('bottom')).toBe('top');
+  });
+
+  it('has none for zones whose remainder no single zone describes', () => {
+    // A quarter leaves an L, a third leaves two, `center` leaves a frame and
+    // `max` leaves nothing. Returning a "closest" zone would move a second window
+    // somewhere the user never pointed.
+    for (const zone of ['tl', 'tr', 'bl', 'br', 'third-l', 'third-c', 'third-r', 'center', 'max'] as const) {
+      expect(complementZone(zone)).toBeNull();
+    }
+  });
+
+  it('is an involution on every zone that has one', () => {
+    for (const zone of SNAP_ZONES) {
+      const other = complementZone(zone);
+      if (other) expect(complementZone(other)).toBe(zone);
+    }
+  });
+
+  it('tiles the surface with the rects of a complementary pair', () => {
+    const l = rectForZone('left', VIEW);
+    const r = rectForZone(complementZone('left')!, VIEW);
+    expect(l.w + r.w).toBe(VIEW.w);
+    expect(r.x).toBe(l.w);
+  });
+});
+
+describe('overlapFraction', () => {
+  const box: WindowRect = { x: 0, y: 0, w: 100, h: 100 };
+
+  it('is 1 for an identical rect and 0 for a disjoint one', () => {
+    expect(overlapFraction(box, box)).toBe(1);
+    expect(overlapFraction(box, { x: 200, y: 0, w: 100, h: 100 })).toBe(0);
+  });
+
+  it('is a fraction of the FIRST rect, not of the intersection', () => {
+    // Asymmetric on purpose: "how much of this window is now covered" is the
+    // question, and a big window half-covering a small one is not the same fact
+    // as a small one sitting inside a big one.
+    const half = { x: 0, y: 0, w: 50, h: 100 };
+    expect(overlapFraction(box, half)).toBeCloseTo(0.5);
+    expect(overlapFraction(half, box)).toBe(1);
+  });
+
+  it('is 0 for an empty rect rather than dividing by zero', () => {
+    expect(overlapFraction({ x: 0, y: 0, w: 0, h: 0 }, box)).toBe(0);
+  });
+});
+
+describe('fillTarget', () => {
+  const maxed = (id: string): WindowState => ({
+    ...win(id, rectForZone('max', VIEW)),
+    mode: 'maximized',
+  });
+
+  it('picks a maximized window to fill the other half', () => {
+    const a = maxed('a');
+    expect(fillTarget([a, win('b', rectForZone('right', VIEW))], 'b', 'right', VIEW)?.id).toBe('a');
+  });
+
+  it('is null when nothing covers the half being taken', () => {
+    const away = win('a', { x: 600, y: 400, w: 300, h: 300 });
+    expect(fillTarget([away, win('b', rectForZone('left', VIEW))], 'b', 'left', VIEW)).toBeNull();
+  });
+
+  it('is null for a zone with no complement, however covered', () => {
+    expect(fillTarget([maxed('a')], 'b', 'tl', VIEW)).toBeNull();
+    expect(fillTarget([maxed('a')], 'b', 'max', VIEW)).toBeNull();
+  });
+
+  it('skips a window already in the complement', () => {
+    // Re-snapping it would overwrite the restoreRect it holds for its own un-snap.
+    const settled: WindowState = { ...win('a', rectForZone('left', VIEW)), snap: 'left' };
+    expect(fillTarget([settled], 'b', 'right', VIEW)).toBeNull();
+  });
+
+  it('skips a minimized window, which is not covering anything', () => {
+    const hidden: WindowState = { ...maxed('a'), mode: 'minimized' };
+    expect(fillTarget([hidden], 'b', 'right', VIEW)).toBeNull();
+  });
+
+  it('picks the topmost of several candidates', () => {
+    const low = { ...maxed('low'), z: 1 };
+    const high = { ...maxed('high'), z: 9 };
+    expect(fillTarget([low, high], 'b', 'left', VIEW)?.id).toBe('high');
+  });
+
+  it('never picks the window being snapped', () => {
+    expect(fillTarget([maxed('a')], 'a', 'left', VIEW)).toBeNull();
   });
 });

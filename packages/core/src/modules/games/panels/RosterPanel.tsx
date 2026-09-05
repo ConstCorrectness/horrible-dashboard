@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 
-import { registry } from '../../../registry';
 import { requestChallengeDraft } from '../challenge-draft';
+import { openGamesSection } from '../hub-section';
 import {
   friendAccept,
   friendRemove,
@@ -61,7 +61,7 @@ export function RosterPanel() {
       {!social.joined && (
         <div className="games-roster-hint">
           <span>Enter the Plaza to see who's online and hang out.</span>
-          <button type="button" onClick={() => registry.openPanel('games.plaza')}>
+          <button type="button" onClick={() => openGamesSection('social')}>
             Open the Plaza →
           </button>
         </div>

@@ -1,0 +1,457 @@
+/**
+ * Notebook cell chrome.
+ *
+ * Everything here used to be inline style objects on `NotebookEditor`, which meant
+ * the generated markdown HTML (`<h1>`, `<pre>`, `<table>`) inherited whatever global
+ * rules happened to exist, and KaTeX had nowhere to put its stylesheet. A real sheet
+ * also lets a cell say what it *is* — code, markdown, running, failed — through one
+ * class rather than a chain of ternaries computing colours.
+ *
+ * Angular by design (see the project's UI standards): a 2px left accent rail carries
+ * run state, and nothing is rounded. Every colour is a theme token so the sheet works
+ * in `daylight` and `hud` as well as `midnight`.
+ */
+@import 'katex/dist/katex.min.css';
+
+.nb-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.5rem 0.5rem 40vh;
+  /* Trailing space so the last cell can be scrolled up to the middle of the pane
+     to work on, rather than being pinned to the bottom edge. */
+}
+
+/* --- one cell ------------------------------------------------------------ */
+
+.nb-cell {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 0.4rem;
+  padding: 0.3rem 0.45rem 0.3rem 0;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--nb-rail, var(--border));
+  border-radius: 0;
+  background: var(--nb-cell-bg, transparent);
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+  /* Staggered entrance, capped by the inline `--nb-i` the pane sets — a hundred-cell
+     notebook must not take ten seconds to finish arriving. */
+  animation: nb-cell-in 180ms ease both;
+  animation-delay: calc(var(--nb-i, 0) * 18ms);
+}
+
+@keyframes nb-cell-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nb-cell {
+    animation: none;
+  }
+}
+
+.nb-cell:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+
+.nb-cell--markdown {
+  --nb-cell-bg: color-mix(in srgb, var(--text-dim) 5%, transparent);
+  --nb-rail: color-mix(in srgb, var(--text-dim) 35%, transparent);
+}
+
+.nb-cell--running,
+.nb-cell--queued {
+  --nb-rail: var(--accent);
+}
+
+.nb-cell--error {
+  --nb-rail: var(--danger);
+  --nb-cell-bg: color-mix(in srgb, var(--danger) 6%, transparent);
+}
+
+.nb-cell--done {
+  --nb-rail: color-mix(in srgb, var(--ok) 55%, transparent);
+}
+
+/* --- prompt gutter ------------------------------------------------------- */
+
+.nb-gutter {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.15rem;
+  width: 2.9rem;
+  padding: 0.15rem 0 0 0.4rem;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.68rem;
+  line-height: 1.2;
+  color: var(--text-dim);
+  user-select: none;
+}
+
+.nb-gutter-kind {
+  font-size: 0.58rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+/* The run-state glyph. An SVG inheriting `currentColor`, so one rule colours it. */
+.nb-state {
+  display: block;
+  width: 12px;
+  height: 12px;
+}
+
+.nb-state--running,
+.nb-state--queued {
+  color: var(--accent);
+}
+
+.nb-state--running {
+  animation: nb-spin 1.1s linear infinite;
+}
+
+.nb-state--done {
+  color: var(--ok);
+}
+
+.nb-state--error {
+  color: var(--danger);
+}
+
+@keyframes nb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nb-state--running {
+    animation: none;
+  }
+}
+
+.nb-body {
+  flex: 1;
+  min-width: 0;
+}
+
+/* --- actions ------------------------------------------------------------- */
+
+.nb-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  visibility: hidden;
+}
+
+.nb-cell:hover .nb-actions,
+.nb-cell:focus-within .nb-actions {
+  visibility: visible;
+}
+
+.nb-actions button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.nb-actions button:hover {
+  border-color: var(--border);
+  color: var(--text);
+  background: var(--surface-2, transparent);
+}
+
+.nb-actions button svg {
+  width: 12px;
+  height: 12px;
+}
+
+.nb-actions button.is-danger:hover {
+  border-color: color-mix(in srgb, var(--danger) 50%, transparent);
+  color: var(--danger);
+}
+
+/* --- diagnostics and outputs -------------------------------------------- */
+
+.nb-diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  margin-top: 0.25rem;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.68rem;
+  color: var(--warn);
+}
+
+.nb-outputs {
+  margin-top: 0.35rem;
+  padding: 0.3rem 0 0.1rem 0.5rem;
+  /* A rail rather than the old dashed top border: it lines the output up under the
+     cell's own accent, so a long output still reads as belonging to its cell. */
+  border-left: 1px solid var(--border);
+  border-top: 1px solid var(--border);
+}
+
+.nb-output-text {
+  margin: 0;
+}
+
+.nb-output-media {
+  /* Capped: one 8-inch figure at 100 dpi otherwise pushes every later cell off the
+     pane, and scrolling past it is the only way to reach them. */
+  max-height: 60vh;
+  overflow: auto;
+  margin: 0.15rem 0;
+}
+
+.nb-output-media img,
+.nb-output-media svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.nb-output-html {
+  font-size: 0.8rem;
+  overflow-x: auto;
+}
+
+.nb-output-latex {
+  overflow-x: auto;
+  padding: 0.2rem 0;
+}
+
+.nb-output-unsupported {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.68rem;
+  color: var(--text-dim);
+}
+
+/* --- rendered markdown --------------------------------------------------- */
+
+.nb-markdown {
+  font-size: 0.85rem;
+  line-height: 1.55;
+  padding: 0.1rem 0.15rem;
+  cursor: text;
+}
+
+.nb-markdown > :first-child {
+  margin-top: 0;
+}
+
+.nb-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.nb-markdown h1,
+.nb-markdown h2,
+.nb-markdown h3,
+.nb-markdown h4,
+.nb-markdown h5,
+.nb-markdown h6 {
+  margin: 0.8rem 0 0.35rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1.25;
+  color: var(--text);
+}
+
+.nb-markdown h1 {
+  font-size: 1.25rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--border);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.nb-markdown h2 {
+  font-size: 1.05rem;
+}
+
+.nb-markdown h3 {
+  font-size: 0.95rem;
+}
+
+.nb-markdown p {
+  margin: 0.4rem 0;
+}
+
+.nb-markdown ul,
+.nb-markdown ol {
+  margin: 0.4rem 0;
+  padding-left: 1.3rem;
+}
+
+.nb-markdown li {
+  margin: 0.12rem 0;
+}
+
+.nb-markdown code {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.85em;
+  padding: 0.05em 0.3em;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--text-dim) 10%, transparent);
+  color: var(--accent);
+}
+
+.nb-markdown pre {
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.6rem;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-left: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--text-dim) 8%, transparent);
+}
+
+.nb-markdown pre code {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+}
+
+.nb-markdown blockquote {
+  margin: 0.5rem 0;
+  padding: 0.15rem 0.6rem;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--text-secondary, var(--text-dim));
+}
+
+.nb-markdown hr {
+  margin: 0.8rem 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.nb-markdown a {
+  color: var(--accent);
+}
+
+.nb-markdown table {
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+  font-size: 0.8rem;
+}
+
+.nb-markdown th,
+.nb-markdown td {
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+
+.nb-markdown th {
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/* --- header -------------------------------------------------------------- */
+
+.nb-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.72rem;
+}
+
+.nb-header-path {
+  font-family: var(--font-mono, monospace);
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nb-header button {
+  height: 22px;
+  padding: 0 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-secondary, var(--text-dim));
+  font-size: 0.66rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.nb-header button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  color: var(--text);
+}
+
+.nb-header button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.nb-header button.is-on {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+/* Kernel status: a dot plus a monospace word, the metadata treatment. */
+.nb-kernel {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.66rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.nb-kernel::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentcolor;
+}
+
+.nb-kernel--idle {
+  color: var(--ok);
+}
+
+.nb-kernel--dead {
+  color: var(--danger);
+}
+
+.nb-banner {
+  padding: 0.3rem 0.5rem;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.7rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.nb-banner--error {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.nb-banner--warn {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+}

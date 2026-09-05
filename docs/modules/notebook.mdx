@@ -186,6 +186,87 @@ dict), `cells_changed` `{notebook}`, `mode` `{mode}`, `graph`
 | `PUT /notebook/mode` | set the execution mode |
 | `GET /notebook/env` | whether the kernel interpreter is ready |
 
+## Rendering a cell
+
+`OutputRenderer` takes the raw nbformat `data` dict — the backend forwards it
+untouched, so disk and wire agree — and picks the **richest** representation it can
+draw:
+
+| MIME | Rendered as |
+| --- | --- |
+| `application/vnd.jupyter.widget-view+json` | live `WidgetView` (see above) |
+| `text/latex` | KaTeX, display mode |
+| `image/svg+xml` | inlined SVG |
+| `image/png`, `image/jpeg`, `image/gif`, `image/webp` | `<img>` from a data URI |
+| `text/html` | injected (trusted-local posture, same as plugins) |
+| `text/markdown`, `text/plain` | monospace, ANSI-parsed |
+
+Four things about that order and its edges:
+
+- **`text/latex` outranks the images.** SymPy and `IPython.display.Math` emit TeX
+  *plus* a `text/plain` repr, and taking the repr shows
+  `<IPython.core.display.Latex object>` where the user asked for an equation.
+- **The delimiters are stripped first.** `display(Latex(r'$$x$$'))` arrives wrapped and
+  `Math('x')` does not; handed `$$x$$`, KaTeX typesets the dollar signs as literal
+  characters.
+- **A bundle with no drawable MIME says so.** It used to render *nothing*, which looks
+  exactly like a cell that produced no output — so the reader debugs their code instead
+  of reading "this needs a renderer".
+- **SVG is inlined rather than data-URI'd.** matplotlib's svg backend and graphviz both
+  emit text, and an `<img>` would lose the selectable labels that are half the reason to
+  pick a vector backend.
+
+ANSI is hand-rolled (no dep) and covers 16-colour SGR, the xterm 256 cube and greyscale
+ramp, and truecolor. The extended forms (`38;5;n`, `38;2;r;g;b`) **consume the arguments
+that follow them** — read as plain SGR codes those arguments are interpreted as colours
+in their own right, which is why the loop advances rather than iterating. Swallowing
+them, as the first version did, produced tracebacks that were colourful in a terminal
+and half plain here: a rendering bug, not a missing feature.
+
+Images are capped at `60vh` with their own scrollbar. One 8-inch figure at 100 dpi
+otherwise pushes every later cell off the pane, and scrolling past it is the only way to
+reach them.
+
+### Math in markdown cells
+
+`markdown.ts` stays hand-rolled — it covers headings, emphasis, code, links, lists,
+blockquotes, rules, pipe tables and paragraphs — but math is **lifted out before
+anything else touches the source** and put back at the very end. Every other rule in the
+file corrupts TeX in a way that still renders: `escapeHtml` turns a raw `<` into an
+entity, the italic rule eats a lone `*`, and the backtick rule claims anything between
+two of them. The placeholder is a private-use codepoint, which survives escaping,
+matches none of the inline rules, and is not something a person can type.
+
+An inline span must open on a non-space, close on a non-space, stay on one line, and not
+be followed by a digit. All four exist to keep `it costs $5 and then $10` prose — those
+two dollars are a perfectly plausible inline pair, and typesetting the words between
+them is the classic false positive. A pipe **table** is likewise identified by its
+`|---|---|` separator, not by its pipes: `choose a | b` is prose.
+
+KaTeX runs with `throwOnError: false`, so a malformed expression renders in KaTeX's own
+error colour with the source visible. The alternative is an exception inside a cell's
+render and a blank output, where the reader can see neither the result nor what they
+typed.
+
+### Cell chrome
+
+Cell styling lives in `notebook/notebook.css` rather than in inline style objects, so
+the markdown body's generated `<h1>`/`<pre>`/`<table>` have scoped rules instead of
+inheriting whatever is global, and KaTeX's stylesheet has a home. A cell carries its
+state as a class (`nb-cell--running`, `--error`, `--markdown`) and a 2px left accent
+rail; the run-state badges are stroke SVG inheriting `currentColor`, because an emoji is
+a font — full-colour in a monochrome gutter and impossible to tint by state, which is
+the one thing those glyphs exist to signal.
+
+Scroll position and the markdown cell being edited are kept in the pane's view-state bag
+(see [windowing.mdx](../architecture/windowing.mdx#view-state-the-cheap-half)), so a
+workspace switch does not scroll the notebook back to the top or close a cell mid-edit.
+Pending debounced edits are **flushed** on unmount rather than cleared: an edit typed
+within `EDIT_SYNC_MS` of a tab switch otherwise never reached the backend document, and
+the store's optimistic copy hid that until the notebook was reloaded from disk.
+
+`training.notebook` consumes the same kit, so it inherits all of this.
+
 ## Contributions to the Layout Shell
 
 - **Panels** — `notebook.browser` ("Notebooks", singleton, left: file catalog +

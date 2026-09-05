@@ -4,7 +4,7 @@
  * (the panel may not be mounted yet) and also broadcast live for an
  * already-visible panel. See docs/architecture/panel-groups.mdx.
  */
-import { registry } from '../../registry';
+import { openGamesSection } from './hub-section';
 
 let pending: string | null = null;
 const listeners = new Set<(gameId: string) => void>();
@@ -12,7 +12,10 @@ const listeners = new Set<(gameId: string) => void>();
 /** Open the Challenges panel focused on `gameId`'s scenario set. */
 export function requestChallenges(gameId: string): void {
   pending = gameId;
-  registry.openPanel('games.challenges');
+  // `games.challenges` is a retired view id: the panel became a section of
+  // `games.lobby`. `openPanel` does no alias resolution and returns null in
+  // silence, so this button did nothing at all.
+  openGamesSection('career');
   listeners.forEach((l) => l(gameId));
 }
 

@@ -105,6 +105,17 @@ and the rest still resolve, through `VIEW_ALIASES` in `layout/controller.ts`, to
 section that now holds them. A saved *layout* is disposable and reseeds from its
 preset; the vocabulary is not.
 
+For a while the alias table was consulted **only** by the agent's `show`, so "open my
+profile" worked when the model said it and did nothing when the user clicked the button
+next to the same words: three in-app openers (🪪 Profile, "Open the Plaza →", and the
+Play card's 🎯 shortcut) still named `games.profile`/`games.plaza`/`games.challenges`,
+and `openPanel` on an unknown id returns `null` in silence — no toast, no warning, an
+inert button. Those five call sites now go through `openGamesSection`, `openPaneRouted`
+falls back to `VIEW_ALIASES` before giving up, and an id that resolves to nothing at all
+logs a warning. `packages/core/src/__tests__/openers-resolve.test.ts` scans every
+`openPanel('…')` literal in the workspace against the declared views plus the alias
+table, which is what would have caught all three.
+
 Sections are **mounted lazily and never unmounted** once visited (hidden with
 `display: none`): the builder holds unsaved code and the board holds canvas state,
 and neither should be lost by looking at the other.
@@ -1262,6 +1273,14 @@ Two ways to play, one engine:
   panel captures held keys and streams them (`arcade_input`); the node maps them to
   each tick's action instantly. A/D move, W jump, S block, U/J/K attack. Challenge
   a Plaza occupant to a `{game_id:"fighter", rated:false}` bout for human-vs-human.
+  New match calls `ensureConnected(true)` like every other play flow — self-play, so
+  this node holds both seats, which is what makes a solo bout possible. It was for a
+  while the one flow that *didn't*: the button was gated on `connected` and nothing in
+  the pane ever connected, so opened cold from the start menu it was permanently
+  disabled, and it only appeared to work if the lobby had connected earlier in the same
+  session. The pane also takes keyboard [capture](../architecture/keybindings.mdx) and
+  binds its key handlers to its own element — on `window` they fired app-wide while it
+  held focus, and the `keyup` handler ran even when it did not.
 
 **Spectating.** Any live table can be watched: `watch_table` joins the referee's
 observer set, which receives the `public_state` stream (never a seat's private

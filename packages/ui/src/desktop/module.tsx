@@ -148,7 +148,9 @@ export const desktopModule: ModuleManifest = {
     ...SNAP_CELLS.map((cell) => ({
       id: snapCommandId(cell.zone),
       title: `Window: Snap ${cell.label}`,
-      run: () => void snapFocused(cell.zone),
+      // `fill: true` — a keyboard snap is the same request as a drag to the edge,
+      // so it produces the same split rather than a window over a maximized one.
+      run: () => void snapFocused(cell.zone, true),
     })),
   ],
   keybindings: [

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Extension } from '@codemirror/state';
 
 import { useAgentContext } from '../../../agent-context';
+import { usePaneScroll, usePaneUiState } from '../../../layout/use-pane-ui-state';
 import { usePaneParams } from '../../../panes';
 import { CellEditor } from '../../../notebook/CellEditor';
 import { useNotebookLsp } from '../../../notebook/useNotebookLsp';
@@ -16,18 +17,20 @@ import {
 import type { CellRunState, NotebookCell } from '../../../notebook/types';
 import { useSession } from '../../../notebook/SessionStore';
 import { widgetManagerFor, type WidgetManager } from '../../../notebook/widgets/WidgetManager';
+import {
+  CloseIcon,
+  PlayIcon,
+  PlusIcon,
+  PlusTextIcon,
+  RunStateIcon,
+  WarnIcon,
+} from '../../../notebook/CellIcons';
 import { NOTEBOOK_CHANNEL, openNotebookSession } from '../store';
 import { NotebookBrowser } from './NotebookBrowser';
+import '../../../notebook/notebook.css';
 
 const dim = { color: 'var(--text-dim)' } as const;
 const EDIT_SYNC_MS = 400;
-
-const STATE_BADGE: Record<CellRunState, string> = {
-  queued: '⏳',
-  running: '▶',
-  done: '✓',
-  error: '✗',
-};
 
 /**
  * The reactive notebook pane: cells on a kernel spawned from the managed venv.
@@ -40,6 +43,12 @@ export function NotebookEditor() {
   const path = String(params.path ?? '');
   const store = useMemo(() => openNotebookSession(path), [path]);
   const state = useSession(store);
+  // Where the pane was scrolled to, and which markdown cell was open for editing.
+  // Both live in `pane-lifetime`'s view-state bag, so a workspace switch (which
+  // unmounts every pane) does not scroll the notebook back to the top or close a
+  // cell mid-edit. See `use-pane-ui-state.ts`.
+  const scrollRef = usePaneScroll<HTMLDivElement>();
+  const [editingMd, setEditingMd] = usePaneUiState<string | null>('editingMd', null);
   const editTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   // A notebook is addressed *relative to the notebook root* everywhere in this
   // module, but the language server resolves the interpreter and the project root by
@@ -79,9 +88,15 @@ export function NotebookEditor() {
     })),
   }));
 
+  // Flush on unmount rather than only clearing. A pending edit is at most
+  // `EDIT_SYNC_MS` old, and clearing the timer without running it drops it from the
+  // backend document — so a change typed a third of a second before switching tabs
+  // silently never happened. The optimistic copy in the store made this invisible
+  // until the notebook was reloaded from disk.
+  const flushAllRef = useRef<() => void>(() => {});
   useEffect(
     () => () => {
-      editTimers.current.forEach((t) => clearTimeout(t));
+      flushAllRef.current();
     },
     [],
   );
@@ -131,6 +146,10 @@ export function NotebookEditor() {
     },
     [store],
   );
+
+  flushAllRef.current = () => {
+    for (const cellId of [...editTimers.current.keys()]) flushEdits(cellId);
+  };
 
   const run = useCallback(
     (cellId: string) => {
@@ -192,39 +211,20 @@ export function NotebookEditor() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.5rem',
-          padding: '0.25rem 0.5rem',
-          borderBottom: '1px solid var(--border)',
-          fontSize: '0.75rem',
-        }}
-      >
-        <span style={dim}>{path}</span>
+      <div className="nb-header">
+        <span className="nb-header-path" title={path}>
+          {path}
+        </span>
         <button
           title="Toggle reactive / classic execution"
+          className={state.mode === 'reactive' ? 'is-on' : undefined}
           onClick={toggleMode}
-          style={{
-            color: state.mode === 'reactive' ? 'var(--accent, #539bf5)' : 'var(--text-dim)',
-          }}
         >
-          {state.mode === 'reactive' ? '⚡ reactive' : '↳ classic'}
+          {state.mode === 'reactive' ? 'reactive' : 'classic'}
         </button>
         <span style={{ flex: 1 }} />
-        <span
-          title="Kernel status"
-          style={{
-            color:
-              state.kernel === 'idle'
-                ? 'var(--ok, #57ab5a)'
-                : state.kernel === 'dead'
-                  ? 'var(--danger, #e5534b)'
-                  : 'var(--text-dim)',
-          }}
-        >
-          ● {state.kernel}
+        <span className={`nb-kernel nb-kernel--${state.kernel}`} title="Kernel status">
+          {state.kernel}
         </span>
         <button disabled={!sessionKey} onClick={() => store.runAll()}>
           Run all
@@ -242,34 +242,25 @@ export function NotebookEditor() {
           Restart
         </button>
       </div>
-      {state.error && (
-        <div
-          style={{ padding: '0.3rem 0.5rem', color: 'var(--danger, #e5534b)', fontSize: '0.75rem' }}
-        >
-          {state.error}
-        </div>
-      )}
+      {state.error && <div className="nb-banner nb-banner--error">{state.error}</div>}
       {state.mode === 'reactive' && state.diagnostics.length > 0 && (
-        <div
-          style={{
-            padding: '0.3rem 0.5rem',
-            color: 'var(--warn, #c69026)',
-            fontSize: '0.72rem',
-          }}
-        >
-          ⚠ {state.diagnostics.length} reactive issue
+        <div className="nb-banner nb-banner--warn">
+          {state.diagnostics.length} reactive issue
           {state.diagnostics.length > 1 ? 's' : ''} — cells won’t auto-run until resolved.
         </div>
       )}
-      <div style={{ flex: 1, overflow: 'auto', padding: '0.5rem' }}>
+      <div className="nb-scroll" ref={scrollRef}>
         {!sessionKey && !state.error && (
           <div style={{ fontSize: '0.8rem', ...dim }}>Starting kernel…</div>
         )}
         {state.cells.map((cell, i) => (
           <Cell
             key={cell.id}
+            index={i}
             cell={cell}
             notebookPath={path}
+            editing={editingMd === cell.id}
+            onEditing={(on) => setEditingMd(on ? cell.id : null)}
             lspExtensions={lsp.cellExtensions(cell)}
             runState={state.runStates[cell.id]}
             diagnostics={diagByCell.get(cell.id)}
@@ -322,9 +313,12 @@ export function NotebookEditor() {
 
 function Cell({
   cell,
+  index,
   runState,
   diagnostics,
   widgetManager,
+  editing,
+  onEditing,
   onChange,
   onRun,
   onDelete,
@@ -333,9 +327,16 @@ function Cell({
   lspExtensions,
 }: {
   cell: NotebookCell;
+  /** Position in the notebook, for the capped entrance stagger. */
+  index: number;
   runState?: CellRunState;
   diagnostics?: CellDiagnostic[];
   widgetManager?: WidgetManager;
+  /** Whether this markdown cell is open in the editor. Owned by the pane so it
+   *  survives an unmount — a cell you were writing must not snap back to rendered
+   *  HTML because you glanced at another tab. */
+  editing: boolean;
+  onEditing: (editing: boolean) => void;
   onChange: (source: string) => void;
   onRun: () => void;
   onDelete: () => void;
@@ -345,100 +346,86 @@ function Cell({
   /** This cell's slice of the notebook's language server (empty for markdown). */
   lspExtensions?: Extension[];
 }) {
-  const [hover, setHover] = useState(false);
   const isCode = cell.cell_type === 'code';
-  // Markdown cells render to HTML; double-click (or an empty cell) shows the editor.
-  const [editingMd, setEditingMd] = useState(cell.source.trim() === '');
+  // An empty markdown cell has nothing to render, so it opens straight into the
+  // editor rather than showing a blank box the user has to guess is double-clickable.
+  const editingMd = editing || cell.source.trim() === '';
 
   return (
     <div
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{
-        display: 'flex',
-        gap: '0.4rem',
-        marginBottom: '0.5rem',
-        border: '1px solid var(--border)',
-        borderLeft: `3px solid ${
-          runState === 'error'
-            ? 'var(--danger, #e5534b)'
-            : runState === 'running' || runState === 'queued'
-              ? 'var(--accent, #539bf5)'
-              : 'var(--border)'
-        }`,
-        borderRadius: 4,
-        padding: '0.25rem 0.4rem',
-      }}
+      className={[
+        'nb-cell',
+        isCode ? 'nb-cell--code' : 'nb-cell--markdown',
+        runState ? `nb-cell--${runState}` : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      // Capped at 12 steps: a long notebook must not spend two seconds arriving.
+      style={{ ['--nb-i' as string]: Math.min(index, 12) }}
     >
-      <div style={{ width: '2.6rem', textAlign: 'right', fontSize: '0.7rem', ...dim }}>
+      <div className="nb-gutter">
         {isCode ? (
           <>
-            <div>[{cell.execution_count ?? ' '}]</div>
-            <div>{runState ? STATE_BADGE[runState] : ''}</div>
+            <span>[{cell.execution_count ?? ' '}]</span>
+            {runState ? <RunStateIcon state={runState} /> : null}
           </>
         ) : (
-          'md'
+          <span className="nb-gutter-kind">md</span>
         )}
       </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
+      <div className="nb-body">
         {isCode || editingMd ? (
           <CellEditor
             value={cell.source}
             language={isCode ? 'python' : 'markdown'}
             onChange={onChange}
-            onRun={isCode ? onRun : () => setEditingMd(false)}
+            onRun={isCode ? onRun : () => onEditing(false)}
             notebookPath={notebookPath}
             extraExtensions={lspExtensions}
           />
         ) : (
           <div
-            onDoubleClick={() => setEditingMd(true)}
-            style={{ fontSize: '0.85rem', lineHeight: 1.5 }}
+            className="nb-markdown"
+            onDoubleClick={() => onEditing(true)}
             dangerouslySetInnerHTML={{ __html: renderMarkdown(cell.source) }}
           />
         )}
         {diagnostics && diagnostics.length > 0 && (
-          <div style={{ marginTop: '0.25rem', fontSize: '0.7rem', color: 'var(--warn, #c69026)' }}>
+          <div className="nb-diagnostics">
             {diagnostics.map((d, idx) => (
-              <div key={idx}>⚠ {d.message}</div>
+              <div key={idx} style={{ display: 'flex', gap: '0.3rem', alignItems: 'flex-start' }}>
+                <WarnIcon />
+                <span>{d.message}</span>
+              </div>
             ))}
           </div>
         )}
         {cell.outputs.length > 0 && (
-          <div
-            style={{
-              borderTop: '1px dashed var(--border)',
-              marginTop: '0.25rem',
-              paddingTop: '0.25rem',
-            }}
-          >
+          <div className="nb-outputs">
             {cell.outputs.map((o, idx) => (
               <OutputRenderer key={idx} output={o} widgetManager={widgetManager} />
             ))}
           </div>
         )}
       </div>
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '0.2rem',
-          visibility: hover ? 'visible' : 'hidden',
-        }}
-      >
+      <div className="nb-actions">
         {isCode && (
-          <button title="Run cell (Ctrl+Enter)" onClick={onRun}>
-            ▶
+          <button type="button" title="Run cell (Ctrl+Enter)" onClick={onRun}>
+            <PlayIcon />
           </button>
         )}
-        <button title="Add code cell below" onClick={() => onAddBelow('code')}>
-          +
+        <button type="button" title="Add code cell below" onClick={() => onAddBelow('code')}>
+          <PlusIcon />
         </button>
-        <button title="Add markdown cell below" onClick={() => onAddBelow('markdown')}>
-          +md
+        <button
+          type="button"
+          title="Add markdown cell below"
+          onClick={() => onAddBelow('markdown')}
+        >
+          <PlusTextIcon />
         </button>
-        <button title="Delete cell" onClick={onDelete}>
-          ✕
+        <button type="button" className="is-danger" title="Delete cell" onClick={onDelete}>
+          <CloseIcon />
         </button>
       </div>
     </div>

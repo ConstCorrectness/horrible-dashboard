@@ -2,7 +2,6 @@ import { useEffect, useState, type CSSProperties } from 'react';
 
 import { signOut } from '../../../account';
 import { useAccount } from '../../../useAccount';
-import { registry } from '../../../registry';
 import {
   decisionClassOf,
   gameAccent,
@@ -12,6 +11,7 @@ import {
 } from '../game-identity';
 import { useGames, gamesDisconnect, ensureConnected } from '../game-ws';
 import { fetchGamesCatalog, type GameCatalogEntry } from '../games-api';
+import { openGamesSection } from '../hub-section';
 import { setActiveGame } from '../selected-game';
 import { ConnectionChip } from './ConnectionChip';
 import { PlaySection } from './PlaySection';
@@ -110,7 +110,7 @@ function SidebarProfile() {
       <div className="games-sidebar-profile-expanded">
         <div
           className="games-sidebar-profile-avatar-container"
-          onClick={() => registry.openPanel('games.profile')}
+          onClick={() => openGamesSection('career')}
           title="Open Full Profile"
         >
           {renderAvatar(profile?.avatar ?? '👤')}
@@ -139,7 +139,7 @@ function SidebarProfile() {
         <button
           type="button"
           className="games-sidebar-profile-btn"
-          onClick={() => registry.openPanel('games.profile')}
+          onClick={() => openGamesSection('career')}
         >
           🪪 Profile
         </button>

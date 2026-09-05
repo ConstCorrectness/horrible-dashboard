@@ -117,4 +117,43 @@ describe('design tokens', () => {
       expect(themes, `themes.css must declare ${token}`).toContain(token);
     }
   });
+
+  /**
+   * The shell's corner radius comes from the scale, never from a literal.
+   *
+   * Same failure as the colour rule one level over: `hud` and `retro` set every
+   * radius to 0 precisely so a hardcoded one shows up somewhere, but a literal in
+   * the *shell* chrome is invisible in the other four themes and simply refuses to
+   * follow the switcher. The shell files are the ones held to it — module CSS is
+   * still being converted, and a rule that fails on 80 known offenders is a rule
+   * people disable.
+   *
+   * `50%`, `999px` and `9999px` are exempt: those are circles and pills, which are
+   * a shape rather than a corner treatment.
+   */
+  it('uses the radius scale for shell chrome, not literals', () => {
+    const shell = [
+      'packages/ui/src/styles.css',
+      'packages/ui/src/layout/frame.css',
+      'packages/ui/src/desktop/desktop.css',
+      'packages/ui/src/desktop/taskbar/taskbar.css',
+    ].map((f) => join(REPO, ...f.split('/')));
+    const literals: string[] = [];
+    for (const file of shell) {
+      for (const m of read(file).matchAll(/border-radius:\s*([^;]+);/g)) {
+        const value = m[1].trim();
+        if (/^(50%|9{3,4}px)$/.test(value)) continue;
+        // Strip whole `var(…)` groups — fallbacks included, since they may contain
+        // spaces and a nested `var()` — and see whether anything but `0` is left.
+        const bare = value.replace(/var\([^()]*(?:\([^()]*\)[^()]*)*\)/g, '').trim();
+        if (bare === '' || /^0(\s+0)*$/.test(bare)) continue;
+        literals.push(`${rel(file)}: ${value}`);
+      }
+    }
+    expect(
+      literals,
+      'hardcoded border-radius in shell chrome — use var(--radius-sm|md|lg|xl) ' +
+        'so the corner treatment follows the theme.',
+    ).toEqual([]);
+  });
 });

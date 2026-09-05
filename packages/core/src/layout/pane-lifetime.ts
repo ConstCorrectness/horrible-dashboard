@@ -35,6 +35,30 @@ interface Entry {
 
 const live = new Map<string, Entry>();
 
+/**
+ * Per-pane **view** state — scroll offsets, cursor positions, which cell was being
+ * edited. See `use-pane-ui-state.ts` for what belongs here and why it is not
+ * persisted.
+ *
+ * A second map rather than a second `Entry` with a no-op dispose, so that a module
+ * which only wants to remember a scroll offset does not acquire a lifetime resource
+ * whose disposal contract it never wrote. It is keyed identically, and every path
+ * below that drops a session drops this too — a leak here is invisible (nothing
+ * observable stays alive), which is exactly why it has to be handled by
+ * construction rather than noticed later.
+ */
+const uiState = new Map<string, Map<string, unknown>>();
+
+/** The pane's view-state bag, created empty on first use. */
+export function paneUiBag(key: string): Map<string, unknown> {
+  let bag = uiState.get(key);
+  if (!bag) {
+    bag = new Map();
+    uiState.set(key, bag);
+  }
+  return bag;
+}
+
 /** The stable identity of a pane across the whole app. */
 export function paneSessionKey(workspaceId: string | null, instanceId: string): string {
   return `${workspaceId ?? '-'}::${instanceId}`;
@@ -62,6 +86,7 @@ export function hasPaneSession(key: string): boolean {
 
 /** Dispose one pane's resource. Called from the layout's close paths. */
 export function closePaneSession(key: string): void {
+  uiState.delete(key);
   const entry = live.get(key);
   if (!entry) return;
   live.delete(key);
@@ -84,6 +109,11 @@ export function closePaneSession(key: string): void {
  */
 export function movePaneSession(fromKey: string, toKey: string): void {
   if (fromKey === toKey) return;
+  const bag = uiState.get(fromKey);
+  if (bag && !uiState.has(toKey)) {
+    uiState.delete(fromKey);
+    uiState.set(toKey, bag);
+  }
   const entry = live.get(fromKey);
   if (!entry) return;
   // Refuse to overwrite: a resource already at the destination would be dropped
@@ -104,7 +134,7 @@ export function closeWorkspaceSessions(
   keep: ReadonlySet<string> = new Set(),
 ): void {
   const prefix = `${workspaceId ?? '-'}::`;
-  for (const key of [...live.keys()]) {
+  for (const key of [...new Set([...live.keys(), ...uiState.keys()])]) {
     if (!key.startsWith(prefix)) continue;
     if (keep.has(key.slice(prefix.length))) continue;
     closePaneSession(key);
@@ -114,4 +144,5 @@ export function closeWorkspaceSessions(
 /** Test-only: drop everything without disposing (mirrors `layoutStore.resetForTests`). */
 export function resetPaneSessionsForTests(): void {
   live.clear();
+  uiState.clear();
 }

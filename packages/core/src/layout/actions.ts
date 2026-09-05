@@ -141,6 +141,16 @@ export type LayoutAction =
       mode: WindowMode;
       snap?: SnapZone;
       viewport?: { w: number; h: number };
+      /**
+       * Snap-assist fill: when this snaps the window to a half, also snap whatever
+       * was covering the other half into it, producing a real split.
+       *
+       * Opt-in rather than always-on, because it moves a window the caller did not
+       * name. A user dragging to an edge is asking for a split; an agent tool or a
+       * test calling `setWindowMode` is asking for exactly one window to move, and
+       * a second one shifting under it would be an effect with no cause on screen.
+       */
+      fill?: boolean;
     }
   /** Titlebar merge: move a pane into another window's tab strip (macOS/Win11). */
   | { type: 'MERGE_INTO_WINDOW'; instanceId: string; windowId: string; index?: number }
