@@ -225,6 +225,14 @@ the other. `assets.load_map` resolves bundled names first: an install directory 
 somewhere anyone can drop a file, and letting a stray `hd_pit.cgz` there decide
 what the game loads would be a surprise with no upside.
 
+`assets.py` is the map catalog and nothing else. The 3D asset cache — the
+GLB download/verify pipeline behind `/api/hassault/assets/*` — is
+`asset_cache.py`, deliberately a separate module: it was briefly written *over*
+`assets.py`, which removed `install_root`/`list_maps` from under six call sites in
+one commit. `GET /api/hassault/status` then 500'd, and because that call is the
+loader's `install` stage, the pane froze at 17% showing a bare fetch error rather
+than anything naming the module that had gone missing.
+
 ### The source of truth is JSON, not a `.cgz`
 
 A committed binary would be an opaque blob in a public repo — unreviewable,

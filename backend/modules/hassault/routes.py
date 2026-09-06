@@ -1589,11 +1589,11 @@ async def get_ranked_maps() -> dict[str, list[str]]:
     """
     import httpx
 
-    from backend.modules.games.client import resolve_server_url
+    from backend.modules.games.client import resolve_http_base
 
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
-            res = await client.get(f"{resolve_server_url().rstrip('/')}/hassault/maps")
+            res = await client.get(f"{resolve_http_base().rstrip('/')}/hassault/maps")
             res.raise_for_status()
             maps = res.json().get("maps") or []
     except Exception as exc:
@@ -1864,6 +1864,7 @@ async def delete_console_macro(name: str) -> dict[str, bool]:
 # Model Viewer, Model Editor, and Animation Editor API
 # ---------------------------------------------------------------------------
 
+
 class ArtModel(BaseModel):
     id: str
     name: str
@@ -1880,6 +1881,7 @@ class ArtModel(BaseModel):
 async def list_art_models() -> dict[str, list[ArtModel]]:
     """Scan and return all raw and compiled models in the repository."""
     from backend.paths import repo_root
+
     root = repo_root() or Path.cwd()
     art_dir = root / "assets" / "horribleAssault"
     public_dir = root / "apps" / "web" / "public"
@@ -1889,7 +1891,13 @@ async def list_art_models() -> dict[str, list[ArtModel]]:
     # 1. Compiled GLBs in apps/web/public
     if public_dir.is_dir():
         for glb in sorted(public_dir.glob("hassault-*.glb")):
-            cat = "weapon" if "weapon" in glb.name else "arms" if "arms" in glb.name else "operator"
+            cat = (
+                "weapon"
+                if "weapon" in glb.name
+                else "arms"
+                if "arms" in glb.name
+                else "operator"
+            )
             items.append(
                 ArtModel(
                     id=glb.stem,
@@ -1925,8 +1933,15 @@ async def list_art_models() -> dict[str, list[ArtModel]]:
                 if sub.name == "buildings":
                     for bld in sorted(sub.iterdir()):
                         if bld.is_dir():
-                            mfiles = list(bld.glob("source/*.fbx")) + list(bld.glob("source/*.obj")) + list(bld.glob("*.fbx"))
-                            tex = [str(t.relative_to(root)) for t in bld.glob("textures/*.*")]
+                            mfiles = (
+                                list(bld.glob("source/*.fbx"))
+                                + list(bld.glob("source/*.obj"))
+                                + list(bld.glob("*.fbx"))
+                            )
+                            tex = [
+                                str(t.relative_to(root))
+                                for t in bld.glob("textures/*.*")
+                            ]
                             for mf in mfiles:
                                 items.append(
                                     ArtModel(
@@ -1942,10 +1957,23 @@ async def list_art_models() -> dict[str, list[ArtModel]]:
                     continue
 
                 # Look for model files inside sub
-                model_files = list(sub.glob("source/*.fbx")) + list(sub.glob("source/*.obj")) + list(sub.glob("*.fbx"))
+                model_files = (
+                    list(sub.glob("source/*.fbx"))
+                    + list(sub.glob("source/*.obj"))
+                    + list(sub.glob("*.fbx"))
+                )
                 textures = [str(t.relative_to(root)) for t in sub.glob("textures/*.*")]
-                
-                cat = "arms" if "arms" in sub.name.lower() else "weapon" if any(w in sub.name.lower() for w in ["m4", "fal", "beretta", "remington", "svu", "carbine"]) else "character"
+
+                cat = (
+                    "arms"
+                    if "arms" in sub.name.lower()
+                    else "weapon"
+                    if any(
+                        w in sub.name.lower()
+                        for w in ["m4", "fal", "beretta", "remington", "svu", "carbine"]
+                    )
+                    else "character"
+                )
                 for mf in model_files:
                     items.append(
                         ArtModel(
@@ -1978,6 +2006,7 @@ async def list_art_models() -> dict[str, list[ArtModel]]:
 async def get_art_file(path: str) -> FileResponse:
     """Stream an asset file safely with proper MIME type."""
     from backend.paths import repo_root
+
     root = (repo_root() or Path.cwd()).resolve()
     target = (root / path).resolve()
 
@@ -1991,7 +2020,10 @@ async def get_art_file(path: str) -> FileResponse:
         try:
             target.relative_to(public_dir)
         except ValueError:
-            raise HTTPException(status_code=403, detail="Access denied: path outside allowed asset directories")
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied: path outside allowed asset directories",
+            )
 
     if not target.is_file():
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
@@ -2023,14 +2055,16 @@ async def list_studio_maps():
         try:
             with open(p, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            results.append({
-                "id": p.stem,
-                "name": data.get("name", p.stem),
-                "nodes_count": len(data.get("nodes", [])),
-                "version": data.get("version", 1),
-                "created_at": data.get("created_at", ""),
-                "file_path": str(p.relative_to(root)),
-            })
+            results.append(
+                {
+                    "id": p.stem,
+                    "name": data.get("name", p.stem),
+                    "nodes_count": len(data.get("nodes", [])),
+                    "version": data.get("version", 1),
+                    "created_at": data.get("created_at", ""),
+                    "file_path": str(p.relative_to(root)),
+                }
+            )
         except Exception as e:
             logger.warning("Failed to parse studio map %s: %s", p, e)
     return results
@@ -2079,16 +2113,14 @@ async def save_studio_map(map_id: str, scene: dict = Body(...)):
 @router.get("/assets/status")
 async def get_hassault_assets_status():
     """Check integrity and availability of HorribleAssault 3D models."""
-    from backend.modules.hassault.assets import get_assets_status
+    from backend.modules.hassault.asset_cache import get_assets_status
+
     return get_assets_status()
 
 
 @router.post("/assets/sync")
 async def sync_hassault_assets(force: bool = False):
     """Pull missing or corrupted 3D models from remote storage into local cache."""
-    from backend.modules.hassault.assets import sync_assets
+    from backend.modules.hassault.asset_cache import sync_assets
+
     return await sync_assets(force=force)
-
-
-
-

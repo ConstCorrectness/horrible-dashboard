@@ -26,7 +26,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from backend.modules.games.client import resolve_server_url
+from backend.modules.games.client import resolve_http_base, resolve_server_url
 from backend.modules.settings.routes import get_value
 from backend import jsonstore, paths
 
@@ -115,8 +115,7 @@ def sign_out() -> None:
 def _http_base() -> str:
     """The game server's HTTP base for sign-in, derived from the same ws:// URL the
     node plays against (resolve_server_url) — see that function on why they must match."""
-    url = resolve_server_url()
-    return url.replace("wss://", "https://").replace("ws://", "http://")
+    return resolve_http_base()
 
 
 def _unreachable_error() -> dict[str, str]:

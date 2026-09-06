@@ -54,6 +54,20 @@ def resolve_server_url() -> str:
     return str(get_value("games.serverUrl", DEFAULT_SERVER_URL) or DEFAULT_SERVER_URL)
 
 
+def resolve_http_base() -> str:
+    """The same server as `resolve_server_url`, addressed over HTTP.
+
+    The play URL is a websocket one (`wss://` by default), so anything reaching the
+    game server's REST side has to map the scheme. Derived here rather than spelled
+    out per caller: `httpx` will happily accept a `wss://` URL and issue the request,
+    so the mistake surfaces as a 404 from the wrong scheme rather than an error --
+    which is what silently emptied hassault's ranked map list.
+    """
+    return (
+        resolve_server_url().replace("wss://", "https://").replace("ws://", "http://")
+    )
+
+
 def _settings() -> tuple[str, str, str]:
     """(server url, auth token, policy). The token is the signed-in JWT if we have
     one, else the dev token."""
