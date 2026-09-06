@@ -235,7 +235,11 @@ export function RunsSidebar({
               color: 'var(--text)',
               border: '1px solid var(--border)',
               borderRadius: 'var(--radius-sm)',
-              padding: 'var(--space-2) var(--space-3)',
+              // Horizontal only: `controls.css` fixes a select's height and strips
+              // its vertical padding (the One Height Rule). Adding it back squeezes
+              // the content box under the text, and a native select — which also
+              // reserves room for its arrow — clips along the bottom.
+              padding: '0 var(--space-3)',
               fontSize: 'var(--fs-body)',
             }}
           >
@@ -275,7 +279,9 @@ export function RunsSidebar({
             color: 'var(--text)',
             border: '1px solid var(--border)',
             borderRadius: 'var(--radius-sm)',
-            padding: 'var(--space-2) var(--space-3)',
+            // Horizontal padding only: `controls.css` fixes this control's height and
+            // strips its vertical padding (the One Height Rule) — see theming.mdx.
+            padding: '0 var(--space-3)',
             fontSize: 'var(--fs-meta)',
           }}
         />

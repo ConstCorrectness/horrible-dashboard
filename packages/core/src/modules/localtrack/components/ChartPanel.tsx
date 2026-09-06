@@ -217,7 +217,10 @@ export function ChartPanel({
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {/* Linear / Log Toggle */}
+          {/* `btn-mini`: a chart header is dense enough that these two want to be
+              glyph-sized, so they opt out of the 30px button height (controls.css). */}
           <button
+            className="btn-mini"
             onClick={() => setLogScale(!logScale)}
             title={logScale ? 'Switch to Linear Scale' : 'Switch to Log Scale'}
             style={{
@@ -237,6 +240,7 @@ export function ChartPanel({
           {/* Remove Panel */}
           {onRemove && (
             <button
+              className="btn-mini"
               onClick={onRemove}
               title="Remove panel"
               style={{

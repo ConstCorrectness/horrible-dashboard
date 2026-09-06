@@ -577,7 +577,9 @@ export function VisualizerWidget() {
                 className="vdb-select"
                 style={{
                   fontSize: '0.75rem',
-                  padding: '0.15rem 0.4rem',
+                  // Horizontal padding only: `controls.css` fixes this control's height and
+                  // strips its vertical padding (the One Height Rule) — see theming.mdx.
+                  padding: '0 0.4rem',
                   background: 'var(--bg)',
                   color: 'var(--text)',
                   border: '1px solid var(--border)',
@@ -602,7 +604,7 @@ export function VisualizerWidget() {
                 className="vdb-select"
                 style={{
                   fontSize: '0.75rem',
-                  padding: '0.15rem 0.4rem',
+                  padding: '0 0.4rem',
                   background: 'var(--bg)',
                   color: 'var(--text)',
                   border: '1px solid var(--border)',

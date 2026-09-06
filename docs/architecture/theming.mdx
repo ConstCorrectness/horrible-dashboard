@@ -227,12 +227,12 @@ arguments, a card with no snippet) instead of leaving a gap where a border was.
 
 ### One control height
 
-`--control-h` (30px) is imposed in `controls.css` at the **element** level — on
-`input`, `select` and `button` themselves, not only on `.hd-field` — as well as in
-`primitives.css`. Those four have four different intrinsic heights, so a form row
-built from a select, a text input and a small button is ragged unless one number is
-imposed on all of them — and a row of controls that do not share a baseline is the
-single loudest sign of an unfinished form.
+`--control-h` (30px) is imposed in `controls.css` at the **element** level for
+`input` and `select` — not only on `.hd-field` — as well as in `primitives.css`.
+Those shapes have different intrinsic heights, so a form row built from a select, a
+text input and a small button is ragged unless one number is imposed on all of them —
+and a row of controls that do not share a baseline is the single loudest sign of an
+unfinished form.
 
 The element-level rule matters because most of this app is not built from the
 primitives: 701 raw `<button>` against 74 `<Button>`, and `--control-h` was
@@ -247,6 +247,76 @@ padding left in, an input settled at 34px while a `<select>` settled at 36px
 still 2px ragged — exactly the defect the rule exists to prevent. `textarea` is the
 one shape excluded, since it has to grow; it keeps its padding and floors at two
 control-heights.
+
+The rule covers **`input:not([type])`** as well as the typed selectors, and that is not
+belt-and-braces. An attribute selector matches the attribute, not the default it stands
+in for, so `<input>` with no `type=` — 114 of them here against 131 typed — matched
+nothing and kept its UA height of 21px beside a 30px select. That 9px gap is exactly the
+raggedness this rule exists to remove, and it was invisible because the rule *looked*
+like it covered everything. `checkbox`, `radio`, `range`, `color` and `file` stay
+typed-only on purpose: they must keep their intrinsic sizing, and `:not([type])` can only
+ever be a text box.
+
+One rule later in `styles.css` was quietly undoing the other half. A
+`button, select { padding: 0.35rem 0.75rem }` block at equal specificity put 5.6px back
+above and below **every** select in the app, leaving a 16.8px content box inside a 30px
+control — tight enough to fit 0.8rem text and clip anything larger. It now sets
+`padding-block: 0` for the select half. A `<button>` keeps it: nothing fixes a bare
+button's height, so for a button the padding *is* the height.
+
+**Never re-add vertical padding to a control in an inline style.** The height is
+fixed, so padding does not grow the box — it eats it. `padding: 0.5rem` on a 30px
+select leaves `30 − 16 − 2 = 12px` of content box for 12.8px text: the top padding
+pushes the label down and it clips along the bottom edge. Text inputs survive it
+looking merely tight, which is what makes it easy to ship; a `<select>` does not,
+because it is also reserving room for its arrow, so the dropdowns are where it shows
+up first. If a control needs to look roomier, it wants a larger `--control-h` in a
+scope, not padding. Style horizontal padding only (`padding: 0 0.6rem`).
+
+`packages/core/src/__tests__/control-padding.test.ts` is the guard, and it is zero
+tolerance rather than a ratchet — every occurrence was fixed when it was written, so a
+new one is always a regression. It reads both shapes the twenty real occurrences used:
+an inline style object, and a shared `const` referenced by `style={…}` (one wrong object
+in the Clubhouse Voice Agent panel was inherited by fourteen controls at once).
+
+### Buttons, and why their rule is scoped
+
+Buttons get the same 30px, but **not** from a bare `button` selector. A live census
+across seven panes found 322 buttons at 22 distinct heights, with the ordinary actions
+— Save, Refresh, Copy path, Clear cache, × — landing anywhere from 21px to 34px purely
+from how each one's font size composed with the shared `0.35rem` vertical padding.
+
+An element-wide `button { min-height }` was tried first and is wrong here. `<button>`
+is this codebase's generic interactive element: 47 distinct button classes are rows,
+chips, tabs, menu items, breadcrumbs, carousel dots or cards. The database sidebar's 55
+table rows are buttons, and the element-wide rule grew every one from 25px to 30px — a
+list half again as tall. Worse, **`min-height` beats `height` at any specificity**, so a
+component that had already sized itself could not opt out by being more specific:
+`.switch` sets `height: 26px` and was stretched with its pill distorted. That shape
+needs an exemption list longer than the rule, growing with every new pane.
+
+`button:not([class])` inverts it. A button with no class never asked to look like
+anything in particular — it is relying on the element default, which is exactly the
+population the standard is about and where Save/Refresh/×/Menu live. Everything that is
+a row, chip or tab carries a class and is untouched, with no list to maintain. A short
+list of named action-button classes (`.hd-btn`, `.setting-button`, `.lib-btn`,
+`.dbc-btn`, …) joins them. The rule to remember:
+
+> **A classless button is a standard 30px control. Give it a class if it is something
+> else** — and `.btn-mini` is the opt-in escape hatch for a classless button that is
+> genuinely tiny (the chart-header LIN/LOG and ✕ controls).
+
+Same mechanism as the inputs: `min-height` with the vertical padding zeroed, never a
+fixed `height`. Padding cannot standardise anything on its own — it composes with the
+font size, which is why one button sat at 34px and another at 21px under the identical
+declaration. Zeroing it lands every single-line button on exactly 30px whatever its type
+size, while a classless button holding two lines still grows past it (the settings
+"Re-probe" wraps to 44px), which a fixed height would have clipped. After the change,
+108 buttons sit at exactly 30px against 50 before, and every deliberate shape — dots at
+7px, reset links at 15px, tree rows at 20px, window chrome at 22px, tabs at 25px,
+switches at 26px, cards at 104px — is unchanged.
+
+### Width
 
 `select` additionally takes `min-width: 0`. A select sizes to its longest option
 string unless told otherwise, and `min-width: auto` is the flex default — which is

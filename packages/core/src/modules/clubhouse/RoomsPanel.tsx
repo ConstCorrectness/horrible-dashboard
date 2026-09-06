@@ -63,9 +63,19 @@ const agentLabelStyle: React.CSSProperties = {
   color: '#94a3b8',
   fontWeight: 600,
 };
+/**
+ * **Horizontal padding only.** `controls.css` gives every `<input>`/`<select>` a
+ * fixed `height: var(--control-h)` (30px) with its vertical padding removed —
+ * the One Height Rule that makes a row of mixed controls line up. Re-adding
+ * `padding: 0.5rem` here did not grow the box, it ate it: 16px of padding plus
+ * 2px of border out of 30px left 12px of content for 0.8rem text. Inputs got
+ * away with it; a `<select>` did not, because native rendering reserves extra
+ * space for its own arrow — so every dropdown in the Agent tab drew its label
+ * low and clipped along the bottom.
+ */
 const agentInputStyle: React.CSSProperties = {
   width: '100%',
-  padding: '0.5rem',
+  padding: '0 0.6rem',
   fontSize: '0.8rem',
   background: '#1d2026',
   color: '#f1f5f9',
@@ -3033,7 +3043,9 @@ export function RoomsPanel() {
                                 }
                               }}
                               style={{
-                                padding: '0.2rem',
+                                // Horizontal padding only: `controls.css` fixes this control's height and
+                                // strips its vertical padding (the One Height Rule) — see theming.mdx.
+                                padding: '0 0.4rem',
                                 fontSize: '0.7rem',
                                 background: '#1d2026',
                                 color: '#f1f5f9',
@@ -3176,15 +3188,7 @@ export function RoomsPanel() {
                             onChange={(e) =>
                               patchAgentConfig({ temperature: Number(e.target.value) })
                             }
-                            style={{
-                              width: '100%',
-                              padding: '0.5rem',
-                              fontSize: '0.8rem',
-                              background: '#1d2026',
-                              color: '#f1f5f9',
-                              border: '1px solid #2e333d',
-                              borderRadius: '4px',
-                            }}
+                            style={agentInputStyle}
                           />
                         </div>
 
@@ -3209,15 +3213,7 @@ export function RoomsPanel() {
                             onChange={(e) =>
                               patchAgentConfig({ maxTokens: Number(e.target.value) })
                             }
-                            style={{
-                              width: '100%',
-                              padding: '0.5rem',
-                              fontSize: '0.8rem',
-                              background: '#1d2026',
-                              color: '#f1f5f9',
-                              border: '1px solid #2e333d',
-                              borderRadius: '4px',
-                            }}
+                            style={agentInputStyle}
                           />
                         </div>
                       </div>
@@ -3429,11 +3425,8 @@ export function RoomsPanel() {
                               setPeopleMemoryQuery(e.target.value);
                               void refreshPeopleMemory(e.target.value);
                             }}
-                            style={{
-                              ...agentInputStyle,
-                              padding: '0.35rem 0.6rem',
-                              fontSize: '0.75rem',
-                            }}
+                            // Vertical padding stays out — see agentInputStyle.
+                            style={{ ...agentInputStyle, fontSize: '0.75rem' }}
                           />
 
                           {peopleMemory.length === 0 ? (
@@ -3592,7 +3585,7 @@ export function RoomsPanel() {
                                         }
                                         style={{
                                           ...agentInputStyle,
-                                          padding: '0.2rem 0.4rem',
+                                          padding: '0 0.4rem',
                                           fontSize: '0.68rem',
                                           flex: 1,
                                         }}

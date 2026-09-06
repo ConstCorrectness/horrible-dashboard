@@ -3399,6 +3399,21 @@ select {
   font: inherit;
 }
 
+/* ...but not vertically, for the select half.
+ *
+ * `controls.css` fixes a select's `height` to `--control-h` and takes its vertical
+ * padding out — that pair IS the One Height Rule. This block is later in the
+ * cascade at equal specificity, so its shorthand quietly put 5.6px back top and
+ * bottom, leaving a 16.8px content box inside a 30px control. It fits 0.8rem text
+ * and clips anything larger, which is the same failure the Voice Agent panel hit
+ * with a bigger number.
+ *
+ * A `<button>` keeps it: nothing fixes a bare button's height, so for a button the
+ * padding *is* the height. */
+select {
+  padding-block: 0;
+}
+
 button:hover {
   background: var(--bg-hover);
 }

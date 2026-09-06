@@ -97,7 +97,9 @@ export function AddPanelModal({
               color: 'var(--text-primary, #c9d1d9)',
               border: '1px solid var(--border-dim, #30363d)',
               borderRadius: 4,
-              padding: '6px 8px',
+              // Horizontal padding only: `controls.css` fixes this control's height and
+              // strips its vertical padding (the One Height Rule) — see theming.mdx.
+              padding: '0 8px',
               fontSize: 13,
               outline: 'none',
             }}
@@ -127,7 +129,7 @@ export function AddPanelModal({
               color: 'var(--text-primary, #c9d1d9)',
               border: '1px solid var(--border-dim, #30363d)',
               borderRadius: 4,
-              padding: '6px 8px',
+              padding: '0 8px',
               fontSize: 12,
               outline: 'none',
             }}
@@ -178,7 +180,7 @@ export function AddPanelModal({
               color: 'var(--text-primary, #c9d1d9)',
               border: '1px solid var(--border-dim, #30363d)',
               borderRadius: 4,
-              padding: '6px 8px',
+              padding: '0 8px',
               fontSize: 13,
               outline: 'none',
             }}

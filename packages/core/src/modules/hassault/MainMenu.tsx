@@ -425,7 +425,9 @@ function PlaySection(props: MainMenuProps) {
       <select
         value={props.mapName}
         onChange={(e) => props.onMapName(e.target.value)}
-        style={{ width: '100%', padding: '0.4rem' }}
+        // Horizontal padding only: `controls.css` fixes this control's height and
+        // strips its vertical padding (the One Height Rule) — see theming.mdx.
+        style={{ width: '100%', padding: '0 0.4rem' }}
         aria-label="Map"
       >
         {/* Grouped so it is obvious which maps ship with the app and which came

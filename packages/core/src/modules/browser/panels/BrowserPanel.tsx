@@ -343,7 +343,9 @@ export function BrowserPanel() {
             placeholder="Enter a URL or search…"
             style={{
               flex: 1,
-              padding: '0.2rem 0.5rem',
+              // Horizontal padding only: `controls.css` fixes this control's height and
+              // strips its vertical padding (the One Height Rule) — see theming.mdx.
+              padding: '0 0.5rem',
               fontSize: '0.8rem',
               border: '1px solid var(--border)',
               borderRadius: 4,

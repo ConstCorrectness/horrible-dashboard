@@ -322,7 +322,9 @@ export function TownPanel() {
                           placeholder="Estate / Plate Name"
                           style={{
                             fontSize: '0.75rem',
-                            padding: '4px 6px',
+                            // Horizontal padding only: `controls.css` fixes this control's height and
+                            // strips its vertical padding (the One Height Rule) — see theming.mdx.
+                            padding: '0 6px',
                             background: 'var(--bg-primary, #0d1117)',
                             border: '1px solid var(--border-dim, #30363d)',
                             borderRadius: 4,
@@ -405,7 +407,7 @@ export function TownPanel() {
                   color: 'var(--text-primary, #c9d1d9)',
                   border: '1px solid var(--border-dim, #30363d)',
                   borderRadius: 6,
-                  padding: '6px 10px',
+                  padding: '0 10px',
                   fontSize: '0.85rem',
                 }}
               >
@@ -432,7 +434,7 @@ export function TownPanel() {
                   color: 'var(--text-primary, #c9d1d9)',
                   border: '1px solid var(--border-dim, #30363d)',
                   borderRadius: 6,
-                  padding: '6px 10px',
+                  padding: '0 10px',
                   fontSize: '0.85rem',
                 }}
               />
@@ -599,7 +601,7 @@ export function TownPanel() {
               color: 'var(--text-primary, #c9d1d9)',
               border: '1px solid var(--border-dim, #30363d)',
               borderRadius: 6,
-              padding: '6px 10px',
+              padding: '0 10px',
             }}
           />
           <textarea

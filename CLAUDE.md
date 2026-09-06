@@ -178,6 +178,29 @@ Apply a modern, developer-first Kombai aesthetic across the UI components:
 - Command Snippets:
   - Display commands (uvx, npx, http endpoints) inside recessed, rounded code containers with syntax-colored protocol prefixes.
 - Compact Dev-Tool Form Controls:
-  - Standardize all inputs, selectors, and action buttons to a sleek 30px height with 6px border-radius.
+  - The 30px height is **already applied**, by `packages/ui/src/controls.css`, to every
+    `input`/`select`/`textarea` in the app — you do not implement it per form, and
+    `--control-h` is the one place it changes.
+  - **Never set vertical padding on an `input` or `select`.** Their height is *fixed*,
+    so padding does not make the control roomier, it shrinks the content box inside it:
+    `padding: 0.5rem` leaves `30 − 16 − 2 = 12px` for 12.8px text, and the label draws
+    low and clips along the bottom. Style horizontal padding only (`padding: '0 0.6rem'`).
+    A text input under that padding merely looks tight while a `<select>` visibly clips
+    (it also reserves room for its arrow), so this reads as "the dropdowns are broken"
+    and the inputs beside them are wrong too. `packages/core/src/__tests__/control-padding.test.ts`
+    fails the build on a new one; `textarea` is exempt (it is `height: auto` and must grow).
+  - Give every text `<input>` an explicit `type`. `controls.css` matches
+    `input[type='text']` and friends, and an attribute selector does not match a default
+    — a bare `<input>` used to opt itself out of the height rule silently.
+  - **A classless `<button>` is a standard 30px control; give it a class if it is
+    something else.** `<button>` is this codebase's generic interactive element — rows,
+    chips, tabs, menu items, cards — so the height rule is scoped to
+    `button:not([class])` plus a short list of named action-button classes rather than
+    to every button. Consequences when writing one: a plain action button needs no
+    styling to be the right height; a button that is really a row or a chip must carry a
+    class (it would be stretched otherwise); and `.btn-mini` is the opt-in escape hatch
+    for a classless button that is genuinely tiny. Vertical padding is wrong here for the
+    same reason as on an input — it composes with the font size, which is exactly how the
+    same declaration produced 21px and 34px buttons.
   - Group related inputs into inline segmented blocks.
   - Use high-contrast primary buttons paired with subtle ghost secondary buttons and clean micro-icons.

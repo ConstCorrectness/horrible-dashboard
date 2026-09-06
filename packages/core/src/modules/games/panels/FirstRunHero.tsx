@@ -161,7 +161,9 @@ export function FirstRunHero() {
                   color: 'var(--text-primary, #c9d1d9)',
                   border: '1px solid var(--border-dim, #30363d)',
                   borderRadius: 6,
-                  padding: '7px 10px',
+                  // Horizontal padding only: `controls.css` fixes this control's height and
+                  // strips its vertical padding (the One Height Rule) — see theming.mdx.
+                  padding: '0 10px',
                   fontSize: 13,
                   outline: 'none',
                 }}
@@ -177,7 +179,7 @@ export function FirstRunHero() {
                 color: 'var(--text-primary, #c9d1d9)',
                 border: '1px solid var(--border-dim, #30363d)',
                 borderRadius: 6,
-                padding: '7px 10px',
+                padding: '0 10px',
                 fontSize: 13,
                 outline: 'none',
               }}

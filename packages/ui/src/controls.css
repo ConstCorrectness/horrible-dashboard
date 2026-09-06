@@ -151,8 +151,82 @@ input[type='radio']:focus-visible,
   cursor: not-allowed;
 }
 
+/* --- Buttons -------------------------------------------------------------- */
+
+/**
+ * The One Height Rule, for buttons — and why it is scoped rather than element-wide.
+ *
+ * `--control-h` reached inputs and selects at the element level but never buttons,
+ * so the third control in every form row was the odd one out. A live census across
+ * seven panes found 322 buttons at 22 distinct heights, with the ordinary actions —
+ * Save, Refresh, Copy path, Clear cache, × — landing anywhere from 21px to 34px
+ * purely from how each one's font size composed with a shared `0.35rem` vertical
+ * padding. The docs already claimed buttons took this height; this makes it true.
+ *
+ * A plain `button { min-height }` was tried first and is wrong for this codebase.
+ * `<button>` here is the generic interactive element: 47 distinct button classes
+ * are rows, chips, tabs, menu items, breadcrumbs, carousel dots or cards. The
+ * database sidebar's 55 table rows are `<button>`, and an element-wide rule grew
+ * every one of them from 25px to 30px — a list half again as tall. Worse,
+ * `min-height` beats `height` at any specificity, so a component that had already
+ * sized itself could not opt out by being more specific; `.switch` sets
+ * `height: 26px` and was stretched with its pill distorted. That design needs an
+ * exemption list that is longer than the rule and grows with every new pane.
+ *
+ * `button:not([class])` inverts it. A button with no class is, by construction, one
+ * that never asked to look like anything in particular — it is relying on the
+ * element default, which is exactly the population the standard is about, and it is
+ * where Save/Refresh/×/Menu actually live. Everything that is a row, chip or tab
+ * carries a class and is untouched with no list to maintain. The rule to remember
+ * is short: **a classless button is a standard 30px control; give it a class if it
+ * is something else.**
+ *
+ * `min-height` with the vertical padding zeroed, not a fixed `height`. Padding
+ * cannot standardise anything on its own — it composes with the font size, which is
+ * why one button sat at 34px and another at 21px under the identical declaration.
+ * Zeroing it and letting `min-height` do the work lands every single-line button on
+ * exactly 30px whatever its type size, while a classless button holding two lines
+ * still grows past it, which a fixed `height` would have clipped.
+ */
+button:not([class]),
+.hd-btn,
+.setting-button,
+.lib-btn,
+.dbc-btn,
+.vdb-btn-refresh,
+.mx__btn,
+.games-sidebar-profile-btn,
+.ch-btn-action,
+.ch-btn-refresh,
+.ch-btn-disconnect {
+  min-height: var(--btn-h, var(--control-h));
+  padding-block: 0;
+}
+
+/**
+ * The escape hatch, for a classless button that is genuinely tiny.
+ *
+ * Opt-in, so a button is 30px unless somebody decided otherwise on purpose. Used
+ * by the chart-panel header controls, where a 10px LIN/LOG toggle beside a 14px ✕
+ * would look absurd at control height. It gives back only the sizing; colour and
+ * spacing stay the caller's.
+ */
+.btn-mini {
+  --btn-h: 0;
+  padding-block: revert;
+}
+
 /* --- Text-ish inputs and selects ------------------------------------------ */
 
+/* `input:not([type])` is not belt-and-braces, it is half the inputs in the app.
+   An attribute selector matches the attribute, not the default it stands in for,
+   so `<input>` with no `type=` — 114 of them here against 131 typed — matched
+   none of the rules below and kept its UA height of 21px beside a 30px select.
+   That 9px gap is the exact raggedness the One Height Rule exists to remove, and
+   it was invisible because the rule looked like it covered everything.
+   Typed-only on purpose otherwise: checkbox, radio, range, color and file must
+   keep their intrinsic sizing, and `:not([type])` can only ever be a text box. */
+input:not([type]),
 input[type='text'],
 input[type='number'],
 input[type='password'],
@@ -200,6 +274,7 @@ textarea {
   min-height: calc(var(--control-h) * 2);
 }
 
+input:not([type]):focus-visible,
 input[type='text']:focus-visible,
 input[type='number']:focus-visible,
 input[type='password']:focus-visible,
