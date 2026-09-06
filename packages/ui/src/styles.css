@@ -4058,18 +4058,153 @@ kbd {
 }
 
 /* The model picker is an *id*, so it is monospace and sized to sit beside the
-   session title rather than compete with it: three equal selects in a narrow pane
+   session title rather than compete with it: three equal controls in a narrow pane
    leaves all three unreadable, and the session title is the one that identifies
-   the conversation you are in. */
-.agent-session-bar select.agent-model-picker {
+   the conversation you are in.
+
+   It is a button, not a select: the list is searchable (see ModelPicker.tsx), and
+   the rules below have to beat `.agent-session-bar button`, which is written for
+   the icon buttons at the end of the bar. */
+.agent-session-bar button.agent-model-picker {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
   flex: 0 1 11rem;
+  min-width: 0;
+  height: 30px;
+  padding: 0 0.4rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
   font-family: var(--font-mono, monospace);
   font-size: 0.78rem;
   color: var(--text-dim);
 }
 
-.agent-session-bar select.agent-model-picker:hover:not(:disabled) {
+.agent-session-bar button.agent-model-picker:hover:not(:disabled),
+.agent-session-bar button.agent-model-picker[aria-expanded='true'] {
   color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.agent-model-picker-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.agent-model-picker-caret {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  opacity: 0.7;
+}
+
+/* The list. `fixed` and positioned from the trigger's measured rect — the session
+   bar sits inside a pane that clips its overflow, so an absolutely positioned
+   panel is cut off after a row or two. Above the window layer (30) and the
+   taskbar (40) for the same reason the minibuffer is. */
+.agent-model-menu {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  /* The real cap is inline: the panel measures the space it actually has and
+     flips above the trigger when there is not enough below. */
+  padding: 0.3rem;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-overlay);
+}
+
+.agent-model-search {
+  flex: none;
+  height: 30px;
+  padding: 0 0.45rem;
+  margin-bottom: 0.3rem;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: 0.82rem;
+}
+
+.agent-model-search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.agent-model-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Beats `.agent-session-bar button` for the rows, which are outside the bar but
+   share nothing with its icon buttons. */
+button.agent-model-option {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.25rem 0.4rem;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  cursor: pointer;
+  text-align: left;
+}
+
+button.agent-model-option.is-cursor {
+  background: color-mix(in srgb, var(--accent) 22%, var(--bg-hover));
+  color: var(--text);
+}
+
+button.agent-model-option.is-selected .agent-model-option-name {
+  color: var(--accent);
+}
+
+.agent-model-option-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.78rem;
+  color: var(--text);
+}
+
+.agent-model-option-group {
+  flex: none;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.agent-model-empty,
+.agent-model-count {
+  margin: 0;
+  padding: 0.35rem 0.4rem 0.15rem;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+
+.agent-model-count {
+  flex: none;
+  border-top: 1px solid var(--border);
+  margin-top: 0.25rem;
+  font-family: var(--font-mono, monospace);
 }
 
 .agent-session-bar button {

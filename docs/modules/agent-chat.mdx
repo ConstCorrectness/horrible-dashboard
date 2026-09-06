@@ -85,15 +85,42 @@ module (`backend/modules/chat/`) that mirrors the workspace store: file-backed J
 at `$HORRIBLE_DATA_DIR/chat-sessions.json`, CRUD under `/api/chat/sessions` (list
 returns metadata only; `GET /{id}` returns the full transcript; `PUT /{id}` is a
 partial upsert of `title`/`messages`; plus `/active` and `DELETE`). The chat widget
-loads the active session on mount (so a pane remount restores the conversation),
-lazily creates a session titled from the first prompt, and **auto-saves each
-completed turn**. The session bar (a `<select>` + new/delete) switches between them,
+reads the active session the **first** time it talks to an agent, lazily creates a
+session titled from the first prompt, and **auto-saves each completed turn**. The session bar (a `<select>` + new/delete) switches between them,
 and an **agent picker** beside it (populated from `GET /api/agent/roster`) selects
 which roster agent the pane talks to — sessions are **per agent** (`agent_id` on
 the session, `?agent=` on the list endpoint), so each agent keeps its own
 conversations and active pointer. See
 [Specialized agents & delegation](#specialized-agents--delegation).
 Frontend client: `packages/core/src/modules/agent/sessions.ts`.
+
+### The transcript lives outside the component
+
+`packages/core/src/modules/agent/chat-state.ts` holds the transcript, the in-flight
+turn, the draft and the active session id in a small module-level store keyed by
+agent id; `ChatWidget` reads it through `useSyncExternalStore` and owns none of it.
+
+That is not tidiness, it is the fix for "the chat resets when I prompt". The shell
+unmounts this pane routinely — a workspace switch tears down every pane, an inactive
+tab is unmounted rather than hidden ([Unmount is not close](../architecture/desktop-shell.mdx)),
+and the agent's **own layout tools** (`open_pane`, `split_area`) restructure the tree
+it is rendered in. With the conversation in `useState`, each of those blanked it: the
+pane came back showing the starter prompts, re-read the node, and got the last
+_saved_ state — which for a turn still streaming is the conversation as it was before
+the question. So the most reliable way to lose a conversation was to ask the agent to
+open something, which is the one thing this agent is for.
+
+Two consequences follow, and both are the point. A remount is **invisible** — same
+transcript, same draft, no refetch and no flash of the empty state. And a turn
+**survives its pane**: `askAgent`'s streaming callbacks write to the store, not into
+a dead component's `setState`, so tokens that arrived while the pane was unmounted are
+there when it comes back rather than silently dropped.
+
+The mount effect therefore loads only when that agent has not been read yet
+(`loaded`), and `loadSessions` will not overwrite a transcript it already holds for
+the active session — a reload landing mid-stream would otherwise truncate the answer
+back to the previous turn. State is per app session and deliberately not persisted:
+the node is still the durable store, this is only what makes the *pane* stateless.
 
 **A failed read is never rendered as an empty transcript.** `loadSessions` records
 `loading` / `ok` / `failed` rather than catching into a blank pane, because empty is
@@ -105,9 +132,18 @@ the backend), and the pane shows what happened with a Retry instead of a chat th
 looks wiped.
 
 A **model picker** (`ModelPicker`) sits in the same bar, listing every reachable
-provider's models as `<optgroup>`s — so a hosted provider appears there the moment a
-key is saved, and switching models does not mean leaving the conversation for the
-settings page. It writes the _provider and the model together_: they are two settings
+provider's models — so a hosted provider appears there the moment a key is saved, and
+switching models does not mean leaving the conversation for the settings page.
+
+It is a **searchable combobox, not a `<select>`**. One OpenRouter key puts several
+hundred models in this list (465 on a typical node), and a native select can only be
+walked: its type-ahead matches a *prefix*, so the queries people actually have — every
+`:free` model, everything with `qwen` in it — are unreachable by typing. The filter is
+a substring match over the provider label and the model id **together**, word by word
+and ANDed, so `free` narrows to the free tier, `lm studio` to one provider, and
+`free qwen` to the intersection. Arrow keys and Enter pick; the panel is
+`position: fixed` and measured off the trigger, because the session bar sits inside a
+pane that clips its overflow. It writes the _provider and the model together_: they are two settings
 (`agent.<id>.provider`, `agent.<id>.model`), and the settings page edits them as two
 controls, but here one option carries both, because a model name means nothing on a
 server that does not have it — `minimax/minimax-m3:free` selected while the provider

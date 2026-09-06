@@ -20,6 +20,7 @@ import {
 } from '@horrible/core';
 
 import { useHorizontalWheel } from '../hooks/useHorizontalWheel';
+import { useAppFullscreen } from '../hooks/useAppFullscreen';
 import { WindowControls } from './WindowChrome';
 
 // The strip renders from AppShell before the Frame ever mounts (home view), so
@@ -103,6 +104,14 @@ export function WorkspaceTabs() {
   // the webview), and it hosts the min/max/close controls. Interactive children
   // (tabs, buttons) aren't drag regions, so their clicks still land.
   const nativeChrome = hasCapability('chrome.workspaceTabs');
+  // The strip stops being a drag region while the app is fullscreen. The native
+  // `data-tauri-drag-region` handler maximizes on double-click *inside the
+  // webview*, never reaching `window_toggle_maximize`, and maximizing a
+  // fullscreen undecorated window is what paints the taskbar-shaped black band
+  // along the bottom (see enter_fullscreen in src-tauri/src/window.rs). There is
+  // nothing to drag in fullscreen anyway.
+  const { fullscreen } = useAppFullscreen();
+  const dragRegion = nativeChrome && !fullscreen;
   // Has to stay reachable once the tabs outgrow the width.
   const wheelRef = useHorizontalWheel<HTMLDivElement>();
   const { frame } = useSyncExternalStore(layoutStore.subscribe, layoutStore.getSnapshot);
@@ -124,7 +133,7 @@ export function WorkspaceTabs() {
     if (!nativeChrome) return null;
     return (
       <header className="frame-tabs frame-tabs--native frame-tabs--bare">
-        <div className="frame-tabs-scroll" data-tauri-drag-region="" />
+        <div className="frame-tabs-scroll" {...(dragRegion ? { 'data-tauri-drag-region': '' } : {})} />
         <WindowControls />
       </header>
     );
@@ -164,7 +173,7 @@ export function WorkspaceTabs() {
       <div
         className="frame-tabs-scroll"
         ref={wheelRef}
-        {...(nativeChrome ? { 'data-tauri-drag-region': '' } : {})}
+        {...(dragRegion ? { 'data-tauri-drag-region': '' } : {})}
       >
         {entries.map((entry) => (
           <button
@@ -226,8 +235,10 @@ export function WorkspaceTabs() {
 export function DetachedTitlebar() {
   const { workspaces, activeId } = useWorkspaces();
   const nativeChrome = hasCapability('chrome.workspaceTabs');
+  // Same rule as the full strip: no drag region while fullscreen — see WorkspaceTabs.
+  const { fullscreen } = useAppFullscreen();
   const name = workspaces.find((w) => w.id === activeId)?.name ?? 'Workspace';
-  const dragProps = nativeChrome ? { 'data-tauri-drag-region': '' } : {};
+  const dragProps = nativeChrome && !fullscreen ? { 'data-tauri-drag-region': '' } : {};
   return (
     <header
       className={`frame-tabs frame-tabs--detached${nativeChrome ? ' frame-tabs--native' : ''}`}

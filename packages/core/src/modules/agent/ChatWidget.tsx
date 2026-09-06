@@ -19,6 +19,7 @@ import { IconPlus, IconSend, IconTrash } from '../../glyphs';
 import { useSetting } from '../../settings';
 import { AgentReadiness } from './AgentReadiness';
 import { getAgentRoster, getAgentStatus, type AgentStatus, type RosterAgent } from './api';
+import { chatState, updateChat, useAgentChat, type ChatTurn } from './chat-state';
 import { compactHistory, MAX_HISTORY_TURNS } from './history';
 import { ModelPicker } from './ModelPicker';
 import { askAgent } from './orchestrator-client';
@@ -48,17 +49,6 @@ const AGENT_STARTERS = [
   'What is on screen right now?',
   'Summarise the file open in the editor',
 ];
-
-interface ChatTurn {
-  role: 'user' | 'assistant' | 'system';
-  text: string;
-  /** Streamed reasoning/thinking for an assistant turn (`reasoning_content`). */
-  reasoning?: string;
-  /** Mutating tools the agent ran during an assistant turn. */
-  actions?: string[];
-  /** Slash-command echo/output: shown but not persisted or replayed to the model. */
-  ephemeral?: boolean;
-}
 
 /** Persisted turns only (drop ephemeral slash output and system lines). */
 function toMessages(turns: ChatTurn[]): ChatMessage[] {
@@ -150,20 +140,37 @@ function ReasoningBlock({ reasoning, hasText }: ReasoningBlockProps) {
 
 export function ChatWidget() {
   const [status, setStatus] = useState<AgentStatus | 'loading' | 'backend-down'>('loading');
-  const [sessions, setSessions] = useState<ChatSessionMeta[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [turns, setTurns] = useState<ChatTurn[]>([]);
-  const [prompt, setPrompt] = useState('');
-  const [busy, setBusy] = useState(false);
   // The roster agent this pane is talking to; each agent keeps its own sessions.
   // It follows the *workspace*: a preset declares the persona its layout is for
   // (`FramePreset.agent`), so switching to Data Entry or Data Ops switches who answers.
   const [roster, setRoster] = useState<RosterAgent[]>([]);
-  // Whether this agent's conversations could be read. 'failed' is distinct from
-  // "no conversations yet" on purpose — see `loadSessions`.
-  const [restore, setRestore] = useState<'loading' | 'ok' | 'failed'>('loading');
   const { activeId: workspaceId } = useWorkspaces();
   const [agentId, setAgentId] = useState(() => agentForWorkspace(workspaceId));
+  // Which agent the async handlers below are for. They outlive the render that
+  // created them (a streaming turn, a session create), so they must never read
+  // `agentId` from the closure.
+  const agentIdRef = useRef(agentId);
+  agentIdRef.current = agentId;
+
+  // The conversation itself lives outside this component — see chat-state.ts. A
+  // pane that keeps its transcript in `useState` loses it every time the shell
+  // unmounts it, and the agent's own layout tools are one of the things that do.
+  const { sessions, activeId, turns, prompt, busy, restore } = useAgentChat(agentId);
+  const setSessions = (v: ChatSessionMeta[]) => updateChat(agentIdRef.current, { sessions: v });
+  const setActiveId = (v: string | null) => updateChat(agentIdRef.current, { activeId: v });
+  const setPrompt = (v: string) => updateChat(agentIdRef.current, { prompt: v });
+  const setBusy = (v: boolean) => updateChat(agentIdRef.current, { busy: v });
+  const setRestore = (v: 'loading' | 'ok' | 'failed') =>
+    updateChat(agentIdRef.current, { restore: v });
+  const setTurns = (v: ChatTurn[] | ((prev: ChatTurn[]) => ChatTurn[])) =>
+    updateChat(agentIdRef.current, (prev) => ({
+      turns: typeof v === 'function' ? v(prev.turns) : v,
+    }));
+  /** The transcript as it is *now*, not as this render saw it. */
+  const liveTurns = (): ChatTurn[] => chatState(agentIdRef.current).turns;
+  /** The active session id as it is now. Async handlers read and write it here. */
+  const liveActiveId = (): string | null => chatState(agentIdRef.current).activeId;
+
   const scrollRef = useRef<HTMLDivElement>(null);
   // Index of the first turn still inside the replay window, or -1 while the whole
   // conversation still fits. Derived from `turns` with the same bound `send` uses,
@@ -173,12 +180,6 @@ export function ChatWidget() {
     const omitted = persisted.length - MAX_HISTORY_TURNS;
     return omitted > 0 ? turns.indexOf(persisted[omitted]) : -1;
   })();
-  const turnsRef = useRef<ChatTurn[]>([]);
-  turnsRef.current = turns;
-  const activeIdRef = useRef<string | null>(null);
-  activeIdRef.current = activeId;
-  const agentIdRef = useRef('main');
-  agentIdRef.current = agentId;
   // The avatar (default on) cycles through its mood animations; the setting turns
   // it off for a plain text pane (see agentModule settings).
   const animateAvatar = useSetting<boolean>('agent.avatarAnimation') ?? true;
@@ -237,18 +238,24 @@ export function ChatWidget() {
    * difference so the pane can say which one happened and refuse to fork.
    */
   const loadSessions = useCallback(async (): Promise<boolean> => {
+    const agent = agentIdRef.current;
     setRestore('loading');
     try {
-      const list = await getSessions(agentIdRef.current);
+      const list = await getSessions(agent);
       setSessions(list.sessions);
       if (!list.active) {
         setActiveId(null);
         setTurns([]);
-      } else {
+      } else if (list.active !== chatState(agent).activeId || chatState(agent).turns.length === 0) {
+        // Only refetch a transcript we do not already hold. Overwriting the live
+        // one is how a turn in flight gets truncated: the fetch returns the last
+        // *saved* state (the previous turn), so a reload landing mid-stream
+        // replaces a growing answer with the conversation as it was before the
+        // question — indistinguishable from the agent losing its place.
         setActiveId(list.active);
         setTurns(toTurns((await getSession(list.active)).messages));
       }
-      setRestore('ok');
+      updateChat(agent, { restore: 'ok', loaded: true });
       return true;
     } catch {
       // Deliberately leaves `sessions`/`turns` untouched: whatever was on screen is
@@ -258,9 +265,18 @@ export function ChatWidget() {
     }
   }, []);
 
-  // Restore on mount, after a pane remount, and whenever the user switches agents
-  // — each agent has its own sessions.
+  // Restore when this agent's conversations have not been read yet, and whenever
+  // the user switches agents — each agent has its own sessions.
+  //
+  // It deliberately does NOT run on every mount any more. The shell unmounts this
+  // pane routinely (a workspace switch, a tab going inactive, the agent's own
+  // layout tools restructuring the tree it lives in), and re-reading the node on
+  // each of those is what made the chat appear to reset: for the length of the
+  // round trip the pane showed the starter prompts, and anything not yet saved —
+  // the turn being streamed right then — was replaced by the last saved state.
+  // The transcript is in the store now, so a remount has nothing to restore.
   useEffect(() => {
+    if (chatState(agentId).loaded) return;
     let cancelled = false;
     void (async () => {
       const ok = await loadSessions();
@@ -309,15 +325,14 @@ export function ChatWidget() {
     try {
       const session = await createSession(undefined, agentIdRef.current);
       setActiveId(session.id);
-      activeIdRef.current = session.id;
-      await refreshSessions();
+            await refreshSessions();
     } catch {
       setActiveId(null);
     }
   };
 
   const switchSession = async (id: string) => {
-    if (!id || id === activeIdRef.current) return;
+    if (!id || id === liveActiveId()) return;
     try {
       await setActiveSession(id);
       setActiveId(id);
@@ -340,7 +355,7 @@ export function ChatWidget() {
     try {
       const list = await deleteSession(id);
       setSessions(list.sessions);
-      if (id !== activeIdRef.current) return;
+      if (id !== liveActiveId()) return;
       setActiveId(list.active);
       setTurns(list.active ? toTurns((await getSession(list.active)).messages) : []);
     } catch {
@@ -357,7 +372,7 @@ export function ChatWidget() {
    * the whole risk is having the wrong one selected.
    */
   const confirmRemoveSession = async () => {
-    const id = activeIdRef.current;
+    const id = liveActiveId();
     if (!id) return;
     const title = sessions.find((s) => s.id === id)?.title;
     const ok = await dialogs.confirm({
@@ -371,30 +386,29 @@ export function ChatWidget() {
 
   // Lazily create a session on the first real message, titled from the prompt.
   const ensureSession = async (firstPrompt: string): Promise<void> => {
-    if (activeIdRef.current) return;
+    if (liveActiveId()) return;
     // A null `activeId` means "no conversation yet" only when the list was actually
     // read. If the read failed, creating one here would fork the history: the real
     // session is still on the node, and this turn would start a second one beside
     // it. Try the read once more and adopt what it finds first.
     if (restore === 'failed') {
       await loadSessions();
-      if (activeIdRef.current) return;
+      if (liveActiveId()) return;
     }
     try {
       const session = await createSession(firstPrompt.slice(0, 40), agentIdRef.current);
       setActiveId(session.id);
-      activeIdRef.current = session.id;
-      await refreshSessions();
+            await refreshSessions();
     } catch {
       /* backend down — proceed without persistence */
     }
   };
 
   const persist = async () => {
-    const id = activeIdRef.current;
+    const id = liveActiveId();
     if (!id) return;
     try {
-      await saveSession(id, { messages: toMessages(turnsRef.current) });
+      await saveSession(id, { messages: toMessages(liveTurns()) });
       await refreshSessions();
     } catch {
       /* best-effort */
@@ -539,11 +553,11 @@ export function ChatWidget() {
     // the system prompt and group guides with it. A new user turn and an empty
     // assistant turn we stream into are appended after.
     const { history } = compactHistory(
-      turnsRef.current
+      liveTurns()
         .filter((t) => t.role !== 'system' && !t.ephemeral)
         .map((t) => ({ role: t.role as 'user' | 'assistant', content: t.text })),
     );
-    const assistantIndex = turnsRef.current.length + 1;
+    const assistantIndex = liveTurns().length + 1;
     setTurns((prev) => [...prev, { role: 'user', text }, { role: 'assistant', text: '' }]);
 
     const patch = (fn: (t: ChatTurn) => ChatTurn) =>

@@ -116,8 +116,24 @@ pub fn window_is_maximized(window: WebviewWindow) -> Result<bool, String> {
 
 /// Toggle maximize/restore; returns the new maximized state. Backs both the
 /// titlebar maximize button and a titlebar double-click.
+///
+/// **While fullscreen this leaves fullscreen instead of maximizing.** Maximizing
+/// a fullscreen undecorated window is the second way into the black band
+/// [`enter_fullscreen`] exists to prevent: Windows clips a maximized undecorated
+/// window's client area to the monitor *work area*, the fullscreen frame still
+/// covers the whole monitor, and the difference paints as a taskbar-shaped strip
+/// along the bottom. `enter_fullscreen` un-maximizes on the way in; nothing
+/// stopped the user from maximizing again once there.
+///
+/// Refusing outright would leave a dead button on the titlebar — which is still
+/// drawn in fullscreen — so "restore" is what it does, the same thing the
+/// gesture means on a maximized window.
 #[tauri::command]
 pub fn window_toggle_maximize(window: WebviewWindow) -> Result<bool, String> {
+    if window.is_fullscreen().map_err(|e| e.to_string())? {
+        leave_fullscreen(&window)?;
+        return window.is_maximized().map_err(|e| e.to_string());
+    }
     let maximized = window.is_maximized().map_err(|e| e.to_string())?;
     if maximized {
         window.unmaximize().map_err(|e| e.to_string())?;
@@ -139,6 +155,13 @@ pub fn window_close(window: WebviewWindow) -> Result<(), String> {
 /// invisible edge handles that call this.
 #[tauri::command]
 pub fn window_start_resize_dragging(window: Window, direction: String) -> Result<(), String> {
+    // A fullscreen window has no edges to drag. Letting the gesture through
+    // resizes the frame out of fullscreen while Windows keeps the work-area
+    // clip on the client, which is the same black band a stray maximize gives —
+    // see `window_toggle_maximize`.
+    if window.is_fullscreen().map_err(|e| e.to_string())? {
+        return Ok(());
+    }
     let dir = match direction.as_str() {
         "east" => ResizeDirection::East,
         "west" => ResizeDirection::West,

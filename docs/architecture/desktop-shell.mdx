@@ -845,6 +845,20 @@ hidden behind it. Dropping the maximized state first leaves Windows no work area
 clip against. The previous state is remembered per window label, so someone who
 fullscreens a maximized window does not get a small one back.
 
+Un-maximizing on the way *in* is only half of it, because nothing stopped the window
+being maximized again once it was already fullscreen — and the band is back the moment
+it is. Three routes reached it, and all three are now closed:
+
+| Route                                                     | Fix                                                                       |
+| --------------------------------------------------------- | ------------------------------------------------------------------------- |
+| The titlebar's maximize button (`window_toggle_maximize`)   | While fullscreen it **leaves fullscreen** instead — the same "restore" the gesture means on a maximized window, rather than a button that does nothing. |
+| Double-clicking the tab strip                               | That is `data-tauri-drag-region`, handled **natively inside the webview** — it never reaches a command, so it cannot be guarded in Rust. `WorkspaceTabs` stops emitting the attribute while fullscreen. |
+| Dragging an edge grip (`window_start_resize_dragging`)      | The command refuses while fullscreen, and `WindowResizeHandles` renders nothing there, so the cursor never suggests the gesture. |
+
+The frontend half is not belt-and-braces: the drag region is the one route with no
+server side to guard, so the attribute has to go. The Rust guards cover the same
+gestures arriving from anywhere else.
+
 `mode` and `snap` are set through **one** action (`SET_WINDOW_MODE`) rather than
 several, so `restoreRect` is written and consumed in a single place.
 
