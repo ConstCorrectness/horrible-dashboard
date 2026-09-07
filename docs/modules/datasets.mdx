@@ -42,9 +42,21 @@ so there is one contract to learn. Four ship:
 | id | what |
 | --- | --- |
 | `hub` | Hugging Face, peeked through the datasets-server without downloading a byte |
-| `local` | `.jsonl` / `.json` / `.csv` / `.parquet` under `$HORRIBLE_DATA_DIR/datasets` |
+| `local` | `.jsonl` / `.json` / `.csv` / `.parquet` under `$HORRIBLE_DATA_DIR/datasets` **and** every training project's `data/` directory |
 | `exports` | what `evals.export` and `trajectories.export` already write |
 | `kaggle` | delegates to the training module's existing Kaggle provider |
+
+`local` spans **two kinds of root**, because a provider fetch does not land in the
+data dir: `_start_fetch` writes into `<project.root>/data`, and `project.root` is
+under `training.projectsRoot` (default `~/horrible/training`). A file there is
+addressed with a `project:<project id>/` prefix; files in the data dir keep bare
+refs, so refs saved when there was only one root still resolve. Prefixes are matched
+**before** the bare root, so a prefixed ref can never be shadowed by a same-named
+directory inside the data dir — and a path segment cannot contain `:` on Windows
+anyway. This is also what makes the `kaggle` source's advice real: Kaggle has no
+row-preview endpoint (a dataset is a zip of arbitrary files), so `peek` refuses
+rather than downloading gigabytes behind a preview button, and points you at
+fetch-then-peek instead.
 
 A plugin adds more with `host.add_dataset_source(source)` — see
 [the backend plugin SDK](../architecture/backend-plugin-sdk.mdx). Built-ins win id

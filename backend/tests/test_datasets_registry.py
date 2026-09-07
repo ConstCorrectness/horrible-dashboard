@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -282,3 +283,58 @@ def _wait_for(build_id: str, timeout: float = 20.0) -> None:
             return
         time.sleep(0.05)
     raise AssertionError(f"build {build_id} never finished")
+
+
+# --- the local source spans training projects ---------------------------------
+
+
+@pytest.fixture
+def _projects_root(tmp_path, monkeypatch):
+    """A projects root with one project holding a fetched file in `data/`."""
+    from backend.modules.training import projects
+
+    root = tmp_path / "projects"
+    monkeypatch.setattr(projects, "projects_root", lambda: root)
+    project = projects.create_project("Kaggle Run", [], "3.12")
+    _write(Path(project.root) / "data" / "train.jsonl", [{"a": 1}, {"a": 2}])
+    return project
+
+
+def test_local_source_peeks_a_file_fetched_into_a_training_project(_projects_root):
+    """A provider fetch lands under `training.projectsRoot`, nowhere near the data
+    dir — so a `local` source that only saw the data dir made "fetch it, then peek
+    at it" an instruction that could not be followed."""
+    ref = f"project:{_projects_root.id}/train.jsonl"
+    columns, rows = sources.LocalSource().peek(ref, "", "train", 10)
+    assert columns == ["a"]
+    assert len(rows) == 2
+    assert sources.LocalSource().locate(ref).endswith("train.jsonl")
+
+
+def test_local_search_lists_both_roots_and_labels_the_project_one(_projects_root):
+    _write(sources.data_root() / "train.jsonl", [{"a": 1}])
+    found = {ref.id: ref for ref in sources.LocalSource().search("train", 10)}
+    assert "train.jsonl" in found  # the data dir keeps bare refs
+    project_ref = found[f"project:{_projects_root.id}/train.jsonl"]
+    # Two identically-named files are indistinguishable by title alone.
+    assert "Kaggle Run" in project_ref.description
+
+
+def test_a_project_ref_cannot_escape_that_project(_projects_root):
+    with pytest.raises(sources.SourceError, match="escapes"):
+        sources.LocalSource().peek(
+            f"project:{_projects_root.id}/../../secrets.json", "", "train", 5
+        )
+
+
+def test_a_broken_projects_root_degrades_local_rather_than_emptying_it(monkeypatch):
+    """`local` must still serve the data dir when the training module cannot
+    answer; an exception here would take out the data dir listing too."""
+    from backend.modules.training import projects
+
+    def _boom():
+        raise RuntimeError("no projects root")
+
+    monkeypatch.setattr(projects, "list_projects", _boom)
+    _write(sources.data_root() / "d.jsonl", [{"a": 1}])
+    assert [ref.id for ref in sources.LocalSource().search("", 10)] == ["d.jsonl"]

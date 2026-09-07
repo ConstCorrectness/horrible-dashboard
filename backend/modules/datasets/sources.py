@@ -9,8 +9,11 @@ instead of breaking boot.
 Four ship:
 
 - **`hub`** — Hugging Face, peeked through the datasets-server without downloading.
-- **`local`** — `.jsonl`/`.json`/`.csv`/`.parquet` under the data dir or a training
-  project, read with the stdlib where possible so a peek needs no `datasets`.
+- **`local`** — `.jsonl`/`.json`/`.csv`/`.parquet` under the data dir *or* any
+  training project's `data/` directory (refs `project:<id>/<file>`), read with the
+  stdlib where possible so a peek needs no `datasets`. Spanning both is what makes
+  a provider fetch inspectable: it lands under `training.projectsRoot`, nowhere
+  near the data dir.
 - **`exports`** — what `evals.export` and `trajectories.export` already write. This
   is the spoke that closes the flywheel: "fine-tune on what the model got wrong"
   was fully implemented at both ends and joined by nothing but a path you had to
@@ -28,7 +31,7 @@ import csv
 import json
 import logging
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, NamedTuple, Protocol, runtime_checkable
 
 from backend import paths
 from backend.modules.datasets.models import DatasetRefModel
@@ -143,24 +146,71 @@ def _read_rows(path: Path, limit: int) -> tuple[list[str], list[dict[str, Any]]]
     return columns, rows
 
 
-def _describe_file(path: Path, root: Path, source: str) -> DatasetRefModel:
+def _describe_file(
+    path: Path, root: Path, source: str, prefix: str = "", origin: str = ""
+) -> DatasetRefModel:
     try:
         size = path.stat().st_size
     except OSError:
         size = 0
+    rel = str(path.relative_to(root)).replace("\\", "/")
+    size_text = f"{size / 1024:.0f} KB"
     return DatasetRefModel(
         source=source,
-        id=str(path.relative_to(root)).replace("\\", "/"),
+        id=f"{prefix}/{rel}" if prefix else rel,
         title=path.name,
-        description=f"{size / 1024:.0f} KB",
-        meta={"bytes": size, "suffix": path.suffix.lower()},
+        # The same `train.jsonl` exists in every project, so a bare filename is not
+        # enough to tell three of them apart in a picker.
+        description=f"{size_text} · {origin}" if origin else size_text,
+        meta={"bytes": size, "suffix": path.suffix.lower(), "origin": origin},
     )
+
+
+class _Root(NamedTuple):
+    """One directory a file source spans.
+
+    `prefix` is the leading ref segment that selects this root (empty for the
+    source's own directory, whose refs stay bare so refs saved before there was
+    more than one root keep resolving). `origin` is what a picker shows to tell
+    two identically-named files apart.
+    """
+
+    prefix: str
+    path: Path
+    origin: str = ""
+
+
+def _project_roots() -> list[_Root]:
+    """`data/` under each training project, as `project:<id>` prefixed roots.
+
+    A path segment cannot contain `:` on Windows and the prefixes are matched
+    first, so these can never collide with a real file under the data dir. The
+    training module is imported lazily and failures are swallowed: a broken or
+    absent projects root must degrade `local` to the data dir, not empty it.
+    """
+    try:
+        from backend.modules.training import projects  # noqa: PLC0415
+
+        found = projects.list_projects()
+    except Exception:  # pragma: no cover - defensive; a bad project.json is not fatal
+        logger.debug(
+            "could not list training projects for the local source", exc_info=True
+        )
+        return []
+    return [
+        _Root(
+            f"project:{project.id}",
+            Path(project.root) / "data",
+            f"project {project.name}",
+        )
+        for project in found
+    ]
 
 
 class _FileSource:
     """Shared implementation for the file-backed sources.
 
-    `local` and `exports` differ only in which directory they look at and whether
+    `local` and `exports` differ only in which directories they look at and whether
     they are writable, so they share everything else rather than being two copies
     that drift.
     """
@@ -173,8 +223,26 @@ class _FileSource:
     def root(self) -> Path:
         raise NotImplementedError
 
+    def roots(self) -> list[_Root]:
+        """Every directory this source spans, the unprefixed one first."""
+        return [_Root("", self.root())]
+
     def _resolve(self, ref: str) -> Path:
-        root = self.root().resolve()
+        ref = ref.replace("\\", "/").lstrip("/")
+        roots = self.roots()
+        # Prefixes are matched before the bare root, so a prefixed ref can never be
+        # shadowed by a same-named directory inside the source's own root.
+        chosen = next(
+            (r for r in roots if r.prefix and ref.startswith(f"{r.prefix}/")),
+            None,
+        )
+        if chosen is not None:
+            ref = ref[len(chosen.prefix) + 1 :]
+        else:
+            chosen = next((r for r in roots if not r.prefix), None)
+            if chosen is None:
+                raise SourceError(f"no {self.id} root holds {ref!r}")
+        root = chosen.path.resolve()
         target = (root / ref).resolve()
         if not target.is_relative_to(root):
             # A `..` is how a peek route becomes an arbitrary-file-read route.
@@ -184,19 +252,24 @@ class _FileSource:
         return target
 
     def search(self, query: str, limit: int) -> list[DatasetRefModel]:
-        root = self.root()
-        if not root.is_dir():
-            return []
         needle = query.lower().strip()
         found: list[DatasetRefModel] = []
-        for path in sorted(root.rglob("*")):
+        for entry in self.roots():
             if len(found) >= limit:
                 break
-            if not path.is_file() or path.suffix.lower() not in self.suffixes:
+            root = entry.path
+            if not root.is_dir():
                 continue
-            if needle and needle not in path.name.lower():
-                continue
-            found.append(_describe_file(path, root, self.id))
+            for path in sorted(root.rglob("*")):
+                if len(found) >= limit:
+                    break
+                if not path.is_file() or path.suffix.lower() not in self.suffixes:
+                    continue
+                if needle and needle not in path.name.lower():
+                    continue
+                found.append(
+                    _describe_file(path, root, self.id, entry.prefix, entry.origin)
+                )
         return found
 
     def splits(self, ref: str) -> list[dict[str, str]]:
@@ -214,11 +287,22 @@ class _FileSource:
 
 
 class LocalSource(_FileSource):
+    """The data dir *and* every training project's `data/` directory.
+
+    A provider fetch (Kaggle, Hub, a competition) writes into
+    `<project.root>/data`, which is under `training.projectsRoot` and so outside
+    the data dir entirely. Spanning both is what makes "fetch it, then look at it"
+    a real instruction rather than a path you copy out of the backend log.
+    """
+
     id = "local"
     label = "Local files"
 
     def root(self) -> Path:
         return data_root()
+
+    def roots(self) -> list[_Root]:
+        return [_Root("", data_root()), *_project_roots()]
 
 
 class ExportsSource(_FileSource):
@@ -348,7 +432,9 @@ class KaggleSource:
         # behind a "preview" button.
         raise SourceError(
             "Kaggle has no row-preview endpoint. Fetch the dataset into a training "
-            "project first, then peek at the file through the Local source."
+            "project first (POST /api/training/projects/{id}/fetch); the Local "
+            "source spans project data dirs, so the file is peekable there as "
+            "`project:<project id>/<file>`."
         )
 
     def locate(self, ref: str) -> str:
