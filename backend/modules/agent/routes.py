@@ -394,6 +394,7 @@ async def tts(
     voice: str = "en-US-ChristopherNeural",
     rate: str = "+0%",
     pitch: str = "+0Hz",
+    volume: str = "+0%",
 ) -> Response:
     """Speak ``text`` as MP3 audio.
 
@@ -409,7 +410,7 @@ async def tts(
         ) from exc
 
     audio_bytes = await edge_tts_service.generate_audio(
-        text, voice=voice, rate=rate, pitch=pitch
+        text, voice=voice, rate=rate, pitch=pitch, volume=volume
     )
     return Response(content=audio_bytes, media_type="audio/mpeg")
 
@@ -442,7 +443,7 @@ async def stt(file: UploadFile, language: str | None = None) -> dict[str, str]:
         from backend.modules.agent.stt_service import stt_service
 
         try:
-            return {"text": await stt_service.transcribe(audio_bytes), "ranOn": "local"}
+            return {"text": await stt_service.transcribe(audio_bytes, language=language), "ranOn": "local"}
         except Exception as exc:
             logger.warning("STT transcription error: %s", exc)
             return {"text": "", "ranOn": "local"}
@@ -452,8 +453,10 @@ async def stt(file: UploadFile, language: str | None = None) -> dict[str, str]:
         if endpoint:
             try:
                 async with httpx.AsyncClient(timeout=120) as client:
+                    params = {"language": language} if language else None
                     res = await client.post(
                         f"{endpoint}/api/agent/stt",
+                        params=params,
                         files={"file": ("audio.webm", audio_bytes)},
                     )
                     res.raise_for_status()

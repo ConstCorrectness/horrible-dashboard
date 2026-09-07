@@ -474,15 +474,22 @@ async def chat(
     model: str,
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]],
+    temperature: float | None = None,
+    max_tokens: int | None = None,
 ) -> ChatResult:
     """One non-streaming tool-calling round, normalized to a `ChatResult`."""
     messages = normalize_system_messages(messages)
     if info.dialect == "litellm":
+        call_kwargs = litellm_call_kwargs(info)
+        if temperature is not None:
+            call_kwargs["temperature"] = temperature
+        if max_tokens is not None:
+            call_kwargs["max_tokens"] = max_tokens
         response = await litellm.acompletion(
             model=qualify_model(info, model),
             messages=messages,
             tools=tools or None,
-            **litellm_call_kwargs(info),
+            **call_kwargs,
         )
         msg = response.choices[0].message
         msg_dict = msg.model_dump()
@@ -493,26 +500,39 @@ async def chat(
         )
 
     if info.dialect == "ollama":
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "tools": tools,
+            "stream": False,
+        }
+        options: dict[str, Any] = {}
+        if temperature is not None:
+            options["temperature"] = temperature
+        if max_tokens is not None:
+            options["num_predict"] = max_tokens
+        if options:
+            payload["options"] = options
         res = await client.post(
             f"{endpoint}/api/chat",
-            json={
-                "model": model,
-                "messages": messages,
-                "tools": tools,
-                "stream": False,
-            },
+            json=payload,
         )
         res.raise_for_status()
         msg = res.json().get("message", {})
     else:
+        payload = {
+            "model": model,
+            "messages": messages,
+            "tools": tools,
+            "stream": False,
+        }
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
         res = await client.post(
             f"{endpoint}/v1/chat/completions",
-            json={
-                "model": model,
-                "messages": messages,
-                "tools": tools,
-                "stream": False,
-            },
+            json=payload,
         )
         res.raise_for_status()
         choices = res.json().get("choices") or [{}]

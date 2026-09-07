@@ -64,4 +64,18 @@ describe('splitForSpeech', () => {
     const chunks = splitForSpeech('She said "hello there everyone." Then she left the stage.');
     expect(chunks[0]).toContain('."');
   });
+
+  it('cleans markdown symbols, links, and code blocks for human speech', () => {
+    const markdown =
+      'Here is the **best solution** with `const x = 1;` and [read docs](https://example.com/docs).\n' +
+      '```js\nconsole.log(x);\n```\n' +
+      'It works great! 🚀';
+    const chunks = splitForSpeech(markdown);
+    expect(chunks.join(' ')).not.toContain('**');
+    expect(chunks.join(' ')).not.toContain('https://');
+    expect(chunks.join(' ')).not.toContain('```');
+    expect(chunks.join(' ')).toContain('best solution');
+    expect(chunks.join(' ')).toContain('read docs');
+    expect(chunks.join(' ')).toContain('It works great');
+  });
 });

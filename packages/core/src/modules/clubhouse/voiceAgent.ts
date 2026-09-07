@@ -32,6 +32,8 @@ export interface VoiceAgentConfig {
   ttsVoice: string;
   ttsRate: string;
   ttsPitch: string;
+  ttsVolume?: string;
+  model?: string;
   turnEagerness: TurnEagerness;
   endpointingDelayMs: number;
   thinkingFiller: boolean;
@@ -65,6 +67,8 @@ export const DEFAULT_VOICE_CONFIG: VoiceAgentConfig = {
   ttsVoice: 'en-US-ChristopherNeural',
   ttsRate: '+0%',
   ttsPitch: '+0Hz',
+  ttsVolume: '+0%',
+  model: '',
   turnEagerness: 'normal',
   endpointingDelayMs: 750,
   thinkingFiller: true,
@@ -110,11 +114,12 @@ export interface VoiceStateTurn {
   ts: number;
 }
 
-async function post<T>(path: string, body: unknown): Promise<T> {
+async function post<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
   const res = await fetch(apiUrl(path), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal,
   });
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;
@@ -144,17 +149,28 @@ export function takeVoiceTurn(params: {
    */
   partial?: boolean;
   room: VoiceRoom;
+  /** Active client-side agent config to ensure server session stays perfectly synchronized. */
+  config?: VoiceAgentConfig;
+  /** Explicitly flag whether this utterance is known to be the agent's own speech (echo) vs operator. */
+  isSelf?: boolean;
+  signal?: AbortSignal;
 }): Promise<VoiceTurnResult> {
-  return post<VoiceTurnResult>('/api/clubhouse/voice/turn', {
-    channel: params.channel,
-    text: params.text,
-    speaker: params.speaker ?? '',
-    speaker_id: params.speakerId ?? null,
-    source: params.source ?? 'voice',
-    force: params.force ?? false,
-    partial: params.partial ?? false,
-    room: params.room,
-  });
+  return post<VoiceTurnResult>(
+    '/api/clubhouse/voice/turn',
+    {
+      channel: params.channel,
+      text: params.text,
+      speaker: params.speaker ?? '',
+      speaker_id: params.speakerId ?? null,
+      source: params.source ?? 'voice',
+      force: params.force ?? false,
+      partial: params.partial ?? false,
+      room: params.room,
+      config: params.config,
+      is_self: params.isSelf,
+    },
+    params.signal,
+  );
 }
 
 export function pushVoiceConfig(channel: string, config: VoiceAgentConfig): Promise<unknown> {

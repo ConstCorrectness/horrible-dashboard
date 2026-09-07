@@ -63,6 +63,40 @@ function hardWrap(sentence: string, limit: number): string[] {
 }
 
 /**
+ * Clean markdown, raw URLs, code blocks, and symbols before speech synthesis
+ * so speech sounds human and doesn't vocalize punctuation.
+ */
+export function cleanForSpeech(text: string): string {
+  if (!text) return '';
+  let s = text;
+  // 1. Replace multi-line code blocks
+  s = s.replace(/```[\s\S]*?```/g, ' [code snippet omitted] ');
+  // 2. Strip inline code backticks: `code` -> code
+  s = s.replace(/`([^`]+)`/g, '$1');
+  // 3. Replace markdown links [label](url) -> label
+  s = s.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+  // 4. Strip bare URLs
+  s = s.replace(/https?:\/\/\S+/gi, '');
+  // 5. Strip markdown bold / italics / strikethrough (**, *, __, _, ~~)
+  s = s.replace(/(\*\*|__)(.*?)\1/g, '$2');
+  s = s.replace(/(\*|_)(.*?)\1/g, '$2');
+  s = s.replace(/~~(.*?)~~/g, '$1');
+  // 6. Strip headers (#, ##) and blockquote / list symbols at line start
+  s = s.replace(/^#{1,6}\s+/gm, '');
+  s = s.replace(/^>\s+/gm, '');
+  s = s.replace(/^[-*+]\s+/gm, '');
+  s = s.replace(/^\d+\.\s+/gm, '');
+  // 7. Strip common emoji ranges
+  s = s.replace(
+    /[\u{1F300}-\u{1F6FF}\u{1F900}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu,
+    '',
+  );
+  // 8. Normalize multiple spaces and line breaks
+  s = s.replace(/\s+/g, ' ').trim();
+  return s;
+}
+
+/**
  * Split a reply into speakable chunks, first-chunk-smallest.
  *
  * `firstChunkChars` keeps the opening chunk short so the room hears something as
@@ -71,12 +105,16 @@ function hardWrap(sentence: string, limit: number): string[] {
  */
 export function splitForSpeech(
   text: string,
-  { firstChunkChars = 120, maxChunkChars = MAX_CHUNK_CHARS } = {},
+  {
+    firstChunkChars = 120,
+    maxChunkChars = MAX_CHUNK_CHARS,
+    sanitize = true,
+  }: { firstChunkChars?: number; maxChunkChars?: number; sanitize?: boolean } = {},
 ): string[] {
-  const clean = (text ?? '').trim();
-  if (!clean) return [];
+  const processed = sanitize ? cleanForSpeech(text) : (text ?? '').trim();
+  if (!processed) return [];
 
-  const pieces = sentences(clean).flatMap((s) => hardWrap(s, maxChunkChars));
+  const pieces = sentences(processed).flatMap((s) => hardWrap(s, maxChunkChars));
   if (pieces.length === 0) return [];
 
   const chunks: string[] = [];

@@ -219,7 +219,7 @@ async def generate_reply(messages: list[dict[str, str]], config: VoiceConfig) ->
         raise RuntimeError("Agent not configured — finish onboarding")
     info = P.provider_for(config_obj.provider)
     endpoint = _endpoint_for(info, config_obj)
-    model = config_obj.model
+    model = (config.model or "").strip() or config_obj.model
 
     timeout_val = float(
         get_value("voice.generationTimeout", GENERATION_TIMEOUT_S)
@@ -228,7 +228,16 @@ async def generate_reply(messages: list[dict[str, str]], config: VoiceConfig) ->
 
     async with instrumented_client(timeout=timeout_val) as client:
         result = await asyncio.wait_for(
-            P.chat(client, info, endpoint, model, messages, []),
+            P.chat(
+                client,
+                info,
+                endpoint,
+                model,
+                messages,
+                [],
+                temperature=config.temperature,
+                max_tokens=config.max_tokens,
+            ),
             timeout=timeout_val,
         )
     return result.content or ""

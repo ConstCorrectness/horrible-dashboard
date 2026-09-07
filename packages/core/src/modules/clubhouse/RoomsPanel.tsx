@@ -84,6 +84,39 @@ const agentInputStyle: React.CSSProperties = {
   borderRadius: '4px',
 };
 
+const DEFAULT_PRESETS: { name: string; prompt: string; chipLabel?: string }[] = [
+  {
+    name: 'Room Co-Host & Assistant',
+    chipLabel: '🤖 Co-Host',
+    prompt:
+      'You are a friendly and proactive co-host in a live Clubhouse audio room. You answer questions concisely in 1-3 spoken sentences, engage with attendees naturally, and keep the discussion flowing.',
+  },
+  {
+    name: 'Podcast & Interview Host',
+    chipLabel: '🎙️ Podcast Host',
+    prompt:
+      'You are an energetic podcast host. You ask insightful follow-up questions, introduce speakers warmly, and summarize key takeaways in a charismatic, broadcast-ready speaking style.',
+  },
+  {
+    name: 'Debater & Critical Thinker',
+    chipLabel: '⚔️ Debater',
+    prompt:
+      'You are an intellectually sharp, respectful debate participant. You probe underlying assumptions, highlight alternative perspectives, and construct logical arguments.',
+  },
+  {
+    name: 'Concise & Direct (No Fluff)',
+    chipLabel: '⚡ Concise',
+    prompt:
+      'You are an ultra-concise assistant. You give immediate, direct answers in 1-2 punchy spoken sentences without fluff, preambles, or conversational filler.',
+  },
+  {
+    name: 'Tech & Architecture Expert',
+    chipLabel: '💡 Tech Expert',
+    prompt:
+      'You are a senior software architect and tech expert. You explain complex technical concepts, system tradeoffs, algorithms, and engineering patterns clearly and concisely for an engineering audience.',
+  },
+];
+
 /**
  * Live Clubhouse rooms panel. Handles searching, joining rooms, active call stage,
  * real-time comments chat, reactions, raising hands, and speaking.
@@ -110,18 +143,29 @@ export function RoomsPanel() {
   });
   const agentEnabled = agentConfig.enabled;
   const [isAgentSpeaking, setIsAgentSpeaking] = useState(false);
+  const [isAgentThinking, setIsAgentThinking] = useState(false);
   // Why the agent stayed quiet on the last turn. Rendered in the Agent tab, because
   // a deliberate silence and a broken pipeline are indistinguishable without it.
   const [agentReason, setAgentReason] = useState<string | null>(null);
   const [agentMemory, setAgentMemory] = useState<VoiceStateTurn[]>([]);
   const [sttChunkMs] = useState(5000);
 
+  const [wakeWordsInput, setWakeWordsInput] = useState(() => (agentConfig.wakeWords || []).join(', '));
+  const [personaDraft, setPersonaDraft] = useState(() => agentConfig.persona || DEFAULT_VOICE_CONFIG.persona);
+  const [selectedPreset, setSelectedPreset] = useState('');
+  const [lastHeardSpeech, setLastHeardSpeech] = useState<{
+    text: string;
+    speaker?: string;
+    time: string;
+  } | null>(null);
+
   const [agentPromptPresets, setAgentPromptPresets] = useState<{ name: string; prompt: string }[]>(
     () => {
       try {
-        return JSON.parse(localStorage.getItem('agentPresets') || '[]');
+        const saved = JSON.parse(localStorage.getItem('agentPresets') || '[]');
+        return Array.isArray(saved) && saved.length > 0 ? saved : DEFAULT_PRESETS;
       } catch {
-        return [];
+        return DEFAULT_PRESETS;
       }
     },
   );
@@ -601,6 +645,7 @@ export function RoomsPanel() {
       speakerName?: string,
       speakerId?: number | null,
       partial?: boolean,
+      isSelf?: boolean,
     ) => void
   >(() => {});
 
@@ -616,6 +661,7 @@ export function RoomsPanel() {
     speakerInvite,
     speakingVolumes,
     playAgentAudio,
+    previewTtsVoice,
     stopAgentAudio,
     loading: voiceLoading,
     error: voiceError,
@@ -641,22 +687,36 @@ export function RoomsPanel() {
       agentConfig.posture === 'interject' ? (agentConfig.interjectAfterS ?? 6) * 1000 : 0,
     onBargeIn: () => {
       if (agentAbortControllerRef.current) {
-        agentAbortControllerRef.current.abort();
+        try {
+          agentAbortControllerRef.current.abort();
+        } catch {
+          /* ignore */
+        }
         agentAbortControllerRef.current = null;
       }
+      stopAgentAudio();
       agentQueueRef.current = [];
+      setIsAgentThinking(false);
       setIsAgentSpeaking(false);
     },
     onTranscribe: (text, _speakerName, speakerId, partial) => {
       lastRoomActivityTsRef.current = Date.now();
       // Resolve actual speaker name from room user roster
       let resolvedName: string | undefined;
-      if (speakerId != null) {
+      if (speakerId === 0 || (myUserId != null && speakerId === myUserId)) {
+        resolvedName = myProfileName || 'Me';
+        speakerId = myUserId;
+      } else if (speakerId != null) {
         const userInDetails = activeRoomInfoRef.current?.users?.find((u) => u.user_id === speakerId);
         if (userInDetails?.name) resolvedName = userInDetails.name;
-        else if (speakerId === myUserId) resolvedName = myProfileName || 'Me';
       }
-      if (text.trim().length > 0)
+      if (text.trim().length > 0) {
+        setLastHeardSpeech({
+          text: text.trim(),
+          speaker: resolvedName,
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        });
+        const isSelf = isAgentSpeaking;
         enqueueUtteranceRef.current(
           text.trim(),
           'voice',
@@ -664,7 +724,9 @@ export function RoomsPanel() {
           resolvedName,
           speakerId,
           partial,
+          isSelf,
         );
+      }
     },
 
     onVoiceError: (message) => {
@@ -871,6 +933,7 @@ export function RoomsPanel() {
       speakerName?: string;
       speakerId?: number | null;
       partial?: boolean;
+      isSelf?: boolean;
     }[]
   >([]);
   const agentBusyRef = useRef(false);
@@ -884,6 +947,9 @@ export function RoomsPanel() {
         const item = agentQueueRef.current.shift()!;
         const channel = activeChannelRef.current;
         if (!channel) continue;
+        const controller = new AbortController();
+        agentAbortControllerRef.current = controller;
+        setIsAgentThinking(true);
         try {
           const result = await takeVoiceTurn({
             channel,
@@ -894,7 +960,12 @@ export function RoomsPanel() {
             force: item.force,
             partial: item.partial,
             room: buildRoomSnapshot(),
+            config: agentConfigRef.current,
+            isSelf: item.isSelf,
+            signal: controller.signal,
           });
+          setIsAgentThinking(false);
+          agentAbortControllerRef.current = null;
           setAgentReason(result.reason);
           if (result.notice) {
             toastsStore.add('info', 'Agent', result.notice);
@@ -917,31 +988,44 @@ export function RoomsPanel() {
               agentSentTextsRef.current.add(result.reply.trim());
               await sendComment(textToSend).catch(() => {});
             }
-            const onStage = liveUsers.find((u) => u.userId === myUserId)?.isSpeaker;
-            if (agentConfigRef.current.speak && onStage) {
+            if (agentConfigRef.current.speak) {
               // If backend provided a natural thinking filler, speak it first
               if (result.filler && agentConfigRef.current.thinkingFiller) {
                 await playAgentAudio(result.filler, {
                   voice: agentConfigRef.current.ttsVoice,
                   rate: agentConfigRef.current.ttsRate,
                   pitch: agentConfigRef.current.ttsPitch,
+                  volume: agentConfigRef.current.ttsVolume,
                 });
               }
               await playAgentAudio(result.reply, {
                 voice: agentConfigRef.current.ttsVoice,
                 rate: agentConfigRef.current.ttsRate,
                 pitch: agentConfigRef.current.ttsPitch,
+                volume: agentConfigRef.current.ttsVolume,
               });
             }
             setIsAgentSpeaking(false);
           }
         } catch (e) {
+          setIsAgentThinking(false);
+          agentAbortControllerRef.current = null;
+          setIsAgentSpeaking(false);
+          if (
+            (e instanceof DOMException && e.name === 'AbortError') ||
+            (e instanceof Error && e.name === 'AbortError') ||
+            String(e).includes('aborted')
+          ) {
+            setAgentReason('interrupted');
+            break;
+          }
           console.error('Voice agent turn failed:', e);
           setAgentReason(e instanceof Error ? e.message : String(e));
-          setIsAgentSpeaking(false);
         }
       }
     } finally {
+      setIsAgentThinking(false);
+      agentAbortControllerRef.current = null;
       agentBusyRef.current = false;
     }
   };
@@ -953,6 +1037,7 @@ export function RoomsPanel() {
     speakerName?: string,
     speakerId?: number | null,
     partial = false,
+    isSelf?: boolean,
   ) => {
     if (!activeChannelRef.current) return;
     lastRoomActivityTsRef.current = Date.now();
@@ -960,7 +1045,7 @@ export function RoomsPanel() {
     // one behind a reply that is still being spoken means cutting in on a sentence that
     // finished ten seconds ago, which is the interruption at its most annoying.
     if (partial && (agentBusyRef.current || agentQueueRef.current.length > 0)) return;
-    agentQueueRef.current.push({ text, source, force, speakerName, speakerId, partial });
+    agentQueueRef.current.push({ text, source, force, speakerName, speakerId, partial, isSelf });
     if (agentQueueRef.current.length > 6)
       agentQueueRef.current.splice(0, agentQueueRef.current.length - 6);
     void drainAgentQueue();
@@ -1024,6 +1109,89 @@ export function RoomsPanel() {
   useEffect(() => {
     speakingVolumesRef.current = speakingVolumes;
   }, [speakingVolumes]);
+
+  const handleInterrupt = () => {
+    if (agentAbortControllerRef.current) {
+      try {
+        agentAbortControllerRef.current.abort();
+      } catch {
+        /* ignore */
+      }
+      agentAbortControllerRef.current = null;
+    }
+    stopAgentAudio();
+    agentQueueRef.current = [];
+    setIsAgentThinking(false);
+    setIsAgentSpeaking(false);
+    setAgentReason('interrupted');
+    toastsStore.add('info', 'Agent Interrupted', 'Stopped speech and cleared queued turns.');
+  };
+
+  const handleClearContext = async (silent = false) => {
+    const channel = activeChannelRef.current;
+    if (!channel) return;
+    try {
+      if (agentAbortControllerRef.current) {
+        try {
+          agentAbortControllerRef.current.abort();
+        } catch {
+          /* ignore */
+        }
+        agentAbortControllerRef.current = null;
+      }
+      stopAgentAudio();
+      agentQueueRef.current = [];
+      agentSentTextsRef.current.clear();
+      setIsAgentThinking(false);
+      setIsAgentSpeaking(false);
+      await resetVoiceMemory(channel);
+      setAgentMemory([]);
+      if (!silent) {
+        toastsStore.add('success', 'Context Cleared', 'Reset LLM conversation memory.');
+      }
+    } catch (e) {
+      console.error('Failed to clear voice context:', e);
+    }
+  };
+
+  const handleApplyPersona = async (newPersona: string, clearMemory = true) => {
+    patchAgentConfig({ persona: newPersona });
+    setPersonaDraft(newPersona);
+    const channel = activeChannelRef.current;
+    if (channel) {
+      try {
+        if (clearMemory) {
+          if (agentAbortControllerRef.current) {
+            try {
+              agentAbortControllerRef.current.abort();
+            } catch {
+              /* ignore */
+            }
+            agentAbortControllerRef.current = null;
+          }
+          stopAgentAudio();
+          agentQueueRef.current = [];
+          agentSentTextsRef.current.clear();
+          setIsAgentThinking(false);
+          setIsAgentSpeaking(false);
+          await resetVoiceMemory(channel, { resetPersona: true, persona: newPersona });
+          setAgentMemory([]);
+          toastsStore.add(
+            'success',
+            'Persona Applied',
+            'Applied new persona and cleared conversation memory so agent adopts it immediately.',
+          );
+        } else {
+          await pushVoiceConfig(channel, { ...agentConfigRef.current, persona: newPersona });
+          toastsStore.add('success', 'Persona Updated', 'Saved new persona to active room.');
+        }
+      } catch (e) {
+        toastsStore.add('error', 'Persona Update Failed', e instanceof Error ? e.message : String(e));
+      }
+    } else {
+      toastsStore.add('info', 'Persona Saved', 'Persona saved (will apply on joining room).');
+    }
+  };
 
   // Push settings to the backend session whenever they change (and on join, since
   // the session is created there and starts on defaults).
@@ -2838,23 +3006,62 @@ export function RoomsPanel() {
                   flexShrink: 0,
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                  <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#a78bfa' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                  <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--accent)' }}>
                     🤖 Voice Agent
                   </span>
                   {agentEnabled && (
-                    <span
-                      style={{
-                        fontSize: '0.62rem',
-                        background: 'rgba(167, 139, 250, 0.2)',
-                        color: '#c4b5fd',
-                        padding: '1px 6px',
-                        borderRadius: 6,
-                        fontWeight: 700,
-                      }}
-                    >
-                      ACTIVE
-                    </span>
+                    <>
+                      {isAgentSpeaking ? (
+                        <div
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px',
+                            background: 'rgba(34, 197, 94, 0.15)',
+                            border: '1px solid rgba(34, 197, 94, 0.3)',
+                            padding: '1px 6px',
+                            borderRadius: '10px',
+                          }}
+                          title="Agent is currently speaking audio into the room"
+                        >
+                          <span style={{ fontSize: '0.62rem', color: 'var(--success)', fontWeight: 700 }}>
+                            SPEAKING
+                          </span>
+                          <span style={{ display: 'inline-block', width: '2px', height: '8px', background: 'var(--success)', borderRadius: '1px' }} />
+                          <span style={{ display: 'inline-block', width: '2px', height: '12px', background: 'var(--success)', borderRadius: '1px' }} />
+                          <span style={{ display: 'inline-block', width: '2px', height: '6px', background: 'var(--success)', borderRadius: '1px' }} />
+                        </div>
+                      ) : isAgentThinking ? (
+                        <span
+                          style={{
+                            fontSize: '0.62rem',
+                            background: 'rgba(56, 189, 248, 0.2)',
+                            color: 'var(--info)',
+                            border: '1px solid rgba(56, 189, 248, 0.3)',
+                            padding: '1px 6px',
+                            borderRadius: 6,
+                            fontWeight: 700,
+                          }}
+                          title="Agent is generating a response"
+                        >
+                          ⚡ THINKING
+                        </span>
+                      ) : (
+                        <span
+                          style={{
+                            fontSize: '0.62rem',
+                            background: 'rgba(167, 139, 250, 0.2)',
+                            color: 'var(--accent)',
+                            padding: '1px 6px',
+                            borderRadius: 6,
+                            fontWeight: 700,
+                          }}
+                        >
+                          ACTIVE
+                        </span>
+                      )}
+                    </>
                   )}
                 </div>
                 <button
@@ -2911,22 +3118,25 @@ export function RoomsPanel() {
                         gap: '1rem',
                       }}
                     >
+                      {/* General Output & Trigger Modes */}
                       <div
                         style={{
                           display: 'flex',
-                          gap: '1rem',
+                          gap: '0.8rem',
                           flexWrap: 'wrap',
-                          borderBottom: '1px solid rgba(255,255,255,0.05)',
-                          paddingBottom: '1rem',
+                          padding: '0.6rem 0.8rem',
+                          background: 'rgba(255,255,255,0.02)',
+                          borderRadius: '8px',
+                          border: '1px solid rgba(255,255,255,0.05)',
                         }}
                       >
                         {(
                           [
-                            ['respondToVoice', 'Respond to Voice (Stage)'],
-                            ['respondToChat', 'Respond to Live Chat'],
-                            ['speak', 'Speak aloud (TTS)'],
-                            ['postToChat', 'Also post replies to chat'],
-                            ['robotEmojiPrefix', 'Prefix chat with 🤖'],
+                            ['respondToVoice', '🎙️ Voice (Stage)'],
+                            ['respondToChat', '💬 Live Chat'],
+                            ['speak', '🔊 Speak aloud (TTS)'],
+                            ['postToChat', '📝 Post to chat'],
+                            ['robotEmojiPrefix', '🤖 Prefix with robot'],
                           ] as const
                         ).map(([key, label]) => (
                           <label
@@ -2934,9 +3144,9 @@ export function RoomsPanel() {
                             style={{
                               display: 'flex',
                               alignItems: 'center',
-                              gap: '0.5rem',
-                              fontSize: '0.8rem',
-                              color: '#f1f5f9',
+                              gap: '0.4rem',
+                              fontSize: '0.74rem',
+                              color: 'var(--text)',
                               cursor: 'pointer',
                             }}
                           >
@@ -2951,373 +3161,221 @@ export function RoomsPanel() {
                         ))}
                       </div>
 
-                      {/* Engine Model Selector */}
-                      <div style={agentFieldStyle}>
-                        <label style={agentLabelStyle}>⚡ Active Engine Model</label>
-                        <select
-                          style={agentInputStyle}
-                          value={agentEngineStatus?.model || ''}
-                          disabled={switchingModel}
-                          onChange={async (e) => {
-                            const newModel = e.target.value;
-                            if (!agentEngineStatus?.provider) return;
-                            setSwitchingModel(true);
-                            try {
-                              await saveAgentConfig(
-                                newModel,
-                                agentEngineStatus.provider,
-                                agentEngineStatus.endpoint || undefined,
-                              );
-                              const updated = await getAgentStatus();
-                              setAgentEngineStatus(updated);
-                              toastsStore.add('success', 'Model Switched', `Voice Agent now using ${newModel}`);
-                            } catch (err) {
-                              toastsStore.add('error', 'Model Switch Failed', err instanceof Error ? err.message : String(err));
-                            } finally {
-                              setSwitchingModel(false);
-                            }
-                          }}
-                        >
-                          {agentEngineStatus?.available_models && agentEngineStatus.available_models.length > 0 ? (
-                            agentEngineStatus.available_models.map((m) => (
-                              <option key={m} value={m}>
-                                {m.includes('3b') || m.includes('2b') || m.includes('1b') ? `⚡ ${m} (Fast - Recommended)` : m}
-                              </option>
-                            ))
-                          ) : (
-                            <option value={agentEngineStatus?.model || ''}>{agentEngineStatus?.model || 'Loading...'}</option>
-                          )}
-                        </select>
-                        <span style={{ fontSize: '0.68rem', color: '#94a3b8' }}>
-                          Fast models (e.g. <strong>llama-3.2-3b-instruct</strong> or <strong>gemma-4-e2b</strong>) give sub-3s voice turns.
-                        </span>
-                      </div>
-
-                      {/* When it speaks, and to whom it listens. */}
-                      <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-                        <div style={agentFieldStyle}>
-                          <span style={agentLabelStyle}>When to speak:</span>
-                          <select
-                            style={agentInputStyle}
-                            value={agentConfig.posture}
-                            onChange={(e) =>
-                              patchAgentConfig({
-                                posture: e.target.value as VoiceAgentConfig['posture'],
-                              })
-                            }
-                          >
-                            <option value="addressed">Only when addressed</option>
-                            <option value="conversational">Conversational (with cooldown)</option>
-                            <option value="always">Always (replies to everything)</option>
-                            <option value="interject">Interject (cuts in mid-sentence)</option>
-                          </select>
-                        </div>
-                        {agentConfig.posture === 'interject' && (
-                          <div style={agentFieldStyle}>
-                            <span style={agentLabelStyle}>Cut in after (seconds):</span>
-                            <input
-                              type="number"
-                              min={2}
-                              max={60}
-                              step={1}
-                              style={agentInputStyle}
-                              value={agentConfig.interjectAfterS ?? 6}
-                              onChange={(e) =>
-                                patchAgentConfig({
-                                  interjectAfterS: Math.max(2, Number(e.target.value) || 6),
-                                })
-                              }
-                            />
-                          </div>
-                        )}
-                        <div style={agentFieldStyle}>
-                          <span style={agentLabelStyle}>Wake words (comma separated):</span>
-                          <input
-                            type="text"
-                            style={agentInputStyle}
-                            value={agentConfig.wakeWords.join(', ')}
-                            onChange={(e) =>
-                              patchAgentConfig({
-                                wakeWords: e.target.value
-                                  .split(',')
-                                  .map((w) => w.trim().toLowerCase())
-                                  .filter(Boolean),
-                              })
-                            }
-                            placeholder="agent, assistant, bot"
-                          />
-                        </div>
-                      </div>
-
-                      {/* Looking things up. */}
-                      <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-                        <div style={agentFieldStyle}>
-                          <span style={agentLabelStyle}>Look things up:</span>
-                          <select
-                            style={agentInputStyle}
-                            value={agentConfig.retrieval}
-                            onChange={(e) =>
-                              patchAgentConfig({
-                                retrieval: e.target.value as VoiceAgentConfig['retrieval'],
-                              })
-                            }
-                          >
-                            <option value="off">Never</option>
-                            <option value="command">Only on /agent search</option>
-                            <option value="auto">Automatically for questions</option>
-                          </select>
-                        </div>
-                        <div style={agentFieldStyle}>
-                          <span style={agentLabelStyle}>Knowledge library:</span>
-                          <input
-                            type="text"
-                            style={agentInputStyle}
-                            value={agentConfig.library}
-                            onChange={(e) => patchAgentConfig({ library: e.target.value })}
-                            placeholder="default"
-                          />
-                        </div>
-                      </div>
-
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                        <div
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                          }}
-                        >
-                          <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>
-                            System Prompt / Persona:
+                      {/* CARD 1: Persona & Prompting */}
+                      <div
+                        style={{
+                          background: 'rgba(255,255,255,0.025)',
+                          border: '1px solid rgba(255,255,255,0.07)',
+                          borderRadius: '8px',
+                          padding: '0.75rem',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.6rem',
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--accent)' }}>
+                            🎭 Persona &amp; Identity
                           </span>
-                          <div style={{ display: 'flex', gap: '0.4rem' }}>
-                            <select
-                              onChange={(e) => {
-                                if (e.target.value) {
-                                  const p = agentPromptPresets.find((pr) => pr.prompt === e.target.value);
-                                  patchAgentConfig({ persona: e.target.value });
-                                  if (activeChannel) {
-                                    void resetVoiceMemory(activeChannel, { resetPersona: true, persona: e.target.value }).then(() => {
-                                      setAgentMemory([]);
-                                      agentQueueRef.current = [];
-                                      agentSentTextsRef.current.clear();
-                                      toastsStore.add('success', 'Persona Applied', `Applied "${p?.name || 'Preset'}" and cleared context window.`);
-                                    });
-                                  }
-                                }
-                              }}
-                              style={{
-                                // Horizontal padding only: `controls.css` fixes this control's height and
-                                // strips its vertical padding (the One Height Rule) — see theming.mdx.
-                                padding: '0 0.4rem',
-                                fontSize: '0.7rem',
-                                background: '#1d2026',
-                                color: '#f1f5f9',
-                                border: '1px solid #2e333d',
-                              }}
-                            >
-                              <option value="">Load Preset...</option>
-                              {agentPromptPresets.map((p, i) => (
-                                <option key={i} value={p.prompt}>
-                                  {p.name}
-                                </option>
-                              ))}
-                            </select>
-                            <button
-                              className="ch-btn-action"
-                              style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}
-                              onClick={() => {
-                                const name = prompt('Name for this preset:');
-                                if (name) {
-                                  const newPresets = [
-                                    ...agentPromptPresets,
-                                    { name, prompt: agentConfig.persona },
-                                  ];
-                                  setAgentPromptPresets(newPresets);
-                                  localStorage.setItem('agentPresets', JSON.stringify(newPresets));
-                                }
-                              }}
-                            >
-                              Save
-                            </button>
-                            <button
-                              className="ch-btn-action"
-                              style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem', background: 'var(--bg-elevated)' }}
-                              onClick={() => {
-                                patchAgentConfig({ persona: DEFAULT_VOICE_CONFIG.persona });
-                                if (activeChannel) {
-                                  void resetVoiceMemory(activeChannel, { resetPersona: true, persona: DEFAULT_VOICE_CONFIG.persona }).then(() => {
-                                    setAgentMemory([]);
-                                    agentQueueRef.current = [];
-                                    agentSentTextsRef.current.clear();
-                                    toastsStore.add('info', 'Persona Reset', 'Restored default persona and cleared context window.');
-                                  });
-                                }
-                              }}
-                            >
-                              Reset Persona
-                            </button>
-                          </div>
+                          <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                            {personaDraft.length} chars
+                          </span>
                         </div>
+
+                        {/* Quick Persona Chips */}
+                        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                          {DEFAULT_PRESETS.map((p, i) => (
+                            <button
+                              key={i}
+                              type="button"
+                              className="ch-btn-action"
+                              style={{
+                                padding: '0.2rem 0.5rem',
+                                fontSize: '0.68rem',
+                                borderRadius: '12px',
+                                background: personaDraft === p.prompt ? 'rgba(168, 85, 247, 0.25)' : 'rgba(255,255,255,0.04)',
+                                border: personaDraft === p.prompt ? '1px solid var(--accent)' : '1px solid rgba(255,255,255,0.08)',
+                                color: personaDraft === p.prompt ? 'var(--text-strong)' : 'var(--text)',
+                                fontWeight: personaDraft === p.prompt ? 600 : 400,
+                              }}
+                              title={p.prompt}
+                              onClick={() => {
+                                setSelectedPreset(p.name);
+                                void handleApplyPersona(p.prompt, true);
+                              }}
+                            >
+                              {p.chipLabel || p.name}
+                            </button>
+                          ))}
+                        </div>
+
+                        {/* Preset Selector & Action Buttons */}
+                        <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                          <select
+                            value={selectedPreset}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setSelectedPreset(val);
+                              if (val) {
+                                const p = agentPromptPresets.find((pr) => pr.prompt === val);
+                                if (p) {
+                                  void handleApplyPersona(p.prompt, true);
+                                }
+                              }
+                            }}
+                            style={{
+                              padding: '0 0.4rem',
+                              fontSize: '0.7rem',
+                              background: 'var(--bg-elevated)',
+                              color: 'var(--text)',
+                              border: '1px solid var(--border)',
+                              borderRadius: '4px',
+                              flex: 1,
+                              minWidth: '130px',
+                            }}
+                          >
+                            <option value="">Choose preset...</option>
+                            {agentPromptPresets.map((p, i) => (
+                              <option key={i} value={p.prompt}>
+                                {p.name}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            className="ch-btn-action"
+                            style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}
+                            title="Save current prompt as a custom preset"
+                            onClick={() => {
+                              const name = prompt('Name for this custom preset:');
+                              if (name && name.trim()) {
+                                const newPresets = [
+                                  ...agentPromptPresets,
+                                  { name: name.trim(), prompt: personaDraft },
+                                ];
+                                setAgentPromptPresets(newPresets);
+                                localStorage.setItem('agentPresets', JSON.stringify(newPresets));
+                                toastsStore.add('success', 'Preset Saved', `Saved preset "${name.trim()}".`);
+                              }
+                            }}
+                          >
+                            Save Preset...
+                          </button>
+                          <button
+                            type="button"
+                            className="ch-btn-action"
+                            style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem', background: 'var(--bg-elevated)' }}
+                            title="Restore default assistant persona and clear conversation memory"
+                            onClick={() => {
+                              setSelectedPreset('');
+                              void handleApplyPersona(DEFAULT_VOICE_CONFIG.persona, true);
+                            }}
+                          >
+                            Reset Default
+                          </button>
+                        </div>
+
+                        {/* Textarea */}
                         <textarea
-                          value={agentConfig.persona}
-                          onChange={(e) => patchAgentConfig({ persona: e.target.value })}
-                          placeholder="System Prompt / Persona"
+                          value={personaDraft}
+                          onChange={(e) => {
+                            setPersonaDraft(e.target.value);
+                            patchAgentConfig({ persona: e.target.value });
+                          }}
+                          placeholder="System Prompt / Persona (instruction for the voice agent)"
+                          rows={3}
                           style={{
                             width: '100%',
                             minHeight: '80px',
-                            padding: '0.75rem',
-                            fontSize: '0.8rem',
-                            background: '#1d2026',
-                            color: '#f1f5f9',
-                            border: '1px solid #2e333d',
-                            borderRadius: '8px',
+                            padding: '0.65rem',
+                            fontSize: '0.78rem',
+                            background: 'var(--bg-elevated)',
+                            color: 'var(--text)',
+                            border: '1px solid var(--border)',
+                            borderRadius: '6px',
                             resize: 'vertical',
                           }}
                         />
+
+                        {/* Apply & Save Buttons */}
+                        <div style={{ display: 'flex', gap: '0.4rem', justifyContent: 'flex-end' }}>
+                          <button
+                            type="button"
+                            className="ch-btn-action"
+                            style={{
+                              padding: '0.25rem 0.6rem',
+                              fontSize: '0.72rem',
+                              background: 'var(--bg-elevated)',
+                              border: '1px solid var(--border)',
+                            }}
+                            title="Update persona for upcoming turns without erasing existing context memory"
+                            onClick={() => void handleApplyPersona(personaDraft, false)}
+                          >
+                            💾 Save Prompt
+                          </button>
+                          <button
+                            type="button"
+                            className="ch-btn-action"
+                            style={{
+                              padding: '0.25rem 0.75rem',
+                              fontSize: '0.72rem',
+                              background: 'var(--accent)',
+                              color: 'var(--text-strong)',
+                              border: 'none',
+                              fontWeight: 600,
+                            }}
+                            title="Apply new persona and wipe conversation memory so the agent switches identity immediately"
+                            onClick={() => void handleApplyPersona(personaDraft, true)}
+                          >
+                            ✨ Apply &amp; Clear Memory
+                          </button>
+                        </div>
                       </div>
 
-                      {/* Conversational Flow: Turn Eagerness & Floor Probing */}
-                      <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-                        <div style={agentFieldStyle}>
-                          <span style={agentLabelStyle}>Turn Eagerness (Response Speed):</span>
-                          <select
-                            style={agentInputStyle}
-                            value={agentConfig.turnEagerness || 'normal'}
-                            onChange={(e) => {
-                              const eagerness = e.target.value as 'fast' | 'normal' | 'patient';
-                              const delay = eagerness === 'fast' ? 400 : eagerness === 'patient' ? 1200 : 750;
-                              patchAgentConfig({ turnEagerness: eagerness, endpointingDelayMs: delay });
+                      {/* CARD 2: Voice & Speech Synthesis (TTS) */}
+                      <div
+                        style={{
+                          background: 'rgba(255,255,255,0.025)',
+                          border: '1px solid rgba(255,255,255,0.07)',
+                          borderRadius: '8px',
+                          padding: '0.75rem',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.6rem',
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--info)' }}>
+                            🔊 Voice &amp; Speech Synthesis (TTS)
+                          </span>
+                          <button
+                            type="button"
+                            className="ch-btn-action"
+                            style={{
+                              padding: '0.15rem 0.55rem',
+                              fontSize: '0.68rem',
+                              background: 'rgba(56, 189, 248, 0.15)',
+                              color: 'var(--info)',
+                              border: '1px solid rgba(56, 189, 248, 0.3)',
+                              borderRadius: '10px',
+                            }}
+                            title="Audition selected neural voice, speed, and pitch directly on your speakers"
+                            onClick={() => {
+                              void previewTtsVoice({
+                                voice: agentConfig.ttsVoice,
+                                rate: agentConfig.ttsRate,
+                                pitch: agentConfig.ttsPitch,
+                                volume: agentConfig.ttsVolume,
+                              });
                             }}
                           >
-                            <option value="fast">⚡ Fast (400ms pause - High Eagerness)</option>
-                            <option value="normal">⚖️ Normal (750ms pause - Balanced)</option>
-                            <option value="patient">🧘 Patient (1200ms pause - Relaxed)</option>
-                          </select>
+                            ▶️ Test Voice
+                          </button>
                         </div>
+
+                        {/* Voice Selector */}
                         <div style={agentFieldStyle}>
-                          <span style={agentLabelStyle}>Take Turn After Silence:</span>
-                          <select
-                            style={agentInputStyle}
-                            value={agentConfig.silenceTimeoutS || 0}
-                            onChange={(e) => patchAgentConfig({ silenceTimeoutS: Number(e.target.value) })}
-                          >
-                            <option value={0}>Disabled</option>
-                            <option value={15}>After 15s quiet</option>
-                            <option value={30}>After 30s quiet</option>
-                            <option value={60}>After 60s quiet</option>
-                          </select>
-                        </div>
-                      </div>
-
-                      {/* Natural Flow & Interruption Toggles */}
-                      <div style={{ display: 'flex', gap: '1.2rem', flexWrap: 'wrap', padding: '0.2rem 0' }}>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.78rem', color: 'var(--text)', cursor: 'pointer' }}>
-                          <input
-                            type="checkbox"
-                            checked={agentConfig.thinkingFiller !== false}
-                            onChange={(e) => patchAgentConfig({ thinkingFiller: e.target.checked })}
-                          />
-                          Soft thinking audio feedback ("Hmm, let me check...")
-                        </label>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.78rem', color: 'var(--text)', cursor: 'pointer' }}>
-                          <input
-                            type="checkbox"
-                            checked={agentConfig.allowBargeIn !== false}
-                            onChange={(e) => patchAgentConfig({ allowBargeIn: e.target.checked })}
-                          />
-                          Allow users to interrupt agent while speaking (Barge-in)
-                        </label>
-                      </div>
-
-                      <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-                        <div
-                          style={{
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: '0.4rem',
-                            flex: 1,
-                            minWidth: '100px',
-                          }}
-                        >
-                          <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>
-                            Temperature:
-                          </span>
-                          <input
-                            type="number"
-                            min="0"
-                            max="2"
-                            step="0.1"
-                            value={agentConfig.temperature}
-                            onChange={(e) =>
-                              patchAgentConfig({ temperature: Number(e.target.value) })
-                            }
-                            style={agentInputStyle}
-                          />
-                        </div>
-
-                        <div
-                          style={{
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: '0.4rem',
-                            flex: 1,
-                            minWidth: '100px',
-                          }}
-                        >
-                          <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>
-                            Max Tokens:
-                          </span>
-                          <input
-                            type="number"
-                            min="20"
-                            max="500"
-                            step="10"
-                            value={agentConfig.maxTokens}
-                            onChange={(e) =>
-                              patchAgentConfig({ maxTokens: Number(e.target.value) })
-                            }
-                            style={agentInputStyle}
-                          />
-                        </div>
-                      </div>
-
-                      {/* Conversation memory + how long it waits between unprompted replies. */}
-                      <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-                        <div style={agentFieldStyle}>
-                          <span style={agentLabelStyle}>Remember (turns):</span>
-                          <input
-                            type="number"
-                            min="0"
-                            max="40"
-                            step="2"
-                            style={agentInputStyle}
-                            value={agentConfig.memoryTurns}
-                            onChange={(e) =>
-                              patchAgentConfig({ memoryTurns: Number(e.target.value) })
-                            }
-                          />
-                        </div>
-                        <div style={agentFieldStyle}>
-                          <span style={agentLabelStyle}>Cooldown (seconds):</span>
-                          <input
-                            type="number"
-                            min="0"
-                            max="60"
-                            step="1"
-                            style={agentInputStyle}
-                            value={agentConfig.cooldownS}
-                            onChange={(e) =>
-                              patchAgentConfig({ cooldownS: Number(e.target.value) })
-                            }
-                          />
-                        </div>
-                      </div>
-
-                      {/* TTS Neural Voice, Speed, and Pitch */}
-                      <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-                        <div style={{ ...agentFieldStyle, flex: 2, minWidth: '180px' }}>
-                          <span style={agentLabelStyle}>TTS Voice:</span>
+                          <span style={agentLabelStyle}>Neural Voice Model:</span>
                           <select
                             style={agentInputStyle}
                             value={agentConfig.ttsVoice || 'en-US-ChristopherNeural'}
@@ -3331,44 +3389,402 @@ export function RoomsPanel() {
                               ))
                             ) : (
                               <>
-                                <option value="en-US-ChristopherNeural">Christopher (US Male)</option>
-                                <option value="en-US-JennyNeural">Jenny (US Female)</option>
-                                <option value="en-US-GuyNeural">Guy (US Male)</option>
-                                <option value="en-US-AriaNeural">Aria (US Female)</option>
-                                <option value="en-GB-RyanNeural">Ryan (UK Male)</option>
-                                <option value="en-GB-SoniaNeural">Sonia (UK Female)</option>
+                                <option value="en-US-AndrewMultilingualNeural">Andrew (US Male - Ultra-Natural &amp; Warm)</option>
+                                <option value="en-US-AvaMultilingualNeural">Ava (US Female - Ultra-Natural &amp; Conversational)</option>
+                                <option value="en-US-BrianMultilingualNeural">Brian (US Male - Engaging &amp; Friendly)</option>
+                                <option value="en-US-EmmaMultilingualNeural">Emma (US Female - Cheerful &amp; Clear)</option>
+                                <option value="en-US-ChristopherNeural">Christopher (US Male - Warm &amp; Authoritative)</option>
+                                <option value="en-US-JennyNeural">Jenny (US Female - Clear &amp; Conversational)</option>
+                                <option value="en-US-GuyNeural">Guy (US Male - Casual &amp; Friendly)</option>
+                                <option value="en-US-AriaNeural">Aria (US Female - Expressive)</option>
+                                <option value="en-US-EricNeural">Eric (US Male - Crisp)</option>
+                                <option value="en-GB-RyanNeural">Ryan (UK Male - Natural)</option>
+                                <option value="en-GB-SoniaNeural">Sonia (UK Female - Clear)</option>
+                                <option value="en-AU-NatNeural">Nat (AU Female)</option>
+                                <option value="en-AU-WilliamNeural">William (AU Male)</option>
+                                <option value="en-IN-NeerjaNeural">Neerja (IN Female - Professional)</option>
+                                <option value="ja-JP-KeitaNeural">Keita (Japanese Male)</option>
+                                <option value="es-ES-AlvaroNeural">Alvaro (Spanish Male)</option>
+                                <option value="fr-FR-HenriNeural">Henri (French Male)</option>
+                                <option value="de-DE-ConradNeural">Conrad (German Male)</option>
                               </>
                             )}
                           </select>
                         </div>
+
+                        {/* Audio Tuning: Volume, Rate, Pitch */}
+                        <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                          <div style={{ ...agentFieldStyle, flex: 1, minWidth: '85px' }}>
+                            <span style={agentLabelStyle}>Output Volume:</span>
+                            <select
+                              style={agentInputStyle}
+                              value={agentConfig.ttsVolume || '+0%'}
+                              onChange={(e) => patchAgentConfig({ ttsVolume: e.target.value })}
+                            >
+                              <option value="-50%">50% (Soft)</option>
+                              <option value="-25%">75%</option>
+                              <option value="+0%">100% (Normal)</option>
+                              <option value="+25%">125%</option>
+                              <option value="+50%">150% (Loud)</option>
+                            </select>
+                          </div>
+                          <div style={{ ...agentFieldStyle, flex: 1, minWidth: '85px' }}>
+                            <span style={agentLabelStyle}>Speech Rate:</span>
+                            <select
+                              style={agentInputStyle}
+                              value={agentConfig.ttsRate || '+0%'}
+                              onChange={(e) => patchAgentConfig({ ttsRate: e.target.value })}
+                            >
+                              <option value="-20%">0.8x (Slow)</option>
+                              <option value="-10%">0.9x</option>
+                              <option value="+0%">1.0x (Normal)</option>
+                              <option value="+10%">1.1x (Fast)</option>
+                              <option value="+20%">1.2x</option>
+                              <option value="+30%">1.3x</option>
+                            </select>
+                          </div>
+                          <div style={{ ...agentFieldStyle, flex: 1, minWidth: '85px' }}>
+                            <span style={agentLabelStyle}>Voice Pitch:</span>
+                            <select
+                              style={agentInputStyle}
+                              value={agentConfig.ttsPitch || '+0Hz'}
+                              onChange={(e) => patchAgentConfig({ ttsPitch: e.target.value })}
+                            >
+                              <option value="-10Hz">-10Hz (Deeper)</option>
+                              <option value="-5Hz">-5Hz</option>
+                              <option value="+0Hz">Default (+0Hz)</option>
+                              <option value="+5Hz">+5Hz</option>
+                              <option value="+10Hz">+10Hz (Higher)</option>
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* CARD 3: Speech Recognition (STT) & Floor Dynamics */}
+                      <div
+                        style={{
+                          background: 'rgba(255,255,255,0.025)',
+                          border: '1px solid rgba(255,255,255,0.07)',
+                          borderRadius: '8px',
+                          padding: '0.75rem',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.6rem',
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--success)' }}>
+                            🎙️ Hearing &amp; Speech Recognition (STT)
+                          </span>
+                          <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                            Whisper / VAD Filtered
+                          </span>
+                        </div>
+
+                        {/* Live STT Transcript Pill */}
+                        <div
+                          style={{
+                            padding: '0.45rem 0.65rem',
+                            background: 'rgba(0, 0, 0, 0.3)',
+                            border: '1px solid rgba(255, 255, 255, 0.08)',
+                            borderRadius: '6px',
+                            fontSize: '0.72rem',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '2px',
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-dim)', fontSize: '0.65rem' }}>
+                            <span>🎙️ LIVE STT RECOGNITION</span>
+                            {lastHeardSpeech && <span>{lastHeardSpeech.time}</span>}
+                          </div>
+                          {lastHeardSpeech ? (
+                            <div style={{ color: 'var(--text)' }}>
+                              <strong style={{ color: 'var(--info)' }}>{lastHeardSpeech.speaker || 'Room'}:</strong>{' '}
+                              <span style={{ fontStyle: 'italic' }}>"{lastHeardSpeech.text}"</span>
+                            </div>
+                          ) : (
+                            <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                              Microphone listening for room audio...
+                            </span>
+                          )}
+                        </div>
+
+                        {/* When to speak & Wake Words */}
+                        <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                          <div style={{ ...agentFieldStyle, flex: 1, minWidth: '140px' }}>
+                            <span style={agentLabelStyle}>When to speak:</span>
+                            <select
+                              style={agentInputStyle}
+                              value={agentConfig.posture}
+                              onChange={(e) =>
+                                patchAgentConfig({
+                                  posture: e.target.value as VoiceAgentConfig['posture'],
+                                })
+                              }
+                            >
+                              <option value="addressed">Only when addressed</option>
+                              <option value="conversational">Conversational (with cooldown)</option>
+                              <option value="always">Always (replies to everything)</option>
+                              <option value="interject">Interject (cuts in mid-sentence)</option>
+                            </select>
+                          </div>
+
+                          {agentConfig.posture === 'interject' && (
+                            <div style={{ ...agentFieldStyle, flex: 1, minWidth: '100px' }}>
+                              <span style={agentLabelStyle}>Cut in after:</span>
+                              <input
+                                type="number"
+                                min={2}
+                                max={60}
+                                step={1}
+                                style={agentInputStyle}
+                                value={agentConfig.interjectAfterS ?? 6}
+                                onChange={(e) =>
+                                  patchAgentConfig({
+                                    interjectAfterS: Math.max(2, Number(e.target.value) || 6),
+                                  })
+                                }
+                              />
+                            </div>
+                          )}
+
+                          <div style={{ ...agentFieldStyle, flex: 2, minWidth: '150px' }}>
+                            <span style={agentLabelStyle}>Wake words (comma separated):</span>
+                            <input
+                              type="text"
+                              style={agentInputStyle}
+                              value={wakeWordsInput}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setWakeWordsInput(val);
+                                patchAgentConfig({
+                                  wakeWords: val
+                                    .split(',')
+                                    .map((w) => w.trim().toLowerCase())
+                                    .filter(Boolean),
+                                });
+                              }}
+                              onBlur={() => {
+                                const cleaned = wakeWordsInput
+                                  .split(',')
+                                  .map((w) => w.trim().toLowerCase())
+                                  .filter(Boolean);
+                                setWakeWordsInput(cleaned.join(', '));
+                              }}
+                              placeholder="agent, assistant, bot"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Conversational Timing */}
+                        <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                          <div style={{ ...agentFieldStyle, flex: 1, minWidth: '140px' }}>
+                            <span style={agentLabelStyle}>Turn Eagerness (Speed):</span>
+                            <select
+                              style={agentInputStyle}
+                              value={agentConfig.turnEagerness || 'normal'}
+                              onChange={(e) => {
+                                const eagerness = e.target.value as 'fast' | 'normal' | 'patient';
+                                const delay = eagerness === 'fast' ? 400 : eagerness === 'patient' ? 1200 : 750;
+                                patchAgentConfig({ turnEagerness: eagerness, endpointingDelayMs: delay });
+                              }}
+                            >
+                              <option value="fast">⚡ Fast (400ms pause)</option>
+                              <option value="normal">⚖️ Normal (750ms pause)</option>
+                              <option value="patient">🧘 Patient (1200ms pause)</option>
+                            </select>
+                          </div>
+                          <div style={{ ...agentFieldStyle, flex: 1, minWidth: '140px' }}>
+                            <span style={agentLabelStyle}>Take Turn After Silence:</span>
+                            <select
+                              style={agentInputStyle}
+                              value={agentConfig.silenceTimeoutS || 0}
+                              onChange={(e) => patchAgentConfig({ silenceTimeoutS: Number(e.target.value) })}
+                            >
+                              <option value={0}>Disabled</option>
+                              <option value={15}>After 15s quiet</option>
+                              <option value={30}>After 30s quiet</option>
+                              <option value={60}>After 60s quiet</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        {/* Natural Flow & Interruption Toggles */}
+                        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', padding: '0.1rem 0' }}>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.74rem', color: 'var(--text)', cursor: 'pointer' }}>
+                            <input
+                              type="checkbox"
+                              checked={agentConfig.thinkingFiller !== false}
+                              onChange={(e) => patchAgentConfig({ thinkingFiller: e.target.checked })}
+                              style={{ accentColor: 'var(--accent)' }}
+                            />
+                            Soft thinking filler ("Hmm, let me check...")
+                          </label>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.74rem', color: 'var(--text)', cursor: 'pointer' }}>
+                            <input
+                              type="checkbox"
+                              checked={agentConfig.allowBargeIn !== false}
+                              onChange={(e) => patchAgentConfig({ allowBargeIn: e.target.checked })}
+                              style={{ accentColor: 'var(--accent)' }}
+                            />
+                            Allow users to interrupt agent while speaking (Barge-in)
+                          </label>
+                        </div>
+                      </div>
+
+                      {/* CARD 4: Model & Reasoning Parameters */}
+                      <div
+                        style={{
+                          background: 'rgba(255,255,255,0.025)',
+                          border: '1px solid rgba(255,255,255,0.07)',
+                          borderRadius: '8px',
+                          padding: '0.75rem',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.6rem',
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--warning)' }}>
+                            🧠 Model &amp; Reasoning Parameters
+                          </span>
+                          {agentEngineStatus?.provider && (
+                            <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)' }}>
+                              Provider: {agentEngineStatus.provider}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Engine Model Selector */}
                         <div style={agentFieldStyle}>
-                          <span style={agentLabelStyle}>Speed:</span>
+                          <label style={agentLabelStyle}>Active Engine Model:</label>
                           <select
                             style={agentInputStyle}
-                            value={agentConfig.ttsRate || '+0%'}
-                            onChange={(e) => patchAgentConfig({ ttsRate: e.target.value })}
+                            value={agentEngineStatus?.model || ''}
+                            disabled={switchingModel}
+                            onChange={async (e) => {
+                              const newModel = e.target.value;
+                              if (!agentEngineStatus?.provider) return;
+                              setSwitchingModel(true);
+                              try {
+                                await saveAgentConfig(
+                                  newModel,
+                                  agentEngineStatus.provider,
+                                  agentEngineStatus.endpoint || undefined,
+                                );
+                                const updated = await getAgentStatus();
+                                setAgentEngineStatus(updated);
+                                toastsStore.add('success', 'Model Switched', `Voice Agent now using ${newModel}`);
+                              } catch (err) {
+                                toastsStore.add('error', 'Model Switch Failed', err instanceof Error ? err.message : String(err));
+                              } finally {
+                                setSwitchingModel(false);
+                              }
+                            }}
                           >
-                            <option value="-20%">0.8x (Slow)</option>
-                            <option value="-10%">0.9x</option>
-                            <option value="+0%">1.0x (Normal)</option>
-                            <option value="+10%">1.1x (Fast)</option>
-                            <option value="+20%">1.2x (Very Fast)</option>
-                            <option value="+30%">1.3x</option>
+                            {agentEngineStatus?.available_models && agentEngineStatus.available_models.length > 0 ? (
+                              agentEngineStatus.available_models.map((m) => (
+                                <option key={m} value={m}>
+                                  {m.includes('3b') || m.includes('2b') || m.includes('1b') ? `⚡ ${m} (Fast - Recommended)` : m}
+                                </option>
+                              ))
+                            ) : (
+                              <option value={agentEngineStatus?.model || ''}>{agentEngineStatus?.model || 'Loading...'}</option>
+                            )}
                           </select>
                         </div>
-                        <div style={agentFieldStyle}>
-                          <span style={agentLabelStyle}>Pitch:</span>
-                          <select
-                            style={agentInputStyle}
-                            value={agentConfig.ttsPitch || '+0Hz'}
-                            onChange={(e) => patchAgentConfig({ ttsPitch: e.target.value })}
-                          >
-                            <option value="-10Hz">-10Hz (Deeper)</option>
-                            <option value="-5Hz">-5Hz</option>
-                            <option value="+0Hz">Default Pitch</option>
-                            <option value="+5Hz">+5Hz</option>
-                            <option value="+10Hz">+10Hz (Higher)</option>
-                          </select>
+
+                        {/* Model override, Temperature, Max Tokens */}
+                        <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                          <div style={{ ...agentFieldStyle, flex: 2, minWidth: '150px' }}>
+                            <span style={agentLabelStyle}>Model Override (optional):</span>
+                            <input
+                              type="text"
+                              placeholder="System default"
+                              value={agentConfig.model || ''}
+                              onChange={(e) =>
+                                patchAgentConfig({ model: e.target.value.trim() || undefined })
+                              }
+                              style={agentInputStyle}
+                            />
+                          </div>
+                          <div style={{ ...agentFieldStyle, flex: 1, minWidth: '85px' }}>
+                            <span style={agentLabelStyle}>Temperature ({agentConfig.temperature}):</span>
+                            <input
+                              type="number"
+                              min="0"
+                              max="1.5"
+                              step="0.1"
+                              value={agentConfig.temperature}
+                              onChange={(e) =>
+                                patchAgentConfig({ temperature: Number(e.target.value) })
+                              }
+                              style={agentInputStyle}
+                            />
+                          </div>
+                          <div style={{ ...agentFieldStyle, flex: 1, minWidth: '85px' }}>
+                            <span style={agentLabelStyle}>Max Tokens:</span>
+                            <input
+                              type="number"
+                              min="20"
+                              max="400"
+                              step="10"
+                              value={agentConfig.maxTokens}
+                              onChange={(e) =>
+                                patchAgentConfig({ maxTokens: Number(e.target.value) })
+                              }
+                              style={agentInputStyle}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Memory and Cooldown */}
+                        <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                          <div style={{ ...agentFieldStyle, flex: 1, minWidth: '110px' }}>
+                            <span style={agentLabelStyle}>Remember turns:</span>
+                            <input
+                              type="number"
+                              min="0"
+                              max="40"
+                              step="2"
+                              style={agentInputStyle}
+                              value={agentConfig.memoryTurns}
+                              onChange={(e) =>
+                                patchAgentConfig({ memoryTurns: Number(e.target.value) })
+                              }
+                            />
+                          </div>
+                          <div style={{ ...agentFieldStyle, flex: 1, minWidth: '110px' }}>
+                            <span style={agentLabelStyle}>Cooldown (seconds):</span>
+                            <input
+                              type="number"
+                              min="0"
+                              max="60"
+                              step="1"
+                              style={agentInputStyle}
+                              value={agentConfig.cooldownS}
+                              onChange={(e) =>
+                                patchAgentConfig({ cooldownS: Number(e.target.value) })
+                              }
+                            />
+                          </div>
+                          <div style={{ ...agentFieldStyle, flex: 1, minWidth: '130px' }}>
+                            <span style={agentLabelStyle}>Look things up:</span>
+                            <select
+                              style={agentInputStyle}
+                              value={agentConfig.retrieval}
+                              onChange={(e) =>
+                                patchAgentConfig({
+                                  retrieval: e.target.value as VoiceAgentConfig['retrieval'],
+                                })
+                              }
+                            >
+                              <option value="off">Never</option>
+                              <option value="command">Only on /agent search</option>
+                              <option value="auto">Automatically for questions</option>
+                            </select>
+                          </div>
                         </div>
                       </div>
 
@@ -3385,30 +3801,31 @@ export function RoomsPanel() {
                           gap: '0.5rem',
                         }}
                       >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600 }}>
-                            Last turn: <span style={{ color: 'var(--text-strong)' }}>{agentReason ?? '—'}</span>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <span>Last turn: <strong style={{ color: 'var(--text-strong)' }}>{agentReason ?? '—'}</strong></span>
+                            {isAgentThinking && (
+                              <span style={{ color: 'var(--info)', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                                ⚡ Generating response...
+                              </span>
+                            )}
+                            {isAgentSpeaking && (
+                              <span style={{ color: 'var(--success)', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                                🔊 Speaking
+                              </span>
+                            )}
                           </div>
                           <button
+                            type="button"
                             className="ch-btn-action"
                             style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem', background: 'var(--bg-elevated)' }}
-                            onClick={() => {
-                              if (activeChannel) {
-                                void resetVoiceMemory(activeChannel).then(() => {
-                                  setAgentMemory([]);
-                                  agentQueueRef.current = [];
-                                  agentSentTextsRef.current.clear();
-                                  stopAgentAudio();
-                                  toastsStore.add('success', 'Context Cleared', 'Reset LLM conversation memory.');
-                                });
-                              }
-                            }}
+                            onClick={() => void handleClearContext(false)}
                           >
                             🧹 Clear Context Window
                           </button>
                         </div>
                         {speechError && (
-                          <div style={{ fontSize: '0.75rem', color: '#fbbf24' }}>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--warning)' }}>
                             ⚠️ {speechError}
                           </div>
                         )}
@@ -3714,6 +4131,7 @@ export function RoomsPanel() {
                         }}
                       >
                         <button
+                          type="button"
                           className="ch-btn-action"
                           style={{
                             padding: '0.6rem 1.2rem',
@@ -3722,14 +4140,17 @@ export function RoomsPanel() {
                             color: 'white',
                             border: 'none',
                             borderRadius: '20px',
-                            cursor: 'pointer',
+                            cursor: (!isAgentThinking && !isAgentSpeaking) ? 'not-allowed' : 'pointer',
+                            opacity: (!isAgentThinking && !isAgentSpeaking) ? 0.5 : 1,
                           }}
-                          onClick={stopAgentAudio}
-                          disabled={!isAgentSpeaking}
+                          onClick={handleInterrupt}
+                          disabled={!isAgentThinking && !isAgentSpeaking}
+                          title="Immediately stop speaking and abort in-flight LLM generation"
                         >
                           ✋ Interrupt
                         </button>
                         <button
+                          type="button"
                           className="ch-btn-action"
                           style={{
                             padding: '0.6rem 1.2rem',
@@ -3737,7 +4158,8 @@ export function RoomsPanel() {
                             background: '#2e333d',
                             border: 'none',
                             borderRadius: '20px',
-                            cursor: 'pointer',
+                            cursor: (isAgentThinking || isAgentSpeaking) ? 'not-allowed' : 'pointer',
+                            opacity: (isAgentThinking || isAgentSpeaking) ? 0.6 : 1,
                           }}
                           onClick={() =>
                             enqueueUtterance(
@@ -3746,11 +4168,12 @@ export function RoomsPanel() {
                               true,
                             )
                           }
-                          disabled={isAgentSpeaking}
+                          disabled={isAgentThinking || isAgentSpeaking}
                         >
-                          🗣️ Speak Now
+                          {isAgentThinking ? '⏳ Generating…' : isAgentSpeaking ? '🔊 Speaking…' : '🗣️ Speak Now'}
                         </button>
                         <button
+                          type="button"
                           className="ch-btn-action"
                           style={{
                             padding: '0.6rem 1.2rem',
@@ -3760,11 +4183,8 @@ export function RoomsPanel() {
                             borderRadius: '20px',
                             cursor: 'pointer',
                           }}
-                          onClick={() => {
-                            if (activeChannel) {
-                              void resetVoiceMemory(activeChannel).then(() => setAgentMemory([]));
-                            }
-                          }}
+                          onClick={() => void handleClearContext(false)}
+                          title="Wipe conversation history so agent forgets recent context"
                         >
                           🧹 Forget
                         </button>

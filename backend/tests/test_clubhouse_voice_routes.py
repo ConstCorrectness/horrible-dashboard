@@ -258,3 +258,30 @@ def test_the_interject_posture_answers_a_partial(client, captured):
     ).json()
     assert res["spoke"] is True
     assert res["reply"] == "Sure, happy to help."
+
+
+def test_turn_with_config_payload_syncs_session(client, captured):
+    """Passing config in TurnRequest directly synchronizes the session, preventing race conditions."""
+    custom_persona = "You are an ancient Roman philosopher."
+    res = client.post(
+        "/api/clubhouse/voice/turn",
+        json={
+            "channel": "c_sync",
+            "text": "agent, what is truth?",
+            "room": ROOM,
+            "config": {
+                "enabled": True,
+                "posture": "addressed",
+                "persona": custom_persona,
+            },
+        },
+    ).json()
+    assert res["spoke"] is True
+    assert res["reply"] == "Sure, happy to help."
+    system_content = captured[0][0]["content"]
+    assert custom_persona in system_content
+    # And state reflects the updated config
+    state = client.get("/api/clubhouse/voice/state", params={"channel": "c_sync"}).json()
+    assert state["config"]["enabled"] is True
+    assert state["config"]["persona"] == custom_persona
+

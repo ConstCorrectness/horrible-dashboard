@@ -180,6 +180,7 @@ class VoiceConfig:
     tts_voice: str = "en-US-ChristopherNeural"
     tts_rate: str = "+0%"
     tts_pitch: str = "+0Hz"
+    tts_volume: str = "+0%"
     # Conversational flow and human-like timing
     turn_eagerness: Literal["fast", "normal", "patient"] = "normal"
     endpointing_delay_ms: int = 750
@@ -223,7 +224,7 @@ class VoiceConfig:
             wake_words=[str(w).strip().lower() for w in words if str(w).strip()]
             if isinstance(words, list)
             else base.wake_words,
-            persona=str(raw.get("persona") or base.persona),
+            persona=str(raw["persona"]) if "persona" in raw and raw["persona"] is not None else base.persona,
             temperature=float(raw.get("temperature", base.temperature)),
             max_tokens=int(
                 raw.get("max_tokens", raw.get("maxTokens", base.max_tokens))
@@ -251,6 +252,7 @@ class VoiceConfig:
             tts_voice=str(raw.get("tts_voice", raw.get("ttsVoice", base.tts_voice))),
             tts_rate=str(raw.get("tts_rate", raw.get("ttsRate", base.tts_rate))),
             tts_pitch=str(raw.get("tts_pitch", raw.get("ttsPitch", base.tts_pitch))),
+            tts_volume=str(raw.get("tts_volume", raw.get("ttsVolume", base.tts_volume))),
             turn_eagerness=eagerness,  # type: ignore[arg-type]
             endpointing_delay_ms=endpointing,
             thinking_filler=bool(
@@ -547,7 +549,11 @@ def build_messages(
     into one block, because a model that sees a transcript-shaped blob answers *about*
     the transcript instead of continuing it.
     """
-    system_parts = [config.persona.strip(), SPEECH_RULES, render_room_brief(room)]
+    system_parts: list[str] = []
+    if config.persona and config.persona.strip():
+        system_parts.append(f"Persona and identity:\n{config.persona.strip()}")
+    system_parts.append(SPEECH_RULES)
+    system_parts.append(render_room_brief(room))
     if bios := render_bios(room):
         system_parts.append(bios)
     if retrieval:
