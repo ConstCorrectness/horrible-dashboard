@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.modules.training.envs import python_path, venv_ready
-from backend.modules.training.metrics import record_event
+from backend.modules.training.metrics import finish_run, record_event
 from backend.modules.training.models import ProjectModel
 from backend.modules.training.sentinel import EVENT_NAMES, LineSplitter
 from backend.modules.training.stream import broadcast_threadsafe
@@ -36,6 +36,11 @@ class ScriptRun:
         self.script = script
         self.proc: subprocess.Popen[str] | None = None
         self.returncode: int | None = None
+        self.stopped = False
+        #: Every metric run id this process opened. A script may call `ht.run()`
+        #: several times (a sweep child does not, but a hand-written loop might),
+        #: and each one needs closing when the process exits.
+        self.metric_runs: list[str] = []
 
     @property
     def running(self) -> bool:
@@ -91,6 +96,7 @@ class ScriptRunner:
         if run is None or run.proc is None:
             return False
         if run.running:
+            run.stopped = True
             run.proc.kill()
         return True
 
@@ -107,6 +113,9 @@ class ScriptRunner:
                     data = {k: v for k, v in event.items() if k != "type"}
                     data["projectId"] = run.project.id
                     data.setdefault("runId", run.id)
+                    metric_run = str(data.get("runId") or "")
+                    if metric_run and metric_run not in run.metric_runs:
+                        run.metric_runs.append(metric_run)
                     record_event(ws_event, data)
                 if text:
                     broadcast_threadsafe(
@@ -127,6 +136,20 @@ class ScriptRunner:
                     {"runId": run.id, "projectId": run.project.id, "line": tail},
                 )
             run.returncode = run.proc.wait()
+            # Close every metric run this process opened. `finish_run` is
+            # idempotent, so a script that already called `ht.finish()` keeps the
+            # status it chose and this is a no-op — which is the point: the
+            # process's exit code is the *fallback* verdict, not the authority.
+            # A killed run is `failed` rather than `crashed`: the user stopped it.
+            status = (
+                "finished"
+                if run.returncode == 0
+                else "failed"
+                if run.stopped
+                else "crashed"
+            )
+            for metric_run in run.metric_runs:
+                finish_run(metric_run, status)
             broadcast_threadsafe(
                 "run_state",
                 {
@@ -135,6 +158,7 @@ class ScriptRunner:
                     "script": run.script,
                     "state": "exited",
                     "returncode": run.returncode,
+                    "status": status,
                 },
             )
 

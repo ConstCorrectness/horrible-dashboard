@@ -2,6 +2,16 @@ import { useState } from 'react';
 import { useLocalTrackStore } from '../store';
 import type { ChartType, YAxisScale } from '../types';
 
+/** Panel type labels. The two comparison types read each run's CONFIG rather than
+ * a metric series, which is why they are separate types and not a mode. */
+const PANEL_LABELS: Record<ChartType, string> = {
+  line: '📈 Line Chart',
+  bar: '📊 Bar Chart',
+  scalar: '🔢 Scalar Card',
+  table: '🧮 Compare (which knob)',
+  parcoords: '🪢 Parallel Coordinates',
+};
+
 export function AddPanelModal({
   isOpen,
   onClose,
@@ -142,7 +152,7 @@ export function AddPanelModal({
             Chart Type
           </label>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
-            {(['line', 'bar', 'scalar'] as ChartType[]).map((type) => (
+            {(['line', 'bar', 'scalar', 'table', 'parcoords'] as ChartType[]).map((type) => (
               <button
                 key={type}
                 type="button"
@@ -159,7 +169,7 @@ export function AddPanelModal({
                   cursor: 'pointer',
                 }}
               >
-                {type === 'line' ? '📈 Line Chart' : type === 'bar' ? '📊 Bar Chart' : '🔢 Scalar Card'}
+                {PANEL_LABELS[type]}
               </button>
             ))}
           </div>

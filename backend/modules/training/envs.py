@@ -20,6 +20,7 @@ import sys
 import threading
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from backend.modules.training.models import ProjectModel
 from backend.modules.training.providers.base import ProviderError
@@ -121,3 +122,74 @@ def bootstrap(
     """Create the venv and install the kernel + helper + provider requirements."""
     create(project, progress)
     install(project, ["ipykernel", str(HELPER_DIR), *requirements], progress)
+
+
+def torch_index_url(profile: Any) -> tuple[str, str]:
+    """(index URL, why) for `torch` on this machine — or ("", why) for the default.
+
+    The step that was missing, and the reason the recipe form has spent its whole
+    life reporting "trl and peft are not installed": `bootstrap` installs
+    `ipykernel` and the helper and nothing else, so there has never been a moment
+    where the ML stack arrived in a project venv.
+
+    Getting `torch` itself right needs the **card and the OS together**, the same
+    rule `hardware._variant_for` follows for llama.cpp builds:
+
+    - **CUDA**: PyPI's default `torch` wheel is already a CUDA build on Windows and
+      Linux, so no index override — pointing at a cu12x index would pin a version
+      that may not exist for the current torch release.
+    - **ROCm**: needs an explicit index; the default wheel has no ROCm support at
+      all and fails at `torch.cuda.is_available()` with no useful message.
+    - **Metal**: the default macOS wheel carries MPS. Nothing to override.
+    - **No accelerator, or we could not ask**: the CPU index, which is a much
+      smaller download — but only when the probe is *certain*. If it could not
+      ask, installing the CPU build would silently make a machine with a card
+      train at CPU speed, which is the failure mode this module exists to avoid.
+    """
+    if profile is None:
+        return "", "no hardware profile; using the default wheel"
+    if not getattr(profile, "certain", True):
+        return "", (
+            "the accelerator probe could not run, so the default (GPU-capable) "
+            "wheel is installed rather than the CPU one — a CPU build on a machine "
+            "with a card would train slowly with nothing saying why"
+        )
+    primary = getattr(profile, "primary", None)
+    if primary is None:
+        return "https://download.pytorch.org/whl/cpu", (
+            "no accelerator was found, so the smaller CPU-only wheel is installed"
+        )
+    if primary.kind == "rocm":
+        return "https://download.pytorch.org/whl/rocm6.2", (
+            f"{primary.name} detected via {primary.detected_by}; the default wheel "
+            "has no ROCm support"
+        )
+    return "", (
+        f"{primary.name} detected via {primary.detected_by}; the default wheel "
+        "already targets it"
+    )
+
+
+def install_stack(
+    project: ProjectModel,
+    packages: list[str],
+    profile: Any,
+    progress: ProgressLine,
+) -> str:
+    """Install a recipe backend's requirements, with torch resolved for this box.
+
+    Two `uv pip install` calls rather than one: torch may need its own index URL,
+    and passing `--index-url` to a combined install would send *every* package
+    through PyTorch's index, where most of them do not exist.
+
+    Returns the sentence explaining the torch choice, so the pane can say why a
+    CPU build landed on a machine whose owner knows they have a card.
+    """
+    index_url, reason = torch_index_url(profile)
+    torch_cmd = ["torch"]
+    if index_url:
+        torch_cmd = ["torch", "--index-url", index_url]
+    progress(f"resolving torch: {reason}")
+    install(project, torch_cmd, progress)
+    install(project, [p for p in packages if p != "torch"], progress)
+    return reason

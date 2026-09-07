@@ -16,6 +16,8 @@ from backend import paths
 from backend.modules.localtrack import stream
 from backend.modules.localtrack.downsampling import ema_smooth, lttb
 from backend.modules.localtrack.models import (
+    CompareResponse,
+    CompareRow,
     MetricLogItem,
     MetricSeriesResponse,
     ProjectModel,
@@ -659,3 +661,85 @@ def save_layout(project_id: str, panels: list[dict[str, Any]]) -> None:
             """,
             (project_id, json.dumps(panels), _utc_now_iso()),
         )
+
+
+def compare_runs(run_ids: list[str], metric: str = "") -> CompareResponse:
+    """Runs side by side, reduced to what actually differs between them.
+
+    The read that makes a sweep worth running. Every ingredient has been in this
+    schema since it was written — `config_json` per run, metrics per (run, key,
+    step) — and nothing had ever put a comparable config in the first field or
+    diffed it out of the second.
+
+    Three things it does that a raw row dump does not:
+
+    - **Splits varied from shared.** A fine-tune has forty knobs and an ablation
+      moves one or two; a table repeating the other thirty-eight on every row
+      buries the answer.
+    - **Takes each metric's LAST value**, not its first or its mean. "Which run
+      ended up best" is the question; a mean over a descending loss curve mostly
+      measures how long the run was.
+    - **Flags mixed comparisons.** Runs on different backends, tasks or datasets
+      are still comparable — you may well want to — but the difference between
+      them is not the axis you varied, and a table that does not say so reads as
+      an ablation result.
+    """
+    runs = [r for r in (get_run(rid) for rid in run_ids) if r is not None]
+    if not runs:
+        return CompareResponse()
+
+    configs = [dict(r.config or {}) for r in runs]
+    keys = sorted({k for c in configs for k in c if not k.startswith("_")})
+    varied: list[str] = []
+    shared: dict[str, Any] = {}
+    for key in keys:
+        seen = [json.dumps(c.get(key), sort_keys=True, default=str) for c in configs]
+        if len(set(seen)) > 1 or any(key not in c for c in configs):
+            varied.append(key)
+        else:
+            shared[key] = configs[0].get(key)
+
+    # A sweep marks its own axes; prefer that order, since it is the order the
+    # experiment was designed in rather than alphabetical.
+    declared: list[str] = []
+    for config in configs:
+        for axis in config.get("_axes") or []:
+            if axis in varied and axis not in declared:
+                declared.append(str(axis))
+    varied = declared + [k for k in varied if k not in declared]
+
+    wanted = [metric] if metric else get_metric_keys(run_ids=[r.id for r in runs])
+    rows: list[CompareRow] = []
+    with get_conn() as conn:
+        for run, config in zip(runs, configs):
+            finals: dict[str, float] = {}
+            for key in wanted:
+                found = conn.execute(
+                    "SELECT value FROM lt_metrics WHERE run_id = ? AND key = ? "
+                    "ORDER BY step DESC, id DESC LIMIT 1",
+                    (run.id, key),
+                ).fetchone()
+                if found is not None:
+                    finals[key] = float(found["value"])
+            rows.append(
+                CompareRow(
+                    run_id=run.id,
+                    name=run.name,
+                    status=run.status,
+                    config={k: config.get(k) for k in varied},
+                    metrics=finals,
+                )
+            )
+
+    mixed = [
+        f"_{name}"
+        for name in ("backend", "task")
+        if len({json.dumps(c.get(f"_{name}"), default=str) for c in configs}) > 1
+    ]
+    return CompareResponse(
+        runs=rows,
+        varied=varied,
+        shared=shared,
+        metric_keys=sorted({k for r in rows for k in r.metrics}),
+        mixed=mixed,
+    )

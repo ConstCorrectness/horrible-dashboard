@@ -21,6 +21,7 @@ SENTINEL = "@@HORRIBLE@@"
 EVENT_NAMES = {
     "run": "run_started",
     "metric": "metrics",
+    "finish": "run_finished",
     "frame": "frame",
     "model_graph": "model_graph",
     "model_stats": "model_stats",

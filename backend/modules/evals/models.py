@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 #: How a case's expected calls are compared with what the model actually did.
 #:
@@ -34,7 +34,17 @@ Grade = Literal["exact", "name_only", "subset", "sequence", "no_call", "judge"]
 
 #: Grades a case may actually select. `judge` needs a provider and `graders` is
 #: deliberately pure, so nothing routes it and it always returns False.
-AUTHORABLE_GRADES = ("exact", "name_only", "subset", "sequence", "no_call")
+#: `judge` joined this list when `evals/judge.py` landed. It was excluded while it
+#: was declared-but-unrouted, because a grade nothing scores fails every run and the
+#: failure reads as the model being wrong.
+AUTHORABLE_GRADES = (
+    "exact",
+    "name_only",
+    "subset",
+    "sequence",
+    "no_call",
+    "judge",
+)
 
 #: What kind of thing a case measures, which decides which runner takes it.
 CaseType = Literal["tool_call", "agent_task", "generative", "hf_benchmark"]
@@ -97,17 +107,22 @@ class Expect(_Strict):
     #: `hf_benchmark` only: the metric name the project runner reports.
     metric: str = ""
 
+    #: `judge` only: the model that graded this case, stamped by the runner.
+    #: Recorded because two runs graded by different judges are not comparable and
+    #: a leaderboard that stays silent presents them as if they were.
+    judge_model: str = ""
+
     @field_validator("grade")
     @classmethod
     def _authorable(cls, grade: Grade) -> Grade:
         """Refuse a grade nothing can score.
 
-        `judge` is declared but unrouted, so a case selecting it fails every time
-        it runs — and the failure reads as the *model* getting it wrong, which is
-        the one thing this module exists not to do. The frontend's picker already
-        omits it; this closes the two paths that bypass the picker, an
-        agent-authored case and a hand-edited `.jsonl`, and it fails where a
-        mistake is cheap rather than twenty minutes into a sweep.
+        The rule, not the list: a grade selected but unrouted fails every time it
+        runs, and the failure reads as the *model* getting it wrong, which is the
+        one thing this module exists not to do. This closes the two paths that
+        bypass the frontend picker — an agent-authored case and a hand-edited
+        `.jsonl` — and fails where a mistake is cheap rather than twenty minutes
+        into a sweep.
         """
         if grade not in AUTHORABLE_GRADES:
             raise ValueError(
@@ -115,6 +130,17 @@ class Expect(_Strict):
                 f"use one of {', '.join(AUTHORABLE_GRADES)}"
             )
         return grade
+
+    @model_validator(mode="after")
+    def _judge_needs_a_rubric(self) -> Expect:
+        """A judge with no rubric is a model asked to grade nothing in particular.
+
+        Caught here rather than at run time for the same reason as the grade
+        check: a case that cannot be scored should fail while you are writing it.
+        """
+        if self.grade == "judge" and not self.rubric.strip():
+            raise ValueError("judge grading needs a `rubric` saying what to check")
+        return self
 
 
 class HfBenchmark(_Strict):
@@ -159,9 +185,20 @@ class HfBenchmark(_Strict):
     #: reason out loud and only the last figure counts — `(-?[\d.,]+)\s*$` is the
     #: usual one.
     prediction_regex: str = ""
-    #: An `evaluate` metric id, or `exact_match` / `contains` which the harness
-    #: implements itself so the common case needs no extra dependency.
+    #: An `evaluate` metric id, or one of the three the harness implements itself
+    #: so the common case needs no extra dependency: `exact_match`, `contains`, and
+    #: `code_exec`.
+    #:
+    #: `code_exec` runs the model's code against the dataset's own tests, which is
+    #: the only way to score HumanEval or MBPP — two correct solutions to one
+    #: problem share almost no characters, so every string metric scores them zero.
+    #: It is gated behind `HORRIBLE_ENABLE_EVAL_CODE_EXEC`.
     metric: str = "exact_match"
+    #: `code_exec` only: the columns holding the dataset's test function and the
+    #: name of the function under test. HumanEval calls them `test` and
+    #: `entry_point`; MBPP spells the first one `test_list`.
+    test_column: str = "test"
+    entry_point_column: str = "entry_point"
     #: Rows to run, after the split expression. Belt and braces: a split of
     #: `test` on a large dataset is a very long afternoon.
     limit: int = 50

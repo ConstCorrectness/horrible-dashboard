@@ -18,6 +18,8 @@ from backend.modules.connectors.providers import (  # noqa: F401
     google_tools,
     huggingface,
     huggingface_tools,
+    nvidia,
+    nvidia_tools,
 )
 from backend.sdk.registry import registry
 
@@ -33,10 +35,12 @@ def register_connectors() -> None:
         github.build(),
         google.build(),
         huggingface.build(),
+        nvidia.build(),
         streaming.connector(),
     ):
         registry.connectors[connector.id] = connector
     github_tools.register_agent_tools()
     google_tools.register_agent_tools()
     huggingface_tools.register_agent_tools()
+    nvidia_tools.register_agent_tools()
     drive_fs.register()

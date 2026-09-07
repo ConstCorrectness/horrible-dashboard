@@ -116,3 +116,72 @@ def test_metrics_non_metric_events_pass_straight_through(monkeypatch) -> None:
     metrics.record_event("model_graph", {"projectId": "p", "graph": {}})
     assert [e for e, _ in sent] == ["frame", "model_graph"]
     metrics.reset()
+
+
+# --- the terminal status ------------------------------------------------------
+#
+# A run had no end. `_mirror_for` closed the previous run when a *new* one started,
+# which for the last run of a session is never — so a twelve-point sweep showed
+# twelve live runs forever. `ht.finish()` and the script runner's process exit are
+# the two real signals; the supersede branch is now only a backstop.
+
+
+def test_the_helper_emits_a_finish_event_that_the_sentinel_maps():
+    from backend.modules.training.sentinel import EVENT_NAMES, parse_line
+
+    event = parse_line('@@HORRIBLE@@{"type": "finish", "runId": "a", "status": "failed"}')
+    assert event["type"] == "finish"
+    assert EVENT_NAMES["finish"] == "run_finished"
+
+
+def test_finishing_a_run_twice_is_a_no_op_the_second_time(monkeypatch):
+    """A generated recipe emits `ht.finish()` from `on_train_end` AND the script
+    runner closes the run on process exit, so two calls for one run is the common
+    case. The second must not overwrite the real status with the process's."""
+    from backend.modules.training import metrics
+
+    metrics.reset()
+    closed: list[tuple[str, str]] = []
+
+    class FakeMirror:
+        run_id = "lt-1"
+
+        def finish(self, status="finished", summary=None):
+            closed.append((self.run_id, status))
+
+    metrics._mirrors["r1"] = FakeMirror()
+    assert metrics.finish_run("r1", "finished") is True
+    assert metrics.finish_run("r1", "crashed") is False
+    assert closed == [("lt-1", "finished")]
+    metrics.reset()
+
+
+def test_an_unknown_status_is_coerced_rather_than_written_through(monkeypatch):
+    """localtrack renders an unknown status as no status at all."""
+    from backend.modules.training import metrics
+
+    metrics.reset()
+    seen: list[str] = []
+
+    class FakeMirror:
+        run_id = "lt-1"
+
+        def finish(self, status="finished", summary=None):
+            seen.append(status)
+
+    metrics._mirrors["r1"] = FakeMirror()
+    metrics.finish_run("r1", "exploded")
+    assert seen == ["failed"]
+    metrics.reset()
+
+
+def test_a_run_started_event_records_the_name_for_the_config_lookup():
+    """A script mints its own run id, so the sweep that launched it can only agree
+    with it on the *name*."""
+    from backend.modules.training import metrics
+
+    metrics.reset()
+    metrics.declare_run_config("proj", "lr=0.001", {"learning_rate": 0.001})
+    metrics.record_event("run_started", {"runId": "abc", "name": "lr=0.001"})
+    assert metrics._names["abc"] == "lr=0.001"
+    metrics.reset()

@@ -48,6 +48,27 @@ const ICONS: Record<string, JSX.Element> = {
       <path d="M9.3 14.6h5.4a2.7 2.7 0 0 1-5.4 0z" fill="#FF9D0B" />
     </svg>
   ),
+  nvidia: (
+    // The eye mark, geometrically: a thick arc opening to the right with a filled
+    // pupil. Brand green rather than currentColor, for the same reason as Google's
+    // and Hugging Face's — the mark *is* the colour, and at tile size a monochrome
+    // version of it reads as an unrelated glyph.
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M4 12c0-4 3.4-6.6 8-6.6 4.6 0 8 2.6 8 6.6s-3.4 6.6-8 6.6c-4.6 0-8-2.6-8-6.6zm2.6 0c0 2.6 2.4 4.3 5.4 4.3s5.4-1.7 5.4-4.3S15 7.7 12 7.7 6.6 9.4 6.6 12z"
+        fill="#76B900"
+      />
+      <ellipse cx="12" cy="12" rx="2.5" ry="2.5" fill="#76B900" />
+    </svg>
+  ),
+  chart: (
+    // The `trackers` connector (W&B key + MLflow URI). It rendered as a letter
+    // avatar until now, which is what an unknown slug falls back to.
+    <svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
+      <path d="M2 13.5V3a.5.5 0 0 1 1 0v10h11a.5.5 0 0 1 0 1H2.5a.5.5 0 0 1-.5-.5z" />
+      <path d="M5 11V7.5a.5.5 0 0 1 1 0V11H5zm2.5 0V5a.5.5 0 0 1 1 0v6h-1zm2.5 0V8.5a.5.5 0 0 1 1 0V11h-1zm2.5 0V4a.5.5 0 0 1 1 0v7h-1z" />
+    </svg>
+  ),
   key: (
     <svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
       <path d="M10.5 1a4.5 4.5 0 0 0-4.24 6L1 12.26V15h2.74l.9-.9V12.5h1.6l1.26-1.26A4.5 4.5 0 1 0 10.5 1zm1.25 3.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0z" />

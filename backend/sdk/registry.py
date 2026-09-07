@@ -59,6 +59,17 @@ class PluginRegistry:
     # that module's own registry; this mirror is what `host.add_search_provider`
     # writes to so a plugin's provider is discoverable the same way.
     search_providers: dict[str, Any] = field(default_factory=dict)
+    # Dataset sources (duck-typed against
+    # backend.modules.datasets.sources.DatasetSource): one place training material
+    # lives, searchable and peekable. Built-ins win id conflicts.
+    dataset_sources: dict[str, Any] = field(default_factory=dict)
+    # Recipe backends (duck-typed against
+    # backend.modules.training.backends.base.RecipeBackend): one training framework,
+    # its tasks, its fields and the code it emits. Built-ins win id conflicts.
+    recipe_backends: dict[str, Any] = field(default_factory=dict)
+    # Eval runners (duck-typed against backend.modules.evals.runners.EvalRunner):
+    # one way of executing a suite. Built-ins win id conflicts.
+    eval_runners: dict[str, Any] = field(default_factory=dict)
     startup_hooks: list[LifecycleHook] = field(default_factory=list)
     shutdown_hooks: list[LifecycleHook] = field(default_factory=list)
     # Per-plugin load failures, surfaced rather than crashing the app.
@@ -75,6 +86,9 @@ class PluginRegistry:
         self.dash_facades.clear()
         self.training_providers.clear()
         self.search_providers.clear()
+        self.dataset_sources.clear()
+        self.recipe_backends.clear()
+        self.eval_runners.clear()
         self.startup_hooks.clear()
         self.shutdown_hooks.clear()
         self.errors.clear()

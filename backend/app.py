@@ -167,6 +167,9 @@ from backend.modules.terminal import TerminalManager
 from backend.modules.symdex import push_symdex_events
 from backend.modules.symdex import register_agent_tools as register_symdex_tools
 from backend.modules.symdex import router as symdex_router
+from backend.modules.datasets import register_agent_tools as register_datasets_tools
+from backend.modules.datasets import router as datasets_router
+from backend.modules.datasets import subscribe_datasets_conn
 from backend.modules.training import register_agent_tools as register_training_tools
 from backend.modules.training import router as training_router
 from backend.modules.training import subscribe_training_conn
@@ -338,6 +341,7 @@ app.include_router(social_router, prefix="/api")
 app.include_router(share_router, prefix="/api")
 app.include_router(hassault_router, prefix="/api")
 app.include_router(training_router, prefix="/api")
+app.include_router(datasets_router, prefix="/api")
 app.include_router(lsp_router, prefix="/api")
 app.include_router(mcp_router, prefix="/api")
 app.include_router(skills_router, prefix="/api")
@@ -355,6 +359,11 @@ app.include_router(localtrack_router)
 # training module is a first-party consumer of the same registry backend plugins
 # write to). Grouped under `training`, disclosed progressively by the orchestrator.
 register_training_tools()
+
+# The datasets module's tools (grouped under `datasets`). Registered beside the
+# training ones because the two are one workflow: peek at a dataset, register it,
+# point a recipe at it.
+register_datasets_tools()
 
 # Register the LocalTrack experiment tracking agent tools (grouped under `localtrack`)
 register_localtrack_tools()
@@ -506,6 +515,8 @@ async def ws(websocket: WebSocket) -> None:
     social_unsub = subscribe_social_conn(conn)
     # Fan training events (venv/fetch progress, metrics, frames) to this browser.
     training_unsub = subscribe_training_conn(conn)
+    # Dataset build progress belongs to the node, not the tab that started it.
+    datasets_unsub = subscribe_datasets_conn(conn)
     try:
         while True:
             msg = await websocket.receive_json()
@@ -578,6 +589,7 @@ async def ws(websocket: WebSocket) -> None:
         commons_unsub()  # type: ignore[operator]
         social_unsub()  # type: ignore[operator]
         training_unsub()
+        datasets_unsub()
         training_kernels.detach(conn)
         notebook_manager.detach(conn)
         collab_manager.drop(conn)

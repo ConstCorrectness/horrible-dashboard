@@ -72,6 +72,24 @@ _mirrors: dict[str, RunMirror] = {}
 #: The most recent run per project, so a new one can close its predecessor.
 _latest_by_project: dict[str, str] = {}
 
+#: run id -> the name the helper announced, from `run_started`. Needed because a
+#: script mints its own run id and the sweep that launched it cannot know it in
+#: advance — the *name* is the only thing both sides agree on beforehand.
+_names: dict[str, str] = {}
+
+#: (project id, run name) -> the config that run is exercising. A sweep declares
+#: one per point before launching it.
+#:
+#: This is the whole mechanism behind "which knob caused this". localtrack has
+#: stored `config_json` per run since it was written and never had a producer that
+#: put anything comparable in it; the comparison view reads it back and diffs.
+_declared: dict[tuple[str, str], dict[str, Any]] = {}
+
+
+def declare_run_config(project_id: str, run_name: str, config: dict[str, Any]) -> None:
+    """Say what a not-yet-started run will be exercising, keyed by its name."""
+    _declared[(project_id, run_name)] = dict(config)
+
 
 def _mirror_for(run_id: str, project_id: str) -> RunMirror:
     """The localtrack run mirroring this training run, creating it if needed.
@@ -84,22 +102,28 @@ def _mirror_for(run_id: str, project_id: str) -> RunMirror:
     if mirror is not None:
         return mirror
 
-    # A new run supersedes the previous one for the same project. This is the only
-    # end-of-run signal available here: the helper emits no "finished" event, and
-    # kernel lifecycle lives in shared notebook_core rather than in this module. A
-    # run whose process simply died is therefore left `running` until the next one
-    # starts — visible in the pane, and better than guessing from a timeout.
+    # A new run supersedes the previous one for the same project. This is the
+    # *backstop* end-of-run signal, not the primary one: `ht.finish()` (helper) and
+    # a script runner's process exit both call `finish_run` below. This branch only
+    # catches a run whose process died without either — a killed kernel, a hard
+    # crash — and leaves it `running` until the next one starts rather than
+    # guessing from a timeout.
     previous = _latest_by_project.get(project_id)
     if previous and previous != run_id:
         prior = _mirrors.get(previous)
         if prior is not None:
             prior.finish()
 
+    name = _names.get(run_id) or run_id
+    declared = _declared.get((project_id, name), {})
     mirror = RunMirror(
         project_id or "training",
-        name=run_id,
-        config={"source": "training", "projectId": project_id},
-        tags=["training"],
+        # The helper's name, not the hex id: a sweep names each point after what
+        # varies (`learning_rate=0.0002`), and a sidebar of twelve hex ids is a
+        # sidebar you cannot read.
+        name=name,
+        config={"source": "training", "projectId": project_id, **declared},
+        tags=["training", "sweep"] if declared else ["training"],
     )
     _mirrors[run_id] = mirror
     if project_id:
@@ -129,12 +153,46 @@ def _persist(data: dict[str, Any]) -> None:
         logger.debug("training: could not persist a metric point", exc_info=True)
 
 
+#: Terminal statuses localtrack understands. Anything else is coerced to `failed`
+#: rather than written through — an unknown status renders as no status at all.
+TERMINAL = ("finished", "failed", "crashed")
+
+
+def finish_run(
+    run_id: str, status: str = "finished", summary: dict[str, Any] | None = None
+) -> bool:
+    """Close one run with a terminal status. Returns False if it was already closed.
+
+    Idempotent on purpose: a generated recipe emits `ht.finish()` from
+    `on_train_end` *and* the script runner closes the run when the process exits,
+    so the common case is two calls for one run. The second must be a no-op, not a
+    second row and not an overwrite of the real status with the process's.
+    """
+    if not run_id:
+        return False
+    mirror = _mirrors.pop(run_id, None)
+    _names.pop(run_id, None)
+    if mirror is None:
+        return False
+    for project_id, latest in list(_latest_by_project.items()):
+        if latest == run_id:
+            _latest_by_project.pop(project_id, None)
+    mirror.finish(
+        status if status in TERMINAL else "failed",
+        summary=summary or {},
+    )
+    return True
+
+
 def finish_all() -> None:
     """Close every open mirror. Called from the app lifespan on shutdown."""
     for mirror in list(_mirrors.values()):
         mirror.finish()
     _mirrors.clear()
     _latest_by_project.clear()
+    _names.clear()
+    # `_declared` is deliberately NOT cleared here: shutdown closes runs, and a
+    # sweep's declared configs belong to points that may not have started yet.
 
 
 def _capacity() -> int:
@@ -146,6 +204,26 @@ def _capacity() -> int:
 
 def record_event(ws_event: str, data: dict[str, Any]) -> None:
     """Record + rebroadcast one sentinel event (called from pump threads)."""
+    if ws_event == "run_started":
+        # Remember the name before any metric arrives: `_mirror_for` runs on the
+        # first metric point and needs it to look up the declared config.
+        run_id = str(data.get("runId") or "")
+        if run_id:
+            _names[run_id] = str(data.get("name") or run_id)
+        broadcast_threadsafe(ws_event, data)
+        return
+    if ws_event == "run_finished":
+        # Close the store row *before* the wire, so a pane that reacts to the
+        # broadcast by re-reading the run sees the terminal status rather than
+        # racing the write and showing `running` one last time.
+        summary = data.get("summary")
+        finish_run(
+            str(data.get("runId") or ""),
+            str(data.get("status") or "finished"),
+            summary if isinstance(summary, dict) else {},
+        )
+        broadcast_threadsafe(ws_event, data)
+        return
     if ws_event != "metrics":
         broadcast_threadsafe(ws_event, data)
         return
@@ -206,3 +284,5 @@ def reset() -> None:
         _buffers.clear()
     _mirrors.clear()
     _latest_by_project.clear()
+    _names.clear()
+    _declared.clear()

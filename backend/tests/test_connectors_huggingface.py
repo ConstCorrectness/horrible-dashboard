@@ -78,12 +78,20 @@ def test_setup_help_gives_a_navigation_path_not_a_bare_url():
     assert "settings/applications/new" not in help_text
 
 
-def test_scopes_are_read_only():
-    """The connector must never request write/manage — a confused agent could
-    otherwise delete a model. This is the guard on that."""
+def test_the_connector_never_asks_for_manage_access():
+    """The invariant is **no deletion**, not "no writing".
+
+    `write-repos` was added so a finished checkpoint or a dataset built here can be
+    pushed to the Hub. `manage-repos` — the scope that can DELETE a repo — is still
+    deliberately absent, and that is the distinction the original "read-only" guard
+    was really protecting: uploading a bad checkpoint wastes bandwidth, deleting a
+    repo destroys work.
+    """
     ids = {s.id for s in huggingface.SCOPES}
-    assert ids == {"profile", "read-repos", "inference-api"}
-    assert not any("write" in s or "manage" in s for s in ids)
+    assert ids == {"profile", "read-repos", "inference-api", "write-repos"}
+    assert "manage-repos" not in ids
+    assert "manage" not in huggingface._SCOPE_PARAM
+    assert not any("manage" in s for s in ids)
 
 
 # --- the device flow --------------------------------------------------------

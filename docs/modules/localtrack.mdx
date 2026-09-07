@@ -311,3 +311,38 @@ LocalTrack also integrates with external Weights & Biases (W&B) endpoints:
 
 Note there is no bare-path alias for any of these — see
 [Routes are namespaced](#routes-are-namespaced).
+
+## Comparing runs
+
+`compare_runs(run_ids, metric)` and the two panel types over it — `table` and
+`parcoords` — are the read a [sweep](./training.mdx#ablation-sweeps) exists for.
+
+Every ingredient has been in this schema since it was written: `config_json` per run,
+metrics per `(run, key, step)`. What was missing was a **producer that put anything
+comparable in the first field**. The training sweep now declares one config per point,
+so the table has something to diff.
+
+Three things it does that a raw row dump does not:
+
+- **Splits varied from shared.** A fine-tune has forty knobs and an ablation moves
+  one or two; a table repeating the other thirty-eight on every row buries the answer.
+  What was held constant is reported once, underneath.
+- **Takes each metric's LAST value**, not its mean. "Which run ended up best" is the
+  question; a mean over a descending loss curve mostly measures how long the run was.
+- **Flags mixed comparisons.** Runs on different backends or tasks are still
+  comparable — you may well want to — but the difference between them is not the axis
+  you varied, and a table that stays silent reads as an ablation result.
+
+The `parcoords` panel answers the shape question the table cannot: whether the metric
+moves *monotonically* with a knob, whether two knobs interact, and whether the best run
+is a trend or one lucky point. Colour encodes the **metric**, not the run, because
+"which of these lines is good" is the question — a categorical palette would mean
+cross-referencing a legend for every line.
+
+### Importing from Weights & Biases
+
+`training.wandb_import` pulls a W&B run's config and metric history in through the
+same `RunMirror`, so a run from a rented box charts and compares beside the ones
+trained here. The history W&B returns is **sampled** by default and the imported run
+says so: a 500-point curve standing in for 40,000 must not be presented as the
+original. See [training](./training.mdx).

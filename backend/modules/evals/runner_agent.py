@@ -253,4 +253,28 @@ async def run_case(
         result.passed = False
         result.error = error
         result.detail = error
+        return result
+
+    if case.expect.grade == "judge":
+        # Routed here rather than in `graders.py`, which is pure and synchronous
+        # by design: everything else it does is a comparison, and giving it a
+        # provider client would make every grade a potential network call.
+        from backend.modules.evals import judge as judge_grader
+
+        try:
+            passed, detail, judge_model = await judge_grader.grade(
+                rubric=case.expect.rubric,
+                question=judge_grader.question_of(case),
+                answer=answer,
+                model=case.expect.judge_model,
+            )
+            result.passed = passed
+            result.detail = detail
+        except judge_grader.JudgeError as exc:
+            # An error, never a zero. A judge that could not be reached has said
+            # nothing about the answer, and scoring it as a failure is exactly the
+            # "the case was wrong and the model got the blame" mistake.
+            result.passed = False
+            result.error = str(exc)
+            result.detail = str(exc)
     return result

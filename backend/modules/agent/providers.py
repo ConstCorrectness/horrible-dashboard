@@ -124,6 +124,22 @@ PROVIDERS: dict[str, ProviderInfo] = {
         # The lender spawns; a borrower never does.
         can_spawn=False,
     ),
+    "nim": ProviderInfo(
+        kind="nim",
+        label="NVIDIA NIM",
+        # The llama.cpp precedent again, and for the same reason: NIM speaks the
+        # OpenAI chat API, so this inherits streamed reasoning, tool-call assembly
+        # and the `tool_choice="required"` retry unchanged. A bespoke dialect would
+        # mean six new branches here and would silently lose that retry, which is
+        # gated on `info.dialect == "openai"`.
+        dialect="openai",
+        default_endpoint="https://integrate.api.nvidia.com",
+        install_url="https://build.nvidia.com",
+        # Hosted: nothing to pull and nothing to spawn. The key comes from the
+        # `nvidia` connector rather than a setting, because it is a credential.
+        can_pull=False,
+        can_spawn=False,
+    ),
     "vllm": ProviderInfo(
         kind="vllm",
         label="vLLM",
@@ -235,6 +251,23 @@ def api_key_for(info: ProviderInfo) -> str | None:
     if info.env_var:
         return os.environ.get(info.env_var, "").strip() or None
     return None
+
+
+def auth_headers(info: ProviderInfo) -> dict[str, str]:
+    """Authorization for an openai-dialect provider that needs one.
+
+    Empty for every local server — llama.cpp, LM Studio, vLLM and a borrowed peer
+    take no key — so adding this to the shared request path changes nothing for
+    them. NVIDIA NIM is the first openai-dialect provider that is *hosted*, and its
+    key lives in the `nvidia` connector rather than a setting, because it is a
+    credential and `GET /api/settings` hands the whole settings bag to the browser.
+    """
+    if info.kind != "nim":
+        return {}
+    from backend.modules.connectors.providers.nvidia import api_key
+
+    key = api_key()
+    return {"Authorization": f"Bearer {key}"} if key else {}
 
 
 def qualify_model(info: ProviderInfo, model: str) -> str:
@@ -462,7 +495,7 @@ async def list_models(
         res = await client.get(f"{endpoint}/api/tags")
         res.raise_for_status()
         return [m["name"] for m in res.json().get("models", [])]
-    res = await client.get(f"{endpoint}/v1/models")
+    res = await client.get(f"{endpoint}/v1/models", headers=auth_headers(info))
     res.raise_for_status()
     return [m["id"] for m in res.json().get("data", [])]
 
@@ -513,6 +546,7 @@ async def chat(
                 "tools": tools,
                 "stream": False,
             },
+            headers=auth_headers(info),
         )
         res.raise_for_status()
         choices = res.json().get("choices") or [{}]
@@ -584,6 +618,7 @@ async def chat_stream(
         tool_choice,
         max_tokens,
         top_p,
+        auth_headers(info),
     )
 
 
@@ -775,6 +810,9 @@ async def _openai_chat_stream(
     tool_choice: str | None = None,
     max_tokens: int | None = None,
     top_p: float | None = None,
+    #: Empty for every local server; a Bearer token for a hosted openai-dialect
+    #: provider (NIM). See `auth_headers`.
+    headers: dict[str, str] | None = None,
 ) -> ChatResult:
     url = f"{endpoint}/v1/chat/completions"
     payload: dict[str, Any] = {
@@ -794,7 +832,7 @@ async def _openai_chat_stream(
     extractor = ThinkingExtractor(on_delta)
     # OpenAI streams tool calls as partial deltas keyed by index; assemble them.
     tool_acc: dict[int, dict[str, Any]] = {}
-    async with client.stream("POST", url, json=payload) as res:
+    async with client.stream("POST", url, json=payload, headers=headers or None) as res:
         res.raise_for_status()
         async for line in tee_stream(res, res.aiter_lines()):
             if not line or not line.startswith("data:"):

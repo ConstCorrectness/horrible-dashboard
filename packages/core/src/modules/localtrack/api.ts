@@ -1,5 +1,5 @@
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from '../../api';
-import type { MetricSeries, PanelConfig, Project, Run, RunArtifact } from './types';
+import type { CompareResult, MetricSeries, PanelConfig, Project, Run, RunArtifact } from './types';
 
 export async function fetchProjects(): Promise<Project[]> {
   const res = await apiGet<{ projects: Project[] }>('/localtrack/projects');
@@ -49,7 +49,7 @@ export async function queryMetrics(
   runIds: string[],
   keys: string[],
   maxPoints = 500,
-  smoothing = 0.0
+  smoothing = 0.0,
 ): Promise<MetricSeries[]> {
   if (!runIds.length || !keys.length) return [];
   const res = await apiPost<{ series: MetricSeries[] }>('/localtrack/metrics/query', {
@@ -63,7 +63,7 @@ export async function queryMetrics(
 
 export async function fetchRunArtifacts(runId: string): Promise<RunArtifact[]> {
   const res = await apiGet<{ artifacts: RunArtifact[] }>(
-    `/localtrack/runs/${encodeURIComponent(runId)}/artifacts`
+    `/localtrack/runs/${encodeURIComponent(runId)}/artifacts`,
   );
   return res.artifacts;
 }
@@ -85,4 +85,15 @@ export async function fetchLayout(projectId: string): Promise<PanelConfig[] | nu
 
 export async function saveLayout(projectId: string, panels: PanelConfig[]): Promise<void> {
   await apiPut(`/localtrack/projects/${encodeURIComponent(projectId)}/layout`, { panels });
+}
+
+/**
+ * Runs side by side, reduced to what differs between them.
+ *
+ * The read a sweep exists for. Everything it needs has been in the schema since
+ * localtrack was written; nothing put a comparable config into `config_json`
+ * until the training sweep started declaring one per point.
+ */
+export async function compareRuns(runIds: string[], metric = ''): Promise<CompareResult> {
+  return apiPost<CompareResult>('/localtrack/compare', { run_ids: runIds, metric });
 }

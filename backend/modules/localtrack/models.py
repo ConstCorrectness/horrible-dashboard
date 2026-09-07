@@ -7,7 +7,11 @@ from pydantic import BaseModel, Field
 
 
 RunStatus = Literal["running", "finished", "failed", "crashed"]
-ChartType = Literal["line", "bar", "scalar"]
+#: `table` and `parcoords` are the comparison panels: the first is the run ×
+#: config × metric grid that answers "which knob caused this", the second plots
+#: every run as a line across the config axes, coloured by the metric. Neither is
+#: a chart of a series — they read `config_json`, which nothing had ever done.
+ChartType = Literal["line", "bar", "scalar", "table", "parcoords"]
 
 
 class ProjectModel(BaseModel):
@@ -139,3 +143,37 @@ class RunArtifactModel(BaseModel):
 
 class ArtifactListResponse(BaseModel):
     artifacts: list[RunArtifactModel]
+
+
+class CompareRequest(BaseModel):
+    run_ids: list[str] = Field(default_factory=list)
+    #: The metric each run is judged by. Its last recorded value is what lands in
+    #: the table, because a fine-tune's final loss is the number people compare.
+    metric: str = ""
+
+
+class CompareRow(BaseModel):
+    run_id: str
+    name: str
+    status: str
+    #: Only the config keys that DIFFER across the compared runs. A row carrying
+    #: all forty knobs buries the two that varied.
+    config: dict[str, Any] = Field(default_factory=dict)
+    metrics: dict[str, float] = Field(default_factory=dict)
+
+
+class CompareResponse(BaseModel):
+    """Runs side by side, reduced to what actually differs between them."""
+
+    runs: list[CompareRow] = Field(default_factory=list)
+    #: Config keys that vary — the axes of the experiment, in the order they
+    #: should be shown.
+    varied: list[str] = Field(default_factory=list)
+    #: Config keys shared by every run. Worth reporting so the table can say what
+    #: was held constant without repeating it on every row.
+    shared: dict[str, Any] = Field(default_factory=dict)
+    metric_keys: list[str] = Field(default_factory=list)
+    #: True when the runs disagree about something that makes them incomparable —
+    #: a different backend, task or dataset. Comparing those is still allowed; it
+    #: just must not be presented as an ablation.
+    mixed: list[str] = Field(default_factory=list)

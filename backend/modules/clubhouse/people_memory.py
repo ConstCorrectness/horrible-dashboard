@@ -65,26 +65,61 @@ class PeopleMemoryStore:
     """Manages persistent profiles, learned notes, and social memory for Clubhouse users."""
 
     def __init__(self, storage_path: Path | None = None) -> None:
-        self._path = storage_path or (paths.data_dir() / "clubhouse-people-memory.json")
+        #: An explicit override, or None to follow `paths.data_dir()` at call time.
+        self._explicit_path = storage_path
         self._people: dict[int, PersonMemory] = {}
-        self._loaded = False
+        #: The path the current `_people` was loaded from, or None if never loaded.
+        #: Not a bool: this store is a **process-global singleton constructed at
+        #: import time**, so a `_path` resolved in `__init__` would be frozen to
+        #: whatever the data dir was when the module first loaded — and the
+        #: contents would then be served from a different directory than the one
+        #: actually in force. Comparing the path is what makes a data-dir change
+        #: reload rather than silently answer from the old one.
+        self._loaded_from: Path | None = None
+
+    @property
+    def _path(self) -> Path:
+        """Where memory lives, resolved now rather than at import.
+
+        `paths` is the one authority on where files go and it reads the
+        environment, so resolving this once at construction would pin the store to
+        the data dir of whichever process state happened to exist at import.
+        """
+        return self._explicit_path or (
+            paths.data_dir() / "clubhouse-people-memory.json"
+        )
 
     def _ensure_loaded(self) -> None:
-        if self._loaded:
+        path = self._path
+        if self._loaded_from == path:
             return
-        self._loaded = True
-        if not self._path.is_file():
+        # A different path than we last loaded from: this is a different store, so
+        # start from nothing rather than layering its contents over the old ones.
+        self._people = {}
+        self._loaded_from = path
+        if not path.is_file():
             return
         try:
-            raw = json.loads(self._path.read_text(encoding="utf-8"))
+            raw = json.loads(path.read_text(encoding="utf-8"))
             for item in raw:
                 person = PersonMemory.from_dict(item)
                 if person.user_id > 0:
                     self._people[person.user_id] = person
         except Exception as e:
             logger.warning(
-                "Failed to load clubhouse people memory from %s: %s", self._path, e
+                "Failed to load clubhouse people memory from %s: %s", path, e
             )
+
+    def reset(self) -> None:
+        """Forget everything held in memory, without touching disk.
+
+        For tests. This object is process-global, so without it one test's people
+        are visible to every test that follows — which is how a room whose member
+        has a `bio` ended up rendering a *remembered* line with no bio instead
+        (`voice.render_bios` prefers learned memory, deliberately).
+        """
+        self._people = {}
+        self._loaded_from = None
 
     def _save(self) -> None:
         try:

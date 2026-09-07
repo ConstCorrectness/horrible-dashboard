@@ -104,10 +104,16 @@ async def status() -> AgentStatus:
     # nobody can install or fix: without a lease it has no endpoint by design, so
     # probing it would put a permanently-unreachable row in a list whose whole
     # purpose is telling the user what they could switch to.
+    #
+    # `nim` is listed only while the NVIDIA connector holds a key, for the same
+    # reason plus one more: it is the only openai-dialect provider that is remote,
+    # so probing it unconditionally would mean an unauthenticated request to
+    # NVIDIA on every status poll, to be told what we already knew.
     infos = [
         info
         for info in P.PROVIDERS.values()
-        if info.kind != "peer" or _endpoint_for(info, config)
+        if (info.kind != "peer" or _endpoint_for(info, config))
+        and (info.kind != "nim" or P.auth_headers(info))
     ]
     async with instrumented_client(timeout=2) as client:
         detected = await asyncio.gather(

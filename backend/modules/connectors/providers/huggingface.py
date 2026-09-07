@@ -41,10 +41,19 @@ DEVICE_CODE_URL = "https://huggingface.co/oauth/device"
 TOKEN_URL = "https://huggingface.co/oauth/token"
 WHOAMI_URL = "https://huggingface.co/api/whoami-v2"
 
-# `profile` names the account; `read-repos` is what makes private models and datasets
-# readable; `inference-api` lets the agent run inference as the user. All read-shaped —
-# Hugging Face does have `write-repos`/`manage-repos`, and this connector deliberately
-# asks for neither, so a confused agent cannot delete a model.
+# `profile` names the account; `read-repos` makes private models and datasets
+# readable; `inference-api` lets the agent run inference as the user; `write-repos`
+# lets a finished checkpoint or a built dataset be pushed back to the Hub.
+#
+# **`manage-repos` is still deliberately absent**, and the distinction is the whole
+# safety argument: `write-repos` can create a repo and upload files, `manage-repos`
+# can DELETE one. A confused agent that uploads a bad checkpoint has wasted some
+# bandwidth; one that can delete a repo has destroyed work. Uploading is the thing
+# people asked for; deleting is not.
+#
+# Adding a scope forces re-consent: an account connected before `write-repos`
+# existed keeps working for reads and is told to reconnect when a push is
+# attempted, rather than failing at the upload with a 403.
 SCOPES = [
     ConnectorScope(
         id="profile",
@@ -67,9 +76,29 @@ SCOPES = [
             "used when you ask the agent to run a model."
         ),
     ),
+    ConnectorScope(
+        id="write-repos",
+        label="Create repos and upload files",
+        description=(
+            "Push a fine-tuned checkpoint or a dataset you built here to the Hub. "
+            "Create and upload only — this connector never asks for manage access, "
+            "so nothing it holds can delete a repo."
+        ),
+    ),
 ]
 
-_SCOPE_PARAM = "profile read-repos inference-api"
+_SCOPE_PARAM = "profile read-repos inference-api write-repos"
+
+#: Scope needed to push. Checked before an upload so a token granted before this
+#: scope existed fails with "reconnect Hugging Face" rather than a bare 403.
+WRITE_SCOPE = "write-repos"
+
+
+def can_write() -> bool:
+    from backend.modules.connectors import store
+
+    cred = store.load(CONNECTOR_ID)
+    return bool(cred) and WRITE_SCOPE in (cred.get("scopes") or [])
 
 
 ID_ENV = "HUGGINGFACE_CLIENT_ID"

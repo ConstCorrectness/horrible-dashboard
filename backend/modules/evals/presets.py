@@ -114,4 +114,132 @@ PRESETS: list[dict[str, Any]] = [
             "system": "Answer truthfully and briefly.",
         },
     },
+    {
+        "id": "humaneval",
+        "label": "HumanEval — code generation",
+        "why": (
+            "Code cannot be graded by string match: two correct solutions to one "
+            "problem share almost no characters. `code_exec` runs the model's "
+            "completion against the dataset's own tests instead. Needs "
+            "HORRIBLE_ENABLE_EVAL_CODE_EXEC=1 — it executes model-written code on "
+            "this machine, isolated but not container-grade."
+        ),
+        "benchmark": {
+            "dataset": "openai/openai_humaneval",
+            "config": "",
+            "split": "test[:20]",
+            "input_template": "{prompt}",
+            # Unused by `code_exec` (the tests decide), but the model requires a
+            # column that exists, and pointing it at the reference solution is the
+            # least surprising choice.
+            "target_column": "canonical_solution",
+            "target_regex": "",
+            "prediction_regex": "",
+            "metric": "code_exec",
+            "test_column": "test",
+            "entry_point_column": "entry_point",
+            "limit": 20,
+            "threshold": 0.3,
+            "system": (
+                "Complete the function. Reply with the function body or the whole "
+                "function, in a single Python code block and nothing else."
+            ),
+        },
+    },
+    {
+        "id": "mbpp",
+        "label": "MBPP — basic Python problems",
+        "why": (
+            "Like HumanEval but the tests live in `test_list` as a LIST of assert "
+            "statements rather than a `check()` function, and there is no signature "
+            "stub — the prompt is a sentence. Same execution gate."
+        ),
+        "benchmark": {
+            "dataset": "google-research-datasets/mbpp",
+            "config": "full",
+            "split": "test[:20]",
+            "input_template": "{text}",
+            "target_column": "code",
+            "target_regex": "",
+            "prediction_regex": "",
+            "metric": "code_exec",
+            "test_column": "test_list",
+            # MBPP has no entry-point column: the tests call the function by name
+            # themselves, so nothing needs to be prepended.
+            "entry_point_column": "",
+            "limit": 20,
+            "threshold": 0.3,
+            "system": (
+                "Write the function described. Reply with one Python code block "
+                "and nothing else."
+            ),
+        },
+    },
+    {
+        "id": "arc",
+        "label": "ARC Challenge — science multiple choice",
+        "why": (
+            "The answer column holds a LETTER (`A`–`D`) while the choices are a "
+            "nested {text, label} structure, so the prompt has to render them and "
+            "the reply has to be reduced to a single letter."
+        ),
+        "benchmark": {
+            "dataset": "allenai/ai2_arc",
+            "config": "ARC-Challenge",
+            "split": "test[:50]",
+            "input_template": "{question}\n\nChoices: {choices}",
+            "target_column": "answerKey",
+            "target_regex": "",
+            "prediction_regex": r"([A-D])",
+            "metric": "exact_match",
+            "limit": 50,
+            "threshold": 0.3,
+            "system": "Answer with the single letter of the correct choice.",
+        },
+    },
+    {
+        "id": "gpqa",
+        "label": "GPQA Diamond — graduate-level science",
+        "why": (
+            "Deliberately hard: strong models score barely above chance, so treat a "
+            "low number as expected rather than as a broken harness. The correct "
+            "answer is a full sentence in its own column, not an index."
+        ),
+        "benchmark": {
+            "dataset": "Idavidrein/gpqa",
+            "config": "gpqa_diamond",
+            "split": "train[:50]",
+            "input_template": "{Question}",
+            "target_column": "Correct Answer",
+            "target_regex": "",
+            "prediction_regex": "",
+            "metric": "contains",
+            "limit": 50,
+            "threshold": 0.2,
+            "system": "Answer concisely with the correct option.",
+        },
+    },
+    {
+        "id": "ifeval",
+        "label": "IFEval — instruction following",
+        "why": (
+            "Measures whether a reply OBEYS its instruction (word counts, formats, "
+            "forbidden words), which no string comparison captures. Graded here as a "
+            "rough `contains` against the prompt's own key phrase — for the real "
+            "verifiable-instruction scoring, use a judge case or the lm-eval runner."
+        ),
+        "benchmark": {
+            "dataset": "google/IFEval",
+            "config": "",
+            "split": "train[:50]",
+            "input_template": "{prompt}",
+            "target_column": "prompt",
+            "target_regex": "",
+            "prediction_regex": "",
+            "metric": "contains",
+            "limit": 50,
+            "threshold": 0.2,
+            "system": "Follow every instruction in the prompt exactly.",
+        },
+    },
 ]

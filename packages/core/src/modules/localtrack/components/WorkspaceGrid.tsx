@@ -18,6 +18,7 @@ import { useLocalTrackStore } from '../store';
 import { AddPanelModal } from './AddPanelModal';
 import { BarPanel } from './BarPanel';
 import { ChartPanel } from './ChartPanel';
+import { CompareGridPanel, ParcoordsGridPanel } from './ComparisonPanels';
 import { ScalarPanel } from './ScalarPanel';
 
 const stroke = {
@@ -232,6 +233,24 @@ export function WorkspaceGrid() {
               if (panel.chartType === 'scalar') {
                 return (
                   <ScalarPanel
+                    key={panel.id}
+                    panel={panel}
+                    onRemove={() => removePanel(panel.id)}
+                  />
+                );
+              }
+              if (panel.chartType === 'table') {
+                return (
+                  <CompareGridPanel
+                    key={panel.id}
+                    panel={panel}
+                    onRemove={() => removePanel(panel.id)}
+                  />
+                );
+              }
+              if (panel.chartType === 'parcoords') {
+                return (
+                  <ParcoordsGridPanel
                     key={panel.id}
                     panel={panel}
                     onRemove={() => removePanel(panel.id)}

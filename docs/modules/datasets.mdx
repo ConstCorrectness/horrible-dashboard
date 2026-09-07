@@ -1,0 +1,175 @@
+---
+sidebar_position: 16
+sidebar_label: Datasets
+---
+
+# Module: datasets
+
+**The material a fine-tune is made of, as a first-class object.** Find training
+data, look at what is actually in it, register it so a run is reproducible, and
+build new datasets out of old ones.
+
+**Status: implemented** — backend in `backend/modules/datasets/`, frontend in
+`packages/core/src/modules/datasets/`.
+
+## Why this exists
+
+A recipe used to hold a dataset *name*: `RecipePane` rendered a bare text input and
+`recipes._dataset_call()` guessed from the file extension whether it was a Hub id or
+a path. Meanwhile four separate places in this app already produced or inspected
+training material —
+
+- the Hugging Face peek layer in `evals` (columns and rows without downloading),
+- the Hub browser in `lab`,
+- `evals.export`'s SFT `.jsonl` of the cases a model got wrong,
+- `trajectories.export`'s graded agent runs,
+
+— and **none of them was reachable from the recipe form.** The last two are the
+sharp end of it: "fine-tune on what the model got wrong" was fully implemented at
+both ends and joined by a path you had to type from memory.
+
+So a dataset here is a *registered* thing: a source, a ref, a split, a **detected
+format**, and a column map. Registering one is what makes a rerun a rerun, and what
+lets a [sweep](./training.mdx#ablation-sweeps)'s twelve points provably eat the same
+rows in the same shape.
+
+## Sources
+
+`sources.py` defines the `DatasetSource` protocol — deliberately the same shape as
+the training module's `EnvironmentProvider` and the database module's driver layer,
+so there is one contract to learn. Four ship:
+
+| id | what |
+| --- | --- |
+| `hub` | Hugging Face, peeked through the datasets-server without downloading a byte |
+| `local` | `.jsonl` / `.json` / `.csv` / `.parquet` under `$HORRIBLE_DATA_DIR/datasets` |
+| `exports` | what `evals.export` and `trajectories.export` already write |
+| `kaggle` | delegates to the training module's existing Kaggle provider |
+
+A plugin adds more with `host.add_dataset_source(source)` — see
+[the backend plugin SDK](../architecture/backend-plugin-sdk.mdx). Built-ins win id
+conflicts, matching `training.providers` and `search.providers`.
+
+`_read_rows` is stdlib for jsonl/json/csv on purpose: peeking is what you do
+*before* deciding to train, and making it depend on a project venv that may not have
+`datasets` installed yet would put the check behind the thing it is meant to check.
+Parquet needs `pyarrow` and says so.
+
+## Format detection
+
+`formats.py` is the piece that replaces the `text_field` guess. A fine-tuning
+dataset is not one shape but a handful of conventions that look alike from a
+distance and are incompatible up close:
+
+| format | shape |
+| --- | --- |
+| `chatml` | `{messages: [{role, content}]}` |
+| `sharegpt` | `{conversations: [{from, value}]}` |
+| `alpaca` | `{instruction, input?, output}` |
+| `preference` | `{prompt, chosen, rejected}` — the only thing DPO/KTO/reward can train |
+| `raw_text` | `{text}` |
+
+Three things it insists on:
+
+**It is a verdict with evidence, never a coercion.** `Detection.reason` is a
+sentence — "`conversations` holds from/value pairs in 3 of 3 rows" — rendered
+verbatim in the pane. A wrong verdict without its evidence is indistinguishable from
+a right one, and the wrong one costs a GPU hour.
+
+**Preference is checked first.** A preference set also has a `prompt` column and
+would otherwise read as Alpaca — and read that way, DPO data trains an SFT objective
+with nothing anywhere saying so.
+
+**ChatML and ShareGPT are told apart by the keys *inside* the list**, which no
+column-name check can see. Get it wrong and `apply_chat_template` silently produces
+empty turns.
+
+`adapt(detection, task)` then answers whether a task can eat a shape, and **the
+refusal is the feature**: `trl` will happily accept a dataset with the wrong
+objective's columns and train on whatever it finds.
+
+## Token statistics
+
+`tokens.py` answers the one question that is otherwise completely silent: how many
+examples would `max_length` truncate? Set it to 1024 against a dataset whose median
+example is 3000 tokens and two thirds of every answer is discarded. Nothing errors.
+Loss goes down. The model learns the first third of answers.
+
+It reuses `interpretability.tokenizer.Counter` rather than counting again — that
+class already resolves a repo from a model name, falls back to a chars/4 estimate,
+and knows whether the answer is `exact`. An estimate is reported as one.
+
+## The builder
+
+`builder.py` is this app's answer to Unsloth Studio's "Data Recipes": a pipeline of
+typed steps (`load → filter → template → dedupe → sample → synthesize → split →
+write`), because the useful training set is almost never the one you downloaded.
+
+**Validate, then preview, then build** — the split that makes a node editor usable
+rather than a slower way to write the same code:
+
+- `validate()` answers "is this pipeline coherent" without touching data. A `filter`
+  on a column no upstream step produces is caught in milliseconds. That check earns
+  the pass its keep: such a pipeline yields zero rows and blames the data.
+- `preview()` runs the whole thing over the first N rows and reports **per-step row
+  counts**. A filter that drops everything produces empty output either way; the
+  counts say *which* step did it.
+- `start_build()` runs it for real, detached under a semaphore — **not** on the
+  shared task queue, which is serial and would park every library ingest behind a
+  build (the `karaoke` download and `evals.sweep` precedent).
+
+**Steps are a closed vocabulary, not arbitrary code.** A `map` step taking a lambda
+would be more powerful and would also make a pipeline an arbitrary-code document
+that an agent can author and a plugin can install. Anything the steps cannot express
+belongs in the notebook, where it is visible.
+
+### Synthetic rows
+
+The `synthesize` step has two engines: **a local model**, through the same
+`roster.resolve_provider` every agent turn uses, and **NVIDIA Nemo Data Designer**
+when the [`nvidia` connector](./connectors.mdx) is connected.
+
+Every generated row carries `synthetic: true` and the model that made it. A synthetic
+set that cannot be told from a collected one is how a benchmark ends up contaminated
+by its own training data — and by the time that shows as a suspiciously high score,
+the provenance is gone.
+
+## Panes
+
+| id | role | what |
+| --- | --- | --- |
+| `datasets.browser` | document | Sources / Library / Inspect |
+| `datasets.picker` | widget, `embedded` | mounted as a region on `training.recipe` |
+
+The picker is `embedded` rather than a destination because "which dataset, in which
+shape" is a question you answer *while looking at the recipe*, and a tab switch is
+where the shape check gets skipped.
+
+## Agent tools (group `datasets`)
+
+`search`, `peek`, `splits`, `adapt`, `register`, `list`, `token_stats`, `build`,
+`build_status`.
+
+`peek` and `adapt` are the two that matter: they are how an agent stops guessing a
+`text_field` the way the form used to make a person guess one.
+
+## The registry
+
+`registry.py` keeps saved datasets in `app.db`, beside `model_lineage` and the eval
+tables — so "which sweeps trained on the dataset I built from last month's eval
+failures" is a join in the `database` console rather than a feature request.
+
+Rows are keyed by a **fingerprint over the definition** (source, ref, config, split,
+format, column map), not over the rows. Hashing the rows would mean downloading
+them, which is what the peek layer exists to avoid; and the question a recipe needs
+answered is "was this the same dataset *specification*" — which is exactly what
+changes when someone edits a column map.
+
+Editing a registered dataset **re-fingerprints it**, deliberately: a column map edit
+changes what a rerun trains on, so it must change the identity.
+
+## Related
+
+- [training](./training.mdx) — recipes point at registered datasets
+- [evals](./evals.mdx) — the `exports` source is its output
+- [The AI-research pipeline](../architecture/ai-research.mdx)

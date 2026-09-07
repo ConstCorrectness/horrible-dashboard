@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import mimetypes
 from pathlib import Path
 from typing import Any
@@ -11,6 +13,8 @@ from fastapi.responses import FileResponse
 
 from backend.modules.localtrack import store
 from backend.modules.localtrack.models import (
+    CompareRequest,
+    CompareResponse,
     ArtifactListResponse,
     BatchIngestRequest,
     BatchIngestResponse,
@@ -236,3 +240,14 @@ async def download_artifact(run_id: str, artifact_id: str) -> FileResponse:
         filename=art.filename,
         media_type=art.content_type,
     )
+
+
+@router.post("/api/localtrack/compare", response_model=CompareResponse)
+async def compare(request: CompareRequest) -> CompareResponse:
+    """Runs side by side, reduced to what differs between them.
+
+    The read a sweep exists for. Everything it needs has been in this schema since
+    it was written; nothing had ever put a comparable config into `config_json`
+    until the training sweep started declaring one per point.
+    """
+    return await asyncio.to_thread(store.compare_runs, request.run_ids, request.metric)

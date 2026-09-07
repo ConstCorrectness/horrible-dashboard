@@ -10,7 +10,9 @@ the connector's blurb and guide.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from pathlib import Path
 from typing import Any
 
 from backend.modules.connectors.providers import huggingface
@@ -250,6 +252,110 @@ async def _read_file(args: dict[str, Any]) -> Any:
     }
 
 
+
+# --- writing back -------------------------------------------------------------
+#
+# `write-repos` only: this connector never asks for `manage-repos`, so nothing here
+# can delete a repo. Uploading a bad checkpoint wastes bandwidth; deleting a repo
+# destroys work, and the two are different scopes for exactly that reason.
+
+
+def _write_refusal() -> dict[str, Any] | None:
+    """The two checks both write tools share, in the order that gives the right
+    message.
+
+    **Not connected is checked first.** A disconnected account told "this
+    connection was granted read access only" would go looking for a scope problem
+    that does not exist. Only a real, connected, read-scoped token gets the
+    reconnect instruction — which it needs, because a connection made before
+    `write-repos` was requested still works for reads and would otherwise fail with
+    a bare 403 several megabytes into an upload.
+    """
+    from backend.modules.connectors import store
+
+    if not store.is_connected(huggingface.CONNECTOR_ID):
+        return dict(_NOT_CONNECTED)
+    if huggingface.can_write():
+        return None
+    return {
+        "error": (
+            "this Hugging Face connection was granted read access only. Disconnect "
+            "and reconnect the Hugging Face tile to grant upload access — it asks "
+            "for `write-repos`, which can create and upload but never delete."
+        )
+    }
+
+
+async def _create_repo(args: dict[str, Any]) -> dict[str, Any]:
+    refusal = _write_refusal()
+    if refusal:
+        return refusal
+    tok = await huggingface.token()
+    if not tok:
+        return {"error": "Hugging Face is not connected"}
+    repo_id = str(args.get("repo_id") or "")
+    if not repo_id:
+        return {"error": "repo_id is required (e.g. `me/my-model`)"}
+    private = bool(args.get("private", True))
+    repo_type = str(args.get("repo_type") or "model")
+
+    def work() -> str:
+        from huggingface_hub import HfApi
+
+        return HfApi(token=tok).create_repo(
+            repo_id=repo_id, repo_type=repo_type, private=private, exist_ok=True
+        )
+
+    try:
+        url = await asyncio.to_thread(work)
+    except Exception as exc:  # noqa: BLE001 — vendor errors are shown verbatim
+        return {"error": f"could not create the repo: {exc}"}
+    return {"repo": repo_id, "url": str(url), "private": private}
+
+
+async def _upload_folder(args: dict[str, Any]) -> dict[str, Any]:
+    refusal = _write_refusal()
+    if refusal:
+        return refusal
+    tok = await huggingface.token()
+    if not tok:
+        return {"error": "Hugging Face is not connected"}
+    repo_id = str(args.get("repo_id") or "")
+    folder = str(args.get("folder") or "")
+    if not repo_id or not folder:
+        return {"error": "repo_id and folder are both required"}
+
+    path = Path(folder).expanduser().resolve()
+    if not path.is_dir():
+        return {"error": f"no such directory: {folder}"}
+    private = bool(args.get("private", True))
+    repo_type = str(args.get("repo_type") or "model")
+    message = str(args.get("message") or "Uploaded from horrible-dashboard")
+
+    def work() -> str:
+        from huggingface_hub import HfApi
+
+        api = HfApi(token=tok)
+        api.create_repo(
+            repo_id=repo_id, repo_type=repo_type, private=private, exist_ok=True
+        )
+        return api.upload_folder(
+            folder_path=str(path),
+            repo_id=repo_id,
+            repo_type=repo_type,
+            commit_message=message,
+            # A checkpoint directory carries optimizer state nobody wants on the
+            # Hub, and a project venv would be a catastrophe to upload.
+            ignore_patterns=["**/.venv/**", "**/__pycache__/**", "**/optimizer.pt"],
+        )
+
+    try:
+        url = await asyncio.to_thread(work)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"upload failed: {exc}"}
+    return {"repo": repo_id, "url": str(url), "uploaded": str(path)}
+
+
 _TOOLS = [
     AgentTool(
         name="huggingface.searchModels",
@@ -350,6 +456,40 @@ _TOOLS = [
         },
         required=["repo", "path"],
         handler=_read_file,
+        group="huggingface",
+    ),
+    AgentTool(
+        name="huggingface.createRepo",
+        description="Create a Hugging Face repo (model or dataset), private by "
+        "default. Needs the write scope — reconnect the tile if it was granted "
+        "read-only.",
+        parameters={
+            "repo_id": {"type": "string", "description": "e.g. `me/my-model`"},
+            "repo_type": {"type": "string", "description": "model | dataset"},
+            "private": {"type": "boolean", "description": "Default true"},
+        },
+        required=["repo_id"],
+        side_effect=True,
+        specifier_template="{repo_id}",
+        handler=_create_repo,
+        group="huggingface",
+    ),
+    AgentTool(
+        name="huggingface.uploadFolder",
+        description="Upload a local folder — a trained checkpoint, or a dataset "
+        "built here — to a Hugging Face repo, creating it if needed. Skips venvs, "
+        "caches and optimizer state.",
+        parameters={
+            "repo_id": {"type": "string", "description": "e.g. `me/my-model`"},
+            "folder": {"type": "string", "description": "Absolute path to upload"},
+            "repo_type": {"type": "string", "description": "model | dataset"},
+            "private": {"type": "boolean", "description": "Default true"},
+            "message": {"type": "string", "description": "Commit message"},
+        },
+        required=["repo_id", "folder"],
+        side_effect=True,
+        specifier_template="{folder} to {repo_id}",
+        handler=_upload_folder,
         group="huggingface",
     ),
 ]

@@ -81,6 +81,34 @@ class PluginHost:
         providers (kaggle, huggingface, gymnasium) win id conflicts."""
         self._registry.training_providers[provider.provider] = provider
 
+    def add_dataset_source(self, source: Any) -> None:
+        """Expose a place training material lives (an object satisfying
+        `backend.modules.datasets.sources.DatasetSource`): search, splits, peek and
+        locate for one source. It appears in the datasets browser alongside the Hub
+        and the local files, and a recipe can point at it like any other.
+
+        Built-in sources (hub, local, exports, kaggle) win id conflicts."""
+        self._registry.dataset_sources[source.id] = source
+
+    def add_recipe_backend(self, backend: Any) -> None:
+        """Expose a training framework (an object satisfying
+        `backend.modules.training.backends.base.RecipeBackend`): which tasks it can
+        train, which knobs it takes, and the code it emits for them.
+
+        The field catalog it returns is validated against the project venv by the
+        same introspection every built-in backend goes through, so a knob the
+        installed library does not accept is dropped from the emitted code and shown
+        as dropped rather than emitted hopefully. Built-ins (trl, unsloth,
+        torchtitan, nanotron) win id conflicts."""
+        self._registry.recipe_backends[backend.id] = backend
+
+    def add_eval_runner(self, runner: Any) -> None:
+        """Expose a way of executing an eval suite (an object satisfying
+        `backend.modules.evals.runners.EvalRunner`): which case types it claims and
+        how it runs them. Results land in the same tables as every other runner's,
+        so a mixed suite still adds up. Built-ins win id conflicts."""
+        self._registry.eval_runners[runner.id] = runner
+
     def add_search_provider(self, provider: Any) -> None:
         """Expose a web-search provider (an object satisfying
         `backend.modules.search.base.SearchProvider`): one `search(query, ...)` that

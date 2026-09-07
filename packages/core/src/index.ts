@@ -392,6 +392,7 @@ export {
 export { docsHover, docsKeymap, renderDocEntry, symbolAt } from './docs/cm-docs';
 export { renderMarkdown as renderDocMarkdown } from './docs/markdown';
 export { trainingModule } from './modules/training';
+export { datasetsModule } from './modules/datasets';
 export { localtrackModule } from './modules/localtrack';
 export { notebookModule } from './modules/notebook';
 export { visualizerModule } from './modules/visualizer';

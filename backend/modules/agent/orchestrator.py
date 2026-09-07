@@ -765,6 +765,14 @@ TOOL_BUDGET = 38
 
 # Human-readable blurbs for known groups; unknown groups get a generic fallback.
 _GROUP_DESCRIPTIONS: dict[str, str] = {
+    "datasets": (
+        "Find, inspect and build training material: search the Hugging Face Hub, "
+        "Kaggle, local files and this node's own eval/trajectory exports; read real "
+        "rows without downloading; report which shape a dataset is in and which "
+        "training tasks can use it; measure how many examples a sequence length "
+        "would silently truncate; and build a new dataset from a pipeline of "
+        "filter/template/dedupe/synthesize steps."
+    ),
     "evals": (
         "Measure how well a model uses this app's tools: list evaluation suites, "
         "start a sweep of a suite against a model, and read which cases failed and "

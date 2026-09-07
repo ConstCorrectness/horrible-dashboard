@@ -13,6 +13,7 @@ numpy/PIL/torch are used only if the calling code already has them.
     ht.log(step=i, loss=0.42)         # -> live chart pane
     ht.frame(env.render())            # -> live rollout pane
     ht.watch(model, example=x)        # -> architecture pane (torch)
+    ht.finish()                       # -> the run is over (see below)
 """
 
 from __future__ import annotations
@@ -70,6 +71,40 @@ def log(step: int | None = None, **values: float) -> None:
     for model, weights in _watched:
         if weights:
             _emit_stats(model)
+
+
+def finish(status: str = "finished", **summary: Any) -> None:
+    """Declare the current run over, with a terminal status.
+
+    Without this a run has **no end**. The backend's only other end-of-run signal
+    is "a different run started for the same project", which leaves the last run
+    of a session `running` forever and makes a sweep of twelve runs show twelve
+    live ones. That was tolerable while runs were things you watched; it is not
+    tolerable once runs are things you compare.
+
+    Emitted by `ht.callback()` on `on_train_end`, so a generated recipe gets it
+    for free. Call it yourself in a hand-written loop, or let the supervising
+    process close the run when it exits (a crashed script is marked `crashed`,
+    a non-zero exit `failed` — the distinction the localtrack schema already
+    carries and nothing had ever written).
+
+    Safe to call twice; the second one is dropped by the backend.
+    """
+    global _current_run
+    if _current_run is None:
+        return
+    clean = {k: v for k, v in summary.items() if isinstance(v, (int, float, str, bool))}
+    _emit(
+        {
+            "type": "finish",
+            "runId": _current_run,
+            "status": status,
+            "summary": clean,
+            "ts": time.time(),
+        }
+    )
+    _current_run = None
+    _watched.clear()
 
 
 def frame(img: Any, source: str = "gym") -> None:
@@ -274,11 +309,19 @@ def callback(name=None, log_every=1):
     class HorribleCallback(TrainerCallback):
         def __init__(self):
             self.started = False
+            self.last = {}
 
         def on_train_begin(self, args, state, control, **kwargs):
             if not self.started:
                 run(name or "train")
                 self.started = True
+
+        def on_train_end(self, args, state, control, **kwargs):
+            # The terminal signal. Without it the run stays `running` until some
+            # *other* run starts, which for the last run of a session is never.
+            if self.started:
+                finish("finished", **self.last)
+                self.started = False
 
         def on_log(self, args, state, control, logs=None, **kwargs):
             if not logs:
@@ -294,6 +337,7 @@ def callback(name=None, log_every=1):
                     continue
                 values[key] = float(value)
             if values:
+                self.last = {f"final/{k}": v for k, v in values.items()}
                 log(step=step, **values)
 
     return HorribleCallback()

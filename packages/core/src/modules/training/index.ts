@@ -7,6 +7,7 @@ import { ModelGraphPane } from './panels/ModelGraphPane';
 import { NotebookPane } from './panels/NotebookPane';
 import { ProjectsPane } from './panels/ProjectsPane';
 import { RecipePane } from './panels/RecipePane';
+import { SweepPane } from './panels/SweepPane';
 import { RolloutPane } from './panels/RolloutPane';
 import { TrainingPeersPane } from './panels/TrainingPeersPane';
 
@@ -151,6 +152,21 @@ export const trainingModule: ModuleManifest = {
       component: RecipePane,
       role: 'document',
       icon: '🧪',
+      // The dataset picker rides beside the form rather than in another tab:
+      // "which dataset, in which shape" is a question you have *while* looking at
+      // the recipe, and a tab switch is where the shape check gets skipped.
+      regions: [
+        { id: 'datasets.picker', label: 'Dataset', icon: '📚', key: 'd', position: 'right' },
+      ],
+    },
+    {
+      // Params-bound like the recipe: a sweep varies one project's recipe, and two
+      // projects open at once must not share an axis list.
+      id: 'training.sweep',
+      title: 'Ablation sweep',
+      component: SweepPane,
+      role: 'document',
+      icon: '🎚',
     },
   ],
   explorerSources: [
@@ -217,6 +233,11 @@ export const trainingModule: ModuleManifest = {
       run: () => registry.openPanel('training.recipe'),
     },
     {
+      id: 'training.openSweep',
+      title: 'Training: Open the ablation sweep',
+      run: () => registry.openPanel('training.sweep'),
+    },
+    {
       id: 'training.openMetrics',
       title: 'Training: Open metrics charts',
       run: () => registry.openPanel('training.metrics'),
@@ -243,6 +264,53 @@ export const trainingModule: ModuleManifest = {
     },
   ],
   frames: [
+    /**
+     * The AI-research workspace: the loop from *material* to *answer*.
+     *
+     * The Training frame above starts at a notebook, which assumes you already
+     * know what you are training on. This one starts a step earlier and ends a
+     * step later, because that is where the questions actually are: browse or
+     * build a dataset, check its shape suits the task, run a grid over the knob
+     * you are unsure about, and read which one moved the metric.
+     *
+     * The arrangement follows the loop left to right. Datasets on the left because
+     * everything downstream is a property of what you picked; recipe over sweep in
+     * the middle because a sweep is a recipe with axes and reads as one; localtrack
+     * and evals on the right because a training curve is not an answer — a
+     * comparison and a score are.
+     */
+    {
+      // NOT `research` — the layouts module already owns that id for the
+      // paper-reading frame, and two frames with one id collide in the tab strip.
+      id: 'ai-research',
+      name: 'AI Research',
+      icon: '🔬',
+      // `datasets` preloaded alongside `training`: the first thing asked of the
+      // agent in this frame is almost always about data.
+      agent: 'trainer',
+      frame: {
+        center: {
+          split: 'row',
+          sizes: [0.34, 0.66],
+          children: [
+            { tabs: ['datasets.browser'], active: 0 },
+            {
+              split: 'row',
+              sizes: [0.55, 0.45],
+              children: [
+                { tabs: [] },
+                { tabs: ['localtrack.workspace', 'evals.hub'], active: 0 },
+              ],
+            },
+          ],
+        },
+        docks: {
+          left: { tools: ['training.projects'], size: 260 },
+          right: { tools: ['agent.chat'], size: 360 },
+          bottom: { tools: ['observability.io'], size: 180, visible: false },
+        },
+      },
+    },
     /**
      * The fine-tuning workspace: the whole loop in one frame — write the recipe,
      * run it, watch the curves, convert the checkpoint, and score it — rather than

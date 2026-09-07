@@ -79,6 +79,7 @@ import {
   terminalModule,
   databaseModule,
   trainingModule,
+  datasetsModule,
   localtrackModule,
   docsModule,
   notebookModule,
@@ -216,6 +217,7 @@ async function boot(): Promise<void> {
     registry.register(researchModule);
     registry.register(searchModule);
     registry.register(trainingModule);
+    registry.register(datasetsModule);
     registry.register(localtrackModule);
     registry.register(docsModule);
     registry.register(notebookModule);

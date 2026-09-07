@@ -97,6 +97,7 @@ but `datasets` should install nothing but `datasets`.
 """
 
 import json
+import os
 import re
 import sys
 import urllib.error
@@ -154,6 +155,10 @@ def score_one(prediction, reference):
         return 1.0 if normalise(prediction) == normalise(reference) else 0.0
     if metric == "contains":
         return 1.0 if normalise(reference) in normalise(prediction) else 0.0
+    if metric == "code_exec":
+        # Handled per row in main(), where the test function and entry point are
+        # in hand. Reaching here means the job was built wrong.
+        raise RuntimeError("code_exec is scored in the row loop, not here")
 
     import evaluate  # noqa: PLC0415 - lazy on purpose, see the docstring
 
@@ -168,6 +173,84 @@ def score_one(prediction, reference):
         if isinstance(value, (int, float)):
             return float(value)
     raise RuntimeError("metric " + metric + " returned no numeric value: " + repr(result))
+
+
+def run_code(row, completion):
+    """Score one code row by running the dataset's tests against the completion.
+
+    The runner writes the candidate to a temp file and runs it in a fresh
+    interpreter with a timeout: an infinite loop is a WRONG ANSWER to a programming
+    problem, so a timeout scores zero rather than erroring the row.
+
+    Gated by the parent process, which refuses to generate this job at all unless
+    HORRIBLE_ENABLE_EVAL_CODE_EXEC is set — model-written code runs on this machine,
+    isolated but not container-grade.
+    """
+    import re
+    import subprocess
+    import sys
+    import tempfile
+    import textwrap
+
+    test = row.get(JOB["test_column"]) or ""
+    if isinstance(test, list):
+        # MBPP spells it `test_list`: a list of assert statements rather than a
+        # `check()` function.
+        test = chr(10).join(str(t) for t in test)
+    entry = str(row.get(JOB["entry_point_column"]) or "")
+    stub = str(row.get("prompt") or "")
+
+    # A model that explains its answer and then fences it has produced valid code
+    # surrounded by prose; running the prose is a SyntaxError graded as a wrong
+    # answer. Built from chr() because this whole module is a format template and
+    # a literal fence here would be indistinguishable from one in the docstring.
+    # Backslashes are DOUBLED here: TEMPLATE is a plain (non-raw) string, so a
+    # single `\\s` would be an invalid escape in this module and would not survive
+    # into the generated script as a regex class.
+    fence = chr(96) * 3
+    pattern = fence + r"(?:python|py)?\\s*" + chr(10) + r"(.*?)" + fence
+    blocks = re.findall(pattern, completion or "", re.DOTALL)
+    code = (
+        max(blocks, key=len).strip(chr(10))
+        if blocks
+        else (completion or "").strip()
+    )
+
+    # HumanEval's format is a *completion*: the model is given a signature and
+    # returns a body. Running the body alone is a NameError, so the stub is
+    # prepended unless the model already redefined the function itself.
+    defines = entry and re.search(
+        r"^\\s*def\\s+" + re.escape(entry) + r"\\s*\\(", code, re.M
+    )
+    body = code if defines else (stub + chr(10) + textwrap.indent(code, "    "))
+
+    program = body + chr(10) * 2 + test + chr(10)
+    if "check(" in test and entry:
+        program += "check(" + entry + ")" + chr(10)
+    program += "print('__HORRIBLE_PASS__')" + chr(10)
+
+    with tempfile.TemporaryDirectory(prefix="horrible-eval-") as folder:
+        path = os.path.join(folder, "candidate.py")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(program)
+        try:
+            out = subprocess.run(
+                [sys.executable, "-I", path],
+                capture_output=True, text=True, timeout=10, cwd=folder,
+                env={{
+                    "PATH": os.environ.get("PATH", ""),
+                    "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),
+                    "PYTHONIOENCODING": "utf-8",
+                }},
+            )
+        except subprocess.TimeoutExpired:
+            # A fail, not an error: a non-terminating loop IS a wrong answer to a
+            # programming problem, and calling it infrastructure trouble hides a
+            # real result.
+            return 0.0
+        except OSError:
+            return 0.0
+    return 1.0 if "__HORRIBLE_PASS__" in (out.stdout or "") else 0.0
 
 
 def main():
@@ -210,7 +293,13 @@ def main():
         try:
             raw = ask(prompt)
             prediction = extract(raw, JOB["prediction_regex"])
-            value = score_one(prediction, extract(reference, JOB["target_regex"]))
+            if JOB["metric"] == "code_exec":
+                # Two correct solutions to one problem share almost no characters,
+                # so every string metric scores code at zero. The verdict is
+                # whether the dataset's own tests pass.
+                value = run_code(row, prediction)
+            else:
+                value = score_one(prediction, extract(reference, JOB["target_regex"]))
         except urllib.error.URLError as exc:
             # A dead endpoint is worth failing the whole job over; a per-row error
             # would report it as a model that got everything wrong.

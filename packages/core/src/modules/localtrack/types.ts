@@ -1,7 +1,12 @@
 /** TypeScript types for LocalTrack */
 
 export type RunStatus = 'running' | 'finished' | 'failed' | 'crashed';
-export type ChartType = 'line' | 'bar' | 'scalar';
+/**
+ * `table` and `parcoords` are the comparison panels, and they are not charts of a
+ * series: they read each run's `config`, which nothing had ever written anything
+ * comparable into until the training sweep started declaring one per point.
+ */
+export type ChartType = 'line' | 'bar' | 'scalar' | 'table' | 'parcoords';
 export type YAxisScale = 'linear' | 'log';
 
 export interface Project {
@@ -55,4 +60,28 @@ export interface RunArtifact {
   size_bytes: number;
   content_type: string;
   created_at: string;
+}
+
+
+/** One run reduced to what differs from the others it is compared against. */
+export interface CompareRow {
+  run_id: string;
+  name: string;
+  status: RunStatus;
+  /** Only the config keys that vary across the compared runs. */
+  config: Record<string, unknown>;
+  metrics: Record<string, number>;
+}
+
+export interface CompareResult {
+  runs: CompareRow[];
+  /** The axes of the experiment, in the order the sweep declared them. */
+  varied: string[];
+  /** Held constant across every run — reported once instead of on every row. */
+  shared: Record<string, unknown>;
+  metric_keys: string[];
+  /** Config keys whose disagreement makes these runs not an ablation
+   * (`_backend`, `_task`). Comparing them is allowed; presenting it as an
+   * ablation is not. */
+  mixed: string[];
 }

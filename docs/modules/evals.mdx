@@ -1012,3 +1012,75 @@ here touches a platform capability.
 - [localtrack](localtrack.mdx) — where sweep aggregates land
 - [training](training.mdx) — projects, venvs, recipes, GGUF conversion
 - [llama.cpp](llamacpp.mdx) — serving a converted fine-tune to re-run a suite against
+
+## Grading beyond string match
+
+Two grades landed together, both because the existing ones could only compare tool
+calls and exact strings.
+
+### `judge` is routed now
+
+It had been declared-but-unrouted since the module was written, and `Expect` rejected
+it at authoring time for a good reason: **a grade nothing scores fails every run, and
+the failure reads as the model being wrong** — the one thing this module exists not to
+do. `evals/judge.py` routes it, so the case is legal now. The rule was never "judge is
+bad"; it was "a grade nothing scores is".
+
+Three rules keep a judge from being worse than no grade:
+
+- **The judge model is recorded on the result.** Two runs graded by different judges
+  are not comparable, and a leaderboard that does not say so presents them as if they
+  were.
+- **The rubric is the case's; the prompt is ours.** The case says what to check; the
+  scaffolding — answer with a verdict, quote the evidence, ignore length — is fixed. A
+  case that could rewrite the whole prompt could quietly ask for something other than
+  grading.
+- **A judge that fails is not a fail.** A provider error, a truncated reply, an
+  unparseable verdict: each is an *error*, never `passed=False`. Scoring a zero because
+  the judge could not be reached is exactly the "the case was wrong and the model got
+  the blame" failure.
+
+It is routed in `runner_agent`, not in `graders.py` — that module is pure and
+synchronous by design, and giving it a provider client would make every grade a
+potential network call.
+
+### `code_exec` scores code by running it
+
+Two correct solutions to one problem share almost no characters, so every string
+metric scores code at zero. That is why HumanEval and MBPP were absent from the
+presets: not the datasets, the **scorer**. `code_exec` runs the model's completion
+against the dataset's own tests.
+
+**Gated behind `HORRIBLE_ENABLE_EVAL_CODE_EXEC=1`**, and the gate is the honest part.
+A subprocess with a timeout and a scrubbed environment stops a runaway loop and an
+accidental `print(os.environ)`; it does **not** stop a determined program. This is
+the games module's caveat repeated: subprocess-isolated is not container-grade. It
+runs model-written code about a programming puzzle, on your own machine, at your
+explicit request — a reasonable risk to take deliberately and an unreasonable one to
+take by default. It is refused at **job-generation** time, where the mistake is cheap,
+rather than letting every row fail and score a zero that looks like a verdict.
+
+Three details that are each a wrong score if missed:
+
+- **Markdown fences are stripped.** Models return ```python blocks; running the fence
+  is a `SyntaxError` graded as a wrong answer.
+- **The stub is prepended when the completion does not redefine the function.**
+  HumanEval's format is a *completion* — the model gets a signature and returns a
+  body. Running the body alone is a `NameError`.
+- **A timeout is a fail, not an error.** An infinite loop *is* a wrong answer to a
+  programming problem; calling it infrastructure trouble would hide a real result.
+
+### Nine presets
+
+`presets.py` now covers GSM8K, MMLU, HellaSwag, TruthfulQA, **HumanEval**, **MBPP**,
+**ARC Challenge**, **GPQA Diamond** and **IFEval**. Each carries a `why` naming the
+trap it exists for — MBPP spells its tests `test_list` as a list of asserts with no
+signature stub; ARC's answer is a letter while its choices are a nested structure;
+GPQA is hard enough that a low score is expected rather than a broken harness.
+
+## Training on what the model got wrong
+
+`evals.export` has always written an SFT `.jsonl` of failed cases. It is now reachable:
+the [datasets](./datasets.mdx) module's `exports` source surfaces that directory, so
+registering the export and pointing a recipe at it is two clicks rather than a path
+typed from memory. See [the AI-research pipeline](../architecture/ai-research.mdx).

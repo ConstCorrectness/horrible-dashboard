@@ -59,8 +59,10 @@ ROW_TIMEOUT_S = 180
 #: harness does not implement.
 BASE_REQUIREMENTS = ["datasets"]
 
-#: Metrics the harness scores without help.
-BUILTIN_METRICS = {"exact_match", "contains"}
+#: Metrics the harness scores without help. `code_exec` is one of them — it runs
+#: the model's completion against the dataset's own tests, which needs no library
+#: at all, only permission (see `code_exec.ENV_FLAG`).
+BUILTIN_METRICS = {"exact_match", "contains", "code_exec"}
 
 #: Stamped on the training projects this module creates (`ProjectModel.owner`), so
 #: the training pane can tell working storage from a project you author in.
@@ -137,6 +139,19 @@ async def prepare_env(
 def _job_for(case: EvalCase, endpoint: str, model: str) -> dict[str, Any]:
     bench = case.benchmark
     assert bench is not None  # callers filter on it
+    if bench.metric == "code_exec":
+        from backend.modules.evals import code_exec
+
+        if not code_exec.enabled():
+            # Refused where it is cheap. Generating the job and letting every row
+            # fail would score a zero that looks like a verdict on the model, which
+            # is the one failure mode this whole module is built around.
+            raise ValueError(
+                f"case {case.id!r} grades code by running it, which is off. Set "
+                f"{code_exec.ENV_FLAG}=1 to enable it — it executes model-written "
+                "code in a subprocess on this machine, which is isolated but NOT "
+                "container-grade."
+            )
     return {
         "dataset": bench.dataset,
         "config": bench.config,
@@ -146,6 +161,8 @@ def _job_for(case: EvalCase, endpoint: str, model: str) -> dict[str, Any]:
         "target_regex": bench.target_regex,
         "prediction_regex": bench.prediction_regex,
         "metric": bench.metric,
+        "test_column": bench.test_column,
+        "entry_point_column": bench.entry_point_column,
         "limit": bench.limit,
         "system": bench.system,
         "endpoint": endpoint,

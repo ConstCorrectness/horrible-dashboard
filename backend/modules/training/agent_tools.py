@@ -23,6 +23,7 @@ from backend.modules.training.providers import (
     get_provider,
     list_providers,
 )
+from backend.modules.training.recipe_tools import TOOLS as RECIPE_TOOLS
 from backend.sdk.registry import registry
 from backend.sdk.types import AgentTool
 
@@ -487,7 +488,10 @@ _TOOLS = [
 def register_agent_tools() -> None:
     """Insert the training backend tools into the sdk registry (called from app.py).
     First-party consumer of the same registry backend plugins write to."""
-    for tool in _TOOLS:
+    # The recipe/sweep half lives in `recipe_tools.py` but registers here, so the
+    # group stays one group — the orchestrator keys on the name prefix, and a
+    # second registration site would be a second place to forget `group=`.
+    for tool in [*_TOOLS, *RECIPE_TOOLS]:
         registry.agent_tools[tool.name] = tool
 
     # The `trackers` connector rides along here because it belongs to this module

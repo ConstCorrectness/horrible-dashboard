@@ -204,15 +204,85 @@ export interface Introspection {
 }
 
 export interface Recipe {
+  /** Which framework emits the code: trl | unsloth | torchtitan | nanotron. */
+  backend: string;
   task: string;
   baseModel: string;
   dataset: string;
+  /** A registered dataset. Wins over `dataset`, and carries the detected shape
+   * and column map with it — the difference between "this run used Capybara" and
+   * a rerun that provably eats the same rows the same way. */
+  datasetId: string;
   datasetSplit: string;
+  columnMap: Record<string, string>;
   textField: string;
   useLora: boolean;
   outputDir: string;
   trackers: string[];
   values: Record<string, unknown>;
+}
+
+/** One thing a backend can train, as the form describes it. */
+export interface TaskSpec {
+  id: string;
+  backend: string;
+  label: string;
+  blurb: string;
+  /** Dataset shapes this task can eat. A task offered against an incompatible
+   * dataset is a run that optimises the wrong objective in silence. */
+  formats: string[];
+  supportsLora: boolean;
+}
+
+export interface BackendSpec {
+  id: string;
+  label: string;
+  blurb: string;
+  tasks: string[];
+}
+
+export interface SweepAxis {
+  field: string;
+  values: unknown[];
+}
+
+export interface SweepSpec {
+  axes: SweepAxis[];
+  strategy: string;
+  maxParallel: number;
+  count: number;
+  seed: number;
+  note: string;
+}
+
+export interface SweepPoint {
+  index: number;
+  label: string;
+  overrides: Record<string, unknown>;
+  outputDir: string;
+}
+
+export interface SweepResultEntry extends SweepPoint {
+  state: string;
+  runId: string;
+  returncode?: number;
+  metricRuns?: string[];
+  error?: string;
+}
+
+export interface SweepRecord {
+  sweepId: string;
+  projectId: string;
+  state: 'queued' | 'running' | 'stopping' | 'finished' | 'stopped';
+  strategy: string;
+  axes: SweepAxis[];
+  total: number;
+  done: number;
+  failed: number;
+  runIds: string[];
+  results: SweepResultEntry[];
+  startedAt: number;
+  finishedAt?: number;
 }
 
 export interface RecipePayload {
@@ -222,7 +292,11 @@ export interface RecipePayload {
   resolved: ResolvedField[];
   warnings: string[];
   trackers: string[];
-  tasks: string[];
+  tasks: TaskSpec[];
+  backends: BackendSpec[];
+  /** What `install_stack` would put in the venv for the selected task. */
+  requirements: string[];
+  sweep: SweepSpec;
   outputTypes: string[];
 }
 
@@ -281,3 +355,42 @@ export function convertCheckpoint(
     signal,
   );
 }
+
+
+// --- sweeps -----------------------------------------------------------------
+
+export interface SweepPayload {
+  spec: SweepSpec;
+  problems: string[];
+  sweeps: SweepRecord[];
+  strategies: string[];
+  maxPoints: number;
+}
+
+export const getSweep = (projectId: string) =>
+  apiGet<SweepPayload>(`/training/projects/${projectId}/sweep`);
+
+export const saveSweep = (projectId: string, spec: SweepSpec) =>
+  apiPut<SweepPayload>(`/training/projects/${projectId}/sweep`, spec);
+
+export const previewSweep = (projectId: string, spec: SweepSpec) =>
+  apiPost<{ problems: string[]; points: SweepPoint[] }>(
+    `/training/projects/${projectId}/sweep/preview`,
+    spec,
+  );
+
+export const startSweep = (projectId: string, spec: SweepSpec) =>
+  apiPost<{ sweepId: string }>(`/training/projects/${projectId}/sweep/start`, spec);
+
+export const stopSweep = (sweepId: string) =>
+  apiPost<{ stopped: boolean }>(`/training/sweeps/${sweepId}/stop`, {});
+
+export const listSweeps = (sweepId = '') =>
+  apiGet<SweepRecord[]>(`/training/sweeps${sweepId ? `?sweep_id=${sweepId}` : ''}`);
+
+/** Install the recipe framework's libraries, torch matched to this machine. */
+export const installStack = (projectId: string) =>
+  apiPost<{ installed: string[]; torch: string }>(
+    `/training/projects/${projectId}/recipe/install-stack`,
+    {},
+  );

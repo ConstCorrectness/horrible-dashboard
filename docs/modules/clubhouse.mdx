@@ -503,6 +503,26 @@ A turn carries a **room snapshot** pushed by the pane rather than polled by the 
 the pane holds the PubNub feed and the Agora volume indicator, so it is seconds fresher
 about who is muted, has a hand up, or is speaking right now.
 
+### People memory outranks the room's bio
+
+`voice.render_bios` prefers what `people_memory_store` has *learned* about a member
+over the `bio` the room reported, deliberately: the bio is what Clubhouse says today,
+memory is what the agent has actually observed across rooms.
+
+The store (`people_memory.py`) is a **process-global singleton constructed at import
+time**, which had two consequences worth knowing:
+
+- **Its path is resolved lazily**, not in `__init__`. `paths.data_dir()` reads the
+  environment, so a path pinned at construction would follow whatever the data dir was
+  when the module first loaded, and every later read would answer from the wrong
+  directory. `_ensure_loaded` compares the path it last loaded from and re-reads when
+  it changes, rather than caching a boolean.
+- **`reset()` exists for tests.** Its in-memory dict otherwise outlives every test in a
+  run, so one test's people are visible to all the tests after it — which produced an
+  ordering-dependent failure in a test about *bios*, several files away from where the
+  state was written. `backend/tests/conftest.py` clears it after each test, beside the
+  data-dir isolation and for the same reason.
+
 A provider failure is **reported, never raised** — the route answers 200 with
 `reason: "model error"` and the provider's own message ("Failed to load model X"). A 500
 here is indistinguishable in the pane from an agent that chose not to answer, and the

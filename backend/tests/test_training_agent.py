@@ -47,7 +47,13 @@ def test_training_group_in_catalog() -> None:
     conn = FakeConn()
     catalog = {g["name"]: g for g in orchestrator._group_catalog(conn)}
     assert "training" in catalog
-    assert catalog["training"]["tools"] == len(agent_tools._TOOLS)
+    # The group is registered from two modules — the project lifecycle tools here
+    # and the recipe/sweep tools in `recipe_tools` — because the orchestrator keys
+    # on the name prefix, not on which file declared it. Counting only one source
+    # would let the other half go missing without failing anything.
+    assert catalog["training"]["tools"] == len(agent_tools._TOOLS) + len(
+        agent_tools.RECIPE_TOOLS
+    )
 
 
 def test_keyword_preload_on_kaggle_prompt() -> None:

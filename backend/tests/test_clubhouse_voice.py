@@ -176,6 +176,31 @@ def test_bios_reach_the_prompt_when_known():
     assert "Ada: Writes compilers." in (V.render_bios(room) or "")
 
 
+def test_learned_memory_wins_over_the_bio_the_room_reported():
+    """The deliberate preference, pinned so it is not "fixed" by mistake.
+
+    This test used to pass by accident and fail by accident: the people store is a
+    process-global singleton, so whether an earlier test had learned this user
+    decided which branch ran — and the failure surfaced here, in a test about bios,
+    rather than where the state was written. `conftest.reset_process_global_stores`
+    clears it between tests; this asserts the branch itself on purpose.
+
+    A remembered person outranks a bio because the bio is what Clubhouse reports
+    today, while memory is what the agent has actually learned about them.
+    """
+    from backend.modules.clubhouse.people_memory import people_memory_store
+
+    people_memory_store.learn_user(user_id=1, name="Ada", bio="Ships compilers.")
+    people_memory_store.add_note(1, "Prefers Rust")
+
+    room = _room(members=[V.RoomMember(user_id=1, name="Ada", bio="Writes compilers.")])
+    rendered = V.render_bios(room) or ""
+    assert "What you remember" in rendered
+    assert "Prefers Rust" in rendered
+    # The room's own bio does not appear; the remembered one does.
+    assert "Writes compilers." not in rendered
+
+
 # --- prompt assembly -----------------------------------------------------------------
 
 

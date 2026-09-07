@@ -529,3 +529,39 @@ A blank field on reconfigure means "leave it alone", never "clear it". The form 
 prefill a secret, so blank is the *default* state of a field whose key is already
 stored; treating it as a delete would wipe a working key every time someone opened the
 tile.
+
+## NVIDIA
+
+An **api-key** connector (NGC issues personal keys and has no device flow) holding one
+credential with two uses: the **NGC model catalog** and **NIM**, NVIDIA's hosted
+inference.
+
+**A NIM endpoint is one `PROVIDERS` entry with `dialect="openai"`, not a new dialect.**
+NIM speaks the OpenAI chat API; a bespoke dialect would mean six new branches in
+`providers.py` and would silently lose the `tool_choice="required"` retry, which is
+gated on `info.dialect == "openai"` — the same reasoning the llama.cpp integration
+records. It is the first openai-dialect provider that is *remote*, so `auth_headers`
+was added to the shared request path: empty for every local server, a `Bearer` for NIM.
+
+It is listed in `GET /api/agent/status` **only while a key is connected**, following
+the `peer` precedent plus one more reason: probing it unconditionally would mean an
+unauthenticated request to NVIDIA on every status poll, to be told what we already knew.
+
+Connecting NVIDIA has nothing to do with the [hardware](./hardware.mdx) probe. That
+reads the card in this machine with `nvidia-smi`; this is an account.
+
+## Hugging Face gained a write scope
+
+`write-repos` was added so a finished checkpoint or a dataset built here can be pushed
+to the Hub (`huggingface.createRepo`, `huggingface.uploadFolder`).
+
+**`manage-repos` is still deliberately absent**, and that distinction is the whole
+safety argument the original "read-only" rule was really protecting: `write-repos` can
+create a repo and upload files; `manage-repos` can **delete** one. A confused agent
+that uploads a bad checkpoint has wasted bandwidth; one that can delete a repo has
+destroyed work.
+
+Adding a scope forces re-consent. A connection made before `write-repos` existed keeps
+working for reads, and a push tells it to reconnect rather than failing with a bare 403
+several megabytes in. The check order matters: **not connected** is reported before
+**read-only**, or a disconnected account goes looking for a scope problem it does not have.

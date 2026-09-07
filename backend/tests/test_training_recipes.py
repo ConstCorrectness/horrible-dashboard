@@ -23,9 +23,15 @@ from backend.modules.training.models import ProjectModel
 
 
 def intro(sft: list[str] | None = None, lora: list[str] | None = None, **kw):
+    """An `Introspection` as the probe would return it.
+
+    `sft=` fills the `config` target: a target is the *backend's* word for one
+    emitted object, and the class behind it now differs per task (`SFTConfig` for
+    sft, `DPOConfig` for dpo), so it could no longer be named after the task.
+    """
     accepted = {}
     if sft is not None:
-        accepted["sft"] = sft
+        accepted["config"] = sft
     if lora is not None:
         accepted["lora"] = lora
     return recipes.Introspection(
@@ -33,11 +39,12 @@ def intro(sft: list[str] | None = None, lora: list[str] | None = None, **kw):
         accepted=accepted,
         versions=kw.get("versions", {"trl": "0.30.0", "peft": "0.19.0"}),
         extra=kw.get("extra", {}),
+        libraries={"config": "trl", "lora": "peft"},
     )
 
 
 def all_names(target: str) -> list[str]:
-    return [f.name for f in recipes.fields_for(target)]
+    return [f.name for f in recipes.fields_for("config" if target == "sft" else target)]
 
 
 # --- resolving a field against the installed library -------------------------
@@ -53,8 +60,8 @@ def test_a_renamed_field_is_emitted_under_the_name_the_library_accepts() -> None
     old = intro(
         sft=[n for n in all_names("sft") if n != "max_length"] + ["max_seq_length"]
     )
-    resolved = recipes.resolve(recipes.FIELDS[0], old)
-    assert recipes.FIELDS[0].name == "max_length"
+    resolved = recipes.resolve(recipes.catalog()[0], old)
+    assert recipes.catalog()[0].name == "max_length"
     assert resolved.emit == "max_seq_length"
     assert resolved.status == "renamed"
     assert "trl 0.30.0" in resolved.note
@@ -76,9 +83,9 @@ def test_unvalidated_is_not_the_same_as_unsupported() -> None:
     so. `unsupported` means we asked and the answer was no — do not emit it.
     """
     nothing = recipes.Introspection(error="no venv")
-    resolved = recipes.resolve(recipes.FIELDS[0], nothing)
+    resolved = recipes.resolve(recipes.catalog()[0], nothing)
     assert resolved.status == "unvalidated"
-    assert resolved.emit == recipes.FIELDS[0].name
+    assert resolved.emit == recipes.catalog()[0].name
 
 
 # --- what gets emitted --------------------------------------------------------
@@ -321,8 +328,8 @@ def test_warmup_ratio_and_warmup_steps_are_not_aliases() -> None:
     warmup at all and raises nothing anywhere. So they are two fields, and on any
     given version one of them shows as dropped.
     """
-    ratio = next(f for f in recipes.FIELDS if f.name == "warmup_ratio")
-    steps = next(f for f in recipes.FIELDS if f.name == "warmup_steps")
+    ratio = next(f for f in recipes.catalog() if f.name == "warmup_ratio")
+    steps = next(f for f in recipes.catalog() if f.name == "warmup_steps")
     assert "warmup_steps" not in ratio.aliases
     assert "warmup_ratio" not in steps.aliases
 

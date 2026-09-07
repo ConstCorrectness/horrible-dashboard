@@ -68,6 +68,11 @@ every capability and doubles as the integration test fixture.
 | `host.add_connector(Connector(...))` | an external account the user can connect from the home page, whose credential the node holds server-side. See [connectors](../modules/connectors.mdx) |
 | `host.add_ws_channel(name, handler)` | an `async (conn, message)` handler for a new channel on the shared `/ws` socket |
 | `host.add_dash_facade(name, factory)` | an object bound to `dash.<name>` in every REPL session (also shows in `dash.help()`) |
+| `host.add_training_provider(provider)` | one trainable-environment source for the [training](../modules/training.mdx) module (Kaggle, HF, Gymnasium, …) |
+| `host.add_search_provider(provider)` | a web-search provider, joining the existing fan-out and rank fusion |
+| `host.add_dataset_source(source)` | one place training material lives — search, splits, peek, locate. See [datasets](../modules/datasets.mdx) |
+| `host.add_recipe_backend(backend)` | one **training framework**: its tasks, its knobs, and the code they become. Inherits the venv-introspection safety net |
+| `host.add_eval_runner(runner)` | one way of executing an eval suite; results land in the same tables as every other runner's |
 | `host.on_startup(hook)` / `host.on_shutdown(hook)` | lifespan hooks (sync or async) |
 | `host.log` | a logger namespaced to the plugin |
 
@@ -137,3 +142,22 @@ is gated like any other; read-only tools pass straight through.
 | Agent-tool dispatch | `backend/modules/agent/orchestrator.py` |
 | `dash` facade attach | `backend/modules/repl/sdk.py` |
 | Reference plugin | `examples/backend-plugins/ping/` |
+
+## The AI-research seams
+
+Four of the methods above exist so an outside contributor can extend the research
+pipeline without touching its core:
+
+- **`add_dataset_source`** — a new place datasets come from. It appears in the browser
+  beside the Hub and a recipe can point at it like any other.
+- **`add_recipe_backend`** — a new training framework. The important part is what it
+  does *not* have to write: `recipes.introspect()` asks the backend for
+  `probe_classes(task)` and interrogates those classes in the project venv, so a new
+  framework inherits the whole `ok | renamed | unsupported | unvalidated` field
+  resolution. A backend that wrote its own validation would be a backend whose
+  "dropped field" report drifts from every other one's.
+- **`add_eval_runner`** — a new way to execute a suite.
+- **`add_search_provider`** — a crawled corpus joining the same rank fusion.
+
+Built-ins win id conflicts in all four, matching the connector rule. See
+[the AI-research pipeline](./ai-research.mdx) for how they fit together.

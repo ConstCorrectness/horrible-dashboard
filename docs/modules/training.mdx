@@ -152,6 +152,65 @@ read back. A regenerate **replaces** the previous block (found by a
 than appending — two `SFTConfig` definitions in one notebook is a bug where the
 second silently wins, discovered after a wasted run.
 
+### Frameworks: the recipe-backend layer
+
+The recipe began as one framework and one task, hardcoded end to end: the field
+catalog named `SFTConfig`, the probe imported `trl`, the emitter wrote `SFTTrainer`.
+That was the right first shape and it does not extend — DPO is not a variant of
+`SFTConfig`, unsloth loads a model differently, and pre-training is not a notebook
+cell at all.
+
+`backends/base.py` is the seam. A `RecipeBackend` declares which tasks it can train,
+which knobs each takes, and what code those knobs become; everything around it — the
+form, the persistence, the notebook write, the sweep — is written once against that
+protocol. Four ship:
+
+| backend | tasks |
+| --- | --- |
+| `trl` | `sft`, `cpt`, `dpo`, `kto`, `reward`, `grpo` |
+| `unsloth` | `sft`, `dpo` — 4-bit QLoRA on fused kernels, NVIDIA only |
+| `torchtitan` | `pretrain` |
+| `nanotron` | `pretrain` |
+
+A plugin adds more with `host.add_recipe_backend(backend)`.
+
+**Unsloth reuses trl's field catalog rather than copying it** — it ends in the same
+`SFTTrainer`, and a second copy would be a second place to fix the
+`warmup_ratio`/`warmup_steps` unit trap. What it adds is the loader, and three
+things there are each a real bug if missed: the model is passed as an **object**
+(passing the name loads a second unoptimised copy), LoRA comes from
+`get_peft_model` and **not** a `peft_config=` argument (passing both applies the
+adapter twice), and `max_seq_length` is set **at load time** because RoPE scaling is
+chosen there.
+
+**Pre-training is a different execution model and says so.** A titan run is
+`torchrun --nproc_per_node=N -m torchtitan.train --job.config_file config.toml` —
+a multi-process launch reading a config file, with no object whose constructor takes
+a learning rate. Those backends emit a config file plus a launch cell and run
+through the script runner, **single-node in v1**. This node already advertises GPUs
+over the peer fabric with no remote execution engine behind it; shipping `--nnodes 1`
+and naming the gap is better than a launcher that appears to support a cluster.
+
+`check(task, profile)` reads the [hardware probe](./hardware.mdx) and honours its
+**three** states — found a card, looked and found none, and *could not ask*. Saying
+"no NVIDIA GPU" when `nvidia-smi` merely was not on PATH is the failure that module
+exists to prevent.
+
+### Installing the stack
+
+`envs.install_stack` is the step that never existed. `bootstrap` installs
+`ipykernel` and the `horrible-train` helper and **nothing else**, which is why the
+recipe form spent its whole life reporting "trl and peft are not installed", the
+generated code was emitted unvalidated, and the LSP had no framework to index.
+Autocomplete coverage was never a completion-engine problem; it was an empty venv.
+
+The torch wheel is chosen from the hardware probe by **card and OS together**, the
+same rule `hardware._variant_for` follows for llama.cpp builds — and the *reason* is
+returned to the pane, because a CPU build landing on a machine whose owner knows
+they have a card needs an explanation rather than a shrug. Notably, when the probe
+**could not ask**, the default GPU-capable wheel is installed rather than the CPU
+one: a CPU build on a machine with a card would train slowly with nothing saying why.
+
 ### Validated against what is actually installed
 
 The expensive failure this exists to prevent: `trl` renamed
@@ -211,6 +270,50 @@ and the script runner does the same. That is what keeps the key out of the
 notebook, out of `project.json`, and out of every HTTP response. `env_for()` is
 scoped to the trackers the recipe selected, so connecting the tile does not by
 itself start shipping every run somewhere.
+
+### Ablation sweeps
+
+`sweeps.py` runs the same recipe N times with one thing changed. Before it, "what
+does learning rate actually do here" meant editing a number, running, screenshotting
+the chart, editing it back, and remembering — which is not an experiment, it is a
+recollection.
+
+A sweep is the recipe plus **axes**: a field and the values to try, expanded as a
+`grid` (every combination), a `zip` (axes step together, for knobs that must move in
+lockstep like rank and alpha), or a seeded `random` sample.
+
+Four things do the work:
+
+- **Points are processes, not kernel cells.** A kernel is single and serial. Each
+  point becomes a `.py` from `recipes.materialize_script` — a *flattening* of the
+  same `materialize()` the notebook uses, so a sweep and a manual run cannot
+  disagree about what a recipe means — and runs through the script runner.
+- **Each run's `config_json` is its resolved values dict**, which is the entire
+  mechanism behind `localtrack.compare_runs`. See
+  [localtrack](./localtrack.mdx#comparing-runs).
+- **One at a time by default.** Two fine-tunes on one GPU is an out-of-memory error
+  at an unpredictable point in the second, not double the throughput.
+- **Refusals are explained.** An axis naming a field the selected task does not have
+  produces N identical runs and a comparison showing no effect — which reads as
+  "this knob does nothing". `validate()` refuses it and says which fields exist.
+
+`MAX_POINTS` is 64: a four-axis grid of five values each is 625 runs, and the cap
+turns "I did not think about that" into an error rather than a machine that is busy
+until Thursday.
+
+#### Runs have an end now
+
+A sweep is the first thing in this module that needed a run to *finish*. Everything
+before it watched one run at a time, so "still running" was indistinguishable from
+"finished and nothing else started" — `metrics._mirror_for` closed the previous run
+only when a **new** one began, which for the last run of a session is never. Twelve
+points made that visible immediately.
+
+`ht.finish(status)` is the helper's terminal signal, emitted from `ht.callback()`'s
+`on_train_end`, and the script runner closes any run its process opened when the
+process exits (`finished` / `failed` on a stop / `crashed` otherwise). Both call
+`metrics.finish_run`, which is **idempotent** — the common case is two calls for one
+run, and the second must not overwrite the real status with the process's.
 
 ### Closing the loop: checkpoint → GGUF
 

@@ -4,12 +4,14 @@ import { Button } from '../../../Primitives';
 import { registry } from '../../../registry';
 import { startServer } from '../../llamacpp/api';
 import { usePaneParams } from '../../../panes';
+import { DatasetPicker } from '../../datasets/panels/DatasetPicker';
 import { ProjectsPane } from './ProjectsPane';
 import {
   applyRecipe,
   convertCheckpoint,
   getRecipe,
   listCheckpoints,
+  installStack,
   recipeDocs,
   saveRecipe,
   type Checkpoint,
@@ -333,6 +335,8 @@ export function RecipePane() {
   const [recipe, setRecipe] = useState<Recipe | null>(null);
   const [docs, setDocs] = useState<DocLink[]>([]);
   const [status, setStatus] = useState('');
+  const [installing, setInstalling] = useState(false);
+  const [installNote, setInstallNote] = useState('');
 
   useEffect(() => {
     if (!projectId) return;
@@ -352,11 +356,40 @@ export function RecipePane() {
     };
   }, [projectId]);
 
+  const reload = useCallback(() => {
+    if (!projectId) return;
+    void getRecipe(projectId, true)
+      .then((data) => {
+        setPayload(data);
+        setRecipe(data.recipe);
+      })
+      .catch((err) => setStatus(err instanceof Error ? err.message : String(err)));
+  }, [projectId]);
+
+  const doInstallStack = useCallback(() => {
+    setInstalling(true);
+    setInstallNote('');
+    void installStack(projectId)
+      .then((res) => {
+        // The torch reason is surfaced, not swallowed: a CPU build landing on a
+        // machine whose owner knows they have a card needs an explanation.
+        setInstallNote(res.torch);
+        reload();
+      })
+      .catch((err) => setInstallNote(err instanceof Error ? err.message : String(err)))
+      .finally(() => setInstalling(false));
+  }, [projectId, reload]);
+
   const resolvedBy = useMemo(() => {
     const map = new Map<string, ResolvedField>();
     for (const item of payload?.resolved ?? []) map.set(item.name, item);
     return map;
   }, [payload]);
+
+  const taskSpec = useMemo(
+    () => payload?.tasks.find((t) => t.id === recipe?.task && t.backend === recipe?.backend),
+    [payload, recipe],
+  );
 
   const groups = useMemo(() => {
     const out = new Map<string, RecipeField[]>();
@@ -474,21 +507,94 @@ export function RecipePane() {
       </div>
 
       <div style={card}>
+        <strong style={{ fontSize: 12 }}>Framework &amp; task</strong>
+        <p style={{ ...dim, fontSize: 11, margin: 0, lineHeight: 1.45 }}>
+          {taskSpec?.blurb ?? 'Pick what kind of training this is.'}
+        </p>
+        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+          <select
+            value={recipe.backend}
+            onChange={(e) => {
+              // Switching framework can invalidate the task: unsloth trains sft
+              // and dpo only. Falling back to its first task beats leaving a task
+              // selected that this backend cannot emit.
+              const next = payload.backends.find((b) => b.id === e.target.value);
+              const task = next?.tasks.includes(recipe.task) ? recipe.task : next?.tasks[0];
+              setRecipe({ ...recipe, backend: e.target.value, task: task ?? recipe.task });
+            }}
+            style={{ padding: '0 0.6rem' }}
+          >
+            {payload.backends.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.label}
+              </option>
+            ))}
+          </select>
+          <select
+            value={recipe.task}
+            onChange={(e) => setRecipe({ ...recipe, task: e.target.value })}
+            style={{ padding: '0 0.6rem', flex: 1, minWidth: 160 }}
+          >
+            {payload.tasks
+              .filter((t) => t.backend === recipe.backend)
+              .map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.label}
+                </option>
+              ))}
+          </select>
+        </div>
+        {payload.requirements.length > 0 && !intro.available && (
+          <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <Button onClick={doInstallStack} disabled={installing}>
+              {installing ? 'Installing…' : `Install ${payload.requirements.join(', ')}`}
+            </Button>
+            <span style={{ ...dim, fontSize: 11 }}>
+              torch is matched to this machine&rsquo;s accelerator.
+            </span>
+          </div>
+        )}
+        {installNote && (
+          <p style={{ ...dim, fontSize: 11, margin: 0 }}>{installNote}</p>
+        )}
+      </div>
+
+      <div style={card}>
         <strong style={{ fontSize: 12 }}>Model &amp; data</strong>
         <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
           <span style={{ ...dim, width: '7rem' }}>Base model</span>
           <input
+            type="text"
             value={recipe.baseModel}
             onChange={(e) => setRecipe({ ...recipe, baseModel: e.target.value })}
             placeholder="meta-llama/Llama-3.2-1B"
             style={{ flex: 1 }}
           />
         </label>
+        <DatasetPicker
+          task={recipe.task}
+          selectedId={recipe.datasetId}
+          onPick={(dataset, result) =>
+            setRecipe({
+              ...recipe,
+              datasetId: dataset.id,
+              dataset: dataset.ref,
+              datasetSplit: dataset.split,
+              columnMap: result.adaptation.columns,
+              textField: result.textField || recipe.textField,
+            })
+          }
+        />
         <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-          <span style={{ ...dim, width: '7rem' }}>Dataset</span>
+          <span style={{ ...dim, width: '7rem' }}>…or type one</span>
           <input
+            type="text"
             value={recipe.dataset}
-            onChange={(e) => setRecipe({ ...recipe, dataset: e.target.value })}
+            onChange={(e) =>
+              // Typing clears the registered id: a recipe showing a picked dataset
+              // while training on a hand-typed one is the worst of both.
+              setRecipe({ ...recipe, dataset: e.target.value, datasetId: '' })
+            }
             placeholder="trl-lib/Capybara"
             style={{ flex: 1 }}
           />
@@ -496,19 +602,22 @@ export function RecipePane() {
         <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
           <span style={{ ...dim, width: '7rem' }}>Output dir</span>
           <input
+            type="text"
             value={recipe.outputDir}
             onChange={(e) => setRecipe({ ...recipe, outputDir: e.target.value })}
             style={{ flex: 1 }}
           />
         </label>
-        <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-          <input
-            type="checkbox"
-            checked={recipe.useLora}
-            onChange={(e) => setRecipe({ ...recipe, useLora: e.target.checked })}
-          />
-          <span>LoRA (adapters instead of a full fine-tune)</span>
-        </label>
+        {taskSpec?.supportsLora !== false && (
+          <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+            <input
+              type="checkbox"
+              checked={recipe.useLora}
+              onChange={(e) => setRecipe({ ...recipe, useLora: e.target.checked })}
+            />
+            <span>LoRA (adapters instead of a full fine-tune)</span>
+          </label>
+        )}
       </div>
 
       {[...groups.entries()].map(([group, fields]) => (

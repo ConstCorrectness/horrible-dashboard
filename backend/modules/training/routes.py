@@ -20,7 +20,14 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 
 from backend.modules.settings.routes import get_value
-from backend.modules.training import convert, envs, notebooks, projects, recipes
+from backend.modules.training import (
+    convert,
+    envs,
+    notebooks,
+    projects,
+    recipes,
+    sweeps,
+)
 from backend.modules.training.models import (
     AcceptedResponse,
     CreateProjectRequest,
@@ -484,15 +491,40 @@ def _start_fetch(project: ProjectModel) -> None:
 
 def _recipe_payload(project: ProjectModel, *, refresh: bool = False) -> dict:
     recipe = recipes.load_recipe(project)
-    intro = recipes.introspect(project, refresh=refresh)
+    intro = recipes.introspect(
+        project, refresh=refresh, backend_id=recipe.backend, task=recipe.task
+    )
+    from backend.modules.hardware import probe as hardware
+    from backend.modules.training.backends.base import get_backend
+
+    try:
+        backend = get_backend(recipe.backend)
+    except ValueError:
+        backend = get_backend("trl")
+    profile = hardware.get_profile()
     return {
         "recipe": recipe.to_dict(),
-        "fields": [f.to_dict() for f in recipes.FIELDS],
+        # The catalog is per backend AND per task now: DPO renders `beta`, SFT
+        # renders `packing`, and sending one list for both would show knobs the
+        # selected trainer has never heard of.
+        "fields": [
+            f.to_dict()
+            for f in recipes.catalog(recipe.backend, recipe.task, recipe.use_lora)
+        ],
         "introspection": intro.to_dict(),
-        "resolved": [r.to_dict() for r in recipes.resolve_all(intro)],
-        "warnings": recipes.warnings_for(recipe.values, recipe.trackers),
+        "resolved": [
+            r.to_dict()
+            for r in recipes.resolve_all(
+                intro, recipe.backend, recipe.task, recipe.use_lora
+            )
+        ],
+        "warnings": recipes.warnings_for(recipe.values, recipe.trackers)
+        + backend.check(recipe.task, profile),
         "trackers": list(recipes.TRACKERS),
-        "tasks": list(recipes.TASKS),
+        "tasks": recipes.tasks(),
+        "backends": recipes.backends(),
+        "requirements": backend.requirements(recipe.task, profile),
+        "sweep": sweeps.load_spec(project).to_dict(),
         "outputTypes": list(convert.OUTPUT_TYPES),
     }
 
@@ -521,7 +553,9 @@ async def recipe_apply(project_id: str, body: dict) -> dict:
 
     def work() -> int:
         recipes.save_recipe(project, recipe)
-        intro = recipes.introspect(project)
+        intro = recipes.introspect(
+            project, backend_id=recipe.backend, task=recipe.task
+        )
         return recipes.apply_to_notebook(project, recipe, intro)
 
     try:
@@ -529,6 +563,121 @@ async def recipe_apply(project_id: str, body: dict) -> dict:
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"cells": written, "notebook": "main.ipynb"}
+
+
+@router.post("/projects/{project_id}/recipe/install-stack")
+async def recipe_install_stack(project_id: str) -> dict:
+    """Install the selected backend's libraries into the project venv.
+
+    The step that never existed: `bootstrap` installs ipykernel and the helper and
+    nothing else, which is why the recipe form has always reported "trl and peft
+    are not installed". torch is resolved against the hardware probe, so the wheel
+    matches the card — and the reason is returned, because a CPU build landing on a
+    machine whose owner knows they have a GPU needs an explanation, not a shrug.
+    """
+    project = _project_or_404(project_id)
+    recipe = recipes.load_recipe(project)
+    from backend.modules.hardware import probe as hardware
+    from backend.modules.training.backends.base import get_backend
+
+    try:
+        backend = get_backend(recipe.backend)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    profile = await asyncio.to_thread(hardware.get_profile)
+    packages = backend.requirements(recipe.task, profile)
+
+    def progress(line: str) -> None:
+        broadcast_threadsafe(
+            "env_progress", {"projectId": project.id, "line": line}
+        )
+
+    def work() -> str:
+        reason = envs.install_stack(project, packages, profile, progress)
+        # The venv changed, so the cached probe is stale — and the whole point of
+        # installing is that the form should now say "validated".
+        recipes.introspect(
+            project, refresh=True, backend_id=recipe.backend, task=recipe.task
+        )
+        return reason
+
+    try:
+        reason = await asyncio.to_thread(work)
+    except Exception as exc:  # noqa: BLE001 — install failures are the user's to read
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"installed": packages, "torch": reason}
+
+
+# --- sweeps -------------------------------------------------------------------
+#
+# The same recipe N times with one thing changed. Points run as processes through
+# the script runner, never on the kernel, which is single and serial.
+
+
+@router.get("/projects/{project_id}/sweep")
+async def sweep_get(project_id: str) -> dict:
+    project = _project_or_404(project_id)
+    spec = await asyncio.to_thread(sweeps.load_spec, project)
+    recipe = await asyncio.to_thread(recipes.load_recipe, project)
+    return {
+        "spec": spec.to_dict(),
+        "problems": sweeps.validate(recipe, spec) if spec.axes else [],
+        "sweeps": sweeps.status(),
+        "strategies": list(sweeps.STRATEGIES),
+        "maxPoints": sweeps.MAX_POINTS,
+    }
+
+
+@router.put("/projects/{project_id}/sweep")
+async def sweep_put(project_id: str, body: dict) -> dict:
+    project = _project_or_404(project_id)
+    spec = sweeps.SweepSpec.from_dict(body)
+    await asyncio.to_thread(sweeps.save_spec, project, spec)
+    return await sweep_get(project_id)
+
+
+@router.post("/projects/{project_id}/sweep/preview")
+async def sweep_preview(project_id: str, body: dict) -> dict:
+    """What this sweep would run, without running it."""
+    project = _project_or_404(project_id)
+    spec = sweeps.SweepSpec.from_dict(body)
+    recipe = await asyncio.to_thread(recipes.load_recipe, project)
+    problems = sweeps.validate(recipe, spec)
+    if problems:
+        return {"problems": problems, "points": []}
+    try:
+        points = sweeps.expand(recipe, spec)
+    except sweeps.SweepError as exc:
+        return {"problems": [str(exc)], "points": []}
+    return {"problems": [], "points": [p.to_dict() for p in points]}
+
+
+@router.post("/projects/{project_id}/sweep/start")
+async def sweep_start(project_id: str, body: dict) -> dict:
+    project = _project_or_404(project_id)
+    if not envs.venv_ready(project):
+        raise HTTPException(status_code=400, detail="project venv is not ready")
+    spec = sweeps.SweepSpec.from_dict(body) if body else sweeps.load_spec(project)
+    recipe = await asyncio.to_thread(recipes.load_recipe, project)
+    intro = await asyncio.to_thread(
+        recipes.introspect, project, backend_id=recipe.backend, task=recipe.task
+    )
+    try:
+        await asyncio.to_thread(sweeps.save_spec, project, spec)
+        sweep_id = sweeps.start(project, recipe, spec, intro)
+    except sweeps.SweepError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"sweepId": sweep_id}
+
+
+@router.post("/sweeps/{sweep_id}/stop")
+async def sweep_stop(sweep_id: str) -> dict:
+    return {"stopped": sweeps.stop(sweep_id)}
+
+
+@router.get("/sweeps")
+async def sweep_list(sweep_id: str = "") -> list[dict]:
+    return sweeps.status(sweep_id)
 
 
 @router.get("/recipe/docs")
