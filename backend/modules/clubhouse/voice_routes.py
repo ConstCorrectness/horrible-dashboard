@@ -40,6 +40,11 @@ class TurnRequest(BaseModel):
     # The live room, pushed by the pane — it holds the PubNub feed and the Agora
     # volume indicator, so it is seconds fresher than anything this server could poll.
     room: dict[str, Any] = Field(default_factory=dict)
+    # The active client-side voice agent configuration, preventing state desync
+    config: dict[str, Any] | None = None
+    # Explicit override from client: true if the client knows it's agent echo,
+    # false if known human operator. If omitted, uses speaker_id matching and text overlap.
+    is_self: bool | None = None
 
 
 class TurnResponse(BaseModel):
@@ -68,12 +73,17 @@ class ResetRequest(BaseModel):
 async def turn(req: TurnRequest) -> TurnResponse:
     """One utterance in, one decision out."""
     session = V.session_for(req.channel)
+    if req.config:
+        session.config = V.VoiceConfig.from_dict(req.config)
     room = V.RoomSnapshot.from_dict({**req.room, "channel": req.channel})
     source: V.Source = "chat" if req.source == "chat" else "voice"
 
-    is_self = (
-        req.speaker_id is not None and req.speaker_id == room.my_user_id
-    ) or session.is_own_speech(req.text)
+    if req.is_self is not None:
+        is_self = req.is_self or session.is_own_speech(req.text)
+    else:
+        is_self = (
+            req.speaker_id is not None and req.speaker_id == room.my_user_id
+        ) or session.is_own_speech(req.text)
 
     if req.force and not is_self:
         decision = V.Decision(True, "asked to speak")
@@ -181,5 +191,7 @@ def reset(req: ResetRequest) -> dict[str, Any]:
     session.spoken.clear()
     session.last_reply_ts = None
     if req.reset_persona:
-        session.config.persona = req.persona or V.DEFAULT_PERSONA
+        session.config.persona = (
+            req.persona if req.persona is not None else V.DEFAULT_PERSONA
+        )
     return {"cleared": True, "persona": session.config.persona}

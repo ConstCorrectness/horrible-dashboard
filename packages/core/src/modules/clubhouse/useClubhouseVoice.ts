@@ -244,9 +244,40 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         throw new Error('Failed to retrieve Agora token from Clubhouse');
       }
 
+      // Initialize Audio Mixer & Routing Destinations FIRST so remote tracks and recorder can bind immediately
+      const audioCtx = mixer.getContext();
+      session.audioCtx = audioCtx;
+
+      // An AudioContext created without a user gesture starts `suspended` under every
+      // autoplay policy. Resuming is a no-op when already running.
+      if (audioCtx.state === 'suspended') {
+        try {
+          await audioCtx.resume();
+        } catch (err) {
+          console.warn('AudioContext could not be resumed; audio will be silent:', err);
+        }
+      }
+
+      const dest = audioCtx.createMediaStreamDestination();
+      session.agentAudioDest = dest;
+
+      const sttDest = audioCtx.createMediaStreamDestination();
+      session.sttDest = sttDest;
+
       // b. Initialize Agora Client
       const client = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
       session.rtcClient = client;
+
+      // Helper to route remote audio stream track to agent's STT
+      const connectRemoteAudioTrackToStt = (track: MediaStreamTrack) => {
+        try {
+          const stream = new MediaStream([track]);
+          const source = audioCtx.createMediaStreamSource(stream);
+          source.connect(sttDest);
+        } catch (e) {
+          console.warn('Failed to route remote audio track to STT destination:', e);
+        }
+      };
 
       // c. Listen for remote audio updates
       client.on('user-published', async (user, mediaType) => {
@@ -255,11 +286,8 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
           const remoteAudioTrack = user.audioTrack;
           remoteAudioTrack?.play();
 
-          if (remoteAudioTrack && session.audioCtx && session.sttDest) {
-            const track = remoteAudioTrack.getMediaStreamTrack();
-            const stream = new MediaStream([track]);
-            const source = session.audioCtx.createMediaStreamSource(stream);
-            source.connect(session.sttDest);
+          if (remoteAudioTrack) {
+            connectRemoteAudioTrackToStt(remoteAudioTrack.getMediaStreamTrack());
           }
         }
       });
@@ -276,38 +304,12 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         chDetails.user_id ?? undefined,
       );
 
-      // e. Create Audio Mixer
-      //
-      // The shared mixer context rather than a private one — nodes cannot cross
-      // contexts, so a `new AudioContext()` here would make this graph
-      // permanently unable to connect to anything else in the app.
-      //
-      // Deliberately `getContext()` and **not** a mixer strip: this graph's
-      // output goes to Agora (a `MediaStreamDestination` published to the room),
-      // never to a local speaker. Declaring a strip would put a fader in the
-      // mixer that controls nothing, which is worse than having no fader.
-      const audioCtx = mixer.getContext();
-      session.audioCtx = audioCtx;
-
-      // An AudioContext created without a user gesture starts `suspended` under every
-      // autoplay policy, and a suspended context is the quietest possible failure:
-      // the graph is wired, MediaRecorder produces valid-but-silent WebM, the VAD
-      // analyser reads zero forever, and the agent simply never hears anything. It
-      // bites hardest in the Tauri webview, where the join can happen without a
-      // direct click on this pane. Resuming is a no-op when already running.
-      if (audioCtx.state === 'suspended') {
-        try {
-          await audioCtx.resume();
-        } catch (err) {
-          console.warn('AudioContext could not be resumed; audio will be silent:', err);
+      // Connect any remote audio tracks from users already in the room
+      for (const remoteUser of client.remoteUsers) {
+        if (remoteUser.hasAudio && remoteUser.audioTrack) {
+          connectRemoteAudioTrackToStt(remoteUser.audioTrack.getMediaStreamTrack());
         }
       }
-
-      const dest = audioCtx.createMediaStreamDestination();
-      session.agentAudioDest = dest;
-
-      const sttDest = audioCtx.createMediaStreamDestination();
-      session.sttDest = sttDest;
 
       // Start STT Recorder with VAD
       try {
@@ -321,6 +323,9 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
 
         let silenceTicks = 0;
         let isSpeaking = false;
+        let idleSilenceTicks = 0;
+        let hasSpeechInChunk = false;
+        let bargeInTicks = 0;
         let activeSpeakerUidDuringSpeech: number | null = null;
         /** When the current unbroken run of speech began, for the interject timer. */
         let speechStartedAt = 0;
@@ -337,17 +342,37 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
          */
         let runText = '';
 
+        const getOptimalMimeType = (): string | undefined => {
+          if (typeof MediaRecorder === 'undefined') return undefined;
+          const candidates = [
+            'audio/webm;codecs=opus',
+            'audio/webm',
+            'audio/ogg;codecs=opus',
+            'audio/mp4',
+          ];
+          for (const mime of candidates) {
+            if (MediaRecorder.isTypeSupported(mime)) return mime;
+          }
+          return undefined;
+        };
+
         const startRecordingChunk = (speakerUidForChunk: number | null = null) => {
           if (!session.sttDest) return;
-          const recorder = new MediaRecorder(session.sttDest.stream);
+          const mime = getOptimalMimeType();
+          const recorder = mime
+            ? new MediaRecorder(session.sttDest.stream, { mimeType: mime })
+            : new MediaRecorder(session.sttDest.stream);
           session.sttRecorder = recorder;
           // Read at `ondataavailable` time, not now: whether a chunk is a partial is
           // decided when it is flushed, which is always after the recorder was made.
-          const chunk = { partial: false };
+          const chunk: { partial: boolean; discard?: boolean } = { partial: false };
           session.sttChunk = chunk;
           const boundSpeakerId = speakerUidForChunk ?? activeSpeakerUidDuringSpeech;
 
           recorder.ondataavailable = async (e) => {
+            if (chunk.discard) {
+              return;
+            }
             if (e.data.size > 0 && session.handlers.onTranscribe) {
               const formData = new FormData();
               formData.append(
@@ -361,9 +386,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
                 });
                 // A non-2xx here is the single most common "the agent doesn't hear
                 // me" cause: /api/agent/stt answers 503 until `uv sync --extra voice`
-                // has been run. The old code called res.json() regardless, read
-                // `undefined` off the error body and returned silently, so a missing
-                // install was indistinguishable from a quiet room.
+                // has been run.
                 if (!res.ok) {
                   let detail = `HTTP ${res.status}`;
                   try {
@@ -405,6 +428,8 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         const flushChunk = (partial: boolean, speakerUid: number | null) => {
           if (!session.sttRecorder || session.sttRecorder.state === 'inactive') return;
           if (session.sttChunk) session.sttChunk.partial = partial;
+          hasSpeechInChunk = false;
+          idleSilenceTicks = 0;
           session.sttRecorder.stop();
           startRecordingChunk(speakerUid);
         };
@@ -418,7 +443,40 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
           for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
           const avgVolume = sum / dataArray.length;
 
-          if (avgVolume > 5) {
+          // Barge-in: Stop agent if it's currently speaking and human is speaking loudly and clearly
+          if (session.isAgentSpeaking) {
+            if (avgVolume > 22) {
+              bargeInTicks++;
+              if (bargeInTicks >= 3 && propsRef.current?.allowBargeIn !== false) {
+                console.log('BARGE-IN DETECTED! Stopping agent audio.');
+                if (session.agentAudioSource) {
+                  try {
+                    session.agentAudioSource.stop();
+                  } catch {
+                    /* ignore */
+                  }
+                }
+                if (session.agentTtsAbort) {
+                  try {
+                    session.agentTtsAbort.abort();
+                  } catch {
+                    /* ignore */
+                  }
+                }
+                session.isAgentSpeaking = false;
+                bargeInTicks = 0;
+              }
+            } else {
+              bargeInTicks = 0;
+            }
+          } else {
+            bargeInTicks = 0;
+          }
+
+          if (avgVolume > 12) {
+            hasSpeechInChunk = true;
+            idleSilenceTicks = 0;
+
             // Track loudest speaker UID across live volumes
             const vols = session.getState().speakingVolumes || {};
             let highestVol = 0;
@@ -443,10 +501,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
             isSpeaking = true;
             silenceTicks = 0;
 
-            // The agent cutting in. Deliberately gated on the *speaker* holding the
-            // floor rather than on a word count: the point is to answer someone who
-            // is monologuing, and a transcript long enough to be worth interrupting
-            // is exactly the one that has taken a while to say.
+            // The agent cutting in
             const interjectAfterMs = propsRef.current?.interjectAfterMs ?? 0;
             if (
               interjectAfterMs > 0 &&
@@ -457,28 +512,8 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
               interjectedThisRun = true;
               flushChunk(true, activeSpeakerUidDuringSpeech);
             }
-
-            // Barge-in: Stop agent if it's currently speaking
-            if (session.isAgentSpeaking && propsRef.current?.allowBargeIn !== false) {
-              console.log('BARGE-IN DETECTED! Stopping agent audio.');
-              if (session.agentAudioSource) {
-                try {
-                  session.agentAudioSource.stop();
-                } catch {
-                  /* ignore */
-                }
-              }
-              if (session.agentTtsAbort) {
-                try {
-                  session.agentTtsAbort.abort();
-                } catch {
-                  /* ignore */
-                }
-              }
-              session.isAgentSpeaking = false;
-            }
           } else {
-            // Silence
+            // Volume below threshold
             if (isSpeaking) {
               silenceTicks++;
               const requiredSilenceTicks = Math.max(
@@ -492,6 +527,19 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
                 activeSpeakerUidDuringSpeech = null;
                 // End of speech detected, send chunk!
                 flushChunk(false, completedSpeakerUid);
+              }
+            } else {
+              // Idle silence without active speech
+              idleSilenceTicks++;
+              // Every ~1.5s of unbroken silence without speech in this chunk, rotate and discard
+              // to prevent accumulating massive silence buffers that dilute STT RMS energy.
+              if (!hasSpeechInChunk && idleSilenceTicks >= 30) {
+                idleSilenceTicks = 0;
+                if (session.sttRecorder && session.sttRecorder.state !== 'inactive') {
+                  if (session.sttChunk) session.sttChunk.discard = true;
+                  session.sttRecorder.stop();
+                  startRecordingChunk();
+                }
               }
             }
           }
@@ -507,8 +555,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         }
 
         const micStream = await Promise.race([
-          // Through the mixer so the chosen microphone is honoured; `{ audio:
-          // true }` silently took the system default whatever the user picked.
+          // Through the mixer so the chosen microphone is honoured
           navigator.mediaDevices.getUserMedia({ audio: inputConstraints() }),
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error('Microphone permission timeout')), 3000),
@@ -519,12 +566,12 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         const micSource = audioCtx.createMediaStreamSource(micStream);
 
         const humanGain = audioCtx.createGain();
-        humanGain.gain.value = 0; // muted by default
+        humanGain.gain.value = 0; // muted by default for Clubhouse room
         session.humanGain = humanGain;
 
         micSource.connect(humanGain);
-        humanGain.connect(dest);
-        humanGain.connect(sttDest);
+        humanGain.connect(dest); // published to Clubhouse room when unmuted
+        micSource.connect(sttDest); // agent's ears always hear operator
       } catch (err) {
         console.warn('Could not access physical microphone, continuing as listener:', err);
       }
@@ -913,9 +960,12 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
    * boundary and drops the queue, instead of killing one monolithic buffer.
    */
   const playAgentAudio = useCallback(
-    async (text: string, voiceOptions?: { voice?: string; rate?: string; pitch?: string }) => {
+    async (
+      text: string,
+      voiceOptions?: { voice?: string; rate?: string; pitch?: string; volume?: string },
+    ) => {
       const ctx = session.audioCtx;
-      if (!ctx || !session.agentAudioDest || !session.localAudioTrack) return;
+      if (!ctx) return;
       const chunks = splitForSpeech(text);
       if (chunks.length === 0) return;
 
@@ -926,11 +976,12 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       const voice = voiceOptions?.voice || 'en-US-ChristopherNeural';
       const rate = voiceOptions?.rate || '+0%';
       const pitch = voiceOptions?.pitch || '+0Hz';
+      const volume = voiceOptions?.volume || '+0%';
 
       /** Fetch + decode one chunk. Returns null if it was aborted or unavailable. */
       const render = async (chunk: string): Promise<AudioBuffer | null> => {
         const url = apiUrl(
-          `/api/agent/tts?text=${encodeURIComponent(chunk)}&voice=${encodeURIComponent(voice)}&rate=${encodeURIComponent(rate)}&pitch=${encodeURIComponent(pitch)}`,
+          `/api/agent/tts?text=${encodeURIComponent(chunk)}&voice=${encodeURIComponent(voice)}&rate=${encodeURIComponent(rate)}&pitch=${encodeURIComponent(pitch)}&volume=${encodeURIComponent(volume)}`,
         );
         const res = await fetch(url, { signal: abort.signal });
         if (!res.ok) {
@@ -970,7 +1021,9 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
 
           const source = ctx.createBufferSource();
           source.buffer = buffer;
-          source.connect(session.agentAudioDest);
+          if (session.agentAudioDest) {
+            source.connect(session.agentAudioDest);
+          }
           source.connect(ctx.destination); // so the operator hears it too
           session.agentAudioSource = source;
 
@@ -1000,6 +1053,47 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       }
     },
     [isMuted, activeChannel, reportVoiceError, session],
+  );
+
+  const previewTtsVoice = useCallback(
+    async (options?: {
+      voice?: string;
+      rate?: string;
+      pitch?: string;
+      volume?: string;
+      text?: string;
+    }) => {
+      try {
+        const AudioContextClass =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        const ctx = session.audioCtx || new AudioContextClass();
+        if (ctx.state === 'suspended') await ctx.resume();
+
+        const voice = options?.voice || 'en-US-ChristopherNeural';
+        const rate = options?.rate || '+0%';
+        const pitch = options?.pitch || '+0Hz';
+        const volume = options?.volume || '+0%';
+        const text = options?.text || 'Hello! I am ready to join the room and chat.';
+
+        const url = apiUrl(
+          `/api/agent/tts?text=${encodeURIComponent(text)}&voice=${encodeURIComponent(voice)}&rate=${encodeURIComponent(rate)}&pitch=${encodeURIComponent(pitch)}&volume=${encodeURIComponent(volume)}`,
+        );
+        const res = await fetch(url);
+        if (!res.ok) {
+          throw new Error(`TTS preview failed (${res.status})`);
+        }
+        const buffer = await ctx.decodeAudioData(await res.arrayBuffer());
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(ctx.destination);
+        source.start();
+      } catch (e) {
+        console.error('Failed to preview TTS voice:', e);
+        reportVoiceError(`Voice preview failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+    [session, reportVoiceError],
   );
 
   const getNetworkInsights = useCallback((): MediaNetworkInsights => {
@@ -1075,6 +1169,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     speakerInvite,
     speakingVolumes,
     playAgentAudio,
+    previewTtsVoice,
     stopAgentAudio,
     loading,
     error,

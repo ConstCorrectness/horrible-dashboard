@@ -101,7 +101,7 @@ export class ClubhouseRoomSession {
    * partial. Mutable and shared with the recorder's own handler because the answer
    * is not known until the moment it is stopped.
    */
-  sttChunk: { partial: boolean } | null = null;
+  sttChunk: { partial: boolean; discard?: boolean } | null = null;
   physicalMicStream: MediaStream | null = null;
   humanGain: GainNode | null = null;
   rtcClient: IAgoraRTCClient | null = null;

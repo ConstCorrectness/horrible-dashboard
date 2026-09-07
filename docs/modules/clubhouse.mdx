@@ -365,8 +365,13 @@ is its turn, and speaks. The speech pipeline is two routes on the agent module:
   on a worker thread (asyncio cannot spawn one under `uvicorn --reload` on
   Windows). Whisper answers silence with its priors rather than with nothing, so
   a small set of known hallucinations (`"you"`, `"thank you"`, …) is filtered to
-  empty — otherwise the agent answers a room that said nothing.
-- **`GET /api/agent/tts?text=`** — MP3 audio, via Edge TTS.
+  empty — otherwise the agent answers a room that said nothing. A `language` hint
+  is forwarded to the transcriber (and on to a remote node's `/api/agent/stt`
+  when the work is delegated); it is ignored by the English-only default model,
+  which is why it is a hint rather than a setting.
+- **`GET /api/agent/tts?text=`** — MP3 audio, via Edge TTS. `voice`, `rate`,
+  `pitch` and `volume` are all passed through to the synthesizer, so the agent's
+  loudness is tuned alongside its speed and pitch rather than left to the mixer.
 
 Everything between those two — whether to answer, what the agent knows, what it
 remembers — is the **voice session**, and it lives on the server.
@@ -489,11 +494,29 @@ like the connection dropped. The speech rules are also kept **separate from the
 persona** in the system prompt: the user edits the persona, and must not be able to
 delete the rules that keep a reply speakable.
 
+### The pane may carry its settings with the utterance
+
+`POST .../voice/turn` accepts the pane's whole `config` alongside the text. The
+session is still the authority — it simply adopts what arrives — but a `config`
+pushed separately races the turn that should have used it, so an utterance
+arriving between an edit and its `POST .../voice/config` was answered under the
+*previous* persona. Sending the settings with the utterance makes that
+unrepresentable. `model`, `temperature` and `max_tokens` reach the provider from
+that same config, so a room's agent can run a different model from the
+orchestrator's.
+
+The request also takes an explicit **`is_self`**. The agent must not answer its
+own speech coming back through the room, and the fallbacks for recognizing it —
+matching the speaker id, or overlapping the text it just spoke — both fail on a
+paraphrase or a shared account. The client knows which audio it originated, so it
+says so; `is_self: false` is a positive assertion that a human spoke, and the
+text-overlap check still runs underneath as a backstop.
+
 ### Routes
 
 | Route | Purpose |
 | --- | --- |
-| `POST /api/clubhouse/voice/turn` | One utterance in, one decision out (`spoke` / `reason` / `reply` / `notice`) |
+| `POST /api/clubhouse/voice/turn` | One utterance in, one decision out (`spoke` / `reason` / `reply` / `notice`). Optionally carries the pane's live `config` and an explicit `is_self` — see above |
 | `POST /api/clubhouse/voice/config` | Replace a room's agent settings |
 | `GET /api/clubhouse/voice/config` | Read them back |
 | `GET /api/clubhouse/voice/state` | What the agent currently remembers (rendered in the Agent tab) |
@@ -625,7 +648,7 @@ The Clubhouse client integrates reverse-engineered endpoints providing comprehen
   - `POST /me/bio`, `/me/name`, `/me/username`: Update bio, display name, and handle.
 - **TTS Voice & Pitch Customization:**
   - `GET /api/agent/tts/voices`: Catalog of Microsoft Edge neural voices.
-  - `GET /api/agent/tts?text=...&voice=...&rate=...&pitch=...`: Customizable voice, speed multiplier, and pitch tuning.
+  - `GET /api/agent/tts?text=...&voice=...&rate=...&pitch=...&volume=...`: Customizable voice, speed multiplier, pitch and volume tuning.
 - **Real-Time Speaker Attribution:**
   - Correlates Agora RTC audio volume indicator metrics with active room participant rosters during VAD speech windows, passing speaker name and user ID directly to the agent's turn loop.
 
