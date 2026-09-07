@@ -48,7 +48,12 @@ DEFAULT_MAX_TOKENS = 160
 # answers and the agent argues with itself.
 DEFAULT_COOLDOWN_S = 6.0
 
-Posture = Literal["addressed", "conversational", "always"]
+# How long one person must hold the floor before the "interject" posture may cut in.
+# Short enough that the agent feels present, long enough that it is not finishing
+# everybody's sentences: below about four seconds it fires on ordinary clauses.
+DEFAULT_INTERJECT_AFTER_S = 6.0
+
+Posture = Literal["addressed", "conversational", "always", "interject"]
 Source = Literal["voice", "chat"]
 
 DEFAULT_WAKE_WORDS = ["agent", "assistant", "bot"]
@@ -181,16 +186,35 @@ class VoiceConfig:
     thinking_filler: bool = True
     silence_timeout_s: float = 0.0
     allow_barge_in: bool = True
+    # Seconds a single speaker must run before the agent may cut in mid-utterance.
+    # Only consulted under the "interject" posture; every other posture waits for a
+    # pause no matter what this says.
+    interject_after_s: float = DEFAULT_INTERJECT_AFTER_S
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> VoiceConfig:
         base = cls()
         words = raw.get("wake_words") or raw.get("wakeWords")
-        eagerness = raw.get("turn_eagerness") or raw.get("turnEagerness") or base.turn_eagerness
-        endpointing = int(raw.get("endpointing_delay_ms", raw.get("endpointingDelayMs", base.endpointing_delay_ms)))
-        if eagerness == "fast" and "endpointing_delay_ms" not in raw and "endpointingDelayMs" not in raw:
+        eagerness = (
+            raw.get("turn_eagerness") or raw.get("turnEagerness") or base.turn_eagerness
+        )
+        endpointing = int(
+            raw.get(
+                "endpointing_delay_ms",
+                raw.get("endpointingDelayMs", base.endpointing_delay_ms),
+            )
+        )
+        if (
+            eagerness == "fast"
+            and "endpointing_delay_ms" not in raw
+            and "endpointingDelayMs" not in raw
+        ):
             endpointing = 400
-        elif eagerness == "patient" and "endpointing_delay_ms" not in raw and "endpointingDelayMs" not in raw:
+        elif (
+            eagerness == "patient"
+            and "endpointing_delay_ms" not in raw
+            and "endpointingDelayMs" not in raw
+        ):
             endpointing = 1200
 
         return cls(
@@ -229,9 +253,26 @@ class VoiceConfig:
             tts_pitch=str(raw.get("tts_pitch", raw.get("ttsPitch", base.tts_pitch))),
             turn_eagerness=eagerness,  # type: ignore[arg-type]
             endpointing_delay_ms=endpointing,
-            thinking_filler=bool(raw.get("thinking_filler", raw.get("thinkingFiller", base.thinking_filler))),
-            silence_timeout_s=float(raw.get("silence_timeout_s", raw.get("silenceTimeoutS", base.silence_timeout_s))),
-            allow_barge_in=bool(raw.get("allow_barge_in", raw.get("allowBargeIn", base.allow_barge_in))),
+            thinking_filler=bool(
+                raw.get(
+                    "thinking_filler", raw.get("thinkingFiller", base.thinking_filler)
+                )
+            ),
+            silence_timeout_s=float(
+                raw.get(
+                    "silence_timeout_s",
+                    raw.get("silenceTimeoutS", base.silence_timeout_s),
+                )
+            ),
+            allow_barge_in=bool(
+                raw.get("allow_barge_in", raw.get("allowBargeIn", base.allow_barge_in))
+            ),
+            interject_after_s=float(
+                raw.get(
+                    "interject_after_s",
+                    raw.get("interjectAfterS", base.interject_after_s),
+                )
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -260,9 +301,8 @@ class VoiceConfig:
             "thinkingFiller": self.thinking_filler,
             "silenceTimeoutS": self.silence_timeout_s,
             "allowBargeIn": self.allow_barge_in,
+            "interjectAfterS": self.interject_after_s,
         }
-
-
 
 
 @dataclass
@@ -323,8 +363,16 @@ def should_respond(
     last_reply_ts: float | None,
     now: float,
     is_self: bool = False,
+    partial: bool = False,
 ) -> Decision:
-    """The gate, as a pure function so the policy is testable without a model."""
+    """The gate, as a pure function so the policy is testable without a model.
+
+    ``partial`` marks an utterance the speaker has **not finished** — the pane flushes
+    one mid-breath once someone has held the floor past ``interject_after_s``. Cutting
+    into a live room is the one thing an agent cannot take back, so it is opt-in per
+    room (the ``interject`` posture) rather than a property of being eager: every
+    other posture waits for the pause, and says so.
+    """
     if not config.enabled:
         return Decision(False, "agent disabled")
     if is_self:
@@ -343,6 +391,10 @@ def should_respond(
     # A command is always honored: someone typed it deliberately.
     if text.strip().startswith("/agent"):
         return Decision(True, "command")
+    if partial and config.posture != "interject" and not addressed:
+        # The floor is still occupied and this room did not ask to be cut into.
+        # Dropping it is safe: the pane sends the finished utterance moments later.
+        return Decision(False, "waiting for a pause")
     if config.posture == "addressed" and not addressed:
         return Decision(False, "not addressed")
     if not addressed and last_reply_ts is not None:

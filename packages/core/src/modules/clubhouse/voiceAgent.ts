@@ -8,7 +8,7 @@
  */
 import { apiUrl } from '../../origin';
 
-export type VoicePosture = 'addressed' | 'conversational' | 'always';
+export type VoicePosture = 'addressed' | 'conversational' | 'always' | 'interject';
 export type RetrievalMode = 'off' | 'command' | 'auto';
 
 export type TurnEagerness = 'fast' | 'normal' | 'patient';
@@ -37,6 +37,12 @@ export interface VoiceAgentConfig {
   thinkingFiller: boolean;
   silenceTimeoutS: number;
   allowBargeIn: boolean;
+  /**
+   * Seconds one person must hold the floor before the agent may cut in mid-sentence.
+   * Only consulted under the `interject` posture — every other posture waits for the
+   * pause, so this is inert rather than merely unused there.
+   */
+  interjectAfterS: number;
 }
 
 export const DEFAULT_VOICE_CONFIG: VoiceAgentConfig = {
@@ -64,9 +70,8 @@ export const DEFAULT_VOICE_CONFIG: VoiceAgentConfig = {
   thinkingFiller: true,
   silenceTimeoutS: 0,
   allowBargeIn: true,
+  interjectAfterS: 6,
 };
-
-
 
 /** One member of the room as the pane currently sees them. */
 export interface VoiceRoomMember {
@@ -132,6 +137,12 @@ export function takeVoiceTurn(params: {
   source?: 'voice' | 'chat';
   /** A human pressed "Speak Now" — bypasses posture and cooldown, not echo checks. */
   force?: boolean;
+  /**
+   * The speaker has not stopped talking — this was flushed mid-breath. The server
+   * drops it unless the room is on the `interject` posture, and never remembers it:
+   * the finished utterance follows and contains it.
+   */
+  partial?: boolean;
   room: VoiceRoom;
 }): Promise<VoiceTurnResult> {
   return post<VoiceTurnResult>('/api/clubhouse/voice/turn', {
@@ -141,6 +152,7 @@ export function takeVoiceTurn(params: {
     speaker_id: params.speakerId ?? null,
     source: params.source ?? 'voice',
     force: params.force ?? false,
+    partial: params.partial ?? false,
     room: params.room,
   });
 }
@@ -169,4 +181,3 @@ export async function getVoiceState(
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
-

@@ -70,6 +70,7 @@ def _decide(config: V.VoiceConfig, text: str, **kw):
         last_reply_ts=kw.pop("last_reply_ts", None),
         now=kw.pop("now", 1000.0),
         is_self=kw.pop("is_self", False),
+        partial=kw.pop("partial", False),
     )
 
 
@@ -315,3 +316,52 @@ def test_a_session_is_shared_per_channel_not_per_pane():
     a.remember(V.Turn(role="room", text="hello", speaker="Ada"))
     assert len(V.session_for("room-1").history) == 1
     assert len(V.session_for("room-2").history) == 0
+
+
+# --- interjecting -------------------------------------------------------------------
+
+
+def test_partial_utterance_is_ignored_unless_the_room_asked_to_be_cut_into():
+    """Every posture but ``interject`` waits for the pause.
+
+    "always" is the trap here: it is the most eager posture and reads like it should
+    also be the one that interrupts, but eagerness is about *how often* the agent
+    speaks, not about talking over somebody mid-sentence.
+    """
+    for posture in ("addressed", "conversational", "always"):
+        config = V.VoiceConfig(enabled=True, posture=posture)
+        decision = _decide(config, "so the thing about compilers is", partial=True)
+        assert not decision.respond, posture
+    config = V.VoiceConfig(enabled=True, posture="interject")
+    assert _decide(config, "so the thing about compilers is", partial=True).respond
+
+
+def test_a_partial_that_names_the_agent_is_answered_at_any_posture():
+    """Being addressed is a request, not an interruption — the speaker said the wake
+    word and is waiting. Making them finish the sentence first is the behaviour that
+    reads as a broken agent."""
+    config = V.VoiceConfig(enabled=True, posture="conversational")
+    assert _decide(config, "agent, what do you think about", partial=True).respond
+
+
+def test_a_partial_still_answers_to_the_cooldown():
+    """Otherwise the interject posture fires on every flush while one person talks."""
+    config = V.VoiceConfig(enabled=True, posture="interject", cooldown_s=6)
+    decision = _decide(
+        config, "and then we drove all the way to", partial=True, last_reply_ts=997.0
+    )
+    assert not decision.respond
+    assert "cooldown" in decision.reason
+
+
+def test_the_reason_names_the_pause_so_a_quiet_agent_is_explicable():
+    config = V.VoiceConfig(enabled=True, posture="always")
+    assert (
+        _decide(config, "half a sentence", partial=True).reason == "waiting for a pause"
+    )
+
+
+def test_interject_after_s_survives_both_spellings():
+    assert V.VoiceConfig.from_dict({"interjectAfterS": 3.5}).interject_after_s == 3.5
+    assert V.VoiceConfig.from_dict({"interject_after_s": 2}).interject_after_s == 2.0
+    assert V.VoiceConfig().to_dict()["interjectAfterS"] == V.DEFAULT_INTERJECT_AFTER_S

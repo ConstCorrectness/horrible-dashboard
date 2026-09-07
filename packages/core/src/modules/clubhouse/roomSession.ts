@@ -96,6 +96,12 @@ export class ClubhouseRoomSession {
   agentAudioDest: MediaStreamAudioDestinationNode | null = null;
   sttDest: MediaStreamAudioDestinationNode | null = null;
   sttRecorder: MediaRecorder | null = null;
+  /**
+   * Whether the chunk `sttRecorder` is currently filling will be flushed as a
+   * partial. Mutable and shared with the recorder's own handler because the answer
+   * is not known until the moment it is stopped.
+   */
+  sttChunk: { partial: boolean } | null = null;
   physicalMicStream: MediaStream | null = null;
   humanGain: GainNode | null = null;
   rtcClient: IAgoraRTCClient | null = null;
@@ -122,13 +128,17 @@ export class ClubhouseRoomSession {
    * of whatever is mounted now, and calls nothing when nothing is.
    */
   handlers: {
-    onTranscribe?: (text: string, speakerName?: string, speakerId?: number | null) => void;
+    onTranscribe?: (
+      text: string,
+      speakerName?: string,
+      speakerId?: number | null,
+      partial?: boolean,
+    ) => void;
     onBargeIn?: () => void;
     onSpeakerInvite?: (invite: SpeakerInvite) => void;
     onHandRaise?: (userId: number, userName: string) => void;
     onVoiceError?: (message: string) => void;
   } = {};
-
 
   chunkIntervalMs = 5000;
   /** Distinct speech-pipeline failures already reported, so a per-chunk failure
@@ -215,6 +225,7 @@ export class ClubhouseRoomSession {
       }
       this.sttRecorder = null;
     }
+    this.sttChunk = null;
     if (this.localAudioTrack) {
       this.localAudioTrack.close();
       this.localAudioTrack = null;

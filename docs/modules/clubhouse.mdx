@@ -420,6 +420,7 @@ the single most common "it doesn't respond" report.
 - **`conversational`** — replies more freely, with a cooldown so two people talking
   cannot produce two overlapping answers.
 - **`always`** — the old behaviour, now opt-in.
+- **`interject`** — may cut in *while someone is still talking*. See below.
 
 Two rules are load-bearing. Wake words match on **word boundaries**, so "bot" does not
 fire inside "robot". And the agent never answers **its own voice**: its TTS is published
@@ -433,6 +434,40 @@ Turn-taking (when a chunk is cut) stays client-side in
 [useClubhouseVoice.ts](file:///C:/Users/Horrible/Code/horrible-dashboard/packages/core/src/modules/clubhouse/useClubhouseVoice.ts):
 a VAD watches the mixed stream and a silence delay closes the chunk, so the agent waits
 for a pause instead of interrupting.
+
+### Interrupting, in both directions
+
+These are two separate mechanisms and only one of them is new.
+
+**A human cuts off the agent** — *barge-in*, `allowBargeIn`, on by default. The VAD is
+watching the mixed stream, which carries the remote speakers *and* the local mic but
+never the agent's own TTS, so any real voice in the room stops playback: the audio
+source is stopped, the TTS fetch is aborted, and the pending queue is dropped. It stops
+at a **chunk boundary**, so it cannot cut a word in half.
+
+**The agent cuts into the room** — the `interject` posture. Every other posture only
+ever sees finished utterances, because a turn is only sent once the endpointing silence
+closes the chunk. Under `interject` the pane also flushes a chunk *mid-breath* once one
+person has held the floor past `interjectAfterS` (default 6s), and marks it `partial`.
+
+Three things about that flush are easy to get wrong:
+
+- **The server, not the pane, decides.** A `partial` is dropped with the reason
+  `waiting for a pause` under every posture but `interject` — being eager
+  (`always`) is about *how often* the agent speaks, not about talking over people.
+  A partial that names the agent is always answered: that is a request, not an
+  interruption, and making the speaker finish their sentence first is exactly the
+  behaviour that reads as broken.
+- **A partial is never remembered.** The finished utterance follows seconds later and
+  contains it; keeping both puts the same sentence in the history twice, once truncated
+  mid-word, and the model starts answering the fragment.
+- **The flush has to stop the recorder**, because each blob is a complete WebM and a
+  fragment without its header decodes to nothing. Every chunk after the first therefore
+  holds only the tail, so the pane concatenates the run's pieces — that is what keeps
+  the finished utterance a whole sentence after the agent has already cut in on its
+  first half. Cutting in is also skipped while the agent is already speaking, and a
+  partial that arrives to a busy queue is dropped rather than queued: a partial is only
+  worth acting on while the speaker is still inside it.
 
 ### Utterances queue; they are not dropped
 
@@ -581,6 +616,18 @@ The Clubhouse client integrates reverse-engineered endpoints providing comprehen
 - **Singleton Panel:** `clubhouse.account` — The unified "Clubhouse" panel. Displays the account onboarding/connection card when disconnected, and the live rooms list when connected. Inside a room it is a three-panel view — participants, chat, and agent settings — each independently toggleable, so a narrow pane can show only what is being used. Declares `dockable: 'right'`, so it opens in a center area by default but can also be toggled into the right dock from the rail — see [Windowing](../architecture/windowing.mdx).
 - **Commands:**
   - `clubhouse.connect` — Opens the unified Clubhouse panel.
+  - `clubhouse.toggleMic` — Mic on/off in the live room, for push-to-talk.
+- **Keybindings:**
+  - `1` — `clubhouse.toggleMic`, scoped `when: paneFocus == 'clubhouse.account'`. A
+    bare digit has to be pane-scoped or it is swallowed by every text field in the app,
+    this pane's own room chat first among them. Only `mod+1..9` is reserved (workspace
+    switching), so a plain `1` is free — see [Keybindings](../architecture/keybindings.mdx).
+
+    The command reaches the mic through a handle the pane publishes while it holds a
+    joined room (`actions.ts`), the same shape as the model designer's. Not being in a
+    room means the command does nothing, which is the point: the handle's absence *is*
+    how "there is no mic to toggle" is expressed, so there is no joined flag to keep in
+    step with the truth.
 
 ---
 

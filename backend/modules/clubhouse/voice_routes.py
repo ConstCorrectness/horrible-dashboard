@@ -34,6 +34,9 @@ class TurnRequest(BaseModel):
     # stop the agent interrupting people, and an explicit request is not that. It
     # does **not** skip the self-speech check: an echo is a bug at any posture.
     force: bool = False
+    # The speaker has not finished — the pane flushed this mid-breath because they
+    # have held the floor a while. Only the "interject" posture acts on one.
+    partial: bool = False
     # The live room, pushed by the pane — it holds the PubNub feed and the Agora
     # volume indicator, so it is seconds fresher than anything this server could poll.
     room: dict[str, Any] = Field(default_factory=dict)
@@ -61,7 +64,6 @@ class ResetRequest(BaseModel):
     persona: str | None = None
 
 
-
 @router.post("/turn", response_model=TurnResponse)
 async def turn(req: TurnRequest) -> TurnResponse:
     """One utterance in, one decision out."""
@@ -84,12 +86,16 @@ async def turn(req: TurnRequest) -> TurnResponse:
             last_reply_ts=session.last_reply_ts,
             now=time.time(),
             is_self=is_self,
+            partial=req.partial,
         )
     if not decision.respond:
         # Still remembered: the agent should know what was said in the room even on
         # the turns it stays out of, or "what were we just talking about?" has no
         # answer and it re-asks a question somebody already answered.
-        if not is_self and req.text.strip():
+        # A partial is deliberately *not* remembered: the finished utterance follows
+        # seconds later and contains it, so keeping both puts the same sentence in the
+        # history twice — once truncated mid-word — and the model answers the fragment.
+        if not is_self and not req.partial and req.text.strip():
             session.remember(
                 V.Turn(role="room", text=req.text, speaker=req.speaker, source=source)
             )
@@ -177,4 +183,3 @@ def reset(req: ResetRequest) -> dict[str, Any]:
     if req.reset_persona:
         session.config.persona = req.persona or V.DEFAULT_PERSONA
     return {"cleared": True, "persona": session.config.persona}
-

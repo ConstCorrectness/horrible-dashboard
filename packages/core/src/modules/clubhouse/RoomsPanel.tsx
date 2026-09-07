@@ -36,6 +36,7 @@ import {
   type PersonMemory,
   type TtsVoiceOption,
 } from './api';
+import { bindClubhouse } from './actions';
 import { MediaInsightsModal } from './MediaInsightsModal';
 import { useClubhouseVoice } from './useClubhouseVoice';
 import {
@@ -593,7 +594,14 @@ export function RoomsPanel() {
   const isNearBottomRef = useRef<boolean>(true);
   const lastRoomActivityTsRef = useRef<number>(Date.now());
   const enqueueUtteranceRef = useRef<
-    (text: string, source: 'voice' | 'chat', force?: boolean, speakerName?: string, speakerId?: number | null) => void
+    (
+      text: string,
+      source: 'voice' | 'chat',
+      force?: boolean,
+      speakerName?: string,
+      speakerId?: number | null,
+      partial?: boolean,
+    ) => void
   >(() => {});
 
   const {
@@ -626,6 +634,11 @@ export function RoomsPanel() {
     sttChunkIntervalMs: sttChunkMs,
     endpointingDelayMs: agentConfig.endpointingDelayMs || 750,
     allowBargeIn: agentConfig.allowBargeIn !== false,
+    // Zero everywhere but the interject posture: the flush is what *creates* a
+    // partial, so leaving it running under another posture would have the pane
+    // cutting recordings in half for turns the server is only going to drop.
+    interjectAfterMs:
+      agentConfig.posture === 'interject' ? (agentConfig.interjectAfterS ?? 6) * 1000 : 0,
     onBargeIn: () => {
       if (agentAbortControllerRef.current) {
         agentAbortControllerRef.current.abort();
@@ -634,7 +647,7 @@ export function RoomsPanel() {
       agentQueueRef.current = [];
       setIsAgentSpeaking(false);
     },
-    onTranscribe: (text, _speakerName, speakerId) => {
+    onTranscribe: (text, _speakerName, speakerId, partial) => {
       lastRoomActivityTsRef.current = Date.now();
       // Resolve actual speaker name from room user roster
       let resolvedName: string | undefined;
@@ -644,7 +657,14 @@ export function RoomsPanel() {
         else if (speakerId === myUserId) resolvedName = myProfileName || 'Me';
       }
       if (text.trim().length > 0)
-        enqueueUtteranceRef.current(text.trim(), 'voice', false, resolvedName, speakerId);
+        enqueueUtteranceRef.current(
+          text.trim(),
+          'voice',
+          false,
+          resolvedName,
+          speakerId,
+          partial,
+        );
     },
 
     onVoiceError: (message) => {
@@ -711,6 +731,24 @@ export function RoomsPanel() {
       Notification.requestPermission().catch(() => {});
     }
   }, []);
+
+  /**
+   * Publish the mic toggle for the `1` keybinding, and take it back down on unmount.
+   *
+   * Bound to `joined` rather than to the mount: with no room there is no track to mute,
+   * and an unbound handle is how the command reports that (see `actions.ts`). The call
+   * goes through a ref because `toggleMute` is a fresh closure every render and closes
+   * over `isMuted` — binding the function itself would either re-publish the handle on
+   * every render or, pinned to `joined`, latch the mute state as it was when the room
+   * was joined and toggle against a stale value forever.
+   */
+  const toggleMuteRef = useRef(toggleMute);
+  toggleMuteRef.current = toggleMute;
+  useEffect(() => {
+    if (!joined) return;
+    bindClubhouse({ toggleMic: () => void toggleMuteRef.current() });
+    return () => bindClubhouse(null);
+  }, [joined]);
 
   // Poll active channel details when joined to keep participant lists updated in real-time
   useEffect(() => {
@@ -832,6 +870,7 @@ export function RoomsPanel() {
       force?: boolean;
       speakerName?: string;
       speakerId?: number | null;
+      partial?: boolean;
     }[]
   >([]);
   const agentBusyRef = useRef(false);
@@ -853,6 +892,7 @@ export function RoomsPanel() {
             speakerId: item.speakerId,
             source: item.source,
             force: item.force,
+            partial: item.partial,
             room: buildRoomSnapshot(),
           });
           setAgentReason(result.reason);
@@ -912,10 +952,15 @@ export function RoomsPanel() {
     force = false,
     speakerName?: string,
     speakerId?: number | null,
+    partial = false,
   ) => {
     if (!activeChannelRef.current) return;
     lastRoomActivityTsRef.current = Date.now();
-    agentQueueRef.current.push({ text, source, force, speakerName, speakerId });
+    // A partial is only worth acting on while the speaker is still inside it. Queueing
+    // one behind a reply that is still being spoken means cutting in on a sentence that
+    // finished ten seconds ago, which is the interruption at its most annoying.
+    if (partial && (agentBusyRef.current || agentQueueRef.current.length > 0)) return;
+    agentQueueRef.current.push({ text, source, force, speakerName, speakerId, partial });
     if (agentQueueRef.current.length > 6)
       agentQueueRef.current.splice(0, agentQueueRef.current.length - 6);
     void drainAgentQueue();
@@ -2964,8 +3009,27 @@ export function RoomsPanel() {
                             <option value="addressed">Only when addressed</option>
                             <option value="conversational">Conversational (with cooldown)</option>
                             <option value="always">Always (replies to everything)</option>
+                            <option value="interject">Interject (cuts in mid-sentence)</option>
                           </select>
                         </div>
+                        {agentConfig.posture === 'interject' && (
+                          <div style={agentFieldStyle}>
+                            <span style={agentLabelStyle}>Cut in after (seconds):</span>
+                            <input
+                              type="number"
+                              min={2}
+                              max={60}
+                              step={1}
+                              style={agentInputStyle}
+                              value={agentConfig.interjectAfterS ?? 6}
+                              onChange={(e) =>
+                                patchAgentConfig({
+                                  interjectAfterS: Math.max(2, Number(e.target.value) || 6),
+                                })
+                              }
+                            />
+                          </div>
+                        )}
                         <div style={agentFieldStyle}>
                           <span style={agentLabelStyle}>Wake words (comma separated):</span>
                           <input

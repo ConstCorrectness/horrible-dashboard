@@ -41,7 +41,16 @@ export interface UseClubhouseVoiceProps {
   onLiveUsersChange?: (users: LiveUserState[]) => void;
   onCommentsChange?: (comments: ChatComment[]) => void;
   onSpeakingVolumesChange?: (volumes: Record<number, number>) => void;
-  onTranscribe?: (text: string, speakerName?: string, speakerId?: number | null) => void;
+  /**
+   * One utterance heard in the room. `partial` means the speaker is *still talking* —
+   * only the `interject` posture acts on one, and the finished utterance follows.
+   */
+  onTranscribe?: (
+    text: string,
+    speakerName?: string,
+    speakerId?: number | null,
+    partial?: boolean,
+  ) => void;
   onBargeIn?: () => void;
   onSpeakerInvite?: (invite: SpeakerInvite) => void;
   onHandRaise?: (userId: number, userName: string) => void;
@@ -50,9 +59,12 @@ export interface UseClubhouseVoiceProps {
   sttChunkIntervalMs?: number;
   endpointingDelayMs?: number;
   allowBargeIn?: boolean;
+  /**
+   * Flush a partial transcript once one person has held the floor this long, so the
+   * agent can cut in. `0` disables it — which is every posture but `interject`.
+   */
+  interjectAfterMs?: number;
 }
-
-
 
 export interface PubNubRoomMessage {
   action?: string;
@@ -149,7 +161,6 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     onVoiceError: props?.onVoiceError,
   };
   session.chunkIntervalMs = props?.sttChunkIntervalMs || 5000;
-
 
   const reportVoiceError = useCallback(
     (message: string) => session.reportVoiceError(message, session.handlers.onVoiceError),
@@ -311,11 +322,29 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         let silenceTicks = 0;
         let isSpeaking = false;
         let activeSpeakerUidDuringSpeech: number | null = null;
+        /** When the current unbroken run of speech began, for the interject timer. */
+        let speechStartedAt = 0;
+        /** One interjection per run of speech — otherwise it fires every tick. */
+        let interjectedThisRun = false;
+        /**
+         * Text transcribed so far during the current run of speech.
+         *
+         * A partial flush has to *stop* the recorder, because each blob is a complete
+         * WebM and a fragment without its header decodes to nothing. That leaves every
+         * chunk after the first holding only the tail, so the pieces are concatenated
+         * here: it is what lets the finished utterance still be the whole sentence
+         * after the agent has already cut in on the first half of it.
+         */
+        let runText = '';
 
         const startRecordingChunk = (speakerUidForChunk: number | null = null) => {
           if (!session.sttDest) return;
           const recorder = new MediaRecorder(session.sttDest.stream);
           session.sttRecorder = recorder;
+          // Read at `ondataavailable` time, not now: whether a chunk is a partial is
+          // decided when it is flushed, which is always after the recorder was made.
+          const chunk = { partial: false };
+          session.sttChunk = chunk;
           const boundSpeakerId = speakerUidForChunk ?? activeSpeakerUidDuringSpeech;
 
           recorder.ondataavailable = async (e) => {
@@ -347,8 +376,14 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
                 }
                 session.clearVoiceError();
                 const json = await res.json();
-                if (session.handlers.onTranscribe && json.text && json.text.trim()) {
-                  session.handlers.onTranscribe(json.text.trim(), undefined, boundSpeakerId);
+                const piece = json.text && json.text.trim();
+                if (session.handlers.onTranscribe && piece) {
+                  runText = runText ? `${runText} ${piece}` : piece;
+                  const whole = runText;
+                  // The run ends with the final chunk; a partial leaves it open so the
+                  // next piece appends rather than starting a new utterance.
+                  if (!chunk.partial) runText = '';
+                  session.handlers.onTranscribe(whole, undefined, boundSpeakerId, chunk.partial);
                 }
               } catch (err) {
                 console.error('STT failed:', err);
@@ -360,6 +395,18 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
           };
 
           recorder.start();
+        };
+
+        /**
+         * End the current chunk and start the next. `partial` marks the flushed chunk
+         * as mid-sentence, which is the only thing that distinguishes an interjection
+         * from an ordinary end-of-speech turn by the time it reaches the server.
+         */
+        const flushChunk = (partial: boolean, speakerUid: number | null) => {
+          if (!session.sttRecorder || session.sttRecorder.state === 'inactive') return;
+          if (session.sttChunk) session.sttChunk.partial = partial;
+          session.sttRecorder.stop();
+          startRecordingChunk(speakerUid);
         };
 
         startRecordingChunk();
@@ -388,11 +435,28 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
             }
 
             // Human is speaking
-            if (!isSpeaking && session.handlers.onBargeIn) {
-              session.handlers.onBargeIn();
+            if (!isSpeaking) {
+              session.handlers.onBargeIn?.();
+              speechStartedAt = Date.now();
+              interjectedThisRun = false;
             }
             isSpeaking = true;
             silenceTicks = 0;
+
+            // The agent cutting in. Deliberately gated on the *speaker* holding the
+            // floor rather than on a word count: the point is to answer someone who
+            // is monologuing, and a transcript long enough to be worth interrupting
+            // is exactly the one that has taken a while to say.
+            const interjectAfterMs = propsRef.current?.interjectAfterMs ?? 0;
+            if (
+              interjectAfterMs > 0 &&
+              !interjectedThisRun &&
+              !session.isAgentSpeaking &&
+              Date.now() - speechStartedAt >= interjectAfterMs
+            ) {
+              interjectedThisRun = true;
+              flushChunk(true, activeSpeakerUidDuringSpeech);
+            }
 
             // Barge-in: Stop agent if it's currently speaking
             if (session.isAgentSpeaking && propsRef.current?.allowBargeIn !== false) {
@@ -427,17 +491,11 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
                 const completedSpeakerUid = activeSpeakerUidDuringSpeech;
                 activeSpeakerUidDuringSpeech = null;
                 // End of speech detected, send chunk!
-                if (session.sttRecorder && session.sttRecorder.state !== 'inactive') {
-                  session.sttRecorder.stop();
-                  startRecordingChunk(completedSpeakerUid);
-                }
+                flushChunk(false, completedSpeakerUid);
               }
             }
           }
-
         }, 50);
-
-
       } catch (err) {
         console.error('Failed to start VAD STT recorder:', err);
       }
@@ -888,7 +946,6 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         // `decodeAudioData` detaches the buffer, so each chunk is decoded exactly once.
         return ctx.decodeAudioData(await res.arrayBuffer());
       };
-
 
       // Unmuted once around the whole utterance, not per chunk: toggling the channel
       // between sentences would clip the start of each one and spam the API.

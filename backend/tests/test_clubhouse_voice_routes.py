@@ -212,3 +212,49 @@ def test_config_round_trips(client):
     assert got["posture"] == "conversational"
     assert got["wakeWords"] == ["hey you"]
     assert got["cooldownS"] == 3
+
+
+def test_a_dropped_partial_leaves_no_trace_in_the_history(client, captured):
+    """The finished utterance follows seconds later and contains the fragment.
+
+    Remembering both is how the model ends up answering a sentence that was cut off
+    mid-word, having seen it twice.
+    """
+    client.post(
+        "/api/clubhouse/voice/config",
+        json={"channel": "c1", "config": {"enabled": True, "posture": "always"}},
+    )
+    dropped = client.post(
+        "/api/clubhouse/voice/turn",
+        json={
+            "channel": "c1",
+            "text": "so the thing about compilers is",
+            "speaker": "Ada",
+            "partial": True,
+            "room": ROOM,
+        },
+    ).json()
+    assert dropped["spoke"] is False
+    assert dropped["reason"] == "waiting for a pause"
+
+    state = client.get("/api/clubhouse/voice/state", params={"channel": "c1"}).json()
+    assert state["turns"] == []
+
+
+def test_the_interject_posture_answers_a_partial(client, captured):
+    client.post(
+        "/api/clubhouse/voice/config",
+        json={"channel": "c2", "config": {"enabled": True, "posture": "interject"}},
+    )
+    res = client.post(
+        "/api/clubhouse/voice/turn",
+        json={
+            "channel": "c2",
+            "text": "so the thing about compilers is",
+            "speaker": "Ada",
+            "partial": True,
+            "room": ROOM,
+        },
+    ).json()
+    assert res["spoke"] is True
+    assert res["reply"] == "Sure, happy to help."
