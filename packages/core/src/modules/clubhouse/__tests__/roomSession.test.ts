@@ -114,3 +114,65 @@ describe('the room survives unmounts', () => {
     expect(notify).toHaveBeenCalledTimes(2);
   });
 });
+
+/**
+ * Switching rooms is teardown-then-build, and both halves await.
+ *
+ * The regression: `joinRoom` built straight over a live connection, so the room you
+ * left kept its Agora client, PubNub subscription, ping/volume intervals, recorder
+ * and VAD loop. The VAD loop mutates `session.sttRecorder` / `session.sttChunk`,
+ * which by then belong to the *new* room, and its idle branch fires on the silence
+ * of the old one — so it marked the new room's audio `discard` every ~1.5s and
+ * nothing was ever transcribed. One extra ghost per switch.
+ */
+describe('a switch cannot leave the previous room running', () => {
+  beforeEach(() => {
+    leaveSpy.mockClear();
+    resetPaneSessionsForTests();
+  });
+
+  it('clears every interval handle, so no loop outlives the room', async () => {
+    const session = open();
+    session.pingInterval = setInterval(() => {}, 1000) as unknown as ReturnType<
+      typeof setInterval
+    >;
+    session.volumeInterval = setInterval(() => {}, 1000) as unknown as ReturnType<
+      typeof setInterval
+    >;
+    session.vadInterval = setInterval(() => {}, 1000) as unknown as ReturnType<typeof setInterval>;
+
+    await session.teardown();
+
+    expect(session.pingInterval).toBeNull();
+    expect(session.volumeInterval).toBeNull();
+    // The one that silently ate the next room's audio.
+    expect(session.vadInterval).toBeNull();
+  });
+
+  it('runs serialized work one at a time, so two switches cannot interleave', async () => {
+    const session = open();
+    const events: string[] = [];
+    const slow = async (tag: string) => {
+      events.push(`${tag}:start`);
+      await new Promise((r) => setTimeout(r, 10));
+      events.push(`${tag}:end`);
+    };
+
+    await Promise.all([
+      session.serialize(() => slow('first')),
+      session.serialize(() => slow('second')),
+    ]);
+
+    expect(events).toEqual(['first:start', 'first:end', 'second:start', 'second:end']);
+  });
+
+  it('does not wedge the queue when a join fails', async () => {
+    const session = open();
+    await expect(
+      session.serialize(() => Promise.reject(new Error('join blew up'))),
+    ).rejects.toThrow('join blew up');
+    // The next switch must still run — a failed join that jammed the queue would
+    // make the pane permanently unable to enter another room.
+    await expect(session.serialize(async () => 'ok')).resolves.toBe('ok');
+  });
+});

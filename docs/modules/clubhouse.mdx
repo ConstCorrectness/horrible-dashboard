@@ -616,6 +616,66 @@ reintroduced by name and biography every turn. The audience is a count in the ro
 brief precisely so that does not happen. A listener cannot say anything the agent
 has to answer, so their biography buys nothing and costs a hundred-odd characters.
 
+### Switching rooms tears the old one down first
+
+There is no Leave between two rooms: the pane goes straight through `joinRoom`. It
+used to build the new connection **on top of the live one**, so everything belonging
+to the room you left kept running — its Agora client (still subscribed, still
+publishing your microphone into it), its PubNub subscription, its ping and volume
+intervals, its `MediaRecorder`, and its VAD loop.
+
+The VAD loop is the one that does real damage, and it is not obvious why. It reads
+and writes `session.sttRecorder` and `session.sttChunk` — *session* fields, so after
+a switch they are the **new** room's recorder and chunk. Meanwhile its analyser is
+still wired to the old room's destination, which is now silent, so it takes the idle
+branch: every ~1.5 s it sets `chunk.discard = true`, stops the recorder and starts
+another. It was discarding the new room's audio, on a timer, forever. Nothing
+reached Whisper, `lastHeardSpeech` never updated, and the pane sat on *"Microphone
+listening for room audio…"* while people talked. Every further switch added another
+ghost doing the same thing.
+
+`joinRoom` now `await session.teardown()` first — **before** the upstream join,
+because `joinClubhouseChannel` moves the account out of the old room as a side
+effect, so tearing down afterwards would be leaving a room Clubhouse had already
+moved us out of.
+
+Both joins and leaves also go through `session.serialize`, a one-at-a-time queue.
+Switching is teardown-then-build and both halves await, so clicking a second room
+mid-switch used to run two builds concurrently: the second teardown ran while the
+first was still installing its intervals, tore down nothing, and left exactly the
+orphans the teardown exists to prevent. A rejected task does not wedge the queue —
+a failed join that jammed it would leave the pane unable to enter any room at all.
+
+### A room switch clears the pane's per-room state
+
+`joinRoom` resets the *session* — `joined`, `comments`, `liveUsers`, `speakingVolumes`
+— but `RoomsPanel` keeps per-room state of its own in React, and nothing was
+resetting it. Switching rooms therefore carried the room you left into the room you
+arrived in.
+
+The visible one was the **LIVE STT** panel. It kept rendering the last thing said in
+the previous room instead of falling back to *"Microphone listening for room
+audio…"*, and that panel is the only evidence in the pane that the agent's ears
+work: a stale line there reads as a live transcript, and a genuinely fresh room
+reads as one nobody has spoken in yet. Exactly backwards, in both directions.
+
+Two of the others are not cosmetic:
+
+- A **queued utterance is addressed at drain time**, from `activeChannelRef.current`
+  — not when it was enqueued. So anything still in the queue when you switched was
+  answered *into the new room*: the agent replying to a stranger, about something
+  nobody there had said. An in-flight generation landed the same way.
+- `agentSentTextsRef` is the echo-dedup set and is keyed on **text alone**, with no
+  channel. Left uncleared it suppresses a genuine line in the new room because the
+  old room happened to say the same words.
+
+One effect keyed on `activeChannel` now drops all of it — the queue, the dedup set,
+any in-flight generation, a reply still being spoken, the STT line, the agent's
+reason and remembered turns, and the chat draft (which would otherwise be sent to the
+wrong room, the same wrong-address failure the `activeChannel` ordering fix removed
+from the send path). `roomSwitchResets.test.ts` pins each entry by reading the source;
+an effect's dependency list is not reachable without rendering the whole pane.
+
 ### A nudge is a direction, not speech
 
 The pane's **Speak Now** button and its silence probe both ask the agent to take the

@@ -37,6 +37,26 @@ describe('joinRoom claims the channel before the media work', () => {
     expect(claim).toBeGreaterThan(joinCall);
   });
 
+  it('tears the previous room down before the upstream join', () => {
+    // Switching rooms goes straight through `joinRoom` with no Leave in between, so
+    // the teardown here is the only thing that stops the old room's Agora client,
+    // PubNub subscription, intervals, recorder and VAD loop from outliving it. The
+    // VAD loop is the one that bites: it mutates `session.sttRecorder` /
+    // `session.sttChunk`, which belong to the *new* room, and discards its audio on
+    // the old room's silence -- so STT silently never picks anything up again.
+    //
+    // Before the join, because `joinClubhouseChannel` moves the account out of the
+    // old room as a side effect: a teardown after it would leave a room Clubhouse
+    // had already moved us out of.
+    const teardown = source.indexOf('await session.teardown()');
+    expect(teardown, 'joinRoom must tear the previous room down').toBeGreaterThan(-1);
+    expect(teardown).toBeLessThan(joinCall);
+  });
+
+  it('routes joins through the session queue, so two switches cannot interleave', () => {
+    expect(source).toMatch(/session\.serialize\(\(\) => joinRoomInner\(/);
+  });
+
   it('claims it before the Agora client and the PubNub subscribe', () => {
     for (const laterStep of ['AgoraRTC.createClient(', 'pubnub.subscribe(', 'session.pingInterval']) {
       const at = source.indexOf(laterStep);

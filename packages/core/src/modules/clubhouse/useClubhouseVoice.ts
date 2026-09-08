@@ -202,7 +202,23 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
   }, []);
 
   // 1. Join voice room
-  const joinRoom = async (channelName: string, initialUsers?: ChannelUser[]) => {
+  const joinRoom = (channelName: string, initialUsers?: ChannelUser[]) =>
+    session.serialize(() => joinRoomInner(channelName, initialUsers));
+
+  const joinRoomInner = async (channelName: string, initialUsers?: ChannelUser[]) => {
+    // Leave whatever we are in *first*. Switching rooms goes straight through
+    // `joinRoom` -- there is no Leave in between -- so without this the previous
+    // room's Agora client, PubNub subscription, ping/volume intervals, recorder and
+    // VAD loop all keep running. The VAD loop is the damaging one: it mutates
+    // `session.sttRecorder`/`session.sttChunk`, which now belong to the room you
+    // just joined, and its idle branch fires on the silence of the room you left --
+    // discarding the new room's audio every ~1.5s, forever, one extra ghost per
+    // switch. The symptom is an STT panel that never picks anything up.
+    //
+    // Before the join, not after: `joinClubhouseChannel` moves the account out of
+    // the old room as a side effect, so a teardown afterwards would be telling
+    // Clubhouse to leave a room it had already moved us out of.
+    await session.teardown();
     session.patch({ loading: true });
     session.patch({ error: null });
     session.set('comments', []);
@@ -837,8 +853,14 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
    */
   const leaveRoom = async (...ignoredChannelName: unknown[]) => {
     void ignoredChannelName;
-    session.patch({ loading: true });
-    await session.teardown();
+    // Through the same queue as `joinRoom`: a Leave clicked while a switch is still
+    // building would otherwise tear down the half-built connection and let the rest
+    // of the build install itself afterwards, leaving the very orphans both paths
+    // exist to prevent.
+    await session.serialize(async () => {
+      session.patch({ loading: true });
+      await session.teardown();
+    });
   };
 
   // 3. Mute/Unmute microphone

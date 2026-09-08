@@ -1249,6 +1249,52 @@ export function RoomsPanel() {
     return () => clearInterval(interval);
   }, [activeChannel, agentEnabled]);
 
+  /**
+   * Everything in this pane that describes *a room* is cleared when the room changes.
+   *
+   * The session state (`joined`, `comments`, `liveUsers`, …) is reset by `joinRoom`,
+   * but this component holds its own per-room state that nothing was resetting, so a
+   * switch carried the previous room into the new one. Visibly: the LIVE STT panel
+   * kept showing the last thing said in the room you left, instead of returning to
+   * "Microphone listening for room audio…" — that panel is the *only* evidence the
+   * agent's ears work, so a stale line there reads as a live transcript and a fresh
+   * room reads as one nobody has spoken in yet.
+   *
+   * Two of these are worse than cosmetic. A queued utterance is addressed at *drain*
+   * time (`activeChannelRef.current`), so anything still queued when you switch is
+   * answered into the new room — the agent replying to a stranger in a room where
+   * nobody said it. An in-flight generation lands the same way. Both are dropped
+   * here, along with the echo-dedup set, which is keyed on text alone and would
+   * otherwise suppress a genuine line in the new room because the old one said it.
+   */
+  useEffect(() => {
+    if (agentAbortControllerRef.current) {
+      try {
+        agentAbortControllerRef.current.abort();
+      } catch {
+        /* already settled */
+      }
+      agentAbortControllerRef.current = null;
+    }
+    agentQueueRef.current = [];
+    agentSentTextsRef.current.clear();
+    // A reply still being spoken belongs to the room you left, and it is being
+    // published into a room you are no longer in. `stopAgentAudio` is a stable
+    // `useCallback([])`, so naming it here does not re-run this effect per render.
+    stopAgentAudio();
+    setIsAgentThinking(false);
+    setIsAgentSpeaking(false);
+    setLastHeardSpeech(null);
+    setAgentReason(null);
+    // Not left to the 5s poll: until it lands the Agent tab shows the previous
+    // room's conversation under the new room's name.
+    setAgentMemory([]);
+    // A draft typed in the room you just left would be sent to the one you arrived
+    // in — the same wrong-address failure the `activeChannel` ordering fix removed
+    // from the send path.
+    setCommentText('');
+  }, [activeChannel, stopAgentAudio]);
+
   const prevCommentsLengthRef = useRef(0);
   useEffect(() => {
     if (comments.length > prevCommentsLengthRef.current) {

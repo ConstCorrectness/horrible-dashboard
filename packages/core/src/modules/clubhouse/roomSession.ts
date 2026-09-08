@@ -211,10 +211,43 @@ export class ClubhouseRoomSession {
   }
 
   /**
+   * Serialize the joins and teardowns so two of them cannot interleave.
+   *
+   * Switching rooms is teardown-then-build, and both halves await. Clicking a second
+   * room before the first switch finished used to run the two builds concurrently,
+   * which produces exactly the orphaned-loop damage `joinRoom`'s teardown exists to
+   * prevent — the second build's `teardown` runs while the first is still installing
+   * its intervals, so it tears down nothing and the first's survive.
+   *
+   * A rejected task must not wedge the chain, hence the swallowed `catch` on the
+   * stored promise; the caller still sees the rejection through the returned one.
+   */
+  serialize<T>(task: () => Promise<T>): Promise<T> {
+    const next = this.work.then(task, task);
+    this.work = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
+  private work: Promise<void> = Promise.resolve();
+
+  /**
    * Tear down every resource and tell Clubhouse we left.
    *
-   * The **only** caller is `pane-lifetime`'s dispose (a real pane close) and the
-   * user's explicit Leave. Never an unmount.
+   * Callers: `pane-lifetime`'s dispose (a real pane close), the user's explicit
+   * Leave, and `joinRoom` before it builds a new connection. Never an unmount.
+   *
+   * That last caller is not optional. `joinRoom` used to build straight over a live
+   * connection, so switching rooms left the previous room's Agora client, PubNub
+   * subscription, ping/volume intervals, MediaRecorder and **VAD loop** all running.
+   * The VAD loop is the one that bites: it reads `session.sttRecorder` and
+   * `session.sttChunk`, which by then belong to the *new* room, and its idle branch
+   * fires on the silence of the room you left — so every ~1.5s it marked the new
+   * room's in-flight chunk `discard` and restarted its recorder. Nothing was ever
+   * transcribed, and the pane sat on "Microphone listening for room audio…" while
+   * people talked. Each switch added another one.
    */
   async teardown(): Promise<void> {
     try {
