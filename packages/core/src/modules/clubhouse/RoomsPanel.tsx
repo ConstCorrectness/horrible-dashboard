@@ -660,6 +660,7 @@ export function RoomsPanel() {
     liveUsers,
     speakerInvite,
     speakingVolumes,
+    chatDisabledReason,
     playAgentAudio,
     previewTtsVoice,
     stopAgentAudio,
@@ -4229,15 +4230,15 @@ export function RoomsPanel() {
             <input
               className="ch-comment-input"
               type="text"
-              placeholder="Send a chat message..."
+              placeholder={chatDisabledReason ?? 'Send a chat message...'}
               value={commentText}
               onChange={(e) => setCommentText(e.target.value)}
-              disabled={voiceLoading}
+              disabled={voiceLoading || chatDisabledReason !== null}
             />
             <button
               className="ch-btn-send"
               type="submit"
-              disabled={voiceLoading || !commentText.trim()}
+              disabled={voiceLoading || chatDisabledReason !== null || !commentText.trim()}
               title="Send comment"
             >
               <svg

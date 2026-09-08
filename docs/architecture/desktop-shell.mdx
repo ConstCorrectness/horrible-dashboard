@@ -190,7 +190,7 @@ the same kind of thing to the desktop, and a plugin should be able to add one.
 | `aurora` | Three blurred CSS gradients drifting on a long keyframe, built from theme tokens.                                   |
 | `grid`   | Canvas: a drifting grid with a scanline sweep. Pairs with `hud`.                                                    |
 | `image`  | A wallpaper the user uploaded. `params: { url, fit, dim }`.                                                         |
-| `splash` | **The default.** The home screen — avatar, ask bar, connector tiles — with windows over the top. Collapses to a docked ask bar; see below. |
+| `splash` | **The default.** The home screen — avatar, ask bar, connector tiles — with windows over the top, and a wallpaper of its own behind. Collapses to a docked ask bar over that wallpaper; see below. |
 | `pulse`  | Canvas: one ripple per request through this node, read from the same `telemetryStore` the observability panel uses. |
 | `board`  | Widgets laid straight onto the desktop.                                                                             |
 
@@ -251,6 +251,64 @@ Three ways in, because a control nobody finds is a control that does not exist: 
 palette, and an entry in the desktop's right-click menu — which appears **only on a
 desktop actually showing the home screen**, since an item that silently switched
 you to the home screen in order to collapse it would be a trap.
+
+The palette also carries `desktop.hideHome` and `desktop.showHome`, the two
+directions named. A toggle is the wrong shape for the palette and for the agent:
+both act without seeing the screen, so "toggle" means "put it in whichever state it
+is not in", and running one twice leaves the home screen hidden. The toggle stays
+for the keyboard and the menu, where the current state is visible.
+
+### The home screen carries its own wallpaper
+
+Collapsing had nowhere to collapse *to*. A desktop has exactly one backdrop slot
+and `splash` is in it, so minimizing the home screen revealed a flat
+theme-coloured void — the wallpaper that would have been there is precisely what
+`splash` displaced. The floating desktop the collapse is supposed to land on did
+not exist.
+
+So the home surface paints a second, decorative backdrop **behind** itself:
+`resolveHomeUnderlay` (`packages/core/src/layout/home-surface.ts`) reads
+`params.under`, defaulting to `aurora` — the id that was `DEFAULT_BACKDROP` before
+the home screen took the slot, so a desktop still looks like the one people know.
+Collapsing now lands on a genuine floating desktop: wallpaper, taskbar, and the ask
+bar docked at the bottom.
+
+The underlay is painted in **both** states, not swapped in on collapse. The landing
+screen has always been translucent over whatever is behind it, and a wallpaper that
+appeared only once you minimized would read as a rendering glitch rather than as
+the same desktop seen from closer up. A scrim between the two keeps the front door
+legible over an arbitrary wallpaper — including a photograph the user supplied —
+so "pick a wallpaper" and "read the home screen" are not a trade-off. It is scoped
+to the expanded form only; veiling the whole desktop for a single docked control
+would defeat having collapsed at all.
+
+`params.under` sits beside `params.collapsed` in the same bag, which is why both
+writers go through one merging `patchHome`: either written as a replacement
+silently discards the other. The picker is the desktop menu's **Wallpaper behind
+home**, listed after **Backdrop** so the two read in order — what this desktop is,
+then what it looks like underneath.
+
+:::warning The underlay may never be interactive
+Two ids are refused, and both fail badly rather than visibly. `splash` under
+`splash` mounts `HomeView` inside `HomeView` forever — the symptom is a hung tab,
+not a wrong wallpaper. Any *other* `interactive` backdrop (`board`) puts two
+surfaces that both want the pointer in one square of screen with the lower one
+unreachable, which reads as the widgets having stopped working. `resolveHomeUnderlay`
+enforces it at render time and `homeUnderlayMenuItems` filters the menu, so the
+picker never offers what the renderer would refuse. An unregistered id falls back to
+the default the way the main slot does.
+:::
+
+### The transition
+
+Collapsing and expanding swap one form of `HomeView` for the other, so the motion
+is an **entrance on whichever form arrived** rather than a cross-fade: the outgoing
+DOM is gone by the time React commits, and keeping both mounted to animate an exit
+would mean two live agent request states — a question asked in the strip would be
+lost on expand. The landing screen lifts away to the wallpaper; the strip rises
+from the taskbar. Under `prefers-reduced-motion` both keep the fade and drop the
+travel. Nothing animates the wallpaper itself: it is present in both states, and
+flashing it would make one desktop look like two.
 
 :::warning The collapsed surface must stop eating clicks
 `splash` is registered `interactive`, so its layer takes pointer events over the

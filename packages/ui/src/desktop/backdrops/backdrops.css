@@ -151,11 +151,131 @@
 /* --- splash --------------------------------------------------------------- */
 
 .os-backdrop-splash {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
   overflow: auto;
+}
+
+/* The wallpaper behind the home screen — the thing that makes the collapsed
+   state an actual desktop rather than a flat void. Strictly decoration: it never
+   takes the pointer, so the home screen's controls and (once collapsed) the
+   desktop's own right-click menu both reach the surface through it.
+
+   `position: fixed`, not absolute, because `.os-backdrop-splash` scrolls: the
+   landing screen is taller than the viewport on a short window, and an absolute
+   layer would scroll the wallpaper away with it and leave bare `--bg` under the
+   setup card. */
+.os-backdrop-splash-under {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* Everything the home screen draws sits over the wallpaper. Stated on the child
+   rather than given to `.home` alone, so the strip and its answer bubble are
+   covered by the same rule. */
+.os-backdrop-splash > :not(.os-backdrop-splash-under) {
+  position: relative;
+  z-index: 1;
+}
+
+/* A legibility scrim between the wallpaper and the landing screen.
+
+   The expanded home screen is a page of text — greeting, connector tiles, 17
+   workspace tiles, the setup card — and it now sits over an arbitrary wallpaper,
+   including a photograph the user supplied. Without this, "pick a wallpaper" and
+   "read the front door" become a trade-off. It is scoped to the *expanded* form
+   only: the strip is a single control that carries its own surface, and veiling
+   the whole desktop for it would defeat having collapsed at all.
+
+   `position: fixed` for the same reason the wallpaper is, and `z-index: -1`
+   inside the stacking context `.os-backdrop-splash > *` already establishes — so
+   it paints over the wallpaper and under every bit of the home screen without
+   needing a third layer in the DOM. */
+.os-backdrop-splash > .home:not(.home-strip)::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--bg) 70%, transparent),
+    color-mix(in srgb, var(--bg) 86%, transparent)
+  );
+}
+
+/* --- the floating-desktop transition -------------------------------------- */
+
+/* Collapsing and expanding swap one form of `HomeView` for the other, so this is
+   an *entrance* on whichever form arrived rather than a cross-fade: the outgoing
+   DOM is gone by the time React commits, and keeping both mounted to animate an
+   exit would mean two live agent request states. Each state therefore announces
+   itself on arrival, which is the part that reads as a transition — the landing
+   screen lifts away to the wallpaper, the strip rises from the taskbar.
+
+   Nothing here animates the wallpaper: it is painted in both states and must not
+   flash, or the two forms would look like two different desktops. */
+.os-backdrop-splash > .home:not(.home-strip) {
+  animation: os-home-expand var(--dur-slow) var(--ease-entrance) both;
+}
+
+.os-backdrop-splash > .home-strip .home-strip-inner {
+  animation: os-home-dock var(--dur-base) var(--ease-entrance) both;
+}
+
+@keyframes os-home-expand {
+  from {
+    opacity: 0;
+    transform: translateY(-0.75rem) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes os-home-dock {
+  from {
+    opacity: 0;
+    transform: translateY(1.25rem);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Keep the fade, drop the travel — the movement is what carries the "this went
+     away / came back" reading, and a fade still marks the change without it. */
+  .os-backdrop-splash > .home:not(.home-strip),
+  .os-backdrop-splash > .home-strip .home-strip-inner {
+    animation-duration: var(--dur-fast);
+  }
+
+  @keyframes os-home-expand {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes os-home-dock {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
 }
 
 /* --- board ---------------------------------------------------------------- */

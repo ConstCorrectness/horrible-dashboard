@@ -403,7 +403,13 @@ def test_mute_channel(client, tmp_path, monkeypatch) -> None:
         # `/mute_speaker`, not `/update_is_muted`: the latter is gone upstream and
         # answers 404, so the mute button silently did nothing.
         assert (path, token, user_id, device_id) == ("/mute_speaker", "T", 4242, "D")
-        assert payload == {"channel": "my-channel", "is_muted": True}
+        # `user_id` is required: without it upstream answers 400 "User id is
+        # required." and the mute button silently did nothing.
+        assert payload == {
+            "channel": "my-channel",
+            "is_muted": True,
+            "user_id": 4242,
+        }
         return {"success": True}
 
     monkeypatch.setattr(routes, "_ch_authed_post", fake_post)

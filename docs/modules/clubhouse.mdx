@@ -293,6 +293,10 @@ Notifies Clubhouse of speaker mute/unmute state. Relays to upstream
 - **Request Schema:** `MuteRequest` (`is_muted` boolean)
 - **Response Schema:** Generic success object.
 - **Errors:** **409 Conflict** if not connected.
+- **`user_id` is required upstream.** Sending only `channel` and `is_muted` gets
+  a `400 User id is required.` — a rejection the pane swallowed, so the mute
+  button once again did nothing. Mute here is always _self_-mute, so the id is
+  the connected account's.
 
 ### 12. `POST /channels/{channel}/hand`
 
@@ -340,6 +344,58 @@ subscribe.
 - **Degrades rather than fails:** chat can be disabled by a moderator and older
   rooms predate the endpoint, so an upstream error returns an **empty backlog**.
   A room with no chat is not a failed join.
+
+### `cannot send message` means "you are not in that channel"
+
+Clubhouse rejects a chat write it does not like with a bare **`400 cannot send
+message`** — no reason, no room named. Probed against the live API, the error is
+specific: a **nonexistent** channel answers `Invalid channel ID`, while a real
+room the account has **not joined** answers `cannot send message`. It is an
+address error, not a permission or payload error — the same payload succeeds the
+moment the account is actually in the room.
+
+That made one ordering bug in `joinRoom` invisible for as long as it existed.
+`joinClubhouseChannel()` moves the account into the new room — and out of any
+previous one — the moment it returns, but `activeChannel` was patched at the
+**end** of the join, after `AgoraRTC.createClient`, `client.join`,
+`getUserMedia`, the track publish and the PubNub subscribe. A slow or failed step
+anywhere in that stretch left the account in the new room while the pane still
+addressed the old one, and every send went to a room it had left. The failure
+surfaced as a generic "Failed to send message" toast, so it read as a broken
+send rather than a wrong address.
+
+The pane therefore claims the channel **as soon as the upstream join returns**,
+which is the moment membership actually moves. `joined` is still set at the end,
+because that gates the room UI on a working connection rather than on membership.
+`joinOrder.test.ts` pins the ordering by reading the source — it is not reachable
+from a unit test without standing up Agora and a microphone.
+
+### Chat availability is carried, not guessed
+
+Chat is also decided per room and per account, and the join response says so — but
+the response model was dropping the answer. `JoinChannelResult` now declares
+`is_chat_enabled`, `is_room_chat_available`, `chat_permission`,
+`chat_permission_options` and `user_capabilities`; the pane records the verdict as
+`RoomState.chatDisabledReason` and **disables the composer with that reason in its
+placeholder** instead of accepting text it cannot deliver.
+
+`user_capabilities.can_post_to_chat` is the field Clubhouse computes for exactly
+this question, and a room can have chat on while still refusing a given account,
+so both are checked and they produce different reasons.
+
+Two traps sit here:
+
+- **The response model is the filter.** These fields reach the browser only
+  because `JoinChannelResult` names them; a Pydantic response model silently
+  drops what it does not declare, which is why the pane had no idea what the room
+  allowed even though every join response said so.
+- **Only an explicit `false` means off.** An absent flag is an older room, not a
+  closed one — reading it as falsy would disable chat in every room that does not
+  mention it.
+
+Both the join verdict and a rejected send are logged by **value** — the send line
+names the channel and message length, because a bare `cannot send message` in
+`logs/backend.log` otherwise identifies neither the room nor the cause.
 
 ### Feed pagination
 

@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Annotated
+from typing import Annotated, Any
 
 from pydantic import BaseModel, StringConstraints
 
@@ -93,6 +93,19 @@ class JoinChannelResult(BaseModel):
     pubnub_enable: bool | None = None
     agora_native_mute: bool | None = None
     user_id: int | None = None
+    # Whether this room takes chat at all, and who may write in it.  Clubhouse
+    # decides both, and rejects a write with a bare ``cannot send message`` --
+    # so a pane that does not carry these has no way to tell "chat is off in
+    # this room" from "the send broke", and shows the same failed toast for both.
+    is_chat_enabled: bool | None = None
+    is_room_chat_available: bool | None = None
+    chat_permission: Any = None
+    chat_permission_options: Any = None
+    # Per-*user* verdicts for this room, computed by Clubhouse.  Its
+    # ``can_post_to_chat`` is the field that answers "may I write here", which
+    # the room-level flags above do not: a room can have chat on and still
+    # refuse this account.
+    user_capabilities: dict[str, Any] | None = None
 
 
 class MuteRequest(BaseModel):
@@ -101,7 +114,6 @@ class MuteRequest(BaseModel):
 
 class HandRequest(BaseModel):
     raise_hands: bool
-
 
 
 class CreateChannelRequest(BaseModel):
@@ -163,14 +175,6 @@ class BlockChannelUserRequest(BaseModel):
 
 class RejectSpeakerInviteRequest(BaseModel):
     user_id: int
-
-
-
-
-
-
-
-
 
 
 class NotificationItem(BaseModel):

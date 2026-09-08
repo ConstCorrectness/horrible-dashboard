@@ -82,6 +82,24 @@ describe('the front door is reachable from a clean install', () => {
     expect(readFileSync(HOME, 'utf8')).toMatch(/<WorkspaceLauncher\b/);
   });
 
+  it('leaves a desktop behind the front door, not a void', () => {
+    /*
+     * The other direction: getting *out* of the front door.
+     *
+     * The desktop has one backdrop slot and the home surface is in it, so
+     * minimizing the home screen used to reveal a flat theme-coloured surface —
+     * the wallpaper that would have been there is exactly what `splash`
+     * displaced. The floating desktop was therefore reachable only by swapping
+     * the backdrop, which takes the ask bar away in order to hide a greeting.
+     *
+     * `SplashBackdrop` painting its own underlay is what makes the collapsed
+     * state an actual desktop. Dropping it would not throw and would not fail a
+     * type check: the home screen would render exactly as it does now, and only
+     * the collapsed state — the one nothing else tests — would go blank.
+     */
+    expect(readFileSync(SPLASH, 'utf8')).toContain('resolveHomeUnderlay');
+  });
+
   it('still routes that default through the backdrop that mounts HomeView', () => {
     // Guards the other half: `splash` could stay the default while quietly
     // ceasing to render the home surface, which would pass the check above and

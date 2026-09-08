@@ -633,6 +633,17 @@ async def join_channel(channel: str) -> dict[str, Any]:
         res.get("pubnub_origin"),
         len(res.get("pubnub_token") or ""),
     )
+    # The chat verdict, by value rather than by key: a send that Clubhouse
+    # rejects with "cannot send message" is only diagnosable against these.
+    logger.info(
+        "join_channel chat fields: is_chat_enabled=%s is_room_chat_available=%s "
+        "chat_permission=%s chat_permission_options=%s can_post_to_chat=%s",
+        res.get("is_chat_enabled"),
+        res.get("is_room_chat_available"),
+        res.get("chat_permission"),
+        res.get("chat_permission_options"),
+        (res.get("user_capabilities") or {}).get("can_post_to_chat"),
+    )
     return res
 
 
@@ -666,9 +677,15 @@ async def active_ping(channel: str) -> dict[str, Any]:
 async def mute_channel(channel: str, body: MuteRequest) -> dict[str, Any]:
     """Notify Clubhouse of speaker mute/unmute state (Clubhouse POST /mute_speaker)."""
     auth = _require_auth()
+    # ``user_id`` is required: without it Clubhouse answers 400 "User id is
+    # required."  Mute here is always self-mute, so it is the connected account.
     return await _ch_authed_post(
         "/mute_speaker",
-        {"channel": channel, "is_muted": body.is_muted},
+        {
+            "channel": channel,
+            "is_muted": body.is_muted,
+            "user_id": auth["user_id"],
+        },
         auth["auth_token"],
         auth["user_id"],
         auth.get("device_id"),
@@ -795,15 +812,30 @@ async def invite_user(channel: str, body: InviteUserRequest) -> dict[str, Any]:
 
 @router.post("/send_channel_message")
 async def send_channel_message(body: SendChannelMessageRequest) -> dict[str, Any]:
-    """Send a message to the active channel."""
+    """Send a message to the active channel.
+
+    Clubhouse refuses a write it does not like with a bare ``cannot send
+    message``, naming neither the room nor the reason, so the channel and the
+    message length are logged here -- otherwise the failure is undiagnosable
+    after the fact.
+    """
     auth = _require_auth()
-    return await _ch_authed_post(
-        "/send_channel_message",
-        {"channel": body.channel, "message": body.message},
-        auth["auth_token"],
-        auth["user_id"],
-        auth.get("device_id"),
-    )
+    try:
+        return await _ch_authed_post(
+            "/send_channel_message",
+            {"channel": body.channel, "message": body.message},
+            auth["auth_token"],
+            auth["user_id"],
+            auth.get("device_id"),
+        )
+    except HTTPException as exc:
+        logger.warning(
+            "send_channel_message rejected for channel=%s len=%d: %s",
+            body.channel,
+            len(body.message),
+            exc.detail,
+        )
+        raise
 
 
 @router.post("/channels/{channel}/handraise_settings")

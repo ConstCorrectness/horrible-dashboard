@@ -36,7 +36,14 @@ import {
 
 import { BUILTIN_BACKDROPS } from './backdrops';
 import { SNAP_ARROWS, SNAP_CELLS, SNAP_PREFIX, snapCommandId } from './snap-palette';
-import { isHomeCollapsed, SPLASH_BACKDROP_ID, toggleHomeCollapsed } from './backdrops/Splash';
+import {
+  homeUnderlayId,
+  isHomeCollapsed,
+  setHomeCollapsed,
+  setHomeUnderlay,
+  SPLASH_BACKDROP_ID,
+  toggleHomeCollapsed,
+} from './backdrops/Splash';
 
 /** The four directions, in the order the frame's own bindings use. */
 const NAVS = ['left', 'right', 'up', 'down'] as const;
@@ -123,6 +130,25 @@ export const desktopModule: ModuleManifest = {
       id: 'desktop.toggleHome',
       title: 'Desktop: Minimize / restore the home screen',
       run: () => void toggleHomeCollapsed(),
+    },
+    /*
+     * The two directions, named, beside the toggle.
+     *
+     * A toggle is the wrong shape for the palette and for the agent: both act
+     * without seeing the screen, so "toggle" means "put it in whichever state it
+     * is not in", and `desktop.showHome` run twice is the home screen hidden.
+     * The toggle stays for the keyboard and the menu, where the current state is
+     * visible.
+     */
+    {
+      id: 'desktop.hideHome',
+      title: 'Desktop: Minimize the home screen — wallpaper, taskbar and the ask bar',
+      run: () => void setHomeCollapsed(true),
+    },
+    {
+      id: 'desktop.showHome',
+      title: 'Desktop: Show the home screen',
+      run: () => void setHomeCollapsed(false),
     },
     {
       id: 'desktop.cascade',
@@ -389,6 +415,29 @@ function backdropMenuItems(): ContextMenuItem[] {
 }
 
 /**
+ * The wallpaper painted behind the home screen.
+ *
+ * Built from the same registry list as `backdropMenuItems`, minus two exclusions
+ * that would each fail badly rather than visibly — the home surface itself
+ * (`splash` inside `splash` is an infinite mount) and any other `interactive`
+ * provider (two surfaces wanting the pointer in one square of screen, the lower
+ * one silently dead). `resolveHomeUnderlay` enforces the same rule at render
+ * time; this filter is so the menu never offers what the renderer would refuse.
+ */
+function homeUnderlayMenuItems(): ContextMenuItem[] {
+  const active = homeUnderlayId();
+  return registry.backdrops
+    .filter((b) => b.id !== SPLASH_BACKDROP_ID && !b.interactive)
+    .map((b) => ({
+      id: `desktop.homeUnderlay:${b.id}`,
+      label: b.title,
+      detail: b.description,
+      checked: active === b.id,
+      run: () => void setHomeUnderlay(b.id),
+    }));
+}
+
+/**
  * Customizing the taskbar, from a right-click on the strip.
  *
  * The config was already a setting (`desktop.taskbar`) and already merged over
@@ -495,8 +544,21 @@ function desktopMenuItems(): ContextMenuItem[] {
           {
             id: 'desktop.toggleHome',
             label: isHomeCollapsed() ? 'Show the home screen' : 'Minimize the home screen',
-            detail: 'Leaves the ask bar docked at the bottom',
+            detail: isHomeCollapsed()
+              ? 'Brings the greeting, connectors and workspaces back'
+              : 'Leaves the wallpaper, the taskbar and the ask bar',
             run: () => void toggleHomeCollapsed(),
+          },
+          // The wallpaper *behind* the home screen, which is a different question
+          // from `Backdrop` above — that one chooses what occupies the slot, and
+          // choosing anything there takes the home screen away entirely. Listed
+          // second so the two read in that order: what this desktop is, then what
+          // it looks like underneath.
+          {
+            id: 'desktop.homeUnderlay',
+            label: 'Wallpaper behind home',
+            run: () => {},
+            submenu: homeUnderlayMenuItems(),
           },
         ]
       : []),

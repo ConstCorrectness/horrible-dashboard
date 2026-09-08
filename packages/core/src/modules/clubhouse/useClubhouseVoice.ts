@@ -145,6 +145,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     speakerInvite,
     speakingVolumes,
     voiceError,
+    chatDisabledReason,
   } = state;
 
   const propsRef = useRef(props);
@@ -243,6 +244,30 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       if (!chDetails.token) {
         throw new Error('Failed to retrieve Agora token from Clubhouse');
       }
+
+      // The upstream join has already moved the account into this room -- and
+      // out of any previous one -- so the pane's address must move with it,
+      // *before* the Agora and PubNub work below. Setting it at the end of the
+      // join instead left a window (a slow `getUserMedia`, a failed Agora join)
+      // where the account was in the new room while `activeChannel` still named
+      // the old one: every send then went to a room we had left, which Clubhouse
+      // rejects with a bare `cannot send message`. `joined` stays below, since
+      // that gates the room UI on a working connection rather than on membership.
+      session.patch({ activeChannel: channelName });
+
+      // Chat is per-room *and* per-account, and Clubhouse's refusal is a bare
+      // "cannot send message", so record its verdict now. Only an explicit
+      // `false` counts: an absent field is an older room, not a closed one.
+      const roomChatOff =
+        chDetails.is_chat_enabled === false || chDetails.is_room_chat_available === false;
+      const cannotPost = chDetails.user_capabilities?.can_post_to_chat === false;
+      session.patch({
+        chatDisabledReason: roomChatOff
+          ? 'Chat is turned off in this room'
+          : cannotPost
+            ? 'You cannot post to chat in this room'
+            : null,
+      });
 
       // Initialize Audio Mixer & Routing Destinations FIRST so remote tracks and recorder can bind immediately
       const audioCtx = mixer.getContext();
@@ -748,7 +773,6 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         }
       }, 30000);
 
-      session.patch({ activeChannel: channelName });
       session.patch({ joined: true });
       session.patch({ handRaised: false });
       session.set('comments', []);
@@ -1168,6 +1192,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     liveUsers,
     speakerInvite,
     speakingVolumes,
+    chatDisabledReason,
     playAgentAudio,
     previewTtsVoice,
     stopAgentAudio,

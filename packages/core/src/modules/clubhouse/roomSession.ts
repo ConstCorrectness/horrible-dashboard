@@ -69,6 +69,13 @@ export interface RoomState {
   liveUsers: LiveUserState[];
   speakerInvite: SpeakerInvite | null;
   speakingVolumes: Record<number, number>;
+  /**
+   * Why chat is unavailable in this room, or `null` when it is available.
+   * Clubhouse decides per room; a write it disallows comes back as a bare
+   * `cannot send message`, so the composer is disabled up front rather than
+   * accepting text it will fail to deliver.
+   */
+  chatDisabledReason: string | null;
 }
 
 export const EMPTY_ROOM_STATE: RoomState = {
@@ -84,6 +91,7 @@ export const EMPTY_ROOM_STATE: RoomState = {
   liveUsers: [],
   speakerInvite: null,
   speakingVolumes: {},
+  chatDisabledReason: null,
 };
 
 /**

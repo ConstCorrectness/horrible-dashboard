@@ -88,6 +88,20 @@ export interface JoinChannelResult {
   pubnub_enable: boolean | null;
   agora_native_mute: boolean | null;
   user_id: number | null;
+  /**
+   * Whether the room takes chat at all, and who may write in it. Clubhouse
+   * rejects a disallowed write with a bare `cannot send message`, so without
+   * these the pane cannot tell "chat is off here" from "the send broke".
+   */
+  is_chat_enabled: boolean | null;
+  is_room_chat_available: boolean | null;
+  chat_permission: unknown;
+  chat_permission_options: unknown;
+  /**
+   * Per-user verdicts for this room. `can_post_to_chat` is the one that answers
+   * "may I write here" — a room can have chat on and still refuse this account.
+   */
+  user_capabilities: { can_post_to_chat?: boolean | null } | null;
 }
 
 export function joinClubhouseChannel(channel: string): Promise<JoinChannelResult> {

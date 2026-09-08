@@ -144,6 +144,17 @@ export { dropPaneOnArea, dropPaneOnTab, paneDrag } from './layout/drag';
 export type { DragPayload } from './layout/drag';
 export { DEFAULT_BACKDROP } from './layout/types';
 export {
+  DEFAULT_HOME_UNDERLAY,
+  HOME_BACKDROP_ID,
+  homeUnderlayId,
+  isHomeCollapsed,
+  resolveHomeUnderlay,
+  setHomeCollapsed,
+  setHomeUnderlay,
+  toggleHomeCollapsed,
+} from './layout/home-surface';
+export type { HomeSurfaceParams } from './layout/home-surface';
+export {
   parseSpotlightQuery,
   spotlightResults,
   type SpotlightAction,
