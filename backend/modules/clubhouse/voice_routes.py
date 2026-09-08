@@ -76,7 +76,9 @@ async def turn(req: TurnRequest) -> TurnResponse:
     if req.config:
         session.config = V.VoiceConfig.from_dict(req.config)
     room = V.RoomSnapshot.from_dict({**req.room, "channel": req.channel})
-    source: V.Source = "chat" if req.source == "chat" else "voice"
+    source: V.Source = (
+        req.source if req.source in ("chat", "nudge") else "voice"  # type: ignore[assignment]
+    )
 
     if req.is_self is not None:
         is_self = req.is_self or session.is_own_speech(req.text)
@@ -105,7 +107,10 @@ async def turn(req: TurnRequest) -> TurnResponse:
         # A partial is deliberately *not* remembered: the finished utterance follows
         # seconds later and contains it, so keeping both puts the same sentence in the
         # history twice — once truncated mid-word — and the model answers the fragment.
-        if not is_self and not req.partial and req.text.strip():
+        # A nudge is excluded for the same reason it is on the answering path: it was
+        # never said in the room, so remembering it puts an instruction the agent was
+        # given into the transcript of what people supposedly told each other.
+        if not is_self and not req.partial and source != "nudge" and req.text.strip():
             session.remember(
                 V.Turn(role="room", text=req.text, speaker=req.speaker, source=source)
             )

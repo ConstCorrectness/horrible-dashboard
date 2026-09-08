@@ -150,8 +150,12 @@ export function RoomsPanel() {
   const [agentMemory, setAgentMemory] = useState<VoiceStateTurn[]>([]);
   const [sttChunkMs] = useState(5000);
 
-  const [wakeWordsInput, setWakeWordsInput] = useState(() => (agentConfig.wakeWords || []).join(', '));
-  const [personaDraft, setPersonaDraft] = useState(() => agentConfig.persona || DEFAULT_VOICE_CONFIG.persona);
+  const [wakeWordsInput, setWakeWordsInput] = useState(() =>
+    (agentConfig.wakeWords || []).join(', '),
+  );
+  const [personaDraft, setPersonaDraft] = useState(
+    () => agentConfig.persona || DEFAULT_VOICE_CONFIG.persona,
+  );
   const [selectedPreset, setSelectedPreset] = useState('');
   const [lastHeardSpeech, setLastHeardSpeech] = useState<{
     text: string;
@@ -255,13 +259,15 @@ export function RoomsPanel() {
     }
   };
 
-
   useEffect(() => {
-    void getAgentStatus().then(setAgentEngineStatus).catch(() => {});
+    void getAgentStatus()
+      .then(setAgentEngineStatus)
+      .catch(() => {});
     void refreshPeopleMemory();
-    void getAgentTtsVoices().then(setTtsVoices).catch(() => {});
+    void getAgentTtsVoices()
+      .then(setTtsVoices)
+      .catch(() => {});
   }, []);
-
 
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [followingUsers, setFollowingUsers] = useState<FollowUser[]>([]);
@@ -472,7 +478,10 @@ export function RoomsPanel() {
             </div>
           </div>
 
-          <div className="ch-profile-actions" style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
+          <div
+            className="ch-profile-actions"
+            style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}
+          >
             {!isCurrentUser &&
               activeChannel &&
               (() => {
@@ -565,9 +574,16 @@ export function RoomsPanel() {
 
                     <button
                       className="ch-btn-action"
-                      style={{ color: 'var(--danger)', borderColor: 'color-mix(in srgb, var(--danger) 40%, transparent)' }}
+                      style={{
+                        color: 'var(--danger)',
+                        borderColor: 'color-mix(in srgb, var(--danger) 40%, transparent)',
+                      }}
                       onClick={async () => {
-                        if (confirm(`Are you sure you want to remove and block ${selectedUser.name} from this room?`)) {
+                        if (
+                          confirm(
+                            `Are you sure you want to remove and block ${selectedUser.name} from this room?`,
+                          )
+                        ) {
                           try {
                             await blockFromClubhouseChannel(activeChannel, selectedUser.user_id);
                             toastsStore.add(
@@ -592,7 +608,6 @@ export function RoomsPanel() {
                 );
               })()}
           </div>
-
 
           <div className="ch-profile-stats">
             <div className="ch-profile-stat">
@@ -640,7 +655,7 @@ export function RoomsPanel() {
   const enqueueUtteranceRef = useRef<
     (
       text: string,
-      source: 'voice' | 'chat',
+      source: 'voice' | 'chat' | 'nudge',
       force?: boolean,
       speakerName?: string,
       speakerId?: number | null,
@@ -650,7 +665,6 @@ export function RoomsPanel() {
   >(() => {});
 
   const {
-
     joined,
     activeChannel,
     isMuted,
@@ -677,7 +691,6 @@ export function RoomsPanel() {
     sendReaction,
     getNetworkInsights,
   } = useClubhouseVoice({
-
     sttChunkIntervalMs: sttChunkMs,
     endpointingDelayMs: agentConfig.endpointingDelayMs || 750,
     allowBargeIn: agentConfig.allowBargeIn !== false,
@@ -708,14 +721,20 @@ export function RoomsPanel() {
         resolvedName = myProfileName || 'Me';
         speakerId = myUserId;
       } else if (speakerId != null) {
-        const userInDetails = activeRoomInfoRef.current?.users?.find((u) => u.user_id === speakerId);
+        const userInDetails = activeRoomInfoRef.current?.users?.find(
+          (u) => u.user_id === speakerId,
+        );
         if (userInDetails?.name) resolvedName = userInDetails.name;
       }
       if (text.trim().length > 0) {
         setLastHeardSpeech({
           text: text.trim(),
           speaker: resolvedName,
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+          time: new Date().toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          }),
         });
         const isSelf = isAgentSpeaking;
         enqueueUtteranceRef.current(
@@ -761,7 +780,6 @@ export function RoomsPanel() {
       }
     },
   });
-
 
   const load = async () => {
     setState('loading');
@@ -839,7 +857,6 @@ export function RoomsPanel() {
       chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [comments]);
-
 
   const agentAbortControllerRef = useRef<AbortController | null>(null);
 
@@ -929,7 +946,7 @@ export function RoomsPanel() {
   const agentQueueRef = useRef<
     {
       text: string;
-      source: 'voice' | 'chat';
+      source: 'voice' | 'chat' | 'nudge';
       force?: boolean;
       speakerName?: string;
       speakerId?: number | null;
@@ -955,7 +972,14 @@ export function RoomsPanel() {
           const result = await takeVoiceTurn({
             channel,
             text: item.text,
-            speaker: item.speakerName || (item.source === 'chat' ? 'Someone in chat' : 'A speaker'),
+            // A nudge has no speaker — this is the pane asking, not a person talking.
+            // The `'A speaker'` fallback is what produced `A speaker said out loud:
+            // Say something to the room`, an instruction the model then answered as
+            // though somebody had actually said it.
+            speaker:
+              item.source === 'nudge'
+                ? ''
+                : item.speakerName || (item.source === 'chat' ? 'Someone in chat' : 'A speaker'),
             speakerId: item.speakerId,
             source: item.source,
             force: item.force,
@@ -1033,7 +1057,7 @@ export function RoomsPanel() {
 
   const enqueueUtterance = (
     text: string,
-    source: 'voice' | 'chat',
+    source: 'voice' | 'chat' | 'nudge',
     force = false,
     speakerName?: string,
     speakerId?: number | null,
@@ -1072,20 +1096,26 @@ export function RoomsPanel() {
         agentQueueRef.current.length === 0
       ) {
         lastRoomActivityTsRef.current = Date.now();
+        // `nudge`, and with no speaker name: this is the pane asking, not a person
+        // talking. It used to be sent as speech attributed to "Room Atmosphere",
+        // which the model answered as though a participant by that name had
+        // spoken -- and which the people-memory store then tried to learn about.
         enqueueUtterance(
-          'The room has been quiet. Please make a brief, natural remark or conversational observation to keep things moving.',
-          'voice',
+          'The room has gone quiet. Make a brief, natural remark to keep things moving.',
+          'nudge',
           false,
-          'Room Atmosphere',
-          null,
         );
       }
     }, 2500);
 
     return () => clearInterval(interval);
-  }, [activeChannel, agentEnabled, agentConfig.posture, agentConfig.silenceTimeoutS, isAgentSpeaking]);
-
-
+  }, [
+    activeChannel,
+    agentEnabled,
+    agentConfig.posture,
+    agentConfig.silenceTimeoutS,
+    isAgentSpeaking,
+  ]);
 
   // Refs so the queue drain reads current values without being re-created (and
   // without the stale closures the old `useEffect`-driven version captured).
@@ -1187,7 +1217,11 @@ export function RoomsPanel() {
           toastsStore.add('success', 'Persona Updated', 'Saved new persona to active room.');
         }
       } catch (e) {
-        toastsStore.add('error', 'Persona Update Failed', e instanceof Error ? e.message : String(e));
+        toastsStore.add(
+          'error',
+          'Persona Update Failed',
+          e instanceof Error ? e.message : String(e),
+        );
       }
     } else {
       toastsStore.add('info', 'Persona Saved', 'Persona saved (will apply on joining room).');
@@ -2690,7 +2724,11 @@ export function RoomsPanel() {
                             toastsStore.add('success', 'Room Ended', 'You ended the room.');
                             void leaveRoom(activeChannel);
                           } catch (err) {
-                            toastsStore.add('error', 'Failed', err instanceof Error ? err.message : 'Could not end room');
+                            toastsStore.add(
+                              'error',
+                              'Failed',
+                              err instanceof Error ? err.message : 'Could not end room',
+                            );
                           }
                         }
                       }}
@@ -2711,9 +2749,13 @@ export function RoomsPanel() {
                 fontSize: '0.75rem',
                 fontWeight: 600,
                 flex: 'none',
-                background: showNetworkModal ? 'rgba(56, 189, 248, 0.2)' : 'rgba(255, 255, 255, 0.05)',
+                background: showNetworkModal
+                  ? 'rgba(56, 189, 248, 0.2)'
+                  : 'rgba(255, 255, 255, 0.05)',
                 color: showNetworkModal ? '#38bdf8' : '#94a3b8',
-                border: showNetworkModal ? '1px solid rgba(56, 189, 248, 0.4)' : '1px solid transparent',
+                border: showNetworkModal
+                  ? '1px solid rgba(56, 189, 248, 0.4)'
+                  : '1px solid transparent',
               }}
               onClick={() => setShowNetworkModal(true)}
               title="Inspect WebRTC, Agora UDP, PubNub WSS, protocols and IP domains"
@@ -2728,16 +2770,19 @@ export function RoomsPanel() {
                 fontSize: '0.75rem',
                 fontWeight: 600,
                 flex: 'none',
-                background: showAgentSidebar ? 'rgba(167, 139, 250, 0.18)' : 'rgba(255, 255, 255, 0.05)',
+                background: showAgentSidebar
+                  ? 'rgba(167, 139, 250, 0.18)'
+                  : 'rgba(255, 255, 255, 0.05)',
                 color: showAgentSidebar ? '#c4b5fd' : '#94a3b8',
-                border: showAgentSidebar ? '1px solid rgba(167, 139, 250, 0.4)' : '1px solid transparent',
+                border: showAgentSidebar
+                  ? '1px solid rgba(167, 139, 250, 0.4)'
+                  : '1px solid transparent',
               }}
               onClick={() => setShowAgentSidebar((v) => !v)}
               title="Toggle Voice Agent panel on the right side"
             >
               🤖 {showAgentSidebar ? 'Agent Panel (Open)' : 'Agent Panel'}
             </button>
-
           </div>
 
           <div className="ch-room-title-section">
@@ -2784,169 +2829,169 @@ export function RoomsPanel() {
               overflow: 'hidden',
             }}
           >
-              {/* 1. Participants Area (Top Half) */}
+            {/* 1. Participants Area (Top Half) */}
+            <div
+              className="ch-participants-section"
+              style={{
+                flex: '0 0 auto',
+                maxHeight: '42%',
+                overflowY: 'auto',
+                borderBottom: '1px solid rgba(255,255,255,0.08)',
+                background: 'rgba(29, 32, 38, 0.5)',
+              }}
+            >
+              {/* Speakers */}
+              {speakers.length > 0 && (
+                <>
+                  <div
+                    className="ch-section-heading"
+                    style={{
+                      borderTop: 'none',
+                      background: 'transparent',
+                      padding: '0.6rem 0.8rem 0.4rem',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: '0.72rem',
+                        color: '#38bdf8',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em',
+                        fontWeight: 700,
+                      }}
+                    >
+                      🎙️ Speakers ({speakers.length})
+                    </span>
+                  </div>
+                  <div className="ch-speakers-grid">
+                    {speakers.map((u) => renderUserCard(u, true))}
+                  </div>
+                </>
+              )}
+
+              {/* Audience */}
+              {audience.length > 0 && (
+                <>
+                  <div
+                    className="ch-section-heading"
+                    style={{
+                      marginTop: '0.3rem',
+                      borderTop: 'none',
+                      background: 'transparent',
+                      padding: '0.4rem 0.8rem',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: '0.72rem',
+                        color: '#64748b',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.05em',
+                        fontWeight: 700,
+                      }}
+                    >
+                      🎧 Audience ({audience.length})
+                    </span>
+                  </div>
+                  <div className="ch-listeners-grid">
+                    {audience.map((u) => renderUserCard(u, false))}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* 2. Live Chat / Comments Feed (Directly Underneath Participants) */}
+            <div
+              className="ch-chat-section"
+              style={{
+                flex: 1,
+                display: 'flex',
+                flexDirection: 'column',
+                minHeight: 0,
+                overflow: 'hidden',
+                background: '#0d1117',
+              }}
+            >
               <div
-                className="ch-participants-section"
                 style={{
-                  flex: '0 0 auto',
-                  maxHeight: '42%',
-                  overflowY: 'auto',
-                  borderBottom: '1px solid rgba(255,255,255,0.08)',
-                  background: 'rgba(29, 32, 38, 0.5)',
+                  padding: '0.4rem 0.8rem',
+                  background: 'rgba(255,255,255,0.03)',
+                  borderBottom: '1px solid rgba(255,255,255,0.06)',
+                  fontSize: '0.72rem',
+                  fontWeight: 700,
+                  color: 'var(--text-dim, #94a3b8)',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
                 }}
               >
-                {/* Speakers */}
-                {speakers.length > 0 && (
-                  <>
-                    <div
-                      className="ch-section-heading"
-                      style={{
-                        borderTop: 'none',
-                        background: 'transparent',
-                        padding: '0.6rem 0.8rem 0.4rem',
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                      }}
-                    >
-                      <span
-                        style={{
-                          fontSize: '0.72rem',
-                          color: '#38bdf8',
-                          textTransform: 'uppercase',
-                          letterSpacing: '0.05em',
-                          fontWeight: 700,
-                        }}
-                      >
-                        🎙️ Speakers ({speakers.length})
-                      </span>
-                    </div>
-                    <div className="ch-speakers-grid">
-                      {speakers.map((u) => renderUserCard(u, true))}
-                    </div>
-                  </>
-                )}
-
-                {/* Audience */}
-                {audience.length > 0 && (
-                  <>
-                    <div
-                      className="ch-section-heading"
-                      style={{
-                        marginTop: '0.3rem',
-                        borderTop: 'none',
-                        background: 'transparent',
-                        padding: '0.4rem 0.8rem',
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                      }}
-                    >
-                      <span
-                        style={{
-                          fontSize: '0.72rem',
-                          color: '#64748b',
-                          textTransform: 'uppercase',
-                          letterSpacing: '0.05em',
-                          fontWeight: 700,
-                        }}
-                      >
-                        🎧 Audience ({audience.length})
-                      </span>
-                    </div>
-                    <div className="ch-listeners-grid">
-                      {audience.map((u) => renderUserCard(u, false))}
-                    </div>
-                  </>
-                )}
+                <span>💬 Live Room Chat ({comments.length})</span>
+                <span style={{ fontSize: '0.65rem', color: '#64748b', textTransform: 'none' }}>
+                  Real-time audience & stage messages
+                </span>
               </div>
 
-              {/* 2. Live Chat / Comments Feed (Directly Underneath Participants) */}
               <div
-                className="ch-chat-section"
-                style={{
-                  flex: 1,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  minHeight: 0,
-                  overflow: 'hidden',
-                  background: '#0d1117',
+                ref={chatScrollRef}
+                className="ch-chat-scroll"
+                style={{ flex: 1, overflowY: 'auto', padding: '0.75rem' }}
+                onScroll={(e) => {
+                  const el = e.currentTarget;
+                  chatScrollTopRef.current = el.scrollTop;
+                  const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+                  isNearBottomRef.current = distanceToBottom < 60;
                 }}
               >
-                <div
-                  style={{
-                    padding: '0.4rem 0.8rem',
-                    background: 'rgba(255,255,255,0.03)',
-                    borderBottom: '1px solid rgba(255,255,255,0.06)',
-                    fontSize: '0.72rem',
-                    fontWeight: 700,
-                    color: 'var(--text-dim, #94a3b8)',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.05em',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                  }}
-                >
-                  <span>💬 Live Room Chat ({comments.length})</span>
-                  <span style={{ fontSize: '0.65rem', color: '#64748b', textTransform: 'none' }}>
-                    Real-time audience & stage messages
-                  </span>
-                </div>
-
-                <div
-                  ref={chatScrollRef}
-                  className="ch-chat-scroll"
-                  style={{ flex: 1, overflowY: 'auto', padding: '0.75rem' }}
-                  onScroll={(e) => {
-                    const el = e.currentTarget;
-                    chatScrollTopRef.current = el.scrollTop;
-                    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-                    isNearBottomRef.current = distanceToBottom < 60;
-                  }}
-                >
-                  {comments.length === 0 ? (
-                    <div className="ch-chat-empty" style={{ minHeight: '120px' }}>
-                      <span style={{ fontSize: '1.5rem' }}>💬</span>
-                      <span>No messages yet. Send a message to chat with the room!</span>
-                    </div>
-                  ) : (
-                    comments.map((c) => (
-                      <div key={c.id} className="ch-comment-item">
-                        {c.userPhoto ? (
-                          <img className="ch-comment-avatar" src={c.userPhoto} alt="" />
-                        ) : (
-                          <div
-                            className="ch-comment-avatar"
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              background: '#2e333d',
-                              color: 'var(--text-dim)',
-                              fontSize: '0.65rem',
-                              fontWeight: 600,
-                            }}
-                          >
-                            {c.userName.slice(0, 2).toUpperCase()}
-                          </div>
-                        )}
-                        <div className="ch-comment-content">
-                          <div className="ch-comment-header">
-                            <span className="ch-comment-user">{c.userName}</span>
-                            <span className="ch-comment-time">
-                              {new Date(c.timestamp).toLocaleTimeString([], {
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              })}
-                            </span>
-                          </div>
-                          <div className="ch-comment-bubble">{c.text}</div>
+                {comments.length === 0 ? (
+                  <div className="ch-chat-empty" style={{ minHeight: '120px' }}>
+                    <span style={{ fontSize: '1.5rem' }}>💬</span>
+                    <span>No messages yet. Send a message to chat with the room!</span>
+                  </div>
+                ) : (
+                  comments.map((c) => (
+                    <div key={c.id} className="ch-comment-item">
+                      {c.userPhoto ? (
+                        <img className="ch-comment-avatar" src={c.userPhoto} alt="" />
+                      ) : (
+                        <div
+                          className="ch-comment-avatar"
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            background: '#2e333d',
+                            color: 'var(--text-dim)',
+                            fontSize: '0.65rem',
+                            fontWeight: 600,
+                          }}
+                        >
+                          {c.userName.slice(0, 2).toUpperCase()}
                         </div>
+                      )}
+                      <div className="ch-comment-content">
+                        <div className="ch-comment-header">
+                          <span className="ch-comment-user">{c.userName}</span>
+                          <span className="ch-comment-time">
+                            {new Date(c.timestamp).toLocaleTimeString([], {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                          </span>
+                        </div>
+                        <div className="ch-comment-bubble">{c.text}</div>
                       </div>
-                    ))
-                  )}
-                  <div ref={chatEndRef} />
+                    </div>
+                  ))
+                )}
+                <div ref={chatEndRef} />
               </div>
             </div>
           </div>
@@ -2964,7 +3009,9 @@ export function RoomsPanel() {
               style={{
                 width: '6px',
                 cursor: 'col-resize',
-                background: isDraggingSplitter ? 'var(--accent, #6366f1)' : 'rgba(255,255,255,0.06)',
+                background: isDraggingSplitter
+                  ? 'var(--accent, #6366f1)'
+                  : 'rgba(255,255,255,0.06)',
                 transition: isDraggingSplitter ? 'none' : 'background 0.15s ease',
                 position: 'relative',
                 zIndex: 10,
@@ -2972,10 +3019,12 @@ export function RoomsPanel() {
                 userSelect: 'none',
               }}
               onMouseEnter={(e) => {
-                if (!isDraggingSplitter) (e.currentTarget as HTMLElement).style.background = 'rgba(167, 139, 250, 0.4)';
+                if (!isDraggingSplitter)
+                  (e.currentTarget as HTMLElement).style.background = 'rgba(167, 139, 250, 0.4)';
               }}
               onMouseLeave={(e) => {
-                if (!isDraggingSplitter) (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.06)';
+                if (!isDraggingSplitter)
+                  (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.06)';
               }}
             />
           )}
@@ -3026,12 +3075,42 @@ export function RoomsPanel() {
                           }}
                           title="Agent is currently speaking audio into the room"
                         >
-                          <span style={{ fontSize: '0.62rem', color: 'var(--success)', fontWeight: 700 }}>
+                          <span
+                            style={{
+                              fontSize: '0.62rem',
+                              color: 'var(--success)',
+                              fontWeight: 700,
+                            }}
+                          >
                             SPEAKING
                           </span>
-                          <span style={{ display: 'inline-block', width: '2px', height: '8px', background: 'var(--success)', borderRadius: '1px' }} />
-                          <span style={{ display: 'inline-block', width: '2px', height: '12px', background: 'var(--success)', borderRadius: '1px' }} />
-                          <span style={{ display: 'inline-block', width: '2px', height: '6px', background: 'var(--success)', borderRadius: '1px' }} />
+                          <span
+                            style={{
+                              display: 'inline-block',
+                              width: '2px',
+                              height: '8px',
+                              background: 'var(--success)',
+                              borderRadius: '1px',
+                            }}
+                          />
+                          <span
+                            style={{
+                              display: 'inline-block',
+                              width: '2px',
+                              height: '12px',
+                              background: 'var(--success)',
+                              borderRadius: '1px',
+                            }}
+                          />
+                          <span
+                            style={{
+                              display: 'inline-block',
+                              width: '2px',
+                              height: '6px',
+                              background: 'var(--success)',
+                              borderRadius: '1px',
+                            }}
+                          />
                         </div>
                       ) : isAgentThinking ? (
                         <span
@@ -3097,7 +3176,9 @@ export function RoomsPanel() {
                       fontSize: '0.78rem',
                     }}
                   >
-                    <p style={{ margin: '0 0 0.5rem' }}>Voice Agent is currently paused in this room.</p>
+                    <p style={{ margin: '0 0 0.5rem' }}>
+                      Voice Agent is currently paused in this room.
+                    </p>
                     <button
                       className="ch-btn-action mic-active"
                       onClick={() => patchAgentConfig({ enabled: true })}
@@ -3108,1102 +3189,1295 @@ export function RoomsPanel() {
                   </div>
                 )}
 
-                  {agentEnabled && (
+                {agentEnabled && (
+                  <div
+                    style={{
+                      padding: '1rem',
+                      background: 'rgba(0,0,0,0.2)',
+                      borderRadius: '8px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '1rem',
+                    }}
+                  >
+                    {/* General Output & Trigger Modes */}
                     <div
                       style={{
-                        padding: '1rem',
-                        background: 'rgba(0,0,0,0.2)',
-                        borderRadius: '8px',
                         display: 'flex',
-                        flexDirection: 'column',
-                        gap: '1rem',
+                        gap: '0.8rem',
+                        flexWrap: 'wrap',
+                        padding: '0.6rem 0.8rem',
+                        background: 'rgba(255,255,255,0.02)',
+                        borderRadius: '8px',
+                        border: '1px solid rgba(255,255,255,0.05)',
                       }}
                     >
-                      {/* General Output & Trigger Modes */}
+                      {(
+                        [
+                          ['respondToVoice', '🎙️ Voice (Stage)'],
+                          ['respondToChat', '💬 Live Chat'],
+                          ['speak', '🔊 Speak aloud (TTS)'],
+                          ['postToChat', '📝 Post to chat'],
+                          ['robotEmojiPrefix', '🤖 Prefix with robot'],
+                        ] as const
+                      ).map(([key, label]) => (
+                        <label
+                          key={key}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.4rem',
+                            fontSize: '0.74rem',
+                            color: 'var(--text)',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={agentConfig[key]}
+                            onChange={(e) => patchAgentConfig({ [key]: e.target.checked })}
+                            style={{ accentColor: 'var(--accent)' }}
+                          />
+                          {label}
+                        </label>
+                      ))}
+                    </div>
+
+                    {/* CARD 1: Persona & Prompting */}
+                    <div
+                      style={{
+                        background: 'rgba(255,255,255,0.025)',
+                        border: '1px solid rgba(255,255,255,0.07)',
+                        borderRadius: '8px',
+                        padding: '0.75rem',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.6rem',
+                      }}
+                    >
                       <div
                         style={{
                           display: 'flex',
-                          gap: '0.8rem',
-                          flexWrap: 'wrap',
-                          padding: '0.6rem 0.8rem',
-                          background: 'rgba(255,255,255,0.02)',
-                          borderRadius: '8px',
-                          border: '1px solid rgba(255,255,255,0.05)',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
                         }}
                       >
-                        {(
-                          [
-                            ['respondToVoice', '🎙️ Voice (Stage)'],
-                            ['respondToChat', '💬 Live Chat'],
-                            ['speak', '🔊 Speak aloud (TTS)'],
-                            ['postToChat', '📝 Post to chat'],
-                            ['robotEmojiPrefix', '🤖 Prefix with robot'],
-                          ] as const
-                        ).map(([key, label]) => (
-                          <label
-                            key={key}
+                        <span
+                          style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--accent)' }}
+                        >
+                          🎭 Persona &amp; Identity
+                        </span>
+                        <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                          {personaDraft.length} chars
+                        </span>
+                      </div>
+
+                      {/* Quick Persona Chips */}
+                      <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                        {DEFAULT_PRESETS.map((p, i) => (
+                          <button
+                            key={i}
+                            type="button"
+                            className="ch-btn-action"
                             style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '0.4rem',
-                              fontSize: '0.74rem',
-                              color: 'var(--text)',
-                              cursor: 'pointer',
+                              padding: '0.2rem 0.5rem',
+                              fontSize: '0.68rem',
+                              borderRadius: '12px',
+                              background:
+                                personaDraft === p.prompt
+                                  ? 'rgba(168, 85, 247, 0.25)'
+                                  : 'rgba(255,255,255,0.04)',
+                              border:
+                                personaDraft === p.prompt
+                                  ? '1px solid var(--accent)'
+                                  : '1px solid rgba(255,255,255,0.08)',
+                              color:
+                                personaDraft === p.prompt ? 'var(--text-strong)' : 'var(--text)',
+                              fontWeight: personaDraft === p.prompt ? 600 : 400,
+                            }}
+                            title={p.prompt}
+                            onClick={() => {
+                              setSelectedPreset(p.name);
+                              void handleApplyPersona(p.prompt, true);
                             }}
                           >
-                            <input
-                              type="checkbox"
-                              checked={agentConfig[key]}
-                              onChange={(e) => patchAgentConfig({ [key]: e.target.checked })}
-                              style={{ accentColor: 'var(--accent)' }}
-                            />
-                            {label}
-                          </label>
+                            {p.chipLabel || p.name}
+                          </button>
                         ))}
                       </div>
 
-                      {/* CARD 1: Persona & Prompting */}
+                      {/* Preset Selector & Action Buttons */}
                       <div
                         style={{
-                          background: 'rgba(255,255,255,0.025)',
-                          border: '1px solid rgba(255,255,255,0.07)',
-                          borderRadius: '8px',
-                          padding: '0.75rem',
                           display: 'flex',
-                          flexDirection: 'column',
-                          gap: '0.6rem',
+                          gap: '0.4rem',
+                          alignItems: 'center',
+                          flexWrap: 'wrap',
                         }}
                       >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--accent)' }}>
-                            🎭 Persona &amp; Identity
-                          </span>
-                          <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
-                            {personaDraft.length} chars
-                          </span>
-                        </div>
-
-                        {/* Quick Persona Chips */}
-                        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
-                          {DEFAULT_PRESETS.map((p, i) => (
-                            <button
-                              key={i}
-                              type="button"
-                              className="ch-btn-action"
-                              style={{
-                                padding: '0.2rem 0.5rem',
-                                fontSize: '0.68rem',
-                                borderRadius: '12px',
-                                background: personaDraft === p.prompt ? 'rgba(168, 85, 247, 0.25)' : 'rgba(255,255,255,0.04)',
-                                border: personaDraft === p.prompt ? '1px solid var(--accent)' : '1px solid rgba(255,255,255,0.08)',
-                                color: personaDraft === p.prompt ? 'var(--text-strong)' : 'var(--text)',
-                                fontWeight: personaDraft === p.prompt ? 600 : 400,
-                              }}
-                              title={p.prompt}
-                              onClick={() => {
-                                setSelectedPreset(p.name);
-                                void handleApplyPersona(p.prompt, true);
-                              }}
-                            >
-                              {p.chipLabel || p.name}
-                            </button>
-                          ))}
-                        </div>
-
-                        {/* Preset Selector & Action Buttons */}
-                        <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                          <select
-                            value={selectedPreset}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setSelectedPreset(val);
-                              if (val) {
-                                const p = agentPromptPresets.find((pr) => pr.prompt === val);
-                                if (p) {
-                                  void handleApplyPersona(p.prompt, true);
-                                }
-                              }
-                            }}
-                            style={{
-                              padding: '0 0.4rem',
-                              fontSize: '0.7rem',
-                              background: 'var(--bg-elevated)',
-                              color: 'var(--text)',
-                              border: '1px solid var(--border)',
-                              borderRadius: '4px',
-                              flex: 1,
-                              minWidth: '130px',
-                            }}
-                          >
-                            <option value="">Choose preset...</option>
-                            {agentPromptPresets.map((p, i) => (
-                              <option key={i} value={p.prompt}>
-                                {p.name}
-                              </option>
-                            ))}
-                          </select>
-                          <button
-                            type="button"
-                            className="ch-btn-action"
-                            style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}
-                            title="Save current prompt as a custom preset"
-                            onClick={() => {
-                              const name = prompt('Name for this custom preset:');
-                              if (name && name.trim()) {
-                                const newPresets = [
-                                  ...agentPromptPresets,
-                                  { name: name.trim(), prompt: personaDraft },
-                                ];
-                                setAgentPromptPresets(newPresets);
-                                localStorage.setItem('agentPresets', JSON.stringify(newPresets));
-                                toastsStore.add('success', 'Preset Saved', `Saved preset "${name.trim()}".`);
-                              }
-                            }}
-                          >
-                            Save Preset...
-                          </button>
-                          <button
-                            type="button"
-                            className="ch-btn-action"
-                            style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem', background: 'var(--bg-elevated)' }}
-                            title="Restore default assistant persona and clear conversation memory"
-                            onClick={() => {
-                              setSelectedPreset('');
-                              void handleApplyPersona(DEFAULT_VOICE_CONFIG.persona, true);
-                            }}
-                          >
-                            Reset Default
-                          </button>
-                        </div>
-
-                        {/* Textarea */}
-                        <textarea
-                          value={personaDraft}
+                        <select
+                          value={selectedPreset}
                           onChange={(e) => {
-                            setPersonaDraft(e.target.value);
-                            patchAgentConfig({ persona: e.target.value });
+                            const val = e.target.value;
+                            setSelectedPreset(val);
+                            if (val) {
+                              const p = agentPromptPresets.find((pr) => pr.prompt === val);
+                              if (p) {
+                                void handleApplyPersona(p.prompt, true);
+                              }
+                            }
                           }}
-                          placeholder="System Prompt / Persona (instruction for the voice agent)"
-                          rows={3}
                           style={{
-                            width: '100%',
-                            minHeight: '80px',
-                            padding: '0.65rem',
-                            fontSize: '0.78rem',
+                            padding: '0 0.4rem',
+                            fontSize: '0.7rem',
                             background: 'var(--bg-elevated)',
                             color: 'var(--text)',
                             border: '1px solid var(--border)',
-                            borderRadius: '6px',
-                            resize: 'vertical',
+                            borderRadius: '4px',
+                            flex: 1,
+                            minWidth: '130px',
                           }}
-                        />
+                        >
+                          <option value="">Choose preset...</option>
+                          {agentPromptPresets.map((p, i) => (
+                            <option key={i} value={p.prompt}>
+                              {p.name}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          className="ch-btn-action"
+                          style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}
+                          title="Save current prompt as a custom preset"
+                          onClick={() => {
+                            const name = prompt('Name for this custom preset:');
+                            if (name && name.trim()) {
+                              const newPresets = [
+                                ...agentPromptPresets,
+                                { name: name.trim(), prompt: personaDraft },
+                              ];
+                              setAgentPromptPresets(newPresets);
+                              localStorage.setItem('agentPresets', JSON.stringify(newPresets));
+                              toastsStore.add(
+                                'success',
+                                'Preset Saved',
+                                `Saved preset "${name.trim()}".`,
+                              );
+                            }
+                          }}
+                        >
+                          Save Preset...
+                        </button>
+                        <button
+                          type="button"
+                          className="ch-btn-action"
+                          style={{
+                            padding: '0.2rem 0.5rem',
+                            fontSize: '0.7rem',
+                            background: 'var(--bg-elevated)',
+                          }}
+                          title="Restore default assistant persona and clear conversation memory"
+                          onClick={() => {
+                            setSelectedPreset('');
+                            void handleApplyPersona(DEFAULT_VOICE_CONFIG.persona, true);
+                          }}
+                        >
+                          Reset Default
+                        </button>
+                      </div>
 
-                        {/* Apply & Save Buttons */}
-                        <div style={{ display: 'flex', gap: '0.4rem', justifyContent: 'flex-end' }}>
-                          <button
-                            type="button"
-                            className="ch-btn-action"
-                            style={{
-                              padding: '0.25rem 0.6rem',
-                              fontSize: '0.72rem',
-                              background: 'var(--bg-elevated)',
-                              border: '1px solid var(--border)',
-                            }}
-                            title="Update persona for upcoming turns without erasing existing context memory"
-                            onClick={() => void handleApplyPersona(personaDraft, false)}
+                      {/* Textarea */}
+                      <textarea
+                        value={personaDraft}
+                        onChange={(e) => {
+                          setPersonaDraft(e.target.value);
+                          patchAgentConfig({ persona: e.target.value });
+                        }}
+                        placeholder="System Prompt / Persona (instruction for the voice agent)"
+                        rows={3}
+                        style={{
+                          width: '100%',
+                          minHeight: '80px',
+                          padding: '0.65rem',
+                          fontSize: '0.78rem',
+                          background: 'var(--bg-elevated)',
+                          color: 'var(--text)',
+                          border: '1px solid var(--border)',
+                          borderRadius: '6px',
+                          resize: 'vertical',
+                        }}
+                      />
+
+                      {/* Apply & Save Buttons */}
+                      <div style={{ display: 'flex', gap: '0.4rem', justifyContent: 'flex-end' }}>
+                        <button
+                          type="button"
+                          className="ch-btn-action"
+                          style={{
+                            padding: '0.25rem 0.6rem',
+                            fontSize: '0.72rem',
+                            background: 'var(--bg-elevated)',
+                            border: '1px solid var(--border)',
+                          }}
+                          title="Update persona for upcoming turns without erasing existing context memory"
+                          onClick={() => void handleApplyPersona(personaDraft, false)}
+                        >
+                          💾 Save Prompt
+                        </button>
+                        <button
+                          type="button"
+                          className="ch-btn-action"
+                          style={{
+                            padding: '0.25rem 0.75rem',
+                            fontSize: '0.72rem',
+                            background: 'var(--accent)',
+                            color: 'var(--text-strong)',
+                            border: 'none',
+                            fontWeight: 600,
+                          }}
+                          title="Apply new persona and wipe conversation memory so the agent switches identity immediately"
+                          onClick={() => void handleApplyPersona(personaDraft, true)}
+                        >
+                          ✨ Apply &amp; Clear Memory
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* CARD 2: Voice & Speech Synthesis (TTS) */}
+                    <div
+                      style={{
+                        background: 'rgba(255,255,255,0.025)',
+                        border: '1px solid rgba(255,255,255,0.07)',
+                        borderRadius: '8px',
+                        padding: '0.75rem',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.6rem',
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                        }}
+                      >
+                        <span
+                          style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--accent)' }}
+                        >
+                          🔊 Voice &amp; Speech Synthesis (TTS)
+                        </span>
+                        <button
+                          type="button"
+                          className="ch-btn-action"
+                          style={{
+                            padding: '0.15rem 0.55rem',
+                            fontSize: '0.68rem',
+                            background: 'rgba(56, 189, 248, 0.15)',
+                            color: 'var(--accent)',
+                            border: '1px solid rgba(56, 189, 248, 0.3)',
+                            borderRadius: '10px',
+                          }}
+                          title="Audition selected neural voice, speed, and pitch directly on your speakers"
+                          onClick={() => {
+                            void previewTtsVoice({
+                              voice: agentConfig.ttsVoice,
+                              rate: agentConfig.ttsRate,
+                              pitch: agentConfig.ttsPitch,
+                              volume: agentConfig.ttsVolume,
+                            });
+                          }}
+                        >
+                          ▶️ Test Voice
+                        </button>
+                      </div>
+
+                      {/* Voice Selector */}
+                      <div style={agentFieldStyle}>
+                        <span style={agentLabelStyle}>Neural Voice Model:</span>
+                        <select
+                          style={agentInputStyle}
+                          value={agentConfig.ttsVoice || 'en-US-ChristopherNeural'}
+                          onChange={(e) => patchAgentConfig({ ttsVoice: e.target.value })}
+                        >
+                          {ttsVoices.length > 0 ? (
+                            ttsVoices.map((v) => (
+                              <option key={v.name} value={v.name}>
+                                {v.label || v.name}
+                              </option>
+                            ))
+                          ) : (
+                            <>
+                              <option value="en-US-AndrewMultilingualNeural">
+                                Andrew (US Male - Ultra-Natural &amp; Warm)
+                              </option>
+                              <option value="en-US-AvaMultilingualNeural">
+                                Ava (US Female - Ultra-Natural &amp; Conversational)
+                              </option>
+                              <option value="en-US-BrianMultilingualNeural">
+                                Brian (US Male - Engaging &amp; Friendly)
+                              </option>
+                              <option value="en-US-EmmaMultilingualNeural">
+                                Emma (US Female - Cheerful &amp; Clear)
+                              </option>
+                              <option value="en-US-ChristopherNeural">
+                                Christopher (US Male - Warm &amp; Authoritative)
+                              </option>
+                              <option value="en-US-JennyNeural">
+                                Jenny (US Female - Clear &amp; Conversational)
+                              </option>
+                              <option value="en-US-GuyNeural">
+                                Guy (US Male - Casual &amp; Friendly)
+                              </option>
+                              <option value="en-US-AriaNeural">
+                                Aria (US Female - Expressive)
+                              </option>
+                              <option value="en-US-EricNeural">Eric (US Male - Crisp)</option>
+                              <option value="en-GB-RyanNeural">Ryan (UK Male - Natural)</option>
+                              <option value="en-GB-SoniaNeural">Sonia (UK Female - Clear)</option>
+                              <option value="en-AU-NatNeural">Nat (AU Female)</option>
+                              <option value="en-AU-WilliamNeural">William (AU Male)</option>
+                              <option value="en-IN-NeerjaNeural">
+                                Neerja (IN Female - Professional)
+                              </option>
+                              <option value="ja-JP-KeitaNeural">Keita (Japanese Male)</option>
+                              <option value="es-ES-AlvaroNeural">Alvaro (Spanish Male)</option>
+                              <option value="fr-FR-HenriNeural">Henri (French Male)</option>
+                              <option value="de-DE-ConradNeural">Conrad (German Male)</option>
+                            </>
+                          )}
+                        </select>
+                      </div>
+
+                      {/* Audio Tuning: Volume, Rate, Pitch */}
+                      <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                        <div style={{ ...agentFieldStyle, flex: 1, minWidth: '85px' }}>
+                          <span style={agentLabelStyle}>Output Volume:</span>
+                          <select
+                            style={agentInputStyle}
+                            value={agentConfig.ttsVolume || '+0%'}
+                            onChange={(e) => patchAgentConfig({ ttsVolume: e.target.value })}
                           >
-                            💾 Save Prompt
-                          </button>
-                          <button
-                            type="button"
-                            className="ch-btn-action"
-                            style={{
-                              padding: '0.25rem 0.75rem',
-                              fontSize: '0.72rem',
-                              background: 'var(--accent)',
-                              color: 'var(--text-strong)',
-                              border: 'none',
-                              fontWeight: 600,
-                            }}
-                            title="Apply new persona and wipe conversation memory so the agent switches identity immediately"
-                            onClick={() => void handleApplyPersona(personaDraft, true)}
+                            <option value="-50%">50% (Soft)</option>
+                            <option value="-25%">75%</option>
+                            <option value="+0%">100% (Normal)</option>
+                            <option value="+25%">125%</option>
+                            <option value="+50%">150% (Loud)</option>
+                          </select>
+                        </div>
+                        <div style={{ ...agentFieldStyle, flex: 1, minWidth: '85px' }}>
+                          <span style={agentLabelStyle}>Speech Rate:</span>
+                          <select
+                            style={agentInputStyle}
+                            value={agentConfig.ttsRate || '+0%'}
+                            onChange={(e) => patchAgentConfig({ ttsRate: e.target.value })}
                           >
-                            ✨ Apply &amp; Clear Memory
-                          </button>
+                            <option value="-20%">0.8x (Slow)</option>
+                            <option value="-10%">0.9x</option>
+                            <option value="+0%">1.0x (Normal)</option>
+                            <option value="+10%">1.1x (Fast)</option>
+                            <option value="+20%">1.2x</option>
+                            <option value="+30%">1.3x</option>
+                          </select>
+                        </div>
+                        <div style={{ ...agentFieldStyle, flex: 1, minWidth: '85px' }}>
+                          <span style={agentLabelStyle}>Voice Pitch:</span>
+                          <select
+                            style={agentInputStyle}
+                            value={agentConfig.ttsPitch || '+0Hz'}
+                            onChange={(e) => patchAgentConfig({ ttsPitch: e.target.value })}
+                          >
+                            <option value="-10Hz">-10Hz (Deeper)</option>
+                            <option value="-5Hz">-5Hz</option>
+                            <option value="+0Hz">Default (+0Hz)</option>
+                            <option value="+5Hz">+5Hz</option>
+                            <option value="+10Hz">+10Hz (Higher)</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* CARD 3: Speech Recognition (STT) & Floor Dynamics */}
+                    <div
+                      style={{
+                        background: 'rgba(255,255,255,0.025)',
+                        border: '1px solid rgba(255,255,255,0.07)',
+                        borderRadius: '8px',
+                        padding: '0.75rem',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.6rem',
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                        }}
+                      >
+                        <span
+                          style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--success)' }}
+                        >
+                          🎙️ Hearing &amp; Speech Recognition (STT)
+                        </span>
+                        <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                          Whisper / VAD Filtered
+                        </span>
+                      </div>
+
+                      {/* Live STT Transcript Pill */}
+                      <div
+                        style={{
+                          padding: '0.45rem 0.65rem',
+                          background: 'rgba(0, 0, 0, 0.3)',
+                          border: '1px solid rgba(255, 255, 255, 0.08)',
+                          borderRadius: '6px',
+                          fontSize: '0.72rem',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '2px',
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            color: 'var(--text-dim)',
+                            fontSize: '0.65rem',
+                          }}
+                        >
+                          <span>🎙️ LIVE STT RECOGNITION</span>
+                          {lastHeardSpeech && <span>{lastHeardSpeech.time}</span>}
+                        </div>
+                        {lastHeardSpeech ? (
+                          <div style={{ color: 'var(--text)' }}>
+                            <strong style={{ color: 'var(--accent)' }}>
+                              {lastHeardSpeech.speaker || 'Room'}:
+                            </strong>{' '}
+                            <span style={{ fontStyle: 'italic' }}>"{lastHeardSpeech.text}"</span>
+                          </div>
+                        ) : (
+                          <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                            Microphone listening for room audio...
+                          </span>
+                        )}
+                      </div>
+
+                      {/* When to speak & Wake Words */}
+                      <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                        <div style={{ ...agentFieldStyle, flex: 1, minWidth: '140px' }}>
+                          <span style={agentLabelStyle}>When to speak:</span>
+                          <select
+                            style={agentInputStyle}
+                            value={agentConfig.posture}
+                            onChange={(e) =>
+                              patchAgentConfig({
+                                posture: e.target.value as VoiceAgentConfig['posture'],
+                              })
+                            }
+                          >
+                            <option value="addressed">Only when addressed</option>
+                            <option value="conversational">Conversational (with cooldown)</option>
+                            <option value="always">Always (replies to everything)</option>
+                            <option value="interject">Interject (cuts in mid-sentence)</option>
+                          </select>
+                        </div>
+
+                        {agentConfig.posture === 'interject' && (
+                          <div style={{ ...agentFieldStyle, flex: 1, minWidth: '100px' }}>
+                            <span style={agentLabelStyle}>Cut in after:</span>
+                            <input
+                              type="number"
+                              min={2}
+                              max={60}
+                              step={1}
+                              style={agentInputStyle}
+                              value={agentConfig.interjectAfterS ?? 6}
+                              onChange={(e) =>
+                                patchAgentConfig({
+                                  interjectAfterS: Math.max(2, Number(e.target.value) || 6),
+                                })
+                              }
+                            />
+                          </div>
+                        )}
+
+                        <div style={{ ...agentFieldStyle, flex: 2, minWidth: '150px' }}>
+                          <span style={agentLabelStyle}>Wake words (comma separated):</span>
+                          <input
+                            type="text"
+                            style={agentInputStyle}
+                            value={wakeWordsInput}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setWakeWordsInput(val);
+                              patchAgentConfig({
+                                wakeWords: val
+                                  .split(',')
+                                  .map((w) => w.trim().toLowerCase())
+                                  .filter(Boolean),
+                              });
+                            }}
+                            onBlur={() => {
+                              const cleaned = wakeWordsInput
+                                .split(',')
+                                .map((w) => w.trim().toLowerCase())
+                                .filter(Boolean);
+                              setWakeWordsInput(cleaned.join(', '));
+                            }}
+                            placeholder="agent, assistant, bot"
+                          />
                         </div>
                       </div>
 
-                      {/* CARD 2: Voice & Speech Synthesis (TTS) */}
-                      <div
-                        style={{
-                          background: 'rgba(255,255,255,0.025)',
-                          border: '1px solid rgba(255,255,255,0.07)',
-                          borderRadius: '8px',
-                          padding: '0.75rem',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: '0.6rem',
-                        }}
-                      >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--accent)' }}>
-                            🔊 Voice &amp; Speech Synthesis (TTS)
-                          </span>
-                          <button
-                            type="button"
-                            className="ch-btn-action"
-                            style={{
-                              padding: '0.15rem 0.55rem',
-                              fontSize: '0.68rem',
-                              background: 'rgba(56, 189, 248, 0.15)',
-                              color: 'var(--accent)',
-                              border: '1px solid rgba(56, 189, 248, 0.3)',
-                              borderRadius: '10px',
-                            }}
-                            title="Audition selected neural voice, speed, and pitch directly on your speakers"
-                            onClick={() => {
-                              void previewTtsVoice({
-                                voice: agentConfig.ttsVoice,
-                                rate: agentConfig.ttsRate,
-                                pitch: agentConfig.ttsPitch,
-                                volume: agentConfig.ttsVolume,
+                      {/* Conversational Timing */}
+                      <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                        <div style={{ ...agentFieldStyle, flex: 1, minWidth: '140px' }}>
+                          <span style={agentLabelStyle}>Turn Eagerness (Speed):</span>
+                          <select
+                            style={agentInputStyle}
+                            value={agentConfig.turnEagerness || 'normal'}
+                            onChange={(e) => {
+                              const eagerness = e.target.value as 'fast' | 'normal' | 'patient';
+                              const delay =
+                                eagerness === 'fast' ? 400 : eagerness === 'patient' ? 1200 : 750;
+                              patchAgentConfig({
+                                turnEagerness: eagerness,
+                                endpointingDelayMs: delay,
                               });
                             }}
                           >
-                            ▶️ Test Voice
-                          </button>
-                        </div>
-
-                        {/* Voice Selector */}
-                        <div style={agentFieldStyle}>
-                          <span style={agentLabelStyle}>Neural Voice Model:</span>
-                          <select
-                            style={agentInputStyle}
-                            value={agentConfig.ttsVoice || 'en-US-ChristopherNeural'}
-                            onChange={(e) => patchAgentConfig({ ttsVoice: e.target.value })}
-                          >
-                            {ttsVoices.length > 0 ? (
-                              ttsVoices.map((v) => (
-                                <option key={v.name} value={v.name}>
-                                  {v.label || v.name}
-                                </option>
-                              ))
-                            ) : (
-                              <>
-                                <option value="en-US-AndrewMultilingualNeural">Andrew (US Male - Ultra-Natural &amp; Warm)</option>
-                                <option value="en-US-AvaMultilingualNeural">Ava (US Female - Ultra-Natural &amp; Conversational)</option>
-                                <option value="en-US-BrianMultilingualNeural">Brian (US Male - Engaging &amp; Friendly)</option>
-                                <option value="en-US-EmmaMultilingualNeural">Emma (US Female - Cheerful &amp; Clear)</option>
-                                <option value="en-US-ChristopherNeural">Christopher (US Male - Warm &amp; Authoritative)</option>
-                                <option value="en-US-JennyNeural">Jenny (US Female - Clear &amp; Conversational)</option>
-                                <option value="en-US-GuyNeural">Guy (US Male - Casual &amp; Friendly)</option>
-                                <option value="en-US-AriaNeural">Aria (US Female - Expressive)</option>
-                                <option value="en-US-EricNeural">Eric (US Male - Crisp)</option>
-                                <option value="en-GB-RyanNeural">Ryan (UK Male - Natural)</option>
-                                <option value="en-GB-SoniaNeural">Sonia (UK Female - Clear)</option>
-                                <option value="en-AU-NatNeural">Nat (AU Female)</option>
-                                <option value="en-AU-WilliamNeural">William (AU Male)</option>
-                                <option value="en-IN-NeerjaNeural">Neerja (IN Female - Professional)</option>
-                                <option value="ja-JP-KeitaNeural">Keita (Japanese Male)</option>
-                                <option value="es-ES-AlvaroNeural">Alvaro (Spanish Male)</option>
-                                <option value="fr-FR-HenriNeural">Henri (French Male)</option>
-                                <option value="de-DE-ConradNeural">Conrad (German Male)</option>
-                              </>
-                            )}
+                            <option value="fast">⚡ Fast (400ms pause)</option>
+                            <option value="normal">⚖️ Normal (750ms pause)</option>
+                            <option value="patient">🧘 Patient (1200ms pause)</option>
                           </select>
                         </div>
-
-                        {/* Audio Tuning: Volume, Rate, Pitch */}
-                        <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
-                          <div style={{ ...agentFieldStyle, flex: 1, minWidth: '85px' }}>
-                            <span style={agentLabelStyle}>Output Volume:</span>
-                            <select
-                              style={agentInputStyle}
-                              value={agentConfig.ttsVolume || '+0%'}
-                              onChange={(e) => patchAgentConfig({ ttsVolume: e.target.value })}
-                            >
-                              <option value="-50%">50% (Soft)</option>
-                              <option value="-25%">75%</option>
-                              <option value="+0%">100% (Normal)</option>
-                              <option value="+25%">125%</option>
-                              <option value="+50%">150% (Loud)</option>
-                            </select>
-                          </div>
-                          <div style={{ ...agentFieldStyle, flex: 1, minWidth: '85px' }}>
-                            <span style={agentLabelStyle}>Speech Rate:</span>
-                            <select
-                              style={agentInputStyle}
-                              value={agentConfig.ttsRate || '+0%'}
-                              onChange={(e) => patchAgentConfig({ ttsRate: e.target.value })}
-                            >
-                              <option value="-20%">0.8x (Slow)</option>
-                              <option value="-10%">0.9x</option>
-                              <option value="+0%">1.0x (Normal)</option>
-                              <option value="+10%">1.1x (Fast)</option>
-                              <option value="+20%">1.2x</option>
-                              <option value="+30%">1.3x</option>
-                            </select>
-                          </div>
-                          <div style={{ ...agentFieldStyle, flex: 1, minWidth: '85px' }}>
-                            <span style={agentLabelStyle}>Voice Pitch:</span>
-                            <select
-                              style={agentInputStyle}
-                              value={agentConfig.ttsPitch || '+0Hz'}
-                              onChange={(e) => patchAgentConfig({ ttsPitch: e.target.value })}
-                            >
-                              <option value="-10Hz">-10Hz (Deeper)</option>
-                              <option value="-5Hz">-5Hz</option>
-                              <option value="+0Hz">Default (+0Hz)</option>
-                              <option value="+5Hz">+5Hz</option>
-                              <option value="+10Hz">+10Hz (Higher)</option>
-                            </select>
-                          </div>
+                        <div style={{ ...agentFieldStyle, flex: 1, minWidth: '140px' }}>
+                          <span style={agentLabelStyle}>Take Turn After Silence:</span>
+                          <select
+                            style={agentInputStyle}
+                            value={agentConfig.silenceTimeoutS || 0}
+                            onChange={(e) =>
+                              patchAgentConfig({ silenceTimeoutS: Number(e.target.value) })
+                            }
+                          >
+                            <option value={0}>Disabled</option>
+                            <option value={15}>After 15s quiet</option>
+                            <option value={30}>After 30s quiet</option>
+                            <option value={60}>After 60s quiet</option>
+                          </select>
                         </div>
                       </div>
 
-                      {/* CARD 3: Speech Recognition (STT) & Floor Dynamics */}
+                      {/* Natural Flow & Interruption Toggles */}
                       <div
                         style={{
-                          background: 'rgba(255,255,255,0.025)',
-                          border: '1px solid rgba(255,255,255,0.07)',
-                          borderRadius: '8px',
-                          padding: '0.75rem',
                           display: 'flex',
-                          flexDirection: 'column',
-                          gap: '0.6rem',
+                          gap: '1rem',
+                          flexWrap: 'wrap',
+                          padding: '0.1rem 0',
                         }}
                       >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--success)' }}>
-                            🎙️ Hearing &amp; Speech Recognition (STT)
-                          </span>
-                          <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
-                            Whisper / VAD Filtered
-                          </span>
-                        </div>
-
-                        {/* Live STT Transcript Pill */}
-                        <div
+                        <label
                           style={{
-                            padding: '0.45rem 0.65rem',
-                            background: 'rgba(0, 0, 0, 0.3)',
-                            border: '1px solid rgba(255, 255, 255, 0.08)',
-                            borderRadius: '6px',
-                            fontSize: '0.72rem',
                             display: 'flex',
-                            flexDirection: 'column',
-                            gap: '2px',
+                            alignItems: 'center',
+                            gap: '0.4rem',
+                            fontSize: '0.74rem',
+                            color: 'var(--text)',
+                            cursor: 'pointer',
                           }}
                         >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-dim)', fontSize: '0.65rem' }}>
-                            <span>🎙️ LIVE STT RECOGNITION</span>
-                            {lastHeardSpeech && <span>{lastHeardSpeech.time}</span>}
-                          </div>
-                          {lastHeardSpeech ? (
-                            <div style={{ color: 'var(--text)' }}>
-                              <strong style={{ color: 'var(--accent)' }}>{lastHeardSpeech.speaker || 'Room'}:</strong>{' '}
-                              <span style={{ fontStyle: 'italic' }}>"{lastHeardSpeech.text}"</span>
-                            </div>
-                          ) : (
-                            <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                              Microphone listening for room audio...
-                            </span>
-                          )}
-                        </div>
-
-                        {/* When to speak & Wake Words */}
-                        <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
-                          <div style={{ ...agentFieldStyle, flex: 1, minWidth: '140px' }}>
-                            <span style={agentLabelStyle}>When to speak:</span>
-                            <select
-                              style={agentInputStyle}
-                              value={agentConfig.posture}
-                              onChange={(e) =>
-                                patchAgentConfig({
-                                  posture: e.target.value as VoiceAgentConfig['posture'],
-                                })
-                              }
-                            >
-                              <option value="addressed">Only when addressed</option>
-                              <option value="conversational">Conversational (with cooldown)</option>
-                              <option value="always">Always (replies to everything)</option>
-                              <option value="interject">Interject (cuts in mid-sentence)</option>
-                            </select>
-                          </div>
-
-                          {agentConfig.posture === 'interject' && (
-                            <div style={{ ...agentFieldStyle, flex: 1, minWidth: '100px' }}>
-                              <span style={agentLabelStyle}>Cut in after:</span>
-                              <input
-                                type="number"
-                                min={2}
-                                max={60}
-                                step={1}
-                                style={agentInputStyle}
-                                value={agentConfig.interjectAfterS ?? 6}
-                                onChange={(e) =>
-                                  patchAgentConfig({
-                                    interjectAfterS: Math.max(2, Number(e.target.value) || 6),
-                                  })
-                                }
-                              />
-                            </div>
-                          )}
-
-                          <div style={{ ...agentFieldStyle, flex: 2, minWidth: '150px' }}>
-                            <span style={agentLabelStyle}>Wake words (comma separated):</span>
-                            <input
-                              type="text"
-                              style={agentInputStyle}
-                              value={wakeWordsInput}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setWakeWordsInput(val);
-                                patchAgentConfig({
-                                  wakeWords: val
-                                    .split(',')
-                                    .map((w) => w.trim().toLowerCase())
-                                    .filter(Boolean),
-                                });
-                              }}
-                              onBlur={() => {
-                                const cleaned = wakeWordsInput
-                                  .split(',')
-                                  .map((w) => w.trim().toLowerCase())
-                                  .filter(Boolean);
-                                setWakeWordsInput(cleaned.join(', '));
-                              }}
-                              placeholder="agent, assistant, bot"
-                            />
-                          </div>
-                        </div>
-
-                        {/* Conversational Timing */}
-                        <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
-                          <div style={{ ...agentFieldStyle, flex: 1, minWidth: '140px' }}>
-                            <span style={agentLabelStyle}>Turn Eagerness (Speed):</span>
-                            <select
-                              style={agentInputStyle}
-                              value={agentConfig.turnEagerness || 'normal'}
-                              onChange={(e) => {
-                                const eagerness = e.target.value as 'fast' | 'normal' | 'patient';
-                                const delay = eagerness === 'fast' ? 400 : eagerness === 'patient' ? 1200 : 750;
-                                patchAgentConfig({ turnEagerness: eagerness, endpointingDelayMs: delay });
-                              }}
-                            >
-                              <option value="fast">⚡ Fast (400ms pause)</option>
-                              <option value="normal">⚖️ Normal (750ms pause)</option>
-                              <option value="patient">🧘 Patient (1200ms pause)</option>
-                            </select>
-                          </div>
-                          <div style={{ ...agentFieldStyle, flex: 1, minWidth: '140px' }}>
-                            <span style={agentLabelStyle}>Take Turn After Silence:</span>
-                            <select
-                              style={agentInputStyle}
-                              value={agentConfig.silenceTimeoutS || 0}
-                              onChange={(e) => patchAgentConfig({ silenceTimeoutS: Number(e.target.value) })}
-                            >
-                              <option value={0}>Disabled</option>
-                              <option value={15}>After 15s quiet</option>
-                              <option value={30}>After 30s quiet</option>
-                              <option value={60}>After 60s quiet</option>
-                            </select>
-                          </div>
-                        </div>
-
-                        {/* Natural Flow & Interruption Toggles */}
-                        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', padding: '0.1rem 0' }}>
-                          <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.74rem', color: 'var(--text)', cursor: 'pointer' }}>
-                            <input
-                              type="checkbox"
-                              checked={agentConfig.thinkingFiller !== false}
-                              onChange={(e) => patchAgentConfig({ thinkingFiller: e.target.checked })}
-                              style={{ accentColor: 'var(--accent)' }}
-                            />
-                            Soft thinking filler ("Hmm, let me check...")
-                          </label>
-                          <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.74rem', color: 'var(--text)', cursor: 'pointer' }}>
-                            <input
-                              type="checkbox"
-                              checked={agentConfig.allowBargeIn !== false}
-                              onChange={(e) => patchAgentConfig({ allowBargeIn: e.target.checked })}
-                              style={{ accentColor: 'var(--accent)' }}
-                            />
-                            Allow users to interrupt agent while speaking (Barge-in)
-                          </label>
-                        </div>
+                          <input
+                            type="checkbox"
+                            checked={agentConfig.thinkingFiller !== false}
+                            onChange={(e) => patchAgentConfig({ thinkingFiller: e.target.checked })}
+                            style={{ accentColor: 'var(--accent)' }}
+                          />
+                          Soft thinking filler ("Hmm, let me check...")
+                        </label>
+                        <label
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.4rem',
+                            fontSize: '0.74rem',
+                            color: 'var(--text)',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={agentConfig.allowBargeIn !== false}
+                            onChange={(e) => patchAgentConfig({ allowBargeIn: e.target.checked })}
+                            style={{ accentColor: 'var(--accent)' }}
+                          />
+                          Allow users to interrupt agent while speaking (Barge-in)
+                        </label>
                       </div>
+                    </div>
 
-                      {/* CARD 4: Model & Reasoning Parameters */}
+                    {/* CARD 4: Model & Reasoning Parameters */}
+                    <div
+                      style={{
+                        background: 'rgba(255,255,255,0.025)',
+                        border: '1px solid rgba(255,255,255,0.07)',
+                        borderRadius: '8px',
+                        padding: '0.75rem',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.6rem',
+                      }}
+                    >
                       <div
                         style={{
-                          background: 'rgba(255,255,255,0.025)',
-                          border: '1px solid rgba(255,255,255,0.07)',
-                          borderRadius: '8px',
-                          padding: '0.75rem',
                           display: 'flex',
-                          flexDirection: 'column',
-                          gap: '0.6rem',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
                         }}
                       >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <span style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--warning)' }}>
-                            🧠 Model &amp; Reasoning Parameters
+                        <span
+                          style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--warning)' }}
+                        >
+                          🧠 Model &amp; Reasoning Parameters
+                        </span>
+                        {agentEngineStatus?.provider && (
+                          <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)' }}>
+                            Provider: {agentEngineStatus.provider}
                           </span>
-                          {agentEngineStatus?.provider && (
-                            <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)' }}>
-                              Provider: {agentEngineStatus.provider}
-                            </span>
+                        )}
+                      </div>
+
+                      {/* Engine Model Selector */}
+                      <div style={agentFieldStyle}>
+                        <label style={agentLabelStyle}>Active Engine Model:</label>
+                        <select
+                          style={agentInputStyle}
+                          value={agentEngineStatus?.model || ''}
+                          disabled={switchingModel}
+                          onChange={async (e) => {
+                            const newModel = e.target.value;
+                            if (!agentEngineStatus?.provider) return;
+                            setSwitchingModel(true);
+                            try {
+                              await saveAgentConfig(
+                                newModel,
+                                agentEngineStatus.provider,
+                                agentEngineStatus.endpoint || undefined,
+                              );
+                              const updated = await getAgentStatus();
+                              setAgentEngineStatus(updated);
+                              toastsStore.add(
+                                'success',
+                                'Model Switched',
+                                `Voice Agent now using ${newModel}`,
+                              );
+                            } catch (err) {
+                              toastsStore.add(
+                                'error',
+                                'Model Switch Failed',
+                                err instanceof Error ? err.message : String(err),
+                              );
+                            } finally {
+                              setSwitchingModel(false);
+                            }
+                          }}
+                        >
+                          {agentEngineStatus?.available_models &&
+                          agentEngineStatus.available_models.length > 0 ? (
+                            agentEngineStatus.available_models.map((m) => (
+                              <option key={m} value={m}>
+                                {m.includes('3b') || m.includes('2b') || m.includes('1b')
+                                  ? `⚡ ${m} (Fast - Recommended)`
+                                  : m}
+                              </option>
+                            ))
+                          ) : (
+                            <option value={agentEngineStatus?.model || ''}>
+                              {agentEngineStatus?.model || 'Loading...'}
+                            </option>
                           )}
-                        </div>
+                        </select>
+                      </div>
 
-                        {/* Engine Model Selector */}
-                        <div style={agentFieldStyle}>
-                          <label style={agentLabelStyle}>Active Engine Model:</label>
-                          <select
+                      {/* Model override, Temperature, Max Tokens */}
+                      <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                        <div style={{ ...agentFieldStyle, flex: 2, minWidth: '150px' }}>
+                          <span style={agentLabelStyle}>Model Override (optional):</span>
+                          <input
+                            type="text"
+                            placeholder="System default"
+                            value={agentConfig.model || ''}
+                            onChange={(e) =>
+                              patchAgentConfig({ model: e.target.value.trim() || undefined })
+                            }
                             style={agentInputStyle}
-                            value={agentEngineStatus?.model || ''}
-                            disabled={switchingModel}
-                            onChange={async (e) => {
-                              const newModel = e.target.value;
-                              if (!agentEngineStatus?.provider) return;
-                              setSwitchingModel(true);
-                              try {
-                                await saveAgentConfig(
-                                  newModel,
-                                  agentEngineStatus.provider,
-                                  agentEngineStatus.endpoint || undefined,
-                                );
-                                const updated = await getAgentStatus();
-                                setAgentEngineStatus(updated);
-                                toastsStore.add('success', 'Model Switched', `Voice Agent now using ${newModel}`);
-                              } catch (err) {
-                                toastsStore.add('error', 'Model Switch Failed', err instanceof Error ? err.message : String(err));
-                              } finally {
-                                setSwitchingModel(false);
-                              }
-                            }}
-                          >
-                            {agentEngineStatus?.available_models && agentEngineStatus.available_models.length > 0 ? (
-                              agentEngineStatus.available_models.map((m) => (
-                                <option key={m} value={m}>
-                                  {m.includes('3b') || m.includes('2b') || m.includes('1b') ? `⚡ ${m} (Fast - Recommended)` : m}
-                                </option>
-                              ))
-                            ) : (
-                              <option value={agentEngineStatus?.model || ''}>{agentEngineStatus?.model || 'Loading...'}</option>
-                            )}
-                          </select>
+                          />
                         </div>
-
-                        {/* Model override, Temperature, Max Tokens */}
-                        <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
-                          <div style={{ ...agentFieldStyle, flex: 2, minWidth: '150px' }}>
-                            <span style={agentLabelStyle}>Model Override (optional):</span>
-                            <input
-                              type="text"
-                              placeholder="System default"
-                              value={agentConfig.model || ''}
-                              onChange={(e) =>
-                                patchAgentConfig({ model: e.target.value.trim() || undefined })
-                              }
-                              style={agentInputStyle}
-                            />
-                          </div>
-                          <div style={{ ...agentFieldStyle, flex: 1, minWidth: '85px' }}>
-                            <span style={agentLabelStyle}>Temperature ({agentConfig.temperature}):</span>
-                            <input
-                              type="number"
-                              min="0"
-                              max="1.5"
-                              step="0.1"
-                              value={agentConfig.temperature}
-                              onChange={(e) =>
-                                patchAgentConfig({ temperature: Number(e.target.value) })
-                              }
-                              style={agentInputStyle}
-                            />
-                          </div>
-                          <div style={{ ...agentFieldStyle, flex: 1, minWidth: '85px' }}>
-                            <span style={agentLabelStyle}>Max Tokens:</span>
-                            <input
-                              type="number"
-                              min="20"
-                              max="400"
-                              step="10"
-                              value={agentConfig.maxTokens}
-                              onChange={(e) =>
-                                patchAgentConfig({ maxTokens: Number(e.target.value) })
-                              }
-                              style={agentInputStyle}
-                            />
-                          </div>
+                        <div style={{ ...agentFieldStyle, flex: 1, minWidth: '85px' }}>
+                          <span style={agentLabelStyle}>
+                            Temperature ({agentConfig.temperature}):
+                          </span>
+                          <input
+                            type="number"
+                            min="0"
+                            max="1.5"
+                            step="0.1"
+                            value={agentConfig.temperature}
+                            onChange={(e) =>
+                              patchAgentConfig({ temperature: Number(e.target.value) })
+                            }
+                            style={agentInputStyle}
+                          />
                         </div>
-
-                        {/* Memory and Cooldown */}
-                        <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
-                          <div style={{ ...agentFieldStyle, flex: 1, minWidth: '110px' }}>
-                            <span style={agentLabelStyle}>Remember turns:</span>
-                            <input
-                              type="number"
-                              min="0"
-                              max="40"
-                              step="2"
-                              style={agentInputStyle}
-                              value={agentConfig.memoryTurns}
-                              onChange={(e) =>
-                                patchAgentConfig({ memoryTurns: Number(e.target.value) })
-                              }
-                            />
-                          </div>
-                          <div style={{ ...agentFieldStyle, flex: 1, minWidth: '110px' }}>
-                            <span style={agentLabelStyle}>Cooldown (seconds):</span>
-                            <input
-                              type="number"
-                              min="0"
-                              max="60"
-                              step="1"
-                              style={agentInputStyle}
-                              value={agentConfig.cooldownS}
-                              onChange={(e) =>
-                                patchAgentConfig({ cooldownS: Number(e.target.value) })
-                              }
-                            />
-                          </div>
-                          <div style={{ ...agentFieldStyle, flex: 1, minWidth: '130px' }}>
-                            <span style={agentLabelStyle}>Look things up:</span>
-                            <select
-                              style={agentInputStyle}
-                              value={agentConfig.retrieval}
-                              onChange={(e) =>
-                                patchAgentConfig({
-                                  retrieval: e.target.value as VoiceAgentConfig['retrieval'],
-                                })
-                              }
-                            >
-                              <option value="off">Never</option>
-                              <option value="command">Only on /agent search</option>
-                              <option value="auto">Automatically for questions</option>
-                            </select>
-                          </div>
+                        <div style={{ ...agentFieldStyle, flex: 1, minWidth: '85px' }}>
+                          <span style={agentLabelStyle}>Max Tokens:</span>
+                          <input
+                            type="number"
+                            min="20"
+                            max="400"
+                            step="10"
+                            value={agentConfig.maxTokens}
+                            onChange={(e) =>
+                              patchAgentConfig({ maxTokens: Number(e.target.value) })
+                            }
+                            style={agentInputStyle}
+                          />
                         </div>
                       </div>
 
+                      {/* Memory and Cooldown */}
+                      <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                        <div style={{ ...agentFieldStyle, flex: 1, minWidth: '110px' }}>
+                          <span style={agentLabelStyle}>Remember turns:</span>
+                          <input
+                            type="number"
+                            min="0"
+                            max="40"
+                            step="2"
+                            style={agentInputStyle}
+                            value={agentConfig.memoryTurns}
+                            onChange={(e) =>
+                              patchAgentConfig({ memoryTurns: Number(e.target.value) })
+                            }
+                          />
+                        </div>
+                        <div style={{ ...agentFieldStyle, flex: 1, minWidth: '110px' }}>
+                          <span style={agentLabelStyle}>Cooldown (seconds):</span>
+                          <input
+                            type="number"
+                            min="0"
+                            max="60"
+                            step="1"
+                            style={agentInputStyle}
+                            value={agentConfig.cooldownS}
+                            onChange={(e) =>
+                              patchAgentConfig({ cooldownS: Number(e.target.value) })
+                            }
+                          />
+                        </div>
+                        <div style={{ ...agentFieldStyle, flex: 1, minWidth: '130px' }}>
+                          <span style={agentLabelStyle}>Look things up:</span>
+                          <select
+                            style={agentInputStyle}
+                            value={agentConfig.retrieval}
+                            onChange={(e) =>
+                              patchAgentConfig({
+                                retrieval: e.target.value as VoiceAgentConfig['retrieval'],
+                              })
+                            }
+                          >
+                            <option value="off">Never</option>
+                            <option value="command">Only on /agent search</option>
+                            <option value="auto">Automatically for questions</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
 
-
-                      {/* Why it did or didn't speak, and what it currently remembers. */}
+                    {/* Why it did or didn't speak, and what it currently remembers. */}
+                    <div
+                      style={{
+                        background: 'rgba(255,255,255,0.03)',
+                        borderRadius: '8px',
+                        padding: '0.75rem',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '0.5rem',
+                      }}
+                    >
                       <div
                         style={{
-                          background: 'rgba(255,255,255,0.03)',
-                          borderRadius: '8px',
-                          padding: '0.75rem',
                           display: 'flex',
-                          flexDirection: 'column',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          flexWrap: 'wrap',
                           gap: '0.5rem',
                         }}
                       >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
-                          <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            <span>Last turn: <strong style={{ color: 'var(--text-strong)' }}>{agentReason ?? '—'}</strong></span>
-                            {isAgentThinking && (
-                              <span style={{ color: 'var(--accent)', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
-                                ⚡ Generating response...
-                              </span>
-                            )}
-                            {isAgentSpeaking && (
-                              <span style={{ color: 'var(--success)', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
-                                🔊 Speaking
-                              </span>
-                            )}
-                          </div>
-                          <button
-                            type="button"
-                            className="ch-btn-action"
-                            style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem', background: 'var(--bg-elevated)' }}
-                            onClick={() => void handleClearContext(false)}
-                          >
-                            🧹 Clear Context Window
-                          </button>
-                        </div>
-                        {speechError && (
-                          <div style={{ fontSize: '0.75rem', color: 'var(--warning)' }}>
-                            ⚠️ {speechError}
-                          </div>
-                        )}
-                        {agentMemory.length > 0 && (
-                          <details>
-                            <summary
-                              style={{ fontSize: '0.75rem', color: '#94a3b8', cursor: 'pointer' }}
-                            >
-                              Conversation memory ({agentMemory.length})
-                            </summary>
-                            <div
+                        <div
+                          style={{
+                            fontSize: '0.75rem',
+                            color: 'var(--text-dim)',
+                            fontWeight: 600,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem',
+                          }}
+                        >
+                          <span>
+                            Last turn:{' '}
+                            <strong style={{ color: 'var(--text-strong)' }}>
+                              {agentReason ?? '—'}
+                            </strong>
+                          </span>
+                          {isAgentThinking && (
+                            <span
                               style={{
-                                maxHeight: '160px',
-                                overflowY: 'auto',
-                                marginTop: '0.5rem',
-                                display: 'flex',
-                                flexDirection: 'column',
+                                color: 'var(--accent)',
+                                display: 'inline-flex',
+                                alignItems: 'center',
                                 gap: '0.25rem',
                               }}
                             >
-                              {agentMemory.map((t, i) => (
-                                <div
-                                  key={i}
-                                  style={{
-                                    fontSize: '0.72rem',
-                                    color: t.role === 'agent' ? '#a5b4fc' : '#cbd5e1',
-                                  }}
-                                >
-                                  <strong>
-                                    {t.role === 'agent' ? 'Agent' : t.speaker || 'Room'}:
-                                  </strong>{' '}
-                                  {t.text}
-                                </div>
-                              ))}
-                            </div>
-                          </details>
-                        )}
-
-
-                        {/* People Knowledge & Profile Memory */}
-                        <div
-                          style={{
-                            background: 'rgba(0,0,0,0.25)',
-                            borderRadius: '8px',
-                            padding: '0.75rem',
-                            border: '1px solid rgba(255,255,255,0.06)',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: '0.6rem',
-                            marginTop: '0.4rem',
-                          }}
-                        >
-                          <div
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                            }}
-                          >
-                            <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#38bdf8' }}>
-                              👥 People Knowledge ({peopleMemory.length})
+                              ⚡ Generating response...
                             </span>
-                            <button
-                              className="ch-btn-action"
-                              style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}
-                              onClick={() => void refreshPeopleMemory()}
-                              disabled={peopleMemoryLoading}
-                            >
-                              {peopleMemoryLoading ? '...' : '🔄 Refresh'}
-                            </button>
-                          </div>
-
-                          <input
-                            type="text"
-                            placeholder="Search remembered people..."
-                            value={peopleMemoryQuery}
-                            onChange={(e) => {
-                              setPeopleMemoryQuery(e.target.value);
-                              void refreshPeopleMemory(e.target.value);
-                            }}
-                            // Vertical padding stays out — see agentInputStyle.
-                            style={{ ...agentInputStyle, fontSize: '0.75rem' }}
-                          />
-
-                          {peopleMemory.length === 0 ? (
-                            <p style={{ fontSize: '0.72rem', color: '#64748b', margin: '0.2rem 0' }}>
-                              No users remembered yet. The agent automatically learns people and their facts when they speak or chat!
-                            </p>
-                          ) : (
-                            <div
+                          )}
+                          {isAgentSpeaking && (
+                            <span
                               style={{
-                                maxHeight: '220px',
-                                overflowY: 'auto',
-                                display: 'flex',
-                                flexDirection: 'column',
-                                gap: '0.5rem',
+                                color: 'var(--success)',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.25rem',
                               }}
                             >
-                              {peopleMemory.map((p) => {
-                                const noteInput = newNoteInputs[p.user_id] || '';
-                                return (
+                              🔊 Speaking
+                            </span>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          className="ch-btn-action"
+                          style={{
+                            padding: '0.2rem 0.5rem',
+                            fontSize: '0.7rem',
+                            background: 'var(--bg-elevated)',
+                          }}
+                          onClick={() => void handleClearContext(false)}
+                        >
+                          🧹 Clear Context Window
+                        </button>
+                      </div>
+                      {speechError && (
+                        <div style={{ fontSize: '0.75rem', color: 'var(--warning)' }}>
+                          ⚠️ {speechError}
+                        </div>
+                      )}
+                      {agentMemory.length > 0 && (
+                        <details>
+                          <summary
+                            style={{ fontSize: '0.75rem', color: '#94a3b8', cursor: 'pointer' }}
+                          >
+                            Conversation memory ({agentMemory.length})
+                          </summary>
+                          <div
+                            style={{
+                              maxHeight: '160px',
+                              overflowY: 'auto',
+                              marginTop: '0.5rem',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '0.25rem',
+                            }}
+                          >
+                            {agentMemory.map((t, i) => (
+                              <div
+                                key={i}
+                                style={{
+                                  fontSize: '0.72rem',
+                                  color: t.role === 'agent' ? '#a5b4fc' : '#cbd5e1',
+                                }}
+                              >
+                                <strong>
+                                  {t.role === 'agent' ? 'Agent' : t.speaker || 'Room'}:
+                                </strong>{' '}
+                                {t.text}
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                      )}
+
+                      {/* People Knowledge & Profile Memory */}
+                      <div
+                        style={{
+                          background: 'rgba(0,0,0,0.25)',
+                          borderRadius: '8px',
+                          padding: '0.75rem',
+                          border: '1px solid rgba(255,255,255,0.06)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.6rem',
+                          marginTop: '0.4rem',
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                          }}
+                        >
+                          <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#38bdf8' }}>
+                            👥 People Knowledge ({peopleMemory.length})
+                          </span>
+                          <button
+                            className="ch-btn-action"
+                            style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}
+                            onClick={() => void refreshPeopleMemory()}
+                            disabled={peopleMemoryLoading}
+                          >
+                            {peopleMemoryLoading ? '...' : '🔄 Refresh'}
+                          </button>
+                        </div>
+
+                        <input
+                          type="text"
+                          placeholder="Search remembered people..."
+                          value={peopleMemoryQuery}
+                          onChange={(e) => {
+                            setPeopleMemoryQuery(e.target.value);
+                            void refreshPeopleMemory(e.target.value);
+                          }}
+                          // Vertical padding stays out — see agentInputStyle.
+                          style={{ ...agentInputStyle, fontSize: '0.75rem' }}
+                        />
+
+                        {peopleMemory.length === 0 ? (
+                          <p style={{ fontSize: '0.72rem', color: '#64748b', margin: '0.2rem 0' }}>
+                            No users remembered yet. The agent automatically learns people and their
+                            facts when they speak or chat!
+                          </p>
+                        ) : (
+                          <div
+                            style={{
+                              maxHeight: '220px',
+                              overflowY: 'auto',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '0.5rem',
+                            }}
+                          >
+                            {peopleMemory.map((p) => {
+                              const noteInput = newNoteInputs[p.user_id] || '';
+                              return (
+                                <div
+                                  key={p.user_id}
+                                  style={{
+                                    background: 'rgba(255,255,255,0.03)',
+                                    borderRadius: '6px',
+                                    padding: '0.5rem 0.6rem',
+                                    border: '1px solid rgba(255,255,255,0.04)',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '0.3rem',
+                                  }}
+                                >
                                   <div
-                                    key={p.user_id}
                                     style={{
-                                      background: 'rgba(255,255,255,0.03)',
-                                      borderRadius: '6px',
-                                      padding: '0.5rem 0.6rem',
-                                      border: '1px solid rgba(255,255,255,0.04)',
                                       display: 'flex',
-                                      flexDirection: 'column',
-                                      gap: '0.3rem',
+                                      alignItems: 'center',
+                                      justifyContent: 'space-between',
                                     }}
                                   >
                                     <div
                                       style={{
                                         display: 'flex',
                                         alignItems: 'center',
-                                        justifyContent: 'space-between',
+                                        gap: '0.4rem',
                                       }}
                                     >
-                                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                        {p.photo_url ? (
-                                          <img
-                                            src={p.photo_url}
-                                            alt=""
-                                            style={{ width: '20px', height: '20px', borderRadius: '6px' }}
-                                          />
-                                        ) : (
-                                          <div
-                                            style={{
-                                              width: '20px',
-                                              height: '20px',
-                                              borderRadius: '6px',
-                                              background: 'var(--bg-elevated)',
-                                              fontSize: '0.6rem',
-                                              display: 'flex',
-                                              alignItems: 'center',
-                                              justifyContent: 'center',
-                                              color: '#cbd5e1',
-                                            }}
-                                          >
-                                            {p.name.slice(0, 1).toUpperCase()}
-                                          </div>
-                                        )}
-                                        <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-strong)' }}>
-                                          {p.name}
-                                        </span>
-                                        {p.username && (
-                                          <span style={{ fontSize: '0.7rem', color: '#64748b' }}>
-                                            @{p.username}
-                                          </span>
-                                        )}
-                                      </div>
-                                      <button
+                                      {p.photo_url ? (
+                                        <img
+                                          src={p.photo_url}
+                                          alt=""
+                                          style={{
+                                            width: '20px',
+                                            height: '20px',
+                                            borderRadius: '6px',
+                                          }}
+                                        />
+                                      ) : (
+                                        <div
+                                          style={{
+                                            width: '20px',
+                                            height: '20px',
+                                            borderRadius: '6px',
+                                            background: 'var(--bg-elevated)',
+                                            fontSize: '0.6rem',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            color: '#cbd5e1',
+                                          }}
+                                        >
+                                          {p.name.slice(0, 1).toUpperCase()}
+                                        </div>
+                                      )}
+                                      <span
                                         style={{
-                                          background: 'transparent',
-                                          border: 'none',
-                                          color: '#ef4444',
-                                          fontSize: '0.65rem',
-                                          cursor: 'pointer',
-                                          padding: '2px 4px',
-                                        }}
-                                        title="Forget this person"
-                                        onClick={async () => {
-                                          await forgetPersonMemory(p.user_id);
-                                          void refreshPeopleMemory();
+                                          fontSize: '0.78rem',
+                                          fontWeight: 600,
+                                          color: 'var(--text-strong)',
                                         }}
                                       >
-                                        ✕
-                                      </button>
+                                        {p.name}
+                                      </span>
+                                      {p.username && (
+                                        <span style={{ fontSize: '0.7rem', color: '#64748b' }}>
+                                          @{p.username}
+                                        </span>
+                                      )}
                                     </div>
-
-                                    {p.bio && (
-                                      <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>
-                                        {p.bio.slice(0, 90)}{p.bio.length > 90 ? '...' : ''}
-                                      </div>
-                                    )}
-
-                                    {/* Notes / Learned Facts */}
-                                    {p.notes.length > 0 && (
-                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                                        {p.notes.map((note, nIdx) => (
-                                          <div
-                                            key={nIdx}
-                                            style={{
-                                              fontSize: '0.68rem',
-                                              color: '#a78bfa',
-                                              display: 'flex',
-                                              alignItems: 'center',
-                                              justifyContent: 'space-between',
-                                              background: 'rgba(167, 139, 250, 0.08)',
-                                              padding: '2px 6px',
-                                              borderRadius: '4px',
-                                            }}
-                                          >
-                                            <span>💡 {note}</span>
-                                            <button
-                                              style={{
-                                                background: 'transparent',
-                                                border: 'none',
-                                                color: '#94a3b8',
-                                                cursor: 'pointer',
-                                                fontSize: '0.6rem',
-                                                padding: '0 2px',
-                                              }}
-                                              onClick={async () => {
-                                                await removePersonNote(p.user_id, nIdx);
-                                                void refreshPeopleMemory();
-                                              }}
-                                            >
-                                              ✕
-                                            </button>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    )}
-
-                                    {/* Add Note Input */}
-                                    <form
-                                      onSubmit={async (e) => {
-                                        e.preventDefault();
-                                        if (!noteInput.trim()) return;
-                                        await addPersonNote(p.user_id, noteInput.trim());
-                                        setNewNoteInputs((prev) => ({ ...prev, [p.user_id]: '' }));
+                                    <button
+                                      style={{
+                                        background: 'transparent',
+                                        border: 'none',
+                                        color: '#ef4444',
+                                        fontSize: '0.65rem',
+                                        cursor: 'pointer',
+                                        padding: '2px 4px',
+                                      }}
+                                      title="Forget this person"
+                                      onClick={async () => {
+                                        await forgetPersonMemory(p.user_id);
                                         void refreshPeopleMemory();
                                       }}
-                                      style={{ display: 'flex', gap: '0.3rem', marginTop: '2px' }}
                                     >
-                                      <input
-                                        type="text"
-                                        placeholder="+ Add note / fact..."
-                                        value={noteInput}
-                                        onChange={(e) =>
-                                          setNewNoteInputs((prev) => ({
-                                            ...prev,
-                                            [p.user_id]: e.target.value,
-                                          }))
-                                        }
-                                        style={{
-                                          ...agentInputStyle,
-                                          padding: '0 0.4rem',
-                                          fontSize: '0.68rem',
-                                          flex: 1,
-                                        }}
-                                      />
-                                      <button
-                                        type="submit"
-                                        className="ch-btn-action"
-                                        style={{ padding: '0.2rem 0.5rem', fontSize: '0.68rem' }}
-                                      >
-                                        Add
-                                      </button>
-                                    </form>
+                                      ✕
+                                    </button>
                                   </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                          <span style={{ fontSize: '0.65rem', color: '#64748b' }}>
-                            💡 Spoken / Chat commands: <code>/agent whois @name</code>, <code>/agent remember @name fact</code>, <code>/agent people</code>
-                          </span>
-                        </div>
 
-                        {/* Compact Media Telemetry & Protocol Summary Card */}
-                        <div
-                          style={{
-                            background: 'rgba(0,0,0,0.2)',
-                            borderRadius: '8px',
-                            padding: '0.6rem 0.8rem',
-                            border: '1px solid rgba(255,255,255,0.05)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            marginTop: '0.4rem',
-                          }}
-                        >
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                            <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#38bdf8' }}>
-                              📡 Protocols & Media Telemetry
-                            </span>
-                            <span style={{ fontSize: '0.65rem', color: '#94a3b8' }}>
-                              UDP/Opus • PubNub WSS • Agora RTN
-                            </span>
+                                  {p.bio && (
+                                    <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>
+                                      {p.bio.slice(0, 90)}
+                                      {p.bio.length > 90 ? '...' : ''}
+                                    </div>
+                                  )}
+
+                                  {/* Notes / Learned Facts */}
+                                  {p.notes.length > 0 && (
+                                    <div
+                                      style={{
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        gap: '2px',
+                                      }}
+                                    >
+                                      {p.notes.map((note, nIdx) => (
+                                        <div
+                                          key={nIdx}
+                                          style={{
+                                            fontSize: '0.68rem',
+                                            color: '#a78bfa',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'space-between',
+                                            background: 'rgba(167, 139, 250, 0.08)',
+                                            padding: '2px 6px',
+                                            borderRadius: '4px',
+                                          }}
+                                        >
+                                          <span>💡 {note}</span>
+                                          <button
+                                            style={{
+                                              background: 'transparent',
+                                              border: 'none',
+                                              color: '#94a3b8',
+                                              cursor: 'pointer',
+                                              fontSize: '0.6rem',
+                                              padding: '0 2px',
+                                            }}
+                                            onClick={async () => {
+                                              await removePersonNote(p.user_id, nIdx);
+                                              void refreshPeopleMemory();
+                                            }}
+                                          >
+                                            ✕
+                                          </button>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+
+                                  {/* Add Note Input */}
+                                  <form
+                                    onSubmit={async (e) => {
+                                      e.preventDefault();
+                                      if (!noteInput.trim()) return;
+                                      await addPersonNote(p.user_id, noteInput.trim());
+                                      setNewNoteInputs((prev) => ({ ...prev, [p.user_id]: '' }));
+                                      void refreshPeopleMemory();
+                                    }}
+                                    style={{ display: 'flex', gap: '0.3rem', marginTop: '2px' }}
+                                  >
+                                    <input
+                                      type="text"
+                                      placeholder="+ Add note / fact..."
+                                      value={noteInput}
+                                      onChange={(e) =>
+                                        setNewNoteInputs((prev) => ({
+                                          ...prev,
+                                          [p.user_id]: e.target.value,
+                                        }))
+                                      }
+                                      style={{
+                                        ...agentInputStyle,
+                                        padding: '0 0.4rem',
+                                        fontSize: '0.68rem',
+                                        flex: 1,
+                                      }}
+                                    />
+                                    <button
+                                      type="submit"
+                                      className="ch-btn-action"
+                                      style={{ padding: '0.2rem 0.5rem', fontSize: '0.68rem' }}
+                                    >
+                                      Add
+                                    </button>
+                                  </form>
+                                </div>
+                              );
+                            })}
                           </div>
-                          <button
-                            className="ch-btn-action"
-                            style={{ padding: '0.25rem 0.6rem', fontSize: '0.68rem' }}
-                            onClick={() => setShowNetworkModal(true)}
-                          >
-                            Inspect
-                          </button>
-                        </div>
+                        )}
+                        <span style={{ fontSize: '0.65rem', color: '#64748b' }}>
+                          💡 Spoken / Chat commands: <code>/agent whois @name</code>,{' '}
+                          <code>/agent remember @name fact</code>, <code>/agent people</code>
+                        </span>
                       </div>
 
+                      {/* Compact Media Telemetry & Protocol Summary Card */}
                       <div
                         style={{
+                          background: 'rgba(0,0,0,0.2)',
+                          borderRadius: '8px',
+                          padding: '0.6rem 0.8rem',
+                          border: '1px solid rgba(255,255,255,0.05)',
                           display: 'flex',
-                          justifyContent: 'flex-end',
-                          gap: '0.5rem',
-                          marginTop: '0.5rem',
-                          borderTop: '1px solid rgba(255,255,255,0.05)',
-                          paddingTop: '1rem',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          marginTop: '0.4rem',
                         }}
                       >
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                          <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#38bdf8' }}>
+                            📡 Protocols & Media Telemetry
+                          </span>
+                          <span style={{ fontSize: '0.65rem', color: '#94a3b8' }}>
+                            UDP/Opus • PubNub WSS • Agora RTN
+                          </span>
+                        </div>
                         <button
-                          type="button"
                           className="ch-btn-action"
-                          style={{
-                            padding: '0.6rem 1.2rem',
-                            fontSize: '0.85rem',
-                            background: '#e11d48',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '20px',
-                            cursor: (!isAgentThinking && !isAgentSpeaking) ? 'not-allowed' : 'pointer',
-                            opacity: (!isAgentThinking && !isAgentSpeaking) ? 0.5 : 1,
-                          }}
-                          onClick={handleInterrupt}
-                          disabled={!isAgentThinking && !isAgentSpeaking}
-                          title="Immediately stop speaking and abort in-flight LLM generation"
+                          style={{ padding: '0.25rem 0.6rem', fontSize: '0.68rem' }}
+                          onClick={() => setShowNetworkModal(true)}
                         >
-                          ✋ Interrupt
-                        </button>
-                        <button
-                          type="button"
-                          className="ch-btn-action"
-                          style={{
-                            padding: '0.6rem 1.2rem',
-                            fontSize: '0.85rem',
-                            background: '#2e333d',
-                            border: 'none',
-                            borderRadius: '20px',
-                            cursor: (isAgentThinking || isAgentSpeaking) ? 'not-allowed' : 'pointer',
-                            opacity: (isAgentThinking || isAgentSpeaking) ? 0.6 : 1,
-                          }}
-                          onClick={() =>
-                            enqueueUtterance(
-                              'Say something to the room — pick up the current conversation, or open one if it has gone quiet.',
-                              'voice',
-                              true,
-                            )
-                          }
-                          disabled={isAgentThinking || isAgentSpeaking}
-                        >
-                          {isAgentThinking ? '⏳ Generating…' : isAgentSpeaking ? '🔊 Speaking…' : '🗣️ Speak Now'}
-                        </button>
-                        <button
-                          type="button"
-                          className="ch-btn-action"
-                          style={{
-                            padding: '0.6rem 1.2rem',
-                            fontSize: '0.85rem',
-                            background: '#2e333d',
-                            border: 'none',
-                            borderRadius: '20px',
-                            cursor: 'pointer',
-                          }}
-                          onClick={() => void handleClearContext(false)}
-                          title="Wipe conversation history so agent forgets recent context"
-                        >
-                          🧹 Forget
+                          Inspect
                         </button>
                       </div>
-                      {!isCurrentUserSpeaker && (
-                        <p
-                          style={{
-                            fontSize: '0.75rem',
-                            color: '#94a3b8',
-                            margin: '0',
-                            textAlign: 'right',
-                          }}
-                        >
-                          ℹ️ You are in the audience. Agent will respond in text chat only.
-                        </p>
-                      )}
                     </div>
-                  )}
+
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'flex-end',
+                        gap: '0.5rem',
+                        marginTop: '0.5rem',
+                        borderTop: '1px solid rgba(255,255,255,0.05)',
+                        paddingTop: '1rem',
+                      }}
+                    >
+                      <button
+                        type="button"
+                        className="ch-btn-action"
+                        style={{
+                          padding: '0.6rem 1.2rem',
+                          fontSize: '0.85rem',
+                          background: '#e11d48',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '20px',
+                          cursor: !isAgentThinking && !isAgentSpeaking ? 'not-allowed' : 'pointer',
+                          opacity: !isAgentThinking && !isAgentSpeaking ? 0.5 : 1,
+                        }}
+                        onClick={handleInterrupt}
+                        disabled={!isAgentThinking && !isAgentSpeaking}
+                        title="Immediately stop speaking and abort in-flight LLM generation"
+                      >
+                        ✋ Interrupt
+                      </button>
+                      <button
+                        type="button"
+                        className="ch-btn-action"
+                        style={{
+                          padding: '0.6rem 1.2rem',
+                          fontSize: '0.85rem',
+                          background: '#2e333d',
+                          border: 'none',
+                          borderRadius: '20px',
+                          cursor: isAgentThinking || isAgentSpeaking ? 'not-allowed' : 'pointer',
+                          opacity: isAgentThinking || isAgentSpeaking ? 0.6 : 1,
+                        }}
+                        onClick={() =>
+                          enqueueUtterance(
+                            'Take the floor now: pick up the current conversation, or open one if it has gone quiet.',
+                            'nudge',
+                            true,
+                          )
+                        }
+                        disabled={isAgentThinking || isAgentSpeaking}
+                      >
+                        {isAgentThinking
+                          ? '⏳ Generating…'
+                          : isAgentSpeaking
+                            ? '🔊 Speaking…'
+                            : '🗣️ Speak Now'}
+                      </button>
+                      <button
+                        type="button"
+                        className="ch-btn-action"
+                        style={{
+                          padding: '0.6rem 1.2rem',
+                          fontSize: '0.85rem',
+                          background: '#2e333d',
+                          border: 'none',
+                          borderRadius: '20px',
+                          cursor: 'pointer',
+                        }}
+                        onClick={() => void handleClearContext(false)}
+                        title="Wipe conversation history so agent forgets recent context"
+                      >
+                        🧹 Forget
+                      </button>
+                    </div>
+                    {!isCurrentUserSpeaker && (
+                      <p
+                        style={{
+                          fontSize: '0.75rem',
+                          color: '#94a3b8',
+                          margin: '0',
+                          textAlign: 'right',
+                        }}
+                      >
+                        ℹ️ You are in the audience. Agent will respond in text chat only.
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -4931,8 +5205,6 @@ export function RoomsPanel() {
           </div>
         </div>
       )}
-
     </div>
   );
 }
-

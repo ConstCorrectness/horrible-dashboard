@@ -262,7 +262,10 @@ async def run_turn(
     # Auto-learn and track speaker profile / notes in persistent people memory
     from backend.modules.clubhouse.people_memory import people_memory_store
 
-    if speaker and speaker != "Someone":
+    # Never on a nudge: there is no speaker to learn about, so this used to attribute
+    # the operator's own instruction to whichever name the pane had attached to it
+    # ("Room Atmosphere") and extract "facts" from it.
+    if speaker and speaker != "Someone" and source != "nudge":
         target = _resolve_member(room, speaker)
         if target and target.user_id:
             people_memory_store.learn_user(
@@ -315,7 +318,14 @@ async def run_turn(
         retrieval=retrieval,
     )
 
-    session.remember(Turn(role="room", text=utterance, speaker=speaker, source=source))
+    # A nudge is not part of the conversation -- it was never said in the room. Kept
+    # in the history it becomes a phantom line the agent will later summarise back
+    # ("you asked me to say something"), and the twelve-turn window is small enough
+    # that a few of them crowd out real speech.
+    if source != "nudge":
+        session.remember(
+            Turn(role="room", text=utterance, speaker=speaker, source=source)
+        )
     try:
         raw = await generate_reply(messages, config)
     except asyncio.TimeoutError:

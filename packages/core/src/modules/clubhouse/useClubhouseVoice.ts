@@ -598,7 +598,17 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         humanGain.connect(dest); // published to Clubhouse room when unmuted
         micSource.connect(sttDest); // agent's ears always hear operator
       } catch (err) {
+        // Continuing as a listener is a legitimate outcome, but it must be *said*.
+        // Without `humanGain` there is nothing between a microphone and the
+        // published track, so `toggleMute` below flips the label to "Mic Active"
+        // and tells Clubhouse we are unmuted while the room hears silence --
+        // which reads as a broken microphone rather than a denied permission.
         console.warn('Could not access physical microphone, continuing as listener:', err);
+        reportVoiceError(
+          `Microphone unavailable — you are connected as a listener: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
       }
 
       // Create and publish mixed microphone stream
@@ -835,10 +845,16 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
   const toggleMute = async () => {
     if (!activeChannel) return;
     const nextMuteState = !isMuted;
+    // No `humanGain` means the microphone never opened, so there is nothing to
+    // unmute. Reporting `isMuted: false` anyway is the silent failure: the button
+    // reads "Mic Active" and Clubhouse shows us unmuted to the room while not one
+    // sample reaches the published track.
+    if (!session.humanGain) {
+      reportVoiceError('No microphone is connected to this room — nothing to unmute.');
+      return;
+    }
     try {
-      if (session.humanGain) {
-        session.humanGain.gain.value = nextMuteState ? 0 : 1;
-      }
+      session.humanGain.gain.value = nextMuteState ? 0 : 1;
       session.patch({ isMuted: nextMuteState });
       await muteClubhouseChannel(activeChannel, nextMuteState);
     } catch (err) {

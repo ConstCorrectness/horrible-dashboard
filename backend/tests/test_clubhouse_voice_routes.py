@@ -73,9 +73,13 @@ def test_the_room_reaches_the_model(client, captured):
     guessing. If this passes vacuously the feature does not exist."""
     _enable(client)
     _turn(client, "agent, who is here?")
-    system = captured[0][0]["content"]
-    assert "Compilers" in system
-    assert "Ada (moderator)" in system
+    # The room rides the *turn*, not the system message: it changes every turn, so
+    # pinning it ahead of a twelve-turn history described a room twelve turns stale.
+    turn = captured[0][-1]["content"]
+    assert "Compilers" in turn
+    assert "Ada (moderator)" in turn
+    assert captured[0][0]["role"] == "system"
+    assert "Ada (moderator)" not in captured[0][0]["content"]
 
 
 def test_an_unaddressed_utterance_is_refused_with_a_reason(client, captured):
@@ -203,7 +207,7 @@ def test_retrieved_context_is_injected_into_the_prompt(client, captured, monkeyp
     body = _turn(client, "/agent search who won in 1998")
     assert body["spoke"] is True
     assert body["retrieved"] is True
-    assert "France won the 1998 World Cup" in captured[0][0]["content"]
+    assert "France won the 1998 World Cup" in captured[0][-1]["content"]
 
 
 def test_config_round_trips(client):

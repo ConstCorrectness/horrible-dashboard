@@ -134,6 +134,17 @@ left to be rediscovered.
    match ends or a microphone is switched off silences the entire app. Release
    the strip instead — this is the "unmount is not close" rule from
    [the layout shell](../architecture/layout-shell.mdx), with an audible symptom.
+
+   It is worse than "until the next join", because `getContext()` caches the one
+   context for the life of the page and never rebuilds a closed one: every later
+   `createGain()` / `createMediaStreamDestination()` throws `InvalidStateError`,
+   and the resume guard does not catch it either — a closed context is `closed`,
+   not `suspended`. hassault was fixed and Clubhouse's room teardown was missed,
+   so leaving one Clubhouse room left the microphone dead in every room after it
+   while the button still read *Mic Active*. The rule is now enforced across the
+   tree by `modules/audio/__tests__/shared-context-is-never-closed.test.ts`,
+   which reads the source the way `control-padding.test.ts` does — a closed
+   context is invisible at runtime, so there is nothing else to assert against.
 3. **`createMediaElementSource` may be called once per element, and it *moves*
    the audio.** After attaching, the element no longer plays to the default
    output on its own; attach without connecting and the video plays in total

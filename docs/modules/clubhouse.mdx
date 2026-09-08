@@ -370,6 +370,42 @@ because that gates the room UI on a working connection rather than on membership
 `joinOrder.test.ts` pins the ordering by reading the source — it is not reachable
 from a unit test without standing up Agora and a microphone.
 
+### Leaving a room must not close the audio context
+
+The room's audio is built on `mixer.getContext()` — the app's one shared
+`AudioContext`. The teardown used to `await audioCtx.close()` on it, which is not
+a room teardown at all: it silences [every other module](audio.mdx) and, because
+`getContext()` caches that context for the life of the page and never rebuilds a
+closed one, it kills **the next Clubhouse join too**. The join's first
+`createMediaStreamDestination()` throws `InvalidStateError`, the `suspended`
+resume guard never fires (a closed context is `closed`), and the symptom the user
+sees is a microphone that does nothing while the button reads *Mic Active*.
+
+The teardown now disconnects the nodes it created (`humanGain`, the two
+`MediaStreamDestination`s) and stops the physical mic stream, which drops its
+source with it — the mixer's context is left running. The rule is enforced tree
+wide by `modules/audio/__tests__/shared-context-is-never-closed.test.ts`.
+
+The teardown also resets the room state in a **`finally`**. `leaveRoom` raises
+`loading` before calling it, and every control in the room — mute, raise hand,
+join stage, the chat composer — is `disabled={voiceLoading}`. A teardown that
+threw or hung on one of its awaits therefore left the pane showing a room with
+every button dead and no error to explain it.
+
+### A missing microphone is reported, never mimed
+
+`getUserMedia` is allowed to fail — a denied permission, no device, a webview
+that does not grant capture — and continuing as a **listener** is a legitimate
+outcome. What is not legitimate is doing it quietly. Without a microphone there
+is no `humanGain`, so `toggleMute` used to change nothing, flip the label to
+*Mic Active (Mute)* and tell Clubhouse the account was unmuted: the room shows a
+live speaker and hears silence, which reads as a broken microphone rather than a
+denied permission.
+
+So the join's failure path raises a voice error naming the reason, and
+`toggleMute` refuses outright when there is no microphone attached rather than
+reporting a mute state it cannot honour.
+
 ### Chat availability is carried, not guessed
 
 Chat is also decided per room and per account, and the join response says so — but
@@ -546,9 +582,62 @@ about?" has no answer.
 `clean_reply` strips speaker prefixes (`Agent:`) and stage directions (`*laughs*`) —
 small models emit both regardless of the prompt, and TTS reads them aloud — flattens
 markdown, and truncates on a **sentence boundary**, since a reply cut mid-word sounds
-like the connection dropped. The speech rules are also kept **separate from the
-persona** in the system prompt: the user edits the persona, and must not be able to
-delete the rules that keep a reply speakable.
+like the connection dropped.
+
+### The system message is the persona and nothing else
+
+The speech rules are kept **separate from the persona**: the user edits the persona
+and must not be able to delete the rules that keep a reply speakable. They used to
+be separate *paragraphs of the same system message*, though, alongside the room
+brief and everyone's profile bios — and that was wrong twice over.
+
+A persona is short. A real one measured 163 characters, against roughly 3 kB of
+rules, room state and biography sharing the same message; the user writes a persona
+and hears a model that mostly ignores it, with nothing to point at. And a bio is
+**not ours** — it is profile text written by a stranger in the room, so carrying it
+in the highest-authority message meant anyone could put "ignore your persona" in
+their Clubhouse profile and have it arrive with the standing of a rule we wrote.
+
+So `build_messages` now sends the persona alone as the system message, and
+`render_turn_context` puts the speech rules, the room brief, the retrieval and the
+bios on the **current turn**, with the bios explicitly labelled as information about
+people rather than instructions to the model. There is still exactly one system
+message, deliberately: strict Jinja chat templates reject a second one outright, so
+a tidier "context" system message is not available here.
+
+Riding the turn is also the more correct place on the merits. The room brief changes
+every turn — who is on stage, who has a hand up, who is talking right now — and
+pinning it ahead of a twelve-turn history described the room as it was twelve turns
+ago.
+
+Bios are **speakers only**, which this page has always said and the memory path did
+not do: it passed every member, so a silent listener the store happened to know was
+reintroduced by name and biography every turn. The audience is a count in the room
+brief precisely so that does not happen. A listener cannot say anything the agent
+has to answer, so their biography buys nothing and costs a hundred-odd characters.
+
+### A nudge is a direction, not speech
+
+The pane's **Speak Now** button and its silence probe both ask the agent to take the
+floor. They used to do it by enqueuing an ordinary `voice` utterance, so the model
+received `A speaker said out loud: Say something to the room — pick up the current
+conversation` and answered *that*: it replied to a speaker who did not exist. The
+silence probe was worse — it passed the speaker name `Room Atmosphere`, inventing a
+participant, whose "utterance" the people-memory store then tried to learn facts
+about.
+
+There is now a third `Source`, **`nudge`**, and the last message is rendered
+`Direction (nobody said this aloud; act on it): …` instead of `X said …`. Three
+consequences follow from "nobody said it":
+
+- it is **not remembered** — a nudge in the twelve-turn history is a phantom line the
+  agent will later summarise back at the room, and it crowds out real speech;
+- it does **not** feed people-memory, which has no speaker to attribute it to;
+- it carries **no speaker name**; the pane's `'A speaker'` fallback is skipped.
+
+What it does *not* change is the gate. `should_respond` treats `nudge` exactly as
+`voice`, including `respond_to_voice` — a room with voice replies switched off must
+not be nudged into talking through a side door.
 
 ### The pane may carry its settings with the utterance
 

@@ -217,6 +217,21 @@ export class ClubhouseRoomSession {
    * user's explicit Leave. Never an unmount.
    */
   async teardown(): Promise<void> {
+    try {
+      await this.#teardown();
+    } finally {
+      // Unconditionally, and in a `finally`: `leaveRoom` raises `loading` before
+      // calling this, and every button in the room -- mute, raise hand, join
+      // stage, the chat composer -- is `disabled={voiceLoading}`. A teardown that
+      // threw or hung on one of its awaits (an Agora `leave`, the upstream leave
+      // call) therefore left the pane showing a room with every control dead and
+      // nothing to say why.
+      this.state = EMPTY_ROOM_STATE;
+      for (const listener of this.listeners) listener();
+    }
+  }
+
+  async #teardown(): Promise<void> {
     const channel = this.state.activeChannel;
 
     for (const key of ['pingInterval', 'volumeInterval', 'vadInterval'] as const) {
@@ -242,14 +257,22 @@ export class ClubhouseRoomSession {
       this.physicalMicStream.getTracks().forEach((t) => t.stop());
       this.physicalMicStream = null;
     }
-    if (this.audioCtx) {
+    // Emphatically **not** `audioCtx.close()`. The context belongs to the audio
+    // mixer and is shared by every sound in the app, and `mixer.getContext()`
+    // caches it for the life of the page without ever rebuilding a closed one.
+    // Closing it here did not tear down a room, it silenced the *whole app*
+    // permanently: karaoke, the agent's voice, hassault -- and the next
+    // Clubhouse join, whose first `createMediaStreamDestination()` throws
+    // `InvalidStateError` on a closed context. Disconnect our own nodes instead;
+    // the physical mic stream is stopped above, which drops its source with it.
+    for (const node of [this.humanGain, this.agentAudioDest, this.sttDest]) {
       try {
-        await this.audioCtx.close();
+        node?.disconnect();
       } catch {
-        /* already closed */
+        /* already disconnected */
       }
-      this.audioCtx = null;
     }
+    this.audioCtx = null;
     this.agentAudioDest = null;
     this.sttDest = null;
     this.humanGain = null;
@@ -280,8 +303,6 @@ export class ClubhouseRoomSession {
         console.warn('Could not notify Clubhouse leave:', err);
       }
     }
-    this.state = EMPTY_ROOM_STATE;
-    for (const listener of this.listeners) listener();
   }
 }
 

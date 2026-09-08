@@ -358,8 +358,12 @@ class PeopleMemoryStore:
                 parts.append("Learned: " + "; ".join(p.notes[-3:]))
             if p.tags:
                 parts.append("Tags: " + ", ".join(p.tags))
-            if parts:
-                entry += ": " + " | ".join(parts)
+            if not parts:
+                # A name on its own says nothing the room brief has not already said,
+                # and one of them is enough to drag the whole "what you remember"
+                # heading (and its fencing paragraph) into the prompt for no content.
+                continue
+            entry += ": " + " | ".join(parts)
             lines.append(entry)
 
         if not lines:

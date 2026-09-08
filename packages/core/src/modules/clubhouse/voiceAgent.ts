@@ -110,7 +110,7 @@ export interface VoiceStateTurn {
   role: 'room' | 'agent';
   text: string;
   speaker: string;
-  source: 'voice' | 'chat';
+  source: 'voice' | 'chat' | 'nudge';
   ts: number;
 }
 
@@ -139,7 +139,7 @@ export function takeVoiceTurn(params: {
   text: string;
   speaker?: string;
   speakerId?: number | null;
-  source?: 'voice' | 'chat';
+  source?: 'voice' | 'chat' | 'nudge';
   /** A human pressed "Speak Now" — bypasses posture and cooldown, not echo checks. */
   force?: boolean;
   /**
