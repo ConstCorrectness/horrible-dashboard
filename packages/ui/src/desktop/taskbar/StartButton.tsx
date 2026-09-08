@@ -8,7 +8,7 @@
  *
  * Two things beyond a flat list:
  *
- * - **It is grouped by the module a pane belongs to.** Sixty-odd entries in one
+ * - **It is grouped by the module a pane belongs to.** Eighty-odd entries in one
  *   alphabetical run told the user nothing, but the previous grouping — by
  *   `PaneRole`, as Documents / Tools / Widgets — answered a question nobody
  *   browsing a launcher is asking: the role decides where a pane *lands* by
@@ -17,7 +17,7 @@
  *   search box already matched on. Searching flattens the groups, because a
  *   filtered list of four things does not need headings.
  * - **It has a settings footer.** The bottom-left corner is where people go for
- *   settings, and this menu previously offered it only as one row among sixty,
+ *   settings, and this menu previously offered it only as one row among eighty,
  *   sorted under S.
  */
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -85,7 +85,8 @@ function groupByOwner(views: View[]): { label: string; views: View[] }[] {
   }
 
   // A heading above a single row is not structure, it is noise that doubles the
-  // height of the list: 22 of the 38 module headings owned exactly one pane, so
+  // height of the list: most module headings own exactly one pane (34 of 47 at the
+  // last count), so
   // more than half the vertical space in the launcher was spent on labels that
   // grouped nothing. Those panes are gathered into one band instead, which is
   // also where an unowned pane already went.
@@ -226,6 +227,17 @@ function StartMenu({ onClose }: { onClose: () => void }) {
           type="button"
           role="menuitem"
           className="os-start-foot-btn"
+          onClick={() => {
+            void registry.runCommand('shell.help');
+            onClose();
+          }}
+        >
+          <span aria-hidden="true">?</span> Help
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          className="os-start-foot-btn"
           aria-haspopup="menu"
           // The tray's picker, reused by kind rather than rebuilt — one list of
           // themes, wherever it is opened from.
@@ -277,12 +289,22 @@ const DESKTOPS_SHOWN = 5;
  * This is the **home for workspace management** now that the top strip hides itself
  * on a floating desktop. The strip was the only surface that could rename, create,
  * reset and delete a workspace, so hiding it without moving management would have
- * left those verbs unreachable — the constraint that kept the taskbar's pips off by
- * default in the first place.
+ * left those verbs unreachable — the constraint that kept a switcher out of the
+ * taskbar in the first place.
  *
- * The pips in the taskbar switch; this switches *and* manages, which is the split
- * that made two always-visible switchers feel redundant before. Only one of them is
- * always visible now.
+ * It switches *and* manages, which is what the taskbar could never do — see
+ * `Taskbar.tsx`, which states plainly that it carries no workspace switcher. (Three
+ * comments in this file and its neighbours used to describe "the pips in the
+ * taskbar" doing the switching. There are no pips; they were removed. The comments
+ * outlived them, and on the floating desktop we boot into they were describing the
+ * *only* switcher a user had.)
+ *
+ * **The list is presets first, then custom desktops.** It used to be `useWorkspaces()`
+ * alone, which is the set of *persisted rows* — a preset becomes one only when it is
+ * first opened. So on a clean install this group listed a single entry while the
+ * comment below claimed it carried "well over a dozen", and every hand-designed
+ * workspace was unreachable here. `WorkspaceTabs` has always merged the two; this
+ * now merges them identically, and a preset already opened appears once, not twice.
  *
  * Two things keep it from swallowing the launcher, because every module that
  * declares a `frames:` preset contributes a desktop and there are well over a
@@ -303,37 +325,57 @@ function DesktopsGroup({ onClose }: { onClose: () => void }) {
   const { frame } = useSyncExternalStore(layoutStore.subscribe, layoutStore.getSnapshot);
   const defaultMode = useSetting<string>(DEFAULT_DESKTOP_MODE_KEY) ?? 'tiling';
   const floats = defaultMode === 'floating';
-  const presetIds = new Set(registry.framePresets.map((p) => p.id));
+  const presets = registry.framePresets;
+  const presetIds = new Set(presets.map((p) => p.id));
   const run = (command: string) => {
     void registry.runCommand(command);
     onClose();
   };
 
-  const shown = expanded ? workspaces : workspaces.slice(0, DESKTOPS_SHOWN);
+  // Presets first (a preset is a desktop whether or not it has been opened yet),
+  // then the custom ones — the same merge, in the same order, as `WorkspaceTabs`.
+  // A preset already opened has a row too, so it is filtered out of the second
+  // half or it would appear twice under two different names.
+  const entries = [
+    ...presets.map((p) => ({ id: p.id, name: p.name, glyph: p.icon ?? p.name[0] })),
+    ...workspaces
+      .filter((w) => !presetIds.has(w.id))
+      .map((w) => ({ id: w.id, name: w.name, glyph: undefined as string | undefined })),
+  ];
+
+  const shown = expanded ? entries : entries.slice(0, DESKTOPS_SHOWN);
   // The active desktop is never folded away, even when it sorts past the cut.
-  const active = workspaces.find((w) => w.id === activeId);
+  const active = entries.find((e) => e.id === activeId);
   const listed = active && !shown.includes(active) ? [...shown, active] : shown;
-  const hidden = workspaces.length - listed.length;
+  const hidden = entries.length - listed.length;
 
   return (
     <div className="os-start-group">
       <h3 className="os-start-group-head">Desktops</h3>
-      {listed.map((w) => (
+      {listed.map((entry) => (
         <button
-          key={w.id}
+          key={entry.id}
           type="button"
           role="menuitem"
-          className={`os-start-item${w.id === activeId ? ' is-active' : ''}`}
-          aria-current={w.id === activeId}
+          className={`os-start-item${entry.id === activeId ? ' is-active' : ''}`}
+          aria-current={entry.id === activeId}
           onClick={() => {
-            registry.switchWorkspace(w.id);
+            registry.switchWorkspace(entry.id);
             onClose();
           }}
         >
+          {/* The active desktop shows which paradigm it is running; the rest show
+              their own preset glyph, which is how they are identified everywhere
+              else (the tab strip, the home launcher). A custom desktop has none
+              and keeps the neutral dot. */}
           <span className="os-start-icon" aria-hidden="true">
-            {w.id === activeId ? (frame.mode === 'tiling' ? '▦' : '❐') : '·'}
+            {entry.id === activeId
+              ? frame.mode === 'tiling'
+                ? '▦'
+                : '❐'
+              : (entry.glyph ?? '·')}
           </span>
-          <span className="os-start-title">{w.name}</span>
+          <span className="os-start-title">{entry.name}</span>
         </button>
       ))}
       {hidden > 0 && (
@@ -349,7 +391,7 @@ function DesktopsGroup({ onClose }: { onClose: () => void }) {
           <span className="os-start-title">{hidden} more desktops</span>
         </button>
       )}
-      {expanded && workspaces.length > DESKTOPS_SHOWN && (
+      {expanded && entries.length > DESKTOPS_SHOWN && (
         <button
           type="button"
           role="menuitem"

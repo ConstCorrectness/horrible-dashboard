@@ -52,6 +52,7 @@ export const interpretabilityModule: ModuleManifest = {
     {
       id: 'interpretability',
       name: 'Interpretability',
+      description: 'Look inside a running model — what it was shown, and what its architecture does with it.',
       icon: '🔍',
       frame: {
         center: {

@@ -12,6 +12,7 @@ import {
   type CellRunState,
 } from '../client';
 import { openSession, useSession } from '../store';
+import { forgetLastProject, lastProjectId } from '../last-project';
 import { OutputRenderer } from '../outputs/OutputRenderer';
 import { CellEditor } from './CellEditor';
 import { ProjectsPane } from './ProjectsPane';
@@ -32,6 +33,39 @@ const STATE_BADGE: Record<CellRunState, string> = {
 const EDIT_SYNC_MS = 400;
 
 /**
+ * The projects list, shown in place of a notebook.
+ *
+ * Two branches reach it — no project at all, and a remembered project that no
+ * longer exists — and they must show the same thing, so it is one component rather
+ * than a block of JSX copied into the second branch. Choosing a project calls
+ * `openTrainingNotebook`, whose `canReuse` retargets *this* pane instance in place,
+ * so the pane the user is looking at becomes the notebook instead of leaving an
+ * empty one behind.
+ */
+function ProjectPicker() {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div
+        style={{
+          padding: '0.5rem 0.75rem',
+          borderBottom: '1px solid var(--border)',
+          fontSize: '0.7rem',
+          fontWeight: 700,
+          letterSpacing: '0.14em',
+          textTransform: 'uppercase',
+          ...dim,
+        }}
+      >
+        Choose a project
+      </div>
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <ProjectsPane />
+      </div>
+    </div>
+  );
+}
+
+/**
  * The native notebook pane: cells on a per-project Jupyter kernel. Opened with
  * params `{projectId, notebook?}`; non-singleton so several notebooks can sit
  * side by side. The kernel session is process-global backend-side — closing the
@@ -40,7 +74,16 @@ const EDIT_SYNC_MS = 400;
 export function NotebookPane() {
   const params = usePaneParams();
   const instanceId = useContext(PaneInstanceContext);
-  const projectId = String(params.projectId ?? '');
+  // Opened without params — from a preset's seed, the start menu, or the palette —
+  // this falls back to the project you were last in. That is what lets the
+  // `training` and `ai-research` presets seed this pane at all: they used to seed
+  // an empty area, because a preset's `tabs` carry no params and a params-less
+  // notebook had nothing to show. Resolved once per mount rather than watched: the
+  // remembered id changing under an open pane should not swap the notebook out from
+  // under someone.
+  const [fallbackId] = useState(() => (params.projectId ? null : lastProjectId()));
+  const projectId = String(params.projectId ?? fallbackId ?? '');
+  const viaFallback = !params.projectId && !!fallbackId;
   const notebookPath = String(params.notebook ?? 'main.ipynb');
   const store = useMemo(() => openSession(projectId, notebookPath), [projectId, notebookPath]);
   const state = useSession(store);
@@ -143,39 +186,25 @@ export function NotebookPane() {
     [store],
   );
 
-  // Opened cold (start menu, palette, an empty area) this pane has no project to
-  // show. It used to say so and point at the projects *pane* — which pane
-  // consolidation turned into an Explorer section, so the instruction named
-  // something the user could not open. Show the picker itself instead: choosing a
-  // project calls `openTrainingNotebook`, whose `canReuse` retargets *this*
-  // instance in place, so the pane the user opened becomes the notebook rather
-  // than leaving an empty one behind.
-  if (!projectId) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-        <div
-          style={{
-            padding: '0.5rem 0.75rem',
-            borderBottom: '1px solid var(--border)',
-            fontSize: '0.7rem',
-            fontWeight: 700,
-            letterSpacing: '0.14em',
-            textTransform: 'uppercase',
-            ...dim,
-          }}
-        >
-          Choose a project
-        </div>
-        <div style={{ flex: 1, minHeight: 0 }}>
-          <ProjectsPane />
-        </div>
-      </div>
-    );
+  // No project at all, and none remembered. It used to say so and point at the
+  // projects *pane* — which pane consolidation turned into an Explorer section, so
+  // the instruction named something the user could not open.
+  if (!projectId) return <ProjectPicker />;
+
+  // The *remembered* project is gone. Forget it and show the picker. The dead-pane
+  // message below is right for a pane the user explicitly opened against that
+  // project and wrong here, where nobody asked for this project and the value is not
+  // one they can see or clear — without this the workspace would greet them with the
+  // same dead project on every open, forever.
+  if (state.errorCode === 'unknown_project' && viaFallback) {
+    forgetLastProject();
+    return <ProjectPicker />;
   }
 
   // The project this pane was persisted against no longer exists (deleted, or a
   // partial dir with no project.json). Offer to close the dead pane — closing it
   // drops it from the saved layout so it won't reattach-and-error on next load.
+
   if (state.errorCode === 'unknown_project') {
     return (
       <div

@@ -146,6 +146,7 @@ export const karaokeModule: ModuleManifest = {
     {
       id: 'karaoke',
       name: 'Karaoke',
+      description: 'A karaoke machine: the stage, the queue and search, with any phone on the LAN as a remote.',
       icon: '🎤',
       frame: {
         center: { pane: 'karaoke.stage' },

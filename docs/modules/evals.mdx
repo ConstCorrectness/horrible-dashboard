@@ -8,8 +8,9 @@ sidebar_label: Evals
 [The first thing it measured](#the-first-thing-it-measured)). Both runners — the
 in-node one for tool calling and the project-venv one for Hugging Face benchmarks —
 the graders, the store, the sweep orchestration, the SFT exporter, the REST
-surface, the agent tools and the `evals.hub` pane are all in. What is left is
-listed under [Still outstanding](#still-outstanding).
+surface, the agent tools and the `evals.hub` pane are all in — and a failing case
+now links straight to
+[what the model was given](#from-a-failing-case-to-what-the-model-was-given).
 
 The module exists because of a gap that had been open for a long time: progressive
 disclosure and `TOOL_BUDGET = 38` are mitigations for a small model drowning in
@@ -991,14 +992,49 @@ answer, an empty choice, an empty group list — and safe failures compose into 
 plausible number. A harness has to be built so that the absence of a thing is
 distinguishable from the thing being absent on purpose.
 
-## Still outstanding
+## From a failing case to what the model was given
 
-The results pane now prints a case's `turn_id` but does not yet **open** the
-[interpretability](interpretability.mdx) recorder's snapshot for it. The id is on
-screen, so the exact prompt and tool schemas that went out are reachable by hand;
-the deep link is not built, and the recorder's pane reads a live in-memory store
-rather than anything a finished sweep left behind, so it would need a backing store
-first.
+A result row's `turn_id` is a **button**. It opens
+[`agentpedia.hub`](agentpedia.mdx) with `{turnId}` and steps straight into that
+turn: the exact prompt, tool schemas and rounds that produced the case.
+
+It used to be inert text — printed next to a pane that is a turn stepper keyed on
+precisely that id and took no params, so the workflow was to read a hex string off
+the screen and hunt the Runs list for it. The concern that stopped it being a link
+was that the recorder keeps a live in-memory ring, which a finished sweep outlives.
+That turned out to be only half the picture: `recorder._persist` writes every turn
+through to `agent_turns` in `app.db` unconditionally, and `GET
+/api/agentpedia/turns/{id}` reads the ring *then* the table for exactly this reason.
+A turn the store never kept 404s and the stepper says "No captured turn `<id>`",
+which is a better answer than a dead string.
+
+## The leaderboard is reachable from a turn
+
+`evals.leaderboard` and `evals.leaderboard_diff` wrap `leaderboard.build` / `.diff`,
+which until now only the pane could ask. The diff is the one that matters: the
+trainer agent's prompt tells it to answer "did the fine-tune help?" with an eval
+sweep rather than a remembered number, and a pass-rate difference cannot tell a real
+improvement from an even trade — 8/12 to 9/12 by fixing three and breaking two is a
+different event from fixing one and breaking none.
+
+`leaderboard` carries the third question with it: the cases **every** run fails.
+That is nearly always a broken case rather than four bad models, and it has already
+caught three of them.
+
+## Where a sweep's metrics land
+
+`sweep.localtrack_project_for(suite_id)` derives the [localtrack](localtrack.mdx)
+project, backend-side, so both callers get it. Only one of them used to derive
+anything: the browser sent a slug of the suite's *name*, and `evals.run` — the agent
+tool, and the one an agent reaches for to answer "did this fine-tune help?" — sent
+nothing at all. `_LocalTrack("")` builds a `RunMirror("")`, which is inactive by
+construction and swallows every metric without error, so an agent-started sweep
+filled in the scoreboard and charted nothing anywhere.
+
+Keyed on the **id**, not the display name: a suite rename must not silently move its
+history into a second project, leaving the comparison view with two halves of one
+story and no way to tell they belong together. The browser no longer sends a rival
+slug for the same reason. An explicit `localtrack_project` still wins.
 
 ## Browser vs desktop
 

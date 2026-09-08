@@ -145,6 +145,10 @@ def init_evals_db() -> None:
         # endpoint: a peer target's endpoint is a *local* tunnel port, so it looks
         # exactly like a local run to anything reading the row afterwards.
         _ensure_column(conn, "eval_runs", "node", "TEXT NOT NULL DEFAULT ''")
+        # `CREATE TABLE IF NOT EXISTS` does nothing to a table that already
+        # exists, so an upgraded install needs this or the column is simply
+        # never there — the `case_hash` precedent.
+        _ensure_column(conn, "eval_runs", "model_path", "TEXT NOT NULL DEFAULT ''")
 
         # The two questions the scoreboard asks: every result for one run, and
         # every run's verdict on one case (the "which model fixed this" column).
@@ -366,6 +370,7 @@ def create_run(
     harness_hash: str = "",
     harness_json: str = "",
     node: str = "",
+    model_path: str = "",
 ) -> EvalRun:
     run = EvalRun(
         id=uuid.uuid4().hex[:12],
@@ -380,13 +385,14 @@ def create_run(
         harness_hash=harness_hash,
         harness_json=harness_json,
         node=node,
+        model_path=model_path,
     )
     with get_db_conn() as conn:
         conn.execute(
             "INSERT INTO eval_runs (id, suite_id, label, provider, endpoint, model,"
             " status, total, passed, completed, started_at, finished_at, error,"
-            " localtrack_run_id, harness_hash, harness_json, node)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, '', '', '', ?, ?, ?)",
+            " localtrack_run_id, harness_hash, harness_json, node, model_path)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, '', '', '', ?, ?, ?, ?)",
             (
                 run.id,
                 run.suite_id,
@@ -400,6 +406,7 @@ def create_run(
                 run.harness_hash,
                 run.harness_json,
                 run.node,
+                run.model_path,
             ),
         )
     return run

@@ -89,7 +89,7 @@ const projectIdParam: Record<string, JSONSchema> = {
 
 export const notebookAgentTools: AgentToolDecl[] = [
   {
-    name: 'training.list_cells',
+    name: 'cells.list_cells',
     description:
       'List the cells of the open training notebook (id, type, first line, execution count, run state, whether it errored).',
     params: { type: 'object', properties: { ...projectIdParam } },
@@ -100,7 +100,7 @@ export const notebookAgentTools: AgentToolDecl[] = [
     },
   },
   {
-    name: 'training.read_cell',
+    name: 'cells.read_cell',
     description:
       'Read a cell in full: its source and outputs (including any error traceback text).',
     params: {
@@ -117,7 +117,7 @@ export const notebookAgentTools: AgentToolDecl[] = [
     },
   },
   {
-    name: 'training.kernel_status',
+    name: 'cells.kernel_status',
     description: 'The kernel status of the open notebook (starting|idle|busy|restarting|dead).',
     params: { type: 'object', properties: { ...projectIdParam } },
     handler: (args) => {
@@ -127,7 +127,7 @@ export const notebookAgentTools: AgentToolDecl[] = [
     },
   },
   {
-    name: 'training.insert_cell',
+    name: 'cells.insert_cell',
     description: 'Insert a new cell. Position by afterCellId or index (default: end).',
     params: {
       type: 'object',
@@ -178,7 +178,7 @@ export const notebookAgentTools: AgentToolDecl[] = [
     },
   },
   {
-    name: 'training.edit_cell',
+    name: 'cells.edit_cell',
     description: 'Replace the source of an existing cell.',
     params: {
       type: 'object',
@@ -201,7 +201,7 @@ export const notebookAgentTools: AgentToolDecl[] = [
     },
   },
   {
-    name: 'training.delete_cell',
+    name: 'cells.delete_cell',
     description: 'Delete a cell by id.',
     params: {
       type: 'object',
@@ -222,7 +222,7 @@ export const notebookAgentTools: AgentToolDecl[] = [
     },
   },
   {
-    name: 'training.run_cell',
+    name: 'cells.run_cell',
     description:
       'Run a code cell and wait for it to finish (up to 120s), returning its outputs and error traceback if any.',
     params: {
@@ -243,7 +243,7 @@ export const notebookAgentTools: AgentToolDecl[] = [
     },
   },
   {
-    name: 'training.run_all',
+    name: 'cells.run_all',
     description: 'Run every code cell in order.',
     params: { type: 'object', properties: { ...projectIdParam } },
     sideEffect: true,
@@ -258,7 +258,7 @@ export const notebookAgentTools: AgentToolDecl[] = [
     },
   },
   {
-    name: 'training.interrupt',
+    name: 'cells.interrupt',
     description: 'Interrupt the running kernel.',
     params: { type: 'object', properties: { ...projectIdParam } },
     sideEffect: true,
@@ -274,7 +274,7 @@ export const notebookAgentTools: AgentToolDecl[] = [
     },
   },
   {
-    name: 'training.restart',
+    name: 'cells.restart',
     description: 'Restart the kernel (clears execution state).',
     params: { type: 'object', properties: { ...projectIdParam } },
     sideEffect: true,

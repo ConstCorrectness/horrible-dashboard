@@ -312,6 +312,51 @@ LocalTrack also integrates with external Weights & Biases (W&B) endpoints:
 Note there is no bare-path alias for any of these — see
 [Routes are namespaced](#routes-are-namespaced).
 
+## `localtrack.compare_runs`
+
+The comparison is an **agent tool**, not just a route. `store.compare_runs` and
+`POST /api/localtrack/compare` had both existed since the store was written, and
+nothing exposed them to a turn — so an agent asked "did this help?" pulled raw metric
+series with `query_metrics` and re-derived the comparison itself.
+
+Worse than absent: `training/recipe_tools.py` instructs the model, twice and by name,
+to call `localtrack.compare_runs` after a sweep. Following the instruction produced an
+unknown-tool error. `test_comparison_agent_tools.py` now source-scans the instruction
+strings — including the `note` fields handlers *return*, which no amount of
+introspecting the tool objects would reach — and requires every `<group>.<tool>` they
+name to exist.
+
+The tool is thin on purpose: every judgement (varied vs shared config, last value
+rather than mean, flagging incomparable runs) stays in the store, so the tool and the
+pane cannot drift into two different answers to one question. A mixed comparison is
+reported in a `note` rather than left in a field the model may not read.
+
+## Deep links into the pane
+
+`localtrack.workspace` accepts `{projectId, runNames}` and opens on that project with
+those runs selected. This is what the sweep pane's **Compare** button sends; it used
+to call `openPanel('localtrack.workspace')` with no arguments at all, landing you on
+whichever project was last open with the sweep you had just run nowhere in sight.
+
+**Runs are matched by name, not by id, and that is not a shortcut.** A sweep point
+has three different ids over its life — the script-runner process
+(`SweepRecord.runIds`), the training run the script announces
+(`SweepResultEntry.metricRuns`), and the localtrack run the mirror mints — and none
+of them is the next one. The *name* is the only thing both ends agree on in advance:
+`sweeps.py` writes `point.label` into the generated script, `metrics.py` names the
+mirrored run after it (`_names`), and that is precisely why a point reads
+`learning_rate=0.0002` instead of a hex id. Matching on ids would select nothing,
+silently — and an empty comparison does not look like a broken link.
+
+Names that match nothing are **reported**, not dropped: a point whose run never
+started is a real thing to know, and a comparison quietly missing two of its six
+points is worse than one that says so.
+
+The delivery mechanism is `SET_PANE_PARAMS` (see
+[windowing](../architecture/windowing.mdx)): `openPane` used to focus an
+already-open pane and discard the params it was handed, so every deep link worked
+only while its target pane happened to be closed.
+
 ## Comparing runs
 
 `compare_runs(run_ids, metric)` and the two panel types over it — `table` and
@@ -341,7 +386,7 @@ cross-referencing a legend for every line.
 
 ### Importing from Weights & Biases
 
-`training.wandb_import` pulls a W&B run's config and metric history in through the
+`wandb.import_runs` pulls a W&B run's config and metric history in through the
 same `RunMirror`, so a run from a rented box charts and compares beside the ones
 trained here. The history W&B returns is **sampled** by default and the imported run
 says so: a 500-point curve standing in for 40,000 must not be presented as the

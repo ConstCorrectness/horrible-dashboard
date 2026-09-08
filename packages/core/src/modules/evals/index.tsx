@@ -43,6 +43,7 @@ export const evalsModule: ModuleManifest = {
     {
       id: 'evals',
       name: 'Evals',
+      description: 'Score a model against a suite, read the failures beside their source, and compare runs.',
       icon: '🎯',
       // The `trainer` persona already covers eval sweeps, conversion and serving —
       // the whole flywheel this workspace sits in — so it is a capability the

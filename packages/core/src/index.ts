@@ -75,6 +75,7 @@ export {
   DEFAULT_AVATAR_MOODS,
   type AvatarMoodMap,
 } from './Avatar3D';
+export { WorkspaceLauncher } from './WorkspaceLauncher';
 export { apiUrl, getBackendOrigin, initBackendOrigin, wsUrl } from './origin';
 export { setWindowControl, windowControl, type ResizeEdge, type WindowControl } from './window';
 export {

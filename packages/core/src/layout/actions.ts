@@ -59,6 +59,21 @@ export type LayoutAction =
       newInstanceId: string;
       params?: Record<string, unknown>;
     }
+  /**
+   * Replace an open pane's params, keeping its identity and geometry.
+   *
+   * The missing half of `openPane`. `openPaneRouted` focuses an already-open pane
+   * and returned *without applying the params it was handed* — so a deep link
+   * ("compare these six runs", "score this checkpoint") worked only when its target
+   * pane happened to be closed, and silently did nothing when it was open. Which is
+   * the case that matters: these links fire from inside workspaces that seed the
+   * target pane.
+   *
+   * `RETARGET_PANE` cannot serve: it refuses `instanceId === newInstanceId` by
+   * design, and a singleton's instance id *is* its view id, so there is no new
+   * identity to move to.
+   */
+  | { type: 'SET_PANE_PARAMS'; instanceId: string; params?: Record<string, unknown> }
   /** Patch one region strip on a pane (null clears the position). */
   | { type: 'SET_REGION'; instanceId: string; position: RegionPosition; region: RegionState | null }
   /** Switch which in-pane section a pane shows. */

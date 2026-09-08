@@ -130,6 +130,24 @@ test`). `packages/ui/src/layout/` renders it: `Frame`, `WorkspaceTabs`,
   has already been made for you. Only the empty slate is affected — an install
   that already has workspaces still opens whichever one it was left on.
 
+- **A preset says what it is for, and that sentence is rendered.** Every
+  `FramePreset` carries a `description` — one sentence naming the working position
+  it seeds. It is what the **workspace launcher** on the home surface and the
+  dashboard's welcome card put under each name, so the rationale is written once
+  and appears wherever a workspace is offered. `presets-described.test.ts` fails a
+  preset without one.
+
+  This closed a reachability gap rather than adding decoration. The presets used to
+  be surfaced by exactly one control, the top tab strip — and `WorkspaceTabs`
+  renders nothing on a **floating** desktop, which is what
+  `DEFAULT_BOOT_WORKSPACE` is. The Start menu's Desktops group was the documented
+  fallback, but it listed `useWorkspaces()`, the set of *persisted rows*, and a
+  preset becomes one only when first opened. So on a clean install that group held
+  a single entry while its own comment claimed "well over a dozen", and every
+  hand-designed workspace was unreachable until the user thought to convert the
+  desktop to tiling. The Desktops group now merges presets exactly as the tab strip
+  does, and the home surface carries the launcher.
+
 - **A workspace carries a role, not just furniture.** A preset may declare
   `agent: '<roster id>'` — the roster agent its docked chat opens as. Switching to
   Data Ops makes the agent the `dba`; switching to Data Entry makes it `intake`,
@@ -532,6 +550,29 @@ existing instance instead of duplicating.
   pane is not open yet — it opens and places in one step; `move_pane` with `edge` is
   for a pane that already exists somewhere else.
   :::
+
+### Opening a pane that is already open
+
+`openPane(viewId, {params})` on a pane that is already open **applies the params,
+then focuses it**. It used to focus and return, dropping them.
+
+The failure was invisible and inverted: a deep link — "compare these six runs",
+"score this checkpoint", "show me the turn behind this eval case" — worked only
+while its target pane happened to be *closed*, and did nothing when it was open.
+Open is the normal state, because these links fire from inside workspaces whose
+presets seed the very pane they target. Nothing threw and nothing warned; the pane
+came to the front showing what it showed before, which reads as the button being
+broken.
+
+`RETARGET_PANE` cannot serve here — it refuses `instanceId === newInstanceId` by
+design, and a singleton's instance id *is* its view id, so there is no new identity
+to move to. Hence `SET_PANE_PARAMS`, applied at all three focus-an-existing-pane
+branches (`openPaneRouted`, and both in `openPaneInArea`).
+
+Params are applied **only when supplied**. A plain "open the LocalTrack workspace"
+from the palette passes none and must not wipe a selection a deep link (or the user)
+established — absent means "no opinion", not "clear it". Pinned by
+`controller.test.ts`.
 
 ## The controller: one set of verbs, three callers
 

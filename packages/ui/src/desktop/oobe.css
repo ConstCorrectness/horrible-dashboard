@@ -308,3 +308,14 @@
   border-color: var(--accent) !important;
   color: var(--accent-contrast) !important;
 }
+
+/* The closing line of the wizard: the one sentence it says about the product
+   rather than about the user's preferences. Set apart from the step's own prose by
+   a rule rather than a box — it is a sign-off, not another control. */
+.os-oobe-step .os-oobe-note {
+  margin-top: var(--space-6);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+}

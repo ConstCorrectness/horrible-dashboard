@@ -4,6 +4,7 @@ import { Button } from '../../../Primitives';
 import { registry } from '../../../registry';
 import { startServer } from '../../llamacpp/api';
 import { usePaneParams } from '../../../panes';
+import { lastProjectId } from '../last-project';
 import { DatasetPicker } from '../../datasets/panels/DatasetPicker';
 import { ProjectsPane } from './ProjectsPane';
 import {
@@ -242,9 +243,17 @@ function ConvertCard({ projectId }: { projectId: string }) {
     }
   };
 
-  /** Open the evals pane on its Run section, with this model waiting to be picked. */
+  /**
+   * Open the evals pane on its Run section, with this model waiting to be picked.
+   *
+   * The path is passed now, and the pane ticks it. It used to open the pane and
+   * jump to the section and stop there — the comment already claimed "with this
+   * model waiting to be picked" and nothing was: lineage makes the file *findable*
+   * in the target list, which is a different thing from *selected*, and the user
+   * still had to recognise their own checkpoint among every GGUF on the machine.
+   */
   const score = () => {
-    registry.openPanel('evals.hub');
+    registry.openPanel('evals.hub', produced ? { params: { modelPath: produced.path } } : undefined);
     void registry.runCommand('section.show:evals.hub:run');
   };
 
@@ -330,7 +339,10 @@ function ConvertCard({ projectId }: { projectId: string }) {
 
 export function RecipePane() {
   const params = usePaneParams();
-  const projectId = String(params.projectId ?? '');
+  // Falls back to the project you were last in, same as the notebook pane — see
+  // `last-project.ts`. Resolved once per mount, not watched.
+  const [fallbackId] = useState(() => (params.projectId ? null : lastProjectId()));
+  const projectId = String(params.projectId ?? fallbackId ?? '');
   const [payload, setPayload] = useState<RecipePayload | null>(null);
   const [recipe, setRecipe] = useState<Recipe | null>(null);
   const [docs, setDocs] = useState<DocLink[]>([]);

@@ -21,6 +21,16 @@ backend surface — workspace layouts persist through
 - **Widgets:** `dashboard.welcome` (intro card). Other modules contribute more
   widgets (`clubhouse.account`, `observability.io`).
 
+  The welcome card is **the app's only body of in-app guidance** and is written as
+  such. It used to be two sentences, one of which was "Press Ctrl+K for the command
+  palette" — wrong on a Mac, wrong for anyone who rebound it, and wrong on the
+  keymap preset that gives `mod+k` to `area.focus:up`. It now resolves the live
+  chord through `bindingsFor`/`labelSpec` and says so honestly when the palette has
+  no binding at all, and it renders the shared `WorkspaceLauncher` rather than
+  restating the preset list: a second hand-written copy would be missing whichever
+  workspace was added last. See
+  [windowing](../architecture/windowing.mdx) for the launcher.
+
   `dashboard.backendStatus` was **retired**: a whole center pane rendering one
   line of health text is the clearest case of a readout becoming a destination
   because a pane was the only way to show anything. The poll moved to

@@ -35,6 +35,7 @@ import logging
 import sqlite3
 import time
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Generator
 
 from backend.modules.database.app_db import ensure_app_db_dir
@@ -208,6 +209,101 @@ def by_path() -> dict[str, dict[str, Any]]:
         return {r["gguf_path"]: _row(r) for r in rows}
     except Exception:  # noqa: BLE001
         logger.debug("training: lineage listing failed", exc_info=True)
+        return {}
+
+
+def inventory() -> list[dict[str, Any]]:
+    """Every model this node made, with where it came from and how it scored.
+
+    The join this module's docstring proposed and nothing performed. Five disjoint
+    views of "the models I have" existed — the llama.cpp GGUF catalog, Hugging Face
+    downloads, chat-provider model *names*, per-project checkpoints, and this table —
+    and the answer to "which fine-tune is this, and did it beat its base?" was to
+    write the join by hand in the database console.
+
+    One row per lineage row, not per file on disk: the catalog lists every GGUF the
+    node can serve, including ones Ollama and LM Studio own, and those have no
+    provenance to report. A model *made here* is what this answers about.
+
+    Every leg is optional and degrades to empty rather than failing. A run whose
+    metrics were never mirrored, an eval that was never run, a file since deleted —
+    each is a normal state, and a inventory that 500s because one of them is missing
+    would be useless exactly when it is most needed. The `present` flag is the one
+    fact worth reporting loudly: a row whose file is gone is a fine-tune you can read
+    the history of and cannot serve.
+    """
+    rows = list(by_path().values())
+    if not rows:
+        return []
+
+    # `_row` already renames every column to camelCase for the browser; reading the
+    # SQL spellings here returns None for all of them and joins nothing, silently.
+    scores = _scores_by_path()
+    metrics = _metrics_by_run()
+    for row in rows:
+        path = str(row.get("ggufPath") or "")
+        present = bool(path) and Path(path).exists()
+        row["present"] = present
+        row["sizeBytes"] = Path(path).stat().st_size if present else 0
+        row["evals"] = scores.get(path, [])
+        row["metrics"] = metrics.get(str(row.get("localtrackRunId") or ""), {})
+    rows.sort(key=lambda r: float(r.get("createdAt") or 0), reverse=True)
+    return rows
+
+
+def _scores_by_path() -> dict[str, list[dict[str, Any]]]:
+    """Finished eval runs, grouped by the GGUF they scored.
+
+    Keyed on `model_path` rather than the model *name*: a name is an alias a server
+    answers to and may mean a different file tomorrow, which is the whole reason the
+    lineage table is keyed on the path. Runs from before that column existed carry an
+    empty path and are simply not attributed — better than attaching a score to a
+    file it may not have measured.
+    """
+    try:
+        from backend.modules.evals import store as evals_store
+
+        runs = evals_store.list_runs(limit=500)
+    except Exception:  # noqa: BLE001 - a missing leg is a normal state
+        logger.debug("lineage: eval scores unavailable", exc_info=True)
+        return {}
+
+    out: dict[str, list[dict[str, Any]]] = {}
+    for run in runs:
+        path = getattr(run, "model_path", "")
+        if not path or run.status != "done":
+            continue
+        out.setdefault(path, []).append(
+            {
+                "runId": run.id,
+                "suiteId": run.suite_id,
+                "passed": run.passed,
+                "total": run.total,
+                "completed": run.completed,
+                "finishedAt": run.finished_at,
+            }
+        )
+    return out
+
+
+def _metrics_by_run() -> dict[str, dict[str, float]]:
+    """Each lineage row's localtrack run summary, keyed by run id."""
+    try:
+        from backend.modules.localtrack import store as lt_store
+
+        wanted = {
+            str(r.get("localtrackRunId") or "")
+            for r in by_path().values()
+            if r.get("localtrackRunId")
+        }
+        out: dict[str, dict[str, float]] = {}
+        for run_id in wanted:
+            run = lt_store.get_run(run_id)
+            if run is not None:
+                out[run_id] = dict(run.summary or {})
+        return out
+    except Exception:  # noqa: BLE001
+        logger.debug("lineage: localtrack summaries unavailable", exc_info=True)
         return {}
 
 

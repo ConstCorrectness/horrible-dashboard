@@ -191,7 +191,7 @@ async def _sweep(args: dict[str, Any]) -> Any:
         return {"points": [p.to_dict() for p in points]}
     if not envs.venv_ready(project):
         return {
-            "error": "this project's venv is not ready — run training.install_stack first"
+            "error": "this project's venv is not ready — run recipe.install_stack first"
         }
     intro = await asyncio.to_thread(
         recipes.introspect, project, backend_id=recipe.backend, task=recipe.task
@@ -205,7 +205,7 @@ async def _sweep(args: dict[str, Any]) -> Any:
         "sweepId": sweep_id,
         "points": len(points),
         "status": "started",
-        "note": "Poll training.sweep_status, then localtrack.compare_runs on the "
+        "note": "Poll recipe.sweep_status, then localtrack.compare_runs on the "
         "metric run ids to see which axis moved the metric.",
     }
 
@@ -275,17 +275,17 @@ async def _wandb_import(args: dict[str, Any]) -> Any:
 
 TOOLS: list[AgentTool] = [
     AgentTool(
-        name="training.get_recipe",
+        name="recipe.get",
         description="Read a project's fine-tuning recipe: the chosen framework and "
         "task, every knob and its value, and whether the project venv has validated "
         "them against the installed libraries.",
         parameters=dict(_PROJECT),
         required=["projectId"],
         handler=_get_recipe,
-        group="training",
+        group="recipe",
     ),
     AgentTool(
-        name="training.set_recipe",
+        name="recipe.set",
         description="Change a project's fine-tuning recipe. Merges: fields you omit "
         "keep their values. Check the dataset suits the task with datasets.adapt "
         "first — a preference dataset cannot train SFT and vice versa.",
@@ -318,7 +318,7 @@ TOOLS: list[AgentTool] = [
             "values": {
                 "type": "object",
                 "description": "Knob values keyed by field name, e.g. "
-                "{'learning_rate': 0.0002, 'r': 16}. training.get_recipe returns the "
+                "{'learning_rate': 0.0002, 'r': 16}. recipe.get returns the "
                 "field list for the selected framework and task.",
             },
         },
@@ -326,10 +326,10 @@ TOOLS: list[AgentTool] = [
         side_effect=True,
         specifier_template="{projectId}",
         handler=_set_recipe,
-        group="training",
+        group="recipe",
     ),
     AgentTool(
-        name="training.apply_recipe",
+        name="recipe.apply",
         description="Write the recipe's generated cells into the project notebook, "
         "replacing any previously generated block.",
         parameters=dict(_PROJECT),
@@ -337,10 +337,10 @@ TOOLS: list[AgentTool] = [
         side_effect=True,
         specifier_template="{projectId}",
         handler=_apply_recipe,
-        group="training",
+        group="recipe",
     ),
     AgentTool(
-        name="training.install_stack",
+        name="recipe.install_stack",
         description="Install the recipe framework's libraries (trl/peft/unsloth/...) "
         "into the project venv, picking the torch wheel that matches this machine's "
         "accelerator. Required before a recipe can be validated or run.",
@@ -349,10 +349,10 @@ TOOLS: list[AgentTool] = [
         side_effect=True,
         specifier_template="{projectId}",
         handler=_install_stack,
-        group="training",
+        group="recipe",
     ),
     AgentTool(
-        name="training.sweep",
+        name="recipe.sweep",
         description="Run an ablation: the project's recipe N times with one or more "
         "fields varied. Every run records the config it exercised, so "
         "localtrack.compare_runs can attribute the difference to an axis. Pass "
@@ -388,19 +388,19 @@ TOOLS: list[AgentTool] = [
         side_effect=True,
         specifier_template="{projectId}",
         handler=_sweep,
-        group="training",
+        group="recipe",
     ),
     AgentTool(
-        name="training.sweep_status",
+        name="recipe.sweep_status",
         description="Progress of ablation sweeps: which points are running, which "
         "finished or failed, and the metric run ids to compare.",
         parameters={"sweepId": {"type": "string", "description": "One sweep's id"}},
         required=[],
         handler=_sweep_status,
-        group="training",
+        group="recipe",
     ),
     AgentTool(
-        name="training.sweep_stop",
+        name="recipe.sweep_stop",
         description="Stop a running sweep. Points that already finished keep their "
         "results.",
         parameters={"sweepId": {"type": "string", "description": "The sweep's id"}},
@@ -408,10 +408,10 @@ TOOLS: list[AgentTool] = [
         side_effect=True,
         specifier_template="{sweepId}",
         handler=_sweep_stop,
-        group="training",
+        group="recipe",
     ),
     AgentTool(
-        name="training.wandb_projects",
+        name="wandb.projects",
         description="List the Weights & Biases projects this node's connected key "
         "can see.",
         parameters={
@@ -422,10 +422,10 @@ TOOLS: list[AgentTool] = [
         },
         required=[],
         handler=_wandb_projects,
-        group="training",
+        group="wandb",
     ),
     AgentTool(
-        name="training.wandb_runs",
+        name="wandb.runs",
         description="List runs in a Weights & Biases project, with their configs "
         "and summary metrics.",
         parameters={
@@ -437,10 +437,10 @@ TOOLS: list[AgentTool] = [
         },
         required=["project"],
         handler=_wandb_runs,
-        group="training",
+        group="wandb",
     ),
     AgentTool(
-        name="training.wandb_import",
+        name="wandb.import_runs",
         description="Import a Weights & Biases run's config and metric history into "
         "localtrack, so a run from another machine charts and compares beside the "
         "ones trained here. Re-importing updates the same row.",
@@ -463,6 +463,6 @@ TOOLS: list[AgentTool] = [
         side_effect=True,
         specifier_template="{run}",
         handler=_wandb_import,
-        group="training",
+        group="wandb",
     ),
 ]

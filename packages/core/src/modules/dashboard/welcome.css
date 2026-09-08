@@ -1,0 +1,57 @@
+/* ------------------------------------------------------------------ welcome --
+ *
+ * The dashboard's welcome card. Prose, then the workspace launcher — which brings
+ * its own grid (`workspace-launcher.css`), so nothing here styles a tile.
+ *
+ * Measured rather than full-bleed: the card sits in a center area that can be most
+ * of a monitor wide, and a paragraph running the whole way across is unreadable.
+ */
+.welcome {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-7);
+  max-width: 56rem;
+  padding: var(--space-7);
+}
+
+.welcome-lede {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-lead);
+  line-height: 1.5;
+}
+
+.welcome-ways {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The leading edge carries the accent — the house rule from datalist.css, which is
+   why these are not bullets. */
+.welcome-ways li {
+  padding-left: var(--space-5);
+  border-left: 2px solid var(--border);
+  color: var(--text-dim);
+  font-size: var(--fs-body);
+  line-height: 1.55;
+}
+
+.welcome-ways b {
+  color: var(--text);
+  font-weight: var(--fw-medium);
+}
+
+.welcome-ways kbd,
+.welcome-ways code {
+  padding: 0 var(--space-3);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+}

@@ -119,8 +119,17 @@ export function WorkspaceTabs() {
 
   /**
    * A floating desktop hides the strip: it is a desktop, and a desktop does not
-   * have a tab bar. Switching moves to the taskbar's pips and management to the
-   * Start menu, so nothing the strip did becomes unreachable.
+   * have a tab bar. Switching and management both move to the Start menu's
+   * Desktops group — which lists the presets as well as the created desktops, so
+   * nothing the strip offered becomes unreachable. The home surface's workspace
+   * launcher is the other way in, and on a clean install it is the *first* one:
+   * `DEFAULT_BOOT_WORKSPACE` is a floating desktop, so this strip has never
+   * rendered at the moment a new user most needs it.
+   *
+   * (This used to say switching "moves to the taskbar's pips". There are no pips
+   * — see `Taskbar.tsx`, which says it deliberately carries no switcher. For as
+   * long as that comment stood, the boot mode had no switcher the comment knew
+   * about.)
    *
    * It cannot simply not render, though. When the native shell grants
    * `chrome.workspaceTabs` this strip **is** the undecorated window's titlebar —

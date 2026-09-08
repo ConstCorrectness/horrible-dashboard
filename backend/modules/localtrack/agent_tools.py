@@ -110,6 +110,43 @@ async def _get_metric_keys(args: dict[str, Any]) -> dict[str, Any]:
     return {"keys": keys}
 
 
+async def _compare_runs(args: dict[str, Any]) -> dict[str, Any]:
+    """Runs side by side, reduced to what actually differs between them.
+
+    The single most-wanted research read — "did this help?" — and until now it was
+    HTTP-only. `store.compare_runs` and `POST /api/localtrack/compare` have both
+    existed the whole time; there was simply no tool, so an agent asked to compare a
+    sweep had to pull raw metric series with `query_metrics` and re-derive the
+    comparison itself. Worse, `training/recipe_tools.py` instructs the model twice,
+    by name, to call `localtrack.compare_runs` — a tool that did not exist, so
+    following the instruction produced an unknown-tool error.
+
+    Thin on purpose: every judgement (varied vs shared config, last value rather
+    than mean, flagging incomparable runs) lives in the store, so the tool and the
+    pane cannot drift into two different answers to one question.
+    """
+    run_ids = args.get("run_ids")
+    if isinstance(run_ids, str):
+        run_ids = [r.strip() for r in run_ids.split(",") if r.strip()]
+    if not run_ids:
+        return {"error": "run_ids is required; call localtrack.list_runs first"}
+    result = store.compare_runs(list(run_ids), str(args.get("metric") or ""))
+    if not result.runs:
+        return {"error": f"none of those {len(run_ids)} run ids exist"}
+    payload = result.model_dump()
+    if result.mixed:
+        # Said out loud rather than left in a field the model may not read. These
+        # runs are still comparable — you may well want to — but the difference
+        # between them is not the axis anyone varied, and reporting it as an
+        # ablation result is the specific wrong answer this guards against.
+        payload["note"] = (
+            "these runs disagree on "
+            + ", ".join(result.mixed)
+            + " — report the difference as a comparison, not as an ablation"
+        )
+    return payload
+
+
 _TOOLS: list[AgentTool] = [
     AgentTool(
         name="localtrack.list_projects",
@@ -193,6 +230,28 @@ _TOOLS: list[AgentTool] = [
             },
         },
         required=[],
+        group="localtrack",
+    ),
+    AgentTool(
+        name="localtrack.compare_runs",
+        description=(
+            "Compare runs side by side: which config keys differ, which are shared, "
+            "and each run's final value for every metric. The read that answers "
+            "'did this change help?' - prefer it over pulling raw series."
+        ),
+        handler=_compare_runs,
+        parameters={
+            "run_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Run IDs to compare (two or more)",
+            },
+            "metric": {
+                "type": "string",
+                "description": "Optional single metric to focus on; omit for all of them",
+            },
+        },
+        required=["run_ids"],
         group="localtrack",
     ),
 ]

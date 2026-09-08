@@ -38,6 +38,10 @@ export const labModule: ModuleManifest = {
       sections: [
         { id: 'models', label: 'Models', icon: '🧠', key: 'm', default: true },
         { id: 'datasets', label: 'Datasets', icon: '🗃', key: 'd' },
+        // Models / Datasets are what the Hub has; Local is what *you* have. A
+        // section rather than a 76th pane opener, for the reason the consolidation
+        // effort gives: one table does not need a destination of its own.
+        { id: 'local', label: 'Local', icon: '📦', key: 'l' },
       ],
     },
   ],
@@ -45,6 +49,7 @@ export const labModule: ModuleManifest = {
     {
       id: 'lab',
       name: 'Lab',
+      description: "Write a fine-tuning script with the model, the agent's context and the Hugging Face Hub all in reach.",
       icon: '🧪',
       frame: {
         center: {

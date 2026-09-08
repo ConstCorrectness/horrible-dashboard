@@ -445,6 +445,20 @@ function openPaneRouted(viewId: string, opts?: OpenPaneOptions): string | null {
       findPaneAnywhere(f, wantedId) ??
       (singleton ? listPanes(f).find((p) => p.pane.viewId === viewId) : undefined);
     if (existing) {
+      // Apply the params before focusing. Without this a deep link into a pane
+      // that is *already open* focuses it and changes nothing — and these links
+      // fire from inside workspaces that seed their own target pane, so "already
+      // open" is the normal case, not the edge one.
+      //
+      // Only when params were actually supplied: a plain "open the LocalTrack
+      // pane" must not wipe a selection a previous deep link established.
+      if (opts?.params) {
+        layoutStore.dispatch({
+          type: 'SET_PANE_PARAMS',
+          instanceId: existing.pane.instanceId,
+          params: opts.params,
+        });
+      }
       focusInstance(existing);
       return existing.pane.instanceId;
     }
@@ -496,6 +510,9 @@ export function openPaneInArea(
   if (instanceId) {
     const existing = findPaneAnywhere(f, instanceId);
     if (existing) {
+      if (params) {
+        layoutStore.dispatch({ type: 'SET_PANE_PARAMS', instanceId, params });
+      }
       focusInstance(existing);
       return instanceId;
     }
@@ -511,6 +528,15 @@ export function openPaneInArea(
     const existing =
       findPaneAnywhere(f, viewId) ?? listPanes(f).find((p) => p.pane.viewId === viewId);
     if (existing) {
+      // Same as `openPaneRouted`: focusing an open singleton must still deliver
+      // the params the caller asked for.
+      if (params) {
+        layoutStore.dispatch({
+          type: 'SET_PANE_PARAMS',
+          instanceId: existing.pane.instanceId,
+          params,
+        });
+      }
       focusInstance(existing);
       return existing.pane.instanceId;
     }

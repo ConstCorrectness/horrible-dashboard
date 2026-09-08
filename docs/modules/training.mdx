@@ -541,7 +541,7 @@ on demand or by keyword) so they don't bloat the model's tool budget:
   takes minutes and is deliberately *not* backgroundable the way `start_run` is —
   there is no id to poll afterwards, the answer **is** the output path.
 - **`training` — frontend tools** (`agentTools` on the `training.notebook` panel). Full
-  cell CRUD + execute against the pane's session store: `training.list_cells`,
+  cell CRUD + execute against the pane's session store: `cells.list_cells`,
   `read_cell`, `kernel_status` (read-only); `insert_cell`, `edit_cell`, `delete_cell`,
   `run_cell` (waits ≤120s, returns outputs/traceback), `run_all`, `interrupt`, `restart`.
 
@@ -568,24 +568,46 @@ project (`open_pane("training.notebook", {params: {projectId, notebook}})`).
 
 **Flow**: keyword-preload `training` → `search_environments` → `create_project` (approval
 gate, specifier `provider:ref`) → `fetch_data` → `open_pane(training.notebook, params)` →
-`split_area` for the metrics pane → `training.insert_cell`/`run_cell` to build the
+`split_area` for the metrics pane → `cells.insert_cell`/`run_cell` to build the
 starter. Verified end to end against a live Ollama model: the ask reaches
 `training.create_project`, the gate fires with the right specifier, and on approval the
 project + scaffolded notebook land on disk.
 
-### Open: the two groups no longer fit together
+### Resolved: `training` was split
 
-This flow used to span `training` (12) + `notebook` (10 cell verbs) on top of an 11-tool
-core. With the cell verbs moved, the flow is one group of 22 and needs `notebook` not at
-all — strictly better. But a group's own name is an implicit preload keyword, so the
-phrase "training notebook" still preloads **both**: 11 + 22 + 9 = 42 against a
-`TOOL_BUDGET` of 38, and the backstop drops the last four (loudly — it logs them at
-ERROR — but it drops them).
+The group had grown to **34 tools** — and the count was easy to miss, because only 14 of
+them are declared in this module's `agent_tools.py`. The other twenty were the ten
+recipe/sweep verbs in `recipe_tools.py` and the ten notebook cell verbs registered by the
+**frontend** (`packages/core/src/modules/training/agentTools.ts`). A tool's group is its
+name prefix (`_group_of`) and does not care which side of the wire declared it, so all
+thirty-four landed in one group.
 
-The budget deliberately sits under the ~40-tool reasoning cliff, so raising it is not the
-answer. The real options are to split `training` (project/venv/run management is a
-different job from cell editing), or to merge the two notebooks behind one tool set with
-a target argument. Both are larger than the rename and neither is done.
+With a ~9-tool core that left no room for `evals` (10) beside it: the loop this module's
+own agent prompt prescribes — start a run, read its metrics, score the result — did not
+fit under `TOOL_BUDGET`, and the overflow was dropped. Loudly in the log, invisibly
+everywhere else.
+
+The split is by **job**, since a group is the unit `load_tools` hands out:
+
+| group | tools | what |
+| --- | --- | --- |
+| `training` | 14 | projects, venvs, fetch, runs, checkpoints, convert, push |
+| `recipe` | 7 | author a recipe, install the stack, run and stop a sweep |
+| `cells` | 10 | read/edit/run the open training notebook's cells |
+| `wandb` | 3 | import someone else's W&B runs into localtrack |
+
+`cells`, not `notebook`: that name belongs to the reactive notebook module, and these two
+collided under it once already. Both old spellings (`notebook.*` and `training.*`) are
+carried in `permission_store._RULE_RENAMES`, listed rather than chained — `rename_in_rule`
+does one lookup, so a rule left to reach `cells.run_cell` by way of `training.run_cell`
+would stop at a name that no longer exists, and a grant pointing at nothing fails closed
+and re-asks the user for a decision they already made.
+
+Every phase of the loop now fits over the core at the 38 floor — pick data (25), run a job
+(30), edit the notebook (33), convert and serve (30), judge it (26) — and the whole thing
+at once is 73, which a hosted model carries in one round. `test_trainer_tool_budget.py`
+asserts this by counting the groups, frontend tools included, rather than trusting a
+number written in a comment; that is how the group reached 34 unnoticed.
 
 ## Backend surface
 
@@ -621,8 +643,8 @@ opened one at a time from the command palette.
 
 ```
 ┌──────────────┬───────────────────────────────┬──────────────────┐
-│ Training     │  (document area — empty)      │ Training Metrics │
-│ Projects     │  notebook · recipe land here  │ LocalTrack       │
+│ Training     │  Training Notebook            │ Training Metrics │
+│ Projects     │  (your last project)          │ LocalTrack       │
 │ Explorer     ├───────────────────────────────┤                  │
 │              │  Evals · llama.cpp            │                  │
 └──────────────┴───────────────────────────────┴──────────────────┘
@@ -636,11 +658,31 @@ serving it to be scored are the same errand, and the right column is where a run
 *watched* — `training.metrics` live, `localtrack.workspace` for comparing it against
 previous runs.
 
-The document area is seeded **empty** on purpose. `training.notebook` and
-`training.recipe` are params-bound (`{projectId, notebook}`) and a preset's `tabs`
-carry no params, so seeding them would open two panes with no project bound. Which
-is exactly why the projects pane is *first* in the left dock: it is the entry point,
-and what it opens lands in the empty area.
+The document area seeds `training.notebook`. It used to seed **empty**:
+`training.notebook` and `training.recipe` are params-bound
+(`{projectId, notebook}`) and a preset's `tabs` carry no params, so seeding one
+opened a pane with no project bound. The consequence was that opening this workspace
+— or `ai-research`, which had the same hole — landed you on "Empty area" every time,
+and the first move was always a trip to the dock.
+
+That was a missing default rather than a preset-format limit. There is exactly one
+project someone means when they open the training workspace without saying which,
+and it is the one they were in last, so `last-project.ts` records it
+(`localStorage`, following `layout/recents.ts` — a per-viewer convenience, and
+deliberately *not* a `SettingDecl`, which would put "Last project" on the settings
+page as something to configure). Both panes fall back to it when opened with no
+params, resolved once per mount so the remembered id changing under an open pane
+cannot swap the notebook out from under you.
+
+A remembered project that no longer exists **forgets itself and shows the picker**,
+rather than the "no longer exists" dead-pane message. That message is right for a
+pane the user deliberately opened against that project and wrong for a fallback:
+nobody asked for this project, the value is not one they can see or clear, and
+without the self-heal the workspace would greet them with the same dead project on
+every open, forever.
+
+The projects pane stays *first* in the left dock: it is still the entry point for a
+**different** project, and what it opens retargets the seeded pane in place.
 
 A params-bound pane opened **cold** — from the start menu, the palette, or an empty
 area — renders the projects picker itself rather than a sentence. It used to say

@@ -14,6 +14,8 @@
  * one-tool `nb` group no keyword could preload.
  */
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { notebookAgentTools } from '../../notebook/agentTools';
 import { notebookAgentTools as trainingAgentTools } from '../../training/agentTools';
@@ -31,12 +33,52 @@ describe('notebook vs training tool names', () => {
     expect([...duplicateToolNames(all).keys()]).toEqual([]);
   });
 
-  it('puts every tool in its owning module’s group', () => {
+  it('puts every tool in exactly one group, and one the backend describes', () => {
     // The prefix *is* the group — there is no `group` field to override it — so a
-    // tool prefixed with anything but its module's id is filed under a group whose
-    // description, guide and preload keywords describe something else.
+    // tool prefixed with anything the backend has no blurb for is filed under a
+    // group whose description, guide and preload keywords describe something else,
+    // or nothing at all.
     expect([...new Set(notebookAgentTools.map((t) => groupOf(t.name)))]).toEqual(['notebook']);
-    expect([...new Set(trainingAgentTools.map((t) => groupOf(t.name)))]).toEqual(['training']);
+
+    // The training module's cell verbs are `cells.*`, NOT `training.*`, and that is
+    // deliberate rather than a stray prefix. A group is the unit `load_tools` hands
+    // out: with these ten in `training` beside its fourteen project verbs and the
+    // recipe module's ten, that group was 34 tools, and the trainer agent's own
+    // documented loop no longer fitted in `TOOL_BUDGET`. Editing cells and managing
+    // a project are different jobs and load separately now.
+    //
+    // `cells` rather than `notebook`, because these two modules collided under that
+    // name once already — see `permission_store._RULE_RENAMES`, which carries both
+    // old spellings so a saved grant survives.
+    expect([...new Set(trainingAgentTools.map((t) => groupOf(t.name)))]).toEqual(['cells']);
+  });
+
+  it('names only groups the backend can describe', () => {
+    /*
+     * The group a frontend tool lands in is decided here and *described* there.
+     * `list_tool_groups` is how a model chooses what to load, and a group with no
+     * blurb is offered as a bare id — so renaming a prefix without adding one
+     * silently makes a whole capability unpickable, with nothing failing.
+     *
+     * Read across the package boundary for the same reason `front-door.test.ts`
+     * reads `packages/ui`: the two halves of this contract live in different
+     * languages and only one of them can be imported.
+     */
+    // `process.cwd()` (the package root under vitest), not `import.meta.url`: this
+    // file runs in `happy-dom`, where that is not a file URL and `fileURLToPath`
+    // throws.
+    const orchestrator = readFileSync(
+      join(process.cwd(), '..', '..', 'backend', 'modules', 'agent', 'orchestrator.py'),
+      'utf8',
+    );
+    const block = orchestrator.slice(orchestrator.indexOf('_GROUP_DESCRIPTIONS'));
+    const described = new Set([...block.matchAll(/^ {4}"([a-z_]+)":/gm)].map((m) => m[1]));
+
+    // A guard on the guard: a changed dict shape must not make this vacuous.
+    expect(described.size).toBeGreaterThan(5);
+
+    const prefixes = [...notebookAgentTools, ...trainingAgentTools].map((t) => groupOf(t.name));
+    expect([...new Set(prefixes)].filter((g) => !described.has(g))).toEqual([]);
   });
 
   it('keeps the reactive notebook’s cell verbs reachable under one prefix', () => {

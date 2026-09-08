@@ -761,7 +761,54 @@ def _skill_tools() -> list[dict[str, Any]]:
 # because the flagship training flow needed `training` (12) + `notebook` (9) on top of
 # an 18-tool core; with the arrangement verbs out of core that same flow is now
 # 11 + 12 + 9 = 32, so the cap can sit under the cliff without truncating real work.
+#
+# This stays the **floor**, and the default for anything we cannot identify. See
+# `tool_budget_for` for when a turn is allowed more.
 TOOL_BUDGET = 38
+
+#: What a hosted frontier model may hold at once.
+#
+# The 38 ceiling is a measured property of *small local models*, not of tool calling.
+# Applying it to a hosted frontier model buys nothing and costs a `load_tools` round
+# trip per group beyond the third — which is what made the trainer agent's own
+# documented loop (`training` + `evals` + `localtrack`, 31 tools over a ~9-tool core)
+# unreachable in one turn on every model, including ones that would have handled all
+# of it comfortably.
+#
+# Not unbounded: a tool list is schema tokens in every request, and past roughly a
+# hundred definitions the cost is real even where the reasoning holds up.
+TOOL_BUDGET_HOSTED = 96
+
+
+def tool_budget_for(agent_id: str = "main") -> int:
+    """How many tool definitions this agent's turns may carry.
+
+    Resolved per agent because the provider is per agent (`roster.resolve_provider`):
+    "run the coder on the local llama.cpp server and leave the orchestrator on
+    Anthropic" is expressible, and the two should not share a ceiling that only one
+    of them needs.
+
+    The signal is `ProviderInfo.hosted` — a hosted API reached with a key, versus a
+    server on this machine — rather than the model name. Parsing a parameter count
+    out of a name works for `llama-3.2-3b-instruct` and not at all for `gpt-5` or
+    `claude-opus-4`, so a name-based rule would quietly leave every hosted model on
+    the floor, which is the case this exists for.
+
+    **Unknown resolves to the floor.** A provider we cannot identify, a settings read
+    that fails, a stale config — every one of those returns 38. Being wrong in this
+    direction costs a `load_tools` round; being wrong in the other costs a model that
+    silently stops reasoning, which is indistinguishable from a model that chose not
+    to call anything.
+    """
+    try:
+        from backend.modules.agent import roster
+
+        info, _ = roster.resolve_provider(_load_config(), agent_id)
+        return TOOL_BUDGET_HOSTED if getattr(info, "hosted", False) else TOOL_BUDGET
+    except Exception:  # noqa: BLE001 - a budget lookup must never break a turn
+        logger.debug("tool budget: falling back to the floor", exc_info=True)
+        return TOOL_BUDGET
+
 
 # Human-readable blurbs for known groups; unknown groups get a generic fallback.
 _GROUP_DESCRIPTIONS: dict[str, str] = {
@@ -851,17 +898,31 @@ _GROUP_DESCRIPTIONS: dict[str, str] = {
     "observability": "Inspect live client / inbound / outbound I/O data flow.",
     "training": (
         "Build & train neural networks: search/create Kaggle/HF/Gym projects, "
-        "per-project venvs, install deps, start/stop training runs, push to "
-        "Kaggle kernels or Colab, render manim explainers — and read, edit, and "
-        "execute the cells of the open TRAINING notebook (addressed by projectId)."
+        "per-project venvs, install deps, start/stop training runs, list and "
+        "convert checkpoints, and push to Kaggle kernels or Colab."
     ),
-    # These two are different notebooks, and the blurbs are what the model picks a
-    # group by. The training notebook's cell tools used to sit in this group under
-    # `notebook.*` names, which is what the old wording described; they are
-    # `training.*` now.
+    "recipe": (
+        "Author a fine-tuning recipe and run it: read and write a project's recipe "
+        "(framework, task, dataset, every hyperparameter), write its generated cells "
+        "into the notebook, install the training stack, and run or stop a sweep over "
+        "the knobs you are unsure about."
+    ),
+    # Three sets of cell verbs against two different notebooks. The blurbs are what
+    # the model picks a group by, so they lead with WHICH notebook and how it is
+    # addressed — that is the whole distinction, and getting it wrong means a call
+    # shaped for one store arriving at the other.
+    "cells": (
+        "Read, edit, and execute the cells of the open TRAINING notebook (addressed "
+        "by projectId): list cells, insert, edit, delete, run one or all, interrupt "
+        "and restart its kernel."
+    ),
     "notebook": (
         "Read, edit, and execute cells of the open REACTIVE notebook (addressed by "
         "file path), and set its execution mode."
+    ),
+    "wandb": (
+        "Import runs from a Weights & Biases account into this node's local "
+        "experiment tracking, so a cloud run charts beside a local one."
     ),
     "symbols": (
         "Semantic + exact lookup over the symbol/docs index: installed package "
@@ -1052,6 +1113,9 @@ _GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
         "alert",
     ),
     "clubhouse": ("clubhouse", "room"),
+    # Deliberately NOT "notebook" or "cell": those preload `cells`, and a prompt
+    # mentioning a training notebook would otherwise pull both groups at once —
+    # 24 tools — which is the shape this split exists to avoid.
     "training": (
         "train",
         "training",
@@ -1405,22 +1469,25 @@ def _select_tools(
             selected.append(t)
     if stats is not None:
         stats["selected"] = len(selected)
-    if len(selected) > TOOL_BUDGET:
-        dropped = [t["function"]["name"] for t in selected[TOOL_BUDGET:]]
+    budget = tool_budget_for(spec.id if spec else "main")
+    if stats is not None:
+        stats["budget"] = budget
+    if len(selected) > budget:
+        dropped = [t["function"]["name"] for t in selected[budget:]]
         # ERROR, not WARNING, and naming the casualties: a truncated tool list is
         # indistinguishable from a model that simply chose not to use the tool, so
         # this is the only trace of *why* an agent could not do what it was asked.
         logger.error(
             "tool list %d exceeds budget %d; DROPPING %d tool(s): %s (active groups: %s)",
             len(selected),
-            TOOL_BUDGET,
+            budget,
             len(dropped),
             ", ".join(dropped),
             sorted(active_groups),
         )
         if stats is not None:
             stats["dropped"] = dropped
-        selected = selected[:TOOL_BUDGET]
+        selected = selected[:budget]
     return selected
 
 
@@ -1916,7 +1983,15 @@ async def _capture_context(conn: WsConnection, **fields: Any) -> None:
         from backend.modules.interpretability import recorder
 
         await recorder.capture_round(
-            conn, tool_budget=TOOL_BUDGET, tokenizer_repo=_tokenizer_repo(), **fields
+            conn,
+            # The budget actually in force for THIS agent, not the module constant.
+            # The pane renders this as the denominator of "tools offered"; reporting
+            # 38 while the turn carried 96 would make the readout say a turn was at
+            # its ceiling when it had most of the room still free — a measurement
+            # that is wrong in the direction of looking correct.
+            tool_budget=tool_budget_for(str(fields.get("agent_id") or "main")),
+            tokenizer_repo=_tokenizer_repo(),
+            **fields,
         )
     except Exception:
         logger.debug("interpretability capture skipped", exc_info=True)

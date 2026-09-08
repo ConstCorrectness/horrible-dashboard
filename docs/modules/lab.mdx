@@ -81,6 +81,48 @@ repo id meant leaving the app and pasting a string into settings.
 
 Models only — a dataset describes nothing about the running model.
 
+## The Local section: what this node made
+
+`lab.hub`'s third section. Models and Datasets are what the *Hub* has; **Local** is
+what *you* have — every GGUF this node converted, with the base model it came from,
+the recipe and checkpoint that produced it, its training curves and its eval scores,
+in one row.
+
+Backed by `GET /api/training/inventory`, which performs the join
+[`training/lineage.py`](training.mdx) recorded and its own docstring proposed. Five
+disjoint views of "the models I have" existed before it — the llama.cpp GGUF catalog,
+Hugging Face downloads, chat-provider model *names*, per-project checkpoints, and the
+lineage table itself — so "which fine-tune is this, and did it beat its base?" was
+answered by writing the join by hand in the database console.
+
+Three things it does deliberately:
+
+- **One row per lineage row, not per file on disk.** The llama.cpp catalog lists
+  every GGUF the node can serve, Ollama's and LM Studio's included, and those have no
+  provenance to report. This answers about models made *here*.
+- **Every leg degrades to empty.** A run whose metrics were never mirrored, an eval
+  never run, a file since deleted — each is a normal state. An inventory that 500s
+  because one leg is missing would be useless exactly when it is most needed.
+- **A missing file is reported, not hidden.** `present: false` is the one fact worth
+  colouring: a fine-tune whose whole history you can read and which you cannot serve.
+  Dropping the row would lose the provenance along with it.
+
+Scores attach by **path**, not by model name. `EvalRun` gained a `model_path` column
+(`_ensure_column`, the `case_hash` precedent) because `model` is an alias a server
+answers to and may mean a different file tomorrow — which is precisely why the lineage
+table is keyed on the path. A run from before that column carries an empty path and is
+deliberately **not** attributed: better than attaching a score to a file it may never
+have measured.
+
+Each row's actions are param deep links — Recipe, Curves, Score — using the same
+mechanism as the rest of the loop (see
+[windowing](../architecture/windowing.mdx#opening-a-pane-that-is-already-open)).
+
+The route declares **no `response_model`**, and that is load-bearing: a Pydantic
+response model silently drops any field it does not declare, and this payload is a
+join over four stores whose shapes move independently. `test_training_inventory.py`
+asserts against the HTTP body for the same reason.
+
 ## Contributions to the layout shell
 
 | Kind | ID | Notes |
@@ -89,6 +131,7 @@ Models only — a dataset describes nothing about the running model.
 | Panel | `lab.hub` | "Hugging Face"; singleton, role `widget` (centre-capable) |
 | Section | `lab.hub` → `models` | Default section, key <kbd>m</kbd> |
 | Section | `lab.hub` → `datasets` | Key <kbd>d</kbd> |
+| Section | `lab.hub` → `local` | "Local"; what this node made. Key <kbd>l</kbd> |
 | Command | `lab.openHub` | Lab: Browse Hugging Face |
 
 Section commands (`section.show:lab.hub:models`, …) are synthesized by the registry,

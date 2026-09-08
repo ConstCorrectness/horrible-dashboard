@@ -137,6 +137,30 @@ correct-looking code and one missing line of TOML.
 halves exist for every command. Adding a permission TOML means adding it to
 `PERMISSION_FILES` there, since `include_str!` needs literal paths.
 
+## What the wizard does not do
+
+It teaches the user their own name, a backdrop, a theme and three credential steps
+— and nothing about the product. There is no tour, no help menu and no in-app docs
+pane, so the moment it closes was the only moment anyone could be told what the app
+_is_.
+
+Two deliberately small things close that, rather than a fifth step:
+
+- The final step signs off by naming the **workspace launcher** the user is about to
+  land on (the wizard closes onto the `splash` home surface, where the tiles sit
+  directly under the ask bar).
+- The Start menu's footer carries a **Help** entry (`shell.help`) opening the
+  published documentation. It checks `openExternal`'s boolean return and toasts the
+  URL when it fails: `window.open` returns `null` behind a pop-up blocker and the
+  Tauri invoke rejects on an older shell, and neither throws — a Help button that
+  silently does nothing teaches the user that the docs do not exist.
+
+What it explicitly does **not** do is offer a boot-workspace picker. Booting into an
+empty floating desktop is a decision this app made on purpose
+(`DEFAULT_BOOT_WORKSPACE`, see [windowing](../architecture/windowing.mdx)); the fix
+for the presets being invisible was to surface them, not to change where the app
+starts.
+
 ## Shared state
 
 Two module-level stores, both `useSyncExternalStore`-shaped, both with a `reset()`

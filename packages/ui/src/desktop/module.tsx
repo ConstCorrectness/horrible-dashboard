@@ -19,7 +19,9 @@ import {
   toggleWindowMinimized,
   getSetting,
   layoutStore,
+  openExternal,
   registry,
+  toastsStore,
   BOOT_WORKSPACE_KEY,
   DEFAULT_BOOT_WORKSPACE,
   setBackdrop,
@@ -55,6 +57,13 @@ import { themeMenuItems } from './taskbar/Tray';
  * synthesizes one per registered provider, so a plugin's backdrop gets its
  * command without a second list to keep in step. See `registry.ts`.
  */
+/**
+ * The published documentation. A constant rather than a setting: this is where
+ * *this build's* docs live, and a user pointing it somewhere else is not a thing
+ * anyone wants. Deployed from `docs/` by `.github/workflows/docs.yml`.
+ */
+const DOCS_URL = 'https://constcorrectness.github.io/horrible-dashboard/';
+
 export const desktopModule: ModuleManifest = {
   id: 'desktop',
   title: 'Desktop',
@@ -68,6 +77,30 @@ export const desktopModule: ModuleManifest = {
     // stay for the cases where converting is genuinely what you want, and the
     // settings page offers the same conversion — but they say so in their titles and
     // live in the palette rather than under an ambient one-click control.
+    {
+      /**
+       * The app's documentation. There is no in-app help surface at all — no tour,
+       * no help menu, no docs pane — while a full Docusaurus site is built from
+       * `docs/` and published on every push to `main`. Linking it is a one-line fix
+       * for the gap; writing a second copy of it inside the app is not.
+       *
+       * The result of `openExternal` is **checked**, because this is exactly the
+       * failure it exists to catch: `window.open` returns null behind a pop-up
+       * blocker and the Tauri invoke rejects on an older shell, and neither throws.
+       * A Help button that does nothing is worse than no Help button — the user
+       * concludes the docs do not exist rather than that a pop-up was blocked.
+       */
+      id: 'shell.help',
+      title: 'Help: Open the documentation',
+      run: async () => {
+        if (await openExternal(DOCS_URL)) return;
+        toastsStore.add(
+          'warning',
+          'Could not open the docs',
+          `Your browser may have blocked it. The documentation is at ${DOCS_URL}`,
+        );
+      },
+    },
     {
       id: 'desktop.toggleMode',
       title: 'Desktop: Convert this desktop (tiling ⇄ floating) — sizes are not preserved',
@@ -306,6 +339,12 @@ export function appMenuItems(): ContextMenuItem[] {
       id: 'settings.open',
       label: 'Settings',
       run: () => registry.openPanel('settings.home'),
+    },
+    {
+      id: 'shell.help',
+      label: 'Documentation',
+      hint: 'Opens in your browser',
+      run: () => void registry.runCommand('shell.help'),
     },
     { id: 'app.theme', label: 'Theme', run: () => {}, submenu: themeMenuItems(currentThemeId()) },
     { id: 'app.backdrop', label: 'Backdrop', run: () => {}, submenu: backdropMenuItems() },

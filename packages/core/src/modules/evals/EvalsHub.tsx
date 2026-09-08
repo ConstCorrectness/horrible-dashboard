@@ -3,6 +3,12 @@ import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 
 import { DataList, DataRow, PickRow, RollingNumber } from '../../DataList';
 import { dialogs } from '../../dialogs';
 import { usePaneSection } from '../../layout/use-sections';
+import { usePaneParams } from '../../panes';
+import { registry } from '../../registry';
+
+// This module styles itself inline (`S` below); the stylesheet exists for the one
+// thing an inline style cannot express — a :hover/:focus-visible state.
+import './evals.css';
 import { subscribeChannel } from '../../ws';
 import {
   getNetworkState,
@@ -1280,25 +1286,17 @@ function Suites({
  */
 const targetId = (t: SuggestedTarget): string => t.modelPath || t.label;
 
-/**
- * The localtrack project a suite's sweeps report into.
- *
- * Derived from the suite rather than fixed, and slugged because localtrack uses the
- * string as both the project id and its display name. Falls back to the bare
- * `evals` bucket only when no suite resolved, which is the one case where there is
- * nothing to derive from.
- */
-function localtrackProject(suite: EvalSuite | undefined): string {
-  if (!suite) return 'evals';
-  const slug = suite.name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '');
-  return slug ? `evals-${slug}` : `evals-${suite.id}`;
-}
-
 /** Run: pick models, start a sweep, watch it. */
-function Run({ suites, selected }: { suites: EvalSuite[]; selected: string }) {
+function Run({
+  suites,
+  selected,
+  preselectPath,
+}: {
+  suites: EvalSuite[];
+  selected: string;
+  /** A GGUF path to tick as soon as the target list arrives. */
+  preselectPath?: string;
+}) {
   const [targets, setTargets] = useState<SuggestedTarget[]>([]);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   const [message, setMessage] = useState('');
@@ -1320,6 +1318,30 @@ function Run({ suites, selected }: { suites: EvalSuite[]; selected: string }) {
     initNetwork();
     requestPeers();
   }, []);
+
+  /*
+   * Tick the deep-linked model once the targets arrive.
+   *
+   * Keyed on `preselectPath` rather than run once: arriving here from a second
+   * conversion must select the *second* GGUF. And it only ever adds — a user who
+   * unticks it, or ticks the base model beside it to compare, keeps that choice,
+   * because the effect does not re-run until a different path is linked.
+   *
+   * A path that names no target is **said**, not swallowed. It is a real state —
+   * the conversion produced a LoRA adapter, which `llama-server` cannot serve
+   * alone and the target list therefore does not offer — and silently selecting
+   * nothing would read as the Score button being broken.
+   */
+  useEffect(() => {
+    if (!preselectPath || targets.length === 0) return;
+    if (!targets.some((t) => targetId(t) === preselectPath)) {
+      setMessage(
+        `${preselectPath} is not in the target list — a LoRA adapter cannot be served on its own, and only a converted GGUF appears here.`,
+      );
+      return;
+    }
+    setChosen((prev) => (prev.has(preselectPath) ? prev : new Set([...prev, preselectPath])));
+  }, [preselectPath, targets]);
 
   const reload = useCallback(() => {
     listRuns(selected)
@@ -1370,12 +1392,14 @@ function Run({ suites, selected }: { suites: EvalSuite[]; selected: string }) {
                 // that is a property of the machine, not of a model.
                 node: runOn || undefined,
               })),
-              // Per suite, not one 'evals' bucket for everything: localtrack
-              // charts a project's runs against each other, so pouring a
-              // tool-calling suite and an MMLU benchmark into one project plots
-              // two unrelated pass rates on the same axis. `suite` is the
-              // selected one, so a sweep always lands beside its own history.
-              localtrack_project: localtrackProject(suite),
+              // `localtrack_project` is deliberately NOT sent. The backend
+              // derives it from the suite id (`sweep.localtrack_project_for`),
+              // which is the only way the agent tool's sweeps get mirrored at
+              // all — it never sent one, so `RunMirror("")` swallowed every
+              // metric. Sending a rival slug from here (this derived one from
+              // the suite's *name*) would split a suite's history across two
+              // projects the moment the two disagreed, which a rename alone
+              // would cause.
             })
               .then((r) => setMessage(r.started ? 'Sweep started.' : r.message))
               .catch((e) => setMessage(String(e)));
@@ -1609,15 +1633,29 @@ function Results({ selected }: { selected: string }) {
                   {r.groups_loaded.length > 0 && (
                     <div style={S.mono}>loaded {r.groups_loaded.join(', ')}</div>
                   )}
-                  {/* The recorder's turn id. Shown rather than kept in the database
-                      because it is the handle on the exact prompt and tool schemas
-                      that went out for this case — without it on screen there is no
-                      way to get from a puzzling row to what the model was actually
-                      given. */}
+                  {/* The recorder's turn id — the handle on the exact prompt and
+                      tool schemas that went out for this case.
+
+                      It used to be printed as inert text, beside a pane
+                      (`agentpedia.hub`) that is a turn stepper keyed on precisely
+                      this id. So "why did this case fail?" was answered by reading
+                      a hex string off the screen and hunting for it in a list. It
+                      is a button now; a turn the store never kept 404s and the
+                      stepper says so, which is a better answer than a dead
+                      string. */}
                   {r.turn_id && (
-                    <div style={{ ...S.mono, color: 'var(--text-dim)' }}>
+                    <button
+                      className="evals-turn-link"
+                      title="Open this turn in Agentpedia — what the model was actually given"
+                      onClick={() => {
+                        registry.openPanel('agentpedia.hub', {
+                          params: { turnId: r.turn_id },
+                        });
+                        void registry.runCommand('section.show:agentpedia.hub:runs');
+                      }}
+                    >
                       turn {r.turn_id}
-                    </div>
+                    </button>
                   )}
                 </>
               }
@@ -1636,6 +1674,11 @@ export function EvalsHub() {
   const { section } = usePaneSection();
   const [suites, setSuites] = useState<EvalSuite[]>([]);
   const [selected, setSelected] = useState('');
+  // Deep-link param from the recipe pane's Score button: the GGUF it just
+  // converted, waiting to be picked. Lineage already made the file *findable* in
+  // the picker (`GET /evals/targets` labels it "fine-tune of <base>"); this is what
+  // makes it *selected*.
+  const preselectPath = String(usePaneParams().modelPath ?? '');
 
   const reload = useCallback(() => {
     listSuites().then((s) => {
@@ -1648,7 +1691,9 @@ export function EvalsHub() {
 
   return (
     <div style={S.pane}>
-      {section === 'run' && <Run suites={suites} selected={selected} />}
+      {section === 'run' && (
+        <Run suites={suites} selected={selected} preselectPath={preselectPath} />
+      )}
       {section === 'results' && <Results selected={selected} />}
       {section === 'compare' && <Compare selected={selected} />}
       {(!section || section === 'suites') && (

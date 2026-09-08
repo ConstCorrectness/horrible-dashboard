@@ -218,15 +218,22 @@ def test_shell_circuit_breakers() -> None:
 # --- stored-rule migration across a tool rename -----------------------------
 
 
-def test_rename_moves_shared_notebook_verbs_to_training() -> None:
+def test_rename_moves_shared_notebook_verbs_to_cells() -> None:
     from backend.modules.agent.permission_store import rename_in_rule
 
     # A `notebook.run_cell` grant was made when training's identically-named tool
     # was the one that actually ran; it must follow the tool, not the name.
-    assert rename_in_rule("notebook.run_cell") == "training.run_cell"
-    assert (
-        rename_in_rule("notebook.insert_cell(proj-1)") == "training.insert_cell(proj-1)"
-    )
+    #
+    # Those verbs have since moved again, to `cells.*`, so BOTH old spellings must
+    # land on the new one. `rename_in_rule` does one lookup, so a rule left to reach
+    # `cells.run_cell` by way of `training.run_cell` would stop at a name that no
+    # longer exists — a grant pointing at nothing, which fails closed and re-asks the
+    # user for a decision they already made.
+    assert rename_in_rule("notebook.run_cell") == "cells.run_cell"
+    assert rename_in_rule("training.run_cell") == "cells.run_cell"
+    assert rename_in_rule("notebook.insert_cell(proj-1)") == "cells.insert_cell(proj-1)"
+    # A project verb keeps its name: only the CELL verbs moved.
+    assert rename_in_rule("training.start_run") == "training.start_run"
     # Reactive-notebook-only verbs never collided, so they keep meaning what they said.
     assert rename_in_rule("notebook.set_mode") == "notebook.set_mode"
     # The stopgap name the collision forced rejoins its own group.
@@ -239,7 +246,7 @@ def test_rename_leaves_a_specifier_containing_dots_alone() -> None:
     from backend.modules.agent.permission_store import rename_in_rule
 
     # Only the head is a tool name; a specifier may contain anything.
-    assert rename_in_rule("notebook.run_cell(a.b(c))") == "training.run_cell(a.b(c))"
+    assert rename_in_rule("notebook.run_cell(a.b(c))") == "cells.run_cell(a.b(c))"
     assert (
         rename_in_rule("files.read(notebook.run_cell)")
         == "files.read(notebook.run_cell)"
@@ -250,7 +257,7 @@ def test_migration_rewrites_once_and_dedupes(monkeypatch) -> None:
     from backend.modules.agent import permission_store as PS
 
     store: dict[str, object] = {
-        PS.KEY_ALLOW: ["notebook.run_cell", "training.run_cell", "terminal.exec"],
+        PS.KEY_ALLOW: ["notebook.run_cell", "cells.run_cell", "terminal.exec"],
         PS.KEY_ASK: [],
         PS.KEY_DENY: [],
     }
@@ -265,7 +272,7 @@ def test_migration_rewrites_once_and_dedupes(monkeypatch) -> None:
 
     PS.load_rules()
     # The renamed rule collapses into the one that already used the new name.
-    assert store[PS.KEY_ALLOW] == ["training.run_cell", "terminal.exec"]
+    assert store[PS.KEY_ALLOW] == ["cells.run_cell", "terminal.exec"]
     assert writes == [PS.KEY_ALLOW]
 
     # Idempotent: a second load is a no-op, so this costs nothing after the first.

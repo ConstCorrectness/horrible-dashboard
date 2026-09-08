@@ -47,13 +47,29 @@ def test_training_group_in_catalog() -> None:
     conn = FakeConn()
     catalog = {g["name"]: g for g in orchestrator._group_catalog(conn)}
     assert "training" in catalog
-    # The group is registered from two modules — the project lifecycle tools here
-    # and the recipe/sweep tools in `recipe_tools` — because the orchestrator keys
-    # on the name prefix, not on which file declared it. Counting only one source
-    # would let the other half go missing without failing anything.
-    assert catalog["training"]["tools"] == len(agent_tools._TOOLS) + len(
+    # `recipe_tools` used to register into THIS group — the orchestrator keys on the
+    # name prefix, not on which file declared a tool, so two files fed one group of
+    # 24. That is what made the trainer agent's own documented loop bigger than
+    # `TOOL_BUDGET`, so the recipe/sweep half now has its own prefix.
+    #
+    # Counted from the module rather than hardcoded: the number drifts every time
+    # somebody adds a tool, which is how it reached 24 in the first place.
+    assert catalog["training"]["tools"] == len(agent_tools._TOOLS)
+
+
+def test_the_recipe_and_wandb_groups_split_out_of_training() -> None:
+    conn = FakeConn()
+    catalog = {g["name"]: g for g in orchestrator._group_catalog(conn)}
+    # Both must exist as groups of their own. A tool whose name still said
+    # `training.` would be silently readmitted to the group this split emptied.
+    assert catalog["recipe"]["tools"] + catalog["wandb"]["tools"] == len(
         agent_tools.RECIPE_TOOLS
     )
+    for tool in agent_tools.RECIPE_TOOLS:
+        assert not tool.name.startswith("training."), tool.name
+        # The group IS the prefix; `AgentTool.group` does not name it. The two
+        # disagreeing means a `load_tools` for one group hands out the other's.
+        assert orchestrator._group_of(tool.name) == tool.group, tool.name
 
 
 def test_keyword_preload_on_kaggle_prompt() -> None:

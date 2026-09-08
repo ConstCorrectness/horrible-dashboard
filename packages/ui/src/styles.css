@@ -2401,11 +2401,24 @@ body {
 }
 
 /* Home view */
+/*
+ * Centred by `margin: auto` on the child, NOT by `align-items: center` here.
+ *
+ * They look equivalent and are not. With `align-items: center` on a scroll
+ * container, a child taller than the container is centred by overflowing equally
+ * at both ends — and overflow above the start edge is not scrollable in any
+ * engine. So the greeting and the avatar scrolled off the top and could not be
+ * scrolled back to, while the bottom of the surface simply never arrived. The
+ * setup card could already trigger it in a short window; the workspace launcher
+ * makes the surface taller than the viewport on any normal one.
+ *
+ * `margin: auto` centres a flex item in both axes and collapses to zero on the
+ * overflowing side instead, which is the whole fix. (`align-items: safe center`
+ * is the other one; this works further back.)
+ */
 .home {
   flex: 1;
   display: flex;
-  align-items: center;
-  justify-content: center;
   overflow: auto;
   background: radial-gradient(ellipse 55% 45% at 50% 52%, rgb(30 80 180 / 28%), transparent 70%);
 }
@@ -2416,6 +2429,7 @@ body {
   align-items: center;
   gap: 1.1rem;
   width: min(44rem, 92vw);
+  margin: auto;
   padding: 2rem 0;
 }
 

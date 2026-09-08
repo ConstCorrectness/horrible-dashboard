@@ -34,6 +34,7 @@ const HERE = fileURLToPath(new URL('.', import.meta.url));
 const REPO = join(HERE, '..', '..', '..', '..');
 const BACKDROPS = join(REPO, 'packages', 'ui', 'src', 'desktop', 'backdrops', 'index.ts');
 const SPLASH = join(REPO, 'packages', 'ui', 'src', 'desktop', 'backdrops', 'Splash.tsx');
+const HOME = join(REPO, 'packages', 'ui', 'src', 'HomeView.tsx');
 
 /** Ids declared with `interactive: true` — the backdrops that render the node's
  *  own state and can be worked in, rather than decoration behind windows. */
@@ -63,6 +64,22 @@ describe('the front door is reachable from a clean install', () => {
         'setup card — the entire tier-1 surface unreachable. Point it at an ' +
         'interactive backdrop.',
     ).toContain(DEFAULT_BACKDROP);
+  });
+
+  it('offers the workspaces on the surface it lands on', () => {
+    /*
+     * The second half of the same invariant, one level in. The presets are the
+     * app's table of contents — 17 complete arrangements, one per kind of work —
+     * and until the launcher landed they were surfaced only by `WorkspaceTabs`,
+     * which returns `null` for a floating desktop. `DEFAULT_BOOT_WORKSPACE` is a
+     * floating desktop. So a clean install rendered the front door with no way to
+     * reach any of them, and nothing failed: the strip is *supposed* to be absent
+     * there.
+     *
+     * Dropping `<WorkspaceLauncher />` from `HomeView` would restore that state
+     * silently, which is why it is asserted rather than commented.
+     */
+    expect(readFileSync(HOME, 'utf8')).toMatch(/<WorkspaceLauncher\b/);
   });
 
   it('still routes that default through the backdrop that mounts HomeView', () => {

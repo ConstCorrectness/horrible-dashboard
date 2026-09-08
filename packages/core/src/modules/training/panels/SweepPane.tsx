@@ -346,7 +346,20 @@ export function SweepPane() {
                   {record.done > 1 && (
                     <Button
                       intent="ghost"
-                      onClick={() => registry.openPanel('localtrack.workspace')}
+                      // The point *labels*, not any of the three run ids in scope
+                      // here — see `localTrackStore.focus`. `sweeps.py` names each
+                      // mirrored run after this exact string, and it is the only
+                      // key both ends agree on before the run starts.
+                      onClick={() =>
+                        registry.openPanel('localtrack.workspace', {
+                          params: {
+                            projectId: record.projectId,
+                            runNames: record.results.map(
+                              (entry) => entry.label || `point ${entry.index}`,
+                            ),
+                          },
+                        })
+                      }
                     >
                       Compare
                     </Button>

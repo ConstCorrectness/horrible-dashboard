@@ -32,22 +32,35 @@ _LIST_KEYS = {"allow": KEY_ALLOW, "ask": KEY_ASK, "deny": KEY_DENY}
 # reactive notebook — a decision the user never made, applied to a different
 # kernel. `set_mode` is untouched: it never collided, so it always meant the
 # reactive notebook. `nb.list_cells` is the stopgap name the collision forced.
+#
+# They then moved again, to `cells.*`. A tool's group IS its name prefix
+# (`_group_of`), so while these were `training.*` they counted against the training
+# group — 10 cell verbs on top of 14 project verbs made it 24, which with a ~9-tool
+# core left no room for `evals` beside it and put the trainer agent's own documented
+# loop over `TOOL_BUDGET`. Editing cells and managing a project are different jobs
+# and are loaded separately now.
+#
+# Both old spellings map to the new one, and they are listed rather than chained:
+# `rename_in_rule` does ONE lookup, so a `notebook.run_cell` rule left to reach
+# `cells.run_cell` via `training.run_cell` would stop at the intermediate name that
+# no longer exists — a grant pointing at nothing, which fails closed and asks the
+# user again for a decision they already made.
+_CELL_VERBS = (
+    "list_cells",
+    "read_cell",
+    "kernel_status",
+    "insert_cell",
+    "edit_cell",
+    "delete_cell",
+    "run_cell",
+    "run_all",
+    "interrupt",
+    "restart",
+)
+
 _RULE_RENAMES: dict[str, str] = {
-    **{
-        f"notebook.{verb}": f"training.{verb}"
-        for verb in (
-            "list_cells",
-            "read_cell",
-            "kernel_status",
-            "insert_cell",
-            "edit_cell",
-            "delete_cell",
-            "run_cell",
-            "run_all",
-            "interrupt",
-            "restart",
-        )
-    },
+    **{f"notebook.{verb}": f"cells.{verb}" for verb in _CELL_VERBS},
+    **{f"training.{verb}": f"cells.{verb}" for verb in _CELL_VERBS},
     "nb.list_cells": "notebook.list_cells",
 }
 

@@ -6,7 +6,7 @@ driver protocol so there is one shape to learn. Sources lazy-import their client
 library inside methods, so a missing optional dependency fails with a clear message
 instead of breaking boot.
 
-Four ship:
+Five ship:
 
 - **`hub`** — Hugging Face, peeked through the datasets-server without downloading.
 - **`local`** — `.jsonl`/`.json`/`.csv`/`.parquet` under the data dir *or* any
@@ -20,6 +20,10 @@ Four ship:
   type from memory.
 - **`kaggle`** — delegates to the training module's existing Kaggle provider rather
   than opening a second Kaggle client.
+- **`library`** — a knowledge library's chunks, as rows. The direction the graph was
+  missing: research files material into a library, the library embeds it, and
+  nothing could train on it. Materialized to jsonl on `locate`, because a library is
+  a vector table rather than a file.
 
 New sources plug in two ways: a file in this package (built-in) or a backend plugin
 calling `host.add_dataset_source(source)` (see `backend.sdk`).
@@ -478,6 +482,160 @@ async def _hub_first_rows(
         raise SourceError(str(exc)) from exc
 
 
+
+class LibrarySource:
+    """A knowledge library, as training material.
+
+    The one direction the graph did not have. Research writes into a library
+    (`research.start` files its report there, `browser.save` files a page,
+    `arxiv.download` files a paper), the library chunks and embeds it, and then it
+    stopped: the dataset sources were hub / local / exports, so a corpus you had
+    spent an afternoon assembling could be *searched* by the agent and never
+    *trained on*. Research and training touched only through a human copying text
+    out of one and into the other.
+
+    A library is not a file, so this is not a `_FileSource`:
+
+    - `search` lists libraries, not rows. One ref per library, described by what is
+      actually in it — a library of four sources and 900 chunks is a different
+      proposition from one with four hundred sources.
+    - `peek` reads chunks straight out of the vector store, so you can look before
+      committing to anything. No file is written to answer a peek.
+    - `locate` **materializes** the library to a jsonl under the datasets dir and
+      returns that path, because `local: True` means a recipe emits
+      `load_dataset("json", data_files=...)`, and that needs a real file.
+
+    `locate` doing work is the surprising part, and is deliberate. The alternative
+    is an Export button: one more thing to forget, and one more state to be stale
+    in. Here the file is rewritten whenever the library holds more chunks than the
+    file holds lines, so a re-run after adding sources trains on the new ones — and
+    it is *not* rewritten when they already agree, because a recipe render calls
+    this and re-serialising a large library every time would make opening a form
+    feel broken.
+
+    One row per **chunk**, not per source: chunks are what the library actually
+    stores, they are already sized for a context window, and a single "source" here
+    may be a whole book.
+    """
+
+    id = "library"
+    label = "Library (your knowledge bases)"
+    local = True
+
+    def _libraries(self) -> list[dict[str, Any]]:
+        from backend.modules.library import store as library_store  # noqa: PLC0415
+
+        try:
+            return library_store.list_libraries()
+        except Exception as exc:  # noqa: BLE001 - reported, not raised past here
+            raise SourceError(f"could not read the library catalog: {exc}") from exc
+
+    def search(self, query: str, limit: int) -> list[DatasetRefModel]:
+        needle = query.lower().strip()
+        found: list[DatasetRefModel] = []
+        for entry in self._libraries():
+            name = str(entry.get("name") or "")
+            if not name or (needle and needle not in name.lower()):
+                continue
+            if len(found) >= limit:
+                break
+            sources = int(entry.get("source_count") or 0)
+            chunks = int(entry.get("chunk_count") or 0)
+            plural = "" if sources == 1 else "s"
+            found.append(
+                DatasetRefModel(
+                    source=self.id,
+                    id=name,
+                    title=name,
+                    rows=chunks,
+                    description=f"{chunks} chunks from {sources} source{plural}",
+                    meta={"chunks": chunks, "sources": sources},
+                )
+            )
+        return found
+
+    def splits(self, ref: str) -> list[dict[str, str]]:
+        return [{"config": "default", "split": "train"}]
+
+    def peek(
+        self, ref: str, config: str, split: str, limit: int
+    ) -> tuple[list[str], list[dict[str, Any]]]:
+        rows = self._chunks(ref, limit)
+        if not rows:
+            raise SourceError(f"library {ref!r} has no chunks yet")
+        return list(rows[0].keys()), rows
+
+    def _chunks(self, ref: str, limit: int) -> list[dict[str, Any]]:
+        """Chunks of a library, flattened into training rows.
+
+        `source_id`/`title`/`url` ride along because a chunk with no provenance is
+        not reviewable, and being able to go and read where a row came from is the
+        whole argument for training on your own corpus.
+        """
+        from backend.modules.database.vectorstore import list_documents  # noqa: PLC0415
+        from backend.modules.library import store as library_store  # noqa: PLC0415
+
+        try:
+            docs, _ = list_documents(ref, limit=limit, offset=0)
+        except Exception as exc:  # noqa: BLE001
+            raise SourceError(f"could not read library {ref!r}: {exc}") from exc
+
+        origins: dict[str, dict[str, Any]] = {}
+        try:
+            for row in library_store.list_sources(library=ref):
+                origins[str(row["id"])] = row
+        except Exception:  # noqa: BLE001 - provenance is a bonus, not the row
+            logger.debug("datasets: library source titles unavailable", exc_info=True)
+
+        out: list[dict[str, Any]] = []
+        for doc in docs:
+            meta = doc.get("metadata") or {}
+            origin = origins.get(str(meta.get("source_id") or ""), {})
+            out.append(
+                {
+                    "text": doc.get("text") or "",
+                    "source_id": meta.get("source_id") or "",
+                    "chunk_index": meta.get("chunk_index", 0),
+                    "title": origin.get("title") or "",
+                    "url": origin.get("url") or "",
+                }
+            )
+        return out
+
+    def locate(self, ref: str) -> str:
+        chunks = self._chunks(ref, limit=1_000_000)
+        if not chunks:
+            raise SourceError(f"library {ref!r} has no chunks to train on")
+
+        path = data_root() / f"library-{_safe_name(ref)}.jsonl"
+        if path.exists():
+            try:
+                with path.open("r", encoding="utf-8") as handle:
+                    existing = sum(1 for line in handle if line.strip())
+                if existing == len(chunks):
+                    return str(path)
+            except OSError:
+                pass  # Unreadable: rewrite it.
+
+        tmp = path.with_suffix(".jsonl.part")
+        try:
+            with tmp.open("w", encoding="utf-8") as handle:
+                for row in chunks:
+                    handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+            # `.part` then rename, the llama.cpp download rule: a half-written jsonl
+            # is a file `load_dataset` will happily read the truncated half of.
+            tmp.replace(path)
+        except OSError as exc:
+            raise SourceError(f"could not write {path.name}: {exc}") from exc
+        return str(path)
+
+
+def _safe_name(value: str) -> str:
+    """A library name as a filename. Library names are user-supplied."""
+    keep = [c if (c.isalnum() or c in "-_") else "-" for c in value]
+    return "".join(keep).strip("-") or "library"
+
+
 # --- registry ----------------------------------------------------------------
 
 _BUILTIN: tuple[DatasetSource, ...] = (
@@ -485,6 +643,7 @@ _BUILTIN: tuple[DatasetSource, ...] = (
     LocalSource(),
     ExportsSource(),
     KaggleSource(),
+    LibrarySource(),
 )
 
 

@@ -45,6 +45,21 @@ export interface FramePreset {
   /** Workspace-tab glyph (emoji/letter); falls back to the name's first character. */
   icon?: string;
   /**
+   * One sentence saying what this arrangement is *for* — the working position it
+   * seeds, not the panes it contains.
+   *
+   * The presets are the most useful "here is a whole way of working" affordance in
+   * the app, and every one of them was designed with a paragraph of rationale above
+   * it in source. None of that reached a user: the tab strip shows an icon and a
+   * name, and the strip does not render at all on the floating desktop the app boots
+   * into. This field is what the launcher and the welcome widget read, so the
+   * rationale is written once and rendered wherever a workspace is offered.
+   *
+   * Required in practice — `presets-described.test.ts` fails a preset without one —
+   * but optional in the type so a plugin's manifest is not broken by adding it.
+   */
+  description?: string;
+  /**
    * The roster agent this workspace's chat talks to by default — a *role* for the
    * layout, not just furniture: the persona, its system prompt and its tool scope
    * switch with the workspace. Just an id (resolved against the backend roster,

@@ -56,9 +56,9 @@
 }
 /* NOT `overflow-x: hidden`, which is what this used to be. Under the native
    titlebar the strip is also the drag region, but hiding the overflow made the
-   tabs unscrollable in the desktop build outright — with 14 frame presets plus
-   any custom workspaces, the later tabs were simply unreachable, and dropping
-   the taskbar's desktop pips made this the only switcher. Scrolling and dragging
+   tabs unscrollable in the desktop build outright — with 17 frame presets plus
+   any custom workspaces, the later tabs were simply unreachable, and the taskbar
+   carries no switcher of its own. Scrolling and dragging
    coexist: `data-tauri-drag-region` is only honoured on the empty strip space. */
 .frame-tabs-scroll {
   scrollbar-width: none;

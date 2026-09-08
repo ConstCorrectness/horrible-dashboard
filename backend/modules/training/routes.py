@@ -689,6 +689,21 @@ async def recipe_docs() -> dict:
 # --- checkpoint → GGUF --------------------------------------------------------
 
 
+@router.get("/inventory")
+async def inventory() -> dict:
+    """Every model this node made: provenance, metrics and scores in one row.
+
+    Deliberately NOT a `response_model`. A Pydantic response model silently drops
+    any field it does not declare, and this payload is a join over four stores whose
+    shapes move independently — declaring one here means a field added to lineage or
+    to a run summary reaches the browser as `undefined`, with nothing failing. The
+    route is tested against its HTTP body for the same reason.
+    """
+    from backend.modules.training import lineage
+
+    return {"models": await asyncio.to_thread(lineage.inventory)}
+
+
 @router.get("/projects/{project_id}/checkpoints")
 async def checkpoints(project_id: str) -> dict:
     project = _project_or_404(project_id)

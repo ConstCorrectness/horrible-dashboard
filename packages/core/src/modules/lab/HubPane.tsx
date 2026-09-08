@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ApiError } from '../../api';
 import { usePaneSection } from '../../layout/use-sections';
+import { LocalModels } from './LocalModels';
 import { setSetting } from '../../settings';
 import {
   isReadable,
@@ -88,6 +89,14 @@ function RepoRow({
 
 export function LabHub() {
   const { section } = usePaneSection();
+  // The Local section is a different question entirely — what this node made, not
+  // what the Hub holds — so it is its own component rather than a third branch
+  // through the search/select/read flow below.
+  if (section === 'local') return <LocalModels />;
+  return <HubBrowser section={section} />;
+}
+
+function HubBrowser({ section }: { section: string | undefined }) {
   const kind: RepoKind = section === 'datasets' ? 'dataset' : 'model';
 
   const [query, setQuery] = useState('');

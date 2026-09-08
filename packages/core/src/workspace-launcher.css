@@ -1,0 +1,114 @@
+/* --------------------------------------------------------- workspace launcher --
+ *
+ * The ways of working, on the front door. 17 presets is too many for a row of
+ * tiles the size of the connector ones, and each carries a sentence explaining
+ * itself — so this is a grid of small cards rather than a strip of glyphs.
+ *
+ * The accent is a 2px top border, not a full-perimeter glow: the house rule for
+ * structure is a technical edge, and a ring around every card at this count reads
+ * as noise long before it reads as emphasis.
+ */
+.ws-launcher {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  width: 100%;
+}
+
+.ws-launcher-head {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-display);
+  text-align: center;
+  text-transform: uppercase;
+}
+
+/* `auto-fill` with a floor, so the row reflows from four across on the home
+   surface down to one in a narrow detached window without a media query. */
+.ws-launcher-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
+  gap: var(--space-4);
+}
+
+/* Its own keyframe rather than datalist.css's `hd-row-in`: that sheet arrives with
+   whichever chunk first imports `DataList`, and the home surface renders before any
+   of them. A missing animation-name does not error, it just silently never plays. */
+@keyframes hd-tile-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.ws-tile {
+  display: grid;
+  grid-template-areas:
+    'glyph name'
+    'glyph desc';
+  grid-template-columns: auto 1fr;
+  gap: 0 var(--space-5);
+  align-content: start;
+  padding: var(--space-5) var(--space-6);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--border);
+  border-radius: var(--radius-lg);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  animation: hd-tile-in var(--dur-base) var(--ease-entrance) both;
+  transition:
+    border-color var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard);
+}
+
+.ws-tile:hover,
+.ws-tile:focus-visible {
+  background: var(--bg-hover, var(--bg-raised));
+  border-top-color: var(--accent);
+  border-color: var(--border-strong, var(--border));
+}
+
+.ws-tile-glyph {
+  grid-area: glyph;
+  align-self: center;
+  font-size: var(--fs-display);
+  line-height: 1;
+}
+
+.ws-tile-name {
+  grid-area: name;
+  font-size: var(--fs-label);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-badge);
+  text-transform: uppercase;
+}
+
+/* Two lines, clamped. The descriptions are one sentence each, but a preset from a
+   plugin is not bound by that, and a single long one must not make its whole row
+   of tiles tall. */
+.ws-tile-desc {
+  display: -webkit-box;
+  grid-area: desc;
+  overflow: hidden;
+  margin-top: var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--fs-meta);
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ws-tile {
+    animation: none;
+  }
+}

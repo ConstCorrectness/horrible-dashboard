@@ -5,6 +5,7 @@ import {
   getAgentStatus,
   getBackendOrigin,
   useSetting,
+  WorkspaceLauncher,
   type AgentStatus,
 } from '@horrible/core';
 
@@ -214,6 +215,12 @@ export function HomeView({
           </ul>
         )}
         {answer !== null && <div className="home-answer">{answer || '…'}</div>}
+        {/* Below the ask bar, not above it: asking is the primary action here and a
+            grid of 17 tiles between the greeting and the input would push the input
+            off the fold. This is the "or, go somewhere" alternative, and it is the
+            only place in the app a clean install can see the workspaces at all —
+            the tab strip does not render on the floating desktop we boot into. */}
+        <WorkspaceLauncher />
         {/* The setup flow covers the model, the account and the connectors, so it
             shows whenever any of the three is outstanding — not only when the agent
             is unconfigured, which is all the old model-only card knew about. It

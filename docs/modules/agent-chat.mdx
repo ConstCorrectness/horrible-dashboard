@@ -410,7 +410,7 @@ sessions. Built-ins (`backend/modules/agent/roster.py`):
 | `dba`        | database, symbols                                                  | database                 | session mode  |
 | `researcher` | browser, search, library, github, google, research, arxiv, records | research, library, arxiv | session mode  |
 | `intake`     | records, browser, research, library                                | records, research        | session mode  |
-| `trainer`    | training, evals, localtrack, editor, files                         | training                 | session mode  |
+| `trainer`    | training, recipe, cells, evals, localtrack, datasets, llamacpp, wandb, editor, files | training                 | session mode  |
 
 Two of `researcher`'s groups are load-bearing for the workspaces it backs, and both
 were **dead buttons** before: Research and Web Ops dock the Review pane (`records` —
@@ -420,12 +420,23 @@ docked pane whose agent lacks the matching group is the failure mode to watch fo
 when adding a preset.
 
 `trainer` backs the [fine-tuning workspace](training.mdx#the-fine-tuning-workspace)
-and shows the _other_ half of that trap. It scopes to `training`/`evals`/`localtrack`
-and pointedly **not** to `llamacpp` or `hardware`, even though the workspace docks a
-llama.cpp pane: a group is a tool name's prefix (`_group_of`), and those two
-namespaces hold settings keys rather than tools, so naming one would permit nothing
-at all and say nothing about it. Check that a group you list has tools under it, not
-just a module with that name.
+and shows the _other_ half of that trap. `hardware` is pointedly **not** in its scope,
+even though the workspace reads a hardware probe: a group is a tool name's prefix
+(`_group_of`), that namespace holds settings keys rather than tools, so naming it
+would permit nothing at all and say nothing about it. Check that a group you list has
+tools under it, not just a module with that name.
+
+Its scope is long because the loop is long, and because `training` was
+[split into four](training.mdx#resolved-training-was-split). That group had reached 34
+tools — a third of them registered by the *frontend*, which is why every count in a
+comment said 14 — and with a ~9-tool core there was no room for `evals` beside it: the
+loop this agent's own prompt prescribes did not fit under `TOOL_BUDGET`, and the
+overflow was dropped with nothing but a log line to show for it. Only `training` is
+preloaded; the rest cost a `load_tools` round rather than schema space on every turn.
+
+`datasets` was missing entirely, which is the same dead-button trap one level in: the
+agent that fills in a recipe's `dataset_id` could not search, peek at or token-stat a
+dataset, and `can_delegate` is False, so it had no way to ask anything that could.
 
 There is deliberately **no `crm` agent**. It existed to enrich contacts and deals
 from the open web, which is what `researcher` already does now that it carries
@@ -852,6 +863,19 @@ injection — nothing is ever dropped, just not-yet-loaded). `active_groups` is:
 A `TOOL_BUDGET = 38` cap remains only as a backstop (core is always kept first). The
 `/tools` command (`list_tools`→`tools`) still reports the **full** catalog, labeled
 by group, independent of what any single turn has loaded.
+
+The cap is **resolved per agent**, not global: `tool_budget_for(agent_id)` returns 38
+for a model running on this machine and `TOOL_BUDGET_HOSTED = 96` for one reached
+through a hosted API. The 38 ceiling is a measured property of *small local models*,
+not of tool calling, and applying it to a frontier model bought nothing while costing
+a `load_tools` round per group past the third.
+
+The signal is `ProviderInfo.hosted` — an API reached with a key, versus a server on
+this machine — and deliberately not the model name: parsing a parameter count works
+for `llama-3.2-3b-instruct` and not at all for `gpt-5`, so a name-based rule would
+have left every hosted model on the floor, which is the case it exists for. **Anything
+unidentifiable resolves to the floor.** Being wrong low costs a round trip; being wrong
+high costs a model that silently stops reasoning.
 
 :::caution Watch the core, not the cap
 The cap was 44 — deliberately _above_ the ≤39 ceiling, so that a legitimate

@@ -274,6 +274,25 @@ function SetupStep() {
       ) : (
         <SetupCard status={status} onChanged={refresh} />
       )}
+      {/*
+        The one line this wizard says about the *product*.
+
+        Four steps taught the user their own name, a wallpaper and three credential
+        flows, and nothing about what the app is or how to move around it. There is
+        no tour and no help menu, so the moment the wizard closes is the only moment
+        anyone is told the workspaces exist — and it closes onto the home surface,
+        where the launcher they name is directly below the ask bar.
+
+        Deliberately not a fifth step with a workspace picker: that would have to
+        write `desktop.bootWorkspace`, and booting into an empty desktop is a
+        decision this app made on purpose (see `DEFAULT_BOOT_WORKSPACE`). Pointing
+        at the launcher costs nothing and reverses nothing.
+      */}
+      <p className="os-oobe-note">
+        That is everything. You will land on your desktop — the tiles below the ask
+        bar are complete workspaces (Research, Training, Data Ops and more); pick one
+        to start, or just ask.
+      </p>
     </section>
   );
 }

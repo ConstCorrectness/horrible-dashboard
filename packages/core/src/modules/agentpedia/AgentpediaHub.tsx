@@ -26,6 +26,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BlockRow, CompositionBar, fmtTokens, TokenizerBadge, ToolList } from '../../ContextBlocks';
 import { IconAlert, IconCheck, IconChevron, IconClock, IconRetry } from '../../glyphs';
 import { usePaneSection } from '../../layout/use-sections';
+import { usePaneParams } from '../../panes';
 import { bindStepper } from './actions';
 import { ForksSection, type ForkTarget } from './ForksSection';
 import {
@@ -485,7 +486,14 @@ function Stepper({
   );
 }
 
-function RunsSection({ onFork }: { onFork: (turnId: string, round: number) => void }) {
+function RunsSection({
+  onFork,
+  openTurnId,
+}: {
+  onFork: (turnId: string, round: number) => void;
+  /** A turn to step into on arrival — the eval results pane's deep link. */
+  openTurnId?: string;
+}) {
   const [index, setIndex] = useState<TurnIndexEntry[]>([]);
   const [captureOn, setCaptureOn] = useState(false);
   const [open, setOpen] = useState<TurnView | null>(null);
@@ -511,6 +519,22 @@ function RunsSection({ onFork }: { onFork: (turnId: string, round: number) => vo
       .then(setOpen)
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
   }, []);
+
+  /*
+   * Step straight into a linked turn.
+   *
+   * The eval results table printed `turn <id>` as inert text beside every case —
+   * next to a pane that is a turn stepper keyed on exactly that id, and took no
+   * params. Reading the id off the screen and hunting the Runs list for it was the
+   * whole workflow.
+   *
+   * `getTurn` 404s for a turn the store never kept, and `openTurn` already routes
+   * that into `error`, which this section renders. So a stale link says "No
+   * captured turn <id>" rather than opening an empty stepper.
+   */
+  useEffect(() => {
+    if (openTurnId) openTurn(openTurnId);
+  }, [openTurnId, openTurn]);
 
   if (open) {
     return (
@@ -687,6 +711,7 @@ function HarnessSection() {
 
 export function AgentpediaHub() {
   const { section, setSection } = usePaneSection();
+  const openTurnId = String(usePaneParams().turnId ?? '');
   // Which round a fork would branch at, handed from Runs to Forks. Held here
   // rather than in a module singleton because the sections are siblings and this
   // is the one value they share — and `setSection` is what moves the tab strip,
@@ -708,7 +733,7 @@ export function AgentpediaHub() {
       ) : section === 'forks' ? (
         <ForksSection target={forkTarget} onClearTarget={() => setForkTarget(null)} />
       ) : (
-        <RunsSection onFork={startFork} />
+        <RunsSection onFork={startFork} openTurnId={openTurnId || undefined} />
       )}
     </div>
   );

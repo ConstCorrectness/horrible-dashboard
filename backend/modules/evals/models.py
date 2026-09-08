@@ -376,6 +376,16 @@ class EvalRun(BaseModel):
     started_at: str = ""
     finished_at: str = ""
     error: str = ""
+    #: The GGUF this run actually scored, when the target named a file.
+    #
+    # `model` is a *name*, and for a llama.cpp target it is whatever alias the server
+    # answers to — not enough to say which file on disk was measured. The lineage
+    # table is keyed on the path (`training/lineage.py`: "the GGUF path is the join
+    # key"), so without this a score could never be attached to the fine-tune that
+    # produced it, only to a name that may mean a different file tomorrow.
+    #
+    # Empty for a hosted or Ollama target, which is honest: there is no file.
+    model_path: str = ""
     #: The localtrack run this sweep reported aggregates to, when there is one.
     localtrack_run_id: str = ""
     #: The tool catalog this run actually saw — enabled skills and connected MCP

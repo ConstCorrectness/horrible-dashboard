@@ -4,6 +4,7 @@
  * splitting off a new one per click.
  */
 import { openDocument } from '../../layout/controller';
+import { noteProjectOpened } from './last-project';
 
 /**
  * Open a project's notebook. Reopening the same one focuses the pane that holds
@@ -14,6 +15,11 @@ import { openDocument } from '../../layout/controller';
  * projects are two identical buttons.
  */
 export function openTrainingNotebook(projectId: string, notebook: string): void {
+  // Recorded here rather than in the pane, so every route into a project — the
+  // projects pane, the agent's `show`, a deep link from the sweep or recipe panes —
+  // updates it through one call. A pane recording it on mount would also record the
+  // fallback it just resolved, which is a loop, not a memory.
+  noteProjectOpened(projectId);
   openDocument(
     'training.notebook',
     `training.notebook:${projectId}/${notebook}`,
@@ -28,5 +34,6 @@ export function openTrainingNotebook(projectId: string, notebook: string): void 
  * focuses its pane instead of splitting a second form onto the screen.
  */
 export function openTrainingRecipe(projectId: string): void {
+  noteProjectOpened(projectId);
   openDocument('training.recipe', `training.recipe:${projectId}`, { projectId }, () => true);
 }

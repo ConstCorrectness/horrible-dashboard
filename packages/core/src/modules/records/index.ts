@@ -111,6 +111,7 @@ export const recordsModule: ModuleManifest = {
     {
       id: 'intake',
       name: 'Data Entry',
+      description: 'Read a document on the left, fill its record on the right, and review every field the agent proposes.',
       icon: '📥',
       // Source left, review right, half and half: the whole workflow is reading one
       // and confirming the other, and neither is secondary.

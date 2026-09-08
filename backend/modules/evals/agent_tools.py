@@ -254,6 +254,53 @@ async def _export(
     }
 
 
+async def _leaderboard(
+    suite_id: str = "", run_ids: str = "", limit: int = 8, **_: Any
+) -> dict[str, Any]:
+    """A suite's runs compared: the ranking, the case matrix, and universal failures.
+
+    `leaderboard.build` has answered three questions since it was written and only
+    the pane could ask them. The third is the one worth having a tool for: a case
+    **every** run fails is nearly always a broken case rather than four bad models,
+    and it has already caught three of them — including a GSM8K reference that
+    contained the whole worked solution.
+    """
+    from backend.modules.evals import leaderboard
+
+    if not suite_id:
+        return {"error": "suite_id is required; call evals.listSuites first"}
+    try:
+        return leaderboard.build(
+            suite_id,
+            [r.strip() for r in run_ids.split(",") if r.strip()] or None,
+            limit,
+        )
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+
+async def _leaderboard_diff(
+    base: str = "", other: str = "", **_: Any
+) -> dict[str, Any]:
+    """What one run fixed and broke against another, over the cases both attempted.
+
+    The fine-tune question, and the reason the trainer prompt says to answer it with
+    an eval sweep rather than a remembered number. Deliberately not derived from the
+    totals: 8/12 -> 9/12 by fixing three and breaking two is a different event from
+    fixing one and breaking none, and only this tells them apart.
+    """
+    from backend.modules.evals import leaderboard
+
+    if not base or not other:
+        return {
+            "error": "base and other run ids are both required; call evals.results first"
+        }
+    try:
+        return leaderboard.diff(base, other)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+
 _TOOLS = [
     AgentTool(
         name="evals.listSuites",
@@ -398,6 +445,51 @@ _TOOLS = [
             "run_id": {"type": "string", "description": "A specific run."},
             "suite_id": {"type": "string", "description": "Filter runs by suite."},
         },
+        group="evals",
+    ),
+    AgentTool(
+        name="evals.leaderboard",
+        description=(
+            "Compare a suite's finished runs: ranking, the per-case matrix, and the "
+            "cases EVERY run fails (usually a broken case, not four bad models)."
+        ),
+        handler=_leaderboard,
+        parameters={
+            "suite_id": {
+                "type": "string",
+                "description": "The suite to compare runs of.",
+            },
+            "run_ids": {
+                "type": "string",
+                "description": "Comma-separated subset; omit for the newest finished runs.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "How many runs to include. Default 8.",
+            },
+        },
+        required=["suite_id"],
+        group="evals",
+    ),
+    AgentTool(
+        name="evals.leaderboard_diff",
+        description=(
+            "What one run FIXED and BROKE relative to another, over the cases both "
+            "attempted. Use this to answer 'did the fine-tune help?' - a pass-rate "
+            "difference cannot tell a real improvement from an even trade."
+        ),
+        handler=_leaderboard_diff,
+        parameters={
+            "base": {
+                "type": "string",
+                "description": "The run to compare against (the base model).",
+            },
+            "other": {
+                "type": "string",
+                "description": "The run being judged (the fine-tune).",
+            },
+        },
+        required=["base", "other"],
         group="evals",
     ),
 ]

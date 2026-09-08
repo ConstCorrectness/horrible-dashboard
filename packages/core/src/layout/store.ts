@@ -179,6 +179,14 @@ function reduceFrame(frame: FrameState, action: LayoutAction): FrameState {
       return { ...next, docks };
     }
 
+    case 'SET_PANE_PARAMS': {
+      const next = updatePaneAnywhere(frame, action.instanceId, (pane) => ({
+        ...pane,
+        params: action.params,
+      }));
+      return next ?? frame;
+    }
+
     case 'SET_REGION': {
       const next = updatePaneAnywhere(frame, action.instanceId, (pane) => {
         const regions = { ...pane.regions };

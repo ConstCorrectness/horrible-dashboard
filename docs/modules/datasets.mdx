@@ -37,7 +37,7 @@ rows in the same shape.
 
 `sources.py` defines the `DatasetSource` protocol — deliberately the same shape as
 the training module's `EnvironmentProvider` and the database module's driver layer,
-so there is one contract to learn. Four ship:
+so there is one contract to learn. Five ship:
 
 | id | what |
 | --- | --- |
@@ -45,6 +45,7 @@ so there is one contract to learn. Four ship:
 | `local` | `.jsonl` / `.json` / `.csv` / `.parquet` under `$HORRIBLE_DATA_DIR/datasets` **and** every training project's `data/` directory |
 | `exports` | what `evals.export` and `trajectories.export` already write |
 | `kaggle` | delegates to the training module's existing Kaggle provider |
+| `library` | a knowledge library's chunks, as rows |
 
 `local` spans **two kinds of root**, because a provider fetch does not land in the
 data dir: `_start_fetch` writes into `<project.root>/data`, and `project.root` is
@@ -57,6 +58,41 @@ anyway. This is also what makes the `kaggle` source's advice real: Kaggle has no
 row-preview endpoint (a dataset is a zip of arbitrary files), so `peek` refuses
 rather than downloading gigabytes behind a preview button, and points you at
 fetch-then-peek instead.
+
+### `library`: the direction the graph was missing
+
+Research files material into a [library](library.mdx) — `research.start` files its
+report, `browser.save` files a page, `arxiv.download` files a paper — and the library
+chunks and embeds it. Then it stopped. The sources were hub / local / exports, so a
+corpus you spent an afternoon assembling could be *searched* by the agent and never
+*trained on*; research and training met only through a human copying text out of one
+and into the other.
+
+A library is a vector table, not a file, so `LibrarySource` is not a `_FileSource`:
+
+- **`search` lists libraries, not rows** — one ref per library, described by what is
+  in it (`3 chunks from 2 sources`). The count *is* the description: a library of
+  four sources and one of four hundred are different propositions.
+- **`peek` reads chunks straight out of the store.** No file is written to answer a
+  look.
+- **`locate` materializes** the library to `$HORRIBLE_DATA_DIR/datasets/library-<name>.jsonl`
+  and returns that path, because `local: true` makes a recipe emit
+  `load_dataset('json', data_files=…)` and that needs a real file.
+
+`locate` doing work is deliberate. The alternative is an Export button: one more
+thing to forget, and one more state to be stale in. The file is rewritten whenever
+the library holds more chunks than the file holds lines — so a re-run after adding
+sources trains on the new ones — and **not** rewritten when they agree, because a
+recipe render calls `locate` and re-serialising a large library each time would make
+opening the form feel broken. Writes land via `.part`+rename, the llama.cpp download
+rule: a half-written jsonl is a file `load_dataset` will happily read the truncated
+half of.
+
+Rows are **one per chunk, not per source**: chunks are what the library stores, they
+are already sized for a context window, and one "source" here may be a whole book.
+Each row carries `source_id`/`title`/`url`, because a chunk with no provenance is not
+reviewable — and being able to go and read where a row came from is the entire
+argument for training on your own corpus.
 
 A plugin adds more with `host.add_dataset_source(source)` — see
 [the backend plugin SDK](../architecture/backend-plugin-sdk.mdx). Built-ins win id

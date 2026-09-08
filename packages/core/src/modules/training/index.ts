@@ -284,6 +284,7 @@ export const trainingModule: ModuleManifest = {
       // paper-reading frame, and two frames with one id collide in the tab strip.
       id: 'ai-research',
       name: 'AI Research',
+      description: 'The loop from material to answer: browse a dataset, sweep the knob you are unsure of, and read which point moved the metric.',
       icon: '🔬',
       // `datasets` preloaded alongside `training`: the first thing asked of the
       // agent in this frame is almost always about data.
@@ -298,7 +299,7 @@ export const trainingModule: ModuleManifest = {
               split: 'row',
               sizes: [0.55, 0.45],
               children: [
-                { tabs: [] },
+                { pane: 'training.notebook' },
                 { tabs: ['localtrack.workspace', 'evals.hub'], active: 0 },
               ],
             },
@@ -324,16 +325,20 @@ export const trainingModule: ModuleManifest = {
      * `training.metrics` live, `localtrack.workspace` for comparing it against
      * previous runs.
      *
-     * The document area is seeded **empty** on purpose. `training.notebook` and
-     * `training.recipe` are params-bound (`{projectId, notebook}`) and a preset's
-     * `tabs` carry no params, so seeding them here would open two panes reading
-     * "No project — open me from the Training projects pane". Which is why that
-     * pane is first in the left dock: it is the entry point, and the panes it opens
-     * land in the empty area.
+     * The document area seeds `training.notebook`. It used to seed **empty**,
+     * because the notebook is params-bound (`{projectId, notebook}`) and a preset's
+     * `tabs` carry no params — so seeding it opened a pane reading "No project".
+     * The pane resolves its own default now (`last-project.ts`: the project you were
+     * last in, falling back to the project picker), so opening this workspace lands
+     * on the notebook you left rather than on an empty area with a dock to go
+     * hunting in. `training.projects` stays first in the left dock: it is still the
+     * entry point for a *different* project, and what it opens retargets this pane
+     * in place.
      */
     {
       id: 'training',
       name: 'Training',
+      description: 'The whole fine-tune in one frame — write the recipe, run it, watch the curves, convert the checkpoint and score it.',
       icon: '🧠',
       // Scoped to the work: `training` + `evals` + `localtrack`, preloading only
       // the first. Deliberately *not* `llamacpp` or `hardware` — those namespaces
@@ -350,7 +355,10 @@ export const trainingModule: ModuleManifest = {
             {
               split: 'column',
               sizes: [0.58, 0.42],
-              children: [{ tabs: [] }, { tabs: ['evals.hub', 'llamacpp.server'], active: 0 }],
+              children: [
+                { pane: 'training.notebook' },
+                { tabs: ['evals.hub', 'llamacpp.server'], active: 0 },
+              ],
             },
             { tabs: ['training.metrics', 'localtrack.workspace'], active: 0 },
           ],

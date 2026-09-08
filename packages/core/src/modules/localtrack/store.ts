@@ -285,6 +285,58 @@ class LocalTrackStore {
     }
   }
 
+  /**
+   * Open on a specific project with a specific set of runs selected.
+   *
+   * The deep link behind the sweep pane's **Compare** button, which used to call
+   * `openPanel('localtrack.workspace')` with no arguments at all — landing you on
+   * whichever project was last open, with the sweep you just ran nowhere in sight
+   * and its points to be re-found by hand in a sidebar of every run ever recorded.
+   *
+   * **Runs are matched by name, not by id, and that is not a shortcut.** A sweep
+   * point has three different ids over its life — the script-runner process
+   * (`SweepRecord.runIds`), the training run the script announces
+   * (`SweepResultEntry.metricRuns`), and the localtrack run the mirror mints — and
+   * none of them is the next one. The *name* is the only thing both ends agree on
+   * in advance: `sweeps.py` writes `point.label` into the generated script,
+   * `metrics.py` names the mirrored run after it (`_names`), and that is precisely
+   * so a point reads `learning_rate=0.0002` rather than a hex id. Matching on ids
+   * here would select nothing, silently — the failure would look like an empty
+   * comparison, not like a broken link.
+   *
+   * Names that match nothing are reported rather than dropped: a point whose run
+   * never started is a real thing to know, and a comparison quietly missing two of
+   * its six points is worse than one that says so.
+   */
+  async focus(projectId: string, runNames: readonly string[]): Promise<void> {
+    if (projectId && projectId !== this.state.activeProjectId) {
+      if (!this.state.projects.some((p) => p.id === projectId)) {
+        this.setState({
+          error: `No LocalTrack project “${projectId}”. Nothing has reported metrics for it yet.`,
+        });
+        return;
+      }
+      await this.setActiveProject(projectId);
+    }
+    if (runNames.length === 0) return;
+
+    const wanted = new Set(runNames);
+    const matched = this.state.runs.filter((r) => wanted.has(r.name));
+    if (matched.length === 0) {
+      this.setState({
+        error: `None of those ${runNames.length} runs have reported metrics yet.`,
+      });
+      return;
+    }
+    const missing = runNames.filter((n) => !matched.some((r) => r.name === n));
+    this.setState({
+      selectedRunIds: new Set(matched.map((r) => r.id)),
+      error: missing.length
+        ? `Showing ${matched.length} of ${runNames.length} runs — no metrics yet for ${missing.join(', ')}.`
+        : this.state.error,
+    });
+  }
+
   toggleRunSelection(runId: string): void {
     const next = new Set(this.state.selectedRunIds);
     if (next.has(runId)) {

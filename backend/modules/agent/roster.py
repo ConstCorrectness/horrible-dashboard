@@ -59,6 +59,13 @@ TRAINER_PROMPT = (
     "training.convert -> llamacpp.serve -> evals.run. Conversion takes minutes, and "
     "llama-server holds one model at a time, so serving a second means stopping the "
     "first — which may be the model the user is chatting with.\n"
+    "- To answer 'did it help?', use the tools that do the comparison properly: "
+    "localtrack.compare_runs for training metrics (it separates the knob you varied "
+    "from the forty you did not) and evals.leaderboard_diff for scores (a pass-rate "
+    "difference cannot tell a real improvement from an even trade). Do not "
+    "reconstruct either from raw metric series.\n"
+    "- Authoring a recipe and running a sweep are the `recipe` group. Look at a "
+    "dataset with the `datasets` group before naming one in a recipe.\n"
     "- Never claim a metric you did not read from localtrack or an eval run."
     + _SHARED_RULES
 )
@@ -165,14 +172,35 @@ def _builtin_agents() -> dict[str, AgentSpec]:
             # `hardware` still does not appear, for the original reason: settings
             # keys only, no tools.
             #
-            # Not preloaded: `llamacpp`, `editor` and `files` are permitted but cost
-            # a `load_tools` rather than schema space on every turn. That matters
-            # here — this flow already sits close to `TOOL_BUDGET`.
+            # `datasets` is here because the agent that fills in a recipe's
+            # `dataset_id` could not search, peek, token-stat or register a dataset —
+            # it could name one and never look at it — and `can_delegate` is False,
+            # so it had no way out.
+            #
+            # `recipe`, `wandb` and `cells` are what the `training` group was split
+            # into. It held 34 tools — 14 project verbs, 10 recipe/sweep verbs, and
+            # the notebook's 10 cell verbs, which are registered by the FRONTEND and
+            # so are easy to forget when counting. With a ~9-tool core that left no
+            # room for `evals` (10) beside it: the loop this agent's own prompt
+            # prescribes did not fit under `TOOL_BUDGET`, and the overflow was
+            # dropped silently apart from one ERROR line in the log.
+            #
+            # `cells` rather than `notebook`: that name is the reactive notebook
+            # module's, and these two collided under it once already (see
+            # `permission_store._RULE_RENAMES`).
+            #
+            # Not preloaded: everything except `training`. The rest are permitted but
+            # cost a `load_tools` round rather than schema space on every turn, which
+            # is the trade that keeps a small local model under the 40-tool cliff.
             tool_groups=[
                 "training",
+                "recipe",
+                "cells",
                 "evals",
                 "localtrack",
+                "datasets",
                 "llamacpp",
+                "wandb",
                 "editor",
                 "files",
             ],

@@ -1,0 +1,21 @@
+
+/* A result row's turn id, as a link into Agentpedia's stepper rather than dead
+   text. Styled as prose, not as a control: it sits inside a run of monospace
+   metadata under a case, and a 30px button there would break the row. Carries a
+   class, so it opts out of the classless-button height rule deliberately. */
+.evals-turn-link {
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--text-dim);
+  font: inherit;
+  text-align: left;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.evals-turn-link:hover,
+.evals-turn-link:focus-visible {
+  color: var(--accent);
+}

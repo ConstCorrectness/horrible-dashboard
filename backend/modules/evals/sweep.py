@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -123,6 +124,24 @@ def _resolve_target(target: RunTarget) -> tuple[Any, str]:
     return info, (target.endpoint or endpoint)
 
 
+def localtrack_project_for(suite_id: str) -> str:
+    """The localtrack project a suite's sweeps report into.
+
+    Derived here rather than by the caller, because there are two callers and only
+    one of them was deriving anything. The browser sent a slug of the suite's
+    *name*; `evals.run` (the agent tool) sent nothing at all, so a sweep an agent
+    started mirrored into `RunMirror("")` — inactive by construction — and reported
+    no metrics anywhere. "Did this fine-tune help?" is the question the agent is
+    meant to answer, and the run it started left nothing to answer it with.
+
+    Keyed on the **id**, not the display name: a suite rename must not silently move
+    its history to a second project, leaving the comparison view with two halves of
+    one story and no way to tell they belong together.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", (suite_id or "").lower()).strip("-")
+    return f"evals-{slug}" if slug else "evals"
+
+
 async def _run_one_target(
     suite_id: str,
     cases: list[EvalCase],
@@ -146,6 +165,10 @@ async def _run_one_target(
         # Stamped at creation, not on completion: a sweep that dies mid-target
         # still has to say whose machine it was on.
         node=getattr(target, "node", "") or "",
+        # The file, when the target named one. `model` is an alias the server
+        # answers to; the lineage table is keyed on the path, so this is what lets a
+        # score be attached to the fine-tune that produced it rather than to a name.
+        model_path=getattr(target, "model_path", "") or "",
     )
     # Reported upward the moment the row exists, so a cancel can name the runs it
     # has to close out. Cancellation arrives as a `CancelledError` raised inside
@@ -390,6 +413,10 @@ async def run_sweep(
     suite = store.get_suite(suite_id)
     if suite is None:
         raise ValueError(f"no suite {suite_id!r}")
+    # An explicit project still wins — a caller that wants a sweep filed somewhere
+    # specific keeps that — but the default is derived rather than empty, so an
+    # agent-started sweep is mirrored like a browser-started one.
+    localtrack_project = localtrack_project or localtrack_project_for(suite_id)
     cases = store.load_cases(suite)
     if case_ids:
         wanted = set(case_ids)

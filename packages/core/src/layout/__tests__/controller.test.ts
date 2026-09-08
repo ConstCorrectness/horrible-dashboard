@@ -236,6 +236,40 @@ describe('openPane', () => {
   });
 });
 
+describe('opening an already-open pane with params', () => {
+  /*
+   * The silent half of `openPane`. Focusing an open singleton used to discard the
+   * params it was handed, so every deep link — "compare these runs", "score this
+   * checkpoint" — worked only while its target pane happened to be CLOSED. Which is
+   * backwards: these links fire from inside workspaces whose presets seed the target
+   * pane, so open is the normal state. Nothing threw, nothing warned; the pane just
+   * came to the front showing what it showed before.
+   */
+  it('delivers params to a singleton that is already open', () => {
+    openPane('t.doc');
+    openPane('t.doc', { params: { runNames: ['a', 'b'] } });
+    const pane = findPaneAnywhere(layoutStore.getSnapshot().frame, 't.doc#0')!.pane;
+    expect(pane.params).toEqual({ runNames: ['a', 'b'] });
+  });
+
+  it('leaves existing params alone when a caller supplies none', () => {
+    // "Open the LocalTrack workspace" from the palette must not wipe a selection a
+    // deep link (or the user) established — absent params mean "no opinion", not
+    // "clear it".
+    openPane('t.doc', { params: { runNames: ['a', 'b'] } });
+    openPane('t.doc');
+    const pane = findPaneAnywhere(layoutStore.getSnapshot().frame, 't.doc#0')!.pane;
+    expect(pane.params).toEqual({ runNames: ['a', 'b'] });
+  });
+
+  it('does the same through openPaneInArea', () => {
+    const areaId = collectAreas(layoutStore.getSnapshot().frame.center)[0].id;
+    openPaneInArea('t.doc', areaId, { runNames: ['c'] });
+    const pane = findPaneAnywhere(layoutStore.getSnapshot().frame, 't.doc#0')!.pane;
+    expect(pane.params).toEqual({ runNames: ['c'] });
+  });
+});
+
 describe('areaHostingView', () => {
   it('finds the area a view already occupies, so siblings can tab into it', () => {
     const seeded = findPaneAnywhere(layoutStore.getSnapshot().frame, 't.doc#0')!;

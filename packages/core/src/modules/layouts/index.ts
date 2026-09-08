@@ -57,6 +57,7 @@ export const layoutsModule: ModuleManifest = {
     {
       id: 'desktop',
       name: 'Desktop',
+      description: 'An empty floating desktop with a wallpaper and a taskbar — start minimal and open only what you ask for.',
       icon: '⌂',
       mode: 'floating',
       backdrop: { id: 'aurora' },
@@ -65,6 +66,7 @@ export const layoutsModule: ModuleManifest = {
     {
       id: 'dashboard',
       name: 'Dashboard',
+      description: 'The welcome card and your account at a glance, with the live data-flow readout one click away.',
       icon: '▦',
       frame: {
         // Backend health used to take the third slot here; it is a dot in the
@@ -86,6 +88,7 @@ export const layoutsModule: ModuleManifest = {
     {
       id: 'scripting',
       name: 'Scripting',
+      description: 'An editor over a terminal and a REPL, with the file explorer alongside.',
       icon: '⌨',
       frame: {
         center: { pane: 'editor.buffer' },
@@ -99,6 +102,7 @@ export const layoutsModule: ModuleManifest = {
     {
       id: 'research',
       name: 'Research',
+      description: 'Read papers: the deep-research console, arXiv and a browser tab feeding viewers stacked over your library.',
       icon: '🔬',
       // Discovery on the left (console/arxiv/browser tab together), reading on
       // the right (viewers above the library) — opening a paper never steals
@@ -136,6 +140,7 @@ export const layoutsModule: ModuleManifest = {
     {
       id: 'dataops',
       name: 'Data Ops',
+      description: 'Query anything connected — a console beside your library, with the DBA agent on hand.',
       icon: '🗄',
       // Console left, knowledge right; the scratchpad (REPL) and the live I/O feed
       // share the bottom dock because you reach for exactly one of them at a time.
@@ -158,6 +163,7 @@ export const layoutsModule: ModuleManifest = {
     {
       id: 'webops',
       name: 'Web Ops',
+      description: 'Work the live web: a browser with its network view, search feeding it, and what you keep landing beside it.',
       icon: '🌐',
       // Reading the live web, not papers: the browser pane brings its own network
       // region (Waterfall/DNS/Route) along, which is what separates this from
@@ -189,6 +195,7 @@ export const layoutsModule: ModuleManifest = {
     {
       id: 'harness',
       name: 'Coding Harnesses',
+      description: 'Build and watch a coding agent compete — the games loop, its log, and the episode trajectory.',
       icon: '🛠',
       // The Games pane carries the whole loop (build → board → play) as internal
       // sections, so the center is just that pane; the log and the episode

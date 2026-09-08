@@ -39,6 +39,7 @@ export const gamesModule: ModuleManifest = {
     {
       id: 'dasharena',
       name: 'DashArena',
+      description: 'The games lobby on its own — play, watch the board, build your agent.',
       icon: '🏟',
       frame: {
         center: { pane: 'games.lobby' },

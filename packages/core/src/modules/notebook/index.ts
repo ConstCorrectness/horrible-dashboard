@@ -110,6 +110,7 @@ export const notebookModule: ModuleManifest = {
     {
       id: 'notebook',
       name: 'Notebooks',
+      description: "An empty desk for notebooks, with the explorer's Notebooks section alongside.",
       icon: '📓',
       frame: {
         // Empty document area: pick a notebook from the browser in the left dock.

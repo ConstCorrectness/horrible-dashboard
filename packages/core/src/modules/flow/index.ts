@@ -66,6 +66,7 @@ export const flowModule: ModuleManifest = {
     {
       id: 'orchestration',
       name: 'Orchestration',
+      description: 'Wire agents and tools into a graph, then run it.',
       icon: '🕸',
       frame: {
         center: { pane: 'flow.editor' },

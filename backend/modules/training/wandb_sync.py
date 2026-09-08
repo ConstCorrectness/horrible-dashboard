@@ -12,11 +12,16 @@ the same charts, and in the same `compare_runs` table as a local one.
 
 Three decisions:
 
-**The tools live in the `training` group, not a `trackers` one.** The `trackers`
+**The tools live in a `wandb` group, not a `trackers` one.** The `trackers`
 connector deliberately contributes no agent tools, and `test_connectors.py` enforces
 that its id names no tool group — the orchestrator groups by name prefix, so a
 `trackers.*` tool would silently split the connector's tools from its blurb. These
-are `training.wandb_*`.
+are `wandb.projects` / `wandb.runs` / `wandb.import_runs`.
+
+They were `training.wandb_*`, which put them in the `training` group. Importing
+someone else's cloud runs is not part of any local loop, and three tools is a cheap
+group to skip — while `training` had grown past what a small model can hold beside
+`evals` (see `test_trainer_tool_budget.py`).
 
 **The history is downsampled by W&B, and we say so.** `run.history()` returns a
 sampled series by default; `scan_history` is exact and far slower. The default is
