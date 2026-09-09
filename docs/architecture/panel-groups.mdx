@@ -73,6 +73,7 @@ REPL with `dash.layout.toggle_region()` / `set_region_view()`.
 | Host view | Regions (key) |
 | --- | --- |
 | `editor.buffer` (document) | right: Outline `o`, Symbol Search `s`, Provenance `g`; left: Recent notes `r` |
+| `ide.workbench` (document) | left: Explorer `e`, Search `f`, Source Control `v`, Outline `o`, Provenance `g`; right: Agent `a`; bottom: Terminal `j`, Problems `m` |
 | `games.lobby` (document) | right: Agent Harness `h`, Ladder `l`, Challenges `c`; bottom: Game Board `v` |
 | `training.notebook` (document) | right: Metrics `m`, Architecture `a`, Rollout `u`, Manim, Peers; left: Projects `p` |
 | `notebook.editor` (document) | left: Notebooks `k` |
@@ -90,6 +91,34 @@ domain-neutral `.ipynb` editor) and `training.notebook` is **Training Notebook**
 (a project's own notebook, on that project's venv). Both were called "Notebook"
 once, which made two identical `Open: Notebook` palette rows and an ambiguous
 `show` target — `registry.register` now warns on a duplicate pane title.
+
+## Where a region host may live
+
+Areas, docks **and floating windows**. A pane dragged out into a window keeps the
+strips it declares — which is worth stating because it was not always true: a
+window rendered a bare `PaneHost`, so popping a region host out silently dropped
+every strip it had, with nothing to say a companion view had gone missing.
+
+That fix carries a constraint for anything that hosts `PaneWithRegions`:
+
+> **A region host has to establish a flex context.** `PaneWithRegions`'s root
+> (`.frame-pane-regions`) sizes itself with `flex: 1` and declares no height of
+> its own, so a parent that is not `display: flex` leaves it collapsed to its
+> content's natural height.
+
+The bare `PaneHost` it replaced got away with any parent, because
+`.frame-pane-host` sets `height: 100%`. `.frame-area` and `.frame-dock` were
+already flex containers; `.os-window-body` was not, and the result was a floating
+window drawn as **a titlebar with nothing under it** — measured at 44px of pane
+header where there should have been 648px, with the pane's canvas at zero.
+
+It is worth knowing how that hid, because the shape recurs: floating windows are
+the *desktop* layout's ordinary way of showing a pane, while the browser layout
+puts panes in areas and docks. So the browser build looked completely healthy
+while every pane in the desktop build was empty. `region-host-is-flex.test.ts`
+pins the rule, and also asserts its own premises — that windows still render
+regions, and that `.frame-pane-regions` still has no height — so it fails loudly
+rather than passing vacuously if either changes.
 
 ## Compared to panel groups
 

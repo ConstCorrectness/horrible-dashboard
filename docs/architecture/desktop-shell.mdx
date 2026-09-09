@@ -678,6 +678,15 @@ A window's content is an `AreaNode` — the same node the center grid uses — s
 window is an area with one tab and a merged window is an area with several. See
 [windowing.mdx](windowing.mdx#model) for why that matters.
 
+The active tab is rendered through **`PaneWithRegions`**, the same wrapper areas and
+docks use, so a pane popped out into a window keeps its
+[region strips](panel-groups.mdx#where-a-region-host-may-live). It used to render a
+bare `PaneHost`, which dropped every strip a region host declared with nothing to say
+one had gone. That wrapper brings a constraint with it — `.os-window-body` must be
+`display: flex`, because `PaneWithRegions`'s root carries `flex: 1` and no height —
+and getting it wrong empties **every** window in the desktop layout while the browser
+layout, which uses areas and docks, looks perfectly fine.
+
 ### Geometry
 
 Rects are **pixels**, against `FrameState.windowViewport`. The window layer measures

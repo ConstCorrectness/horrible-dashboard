@@ -265,6 +265,14 @@
 }
 
 .os-window-body {
+  /* `display: flex` is load-bearing, not tidiness. The body holds
+     `PaneWithRegions`, whose root (`.frame-pane-regions`) sizes itself with
+     `flex: 1` and carries no height of its own — so without a flex context here
+     it collapses to its content's natural height and the window renders as a
+     titlebar with nothing under it. The bare `PaneHost` this used to hold got
+     away with it because `.frame-pane-host` sets `height: 100%`; the areas and
+     docks that have always rendered regions are `display: flex` themselves. */
+  display: flex;
   flex: 1;
   min-width: 0;
   min-height: 0;
