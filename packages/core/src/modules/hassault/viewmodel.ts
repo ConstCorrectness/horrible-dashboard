@@ -64,6 +64,8 @@ import { createDetailTexture } from './surfaces';
  * models are the length they are rather than whatever looked right on one screen.
  */
 const HOME = { x: 0.92, y: -0.86, z: -1.35 };
+/** Centered ADS aim position aligned with sights line */
+const ADS_POS = { x: 0.0, y: -0.44, z: -0.90 };
 
 /** Recoil decay and reload-dip rates, per second. */
 const KICK_DECAY = 11;
@@ -163,6 +165,8 @@ export interface ViewModelFrame {
    * timestamp from one measured against the other is a number with no meaning.
    */
   sinceLanded?: number;
+  /** Aim-down-sights weight (0 hipfire to 1 ADS). Lerps weapon model towards sight-line. */
+  ads?: number;
 }
 
 /**
@@ -174,6 +178,8 @@ export interface ViewModelFrame {
  * here. What does change it: two colours, how they are laid out, and the wear.
  */
 export interface WeaponSkin {
+  id?: string;
+  name?: string;
   baseColor: string;
   accentColor: string;
   /** `solid` | `camo` | `anodized` | `custom_art` | `patina` | `fade`. */
@@ -197,13 +203,22 @@ export function equippedSkins(
   inventory: {
     isEquipped: boolean;
     floatValue: number;
-    definition?: { weaponId: string; baseColor: string; accentColor: string; patternType: string };
+    definition?: {
+      id?: string;
+      name?: string;
+      weaponId: string;
+      baseColor: string;
+      accentColor: string;
+      patternType: string;
+    };
   }[],
 ): Record<string, WeaponSkin> {
   const out: Record<string, WeaponSkin> = {};
   for (const item of inventory) {
     if (!item.isEquipped || !item.definition) continue;
     out[item.definition.weaponId] = {
+      id: item.definition.id,
+      name: item.definition.name,
       baseColor: item.definition.baseColor,
       accentColor: item.definition.accentColor,
       patternType: item.definition.patternType,
@@ -570,6 +585,8 @@ export class WeaponViewModel {
    * that it has finished — falls out of one number.
    */
   private inspectT: number | null = null;
+  /** Current ADS interpolation state, 0 (hipfire) to 1 (full ADS) */
+  private adsT = 0;
 
   // Built with the model rather than shared, because they now carry the skin:
   // two weapons in one match are two different guns, and a material shared
@@ -623,7 +640,7 @@ export class WeaponViewModel {
    */
   setWeapon(id: string, skin: WeaponSkin | null = null): void {
     const skinKey = skin
-      ? `${skin.baseColor}|${skin.accentColor}|${skin.patternType}|${skin.floatValue}`
+      ? `${skin.id ?? ''}|${skin.baseColor}|${skin.accentColor}|${skin.patternType}|${skin.floatValue}`
       : '';
     if (id === this.weaponId && skinKey === this.skinKey) return;
     const swapped = id !== this.weaponId;
@@ -634,7 +651,7 @@ export class WeaponViewModel {
     this.setPalette(skin);
 
     this.building = [];
-    const shape = this.build(id);
+    const shape = this.build(id, skin);
     this.grips = gripsFor(id);
     this.pivot.add(shape.group);
     shape.group.rotation.set(shape.rest[0], shape.rest[1], shape.rest[2]);
@@ -690,16 +707,33 @@ export class WeaponViewModel {
         // exactly what "no skin" should mean.
         const tint = skin ? paletteFor(skin).body : 0xffffff;
         const materials: THREE.Material[] = [];
+        const wear = skin ? Math.max(0, Math.min(1, skin.floatValue)) : 0.25;
+        const isSpecial =
+          skin !== null &&
+          (skin.patternType === 'fade' ||
+            skin.patternType === 'anodized' ||
+            skin.patternType === 'patina');
+        const baseRoughness = isSpecial ? 0.12 : 0.35;
+        const roughness = Math.min(0.95, baseRoughness + wear * 0.55);
+        const metalness = isSpecial
+          ? Math.max(0.35, 0.92 - wear * 0.45)
+          : Math.max(0.1, 0.6 - wear * 0.4);
+        const envIntensity = isSpecial
+          ? PROP_ENV_INTENSITY * 1.35 * (1 - wear * 0.5)
+          : PROP_ENV_INTENSITY * (1 - wear * 0.5);
+
         model.traverse((obj) => {
           const mesh = obj as THREE.Mesh;
           if (!mesh.isMesh) return;
           for (const mat of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
             const tinted = mat as THREE.MeshStandardMaterial;
             tinted.color?.setHex(tint);
+            tinted.roughness = roughness;
+            tinted.metalness = metalness;
             // Without this the weapon is a silhouette: a metal has no diffuse
             // term, so analytic lights alone leave it with nothing to return.
             tinted.envMap = this.environment;
-            tinted.envMapIntensity = PROP_ENV_INTENSITY;
+            tinted.envMapIntensity = envIntensity;
             tinted.needsUpdate = true;
             materials.push(mat);
           }
@@ -976,8 +1010,17 @@ export class WeaponViewModel {
       }
     }
 
-    const bobX = Math.cos(this.bobPhase * 0.5) * 0.05 * bobAmount;
-    const bobY = Math.abs(Math.sin(this.bobPhase)) * -0.055 * bobAmount;
+    // ADS smooth transition: target is frame.ads (defaulting to 0)
+    const targetAds = frame.ads ?? 0;
+    this.adsT += (targetAds - this.adsT) * Math.min(1, dt * 14.0);
+    const adsDamp = 1.0 - 0.75 * this.adsT;
+
+    const curHomeX = HOME.x * (1 - this.adsT) + ADS_POS.x * this.adsT;
+    const curHomeY = HOME.y * (1 - this.adsT) + ADS_POS.y * this.adsT;
+    const curHomeZ = HOME.z * (1 - this.adsT) + ADS_POS.z * this.adsT;
+
+    const bobX = Math.cos(this.bobPhase * 0.5) * 0.05 * bobAmount * adsDamp;
+    const bobY = Math.abs(Math.sin(this.bobPhase)) * -0.055 * bobAmount * adsDamp;
 
     // Where the inspect pose takes the weapon: in towards the centre of the
     // screen, up, and rolled most of the way over so the side of the receiver —
@@ -990,22 +1033,47 @@ export class WeaponViewModel {
     // `inspect * (ROLL + TURN * turn)` rather than `inspect * ROLL` — the
     // envelope still scales it, so it starts and ends at rest; the turn is what
     // keeps it moving in between.
+    // CS2-style inspect flourishes:
+    // For knife: agile flourish twirl and flip around the grip during the initial rise,
+    // followed by horizontal blade presentation showing off the finish and edge.
+    // For firearms: two-stage inspect showcasing the play-side receiver/chamber first,
+    // then subtly tilting across to inspect the top and reverse side.
+    const isKnife = this.weaponId === 'knife';
+    const knifeFlourish = isKnife ? Math.sin(Math.min(1.0, turn * 2.5) * Math.PI) : 0;
+    const knifeSpin = isKnife ? knifeFlourish * Math.PI * 1.6 : 0;
+
+    const inspectPitch = isKnife
+      ? inspect * (0.28 + 0.35 * Math.sin(turn * Math.PI))
+      : inspect * (0.34 - 0.12 * Math.sin(turn * Math.PI));
+
+    const inspectYaw = isKnife
+      ? -inspect * 0.45 + knifeFlourish * 0.35
+      : -inspect * (0.95 - 0.35 * turn);
+
+    const inspectRoll = isKnife
+      ? inspect * (1.2 + knifeSpin)
+      : inspect * (INSPECT_ROLL + INSPECT_TURN * turn);
+
+    const inspectLiftX = isKnife ? lift * 0.18 : lift * 0.3;
+    const inspectLiftY = isKnife ? lift * 0.22 : lift * 0.16;
+    const inspectLiftZ = isKnife ? lift * 0.26 : lift * 0.2;
+
     this.pivot.position.set(
-      HOME.x + bobX + this.swayX - lift * 0.3,
+      curHomeX + (bobX + this.swayX * adsDamp) - inspectLiftX,
       // The stow drops the weapon out of frame entirely. Applied to the same
       // axis as the reload dip and *added* rather than blended, so a switch
       // asked for mid-reload takes the gun the rest of the way down instead of
       // fighting the dip for the pivot.
-      HOME.y + bobY + this.swayY - this.reloadT * 0.55 + lift * 0.16 - stow * 1.15,
+      curHomeY + (bobY + this.swayY * adsDamp) - this.reloadT * 0.55 + inspectLiftY - stow * 1.15,
       // Recoil is mostly backwards: a gun that only rotates looks hinged.
-      HOME.z + this.kick * 0.28 + lift * 0.2,
+      curHomeZ + this.kick * 0.28 + inspectLiftZ,
     );
     this.pivot.rotation.set(
-      this.kick * -0.16 + this.reloadT * 0.7 + bobY * 0.4 + inspect * 0.34 + stow * 0.9,
-      this.swayX * 0.7 + this.reloadT * 0.25 - inspect * 0.95,
-      this.swayX * 0.5 +
+      this.kick * -0.16 + this.reloadT * 0.7 + bobY * 0.4 + inspectPitch + stow * 0.9,
+      this.swayX * 0.7 * adsDamp + this.reloadT * 0.25 + inspectYaw,
+      this.swayX * 0.5 * adsDamp +
         bobX * 0.6 +
-        inspect * (INSPECT_ROLL + INSPECT_TURN * turn) +
+        inspectRoll +
         stow * 0.35,
     );
 
@@ -1273,10 +1341,17 @@ export class WeaponViewModel {
     // A highlight that travels along a barrel as you turn is what says "this is
     // metal and it is round", and it costs one extra term per fragment.
     const wear = skin ? Math.max(0, Math.min(1, skin.floatValue)) : 0.25;
+    const isSpecial =
+      skin !== null &&
+      (skin.patternType === 'fade' ||
+        skin.patternType === 'anodized' ||
+        skin.patternType === 'patina');
     // A worn gun is a dull gun: the float already dulls the colour, and letting
     // it dull the shine too is the difference between a Factory New that looks
-    // new and one that is merely brighter.
-    const polish = 1 - wear * 0.75;
+    // new and one that is merely brighter. Rare/special finishes keep high polish.
+    const polish = isSpecial
+      ? Math.max(0.25, 1.35 - wear * 1.1)
+      : Math.max(0.12, 1.0 - wear * 0.85);
 
     const make = (color: number, specular: number, shininess: number) =>
       new this.three.MeshPhongMaterial({
@@ -1287,15 +1362,21 @@ export class WeaponViewModel {
       });
 
     // Machined metal: the brightest highlight and the tightest.
-    this.metal = make(palette.body, 0x6b7280, 34);
+    const metalSpec = isSpecial ? 0x9ca3af : 0x6b7280;
+    const metalShine = isSpecial ? 65 : 34;
+    this.metal = make(palette.body, metalSpec, metalShine);
     // Anodised or blued: darker, still metal, softer highlight.
-    this.dark = make(palette.dark, 0x3f4650, 18);
+    const darkSpec = isSpecial ? 0x52525b : 0x3f4650;
+    const darkShine = isSpecial ? 32 : 18;
+    this.dark = make(palette.dark, darkSpec, darkShine);
     // Polymer and rubber: almost none, and broad. A grip that glints reads as
     // wet plastic, which is the one thing furniture must not look like.
     this.grip = make(palette.grip, 0x1d2026, 6);
     // Hardware and trim: the shiniest thing on the gun, which is what makes
     // sights and bolts catch the eye at all.
-    this.accent = make(palette.accent, 0x8a94a3, 52);
+    const accentSpec = isSpecial ? 0xc7d2fe : 0x8a94a3;
+    const accentShine = isSpecial ? 85 : 52;
+    this.accent = make(palette.accent, accentSpec, accentShine);
   }
 
   /** Drop the current model and its resources. Swapping weapons calls this, so a
@@ -1391,6 +1472,132 @@ export class WeaponViewModel {
     return mesh;
   }
 
+  private buildKarambit(): Shape {
+    const group = new this.three.Group();
+    // Ergonomic curved handle: 3 contoured angled segments
+    group.add(this.box([0.12, 0.16, 0.22], [0, 0.02, 0.02], this.grip, [0.14, 0, 0]));
+    group.add(this.box([0.14, 0.18, 0.24], [0, 0.06, 0.22], this.grip, [0.28, 0, 0]));
+    group.add(this.box([0.13, 0.16, 0.20], [0, 0.14, 0.42], this.dark, [0.42, 0, 0]));
+    // Contoured finger index notches
+    group.add(this.box([0.145, 0.04, 0.04], [0, -0.06, 0.12], this.dark));
+    group.add(this.box([0.145, 0.04, 0.04], [0, -0.04, 0.24], this.dark));
+
+    // Pommel retention ring: circular loop with an open inner hole
+    group.add(this.box([0.14, 0.14, 0.08], [0, 0.22, 0.54], this.metal, [0.55, 0, 0]));
+    // Open ring frame
+    group.add(this.box([0.10, 0.04, 0.10], [0, 0.36, 0.62], this.metal, [0.65, 0, 0]));
+    group.add(this.box([0.10, 0.04, 0.10], [0, 0.16, 0.68], this.metal, [0.65, 0, 0]));
+    group.add(this.box([0.04, 0.16, 0.10], [0.06, 0.26, 0.65], this.metal, [0.65, 0, 0]));
+    group.add(this.box([0.04, 0.16, 0.10], [-0.06, 0.26, 0.65], this.metal, [0.65, 0, 0]));
+
+    // Claw/Talon blade: curves forward and sweeps down into an aggressive talon
+    group.add(this.box([0.06, 0.16, 0.16], [0, -0.01, -0.16], this.dark, [-0.10, 0, 0]));
+    group.add(this.box([0.045, 0.18, 0.32], [0, -0.05, -0.38], this.metal, [-0.22, 0, 0]));
+    group.add(this.box([0.04, 0.17, 0.30], [0, -0.14, -0.66], this.metal, [-0.44, 0, 0]));
+    group.add(this.box([0.035, 0.15, 0.26], [0, -0.29, -0.90], this.metal, [-0.70, 0, 0]));
+    // Razor ground inside bevel
+    group.add(this.box([0.026, 0.09, 0.36], [0, -0.12, -0.52], this.accent, [-0.32, 0, 0]));
+    // Sharp talon beak point
+    group.add(this.box([0.028, 0.10, 0.22], [0, -0.48, -1.06], this.accent, [-0.98, 0, 0]));
+    // Thumb ramp jimping notches on spine
+    for (let i = 0; i < 3; i += 1) {
+      group.add(this.box([0.055, 0.04, 0.04], [0, 0.08, -0.14 - i * 0.08], this.accent));
+    }
+    return { group, muzzle: [0, -0.48, -1.10], rest: [0.10, -0.36, 0.28] };
+  }
+
+  private buildButterfly(): Shape {
+    const group = new this.three.Group();
+    // Dual skeletonized handles: Safe handle (left) and Bite handle (right)
+    // Left handle rails
+    group.add(this.box([0.035, 0.13, 0.65], [-0.07, 0.0, 0.12], this.grip));
+    group.add(this.box([0.035, 0.13, 0.65], [-0.015, 0.0, 0.12], this.grip));
+    group.add(this.box([0.065, 0.11, 0.05], [-0.042, 0.0, -0.16], this.dark));
+    group.add(this.box([0.065, 0.11, 0.05], [-0.042, 0.0, 0.12], this.dark));
+    group.add(this.box([0.065, 0.11, 0.05], [-0.042, 0.0, 0.40], this.dark));
+
+    // Right handle rails
+    group.add(this.box([0.035, 0.13, 0.65], [0.015, 0.0, 0.12], this.grip));
+    group.add(this.box([0.035, 0.13, 0.65], [0.07, 0.0, 0.12], this.grip));
+    group.add(this.box([0.065, 0.11, 0.05], [0.042, 0.0, -0.16], this.dark));
+    group.add(this.box([0.065, 0.11, 0.05], [0.042, 0.0, 0.12], this.dark));
+    group.add(this.box([0.065, 0.11, 0.05], [0.042, 0.0, 0.40], this.dark));
+
+    // Latch mechanism at the base of the bite handle
+    group.add(this.box([0.03, 0.05, 0.11], [0.042, 0.0, 0.48], this.metal));
+    group.add(this.box([0.04, 0.06, 0.04], [0.042, 0.0, 0.54], this.accent));
+
+    // Dual pivot screws and tang horns
+    group.add(this.box([0.05, 0.04, 0.04], [-0.042, 0.0, -0.22], this.accent));
+    group.add(this.box([0.05, 0.04, 0.04], [0.042, 0.0, -0.22], this.accent));
+    group.add(this.box([0.048, 0.15, 0.16], [0, 0, -0.28], this.metal));
+    group.add(this.box([0.15, 0.06, 0.05], [0, 0, -0.26], this.dark));
+
+    // Symmetrical spear-point blade with fuller
+    group.add(this.box([0.042, 0.17, 0.88], [0, 0.01, -0.76], this.metal));
+    group.add(this.box([0.028, 0.12, 0.84], [0, -0.06, -0.76], this.accent));
+    group.add(this.box([0.030, 0.08, 0.60], [0, 0.07, -0.80], this.accent));
+    group.add(this.box([0.048, 0.04, 0.52], [0, 0.01, -0.68], this.dark));
+    group.add(this.box([0.032, 0.13, 0.26], [0, 0.0, -1.28], this.accent));
+
+    return { group, muzzle: [0, 0.0, -1.42], rest: [0.05, -0.25, 0.18] };
+  }
+
+  private buildBayonet(): Shape {
+    const group = new this.three.Group();
+    // Heavy ribbed combat grip with finger grooves
+    group.add(this.box([0.13, 0.17, 0.54], [0, 0, 0.12], this.grip));
+    group.add(this.box([0.16, 0.20, 0.10], [0, 0, 0.41], this.metal));
+    group.add(this.box([0.08, 0.08, 0.06], [0, 0, 0.48], this.dark));
+    group.add(this.box([0.05, 0.05, 0.05], [0, -0.09, 0.44], this.dark));
+    for (let i = 0; i < 4; i += 1) {
+      group.add(this.box([0.145, 0.185, 0.04], [0, 0, -0.06 + i * 0.11], this.dark));
+    }
+
+    // Steel crossguard with barrel attachment ring
+    group.add(this.box([0.22, 0.24, 0.08], [0, 0.02, -0.18], this.metal));
+    group.add(this.box([0.06, 0.10, 0.07], [0, 0.14, -0.18], this.metal));
+    group.add(this.tube(0.06, 0.07, [0, 0.21, -0.18], this.metal));
+    group.add(this.box([0.06, 0.08, 0.06], [0, -0.12, -0.18], this.metal, [-0.2, 0, 0]));
+
+    // Clip-point blade with sawback serrations and fuller
+    group.add(this.box([0.065, 0.16, 0.16], [0, 0.02, -0.30], this.metal));
+    group.add(this.box([0.052, 0.20, 1.05], [0, 0.07, -0.88], this.metal));
+    group.add(this.box([0.035, 0.15, 1.02], [0, -0.06, -0.87], this.accent));
+    group.add(this.box([0.058, 0.04, 0.65], [0, 0.03, -0.78], this.dark));
+    group.add(this.box([0.042, 0.16, 0.32], [0, 0.0, -1.48], this.accent, [0.18, 0, 0]));
+    for (let i = 0; i < 5; i += 1) {
+      group.add(this.box([0.058, 0.05, 0.05], [0, 0.18, -0.48 - i * 0.10], this.dark));
+    }
+
+    return { group, muzzle: [0, 0.02, -1.62], rest: [0.06, -0.32, 0.22] };
+  }
+
+  private buildTacticalKnife(): Shape {
+    const group = new this.three.Group();
+    // Handle in three segments rather than one box, so it has a swell in the
+    // middle and a pommel at the end
+    group.add(this.box([0.13, 0.16, 0.5], [0, 0, 0.14], this.grip));
+    group.add(this.box([0.15, 0.185, 0.24], [0, 0, 0.06], this.grip));
+    group.add(this.box([0.16, 0.2, 0.09], [0, 0, 0.38], this.dark));
+    group.add(this.tube(0.075, 0.06, [0, 0, 0.44], this.accent));
+    group.add(this.box([0.17, 0.05, 0.05], [0, 0.02, 0.38], this.metal));
+    group.add(this.box([0.2, 0.2, 0.07], [0, 0.01, -0.2], this.dark));
+    group.add(this.box([0.06, 0.13, 0.14], [0, 0.03, -0.31], this.metal));
+
+    const spine = this.box([0.05, 0.2, 0.95], [0, 0.08, -0.85], this.metal);
+    spine.scale.set(1, 0.85, 1);
+    group.add(spine);
+    group.add(this.box([0.035, 0.14, 0.92], [0, -0.035, -0.84], this.accent));
+    const tip = this.box([0.04, 0.17, 0.3], [0, 0.02, -1.42], this.accent);
+    tip.scale.set(0.7, 0.45, 1);
+    group.add(tip);
+    for (let i = 0; i < 3; i += 1) {
+      group.add(this.box([0.055, 0.05, 0.05], [0, 0.15, -0.5 - i * 0.13], this.dark));
+    }
+    return { group, muzzle: [0, 0.03, -1.5], rest: [0.06, -0.32, 0.22] };
+  }
+
   /**
    * The weapon, by id.
    *
@@ -1398,42 +1605,21 @@ export class WeaponViewModel {
    * sniper. An unknown id gets the rifle rather than nothing — a new weapon
    * should look wrong, not invisible.
    */
-  private build(id: string): Shape {
+  private build(id: string, skin: WeaponSkin | null = null): Shape {
     const group = new this.three.Group();
     switch (id) {
       case 'knife': {
-        // Handle in three segments rather than one box, so it has a swell in the
-        // middle and a pommel at the end — the difference between a knife and a
-        // stick with a blade on it.
-        group.add(this.box([0.13, 0.16, 0.5], [0, 0, 0.14], this.grip));
-        group.add(this.box([0.15, 0.185, 0.24], [0, 0, 0.06], this.grip));
-        group.add(this.box([0.16, 0.2, 0.09], [0, 0, 0.38], this.dark));
-        // A rounded butt cap, so the handle ends in something rather than
-        // stopping square.
-        group.add(this.tube(0.075, 0.06, [0, 0, 0.44], this.accent));
-        // Lanyard hole, as a notch through the pommel.
-        group.add(this.box([0.17, 0.05, 0.05], [0, 0.02, 0.38], this.metal));
-        // Guard and ricasso.
-        group.add(this.box([0.2, 0.2, 0.07], [0, 0.01, -0.2], this.dark));
-        group.add(this.box([0.06, 0.13, 0.14], [0, 0.03, -0.31], this.metal));
+        const skinId = skin?.id ?? '';
+        const skinName = (skin?.name ?? '').toLowerCase();
+        const isKarambit = skinId.includes('karambit') || skinName.includes('karambit');
+        const isButterfly = skinId.includes('butterfly') || skinName.includes('butterfly');
+        const isBayonet =
+          skinId.includes('bayonet') || skinName.includes('bayonet') || skinId.includes('lore');
 
-        // Blade in two layers: a spine at full thickness with a flat ground
-        // bevel under it, which is what catches the light differently along an
-        // edge. One box has no edge, only a thickness.
-        const spine = this.box([0.05, 0.2, 0.95], [0, 0.08, -0.85], this.metal);
-        spine.scale.set(1, 0.85, 1);
-        group.add(spine);
-        group.add(this.box([0.035, 0.14, 0.92], [0, -0.035, -0.84], this.accent));
-        // Tip: a short tapered section, so the blade comes to a point instead of
-        // stopping square.
-        const tip = this.box([0.04, 0.17, 0.3], [0, 0.02, -1.42], this.accent);
-        tip.scale.set(0.7, 0.45, 1);
-        group.add(tip);
-        // Serrations on the spine, three teeth near the guard.
-        for (let i = 0; i < 3; i += 1) {
-          group.add(this.box([0.055, 0.05, 0.05], [0, 0.15, -0.5 - i * 0.13], this.dark));
-        }
-        return { group, muzzle: [0, 0.03, -1.5], rest: [0.06, -0.32, 0.22] };
+        if (isKarambit) return this.buildKarambit();
+        if (isButterfly) return this.buildButterfly();
+        if (isBayonet) return this.buildBayonet();
+        return this.buildTacticalKnife();
       }
 
       case 'pistol': {

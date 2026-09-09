@@ -224,6 +224,23 @@ pub fn timbre(kind: &str) -> Timbre {
             body: 70.0,
             thump: 60.0,
         },
+        // Radio comms push-to-talk mic key and release chirps
+        "radio_on" => Timbre {
+            frequency: 1850.0,
+            q: 5.5,
+            decay: 0.08,
+            gain: 0.55,
+            body: 880.0,
+            thump: 0.0,
+        },
+        "radio_off" => Timbre {
+            frequency: 1420.0,
+            q: 4.5,
+            decay: 0.06,
+            gain: 0.45,
+            body: 620.0,
+            thump: 0.0,
+        },
         // `step`, and the fallback for a kind this build does not know: a noise
         // the server invented later must still be *audible*, because the whole
         // mechanic is hearing that something happened.

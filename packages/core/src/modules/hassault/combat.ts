@@ -173,10 +173,13 @@ export class ShotController {
     this.wantReload = true;
   }
 
+  previousSlot: number = 0;
+
   /** Select a slot. Out-of-range numbers are ignored rather than clamped: they
    * come from a key the player pressed, and `6` means nothing, not "the last one". */
   select(slot: number): void {
     if (slot >= 0 && slot < this.weapons.length && slot !== this.slot) {
+      this.previousSlot = this.slot;
       this.wantSlot = slot;
       this.slot = slot;
       this.triggerUsed = true; // a switch does not carry the held trigger with it
@@ -184,6 +187,22 @@ export class ShotController {
       // leave you at 4× holding a shotgun, and the FOV is the one piece of state
       // here you cannot see the cause of.
       this.scoped = 0;
+      // Combat Arms "QQ" quick-switch rechamber cancel for sniper
+      const targetWeapon = this.weapons[slot];
+      if (targetWeapon && targetWeapon.id === 'sniper' && performance.now() - this.lastFireMs >= 500) {
+        this.lastFireMs = performance.now() - targetWeapon.interval * 1000;
+      }
+    }
+  }
+
+  /** Quick switch (QQ) toggling between current and previous weapon slot */
+  quickSwitch(): void {
+    let target = this.previousSlot;
+    if (target === this.slot) {
+      target = this.slot === 0 ? 1 : 0;
+    }
+    if (target >= 0 && target < this.weapons.length) {
+      this.select(target);
     }
   }
 

@@ -421,7 +421,7 @@ impl Default for Video {
             render_scale: 1.0,
             hud_scale: 1.0,
             quality: Quality::default(),
-            vsync: false,
+            vsync: true,
             fov: 75.0,
             antialias: Quality::default().antialias(),
             shadows: true,

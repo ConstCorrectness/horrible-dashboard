@@ -41,6 +41,13 @@ import { TextureInspector } from './TextureInspector';
 import { SceneOutliner } from './SceneOutliner';
 import { createEntityMarker } from './EntityMarkers';
 import { registry } from '../../../registry';
+import {
+  onMapEditorInspect,
+  onWeaponInspectRequested,
+  requestMapLoad,
+  takePendingMapEditorInspect,
+  takePendingWeaponInspect,
+} from '../workspace-bus';
 
 export interface ArtModelItem {
   id: string;
@@ -464,6 +471,60 @@ export function ModelStudioPanel({ initialTab = 'viewer' }: { initialTab?: Studi
         setError('Could not connect to /api/hassault/art/models');
       });
   }, []);
+
+  // Synchronize cross-pane workspace inspect events
+  useEffect(() => {
+    const unsubMap = onMapEditorInspect((req) => {
+      setTab('scene');
+      if (req.mapName) {
+        void loadStudioMap(req.mapName);
+      }
+      if (req.camera && cameraRef.current && controlsRef.current) {
+        cameraRef.current.position.set(req.camera.x, req.camera.y + 1.5, req.camera.z);
+        controlsRef.current.target.set(
+          req.camera.x + Math.cos(req.camera.yaw ?? 0),
+          req.camera.y + 1.5,
+          req.camera.z + Math.sin(req.camera.yaw ?? 0),
+        );
+        controlsRef.current.update();
+      }
+    });
+
+    const unsubWep = onWeaponInspectRequested((req) => {
+      setTab('viewer');
+      if (models.length > 0) {
+        const found = models.find(
+          (m) =>
+            m.id.toLowerCase().includes(req.weaponId.toLowerCase()) ||
+            m.name.toLowerCase().includes(req.weaponId.toLowerCase()),
+        );
+        if (found) setSelectedModel(found);
+      }
+    });
+
+    // Handle parked intents on mount
+    const pendingMap = takePendingMapEditorInspect();
+    if (pendingMap) {
+      setTab('scene');
+      if (pendingMap.mapName) void loadStudioMap(pendingMap.mapName);
+    }
+
+    const pendingWep = takePendingWeaponInspect();
+    if (pendingWep && models.length > 0) {
+      setTab('viewer');
+      const found = models.find(
+        (m) =>
+          m.id.toLowerCase().includes(pendingWep.weaponId.toLowerCase()) ||
+          m.name.toLowerCase().includes(pendingWep.weaponId.toLowerCase()),
+      );
+      if (found) setSelectedModel(found);
+    }
+
+    return () => {
+      unsubMap();
+      unsubWep();
+    };
+  }, [loadStudioMap, models]);
 
   // Initialize Three.js scene & TransformControls
   useEffect(() => {
@@ -1505,10 +1566,19 @@ export function ModelStudioPanel({ initialTab = 'viewer' }: { initialTab?: Studi
               </button>
               <button
                 onClick={() => {
+                  const currentCamera = cameraRef.current;
+                  const spawn = currentCamera
+                    ? { x: currentCamera.position.x, y: currentCamera.position.z, z: currentCamera.position.y }
+                    : undefined;
+                  requestMapLoad({
+                    mapName: selectedMapId === 'default' ? 'ac_desert' : selectedMapId,
+                    spawn,
+                    source: 'studio',
+                  });
                   registry.openPanel('hassault.play');
                 }}
                 style={styles.playGameBtn}
-                title="Launch this arena in HorribleAssault gameplay"
+                title="Launch this arena in HorribleAssault gameplay with live camera spawn"
               >
                 <IconCrosshair size={12} color="rgb(255, 255, 255)" />
                 <span>Play in Game</span>

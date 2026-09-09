@@ -406,8 +406,10 @@ export class TrainingRange {
       // the match server resolves against is worse than not practising.
       const spec = currentHitbox();
       const head = point[2] >= target.z + (spec.standingHeight - spec.headBand);
-      const amount =
-        damageAt(weapon, distance, falloffStart(weapon)) * (head ? weapon.headMultiplier : 1);
+      const nutshot = !head && point[2] >= target.z + spec.standingHeight * 0.38 && point[2] <= target.z + spec.standingHeight * 0.55;
+      const limbs = !head && !nutshot && point[2] < target.z + spec.standingHeight * 0.38;
+      const mult = head ? weapon.headMultiplier : nutshot ? 1.5 : limbs ? 0.75 : 1.0;
+      const amount = damageAt(weapon, distance, falloffStart(weapon)) * mult;
       target.hp -= amount;
       const killed = target.hp <= 0;
       if (killed) {

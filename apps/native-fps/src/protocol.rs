@@ -568,6 +568,28 @@ pub enum Fx {
         weapon: String,
         #[serde(default)]
         head: bool,
+        #[serde(default)]
+        nutshot: bool,
+        #[serde(default)]
+        smoke: bool,
+        #[serde(default)]
+        airborne: bool,
+        #[serde(default)]
+        wallbang: bool,
+        #[serde(default)]
+        noscope: bool,
+        #[serde(default)]
+        blind: bool,
+        #[serde(rename = "killerTeam", default)]
+        killer_team: i32,
+        #[serde(rename = "victimTeam", default)]
+        victim_team: i32,
+        #[serde(default)]
+        assister: String,
+        #[serde(rename = "assisterName", default)]
+        assister_name: String,
+        #[serde(rename = "assisterTeam", default)]
+        assister_team: i32,
     },
     #[serde(rename = "spawn")]
     Spawn {
@@ -1245,6 +1267,8 @@ pub enum Event {
     Left(Left),
     /// Bots were fielded or kicked.
     Roster(Roster),
+    Chat(ChatBroadcast),
+    Voice(VoiceBroadcast),
     /// A `hassault` event this build has no variant for (`invite`, `matches`,
     /// `roster`, …).
     ///
@@ -1253,6 +1277,32 @@ pub enum Event {
     /// the event being handled, and for a long time the app loop's `=> {}` made
     /// those indistinguishable.
     Other(String),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct ChatBroadcast {
+    #[serde(rename = "senderId", default)]
+    pub sender_id: String,
+    #[serde(rename = "senderName", default)]
+    pub sender_name: String,
+    #[serde(default)]
+    pub team: i32,
+    #[serde(rename = "isTeam", default)]
+    pub is_team: bool,
+    #[serde(default)]
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct VoiceBroadcast {
+    #[serde(rename = "playerId", default)]
+    pub player_id: String,
+    #[serde(rename = "playerName", default)]
+    pub player_name: String,
+    #[serde(default)]
+    pub team: i32,
+    #[serde(default)]
+    pub transmitting: bool,
 }
 
 /// Classify one line off the socket.
@@ -1301,6 +1351,8 @@ pub fn classify(line: &str) -> Option<Event> {
             divergence::note_extra("roster", &r.extra);
             Event::Roster(r)
         }
+        "chat" => Event::Chat(serde_json::from_value(env.data).unwrap_or_default()),
+        "voice" => Event::Voice(serde_json::from_value(env.data).unwrap_or_default()),
         other => {
             divergence::note_event(other);
             Event::Other(other.to_string())

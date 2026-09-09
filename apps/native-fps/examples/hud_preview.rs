@@ -321,6 +321,17 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, mode_name: Opti
             killer_name: "HORRIBLECPP".into(),
             head: true,
             weapon: "assault".into(),
+            nutshot: false,
+            smoke: true,
+            airborne: true,
+            wallbang: false,
+            noscope: false,
+            blind: false,
+            killer_team: 1,
+            victim_team: 0,
+            assister: String::new(),
+            assister_name: String::new(),
+            assister_team: 0,
         },
         "me",
     );
@@ -445,6 +456,9 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, mode_name: Opti
         utility: Some(&utility),
         flash: 0.0,
         console: None,
+        chat: None,
+        voice_transmitting: false,
+        voice_speakers: &[],
     };
 
     let mut verts: Vec<OverlayVertex> = Vec::new();

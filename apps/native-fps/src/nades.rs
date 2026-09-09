@@ -339,8 +339,8 @@ pub fn volume_vertices(pool: &NadePool, out: &mut Vec<VolumeVertex>) {
             zone_tint(&zone.kind),
         );
         // Fire is thinner than smoke: it is meant to be walked *around*, not
-        // hidden in, so it must never become a place to hide.
-        let density = if zone.kind == "fire" { 0.45 } else { 0.9 };
+        // hidden in, so it must never become a place to hide. Smoke reaches 1.0 in its core.
+        let density = if zone.kind == "fire" { 0.45 } else { 1.0 };
         out.extend(scratch.iter().map(|v| VolumeVertex {
             position: v.position,
             normal: v.normal,

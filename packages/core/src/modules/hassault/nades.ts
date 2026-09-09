@@ -235,10 +235,15 @@ export class NadePool {
         uFire: { value: fire ? 1 : 0 },
       },
       vertexShader: `
+        varying vec3 vViewNormal;
+        varying vec3 vViewDir;
         varying vec3 vLocal;
         void main() {
           vLocal = position;
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+          vViewNormal = normalize(normalMatrix * normal);
+          vViewDir = normalize(-mvPosition.xyz);
+          gl_Position = projectionMatrix * mvPosition;
         }
       `,
       fragmentShader: `
@@ -246,6 +251,8 @@ export class NadePool {
         uniform float uOpacity;
         uniform vec3 uColor;
         uniform float uFire;
+        varying vec3 vViewNormal;
+        varying vec3 vViewDir;
         varying vec3 vLocal;
 
         // Value noise, the same shape as the surface detail's — a hashed lattice
@@ -271,17 +278,35 @@ export class NadePool {
           // Drifting upward, faster for fire than for smoke.
           vec3 p = vLocal * 2.2 - vec3(0.0, uTime * (uFire > 0.5 ? 1.6 : 0.35), 0.0);
           float n = noise(p) * 0.55 + noise(p * 2.3) * 0.3 + noise(p * 5.1) * 0.15;
-          // Denser toward the middle, so the sphere does not read as a ball with
-          // an edge. This is the only thing making a hard-surfaced primitive
-          // look like a volume.
-          float core = 1.0 - clamp(length(vLocal), 0.0, 1.0);
-          float density = clamp(n * 0.85 + core * 0.75 - 0.25, 0.0, 1.0);
+
+          // View-ray chord thickness through spherical volume along the view line
+          float chord = clamp(abs(dot(normalize(vViewNormal), normalize(vViewDir))), 0.0, 1.0);
+
+          float density;
+          if (uFire > 0.5) {
+            density = clamp(chord * 1.3 + n * 0.5 - 0.2, 0.0, 1.0);
+          } else {
+            // CS2-style volumetric smoke:
+            // Core area (chord > 0.38) is completely opaque (alpha = 1.0),
+            // strictly preventing anything behind it from being seen.
+            // Opacity smoothly rolls off toward the soft boundary edge.
+            float coreDensity = smoothstep(0.04, 0.42, chord);
+            density = clamp(coreDensity * 1.3 + (n - 0.5) * 0.35, 0.0, 1.0);
+            if (chord > 0.38) {
+              density = 1.0;
+            }
+          }
+
           vec3 color = uColor;
           if (uFire > 0.5) {
             // Fire is hotter at its base and where the noise is thickest.
             color = mix(vec3(0.75, 0.12, 0.02), vec3(1.0, 0.85, 0.25), density * 0.9);
+          } else {
+            // Volumetric smoke micro-shading: realistic self-shadowing and highlights
+            color = mix(uColor * 0.82, uColor * 1.14, n * 0.7 + chord * 0.3);
           }
-          float alpha = density * uOpacity * (uFire > 0.5 ? 0.75 : 0.95);
+
+          float alpha = density * uOpacity * (uFire > 0.5 ? 0.75 : 1.0);
           if (alpha < 0.01) discard;
           gl_FragColor = vec4(color, alpha);
         }
@@ -304,5 +329,29 @@ export class NadePool {
     };
     this.zones.set(row.id, live);
     return live;
+  }
+
+  /**
+   * How deeply the camera is submerged inside an active smoke cloud (0.0 = clear, 1.0 = thick core).
+   * Used to render the first-person smoke blindness shroud.
+   */
+  smokeDensityAt(x: number, y: number, z: number): number {
+    let maxDensity = 0;
+    for (const live of this.zones.values()) {
+      if (live.kind !== 'smoke' || live.left <= 0) continue;
+      const dx = live.mesh.position.x - x;
+      const dy = live.mesh.position.y - y;
+      const dz = live.mesh.position.z - z;
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      const r = live.mesh.scale.x;
+      if (dist < r) {
+        const t = 1 - dist / r;
+        const bloom = Math.min(1, (live.duration - live.left) / 0.65);
+        const fade = Math.min(1, live.left / 1.6);
+        const density = Math.min(1, t * 1.6) * bloom * fade;
+        if (density > maxDensity) maxDensity = density;
+      }
+    }
+    return maxDensity;
   }
 }

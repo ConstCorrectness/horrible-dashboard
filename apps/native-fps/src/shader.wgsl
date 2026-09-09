@@ -376,11 +376,22 @@ fn fs_volume(in: VolumeOut) -> @location(0) vec4<f32> {
     // buys nothing you can see through a cloud you are meant to be blinded by.
     let n = volume_noise(in.world_position * 0.9) * 0.65
         + volume_noise(in.world_position * 2.3) * 0.35;
-    // Never all the way to zero: the density the server uses is uniform inside
-    // the sphere, and a hole you can see a body through would be the exact lie
-    // the sphere exists to avoid.
-    let density = mix(0.62, 1.0, n);
-    let shaded = in.color.rgb * mix(0.75, 1.12, n);
+
+    // View-ray chord thickness through spherical cloud volume:
+    let norm_clip = camera.view_proj * vec4<f32>(in.normal, 0.0);
+    let chord = clamp(abs(norm_clip.w), 0.0, 1.0);
+
+    // CS2-style volumetric smoke:
+    // Core area (chord > 0.38) is completely opaque (alpha = 1.0),
+    // strictly preventing anything behind it from being seen.
+    // Opacity smoothly rolls off toward the soft boundary edge.
+    let core_density = smoothstep(0.04, 0.42, chord);
+    var density = clamp(core_density * 1.3 + (n - 0.5) * 0.35, 0.0, 1.0);
+    if (chord > 0.38) {
+        density = 1.0;
+    }
+
+    let shaded = in.color.rgb * mix(0.82, 1.14, n * 0.7 + chord * 0.3);
     var alpha = in.color.a * density;
     // Fade the last stretch into the fog, so a cloud at the edge of sight does
     // not sit as a hard disc against the haze.

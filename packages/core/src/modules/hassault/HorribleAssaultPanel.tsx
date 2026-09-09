@@ -127,6 +127,25 @@ import { TrainingRange } from './training';
 import { equippedSkins, WeaponViewModel, type WeaponSkin } from './viewmodel';
 import { createPropEnvironment } from './models/weapons';
 import { World } from './world';
+import { createWorld3D, type World3D } from './world3d';
+import { ensureRapierInitialized, RapierPhysicsWorld } from './physics-rapier';
+import {
+  DemoRecorder,
+  DemoPlayer,
+  type DemoBookmark,
+  type DemoData,
+} from './demo';
+import { KillFeed } from './panels/KillFeed';
+import {
+  broadcastMatchTelemetry,
+  onConsoleCommand,
+  onMapLoadRequested,
+  requestMapEditorInspect,
+  takePendingMapLoad,
+  type MapCoordinates,
+} from './workspace-bus';
+import { consoleRegistry } from './console/registry';
+import { registry } from '../../registry';
 
 /**
  * three, imported once per page rather than once per mount.
@@ -181,6 +200,10 @@ interface Hud {
   yaw: number;
   /** Distance the last reconciliation had to correct, in cubes. */
   error: number;
+  /** Stamina pool (0..100) for sprint & power-slides */
+  stamina?: number;
+  isSprinting?: boolean;
+  isSliding?: boolean;
 }
 
 const NO_CORRECTION = { x: 0, y: 0, z: 0 };
@@ -267,7 +290,7 @@ const EMPTY_SESSION: SessionState = {
 };
 
 interface SceneHandle {
-  setMesh: (w: World) => number;
+  setMesh: (w: World, w3d?: World3D | null) => number;
   /** Vertical field of view in degrees. A setting, so it has to reach the camera
    * after construction rather than only at it. */
   setFov: (degrees: number) => void;
@@ -301,6 +324,8 @@ interface SceneHandle {
  */
 export function HorribleAssaultPanel() {
   const mountRef = useRef<HTMLDivElement | null>(null);
+  const pendingSpawnRef = useRef<MapCoordinates | null>(null);
+  const godModeRef = useRef<boolean>(consoleRegistry.getBool('player.god'));
   const [status, setStatus] = useState<InstallStatus | null>(null);
   const [maps, setMaps] = useState<MapSummary[]>([]);
   const [mapName, setMapName] = useState<string>('');
@@ -351,6 +376,7 @@ export function HorribleAssaultPanel() {
    * on a crossing, so it costs one render per dive rather than one per frame.
    */
   const [underwater, setUnderwater] = useState(false);
+  const [smokeBlindness, setSmokeBlindness] = useState(0);
   /** The grenades, in slot order. Served for the same reason the weapons are. */
   const [tacticals, setTacticals] = useState<TacticalSpec[]>([]);
   /**
@@ -404,6 +430,75 @@ export function HorribleAssaultPanel() {
    * business, and this is the one line between them.
    */
   const [scoped, setScoped] = useState(0);
+
+  // Match Recording & Replay Suite
+  const recorderRef = useRef<DemoRecorder>(new DemoRecorder());
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const demoPlayerRef = useRef<DemoPlayer>(new DemoPlayer());
+  const [isReplaying, setIsReplaying] = useState(false);
+  const isReplayingRef = useRef(false);
+  isReplayingRef.current = isReplaying;
+  const [replayTime, setReplayTime] = useState(0);
+  const [replayDuration, setReplayDuration] = useState(0);
+  const [replayPlaying, setReplayPlaying] = useState(false);
+  const [replaySpeed, setReplaySpeed] = useState(1.0);
+  const [replayBookmarks, setReplayBookmarks] = useState<DemoBookmark[]>([]);
+  const [cleanView, setCleanView] = useState(false);
+  const [freecamActive, setFreecamActive] = useState(false);
+
+  useEffect(() => {
+    if (!isRecording) return;
+    const timer = setInterval(() => {
+      setRecordingSeconds((s) => s + 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [isRecording]);
+
+  const startRecording = useCallback(() => {
+    if (!recorderRef.current.isRecording()) {
+      recorderRef.current.start(info?.name || 'unknown_map', { 0: playerName || 'Player' });
+      setIsRecording(true);
+      setRecordingSeconds(0);
+    }
+  }, [info?.name, playerName]);
+
+  const stopAndDownloadRecording = useCallback(() => {
+    if (recorderRef.current.isRecording()) {
+      const demo = recorderRef.current.stop();
+      setIsRecording(false);
+      if (demo) {
+        const json = JSON.stringify(demo, null, 2);
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${demo.header.map}_${Date.now()}.hademo`;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    }
+  }, []);
+
+  const loadReplayFile = useCallback((file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = JSON.parse(e.target?.result as string) as DemoData;
+        if (data.header?.magic === 'HADEMO') {
+          demoPlayerRef.current.load(data);
+          setIsReplaying(true);
+          setReplayDuration(data.header.durationMs);
+          setReplayBookmarks(data.bookmarks);
+          setReplayPlaying(false);
+          setReplayTime(0);
+        }
+      } catch (err) {
+        console.error('Failed to parse .hademo file:', err);
+      }
+    };
+    reader.readAsText(file);
+  }, []);
 
   // ---- the pause menu and the preferences it edits --------------------------
   const [menuOpen, setMenuOpen] = useState(false);
@@ -608,6 +703,8 @@ export function HorribleAssaultPanel() {
   // Mutable simulation state, kept out of React: this updates every frame and
   // re-rendering the component 60 times a second would be absurd.
   const worldRef = useRef<World | null>(null);
+  const world3dRef = useRef<World3D | null>(null);
+  const rapierRef = useRef<RapierPhysicsWorld | null>(null);
   /**
    * The interpolated rows the last frame drew, for the radar.
    *
@@ -967,6 +1064,68 @@ export function HorribleAssaultPanel() {
     };
   }, []);
 
+  // Cross-pane workspace bus subscriptions (map load, teleports, cheats, concommands)
+  useEffect(() => {
+    const pending = takePendingMapLoad();
+    if (pending) {
+      if (pending.spawn) pendingSpawnRef.current = pending.spawn;
+      if (pending.mapName) {
+        setMapName(pending.mapName);
+        setDeployed(true);
+      }
+    }
+
+    const unsubMap = onMapLoadRequested((req) => {
+      if (req.mapName === mapName) {
+        if (req.spawn && playerRef.current) {
+          playerRef.current.x = req.spawn.x;
+          playerRef.current.y = req.spawn.y;
+          playerRef.current.z = req.spawn.z;
+          if (req.spawn.yaw != null) playerRef.current.yaw = req.spawn.yaw;
+          rapierRef.current?.setPosition(req.spawn.x, req.spawn.y, req.spawn.z);
+        }
+      } else {
+        if (req.spawn) pendingSpawnRef.current = req.spawn;
+        setMapName(req.mapName);
+        setDeployed(true);
+      }
+    });
+
+    const unsubCvar = consoleRegistry.subscribe((name, val) => {
+      if (name === 'player.god') godModeRef.current = Boolean(val);
+      if (name === 'player.noclip') noclipRef.current = Boolean(val);
+      if (name === 'draw.hitboxes') void setSetting(SHOW_HITBOXES_KEY, Boolean(val));
+    });
+
+    const unsubCmd = onConsoleCommand((req) => {
+      const parts = req.command.trim().split(/\s+/);
+      const cmd = parts[0]?.toLowerCase();
+      if (cmd === 'god') {
+        const next = !godModeRef.current;
+        godModeRef.current = next;
+        consoleRegistry.set('player.god', next ? '1' : '0');
+      } else if (cmd === 'noclip') {
+        const next = !noclipRef.current;
+        noclipRef.current = next;
+        consoleRegistry.set('player.noclip', next ? '1' : '0');
+      } else if (cmd === 'respawn' && playerRef.current && worldRef.current) {
+        const s = world3dRef.current?.spawns.all[0] ?? worldRef.current.spawns()[0];
+        if (s) {
+          playerRef.current.x = s.x;
+          playerRef.current.y = s.y;
+          playerRef.current.z = s.z;
+          rapierRef.current?.setPosition(s.x, s.y, s.z);
+        }
+      }
+    });
+
+    return () => {
+      unsubMap();
+      unsubCvar();
+      unsubCmd();
+    };
+  }, [mapName]);
+
   // ---- the three.js scene ---------------------------------------------------------
 
   useEffect(() => {
@@ -1078,6 +1237,7 @@ export function HorribleAssaultPanel() {
       // *being in*: only the crossing makes a sound.
       let wasWet = false;
       let wasUnder = false;
+      let wasSmoke = 0;
       // The map's water plane and its ladders. Both are static — water is one
       // global height in Cube 1 and a ladder's span never changes — so they are
       // built once from the world and only disposed. An invisible water plane
@@ -1095,16 +1255,48 @@ export function HorribleAssaultPanel() {
       const propEnvironment = createPropEnvironment(THREE, renderer);
       viewmodel.setEnvironment(propEnvironment);
 
-      const setMesh = (world: World): number => {
+      const setMesh = (world: World, world3d?: World3D | null): number => {
         if (mesh) {
           scene.remove(mesh);
           mesh.geometry.dispose();
         }
-        // Rebuilt with the mesh rather than beside it: both describe this map,
-        // and a water plane left over from the previous one would hang in the
-        // air at whatever height that map's was.
         water?.dispose();
         ladders?.dispose();
+
+        if (world3d) {
+          const w3dMesh = world3d.scene.children[0] as import('three').Mesh;
+          const geo = w3dMesh.geometry;
+          geo.computeBoundingSphere();
+          mesh = new THREE.Mesh(geo, material);
+          mesh.castShadow = true;
+          mesh.receiveShadow = true;
+          scene.add(mesh);
+
+          const cx = world3d.bounds.center[0];
+          const cz = world3d.bounds.center[1];
+          const extent = world3d.bounds.extent;
+          bounds.current = { cx, cz, extent };
+
+          reveal.fit([cx, cz], extent * 1.05, Math.max(extent * 0.6, 1));
+          backdrop.fit([cx, cz], extent * 2);
+
+          const reach = extent * 2;
+          sun.position.set(cx + reach * 0.55, reach * 0.82, cz + reach * 0.36);
+          sun.target.position.set(cx, 0, cz);
+          sun.target.updateMatrixWorld();
+          const cam = sun.shadow.camera;
+          cam.left = -extent * 1.1;
+          cam.right = extent * 1.1;
+          cam.top = extent * 1.1;
+          cam.bottom = -extent * 1.1;
+          const distance = sun.position.distanceTo(sun.target.position);
+          cam.near = Math.max(1, distance - extent * 1.4);
+          cam.far = distance + extent * 1.4;
+          cam.updateProjectionMatrix();
+          renderer.shadowMap.needsUpdate = true;
+          return world3d.collision.triangles;
+        }
+
         water = createWater(THREE, scene, world);
         ladders = createLadders(THREE, scene, world);
         const data = buildWorldMesh(world);
@@ -1115,10 +1307,6 @@ export function HorribleAssaultPanel() {
         geo.setAttribute('uv', new THREE.BufferAttribute(data.uvs, 2));
         geo.computeBoundingSphere();
         mesh = new THREE.Mesh(geo, material);
-        // Both, and both matter: a wall has to cast onto the floor beside it and
-        // receive from the wall opposite. One-sided geometry means there are no
-        // back faces to produce the peter-panning a single-sided caster usually
-        // does.
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         scene.add(mesh);
@@ -1372,7 +1560,11 @@ export function HorribleAssaultPanel() {
                 }
               }
             }
-            step(world, player, input, dt);
+            if (rapierRef.current && world3dRef.current) {
+              rapierRef.current.stepPlayer(player, input, dt);
+            } else {
+              step(world, player, input, dt);
+            }
             // After the step, matching the order `Predictor.record` uses online
             // and the order the match server fires in. Applied before it, a
             // shoot-jump would land somewhere training never taught you.
@@ -1406,7 +1598,9 @@ export function HorribleAssaultPanel() {
             // every other sound we make: the server does not send our own noises
             // back, because one arriving half a round trip late does not sound
             // like the thing that made it.
-            const nowWet = inWater(world, player);
+            const nowWet = world3dRef.current
+              ? player.z < world3dRef.current.waterlevel
+              : inWater(world, player);
             if (nowWet !== wasWet) {
               wasWet = nowWet;
               audio.own('splash', 0.8);
@@ -1548,7 +1742,9 @@ export function HorribleAssaultPanel() {
         // Outside the audio block on purpose: the tint is not a sound, and a
         // player with the volume at zero still has to be told their head is under.
         if (worldRef.current) {
-          const nowUnder = submerged(worldRef.current, playerRef.current);
+          const nowUnder = world3dRef.current
+            ? playerRef.current.z + 4.5 < world3dRef.current.waterlevel
+            : submerged(worldRef.current, playerRef.current);
           if (nowUnder !== wasUnder) {
             wasUnder = nowUnder;
             setUnderwater(nowUnder);
@@ -1557,10 +1753,21 @@ export function HorribleAssaultPanel() {
 
         if (acceptsGameInput(phaseRef.current)) {
           backdrop.setOpacity(0);
+          // Smooth ADS camera zoom transition
+          const targetFov = fov / (shotsRef.current?.magnification() ?? 1);
+          if (Math.abs(camera.fov - targetFov) > 0.01) {
+            camera.fov += (targetFov - camera.fov) * Math.min(1, dt * 14);
+            camera.updateProjectionMatrix();
+          }
           // Cube (x, y, height) → three (x, height, z). The correction offset is
           // visual only: the simulation stays exactly where the server says.
           const c = online && session ? session.predictor.correction : NO_CORRECTION;
           camera.position.set(player.x + c.x, eyeHeight(player) + c.z, player.y + c.y);
+          const camSmoke = nadePool.smokeDensityAt(camera.position.x, camera.position.y, camera.position.z);
+          if (Math.abs(camSmoke - wasSmoke) > 0.02) {
+            wasSmoke = camSmoke;
+            setSmokeBlindness(camSmoke);
+          }
           // YXZ so yaw is applied before pitch; the default XYZ order rolls the
           // camera as you look around.
           camera.rotation.set(player.pitch, -player.yaw - Math.PI / 2, 0, 'YXZ');
@@ -1643,6 +1850,7 @@ export function HorribleAssaultPanel() {
             // simulated clocks are unrelated, so a timestamp from one measured
             // against the other means nothing.
             sinceLanded: Math.max(0, player.t - player.landedAt),
+            ads: scopedRef.current > 0 ? 1 : 0,
           });
         } else {
           // Before you deploy the camera flies the map rather than standing in
@@ -1688,6 +1896,9 @@ export function HorribleAssaultPanel() {
             crouch: player.crouch,
             yaw: player.yaw,
             error: session ? session.predictor.lastError : 0,
+            stamina: player.stamina ?? 100,
+            isSprinting: player.isSprinting ?? false,
+            isSliding: player.isSliding ?? false,
           }));
           fpsAccum = 0;
           fpsFrames = 0;
@@ -1807,14 +2018,40 @@ export function HorribleAssaultPanel() {
         if (cancelled) return;
         setProgress((p) => advance(p, { map: 1 }));
 
+        const is3D = mapInfo.format === 'gltf';
+        let world3d: World3D | null = null;
+        let rapierPhysics: RapierPhysicsWorld | null = null;
+        if (is3D) {
+          const THREE = await loadThree();
+          await ensureRapierInitialized();
+          world3d = createWorld3D(THREE, mapInfo);
+          rapierPhysics = new RapierPhysicsWorld(world3d.collision);
+        }
+        world3dRef.current = world3d;
+        rapierRef.current = rapierPhysics;
+
         const world = new World(mapInfo, cubes);
         worldRef.current = world;
         setInfo(mapInfo);
 
-        const spawn = world.spawns()[0];
-        playerRef.current = spawn
-          ? spawnAt(world, spawn)
-          : createPlayer(world.ssize / 2, world.ssize / 2, 0);
+        const pendingSpawn = pendingSpawnRef.current;
+        pendingSpawnRef.current = null;
+        const spawn = pendingSpawn
+          ? pendingSpawn
+          : is3D && world3d?.spawns.all[0]
+          ? world3d.spawns.all[0]
+          : world.spawns()[0];
+
+        if (spawn) {
+          playerRef.current = is3D
+            ? createPlayer(spawn.x, spawn.y, spawn.z, ((spawn.yaw ?? 0) * Math.PI) / 180)
+            : spawnAt(world, { ...spawn, yaw: spawn.yaw ?? null });
+          if (is3D && rapierPhysics) {
+            rapierPhysics.setPosition(spawn.x, spawn.y, spawn.z);
+          }
+        } else {
+          playerRef.current = createPlayer(world.ssize / 2, world.ssize / 2, 0);
+        }
 
         // Await the renderer rather than poll for it. The two loads are genuinely
         // concurrent, and the retry loop this replaces would silently drop the
@@ -1824,7 +2061,7 @@ export function HorribleAssaultPanel() {
         const scene = sceneRef.current;
         if (!scene) return;
 
-        const triangles = scene.setMesh(world);
+        const triangles = scene.setMesh(world, world3d);
         setHud((h) => ({ ...h, triangles }));
         setProgress((p) => advance(p, { mesh: 1 }));
 
@@ -1975,6 +2212,13 @@ export function HorribleAssaultPanel() {
     };
     const onMouseMove = (e: MouseEvent) => {
       if (!isLocked()) return;
+      if (demoPlayerRef.current.freecam.active) {
+        demoPlayerRef.current.freecam.update(0.016, {
+          yawDelta: e.movementX * sensitivityRef.current * 0.1,
+          pitchDelta: -e.movementY * sensitivityRef.current * 0.1,
+        });
+        return;
+      }
       // Mouse right turns right. The sign lives in `applyLook` with the reasoning
       // for it and a test — it was inverted here, which is subtle enough to have
       // shipped: the camera's yaw is about cube +x, but the renderer maps cube y
@@ -2014,12 +2258,16 @@ export function HorribleAssaultPanel() {
     // Pointer lock suppresses the context menu in most browsers, but not all and
     // not on every platform — and one that opens mid-firefight steals the
     // pointer. Cheap insurance for a button the game now uses.
-    const onContextMenu = (e: MouseEvent) => {
-      if (isLocked()) e.preventDefault();
-    };
+    const onContextMenu = (e: MouseEvent) => e.preventDefault();
     const onWheel = (e: WheelEvent) => {
       if (!isLocked()) return;
       e.preventDefault();
+      if (demoPlayerRef.current.freecam.active) {
+        demoPlayerRef.current.freecam.update(0.016, {
+          fovDelta: e.deltaY > 0 ? 2.5 : -2.5,
+        });
+        return;
+      }
       shotsRef.current?.cycle(e.deltaY > 0 ? 1 : -1);
     };
     const onKeyDown = (e: KeyboardEvent) => {
@@ -2041,6 +2289,21 @@ export function HorribleAssaultPanel() {
           setConsoleOpen(false);
           if (!menuOpenRef.current) grabInput();
         }
+        return;
+      }
+
+      // Clean View toggle (Ctrl+H / Cmd+H) for zero-HUD cinematic capture
+      if (e.code === 'KeyH' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        setCleanView((cv) => !cv);
+        return;
+      }
+
+      // Replay Drone Freecam toggle (F3 or C during replay)
+      if (e.code === 'F3' || (isReplayingRef.current && e.code === 'KeyC')) {
+        e.preventDefault();
+        demoPlayerRef.current.freecam.active = !demoPlayerRef.current.freecam.active;
+        setFreecamActive(demoPlayerRef.current.freecam.active);
         return;
       }
 
@@ -2086,6 +2349,10 @@ export function HorribleAssaultPanel() {
       // in `keysRef` with the rest of the movement keys.
       if (action === 'crouch') {
         crouchRef.current = crouchToggleRef.current ? !crouchRef.current : true;
+      }
+      if (action === 'quickswitch') {
+        nadesRef.current?.holster();
+        shotsRef.current?.quickSwitch();
       }
       if (action.startsWith('weapon')) {
         // A weapon key puts the grenade away — the counterpart of a number key
@@ -2166,9 +2433,16 @@ export function HorribleAssaultPanel() {
     }
     const world = worldRef.current;
     if (!world) return;
-    const spawns = world.spawns();
+    const spawns = world3dRef.current ? world3dRef.current.spawns.all : world.spawns();
     const spawn = spawns[Math.floor(Math.random() * spawns.length)];
-    if (spawn) playerRef.current = spawnAt(world, spawn);
+    if (spawn) {
+      if (world3dRef.current && rapierRef.current) {
+        playerRef.current = createPlayer(spawn.x, spawn.y, spawn.z, ((spawn.yaw ?? 0) * Math.PI) / 180);
+        rapierRef.current.setPosition(spawn.x, spawn.y, spawn.z);
+      } else {
+        playerRef.current = spawnAt(world, spawn);
+      }
+    }
   }, []);
 
   /** Enter the world. The one path from any menu to actually playing. */
@@ -2515,6 +2789,42 @@ export function HorribleAssaultPanel() {
         : null,
   }));
 
+  // Broadcast live match telemetry across workspace bus for companion & radar sidecars
+  useEffect(() => {
+    const isOnline = net.status === 'joined';
+    const player = playerRef.current;
+    broadcastMatchTelemetry({
+      phase: nativeRunning ? 'native' : phase,
+      mapName,
+      room: net.room || 'local',
+      online: isOnline,
+      player: player
+        ? {
+            x: player.x,
+            y: player.y,
+            z: player.z,
+            yaw: player.yaw,
+            health: godModeRef.current ? 100 : net.you?.hp ?? 100,
+            armor: net.you?.armour ?? 100,
+            weapon: (weapons[net.you?.weapon ?? 0]?.name || 'subgun').toLowerCase(),
+            ammo: net.you?.ammo ?? 30,
+            carried: net.you?.reserve ?? 90,
+            godMode: godModeRef.current,
+            noclip: noclipRef.current,
+            isSprinting: player.isSprinting,
+            isSliding: player.isSliding,
+            stamina: player.stamina,
+          }
+        : null,
+      roster: remoteRowsRef.current,
+      spotted: net.you?.spotted ?? [],
+      roundTime: 0,
+      score: { ct: net.scores[0] ?? 0, t: net.scores[1] ?? 0 },
+      killEvents: net.killfeed,
+      lastUpdated: performance.now(),
+    });
+  }, [hud, net, phase, nativeRunning, mapName, weapons]);
+
   // ---- render ---------------------------------------------------------------------
 
   // Gated on having a map to play, *not* on having an AssaultCube install: the
@@ -2612,6 +2922,70 @@ export function HorribleAssaultPanel() {
             {net.peers.length} in · {Math.round(net.rtt)} ms
             {net.host ? ` · guest on ${net.host.slice(0, 8)}` : ''}
           </span>
+        )}
+        {phase === 'playing' && (
+          <>
+            {isRecording ? (
+              <button
+                onClick={stopAndDownloadRecording}
+                style={{
+                  background: 'rgba(218, 54, 51, 1)',
+                  color: 'white',
+                  fontWeight: 600,
+                  borderRadius: '3px',
+                  padding: '2px 8px',
+                }}
+                title="Stop recording and download .hademo match demo"
+              >
+                ⏹ Stop REC ({recordingSeconds}s)
+              </button>
+            ) : (
+              <button
+                onClick={startRecording}
+                style={{
+                  background: 'rgba(255,255,255,0.08)',
+                  borderRadius: '3px',
+                  padding: '2px 8px',
+                }}
+                title="Record match demo (.hademo) for montages"
+              >
+                ⏺ Record
+              </button>
+            )}
+            <label
+              style={{
+                cursor: 'pointer',
+                background: 'rgba(255,255,255,0.08)',
+                padding: '2px 8px',
+                borderRadius: '3px',
+                border: '1px solid rgba(255,255,255,0.15)',
+              }}
+              title="Load and replay a .hademo recording"
+            >
+              🎞 Replay
+              <input
+                type="file"
+                accept=".hademo,.json"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) loadReplayFile(f);
+                }}
+              />
+            </label>
+            <button
+              onClick={() => setCleanView((cv) => !cv)}
+              style={{
+                background: cleanView ? 'var(--accent, rgba(31, 111, 235, 1))' : 'transparent',
+                color: cleanView ? 'white' : 'inherit',
+                borderRadius: '3px',
+                padding: '2px 8px',
+              }}
+              title="Toggle Clean Montage View without HUD (Ctrl+H)"
+            >
+              {cleanView ? '👁 Show HUD' : '🎬 Clean View'}
+            </button>
+          </>
         )}
         {net.status === 'error' && <span style={{ color: '#f85149' }}>{net.error}</span>}
         <span style={{ marginLeft: 'auto', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
@@ -2718,36 +3092,7 @@ export function HorribleAssaultPanel() {
           />
         )}
 
-        {online && net.killfeed.length > 0 && (
-          <div
-            style={{
-              position: 'absolute',
-              right: 8,
-              top: 8,
-              pointerEvents: 'none',
-              fontFamily: 'monospace',
-              fontSize: '0.72rem',
-              textAlign: 'right',
-              lineHeight: 1.6,
-            }}
-          >
-            {net.killfeed.map((k) => (
-              <div
-                key={k.id}
-                style={{
-                  color: k.mine ? '#f0d48a' : 'rgba(255,255,255,0.75)',
-                  background: 'rgba(13,17,23,0.55)',
-                  borderRadius: 3,
-                  padding: '0 0.35rem',
-                  display: 'inline-block',
-                  marginBottom: 2,
-                }}
-              >
-                {k.text}
-              </div>
-            ))}
-          </div>
-        )}
+        {online && <KillFeed entries={net.killfeed} />}
 
         {online && showScores && (
           <div
@@ -2910,6 +3255,23 @@ export function HorribleAssaultPanel() {
             onDismissInvite={(room) => sessionRef.current?.dismissInvite(room)}
             onResume={resumeGame}
             onExitToMenu={exitToMenu}
+            onOpenStudio={() => {
+              if (playerRef.current) {
+                requestMapEditorInspect({
+                  mapName,
+                  camera: {
+                    x: playerRef.current.x,
+                    y: playerRef.current.y,
+                    z: playerRef.current.z,
+                    yaw: playerRef.current.yaw,
+                  },
+                  source: 'play',
+                });
+              }
+              registry.openPanel('hassault.studio');
+            }}
+            onOpenArmory={() => registry.openPanel('hassault.armory')}
+            onOpenConsole={() => registry.openPanel('hassault.console')}
           />
         )}
 
@@ -2985,7 +3347,7 @@ export function HorribleAssaultPanel() {
           />
         )}
 
-        {locked && (
+        {locked && !cleanView && (
           <>
             {scoped > 0 ? (
               <ScopeOverlay magnification={magnification} hit={showHit} killed={showKilled} />
@@ -3045,6 +3407,28 @@ export function HorribleAssaultPanel() {
                 <span style={{ opacity: 0.5 }}> / {MOVE_SPEED} c/s</span>
                 {hud.crouch > 0.5 && <span style={{ color: '#8ab4f8' }}> · crouched</span>}
                 {hud.onGround ? '' : ' · airborne'}
+                {hud.isSliding && <span style={{ color: 'rgba(242, 204, 96, 1)', fontWeight: 600 }}> · SLIDING</span>}
+                {hud.isSprinting && !hud.isSliding && <span style={{ color: 'rgba(88, 166, 255, 1)', fontWeight: 600 }}> · SPRINT</span>}
+              </div>
+              {/* Stamina bar for sprint & power-slides */}
+              <div
+                style={{
+                  width: '120px',
+                  height: '4px',
+                  backgroundColor: 'rgba(255,255,255,0.15)',
+                  borderRadius: '2px',
+                  marginTop: '4px',
+                  overflow: 'hidden',
+                }}
+              >
+                <div
+                  style={{
+                    width: `${Math.min(100, Math.max(0, hud.stamina ?? 100))}%`,
+                    height: '100%',
+                    backgroundColor: hud.isSliding ? 'rgba(242, 204, 96, 1)' : hud.isSprinting ? 'rgba(88, 166, 255, 1)' : 'rgba(126, 231, 135, 1)',
+                    transition: 'width 0.05s linear',
+                  }}
+                />
               </div>
               x {hud.x.toFixed(1)} y {hud.y.toFixed(1)} z {hud.z.toFixed(1)}
               {!online && noclipRef.current ? ' · noclip' : ''}
@@ -3085,6 +3469,18 @@ export function HorribleAssaultPanel() {
                   pointerEvents: 'none',
                   background:
                     'radial-gradient(ellipse at center, rgba(24,86,120,0.28) 0%, rgba(12,46,68,0.62) 100%)',
+                }}
+              />
+            )}
+
+            {smokeBlindness > 0.02 && (
+              <div
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  pointerEvents: 'none',
+                  background: `radial-gradient(ellipse at center, rgba(185,194,204,${(smokeBlindness * 0.96).toFixed(3)}) 0%, rgba(140,150,165,${(smokeBlindness * 0.99).toFixed(3)}) 100%)`,
+                  backdropFilter: smokeBlindness > 0.25 ? `blur(${Math.min(10, smokeBlindness * 10).toFixed(1)}px)` : undefined,
                 }}
               />
             )}
@@ -3156,6 +3552,188 @@ export function HorribleAssaultPanel() {
               </div>
             )}
           </>
+        )}
+
+        {isReplaying && (
+          <div
+            style={{
+              position: 'absolute',
+              bottom: 12,
+              left: '50%',
+              transform: 'translateX(-50%)',
+              background: 'rgba(20, 20, 25, 0.92)',
+              border: '1px solid rgba(255, 255, 255, 0.18)',
+              borderRadius: '8px',
+              padding: '8px 14px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '6px',
+              width: '90%',
+              maxWidth: '720px',
+              backdropFilter: 'blur(8px)',
+              zIndex: 100,
+              boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+            }}
+          >
+            {/* Top row: Play/Pause, Scrubber bar, Timestamps */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <button
+                onClick={() => {
+                  demoPlayerRef.current.togglePlay();
+                  setReplayPlaying(demoPlayerRef.current.isPlaying);
+                }}
+                style={{
+                  background: 'rgba(35, 134, 54, 1)',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  padding: '4px 10px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                {replayPlaying ? '⏸ Pause' : '▶ Play'}
+              </button>
+              <input
+                type="range"
+                min={0}
+                max={Math.max(1, replayDuration)}
+                value={replayTime}
+                onChange={(e) => {
+                  const t = Number(e.target.value);
+                  demoPlayerRef.current.seek(t);
+                  setReplayTime(t);
+                }}
+                style={{ flex: 1, cursor: 'pointer', accentColor: 'var(--accent, rgba(88, 166, 255, 1))' }}
+              />
+              <span
+                style={{
+                  fontFamily: 'monospace',
+                  fontSize: '0.75rem',
+                  color: 'rgba(204, 204, 204, 1)',
+                  minWidth: '85px',
+                  textAlign: 'right',
+                }}
+              >
+                {(replayTime / 1000).toFixed(1)}s / {(replayDuration / 1000).toFixed(1)}s
+              </span>
+            </div>
+
+            {/* Bookmarks bar */}
+            {replayBookmarks.length > 0 && (
+              <div
+                style={{
+                  display: 'flex',
+                  gap: '6px',
+                  overflowX: 'auto',
+                  paddingBottom: '2px',
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: '0.7rem',
+                    color: 'rgba(139, 148, 158, 1)',
+                    alignSelf: 'center',
+                  }}
+                >
+                  Frags:
+                </span>
+                {replayBookmarks.map((bm, i) => (
+                  <button
+                    key={i}
+                    onClick={() => {
+                      demoPlayerRef.current.seekToBookmark(i);
+                      setReplayTime(demoPlayerRef.current.currentTimeMs);
+                    }}
+                    style={{
+                      fontSize: '0.65rem',
+                      padding: '2px 6px',
+                      borderRadius: '3px',
+                      border: '1px solid rgba(48, 54, 61, 1)',
+                      background:
+                        bm.type === 'streak'
+                          ? 'rgba(137, 87, 229, 1)'
+                          : bm.type === 'headshot'
+                            ? 'rgba(218, 54, 51, 1)'
+                            : 'rgba(210, 153, 34, 1)',
+                      color: 'white',
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                    }}
+                    title={`Jump to ${bm.label} (-2.0s lead-in)`}
+                  >
+                    🎯 {bm.label} @ {(bm.timestamp / 1000).toFixed(1)}s
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Bottom row: Speeds, Drone Freecam, Close */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                fontSize: '0.75rem',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <span style={{ color: 'rgba(139, 148, 158, 1)' }}>Speed:</span>
+                {[0.1, 0.25, 0.5, 1.0, 2.0, 4.0].map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => {
+                      demoPlayerRef.current.setSpeed(s);
+                      setReplaySpeed(s);
+                    }}
+                    style={{
+                      padding: '1px 5px',
+                      borderRadius: '3px',
+                      border: '1px solid rgba(48, 54, 61, 1)',
+                      background: replaySpeed === s ? 'rgba(31, 111, 235, 1)' : 'rgba(33, 38, 45, 1)',
+                      color: 'white',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {s}x
+                  </button>
+                ))}
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <button
+                  onClick={() => {
+                    demoPlayerRef.current.freecam.active = !demoPlayerRef.current.freecam.active;
+                    setFreecamActive(demoPlayerRef.current.freecam.active);
+                  }}
+                  style={{
+                    padding: '2px 8px',
+                    borderRadius: '4px',
+                    border: '1px solid rgba(48, 54, 61, 1)',
+                    background: freecamActive ? 'rgba(35, 134, 54, 1)' : 'rgba(33, 38, 45, 1)',
+                    color: 'white',
+                    cursor: 'pointer',
+                  }}
+                  title="Toggle 6-DOF Drone Freecam (F3 / C). Move: WASD, Space/Ctrl, Roll: Q/E, Zoom: Wheel"
+                >
+                  🚁 {freecamActive ? 'Drone Freecam: ON' : 'Drone Freecam (F3)'}
+                </button>
+                <button
+                  onClick={() => setIsReplaying(false)}
+                  style={{
+                    padding: '2px 8px',
+                    borderRadius: '4px',
+                    border: '1px solid rgba(68, 68, 68, 1)',
+                    background: 'rgba(48, 54, 61, 1)',
+                    color: 'white',
+                    cursor: 'pointer',
+                  }}
+                >
+                  ✕ Close
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </div>

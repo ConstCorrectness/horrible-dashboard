@@ -107,6 +107,14 @@ pub fn grips_for(weapon_id: &str) -> GripAnchors {
         support_roll: defaults["supportRoll"].as_f64().unwrap_or(0.0) as f32,
     };
     let Some(listed) = file["weapons"].get(weapon_id) else {
+        if weapon_id.starts_with("nade_") || weapon_id.starts_with("grenade_") {
+            return GripAnchors {
+                primary: Vec3::new(0.08, -0.24, 0.20),
+                support: None,
+                primary_roll: 0.1,
+                support_roll: 0.0,
+            };
+        }
         return out;
     };
     if let Some(p) = vec3_from(&listed["primary"]) {

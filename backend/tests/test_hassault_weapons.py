@@ -19,7 +19,7 @@ import time
 
 import pytest
 
-from backend.modules.hassault import weapons, match
+from backend.modules.hassault import weapons, match, hitbox
 from backend.modules.hassault.match import BUDGET_CEILING, Command, MatchRoom
 from backend.modules.hassault.physics import PLAYER_EYE_HEIGHT, flat_world
 from backend.modules.hassault.weapons import (
@@ -128,7 +128,8 @@ def test_a_ray_that_never_leaves_its_cell_terminates():
 def test_a_body_in_the_path_is_hit_and_one_beside_it_is_not():
     origin = (10.0, 10.0, PLAYER_EYE_HEIGHT)
     ahead = ray_hits_body(origin, (1.0, 0.0, 0.0), (20.0, 10.0, 0.0))
-    assert ahead == pytest.approx(8.9, abs=0.05)  # 10 cubes minus the radius
+    expected = 10.0 - hitbox.DEFAULT.radius
+    assert ahead == pytest.approx(expected, abs=0.05)  # 10 cubes minus the radius
     assert ray_hits_body(origin, (1.0, 0.0, 0.0), (20.0, 14.0, 0.0)) is None
 
 

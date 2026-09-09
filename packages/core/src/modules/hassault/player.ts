@@ -25,7 +25,7 @@
  * `__tests__/physics-vectors.json` is what fails if you don't.
  */
 import { currentHitbox, eyeAt, heightAt } from './hitbox';
-import { PLAYER_ABOVE_EYE, PLAYER_EYE_HEIGHT, World, type Ladder } from './world';
+import { PLAYER_ABOVE_EYE, PLAYER_EYE_HEIGHT, PLAYER_RADIUS, World, type Ladder } from './world';
 
 /** Cubes per second at a walk. Tuned to feel like AC rather than derived from it. */
 export const MOVE_SPEED = 22;
@@ -129,6 +129,10 @@ export interface PlayerState {
   /** Impact speed of a landing that happened *this step*, else 0. An output: the
    * server turns it into damage and the client only flinches. */
   fallSpeed: number;
+  stamina?: number;
+  isSprinting?: boolean;
+  isSliding?: boolean;
+  slideTime?: number;
 }
 
 export interface MoveInput {
@@ -136,6 +140,7 @@ export interface MoveInput {
   strafe: number; // -1..1
   jump: boolean;
   crouch: boolean;
+  sprint?: boolean;
   /** Ignore gravity and walls — useful for looking around a map. */
   noclip: boolean;
 }
@@ -219,7 +224,7 @@ export function eyeHeight(player: PlayerState): number {
  * extremes are what stop the player sinking or clipping into a low ceiling.
  */
 function support(world: World, x: number, y: number) {
-  const { x0, x1, y0, y1 } = world.cellsInRadius(x, y, currentHitbox().radius);
+  const { x0, x1, y0, y1 } = world.cellsInRadius(x, y, PLAYER_RADIUS);
   let highestFloor = -Infinity;
   let lowestCeil = Infinity;
   let anySolid = false;
@@ -262,7 +267,7 @@ export function canStand(
   // omit it — tuning that appears to work everywhere except where it decides a hit.
   const spec = currentHitbox();
   const bodyH = height ?? spec.standingHeight;
-  const { x0, x1, y0, y1 } = world.cellsInRadius(x, y, spec.radius);
+  const { x0, x1, y0, y1 } = world.cellsInRadius(x, y, PLAYER_RADIUS);
   for (let cy = y0; cy <= y1; cy++) {
     for (let cx = x0; cx <= x1; cx++) {
       if (world.isSolid(cx, cy)) return false;

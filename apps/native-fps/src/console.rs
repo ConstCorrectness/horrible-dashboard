@@ -89,7 +89,9 @@ pub const HONORED: &[&str] = &[
     "draw.crosshair.thickness",
     "draw.fov",
     "draw.hitboxes",
+    "draw.tracers_firstperson",
     "net.graph",
+    "player.god",
     "player.sensitivity",
 ];
 
@@ -1034,7 +1036,18 @@ impl Console {
     /// never typed.
     pub fn execute(&mut self, line: &str, cvars: &mut ClientCvars, online: bool) -> Dispatch {
         let expanded = self.expand_alias(line);
-        let tokens: Vec<String> = expanded.split_whitespace().map(|t| t.to_string()).collect();
+        let mut tokens: Vec<String> = expanded.split_whitespace().map(|t| t.to_string()).collect();
+        if tokens.len() >= 3 && tokens[1] == "=" {
+            tokens.remove(1);
+        }
+        if !tokens.is_empty() && tokens[0].contains('=') {
+            let first = tokens.remove(0);
+            let parts: Vec<&str> = first.splitn(2, '=').collect();
+            tokens.insert(0, parts[0].to_string());
+            if parts.len() > 1 && !parts[1].is_empty() {
+                tokens.insert(1, parts[1].to_string());
+            }
+        }
         let Some(head) = tokens.first().cloned() else {
             return Dispatch::Handled;
         };
@@ -1136,9 +1149,21 @@ impl Console {
         // from it would report the registry's default rather than what this
         // client is actually drawing with.
         if let Some(def) = self.cvar_index.get(&head).cloned() {
-            if def.is_client() && !head.contains('(') {
+            if (def.is_client() || (!online && ClientCvars::is_honored(&def.name)))
+                && !head.contains('(')
+            {
                 return self.client_cvar(&def, &tokens, cvars);
             }
+        } else if !online && ClientCvars::is_honored(&head) {
+            let def = CVarDef {
+                name: head.clone(),
+                kind: "boolean".into(),
+                default_value: serde_json::Value::Bool(false),
+                description: "Honored offline cvar".into(),
+                flags: vec!["client".into()],
+                ..Default::default()
+            };
+            return self.client_cvar(&def, &tokens, cvars);
         }
 
         if !online {
@@ -1250,14 +1275,28 @@ impl Console {
     }
 
     fn expand_alias(&self, line: &str) -> String {
-        let head = line.split_whitespace().next().unwrap_or("");
-        match self.aliases.get(&head.to_ascii_lowercase()) {
-            Some(target) => {
-                let tail = line.trim_start();
-                format!("{target}{}", &tail[head.len()..])
-            }
-            None => line.to_string(),
+        let mut clean = line.trim().to_string();
+        let head = clean.split_whitespace().next().unwrap_or("");
+        if let Some(target) = self.aliases.get(&head.to_ascii_lowercase()) {
+            let tail = clean.trim_start();
+            clean = format!("{target}{}", &tail[head.len()..]);
         }
+        let head = clean.split_whitespace().next().unwrap_or("");
+        let lower = head.to_ascii_lowercase();
+        if lower == "god" {
+            let tail = &clean[head.len()..];
+            return if tail.trim().is_empty() {
+                "player.god 1".to_string()
+            } else {
+                format!("player.god{tail}")
+            };
+        }
+        if lower.starts_with("play.") {
+            let rest = &head[5..];
+            let tail = &clean[head.len()..];
+            return format!("player.{rest}{tail}");
+        }
+        clean
     }
 
     /// The command bound to a key, if any. Lower-cased on both sides so `F5`

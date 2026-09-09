@@ -1616,11 +1616,12 @@ fn create_blit_bind_group(
 /// `Immediate` nor `Mailbox` still has to present something.
 fn pick_present_mode(available: &[wgpu::PresentMode], vsync: bool) -> wgpu::PresentMode {
     let wanted: &[wgpu::PresentMode] = if vsync {
-        &[wgpu::PresentMode::Fifo]
+        &[wgpu::PresentMode::AutoVsync, wgpu::PresentMode::Fifo]
     } else {
         &[
             wgpu::PresentMode::Immediate,
             wgpu::PresentMode::Mailbox,
+            wgpu::PresentMode::AutoNoVsync,
             wgpu::PresentMode::Fifo,
         ]
     };

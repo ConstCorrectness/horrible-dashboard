@@ -18,7 +18,7 @@
 //! testable with no GPU.
 
 use crate::api::WeaponSpec;
-use crate::world::{World, PLAYER_ABOVE_EYE, PLAYER_EYE_HEIGHT, PLAYER_RADIUS};
+use crate::world::{World, PLAYER_ABOVE_EYE, PLAYER_EYE_HEIGHT};
 
 /// Total body height — what the collision code reserves and the avatar is drawn to.
 pub const BODY_HEIGHT: f32 = PLAYER_EYE_HEIGHT + PLAYER_ABOVE_EYE;
@@ -203,7 +203,7 @@ pub fn raycast_world_face(
 /// inside the height slab — so a shot straight up or straight down is not a
 /// special case needing its own branch.
 pub fn ray_hits_body(origin: Vec3, direction: Vec3, feet: Vec3) -> Option<f32> {
-    ray_hits_body_sized(origin, direction, feet, PLAYER_RADIUS, BODY_HEIGHT)
+    ray_hits_body_sized(origin, direction, feet, crate::api::HitboxSpec::default().radius, BODY_HEIGHT)
 }
 
 pub fn ray_hits_body_sized(
@@ -450,7 +450,7 @@ mod tests {
         let dir = aim_vector(0.0, 0.0);
         let hit = ray_hits_body(origin, dir, [20.0, 4.0, 0.0]).expect("hit");
         assert!(
-            (hit - (16.0 - PLAYER_RADIUS)).abs() < 1e-3,
+            (hit - (16.0 - crate::api::HitboxSpec::default().radius)).abs() < 1e-3,
             "entered at {hit}"
         );
     }

@@ -291,3 +291,63 @@ def test_resolve_slot_accepts_the_three_things_a_person_types() -> None:
     assert weapons.resolve_slot("ak47") is None
     assert weapons.resolve_slot(str(len(weapons.WEAPONS))) is None
     assert weapons.resolve_slot("") is None
+
+
+@pytest.mark.anyio
+async def test_gameplay_cvars_and_reset(fresh_registry: ConsoleRegistry, room_with_player) -> None:
+    room, player = room_with_player
+    # 1. Modify gameplay cvars
+    res = await fresh_registry.execute(ConsoleExecRequest(command="gameplay.damage_scale 2.5", room_id=room.id))
+    assert res.ok
+    assert room.settings.damage_scale == 2.5
+
+    res = await fresh_registry.execute(ConsoleExecRequest(command="gameplay.knife_speed_boost 1.30", room_id=room.id))
+    assert res.ok
+    assert room.settings.knife_speed_boost == 1.30
+
+    res = await fresh_registry.execute(ConsoleExecRequest(command="gameplay.recoil_scale 0.5", room_id=room.id))
+    assert res.ok
+    assert room.settings.recoil_scale == 0.5
+
+    res = await fresh_registry.execute(ConsoleExecRequest(command="gameplay.recoil_push 1.5", room_id=room.id))
+    assert res.ok
+    assert room.settings.recoil_push == 1.5
+
+    # 2. Reset gameplay cvars
+    res_reset = await fresh_registry.execute(ConsoleExecRequest(command="gameplay.reset", room_id=room.id))
+    assert res_reset.ok
+    assert room.settings.damage_scale == 1.0
+    assert room.settings.knife_speed_boost == 1.10
+    assert room.settings.recoil_scale == 1.0
+    assert room.settings.recoil_push == 0.0
+
+
+@pytest.mark.anyio
+async def test_god_mode_execution_and_invulnerability(fresh_registry: ConsoleRegistry, room_with_player) -> None:
+    room, player = room_with_player
+    assert not player.god
+
+    # Test Python style: play.god = True
+    res = await fresh_registry.execute(ConsoleExecRequest(command="play.god = True", room_id=room.id, player_id=player.id))
+    assert res.ok
+    assert player.god is True
+
+    # Test that player with god=True takes no damage
+    start_hp = player.health
+    room._apply_damage(player, player, 50.0, False, weapons.weapon_at(2), 0.0)
+    assert player.health == start_hp
+
+    room._fall_damage(player, 80.0, 0.0)
+    assert player.health == start_hp
+
+    # Test Source style disable: player.god 0
+    res_off = await fresh_registry.execute(ConsoleExecRequest(command="player.god 0", room_id=room.id, player_id=player.id))
+    assert res_off.ok
+    assert player.god is False
+
+    # Test bare "god" toggle
+    res_toggle = await fresh_registry.execute(ConsoleExecRequest(command="god", room_id=room.id, player_id=player.id))
+    assert res_toggle.ok
+    assert player.god is True
+
+

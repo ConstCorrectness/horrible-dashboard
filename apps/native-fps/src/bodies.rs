@@ -614,12 +614,12 @@ mod tests {
         HitboxSpec {
             spec_id: "test".into(),
             shape: "cylinder".into(),
-            radius: 1.1,
+            radius: 0.68,
             eye_height: 4.5,
             above_eye: 0.7,
             standing_height: 5.2,
             crouch_height: 4.075,
-            head_band: 1.0,
+            head_band: 0.85,
         }
     }
 
@@ -660,7 +660,7 @@ mod tests {
     #[test]
     fn cube_y_becomes_render_z() {
         let verts = build(&[player("them", true)], "me", &spec());
-        let r = spec().radius + 0.2;
+        let r = spec().radius + 0.45;
         let xs: Vec<f32> = verts.iter().map(|v| v.position[0]).collect();
         let zs: Vec<f32> = verts.iter().map(|v| v.position[2]).collect();
         assert!(xs.iter().all(|x| (*x - 10.0).abs() <= r + 1e-6));

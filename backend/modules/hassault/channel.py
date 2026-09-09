@@ -264,6 +264,39 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
             )
         )
 
+    elif event == "chat":
+        text = str(data.get("text") or "").strip()
+        is_team = bool(data.get("team", False))
+        if text:
+            entry = match_server.player_for(conn)
+            if entry is not None:
+                room, player = entry
+                payload = {
+                    "senderId": player.id,
+                    "senderName": player.name,
+                    "team": player.team,
+                    "isTeam": is_team,
+                    "text": text[:200],
+                }
+                target_team = player.team if is_team else None
+                await match_server.broadcast_event(room, "chat", payload, team=target_team)
+
+    elif event == "voice":
+        transmitting = bool(data.get("transmitting", False))
+        entry = match_server.player_for(conn)
+        if entry is not None:
+            room, player = entry
+            payload = {
+                "playerId": player.id,
+                "playerName": player.name,
+                "team": player.team,
+                "transmitting": transmitting,
+            }
+            # Radio is team comms
+            await match_server.broadcast_event(
+                room, "voice", payload, exclude=player.id, team=player.team
+            )
+
 
 def _signed_in_username() -> str | None:
     """This node's player identity, or None when signed out / not yet enlisted.

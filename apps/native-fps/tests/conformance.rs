@@ -31,7 +31,7 @@ use hassault_native::arc;
 use hassault_native::summary::{MatchTally, Summary};
 use hassault_native::physics::{apply_impulse, spawn_at, step, MoveInput, PlayerState, Spawn};
 use hassault_native::trace::{aim_vector, ray_hits_body_sized, raycast_world_face, BODY_HEIGHT};
-use hassault_native::world::{World, LADDER_ENTITY, PLAYER_RADIUS, SOLID, SPACE};
+use hassault_native::world::{World, LADDER_ENTITY, SOLID, SPACE};
 use serde_json::Value;
 
 const PLANES: [&str; 9] = [
@@ -164,6 +164,8 @@ fn movement_matches_the_server_and_the_browser_client() {
                     strafe: f(raw, "strafe", 0.0),
                     jump: b(raw, "jump", false),
                     crouch: b(raw, "crouch", false),
+                    sprint: false,
+                    knife: false,
                 },
                 f(raw, "dt", 0.0),
             );
@@ -317,7 +319,7 @@ fn shot_geometry_matches_the_server_and_the_browser_client() {
             origin,
             direction,
             vec3(&case["feet"]),
-            f(case, "radius", PLAYER_RADIUS),
+            f(case, "radius", hassault_native::api::HitboxSpec::default().radius),
             f(case, "height", BODY_HEIGHT),
         );
         match case["expect"].as_f64() {

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 
+import { registry } from '../../../registry';
 import {
   claimLevelUpDrop,
   equipSkin,
@@ -11,6 +12,10 @@ import {
   type SkinDefinition,
   type SkinInstance,
 } from '../api';
+import {
+  onWeaponEquipped,
+  requestWeaponInspect,
+} from '../workspace-bus';
 import { WeaponSilhouette } from './WeaponSilhouettes';
 
 const RARITY_BG: Record<string, string> = {
@@ -67,6 +72,15 @@ export function ArmoryMarketplace() {
 
   useEffect(() => {
     void refreshData();
+    return onWeaponEquipped((req) => {
+      setInventory((prev) =>
+        prev.map((item) => {
+          if (item.skinId === req.skinId) return { ...item, isEquipped: true };
+          if (item.definition?.weaponId === req.weaponId) return { ...item, isEquipped: false };
+          return item;
+        }),
+      );
+    });
   }, []);
 
   const handleEquip = async (instanceId: string) => {
@@ -489,6 +503,24 @@ export function ArmoryMarketplace() {
                       >
                         Inspect
                       </button>
+                      <button
+                        type="button"
+                        className="games-ghost-btn"
+                        style={{ fontSize: '0.7rem', color: 'rgb(56, 189, 248)' }}
+                        title="Inspect in 3D Model Studio"
+                        onClick={() => {
+                          requestWeaponInspect({
+                            weaponId: def.weaponId,
+                            skinId: item.skinId || def.id,
+                            floatValue: item.floatValue,
+                            patternSeed: item.patternSeed,
+                            source: 'armory',
+                          });
+                          registry.openPanel('hassault.studio');
+                        }}
+                      >
+                        ◈ 3D
+                      </button>
                     </div>
                   </div>
                 );
@@ -568,6 +600,38 @@ export function ArmoryMarketplace() {
               </div>
 
               <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>{def.description}</div>
+
+              <div style={{ display: 'flex', gap: '0.3rem', marginTop: '0.2rem' }}>
+                <button
+                  type="button"
+                  className="games-ghost-btn"
+                  style={{ fontSize: '0.7rem', flex: 1 }}
+                  onClick={() => {
+                    setInspectItem(def);
+                    setInspectFlourish(false);
+                  }}
+                >
+                  Inspect
+                </button>
+                <button
+                  type="button"
+                  className="games-ghost-btn"
+                  style={{ fontSize: '0.7rem', color: 'rgb(56, 189, 248)' }}
+                  title="Inspect in 3D Model Studio"
+                  onClick={() => {
+                    requestWeaponInspect({
+                      weaponId: def.weaponId,
+                      skinId: def.id,
+                      floatValue: 0.03,
+                      patternSeed: 100,
+                      source: 'armory',
+                    });
+                    registry.openPanel('hassault.studio');
+                  }}
+                >
+                  ◈ 3D
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -860,9 +924,40 @@ export function ArmoryMarketplace() {
                 </div>
               </>
             ) : null}
-            <button type="button" className="games-ghost-btn" onClick={() => setInspectItem(null)}>
-              Close Inspect
-            </button>
+            <div style={{ display: 'flex', gap: '0.5rem', width: '100%' }}>
+              <button
+                type="button"
+                className="games-play-btn"
+                style={{ flex: 1 }}
+                onClick={() => {
+                  const isInstance = 'instanceId' in inspectItem;
+                  const weaponId = isInstance ? inspectItem.definition?.weaponId : inspectItem.weaponId;
+                  const skinId = isInstance ? inspectItem.skinId : inspectItem.id;
+                  const floatValue = isInstance ? inspectItem.floatValue : 0.03;
+                  const patternSeed = isInstance ? inspectItem.patternSeed : 100;
+                  if (weaponId) {
+                    requestWeaponInspect({
+                      weaponId,
+                      skinId,
+                      floatValue,
+                      patternSeed,
+                      source: 'armory',
+                    });
+                    registry.openPanel('hassault.studio');
+                  }
+                }}
+              >
+                ◈ Inspect in 3D Studio
+              </button>
+              <button
+                type="button"
+                className="games-ghost-btn"
+                style={{ flex: 1 }}
+                onClick={() => setInspectItem(null)}
+              >
+                Close Inspect
+              </button>
+            </div>
           </div>
         </div>
       )}

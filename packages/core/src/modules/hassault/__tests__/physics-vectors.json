@@ -1,10 +1,10 @@
 {
   "_comment": "Cross-language physics conformance vectors. Read by BOTH backend/tests/test_hassault_physics.py and packages/core/src/modules/hassault/__tests__/conformance.test.ts. These pin that the two implementations agree, not that either is correct in the abstract - correctness is what each side's own unit tests are for. Regenerate only when a rule genuinely changes, and make both suites pass before committing. 'hitboxSpecId' is the content hash of the body these vectors were generated against (backend/modules/hassault/hitbox.py). It is checked by the Python suite: change a hit-deciding dimension and this file is stale, which is the one failure mode a hand-maintained revision number would let you forget.",
-  "hitboxSpecId": "86d9f2779917",
+  "hitboxSpecId": "cb9e8b565ae0",
   "hitbox": {
-    "specId": "86d9f2779917",
+    "specId": "cb9e8b565ae0",
     "shape": "cylinder",
-    "radius": 1.1,
+    "radius": 0.68,
     "eyeHeight": 4.5,
     "aboveEye": 0.7,
     "standingHeight": 5.2,
@@ -12,8 +12,8 @@
     "crouchEyeHeight": 3.375,
     "crouchHeight": 4.075,
     "crouchScale": 0.7836538461538461,
-    "headBand": 1.0,
-    "fitTolerance": 0.35,
+    "headBand": 0.85,
+    "fitTolerance": 0.15,
     "eyeTolerance": 0.15
   },
   "tolerance": 1e-09,
@@ -11403,7 +11403,7 @@
         8.0,
         0.0
       ],
-      "expect": 10.899999999999997
+      "expect": 11.319999999999999
     },
     {
       "name": "a shot past a body misses",
@@ -11483,7 +11483,7 @@
         8.0,
         0.0
       ],
-      "expect": 10.913639207152222
+      "expect": 11.334164754583773
     },
     {
       "name": "a crouched body is shorter and the same shot sails over it",
@@ -11539,7 +11539,7 @@
       "pellets": 1,
       "range": 140.0,
       "auto": false,
-      "kickback": 1.2,
+      "kickback": 0.0,
       "zoomLevels": [],
       "hipfireSpread": 0.013,
       "spray": [],
@@ -11560,7 +11560,7 @@
       "pellets": 1,
       "range": 200.0,
       "auto": true,
-      "kickback": 1.6,
+      "kickback": 0.0,
       "zoomLevels": [],
       "hipfireSpread": 0.021,
       "spray": [
@@ -11569,80 +11569,96 @@
           0.0
         ],
         [
-          0.0004,
-          0.0092
+          0.0006,
+          0.014
         ],
         [
-          0.0009,
-          0.0192
+          0.0012,
+          0.028
         ],
         [
-          0.0011,
-          0.0298
+          0.0016,
+          0.043
         ],
         [
-          0.0008,
-          0.0402
+          0.001,
+          0.058
         ],
         [
-          -0.0002,
-          0.0498
+          -0.0015,
+          0.072
         ],
         [
-          -0.0021,
-          0.0578
+          -0.005,
+          0.084
         ],
         [
-          -0.0052,
-          0.064
+          -0.011,
+          0.094
         ],
         [
-          -0.0092,
-          0.0684
+          -0.018,
+          0.101
         ],
         [
-          -0.0136,
-          0.0714
+          -0.024,
+          0.105
         ],
         [
-          -0.0174,
-          0.0738
+          -0.028,
+          0.107
         ],
         [
-          -0.0196,
-          0.0758
+          -0.026,
+          0.108
         ],
         [
-          -0.0193,
-          0.0776
+          -0.018,
+          0.109
         ],
         [
-          -0.0162,
-          0.0792
+          -0.008,
+          0.11
         ],
         [
-          -0.0108,
-          0.0806
+          0.004,
+          0.1105
         ],
         [
-          -0.0042,
-          0.0818
+          0.015,
+          0.111
         ],
         [
-          0.0026,
-          0.0828
+          0.024,
+          0.1115
         ],
         [
-          0.0086,
-          0.0838
+          0.03,
+          0.112
         ],
         [
-          0.0132,
-          0.0847
+          0.032,
+          0.112
         ],
         [
-          0.0158,
-          0.0856
+          0.026,
+          0.1125
+        ],
+        [
+          0.016,
+          0.113
+        ],
+        [
+          0.004,
+          0.113
+        ],
+        [
+          -0.008,
+          0.1135
+        ],
+        [
+          -0.018,
+          0.114
         ]
       ],
       "sprayReset": 0.35,
@@ -11724,15 +11740,15 @@
       "pitch": 0.1,
       "expect": {
         "offset": [
-          0.0009,
-          0.0192
+          0.0012,
+          0.028
         ],
-        "yaw": 0.40090000000000003,
-        "pitch": 0.1192,
+        "yaw": 0.4012,
+        "pitch": 0.128,
         "direction": [
-          0.9141768662672898,
-          0.3874779799828206,
-          0.11891792215705164
+          0.9130618218843771,
+          0.38732853324067046,
+          0.12765076088614874
         ],
         "cone": 0.004
       }
@@ -11745,15 +11761,15 @@
       "pitch": 0.0,
       "expect": {
         "offset": [
-          -0.0136,
-          0.0714
+          -0.024,
+          0.105
         ],
-        "yaw": -0.0136,
-        "pitch": 0.0714,
+        "yaw": -0.024,
+        "pitch": 0.105,
         "direction": [
-          0.9973598597505005,
-          -0.013564930426096612,
-          0.07133934973769489
+          0.994206162638027,
+          -0.023865530261088213,
+          0.10480716882888248
         ],
         "cone": 0.004
       }
@@ -11766,15 +11782,15 @@
       "pitch": -0.3,
       "expect": {
         "offset": [
-          0.0158,
-          0.0856
+          0.026,
+          0.1125
         ],
-        "yaw": -1.1842,
-        "pitch": -0.21439999999999998,
+        "yaw": -1.174,
+        "pitch": -0.1875,
         "direction": [
-          0.3684055512498523,
-          -0.9049917236304056,
-          -0.21276120409689336
+          0.3796921094774929,
+          -0.9061389037872112,
+          -0.18640329676226988
         ],
         "cone": 0.004
       }
@@ -11787,15 +11803,15 @@
       "pitch": -0.3,
       "expect": {
         "offset": [
-          0.0158,
-          0.0856
+          -0.018,
+          0.114
         ],
-        "yaw": -1.1842,
-        "pitch": -0.21439999999999998,
+        "yaw": -1.218,
+        "pitch": -0.186,
         "direction": [
-          0.3684055512498523,
-          -0.9049917236304056,
-          -0.21276120409689336
+          0.3395636066268544,
+          -0.9222243123772313,
+          -0.18492937764158965
         ],
         "cone": 0.004
       }

@@ -44,6 +44,7 @@ use hassault_native::api::{
 };
 use hassault_native::arc::{self, ThrowArc};
 use hassault_native::audio::GameAudio;
+use hassault_native::chat::{ChatChannel, ChatState};
 use hassault_native::bodies;
 use hassault_native::camera::{blast_trauma, damage_trauma, fire_trauma, Camera, Shake};
 use hassault_native::console::{self, ClientCvars, Console, Definitions, Dispatch};
@@ -72,11 +73,13 @@ use hassault_native::renderer::{Renderer, Vertex, VolumeVertex, MODE_FLAT};
 use hassault_native::reveal::Reveal;
 use hassault_native::settings::{Crosshair, CrosshairStyle, Settings, SettingsWriter, FOV_RANGE};
 use hassault_native::summary::{MatchTally, Summary, SummaryScreen};
+use hassault_native::physics_rapier::RapierPhysicsWorld;
 use hassault_native::trace::kick_vector;
 use hassault_native::training::TrainingRange;
 use hassault_native::utility::GrenadeController;
 use hassault_native::viewmodel::{self, Skin, WeaponViewModel};
 use hassault_native::world::World;
+use hassault_native::world3d::{self, World3D};
 
 /// Degrees of view rotation per unit of raw mouse movement, before the user's own
 /// multiplier. Chosen to land near the browser client's feel at sensitivity 1.
@@ -146,6 +149,8 @@ pub struct App {
     prop_fitted: bool,
     mesh: MeshData,
     world: World,
+    pub world3d: Option<World3D>,
+    pub rapier_physics: Option<RapierPhysicsWorld>,
     /// The match, when there is one. **Train has none** — it is one player on a
     /// map, off the wire entirely, which is what the browser client's Train is
     /// too. A solo mode implemented as a room of one would not be solo: the
@@ -288,6 +293,7 @@ pub struct App {
     cvars: ClientCvars,
     /// Unacknowledged commands, sampled when the title updates.
     pending: usize,
+    prev_weapon_slot: usize,
     map_name: String,
     /// The room this client is in, from the welcome. Empty in Train and while
     /// connecting — the console header draws nothing rather than an empty label,
@@ -389,6 +395,9 @@ pub struct App {
     /// not allocate. The same reasoning as the renderer's own body buffer.
     overlay: Vec<OverlayVertex>,
     weapon_verts: Vec<Vertex>,
+    chat: ChatState,
+    voice_transmitting: bool,
+    voice_speakers: HashMap<String, (String, i32, Instant)>,
 }
 
 #[derive(Default)]
@@ -399,6 +408,7 @@ struct Keys {
     right: bool,
     jump: bool,
     crouch: bool,
+    sprint: bool,
     fire: bool,
     /// Whether the scoreboard is being held open. A held key rather than a
     /// toggle, matching the browser client and every shooter: you look at the
@@ -454,6 +464,17 @@ impl App {
         // `Camera::default()` would sit unapplied until the player opened the
         // menu and nudged the row.
         let base_fov = settings.video.fov;
+        let is_gltf = world.info.format.as_deref() == Some("gltf")
+            || map_name == "hd_facility"
+            || map_name == "hd_junkflea";
+        let (world3d, rapier_physics, mesh) = if is_gltf {
+            let w3d = world3d::create_world_3d(world.info.clone());
+            let rapier = RapierPhysicsWorld::new(&w3d.col_vertices, &w3d.col_indices);
+            let m3d = w3d.to_mesh_data();
+            (Some(w3d), Some(rapier), m3d)
+        } else {
+            (None, None, mesh)
+        };
         // Read before `world` is moved into the struct below.
         let world_items = world.info.items.clone();
         let mut app = App {
@@ -467,6 +488,8 @@ impl App {
             renderer: None,
             mesh,
             world,
+            world3d,
+            rapier_physics,
             socket,
             pending_bots: None,
             prediction: Prediction::default(),
@@ -528,6 +551,7 @@ impl App {
             console: Console::default(),
             cvars: ClientCvars::default(),
             pending: 0,
+            prev_weapon_slot: 1,
             map_name,
             room: String::new(),
             modifiers: winit::keyboard::ModifiersState::empty(),
@@ -570,6 +594,9 @@ impl App {
             // and nudged it.
             base_fov,
             pointer: (0.0, 0.0),
+            chat: ChatState::new(),
+            voice_transmitting: false,
+            voice_speakers: HashMap::new(),
         };
         if app.audio.is_none() {
             // Said out loud: a game that is silently silent reads as a game whose
@@ -579,9 +606,18 @@ impl App {
         // Aimed at the map it will build. `extent * 1.05` is the browser's:
         // a radius slightly larger than the world, so the far corner is not
         // still mid-rise when the clock runs out.
-        let extent = app.world.ssize as f32 * 0.5;
+        let extent = if let Some(w3d) = &app.world3d {
+            w3d.bounds.extent
+        } else {
+            app.world.ssize as f32 * 0.5
+        };
+        let center = if let Some(w3d) = &app.world3d {
+            [w3d.bounds.center[0], w3d.bounds.center[1]]
+        } else {
+            [extent, extent]
+        };
         app.reveal
-            .fit([extent, extent], extent * 1.05, (extent * 0.6).max(1.0));
+            .fit(center, extent * 1.05, (extent * 0.6).max(1.0));
         app.console.set_definitions(definitions);
         if app.socket.is_none() {
             app.place_offline();
@@ -770,6 +806,9 @@ impl App {
     /// Advance the HUD and the weapon in the hands by one frame.
     fn animate(&mut self, dt: f32) {
         self.hud.update(dt, self.keys.scores);
+        self.chat.step(dt);
+        let now = Instant::now();
+        self.voice_speakers.retain(|_, (_, _, seen)| now.duration_since(*seen).as_secs_f32() < 3.0);
         // Drawn-position easing only. Nothing here simulates a grenade — the
         // arc, the bounce and the fuse are all the server's, and a second
         // implementation of the bounce would exist only to disagree with the
@@ -813,16 +852,17 @@ impl App {
         if self.you.as_ref().is_some_and(|y| !y.alive) {
             self.unscope();
         }
-        self.viewmodel.set_weapon(&weapon, self.skins.get(&weapon));
-        self.sync_prop(&weapon);
-        // **What is in your hand this frame.** The weapon is stowed while a
-        // grenade is up and comes back the instant it leaves — a throw is one
-        // action, not a mode you have to leave.
-        //
-        // An edge, not a level: `holster` starts an animation, and calling it
-        // every frame would restart the stow sixty times a second and leave the
-        // weapon permanently down.
         let holding_nade = self.utility.equipped();
+        let display_weapon = if holding_nade {
+            self.utility
+                .selected_spec()
+                .map(|s| format!("nade_{}", s.id))
+                .unwrap_or_else(|| "nade_he".to_string())
+        } else {
+            weapon.clone()
+        };
+        self.viewmodel.set_weapon(&display_weapon, self.skins.get(&display_weapon));
+        self.sync_prop(&display_weapon);
         // **The predicted arc.** Drawn from the *locally predicted* velocity,
         // not from the last snapshot's: the whole reason it exists is to make
         // `THROW_INHERIT` visible — running and jumping feed the throw — and a
@@ -865,6 +905,7 @@ impl App {
         // client draws its weapon on `alive` alone for the same reason.
         let alive = self.you.as_ref().map(|y| y.alive).unwrap_or(true);
         let frame = viewmodel::Frame {
+            ads: if self.scoped > 0 { 1.0 } else { 0.0 },
             speed: self.ground_speed(),
             on_ground: self.prediction.state.on_ground,
             reloading: self.you.as_ref().is_some_and(|y| y.reloading),
@@ -924,7 +965,11 @@ impl App {
         let speed = self.ground_speed();
         let fall_speed = state.fall_speed;
         let rising = state.vel_z > 0.0;
-        let wet = physics::in_water(&self.world, state);
+        let wet = if let Some(w3d) = &self.world3d {
+            state.z < w3d.waterlevel
+        } else {
+            physics::in_water(&self.world, state)
+        };
         let audible = self.joined;
 
         if grounded && !crouched {
@@ -1325,6 +1370,38 @@ impl App {
     /// the spawn, never from the entity's own `z`, which is the mapper's eye and
     /// scatters up to twenty-two cubes above the floor.
     fn place_offline(&mut self) {
+        let spawn_3d = self.world3d.as_ref().and_then(|w| w.spawns.first().copied());
+        if let Some(sp) = spawn_3d {
+            self.camera.yaw = sp.yaw;
+            self.camera.pitch = 0.0;
+            self.prediction.reset(
+                sp.x,
+                sp.y,
+                sp.z,
+                sp.yaw.to_radians(),
+                0.0,
+            );
+            if let Some(rapier) = &mut self.rapier_physics {
+                rapier.set_position(sp.x, sp.y, sp.z);
+            }
+            self.joined = true;
+            self.follow_prediction();
+
+            let slot = self
+                .weapons
+                .iter()
+                .position(|w| w.id == "assault")
+                .unwrap_or(0);
+            let weapons = self.weapons.clone();
+            self.range.set_weapons(&weapons, slot);
+            self.range.place(&self.world, sp.x, sp.y);
+            let items = self.world.info.items.clone();
+            self.range
+                .place_items(&items, &self.item_table.kinds, self.item_table.reach);
+            self.you = Some(self.range.self_state());
+            return;
+        }
+
         let spawn = self.world.spawns(None).first().map(|e| physics::Spawn {
             x: e.x,
             y: e.y,
@@ -1536,8 +1613,11 @@ impl App {
                             // fallback for a shooter whose backend predates
                             // `faces` — which says per *pellet* whether there
                             // was a surface, and which one.
+                            let is_mine = id == &self.self_id;
+                            let draw_beam = !is_mine
+                                || self.cvars.boolean("draw.tracers_firstperson").unwrap_or(true);
                             self.effects
-                                .shot(*origin, ends, faces, id == &self.self_id, *hit);
+                                .shot_ex(*origin, ends, faces, is_mine, *hit, draw_beam);
                             // And the surface remembers being shot at. Every
                             // player's shots, not only ours: reading the room
                             // afterwards is most of what marks are for.
@@ -1733,6 +1813,20 @@ impl App {
                 Incoming::Event(Event::ConsoleRes(res)) => {
                     self.console.on_response(&res, &mut self.cvars);
                 }
+                Incoming::Event(Event::Chat(c)) => {
+                    self.chat
+                        .receive(&c.sender_id, &c.sender_name, c.team, c.is_team, &c.text);
+                }
+                Incoming::Event(Event::Voice(v)) => {
+                    if v.transmitting {
+                        self.voice_speakers.insert(
+                            v.player_id.clone(),
+                            (v.player_name.clone(), v.team, Instant::now()),
+                        );
+                    } else {
+                        self.voice_speakers.remove(&v.player_id);
+                    }
+                }
                 // Already reported by name in `protocol::classify` — see
                 // `divergence::note_event`. Nothing to do here beyond not
                 // pretending this was a handled message.
@@ -1784,18 +1878,26 @@ impl App {
         // next second of honest movement paying it back.
         let dt = self.input_accum.min(MAX_DT);
         self.input_accum = 0.0;
+        let is_knife = self.held().map(|w| w.id.as_str()) == Some("knife")
+            && !self.utility.equipped();
         let input = MoveInput {
             forward: axis(self.keys.forward, self.keys.back),
             strafe: axis(self.keys.right, self.keys.left),
             jump: self.keys.jump,
             crouch: self.keys.crouch,
+            sprint: self.keys.sprint,
+            knife: is_knife,
         };
         if self.socket.is_none() {
             self.local_seq += 1;
             let (yaw, pitch) = self.view_angles();
             self.prediction.state.yaw = yaw;
             self.prediction.state.pitch = pitch;
-            physics::step(&self.world, &mut self.prediction.state, &input, dt);
+            if let Some(rapier) = &mut self.rapier_physics {
+                rapier.step_player(&mut self.prediction.state, input, dt);
+            } else {
+                physics::step(&self.world, &mut self.prediction.state, &input, dt);
+            }
             // The range plays the server's part, and it has to run *after* the
             // step: a shot leaves from where the body is this frame, and firing
             // before moving aims from where it was on the previous one.
@@ -1873,6 +1975,7 @@ impl App {
             cmd.r#throw = true;
             cmd.nade = intent.nade;
             cmd.lob = intent.lob;
+            self.viewmodel.throw_nade();
             // Ours, played locally. The server does send a `throw` noise, but it
             // sends it to everyone *else* — your own noises never come back, so
             // the thrower would be the one person in the room who could not hear
@@ -2038,8 +2141,9 @@ impl App {
         // server's by `physics-vectors.json`. Tracers and impacts too: the range
         // is where a spray pattern is learnt, and it is not learnable without
         // seeing where the rounds went.
+        let draw_beam = self.cvars.boolean("draw.tracers_firstperson").unwrap_or(true);
         self.effects
-            .shot(shot.origin, &shot.ends, &shot.faces, true, false);
+            .shot_ex(shot.origin, &shot.ends, &shot.faces, true, false, draw_beam);
         self.decals.shot(&shot.ends, &shot.faces);
     }
 
@@ -2134,8 +2238,13 @@ impl App {
         }
         // Asking for the slot we already hold is not a switch, and dipping the
         // weapon for it would punish leaning on the number row.
-        let held = self.you.as_ref().map(|y| y.weapon).unwrap_or(-1);
-        if slot as i32 != held {
+        let held = if self.socket.is_some() {
+            self.you.as_ref().map(|y| y.weapon).unwrap_or(0).max(0) as usize
+        } else {
+            self.range.slot()
+        };
+        if slot != held {
+            self.prev_weapon_slot = held;
             // Down *now*, on the press. In a match the answer is a round trip
             // away and a holster that waited for it would read as input lag;
             // if the switch is refused the weapon comes back up on its own. See
@@ -2147,6 +2256,22 @@ impl App {
             return;
         }
         self.range.select(slot);
+    }
+
+    /// Combat Arms / CS "QQ" Quick Switch. Toggles to the previously held weapon.
+    fn quick_switch_weapon(&mut self) {
+        let held = if self.socket.is_some() {
+            self.you.as_ref().map(|y| y.weapon).unwrap_or(0).max(0) as usize
+        } else {
+            self.range.slot()
+        };
+        let mut target = self.prev_weapon_slot;
+        if target == held {
+            target = if held == 0 { 1 } else { 0 };
+        }
+        if target < self.weapons.len() {
+            self.select_weapon(target);
+        }
     }
 
     /// Open or close the pause menu.
@@ -2286,10 +2411,8 @@ impl App {
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
-        // Drained here rather than in a handler of its own: this is the one
-        // place per frame that already owns the renderer, and an upload is a few
-        // milliseconds spread over the frames the props happen to land on.
-        while let Ok((id, parsed)) = self.prop_loads.try_recv() {
+        // Spread uploads across frames so multiple preloaded models do not stall a single frame.
+        if let Ok((id, parsed)) = self.prop_loads.try_recv() {
             match parsed {
                 Ok(prop) => renderer.set_prop(&id, &prop),
                 Err(e) => hassault_native::divergence::note_prop(&id, &e),
@@ -2734,6 +2857,9 @@ impl App {
 
     fn update_title(&mut self) {
         let Some(window) = &self.window else { return };
+        if self.fullscreen {
+            return;
+        }
         let (backend, gpu) = self
             .renderer
             .as_ref()
@@ -2868,8 +2994,11 @@ impl ApplicationHandler for App {
                 return;
             }
         }
-        self.window = Some(window);
+        self.window = Some(window.clone());
+        self.last_frame = Instant::now();
+        self.fps_since = Instant::now();
         self.update_title();
+        window.request_redraw();
         // Poll rather than Wait: frames are driven by this loop, not by the
         // compositor asking for one.
         event_loop.set_control_flow(ControlFlow::Poll);
@@ -2902,7 +3031,18 @@ impl ApplicationHandler for App {
                     r.resize(size.width, size.height);
                 }
             }
-            WindowEvent::Focused(false) => self.set_grab(false),
+            WindowEvent::Focused(false) => {
+                if self.voice_transmitting {
+                    self.voice_transmitting = false;
+                    if let Some(audio) = &self.audio {
+                        audio.own("radio_off", 1.0, None);
+                    }
+                    if let Some(socket) = &self.socket {
+                        let _ = socket.send_voice(false);
+                    }
+                }
+                self.set_grab(false);
+            }
             // The wheel scrolls the console and nothing else. In play it is
             // deliberately inert: a weapon-cycle bound to it is the one binding
             // people rebind first, and guessing wrong is worse than nothing.
@@ -2978,6 +3118,9 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
+                if self.chat.open {
+                    return;
+                }
                 // **With a grenade in hand the mouse means throw and toss.**
                 // Left is the full overhand throw, right is the short underhand
                 // lob — the two the server has always known about, now on the
@@ -3079,6 +3222,54 @@ impl ApplicationHandler for App {
                         }
                         return;
                     }
+                    if self.chat.open {
+                        if down {
+                            match code {
+                                KeyCode::Escape => self.chat.close_prompt(),
+                                KeyCode::Enter | KeyCode::NumpadEnter => {
+                                    if let Some((text, is_team)) = self.chat.submit() {
+                                        if let Some(socket) = &self.socket {
+                                            let _ = socket.send_chat(&text, is_team);
+                                        }
+                                        let my_name = self
+                                            .players
+                                            .iter()
+                                            .find(|p| p.id == self.self_id)
+                                            .map(|p| {
+                                                if p.name.is_empty() {
+                                                    "You".to_string()
+                                                } else {
+                                                    p.name.clone()
+                                                }
+                                            })
+                                            .unwrap_or_else(|| "You".to_string());
+                                        let my_team = self.my_team();
+                                        self.chat.receive(
+                                            &self.self_id,
+                                            &my_name,
+                                            my_team,
+                                            is_team,
+                                            &text,
+                                        );
+                                    }
+                                }
+                                KeyCode::Backspace => self.chat.backspace(),
+                                KeyCode::Delete => self.chat.delete(),
+                                KeyCode::ArrowLeft => self.chat.move_cursor_left(),
+                                KeyCode::ArrowRight => self.chat.move_cursor_right(),
+                                KeyCode::Home => self.chat.cursor_home(),
+                                KeyCode::End => self.chat.cursor_end(),
+                                _ => {
+                                    if let Some(t) = typed.as_deref() {
+                                        if !t.chars().any(|c| c.is_control()) {
+                                            self.chat.type_text(t);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        return;
+                    }
                     // A key the console has bound runs its command instead of
                     // whatever the game would have done with it. Checked before
                     // the match so a bind can shadow a default — which is the
@@ -3116,7 +3307,9 @@ impl ApplicationHandler for App {
                         KeyCode::KeyA => self.keys.left = down,
                         KeyCode::KeyD => self.keys.right = down,
                         KeyCode::Space => self.keys.jump = down,
-                        KeyCode::ShiftLeft => self.keys.crouch = down,
+                        KeyCode::ShiftLeft | KeyCode::ShiftRight => self.keys.sprint = down,
+                        KeyCode::ControlLeft | KeyCode::KeyC => self.keys.crouch = down,
+                        KeyCode::KeyQ if down => self.quick_switch_weapon(),
                         KeyCode::Tab => self.keys.scores = down,
                         // E for the objective, which is where every shooter puts
                         // it and where `DEFAULT_CONTROLS` in the browser's
@@ -3185,6 +3378,31 @@ impl ApplicationHandler for App {
                             self.net_graph_default = (self.net_graph() + 1) % 4;
                             self.cvars
                                 .set("net.graph", serde_json::json!(self.net_graph_default));
+                        }
+                        KeyCode::KeyY if down && !self.editing() => {
+                            self.chat.open_prompt(ChatChannel::All);
+                        }
+                        KeyCode::KeyU if down => {
+                            self.chat.open_prompt(ChatChannel::Team);
+                        }
+                        KeyCode::KeyV => {
+                            if down && !self.voice_transmitting {
+                                self.voice_transmitting = true;
+                                if let Some(audio) = &self.audio {
+                                    audio.own("radio_on", 1.0, None);
+                                }
+                                if let Some(socket) = &self.socket {
+                                    let _ = socket.send_voice(true);
+                                }
+                            } else if !down && self.voice_transmitting {
+                                self.voice_transmitting = false;
+                                if let Some(audio) = &self.audio {
+                                    audio.own("radio_off", 1.0, None);
+                                }
+                                if let Some(socket) = &self.socket {
+                                    let _ = socket.send_voice(false);
+                                }
+                            }
                         }
                         KeyCode::Backquote if down => self.toggle_console(),
                         // Escape opens the menu — and releases the pointer on
@@ -3422,6 +3640,11 @@ impl ApplicationHandler for App {
                         .collect(),
                     selected: self.utility.selected(),
                 });
+                let active_speakers: Vec<String> = self
+                    .voice_speakers
+                    .values()
+                    .map(|(name, _, _)| name.clone())
+                    .collect();
                 let view = HudView {
                     hud_scale: self.settings.video.hud_scale,
                     team: self
@@ -3483,7 +3706,11 @@ impl ApplicationHandler for App {
                     // the same test the simulation runs to take the jump away,
                     // and reading it a tick late would tint the screen after the
                     // jump had already stopped working.
-                    underwater: physics::submerged(&self.world, &self.prediction.state),
+                    underwater: if let Some(w3d) = &self.world3d {
+                        (self.prediction.state.z + physics::eye_offset(&self.prediction.state)) < w3d.waterlevel
+                    } else {
+                        physics::submerged(&self.world, &self.prediction.state)
+                    },
                     playing: self.joined,
                     rtt: self.ping.rtt(),
                     fps: if self.fps > 0.0 { Some(self.fps) } else { None },
@@ -3491,6 +3718,9 @@ impl ApplicationHandler for App {
                     scoreboard: scoreboard.as_deref(),
                     scores: &self.scores,
                     damage: &self.damage_placed,
+                    chat: Some(&self.chat),
+                    voice_transmitting: self.voice_transmitting,
+                    voice_speakers: &active_speakers,
                 };
                 self.hud.build(&view, &mut overlay);
                 // After the HUD, so the scrim covers it: the menu is *over* the
@@ -3532,7 +3762,6 @@ impl ApplicationHandler for App {
                 // `Ok(false)` is a frame that did not happen — minimised,
                 // occluded, or a surface that has moved on. Routine, and already
                 // handled inside; there is nothing to report and nothing to stop.
-                // The shaken copy built above, shared with the damage numbers.
                 match renderer.render(&drawn_camera) {
                     // Only a frame that actually presented counts. Occluded and
                     // minimised frames return early, and counting them would make
@@ -3545,6 +3774,9 @@ impl ApplicationHandler for App {
                         event_loop.exit();
                     }
                 }
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
             }
             _ => {}
         }
@@ -3556,7 +3788,7 @@ impl ApplicationHandler for App {
         // client exists, and taking the convenient one would quietly give up the
         // whole argument for it.
         if let DeviceEvent::MouseMotion { delta } = event {
-            if self.focused {
+            if self.focused && !self.chat.open {
                 self.look(delta.0 as f32, delta.1 as f32);
             }
         }
@@ -3587,6 +3819,7 @@ impl ApplicationHandler for App {
         } else {
             self.send_input(dt);
         }
+
         // After the input, so the weapon sways to the angles this frame is about
         // to be drawn with rather than to the previous one's.
         self.animate(dt.clamp(0.0, MAX_DT));
