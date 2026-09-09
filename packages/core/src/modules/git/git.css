@@ -189,3 +189,45 @@
   color: var(--text);
   background: var(--bg);
 }
+
+/* --- unified diff: one renderer, two surfaces (provenance + IDE source control) --- */
+
+.git-diff-empty {
+  margin: 0;
+  padding: var(--space-5);
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+}
+
+.git-diff-line {
+  /* A tinted left edge rather than a tinted row: at 11px mono the fill swallows
+     the text, and the edge still reads at a glance in a 280px strip. */
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border-left: 2px solid transparent;
+}
+
+.git-diff-line--add {
+  color: var(--success);
+  border-left-color: var(--success);
+  background: color-mix(in srgb, var(--success) 8%, transparent);
+}
+
+.git-diff-line--del {
+  color: var(--danger);
+  border-left-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.git-diff-line--hunk {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.git-diff-line--file {
+  color: var(--text-strong);
+  font-weight: var(--fw-bold);
+}
+
+.git-diff-line--meta {
+  color: var(--text-faint);
+}

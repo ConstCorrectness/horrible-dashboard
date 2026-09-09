@@ -14,6 +14,7 @@ import {
   gamesModule,
   gitModule,
   githubModule,
+  ideModule,
   initAgentManifestSync,
   initAgentRelay,
   initApprovalListener,
@@ -208,6 +209,9 @@ async function boot(): Promise<void> {
     registry.register(gitModule);
     registry.register(githubModule);
     registry.register(terminalModule);
+    // After the five views it hosts in its region strips — a region naming an
+    // unregistered view renders as "Unknown pane".
+    registry.register(ideModule);
     registry.register(replModule);
     registry.register(databaseModule);
     registry.register(libraryModule);

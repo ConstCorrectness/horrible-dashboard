@@ -12,6 +12,7 @@ import { openChatSession } from '../agent/openSession';
 import { setLocus, useLocus } from '../../locus';
 import { fetchBlame, fetchLog, fetchShow } from './api';
 import type { BlameResult, CommitInfo, DiffResult, LogResult } from './types';
+import { UnifiedDiff } from './UnifiedDiff';
 import './git.css';
 
 type Tab = 'blame' | 'history';
@@ -170,7 +171,7 @@ function HistoryView() {
           </li>
         ))}
       </ul>
-      {diff && <pre className="git-diff">{diff.diff}</pre>}
+      {diff && <UnifiedDiff diff={diff.diff} />}
     </div>
   );
 }

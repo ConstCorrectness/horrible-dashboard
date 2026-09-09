@@ -31,6 +31,7 @@ from fastapi import APIRouter, HTTPException
 
 from backend.modules.files import providers
 from backend.modules.files.git import git_status
+from backend.modules.files.search import search_text
 from backend.modules.files.models import (
     CreateRequest,
     DeleteRequest,
@@ -41,6 +42,8 @@ from backend.modules.files.models import (
     OpResult,
     RenameRequest,
     RootInfo,
+    SearchRequest,
+    SearchResult,
     WriteRequest,
 )
 from backend.modules.settings.routes import get_value
@@ -187,6 +190,21 @@ def git_status_route(path: str) -> GitStatus:
     if not target.is_dir():
         raise HTTPException(status_code=400, detail="not a directory")
     return git_status(target)
+
+
+@router.post("/search", response_model=SearchResult)
+async def search_route(body: SearchRequest) -> SearchResult:
+    """Repo-wide text search across the workspace roots.
+
+    POST because a regex is full of characters a query string mangles. The walk is
+    blocking, so it runs on a worker thread like `read_file` does. A virtual root
+    (`gdrive:/…`) answers with a message rather than reaching `_resolve`, which
+    would anchor the URI to a root and produce a misdescribed 403.
+    """
+    if body.root and providers.is_virtual(body.root):
+        return SearchResult(engine="none", error="this location cannot be searched")
+    roots = [_resolve(body.root)] if body.root else _roots()
+    return await anyio.to_thread.run_sync(lambda: search_text(body, roots))
 
 
 @router.get("/list", response_model=DirListing)

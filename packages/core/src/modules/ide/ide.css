@@ -1,0 +1,533 @@
+/*
+ * The workbench and its panes.
+ *
+ * Everything here is a theme token — there are no literal colours, and the
+ * token-coverage test fails the build on one. The look is the repo's tactical
+ * house style rather than VS Code's: structure comes from 1px borders and a 2px
+ * accent edge on the active tab, not from fill or shadow.
+ */
+
+/* ------------------------------------------------------------ workbench -- */
+
+.ide-workbench {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.ide-editor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ide-editor > * {
+  flex: 1;
+  min-height: 0;
+}
+
+.ide-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: 100%;
+  color: var(--text-faint);
+}
+
+.ide-empty-title {
+  margin: 0;
+  font-size: var(--fs-label);
+  font-weight: var(--fw-bold);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-display);
+  color: var(--text-dim);
+}
+
+.ide-empty-hint {
+  margin: 0;
+  font-size: var(--fs-meta);
+}
+
+/* ------------------------------------------------------------- tab strip -- */
+
+.ide-tabs {
+  display: flex;
+  flex: none;
+  align-items: stretch;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+  scrollbar-width: thin;
+}
+
+.ide-tab {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: none;
+  max-width: 220px;
+  /* Horizontal padding only. A tab's height comes from the strip, and vertical
+     padding on a control is the repo's standing bug — see CLAUDE.md. */
+  padding: 0 var(--space-4);
+  height: var(--control-h);
+  font-size: var(--fs-label);
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--border);
+  /* The accent edge sits at the top of the ACTIVE tab only; drawn transparent
+     here so switching tabs does not shift the label by 2px. */
+  border-top: 2px solid transparent;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-standard);
+}
+
+.ide-tab:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.ide-tab--active {
+  color: var(--text-strong);
+  background: var(--bg);
+  border-top-color: var(--accent);
+}
+
+.ide-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ide-tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  color: var(--text-faint);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-standard);
+}
+
+.ide-tab:hover .ide-tab-close,
+.ide-tab--active .ide-tab-close {
+  opacity: 1;
+}
+
+/* An unsaved tab shows its dot at all times — that is the whole signal. */
+.ide-tab-close--dirty {
+  opacity: 1;
+  color: var(--accent);
+}
+
+.ide-tab-close--dirty .ide-tab-close-hover {
+  display: none;
+}
+
+.ide-tab:hover .ide-tab-close--dirty > .hd-icon:first-child {
+  display: none;
+}
+
+.ide-tab:hover .ide-tab-close--dirty .ide-tab-close-hover {
+  display: inline-flex;
+  color: var(--text);
+}
+
+.ide-tab-close:hover {
+  color: var(--text-strong);
+}
+/* ---------------------------------------------------- shared panel chrome -- */
+/* Search, Source Control and Problems are three views of one shape: a header of
+   controls, then a scrolling list of grouped rows. One vocabulary rather than
+   three, so a row reads the same wherever you meet it. */
+
+.ide-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  font-size: var(--fs-label);
+  color: var(--text);
+}
+
+.ide-panel-note {
+  margin: 0;
+  padding: var(--space-5);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--text-faint);
+  font-size: var(--fs-meta);
+  line-height: 1.5;
+}
+
+.ide-panel-note--warn {
+  color: var(--warn);
+}
+
+.ide-results {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+
+.ide-result-group {
+  border-bottom: 1px solid var(--border);
+}
+
+/* A row, not an action button — hence a class, which keeps it out of the 30px
+   control rule so a dense list stays dense. */
+.ide-result-row,
+.ide-result-file {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-1) var(--space-4);
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: var(--fs-meta);
+  cursor: pointer;
+}
+
+.ide-result-row:hover,
+.ide-result-file:hover {
+  background: var(--bg-hover);
+}
+
+.ide-result-file {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-raised);
+  color: var(--text-strong);
+  font-weight: var(--fw-medium);
+}
+
+.ide-result-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-strong);
+}
+
+.ide-result-dir {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-faint);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-micro);
+}
+
+/* Identifiers and figures are mono in the muted token, per the type hierarchy. */
+.ide-result-line {
+  flex: none;
+  min-width: 2.5em;
+  color: var(--text-faint);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-micro);
+  text-align: right;
+}
+
+.ide-result-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, monospace);
+}
+
+.ide-hit {
+  padding: 0 1px;
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: var(--radius-sm);
+}
+
+.ide-count {
+  flex: none;
+  min-width: 1.4em;
+  padding: 0 var(--space-2);
+  color: var(--text-dim);
+  background: var(--bg-inset);
+  border-radius: var(--radius-lg);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-micro);
+  text-align: center;
+}
+
+.ide-caret {
+  flex: none;
+  width: 0;
+  height: 0;
+  margin-right: var(--space-1);
+  border-left: 4px solid currentColor;
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+  color: var(--text-faint);
+  transition: transform var(--dur-fast) var(--ease-standard);
+}
+
+.ide-caret--open {
+  transform: rotate(90deg);
+}
+
+/* A toggle chip. Classed, so it keeps its own compact size. */
+.ide-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+  padding: 0 var(--space-3);
+  height: 22px;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  font-size: var(--fs-micro);
+  cursor: pointer;
+}
+
+.ide-toggle:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.ide-toggle--on {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.ide-filters {
+  display: flex;
+  gap: var(--space-2);
+  flex: none;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.ide-filter-label {
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-badge);
+  font-weight: var(--fw-bold);
+}
+
+/* --------------------------------------------------------------- search -- */
+
+.ide-search-controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex: none;
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.ide-search-query {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ide-search-input {
+  flex: 1;
+  min-width: 0;
+  /* Horizontal only. `controls.css` fixes the height, so vertical padding here
+     would shrink the box under the text rather than growing it. */
+  padding: 0 var(--space-3);
+  font-size: var(--fs-meta);
+}
+
+/* ------------------------------------------------------- source control -- */
+
+.ide-scm-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: none;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.ide-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-strong);
+  font-weight: var(--fw-medium);
+}
+
+.ide-scm-commit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex: none;
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+/* A textarea is exempt from the fixed control height: it must grow. */
+.ide-scm-message {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  resize: vertical;
+  font-family: inherit;
+  font-size: var(--fs-meta);
+}
+
+.ide-scm-commit button {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border: none;
+  border-radius: var(--radius-md);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+}
+
+.ide-scm-commit button:disabled {
+  background: var(--bg-elevated);
+  color: var(--text-faint);
+  cursor: default;
+}
+
+.ide-scm-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: var(--space-2) var(--space-4);
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+}
+
+.ide-scm-group-label {
+  flex: 1;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-badge);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-bold);
+}
+
+.ide-scm-row-wrap {
+  display: flex;
+  align-items: center;
+}
+
+.ide-scm-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.ide-scm-row--on {
+  background: var(--bg-elevated);
+}
+
+/* The per-row stage/unstage action appears on hover, so thirty changed files
+   read as a list of filenames rather than a grid of buttons. */
+.ide-scm-action {
+  flex: none;
+  margin-right: var(--space-3);
+  padding: 0 var(--space-2);
+  color: var(--text-faint);
+  background: transparent;
+  border: none;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.ide-scm-row-wrap:hover .ide-scm-action,
+.ide-scm-action:focus-visible {
+  opacity: 1;
+}
+
+.ide-scm-action:hover {
+  color: var(--text-strong);
+}
+
+.ide-scm-badge {
+  flex: none;
+  width: 1.1em;
+  color: var(--text-dim);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-bold);
+  text-align: center;
+}
+
+.ide-scm-badge--added,
+.ide-scm-badge--untracked {
+  color: var(--success);
+}
+
+.ide-scm-badge--deleted,
+.ide-scm-badge--conflict {
+  color: var(--danger);
+}
+
+.ide-scm-badge--modified,
+.ide-scm-badge--renamed {
+  color: var(--warn);
+}
+
+.ide-scm-diff {
+  flex: none;
+  max-height: 45%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid var(--border);
+}
+
+.ide-scm-diff-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: none;
+  padding: var(--space-2) var(--space-4);
+  background: var(--bg-raised);
+}
+
+.ide-scm-diff .git-diff {
+  border-top: none;
+  max-height: none;
+}
+
+/* ------------------------------------------------------------- problems -- */
+
+.ide-sev {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.ide-sev--error {
+  background: var(--danger);
+}
+
+.ide-sev--warning {
+  background: var(--warn);
+}
+
+.ide-sev--info {
+  background: var(--accent);
+}

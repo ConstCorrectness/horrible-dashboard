@@ -8,7 +8,10 @@ import {
 import type { CollisionGeometry } from '../world3d';
 
 describe('RapierPhysicsWorld Character Controller', () => {
-  let R: any;
+  // The Rapier module namespace, taken from the initializer rather than `any`:
+  // the type is already in scope, and `any` here hides a signature change in the
+  // exact place a wasm-backed API is most likely to shift under you.
+  let R: Awaited<ReturnType<typeof ensureRapierInitialized>>;
 
   beforeAll(async () => {
     R = await ensureRapierInitialized();

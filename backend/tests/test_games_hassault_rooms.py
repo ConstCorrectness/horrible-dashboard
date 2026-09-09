@@ -84,7 +84,16 @@ def test_only_bundled_maps_can_be_adjudicated(referee: HassaultReferee):
     refusal is explicit so the reason is legible."""
     assert referee.playable("hd_pit")
     assert not referee.playable("ac_desert")
-    assert set(referee.maps()) == {"hd_atrium", "hd_crossing", "hd_pit"}
+    # Pinned exactly, not as a subset: the point of the assertion is that the
+    # adjudicable set is *closed*, so a map appearing here without being added
+    # deliberately is exactly what it should catch.
+    assert set(referee.maps()) == {
+        "hd_atrium",
+        "hd_crossing",
+        "hd_facility",
+        "hd_junkflea",
+        "hd_pit",
+    }
 
 
 def test_joining_an_unbundled_map_is_refused(referee: HassaultReferee):
@@ -304,6 +313,8 @@ def test_the_map_list_is_served(server):
     assert server.get("/hassault/maps").json()["maps"] == [
         "hd_atrium",
         "hd_crossing",
+        "hd_facility",
+        "hd_junkflea",
         "hd_pit",
     ]
 

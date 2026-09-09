@@ -42,6 +42,8 @@ import {
   resolveLanguage,
 } from './language';
 import { registerBuffer, type BufferSnapshot } from './buffers';
+import { forgetUnsaved, readUnsaved, writeUnsaved } from './unsaved';
+import { adoptByHost } from './host';
 import { openBuffer, setActiveBufferSource, setActiveSaveAs } from './index';
 import { dirOf, lspExtension } from './lsp';
 import { readDiagnostics } from './lsp-registry';
@@ -50,19 +52,10 @@ import { dbGhostFetch, indexBuffer, indexBufferNow } from './symbolCompletion';
 
 const FILE_URI = 'workspace-file:';
 
-interface UnsavedState {
-  content: string;
-  dirty: boolean;
-  proposing: boolean;
-  original?: string;
-  dirtyBeforeProposal?: boolean;
-}
-const unsavedCache = new Map<string, UnsavedState>();
-
 /**
  * Where you were in a buffer: caret and scroll offset, keyed by source URI.
  *
- * Separate from `unsavedCache` because it applies to a *clean* buffer too — the
+ * Separate from the unsaved cache (`unsaved.ts`) because it applies to a *clean* buffer too — the
  * common case is switching tabs to check something and coming back to find the file
  * scrolled to the top with the caret at position 0, which is indistinguishable from
  * having lost your place. Source-keyed, like the cache above, so reopening the file
@@ -333,7 +326,7 @@ export function BufferView() {
               const src = sourceRef.current;
               if (src) {
                 const content = u.state.doc.toString();
-                unsavedCache.set(src, {
+                writeUnsaved(src, {
                   content,
                   dirty: true,
                   proposing: false, // user edits drop proposing state in our cache model
@@ -420,7 +413,7 @@ export function BufferView() {
 
         const src = sourceRef.current;
         if (src) {
-          const cached = unsavedCache.get(src);
+          const cached = readUnsaved(src);
           if (cached) {
             if (cached.dirty || cached.proposing) {
               insertContent = cached.content;
@@ -601,7 +594,7 @@ export function BufferView() {
       const res = await saveSource(source, view.state.doc.toString(), revisionRef.current);
       if (res.revision !== undefined) revisionRef.current = res.revision;
       setDirty(false);
-      unsavedCache.delete(source);
+      forgetUnsaved(source);
       setStatus('Saved');
       setTimeout(() => setStatus((s) => (s === 'Saved' ? null : s)), 1200);
       return true;
@@ -631,6 +624,10 @@ export function BufferView() {
     if (!instance) return false;
     setDirty(false);
     setPaneDirty(instance, false);
+    // A host (the IDE workbench) renames its own tab. Its instance id is
+    // synthetic, so `retargetPane` below would find no such pane and report
+    // failure — leaving a saved file sitting in a tab still reading `untitled`.
+    if (adoptByHost(instance, uri)) return true;
     return (
       retargetPane(instance, `editor.buffer:${uri}`, { source: uri, title: sourceTitle(uri) }) !==
       null
@@ -714,7 +711,7 @@ export function BufferView() {
 
     const src = sourceRef.current;
     if (src) {
-      unsavedCache.set(src, {
+      writeUnsaved(src, {
         content,
         dirty, // we retain the dirty state it had, or whatever it is, but it's part of proposal
         proposing: true,
@@ -746,7 +743,7 @@ export function BufferView() {
 
     const src = sourceRef.current;
     if (src) {
-      unsavedCache.set(src, {
+      writeUnsaved(src, {
         content: view.state.doc.toString(),
         dirty: newDirty,
         proposing: false,
@@ -775,6 +772,10 @@ export function BufferView() {
       case 'save':
         return save();
       case 'dontSave':
+        // Drop the unsaved content, not just the buffer. The cache is keyed by
+        // source and outlives this component, so leaving it would hand the
+        // declined changes straight back the next time the file is opened.
+        if (sourceRef.current) forgetUnsaved(sourceRef.current);
         return true;
       default:
         return false; // Cancel / Esc / backdrop — keep the buffer open

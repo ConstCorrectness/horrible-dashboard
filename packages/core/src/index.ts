@@ -424,6 +424,7 @@ export {
 } from './modules/editor';
 export { filesModule } from './modules/files';
 export { terminalModule, openTerminal, runCommand as runTerminalCommand } from './modules/terminal';
+export { ideModule, openInWorkbench, workbenchInstanceId } from './modules/ide';
 export { replModule } from './modules/repl';
 export {
   clubhouseModule,

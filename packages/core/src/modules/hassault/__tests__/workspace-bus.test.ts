@@ -17,7 +17,12 @@ import {
   takePendingMapEditorInspect,
   takePendingMapLoad,
   takePendingWeaponInspect,
+  type ConsoleCommandRequest,
+  type MapEditorInspectRequest,
+  type MapLoadRequest,
   type MatchTelemetry,
+  type WeaponEquipRequest,
+  type WeaponInspectRequest,
 } from '../workspace-bus';
 
 describe('workspace-bus interoperability', () => {
@@ -27,7 +32,7 @@ describe('workspace-bus interoperability', () => {
 
   describe('map load pipeline', () => {
     it('notifies listeners when map load is requested', () => {
-      const received: any[] = [];
+      const received: MapLoadRequest[] = [];
       const unsub = onMapLoadRequested((req) => received.push(req));
 
       requestMapLoad({
@@ -67,7 +72,7 @@ describe('workspace-bus interoperability', () => {
 
   describe('map editor inspect pipeline', () => {
     it('allows play session to request editor inspect with camera coordinates', () => {
-      const received: any[] = [];
+      const received: MapEditorInspectRequest[] = [];
       const unsub = onMapEditorInspect((req) => received.push(req));
 
       requestMapEditorInspect({
@@ -97,7 +102,7 @@ describe('workspace-bus interoperability', () => {
 
   describe('weapon inspect and equip pipeline', () => {
     it('synchronizes armory inspect with 3D model studio', () => {
-      const received: any[] = [];
+      const received: WeaponInspectRequest[] = [];
       const unsub = onWeaponInspectRequested((req) => received.push(req));
 
       requestWeaponInspect({
@@ -129,7 +134,7 @@ describe('workspace-bus interoperability', () => {
     });
 
     it('broadcasts weapon equipped event across panes', () => {
-      const equips: any[] = [];
+      const equips: WeaponEquipRequest[] = [];
       const unsub = onWeaponEquipped((req) => equips.push(req));
 
       broadcastWeaponEquipped({
@@ -190,7 +195,7 @@ describe('workspace-bus interoperability', () => {
 
   describe('console command pipeline', () => {
     it('allows external console pane to dispatch commands to game', () => {
-      const dispatched: any[] = [];
+      const dispatched: ConsoleCommandRequest[] = [];
       const unsub = onConsoleCommand((req) => dispatched.push(req));
 
       dispatchConsoleCommand({

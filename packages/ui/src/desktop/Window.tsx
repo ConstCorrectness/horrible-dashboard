@@ -34,7 +34,7 @@ import {
 } from '@horrible/core';
 
 import { useHorizontalWheel } from '../hooks/useHorizontalWheel';
-import { PaneHost } from '../layout/PaneHost';
+import { PaneWithRegions } from '../layout/Region';
 import type { DragState } from './WindowLayer';
 
 /** The eight resize grips, as [class suffix, x-edge, y-edge]. */
@@ -345,7 +345,11 @@ export function DesktopWindow({
         </div>
       </div>
 
-      <div className="os-window-body">{active && <PaneHost pane={active} />}</div>
+      {/* `PaneWithRegions`, not a bare `PaneHost`: a region host dragged into a
+          floating window would otherwise lose every strip it declares — the
+          workbench's whole sidebar — with nothing to say it had one. Areas and
+          docks already wrap their active pane this way. */}
+      <div className="os-window-body">{active && <PaneWithRegions pane={active} />}</div>
 
       {/* Resize grips last so they sit above the body's own pointer handlers. */}
       {!maximized &&

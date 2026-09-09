@@ -679,11 +679,26 @@ export function setRegionView(instanceId: string, viewId: string): boolean {
   return true;
 }
 
-/** The view that hosts `regionViewId` in its declared regions, if any. */
+/**
+ * The view that hosts `regionViewId` in its declared regions, if any.
+ *
+ * More than one view may host the same region — Outline and Provenance are
+ * satellites of `editor.buffer` *and* of the IDE workbench, since both are
+ * surfaces you read code in. Registration order decides nothing useful there, so
+ * the host on screen wins: the focused pane first, then any host with an open
+ * instance, and only then the first declaration. Without that, `code.openOutline`
+ * from inside the workbench would open a second pane behind it.
+ */
 export function regionHostOf(regionViewId: string): ViewDecl | undefined {
-  return [...registry.panels, ...registry.widgets].find((v) =>
+  const hosts = [...registry.panels, ...registry.widgets].filter((v) =>
     v.regions?.some((r) => r.id === regionViewId),
   );
+  if (hosts.length <= 1) return hosts[0];
+  const focusedView = focusedPane()?.pane.viewId;
+  const focusedHost = hosts.find((v) => v.id === focusedView);
+  if (focusedHost) return focusedHost;
+  const open = listPanes(frame());
+  return hosts.find((v) => open.some((p) => p.pane.viewId === v.id)) ?? hosts[0];
 }
 
 /**

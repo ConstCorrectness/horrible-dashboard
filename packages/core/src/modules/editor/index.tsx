@@ -11,6 +11,8 @@ import { areaHostingView, openPaneInArea, retargetPane } from '../../layout/cont
 import { getLocus, subscribeLocus } from '../../locus';
 import { minibuffer } from '../../minibuffer';
 import { registry, type ModuleManifest } from '../../registry';
+import { routeOpenToHost } from './host';
+import type { OpenBufferOptions } from './openOptions';
 import { editorAgentTools } from './agentTools';
 import { BufferView } from './BufferView';
 import { IndexedPackages } from './IndexedPackages';
@@ -20,11 +22,6 @@ import { RecentNotesWidget } from './RecentNotes';
 import { registerEditorService } from './service';
 import { createNote, sourceTitle } from './sources';
 
-/** Optional knobs when opening a buffer. */
-export interface OpenBufferOptions {
-  /** Highlighting hint for sources with no extension to infer from (notes). */
-  language?: 'javascript' | 'python';
-}
 
 /**
  * The pane holding the buffer the user is looking at, when that buffer is blank
@@ -53,6 +50,10 @@ function blankBufferPane(target: string): string | null {
  * carves the frame up further.
  */
 export function openBuffer(source: string, opts?: OpenBufferOptions): void {
+  // A host that renders buffers itself claims the open first, so every existing
+  // caller — the file tree, go-to-definition, the cross-file locus follow below —
+  // lands in it with no change of its own.
+  if (routeOpenToHost(source, opts)) return;
   const instanceId = `editor.buffer:${source}`;
   const params = { source, title: sourceTitle(source), language: opts?.language };
   const blank = blankBufferPane(source);
@@ -335,4 +336,16 @@ subscribeLocus(() => {
 });
 
 export { loadSource, saveSource, sourceTitle, type LoadedSource } from './sources';
+// The buffer-host seam, for a surface that renders buffers in place (the IDE).
+export { adoptByHost, hasBufferHost, setBufferHost, type BufferHost } from './host';
+export type { OpenBufferOptions } from './openOptions';
 export type { EditorService, BufferLanguage, OpenBufferRequest } from './service';
+// The unsaved-content cache, for a host drawing tabs over unmounted buffers.
+export {
+  forgetUnsaved,
+  isSourceDirty,
+  listDirtySources,
+  readUnsaved,
+  subscribeUnsaved,
+  type UnsavedState,
+} from './unsaved';

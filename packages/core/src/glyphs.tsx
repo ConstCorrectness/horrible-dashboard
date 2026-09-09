@@ -160,3 +160,91 @@ export function IconPinOff(props: SVGProps<SVGSVGElement>) {
     </Glyph>
   );
 }
+
+/** Dismiss / close. */
+export function IconClose(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" />
+    </Glyph>
+  );
+}
+
+/** A filled mark — an unsaved buffer, an unread item. Filled, not stroked: it is
+ * a state, not an action, and a hollow ring reads as a disabled radio button. */
+export function IconDot(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <circle cx="8" cy="8" r="3.25" fill="currentColor" stroke="none" />
+    </Glyph>
+  );
+}
+
+/** Remove one from a set — the counterpart of {@link IconPlus}. */
+export function IconMinus(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M3.5 8h9" />
+    </Glyph>
+  );
+}
+
+/** A file. */
+export function IconFile(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M9 1.75H4.5A1.25 1.25 0 0 0 3.25 3v10A1.25 1.25 0 0 0 4.5 14.25h7A1.25 1.25 0 0 0 12.75 13V5.5z" />
+      <path d="M9 1.75V5.5h3.75" />
+    </Glyph>
+  );
+}
+
+/** A branch — source control. */
+export function IconBranch(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <circle cx="4.5" cy="3.5" r="1.75" />
+      <circle cx="4.5" cy="12.5" r="1.75" />
+      <circle cx="11.5" cy="6" r="1.75" />
+      <path d="M4.5 5.25v5.5M11.5 7.75c0 2-1.5 3-3.5 3.25" />
+    </Glyph>
+  );
+}
+
+/**
+ * Match case. The three search toggles are lettering rather than pictograms
+ * because that is what they mean and what every editor draws — but drawn as
+ * paths, so they take `currentColor` and the stroke weight of their siblings
+ * instead of arriving as a font the theme did not choose.
+ */
+export function IconMatchCase(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M1.5 11.5 4.25 4.5 7 11.5M2.4 9.4h3.7" />
+      <path d="M13 8.6a1.9 1.9 0 1 0 0 2.9v-3.3c0-1-.7-1.6-1.8-1.6-.8 0-1.4.3-1.8.8" />
+      <path d="M13 11.5V8.2" />
+    </Glyph>
+  );
+}
+
+/** Match whole word. */
+export function IconWholeWord(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M4.6 8.9a1.6 1.6 0 1 0 0 2.4V8.2c0-.85-.6-1.35-1.5-1.35-.7 0-1.2.25-1.55.7" />
+      <path d="M4.6 11.3V8.5" />
+      <path d="M7.6 4.5v6.8M7.6 8.6c.35-.5.9-.8 1.55-.8a1.75 1.75 0 0 1 0 3.5c-.65 0-1.2-.3-1.55-.8" />
+      <path d="M1.5 13.5h13" />
+    </Glyph>
+  );
+}
+
+/** Use regular expression. */
+export function IconRegex(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M10 3v6M7.4 4.5l5.2 3M12.6 4.5l-5.2 3" />
+      <circle cx="4.25" cy="11.75" r="1.1" fill="currentColor" stroke="none" />
+    </Glyph>
+  );
+}

@@ -218,10 +218,17 @@ scaled — only *attributes* are.
 
 `backend/modules/hassault/mapsource.py` + `backend/modules/hassault/maps/*.json`.
 
-Three maps ship with the app — `hd_atrium`, `hd_crossing`, `hd_pit` — so the pane
-is playable on a clean clone. They are ours, CC0, and named `hd_*` so the bundled
-and installed catalogs share one namespace without either being able to shadow
-the other. `assets.load_map` resolves bundled names first: an install directory is
+Five maps ship with the app — `hd_atrium`, `hd_crossing`, `hd_pit`,
+`hd_facility` and `hd_junkflea` — so the pane is playable on a clean clone. They
+are ours, CC0, and named `hd_*` so the bundled and installed catalogs share one
+namespace without either being able to shadow the other.
+
+The last two are **`gltf` maps** rather than Cube heightfields; see
+[Two level formats](#two-level-formats-cube-and-gltf) for what that changes. The
+adjudicable set is pinned exactly — not as a subset — in
+`test_games_hassault_rooms.py`, because the point of that assertion is that the
+set a rated match may be played on is *closed*, so a map appearing in it without
+being added deliberately is precisely what it should catch. `assets.load_map` resolves bundled names first: an install directory is
 somewhere anyone can drop a file, and letting a stray `hd_pit.cgz` there decide
 what the game loads would be a surprise with no upside.
 
@@ -1914,6 +1921,35 @@ all — silent, and only on the event nobody happened to try.
 does**, `apps/native-fps/tests/mode-wire.json`. One artefact, two readers: it is
 the only thing that can catch the two clients drifting from each other *and* from
 the server at once.
+
+#### The kill feed is a structured record, not a sentence
+
+`panels/KillFeed.tsx` draws the browser pane's feed, and the thing worth knowing is
+the shape of what it draws. `KillNote` (`session.ts`) carries `killerName` /
+`assisterName` / `victimName` with a `KillFeedTeam` (`CT` | `T` | `FFA`) *each*,
+the `weaponId`, and seven independent modifier flags — `isHeadshot`,
+`isWallbang`, `isThroughSmoke`, `isNoScope`, `isAirborne`, `isBlind`,
+`isNutshot` — plus `isLocalPlayerInvolved`.
+
+It also still carries `text`. Both matter: the flags are what let the component
+render a weapon badge and per-modifier icons and colour each name by *that
+player's* team, and the pre-rendered string is what anything without a renderer
+(a log line, an agent tool, the native HUD's simpler feed) can still read. A feed
+that shipped only the sentence could not colour the two names differently; one
+that shipped only the flags would force every consumer to learn the grammar of a
+kill.
+
+The split between what the server decides and what the client does is the usual
+one, and it runs straight through this record. `isThroughSmoke` is **server-side**
+— `match.py` resolves whether the shot crossed a smoke volume and puts it on the
+wire as `fx.smoke`; the client only reads it. Letting a client decide that would
+make a smoke worth exactly as much as the renderer that drew it.
+`isLocalPlayerInvolved`, by contrast, is derived **client-side** in
+`session.absorb` by comparing `fx.killer` / `fx.victim` / `fx.assister` against
+the local `playerId` — which is right, because "am *I* in this line" is the one
+question whose answer differs per recipient and needs no authority to settle.
+`mine` is the same boolean under its older name, kept because the native HUD and
+the older feed both read it.
 
 #### Two bugs the live API found that the tests did not
 
@@ -4077,6 +4113,52 @@ Two things the fixture caught that no unit test would have:
   them and both suites still checked them — so the first regeneration silently
   dropped two guards. Restored in the same change.
 
+## Two level formats: `cube` and `gltf`
+
+`MapInfo.format` (`backend/modules/hassault/models.py`) is `"cube"` or `"gltf"`,
+and it decides which of two entirely separate world and physics paths a match
+runs on.
+
+- **`cube`** is everything above: a Cube 1 2.5D heightfield read out of a `.cgz`
+  or built from our JSON brushes, walked by the ported AssaultCube physics.
+- **`gltf`** is a full 3D mesh with collision hulls. `hd_facility` and
+  `hd_junkflea` are the first two, and the pane fetches their geometry from
+  `GET /api/hassault/maps/{name}/mesh` — a route that answers `null` for a cube
+  map rather than existing conditionally.
+
+A map declares its own format: both new maps carry `"format": "gltf"` at the top
+level of their JSON, and `routes.py` reads it. There is also a hardcoded
+`name in ("hd_facility", "hd_junkflea")` check immediately before that read, which
+is redundant with the declaration and reachable only for those two names — a third
+`gltf` map needs the declaration and nothing else. Worth knowing before adding
+one, because the shape of that line invites you to append to it.
+
+### The heightfield physics does not run on a `gltf` map
+
+This is the part that is easy to read backwards. The three ported
+implementations — `physics.py`, `player.ts`, `physics.rs` — and the
+`physics-vectors.json` fixture that binds them all describe the **cube** path.
+A `gltf` map runs **Rapier3D** instead: `physics-rapier.ts` in the browser
+(`@dimforge/rapier3d-compat`, wasm) and `physics_rapier.rs` natively
+(`rapier3d`). `HorribleAssaultPanel` constructs a `RapierPhysicsWorld` only inside
+its `if (is3D)` branch, so on a cube map the wasm is never even initialised.
+
+What Rapier buys is what a capsule-against-trimesh controller gives you for free
+and the heightfield port cannot: continuous collision against arbitrary geometry,
+slope climbing with automatic sliding past the limit, stair stepping, and a
+collision capsule that shrinks with a crouch.
+
+**What it does not have is the fixture.** `physics-vectors.json` covers neither
+Rapier port; `conformance.test.ts` and `conformance.rs` mention Rapier nowhere.
+So the duplication argument made in
+[Three implementations, one fixture](#three-implementations-one-fixture) — that
+two ports of one rule set are only safe while a shared fixture binds them —
+currently holds for the cube path and **not** for the `gltf` one, where the same
+rules exist twice with nothing replaying them against each other.
+`physics-rapier.test.ts` pins the browser side's own behaviour (slopes, steps,
+crouch, momentum) but says nothing about whether Rust agrees. That is a real gap,
+not a simplification of one.
+
 ### On the bundled maps
 
 The Pit is flooded to its rim (`waterlevel` 0, pit floor -5), which turns the
@@ -4291,6 +4373,13 @@ blinded a client-side setting.
   alt-tabbed is permanent.
 
 ### Drawing it
+
+The browser's smoke is volumetric rather than a billboard — `nades.ts` shades the
+puff with self-shadowing and highlights so it reads as a body of smoke you are
+looking *into*, which is the difference between a smoke that hides a lane and a
+sprite that sits in front of it. It is a rendering choice only: what a smoke
+*does* to a shot is resolved server-side, and `isThroughSmoke` on a kill comes
+from that resolution, never from what either client drew.
 
 `nades.ts` is a renderer and nothing else — position, cloud centre and radius all
 arrive in the snapshot. Two decisions in it are worth keeping:
@@ -6334,16 +6423,108 @@ out instead of failing at the socket after a map has loaded.
 Train produces no card at all, which is correct: there is no match, nobody to play
 against, and nothing to be MVP of.
 
+## The workspace: one game, several panes
+
+The game is one pane, but almost everything you do *around* it is another one —
+the model studio, the armory, the tactical radar, the match companion, the
+developer console. `workspace-bus.ts` is the channel between them, and it exists
+because the obvious implementation does not survive contact with the frame engine.
+
+**The target pane is usually not open yet.** Clicking "inspect in the studio" from
+the armory has to open the studio, and the studio mounts a tick later — so an
+event broadcast at click time is delivered to nobody. Worse, only an area's active
+tab renders, so a pane that *is* open may still be unmounted while you look at
+another tab. A plain listener registry loses the request in both cases, silently.
+
+So three of the five channels **park** their request and the consumer drains it on
+mount:
+
+| Channel | Parks? | Producer → consumer |
+| --- | --- | --- |
+| `requestMapLoad` | ✅ `takePendingMapLoad` | studio / console / armory / menu / companion → the play pane |
+| `requestMapEditorInspect` | ✅ `takePendingMapEditorInspect` | play / console / menu / companion → the studio |
+| `requestWeaponInspect` | ✅ `takePendingWeaponInspect` | armory / play / studio / console → the studio |
+| `broadcastWeaponEquipped` | ❌ | armory / studio / console → whoever is listening |
+| `dispatchConsoleCommand` | ❌ | console / panel / UI → the play pane |
+
+`HorribleAssaultPanel` shows the pattern exactly: its effect calls
+`takePendingMapLoad()` **first**, applies whatever was parked, and only then
+subscribes with `onMapLoadRequested`. Drain-then-subscribe, not the reverse — the
+reverse leaves the parked intent sitting there until something unrelated fires.
+
+The two that do not park are the ones where a missed event is genuinely nothing:
+an equip is a cosmetic broadcast, and a console command aimed at a match that is
+not running has nowhere to land anyway.
+
+**Telemetry is a `latest`, not a queue.** `broadcastMatchTelemetry` overwrites, and
+`getLatestMatchTelemetry()` reads the current value — because a radar or companion
+pane opened mid-match wants the state of the match *now*, and replaying the
+history of a firefight to a panel that just appeared would be worse than useless.
+`MatchTelemetry` carries the phase, map, roster, spotted list, round time, score,
+kill events and the local player's vitals in one object, so a consumer re-renders
+from a single snapshot rather than assembling one out of five subscriptions.
+
+**Every request carries a `source`.** `'studio' | 'console' | 'armory' | 'menu' |
+'companion'` and friends are not decoration: a pane that both produces and
+consumes a channel — the studio does, for weapon inspect — needs to ignore its own
+echo, the same problem the [code locus](../modules/editor.mdx) solves the same way.
+
+The bus is **module-global**, not React state or context. A pane's state does not
+survive its unmount, and the whole point here is to outlive one.
+`resetWorkspaceBusForTesting()` clears every parked intent and listener, which is
+what lets `workspace-bus.test.ts` run each channel in isolation.
+
+### The four workspaces
+
+The panes are arranged by `frames:` presets rather than left to the user to
+assemble, since the useful combinations are few and specific:
+
+| Preset | Layout |
+| --- | --- |
+| `hassault_dev` | Play beside the studio (55/45), console below, companion + radar right. |
+| `hassault_mapmaker` | Studio at 68% with a live match beside it to test what you just built, radar right. |
+| `hassault_armory_studio` | Armory and studio 50/50; console present but closed. |
+| `hassault_play` | Just the match, with companion + radar + voice stacked right. |
+
+Each carries a `description`, which is not optional decoration:
+`presets-described.test.ts` fails the build without one, because a preset with no
+description renders as a bare name in the home launcher and the welcome widget —
+the two places a user is offered a way of working.
+
 ## Contributions to the layout shell
 
-- **Panels:** `hassault.play` (HorribleAssault, role `document`, singleton,
-  `fullscreen: true`). A `document` because it wants the centre area and a lot of
-  pixels, and it grabs pointer lock, which would be hostile in a narrow dock. The
-  `fullscreen` opt-in earns it the `⛶` titlebar control and Escape-able
-  presentation over the taskbar and the workspace strip — and on the desktop build
-  that escalates to OS-window fullscreen, which is what makes pointer lock and the
-  full field of view behave the way the game assumes. See
+- **Panels:**
+
+  | Id | Role | Singleton | What |
+  | --- | --- | --- | --- |
+  | `hassault.play` | document | ✅ | The match. `fullscreen: true`. |
+  | `hassault.studio` | document | — | Model studio / level editor / scene outliner. |
+  | `hassault.modelViewer` | document | — | Asset inspector. |
+  | `hassault.modelEditor` | document | — | Mesh editing. |
+  | `hassault.animEditor` | document | — | Animation clips. |
+  | `hassault.armory` | document | — | Inventory, catalog, trade-up forge. |
+  | `hassault.console` | tool | — | The developer console. |
+  | `hassault.companion` | tool | — | Telemetry, vitals, team scoreboard. |
+  | `hassault.radar` | tool | — | 2D tactical minimap and callouts. |
+  | `hassault.voice` | tool | — | Voice comms. |
+
+  `hassault.play` is the only singleton, and the only `fullscreen: true`. It is a
+  `document` because it wants the centre area and a lot of pixels, and it grabs
+  pointer lock, which would be hostile in a narrow dock. The `fullscreen` opt-in
+  earns it the `⛶` titlebar control and Escape-able presentation over the taskbar
+  and the workspace strip — and on the desktop build that escalates to OS-window
+  fullscreen, which is what makes pointer lock and the full field of view behave
+  the way the game assumes. See
   [desktop-shell.mdx](../architecture/desktop-shell.mdx#presenting-a-pane).
+
+  The other nine are deliberately **not** singletons: two studio panes on two
+  monitors, or a radar beside a companion, is the arrangement the
+  [workspace presets](#the-four-workspaces) exist to set up. They talk to each
+  other over the [workspace bus](#the-workspace-one-game-several-panes), not by
+  reaching into one another.
+- **Workspace presets:** `hassault_dev`, `hassault_mapmaker`,
+  `hassault_armory_studio`, `hassault_play` — see
+  [The four workspaces](#the-four-workspaces).
 - **Commands:** `hassault.open` (HorribleAssault: Open).
 - **Console commands** (namespace `edit`, served to both clients): `edit.new`,
   `.open`, `.close`, `.status`, `.save`, `.list`, `.select`, `.brush.add`,
@@ -7383,9 +7564,14 @@ The skin system provides distinct faction styling and collectible operator skins
   constant means a mistimed jump cannot be corrected mid-flight. It is the mechanic
   AssaultCube's skill curve is built on, and it is also the thing most likely to read
   as unresponsive to somebody arriving from a modern shooter.
-- **No water, ladder or slide physics.** AC has friction constants for all three
-  (20, 1.5, and a scramble state); only ground and air exist here, so the water level
-  a map declares is neither drawn nor swum in.
+- ~~**No water, ladder or slide physics.**~~ Water and ladders are implemented
+  across all three cube-path ports and bound by thirteen fixture cases — see
+  [Water and ladders](#water-and-ladders). **Sliding is not.** `sprint`,
+  `isSliding`, `slideTime` and `stamina` exist as fields on `player.ts`'s
+  `PlayerState` / `MoveInput` and ride the telemetry bus, but `physics.py`
+  simulates none of them, so nothing on the wire can make you slide. The Rapier
+  controller names slide-hopping among its capabilities; that is the wasm
+  controller's own vocabulary, not a mechanic this game currently has.
 - **A remote player's account is not verified, only their node.** In a cross-node
   match the host authenticates the guest's *machine* (Ed25519 node id, plus
   friendship), and the username that arrives with them is a display label tagged
@@ -7428,8 +7614,10 @@ The skin system provides distinct faction styling and collectible operator skins
 
 1. **Map and asset pipeline** — done, both directions: a reader for AssaultCube's
    maps and a writer for ours.
-2. **Bundled maps** — done: three original maps ship with the app, so it needs no
-   AssaultCube install to be playable.
+2. **Bundled maps** — done: five original maps ship with the app, so it needs no
+   AssaultCube install to be playable. Three are Cube heightfields; `hd_facility`
+   and `hd_junkflea` are [`gltf` levels](#two-level-formats-cube-and-gltf) with
+   real 3D geometry.
 3. **Three.js renderer** — done: walk any map in first person.
 4. **Netcode** — done: an authoritative match server on the local backend, with
    client prediction, reconciliation, and entity interpolation. JSON on the shared
@@ -7453,17 +7641,31 @@ The skin system provides distinct faction styling and collectible operator skins
 9. **A front door** — done: a main menu with map selection, training, hosting with
    bots, the server browser, LAN discovery and the friends roster, plus an Escape menu
    that shares its panels and can exit back to it.
-10. **Textures and map models** — the largest remaining gap between this and
+10. **A workspace, not a pane** — done: ten panes (play, studio, model viewer /
+    editor / animation editor, armory, console, companion, radar, voice) wired
+    together by a typed
+    [event bus](#the-workspace-one-game-several-panes) that parks an intent for a
+    pane that has not mounted yet, and four
+    [workspace presets](#the-four-workspaces) that arrange them.
+11. **Full 3D levels** — in progress: `gltf` maps run a Rapier capsule controller
+    for slopes, stairs and a shrinking crouch capsule. The
+    [conformance fixture does not yet cover that path](#the-heightfield-physics-does-not-run-on-a-gltf-map),
+    which is the next thing it needs.
+12. **Textures and map models** — the largest remaining gap between this and
     something that looks like AssaultCube. Needs the `.cfg` parser that maps
     texture slots to files.
-11. **Pickups** — ammo and health entities are already in the map file; placing
-    them turns the ammo economy from a countdown into a reason to move.
-12. **Per-weapon sound** — the synth has one voice per noise *kind*; five weapons that
-    sound different is a small extension of the same timbre table, and needs no assets.
-13. **Water, ladders and the scramble state** — the remaining AC friction constants,
-    and the only movement rules still missing.
-14. **Game modes** — team deathmatch is what the scoreboard currently describes.
-    CTF and the rest need flag entities and a round structure.
+13. **Pickups** — done: six kinds off the map's own entities, with armour as a
+    real mechanic and an item that cannot help you left where it stands. See
+    [Items on the map](#items-on-the-map).
+14. **Per-weapon sound** — done: a weapon's voice is
+    [derived from its own numbers](#a-weapons-voice-is-derived-not-tabulated)
+    rather than tabulated, so five weapons sound different with no assets added.
+15. **Water and ladders** — done across the cube path's three ports; see
+    [Water and ladders](#water-and-ladders). The **scramble state** is the one AC
+    friction constant still missing, and sliding with it.
+16. **Game modes** — done beyond deathmatch: [capture the flag](#capture-the-flag)
+    and [bomb defuse](#bomb-defuse), with a round structure and an economy.
+    Ranked play deliberately stays deathmatch.
 
 ## See also
 

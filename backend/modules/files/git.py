@@ -52,35 +52,114 @@ def _abs(repo_root: Path, rel: str) -> str:
     return str(repo_root / rel)
 
 
-def git_status(root: Path) -> GitStatus:
-    top = _run_git(root, "rev-parse", "--show-toplevel")
-    if top is None:
-        return GitStatus(is_repo=False, root=str(root))
-    repo_root = Path(top.strip())
-    out = _run_git(root, "status", "--porcelain=v2", "--branch") or ""
+class PorcelainEntry:
+    """One line of `git status --porcelain=v2`, parsed but not yet collapsed.
 
-    branch: str | None = None
-    entries: list[GitEntry] = []
+    The two status characters are kept **apart** here, which is the whole reason
+    this exists: `GitStatus` collapses them into one category for the file tree's
+    decorations, and that collapse is lossy in exactly the way source control
+    cares about — it cannot tell a staged change from an unstaged one.
+    """
+
+    __slots__ = ("path", "index", "worktree", "orig_path")
+
+    def __init__(
+        self, path: str, index: str, worktree: str, orig_path: str | None = None
+    ):
+        self.path = path
+        self.index = index
+        self.worktree = worktree
+        self.orig_path = orig_path
+
+    @property
+    def xy(self) -> str:
+        return f"{self.index}{self.worktree}"
+
+    @property
+    def status(self) -> str:
+        return _status_of(self.xy)
+
+
+class Porcelain:
+    """A parsed `git status --porcelain=v2 --branch` run."""
+
+    __slots__ = ("branch", "ahead", "behind", "entries")
+
+    def __init__(self) -> None:
+        self.branch: str | None = None
+        self.ahead = 0
+        self.behind = 0
+        self.entries: list[PorcelainEntry] = []
+
+
+def parse_porcelain_v2(out: str, repo_root: Path) -> Porcelain:
+    """Parse porcelain v2 into absolute paths and split status characters.
+
+    One parser, two consumers (`git_status` here and the source-control view in
+    the git module) so the two can never come to disagree about what a `2 ` line
+    means — which is the kind of drift that shows a rename in one pane and a
+    delete-plus-add in another.
+    """
+    parsed = Porcelain()
     for line in out.splitlines():
         if line.startswith("# branch.head "):
             head = line[len("# branch.head ") :].strip()
-            branch = None if head == "(detached)" else head
+            parsed.branch = None if head == "(detached)" else head
+        elif line.startswith("# branch.ab "):
+            # `+1 -2` — ahead of and behind the upstream.
+            for token in line[len("# branch.ab ") :].split():
+                if token.startswith("+"):
+                    parsed.ahead = int(token[1:] or 0)
+                elif token.startswith("-"):
+                    parsed.behind = int(token[1:] or 0)
         elif line.startswith("1 "):  # ordinary change: 8 fields then path
             parts = line.split(" ", 8)
-            entries.append(
-                GitEntry(path=_abs(repo_root, parts[8]), status=_status_of(parts[1]))
+            parsed.entries.append(
+                PorcelainEntry(_abs(repo_root, parts[8]), parts[1][0], parts[1][1])
             )
         elif line.startswith("2 "):  # rename/copy: extra score field, path<TAB>orig
             parts = line.split(" ", 9)
-            entries.append(
-                GitEntry(
-                    path=_abs(repo_root, parts[9].split("\t", 1)[0]), status="renamed"
+            path, _, orig = parts[9].partition("	")
+            parsed.entries.append(
+                PorcelainEntry(
+                    _abs(repo_root, path),
+                    parts[1][0],
+                    parts[1][1],
+                    _abs(repo_root, orig) if orig else None,
                 )
             )
         elif line.startswith("u "):  # unmerged: 9 fields then path
             parts = line.split(" ", 10)
-            entries.append(GitEntry(path=_abs(repo_root, parts[10]), status="conflict"))
+            parsed.entries.append(
+                PorcelainEntry(_abs(repo_root, parts[10]), parts[1][0], parts[1][1])
+            )
         elif line.startswith("? "):  # untracked
-            entries.append(GitEntry(path=_abs(repo_root, line[2:]), status="untracked"))
+            parsed.entries.append(PorcelainEntry(_abs(repo_root, line[2:]), "?", "?"))
+    return parsed
 
-    return GitStatus(is_repo=True, root=str(root), branch=branch, entries=entries)
+
+def read_porcelain(root: Path) -> tuple[Path, Porcelain] | None:
+    """Run status in `root` and parse it. None when `root` is not in a repo."""
+    top = _run_git(root, "rev-parse", "--show-toplevel")
+    if top is None:
+        return None
+    repo_root = Path(top.strip())
+    out = _run_git(root, "status", "--porcelain=v2", "--branch") or ""
+    return repo_root, parse_porcelain_v2(out, repo_root)
+
+
+def git_status(root: Path) -> GitStatus:
+    read = read_porcelain(root)
+    if read is None:
+        return GitStatus(is_repo=False, root=str(root))
+    _, parsed = read
+    entries = [
+        GitEntry(
+            path=e.path,
+            status="untracked" if e.xy == "??" else e.status,
+        )
+        for e in parsed.entries
+    ]
+    return GitStatus(
+        is_repo=True, root=str(root), branch=parsed.branch, entries=entries
+    )

@@ -143,6 +143,8 @@ export const hassaultModule: ModuleManifest = {
       id: 'hassault_dev',
       name: 'hAssault: Game Dev & Testing',
       icon: '⚒',
+      description:
+        'The game beside its editor: a live match on the left, the model studio on the right, the console below and match telemetry alongside.',
       frame: {
         center: {
           split: 'row',
@@ -172,6 +174,8 @@ export const hassaultModule: ModuleManifest = {
       id: 'hassault_mapmaker',
       name: 'hAssault: Level Designer',
       icon: '◈',
+      description:
+        'Level design with a playable preview: the studio takes the width, a match sits beside it to test what you just built, and the radar shows the layout from above.',
       frame: {
         center: {
           split: 'row',
@@ -201,6 +205,8 @@ export const hassaultModule: ModuleManifest = {
       id: 'hassault_armory_studio',
       name: 'hAssault: 3D Armory & Skins',
       icon: '⚔',
+      description:
+        'Weapons and their finishes side by side: the armory marketplace next to the 3D studio that edits what it sells.',
       frame: {
         center: {
           split: 'row',
@@ -224,6 +230,8 @@ export const hassaultModule: ModuleManifest = {
       id: 'hassault_play',
       name: 'hAssault: Arena Match & Companion',
       icon: '🎮',
+      description:
+        'Just the match: the arena at full width, with the companion, radar and voice comms stacked alongside it.',
       frame: {
         center: { pane: 'hassault.play', headerCollapsed: true },
         docks: {

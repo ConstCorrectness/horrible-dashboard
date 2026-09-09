@@ -56,3 +56,42 @@ class CommitRequest(BaseModel):
     message: str
     paths: list[str] | None = None  # stage these (else stage everything)
     path: str | None = None  # a workspace path to locate the repo (else the first root)
+
+
+class ScmEntry(BaseModel):
+    """One changed path, with git's two status characters kept **apart**.
+
+    `GitStatus` in the files module collapses them into one category for the file
+    tree's decorations, which is right there and lossy here: source control's
+    whole shape is staged vs unstaged, and a collapsed code cannot tell them
+    apart."""
+
+    path: str  # absolute
+    index: str  # git's X character — the staged side
+    worktree: str  # git's Y character — the working-tree side
+    status: str  # the collapsed category, for the icon
+    orig_path: str | None = None  # renames
+
+
+class ScmStatus(BaseModel):
+    """A repo's working tree, grouped the way source control is worked."""
+
+    is_repo: bool
+    root: str
+    branch: str | None = None
+    ahead: int = 0
+    behind: int = 0
+    staged: list[ScmEntry] = []
+    unstaged: list[ScmEntry] = []
+    untracked: list[ScmEntry] = []
+    conflicted: list[ScmEntry] = []
+
+
+class StageRequest(BaseModel):
+    paths: list[str]
+    path: str | None = None  # a workspace path to locate the repo
+
+
+class StageResult(BaseModel):
+    ok: bool
+    error: str | None = None

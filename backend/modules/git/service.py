@@ -13,6 +13,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from backend.modules.files.git import read_porcelain
 from backend.modules.git.models import (
     BlameLine,
     BlameResult,
@@ -20,6 +21,9 @@ from backend.modules.git.models import (
     CommitResult,
     DiffResult,
     LogResult,
+    ScmEntry,
+    ScmStatus,
+    StageResult,
 )
 
 _TIMEOUT_S = 15
@@ -214,3 +218,91 @@ def commit(
         )
     head = (_out(root, "rev-parse", "HEAD") or "").strip()
     return CommitResult(ok=True, sha=head[:8], session_id=sid, session_title=title)
+
+
+def scm_status(path_hint: Path) -> ScmStatus:
+    """The working tree, grouped for the source-control view.
+
+    Reads the **same** `git status --porcelain=v2` parse the file tree's
+    decorations do (`files/git.py`), so the two can never disagree about what a
+    line means.
+    """
+    read = read_porcelain(path_hint)
+    if read is None:
+        return ScmStatus(is_repo=False, root=str(path_hint))
+    repo_root, parsed = read
+
+    staged: list[ScmEntry] = []
+    unstaged: list[ScmEntry] = []
+    untracked: list[ScmEntry] = []
+    conflicted: list[ScmEntry] = []
+    for e in parsed.entries:
+        entry = ScmEntry(
+            path=e.path,
+            index=e.index,
+            worktree=e.worktree,
+            status="untracked" if e.xy == "??" else e.status,
+            orig_path=e.orig_path,
+        )
+        if e.xy == "??":
+            untracked.append(entry)
+        elif "U" in e.xy or e.xy in ("AA", "DD"):
+            # Unmerged. `AA`/`DD` are conflicts too even though neither char is
+            # `U` — both sides added, or both deleted.
+            conflicted.append(entry)
+        else:
+            # A path can be in BOTH lists: staged edits plus later unstaged ones
+            # is the ordinary case, and showing it in only one is how a commit
+            # silently leaves half your work behind.
+            if e.index not in (".", " "):
+                staged.append(entry)
+            if e.worktree not in (".", " "):
+                unstaged.append(entry)
+
+    return ScmStatus(
+        is_repo=True,
+        root=str(repo_root),
+        branch=parsed.branch,
+        ahead=parsed.ahead,
+        behind=parsed.behind,
+        staged=staged,
+        unstaged=unstaged,
+        untracked=untracked,
+        conflicted=conflicted,
+    )
+
+
+def working_diff(path_hint: Path, path: Path | None, staged: bool) -> DiffResult:
+    """The working-tree diff for a path, or the index diff with `staged`."""
+    root = _repo_root(path_hint)
+    if root is None:
+        return DiffResult(sha="", diff="")
+    args = ["diff"]
+    if staged:
+        args.append("--cached")
+    if path is not None:
+        args += ["--", str(path)]
+    # An untracked file has no diff at all; git says nothing rather than erroring,
+    # which the pane renders as "no changes to show".
+    return DiffResult(sha="", diff=_out(root, *args) or "")
+
+
+def stage(path_hint: Path, paths: list[str]) -> StageResult:
+    root = _repo_root(path_hint)
+    if root is None:
+        return StageResult(ok=False, error="not a git repository")
+    res = _run(root, "add", "--", *paths)
+    return StageResult(ok=res.returncode == 0, error=res.stderr.strip() or None)
+
+
+def unstage(path_hint: Path, paths: list[str]) -> StageResult:
+    root = _repo_root(path_hint)
+    if root is None:
+        return StageResult(ok=False, error="not a git repository")
+    res = _run(root, "restore", "--staged", "--", *paths)
+    if res.returncode != 0:
+        # `git restore` arrived in 2.23. Fall back by **return code**, not by
+        # sniffing the version — a parsed version string is one more thing to be
+        # wrong about, and the failure is self-announcing.
+        res = _run(root, "reset", "HEAD", "--", *paths)
+    return StageResult(ok=res.returncode == 0, error=res.stderr.strip() or None)

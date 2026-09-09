@@ -70,9 +70,16 @@ export interface LspBufferClient {
 
 const diagnosticsByUri = new Map<string, AgentDiagnostic[]>();
 const clientsByUri = new Map<string, LspBufferClient>();
+const retained = new Set<string>();
+const diagnosticListeners = new Set<() => void>();
+
+function notifyDiagnostics(): void {
+  for (const fn of diagnosticListeners) fn();
+}
 
 export function recordDiagnostics(uri: string, diags: AgentDiagnostic[]): void {
   diagnosticsByUri.set(uri, diags);
+  notifyDiagnostics();
 }
 
 /** The diagnostics last published for a buffer (empty if none / no server). */
@@ -80,13 +87,47 @@ export function readDiagnostics(uri: string): AgentDiagnostic[] {
   return diagnosticsByUri.get(uri) ?? [];
 }
 
+/**
+ * Keep a buffer's diagnostics after its LSP session ends.
+ *
+ * The cleanup below runs from the CodeMirror plugin's `destroy()`, which fires on
+ * every **unmount** — not only on close. That is right for a pane, whose buffer is
+ * gone when it unmounts, and wrong for a host that draws a tab strip over files
+ * whose editors are unmounted: a Problems list built on the unretained map would
+ * show diagnostics for exactly the one file already showing them in its gutter.
+ *
+ * Returns the release, which both stops retaining and drops what was retained —
+ * a file that is no longer open has no problems to report.
+ */
+export function retainDiagnostics(uri: string): () => void {
+  retained.add(uri);
+  return () => {
+    retained.delete(uri);
+    if (diagnosticsByUri.delete(uri)) notifyDiagnostics();
+  };
+}
+
+/** Every buffer with published diagnostics — the Problems list's whole input. */
+export function listDiagnostics(): { uri: string; diagnostics: AgentDiagnostic[] }[] {
+  return [...diagnosticsByUri.entries()]
+    .filter(([, diags]) => diags.length > 0)
+    .map(([uri, diagnostics]) => ({ uri, diagnostics }));
+}
+
+/** Subscribe to diagnostic publishes and clears. */
+export function subscribeDiagnostics(fn: () => void): () => void {
+  diagnosticListeners.add(fn);
+  return () => diagnosticListeners.delete(fn);
+}
+
 /** Register a live LSP client for a buffer; the cleanup also clears its
- * diagnostics so a closed buffer leaves no stale state behind. */
+ * diagnostics so a closed buffer leaves no stale state behind — unless a host
+ * has {@link retainDiagnostics | retained} them because the file is still open. */
 export function registerLspClient(uri: string, client: LspBufferClient): () => void {
   clientsByUri.set(uri, client);
   return () => {
     if (clientsByUri.get(uri) === client) clientsByUri.delete(uri);
-    diagnosticsByUri.delete(uri);
+    if (!retained.has(uri) && diagnosticsByUri.delete(uri)) notifyDiagnostics();
   };
 }
 

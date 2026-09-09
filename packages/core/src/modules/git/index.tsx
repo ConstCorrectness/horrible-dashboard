@@ -39,3 +39,7 @@ export const gitModule: ModuleManifest = {
     },
   ],
 };
+
+// The diff renderer, so other modules (the IDE's source control view) render a
+// diff the same way rather than growing a second one.
+export { UnifiedDiff } from './UnifiedDiff';
