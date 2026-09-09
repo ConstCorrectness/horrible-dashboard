@@ -142,11 +142,28 @@ source. A note, an unsaved buffer, a `.json`, a Drive file had none, even though
 source among several. `BufferView` mounts it through its own compartment for buffers
 with no server; `lspExtension` calls the same builder with the server's source added.
 
-:::caution One `autocompletion()` at a time
-CodeMirror merges configuration across instances, but `override` is a **replacing**
-field — a second live instance's override silently wins and the first one's sources
-vanish with no error. The LSP compartment and the standalone compartment are therefore
-configured from one predicate (`usesLanguageServer`) and are never both non-empty.
+:::caution One `autocompletion()` at a time, swapped in one transaction
+CodeMirror merges configuration across live instances, but `override` is a
+**replacing** field it has no combiner for: two live instances that both set it do not
+degrade quietly, they make the *dispatch* throw
+`Config merge conflict for field override`. The LSP compartment and the standalone
+compartment are therefore configured from one predicate (`usesLanguageServer`) and are
+never both non-empty.
+
+That predicate is not enough on its own, because the two compartments live in one
+buffer and a compartment is only as exclusive as the moment it is reconfigured. They
+must swap in the **same transaction**. They used to be reconfigured from two separate
+effects — the LSP one when the content arrived, the standalone one when the resolved
+language changed — and between the two, the stack resolved while the tab title was
+still the `…` placeholder (no language, so: standalone) was live alongside the one
+resolved from the loaded filename (`gqa.py` → python, so: LSP). The throw landed
+inside the load's `.then`, so the buffer's own `.catch` swallowed it into the status
+bar and **the content transaction was rolled back with it**: every source file opened
+from the Explorer came up blank.
+
+Hence the load applies content on its own transaction first and reconfigures second,
+guarded — a buffer that loaded is more use with no completions than one that shows
+nothing.
 :::
 
 ### Completing an import statement
@@ -248,7 +265,7 @@ Both halves now reach a cell, and which one is a real decision:
   seconds a cold server takes to come up.
 
 They are alternatives and never both, for the reason in the caution above: two live
-`autocompletion()` instances mean one `override` silently replaces the other's sources.
+`autocompletion()` instances make the dispatch that installs the second one throw.
 `useNotebookLsp` picks one and the cell's compartment swaps between them.
 
 `bareCompletion` is on `EditorService` rather than deep-imported because the notebook

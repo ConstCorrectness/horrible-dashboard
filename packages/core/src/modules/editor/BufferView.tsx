@@ -427,44 +427,82 @@ export function BufferView() {
           }
         }
 
+        // The content goes in on its own transaction, before any reconfigure. A
+        // throw out of an extension swap must cost this buffer its intellisense,
+        // never its text: the two used to ride one dispatch, so a config clash
+        // rolled the *whole* transaction back and the file opened blank with an
+        // obscure CodeMirror message in the status bar.
         isProgrammaticRef.current = true;
         view.dispatch({
           changes: { from: 0, to: view.state.doc.length, insert: insertContent },
-          effects: [
-            // The grammar is owned by the language effect below (it may change without
-            // the source changing, and loading one is async).
-            //
-            // Connect (or disconnect) a language server for this buffer. The
-            // reconfigure tears down any prior session (didClose + stop) and the
-            // new plugin sees the just-applied content for its didOpen.
-            lspRef.current.reconfigure(
-              lspFor(source, resolveLanguage({ title: loaded.title, hint: langHint }).lspId, {
-                pythonPath,
-                frameworkImports,
-                indexedSymbols,
-                warmupMs,
-                changeDebounceMs,
-                diagnostics: diagnosticsOn,
-                hover: hoverOn,
-                importCompletions,
-                trigger: completionTrigger,
-              }),
-            ),
-            readOnlyRef.current.reconfigure(EditorState.readOnly.of(loaded.readOnly ?? false)),
-            ...(isProposing
-              ? [mergeRef.current.reconfigure(unifiedMergeView({ original: originalRef.current }))]
-              : []),
-          ],
         });
         isProgrammaticRef.current = false;
 
+        const loadedLang = resolveLanguage({ title: loaded.title, hint: langHint });
+        const intellisense = {
+          indexedSymbols,
+          frameworkImports,
+          importCompletions,
+          trigger: completionTrigger,
+        };
+        // Guarded for the same reason it is a second transaction: a buffer that
+        // loaded is more use with no completions than one that shows nothing.
+        let extensionError: string | null = null;
+        isProgrammaticRef.current = true;
+        try {
+          view.dispatch({
+            effects: [
+              // The grammar is owned by the language effect below (it may change without
+              // the source changing, and loading one is async).
+              //
+              // Connect (or disconnect) a language server for this buffer. The
+              // reconfigure tears down any prior session (didClose + stop) and the
+              // new plugin sees the just-applied content for its didOpen.
+              lspRef.current.reconfigure(
+                lspFor(source, loadedLang.lspId, {
+                  ...intellisense,
+                  pythonPath,
+                  warmupMs,
+                  changeDebounceMs,
+                  diagnostics: diagnosticsOn,
+                  hover: hoverOn,
+                }),
+              ),
+              // Both stacks carry an `autocompletion()`, and `override` is a *replacing*
+              // config field CodeMirror refuses to merge — so the two compartments have
+              // to swap in the SAME transaction. Leaving this to the language effect
+              // below meant that between the two, the standalone stack (resolved while
+              // the title was still the '…' placeholder) and the language server's stack
+              // were both live, and the dispatch threw "Config merge conflict for field
+              // override".
+              completionRef.current.reconfigure(
+                completionFor(source, loadedLang.lspId, intellisense),
+              ),
+              readOnlyRef.current.reconfigure(EditorState.readOnly.of(loaded.readOnly ?? false)),
+              ...(isProposing
+                ? [
+                    mergeRef.current.reconfigure(
+                      unifiedMergeView({ original: originalRef.current }),
+                    ),
+                  ]
+                : []),
+            ],
+          });
+        } catch (err: unknown) {
+          extensionError = `Editor extensions failed to load: ${
+            err instanceof Error ? err.message : String(err)
+          }`;
+          console.error('[editor] extension reconfigure failed', err);
+        }
+        isProgrammaticRef.current = false;
+
         // Seed the completion index with this buffer's symbols right away.
-        const indexLang = resolveLanguage({ title: loaded.title, hint: langHint }).lspId ?? '';
+        const indexLang = loadedLang.lspId ?? '';
         if (indexLang) indexBufferNow(source, indexLang, insertContent);
 
         setDirty(initialDirty);
         setProposing(isProposing);
-        setStatus(null);
+        setStatus(extensionError);
         // Content is now in the doc — re-apply any pending locus so a jump that opened
         // this file (its scroll fired against an empty doc) lands on the right line.
         const jumped = applyLocusRef.current();
