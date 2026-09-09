@@ -231,6 +231,20 @@ impl MatchSocket {
         ))
     }
 
+    pub fn send_chat(&self, text: &str, team: bool) -> Result<(), NetError> {
+        self.send(&Outbound::new(
+            "chat",
+            serde_json::json!({ "text": text, "team": team }),
+        ))
+    }
+
+    pub fn send_voice(&self, transmitting: bool) -> Result<(), NetError> {
+        self.send(&Outbound::new(
+            "voice",
+            serde_json::json!({ "transmitting": transmitting }),
+        ))
+    }
+
     /// Queue one input frame. Sent by the next `flush`, not immediately.
     pub fn push_command(&mut self, mut command: Command) -> u64 {
         self.seq += 1;

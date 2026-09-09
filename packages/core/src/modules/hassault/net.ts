@@ -363,6 +363,17 @@ export interface KillFx {
   killerName: string;
   weapon: string;
   head: boolean;
+  nutshot?: boolean;
+  smoke?: boolean;
+  airborne?: boolean;
+  wallbang?: boolean;
+  noscope?: boolean;
+  blind?: boolean;
+  killerTeam?: number;
+  victimTeam?: number;
+  assister?: string;
+  assisterName?: string;
+  assisterTeam?: number;
 }
 
 export interface SpawnFx {

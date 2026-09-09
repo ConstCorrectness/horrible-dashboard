@@ -389,6 +389,17 @@ async def get_map(name: str) -> MapInfo:
         "rvsf": len(world.spawns(1)),
         "total": len(world.spawns()),
     }
+    map_format = "gltf" if name in ("hd_facility", "hd_junkflea") else "cube"
+    if map_format == "cube":
+        json_path = mapsource.MAPS_DIR / f"{name}.json"
+        if json_path.is_file():
+            try:
+                src = json.loads(json_path.read_text(encoding="utf-8"))
+                if src.get("format") == "gltf":
+                    map_format = "gltf"
+            except Exception:
+                pass
+
     return MapInfo(
         name=world.name,
         title=world.title,
@@ -409,10 +420,6 @@ async def get_map(name: str) -> MapInfo:
             for item in pickups.place(SimWorld.from_map(world), world.entities)
         ],
         modes=list(world.modes),
-        # Resolved onto the floor here, the same way `items` is and for the same
-        # reason: an entity's `z` is the mapper's eye and the editor flies, so a
-        # client re-deriving it would draw a site somewhere the server does not
-        # think it is.
         sites=[s.to_dict() for s in _objectives(world).sites],
         flagStands=[f.to_dict() for f in _objectives(world).flags],
         entities=[
@@ -431,6 +438,8 @@ async def get_map(name: str) -> MapInfo:
         truncated=world.truncated,
         legacy_unscaled_attrs=world.legacy_unscaled_attrs,
         plane_order=list(PLANE_ORDER),
+        format=map_format,
+        meshUrl=f"/api/hassault/maps/{name}/mesh" if map_format == "gltf" else None,
     )
 
 

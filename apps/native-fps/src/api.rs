@@ -180,6 +180,10 @@ pub struct MapInfo {
     pub plane_order: Vec<String>,
     #[serde(default)]
     pub truncated: bool,
+    #[serde(default)]
+    pub format: Option<String>,
+    #[serde(default, rename = "meshUrl")]
+    pub mesh_url: Option<String>,
 }
 
 #[allow(dead_code)] // The map picker lands with the renderer, in B2.
@@ -457,14 +461,14 @@ impl Default for HitboxSpec {
     /// nothing does not work at all.
     fn default() -> HitboxSpec {
         HitboxSpec {
-            spec_id: String::new(),
+            spec_id: "cb9e8b565ae0".into(),
             shape: "cylinder".into(),
-            radius: 1.1,
+            radius: 0.68,
             eye_height: 4.5,
             above_eye: 0.7,
             standing_height: 5.2,
             crouch_height: 4.075,
-            head_band: 1.0,
+            head_band: 0.85,
         }
     }
 }
@@ -489,6 +493,8 @@ impl HitboxSpec {
 /// and none of those change what the gun in your hands looks like.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct SkinDefinition {
+    #[serde(default)]
+    pub id: String,
     #[serde(rename = "weaponId", default)]
     pub weapon_id: String,
     #[serde(rename = "baseColor", default)]

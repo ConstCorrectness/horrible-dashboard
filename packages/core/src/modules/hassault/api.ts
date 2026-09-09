@@ -66,6 +66,10 @@ export interface MapInfo {
    * somewhere a match's are not.
    */
   items: ItemRow[];
+  /** Level format: "cube" (Cube 1 2.5D heightfield) or "gltf" (full 3D mesh). */
+  format?: 'cube' | 'gltf';
+  /** Optional URL to fetch the level mesh (GLB) when format is "gltf". */
+  meshUrl?: string;
 }
 
 /**

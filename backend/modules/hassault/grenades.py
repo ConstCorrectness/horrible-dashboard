@@ -151,9 +151,9 @@ GRENADES: tuple[GrenadeSpec, ...] = (
         kind="he",
         fuse=1.9,
         impact=False,
-        radius=9.0,
+        radius=11.5,
         duration=0.0,
-        damage=98.0,
+        damage=140.0,
         damage_per_second=0.0,
         bounce=0.45,
         friction=3.2,
@@ -165,7 +165,7 @@ GRENADES: tuple[GrenadeSpec, ...] = (
         kind="flash",
         fuse=1.6,
         impact=False,
-        radius=26.0,
+        radius=34.0,
         duration=0.0,
         damage=0.0,
         damage_per_second=0.0,
@@ -179,8 +179,8 @@ GRENADES: tuple[GrenadeSpec, ...] = (
         kind="smoke",
         fuse=1.7,
         impact=False,
-        radius=7.5,
-        duration=15.0,
+        radius=10.5,
+        duration=18.0,
         damage=0.0,
         damage_per_second=0.0,
         bounce=0.35,
@@ -196,10 +196,10 @@ GRENADES: tuple[GrenadeSpec, ...] = (
         # map) must still resolve rather than fall forever.
         fuse=6.0,
         impact=True,
-        radius=6.0,
-        duration=8.0,
+        radius=8.5,
+        duration=9.5,
         damage=0.0,
-        damage_per_second=26.0,
+        damage_per_second=52.0,
         bounce=0.0,
         friction=99.0,
         carried=1,
@@ -486,12 +486,12 @@ def visible(
 
 #: How long a full flash lasts, in seconds, at the very centre of the effect
 #: looking straight at it. Everything else is a fraction of it.
-FLASH_MAX = 4.2
+FLASH_MAX = 6.0
 
 #: Fraction of `FLASH_MAX` someone gets with the flash directly behind them.
 #: Not zero: a bang at your heels is disorienting even when it is not blinding,
 #: and a hard zero makes turning away a perfect counter rather than a good one.
-FLASH_BEHIND = 0.12
+FLASH_BEHIND = 0.25
 
 
 def flash_strength(

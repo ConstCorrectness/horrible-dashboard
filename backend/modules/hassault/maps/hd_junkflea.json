@@ -1,0 +1,236 @@
+{
+  "title": "Junk Flea",
+  "author": "horrible-dashboard",
+  "license": "CC0-1.0",
+  "sfactor": 6,
+  "waterlevel": -5.0,
+  "ambient": 52,
+  "format": "gltf",
+  "brushes": [
+    {
+      "op": "room",
+      "rect": [8, 8, 48, 48],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 89,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [16, 20, 6, 24],
+      "floor": -2,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 58,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [42, 20, 6, 24],
+      "floor": -2,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 58,
+      "ctex": 33
+    },
+    {
+      "op": "stairs",
+      "rect": [16, 14, 6, 6],
+      "axis": "y",
+      "from": 0,
+      "to": -2,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 58
+    },
+    {
+      "op": "stairs",
+      "rect": [16, 44, 6, 6],
+      "axis": "y",
+      "from": -2,
+      "to": 0,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 58
+    },
+    {
+      "op": "stairs",
+      "rect": [42, 14, 6, 6],
+      "axis": "y",
+      "from": 0,
+      "to": -2,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 58
+    },
+    {
+      "op": "stairs",
+      "rect": [42, 44, 6, 6],
+      "axis": "y",
+      "from": -2,
+      "to": 0,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 58
+    },
+    {
+      "op": "solid",
+      "rect": [26, 22, 12, 6],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [26, 36, 12, 6],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [10, 26, 4, 12],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [50, 26, 4, 12],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [20, 14, 4, 4],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [40, 14, 4, 4],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [20, 46, 4, 4],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [40, 46, 4, 4],
+      "wtex": 131
+    }
+  ],
+  "entities": [
+    {
+      "type": "playerstart",
+      "x": 16,
+      "y": 12,
+      "yaw": 0,
+      "team": 0
+    },
+    {
+      "type": "playerstart",
+      "x": 48,
+      "y": 12,
+      "yaw": 0,
+      "team": 0
+    },
+    {
+      "type": "playerstart",
+      "x": 32,
+      "y": 10,
+      "yaw": 0,
+      "team": 0
+    },
+    {
+      "type": "playerstart",
+      "x": 32,
+      "y": 15,
+      "yaw": 0,
+      "team": 0
+    },
+    {
+      "type": "playerstart",
+      "x": 16,
+      "y": 52,
+      "yaw": 180,
+      "team": 1
+    },
+    {
+      "type": "playerstart",
+      "x": 48,
+      "y": 52,
+      "yaw": 180,
+      "team": 1
+    },
+    {
+      "type": "playerstart",
+      "x": 32,
+      "y": 54,
+      "yaw": 180,
+      "team": 1
+    },
+    {
+      "type": "playerstart",
+      "x": 32,
+      "y": 49,
+      "yaw": 180,
+      "team": 1
+    },
+    {
+      "type": "armour",
+      "x": 32,
+      "y": 32,
+      "z": 0
+    },
+    {
+      "type": "health",
+      "x": 19,
+      "y": 32,
+      "z": -2
+    },
+    {
+      "type": "health",
+      "x": 45,
+      "y": 32,
+      "z": -2
+    },
+    {
+      "type": "ammo",
+      "x": 22,
+      "y": 12,
+      "z": 0
+    },
+    {
+      "type": "ammo",
+      "x": 42,
+      "y": 12,
+      "z": 0
+    },
+    {
+      "type": "ammo",
+      "x": 22,
+      "y": 52,
+      "z": 0
+    },
+    {
+      "type": "ammo",
+      "x": 42,
+      "y": 52,
+      "z": 0
+    },
+    {
+      "type": "grenade",
+      "x": 12,
+      "y": 32,
+      "z": 0
+    },
+    {
+      "type": "clips",
+      "x": 52,
+      "y": 32,
+      "z": 0
+    },
+    {
+      "type": "armour",
+      "x": 32,
+      "y": 20,
+      "z": 0
+    }
+  ]
+}

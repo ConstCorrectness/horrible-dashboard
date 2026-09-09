@@ -292,9 +292,9 @@ TACTICALS: tuple[TacticalUtility, ...] = (
         id="smoke",
         name="Smoke Grenade",
         type="smoke",
-        fuse_time=1.8,
-        radius=6.5,
-        duration=16.0,
+        fuse_time=1.7,
+        radius=10.5,
+        duration=18.0,
         max_damage=0.0,
         bounce_damping=0.5,
     ),
@@ -302,20 +302,20 @@ TACTICALS: tuple[TacticalUtility, ...] = (
         id="flashbang",
         name="Flashbang",
         type="flash",
-        fuse_time=1.5,
-        radius=24.0,
-        duration=4.5,
-        max_damage=5.0,
+        fuse_time=1.6,
+        radius=34.0,
+        duration=6.0,
+        max_damage=10.0,
         bounce_damping=0.6,
     ),
     TacticalUtility(
         id="he_grenade",
         name="HE Frag Grenade",
         type="he",
-        fuse_time=2.0,
-        radius=8.5,
+        fuse_time=1.9,
+        radius=11.5,
         duration=0.0,
-        max_damage=105.0,
+        max_damage=140.0,
         bounce_damping=0.55,
     ),
 )
@@ -347,25 +347,29 @@ TACTICALS: tuple[TacticalUtility, ...] = (
 #: which at fifty cubes is a couple of bodies' height.
 ASSAULT_SPRAY: tuple[tuple[float, float], ...] = (
     (0.0000, 0.0000),
-    (0.0004, 0.0092),
-    (0.0009, 0.0192),
-    (0.0011, 0.0298),
-    (0.0008, 0.0402),
-    (-0.0002, 0.0498),
-    (-0.0021, 0.0578),
-    (-0.0052, 0.0640),
-    (-0.0092, 0.0684),
-    (-0.0136, 0.0714),
-    (-0.0174, 0.0738),
-    (-0.0196, 0.0758),
-    (-0.0193, 0.0776),
-    (-0.0162, 0.0792),
-    (-0.0108, 0.0806),
-    (-0.0042, 0.0818),
-    (0.0026, 0.0828),
-    (0.0086, 0.0838),
-    (0.0132, 0.0847),
-    (0.0158, 0.0856),
+    (0.0006, 0.0140),
+    (0.0012, 0.0280),
+    (0.0016, 0.0430),
+    (0.0010, 0.0580),
+    (-0.0015, 0.0720),
+    (-0.0050, 0.0840),
+    (-0.0110, 0.0940),
+    (-0.0180, 0.1010),
+    (-0.0240, 0.1050),
+    (-0.0280, 0.1070),
+    (-0.0260, 0.1080),
+    (-0.0180, 0.1090),
+    (-0.0080, 0.1100),
+    (0.0040, 0.1105),
+    (0.0150, 0.1110),
+    (0.0240, 0.1115),
+    (0.0300, 0.1120),
+    (0.0320, 0.1120),
+    (0.0260, 0.1125),
+    (0.0160, 0.1130),
+    (0.0040, 0.1130),
+    (-0.0080, 0.1135),
+    (-0.0180, 0.1140),
 )
 
 
@@ -400,7 +404,7 @@ WEAPONS: tuple[Weapon, ...] = (
         range=140.0,
         falloff_start=60.0,
         auto=False,
-        kickback=1.2,
+        kickback=0.0,
     ),
     Weapon(
         id="assault",
@@ -416,7 +420,7 @@ WEAPONS: tuple[Weapon, ...] = (
         range=200.0,
         falloff_start=80.0,
         auto=True,
-        kickback=1.6,
+        kickback=0.0,
         spray=ASSAULT_SPRAY,
         # About a fifth of the cone the pattern replaces. Not zero — see
         # `Weapon.residual_spread`.
@@ -1020,6 +1024,8 @@ class PelletHit:
     damage: float
     head: bool
     point: tuple[float, float, float]
+    nutshot: bool = False
+    wallbang: bool = False
 
 
 @dataclass(slots=True)
@@ -1050,6 +1056,7 @@ def resolve_shot(
     rewound_ms: float = 0.0,
     heights: dict[str, float] | None = None,
     spread: float | None = None,
+    penetration: float = 0.0,
 ) -> ShotResult:
     """Trace one trigger pull against the world and a set of rewound bodies.
 
@@ -1085,29 +1092,36 @@ def resolve_shot(
         pdx, pdy, pdz = spread_vector(direction, cone, rng)
         wall, face = raycast_world_face(world, origin, (pdx, pdy, pdz), weapon.range)
 
-        best: tuple[float, str] | None = None
+        best: tuple[float, str, bool] | None = None
         for pid, feet in targets.items():
             tall = _standing if heights is None else heights.get(pid, _standing)
             distance = ray_hits_body((ox, oy, oz), (pdx, pdy, pdz), feet, height=tall)
-            # A body behind a wall is not a target; the wall is nearer, and the
-            # `<` is what makes cover work.
-            if distance is None or distance >= wall:
+            if distance is None:
                 continue
+            wallbang = distance >= wall
+            if wallbang:
+                if penetration <= 0.0 or distance > wall + penetration:
+                    continue
+                if world.is_solid(math.floor(feet[0]), math.floor(feet[1])):
+                    continue
             if best is None or distance < best[0]:
-                best = (distance, pid)
+                best = (distance, pid, wallbang)
 
         if best is None:
             endpoints.append((ox + pdx * wall, oy + pdy * wall, oz + pdz * wall))
             faces.append(face)
             continue
 
-        distance, pid = best
+        distance, pid, is_wallbang = best
         point = (ox + pdx * distance, oy + pdy * distance, oz + pdz * distance)
         tall = _standing if heights is None else heights.get(pid, _standing)
         # Relative to the top of the body, so a crouched head is where the
         # crouched head actually is.
         head = point[2] >= targets[pid][2] + (tall - _spec.head_band)
-        amount = damage_at(weapon, distance) * (weapon.head_multiplier if head else 1.0)
+        rel_z = point[2] - targets[pid][2]
+        nutshot = (not head) and (0.38 * tall <= rel_z <= 0.54 * tall)
+        base_dmg = damage_at(weapon, distance) * (weapon.head_multiplier if head else 1.0)
+        amount = base_dmg * (0.6 if is_wallbang else 1.0)
         hits.append(
             PelletHit(
                 victim=pid,
@@ -1115,12 +1129,11 @@ def resolve_shot(
                 damage=amount,
                 head=head,
                 point=point,
+                nutshot=nutshot,
+                wallbang=is_wallbang,
             )
         )
         endpoints.append(point)
-        # A body is not a surface. The wall behind it is still there, but the
-        # pellet stopped short of it, and a mark on a wall a bullet never
-        # reached is a lie about where the shot went.
         faces.append(FACE_NONE)
 
     return ShotResult(

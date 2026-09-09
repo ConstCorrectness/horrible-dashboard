@@ -341,3 +341,54 @@ describe('inspect', () => {
     }
   });
 });
+
+describe('Knife archetypes and PBR skin materials', () => {
+  it('builds distinct procedural meshes for Karambit, Butterfly, Bayonet, and default knives', () => {
+    const defaultKnife = stand();
+    defaultKnife.vm.setWeapon('knife');
+    const defaultColors = colors(defaultKnife.vm, defaultKnife.camera);
+
+    const karambit = stand();
+    karambit.vm.setWeapon('knife', {
+      id: 'knife_karambit_fade',
+      name: 'Karambit | Fade',
+      baseColor: '#38bdf8',
+      accentColor: '#f43f5e',
+      patternType: 'fade',
+      floatValue: 0.01,
+    });
+    const karambitColors = colors(karambit.vm, karambit.camera);
+
+    const butterfly = stand();
+    butterfly.vm.setWeapon('knife', {
+      id: 'knife_butterfly_marble',
+      name: 'Butterfly Knife | Marble Fade',
+      baseColor: '#ef4444',
+      accentColor: '#3b82f6',
+      patternType: 'fade',
+      floatValue: 0.02,
+    });
+    const butterflyColors = colors(butterfly.vm, butterfly.camera);
+
+    const bayonet = stand();
+    bayonet.vm.setWeapon('knife', {
+      id: 'knife_bayonet_lore',
+      name: 'Tactical Bayonet | Lore',
+      baseColor: '#eab308',
+      accentColor: '#15803d',
+      patternType: 'anodized',
+      floatValue: 0.03,
+    });
+    const bayonetColors = colors(bayonet.vm, bayonet.camera);
+
+    expect(karambitColors.length).toBeGreaterThan(0);
+    expect(butterflyColors.length).toBeGreaterThan(0);
+    expect(bayonetColors.length).toBeGreaterThan(0);
+    expect(defaultColors.length).toBeGreaterThan(0);
+
+    // Each knife archetype has a distinct part count reflecting its specific model
+    expect(karambitColors.length).not.toEqual(butterflyColors.length);
+    expect(butterflyColors.length).not.toEqual(bayonetColors.length);
+  });
+});
+

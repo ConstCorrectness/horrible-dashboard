@@ -29,7 +29,6 @@ import {
   sprayOffset,
   type Vec,
 } from '../trace';
-import { PLAYER_RADIUS } from '../world';
 
 
 interface Vectors {
@@ -302,7 +301,7 @@ describe('cross-language body hit conformance', () => {
         testCase.origin,
         aimVector(testCase.yaw, testCase.pitch),
         testCase.feet,
-        PLAYER_RADIUS,
+        DEFAULT_HITBOX.radius,
         testCase.height ?? BODY_HEIGHT,
       );
       if (testCase.expect === null) {

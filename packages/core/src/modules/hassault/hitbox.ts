@@ -46,9 +46,9 @@ export interface HitboxSpec {
  * differently, which is precisely the class of drift this module exists to close.
  */
 export const DEFAULT_HITBOX: HitboxSpec = {
-  specId: '86d9f2779917',
+  specId: 'cb9e8b565ae0',
   shape: 'cylinder',
-  radius: 1.1,
+  radius: 0.68,
   eyeHeight: 4.5,
   aboveEye: 0.7,
   standingHeight: 5.2,
@@ -56,8 +56,8 @@ export const DEFAULT_HITBOX: HitboxSpec = {
   crouchEyeHeight: 3.375,
   crouchHeight: 4.075,
   crouchScale: 4.075 / 5.2,
-  headBand: 1.0,
-  fitTolerance: 0.35,
+  headBand: 0.85,
+  fitTolerance: 0.15,
   eyeTolerance: 0.15,
 };
 

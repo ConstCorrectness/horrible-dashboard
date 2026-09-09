@@ -1,6 +1,6 @@
 [package]
 name = "hassault-native"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
@@ -34,6 +34,8 @@ gltf = { version = "1.4", default-features = false, features = ["utils", "names"
 # other format this crate can read is dead weight in a binary that ships exactly
 # one asset.
 image = { version = "0.25", default-features = false, features = ["webp"] }
+# Fast, deterministic 3D physics for character controllers, raycasts, and colliders.
+rapier3d = "0.22"
 
 
 [dev-dependencies]

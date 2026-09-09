@@ -376,6 +376,14 @@ class ConsoleRegistry:
             flags=["client"],
         )
         self._register_cvar(
+            "draw.tracers_firstperson",
+            "draw",
+            "boolean",
+            True,
+            "Render first-person weapon muzzle bullet tracers (toggle off for pure impact sparks and decals)",
+            flags=["client"],
+        )
+        self._register_cvar(
             "draw.wireframe",
             "draw",
             "boolean",
@@ -596,10 +604,80 @@ class ConsoleRegistry:
             flags=["server", "cheat"],
         )
 
+        # --- gameplay.* ---
+        self._register_cvar(
+            "gameplay.player_max_health",
+            "gameplay",
+            "number",
+            100.0,
+            "Spawn maximum health for players (10 - 500)",
+            min_val=10.0,
+            max_val=500.0,
+            flags=["server", "replicated"],
+        )
+        self._register_cvar(
+            "gameplay.damage_scale",
+            "gameplay",
+            "number",
+            1.0,
+            "Global weapon bullet damage multiplier (0.1 - 5.0)",
+            min_val=0.1,
+            max_val=5.0,
+            flags=["server", "replicated"],
+        )
+        self._register_cvar(
+            "gameplay.nade_damage_scale",
+            "gameplay",
+            "number",
+            1.0,
+            "Tactical grenade explosion and fire damage multiplier (0.1 - 5.0)",
+            min_val=0.1,
+            max_val=5.0,
+            flags=["server", "replicated"],
+        )
+        self._register_cvar(
+            "gameplay.knife_speed_boost",
+            "gameplay",
+            "number",
+            1.10,
+            "Movement speed and acceleration multiplier with knife equipped (1.0 - 2.0)",
+            min_val=1.0,
+            max_val=2.0,
+            flags=["server", "replicated"],
+        )
+        self._register_cvar(
+            "gameplay.recoil_scale",
+            "gameplay",
+            "number",
+            1.0,
+            "Weapon spray pattern climb and sway multiplier (0.0 - 3.0)",
+            min_val=0.0,
+            max_val=3.0,
+            flags=["server", "replicated"],
+        )
+        self._register_cvar(
+            "gameplay.recoil_push",
+            "gameplay",
+            "number",
+            0.0,
+            "Backward physical push impulse on weapon fire (0.0 - 5.0)",
+            min_val=0.0,
+            max_val=5.0,
+            flags=["server", "replicated"],
+        )
+
         # --- ConCommands ---
         self._init_commands()
 
     def _init_commands(self) -> None:
+        # gameplay.reset
+        self._register_command(
+            "gameplay.reset",
+            "gameplay",
+            self._cmd_gameplay_reset,
+            description="Reset all gameplay tuning settings to default values",
+            signature="gameplay.reset()",
+        )
         # server.start
         self._register_command(
             "server.start",
@@ -1437,6 +1515,57 @@ class ConsoleRegistry:
         ctx.print(f"[hitbox] Reset to canonical spec ({spec.spec_id[:12]}).")
         return spec.model_dump()
 
+    def _apply_cvar_to_game(
+        self, ctx: ConsoleExecutionContext, name: str, val: Any
+    ) -> None:
+        room = ctx.resolve_room()
+        if name in ("player.god", "play.god"):
+            b_val = bool(val)
+            player = ctx.resolve_player()
+            if player:
+                player.god = b_val
+            if room:
+                for p in room.players.values():
+                    if not getattr(p, "is_bot", False):
+                        p.god = b_val
+            return
+        if not room:
+            return
+        settings = getattr(room, "settings", None)
+        if not settings:
+            return
+        if name == "gameplay.player_max_health":
+            settings.player_max_health = float(val)
+        elif name == "gameplay.damage_scale":
+            settings.damage_scale = float(val)
+        elif name == "gameplay.nade_damage_scale":
+            settings.nade_damage_scale = float(val)
+        elif name == "gameplay.knife_speed_boost":
+            settings.knife_speed_boost = float(val)
+        elif name == "gameplay.recoil_scale":
+            settings.recoil_scale = float(val)
+        elif name == "gameplay.recoil_push":
+            settings.recoil_push = float(val)
+
+    async def _cmd_gameplay_reset(
+        self, _args: dict[str, Any], ctx: ConsoleExecutionContext
+    ) -> Any:
+        defaults = {
+            "gameplay.player_max_health": 100.0,
+            "gameplay.damage_scale": 1.0,
+            "gameplay.nade_damage_scale": 1.0,
+            "gameplay.knife_speed_boost": 1.10,
+            "gameplay.recoil_scale": 1.0,
+            "gameplay.recoil_push": 0.0,
+        }
+        for name, def_val in defaults.items():
+            if name in self.cvars:
+                self.cvars[name].current_value = def_val
+                ctx.affected_cvars[name] = def_val
+                self._apply_cvar_to_game(ctx, name, def_val)
+        ctx.print("[gameplay] Settings reset to default values.")
+        return defaults
+
     async def _cmd_macro_run(
         self, args: dict[str, Any], ctx: ConsoleExecutionContext
     ) -> Any:
@@ -1573,6 +1702,15 @@ class ConsoleRegistry:
         elif len(tokens) >= 3 and tokens[1] == "=":
             tokens = [tokens[0], tokens[2]] + tokens[3:]
 
+        if target.startswith("play."):
+            target = "player." + target[5:]
+            tokens[0] = target
+        elif target == "god":
+            target = "player.god"
+            tokens[0] = target
+            if len(tokens) == 1:
+                tokens.append("1")
+
         # A. Is it a CVar?
         if target in self.cvars:
             cvar = self.cvars[target]
@@ -1594,6 +1732,7 @@ class ConsoleRegistry:
             parsed_val = self._coerce_cvar_value(cvar, val_str)
             cvar.current_value = parsed_val
             ctx.affected_cvars[cvar.name] = parsed_val
+            self._apply_cvar_to_game(ctx, cvar.name, parsed_val)
             ctx.print(f"{cvar.name} = {parsed_val}")
             return ConsoleExecResponse(
                 ok=True,
@@ -2226,6 +2365,7 @@ class ConsoleExecutionContext:
                     coerced = self._ctx.registry._coerce_cvar_value(cvar, str(value))
                     cvar.current_value = coerced
                     self._ctx.affected_cvars[full_name] = coerced
+                    self._ctx.registry._apply_cvar_to_game(self._ctx, full_name, coerced)
                     self._ctx.print(f"[set] {full_name} = {coerced}")
                     return
                 super().__setattr__(item, value)
@@ -2235,6 +2375,7 @@ class ConsoleExecutionContext:
             "draw": NamespaceProxy("draw", self),
             "server": NamespaceProxy("server", self),
             "player": NamespaceProxy("player", self),
+            "play": NamespaceProxy("player", self),
             "hitbox": NamespaceProxy("hitbox", self),
             "physics": NamespaceProxy("physics", self),
             "macro": NamespaceProxy("macro", self),

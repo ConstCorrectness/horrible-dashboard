@@ -71,7 +71,7 @@ class HitboxSpec:
     #: allowed to exceed the body precisely because the server never asks the mesh
     #: anything. Tightening this is how you make avatars honest; it lives here so
     #: it is tuned alongside the body it is a tolerance on.
-    fit_tolerance: float = 0.35
+    fit_tolerance: float = 0.15
     #: How far the rig's eye bone may sit from `eye_height`. Tighter than
     #: `fit_tolerance` because the eye is not decoration — a first-person camera
     #: and a third-person head are supposed to be the same place.
@@ -157,14 +157,15 @@ class HitboxSpec:
         }
 
 
-#: The shipped body. AssaultCube's `entity.h` defaults, which is where the numbers
-#: came from and not an argument that they are right for this game.
+#: The shipped body. Fitted tightly to the character operator mesh (radius 0.68,
+#: head_band 0.85).
 DEFAULT = HitboxSpec(
-    radius=1.1,
+    radius=0.68,
     eye_height=4.5,
     above_eye=0.7,
     crouch_eye_scale=0.75,
-    head_band=1.0,
+    head_band=0.85,
+    fit_tolerance=0.15,
 )
 
 _override: HitboxSpec | None = None

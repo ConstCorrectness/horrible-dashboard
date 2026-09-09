@@ -33,7 +33,7 @@ use std::collections::VecDeque;
 
 use crate::console::{LogLine, Tone};
 use crate::damage::Placed;
-use crate::protocol::{Fx, HitMarker, HurtMarker, ModeInfo, ModeSelf, ModeShared, SelfState};
+use crate::protocol::{Fx, HitMarker, ModeInfo, ModeSelf, ModeShared, SelfState};
 use crate::radar::{self, Blip, Run};
 use crate::settings::{Crosshair, CrosshairStyle};
 
@@ -171,6 +171,20 @@ pub struct ScoreRow {
 #[derive(Debug, Clone)]
 pub struct KillNote {
     pub text: String,
+    pub killer_name: String,
+    pub victim_name: String,
+    pub killer_team: i32,
+    pub victim_team: i32,
+    pub weapon: String,
+    pub head: bool,
+    pub nutshot: bool,
+    pub smoke: bool,
+    pub airborne: bool,
+    pub wallbang: bool,
+    pub noscope: bool,
+    pub blind: bool,
+    pub assister_name: String,
+    pub assister_team: i32,
     /// Whether we did it or it was done to us — worth colouring differently.
     pub mine: bool,
     pub age: f32,
@@ -408,6 +422,9 @@ pub struct HudView<'a> {
     /// console you can read the ammo counter through is a console you cannot
     /// read.
     pub console: Option<ConsoleView<'a>>,
+    pub chat: Option<&'a crate::chat::ChatState>,
+    pub voice_transmitting: bool,
+    pub voice_speakers: &'a [String],
 }
 
 /// The HUD's own memory: things that persist across frames because they are
@@ -515,39 +532,69 @@ impl Hud {
             victim_name,
             killer,
             killer_name,
+            weapon,
             head,
+            nutshot,
+            smoke,
+            airborne,
+            wallbang,
+            noscope,
+            blind,
+            killer_team,
+            victim_team,
+            assister,
+            assister_name,
+            assister_team,
             ..
         } = fx
         else {
             return;
         };
+        let k_name = name_of(killer_name, killer);
+        let v_name = name_of(victim_name, victim);
         // An empty killer is what the feed reads as "the map did it" — a fall,
         // which goes through `_fall_damage` and has no killer by construction.
         let text = if killer.is_empty() {
-            format!("{} FELL", name_of(victim_name, victim))
+            format!("{} FELL", v_name)
         } else {
             format!(
                 "{} {} {}",
-                name_of(killer_name, killer),
+                k_name,
                 if *head { "X" } else { ">" },
-                name_of(victim_name, victim)
+                v_name
             )
         };
-        let mine = killer == self_id || victim == self_id;
+        let mine = killer == self_id || victim == self_id || (!assister.is_empty() && assister == self_id);
         // A kill **we** made, with the name the feed already has. Not a death of
         // ours, and not a fall — `killer` is empty for those, and "ELIMINATED"
         // over the crosshair as you die would be an unusually cruel bug.
         if killer == self_id && victim != self_id {
             self.kill_notice = if *head {
-                format!("HEADSHOT {}", name_of(victim_name, victim))
+                format!("HEADSHOT {}", v_name)
+            } else if *nutshot {
+                format!("NUTSHOT {}", v_name)
             } else {
-                format!("ELIMINATED {}", name_of(victim_name, victim))
+                format!("ELIMINATED {}", v_name)
             }
             .to_uppercase();
             self.kill_age = 0.0;
         }
         self.feed.push_front(KillNote {
             text,
+            killer_name: if killer.is_empty() { String::new() } else { k_name },
+            victim_name: v_name,
+            killer_team: *killer_team,
+            victim_team: *victim_team,
+            weapon: weapon.clone(),
+            head: *head,
+            nutshot: *nutshot,
+            smoke: *smoke,
+            airborne: *airborne,
+            wallbang: *wallbang,
+            noscope: *noscope,
+            blind: *blind,
+            assister_name: assister_name.clone(),
+            assister_team: *assister_team,
             mine,
             age: 0.0,
         });
@@ -635,6 +682,20 @@ impl Hud {
     pub fn note(&mut self, text: impl Into<String>, mine: bool) {
         self.feed.push_front(KillNote {
             text: text.into().to_uppercase(),
+            killer_name: String::new(),
+            victim_name: String::new(),
+            killer_team: -1,
+            victim_team: -1,
+            weapon: String::new(),
+            head: false,
+            nutshot: false,
+            smoke: false,
+            airborne: false,
+            wallbang: false,
+            noscope: false,
+            blind: false,
+            assister_name: String::new(),
+            assister_team: -1,
             mine,
             age: 0.0,
         });
@@ -828,50 +889,190 @@ impl Hud {
         if let Some(console) = &view.console {
             paint_console(&mut p, console, u);
         }
+
+        if let Some(chat) = view.chat {
+            paint_chat(&mut p, chat, u);
+        }
+        paint_voice_indicator(&mut p, view.voice_transmitting, view.voice_speakers, u);
     }
 
     fn paint_feed(&self, p: &mut Painter, u: f32) {
         let scale = u * 0.75;
         let mut y = u * 6.0;
+        let icon_size = (scale * 1.8).max(12.0);
+        let gap = scale * 1.2;
+
         for note in &self.feed {
             // The last second is a fade rather than a disappearance, so a line
             // does not vanish mid-read.
             let fade = ((KILL_TTL - note.age) / 1.0).clamp(0.0, 1.0);
-            let mut color = if note.mine { AMBER } else { DIM };
-            color[3] *= fade;
-            let w = text_width(&note.text, scale);
-            let x = p.width - w - u * 6.0;
-            let h = 7.0 * scale + scale * 2.0;
-            // Chamfered on the left only — the right edge is the screen margin
-            // that every line shares, and cutting it would make the stack look
-            // ragged rather than cut.
-            let cut = scale * 1.6;
-            p.rect(
-                x - scale + cut,
-                y - scale,
-                w + scale * 2.0 - cut,
-                h,
-                [PANEL[0], PANEL[1], PANEL[2], PANEL[3] * fade],
-            );
-            p.tri(
-                (x - scale, y - scale + cut),
-                (x - scale + cut, y - scale),
-                (x - scale + cut, y - scale + cut),
-                [PANEL[0], PANEL[1], PANEL[2], PANEL[3] * fade],
-            );
-            p.tri(
-                (x - scale, y - scale + h - cut),
-                (x - scale + cut, y - scale + h - cut),
-                (x - scale + cut, y - scale + h),
-                [PANEL[0], PANEL[1], PANEL[2], PANEL[3] * fade],
-            );
-            // A leading accent bar, which is what lets your own kills be found
-            // in a busy feed without reading any of it.
-            let mut accent = if note.mine { AMBER } else { FAINT };
-            accent[3] *= fade;
-            p.rect(x - scale + cut, y - scale, (u * 0.4).max(2.0), h, accent);
-            p.text(x, y, scale, color, &note.text);
-            y += 7.0 * scale + u * 3.0;
+            if !note.killer_name.is_empty() {
+                let k_color = {
+                    let mut c = team_color(note.killer_team);
+                    c[3] *= fade;
+                    c
+                };
+                let v_color = {
+                    let mut c = team_color(note.victim_team);
+                    c[3] *= fade;
+                    c
+                };
+                let wep_lower = note.weapon.to_lowercase();
+                let wep_label = match wep_lower.as_str() {
+                    "assault" => "AK-47",
+                    "sniper" => "AWP",
+                    "knife" => "KNIFE",
+                    "pistol" => "PISTOL",
+                    "shotgun" => "SHOTGUN",
+                    "he" => "HE",
+                    "molotov" => "MOLOTOV",
+                    _ => note.weapon.as_str(),
+                };
+                let k_w = text_width(&note.killer_name, scale);
+                let v_w = text_width(&note.victim_name, scale);
+                let pad = scale * 0.8;
+                let wep_w = text_width(wep_label, scale * 0.85) + pad * 2.0;
+
+                let has_assister = !note.assister_name.is_empty();
+                let a_label = if has_assister {
+                    format!("+ {}", note.assister_name)
+                } else {
+                    String::new()
+                };
+                let a_w = if has_assister {
+                    text_width(&a_label, scale * 0.85) + gap * 0.5
+                } else {
+                    0.0
+                };
+                let a_color = {
+                    let mut c = team_color(note.assister_team);
+                    c[3] *= fade;
+                    c
+                };
+
+                let mut total_w = k_w + a_w + gap + wep_w + gap + v_w;
+                if note.airborne { total_w += icon_size + gap; }
+                if note.blind { total_w += icon_size + gap; }
+                if note.smoke { total_w += icon_size + gap; }
+                if note.noscope { total_w += icon_size + gap; }
+                if note.wallbang { total_w += icon_size + gap; }
+                if note.nutshot { total_w += icon_size + gap; }
+                if note.head { total_w += icon_size + gap; }
+
+                let x = p.width - total_w - u * 6.0;
+                let h = 7.0 * scale + scale * 2.0;
+                let cut = scale * 1.6;
+
+                p.rect(
+                    x - scale + cut,
+                    y - scale,
+                    total_w + scale * 2.0 - cut,
+                    h,
+                    [PANEL[0], PANEL[1], PANEL[2], PANEL[3] * fade],
+                );
+                p.tri(
+                    (x - scale, y - scale + cut),
+                    (x - scale + cut, y - scale),
+                    (x - scale + cut, y - scale + cut),
+                    [PANEL[0], PANEL[1], PANEL[2], PANEL[3] * fade],
+                );
+                p.tri(
+                    (x - scale, y - scale + h - cut),
+                    (x - scale + cut, y - scale + h - cut),
+                    (x - scale + cut, y - scale + h),
+                    [PANEL[0], PANEL[1], PANEL[2], PANEL[3] * fade],
+                );
+
+                let mut accent = if note.mine { AMBER } else { FAINT };
+                accent[3] *= fade;
+                p.rect(x - scale + cut, y - scale, (u * 0.4).max(2.0), h, accent);
+
+                if note.mine {
+                    // Glowing border outline for local player involvement
+                    let mut border = AMBER;
+                    border[3] *= 0.85 * fade;
+                    p.rect(x - scale + cut, y - scale, total_w + scale * 2.0 - cut, 1.5, border);
+                    p.rect(x - scale + cut, y - scale + h - 1.5, total_w + scale * 2.0 - cut, 1.5, border);
+                    p.rect(x - scale + total_w + scale * 2.0 - 1.5, y - scale, 1.5, h, border);
+                }
+
+                let mut cur_x = x;
+                p.text(cur_x, y, scale, k_color, &note.killer_name);
+                cur_x += k_w;
+
+                if has_assister {
+                    cur_x += gap * 0.5;
+                    p.text(cur_x, y, scale * 0.85, a_color, &a_label);
+                    cur_x += text_width(&a_label, scale * 0.85);
+                }
+                cur_x += gap;
+
+                if note.airborne {
+                    draw_airborne_icon(p, cur_x, y - scale * 0.1, icon_size, fade);
+                    cur_x += icon_size + gap;
+                }
+                if note.blind {
+                    draw_blind_icon(p, cur_x, y - scale * 0.1, icon_size, fade);
+                    cur_x += icon_size + gap;
+                }
+                if note.smoke {
+                    draw_smoke_icon(p, cur_x, y - scale * 0.1, icon_size, fade);
+                    cur_x += icon_size + gap;
+                }
+                if note.noscope {
+                    draw_noscope_icon(p, cur_x, y - scale * 0.1, icon_size, fade);
+                    cur_x += icon_size + gap;
+                }
+                if note.wallbang {
+                    draw_wallbang_icon(p, cur_x, y - scale * 0.1, icon_size, fade);
+                    cur_x += icon_size + gap;
+                }
+
+                cur_x += draw_weapon_badge(p, cur_x, y, wep_label, scale, fade) + gap;
+
+                if note.nutshot {
+                    draw_nutshot_icon(p, cur_x, y - scale * 0.1, icon_size, fade);
+                    cur_x += icon_size + gap;
+                }
+                if note.head {
+                    draw_headshot_icon(p, cur_x, y - scale * 0.1, icon_size, fade);
+                    cur_x += icon_size + gap;
+                }
+
+                p.text(cur_x, y, scale, v_color, &note.victim_name);
+                y += 7.0 * scale + u * 3.0;
+            } else {
+                let mut color = if note.mine { AMBER } else { DIM };
+                color[3] *= fade;
+                let w = text_width(&note.text, scale);
+                let x = p.width - w - u * 6.0;
+                let h = 7.0 * scale + scale * 2.0;
+                let cut = scale * 1.6;
+                p.rect(
+                    x - scale + cut,
+                    y - scale,
+                    w + scale * 2.0 - cut,
+                    h,
+                    [PANEL[0], PANEL[1], PANEL[2], PANEL[3] * fade],
+                );
+                p.tri(
+                    (x - scale, y - scale + cut),
+                    (x - scale + cut, y - scale),
+                    (x - scale + cut, y - scale + cut),
+                    [PANEL[0], PANEL[1], PANEL[2], PANEL[3] * fade],
+                );
+                p.tri(
+                    (x - scale, y - scale + h - cut),
+                    (x - scale + cut, y - scale + h - cut),
+                    (x - scale + cut, y - scale + h),
+                    [PANEL[0], PANEL[1], PANEL[2], PANEL[3] * fade],
+                );
+                let mut accent = if note.mine { AMBER } else { FAINT };
+                accent[3] *= fade;
+                p.rect(x - scale + cut, y - scale, (u * 0.4).max(2.0), h, accent);
+                p.text(x, y, scale, color, &note.text);
+                y += 7.0 * scale + u * 3.0;
+            }
         }
     }
 
@@ -1101,6 +1302,292 @@ impl Hud {
                 );
             }
         }
+    }
+}
+
+pub fn team_color(team: i32) -> [f32; 4] {
+    match team {
+        0 => [0.96, 0.74, 0.28, 0.95], // CLA / Terrorist (gold/orange)
+        1 => [0.44, 0.72, 0.98, 0.95], // RVSF / Counter-Terrorist (light blue)
+        _ => [0.90, 0.92, 0.94, 0.90], // Neutral / Fall / Server
+    }
+}
+
+fn draw_airborne_icon(p: &mut Painter, x: f32, y: f32, size: f32, fade: f32) {
+    let color = [0.45, 0.85, 1.0, 0.95 * fade];
+    let s = size / 14.0;
+    // Angled flight wings
+    p.tri((x + 1.0 * s, y + 3.0 * s), (x + 6.0 * s, y + 9.0 * s), (x + 6.0 * s, y + 6.0 * s), color);
+    p.rect(x + 1.0 * s, y + 2.0 * s, 3.0 * s, 2.0 * s, color);
+    p.tri((x + 13.0 * s, y + 3.0 * s), (x + 8.0 * s, y + 9.0 * s), (x + 8.0 * s, y + 6.0 * s), color);
+    p.rect(x + 10.0 * s, y + 2.0 * s, 3.0 * s, 2.0 * s, color);
+    // Jumper body
+    p.rect(x + 5.5 * s, y + 1.0 * s, 3.0 * s, 2.5 * s, color); // head
+    p.rect(x + 6.0 * s, y + 4.0 * s, 2.0 * s, 5.0 * s, color); // torso
+    p.rect(x + 5.0 * s, y + 9.5 * s, 4.0 * s, 2.0 * s, color); // tucked legs
+}
+
+fn draw_smoke_icon(p: &mut Painter, x: f32, y: f32, size: f32, fade: f32) {
+    let smoke_color = [0.72, 0.78, 0.84, 0.90 * fade];
+    let tracer_color = [1.0, 0.92, 0.45, 0.95 * fade];
+    let s = size / 14.0;
+    // Overlapping cloud puffs
+    p.rect(x + 4.0 * s, y + 3.5 * s, 6.0 * s, 6.5 * s, smoke_color);
+    p.rect(x + 1.0 * s, y + 5.5 * s, 4.0 * s, 4.5 * s, smoke_color);
+    p.rect(x + 9.0 * s, y + 5.5 * s, 4.0 * s, 4.5 * s, smoke_color);
+    p.tri((x + 7.0 * s, y + 1.5 * s), (x + 3.5 * s, y + 4.5 * s), (x + 10.5 * s, y + 4.5 * s), smoke_color);
+    // Bullet tracer piercing through smoke cloud
+    p.rect(x - 1.0 * s, y + 6.5 * s, 16.0 * s, 1.6 * s, tracer_color);
+}
+
+fn draw_wallbang_icon(p: &mut Painter, x: f32, y: f32, size: f32, fade: f32) {
+    let wall_color = [0.65, 0.72, 0.80, 0.85 * fade];
+    let bullet_in = [1.0, 0.75, 0.2, 0.95 * fade];
+    let bullet_out = [0.95, 0.25, 0.25, 0.95 * fade];
+    let s = size / 14.0;
+    // Barrier wall
+    p.rect(x + 5.0 * s, y + 1.0 * s, 4.0 * s, 12.0 * s, wall_color);
+    // Penetrating bullet path
+    p.rect(x + 1.0 * s, y + 6.0 * s, 4.0 * s, 2.0 * s, bullet_in);
+    p.rect(x + 9.0 * s, y + 6.0 * s, 4.0 * s, 2.0 * s, bullet_out);
+    // Arrowhead exit
+    p.tri((x + 14.0 * s, y + 7.0 * s), (x + 12.0 * s, y + 5.0 * s), (x + 12.0 * s, y + 9.0 * s), bullet_out);
+}
+
+fn draw_noscope_icon(p: &mut Painter, x: f32, y: f32, size: f32, fade: f32) {
+    let scope_amber = [1.0, 0.65, 0.15, 0.90 * fade];
+    let slash_red = [0.95, 0.25, 0.25, 0.95 * fade];
+    let s = size / 14.0;
+    // Outer reticle circle approximations
+    p.rect(x + 3.0 * s, y + 2.0 * s, 8.0 * s, 1.5 * s, scope_amber);
+    p.rect(x + 3.0 * s, y + 10.5 * s, 8.0 * s, 1.5 * s, scope_amber);
+    p.rect(x + 1.5 * s, y + 3.5 * s, 1.5 * s, 7.0 * s, scope_amber);
+    p.rect(x + 11.0 * s, y + 3.5 * s, 1.5 * s, 7.0 * s, scope_amber);
+    // Crosshairs
+    p.rect(x + 6.25 * s, y + 0.5 * s, 1.5 * s, 3.5 * s, scope_amber);
+    p.rect(x + 6.25 * s, y + 10.0 * s, 1.5 * s, 3.5 * s, scope_amber);
+    p.rect(x + 0.0 * s, y + 6.25 * s, 3.5 * s, 1.5 * s, scope_amber);
+    p.rect(x + 10.5 * s, y + 6.25 * s, 3.5 * s, 1.5 * s, scope_amber);
+    // Red diagonal cancellation slash
+    p.tri((x + 2.0 * s, y + 11.5 * s), (x + 3.5 * s, y + 12.5 * s), (x + 12.5 * s, y + 2.5 * s), slash_red);
+    p.tri((x + 2.0 * s, y + 11.5 * s), (x + 11.0 * s, y + 1.5 * s), (x + 12.5 * s, y + 2.5 * s), slash_red);
+}
+
+fn draw_blind_icon(p: &mut Painter, x: f32, y: f32, size: f32, fade: f32) {
+    let eye_yellow = [1.0, 0.82, 0.25, 0.95 * fade];
+    let slash_red = [0.95, 0.25, 0.25, 0.95 * fade];
+    let s = size / 14.0;
+    // Eye shape
+    p.tri((x + 1.0 * s, y + 7.0 * s), (x + 7.0 * s, y + 2.0 * s), (x + 13.0 * s, y + 7.0 * s), eye_yellow);
+    p.tri((x + 1.0 * s, y + 7.0 * s), (x + 7.0 * s, y + 12.0 * s), (x + 13.0 * s, y + 7.0 * s), eye_yellow);
+    // Pupil center
+    p.rect(x + 5.5 * s, y + 5.5 * s, 3.0 * s, 3.0 * s, [0.08, 0.08, 0.08, 0.95 * fade]);
+    // Slashed diagonal
+    p.tri((x + 2.0 * s, y + 2.0 * s), (x + 3.5 * s, y + 1.5 * s), (x + 12.5 * s, y + 12.0 * s), slash_red);
+    p.tri((x + 2.0 * s, y + 2.0 * s), (x + 11.0 * s, y + 12.5 * s), (x + 12.5 * s, y + 12.0 * s), slash_red);
+}
+
+fn draw_headshot_icon(p: &mut Painter, x: f32, y: f32, size: f32, fade: f32) {
+    let red = [0.96, 0.22, 0.22, 0.95 * fade];
+    let dark = [0.08, 0.08, 0.08, 0.95 * fade];
+    let s = size / 14.0;
+    // Skull head
+    p.rect(x + 2.5 * s, y + 1.5 * s, 9.0 * s, 6.5 * s, red);
+    // Skull jaw
+    p.rect(x + 4.5 * s, y + 8.0 * s, 5.0 * s, 3.5 * s, red);
+    // Eye sockets
+    p.rect(x + 3.5 * s, y + 4.0 * s, 2.0 * s, 2.5 * s, dark);
+    p.rect(x + 8.5 * s, y + 4.0 * s, 2.0 * s, 2.5 * s, dark);
+    // Crosshair ticks
+    p.rect(x + 6.0 * s, y - 1.0 * s, 2.0 * s, 2.0 * s, red);
+    p.rect(x + 6.0 * s, y + 12.0 * s, 2.0 * s, 2.0 * s, red);
+    p.rect(x - 1.0 * s, y + 5.0 * s, 2.0 * s, 2.0 * s, red);
+    p.rect(x + 13.0 * s, y + 5.0 * s, 2.0 * s, 2.0 * s, red);
+}
+
+fn draw_nutshot_icon(p: &mut Painter, x: f32, y: f32, size: f32, fade: f32) {
+    let amber = [1.0, 0.58, 0.16, 0.95 * fade];
+    let dark = [0.08, 0.08, 0.08, 0.95 * fade];
+    let s = size / 14.0;
+    // Pelvic waistline bar
+    p.rect(x + 1.0 * s, y + 1.5 * s, 12.0 * s, 2.5 * s, amber);
+    // Angled hip lines
+    p.tri((x + 1.0 * s, y + 4.0 * s), (x + 4.0 * s, y + 4.0 * s), (x + 3.0 * s, y + 10.0 * s), amber);
+    p.tri((x + 13.0 * s, y + 4.0 * s), (x + 10.0 * s, y + 4.0 * s), (x + 11.0 * s, y + 10.0 * s), amber);
+    // Groin target bullseye diamond
+    p.tri((x + 7.0 * s, y + 4.0 * s), (x + 10.5 * s, y + 8.0 * s), (x + 3.5 * s, y + 8.0 * s), amber);
+    p.tri((x + 7.0 * s, y + 12.0 * s), (x + 10.5 * s, y + 8.0 * s), (x + 3.5 * s, y + 8.0 * s), amber);
+    // Bullseye center dot
+    p.rect(x + 6.0 * s, y + 7.0 * s, 2.0 * s, 2.0 * s, dark);
+}
+
+fn draw_weapon_badge(p: &mut Painter, x: f32, y: f32, name: &str, scale: f32, fade: f32) -> f32 {
+    let w = text_width(name, scale * 0.85);
+    let pad = scale * 0.8;
+    let badge_w = w + pad * 2.0;
+    let badge_h = 7.0 * scale * 0.85 + scale * 1.5;
+    // Badge background
+    p.rect(
+        x,
+        y - scale * 0.4,
+        badge_w,
+        badge_h,
+        [0.08, 0.10, 0.14, 0.85 * fade],
+    );
+    // Top border accent
+    p.rect(
+        x,
+        y - scale * 0.4,
+        badge_w,
+        1.5,
+        [0.55, 0.65, 0.75, 0.6 * fade],
+    );
+    p.text(x + pad, y, scale * 0.85, [0.94, 0.96, 0.98, 0.95 * fade], name);
+    badge_w
+}
+
+fn paint_chat(p: &mut Painter, chat: &crate::chat::ChatState, u: f32) {
+    let scale = u * 0.72;
+    let line_h = 7.0 * scale + u * 2.0;
+    let left = u * 6.0;
+    let max_lines = 8;
+    // Anchor above the health panel
+    let bottom_y = p.height - u * 14.0;
+    let mut y = bottom_y;
+
+    if chat.open {
+        let prefix = match chat.channel {
+            crate::chat::ChatChannel::All => "[ALL]: ",
+            crate::chat::ChatChannel::Team => "[TEAM]: ",
+        };
+        let prefix_color = match chat.channel {
+            crate::chat::ChatChannel::All => [0.85, 0.88, 0.92, 0.95],
+            crate::chat::ChatChannel::Team => [0.35, 0.85, 1.0, 0.95],
+        };
+        let prompt_str = format!("{}{}", prefix, &chat.input);
+        let prompt_w = (text_width(&prompt_str, scale) + scale * 4.0).max(u * 50.0);
+        let box_h = line_h + scale * 1.5;
+
+        // Background box for active prompt
+        p.panel(left - scale, y - scale * 0.5, prompt_w, box_h, scale * 1.2, Some(prefix_color));
+        let pre_w = text_width(prefix, scale);
+        p.text(left, y, scale, prefix_color, prefix);
+        p.text(left + pre_w, y, scale, WHITE, &chat.input);
+
+        // Blinking cursor
+        let cur_bound = chat.cursor.min(chat.input.len());
+        let cur_offset = text_width(&chat.input[..cur_bound], scale);
+        let cursor_x = left + pre_w + cur_offset + 1.0;
+        p.rect(cursor_x, y, 2.0, 7.0 * scale, [1.0, 1.0, 1.0, 0.9]);
+
+        y -= line_h + u * 1.5;
+    }
+
+    let mut drawn_lines = 0;
+    for msg in &chat.messages {
+        if drawn_lines >= max_lines {
+            break;
+        }
+        let fade = if chat.open {
+            1.0
+        } else {
+            ((crate::chat::CHAT_TTL - msg.age) / 1.5).clamp(0.0, 1.0)
+        };
+        if fade <= 0.01 {
+            continue;
+        }
+
+        let prefix = if msg.is_team { "[TEAM] " } else { "[ALL] " };
+        let mut prefix_col = if msg.is_team {
+            team_color(msg.team)
+        } else {
+            [0.70, 0.75, 0.80, 0.85]
+        };
+        prefix_col[3] *= fade;
+
+        let mut name_col = team_color(msg.team);
+        name_col[3] *= fade;
+
+        let mut text_col = WHITE;
+        text_col[3] *= fade;
+
+        let name_str = format!("{}: ", &msg.sender_name);
+        let pre_w = text_width(prefix, scale);
+        let name_w = text_width(&name_str, scale);
+        let text_w = text_width(&msg.text, scale);
+        let total_w = pre_w + name_w + text_w;
+
+        // Panel backdrop for readability
+        p.rect(
+            left - scale * 0.5,
+            y - scale * 0.4,
+            total_w + scale * 2.0,
+            line_h,
+            [0.04, 0.05, 0.07, 0.50 * fade],
+        );
+
+        p.text(left, y, scale, prefix_col, prefix);
+        p.text(left + pre_w, y, scale, name_col, &name_str);
+        p.text(left + pre_w + name_w, y, scale, text_col, &msg.text);
+
+        y -= line_h;
+        drawn_lines += 1;
+    }
+}
+
+fn paint_voice_indicator(p: &mut Painter, transmitting: bool, speakers: &[String], u: f32) {
+    let scale = u * 0.75;
+    let mut y = u * 24.0;
+    let x = u * 6.0;
+
+    if transmitting {
+        let label = "[VOICE COMMS - TRANSMITTING (TEAM)]";
+        let w = text_width(label, scale) + u * 12.0;
+        let h = 7.0 * scale + scale * 2.5;
+        let accent = [0.35, 0.95, 0.45, 0.95];
+
+        p.panel(x, y, w, h, scale * 1.5, Some(accent));
+        p.text(x + scale * 1.5, y + scale * 0.2, scale, accent, label);
+
+        // Animated bouncing equalizer wave bars
+        let bar_x = x + text_width(label, scale) + scale * 3.0;
+        let bar_w = scale * 0.8;
+        let base_h = 7.0 * scale;
+        for i in 0..4 {
+            let offset = (i as f32) * 1.3;
+            let wave = ((p.width * 0.01 + offset).sin().abs() * 0.7 + 0.3) * base_h;
+            p.rect(
+                bar_x + (i as f32) * (bar_w + 2.0),
+                y + scale * 0.2 + (base_h - wave),
+                bar_w,
+                wave,
+                accent,
+            );
+        }
+        y += h + u * 2.0;
+    }
+
+    for speaker in speakers {
+        let label = format!("[RADIO] {speaker}");
+        let w = text_width(&label, scale) + u * 8.0;
+        let h = 7.0 * scale + scale * 2.5;
+        let accent = [0.45, 0.85, 1.0, 0.95];
+
+        p.panel(x, y, w, h, scale * 1.5, Some(accent));
+        p.text(x + scale * 1.5, y + scale * 0.2, scale, accent, &label);
+
+        let tick_x = x + text_width(&label, scale) + scale * 2.5;
+        for i in 0..3 {
+            let h_tick = (i + 1) as f32 * scale * 0.8;
+            p.rect(
+                tick_x + (i as f32) * (scale * 0.7 + 2.0),
+                y + scale * 0.2 + (7.0 * scale - h_tick),
+                scale * 0.7,
+                h_tick,
+                accent,
+            );
+        }
+        y += h + u * 1.5;
     }
 }
 
@@ -3281,6 +3768,7 @@ fn glyph(ch: char) -> [u8; 7] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::HurtMarker;
 
     fn kill(killer: &str, victim: &str, head: bool) -> Fx {
         Fx::Kill {
@@ -3290,6 +3778,17 @@ mod tests {
             killer_name: killer.to_uppercase(),
             weapon: "assault".into(),
             head,
+            nutshot: false,
+            smoke: false,
+            airborne: false,
+            wallbang: false,
+            noscope: false,
+            blind: false,
+            killer_team: 0,
+            victim_team: 1,
+            assister: String::new(),
+            assister_name: String::new(),
+            assister_team: 0,
         }
     }
 
@@ -3333,6 +3832,9 @@ mod tests {
             scores: &[],
             radar: None,
             console: None,
+            chat: None,
+            voice_transmitting: false,
+            voice_speakers: &[],
         }
     }
 
@@ -3492,6 +3994,43 @@ mod tests {
         assert!(hud.feed.front().unwrap().mine);
         hud.on_fx(&kill("a", "b", false), "me");
         assert!(!hud.feed.front().unwrap().mine);
+    }
+
+    #[test]
+    fn the_killfeed_supports_assists_and_all_cs2_modifiers() {
+        let mut hud = Hud::default();
+        hud.on_fx(
+            &Fx::Kill {
+                victim: "enemy".into(),
+                victim_name: "ENEMY".into(),
+                killer: "teammate".into(),
+                killer_name: "TEAMMATE".into(),
+                weapon: "sniper".into(),
+                head: true,
+                nutshot: false,
+                smoke: true,
+                airborne: true,
+                wallbang: true,
+                noscope: true,
+                blind: true,
+                killer_team: 1,
+                victim_team: 0,
+                assister: "me".into(),
+                assister_name: "ME".into(),
+                assister_team: 1,
+            },
+            "me",
+        );
+        let note = hud.feed.front().unwrap();
+        assert!(note.mine); // Local player was assister
+        assert!(note.head);
+        assert!(note.smoke);
+        assert!(note.airborne);
+        assert!(note.wallbang);
+        assert!(note.noscope);
+        assert!(note.blind);
+        assert_eq!(note.assister_name, "ME");
+        assert_eq!(note.assister_team, 1);
     }
 
     #[test]
@@ -4254,6 +4793,17 @@ mod tests {
                 killer_name: "ME".into(),
                 head: false,
                 weapon: String::new(),
+                nutshot: false,
+                smoke: false,
+                airborne: false,
+                wallbang: false,
+                noscope: false,
+                blind: false,
+                killer_team: 0,
+                victim_team: 1,
+                assister: String::new(),
+                assister_name: String::new(),
+                assister_team: 0,
             },
             "me",
         );

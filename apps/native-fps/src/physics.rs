@@ -182,6 +182,8 @@ pub struct MoveInput {
     pub strafe: f32,
     pub jump: bool,
     pub crouch: bool,
+    pub sprint: bool,
+    pub knife: bool,
 }
 
 pub fn create_player(x: f32, y: f32, z: f32, yaw: f32) -> PlayerState {
@@ -476,6 +478,9 @@ pub fn step(world: &World, player: &mut PlayerState, input: &MoveInput, dt: f32)
     if ladder.is_some() {
         scale *= LADDER_HORIZONTAL_SCALE;
     }
+    if input.knife {
+        scale *= 1.10;
+    }
     let speed_cap = MOVE_SPEED * scale;
 
     let (mut wx, mut wy) = wish_direction(player, input);
@@ -489,13 +494,16 @@ pub fn step(world: &World, player: &mut PlayerState, input: &MoveInput, dt: f32)
             wy = ty;
         }
     }
-    let response = if under {
+    let mut response = if under {
         WATER_RESPONSE
     } else if player.on_ground {
         GROUND_RESPONSE
     } else {
         AIR_RESPONSE
     };
+    if input.knife {
+        response *= 1.10;
+    }
     let blend = 1.0 - (-response * dt).exp();
     player.vel_x += (wx * speed_cap - player.vel_x) * blend;
     player.vel_y += (wy * speed_cap - player.vel_y) * blend;

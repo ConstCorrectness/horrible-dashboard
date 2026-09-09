@@ -631,6 +631,12 @@ fn run_headless(socket: &mut MatchSocket) -> Result<(), Box<dyn std::error::Erro
                     eprintln!("hassault: invite to room {} from {}", i.room, i.host_name)
                 }
                 Incoming::Event(Event::Invites(_)) => {}
+                Incoming::Event(Event::Chat(c)) => {
+                    eprintln!("hassault: chat [{}]: {}", c.sender_name, c.text);
+                }
+                Incoming::Event(Event::Voice(v)) => {
+                    eprintln!("hassault: voice [{}]: transmitting={}", v.player_name, v.transmitting);
+                }
                 Incoming::Closed(why) => {
                     eprintln!("hassault: connection closed: {why}");
                     return Ok(());

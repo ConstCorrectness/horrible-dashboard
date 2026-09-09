@@ -44,6 +44,9 @@ use crate::renderer::Vertex;
 /// roughly 36 cm and a 90 cm rifle is about two and a half cubes long.
 const HOME: Vec3 = Vec3::new(0.92, -0.86, -1.35);
 
+/// Centered ADS aim position aligned with sights line.
+const ADS_POS: Vec3 = Vec3::new(0.0, -0.44, -0.90);
+
 /// How long the muzzle flash stays lit. Two frames at 60 fps.
 const FLASH_LIFE: f32 = 0.055;
 
@@ -157,6 +160,7 @@ const FLASH_HALO_SCALE: f32 = 2.1;
 /// the gun looks like.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Skin {
+    pub id: Option<String>,
     pub base_color: String,
     pub accent_color: String,
     /// `solid` | `camo` | `anodized` | `custom_art` | `patina` | `fade`.
@@ -271,8 +275,20 @@ fn palette_for(skin: Option<&Skin>) -> Palette {
             grip: mix(base, BLACK, 0.65),
             accent,
         },
-        // `solid`, `patina`, `custom_art`: the base carries the weapon and the
-        // accent picks out the barrel and the sights.
+        "patina" => Palette {
+            body: mix(base, accent, 0.35),
+            dark: mix(accent, BLACK, 0.35),
+            grip: mix(base, BLACK, 0.7),
+            accent: mix(base, WHITE, 0.2),
+        },
+        "custom_art" => Palette {
+            body: base,
+            dark: accent,
+            grip: mix(base, BLACK, 0.72),
+            accent: mix(accent, WHITE, 0.3),
+        },
+        // `solid`, and anything new: the base carries the weapon and the accent
+        // picks out the barrel and the sights.
         _ => Palette {
             body: base,
             dark: mix(base, BLACK, 0.5),
@@ -309,6 +325,7 @@ pub fn equipped_skins(inventory: &[crate::api::SkinInstance]) -> HashMap<String,
         out.insert(
             def.weapon_id.clone(),
             Skin {
+                id: if def.id.is_empty() { None } else { Some(def.id.clone()) },
                 base_color: def.base_color.clone(),
                 accent_color: def.accent_color.clone(),
                 pattern_type: def.pattern_type.clone(),
@@ -321,6 +338,8 @@ pub fn equipped_skins(inventory: &[crate::api::SkinInstance]) -> HashMap<String,
 
 /// What the animation needs to know about this frame.
 pub struct Frame {
+    /// Aim-down-sights weight (0.0 hipfire to 1.0 ADS).
+    pub ads: f32,
     /// Horizontal speed in cubes per second, for the walk cycle.
     pub speed: f32,
     pub on_ground: bool,
@@ -546,6 +565,8 @@ pub struct WeaponViewModel {
     /// working weapon and always were.
     prop: Option<PropFit>,
     visible: bool,
+    /// Current ADS interpolation state, 0.0 (hipfire) to 1.0 (full ADS).
+    pub ads_t: f32,
 }
 
 impl Default for WeaponViewModel {
@@ -578,6 +599,7 @@ impl Default for WeaponViewModel {
             transform: Mat4::IDENTITY,
             prop: None,
             visible: false,
+            ads_t: 0.0,
         }
     }
 }
@@ -827,8 +849,15 @@ impl WeaponViewModel {
             }
         };
 
-        let bob_x = (self.bob_phase * 0.5).cos() * 0.05 * bob_amount;
-        let bob_y = (self.bob_phase).sin().abs() * -0.055 * bob_amount;
+        self.ads_t += (frame.ads - self.ads_t) * (dt * 14.0).min(1.0);
+        let ads_damp = 1.0 - 0.75 * self.ads_t;
+
+        let cur_home_x = HOME.x * (1.0 - self.ads_t) + ADS_POS.x * self.ads_t;
+        let cur_home_y = HOME.y * (1.0 - self.ads_t) + ADS_POS.y * self.ads_t;
+        let cur_home_z = HOME.z * (1.0 - self.ads_t) + ADS_POS.z * self.ads_t;
+
+        let bob_x = (self.bob_phase * 0.5).cos() * 0.05 * bob_amount * ads_damp;
+        let bob_y = (self.bob_phase).sin().abs() * -0.055 * bob_amount * ads_damp;
 
         // Where the inspect pose takes the weapon: in towards the centre of
         // the screen, up, and rolled most of the way over so the side of the
@@ -843,6 +872,40 @@ impl WeaponViewModel {
         // The roll is `inspect * (ROLL + TURN * turn)` rather than `inspect *
         // ROLL`. The envelope still scales it, so it starts and ends at rest;
         // the turn is what keeps it moving in between.
+        let is_knife = self.weapon == "knife";
+        let knife_flourish = if is_knife {
+            ((turn * 2.5).min(1.0) * std::f32::consts::PI).sin()
+        } else {
+            0.0
+        };
+        let knife_spin = if is_knife {
+            knife_flourish * std::f32::consts::PI * 1.6
+        } else {
+            0.0
+        };
+
+        let inspect_pitch = if is_knife {
+            inspect * (0.28 + 0.35 * (turn * std::f32::consts::PI).sin())
+        } else {
+            inspect * (0.34 - 0.12 * (turn * std::f32::consts::PI).sin())
+        };
+
+        let inspect_yaw = if is_knife {
+            -inspect * 0.45 + knife_flourish * 0.35
+        } else {
+            -inspect * (0.95 - 0.35 * turn)
+        };
+
+        let inspect_roll = if is_knife {
+            inspect * (1.2 + knife_spin)
+        } else {
+            inspect * (INSPECT_ROLL + INSPECT_TURN * turn)
+        };
+
+        let inspect_lift_x = if is_knife { lift * 0.18 } else { lift * 0.30 };
+        let inspect_lift_y = if is_knife { lift * 0.22 } else { lift * 0.16 };
+        let inspect_lift_z = if is_knife { lift * 0.26 } else { lift * 0.20 };
+
         // The swap, eased rather than applied raw: a linear `stow` moved
         // linearly reads as the gun being winched, and the arrival is the part
         // that has to land. Down and slightly back, muzzle tipping toward the
@@ -850,16 +913,16 @@ impl WeaponViewModel {
         // since a weapon that stops just short of gone reads as a bug.
         let stow = ease(self.stow);
         let position = Vec3::new(
-            HOME.x + bob_x + self.sway_x - lift * 0.30,
-            HOME.y + bob_y + self.sway_y - self.reload_t * 0.55 + lift * 0.16 - stow * 1.15,
-            HOME.z + self.kick * 0.28 + lift * 0.20 + stow * 0.22,
+            cur_home_x + bob_x + self.sway_x * ads_damp - inspect_lift_x,
+            cur_home_y + bob_y + self.sway_y * ads_damp - self.reload_t * 0.55 + inspect_lift_y - stow * 1.15,
+            cur_home_z + self.kick * 0.28 + inspect_lift_z + stow * 0.22,
         );
         let rotation = Vec3::new(
-            self.kick * -0.16 + self.reload_t * 0.7 + bob_y * 0.4 + inspect * 0.34 + stow * 1.05,
-            self.sway_x * 0.7 + self.reload_t * 0.25 - inspect * 0.95,
-            self.sway_x * 0.5
+            self.kick * -0.16 + self.reload_t * 0.7 + bob_y * 0.4 + inspect_pitch + stow * 1.05,
+            self.sway_x * 0.7 * ads_damp + self.reload_t * 0.25 + inspect_yaw,
+            self.sway_x * 0.5 * ads_damp
                 + bob_x * 0.6
-                + inspect * (INSPECT_ROLL + INSPECT_TURN * turn)
+                + inspect_roll
                 + stow * 0.35,
         );
         self.transform = Mat4::from_translation(position)
@@ -1232,6 +1295,149 @@ fn flash_fan(radius: f32, segments: usize, color: [f32; 3]) -> Vec<Vertex> {
     out
 }
 
+fn build_karambit(
+    metal: [f32; 3],
+    dark: [f32; 3],
+    grip: [f32; 3],
+    accent: [f32; 3],
+) -> (Vec<Part>, Vec3, Vec3) {
+    let mut parts = vec![
+        // Ergonomic curved handle: 3 contoured angled segments
+        rotated([0.12, 0.16, 0.22], [0.0, 0.02, 0.02], grip, [0.14, 0.0, 0.0]),
+        rotated([0.14, 0.18, 0.24], [0.0, 0.06, 0.22], grip, [0.28, 0.0, 0.0]),
+        rotated([0.13, 0.16, 0.20], [0.0, 0.14, 0.42], dark, [0.42, 0.0, 0.0]),
+        // Contoured finger index notches
+        part([0.145, 0.04, 0.04], [0.0, -0.06, 0.12], dark),
+        part([0.145, 0.04, 0.04], [0.0, -0.04, 0.24], dark),
+        // Pommel retention ring: open loop
+        rotated([0.14, 0.14, 0.08], [0.0, 0.22, 0.54], metal, [0.55, 0.0, 0.0]),
+        rotated([0.10, 0.04, 0.10], [0.0, 0.36, 0.62], metal, [0.65, 0.0, 0.0]),
+        rotated([0.10, 0.04, 0.10], [0.0, 0.16, 0.68], metal, [0.65, 0.0, 0.0]),
+        rotated([0.04, 0.16, 0.10], [0.06, 0.26, 0.65], metal, [0.65, 0.0, 0.0]),
+        rotated([0.04, 0.16, 0.10], [-0.06, 0.26, 0.65], metal, [0.65, 0.0, 0.0]),
+        // Claw/Talon blade: curves forward and sweeps down
+        rotated([0.06, 0.16, 0.16], [0.0, -0.01, -0.16], dark, [-0.10, 0.0, 0.0]),
+        rotated([0.045, 0.18, 0.32], [0.0, -0.05, -0.38], metal, [-0.22, 0.0, 0.0]),
+        rotated([0.04, 0.17, 0.30], [0.0, -0.14, -0.66], metal, [-0.44, 0.0, 0.0]),
+        rotated([0.035, 0.15, 0.26], [0.0, -0.29, -0.90], metal, [-0.70, 0.0, 0.0]),
+        // Razor ground inside bevel
+        rotated([0.026, 0.09, 0.36], [0.0, -0.12, -0.52], accent, [-0.32, 0.0, 0.0]),
+        // Sharp talon beak point
+        rotated([0.028, 0.10, 0.22], [0.0, -0.48, -1.06], accent, [-0.98, 0.0, 0.0]),
+    ];
+    for i in 0..3 {
+        parts.push(part(
+            [0.055, 0.04, 0.04],
+            [0.0, 0.08, -0.14 - (i as f32) * 0.08],
+            accent,
+        ));
+    }
+    (parts, Vec3::new(0.0, -0.48, -1.10), Vec3::new(0.10, -0.36, 0.28))
+}
+
+fn build_butterfly(
+    metal: [f32; 3],
+    dark: [f32; 3],
+    grip: [f32; 3],
+    accent: [f32; 3],
+) -> (Vec<Part>, Vec3, Vec3) {
+    let parts = vec![
+        // Left handle rails & skeleton cutouts
+        part([0.035, 0.13, 0.65], [-0.07, 0.0, 0.12], grip),
+        part([0.035, 0.13, 0.65], [-0.015, 0.0, 0.12], grip),
+        part([0.065, 0.11, 0.05], [-0.042, 0.0, -0.16], dark),
+        part([0.065, 0.11, 0.05], [-0.042, 0.0, 0.12], dark),
+        part([0.065, 0.11, 0.05], [-0.042, 0.0, 0.40], dark),
+        // Right handle rails & skeleton cutouts
+        part([0.035, 0.13, 0.65], [0.015, 0.0, 0.12], grip),
+        part([0.035, 0.13, 0.65], [0.07, 0.0, 0.12], grip),
+        part([0.065, 0.11, 0.05], [0.042, 0.0, -0.16], dark),
+        part([0.065, 0.11, 0.05], [0.042, 0.0, 0.12], dark),
+        part([0.065, 0.11, 0.05], [0.042, 0.0, 0.40], dark),
+        // Latch
+        part([0.03, 0.05, 0.11], [0.042, 0.0, 0.48], metal),
+        part([0.04, 0.06, 0.04], [0.042, 0.0, 0.54], accent),
+        // Pivots & tang
+        part([0.05, 0.04, 0.04], [-0.042, 0.0, -0.22], accent),
+        part([0.05, 0.04, 0.04], [0.042, 0.0, -0.22], accent),
+        part([0.048, 0.15, 0.16], [0.0, 0.0, -0.28], metal),
+        part([0.15, 0.06, 0.05], [0.0, 0.0, -0.26], dark),
+        // Blade
+        part([0.042, 0.17, 0.88], [0.0, 0.01, -0.76], metal),
+        part([0.028, 0.12, 0.84], [0.0, -0.06, -0.76], accent),
+        part([0.030, 0.08, 0.60], [0.0, 0.07, -0.80], accent),
+        part([0.048, 0.04, 0.52], [0.0, 0.01, -0.68], dark),
+        part([0.032, 0.13, 0.26], [0.0, 0.0, -1.28], accent),
+    ];
+    (parts, Vec3::new(0.0, 0.0, -1.42), Vec3::new(0.05, -0.25, 0.18))
+}
+
+fn build_bayonet(
+    metal: [f32; 3],
+    dark: [f32; 3],
+    grip: [f32; 3],
+    accent: [f32; 3],
+) -> (Vec<Part>, Vec3, Vec3) {
+    let mut parts = vec![
+        part([0.13, 0.17, 0.54], [0.0, 0.0, 0.12], grip),
+        part([0.16, 0.20, 0.10], [0.0, 0.0, 0.41], metal),
+        part([0.08, 0.08, 0.06], [0.0, 0.0, 0.48], dark),
+        part([0.05, 0.05, 0.05], [0.0, -0.09, 0.44], dark),
+    ];
+    for i in 0..4 {
+        parts.push(part(
+            [0.145, 0.185, 0.04],
+            [0.0, 0.0, -0.06 + (i as f32) * 0.11],
+            dark,
+        ));
+    }
+    parts.push(part([0.22, 0.24, 0.08], [0.0, 0.02, -0.18], metal));
+    parts.push(part([0.06, 0.10, 0.07], [0.0, 0.14, -0.18], metal));
+    parts.push(tube(0.06, 0.07, [0.0, 0.21, -0.18], metal));
+    parts.push(rotated([0.06, 0.08, 0.06], [0.0, -0.12, -0.18], metal, [-0.2, 0.0, 0.0]));
+    parts.push(part([0.065, 0.16, 0.16], [0.0, 0.02, -0.30], metal));
+    parts.push(part([0.052, 0.20, 1.05], [0.0, 0.07, -0.88], metal));
+    parts.push(part([0.035, 0.15, 1.02], [0.0, -0.06, -0.87], accent));
+    parts.push(part([0.058, 0.04, 0.65], [0.0, 0.03, -0.78], dark));
+    parts.push(rotated([0.042, 0.16, 0.32], [0.0, 0.0, -1.48], accent, [0.18, 0.0, 0.0]));
+    for i in 0..5 {
+        parts.push(part(
+            [0.058, 0.05, 0.05],
+            [0.0, 0.18, -0.48 - (i as f32) * 0.10],
+            dark,
+        ));
+    }
+    (parts, Vec3::new(0.0, 0.02, -1.62), Vec3::new(0.06, -0.32, 0.22))
+}
+
+fn build_tactical_knife(
+    metal: [f32; 3],
+    dark: [f32; 3],
+    grip: [f32; 3],
+    accent: [f32; 3],
+) -> (Vec<Part>, Vec3, Vec3) {
+    let mut parts = vec![
+        part([0.13, 0.16, 0.5], [0.0, 0.0, 0.14], grip),
+        part([0.15, 0.185, 0.24], [0.0, 0.0, 0.06], grip),
+        part([0.16, 0.2, 0.09], [0.0, 0.0, 0.38], dark),
+        tube(0.075, 0.06, [0.0, 0.0, 0.44], accent),
+        part([0.17, 0.05, 0.05], [0.0, 0.02, 0.38], metal),
+        part([0.2, 0.2, 0.07], [0.0, 0.01, -0.2], dark),
+        part([0.06, 0.13, 0.14], [0.0, 0.03, -0.31], metal),
+        part([0.05, 0.2, 0.95], [0.0, 0.08, -0.85], metal),
+        part([0.035, 0.14, 0.92], [0.0, -0.035, -0.84], accent),
+        part([0.04, 0.17, 0.3], [0.0, 0.02, -1.42], accent),
+    ];
+    for i in 0..3 {
+        parts.push(part(
+            [0.055, 0.05, 0.05],
+            [0.0, 0.15, -0.5 - (i as f32) * 0.13],
+            dark,
+        ));
+    }
+    (parts, Vec3::new(0.0, 0.03, -1.5), Vec3::new(0.06, -0.32, 0.22))
+}
+
 /// The weapon, by id.
 ///
 /// Ids are the backend's (`weapons.py`): knife, pistol, assault, shotgun,
@@ -1241,18 +1447,21 @@ fn build(id: &str, skin: Option<&Skin>) -> Shape {
     let palette = palette_for(skin);
     let (metal, dark, grip, accent) = (palette.body, palette.dark, palette.grip, palette.accent);
     let (parts, muzzle, rest): (Vec<Part>, Vec3, Vec3) = match id {
-        "knife" => (
-            vec![
-                part([0.14, 0.17, 0.6], [0.0, 0.0, 0.1], grip),
-                part([0.05, 0.05, 0.1], [0.0, 0.0, -0.24], accent),
-                // Blade: a flat box, already tapered in its own proportions
-                // rather than by a scale on the mesh, which this builder has no
-                // node to hang.
-                part([0.045, 0.18, 1.0], [0.0, 0.03, -0.8], accent),
-            ],
-            Vec3::new(0.0, 0.03, -1.3),
-            Vec3::new(0.06, -0.32, 0.22),
-        ),
+        "knife" => {
+            let skin_id = skin.and_then(|s| s.id.as_deref()).unwrap_or("");
+            let is_karambit = skin_id.contains("karambit");
+            let is_butterfly = skin_id.contains("butterfly");
+            let is_bayonet = skin_id.contains("bayonet") || skin_id.contains("lore");
+            if is_karambit {
+                build_karambit(metal, dark, grip, accent)
+            } else if is_butterfly {
+                build_butterfly(metal, dark, grip, accent)
+            } else if is_bayonet {
+                build_bayonet(metal, dark, grip, accent)
+            } else {
+                build_tactical_knife(metal, dark, grip, accent)
+            }
+        }
         "pistol" => (
             vec![
                 part([0.22, 0.3, 1.05], [0.0, 0.0, -0.5], metal),
@@ -1308,6 +1517,48 @@ fn build(id: &str, skin: Option<&Skin>) -> Shape {
             ],
             Vec3::new(0.0, 0.02, -3.0),
             Vec3::new(0.0, -0.03, 0.0),
+        ),
+        "nade_he" | "grenade_he" => (
+            vec![
+                tube(0.14, 0.30, [0.0, 0.0, 0.0], [0.24, 0.33, 0.18]),
+                tube(0.06, 0.10, [0.0, 0.0, 0.18], [0.35, 0.35, 0.38]),
+                tube(0.045, 0.06, [0.0, 0.0, 0.24], [0.45, 0.45, 0.48]),
+                part([0.03, 0.02, 0.28], [0.08, 0.0, 0.08], [0.65, 0.65, 0.68]),
+                tube(0.04, 0.02, [0.07, 0.0, 0.21], [0.85, 0.75, 0.20]),
+            ],
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.08, -0.26, 0.22),
+        ),
+        "nade_flash" | "grenade_flash" => (
+            vec![
+                tube(0.12, 0.34, [0.0, 0.0, 0.0], [0.72, 0.74, 0.78]),
+                tube(0.125, 0.08, [0.0, 0.0, 0.06], [0.15, 0.35, 0.85]),
+                tube(0.06, 0.09, [0.0, 0.0, 0.20], [0.35, 0.35, 0.38]),
+                part([0.03, 0.02, 0.26], [0.07, 0.0, 0.08], [0.65, 0.65, 0.68]),
+            ],
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.08, -0.26, 0.22),
+        ),
+        "nade_smoke" | "grenade_smoke" => (
+            vec![
+                tube(0.14, 0.40, [0.0, 0.0, 0.0], [0.55, 0.58, 0.62]),
+                tube(0.145, 0.08, [0.0, 0.0, 0.12], [0.20, 0.60, 0.28]),
+                tube(0.06, 0.09, [0.0, 0.0, 0.23], [0.35, 0.35, 0.38]),
+                part([0.03, 0.02, 0.30], [0.08, 0.0, 0.08], [0.65, 0.65, 0.68]),
+            ],
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.08, -0.26, 0.22),
+        ),
+        "nade_molotov" | "grenade_molotov" => (
+            vec![
+                tube(0.12, 0.34, [0.0, 0.0, -0.06], [0.62, 0.32, 0.10]),
+                tube(0.05, 0.16, [0.0, 0.0, 0.17], [0.62, 0.32, 0.10]),
+                tube(0.065, 0.04, [0.0, 0.0, 0.25], [0.58, 0.30, 0.08]),
+                part([0.07, 0.07, 0.14], [0.0, 0.0, 0.31], [0.88, 0.84, 0.74]),
+                part([0.04, 0.04, 0.06], [0.0, 0.0, 0.38], [0.98, 0.45, 0.10]),
+            ],
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.08, -0.26, 0.22),
         ),
         // Assault rifle, and the fallback for anything new.
         _ => (
@@ -1517,6 +1768,7 @@ mod tests {
 
     fn frame(visible: bool) -> Frame {
         Frame {
+            ads: 0.0,
             speed: 0.0,
             on_ground: true,
             reloading: false,
@@ -1650,6 +1902,7 @@ mod tests {
 
     fn skin(base: &str, accent: &str, pattern: &str, wear: f32) -> Skin {
         Skin {
+            id: None,
             base_color: base.into(),
             accent_color: accent.into(),
             pattern_type: pattern.into(),
@@ -1776,6 +2029,7 @@ mod tests {
             is_equipped,
             float_value: 0.2,
             definition: definition.then(|| SkinDefinition {
+                id: format!("{weapon}_skin"),
                 weapon_id: weapon.into(),
                 base_color: "#38bdf8".into(),
                 accent_color: "#f43f5e".into(),
@@ -2325,5 +2579,22 @@ mod tests {
         let out = transform_vertex(&m, &v);
         assert_eq!(out.normal, [0.0, 1.0, 0.0]);
         assert_eq!(out.position, [10.0, -5.0, 3.0]);
+    }
+
+    #[test]
+    fn ads_moves_weapon_towards_sight_line_and_damps_bob() {
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("assault", None);
+        settle(&mut vm);
+        let hip_x = vm.transform.w_axis.x;
+
+        let mut f = frame(true);
+        f.ads = 1.0;
+        for _ in 0..60 {
+            vm.update(0.016, &f);
+        }
+        let ads_x = vm.transform.w_axis.x;
+        assert!((ads_x - ADS_POS.x).abs() < 0.05);
+        assert!(ads_x < hip_x, "ADS should move weapon towards screen center");
     }
 }

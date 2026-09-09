@@ -141,6 +141,10 @@ class MapInfo(BaseModel):
     #: implementation of it in TypeScript would be a Train mode whose items sit
     #: somewhere a match's do not.
     items: list[ItemPlacement] = Field(default_factory=list)
+    #: Level format: "cube" (Cube 1 2.5D heightfield) or "gltf" (full 3D mesh with collision hulls).
+    format: Literal["cube", "gltf"] = "cube"
+    #: Optional URL to the 3D level mesh (GLB), served at `/api/hassault/maps/{name}/mesh`.
+    meshUrl: str | None = None
 
 
 class MatchSummary(BaseModel):

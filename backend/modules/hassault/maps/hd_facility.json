@@ -1,0 +1,207 @@
+{
+  "title": "The Facility",
+  "author": "horrible-dashboard",
+  "license": "CC0-1.0",
+  "sfactor": 6,
+  "waterlevel": -3.5,
+  "ambient": 46,
+  "format": "gltf",
+  "brushes": [
+    {
+      "op": "room",
+      "rect": [4, 4, 56, 56],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 12,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [20, 20, 24, 24],
+      "floor": -5,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 58,
+      "ctex": 33
+    },
+    {
+      "op": "stairs",
+      "rect": [28, 14, 8, 6],
+      "axis": "y",
+      "from": 0,
+      "to": -5,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 58
+    },
+    {
+      "op": "stairs",
+      "rect": [28, 44, 8, 6],
+      "axis": "y",
+      "from": -5,
+      "to": 0,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 58
+    },
+    {
+      "op": "solid",
+      "rect": [10, 12, 4, 4],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [50, 48, 4, 4],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [12, 48, 4, 4],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [48, 12, 4, 4],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [24, 22, 2, 2],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [38, 22, 2, 2],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [24, 40, 2, 2],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [38, 40, 2, 2],
+      "wtex": 131
+    }
+  ],
+  "entities": [
+    {
+      "type": "playerstart",
+      "x": 9,
+      "y": 9,
+      "yaw": 45,
+      "team": 0
+    },
+    {
+      "type": "playerstart",
+      "x": 54,
+      "y": 9,
+      "yaw": 315,
+      "team": 0
+    },
+    {
+      "type": "playerstart",
+      "x": 32,
+      "y": 8,
+      "yaw": 0,
+      "team": 0
+    },
+    {
+      "type": "playerstart",
+      "x": 9,
+      "y": 28,
+      "yaw": 0,
+      "team": 0
+    },
+    {
+      "type": "playerstart",
+      "x": 9,
+      "y": 54,
+      "yaw": 135,
+      "team": 1
+    },
+    {
+      "type": "playerstart",
+      "x": 54,
+      "y": 54,
+      "yaw": 225,
+      "team": 1
+    },
+    {
+      "type": "playerstart",
+      "x": 32,
+      "y": 55,
+      "yaw": 180,
+      "team": 1
+    },
+    {
+      "type": "playerstart",
+      "x": 54,
+      "y": 28,
+      "yaw": 180,
+      "team": 1
+    },
+    {
+      "type": "health",
+      "x": 9,
+      "y": 38,
+      "z": 0
+    },
+    {
+      "type": "health",
+      "x": 54,
+      "y": 38,
+      "z": 0
+    },
+    {
+      "type": "armour",
+      "x": 32,
+      "y": 32,
+      "z": -5
+    },
+    {
+      "type": "armour",
+      "x": 32,
+      "y": 24,
+      "z": -5
+    },
+    {
+      "type": "ammo",
+      "x": 22,
+      "y": 10,
+      "z": 0
+    },
+    {
+      "type": "ammo",
+      "x": 42,
+      "y": 10,
+      "z": 0
+    },
+    {
+      "type": "ammo",
+      "x": 22,
+      "y": 54,
+      "z": 0
+    },
+    {
+      "type": "ammo",
+      "x": 42,
+      "y": 54,
+      "z": 0
+    },
+    {
+      "type": "clips",
+      "x": 16,
+      "y": 32,
+      "z": 0
+    },
+    {
+      "type": "grenade",
+      "x": 48,
+      "y": 32,
+      "z": 0
+    }
+  ]
+}

@@ -100,11 +100,13 @@ export class ItemPool {
       if (!mat) continue; // an item kind this client is too old to draw
       const group = new this.three.Group();
       const body = new this.three.Mesh(this.shapeFor(row.kind), mat);
+      body.frustumCulled = true;
       group.add(body);
 
       // The floor ring, which is what a player actually navigates by: it stays
       // put while the body bobs, and it is still there when the item is gone.
       const ring = new this.three.Mesh(this.ringGeo, this.ringMats.get(row.kind)!);
+      ring.frustumCulled = true;
       ring.rotation.x = -Math.PI / 2;
       ring.position.z = 0.03;
       group.add(ring);

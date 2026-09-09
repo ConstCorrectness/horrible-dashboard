@@ -311,6 +311,10 @@ impl TrainingRange {
             // `_handle_combat` follows: a weapon you just drew must not fire
             // from halfway down someone else's recoil curve.
             self.spray_index = 0;
+            // Combat Arms "QQ" quick-switch rechamber cancel for sniper
+            if self.weapons[slot].id == "sniper" && self.clock - self.last_range_fire_at >= 0.50 {
+                self.last_range_fire_at = self.clock - self.weapons[slot].interval;
+            }
         }
     }
 
@@ -481,8 +485,18 @@ impl TrainingRange {
             // Relative to the top of the body, so the head is where the head is
             // on a crouched target too.
             let head = point[2] >= target.z + (BODY_HEIGHT - HEAD_BAND);
-            let amount = damage_at(&weapon, distance, falloff_start(&weapon))
-                * if head { weapon.head_multiplier } else { 1.0 };
+            let nutshot = !head && point[2] >= target.z + (BODY_HEIGHT * 0.38) && point[2] <= target.z + (BODY_HEIGHT * 0.55);
+            let limbs = !head && !nutshot && point[2] < target.z + (BODY_HEIGHT * 0.38);
+            let mult = if head {
+                weapon.head_multiplier
+            } else if nutshot {
+                1.5
+            } else if limbs {
+                0.75
+            } else {
+                1.0
+            };
+            let amount = damage_at(&weapon, distance, falloff_start(&weapon)) * mult;
             target.hp -= amount;
             let killed = target.hp <= 0.0;
             if killed {

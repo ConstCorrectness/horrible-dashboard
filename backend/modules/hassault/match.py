@@ -355,6 +355,7 @@ class MatchPlayer:
 
     # -- combat -------------------------------------------------------------
     health: float = MAX_HEALTH
+    god: bool = False
     #: Absorbs `weapons.ARMOUR_ABSORB` of every incoming hit until it is spent.
     #: **Private**, unlike health: how much protection somebody is carrying is
     #: exactly what you would like to know before starting a fight, and the
@@ -365,7 +366,9 @@ class MatchPlayer:
     ammo: dict[int, int] = field(default_factory=dict)
     reserve: dict[int, int] = field(default_factory=dict)
     kills: int = 0
+    assists: int = 0
     deaths: int = 0
+    recent_damagers: list[tuple[str, str, int, float, float]] = field(default_factory=list)
     #: Damage this player has actually landed, in hit points. **Applied** damage,
     #: not rolled: a 90-damage sniper round into a body with 20 left counts 20.
     #: Overkill would make the number a description of the weapon rather than of
@@ -597,6 +600,45 @@ class MatchPlayer:
         }
 
 
+@dataclass
+class RoomSettings:
+    """Configurable in-game settings for live playtesting and balance iteration."""
+
+    player_max_health: float = 100.0
+    damage_scale: float = 1.0
+    nade_damage_scale: float = 1.0
+    knife_speed_boost: float = 1.10
+    recoil_scale: float = 1.0
+    recoil_push: float = 0.0
+
+@dataclass
+class PseudoWeapon:
+    id: str
+    name: str = ""
+
+
+def _segment_intersects_zone(
+    p0: tuple[float, float, float] | list[float],
+    p1: tuple[float, float, float] | list[float],
+    zone: Any,
+) -> bool:
+    vx = p1[0] - p0[0]
+    vy = p1[1] - p0[1]
+    vz = p1[2] - p0[2]
+    seg_len_sq = vx * vx + vy * vy + vz * vz
+    if seg_len_sq < 1e-6:
+        return zone.contains(p0[0], p0[1], p0[2])
+    wx = zone.x - p0[0]
+    wy = zone.y - p0[1]
+    wz = zone.z - p0[2]
+    t = max(0.0, min(1.0, (wx * vx + wy * vy + wz * vz) / seg_len_sq))
+    closest_x = p0[0] + t * vx
+    closest_y = p0[1] + t * vy
+    closest_z = p0[2] + t * vz
+    dist_sq = (closest_x - zone.x) ** 2 + (closest_y - zone.y) ** 2 + (closest_z - zone.z) ** 2
+    return dist_sq <= zone.radius * zone.radius
+
+
 class MatchRoom:
     """One match on one map. Owns a tick task for as long as anyone is in it."""
 
@@ -644,6 +686,7 @@ class MatchRoom:
         # knew it was playing deathmatch.
         self.scores: list[int] = [0, 0]
         self.mode: GameMode = mode if mode is not None else modes.build()
+        self.settings: RoomSettings = RoomSettings()
         #: Flag stands and bomb sites, already resolved onto the floor. Optional
         #: and empty by default for the same reason `items` is: a room built out
         #: of four numbers in a test has no objectives, and that is not an error.
@@ -916,6 +959,8 @@ class MatchRoom:
                             pitch=command.pitch,
                             dt=dt,
                             seq=command.seq,
+                            knife=(player.weapon == 0),
+                            knife_boost=self.settings.knife_speed_boost,
                         ),
                         dt,
                     )
@@ -1080,7 +1125,7 @@ class MatchRoom:
         # the game says so.
         targets: dict[str, tuple[float, float, float]] = {}
         for other in self.players.values():
-            if not other.alive or other.protected:
+            if not other.alive or other.protected or other.god:
                 continue
             thrower = self.players.get(nade.owner)
             if (
@@ -1101,21 +1146,29 @@ class MatchRoom:
             victim = self.players.get(hit.victim)
             if victim is None or not victim.alive:
                 continue
+            blast_dmg = hit.damage * self.settings.nade_damage_scale
             if thrower is not None and victim.id != thrower.id:
+                airborne = not thrower.state.on_ground
                 self._apply_damage(
-                    victim, thrower, hit.damage, False, weapons.weapon_at(0), now
+                    victim,
+                    thrower,
+                    blast_dmg,
+                    False,
+                    PseudoWeapon(id=nade.spec.kind, name=nade.spec.kind.upper()),
+                    now,
+                    airborne=airborne,
                 )
             else:
                 # Blowing yourself up has no killer to credit, exactly like a
                 # fall. Routing it through `_apply_damage` would award you a kill
                 # on yourself and put you on your own scoreboard line.
-                self._fall_damage(victim, hit.damage, now)
+                self._fall_damage(victim, blast_dmg, now)
 
     def _burn(self, zone: grenades.Zone, dt: float, now: float) -> None:
         """Damage over time from a fire, for anybody standing in it."""
         owner = self.players.get(zone.owner)
         for player in self.players.values():
-            if not player.alive or player.protected:
+            if not player.alive or player.protected or player.god:
                 continue
             if (
                 player.id != zone.owner
@@ -1127,10 +1180,17 @@ class MatchRoom:
             # would let a player wade through the edge of one untouched.
             if not zone.contains(player.state.x, player.state.y, player.state.z + 0.5):
                 continue
-            amount = zone.damage_per_second * dt
+            amount = zone.damage_per_second * dt * self.settings.nade_damage_scale
             if owner is not None and player.id != owner.id:
+                airborne = not owner.state.on_ground
                 self._apply_damage(
-                    player, owner, amount, False, weapons.weapon_at(0), now
+                    player,
+                    owner,
+                    amount,
+                    False,
+                    PseudoWeapon(id="molotov", name="MOLOTOV"),
+                    now,
+                    airborne=airborne,
                 )
             else:
                 self._fall_damage(player, amount, now)
@@ -1378,6 +1438,8 @@ class MatchRoom:
         killfeed, the hitmarker and the score — and a fall has none of those. A
         death here is a death with no kill, which is exactly right.
         """
+        if player.god:
+            return
         player.health -= amount
         player.last_fall = amount
         if player.health > 0:
@@ -1399,6 +1461,14 @@ class MatchRoom:
                 "killerName": "",
                 "weapon": "fall",
                 "head": False,
+                "nutshot": False,
+                "smoke": False,
+                "airborne": False,
+                "wallbang": False,
+                "noscope": False,
+                "blind": False,
+                "killerTeam": -1,
+                "victimTeam": player.team,
             }
         )
 
@@ -1448,6 +1518,10 @@ class MatchRoom:
             # index across a switch would mean a weapon you just drew firing from
             # halfway down someone else's recoil curve.
             player.spray_index = 0
+            # Combat Arms "QQ" quick-switch rechamber cancel for sniper
+            w = weapons.weapon_at(player.weapon)
+            if w.id == "sniper" and player.sim_time - player.last_fire_at >= 0.50:
+                player.last_fire_at = player.sim_time - w.interval
         # Every frame, not only on the next trigger pull. Resolving it lazily
         # deadlocks anyone who reloads and then waits — including every bot, which
         # stops firing precisely because it is empty.
@@ -1596,10 +1670,16 @@ class MatchRoom:
         # is bit-for-bit the number the client adds to its camera. Anything else
         # and the crosshair drifts away from where the bullets go, which is the
         # one thing a learnable pattern cannot survive.
+        spray_off = weapons.spray_offset(weapon, player.spray_index)
+        if self.settings.recoil_scale != 1.0:
+            spray_off = (
+                spray_off[0] * self.settings.recoil_scale,
+                spray_off[1] * self.settings.recoil_scale,
+            )
         aim_yaw, aim_pitch = weapons.apply_spray(
             command.yaw,
             command.pitch,
-            weapons.spray_offset(weapon, player.spray_index),
+            spray_off,
         )
         direction = weapons.aim_vector(aim_yaw, aim_pitch)
 
@@ -1625,6 +1705,7 @@ class MatchRoom:
                 other.id, physics.body_height(other.state)
             )
 
+        pen = 1.25 if getattr(weapon, "id", "") == "sniper" else (0.8 if getattr(weapon, "id", "") in ("assault", "carbine") else 0.0)
         result = weapons.resolve_shot(
             self.world,
             weapon,
@@ -1639,6 +1720,7 @@ class MatchRoom:
             spread=weapons.residual_spread(weapon, command.scoped),
             rewound_ms=max(0.0, now_ms - rewind_to),
             heights=heights,
+            penetration=pen,
         )
 
         # Recoil shoves the shooter, opposite their aim — AC's `attackphysics`, and
@@ -1648,6 +1730,10 @@ class MatchRoom:
         # where the player was pointing, and threading a recoil offset into it
         # would make the shoot-jump drift as a burst went on.
         kick = weapons.kick_vector(weapon, command.yaw, command.pitch, crouching)
+        if self.settings.recoil_push > 0.0:
+            dx, dy, dz = weapons.aim_vector(command.yaw, command.pitch)
+            push = self.settings.recoil_push * (weapons.CROUCH_KICK_SCALE if crouching else 1.0)
+            kick = (kick[0] - dx * push, kick[1] - dy * push, kick[2] - dz * push)
         if kick != (0.0, 0.0, 0.0):
             physics.apply_impulse(player.state, *kick)
 
@@ -1666,7 +1752,31 @@ class MatchRoom:
             victim = self.players.get(hit.victim)
             if victim is None or not victim.alive:
                 continue
-            self._apply_damage(victim, player, hit.damage, hit.head, weapon, now)
+            nutshot = getattr(hit, "nutshot", False)
+            wallbang = getattr(hit, "wallbang", False)
+            shot_origin = result.origin
+            victim_pos = (victim.state.x, victim.state.y, victim.state.z + 0.8)
+            through_smoke = any(
+                z.kind == "smoke" and _segment_intersects_zone(shot_origin, victim_pos, z)
+                for z in self.zones
+            )
+            airborne = not player.state.on_ground
+            noscope = bool(getattr(weapon, "zoom_levels", ())) and command.scoped == 0
+            blind = player.flash > 0.15
+            self._apply_damage(
+                victim,
+                player,
+                hit.damage,
+                hit.head,
+                weapon,
+                now,
+                nutshot=nutshot,
+                through_smoke=through_smoke,
+                airborne=airborne,
+                wallbang=wallbang,
+                noscope=noscope,
+                blind=blind,
+            )
 
         self._emit(
             {
@@ -1695,9 +1805,17 @@ class MatchRoom:
         attacker: MatchPlayer,
         amount: float,
         head: bool,
-        weapon: weapons.Weapon,
+        weapon: weapons.Weapon | Any,
         now: float,
+        nutshot: bool = False,
+        through_smoke: bool = False,
+        airborne: bool = False,
+        wallbang: bool = False,
+        noscope: bool = False,
+        blind: bool = False,
     ) -> None:
+        if victim.god:
+            return
         # The mode's say on this pairing, and it must be applied to the *amount*
         # as well as used as the filter the three damage sites ask it for.
         #
@@ -1708,6 +1826,7 @@ class MatchRoom:
         # all of it. Applied before armour, because armour absorbs a fraction of
         # what actually arrives.
         amount *= self.mode.damage_scale(self, attacker, victim)
+        amount *= self.settings.damage_scale
         if amount <= 0.0:
             return
 
@@ -1726,6 +1845,8 @@ class MatchRoom:
         landed = min(amount, max(0.0, victim.health))
         attacker.damage_dealt += landed
         victim.health -= amount
+        if landed > 0 and attacker.id != victim.id:
+            victim.recent_damagers.append((attacker.id, attacker.name, attacker.team, landed, now))
         killed = victim.health <= 0
         if len(attacker.pending_hits) < MAX_PENDING_HITS:
             hit = {
@@ -1773,17 +1894,54 @@ class MatchRoom:
         if head:
             attacker.head_kills += 1
         self.mode.on_kill(self, victim, attacker, head, weapon)
-        self._emit(
-            {
-                "kind": "kill",
-                "victim": victim.id,
-                "victimName": victim.name,
-                "killer": attacker.id,
-                "killerName": attacker.name,
-                "weapon": weapon.id,
-                "head": head,
-            }
-        )
+
+        # Determine assist (deal >= 40 damage within the last 6.0s, highest damage wins)
+        assister_id = ""
+        assister_name = ""
+        assister_team = -1
+        damage_by_player: dict[str, tuple[str, int, float]] = {}
+        cutoff = now - 6.0
+        for pid, pname, pteam, dmg, t in victim.recent_damagers:
+            if t >= cutoff and pid != attacker.id and pid != victim.id:
+                prev = damage_by_player.get(pid)
+                prev_dmg = prev[2] if prev else 0.0
+                damage_by_player[pid] = (pname, pteam, prev_dmg + dmg)
+
+        eligible = [(pid, info) for pid, info in damage_by_player.items() if info[2] >= 40.0]
+        if eligible:
+            eligible.sort(key=lambda x: x[1][2], reverse=True)
+            best_pid, (best_name, best_team, _dmg) = eligible[0]
+            assister_id = best_pid
+            assister_name = best_name
+            assister_team = best_team
+            if best_pid in self.players:
+                self.players[best_pid].assists += 1
+
+        victim.recent_damagers.clear()
+
+        weapon_id = getattr(weapon, "id", str(weapon))
+        kill_payload: dict[str, Any] = {
+            "kind": "kill",
+            "victim": victim.id,
+            "victimName": victim.name,
+            "killer": attacker.id,
+            "killerName": attacker.name,
+            "weapon": weapon_id,
+            "head": head,
+            "nutshot": nutshot,
+            "smoke": through_smoke,
+            "airborne": airborne,
+            "wallbang": wallbang,
+            "noscope": noscope,
+            "blind": blind,
+            "killerTeam": attacker.team,
+            "victimTeam": victim.team,
+        }
+        if assister_id:
+            kill_payload["assister"] = assister_id
+            kill_payload["assisterName"] = assister_name
+            kill_payload["assisterTeam"] = assister_team
+        self._emit(kill_payload)
 
     def _emit(self, effect: dict[str, Any]) -> None:
         if len(self.fx) < MAX_FX_PER_TICK:
@@ -2214,11 +2372,18 @@ class MatchServer:
             return None
 
     async def broadcast_event(
-        self, room: MatchRoom, event: str, data: dict[str, Any], exclude: str = ""
+        self,
+        room: MatchRoom,
+        event: str,
+        data: dict[str, Any],
+        exclude: str = "",
+        team: int | None = None,
     ) -> None:
         message = {"channel": CHANNEL, "event": event, "data": data}
         for player in list(room.players.values()):
             if player.id == exclude or player.conn is None:
+                continue
+            if team is not None and player.team != team:
                 continue
             try:
                 await player.conn.send_json(message)

@@ -81,10 +81,9 @@ NO_WATER = -1e9
 # body — they are what the movement vectors were generated against and what every
 # call site that does not decide a hit still reads.
 #
-# Anything that decides where a bullet lands, or how tall a body is right now, goes
-# through `hitbox.current()` instead, so a spec tuned in the lab takes effect
-# without a restart. The two are the same until somebody tunes one.
-PLAYER_RADIUS = hitbox.DEFAULT.radius
+# Movement collision radius. The body keeps 1.1 cubes clear of walls and corners,
+# matching AssaultCube's rectcollide (2.2-cube AABB) so a corridor needs 3 cells.
+PLAYER_RADIUS = 1.1
 PLAYER_EYE_HEIGHT = hitbox.DEFAULT.eye_height
 PLAYER_ABOVE_EYE = hitbox.DEFAULT.above_eye
 # Total body height standing: what the collision code reserves headroom for, what
@@ -419,6 +418,8 @@ class MoveInput:
     pitch: float = 0.0
     dt: float = 0.0
     seq: int = 0
+    knife: bool = False
+    knife_boost: float = 1.10
 
 
 def body_height(player: PlayerState) -> float:
@@ -454,7 +455,7 @@ def can_stand(
     spec = hitbox.current()
     if height is None:
         height = spec.standing_height
-    x0, x1, y0, y1 = world.cells_in_radius(x, y, spec.radius)
+    x0, x1, y0, y1 = world.cells_in_radius(x, y, PLAYER_RADIUS)
     for cy in range(y0, y1 + 1):
         for cx in range(x0, x1 + 1):
             if world.is_solid(cx, cy):
@@ -468,7 +469,7 @@ def can_stand(
 
 def _support(world: World, x: float, y: float) -> tuple[float, float, bool]:
     """Highest floor under the body and lowest ceiling over it, plus `enclosed`."""
-    x0, x1, y0, y1 = world.cells_in_radius(x, y, hitbox.current().radius)
+    x0, x1, y0, y1 = world.cells_in_radius(x, y, PLAYER_RADIUS)
     highest_floor = -math.inf
     lowest_ceil = math.inf
     for cy in range(y0, y1 + 1):
@@ -667,6 +668,8 @@ def step(world: World, player: PlayerState, move: MoveInput, dt: float) -> None:
     if ladder is not None:
         # Damped, not stopped: strafing off is one of the two ways to leave.
         scale *= LADDER_HORIZONTAL_SCALE
+    if move.knife:
+        scale *= move.knife_boost
     speed_cap = MOVE_SPEED * scale
 
     wx, wy = _wish_direction(player, move)
@@ -685,6 +688,8 @@ def step(world: World, player: PlayerState, move: MoveInput, dt: float) -> None:
         response = WATER_RESPONSE
     else:
         response = GROUND_RESPONSE if player.on_ground else AIR_RESPONSE
+    if move.knife:
+        response *= move.knife_boost
     blend = 1.0 - math.exp(-response * dt)
     player.vel_x += (wx * speed_cap - player.vel_x) * blend
     player.vel_y += (wy * speed_cap - player.vel_y) * blend

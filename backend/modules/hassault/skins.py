@@ -159,6 +159,50 @@ SKIN_CATALOG: list[SkinDefinition] = [
         description="Airbrushed with transparent paints that fade together over a chrome base coat.",
     ),
     SkinDefinition(
+        id="knife_karambit_fade",
+        name="Karambit | Fade",
+        weapon_id="knife",
+        rarity=Rarity.SPECIAL,
+        collection="Chroma Collection",
+        base_color="#38bdf8",
+        accent_color="#f43f5e",
+        pattern_type="fade",
+        description="Curved talon Karambit blade airbrushed with transparent fade chrome over high-gloss steel.",
+    ),
+    SkinDefinition(
+        id="knife_karambit_doppler",
+        name="Karambit | Doppler Phase 2",
+        weapon_id="knife",
+        rarity=Rarity.SPECIAL,
+        collection="Gamma Collection",
+        base_color="#1e1b4b",
+        accent_color="#ec4899",
+        pattern_type="anodized",
+        description="Deep sapphire blue fading into vibrant cosmic ruby pink smoke on a curved talon Karambit.",
+    ),
+    SkinDefinition(
+        id="knife_butterfly_marble",
+        name="Butterfly Knife | Marble Fade",
+        weapon_id="knife",
+        rarity=Rarity.SPECIAL,
+        collection="Spectrum Collection",
+        base_color="#ef4444",
+        accent_color="#3b82f6",
+        pattern_type="fade",
+        description="Dual-handled balisong with tricolor red, blue, and gold marbled blade.",
+    ),
+    SkinDefinition(
+        id="knife_bayonet_lore",
+        name="Tactical Bayonet | Lore",
+        weapon_id="knife",
+        rarity=Rarity.SPECIAL,
+        collection="Cobblestone Collection",
+        base_color="#eab308",
+        accent_color="#15803d",
+        pattern_type="anodized",
+        description="Heavy combat bayonet with golden blade and intricate Celtic knotwork filigree.",
+    ),
+    SkinDefinition(
         id="knife_damascus",
         name="Damascus Steel",
         weapon_id="knife",
@@ -214,7 +258,40 @@ SKIN_CATALOG: list[SkinDefinition] = [
         pattern_type="anodized",
         description="Monochrome finish with pearlescent accents and digital optical tracking marks.",
     ),
+    SkinDefinition(
+        id="assault_howl",
+        name="M4A4 | Howl",
+        weapon_id="assault",
+        rarity=Rarity.COVERT,
+        collection="Huntsman Collection",
+        base_color="#dc2626",
+        accent_color="#f97316",
+        pattern_type="custom_art",
+        description="Fierce fire-breathing red wolf with blazing crimson and incandescent orange highlights.",
+    ),
+    SkinDefinition(
+        id="sniper_asiimov",
+        name="AWP | Asiimov",
+        weapon_id="sniper",
+        rarity=Rarity.COVERT,
+        collection="Phoenix Collection",
+        base_color="#f8fafc",
+        accent_color="#ea580c",
+        pattern_type="custom_art",
+        description="Futuristic high-contrast white, matte black, and orange sci-fi marksman rifle.",
+    ),
     # Classified (Pink - Legendary)
+    SkinDefinition(
+        id="pistol_emerald",
+        name="Desert Eagle | Emerald",
+        weapon_id="pistol",
+        rarity=Rarity.CLASSIFIED,
+        collection="Chroma Collection",
+        base_color="#10b981",
+        accent_color="#064e3b",
+        pattern_type="anodized",
+        description="Lustrous deep emerald green high-gloss anodized lacquer finish.",
+    ),
     SkinDefinition(
         id="sniper_hyperbeast",
         name="Hyper Beast",
@@ -779,8 +856,27 @@ class SkinInventoryManager:
             matching_skins = pool
 
         chosen_skin = random.choice(matching_skins)
-        # Beta distribution for float value: biases toward Field-Tested / Minimal Wear
-        float_val = round(random.betavariate(2.0, 3.0), 5)
+        # Rarity-driven float wear distribution:
+        # Rarer items drop with pristine finishes (Factory New / Minimal Wear)
+        # while lower rarity items drop with worn/weathered finishes.
+        if chosen_skin.rarity == Rarity.SPECIAL:
+            # Special ⭐ (Knives): pristine Factory New / low Minimal Wear (0.005 - 0.08)
+            float_val = round(random.betavariate(1.2, 8.0) * 0.075 + 0.005, 5)
+        elif chosen_skin.rarity == Rarity.COVERT:
+            # Covert: Factory New / Minimal Wear (0.01 - 0.15)
+            float_val = round(random.betavariate(1.5, 6.0) * 0.14 + 0.01, 5)
+        elif chosen_skin.rarity == Rarity.CLASSIFIED:
+            # Classified: (0.03 - 0.25)
+            float_val = round(random.betavariate(1.8, 4.5) * 0.22 + 0.03, 5)
+        elif chosen_skin.rarity == Rarity.RESTRICTED:
+            # Restricted: (0.06 - 0.38)
+            float_val = round(random.betavariate(2.0, 3.5) * 0.32 + 0.06, 5)
+        elif chosen_skin.rarity == Rarity.MIL_SPEC:
+            # Mil-Spec: (0.10 - 0.55)
+            float_val = round(random.betavariate(2.0, 2.5) * 0.45 + 0.10, 5)
+        else:
+            # Industrial & Consumer: worn out, well-worn / battle-scarred (0.20 - 0.85)
+            float_val = round(random.betavariate(3.0, 1.8) * 0.65 + 0.20, 5)
         float_val = max(0.00001, min(0.99999, float_val))
         seed = random.randint(1, 1000)
 

@@ -212,34 +212,60 @@ impl EffectsPool {
         mine: bool,
         hit: bool,
     ) {
+        self.shot_ex(origin, ends, faces, mine, hit, true);
+    }
+
+    pub fn shot_ex(
+        &mut self,
+        origin: [f32; 3],
+        ends: &[[f32; 3]],
+        faces: &[i32],
+        mine: bool,
+        hit: bool,
+        draw_beam: bool,
+    ) {
         for (i, end) in ends.iter().enumerate() {
             let face = faces.get(i).copied().unwrap_or(crate::trace::FACE_NONE);
             let on_a_surface = if faces.is_empty() { !hit } else { face >= 0 };
-            // Your own tracer leaves the barrel rather than your eye. A pellet
-            // that stopped closer than the barrel gets no tracer at all: there
-            // is no line to see at that range, only the impact.
+            // Your own tracer leaves the weapon muzzle rather than your eye,
+            // angled toward the impact point. This completely eliminates the
+            // center square artifact caused by looking down the bore of an eye-aligned prism.
             let from = if mine {
-                match advance(origin, *end, MINE_TRACER_START) {
-                    Some(p) => p,
-                    None => {
-                        self.impact(*end, origin, face, on_a_surface, i);
-                        continue;
-                    }
+                let dir = [end[0] - origin[0], end[1] - origin[1], end[2] - origin[2]];
+                let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+                if len <= MINE_TRACER_START {
+                    self.impact(*end, origin, face, on_a_surface, i);
+                    continue;
                 }
+                let d = [dir[0] / len, dir[1] / len, dir[2] / len];
+                let helper = if d[2].abs() < 0.9 {
+                    [0.0, 0.0, 1.0]
+                } else {
+                    [1.0, 0.0, 0.0]
+                };
+                let right = normalize(cross(d, helper));
+                let down = normalize(cross(right, d));
+                [
+                    origin[0] + d[0] * 0.35 + right[0] * 0.16 + down[0] * 0.12,
+                    origin[1] + d[1] * 0.35 + right[1] * 0.16 + down[1] * 0.12,
+                    origin[2] + d[2] * 0.35 + right[2] * 0.16 + down[2] * 0.12,
+                ]
             } else {
                 origin
             };
-            self.push(Live {
-                shape: Shape::Beam {
-                    from,
-                    to: *end,
-                    radius: BEAM_RADIUS,
-                },
-                color: rgb(TRACER_COLOR),
-                base: if mine { 0.35 } else { 0.8 },
-                age: 0.0,
-                life: TRACER_LIFE,
-            });
+            if draw_beam {
+                self.push(Live {
+                    shape: Shape::Beam {
+                        from,
+                        to: *end,
+                        radius: BEAM_RADIUS,
+                    },
+                    color: rgb(TRACER_COLOR),
+                    base: if mine { 0.35 } else { 0.8 },
+                    age: 0.0,
+                    life: TRACER_LIFE,
+                });
+            }
             self.impact(*end, origin, face, on_a_surface, i);
         }
     }
@@ -348,6 +374,10 @@ impl EffectsPool {
         self.live.retain(|e| e.age < e.life);
     }
 
+    pub fn len(&self) -> usize {
+        self.live.len()
+    }
+
     #[cfg(test)]
     pub fn count(&self) -> usize {
         self.live.len()
@@ -424,6 +454,7 @@ fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {
 ///
 /// `None` is a real answer and not a failure: it is how a point-blank shot says
 /// it has no tracer worth drawing.
+#[allow(dead_code)]
 fn advance(from: [f32; 3], to: [f32; 3], along: f32) -> Option<[f32; 3]> {
     let d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
     let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();

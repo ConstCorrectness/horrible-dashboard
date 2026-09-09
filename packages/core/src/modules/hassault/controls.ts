@@ -28,6 +28,8 @@ export type GameAction =
   | 'right'
   | 'jump'
   | 'crouch'
+  | 'sprint'
+  | 'quickswitch'
   | 'reload'
   | 'inspect'
   | 'scores'
@@ -80,6 +82,18 @@ export const ACTIONS: readonly ActionDoc[] = [
     label: 'Crouch',
     group: 'Movement',
     note: 'Silent, shorter, and steadier — for 40% of your speed. Crouching in mid-air costs nothing.',
+  },
+  {
+    action: 'sprint',
+    label: 'Sprint',
+    group: 'Movement',
+    note: 'Fast sprint (1.35x speed). Drains stamina pool. Crouch while sprinting to power-slide!',
+  },
+  {
+    action: 'quickswitch',
+    label: 'Quick Switch (QQ)',
+    group: 'Combat',
+    note: 'Toggle to last used weapon. Double-tap Q (QQ) to cancel sniper rechamber delay!',
   },
   { action: 'reload', label: 'Reload', group: 'Combat' },
   {
@@ -142,6 +156,8 @@ export const DEFAULT_CONTROLS: Bindings = {
   right: ['KeyD', 'ArrowRight'],
   jump: ['Space'],
   crouch: ['ControlLeft', 'KeyC'],
+  sprint: ['ShiftLeft', 'ShiftRight'],
+  quickswitch: ['KeyQ'],
   reload: ['KeyR'],
   inspect: ['KeyF'],
   scores: ['Tab'],

@@ -59,6 +59,9 @@ export interface GameMenuProps {
   onResume: () => void;
   /** Back to the main menu — leaves the match on the way out. */
   onExitToMenu: () => void;
+  onOpenStudio?: () => void;
+  onOpenArmory?: () => void;
+  onOpenConsole?: () => void;
 }
 
 export function GameMenu(props: GameMenuProps) {
@@ -69,6 +72,38 @@ export function GameMenu(props: GameMenuProps) {
       <div style={styles.sheet}>
         <div style={styles.header}>
           <strong style={{ letterSpacing: '0.14em', fontSize: '0.95rem' }}>PAUSED</strong>
+          <div style={{ display: 'flex', gap: '0.35rem', marginLeft: '0.6rem' }}>
+            {props.onOpenStudio && (
+              <button
+                type="button"
+                onClick={props.onOpenStudio}
+                style={{ ...styles.tab, color: 'rgb(56, 189, 248)' }}
+                title="Edit current map and position in 3D Level Studio"
+              >
+                ◈ 3D Studio
+              </button>
+            )}
+            {props.onOpenArmory && (
+              <button
+                type="button"
+                onClick={props.onOpenArmory}
+                style={{ ...styles.tab, color: 'rgb(245, 158, 11)' }}
+                title="Open Armory & Weapon Skins"
+              >
+                ⚔ Armory
+              </button>
+            )}
+            {props.onOpenConsole && (
+              <button
+                type="button"
+                onClick={props.onOpenConsole}
+                style={styles.tab}
+                title="Open Developer Console"
+              >
+                ⌨ Console
+              </button>
+            )}
+          </div>
           <div style={styles.tabs}>
             {TABS.map((entry) => (
               <button

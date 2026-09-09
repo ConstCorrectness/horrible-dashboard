@@ -9,6 +9,10 @@ import {
   AnimationEditorPanel,
 } from './studio/ModelStudioPanel';
 import { requestJoin } from './invite-notify';
+import { ArmoryPanel } from './panels/ArmoryPanel';
+import { StandaloneMatchCompanionPanel } from './panels/MatchCompanion';
+import { StandaloneRadarPanel } from './panels/StandaloneRadarPanel';
+import { VoiceCommsPanel } from './panels/VoiceCommsPanel';
 
 /**
  * What the **Join** button on an invite toast does.
@@ -101,6 +105,143 @@ export const hassaultModule: ModuleManifest = {
       icon: '▷',
       singleton: false,
     },
+    {
+      id: 'hassault.armory',
+      title: 'hAssault Armory & Skins',
+      component: ArmoryPanel,
+      role: 'document',
+      icon: '⚔',
+      singleton: false,
+    },
+    {
+      id: 'hassault.companion',
+      title: 'hAssault Match Companion',
+      component: StandaloneMatchCompanionPanel,
+      role: 'tool',
+      icon: '⌖',
+      singleton: false,
+    },
+    {
+      id: 'hassault.radar',
+      title: 'hAssault Tactical Radar',
+      component: StandaloneRadarPanel,
+      role: 'tool',
+      icon: '⦿',
+      singleton: false,
+    },
+    {
+      id: 'hassault.voice',
+      title: 'hAssault Voice Comms',
+      component: VoiceCommsPanel,
+      role: 'tool',
+      icon: '🎙',
+      singleton: false,
+    },
+  ],
+  frames: [
+    {
+      id: 'hassault_dev',
+      name: 'hAssault: Game Dev & Testing',
+      icon: '⚒',
+      frame: {
+        center: {
+          split: 'row',
+          sizes: [0.55, 0.45],
+          children: [
+            { pane: 'hassault.play', headerCollapsed: true },
+            { pane: 'hassault.studio', headerCollapsed: false },
+          ],
+        },
+        docks: {
+          bottom: {
+            tools: ['hassault.console'],
+            activeTool: 'hassault.console',
+            size: 240,
+            visible: true,
+          },
+          right: {
+            tools: ['hassault.companion', 'hassault.radar'],
+            activeTool: 'hassault.companion',
+            size: 320,
+            visible: true,
+          },
+        },
+      },
+    },
+    {
+      id: 'hassault_mapmaker',
+      name: 'hAssault: Level Designer',
+      icon: '◈',
+      frame: {
+        center: {
+          split: 'row',
+          sizes: [0.68, 0.32],
+          children: [
+            { pane: 'hassault.studio', headerCollapsed: false },
+            { pane: 'hassault.play', headerCollapsed: true },
+          ],
+        },
+        docks: {
+          bottom: {
+            tools: ['hassault.console'],
+            activeTool: 'hassault.console',
+            size: 220,
+            visible: true,
+          },
+          right: {
+            tools: ['hassault.radar', 'hassault.companion'],
+            activeTool: 'hassault.radar',
+            size: 300,
+            visible: true,
+          },
+        },
+      },
+    },
+    {
+      id: 'hassault_armory_studio',
+      name: 'hAssault: 3D Armory & Skins',
+      icon: '⚔',
+      frame: {
+        center: {
+          split: 'row',
+          sizes: [0.5, 0.5],
+          children: [
+            { pane: 'hassault.armory', headerCollapsed: false },
+            { pane: 'hassault.studio', headerCollapsed: false },
+          ],
+        },
+        docks: {
+          bottom: {
+            tools: ['hassault.console'],
+            activeTool: 'hassault.console',
+            size: 200,
+            visible: false,
+          },
+        },
+      },
+    },
+    {
+      id: 'hassault_play',
+      name: 'hAssault: Arena Match & Companion',
+      icon: '🎮',
+      frame: {
+        center: { pane: 'hassault.play', headerCollapsed: true },
+        docks: {
+          right: {
+            tools: ['hassault.companion', 'hassault.radar', 'hassault.voice'],
+            activeTool: 'hassault.companion',
+            size: 320,
+            visible: true,
+          },
+          bottom: {
+            tools: ['hassault.console'],
+            activeTool: 'hassault.console',
+            size: 220,
+            visible: false,
+          },
+        },
+      },
+    },
   ],
   commands: [
     {
@@ -132,6 +273,26 @@ export const hassaultModule: ModuleManifest = {
       id: 'hassault.openAnimEditor',
       title: 'HorribleAssault: Open Animation Editor',
       run: () => registry.openPanel('hassault.animEditor'),
+    },
+    {
+      id: 'hassault.openArmory',
+      title: 'HorribleAssault: Open Armory & Skins',
+      run: () => registry.openPanel('hassault.armory'),
+    },
+    {
+      id: 'hassault.openCompanion',
+      title: 'HorribleAssault: Open Match Companion',
+      run: () => registry.openPanel('hassault.companion'),
+    },
+    {
+      id: 'hassault.openRadar',
+      title: 'HorribleAssault: Open Tactical Radar',
+      run: () => registry.openPanel('hassault.radar'),
+    },
+    {
+      id: 'hassault.openVoice',
+      title: 'HorribleAssault: Open Voice Comms',
+      run: () => registry.openPanel('hassault.voice'),
     },
   ],
   settings: [

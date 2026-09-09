@@ -247,6 +247,9 @@ def installed_maps() -> list[dict[str, str]]:
     """Only the install's maps. `list_maps` also carries the ones this app ships,
     which are built from source and have no `.cgz` on disk to read — they are
     covered by `test_hassault_bundled.py`, and this file is about real files."""
+    if _INSTALL is not None:
+        from backend.modules.settings.routes import set_value
+        set_value("hassault.installPath", str(_INSTALL))
     return [m for m in assets.list_maps() if m["source"] != "bundled"]
 
 

@@ -41,17 +41,33 @@ export interface MatchPeer {
   crouch: number;
 }
 
-/** One line of the kill feed, already phrased. */
+export type KillFeedTeam = 'CT' | 'T' | 'FFA';
+
+/** One event in the kill feed, with full CS2 / CS:GO visual and modifier depth. */
 export interface KillNote {
   id: number;
   text: string;
-  /** Whether we did it or it was done to us — worth colouring differently. */
   mine: boolean;
   ts: number;
+  killerName: string;
+  killerTeam: KillFeedTeam;
+  assisterName?: string;
+  assisterTeam?: KillFeedTeam;
+  victimName: string;
+  victimTeam: KillFeedTeam;
+  weaponId: string;
+  isHeadshot: boolean;
+  isWallbang: boolean;
+  isThroughSmoke: boolean;
+  isNoScope: boolean;
+  isAirborne: boolean;
+  isBlind: boolean;
+  isNutshot: boolean;
+  isLocalPlayerInvolved: boolean;
 }
 
-/** How long a kill stays on the feed. */
-const KILL_TTL_MS = 8000;
+/** How long a kill stays on the feed (6.0s default duration). */
+const KILL_TTL_MS = 6000;
 
 export interface SessionState {
   status: 'idle' | 'joining' | 'joined' | 'error';
@@ -551,14 +567,40 @@ export class MatchSession {
     }
     if (fx.kind !== 'kill') return;
     const me = this.state.playerId;
-    const mine = fx.killer === me || fx.victim === me;
+    const isLocalPlayerInvolved =
+      fx.killer === me || fx.victim === me || (Boolean(fx.assister) && fx.assister === me);
+    const killerTeam: KillFeedTeam = fx.killerTeam === 1 ? 'CT' : fx.killerTeam === 0 ? 'T' : 'FFA';
+    const victimTeam: KillFeedTeam = fx.victimTeam === 1 ? 'CT' : fx.victimTeam === 0 ? 'T' : 'FFA';
+    const assisterTeam: KillFeedTeam | undefined = fx.assisterName
+      ? fx.assisterTeam === 1
+        ? 'CT'
+        : fx.assisterTeam === 0
+          ? 'T'
+          : 'FFA'
+      : undefined;
+
     this.killSeq += 1;
     this.state.killfeed = [
       {
         id: this.killSeq,
-        text: `${fx.killerName} ${fx.head ? '⌖' : '·'} ${fx.victimName}`,
-        mine,
+        text: `${fx.killerName || 'World'}${fx.assisterName ? ` + ${fx.assisterName}` : ''} ${fx.head ? '⌖' : '·'} ${fx.victimName}`,
+        mine: isLocalPlayerInvolved,
         ts: Date.now(),
+        killerName: fx.killerName || (fx.killer ? fx.killer : 'World'),
+        killerTeam,
+        assisterName: fx.assisterName,
+        assisterTeam,
+        victimName: fx.victimName || fx.victim,
+        victimTeam,
+        weaponId: fx.weapon || 'unknown',
+        isHeadshot: Boolean(fx.head),
+        isWallbang: Boolean(fx.wallbang),
+        isThroughSmoke: Boolean(fx.smoke),
+        isNoScope: Boolean(fx.noscope),
+        isAirborne: Boolean(fx.airborne),
+        isBlind: Boolean(fx.blind),
+        isNutshot: Boolean(fx.nutshot),
+        isLocalPlayerInvolved,
       },
       ...this.state.killfeed,
     ].slice(0, 5);
