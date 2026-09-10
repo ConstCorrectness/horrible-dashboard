@@ -178,14 +178,14 @@ const NutshotIcon: React.FC<{ size?: number }> = memo(({ size = 16 }) => (
 /* -------------------------------------------------------------------------- */
 
 const WeaponSilhouetteBadge: React.FC<{ weaponId: string; width?: number; height?: number }> = memo(
-  ({ weaponId, width = 38, height = 16 }) => {
+  ({ weaponId, width = 46, height = 18 }) => {
     const id = weaponId.toLowerCase();
 
     // AK-47 / Assault Rifle
     if (id === 'assault' || id === 'ak47') {
       return (
-        <svg width={width} height={height} viewBox="0 0 72 24" fill="rgb(226, 232, 240)">
-          <path d="M2 11h20v2H2zM22 9h16v4H22zM38 8h10v5H38zM48 9h14l4 8h-6l-3-4h-9zM32 13l-4 8h-4l3-8zM18 13l-2 5h-4l2-5z" />
+        <svg width={width} height={height} viewBox="0 0 96 28" fill="rgb(241, 245, 249)">
+          <path d="M 2 12 L 8 12 L 8 9 L 10 9 L 10 12 L 32 12 L 32 10 L 46 10 L 48 12 L 62 12 L 64 10 L 80 11 L 94 13 L 94 21 L 86 21 L 74 18 L 65 17 L 62 25 L 56 25 L 57 17 L 50 17 L 46 27 L 40 27 L 43 17 L 33 17 L 33 15 L 2 15 Z" />
         </svg>
       );
     }
@@ -193,17 +193,17 @@ const WeaponSilhouetteBadge: React.FC<{ weaponId: string; width?: number; height
     // Sniper / AWP
     if (id === 'sniper' || id === 'awp') {
       return (
-        <svg width={width} height={height} viewBox="0 0 80 24" fill="rgb(226, 232, 240)">
-          <path d="M1 11h32v2H1zM33 9h20v5H33zM53 10h18l6 7h-7l-4-3h-13zM25 6h16v3H25zM28 9h3v2h-3zM35 9h3v2h-3zM40 14l-3 7h-4l2-7z" />
+        <svg width={width + 4} height={height} viewBox="0 0 96 28" fill="rgb(241, 245, 249)">
+          <path d="M 1 11 L 6 11 L 6 9 L 12 9 L 12 11 L 30 11 L 30 6 L 54 6 L 56 8 L 56 11 L 68 11 L 76 13 L 95 14 L 95 22 L 88 23 L 78 18 L 68 18 L 64 25 L 58 25 L 60 18 L 48 18 L 46 23 L 40 23 L 41 18 L 30 18 L 30 13 L 1 13 Z M 34 8 L 50 8 L 50 10 L 34 10 Z" />
         </svg>
       );
     }
 
-    // Carbine / M4
+    // Carbine / M4 / M4A1
     if (id === 'carbine' || id === 'm4a1' || id === 'm4') {
       return (
-        <svg width={width} height={height} viewBox="0 0 68 24" fill="rgb(226, 232, 240)">
-          <path d="M4 11h18v2H4zM22 9h18v4H22zM40 9h12v4h-12zM52 10h10l3 7h-5l-2-3h-6zM32 13l-3 8h-4l2-8zM24 6h10v3H24z" />
+        <svg width={width} height={height} viewBox="0 0 96 28" fill="rgb(241, 245, 249)">
+          <path d="M 2 12 L 6 12 L 6 11 L 10 11 L 10 12 L 18 12 L 18 8 L 22 8 L 22 12 L 40 12 L 42 7 L 54 7 L 55 12 L 64 12 L 66 11 L 90 12 L 90 20 L 82 19 L 72 16 L 64 16 L 62 25 L 56 25 L 58 16 L 50 16 L 46 26 L 40 26 L 43 16 L 24 16 L 24 14 L 2 14 Z" />
         </svg>
       );
     }
@@ -211,35 +211,35 @@ const WeaponSilhouetteBadge: React.FC<{ weaponId: string; width?: number; height
     // Shotgun
     if (id === 'shotgun') {
       return (
-        <svg width={width} height={height} viewBox="0 0 64 24" fill="rgb(226, 232, 240)">
-          <path d="M4 10h30v3H4zM34 9h14v5H34zM48 10h10l4 7h-6l-3-4h-5zM20 13h10v3H20zM40 14l-2 6h-4l2-6z" />
+        <svg width={width} height={height} viewBox="0 0 92 28" fill="rgb(241, 245, 249)">
+          <path d="M 2 11 L 46 11 L 46 9 L 60 9 L 66 11 L 88 13 L 88 21 L 80 20 L 68 17 L 62 24 L 56 24 L 58 17 L 46 17 L 44 19 L 24 19 L 26 17 L 2 17 Z M 24 14 L 36 14 L 36 18 L 24 18 Z" />
         </svg>
       );
     }
 
-    // SMG / Subgun
+    // SMG / Subgun / MP5
     if (id === 'subgun' || id === 'smg' || id === 'mp5') {
       return (
-        <svg width={width} height={height} viewBox="0 0 54 24" fill="rgb(226, 232, 240)">
-          <path d="M6 10h14v3H6zM20 8h16v5H20zM36 9h10l5 7h-6l-2-3h-7zM24 13l-2 9h-4l2-9z" />
+        <svg width={width - 4} height={height} viewBox="0 0 80 28" fill="rgb(241, 245, 249)">
+          <path d="M 4 12 L 8 12 L 8 9 L 11 9 L 11 12 L 26 12 L 26 10 L 46 10 L 48 12 L 62 12 L 76 13 L 76 19 L 62 18 L 60 26 L 54 26 L 56 18 L 48 18 L 44 28 L 38 27 L 41 18 L 26 18 L 26 14 L 4 14 Z" />
         </svg>
       );
     }
 
-    // Pistol
+    // Pistol / Deagle
     if (id === 'pistol' || id === 'deagle') {
       return (
-        <svg width={width} height={height} viewBox="0 0 36 24" fill="rgb(226, 232, 240)">
-          <path d="M6 9h18v5H6zM18 14l-3 8h-5l2-8zM24 10h4v3h-4z" />
+        <svg width={width - 12} height={height} viewBox="0 0 36 28" fill="rgb(241, 245, 249)">
+          <path d="M 4 8 L 30 8 L 31 14 L 32 14 L 32 17 L 27 25 L 20 25 L 22 17 L 17 17 L 17 15 L 23 15 L 23 12 L 4 12 Z" />
         </svg>
       );
     }
 
-    // Knife
+    // Tactical Knife
     if (id === 'knife') {
       return (
-        <svg width={width} height={height} viewBox="0 0 40 24" fill="rgb(226, 232, 240)">
-          <path d="M4 15l10-4h20l-12 5H14l-2 3H8l2-4z" />
+        <svg width={width - 6} height={height} viewBox="0 0 64 26" fill="rgb(241, 245, 249)">
+          <path d="M 4 15 C 8 12 18 10 32 10 L 32 8 L 35 8 L 35 10 L 36 10 L 36 7 L 39 7 L 39 17 L 36 17 L 36 14 L 35 14 L 35 16 L 32 16 C 26 16 18 18 12 21 C 8 21 5 19 4 15 Z M 39 11 L 56 11 C 58 11 60 12 60 14 C 60 16 58 17 56 17 L 39 17 Z" />
         </svg>
       );
     }
@@ -247,7 +247,7 @@ const WeaponSilhouetteBadge: React.FC<{ weaponId: string; width?: number; height
     // HE Grenade
     if (id === 'he' || id === 'frag' || id === 'grenade') {
       return (
-        <svg width={width} height={height} viewBox="0 0 24 24" fill="rgb(239, 68, 68)">
+        <svg width={22} height={height} viewBox="0 0 24 24" fill="rgb(239, 68, 68)">
           <circle cx="12" cy="14" r="7" />
           <rect x="10" y="4" width="4" height="4" rx="1" fill="rgb(203, 213, 225)" />
           <path d="M14 6h3" stroke="rgb(203, 213, 225)" strokeWidth="1.5" />
@@ -258,7 +258,7 @@ const WeaponSilhouetteBadge: React.FC<{ weaponId: string; width?: number; height
     // Smoke
     if (id === 'smoke') {
       return (
-        <svg width={width} height={height} viewBox="0 0 24 24" fill="rgb(148, 163, 184)">
+        <svg width={22} height={height} viewBox="0 0 24 24" fill="rgb(148, 163, 184)">
           <rect x="8" y="7" width="8" height="12" rx="2" />
           <rect x="10" y="4" width="4" height="3" fill="rgb(203, 213, 225)" />
         </svg>
@@ -268,7 +268,7 @@ const WeaponSilhouetteBadge: React.FC<{ weaponId: string; width?: number; height
     // Flashbang
     if (id === 'flash' || id === 'flashbang') {
       return (
-        <svg width={width} height={height} viewBox="0 0 24 24" fill="rgb(56, 189, 248)">
+        <svg width={22} height={height} viewBox="0 0 24 24" fill="rgb(56, 189, 248)">
           <rect x="8" y="7" width="8" height="12" rx="2" />
           <rect x="10" y="4" width="4" height="3" fill="rgb(203, 213, 225)" />
           <circle cx="12" cy="13" r="2" fill="rgb(255, 255, 255)" />
@@ -279,7 +279,7 @@ const WeaponSilhouetteBadge: React.FC<{ weaponId: string; width?: number; height
     // Molotov
     if (id === 'molotov' || id === 'fire') {
       return (
-        <svg width={width} height={height} viewBox="0 0 24 24" fill="rgb(245, 158, 11)">
+        <svg width={22} height={height} viewBox="0 0 24 24" fill="rgb(245, 158, 11)">
           <rect x="8" y="9" width="8" height="12" rx="2" />
           <rect x="10" y="5" width="4" height="4" />
           <path d="M12 2c-1.5 2 1.5 3 0 5" stroke="rgb(239, 68, 68)" strokeWidth="2" strokeLinecap="round" />
@@ -290,7 +290,7 @@ const WeaponSilhouetteBadge: React.FC<{ weaponId: string; width?: number; height
     // Fall / Suicide / World
     if (id === 'fall' || id === 'world') {
       return (
-        <svg width={width} height={height} viewBox="0 0 24 24" fill="none" stroke="rgb(148, 163, 184)" strokeWidth="2">
+        <svg width={22} height={height} viewBox="0 0 24 24" fill="none" stroke="rgb(148, 163, 184)" strokeWidth="2">
           <path d="M12 4v16m0 0l-5-5m5 5l5-5" />
         </svg>
       );
@@ -336,20 +336,20 @@ const KillFeedCard: React.FC<{ entry: KillNote }> = memo(({ entry }) => {
         padding: '3px 9px',
         borderRadius: 3,
         background: isLocal
-          ? 'linear-gradient(90deg, rgba(251, 191, 36, 0.22) 0%, rgba(15, 23, 42, 0.88) 35%, rgba(15, 23, 42, 0.92) 100%)'
-          : 'rgba(15, 23, 42, 0.82)',
-        border: isLocal ? '1px solid rgba(251, 191, 36, 0.85)' : '1px solid rgba(255, 255, 255, 0.08)',
+          ? 'linear-gradient(90deg, rgba(239, 68, 68, 0.28) 0%, rgba(251, 191, 36, 0.25) 25%, rgba(15, 23, 42, 0.90) 65%, rgba(15, 23, 42, 0.95) 100%)'
+          : 'linear-gradient(180deg, rgba(30, 41, 59, 0.88) 0%, rgba(15, 23, 42, 0.88) 100%)',
+        border: isLocal ? '1px solid rgba(251, 191, 36, 0.9)' : '1px solid rgba(255, 255, 255, 0.12)',
         boxShadow: isLocal
-          ? '0 0 14px rgba(251, 191, 36, 0.45), inset 0 0 6px rgba(251, 191, 36, 0.2)'
-          : '0 2px 8px rgba(0, 0, 0, 0.45)',
-        backdropFilter: 'blur(6px)',
+          ? '0 0 16px rgba(251, 191, 36, 0.5), inset 0 0 8px rgba(251, 191, 36, 0.25)'
+          : '0 4px 12px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.08)',
+        backdropFilter: 'blur(10px)',
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
         fontSize: '0.78rem',
         letterSpacing: '0.02em',
         lineHeight: 1.3,
         userSelect: 'none',
         pointerEvents: 'none',
-        animation: 'killfeed-slide-in 0.18s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+        animation: 'killfeed-slide-in 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards',
         whiteSpace: 'nowrap',
       }}
     >
@@ -402,6 +402,30 @@ const KillFeedCard: React.FC<{ entry: KillNote }> = memo(({ entry }) => {
         <WeaponSilhouetteBadge weaponId={entry.weaponId} />
       </span>
 
+      {/* Backstab Stabbing Emoji Badge */}
+      {entry.isBackstab && (
+        <span
+          title="Backstab (Right-Click)"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 3,
+            padding: '1px 5px',
+            borderRadius: 3,
+            background: 'rgba(239, 68, 68, 0.28)',
+            border: '1px solid rgba(239, 68, 68, 0.85)',
+            boxShadow: '0 0 10px rgba(239, 68, 68, 0.6)',
+            fontSize: '0.85rem',
+            lineHeight: 1,
+            color: 'rgb(254, 202, 202)',
+            fontWeight: 800,
+          }}
+        >
+          <span style={{ filter: 'drop-shadow(0 0 4px rgba(239, 68, 68, 0.8))' }}>🗡️</span>
+          <span style={{ fontSize: '0.64rem', fontWeight: 800, letterSpacing: '0.04em', color: 'rgb(254, 226, 226)' }}>STAB</span>
+        </span>
+      )}
+
       {/* Critical Hit / Nutshot Icons (After Weapon) */}
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
         {entry.isNutshot && <NutshotIcon size={15} />}
@@ -452,7 +476,7 @@ export const KillFeed: React.FC<KillFeedProps> = memo(({ entries, className, sty
         @keyframes killfeed-slide-in {
           0% {
             opacity: 0;
-            transform: translateX(30px) scale(0.96);
+            transform: translateX(36px) scale(0.96);
           }
           100% {
             opacity: 1;

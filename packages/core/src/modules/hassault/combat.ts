@@ -32,14 +32,13 @@ export const NO_SHOT: ShotIntent = {
   scoped: 0,
 };
 
-/**
- * Recoil push while crouched, from AC's `attackphysics`.
- *
- * Mirrors `CROUCH_KICK_SCALE` in `weapons.py`. A braced shot moves you less, which
- * makes crouching the accurate option *and* the stable one — two incentives
- * pointing the same way rather than a dial to balance.
- */
+/** Recoil push while crouched, from AC's `attackphysics`. */
 export const CROUCH_KICK_SCALE = 0.75;
+
+/** Attack interval for knife quick slash (left-click). */
+export const KNIFE_SLASH_INTERVAL = 0.32;
+/** Attack interval for knife heavy stab (right-click). */
+export const KNIFE_STAB_INTERVAL = 0.75;
 
 /**
  * The impulse a shot applies to the **shooter**, in cubes per second.
@@ -124,6 +123,7 @@ export class ShotController {
   private blocked = false;
 
   private held = false;
+  private heldAlt = false;
   /** Semi-automatic weapons need the button released between shots. */
   private triggerUsed = false;
   private lastFireMs = -Infinity;
@@ -144,6 +144,10 @@ export class ShotController {
     return this.weapons[this.slot];
   }
 
+  get isKnife(): boolean {
+    return this.weapon?.id === 'knife';
+  }
+
   /**
    * Block or unblock the trigger. Set while a grenade is in hand.
    *
@@ -157,7 +161,10 @@ export class ShotController {
     this.blocked = blocked;
     // Releasing here as well: a trigger left held while the grenade came up
     // would fire on the frame the weapon came back.
-    if (blocked) this.release();
+    if (blocked) {
+      this.release();
+      this.releaseAlt();
+    }
   }
 
   press(): void {
@@ -166,6 +173,15 @@ export class ShotController {
 
   release(): void {
     this.held = false;
+    this.triggerUsed = false;
+  }
+
+  pressAlt(): void {
+    this.heldAlt = true;
+  }
+
+  releaseAlt(): void {
+    this.heldAlt = false;
     this.triggerUsed = false;
   }
 
@@ -288,6 +304,25 @@ export class ShotController {
     if (this.blocked) return intent;
     if (!weapon || !you || !you.alive) return intent;
     if (you.reloading) return intent;
+
+    // Knife attack handling:
+    // Left-click (held): quick slashing (~0.32s interval)
+    // Right-click (heldAlt): heavy stabbing (~0.75s interval)
+    if (weapon.id === 'knife') {
+      const isAlt = this.heldAlt;
+      const attacking = this.held || isAlt;
+      if (!attacking || this.triggerUsed) return intent;
+
+      const interval = isAlt ? KNIFE_STAB_INTERVAL : KNIFE_SLASH_INTERVAL;
+      if (nowMs - this.lastFireMs < interval * 1000) return intent;
+
+      this.lastFireMs = nowMs;
+      this.triggerUsed = true;
+      intent.fire = true;
+      intent.altFire = isAlt;
+      return intent;
+    }
+
     if (weapon.mag > 0 && this.ammo <= 0) {
       // Out. Ask for the reload the server is about to start anyway, so the HUD
       // shows it on this frame rather than on the next snapshot.
@@ -375,6 +410,7 @@ export class ShotController {
 
   reset(): void {
     this.held = false;
+    this.heldAlt = false;
     this.triggerUsed = false;
     this.lastFireMs = -Infinity;
     this.wantReload = false;

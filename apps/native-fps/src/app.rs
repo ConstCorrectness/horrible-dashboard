@@ -1605,23 +1605,22 @@ impl App {
                             ends,
                             faces,
                             hit,
+                            weapon,
                             ..
                         } = fx
                         {
-                            // `hit` has been on the wire and parsed into
-                            // nothing since shots existed. It is now only the
-                            // fallback for a shooter whose backend predates
-                            // `faces` — which says per *pellet* whether there
-                            // was a surface, and which one.
-                            let is_mine = id == &self.self_id;
-                            let draw_beam = !is_mine
-                                || self.cvars.boolean("draw.tracers_firstperson").unwrap_or(true);
-                            self.effects
-                                .shot_ex(*origin, ends, faces, is_mine, *hit, draw_beam);
-                            // And the surface remembers being shot at. Every
-                            // player's shots, not only ours: reading the room
-                            // afterwards is most of what marks are for.
-                            self.decals.shot(ends, faces);
+                            let is_knife = *weapon == 0;
+                            if !is_knife {
+                                let is_mine = id == &self.self_id;
+                                let draw_beam = if is_mine {
+                                    self.cvars.boolean("draw.tracers_firstperson").unwrap_or(false)
+                                } else {
+                                    true
+                                };
+                                self.effects
+                                    .shot_ex(*origin, ends, faces, is_mine, *hit, draw_beam);
+                                self.decals.shot(ends, faces);
+                            }
                         }
                         if let Fx::Detonate {
                             nade, at, radius, ..
@@ -2141,10 +2140,12 @@ impl App {
         // server's by `physics-vectors.json`. Tracers and impacts too: the range
         // is where a spray pattern is learnt, and it is not learnable without
         // seeing where the rounds went.
-        let draw_beam = self.cvars.boolean("draw.tracers_firstperson").unwrap_or(true);
-        self.effects
-            .shot_ex(shot.origin, &shot.ends, &shot.faces, true, false, draw_beam);
-        self.decals.shot(&shot.ends, &shot.faces);
+        if weapon.id != "knife" {
+            let draw_beam = self.cvars.boolean("draw.tracers_firstperson").unwrap_or(false);
+            self.effects
+                .shot_ex(shot.origin, &shot.ends, &shot.faces, true, false, draw_beam);
+            self.decals.shot(&shot.ends, &shot.faces);
+        }
     }
 
     /// Whether enough time has passed to bother sending another `fire`.

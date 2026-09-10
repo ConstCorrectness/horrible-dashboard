@@ -56,6 +56,7 @@ export interface Command {
   pitch: number;
   dt: number;
   fire?: boolean;
+  altFire?: boolean;
   reload?: boolean;
   /** Slot to switch to, or `-1` for no change. */
   weapon?: number;
@@ -118,6 +119,7 @@ export interface Command {
 /** The combat half of a command, decided by `ShotController` rather than by keys. */
 export interface ShotIntent {
   fire: boolean;
+  altFire?: boolean;
   reload: boolean;
   weapon: number;
   viewT: number;
@@ -369,6 +371,7 @@ export interface KillFx {
   wallbang?: boolean;
   noscope?: boolean;
   blind?: boolean;
+  backstab?: boolean;
   killerTeam?: number;
   victimTeam?: number;
   assister?: string;
@@ -701,6 +704,7 @@ export class Predictor {
     if (shot && (shot.fire || shot.reload || shot.weapon >= 0)) {
       if (shot.fire) {
         command.fire = true;
+        if (shot.altFire) command.altFire = true;
         command.viewT = shot.viewT;
         // Only on a shot, and only when actually scoped: it decides this pull's
         // cone and nothing else, so on every other frame it would be a number

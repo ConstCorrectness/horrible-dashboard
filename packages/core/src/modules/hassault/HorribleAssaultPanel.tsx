@@ -1405,6 +1405,7 @@ export function HorribleAssaultPanel() {
         let moving = false;
         /** Whether a shot left the barrel this frame, for the view model's kick. */
         let fired = false;
+        let altFired = false;
 
         if (world) {
           const keys = keysRef.current;
@@ -1513,6 +1514,7 @@ export function HorribleAssaultPanel() {
             if (intent.reload) range?.requestReload();
             if (intent.weapon >= 0) range?.select(intent.weapon);
             fired = intent.fire;
+            altFired = Boolean(intent.altFire);
             localReloadingRef.current = self?.reloading ?? false;
             // Only when something the HUD draws actually moved.
             const prev = localYouRef.current;
@@ -1541,14 +1543,17 @@ export function HorribleAssaultPanel() {
                 intent.scoped,
               );
               if (shot) {
-                effects.shot(shot.origin, shot.ends, TEAM_COLORS[0] ?? 0xffffff, true);
-                // The range resolves its own shots, so its faces come from
-                // `trace.ts` rather than off the wire — the same numbers, pinned
-                // against the server's by `physics-vectors.json`. A range that
-                // left no marks would be the one place you cannot see your own
-                // spray pattern, which is what it is for.
-                for (let i = 0; i < shot.ends.length; i++) {
-                  decals.mark(shot.ends[i], shot.faces[i] ?? -1);
+                const isKnife = shots.isKnife || shots.slot === 0;
+                if (!isKnife) {
+                  effects.shot(shot.origin, shot.ends, TEAM_COLORS[0] ?? 0xffffff, true);
+                  // The range resolves its own shots, so its faces come from
+                  // `trace.ts` rather than off the wire — the same numbers, pinned
+                  // against the server's by `physics-vectors.json`. A range that
+                  // left no marks would be the one place you cannot see your own
+                  // spray pattern, which is what it is for.
+                  for (let i = 0; i < shot.ends.length; i++) {
+                    decals.mark(shot.ends[i], shot.faces[i] ?? -1);
+                  }
                 }
                 if (shot.hits.length > 0) {
                   const killed = shot.hits.some((h) => h.killed);
@@ -1680,18 +1685,21 @@ export function HorribleAssaultPanel() {
             // us, and our own tracer needs a colour too.
             const teamOf = new Map(session.state.peers.map((p) => [p.id, p.team]));
             for (const fx of session.pendingShots) {
-              effects.shot(
-                fx.origin,
-                fx.ends,
-                TEAM_COLORS[teamOf.get(fx.id) ?? 0] ?? 0xffffff,
-                fx.id === session.state.playerId,
-              );
-              // One mark per pellet that stopped on a surface. `faces` is
-              // optional on the wire — a fabric peer may be running an older
-              // backend — and an absent list means "no marks", never "mark
-              // everything": `-1` is refused by `mark` itself.
-              for (let i = 0; i < fx.ends.length; i++) {
-                decals.mark(fx.ends[i], fx.faces?.[i] ?? -1);
+              const isKnife = fx.weapon === 0;
+              if (!isKnife) {
+                effects.shot(
+                  fx.origin,
+                  fx.ends,
+                  TEAM_COLORS[teamOf.get(fx.id) ?? 0] ?? 0xffffff,
+                  fx.id === session.state.playerId,
+                );
+                // One mark per pellet that stopped on a surface. `faces` is
+                // optional on the wire — a fabric peer may be running an older
+                // backend — and an absent list means "no marks", never "mark
+                // everything": `-1` is refused by `mark` itself.
+                for (let i = 0; i < fx.ends.length; i++) {
+                  decals.mark(fx.ends[i], fx.faces?.[i] ?? -1);
+                }
               }
               // Flash and kick the shooter's own avatar. Our body is not drawn
               // (we are inside it), so this only ever lands on someone else.
@@ -1773,8 +1781,19 @@ export function HorribleAssaultPanel() {
           camera.rotation.set(player.pitch, -player.yaw - Math.PI / 2, 0, 'YXZ');
           // The weapon rides the camera, so it is updated with it: what it needs
           // is what the camera just did (angles) and what the player just did
-          // (moved, fired, reloading).
-          if (fired) viewmodel.fire();
+          if (fired) {
+            if (shots?.isKnife || shots?.slot === 0) {
+              if (altFired) {
+                viewmodel.stab();
+                audioRef.current?.own('knife_stab', 1.0);
+              } else {
+                viewmodel.slash();
+                audioRef.current?.own('knife_slash', 0.85);
+              }
+            } else {
+              viewmodel.fire();
+            }
+          }
           // **What is in your hand this frame.** The trigger is blocked and the
           // weapon stowed while a grenade is up, and both come back the instant
           // it leaves — a throw is one action, not a mode you have to leave.
@@ -2241,11 +2260,14 @@ export function HorribleAssaultPanel() {
         nadesRef.current.press(e.button === 2);
         return;
       }
-      // Right is the scope, left is the trigger. A weapon with no scope ignores
-      // the right button entirely rather than consuming it.
+      // Right is the scope for firearms, and heavy stab for the knife!
       if (e.button === 2) {
         e.preventDefault();
-        shotsRef.current?.cycleScope();
+        if (shotsRef.current?.isKnife) {
+          shotsRef.current.pressAlt();
+        } else {
+          shotsRef.current?.cycleScope();
+        }
         return;
       }
       if (e.button !== 0) return;
@@ -2254,6 +2276,7 @@ export function HorribleAssaultPanel() {
     };
     const onMouseUp = (e: MouseEvent) => {
       if (e.button === 0) shotsRef.current?.release();
+      if (e.button === 2 && shotsRef.current?.isKnife) shotsRef.current?.releaseAlt();
     };
     // Pointer lock suppresses the context menu in most browsers, but not all and
     // not on every platform — and one that opens mid-firefight steals the

@@ -587,6 +587,9 @@ export class WeaponViewModel {
   private inspectT: number | null = null;
   /** Current ADS interpolation state, 0 (hipfire) to 1 (full ADS) */
   private adsT = 0;
+  /** Active knife melee animation and elapsed seconds */
+  private knifeAction: 'slash' | 'stab' | null = null;
+  private knifeActionT = 0;
 
   // Built with the model rather than shared, because they now carry the skin:
   // two weapons in one match are two different guns, and a material shared
@@ -846,8 +849,28 @@ export class WeaponViewModel {
     this.startAction('throw', THROW_DURATION);
   }
 
-  /** A shot left the barrel this frame: kick the model and light the muzzle. */
+  /** Knife quick slash: rapid diagonal blade swipe. */
+  slash(): void {
+    this.knifeAction = 'slash';
+    this.knifeActionT = 0;
+    this.action = null;
+    this.inspectT = null;
+  }
+
+  /** Knife heavy stab: powerful forward thrust along -Z. */
+  stab(): void {
+    this.knifeAction = 'stab';
+    this.knifeActionT = 0;
+    this.action = null;
+    this.inspectT = null;
+  }
+
+  /** A shot left the barrel this frame: kick the model and light the muzzle (or slash if knife). */
   fire(): void {
+    if (this.weaponId === 'knife') {
+      this.slash();
+      return;
+    }
     // Additive but capped: holding down an assault rifle should climb to a steady
     // shake, not to a weapon behind the player's ear.
     this.kick = Math.min(1, this.kick + 0.8);
@@ -1058,23 +1081,58 @@ export class WeaponViewModel {
     const inspectLiftY = isKnife ? lift * 0.22 : lift * 0.16;
     const inspectLiftZ = isKnife ? lift * 0.26 : lift * 0.2;
 
+    let knifeX = 0;
+    let knifeY = 0;
+    let knifeZ = 0;
+    let knifePitch = 0;
+    let knifeYaw = 0;
+    let knifeRoll = 0;
+
+    if (this.knifeAction !== null) {
+      this.knifeActionT += dt;
+      const duration = this.knifeAction === 'stab' ? 0.35 : 0.22;
+      const progress = Math.min(1.0, this.knifeActionT / duration);
+      const arc = Math.sin(progress * Math.PI);
+      if (this.knifeAction === 'slash') {
+        // Quick slash: fast diagonal swipe across the screen
+        knifeX = -0.32 * arc;
+        knifeY = 0.08 * arc;
+        knifeZ = -0.12 * arc;
+        knifePitch = 0.25 * arc;
+        knifeYaw = -0.55 * arc;
+        knifeRoll = -0.45 * arc;
+      } else {
+        // Heavy stab: powerful forward thrust along -Z
+        knifeX = -0.12 * arc;
+        knifeY = 0.06 * arc;
+        knifeZ = -0.40 * arc;
+        knifePitch = -0.12 * arc;
+        knifeYaw = 0.15 * arc;
+        knifeRoll = 0.55 * arc;
+      }
+      if (this.knifeActionT >= duration) {
+        this.knifeAction = null;
+      }
+    }
+
     this.pivot.position.set(
-      curHomeX + (bobX + this.swayX * adsDamp) - inspectLiftX,
+      curHomeX + (bobX + this.swayX * adsDamp) - inspectLiftX + knifeX,
       // The stow drops the weapon out of frame entirely. Applied to the same
       // axis as the reload dip and *added* rather than blended, so a switch
       // asked for mid-reload takes the gun the rest of the way down instead of
       // fighting the dip for the pivot.
-      curHomeY + (bobY + this.swayY * adsDamp) - this.reloadT * 0.55 + inspectLiftY - stow * 1.15,
+      curHomeY + (bobY + this.swayY * adsDamp) - this.reloadT * 0.55 + inspectLiftY - stow * 1.15 + knifeY,
       // Recoil is mostly backwards: a gun that only rotates looks hinged.
-      curHomeZ + this.kick * 0.28 + inspectLiftZ,
+      curHomeZ + this.kick * 0.28 + inspectLiftZ + knifeZ,
     );
     this.pivot.rotation.set(
-      this.kick * -0.16 + this.reloadT * 0.7 + bobY * 0.4 + inspectPitch + stow * 0.9,
-      this.swayX * 0.7 * adsDamp + this.reloadT * 0.25 + inspectYaw,
+      this.kick * -0.16 + this.reloadT * 0.7 + bobY * 0.4 + inspectPitch + stow * 0.9 + knifePitch,
+      this.swayX * 0.7 * adsDamp + this.reloadT * 0.25 + inspectYaw + knifeYaw,
       this.swayX * 0.5 * adsDamp +
         bobX * 0.6 +
         inspectRoll +
-        stow * 0.35,
+        stow * 0.35 +
+        knifeRoll,
     );
 
     this.flashAge += dt;

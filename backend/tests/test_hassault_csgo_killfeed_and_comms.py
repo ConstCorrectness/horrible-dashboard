@@ -200,3 +200,123 @@ def test_chat_and_voice_routing(monkeypatch):
     assert len(voice_t2) == 1
     assert voice_t2[0]["data"]["transmitting"] is True
     assert voice_t2[0]["data"]["playerId"] == p_t1.id
+
+
+def test_knife_backstab_detection_and_kill_event():
+    room = make_room()
+    killer = room.add("killer", None)
+    victim = room.add("victim", None)
+    killer.team = 0
+    victim.team = 1
+
+    killer.protected_until = 0.0
+    victim.protected_until = 0.0
+
+    # Position: killer behind victim.
+    # Killer at (10, 10), looking in +X direction (yaw = 0)
+    killer.state.x = 10.0
+    killer.state.y = 10.0
+    killer.state.z = 0.0
+    killer.state.yaw = 0.0
+
+    # Victim in front of killer at (11.0, 10.0), also looking in +X direction (yaw = 0)
+    # So killer is behind victim looking at victim's back!
+    victim.state.x = 11.0
+    victim.state.y = 10.0
+    victim.state.z = 0.0
+    victim.state.yaw = 0.0
+    victim.health = 100.0
+
+    killer.weapon = 0  # Knife
+    cmd = match.Command(
+        seq=1,
+        forward=0.0,
+        strafe=0.0,
+        jump=False,
+        yaw=0.0,
+        pitch=0.0,
+        dt=0.016,
+        fire=True,
+        alt_fire=True,
+        view_t=100.0,
+    )
+
+    room._fire(killer, cmd, now=100.0, now_ms=100000.0)
+
+    # Backstab should deal 150 damage, eliminating full-health victim instantly
+    assert not victim.alive
+    assert victim.health == 0
+    kill_events = [fx for fx in room.fx if fx.get("kind") == "kill"]
+    assert len(kill_events) == 1
+    ev = kill_events[0]
+    assert ev["killer"] == killer.id
+    assert ev["victim"] == victim.id
+    assert ev["weapon"] == "knife"
+    assert ev["backstab"] is True
+
+
+def test_knife_slash_and_front_stab_damage():
+    room = make_room()
+    killer = room.add("killer", None)
+    victim = room.add("victim", None)
+    killer.team = 0
+    victim.team = 1
+    killer.protected_until = 0.0
+    victim.protected_until = 0.0
+
+    # Facing each other (killer looking +X yaw=0, victim looking -X yaw=pi)
+    killer.state.x = 10.0
+    killer.state.y = 10.0
+    killer.state.z = 0.0
+    killer.state.yaw = 0.0
+
+    victim.state.x = 11.0
+    victim.state.y = 10.0
+    victim.state.z = 0.0
+    victim.state.yaw = 3.14159
+    victim.health = 100.0
+
+    killer.weapon = 0  # Knife
+
+    # Quick slash: deals 45 damage, non-lethal
+    cmd_slash = match.Command(
+        seq=1,
+        forward=0.0,
+        strafe=0.0,
+        jump=False,
+        yaw=0.0,
+        pitch=0.0,
+        dt=0.016,
+        fire=True,
+        alt_fire=False,
+        view_t=100.0,
+    )
+    room._fire(killer, cmd_slash, now=100.0, now_ms=100000.0)
+    assert victim.alive
+    assert victim.health == 55.0
+
+    # Advance time beyond fire interval
+    killer.sim_time = 102.0
+    # Heavy frontal stab: deals 70 damage (lethal here since health is 55.0)
+    cmd_stab = match.Command(
+        seq=2,
+        forward=0.0,
+        strafe=0.0,
+        jump=False,
+        yaw=0.0,
+        pitch=0.0,
+        dt=0.016,
+        fire=True,
+        alt_fire=True,
+        view_t=102.0,
+    )
+    room._fire(killer, cmd_stab, now=102.0, now_ms=102000.0)
+    assert not victim.alive
+    assert victim.health == 0
+    kill_events = [fx for fx in room.fx if fx.get("kind") == "kill"]
+    assert len(kill_events) == 1
+    ev = kill_events[0]
+    # Not a backstab because they were facing each other!
+    assert ev["backstab"] is False
+
+

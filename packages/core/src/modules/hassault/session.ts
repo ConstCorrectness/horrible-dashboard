@@ -63,6 +63,7 @@ export interface KillNote {
   isAirborne: boolean;
   isBlind: boolean;
   isNutshot: boolean;
+  isBackstab?: boolean;
   isLocalPlayerInvolved: boolean;
 }
 
@@ -600,6 +601,7 @@ export class MatchSession {
         isAirborne: Boolean(fx.airborne),
         isBlind: Boolean(fx.blind),
         isNutshot: Boolean(fx.nutshot),
+        isBackstab: Boolean(fx.backstab),
         isLocalPlayerInvolved,
       },
       ...this.state.killfeed,

@@ -134,27 +134,30 @@ export class EffectsPool {
     const from = new three.Vector3(origin[0], origin[2], origin[1]);
     for (const end of ends) {
       const to = new three.Vector3(end[0], end[2], end[1]);
-      const material = new three.LineBasicMaterial({
-        color,
-        transparent: true,
-        // Our own tracer is drawn faint: it leaves the camera, so a bright one
-        // is a line down the middle of the screen and nothing else.
-        opacity: self ? 0.35 : 0.8,
-      });
-      const line = new three.Line(this.tracerGeo, material);
-      line.position.copy(from);
-      // Explicitly rotating the geometry's +Z onto the shot direction rather
-      // than using `lookAt`, whose axis convention differs between cameras and
-      // everything else and is the kind of thing that is wrong by 180°.
-      const length = from.distanceTo(to);
-      if (length > 1e-4) {
-        line.quaternion.setFromUnitVectors(
-          new three.Vector3(0, 0, 1),
-          to.clone().sub(from).divideScalar(length),
-        );
+      // Bullet tracer lines are only drawn for remote players so you can see where incoming fire comes from.
+      // In first-person player view (self === true), long bullet trajectory lines are suppressed so the
+      // screen is clean and unobstructed (muzzle flash and target impacts still render).
+      if (!self) {
+        const material = new three.LineBasicMaterial({
+          color,
+          transparent: true,
+          opacity: 0.8,
+        });
+        const line = new three.Line(this.tracerGeo, material);
+        line.position.copy(from);
+        // Explicitly rotating the geometry's +Z onto the shot direction rather
+        // than using `lookAt`, whose axis convention differs between cameras and
+        // everything else and is the kind of thing that is wrong by 180°.
+        const length = from.distanceTo(to);
+        if (length > 1e-4) {
+          line.quaternion.setFromUnitVectors(
+            new three.Vector3(0, 0, 1),
+            to.clone().sub(from).divideScalar(length),
+          );
+        }
+        line.scale.set(1, 1, length);
+        this.add(line, material, TRACER_LIFE);
       }
-      line.scale.set(1, 1, length);
-      this.add(line, material, TRACER_LIFE);
 
       const impactMat = new three.MeshBasicMaterial({
         color: 0xffd9a0,

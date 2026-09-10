@@ -581,3 +581,51 @@ describe('setBlocked', () => {
     expect(shots.frame(1000, 100, you()).fire).toBe(false);
   });
 });
+
+describe('knife combat (quick slash vs heavy stab)', () => {
+  const knife = spec({ id: 'knife', name: 'Knife', auto: false, interval: 0.5, mag: 0, reserve: -1 });
+
+  it('identifies knife weapon slot correctly', () => {
+    const shots = controller([knife, AUTO], 0);
+    expect(shots.isKnife).toBe(true);
+    shots.select(1);
+    expect(shots.isKnife).toBe(false);
+  });
+
+  it('left-click triggers quick slash with fast interval (~0.32s)', () => {
+    const shots = controller([knife], 0);
+    shots.press();
+    const f1 = shots.frame(1000, 100, you({ weapon: 0 }));
+    expect(f1.fire).toBe(true);
+    expect(f1.altFire).toBe(false);
+
+    // Re-pressing before 0.32s interval should be blocked
+    shots.release();
+    shots.press();
+    const f2 = shots.frame(1200, 100, you({ weapon: 0 }));
+    expect(f2.fire).toBe(false);
+
+    // After 0.32s (e.g. 1350ms), should fire again
+    const f3 = shots.frame(1350, 100, you({ weapon: 0 }));
+    expect(f3.fire).toBe(true);
+  });
+
+  it('right-click triggers heavy stab with altFire and ~0.75s interval', () => {
+    const shots = controller([knife], 0);
+    shots.pressAlt();
+    const f1 = shots.frame(1000, 100, you({ weapon: 0 }));
+    expect(f1.fire).toBe(true);
+    expect(f1.altFire).toBe(true);
+
+    // Re-pressing before 0.75s interval should be blocked
+    shots.releaseAlt();
+    shots.pressAlt();
+    const f2 = shots.frame(1400, 100, you({ weapon: 0 }));
+    expect(f2.fire).toBe(false);
+
+    // After 0.75s (e.g. 1800ms), should fire again
+    const f3 = shots.frame(1800, 100, you({ weapon: 0 }));
+    expect(f3.fire).toBe(true);
+    expect(f3.altFire).toBe(true);
+  });
+});

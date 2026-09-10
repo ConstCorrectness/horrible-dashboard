@@ -236,6 +236,7 @@ class Command:
     dt: float
     crouch: bool = False
     fire: bool = False
+    alt_fire: bool = False
     reload: bool = False
     """Weapon slot to switch to, or `-1` for no change."""
     weapon: int = -1
@@ -1632,7 +1633,9 @@ class MatchRoom:
         weapon = weapons.weapon_at(player.weapon)
         if player.sim_time < player.reload_until:
             return
-        if player.sim_time - player.last_fire_at < weapon.interval:
+        is_knife = getattr(weapon, "id", "") == "knife"
+        fire_interval = (0.75 if command.alt_fire else 0.32) if is_knife else weapon.interval
+        if player.sim_time - player.last_fire_at < fire_interval:
             return
         if weapon.mag > 0:
             if player.ammo.get(player.weapon, 0) <= 0:
@@ -1763,10 +1766,27 @@ class MatchRoom:
             airborne = not player.state.on_ground
             noscope = bool(getattr(weapon, "zoom_levels", ())) and command.scoped == 0
             blind = player.flash > 0.15
+            hit_damage = hit.damage
+            backstab = False
+            if is_knife:
+                if command.alt_fire:
+                    # Heavy stab: check if victim is hit from rear hemisphere
+                    dot_facing = math.cos(command.yaw - victim.state.yaw)
+                    dx = victim.state.x - player.state.x
+                    dy = victim.state.y - player.state.y
+                    dot_pos = math.cos(command.yaw) * dx + math.sin(command.yaw) * dy
+                    if dot_facing > 0.40 and dot_pos > 0:
+                        backstab = True
+                        hit_damage = 150.0
+                    else:
+                        hit_damage = 70.0
+                else:
+                    hit_damage = 45.0
+
             self._apply_damage(
                 victim,
                 player,
-                hit.damage,
+                hit_damage,
                 hit.head,
                 weapon,
                 now,
@@ -1776,6 +1796,7 @@ class MatchRoom:
                 wallbang=wallbang,
                 noscope=noscope,
                 blind=blind,
+                backstab=backstab,
             )
 
         self._emit(
@@ -1813,6 +1834,7 @@ class MatchRoom:
         wallbang: bool = False,
         noscope: bool = False,
         blind: bool = False,
+        backstab: bool = False,
     ) -> None:
         if victim.god:
             return
@@ -1934,6 +1956,7 @@ class MatchRoom:
             "wallbang": wallbang,
             "noscope": noscope,
             "blind": blind,
+            "backstab": backstab,
             "killerTeam": attacker.team,
             "victimTeam": victim.team,
         }
@@ -2519,6 +2542,7 @@ def parse_command(raw: Any) -> Command | None:
         pitch=_clamp(_num(raw.get("pitch")), -1.5708, 1.5708),
         dt=_clamp(_num(raw.get("dt")), 0.0, 0.25),
         fire=bool(raw.get("fire")),
+        alt_fire=bool(raw.get("alt_fire") or raw.get("altFire")),
         reload=bool(raw.get("reload")),
         # `-1` means "no change", so an absent or nonsensical slot leaves the
         # weapon alone rather than silently arming the knife.
