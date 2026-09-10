@@ -436,6 +436,7 @@ class MatchPlayer:
     #: class of index drift.
     spray_index: int = 0
     reload_until: float = -999.0
+    reloading_empty: bool = False
     """Wall clock, unlike the two above: a dead player stops sending commands, so
     a respawn measured on their simulated time would never come."""
     respawn_at: float = 0.0
@@ -505,6 +506,7 @@ class MatchPlayer:
         self.ammo = {i: w.mag for i, w in enumerate(weapons.WEAPONS)}
         self.reserve = {i: w.reserve for i, w in enumerate(weapons.WEAPONS)}
         self.reload_until = -999.0
+        self.reloading_empty = False
         self.last_fire_at = -999.0
         # A respawn is the clearest "starting again" there is.
         self.spray_index = 0
@@ -596,6 +598,7 @@ class MatchPlayer:
             "ammo": self.ammo.get(self.weapon, 0),
             "reserve": self.reserve.get(self.weapon, 0),
             "reloading": self.sim_time < self.reload_until,
+            "reloadingEmpty": (self.sim_time < self.reload_until) and self.reloading_empty,
             "reloadIn": max(0.0, round(self.reload_until - self.sim_time, 2)),
             # How far into the spray pattern this player is. Echoed so the client
             # can *adopt* it rather than keeping its own count — predicted
@@ -1588,6 +1591,7 @@ class MatchRoom:
             # Switching cancels a reload rather than queueing behind it: that is
             # what every player expects the switch to be *for*.
             player.reload_until = -999.0
+            player.reloading_empty = False
             # And it puts you back at the top of the pattern. Carrying a spray
             # index across a switch would mean a weapon you just drew firing from
             # halfway down someone else's recoil curve.
@@ -1717,7 +1721,10 @@ class MatchRoom:
             return
         if player.reserve.get(player.weapon, 0) == 0:
             return
-        player.reload_until = player.sim_time + weapon.reload_time
+        is_empty = player.ammo.get(player.weapon, 0) == 0
+        reload_duration = weapon.reload_time * 1.25 if is_empty else weapon.reload_time
+        player.reload_until = player.sim_time + reload_duration
+        player.reloading_empty = is_empty
         # A magazine change is the end of a burst by definition.
         player.spray_index = 0
 
@@ -1736,6 +1743,7 @@ class MatchRoom:
         if player.sim_time < player.reload_until:
             return
         player.reload_until = -999.0
+        player.reloading_empty = False
         have = player.ammo.get(player.weapon, 0)
         want = weapon.mag - have
         pool = player.reserve.get(player.weapon, -1)

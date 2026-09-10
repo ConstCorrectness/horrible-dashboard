@@ -216,6 +216,7 @@ export interface SelfState {
   /** `-1` is unlimited. */
   reserve: number;
   reloading: boolean;
+  reloadingEmpty?: boolean;
   /**
    * How far into the spray pattern the **server** thinks we are.
    *

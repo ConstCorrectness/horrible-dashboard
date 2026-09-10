@@ -343,6 +343,15 @@ describe('inspect', () => {
 });
 
 describe('Knife archetypes and PBR skin materials', () => {
+  const frame = {
+    speed: 0,
+    onGround: true,
+    reloading: false,
+    yaw: 0,
+    pitch: 0,
+    visible: true,
+  };
+
   it('builds distinct procedural meshes for Karambit, Butterfly, Bayonet, and default knives', () => {
     const defaultKnife = stand();
     defaultKnife.vm.setWeapon('knife');
@@ -390,5 +399,53 @@ describe('Knife archetypes and PBR skin materials', () => {
     expect(karambitColors.length).not.toEqual(butterflyColors.length);
     expect(butterflyColors.length).not.toEqual(bayonetColors.length);
   });
+
+  it('allows continuous knife flourish looping when inspect is pressed repeatedly', () => {
+    const { vm } = stand();
+    vm.setWeapon('knife');
+    vm.inspect();
+    expect(vm.inspecting).toBe(true);
+
+    // Re-triggering inspect while inspecting loops and stays inspecting
+    vm.inspect();
+    expect(vm.inspecting).toBe(true);
+  });
+
+  it('cancels inspect when aiming down sights', () => {
+    const { vm } = stand();
+    vm.setWeapon('assault');
+    vm.inspect();
+    expect(vm.inspecting).toBe(true);
+
+    // Aiming down sights (ads = 1) cancels inspect
+    vm.update(0.05, { ...frame, ads: 1.0 });
+    expect(vm.inspecting).toBe(false);
+  });
+
+  it('applies dry reload bolt rack displacement during empty reload', () => {
+    const { vm } = stand();
+    vm.setWeapon('assault');
+
+    // Sample pivot at 75% reload progress during tactical vs empty reload
+    vm.update(0.016, {
+      ...frame,
+      reloading: true,
+      reloadingEmpty: false,
+      reloadProgress: 0.75,
+    });
+    const tacticalZ = vm.pivot.position.z;
+
+    vm.update(0.016, {
+      ...frame,
+      reloading: true,
+      reloadingEmpty: true,
+      reloadProgress: 0.75,
+    });
+    const emptyZ = vm.pivot.position.z;
+
+    // Empty reload pulls bolt rearward (more negative Z)
+    expect(emptyZ).toBeLessThan(tacticalZ);
+  });
 });
+
 

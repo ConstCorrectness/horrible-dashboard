@@ -141,6 +141,8 @@ export interface ViewModelFrame {
   speed: number;
   onGround: boolean;
   reloading: boolean;
+  /** Whether the in-progress reload is from an empty magazine (dry reload). */
+  reloadingEmpty?: boolean;
   /**
    * How far through the reload we are, 0..1, or `null` when that cannot be known
    * — the weapon's `reloadTime` has not been served, or is zero.
@@ -155,6 +157,8 @@ export interface ViewModelFrame {
   /** View angles, so the weapon can lag a turn slightly instead of being welded on. */
   yaw: number;
   pitch: number;
+  /** Lateral strafe input (-1 to 1) for physics-based strafe inertia. */
+  strafe?: number;
   /** False while dead, spectating, or before deploying. */
   visible: boolean;
   /**
@@ -574,6 +578,8 @@ export class WeaponViewModel {
   private lastPitch = 0;
   private swayX = 0;
   private swayY = 0;
+  private swayRoll = 0;
+  private strafeSway = 0;
   /** Smoothed walk factor: the *input* is a step function, and a bob that snaps
    * to full amplitude on the frame W goes down looks like a glitch, not a stride. */
   private walk = 0;
@@ -902,7 +908,12 @@ export class WeaponViewModel {
    */
   inspect(): void {
     if (this.built) {
-      this.inspectT = 0;
+      if (this.weaponId === 'knife' && this.inspectT !== null) {
+        // Continuous knife flourish spam (CS2-style endless twirl/spin on repeated F presses)
+        this.inspectT = (this.inspectT + 0.38) % INSPECT_DURATION;
+      } else {
+        this.inspectT = 0;
+      }
       this.startAction('inspect', INSPECT_DURATION);
     }
   }
@@ -960,13 +971,27 @@ export class WeaponViewModel {
 
     // Turning drags the weapon behind the view for a fraction of a second, which
     // is the difference between a held object and a decal on the screen.
-    const yawDelta = this.lastYaw === null ? 0 : frame.yaw - this.lastYaw;
+    let yawDelta = this.lastYaw === null ? 0 : frame.yaw - this.lastYaw;
+    while (yawDelta > Math.PI) yawDelta -= Math.PI * 2;
+    while (yawDelta < -Math.PI) yawDelta += Math.PI * 2;
     const pitchDelta = frame.pitch - this.lastPitch;
     this.lastYaw = frame.yaw;
     this.lastPitch = frame.pitch;
     const settle = Math.min(1, dt * 9);
     this.swayX += (clamp(-yawDelta * 2.2, -0.22, 0.22) - this.swayX) * settle;
     this.swayY += (clamp(-pitchDelta * 1.6, -0.18, 0.18) - this.swayY) * settle;
+    this.swayRoll += (clamp(-yawDelta * 1.8, -0.15, 0.15) - this.swayRoll) * Math.min(1, dt * 10);
+
+    // Lateral strafe inertia: strafing left swings weapon slightly right and rolls outward
+    const strafeTarget = (frame.strafe ?? 0) * -0.06;
+    this.strafeSway += (strafeTarget - this.strafeSway) * Math.min(1, dt * 8);
+
+    // Landing shockwave dip (damped spring compression)
+    const landPhase =
+      frame.sinceLanded !== undefined && frame.sinceLanded < 0.28
+        ? frame.sinceLanded / 0.28
+        : 1;
+    const landDip = landPhase < 1 ? -0.075 * Math.sin(landPhase * Math.PI) * (1.0 - landPhase) : 0;
 
     this.kick -= this.kick * Math.min(1, dt * KICK_DECAY);
     // The dip, on the server's clock where there is one. `reloadProgress` is
@@ -1037,6 +1062,7 @@ export class WeaponViewModel {
     const targetAds = frame.ads ?? 0;
     this.adsT += (targetAds - this.adsT) * Math.min(1, dt * 14.0);
     const adsDamp = 1.0 - 0.75 * this.adsT;
+    if (this.adsT > 0.15) this.inspectT = null;
 
     const curHomeX = HOME.x * (1 - this.adsT) + ADS_POS.x * this.adsT;
     const curHomeY = HOME.y * (1 - this.adsT) + ADS_POS.y * this.adsT;
@@ -1044,6 +1070,20 @@ export class WeaponViewModel {
 
     const bobX = Math.cos(this.bobPhase * 0.5) * 0.05 * bobAmount * adsDamp;
     const bobY = Math.abs(Math.sin(this.bobPhase)) * -0.055 * bobAmount * adsDamp;
+
+    // Empty reload bolt rack: between progress 0.68 and 0.88, rack the bolt/charging handle
+    let boltPullZ = 0;
+    let boltPullPitch = 0;
+    let boltPullRoll = 0;
+    if (frame.reloadingEmpty && frame.reloadProgress !== null && frame.reloadProgress !== undefined) {
+      const p = frame.reloadProgress;
+      if (p >= 0.68 && p <= 0.88) {
+        const boltPhase = Math.sin(((p - 0.68) / 0.20) * Math.PI);
+        boltPullZ = -0.14 * boltPhase;
+        boltPullPitch = 0.22 * boltPhase;
+        boltPullRoll = 0.12 * boltPhase;
+      }
+    }
 
     // Where the inspect pose takes the weapon: in towards the centre of the
     // screen, up, and rolled most of the way over so the side of the receiver —
@@ -1116,20 +1156,21 @@ export class WeaponViewModel {
     }
 
     this.pivot.position.set(
-      curHomeX + (bobX + this.swayX * adsDamp) - inspectLiftX + knifeX,
+      curHomeX + (bobX + (this.swayX + this.strafeSway) * adsDamp) - inspectLiftX + knifeX,
       // The stow drops the weapon out of frame entirely. Applied to the same
       // axis as the reload dip and *added* rather than blended, so a switch
       // asked for mid-reload takes the gun the rest of the way down instead of
       // fighting the dip for the pivot.
-      curHomeY + (bobY + this.swayY * adsDamp) - this.reloadT * 0.55 + inspectLiftY - stow * 1.15 + knifeY,
+      curHomeY + (bobY + this.swayY * adsDamp + landDip) - this.reloadT * 0.55 + inspectLiftY - stow * 1.15 + knifeY,
       // Recoil is mostly backwards: a gun that only rotates looks hinged.
-      curHomeZ + this.kick * 0.28 + inspectLiftZ + knifeZ,
+      curHomeZ + this.kick * 0.28 + boltPullZ + inspectLiftZ + knifeZ,
     );
     this.pivot.rotation.set(
-      this.kick * -0.16 + this.reloadT * 0.7 + bobY * 0.4 + inspectPitch + stow * 0.9 + knifePitch,
-      this.swayX * 0.7 * adsDamp + this.reloadT * 0.25 + inspectYaw + knifeYaw,
-      this.swayX * 0.5 * adsDamp +
+      this.kick * -0.16 + this.reloadT * 0.7 + boltPullPitch + bobY * 0.4 + inspectPitch + stow * 0.9 + knifePitch,
+      (this.swayX * 0.7 + this.strafeSway * 0.5) * adsDamp + this.reloadT * 0.25 + inspectYaw + knifeYaw,
+      (this.swayX * 0.5 + this.swayRoll) * adsDamp +
         bobX * 0.6 +
+        boltPullRoll +
         inspectRoll +
         stow * 0.35 +
         knifeRoll,

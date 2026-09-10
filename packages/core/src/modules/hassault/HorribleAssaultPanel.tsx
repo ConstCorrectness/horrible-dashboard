@@ -1044,6 +1044,13 @@ export function HorribleAssaultPanel() {
     }
   }, [net.objective]);
 
+  // Tactical reload multi-phase audio tracking
+  const reloadStageRef = useRef<{ wasReloading: boolean; magInFired: boolean; boltFired: boolean }>({
+    wasReloading: false,
+    magInFired: false,
+    boltFired: false,
+  });
+
   // Pickup feedback: the line that says what you just ran over, and its sound.
   //
   // Driven off `you.picked`, which the server drains: an item is reported once,
@@ -1461,6 +1468,7 @@ export function HorribleAssaultPanel() {
         const alive = !online || (session?.state.you?.alive ?? true);
 
         let moving = false;
+        let strafe = 0;
         /** Whether a shot left the barrel this frame, for the view model's kick. */
         let fired = false;
         let altFired = false;
@@ -1470,7 +1478,7 @@ export function HorribleAssaultPanel() {
           // A dead player's input is discarded server-side, so predicting
           // movement from it would only be a correction waiting to happen.
           const forward = alive ? (keys.has('forward') ? 1 : 0) - (keys.has('back') ? 1 : 0) : 0;
-          const strafe = alive ? (keys.has('right') ? 1 : 0) - (keys.has('left') ? 1 : 0) : 0;
+          strafe = alive ? (keys.has('right') ? 1 : 0) - (keys.has('left') ? 1 : 0) : 0;
           moving = forward !== 0 || strafe !== 0;
           const input = {
             forward,
@@ -1975,21 +1983,53 @@ export function HorribleAssaultPanel() {
           const reloadLeft = online
             ? (session?.state.you?.reloadIn ?? 0)
             : (rangeRef.current?.selfState().reloadIn ?? 0);
+          const isReloading = online
+            ? (session?.state.you?.reloading ?? false)
+            : localReloadingRef.current;
+          const isReloadingEmpty = online
+            ? (session?.state.you?.reloadingEmpty ?? false)
+            : (shots?.ammo === 0);
+          const reloadDurationMultiplier = isReloadingEmpty ? 1.25 : 1.0;
+          const effectiveReloadTime = reloadTime * reloadDurationMultiplier;
+          const reloadProgress =
+            effectiveReloadTime > 0
+              ? Math.max(0, Math.min(1, 1 - reloadLeft / effectiveReloadTime))
+              : null;
+
+          // Tactical & Dry Reload multi-stage synthesized audio cues
+          if (isReloading) {
+            if (!reloadStageRef.current.wasReloading) {
+              reloadStageRef.current.wasReloading = true;
+              reloadStageRef.current.magInFired = false;
+              reloadStageRef.current.boltFired = false;
+              audioRef.current?.own('reload_magout', 0.65);
+            }
+            if (reloadProgress !== null) {
+              if (reloadProgress >= 0.44 && !reloadStageRef.current.magInFired) {
+                reloadStageRef.current.magInFired = true;
+                audioRef.current?.own('reload_magin', 0.75);
+              }
+              if (isReloadingEmpty && reloadProgress >= 0.72 && !reloadStageRef.current.boltFired) {
+                reloadStageRef.current.boltFired = true;
+                audioRef.current?.own('reload_bolt', 0.85);
+              }
+            }
+          } else {
+            reloadStageRef.current.wasReloading = false;
+            reloadStageRef.current.magInFired = false;
+            reloadStageRef.current.boltFired = false;
+          }
+
           viewmodel.update(dt, {
             speed: moving ? MOVE_SPEED : 0,
             onGround: player.onGround,
-            reloading: online
-              ? (session?.state.you?.reloading ?? false)
-              : localReloadingRef.current,
-            reloadProgress:
-              reloadTime > 0 ? Math.max(0, Math.min(1, 1 - reloadLeft / reloadTime)) : null,
+            reloading: isReloading,
+            reloadingEmpty: isReloadingEmpty,
+            reloadProgress,
             yaw: player.yaw,
             pitch: player.pitch,
+            strafe,
             visible: alive,
-            // For the landing dip. A *duration*, which is also what the server
-            // sends (`you.move.sinceLanded`) and for the same reason: the two
-            // simulated clocks are unrelated, so a timestamp from one measured
-            // against the other means nothing.
             sinceLanded: Math.max(0, player.t - player.landedAt),
             ads: scopedRef.current > 0 ? 1 : 0,
           });
