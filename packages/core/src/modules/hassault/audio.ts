@@ -110,6 +110,12 @@ const TIMBRES: Record<string, Timbre> = {
   defuse_wire_cut: { frequency: 1800, q: 4.5, decay: 0.08, gain: 0.9, body: 240 },
   clutch_fanfare: { frequency: 820, q: 2.2, decay: 0.65, gain: 0.95, body: 440 },
   bomb_beep: { frequency: 2500, q: 8.0, decay: 0.06, gain: 0.8, body: 1200 },
+  // Surface Material Impacts & Penetration Thump
+  impact_concrete: { frequency: 1800, q: 2.2, decay: 0.08, gain: 0.55, body: 180 },
+  impact_metal: { frequency: 3400, q: 8.5, decay: 0.14, gain: 0.65, body: 1200 },
+  impact_wood: { frequency: 580, q: 3.0, decay: 0.10, gain: 0.60, body: 120 },
+  impact_glass: { frequency: 4200, q: 4.5, decay: 0.12, gain: 0.70, body: 300 },
+  impact_wallbang: { frequency: 280, q: 2.0, decay: 0.18, gain: 0.85, body: 80 },
 };
 
 const FALLBACK: Timbre = TIMBRES.step;
@@ -409,6 +415,30 @@ export class GameAudio {
         gain.disconnect();
       };
     }
+  }
+
+  /**
+   * Play surface material impact audio for bullet-hitting-wall feedback.
+   *
+   * Uses bearing + listenerYaw like every other positional sound. The call site
+   * computes bearing from the impact position and the player's position; details
+   * of stereo placement are handled by `play()`.
+   */
+  surfaceImpact(
+    material: 'concrete' | 'metal' | 'wood' | 'glass' | 'default',
+    bearing: number,
+    listenerYaw: number,
+    volume = 0.6,
+  ): void {
+    const sound =
+      material === 'metal'
+        ? 'impact_metal'
+        : material === 'wood'
+          ? 'impact_wood'
+          : material === 'glass'
+            ? 'impact_glass'
+            : 'impact_concrete';
+    this.play(sound, volume, bearing, listenerYaw);
   }
 
   dispose(): void {

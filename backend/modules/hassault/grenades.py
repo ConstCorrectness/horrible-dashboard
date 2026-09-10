@@ -44,6 +44,7 @@ spraying into a smoke a real (and punished) decision rather than a free wall.
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
@@ -280,6 +281,9 @@ class Zone:
     duration: float
     damage_per_second: float
     cleared_until: float = 0.0
+    channels: list[tuple[float, float, float, float, float]] = field(
+        default_factory=list
+    )
 
     def snapshot(self) -> dict[str, Any]:
         data = {
@@ -294,6 +298,21 @@ class Zone:
         }
         if self.cleared_until > 0.0:
             data["cleared"] = round(self.cleared_until, 2)
+        active_channels = [c for c in self.channels if c[4] > 0]
+        if active_channels:
+            now = time.monotonic()
+            data["channels"] = [
+                [
+                    round(c[0], 2),
+                    round(c[1], 2),
+                    round(c[2], 2),
+                    # `c[4]` is stored as an absolute (monotonic) expiry, not a
+                    # duration — the wire's `remainingSec` field must be the
+                    # time still left, not the moment it runs out.
+                    round(max(0.0, c[4] - now), 2),
+                ]
+                for c in active_channels[-8:]
+            ]
         return data
 
     def contains(self, x: float, y: float, z: float) -> bool:
@@ -566,9 +585,7 @@ def sight_blocked_by(
     length_sq = dx * dx + dy * dy + dz * dz
     if length_sq < 1e-9:
         return any(
-            z.kind == "smoke"
-            and z.cleared_until <= now
-            and z.contains(ax, ay, az)
+            z.kind == "smoke" and z.cleared_until <= now and z.contains(ax, ay, az)
             for z in zones
         )
     for zone in zones:
@@ -584,6 +601,29 @@ def sight_blocked_by(
         if (cx - zone.x) ** 2 + (cy - zone.y) ** 2 + (
             cz - zone.z
         ) ** 2 <= zone.radius**2:
+            # Bullet smoke channel check: if the ray passes through an active bullet hole/channel
+            # punched through the smoke cloud, visibility is temporarily unblocked along that tunnel.
+            if zone.channels:
+                in_channel = False
+                for ch in zone.channels:
+                    chx, chy, chz, ch_r, ch_exp = ch
+                    if ch_exp > now:
+                        tch = max(
+                            0.0,
+                            min(
+                                1.0,
+                                ((chx - ax) * dx + (chy - ay) * dy + (chz - az) * dz)
+                                / length_sq,
+                            ),
+                        )
+                        px, py, pz = ax + dx * tch, ay + dy * tch, az + dz * tch
+                        if (px - chx) ** 2 + (py - chy) ** 2 + (
+                            pz - chz
+                        ) ** 2 <= ch_r**2:
+                            in_channel = True
+                            break
+                if in_channel:
+                    continue
             return True
     return False
 

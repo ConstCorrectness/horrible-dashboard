@@ -4017,6 +4017,102 @@ disagree about what the number means, and `shaders.rs` pins it as **text**: the
 wrong version parses, validates and runs at full frame rate, so nothing else in
 that suite could have caught it.
 
+### Surface material: what a mark looks and sounds like
+
+A decal used to be one colour regardless of what it landed on, and a bullet
+punching a wall made the same sound as one punching a doorframe. `decals.ts`'s
+`surfaceMaterial()` reads the hit cell's texture id off the **served** face
+arrays (`wtex`/`ftex`/`ctex` — the map's own `world.ts` data, not a guess) and
+buckets it into `concrete` / `metal` / `wood` / `glass` / `default` by a fixed
+id table — the same limit the world renderer's own texture-id tinting is under
+("No textures yet", further below): map `.cfg` files, which would name a
+texture, are not parsed yet, so a material guess is only as good as the colour
+guess the surface itself is drawn with, and both wait on the same missing
+piece. That classification now feeds three things off one lookup, rather than
+three separate guesses that could disagree:
+
+- **`decals.mark`** tints the mark by material (`MATERIAL_TINTS`) instead of a
+  fixed white, so a wall of pocked concrete and a shredded vent read differently
+  at a glance.
+- **`effects.impactSpatter`** spawns a short-lived, material-shaped particle
+  burst — ricochet sparks off metal, splinters off wood, shards off glass, dust
+  everywhere else — oriented off the served face normal, using the same fixed
+  particle pool (`MAX_LIVE`) every other transient effect shares rather than a
+  budget of its own.
+- **`audio.surfaceImpact`** plays a per-material timbre (`impact_metal`,
+  `impact_wood`, `impact_glass`, `impact_concrete`) positioned the same way
+  every other sound in the mixer is — bearing plus listener yaw, never a raw
+  stereo pan — so a shot's material is audible before the decal is in view.
+
+A **wallbang kill** additionally plays `impact_wallbang`, a distinct low thump
+gated on `hit.wallbang` in the snapshot (`match.py` already resolved this per
+hit for the kill feed's `isWallbang` flag; this is a second consumer of the
+same server-decided fact, not a new one) — audible confirmation that a shot
+landed through geometry, which a normal hit marker doesn't distinguish.
+
+This is **browser-only** for now, the same status the smoke wisp carries: the
+native client keeps its fixed decal tint and has no particle burst or
+per-material audio. `browser_parity.rs` pins what the native side *does* draw
+(cap, lifetime, fade, lift, size, face-normal order); it does not yet cover
+material, because there is no native material to compare against.
+
+### Bullet smoke channels
+
+A round fired through a smoke cloud used to behave exactly like one fired
+through open air on the way in and then vanish into the cloud's opacity on the
+way out — the smoke didn't know it had been shot. CS2's mechanic is that a
+bullet punches a short-lived visibility tunnel through smoke it passes through,
+and it is implemented the same way every other simulation fact here is: **on
+the server**, because whether a sightline through smoke is currently open
+decides whether a peek is safe, and a client computing that itself could decide
+it differently for the shooter and the target.
+
+`grenades.Zone` gained a `channels` list: `(x, y, z, radius, expires_at)`
+tuples appended by `match.py` whenever a non-knife shot's endpoint ray crosses
+a live smoke zone's sphere, capped at 8 per zone (oldest evicted) and pruned
+every tick by `expires_at`. Two things read the list:
+
+- **`sight_blocked_by`**, reached through `MatchRoom.smoked()` — the one call
+  both a bot's line-of-sight check and the radar's "is this cloud in the way"
+  logic go through, so a cloud is respected the same way by a human's eyes and
+  a bot's — now walks a target ray against each active channel first and
+  treats a ray passing through one as unblocked, the same way it already
+  treats a ray that misses the zone's sphere entirely.
+- **`Zone.snapshot()`** serialises the active channels as `[x, y, z,
+  remainingSec]`. Internally a channel stores an *absolute* expiry
+  (`time.monotonic()` at append time, plus its 0.8 s life), because that is
+  what a tick-by-tick prune compares against — `snapshot()` converts it to a
+  duration (`expires_at − now`) on the way out, since a raw expiry timestamp
+  means nothing to a client that doesn't share the server's monotonic clock.
+  The id and radius are fixed constants the client already knows, so the wire
+  carries only what varies.
+
+The client mirrors this rather than re-deciding it. `net.ts`'s `ZoneRow`
+carries the same `channels` field, and `NadePool.punchSmoke()` (`nades.ts`) —
+called from `HorribleAssaultPanel.tsx` on every shot's impact endpoints,
+alongside the existing decal/spatter/audio calls — both reproduces a channel
+locally on the shooter's own screen (so the hole appears with zero added
+latency for the person who made it) and reconciles against the server's list
+on the next snapshot the same way `NadePool.sync` reconciles every other zone
+field. A channel is stored as a point on the **unit sphere local to the
+zone** (`(hit − zoneCenter) / radius`), not a world position, because the
+cloud's own bloom/fade animates its radius continuously and a fixed-radius
+hole would drift off the surface as the cloud grows or shrinks.
+
+Visually, a channel is a soft-edged void carved into the volumetric shader's
+density function (`uChannels[8]`, a `vec4` per hole: local xyz + fade-scaled
+radius) rather than a hole in the mesh — the smoke shader already computes a
+scalar density per fragment for its noise-driven bloom, so punching a channel
+is one more term multiplied in, not a second draw call. `NadePool.smokeDensityAt`
+— the same query the camera's own smoke-blindness shroud reads when the player
+is standing inside a cloud — subtracts the same channel list, so a channel
+punched near your own position also thins the first-person whiteout, not only
+the view from outside the cloud.
+
+`backend/tests/test_hassault_smoke_channels.py` pins the channel lifecycle
+(creation, expiry, the 8-channel cap) and `sight_blocked_by` respecting an
+active channel; `decals.test.ts` pins `surfaceMaterial`'s texture-id buckets.
+
 ### On the range
 
 Train places the same items, from the same served placements, and resolves **only the

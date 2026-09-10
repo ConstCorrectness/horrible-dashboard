@@ -20,6 +20,8 @@
  */
 import type * as THREE from 'three';
 
+import type { SurfaceMaterial } from './decals';
+
 /** Tracer lifetime. Long enough to register, short enough not to draw a web. */
 const TRACER_LIFE = 0.075;
 const IMPACT_LIFE = 0.3;
@@ -35,7 +37,7 @@ const BLAST_TINT: Record<string, number> = {
   fire: 0xff7a2a,
 };
 /** Beyond this, older effects are dropped rather than queued. */
-const MAX_LIVE = 96;
+const MAX_LIVE = 160;
 
 interface Live {
   object: THREE.Object3D;
@@ -45,12 +47,16 @@ interface Live {
   /** Starting opacity, so the fade is `base * (1 - t)` and not a compounding decay. */
   base: number;
   scale: number;
+  velocity?: THREE.Vector3;
+  drag?: number;
+  gravity?: number;
 }
 
 export class EffectsPool {
   private live: Live[] = [];
   private tracerGeo: THREE.BufferGeometry;
   private impactGeo: THREE.BufferGeometry;
+  private particleGeo: THREE.BufferGeometry;
   /** A unit sphere, grown to a blast's real radius. Low-poly on purpose: it is
    * drawn as a wireframe and a dense one reads as a solid ball. */
   private blastGeo: THREE.BufferGeometry;
@@ -66,6 +72,7 @@ export class EffectsPool {
       new three.Vector3(0, 0, 1),
     ]);
     this.impactGeo = new three.SphereGeometry(0.16, 6, 4);
+    this.particleGeo = new three.BoxGeometry(0.045, 0.045, 0.045);
     this.blastGeo = new three.SphereGeometry(1, 12, 8);
   }
 
@@ -184,14 +191,134 @@ export class EffectsPool {
     this.add(dinkMesh, dinkMat, 0.22, 4.2);
   }
 
+  /**
+   * Surface-aware ballistic impact spatter: dust puffs for stone/concrete, bright ricochet
+   * sparks for metal, splinter flecks for wood, and glittering shards for glass.
+   */
+  impactSpatter(
+    at: [number, number, number],
+    normal: [number, number, number],
+    material: SurfaceMaterial = 'default',
+  ): void {
+    const three = this.three;
+    // Cube [x, y, height] -> three [x, height, z]
+    const pos = new three.Vector3(at[0], at[2], at[1]);
+    const norm = new three.Vector3(normal[0], normal[2], normal[1]).normalize();
+
+    // Subtle tangent basis for scattering particles outward around normal
+    const up = Math.abs(norm.y) < 0.9 ? new three.Vector3(0, 1, 0) : new three.Vector3(1, 0, 0);
+    const tangent = new three.Vector3().crossVectors(norm, up).normalize();
+    const bitangent = new three.Vector3().crossVectors(norm, tangent).normalize();
+
+    if (material === 'metal') {
+      // Hot ricochet sparks: fast, glancing spray with glowing yellow-orange embers
+      const count = 5;
+      for (let i = 0; i < count; i++) {
+        const theta = Math.random() * Math.PI * 2;
+        const spread = 0.3 + Math.random() * 0.9;
+        const vel = norm
+          .clone()
+          .multiplyScalar(6 + Math.random() * 8)
+          .addScaledVector(tangent, Math.cos(theta) * spread * 10)
+          .addScaledVector(bitangent, Math.sin(theta) * spread * 10);
+
+        const sparkColor = Math.random() > 0.3 ? 0xffea55 : 0xffaa22;
+        const sparkMat = new three.MeshBasicMaterial({
+          color: sparkColor,
+          transparent: true,
+          opacity: 1.0,
+        });
+        const spark = new three.Mesh(this.particleGeo, sparkMat);
+        spark.position.copy(pos);
+        this.add(spark, sparkMat, 0.16 + Math.random() * 0.08, 1.2, vel, 2.0, 32.0);
+      }
+    } else if (material === 'wood') {
+      // Splinter debris
+      const count = 4;
+      for (let i = 0; i < count; i++) {
+        const theta = Math.random() * Math.PI * 2;
+        const spread = 0.2 + Math.random() * 0.6;
+        const vel = norm
+          .clone()
+          .multiplyScalar(4 + Math.random() * 5)
+          .addScaledVector(tangent, Math.cos(theta) * spread * 6)
+          .addScaledVector(bitangent, Math.sin(theta) * spread * 6);
+
+        const woodColor = Math.random() > 0.5 ? 0x8a5a2e : 0xbfa073;
+        const woodMat = new three.MeshBasicMaterial({
+          color: woodColor,
+          transparent: true,
+          opacity: 0.9,
+        });
+        const splinter = new three.Mesh(this.particleGeo, woodMat);
+        splinter.position.copy(pos);
+        this.add(splinter, woodMat, 0.22 + Math.random() * 0.08, 1.0, vel, 4.0, 22.0);
+      }
+    } else if (material === 'glass') {
+      // Crystalline glass shards
+      const count = 5;
+      for (let i = 0; i < count; i++) {
+        const vel = norm
+          .clone()
+          .multiplyScalar(5 + Math.random() * 7)
+          .addScaledVector(tangent, (Math.random() - 0.5) * 8)
+          .addScaledVector(bitangent, (Math.random() - 0.5) * 8);
+
+        const glassMat = new three.MeshBasicMaterial({
+          color: 0xe0f4fc,
+          transparent: true,
+          opacity: 0.95,
+        });
+        const shard = new three.Mesh(this.particleGeo, glassMat);
+        shard.position.copy(pos);
+        this.add(shard, glassMat, 0.18 + Math.random() * 0.06, 0.9, vel, 3.0, 25.0);
+      }
+    } else {
+      // Concrete / plaster / stone: dust puff
+      const count = 4;
+      for (let i = 0; i < count; i++) {
+        const theta = Math.random() * Math.PI * 2;
+        const spread = 0.2 + Math.random() * 0.7;
+        const vel = norm
+          .clone()
+          .multiplyScalar(2.5 + Math.random() * 3.5)
+          .addScaledVector(tangent, Math.cos(theta) * spread * 4)
+          .addScaledVector(bitangent, Math.sin(theta) * spread * 4);
+
+        const dustColor = Math.random() > 0.5 ? 0xcccccc : 0xa6a6a6;
+        const dustMat = new three.MeshBasicMaterial({
+          color: dustColor,
+          transparent: true,
+          opacity: 0.85,
+        });
+        const dust = new three.Mesh(this.particleGeo, dustMat);
+        dust.position.copy(pos);
+        this.add(dust, dustMat, 0.24 + Math.random() * 0.08, 1.8, vel, 9.0, 8.0);
+      }
+    }
+  }
+
   private add(
     object: THREE.Object3D,
     material: THREE.Material & { opacity: number },
     life: number,
     scale = 1,
+    velocity?: THREE.Vector3,
+    drag?: number,
+    gravity?: number,
   ): void {
     this.scene.add(object);
-    this.live.push({ object, material, age: 0, life, base: material.opacity, scale });
+    this.live.push({
+      object,
+      material,
+      age: 0,
+      life,
+      base: material.opacity,
+      scale,
+      velocity,
+      drag,
+      gravity,
+    });
     while (this.live.length > MAX_LIVE) this.retire(this.live.shift()!);
   }
 
@@ -205,6 +332,11 @@ export class EffectsPool {
         this.retire(entry);
         this.live.splice(i, 1);
         continue;
+      }
+      if (entry.velocity) {
+        entry.object.position.addScaledVector(entry.velocity, dt);
+        if (entry.gravity) entry.velocity.y -= entry.gravity * dt;
+        if (entry.drag) entry.velocity.multiplyScalar(Math.max(0, 1 - entry.drag * dt));
       }
       entry.material.opacity = entry.base * (1 - t);
       if (entry.scale !== 1) {
@@ -224,6 +356,7 @@ export class EffectsPool {
     this.live = [];
     this.tracerGeo.dispose();
     this.impactGeo.dispose();
+    this.particleGeo.dispose();
     this.blastGeo.dispose();
   }
 

@@ -86,7 +86,7 @@ import {
 import { DeveloperConsole, NetGraphHUD } from './console';
 import { ArcLine } from './arcline';
 import { simulateThrow, throwOrigin, throwVelocity } from './arc';
-import { DecalPool } from './decals';
+import { DecalPool, FACE_NORMALS, surfaceMaterial } from './decals';
 import { EffectsPool } from './effects';
 import { GameMenu } from './GameMenu';
 import { buildWorldMesh } from './geometry';
@@ -1002,6 +1002,11 @@ export function HorribleAssaultPanel() {
         audioRef.current?.own('flesh_headshot', 0.85);
       }
     }
+    // Distinct audio cue for wallbang penetration kills — the muffled thud
+    // confirms you damaged through geometry, which is tactical information.
+    if (you.hits.some((h) => h.wallbang)) {
+      audioRef.current?.own('impact_wallbang', 0.75);
+    }
     const hurt = you.hp < lastHpRef.current;
     lastHpRef.current = you.hp;
     // Only on an actual event: this effect runs on every emitted snapshot, and
@@ -1623,7 +1628,16 @@ export function HorribleAssaultPanel() {
                   // left no marks would be the one place you cannot see your own
                   // spray pattern, which is what it is for.
                   for (let i = 0; i < shot.ends.length; i++) {
-                    decals.mark(shot.ends[i], shot.faces[i] ?? -1);
+                    const face = shot.faces[i] ?? -1;
+                    const mat = surfaceMaterial(world, shot.ends[i], face);
+                    decals.mark(shot.ends[i], face, mat);
+                    if (face >= 0 && face < FACE_NORMALS.length) {
+                      effects.impactSpatter(shot.ends[i], FACE_NORMALS[face], mat);
+                      const dx = shot.ends[i][0] - player.x;
+                      const dy = shot.ends[i][1] - player.y;
+                      const bearing = Math.atan2(dx, dy);
+                      audioRef.current?.surfaceImpact(mat, bearing, player.yaw);
+                    }
                   }
                 }
                 if (shot.hits.length > 0) {
@@ -1777,7 +1791,19 @@ export function HorribleAssaultPanel() {
                 // backend — and an absent list means "no marks", never "mark
                 // everything": `-1` is refused by `mark` itself.
                 for (let i = 0; i < fx.ends.length; i++) {
-                  decals.mark(fx.ends[i], fx.faces?.[i] ?? -1);
+                  const face = fx.faces?.[i] ?? -1;
+                  const mat = surfaceMaterial(world, fx.ends[i], face);
+                  decals.mark(fx.ends[i], face, mat);
+                  if (face >= 0 && face < FACE_NORMALS.length) {
+                    effects.impactSpatter(fx.ends[i], FACE_NORMALS[face], mat);
+                    const dx = fx.ends[i][0] - player.x;
+                    const dy = fx.ends[i][1] - player.y;
+                    const bearing = Math.atan2(dx, dy);
+                    audioRef.current?.surfaceImpact(mat, bearing, player.yaw);
+                  }
+                  // CS2 bullet smoke channel: punch a sightline through any
+                  // smoke the round penetrated.
+                  nadePool.punchSmoke(fx.origin, fx.ends[i]);
                 }
               }
               // Flash and kick the shooter's own avatar. Our body is not drawn

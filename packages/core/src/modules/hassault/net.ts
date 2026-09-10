@@ -245,7 +245,7 @@ export interface SelfState {
   objectives?: number;
   mag: number;
   /** Hitmarkers since the last snapshot. Drained server-side, so each is sent once. */
-  hits: { victim: string; damage: number; head: boolean; killed: boolean; armour?: boolean }[];
+  hits: { victim: string; damage: number; head: boolean; killed: boolean; armour?: boolean; wallbang?: boolean }[];
   /** What prediction rebases on. Absent only from a server older than momentum. */
   move?: MoveState;
   /** Audible noises since the last snapshot, drained server-side. */
@@ -362,6 +362,8 @@ export interface ZoneRow {
   duration: number;
   /** Server timestamp/timer until which smoke is cleared by HE blast dispersion. */
   cleared?: number;
+  /** Bullet channels carved through smoke: [x, y, z, remainingSec]. */
+  channels?: [number, number, number, number][];
 }
 
 /** A shot somebody took, batched into the snapshot rather than sent as it happened. */

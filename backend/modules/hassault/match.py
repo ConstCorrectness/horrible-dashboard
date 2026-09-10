@@ -1084,6 +1084,8 @@ class MatchRoom:
         if self.zones:
             for zone in self.zones:
                 zone.remaining -= dt
+                if zone.channels:
+                    zone.channels = [c for c in zone.channels if c[4] > now]
                 if zone.damage_per_second > 0:
                     self._burn(zone, dt, now)
             self.zones = [z for z in self.zones if z.remaining > 0]
@@ -1878,6 +1880,28 @@ class MatchRoom:
         # walk the pattern for a player who never fired.
         player.spray_index += 1
 
+        # CS2 bullet smoke channels: high-velocity bullets carve visibility tunnels through smoke
+        if not is_knife and self.zones:
+            for end in result.endpoints:
+                for z in self.zones:
+                    if z.kind == "smoke":
+                        vx = end[0] - origin[0]
+                        vy = end[1] - origin[1]
+                        vz = end[2] - origin[2]
+                        seg_sq = vx * vx + vy * vy + vz * vz
+                        if seg_sq > 1e-6:
+                            wx = z.x - origin[0]
+                            wy = z.y - origin[1]
+                            wz = z.z - origin[2]
+                            t = max(0.0, min(1.0, (wx * vx + wy * vy + wz * vz) / seg_sq))
+                            cx = origin[0] + t * vx
+                            cy = origin[1] + t * vy
+                            cz = origin[2] + t * vz
+                            if (cx - z.x) ** 2 + (cy - z.y) ** 2 + (cz - z.z) ** 2 <= z.radius ** 2:
+                                z.channels.append((cx, cy, cz, 1.2, now + 0.8))
+                                if len(z.channels) > 8:
+                                    z.channels.pop(0)
+
         for hit in result.hits:
             victim = self.players.get(hit.victim)
             if victim is None or not victim.alive:
@@ -2004,6 +2028,8 @@ class MatchRoom:
                 "head": head,
                 "killed": killed,
             }
+            if wallbang:
+                hit["wallbang"] = True
             if absorbed:
                 # The shooter is told armour ate some of it, but never how much
                 # is left: "that one hit a vest" is feedback about the shot they

@@ -31,7 +31,7 @@
  */
 import type * as THREE from 'three';
 
-import { FACE_NONE } from './trace';
+import { FACE_NONE, FACE_NZ, FACE_PZ } from './trace';
 
 /** How many marks the world remembers. The 129th retires the 1st. */
 export const DECAL_MAX = 128;
@@ -65,6 +65,54 @@ export const FACE_NORMALS: readonly [number, number, number][] = [
   [0, 0, 1],
   [0, 0, -1],
 ];
+
+export type SurfaceMaterial = 'concrete' | 'metal' | 'wood' | 'glass' | 'default';
+
+export const MATERIAL_TINTS: Record<SurfaceMaterial, number> = {
+  concrete: 0xb8b8b8,
+  metal: 0x586068,
+  wood: 0x6a4828,
+  glass: 0x88c8e8,
+  default: 0xffffff,
+};
+
+/**
+ * Identify the surface material from cell texture coordinates and hit face.
+ */
+export function surfaceMaterial(
+  world: { ssize: number; wtex: Uint8Array; ftex: Uint8Array; ctex: Uint8Array; utex?: Uint8Array } | null | undefined,
+  at: [number, number, number],
+  face: number,
+): SurfaceMaterial {
+  if (!world || face === FACE_NONE || face < 0) return 'default';
+  const cx = Math.floor(at[0]);
+  const cy = Math.floor(at[1]);
+  if (cx < 0 || cy < 0 || cx >= world.ssize || cy >= world.ssize) return 'concrete';
+  const idx = cy * world.ssize + cx;
+  let tex = 0;
+  if (face === FACE_PZ) {
+    tex = world.ftex[idx] ?? 0;
+  } else if (face === FACE_NZ) {
+    tex = world.ctex[idx] ?? 0;
+  } else {
+    tex = world.wtex[idx] ?? 0;
+  }
+
+  // Metal: 3 (Default Floor plate), 21 (Steel Deck), 58 (Grated Floor), 89 (Rusted Plate), 131 (Bulkhead), 150 (Catwalk), 233 (Vent)
+  if (tex === 3 || tex === 21 || tex === 58 || tex === 89 || tex === 131 || tex === 150 || tex === 233) {
+    return 'metal';
+  }
+  // Wood / Composite Panels: 4 (Default Ceiling panel), 33 (Ceiling Panel), 76 (Painted Block), 104 (Tile), 214 (Hazard Stripe)
+  if (tex === 4 || tex === 33 || tex === 76 || tex === 104 || tex === 214) {
+    return 'wood';
+  }
+  // Glass: 199 (Glass Panel)
+  if (tex === 199) {
+    return 'glass';
+  }
+  // Concrete / Stone: 2, 6, 12, 47, 178
+  return 'concrete';
+}
 
 /** Tile edge in pixels. A bullet hole seen from across a room is a smudge. */
 const SIZE = 32;
@@ -212,7 +260,11 @@ export class DecalPool {
    * at the call site so every caller has one fewer chance to index
    * `FACE_NORMALS` with `-1`.
    */
-  mark(at: [number, number, number], face: number, tint = 0xffffff): void {
+  mark(
+    at: [number, number, number],
+    face: number,
+    tintOrMaterial: number | SurfaceMaterial = 'default',
+  ): void {
     if (face === FACE_NONE || face < 0 || face >= FACE_NORMALS.length) return;
     const entry = this.marks[this.next];
     this.next = (this.next + 1) % DECAL_MAX;
@@ -230,7 +282,11 @@ export class DecalPool {
     // copies of the same stamp.
     entry.mesh.rotateZ(hash(at[0], at[1]) * Math.PI * 2);
     entry.mesh.scale.setScalar(DECAL_SIZE);
-    entry.material.color.setHex(tint);
+    const hex =
+      typeof tintOrMaterial === 'number'
+        ? tintOrMaterial
+        : (MATERIAL_TINTS[tintOrMaterial] ?? 0xffffff);
+    entry.material.color.setHex(hex);
     entry.material.opacity = 1;
     entry.mesh.visible = true;
     entry.age = 0;

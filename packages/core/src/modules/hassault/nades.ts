@@ -62,6 +62,15 @@ interface LiveNade {
   fuse: number;
 }
 
+interface SmokeChannel {
+  x: number;
+  y: number;
+  z: number;
+  age: number;
+  life: number;
+  radius: number;
+}
+
 interface LiveZone {
   mesh: THREE.Mesh;
   material: THREE.ShaderMaterial;
@@ -70,6 +79,7 @@ interface LiveZone {
   left: number;
   duration: number;
   clearedUntil?: number;
+  channels: SmokeChannel[];
 }
 
 export class NadePool {
@@ -132,12 +142,86 @@ export class NadePool {
       live.clearedUntil = row.cleared;
       live.mesh.position.set(row.x, row.z, row.y);
       live.mesh.scale.setScalar(row.r);
+
+      if (row.channels && live.kind === 'smoke') {
+        for (const [cx, cy, cz, remaining] of row.channels) {
+          const r = row.r;
+          if (r > 0.01) {
+            const lx = (cx - row.x) / r;
+            const ly = (cz - row.z) / r;
+            const lz = (cy - row.y) / r;
+            const exists = live.channels.some(
+              (c) => Math.hypot(c.x - lx, c.y - ly, c.z - lz) < 0.15,
+            );
+            if (!exists) {
+              live.channels.push({
+                x: lx,
+                y: ly,
+                z: lz,
+                age: Math.max(0, 0.8 - remaining),
+                life: 0.8,
+                radius: 0.26,
+              });
+            }
+          }
+        }
+      }
     }
     for (const [id, live] of this.zones) {
       if (seenZones.has(id)) continue;
       this.scene.remove(live.mesh);
       live.material.dispose();
       this.zones.delete(id);
+    }
+  }
+
+  /**
+   * Punch temporary bullet visibility tunnels through any active smoke clouds pierced by a shot.
+   * CS2 mechanic: enables tactical peek sightlines when spraying or sniping through smoke.
+   */
+  punchSmoke(origin: [number, number, number], end: [number, number, number]): void {
+    for (const live of this.zones.values()) {
+      if (live.kind !== 'smoke' || live.left <= 0) continue;
+      const r = live.mesh.scale.x;
+      if (r <= 0.01) continue;
+
+      // Mesh position is Three (cx, cz, cy) = (x, y, z) in cube coords
+      const zx = live.mesh.position.x;
+      const zy = live.mesh.position.z;
+      const zz = live.mesh.position.y;
+
+      const vx = end[0] - origin[0];
+      const vy = end[1] - origin[1];
+      const vz = end[2] - origin[2];
+      const segSq = vx * vx + vy * vy + vz * vz;
+      if (segSq < 1e-6) continue;
+
+      const wx = zx - origin[0];
+      const wy = zy - origin[1];
+      const wz = zz - origin[2];
+      const t = Math.max(0, Math.min(1, (wx * vx + wy * vy + wz * vz) / segSq));
+      const px = origin[0] + t * vx;
+      const py = origin[1] + t * vy;
+      const pz = origin[2] + t * vz;
+
+      const distSq = (px - zx) ** 2 + (py - zy) ** 2 + (pz - zz) ** 2;
+      if (distSq <= r * r) {
+        // Pierced the smoke! Local coordinates on the unit sphere
+        const lx = (px - zx) / r;
+        const ly = (pz - zz) / r;
+        const lz = (py - zy) / r;
+        live.channels.push({
+          x: lx,
+          y: ly,
+          z: lz,
+          age: 0,
+          life: 0.8,
+          radius: 0.28,
+        });
+        if (live.channels.length > 8) {
+          live.channels.shift();
+        }
+      }
     }
   }
 
@@ -171,6 +255,24 @@ export class NadePool {
       const isCleared = live.kind === 'smoke' && live.clearedUntil !== undefined && live.clearedUntil > nowSec;
       const clearFactor = isCleared ? 0.08 : 1.0;
       live.material.uniforms.uOpacity.value = Math.max(0, Math.min(1, bloom * fade * clearFactor));
+
+      if (live.kind === 'smoke' && live.channels.length > 0) {
+        for (let i = live.channels.length - 1; i >= 0; i--) {
+          const ch = live.channels[i];
+          ch.age += dt;
+          if (ch.age >= ch.life) {
+            live.channels.splice(i, 1);
+          }
+        }
+        const uChannels = live.material.uniforms.uChannels.value as THREE.Vector4[];
+        const count = Math.min(8, live.channels.length);
+        for (let i = 0; i < count; i++) {
+          const ch = live.channels[i];
+          const fadeAmount = Math.max(0, 1.0 - ch.age / ch.life);
+          uChannels[i].set(ch.x, ch.y, ch.z, fadeAmount * ch.radius);
+        }
+        live.material.uniforms.uChannelCount.value = count;
+      }
     }
   }
 
@@ -238,6 +340,10 @@ export class NadePool {
         uOpacity: { value: 0 },
         uColor: { value: new three.Color(ZONE_TINT[row.kind] ?? 0xffffff) },
         uFire: { value: fire ? 1 : 0 },
+        uChannels: {
+          value: Array.from({ length: 8 }, () => new three.Vector4(0, 0, 0, 0)),
+        },
+        uChannelCount: { value: 0 },
       },
       vertexShader: `
         varying vec3 vViewNormal;
@@ -256,6 +362,8 @@ export class NadePool {
         uniform float uOpacity;
         uniform vec3 uColor;
         uniform float uFire;
+        uniform vec4 uChannels[8];
+        uniform int uChannelCount;
         varying vec3 vViewNormal;
         varying vec3 vViewDir;
         varying vec3 vLocal;
@@ -300,6 +408,21 @@ export class NadePool {
             if (chord > 0.38) {
               density = 1.0;
             }
+
+            // CS2 Bullet smoke channels: holes punched through volumetric smoke by high-velocity rounds
+            float channelVoid = 0.0;
+            for (int i = 0; i < 8; i++) {
+              if (i >= uChannelCount) break;
+              vec4 ch = uChannels[i];
+              if (ch.w > 0.001) {
+                float d = length(vLocal - ch.xyz);
+                if (d < ch.w) {
+                  float hole = smoothstep(ch.w, ch.w * 0.25, d);
+                  channelVoid = max(channelVoid, hole);
+                }
+              }
+            }
+            density *= (1.0 - channelVoid * 0.95);
           }
 
           vec3 color = uColor;
@@ -331,6 +454,7 @@ export class NadePool {
       kind: row.kind,
       left: row.left,
       duration: row.duration,
+      channels: [],
     };
     this.zones.set(row.id, live);
     return live;
@@ -350,10 +474,23 @@ export class NadePool {
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
       const r = live.mesh.scale.x;
       if (dist < r) {
+        let channelVoid = 0;
+        if (live.channels.length > 0) {
+          const lx = dx / r;
+          const ly = dy / r;
+          const lz = dz / r;
+          for (const ch of live.channels) {
+            const chDist = Math.hypot(lx - ch.x, ly - ch.y, lz - ch.z);
+            if (chDist < ch.radius) {
+              const fade = Math.max(0, 1 - ch.age / ch.life);
+              channelVoid = Math.max(channelVoid, (1 - chDist / ch.radius) * fade);
+            }
+          }
+        }
         const t = 1 - dist / r;
         const bloom = Math.min(1, (live.duration - live.left) / 0.65);
         const fade = Math.min(1, live.left / 1.6);
-        const density = Math.min(1, t * 1.6) * bloom * fade;
+        const density = Math.min(1, t * 1.6) * bloom * fade * (1.0 - channelVoid * 0.9);
         if (density > maxDensity) maxDensity = density;
       }
     }
