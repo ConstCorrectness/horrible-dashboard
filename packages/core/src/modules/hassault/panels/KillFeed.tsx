@@ -22,7 +22,7 @@ export interface KillFeedProps {
   style?: React.CSSProperties;
 }
 
-const TEAM_COLORS: Record<KillFeedTeam, { text: string; bg: string; glow: string }> = {
+export const TEAM_COLORS: Record<KillFeedTeam, { text: string; bg: string; glow: string }> = {
   CT: { text: 'rgb(56, 189, 248)', bg: 'rgba(56, 189, 248, 0.15)', glow: 'rgba(56, 189, 248, 0.35)' },
   T: { text: 'rgb(251, 191, 36)', bg: 'rgba(251, 191, 36, 0.15)', glow: 'rgba(251, 191, 36, 0.35)' },
   FFA: { text: 'rgb(241, 245, 249)', bg: 'rgba(241, 245, 249, 0.12)', glow: 'rgba(241, 245, 249, 0.35)' },
@@ -32,7 +32,7 @@ const TEAM_COLORS: Record<KillFeedTeam, { text: string; bg: string; glow: string
 /*                                SVG ICONS                                   */
 /* -------------------------------------------------------------------------- */
 
-const HeadshotIcon: React.FC<{ size?: number }> = memo(({ size = 16 }) => (
+export const HeadshotIcon: React.FC<{ size?: number }> = memo(({ size = 16 }) => (
   <svg
     width={size}
     height={size}
@@ -54,7 +54,7 @@ const HeadshotIcon: React.FC<{ size?: number }> = memo(({ size = 16 }) => (
   </svg>
 ));
 
-const WallbangIcon: React.FC<{ size?: number }> = memo(({ size = 16 }) => (
+export const WallbangIcon: React.FC<{ size?: number }> = memo(({ size = 16 }) => (
   <svg
     width={size}
     height={size}
@@ -76,7 +76,7 @@ const WallbangIcon: React.FC<{ size?: number }> = memo(({ size = 16 }) => (
   </svg>
 ));
 
-const SmokeIcon: React.FC<{ size?: number }> = memo(({ size = 16 }) => (
+export const SmokeIcon: React.FC<{ size?: number }> = memo(({ size = 16 }) => (
   <svg
     width={size}
     height={size}
@@ -93,7 +93,7 @@ const SmokeIcon: React.FC<{ size?: number }> = memo(({ size = 16 }) => (
   </svg>
 ));
 
-const NoScopeIcon: React.FC<{ size?: number }> = memo(({ size = 16 }) => (
+export const NoScopeIcon: React.FC<{ size?: number }> = memo(({ size = 16 }) => (
   <svg
     width={size}
     height={size}
@@ -116,7 +116,7 @@ const NoScopeIcon: React.FC<{ size?: number }> = memo(({ size = 16 }) => (
   </svg>
 ));
 
-const AirborneIcon: React.FC<{ size?: number }> = memo(({ size = 16 }) => (
+export const AirborneIcon: React.FC<{ size?: number }> = memo(({ size = 16 }) => (
   <svg
     width={size}
     height={size}
@@ -134,7 +134,7 @@ const AirborneIcon: React.FC<{ size?: number }> = memo(({ size = 16 }) => (
   </svg>
 ));
 
-const BlindIcon: React.FC<{ size?: number }> = memo(({ size = 16 }) => (
+export const BlindIcon: React.FC<{ size?: number }> = memo(({ size = 16 }) => (
   <svg
     width={size}
     height={size}
@@ -154,7 +154,7 @@ const BlindIcon: React.FC<{ size?: number }> = memo(({ size = 16 }) => (
   </svg>
 ));
 
-const NutshotIcon: React.FC<{ size?: number }> = memo(({ size = 16 }) => (
+export const NutshotIcon: React.FC<{ size?: number }> = memo(({ size = 16 }) => (
   <svg
     width={size}
     height={size}
@@ -177,7 +177,7 @@ const NutshotIcon: React.FC<{ size?: number }> = memo(({ size = 16 }) => (
 /*                            WEAPON SILHOUETTES                              */
 /* -------------------------------------------------------------------------- */
 
-const WeaponSilhouetteBadge: React.FC<{ weaponId: string; width?: number; height?: number }> = memo(
+export const WeaponSilhouetteBadge: React.FC<{ weaponId: string; width?: number; height?: number }> = memo(
   ({ weaponId, width = 46, height = 18 }) => {
     const id = weaponId.toLowerCase();
 

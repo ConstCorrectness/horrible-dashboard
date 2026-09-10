@@ -497,7 +497,13 @@ pub fn step(world: &World, player: &mut PlayerState, input: &MoveInput, dt: f32)
     let mut response = if under {
         WATER_RESPONSE
     } else if player.on_ground {
-        GROUND_RESPONSE
+        // Counter-strafe braking: when grounded without a ladder, if wish direction opposes current velocity,
+        // apply active braking boost (3.2x) to rapidly halt momentum for tactical peek-shooting.
+        if ladder.is_none() && wx * player.vel_x + wy * player.vel_y < -0.1 {
+            GROUND_RESPONSE * 3.2
+        } else {
+            GROUND_RESPONSE
+        }
     } else {
         AIR_RESPONSE
     };

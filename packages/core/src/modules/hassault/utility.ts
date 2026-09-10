@@ -30,16 +30,16 @@ export interface ThrowIntent {
   /** Slot to throw, or `-1` when nothing is going out this frame. */
   nade: number;
   lob: boolean;
+  power?: number;
 }
 
 /**
  * How a grenade left the hand.
  *
- * `overhand` is the full throw, `underhand` the short lob — the two the server
- * already knew about (`LOB_SCALE`), now reachable from the two mouse buttons
- * rather than from two keys on the far side of the keyboard.
+ * `overhand` is the full throw (power 1.0), `medium` is the half toss (power 0.72),
+ * `underhand` the short lob (power 0.42).
  */
-export type ThrowStyle = 'overhand' | 'underhand';
+export type ThrowStyle = 'overhand' | 'medium' | 'underhand';
 
 export const NO_THROW: ThrowIntent = { throw: false, nade: -1, lob: false };
 
@@ -61,6 +61,7 @@ export class GrenadeController {
   private counts: Record<string, number> = {};
   private wantThrow = false;
   private wantLob = false;
+  private throwPower: number | undefined = undefined;
   private lastThrowAt = -Infinity;
   /**
    * The slot currently **in your hand**, or `-1` when a weapon is.
@@ -141,6 +142,7 @@ export class GrenadeController {
     // the next one.
     this.wantThrow = false;
     this.wantLob = false;
+    this.throwPower = undefined;
   }
 
   /**
@@ -170,9 +172,10 @@ export class GrenadeController {
   /**
    * A throw key went down this frame. Edge, not level — see the class docstring.
    */
-  press(lob = false): void {
+  press(lob = false, power?: number): void {
     this.wantThrow = true;
     this.wantLob = lob;
+    this.throwPower = power;
   }
 
   /**
@@ -188,8 +191,10 @@ export class GrenadeController {
 
     const wanted = this.wantThrow;
     const lob = this.wantLob;
+    const power = this.throwPower;
     this.wantThrow = false;
     this.wantLob = false;
+    this.throwPower = undefined;
     this.threw = false;
 
     // Dying puts the grenade away. Coming back holding one you readied in a
@@ -212,7 +217,12 @@ export class GrenadeController {
     // Readying the next one you actually have. Standing there holding an empty
     // hand after your last smoke is a state with nothing to do in it.
     const emptied = this.counts[spec.id] <= 0;
-    const intent: ThrowIntent = { throw: true, nade: this.slot, lob };
+    const intent: ThrowIntent = {
+      throw: true,
+      nade: this.slot,
+      lob,
+      ...(power !== undefined ? { power } : {}),
+    };
     this.threw = true;
     if (emptied) {
       this.cycle();
@@ -233,6 +243,7 @@ export class GrenadeController {
     this.lastThrowAt = -Infinity;
     this.wantThrow = false;
     this.wantLob = false;
+    this.throwPower = undefined;
     this.equippedSlot = -1;
     this.threw = false;
   }

@@ -877,3 +877,150 @@ def test_running_and_jumping_actually_change_where_a_grenade_goes():
     # At a fraction, not in full: at 1.0 a player running backwards can drop a
     # grenade that never leaves them, which reads as the throw having failed.
     assert running[0] - still[0] < 20.0
+
+
+def test_throw_velocity_power_scaling():
+    """Overhand 1.0, medium 0.72, underhand 0.42."""
+    v_over = grenades.throw_velocity(0.0, 0.0, False, power=1.0)
+    v_med = grenades.throw_velocity(0.0, 0.0, True, power=0.72)
+    v_under = grenades.throw_velocity(0.0, 0.0, True, power=0.42)
+
+    assert v_over[0] == pytest.approx(grenades.THROW_SPEED * 1.0)
+    assert v_med[0] == pytest.approx(grenades.THROW_SPEED * 0.72)
+    assert v_under[0] == pytest.approx(grenades.THROW_SPEED * 0.42)
+    assert v_over[0] > v_med[0] > v_under[0]
+
+
+def test_he_blast_disperses_smoke_temporarily():
+    """HE grenade clears smoke line-of-sight for 2.5s."""
+    from backend.modules.hassault.modes import Deathmatch
+
+    world = flat_world(32)
+    m = MatchRoom(
+        room_id="test-room",
+        map_name="test",
+        world=world,
+        mode=Deathmatch(),
+        spawns=[Spawn(10, 10), Spawn(20, 20)],
+    )
+
+    smoke_zone = grenades.Zone(
+        id="smoke-1",
+        kind="smoke",
+        owner="p1",
+        team=0,
+        x=15.0,
+        y=15.0,
+        z=1.0,
+        radius=10.0,
+        remaining=15.0,
+        duration=15.0,
+        damage_per_second=0.0,
+    )
+    m.zones.append(smoke_zone)
+
+    # Smoke blocks sight initially
+    assert m.smoked((10.0, 15.0, 1.0), (20.0, 15.0, 1.0)) is True
+
+    # Detonate HE grenade within radius
+    he_spec = grenades.BY_ID["he"]
+    he_nade = grenades.Grenade(
+        id="he-1",
+        spec=he_spec,
+        owner="p1",
+        team=0,
+        x=15.0,
+        y=15.0,
+        z=1.0,
+        vx=0.0,
+        vy=0.0,
+        vz=0.0,
+        fuse=0.0,
+    )
+    m._detonate(he_nade, now=10.0)
+
+    # Smoke zone has cleared_until set to 10.0 + 2.5 = 12.5
+    assert smoke_zone.cleared_until == pytest.approx(12.5)
+
+    # During cleared window (now = 11.0), sight is NOT blocked!
+    m.now = 11.0
+    assert m.smoked((10.0, 15.0, 1.0), (20.0, 15.0, 1.0)) is False
+
+    # After cleared window (now = 13.0), smoke blocks sight again!
+    m.now = 13.0
+    assert m.smoked((10.0, 15.0, 1.0), (20.0, 15.0, 1.0)) is True
+
+
+def test_smoke_extinguishes_fire_and_fire_in_smoke():
+    """Smoke puts out fire on detonation; fire landing in smoke is extinguished."""
+    from backend.modules.hassault.modes import Deathmatch
+
+    world = flat_world(32)
+    m = MatchRoom(
+        room_id="test-room-2",
+        map_name="test",
+        world=world,
+        mode=Deathmatch(),
+        spawns=[Spawn(10, 10), Spawn(20, 20)],
+    )
+
+    fire_zone = grenades.Zone(
+        id="fire-1",
+        kind="fire",
+        owner="p1",
+        team=0,
+        x=15.0,
+        y=15.0,
+        z=1.0,
+        radius=8.0,
+        remaining=10.0,
+        duration=10.0,
+        damage_per_second=50.0,
+    )
+    m.zones.append(fire_zone)
+
+    # Detonate smoke nearby
+    smoke_spec = grenades.BY_ID["smoke"]
+    smoke_nade = grenades.Grenade(
+        id="smoke-nade",
+        spec=smoke_spec,
+        owner="p2",
+        team=1,
+        x=16.0,
+        y=15.0,
+        z=1.0,
+        vx=0.0,
+        vy=0.0,
+        vz=0.0,
+        fuse=0.0,
+    )
+    m._detonate(smoke_nade, now=1.0)
+
+    # Fire zone was extinguished (remaining set to 0.0)
+    assert fire_zone.remaining == 0.0
+
+    # Clean up spent zones
+    m.zones = [z for z in m.zones if z.remaining > 0]
+    assert len(m.zones) == 1
+    assert m.zones[0].kind == "smoke"
+
+    # Now throw molotov into the active smoke
+    molotov_spec = grenades.BY_ID["molotov"]
+    molotov_nade = grenades.Grenade(
+        id="molo-nade",
+        spec=molotov_spec,
+        owner="p1",
+        team=0,
+        x=16.0,
+        y=15.0,
+        z=1.0,
+        vx=0.0,
+        vy=0.0,
+        vz=0.0,
+        fuse=0.0,
+    )
+    m._detonate(molotov_nade, now=2.0)
+
+    # No new fire zone was added because it was extinguished on impact with smoke!
+    assert not any(z.kind == "fire" for z in m.zones)
+

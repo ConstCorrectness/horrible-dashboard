@@ -136,6 +136,7 @@ import {
   type DemoData,
 } from './demo';
 import { KillFeed } from './panels/KillFeed';
+import { KillCardDeck } from './panels/KillCardDeck';
 import {
   broadcastMatchTelemetry,
   onConsoleCommand,
@@ -280,6 +281,7 @@ const EMPTY_SESSION: SessionState = {
   you: null,
   scores: [0, 0],
   killfeed: [],
+  roundKills: [],
   host: '',
   invites: [],
   mode: null,
@@ -762,6 +764,7 @@ export function HorribleAssaultPanel() {
   if (nadesRef.current === null) nadesRef.current = new GrenadeController();
   if (rangeRef.current === null) rangeRef.current = new TrainingRange();
   if (audioRef.current === null) audioRef.current = new GameAudio();
+  const effectsRef = useRef<EffectsPool | null>(null);
   const wasReloadingRef = useRef(false);
 
   // The frame loop is built once and never re-created, so anything it needs to
@@ -977,6 +980,14 @@ export function HorribleAssaultPanel() {
     if (!you) return;
     const hit = you.hits.length > 0;
     const killed = you.hits.some((h) => h.killed);
+    const headHit = you.hits.find((h) => h.head);
+    if (headHit) {
+      if (headHit.armour) {
+        audioRef.current?.own('helmet_dink', 0.95);
+      } else {
+        audioRef.current?.own('flesh_headshot', 0.85);
+      }
+    }
     const hurt = you.hp < lastHpRef.current;
     lastHpRef.current = you.hp;
     // Only on an actual event: this effect runs on every emitted snapshot, and
@@ -989,6 +1000,19 @@ export function HorribleAssaultPanel() {
       hurt: hurt ? at : f.hurt,
     }));
   }, [net.you]);
+
+  // Multikill fanfare audio stingers for round clutch moments (Double, Triple, Quad, Ace!)
+  const lastRoundKillsCountRef = useRef(0);
+  useEffect(() => {
+    const count = net.roundKills.length;
+    if (count > lastRoundKillsCountRef.current) {
+      if (count === 2) audioRef.current?.own('multikill_double', 0.9);
+      else if (count === 3) audioRef.current?.own('multikill_triple', 0.95);
+      else if (count === 4) audioRef.current?.own('multikill_quad', 1.0);
+      else if (count >= 5) audioRef.current?.own('multikill_ace', 1.0);
+    }
+    lastRoundKillsCountRef.current = count;
+  }, [net.roundKills]);
 
   // Pickup feedback: the line that says what you just ran over, and its sound.
   //
@@ -1224,6 +1248,7 @@ export function HorribleAssaultPanel() {
       const backdrop = createBackdrop(THREE, scene);
       const avatars = new AvatarPool(THREE, scene);
       const effects = new EffectsPool(THREE, scene);
+      effectsRef.current = effects;
       const decals = new DecalPool(THREE, scene);
       const arcLine = new ArcLine(THREE, scene);
       // Grenades in the air and the smoke/fire they leave. A renderer only: what
@@ -1557,6 +1582,13 @@ export function HorribleAssaultPanel() {
                 }
                 if (shot.hits.length > 0) {
                   const killed = shot.hits.some((h) => h.killed);
+                  const headHit = shot.hits.find((h) => h.head);
+                  if (headHit) {
+                    audioRef.current?.own('helmet_dink', 0.95);
+                    if (effects && shot.ends[0]) {
+                      effects.helmetDink(shot.ends[0]);
+                    }
+                  }
                   setFlash((f) => ({
                     ...f,
                     hit: Date.now(),
@@ -1724,7 +1756,7 @@ export function HorribleAssaultPanel() {
             const listenerYaw = playerRef.current.yaw;
             const loadout = shotsRef.current?.weapons ?? [];
             for (const event of session.pendingNoise) {
-              audio?.heard(event, listenerYaw, loadout);
+              audio?.heard(event, listenerYaw, loadout, event.occluded);
             }
             // Also shown, not only played: a bearing is exactly what the direction
             // ring draws, and a player on headphones and a player on laptop
@@ -2255,9 +2287,11 @@ export function HorribleAssaultPanel() {
       // one: a global right-click toss would take the scope away from the
       // sniper, whose whole identity is that scope.
       if (nadesRef.current?.equipped) {
-        if (e.button !== 0 && e.button !== 2) return;
+        if (e.button !== 0 && e.button !== 1 && e.button !== 2) return;
         e.preventDefault();
-        nadesRef.current.press(e.button === 2);
+        const power = e.button === 0 ? 1.0 : e.button === 2 ? 0.42 : 0.72;
+        const lob = e.button !== 0;
+        nadesRef.current.press(lob, power);
         return;
       }
       // Right is the scope for firearms, and heavy stab for the knife!
@@ -2395,8 +2429,8 @@ export function HorribleAssaultPanel() {
       // filtered above, which is what makes this one press.
       // Still bound, and still working: a player who has rebound the mouse, or
       // simply learned these, should not lose them because the default moved.
-      if (action === 'throw') nadesRef.current?.press(false);
-      if (action === 'lob') nadesRef.current?.press(true);
+      if (action === 'throw') nadesRef.current?.press(false, 1.0);
+      if (action === 'lob') nadesRef.current?.press(true, 0.42);
       keysRef.current.add(action);
     };
     const onKeyUp = (e: KeyboardEvent) => {
@@ -2880,7 +2914,8 @@ export function HorribleAssaultPanel() {
   const showHit = now - flash.hit < FLASH_MS;
   const showKilled = now - flash.killed < FLASH_MS * 2;
   const showHurt = now - flash.hurt < FLASH_MS * 2;
-  const crosshairGap = shotsRef.current?.crosshairSpread() ?? 4;
+  const crosshairGap =
+    shotsRef.current?.crosshairSpread({ speed: hud.speed, isAirborne: !hud.onGround }) ?? 4;
   const magnification = shotsRef.current?.magnification() ?? 1;
 
   return (
@@ -3116,6 +3151,19 @@ export function HorribleAssaultPanel() {
         )}
 
         {online && <KillFeed entries={net.killfeed} />}
+
+        {online && (
+          <KillCardDeck
+            cards={net.roundKills}
+            style={{
+              position: 'absolute',
+              bottom: '108px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              zIndex: 25,
+            }}
+          />
+        )}
 
         {online && showScores && (
           <div

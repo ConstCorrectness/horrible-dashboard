@@ -267,6 +267,8 @@ class Command:
     nade: int = -1
     """Underhand: a short throw, for putting a smoke at your own feet."""
     lob: bool = False
+    """Fractional throw power: 1.0 overhand, 0.72 medium, 0.42 underhand."""
+    throw_power: float | None = None
     """Hold the action key: plant, defuse, take a flag, return one.
 
     **One flag, not three.** All of those are "hold the action key where I am
@@ -709,6 +711,7 @@ class MatchRoom:
         # in `MatchPlayer.flash` instead.
         self.nades: list[grenades.Grenade] = []
         self.zones: list[grenades.Zone] = []
+        self.now: float = 0.0
         #: Rolling tick cost. Per room, not per server: two matches on one node
         #: have separate budgets and averaging them describes neither.
         self.stats = TickStats()
@@ -1018,6 +1021,7 @@ class MatchRoom:
         player's connection stuttered — and stop the fuse with it.
         """
         dt = min(elapsed, physics.MAX_STEP_DT)
+        self.now = now
 
         # Detonations are collected and applied after the walk, not during it:
         # an HE that kills somebody mutates the player table, and a zone created
@@ -1077,6 +1081,25 @@ class MatchRoom:
         )
 
         if kind in ("smoke", "fire"):
+            if kind == "smoke":
+                # Smoke extinguishes any overlapping fire zones
+                for z in self.zones:
+                    if z.kind == "fire":
+                        dist_sq = (z.x - nade.x) ** 2 + (z.y - nade.y) ** 2
+                        if dist_sq <= (nade.spec.radius + z.radius) ** 2:
+                            z.remaining = 0.0
+
+            if kind == "fire":
+                # Fire detonating inside or overlapping active smoke is extinguished immediately
+                in_smoke = any(
+                    z.kind == "smoke"
+                    and z.cleared_until <= now
+                    and ((z.x - nade.x) ** 2 + (z.y - nade.y) ** 2) <= (z.radius + nade.spec.radius) ** 2
+                    for z in self.zones
+                )
+                if in_smoke:
+                    return
+
             if len(self.zones) >= MAX_LIVE_ZONES:
                 return
             self._zone_seq += 1
@@ -1121,7 +1144,15 @@ class MatchRoom:
                     player.flash = strength
             return
 
-        # HE. Targets are enemies plus the thrower — friendly fire stays off, as
+        # HE. Dispersion clears nearby smoke for 2.5 seconds, matching CS2 mechanic!
+        if kind == "he":
+            for z in self.zones:
+                if z.kind == "smoke":
+                    dist_sq = (z.x - nade.x) ** 2 + (z.y - nade.y) ** 2 + (z.z - nade.z) ** 2
+                    if dist_sq <= (nade.spec.radius + z.radius) ** 2:
+                        z.cleared_until = now + 2.5
+
+        # Targets are enemies plus the thrower — friendly fire stays off, as
         # it is for bullets, but a grenade at your own feet is your own fault and
         # the game says so.
         targets: dict[str, tuple[float, float, float]] = {}
@@ -1331,7 +1362,7 @@ class MatchRoom:
         and the radar both have to ask, or a cloud would be something only humans
         respect. See `grenades.sight_blocked_by`.
         """
-        return grenades.sight_blocked_by(self.zones, a, b)
+        return grenades.sight_blocked_by(self.zones, a, b, now=self.now)
 
     # -- movement consequences ----------------------------------------------
 
@@ -1571,6 +1602,7 @@ class MatchRoom:
             command.pitch,
             command.lob,
             (state.vel_x, state.vel_y, state.vel_z),
+            power=command.throw_power,
         )
         self._nade_seq += 1
         self.nades.append(
@@ -2581,4 +2613,15 @@ def parse_command(raw: Any) -> Command | None:
             else -1
         ),
         lob=bool(raw.get("lob")),
+        throw_power=(
+            float(
+                _clamp(
+                    _num(raw.get("throwPower") if raw.get("throwPower") is not None else raw.get("throw_power")),
+                    0.2,
+                    1.5,
+                )
+            )
+            if raw.get("throwPower") is not None or raw.get("throw_power") is not None
+            else None
+        ),
     )

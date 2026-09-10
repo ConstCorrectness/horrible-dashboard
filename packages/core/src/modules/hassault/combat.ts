@@ -396,7 +396,7 @@ export class ShotController {
    * The alternative — drawing `spread` always — would hide the one number the
    * scope exists to change.
    */
-  crosshairSpread(): number {
+  crosshairSpread(options?: { speed?: number; isAirborne?: boolean }): number {
     const weapon = this.weapon;
     if (!weapon) return 4;
     // The cone the *next* shot would actually use, through the one function that
@@ -405,7 +405,12 @@ export class ShotController {
     // times the real one: a crosshair telling you not to take a shot the weapon
     // would have made.
     const cone = residualSpread(weapon, this.scoped);
-    return 4 + cone * 260 + this.owed * 90;
+    const speed = options?.speed ?? 0;
+    const isAirborne = options?.isAirborne ?? false;
+    // Dynamic inaccuracy bloom: moving or airborne opens the crosshair gap
+    const speedBloom = speed > 1.0 ? Math.pow(Math.min(speed / 22, 1.8), 1.2) * 14 : 0;
+    const airBloom = isAirborne ? 18 : 0;
+    return 4 + cone * 260 + this.owed * 90 + speedBloom + airBloom;
   }
 
   reset(): void {

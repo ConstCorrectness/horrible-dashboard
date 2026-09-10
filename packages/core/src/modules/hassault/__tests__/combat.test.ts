@@ -255,6 +255,15 @@ describe('ShotController recoil', () => {
     expect(wide.crosshairSpread()).toBeGreaterThan(tight.crosshairSpread());
   });
 
+  it('blooms crosshair dynamically when moving or airborne', () => {
+    const shots = controller([spec({ spread: 0.02 })]);
+    const stationary = shots.crosshairSpread({ speed: 0, isAirborne: false });
+    const moving = shots.crosshairSpread({ speed: 22, isAirborne: false });
+    const airborne = shots.crosshairSpread({ speed: 0, isAirborne: true });
+    expect(moving).toBeGreaterThan(stationary);
+    expect(airborne).toBeGreaterThan(stationary);
+  });
+
   it('forgets everything on reset, so a new match starts cold', () => {
     const shots = controller();
     shots.press();

@@ -170,6 +170,20 @@ export class EffectsPool {
     }
   }
 
+  /** Golden helmet dink spark burst for armored headshots. */
+  helmetDink(at: [number, number, number]): void {
+    const three = this.three;
+    const pos = new three.Vector3(at[0], at[2], at[1]);
+    const dinkMat = new three.MeshBasicMaterial({
+      color: 0xffea00,
+      transparent: true,
+      opacity: 1.0,
+    });
+    const dinkMesh = new three.Mesh(this.impactGeo, dinkMat);
+    dinkMesh.position.copy(pos);
+    this.add(dinkMesh, dinkMat, 0.22, 4.2);
+  }
+
   private add(
     object: THREE.Object3D,
     material: THREE.Material & { opacity: number },

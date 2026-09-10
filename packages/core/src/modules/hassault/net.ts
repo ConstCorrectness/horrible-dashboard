@@ -91,6 +91,8 @@ export interface Command {
   nade?: number;
   /** Underhand — a short throw, for putting a smoke at your own feet. */
   lob?: boolean;
+  /** Throw power scaling: 1.0 full overhand, 0.72 medium lob, 0.42 underhand. */
+  throwPower?: number;
   /**
    * The action key: plant, defuse, take a flag.
    *
@@ -196,6 +198,7 @@ export interface NoiseEvent {
    * tell a sniper round from a shotgun blast two rooms away, which is a real
    * decision; not enough to locate either. */
   weapon?: string;
+  occluded?: boolean;
 }
 
 /** The half of our own state nobody else is sent. */
@@ -235,7 +238,7 @@ export interface SelfState {
   objectives?: number;
   mag: number;
   /** Hitmarkers since the last snapshot. Drained server-side, so each is sent once. */
-  hits: { victim: string; damage: number; head: boolean; killed: boolean }[];
+  hits: { victim: string; damage: number; head: boolean; killed: boolean; armour?: boolean }[];
   /** What prediction rebases on. Absent only from a server older than momentum. */
   move?: MoveState;
   /** Audible noises since the last snapshot, drained server-side. */
@@ -323,6 +326,8 @@ export interface ZoneRow {
   /** Seconds left, so a cloud can thin as it dies rather than vanishing. */
   left: number;
   duration: number;
+  /** Server timestamp/timer until which smoke is cleared by HE blast dispersion. */
+  cleared?: number;
 }
 
 /** A shot somebody took, batched into the snapshot rather than sent as it happened. */
@@ -679,7 +684,7 @@ export class Predictor {
     dt: number,
     shot?: ShotIntent,
     kick?: Vec3,
-    thrown?: { throw: boolean; nade: number; lob: boolean },
+    thrown?: { throw: boolean; nade: number; lob: boolean; power?: number },
     use?: boolean,
     buy?: number,
   ): Command {
@@ -721,6 +726,7 @@ export class Predictor {
       command.throw = true;
       command.nade = thrown.nade;
       if (thrown.lob) command.lob = true;
+      if (thrown.power !== undefined) command.throwPower = thrown.power;
     }
     // **Held, not edge-triggered** — the opposite of `throw` directly above,
     // and for the opposite reason. A throw is instantaneous, so a key read as

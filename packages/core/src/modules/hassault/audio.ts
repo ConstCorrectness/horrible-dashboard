@@ -92,6 +92,14 @@ const TIMBRES: Record<string, Timbre> = {
   nade_flash: { frequency: 2600, q: 0.6, decay: 0.35, gain: 1, body: 30 },
   nade_smoke: { frequency: 4200, q: 0.35, decay: 0.85, gain: 0.5, body: 0 },
   nade_fire: { frequency: 210, q: 0.45, decay: 1.1, gain: 0.7, body: 70 },
+  // Headshot feedback: high-frequency metallic ping for armored helmet hit, wet snap for flesh
+  helmet_dink: { frequency: 3200, q: 7.5, decay: 0.16, gain: 0.95, body: 1400 },
+  flesh_headshot: { frequency: 1900, q: 2.2, decay: 0.22, gain: 0.85, body: 95 },
+  // Multikill clutch audio fanfares
+  multikill_double: { frequency: 580, q: 2.0, decay: 0.35, gain: 0.7, body: 320 },
+  multikill_triple: { frequency: 720, q: 2.5, decay: 0.42, gain: 0.8, body: 440 },
+  multikill_quad: { frequency: 880, q: 3.0, decay: 0.50, gain: 0.9, body: 580 },
+  multikill_ace: { frequency: 1100, q: 3.8, decay: 0.75, gain: 1.0, body: 880 },
 };
 
 const FALLBACK: Timbre = TIMBRES.step;
@@ -207,6 +215,7 @@ export class GameAudio {
     // shot however it sounds, and keying the timbre table by `shot:sniper` would
     // make an unknown weapon fall all the way back to a footstep.
     voice?: Timbre,
+    occluded = false,
   ): void {
     if (volume < MIN_GAIN) return;
     if (this.voices >= MAX_VOICES) return;
@@ -215,7 +224,8 @@ export class GameAudio {
 
     const timbre = voice ?? TIMBRES[kind] ?? FALLBACK;
     const now = ctx.currentTime;
-    const gain = volume * timbre.gain;
+    let gain = volume * timbre.gain;
+    if (occluded) gain *= 0.65;
 
     const source = ctx.createBufferSource();
     source.buffer = this.noise;
@@ -232,6 +242,17 @@ export class GameAudio {
     band.frequency.value = timbre.frequency * (up > 0 ? 1.25 : up < 0 ? 0.8 : 1);
     band.Q.value = timbre.q;
 
+    let filterOut: AudioNode = band;
+    let occludeFilter: BiquadFilterNode | null = null;
+    if (occluded) {
+      // Wall occlusion: direct sound passes through solid geometry, muffled via lowpass
+      occludeFilter = ctx.createBiquadFilter();
+      occludeFilter.type = 'lowpass';
+      occludeFilter.frequency.value = 650;
+      band.connect(occludeFilter);
+      filterOut = occludeFilter;
+    }
+
     const envelope = ctx.createGain();
     envelope.gain.setValueAtTime(0, now);
     envelope.gain.linearRampToValueAtTime(gain, now + 0.004);
@@ -243,7 +264,7 @@ export class GameAudio {
     panner.pan.value = Math.max(-1, Math.min(1, Math.sin(bearing - listenerYaw)));
 
     source.connect(band);
-    band.connect(envelope);
+    filterOut.connect(envelope);
     envelope.connect(panner);
     panner.connect(this.master);
 
@@ -252,6 +273,7 @@ export class GameAudio {
       this.voices = Math.max(0, this.voices - 1);
       source.disconnect();
       band.disconnect();
+      if (occludeFilter) occludeFilter.disconnect();
       envelope.disconnect();
       panner.disconnect();
     };
@@ -287,12 +309,17 @@ export class GameAudio {
    * an unrecognised weapon must be audible, since the alternative is a gunshot
    * you cannot hear because the client is out of date.
    */
-  heard(event: NoiseEvent, listenerYaw: number, weapons: WeaponSpec[] = []): void {
+  heard(
+    event: NoiseEvent,
+    listenerYaw: number,
+    weapons: WeaponSpec[] = [],
+    occluded = false,
+  ): void {
     const voice =
       event.kind === 'shot' && event.weapon
         ? weaponVoice(weapons.find((w) => w.id === event.weapon))
         : undefined;
-    this.play(event.kind, event.volume, event.bearing, listenerYaw, event.up, voice);
+    this.play(event.kind, event.volume, event.bearing, listenerYaw, event.up, voice, occluded);
   }
 
   /**

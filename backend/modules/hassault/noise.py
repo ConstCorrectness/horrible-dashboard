@@ -124,8 +124,8 @@ def hear(
     world: World,
     listener: tuple[float, float, float],
     noise: Noise,
-) -> tuple[float, float, int] | None:
-    """`(volume, bearing, up)` as `listener` perceives `noise`, or `None`.
+) -> tuple[float, float, int, bool] | None:
+    """`(volume, bearing, up, occluded)` as `listener` perceives `noise`, or `None`.
 
     `listener` is an **eye** position, not the feet: the ears are on the head, and
     on a map with head-height gaps the difference decides whether a wall is in the
@@ -145,6 +145,7 @@ def hear(
         return None
 
     volume = 1.0 - distance / noise.loudness
+    occluded = False
     if distance > 1e-6:
         # One ray from the ear to the source. A partial credit test rather than a
         # visibility test: the muffle is a multiplier, so "through a wall" is
@@ -152,6 +153,7 @@ def hear(
         direction = (dx / distance, dy / distance, dz / distance)
         if raycast_world(world, listener, direction, distance) < distance - 1e-6:
             volume *= WALL_MUFFLE
+            occluded = True
     if volume < MIN_AUDIBLE:
         return None
 
@@ -163,7 +165,7 @@ def hear(
         up = 1
     elif dz < -1.5:
         up = -1
-    return volume, bearing, up
+    return volume, bearing, up, occluded
 
 
 def envelope(
@@ -171,26 +173,28 @@ def envelope(
     listener: tuple[float, float, float],
     listener_id: str,
     noises: list[Noise],
-) -> list[dict[str, float | str | int]]:
+) -> list[dict[str, Any]]:
     """The audible subset of `noises`, in wire form, for one listener.
 
     Own noises are dropped here: the client makes those sounds itself, without
     waiting for a round trip.
     """
-    out: list[dict[str, float | str | int]] = []
+    out: list[dict[str, Any]] = []
     for noise in noises:
         if noise.source == listener_id:
             continue
         heard = hear(world, listener, noise)
         if heard is None:
             continue
-        volume, bearing, up = heard
-        entry: dict[str, float | str | int] = {
+        volume, bearing, up, occluded = heard
+        entry: dict[str, Any] = {
             "kind": noise.kind,
             "volume": round(volume, 3),
             "bearing": round(bearing, 3),
             "up": up,
         }
+        if occluded:
+            entry["occluded"] = True
         if noise.weapon:
             entry["weapon"] = noise.weapon
         out.append(entry)

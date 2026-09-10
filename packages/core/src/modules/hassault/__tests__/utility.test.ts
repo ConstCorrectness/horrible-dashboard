@@ -91,6 +91,30 @@ describe('throwing is edge-triggered', () => {
     c.press(true);
     expect(c.frame(1000, null).lob).toBe(true);
   });
+
+  it('carries throw power scaling through (overhand 1.0, medium 0.72, underhand 0.42)', () => {
+    const c = controller();
+    c.select(0);
+    c.press(false, 1.0);
+    const overhand = c.frame(1000, null);
+    expect(overhand.throw).toBe(true);
+    expect(overhand.lob).toBe(false);
+    expect(overhand.power).toBe(1.0);
+
+    c.setSpecs(SPECS); // replenish
+    c.select(1);
+    c.press(true, 0.72);
+    const medium = c.frame(2000, null);
+    expect(medium.throw).toBe(true);
+    expect(medium.lob).toBe(true);
+    expect(medium.power).toBe(0.72);
+
+    c.press(true, 0.42);
+    const underhand = c.frame(3000, null);
+    expect(underhand.throw).toBe(true);
+    expect(underhand.lob).toBe(true);
+    expect(underhand.power).toBe(0.42);
+  });
 });
 
 describe('carry counts', () => {

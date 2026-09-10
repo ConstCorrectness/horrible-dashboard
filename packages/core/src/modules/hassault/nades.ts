@@ -69,6 +69,7 @@ interface LiveZone {
   /** Seconds left when last told, for the fade-out. */
   left: number;
   duration: number;
+  clearedUntil?: number;
 }
 
 export class NadePool {
@@ -128,6 +129,7 @@ export class NadePool {
       if (!live) live = this.createZone(row);
       live.left = row.left;
       live.duration = row.duration;
+      live.clearedUntil = row.cleared;
       live.mesh.position.set(row.x, row.z, row.y);
       live.mesh.scale.setScalar(row.r);
     }
@@ -157,6 +159,7 @@ export class NadePool {
       const rate = live.fuse > 0 ? 2 + 10 / Math.max(0.25, live.fuse) : 24;
       live.light.visible = Math.sin(this.elapsed * rate) > 0;
     }
+    const nowSec = Date.now() / 1000;
     for (const live of this.zones.values()) {
       live.material.uniforms.uTime.value = this.elapsed;
       // Clouds bloom in over their first moment and thin out at the end, rather
@@ -165,7 +168,9 @@ export class NadePool {
       const age = live.duration - live.left;
       const bloom = Math.min(1, age / 0.65);
       const fade = Math.min(1, live.left / 1.6);
-      live.material.uniforms.uOpacity.value = Math.max(0, Math.min(1, bloom * fade));
+      const isCleared = live.kind === 'smoke' && live.clearedUntil !== undefined && live.clearedUntil > nowSec;
+      const clearFactor = isCleared ? 0.08 : 1.0;
+      live.material.uniforms.uOpacity.value = Math.max(0, Math.min(1, bloom * fade * clearFactor));
     }
   }
 

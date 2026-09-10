@@ -688,6 +688,10 @@ def step(world: World, player: PlayerState, move: MoveInput, dt: float) -> None:
         response = WATER_RESPONSE
     else:
         response = GROUND_RESPONSE if player.on_ground else AIR_RESPONSE
+        # Counter-strafe braking: when grounded without a ladder, if wish direction opposes current velocity,
+        # apply active braking boost (3.2x) to rapidly halt momentum for tactical peek-shooting.
+        if player.on_ground and ladder is None and (wx * player.vel_x + wy * player.vel_y) < -0.1:
+            response = GROUND_RESPONSE * 3.2
     if move.knife:
         response *= move.knife_boost
     blend = 1.0 - math.exp(-response * dt)

@@ -279,9 +279,10 @@ class Zone:
     remaining: float
     duration: float
     damage_per_second: float
+    cleared_until: float = 0.0
 
     def snapshot(self) -> dict[str, Any]:
-        return {
+        data = {
             "id": self.id,
             "kind": self.kind,
             "x": round(self.x, 2),
@@ -291,6 +292,9 @@ class Zone:
             "left": round(self.remaining, 2),
             "duration": round(self.duration, 2),
         }
+        if self.cleared_until > 0.0:
+            data["cleared"] = round(self.cleared_until, 2)
+        return data
 
     def contains(self, x: float, y: float, z: float) -> bool:
         return (
@@ -301,8 +305,9 @@ class Zone:
 def throw_velocity(
     yaw: float,
     pitch: float,
-    lob: bool,
+    lob: bool = False,
     inherit: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    power: float | None = None,
 ) -> tuple[float, float, float]:
     """The velocity a grenade leaves the hand with.
 
@@ -311,7 +316,8 @@ def throw_velocity(
     fraction: at 1.0 a player running backwards can drop a grenade that never
     leaves them, which reads as the throw having failed.
     """
-    speed = THROW_SPEED * (LOB_SCALE if lob else 1.0)
+    scale = power if power is not None else (LOB_SCALE if lob else 1.0)
+    speed = THROW_SPEED * max(0.2, min(1.5, scale))
     cp = math.cos(pitch)
     dx = math.cos(yaw) * cp
     dy = math.sin(yaw) * cp
@@ -539,7 +545,10 @@ def flash_strength(
 
 
 def sight_blocked_by(
-    zones: Iterable[Zone], a: tuple[float, float, float], b: tuple[float, float, float]
+    zones: Iterable[Zone],
+    a: tuple[float, float, float],
+    b: tuple[float, float, float],
+    now: float = 0.0,
 ) -> bool:
     """Whether a smoke lies across the line between two points.
 
@@ -556,9 +565,16 @@ def sight_blocked_by(
     dx, dy, dz = bx - ax, by - ay, bz - az
     length_sq = dx * dx + dy * dy + dz * dz
     if length_sq < 1e-9:
-        return any(z.kind == "smoke" and z.contains(ax, ay, az) for z in zones)
+        return any(
+            z.kind == "smoke"
+            and z.cleared_until <= now
+            and z.contains(ax, ay, az)
+            for z in zones
+        )
     for zone in zones:
         if zone.kind != "smoke":
+            continue
+        if zone.cleared_until > now:
             continue
         # Closest point on the segment to the cloud's centre, clamped to the
         # segment so a cloud *behind* the viewer never blocks anything.

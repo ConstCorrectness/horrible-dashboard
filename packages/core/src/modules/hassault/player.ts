@@ -492,7 +492,12 @@ export function step(world: World, player: PlayerState, input: MoveInput, dt: nu
     [wx, wy] = tangential(player, ladder, wx, wy);
   }
 
-  const response = under ? WATER_RESPONSE : player.onGround ? GROUND_RESPONSE : AIR_RESPONSE;
+  let response = under ? WATER_RESPONSE : player.onGround ? GROUND_RESPONSE : AIR_RESPONSE;
+  // Counter-strafe braking: when grounded without a ladder, if wish direction opposes current velocity,
+  // apply active braking boost (3.2x) to rapidly halt momentum for tactical peek-shooting.
+  if (player.onGround && !under && !ladder && wx * player.velX + wy * player.velY < -0.1) {
+    response = GROUND_RESPONSE * 3.2;
+  }
   const blend = 1 - Math.exp(-response * dt);
   player.velX += (wx * speedCap - player.velX) * blend;
   player.velY += (wy * speedCap - player.velY) * blend;

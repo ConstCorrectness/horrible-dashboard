@@ -83,6 +83,8 @@ export interface SessionState {
   /** Kills per team, indexed by team number. */
   scores: number[];
   killfeed: KillNote[];
+  /** Consecutive kills by the local player this round/life for the CS2 kill card deck. */
+  roundKills: KillNote[];
   /**
    * The node hosting this match, empty when it is our own.
    *
@@ -219,6 +221,7 @@ export class MatchSession {
     you: null,
     scores: [0, 0],
     killfeed: [],
+    roundKills: [],
     host: '',
     ranked: false,
     invites: [],
@@ -486,8 +489,13 @@ export class MatchSession {
         for (const fx of snapshot.fx ?? []) this.absorb(fx);
         const peers = this.peersFrom(snapshot.players);
         const you = snapshot.you ?? null;
+        let roundKillsDied = false;
+        if (you && !you.alive && this.state.roundKills.length > 0) {
+          this.state.roundKills = [];
+          roundKillsDied = true;
+        }
         const feedChanged = this.pruneKillfeed();
-        if (feedChanged || this.peersChanged(peers) || this.youChanged(you)) {
+        if (feedChanged || roundKillsDied || this.peersChanged(peers) || this.youChanged(you)) {
           this.state.peers = peers;
           this.state.you = you;
           if (Array.isArray(snapshot.scores)) this.state.scores = snapshot.scores;
@@ -558,6 +566,15 @@ export class MatchSession {
     if (note) {
       this.killSeq += 1;
       this.state.objective = { id: this.killSeq, ...note, ts: Date.now() };
+      if (
+        fx.kind === 'round_start' ||
+        fx.kind === 'round_end' ||
+        fx.kind === 'half' ||
+        fx.kind === 'match_over' ||
+        fx.kind === 'eliminated'
+      ) {
+        this.state.roundKills = [];
+      }
       // **The kill feed is cleared on a swap.** Its entries are coloured by
       // whether they were ours, and after the sides change every one from
       // before is coloured for a side that player is no longer on — which reads
@@ -581,31 +598,32 @@ export class MatchSession {
       : undefined;
 
     this.killSeq += 1;
-    this.state.killfeed = [
-      {
-        id: this.killSeq,
-        text: `${fx.killerName || 'World'}${fx.assisterName ? ` + ${fx.assisterName}` : ''} ${fx.head ? '⌖' : '·'} ${fx.victimName}`,
-        mine: isLocalPlayerInvolved,
-        ts: Date.now(),
-        killerName: fx.killerName || (fx.killer ? fx.killer : 'World'),
-        killerTeam,
-        assisterName: fx.assisterName,
-        assisterTeam,
-        victimName: fx.victimName || fx.victim,
-        victimTeam,
-        weaponId: fx.weapon || 'unknown',
-        isHeadshot: Boolean(fx.head),
-        isWallbang: Boolean(fx.wallbang),
-        isThroughSmoke: Boolean(fx.smoke),
-        isNoScope: Boolean(fx.noscope),
-        isAirborne: Boolean(fx.airborne),
-        isBlind: Boolean(fx.blind),
-        isNutshot: Boolean(fx.nutshot),
-        isBackstab: Boolean(fx.backstab),
-        isLocalPlayerInvolved,
-      },
-      ...this.state.killfeed,
-    ].slice(0, 5);
+    const killCard: KillNote = {
+      id: this.killSeq,
+      text: `${fx.killerName || 'World'}${fx.assisterName ? ` + ${fx.assisterName}` : ''} ${fx.head ? '⌖' : '·'} ${fx.victimName}`,
+      mine: isLocalPlayerInvolved,
+      ts: Date.now(),
+      killerName: fx.killerName || (fx.killer ? fx.killer : 'World'),
+      killerTeam,
+      assisterName: fx.assisterName,
+      assisterTeam,
+      victimName: fx.victimName || fx.victim,
+      victimTeam,
+      weaponId: fx.weapon || 'unknown',
+      isHeadshot: Boolean(fx.head),
+      isWallbang: Boolean(fx.wallbang),
+      isThroughSmoke: Boolean(fx.smoke),
+      isNoScope: Boolean(fx.noscope),
+      isAirborne: Boolean(fx.airborne),
+      isBlind: Boolean(fx.blind),
+      isNutshot: Boolean(fx.nutshot),
+      isBackstab: Boolean(fx.backstab),
+      isLocalPlayerInvolved,
+    };
+    this.state.killfeed = [killCard, ...this.state.killfeed].slice(0, 5);
+    if (fx.killer === me) {
+      this.state.roundKills = [...this.state.roundKills, killCard];
+    }
   }
 
   /** Drop expired kill notes. Returns whether anything went. */
@@ -702,6 +720,7 @@ export class MatchSession {
       you: null,
       scores: [0, 0],
       killfeed: [],
+      roundKills: [],
       host: '',
       ranked: false,
       invites: this.state.invites,
@@ -730,6 +749,7 @@ export class MatchSession {
       peers: [...this.state.peers],
       invites: [...this.state.invites],
       killfeed: [...this.state.killfeed],
+      roundKills: [...this.state.roundKills],
     });
   }
 }

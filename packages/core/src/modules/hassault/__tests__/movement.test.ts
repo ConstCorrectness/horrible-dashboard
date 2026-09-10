@@ -303,4 +303,25 @@ describe('impulses and fall damage', () => {
       expect(player.fallSpeed).toBe(0);
     }
   });
+
+  it('counter-strafing halts forward velocity significantly faster than passive braking', () => {
+    const world = room();
+    // Run forward for 30 frames to reach top speed
+    const passivePlayer = grounded(8, 8);
+    const counterPlayer = grounded(8, 8);
+    for (let i = 0; i < 30; i++) {
+      step(world, passivePlayer, input({ forward: 1 }), 1 / 60);
+      step(world, counterPlayer, input({ forward: 1 }), 1 / 60);
+    }
+    expect(passivePlayer.velX).toBeGreaterThan(15);
+    expect(counterPlayer.velX).toBeGreaterThan(15);
+
+    // Passive player releases keys (forward: 0), counter player taps back (forward: -1)
+    for (let i = 0; i < 6; i++) {
+      step(world, passivePlayer, input({ forward: 0 }), 1 / 60);
+      step(world, counterPlayer, input({ forward: -1 }), 1 / 60);
+    }
+    // Counter-strafe braking (3.2x response) decelerates speed much faster than passive coasting
+    expect(counterPlayer.velX).toBeLessThan(passivePlayer.velX * 0.4);
+  });
 });
