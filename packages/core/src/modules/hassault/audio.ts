@@ -100,6 +100,11 @@ const TIMBRES: Record<string, Timbre> = {
   multikill_triple: { frequency: 720, q: 2.5, decay: 0.42, gain: 0.8, body: 440 },
   multikill_quad: { frequency: 880, q: 3.0, decay: 0.50, gain: 0.9, body: 580 },
   multikill_ace: { frequency: 1100, q: 3.8, decay: 0.75, gain: 1.0, body: 880 },
+  // Tactical Ping & Callouts: synthesized radio chirps and alert tones
+  ping_spotted: { frequency: 1350, q: 4.5, decay: 0.20, gain: 0.95, body: 950 },
+  ping_watch: { frequency: 780, q: 3.2, decay: 0.16, gain: 0.7, body: 650 },
+  ping_utility: { frequency: 540, q: 2.8, decay: 0.18, gain: 0.75, body: 440 },
+  ping_danger: { frequency: 460, q: 2.5, decay: 0.28, gain: 0.9, body: 320 },
 };
 
 const FALLBACK: Timbre = TIMBRES.step;
@@ -330,6 +335,21 @@ export class GameAudio {
    */
   own(kind: string, volume = 1, weapon?: WeaponSpec): void {
     this.play(kind, volume, 0, 0, 0, weapon ? weaponVoice(weapon) : undefined);
+  }
+
+  /**
+   * Play a tactical ping / callout audio cue.
+   *
+   * If bearing and listenerYaw are provided, the chirp is positioned stereophonically;
+   * otherwise it plays front-and-centre.
+   */
+  ping(kind: string, bearing?: number, listenerYaw = 0): void {
+    const pingKind = `ping_${kind}`;
+    if (bearing !== undefined) {
+      this.play(pingKind, 0.85, bearing, listenerYaw);
+    } else {
+      this.own(pingKind, 0.85);
+    }
   }
 
   dispose(): void {

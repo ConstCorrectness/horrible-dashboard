@@ -99,7 +99,10 @@ import {
   VOLUME_KEY,
 } from './menu-panels';
 import type { ItemsResponse } from './api';
-import type { NoiseEvent, PickedItem, PlayerRow, SelfState, Vec3 } from './net';
+import type { NoiseEvent, PickedItem, PingIntent, PingKind, PlayerRow, SelfState, Vec3 } from './net';
+import { CalloutWheel, getCalloutFromDelta } from './panels/CalloutWheel';
+import { TacticalPingsOverlay } from './panels/TacticalPingsOverlay';
+import { aimVector, raycastWorld } from './trace';
 import {
   applyImpulse,
   applyLook,
@@ -308,10 +311,7 @@ interface SceneHandle {
   weapon: WeaponViewModel;
   reveal: Reveal;
   backdrop: Backdrop;
-  camera: {
-    position: { set: (x: number, y: number, z: number) => void };
-    rotation: { set: (x: number, y: number, z: number, order?: string) => void };
-  };
+  camera: any;
 }
 
 /**
@@ -766,6 +766,18 @@ export function HorribleAssaultPanel() {
   if (audioRef.current === null) audioRef.current = new GameAudio();
   const effectsRef = useRef<EffectsPool | null>(null);
   const wasReloadingRef = useRef(false);
+
+  // Tactical Ping & Callouts
+  const [showCalloutWheel, setShowCalloutWheel] = useState(false);
+  const [calloutSelected, setCalloutSelected] = useState<PingKind>('spotted');
+  const showCalloutWheelRef = useRef(false);
+  showCalloutWheelRef.current = showCalloutWheel;
+  const calloutSelectedRef = useRef<PingKind>('spotted');
+  calloutSelectedRef.current = calloutSelected;
+  const pingHoldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pingDeltaRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const pendingPingRef = useRef<PingIntent | undefined>(undefined);
+  const knownPingIdsRef = useRef<Set<string>>(new Set());
 
   // The frame loop is built once and never re-created, so anything it needs to
   // read per-frame from React state has to arrive by ref.
@@ -1511,6 +1523,11 @@ export function HorribleAssaultPanel() {
                   pendingBuyRef.current = -1;
                   return queued;
                 })(),
+                (() => {
+                  const ping = pendingPingRef.current;
+                  pendingPingRef.current = undefined;
+                  return ping;
+                })(),
               ),
             );
             session.predictor.decay(dt);
@@ -1769,6 +1786,28 @@ export function HorribleAssaultPanel() {
             }));
             setHeard((prev) => [...prev.filter((h) => at - h.at < NOISE_TTL_MS), ...batch]);
             session.pendingNoise = [];
+          }
+
+          // Tactical callouts: trigger spatial audio chirp for new pings from teammates
+          const currentPings = session.state.you?.pings;
+          if (currentPings && currentPings.length > 0) {
+            const audio = audioRef.current;
+            const myId = session.state.playerId;
+            for (const ping of currentPings) {
+              if (!knownPingIdsRef.current.has(ping.id)) {
+                knownPingIdsRef.current.add(ping.id);
+                if (ping.owner !== myId && audio) {
+                  const bearing = Math.atan2(ping.y - player.y, ping.x - player.x);
+                  audio.ping(ping.kind, bearing, player.yaw);
+                }
+              }
+            }
+            if (knownPingIdsRef.current.size > 30) {
+              const activeIds = new Set(currentPings.map((p) => p.id));
+              for (const id of knownPingIdsRef.current) {
+                if (!activeIds.has(id)) knownPingIdsRef.current.delete(id);
+              }
+            }
           }
         }
         effects.update(dt);
@@ -2256,6 +2295,11 @@ export function HorribleAssaultPanel() {
         keysRef.current.clear();
         if (!crouchToggleRef.current) crouchRef.current = false;
         setShowScores(false);
+        if (pingHoldTimerRef.current) {
+          clearTimeout(pingHoldTimerRef.current);
+          pingHoldTimerRef.current = null;
+        }
+        setShowCalloutWheel(false);
         // The browser can drop pointer lock on its own (alt-tab, Escape where
         // Keyboard Lock is unavailable); keep the shell's capture in step.
         releaseCapture();
@@ -2263,6 +2307,12 @@ export function HorribleAssaultPanel() {
     };
     const onMouseMove = (e: MouseEvent) => {
       if (!isLocked()) return;
+      if (showCalloutWheelRef.current) {
+        pingDeltaRef.current.x += e.movementX;
+        pingDeltaRef.current.y += e.movementY;
+        const sel = getCalloutFromDelta(pingDeltaRef.current.x, pingDeltaRef.current.y);
+        setCalloutSelected(sel);
+      }
       if (demoPlayerRef.current.freecam.active) {
         demoPlayerRef.current.freecam.update(0.016, {
           yawDelta: e.movementX * sensitivityRef.current * 0.1,
@@ -2386,6 +2436,14 @@ export function HorribleAssaultPanel() {
       // Purely local — see `WeaponViewModel.inspect`. It is never a command, so
       // it needs no server, works in Train, and costs the wire nothing.
       if (action === 'inspect') sceneRef.current?.weapon.inspect();
+      if (action === 'ping') {
+        if (pingHoldTimerRef.current) clearTimeout(pingHoldTimerRef.current);
+        pingDeltaRef.current = { x: 0, y: 0 };
+        setCalloutSelected('spotted');
+        pingHoldTimerRef.current = setTimeout(() => {
+          setShowCalloutWheel(true);
+        }, 200);
+      }
       if (action === 'scores') setShowScores(true);
       if (action === 'buy') setShowBuy(true);
       // While the menu is held, the number row buys instead of selecting. Two
@@ -2443,11 +2501,41 @@ export function HorribleAssaultPanel() {
       if (action === 'scores') setShowScores(false);
       if (action === 'buy') setShowBuy(false);
       if (action === 'crouch' && !crouchToggleRef.current) crouchRef.current = false;
+      if (action === 'ping') {
+        if (pingHoldTimerRef.current) {
+          clearTimeout(pingHoldTimerRef.current);
+          pingHoldTimerRef.current = null;
+        }
+        const wasWheel = showCalloutWheelRef.current;
+        setShowCalloutWheel(false);
+        const kind: PingKind = wasWheel ? calloutSelectedRef.current : 'spotted';
+
+        const world = worldRef.current;
+        const player = playerRef.current;
+        const session = sessionRef.current;
+        const alive = !session || session.state.status !== 'joined' || (session.state.you?.alive ?? true);
+        if (world && player && acceptsGameInput(phaseRef.current) && alive) {
+          const eyeZ = eyeHeight(player);
+          const eye: [number, number, number] = [player.x, player.y, eyeZ];
+          const aim = aimVector(player.yaw, player.pitch);
+          const hitDist = raycastWorld(world, eye, aim, 120.0);
+          const px = eye[0] + aim[0] * hitDist;
+          const py = eye[1] + aim[1] * hitDist;
+          const pz = eye[2] + aim[2] * hitDist;
+          pendingPingRef.current = { kind, x: px, y: py, z: pz };
+          audioRef.current?.ping(kind);
+        }
+      }
       keysRef.current.delete(action);
     };
     const onBlur = () => {
       keysRef.current.clear();
       shotsRef.current?.release();
+      if (pingHoldTimerRef.current) {
+        clearTimeout(pingHoldTimerRef.current);
+        pingHoldTimerRef.current = null;
+      }
+      setShowCalloutWheel(false);
       // Standing up on blur, in hold mode only: a toggled crouch is a deliberate
       // state and losing it because the window lost focus would be a surprise.
       if (!crouchToggleRef.current) crouchRef.current = false;
@@ -3568,8 +3656,25 @@ export function HorribleAssaultPanel() {
                 myTeam={myTeam}
                 rows={remoteRowsRef.current}
                 spotted={you?.spotted ?? EMPTY_SPOTTED}
+                pings={you?.pings}
               />
             )}
+
+            {/* Tactical 3D in-world beacons and edge-clamped callout markers */}
+            {online && (
+              <TacticalPingsOverlay
+                pings={you?.pings}
+                camera={sceneRef.current?.camera ?? null}
+                playerPos={playerRef.current}
+                containerRef={mountRef}
+              />
+            )}
+
+            {/* Esports Callout Radial Wheel */}
+            <CalloutWheel
+              active={showCalloutWheel}
+              selected={calloutSelected}
+            />
 
             <NadeTray
               specs={tacticals}

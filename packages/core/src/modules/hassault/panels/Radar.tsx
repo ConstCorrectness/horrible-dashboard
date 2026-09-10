@@ -16,7 +16,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 
 import type { TacticalSpec } from '../api';
-import type { PlayerRow } from '../net';
+import type { PingRow, PlayerRow } from '../net';
 import type { World } from '../world';
 
 /** Size of the radar in CSS pixels. */
@@ -28,6 +28,13 @@ const SPAN = 110;
 const TEAM_YOU = '#7ee787';
 const TEAM_MATE = '#58a6ff';
 const TEAM_ENEMY = '#f85149';
+
+const PING_RADAR_COLORS: Record<string, string> = {
+  spotted: 'rgb(239, 68, 68)',
+  watch: 'rgb(6, 182, 212)',
+  danger: 'rgb(245, 158, 11)',
+  utility: 'rgb(59, 130, 246)',
+};
 
 /**
  * Rasterise the map's walls once, into a canvas that is then just blitted.
@@ -66,9 +73,11 @@ export interface RadarProps {
   rows: PlayerRow[];
   /** Enemy ids our team can see, straight from `you.spotted`. */
   spotted: readonly string[];
+  /** Tactical team pings. */
+  pings?: readonly PingRow[];
 }
 
-export function Radar({ world, me, myId, myTeam, rows, spotted }: RadarProps) {
+export function Radar({ world, me, myId, myTeam, rows, spotted, pings }: RadarProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const scale = 2;
   // Rebuilt only when the map changes. The dependency is the world object
@@ -126,6 +135,36 @@ export function Radar({ world, me, myId, myTeam, rows, spotted }: RadarProps) {
       ctx.fillStyle = friendly ? TEAM_MATE : TEAM_ENEMY;
       ctx.fill();
     }
+
+    // Tactical pings on the radar: diamond / diamond-ring blip in callout color
+    if (pings) {
+      for (const p of pings) {
+        const px = (p.x - me.x) * pxPerCube;
+        const py = (p.y - me.y) * pxPerCube;
+        const dist = Math.hypot(px, py);
+        const clampedDist = Math.min(dist, radius - 5);
+        const factor = dist > 0 ? clampedDist / dist : 0;
+        const drawX = px * factor;
+        const drawY = py * factor;
+        const color = PING_RADAR_COLORS[p.kind] || 'rgb(224, 185, 106)';
+
+        ctx.save();
+        ctx.translate(drawX, drawY);
+        // Draw diamond
+        ctx.beginPath();
+        ctx.moveTo(0, -5);
+        ctx.lineTo(5, 0);
+        ctx.lineTo(0, 5);
+        ctx.lineTo(-5, 0);
+        ctx.closePath();
+        ctx.fillStyle = color;
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
     ctx.restore();
 
     // Us, drawn last and unrotated: a triangle at the centre pointing up, which
@@ -147,7 +186,7 @@ export function Radar({ world, me, myId, myTeam, rows, spotted }: RadarProps) {
     ctx.strokeStyle = 'rgba(180, 200, 230, 0.28)';
     ctx.lineWidth = 1;
     ctx.stroke();
-  }, [plan, me, myId, myTeam, rows, spotted]);
+  }, [plan, me, myId, myTeam, rows, spotted, pings]);
 
   if (!me) return null;
   return (

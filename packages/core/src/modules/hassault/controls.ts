@@ -32,6 +32,7 @@ export type GameAction =
   | 'quickswitch'
   | 'reload'
   | 'inspect'
+  | 'ping'
   | 'scores'
   | 'noclip'
   | 'weapon1'
@@ -102,6 +103,12 @@ export const ACTIONS: readonly ActionDoc[] = [
     group: 'Combat',
     note: 'Admire your weapon skin finish in first-person and spectator view.',
   },
+  {
+    action: 'ping',
+    label: 'Tactical Ping & Callout',
+    group: 'Combat',
+    note: 'Tap for crosshair target ping. Hold to open radial callout wheel (Spotted, Watch, Danger, Utility).',
+  },
   { action: 'weapon1', label: 'Weapon 1', group: 'Combat' },
   { action: 'weapon2', label: 'Weapon 2', group: 'Combat' },
   { action: 'weapon3', label: 'Weapon 3', group: 'Combat' },
@@ -160,6 +167,7 @@ export const DEFAULT_CONTROLS: Bindings = {
   quickswitch: ['KeyQ'],
   reload: ['KeyR'],
   inspect: ['KeyF'],
+  ping: ['KeyZ'],
   scores: ['Tab'],
   noclip: ['KeyV'],
   weapon1: ['Digit1'],

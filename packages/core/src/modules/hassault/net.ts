@@ -94,6 +94,12 @@ export interface Command {
   /** Throw power scaling: 1.0 full overhand, 0.72 medium lob, 0.42 underhand. */
   throwPower?: number;
   /**
+   * Tactical ping / callout.
+   *
+   * One frame when placed. Edge-triggered, validated and rate-limited server-side.
+   */
+  ping?: PingIntent;
+  /**
    * The action key: plant, defuse, take a flag.
    *
    * **One flag, not three.** All of those are "hold the action key where I am
@@ -276,8 +282,35 @@ export interface SelfState {
    * saying so every tick would be a per-player id list that never changes.
    */
   spotted?: string[];
+  /**
+   * Tactical pings / callouts visible to our team.
+   *
+   * Private: enemies never receive our team's tactical coordinates or callouts.
+   */
+  pings?: PingRow[];
   /** The mode's answer for us. Absent when the server has no mode. */
   mode?: ModeSelf;
+}
+
+export type PingKind = 'spotted' | 'watch' | 'utility' | 'danger';
+
+export interface PingIntent {
+  kind: PingKind;
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface PingRow {
+  id: string;
+  owner: string;
+  ownerName: string;
+  kind: PingKind;
+  x: number;
+  y: number;
+  z: number;
+  created: number;
+  ttl: number;
 }
 
 /** One item lying on the map. Sent once, with the welcome: placements never move. */
@@ -687,6 +720,7 @@ export class Predictor {
     thrown?: { throw: boolean; nade: number; lob: boolean; power?: number },
     use?: boolean,
     buy?: number,
+    ping?: PingIntent,
   ): Command {
     this.seq += 1;
     // The server clamps dt the same way; recording the unclamped value would
@@ -740,6 +774,8 @@ export class Predictor {
     // a purchase is a single decision, and repeating it every frame the key is
     // down would be sixty buys a second.
     if (buy !== undefined && buy >= 0) command.buy = buy;
+    // Tactical ping: instantaneous edge trigger on this command
+    if (ping) command.ping = ping;
     this.pending.push(command);
     step(world, player, input, clamped);
     if (kick && (kick.x !== 0 || kick.y !== 0 || kick.z !== 0)) {

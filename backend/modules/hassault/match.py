@@ -218,6 +218,38 @@ class TickStats:
 
 
 @dataclass(slots=True)
+class Ping:
+    """A tactical ping / callout placed by a player in 3D world space.
+
+    Private to teammates: enemy packets never receive teammate pings.
+    """
+
+    id: str
+    owner: str
+    owner_name: str
+    team: int
+    kind: str
+    x: float
+    y: float
+    z: float
+    created: float
+    ttl: float = 5.0
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "owner": self.owner,
+            "ownerName": self.owner_name,
+            "kind": self.kind,
+            "x": round(self.x, 3),
+            "y": round(self.y, 3),
+            "z": round(self.z, 3),
+            "created": round(self.created, 3),
+            "ttl": round(self.ttl, 2),
+        }
+
+
+@dataclass(slots=True)
 class Command:
     """One client input frame.
 
@@ -299,6 +331,8 @@ class Command:
     every movement command a request to buy a rifle.
     """
     buy: int = -1
+    """Tactical ping / callout coordinates and kind: (x, y, z, kind)."""
+    ping: tuple[float, float, float, str] | None = None
 
 
 @dataclass(slots=True)
@@ -309,6 +343,7 @@ class MatchPlayer:
     state: PlayerState
     conn: Any = None
     queue: deque[Command] = field(default_factory=deque)
+    last_ping_at: float = -999.0
     # Last command sequence the simulation has actually consumed. Sent back as
     # `ack` so the client knows what to replay.
     ack: int = 0
@@ -711,6 +746,9 @@ class MatchRoom:
         # in `MatchPlayer.flash` instead.
         self.nades: list[grenades.Grenade] = []
         self.zones: list[grenades.Zone] = []
+        # Tactical pings placed in 3D world space. Private to teammates,
+        # rate-limited, and pruned on TTL expiration.
+        self.pings: list[Ping] = []
         self.now: float = 0.0
         #: Rolling tick cost. Per room, not per server: two matches on one node
         #: have separate budgets and averaging them describes neither.
@@ -719,6 +757,7 @@ class MatchRoom:
         # grenade's arc against between snapshots.
         self._nade_seq = 0
         self._zone_seq = 0
+        self._ping_seq = 0
         # Seeded per room rather than per shot: reproducible if you know the room
         # and the shot count, which is worth nothing to a cheat and worth a lot
         # when a test needs a shotgun to pattern the same way twice.
@@ -970,6 +1009,7 @@ class MatchRoom:
                     )
                     self._movement_consequences(player, before, was_airborne, now)
                     self._handle_combat(player, command, now, now_ms)
+                self._handle_ping(player, command, now)
                 # **Outside the `alive` guard**, unlike combat, and that is the
                 # point: what a *dead* player's command is allowed to do is the
                 # mode's decision, not this loop's. A buy menu is the case —
@@ -987,6 +1027,7 @@ class MatchRoom:
                 player.ack = command.seq
 
         self._step_grenades(elapsed, now)
+        self._step_pings(now)
         # After grenades and before the history: a round that ends on this tick
         # has already seen every consequence of the commands in it, and a round
         # reset that teleports everybody happens before the positions those
@@ -1622,6 +1663,51 @@ class MatchRoom:
         )
         self._noise(player, "throw", noise.JUMP_LOUDNESS * 0.8)
 
+    def _handle_ping(self, player: MatchPlayer, command: Command, now: float) -> None:
+        """Process a tactical ping / callout from player command.
+
+        Rate-limited to 0.8s between pings; capped at 3 active pings per player.
+        Private to teammates (or owner in FFA).
+        """
+        if command.ping is None:
+            return
+        if now - player.last_ping_at < 0.8:
+            return
+
+        # Cap active pings per player to 3 (drop oldest if exceeded)
+        player_pings = [p for p in self.pings if p.owner == player.id]
+        if len(player_pings) >= 3:
+            oldest = min(player_pings, key=lambda p: p.created)
+            try:
+                self.pings.remove(oldest)
+            except ValueError:
+                pass
+
+        px, py, pz, kind = command.ping
+        player.last_ping_at = now
+        self._ping_seq += 1
+        ping_id = f"{self.id}-p{self._ping_seq}"
+        self.pings.append(
+            Ping(
+                id=ping_id,
+                owner=player.id,
+                owner_name=player.name,
+                team=player.team,
+                kind=kind,
+                x=px,
+                y=py,
+                z=pz,
+                created=now,
+                ttl=5.0,
+            )
+        )
+
+    def _step_pings(self, now: float) -> None:
+        """Prune tactical pings whose TTL has expired."""
+        if not self.pings:
+            return
+        self.pings = [p for p in self.pings if (now - p.created) < p.ttl]
+
     def _begin_reload(self, player: MatchPlayer) -> None:
         weapon = weapons.weapon_at(player.weapon)
         if weapon.mag <= 0 or player.sim_time < player.reload_until:
@@ -2081,6 +2167,13 @@ class MatchRoom:
         # they are carrying something. Inside `you`, which is the only part of a
         # snapshot the template rebuilds per recipient — see `snapshot_template`.
         you["mode"] = self.mode.private_state(self, player)
+        # Tactical pings: strictly team-private so opponents cannot intercept callouts.
+        has_teams = getattr(self.mode, "teams", True)
+        you["pings"] = [
+            p.snapshot()
+            for p in self.pings
+            if (p.team == player.team if has_teams and player.team >= 0 else p.owner == player.id)
+        ]
         return you
 
     def snapshot_message(
@@ -2562,6 +2655,16 @@ def parse_command(raw: Any) -> Command | None:
         return None
     weapon = raw.get("weapon")
     view_t = raw.get("viewT")
+    ping_raw = raw.get("ping")
+    ping_val: tuple[float, float, float, str] | None = None
+    if isinstance(ping_raw, dict):
+        kind = str(ping_raw.get("kind", ""))
+        if kind in ("spotted", "watch", "utility", "danger"):
+            px = _num(ping_raw.get("x"))
+            py = _num(ping_raw.get("y"))
+            pz = _num(ping_raw.get("z"))
+            if -500.0 <= px <= 500.0 and -500.0 <= py <= 500.0 and -200.0 <= pz <= 200.0:
+                ping_val = (px, py, pz, kind)
     return Command(
         seq=seq,
         # Clamped rather than trusted: the analogue axes are the obvious place to
@@ -2624,4 +2727,5 @@ def parse_command(raw: Any) -> Command | None:
             if raw.get("throwPower") is not None or raw.get("throw_power") is not None
             else None
         ),
+        ping=ping_val,
     )
