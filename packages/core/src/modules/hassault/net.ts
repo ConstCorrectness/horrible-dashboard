@@ -464,6 +464,8 @@ export interface ObjectiveFx {
     | 'bomb_planted'
     | 'bomb_defused'
     | 'bomb_exploded'
+    | 'kit_drop'
+    | 'kit_pickup'
     | 'round_start'
     | 'round_live'
     | 'round_end'
@@ -473,8 +475,13 @@ export interface ObjectiveFx {
     | 'match_over';
   team?: number;
   by?: string;
+  byName?: string;
   /** A site id for a plant, a round number for a round start. */
   detail?: string;
+  ninja?: boolean;
+  clutch?: boolean;
+  clutchTime?: number;
+  hasKit?: boolean;
 }
 
 export type Fx = ShotFx | KillFx | SpawnFx | DetonateFx | PickupFx | ObjectiveFx;
@@ -489,7 +496,7 @@ export type Fx = ShotFx | KillFx | SpawnFx | DetonateFx | PickupFx | ObjectiveFx
 export interface BuyItem {
   id: string;
   name: string;
-  /** `weapon` | `armour` | `nade`. */
+  /** `weapon` | `armour` | `nade` | `kit`. */
   kind: string;
   slot: number;
   price: number;
@@ -547,6 +554,8 @@ export interface ModeInfo {
     halfAt?: number;
     plantTime?: number;
     defuseTime?: number;
+    defuseTimeStandard?: number;
+    defuseTimeKit?: number;
     fuseTime?: number;
     startMoney?: number;
   };
@@ -568,6 +577,19 @@ export interface ModeBomb {
   y?: number;
   z?: number;
   fuseIn?: number;
+  ninja?: boolean;
+  clutch?: boolean;
+  clutchTime?: number;
+  by?: string;
+  byName?: string;
+  hasKit?: boolean;
+}
+
+export interface ModeKit {
+  id: string;
+  x: number;
+  y: number;
+  z: number;
 }
 
 /** The mode's public state, every tick. */
@@ -584,6 +606,7 @@ export interface ModeShared {
   attackers?: number;
   swapped?: boolean;
   bomb?: ModeBomb;
+  kits?: ModeKit[];
   flags?: ModeFlag[];
   over?: boolean;
 }
@@ -602,6 +625,8 @@ export interface ModeSelf {
   progress?: number;
   progressKind?: string;
   captures?: number;
+  hasKit?: boolean;
+  defuseTime?: number;
   /**
    * What we have to spend.
    *

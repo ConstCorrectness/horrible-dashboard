@@ -173,7 +173,17 @@ export function objectiveNote(fx: Fx, self: string): { text: string; mine: boole
         mine: false,
       };
     case 'bomb_defused':
+      if (fx.ninja) {
+        return { text: 'NINJA DEFUSE!', mine: true };
+      }
+      if (fx.clutch && typeof fx.clutchTime === 'number') {
+        return { text: `${fx.clutchTime.toFixed(2)}s CLUTCH DEFUSE!`, mine: true };
+      }
       return { text: 'BOMB DEFUSED', mine: false };
+    case 'kit_pickup':
+      return { text: mine ? 'DEFUSAL KIT EQUIPPED' : 'DEFUSAL KIT RETRIEVED', mine };
+    case 'kit_drop':
+      return null;
     case 'bomb_exploded':
       return { text: 'BOMB DETONATED', mine: false };
     case 'round_start':

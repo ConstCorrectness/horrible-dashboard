@@ -83,15 +83,24 @@ export function BuyMenu({ mode, mine, open, onBuy }: BuyMenuProps) {
         const owned = bought.includes(index);
         const afford = money >= item.price;
         const colour = owned ? OWNED : afford && canBuy ? BUYABLE : OUT_OF_REACH;
+        const icon =
+          item.kind === 'kit'
+            ? '✂️ '
+            : item.kind === 'armor'
+              ? '🛡️ '
+              : item.kind === 'knife'
+                ? '🗡️ '
+                : '🔫 ';
         return (
           <div
             key={item.id}
             onClick={() => onBuy(index)}
-            style={{ display: 'flex', gap: '0.6rem', color: colour, lineHeight: 1.7 }}
+            style={{ display: 'flex', gap: '0.6rem', color: colour, lineHeight: 1.7, alignItems: 'center' }}
           >
             {/* 1-based, matching the key you press. The index on the wire stays
                 0-based; the label is the thing being made friendly. */}
             <span style={{ opacity: 0.6, width: '1.2em' }}>{index + 1}</span>
+            <span style={{ opacity: 0.85, fontSize: '0.9em' }}>{icon}</span>
             <span style={{ flex: 1 }}>{item.name}</span>
             <span>{owned ? 'OWNED' : `$${item.price}`}</span>
           </div>

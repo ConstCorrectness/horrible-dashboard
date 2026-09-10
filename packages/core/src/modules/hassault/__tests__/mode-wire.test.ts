@@ -205,6 +205,7 @@ describe('objective phrasing', () => {
       'time_out',
       'half',
       'match_over',
+      'kit_pickup',
     ] as const;
     for (const kind of kinds) {
       const note = objectiveNote({ kind } as Fx, 'me');
@@ -212,4 +213,35 @@ describe('objective phrasing', () => {
       expect(note?.text.length, `${kind} phrased as an empty string`).toBeGreaterThan(0);
     }
   });
+
+  it('phrases ninja defuse and clutch accolades distinctly', () => {
+    const ninjaNote = objectiveNote(
+      { kind: 'bomb_defused', ninja: true, by: 'me' } as Fx,
+      'me',
+    );
+    expect(ninjaNote?.text).toBe('NINJA DEFUSE!');
+    expect(ninjaNote?.mine).toBe(true);
+
+    const clutchNote = objectiveNote(
+      { kind: 'bomb_defused', clutch: true, clutchTime: 0.85, by: 'me' } as Fx,
+      'me',
+    );
+    expect(clutchNote?.text).toBe('0.85s CLUTCH DEFUSE!');
+    expect(clutchNote?.mine).toBe(true);
+
+    const kitPickupSelf = objectiveNote(
+      { kind: 'kit_pickup', by: 'me' } as Fx,
+      'me',
+    );
+    expect(kitPickupSelf?.text).toBe('DEFUSAL KIT EQUIPPED');
+    expect(kitPickupSelf?.mine).toBe(true);
+
+    const kitPickupTeammate = objectiveNote(
+      { kind: 'kit_pickup', by: 'teammate' } as Fx,
+      'me',
+    );
+    expect(kitPickupTeammate?.text).toBe('DEFUSAL KIT RETRIEVED');
+    expect(kitPickupTeammate?.mine).toBe(false);
+  });
 });
+

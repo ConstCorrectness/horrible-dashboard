@@ -39,6 +39,8 @@ import { createBackdrop, type Backdrop } from './backdrop';
 import { MatchCompanion } from './panels/MatchCompanion';
 import { BuyMenu } from './panels/BuyMenu';
 import { ModeHud, ModeProgress } from './panels/ModeHud';
+import { DefuseProgressRing } from './panels/DefuseProgressRing';
+import { KitPool } from './kits';
 
 /**
  * Digit codes in catalogue order, so key `n` buys entry `n - 1`.
@@ -1026,6 +1028,22 @@ export function HorribleAssaultPanel() {
     lastRoundKillsCountRef.current = count;
   }, [net.roundKills]);
 
+  // Objective feedback and clutch/defuse fanfares
+  const lastObjectiveIdRef = useRef<number>(0);
+  useEffect(() => {
+    const obj = net.objective;
+    if (!obj || obj.id === lastObjectiveIdRef.current) return;
+    lastObjectiveIdRef.current = obj.id;
+
+    if (obj.text.includes('NINJA DEFUSE')) {
+      audioRef.current?.clutchFanfare(true);
+    } else if (obj.text.includes('CLUTCH DEFUSE') || obj.text.includes('BOMB DEFUSED')) {
+      audioRef.current?.clutchFanfare(false);
+    } else if (obj.text.includes('DEFUSAL KIT')) {
+      audioRef.current?.own('pickup', 0.8);
+    }
+  }, [net.objective]);
+
   // Pickup feedback: the line that says what you just ran over, and its sound.
   //
   // Driven off `you.picked`, which the server drains: an item is reported once,
@@ -1269,6 +1287,9 @@ export function HorribleAssaultPanel() {
       // Items on the floor. Placements come once with the welcome and never
       // move; which of them are currently gone rides in every snapshot.
       const itemPool = new ItemPool(THREE, scene);
+      const kitPool = new KitPool(THREE, scene);
+      let lastBombBeepTime = 0;
+      let lastHeartbeatTime = 0;
       let placedForRoom = '';
       // Whether we were in water last frame, so *entering* can be told from
       // *being in*: only the crossing makes a sound.
@@ -1729,6 +1750,7 @@ export function HorribleAssaultPanel() {
             itemPool.place(online ? session.state.items : (trainingRange?.placements() ?? []));
           }
           itemPool.sync(online ? latest?.itemsOut : trainingRange?.takenIds());
+          kitPool.sync(online ? session.state.modeState?.kits : undefined);
           if (session.pendingShots.length > 0) {
             // Teams come from the roster, not from `remote` — that one excludes
             // us, and our own tracer needs a colour too.
@@ -1809,11 +1831,40 @@ export function HorribleAssaultPanel() {
               }
             }
           }
+
+          const bomb = session.state.modeState?.bomb;
+          if (bomb?.state === 'planted' && typeof bomb.fuseIn === 'number') {
+            const fuse = bomb.fuseIn;
+            const beepInterval = fuse > 20 ? 1.0 : fuse > 10 ? 0.5 : fuse > 5 ? 0.25 : 0.125;
+            if (now - lastBombBeepTime >= beepInterval * 1000) {
+              lastBombBeepTime = now;
+              let bearing: number | undefined;
+              if (bomb.x !== undefined && bomb.y !== undefined) {
+                const dx = bomb.x - player.x;
+                const dy = bomb.y - player.y;
+                bearing = Math.atan2(dx, dy);
+              }
+              audioRef.current?.bombBeep(0.85, bearing, player.yaw);
+            }
+
+            if (fuse <= 10) {
+              const heartInterval = fuse <= 5 ? 0.6 : 1.0;
+              if (now - lastHeartbeatTime >= heartInterval * 1000) {
+                lastHeartbeatTime = now;
+                const intensity = fuse <= 5 ? 1.0 : 0.7;
+                audioRef.current?.heartbeat(intensity);
+              }
+            }
+          } else {
+            lastBombBeepTime = 0;
+            lastHeartbeatTime = 0;
+          }
         }
         effects.update(dt);
         decals.update(dt);
         nadePool.update(dt);
         itemPool.update(dt);
+        kitPool.update(dt);
 
         const elapsed = (now - started) / 1000;
         backdrop.update(elapsed);
@@ -2058,6 +2109,7 @@ export function HorribleAssaultPanel() {
         arcLine.dispose();
         nadePool.dispose();
         itemPool.dispose();
+        kitPool.dispose();
         water?.dispose();
         ladders?.dispose();
         viewmodel.dispose();
@@ -3226,7 +3278,16 @@ export function HorribleAssaultPanel() {
             objective={net.objective}
           />
         )}
-        {online && <ModeProgress mine={net.you?.mode} />}
+        {online && (
+          net.you?.mode?.progressKind === 'defuse' ? (
+            <DefuseProgressRing
+              mine={net.you?.mode}
+              onWireCut={() => audioRef.current?.defuseWireCut()}
+            />
+          ) : (
+            <ModeProgress mine={net.you?.mode} />
+          )
+        )}
         {online && (
           <BuyMenu
             mode={net.mode}

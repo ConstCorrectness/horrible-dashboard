@@ -105,6 +105,11 @@ const TIMBRES: Record<string, Timbre> = {
   ping_watch: { frequency: 780, q: 3.2, decay: 0.16, gain: 0.7, body: 650 },
   ping_utility: { frequency: 540, q: 2.8, decay: 0.18, gain: 0.75, body: 440 },
   ping_danger: { frequency: 460, q: 2.5, decay: 0.28, gain: 0.9, body: 320 },
+  // Competitive Bomb Defuse & Clutch Audio
+  heartbeat: { frequency: 65, q: 1.5, decay: 0.18, gain: 0.85, body: 55 },
+  defuse_wire_cut: { frequency: 1800, q: 4.5, decay: 0.08, gain: 0.9, body: 240 },
+  clutch_fanfare: { frequency: 820, q: 2.2, decay: 0.65, gain: 0.95, body: 440 },
+  bomb_beep: { frequency: 2500, q: 8.0, decay: 0.06, gain: 0.8, body: 1200 },
 };
 
 const FALLBACK: Timbre = TIMBRES.step;
@@ -349,6 +354,60 @@ export class GameAudio {
       this.play(pingKind, 0.85, bearing, listenerYaw);
     } else {
       this.own(pingKind, 0.85);
+    }
+  }
+
+  /**
+   * Wire snip metallic click played at defusal progress milestones.
+   */
+  defuseWireCut(): void {
+    this.own('defuse_wire_cut', 0.9);
+  }
+
+  /**
+   * Tension heartbeat (sub-bass 65 Hz) played during critical defuses / clutch situations.
+   */
+  heartbeat(intensity = 0.8): void {
+    this.own('heartbeat', Math.max(0.2, Math.min(1.0, intensity)));
+  }
+
+  /**
+   * C4 explosive countdown beep, panning stereophonically if bomb bearing is known.
+   */
+  bombBeep(volume = 0.8, bearing?: number, listenerYaw = 0): void {
+    if (bearing !== undefined) {
+      this.play('bomb_beep', volume, bearing, listenerYaw);
+    } else {
+      this.own('bomb_beep', volume);
+    }
+  }
+
+  /**
+   * Triumphant clutch fanfare on defusal or ninja clutch.
+   */
+  clutchFanfare(isNinja = false): void {
+    const ctx = this.ready();
+    if (!ctx || !this.master) return;
+    this.own('clutch_fanfare', 1.0);
+    if (isNinja) {
+      // Play second higher-pitched shimmer for ninja defuse
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(1100, now + 0.12);
+      osc.frequency.exponentialRampToValueAtTime(1760, now + 0.45);
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0, now + 0.12);
+      gain.gain.linearRampToValueAtTime(0.5, now + 0.16);
+      gain.gain.exponentialRampToValueAtTime(1e-4, now + 0.65);
+      osc.connect(gain);
+      gain.connect(this.master);
+      osc.start(now + 0.12);
+      osc.stop(now + 0.7);
+      osc.onended = () => {
+        osc.disconnect();
+        gain.disconnect();
+      };
     }
   }
 

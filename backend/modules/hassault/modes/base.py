@@ -194,6 +194,9 @@ class GameMode:
         if 0 <= attacker.team < len(room.scores):
             room.scores[attacker.team] += 1
 
+    def on_death(self, room: MatchRoom, player: MatchPlayer) -> None:
+        """A player died, whether by combat or by falling."""
+
     def on_command(
         self, room: MatchRoom, player: MatchPlayer, command: Command, now: float
     ) -> None:

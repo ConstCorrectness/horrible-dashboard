@@ -387,14 +387,16 @@ def test_a_defender_defuses_a_planted_bomb_and_wins_the_round(game):
     site = mode.sites[0]
     where = (site.x, site.y, site.z)
     att.state.x, att.state.y, att.state.z = where
-    seq = hold_use(room, att, where, 1, 400)
+    seq = hold_use(
+        room, att, where, 1, 250, until=lambda: mode.state.bomb.state == "planted"
+    )
     assert mode.state.bomb.state == "planted"
 
     bomb = mode.state.bomb
     at_bomb = (bomb.x, bomb.y, bomb.z)
     dfn.state.x, dfn.state.y, dfn.state.z = at_bomb
     assert mode._action_for(room, dfn) == "defuse"
-    hold_use(room, dfn, at_bomb, seq, 600, until=lambda: mode.state.phase != LIVE)
+    hold_use(room, dfn, at_bomb, seq, 700, until=lambda: mode.state.phase != LIVE)
     assert mode.state.phase in (POST, OVER)
     assert room.scores[dfn.team] == 1
     assert dfn.objectives == 1

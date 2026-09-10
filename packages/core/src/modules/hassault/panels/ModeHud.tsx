@@ -84,15 +84,39 @@ export function ModeHud({ mode, state, mine, scores, team, objective }: ModeHudP
       {planted ? (
         <div
           style={{
-            fontSize: '0.8rem',
-            letterSpacing: '0.1em',
-            // The one colour change here, on the one number worth panicking
-            // about.
-            color: (bomb?.fuseIn ?? 0) < 5 ? '#f8635a' : '#f0ad52',
+            fontSize: '0.82rem',
+            letterSpacing: '0.12em',
+            fontWeight: 'bold',
+            color:
+              (bomb?.fuseIn ?? 0) < 5
+                ? '#f8635a'
+                : (bomb?.fuseIn ?? 0) < 10
+                  ? '#fb923c'
+                  : '#f0ad52',
+            textShadow:
+              (bomb?.fuseIn ?? 0) < 5
+                ? '0 0 8px rgba(248, 99, 90, 0.8)'
+                : (bomb?.fuseIn ?? 0) < 10
+                  ? '0 0 6px rgba(251, 146, 60, 0.6)'
+                  : undefined,
           }}
         >
-          BOMB {clock(bomb?.fuseIn ?? 0)}
-          {bomb?.site ? ` · ${bomb.site}` : ''}
+          💣 BOMB {clock(bomb?.fuseIn ?? 0)}
+          {bomb?.site ? ` · SITE ${bomb.site}` : ''}
+        </div>
+      ) : bomb?.state === 'defused' ? (
+        <div style={{ fontSize: '0.78rem', letterSpacing: '0.12em', color: '#38bdf8' }}>
+          {bomb.ninja ? (
+            <span style={{ textShadow: '0 0 8px rgba(56, 189, 248, 0.8)' }}>
+              🥷 NINJA DEFUSE {bomb.byName ? `BY ${bomb.byName}` : ''}
+            </span>
+          ) : bomb.clutch ? (
+            <span style={{ color: '#fbbf24', textShadow: '0 0 8px rgba(251, 191, 36, 0.8)' }}>
+              ⚡ {bomb.clutchTime?.toFixed(2)}s CLUTCH DEFUSE {bomb.byName ? `BY ${bomb.byName}` : ''}
+            </span>
+          ) : (
+            <span>BOMB DEFUSED</span>
+          )}
         </div>
       ) : (
         // Absent for a mode with no phases at all, which is how deathmatch and
@@ -122,6 +146,20 @@ export function ModeHud({ mode, state, mine, scores, team, objective }: ModeHudP
           }}
         >
           {mine.attacking ? 'ATTACK' : 'DEFEND'}
+        </div>
+      )}
+
+      {mine?.hasKit && (
+        <div
+          style={{
+            fontSize: '0.68rem',
+            letterSpacing: '0.12em',
+            color: '#38bdf8',
+            marginTop: 1,
+            textShadow: '0 0 4px rgba(56, 189, 248, 0.5)',
+          }}
+        >
+          ✂️ DEFUSAL KIT EQUIPPED
         </div>
       )}
 

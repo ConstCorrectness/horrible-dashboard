@@ -66,6 +66,7 @@ instead — and `maplint` is where the rule would go.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
@@ -113,7 +114,10 @@ POST_TIME = 5.0
 #: pressure with the round on the line, while the defender chooses their moment.
 #: Equal times make the last seconds of a round a coin flip rather than a read.
 PLANT_TIME = 3.2
-DEFUSE_TIME = 5.0
+DEFUSE_TIME_STANDARD = 10.0
+DEFUSE_TIME_KIT = 5.0
+DEFUSE_TIME = DEFUSE_TIME_STANDARD
+DEFUSER_PRICE = 400
 
 # ---------------------------------------------------------------------------
 # The economy
@@ -202,6 +206,7 @@ CATALOG: tuple[BuyItem, ...] = (
     BuyItem("flash", "Flashbang", "nade", 1, 200),
     BuyItem("smoke", "Smoke Grenade", "nade", 2, 300),
     BuyItem("molotov", "Incendiary", "nade", 3, 600),
+    BuyItem("defuser", "Defusal Kit", "kit", -1, DEFUSER_PRICE),
 )
 
 #: What you are given at the start of every round regardless of money.
@@ -265,6 +270,24 @@ class RoundState:
 
 
 @dataclass(slots=True, frozen=True)
+class DroppedKit:
+    """A defusal kit dropped on the ground by a fallen defender."""
+
+    id: str
+    x: float
+    y: float
+    z: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "x": round(self.x, 2),
+            "y": round(self.y, 2),
+            "z": round(self.z, 2),
+        }
+
+
+@dataclass(slots=True, frozen=True)
 class Facts:
     """What the world says this tick, as three numbers and two flags.
 
@@ -278,6 +301,7 @@ class Facts:
     planted_on: str = ""
     #: The bomb was defused this tick.
     defused: bool = False
+    defuse_info: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True, frozen=True)
@@ -291,6 +315,7 @@ class Emit:
     kind: str
     team: int = -1
     detail: str = ""
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 def _round_over(state: RoundState, winner: int, emits: list[Emit]) -> RoundState:
@@ -349,7 +374,7 @@ def advance(
 
     # LIVE.
     if facts.defused:
-        emits.append(Emit("bomb_defused"))
+        emits.append(Emit("bomb_defused", extra=facts.defuse_info))
         planted = replace(bomb, state="defused", fuse=0.0)
         return _round_over(
             replace(state, bomb=planted), 1 - state.attackers, emits
@@ -437,6 +462,9 @@ class Defuse(GameMode):
         #: not per player: it is the *side* that has been losing, and a player
         #: who joined two rounds ago is on the same footing as one who did not.
         self._loss_streak = [0, 0]
+        self.dropped_kits: list[DroppedKit] = []
+        self._defuse_info: dict[str, Any] = {}
+        self._last_defuse_accolades: dict[str, Any] = {}
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -446,6 +474,9 @@ class Defuse(GameMode):
     def reset(self, room: MatchRoom) -> None:
         self.state = RoundState()
         room.scores[:] = [0, 0]
+        self.dropped_kits.clear()
+        self._defuse_info.clear()
+        self._last_defuse_accolades.clear()
         self._reset_round(room)
 
     def _seed_money(self, player: MatchPlayer) -> None:
@@ -474,14 +505,40 @@ class Defuse(GameMode):
 
     def tick(self, room: MatchRoom, elapsed: float, now: float) -> None:
         state = self.state
+
+        # Check dropped defusal kit pickups by living defenders
+        for kit in list(self.dropped_kits):
+            for player in room.players.values():
+                if not player.alive or player.team == state.attackers:
+                    continue
+                if "defuser" in player.owned_extras:
+                    continue
+                dx = player.state.x - kit.x
+                dy = player.state.y - kit.y
+                dz = player.state.z - kit.z
+                if (dx * dx + dy * dy <= 1.8 * 1.8) and (-1.25 <= dz <= 4.5):
+                    player.owned_extras.add("defuser")
+                    self.dropped_kits.remove(kit)
+                    room._emit(
+                        {
+                            "kind": "kit_pickup",
+                            "player": player.id,
+                            "name": player.name,
+                            "id": kit.id,
+                        }
+                    )
+                    break
+
         facts = Facts(
             attackers_alive=self._alive(room, state.attackers),
             defenders_alive=self._alive(room, 1 - state.attackers),
             planted_on=self._planted_this_tick,
             defused=self._defused_this_tick,
+            defuse_info=dict(self._defuse_info),
         )
         self._planted_this_tick = ""
         self._defused_this_tick = False
+        self._defuse_info.clear()
 
         # A planted bomb tracks the carrier's last position, which is where it
         # was put down — not where they are now.
@@ -498,6 +555,7 @@ class Defuse(GameMode):
                 "kind": emit.kind,
                 **({"team": emit.team} if emit.team >= 0 else {}),
                 **({"detail": emit.detail} if emit.detail else {}),
+                **emit.extra,
             }
         )
         if emit.kind == "round_end":
@@ -558,6 +616,9 @@ class Defuse(GameMode):
             room.respawn(player)
             player.action_progress = 0.0
             player.action_kind = ""
+        self.dropped_kits.clear()
+        self._defuse_info.clear()
+        self._last_defuse_accolades.clear()
         self._give_bomb(room)
 
     def _give_bomb(self, room: MatchRoom) -> None:
@@ -622,10 +683,28 @@ class Defuse(GameMode):
             else:
                 attacker.money = min(MAX_MONEY, attacker.money + KILL_REWARD)
 
-        if self.state.bomb.carrier == victim.id:
-            # The bomb goes to somebody still standing rather than to the floor.
-            # A dropped bomb on maps this size is a hunt, not a round.
+    def on_death(self, room: MatchRoom, player: MatchPlayer) -> None:
+        """Hand over bomb if carrier died, and drop defuse kit if defender had one."""
+        if self.state.bomb.carrier == player.id:
             self._give_bomb(room)
+        if player.team != self.state.attackers and "defuser" in player.owned_extras:
+            player.owned_extras.discard("defuser")
+            kit = DroppedKit(
+                id=f"kit_{player.id}_{self.state.round}_{int(time.time() * 1000)}",
+                x=player.state.x,
+                y=player.state.y,
+                z=player.state.z,
+            )
+            self.dropped_kits.append(kit)
+            room._emit(
+                {
+                    "kind": "kit_drop",
+                    "player": player.id,
+                    "x": round(kit.x, 2),
+                    "y": round(kit.y, 2),
+                    "z": round(kit.z, 2),
+                }
+            )
 
     def on_command(
         self, room: MatchRoom, player: MatchPlayer, command: Command, now: float
@@ -652,7 +731,14 @@ class Defuse(GameMode):
         if player.action_kind != kind:
             player.action_kind = kind
             player.action_progress = 0.0
-        span = PLANT_TIME if kind == "plant" else DEFUSE_TIME
+        if kind == "plant":
+            span = PLANT_TIME
+        else:
+            span = (
+                DEFUSE_TIME_KIT
+                if "defuser" in player.owned_extras
+                else DEFUSE_TIME_STANDARD
+            )
         player.action_progress = min(1.0, player.action_progress + command.dt / span)
         if player.action_progress < 1.0:
             return
@@ -685,7 +771,30 @@ class Defuse(GameMode):
         else:
             player.objectives += 1
             player.money = min(MAX_MONEY, player.money + DEFUSE_REWARD)
+
+            # Clutch & ninja defuse detection
+            alive_attackers = sum(
+                1
+                for p in room.players.values()
+                if p.team == self.state.attackers and p.alive
+            )
+            is_ninja = alive_attackers >= 2
+            fuse_left = max(0.0, self.state.bomb.fuse)
+            is_clutch = fuse_left < 1.0
+            clutch_time = round(fuse_left, 2)
+            has_kit = "defuser" in player.owned_extras
+
             self._defused_this_tick = True
+            accolades = {
+                "by": player.id,
+                "byName": player.name,
+                "ninja": is_ninja,
+                "clutch": is_clutch,
+                "clutchTime": clutch_time,
+                "hasKit": has_kit,
+            }
+            self._defuse_info = dict(accolades)
+            self._last_defuse_accolades = dict(accolades)
 
     def _buy(self, room: MatchRoom, player: MatchPlayer, index: int) -> None:
         """Spend, if every one of the reasons not to is absent.
@@ -708,6 +817,8 @@ class Defuse(GameMode):
         if self.state.phase != FREEZE:
             return
         item = CATALOG[index]
+        if item.id == "defuser" and player.team == self.state.attackers:
+            return
         if self._owns(player, item):
             return
         if player.money < item.price:
@@ -725,9 +836,11 @@ class Defuse(GameMode):
         elif item.kind == "nade":
             player.owned_nades.add(item.slot)
             player.nades.counts[item.slot] = 1
-        else:
+        elif item.kind == "armour":
             player.owned_extras.add(item.id)
             player.armour = weapons.MAX_ARMOUR
+        elif item.kind == "kit":
+            player.owned_extras.add(item.id)
         # No public effect. What somebody bought is revealed by the gun in their
         # hands, which `PlayerRow.weapon` already broadcasts — an fx would be
         # telling the other side what to expect before they could see it.
@@ -737,8 +850,11 @@ class Defuse(GameMode):
             return item.slot in player.owned
         if item.kind == "nade":
             return item.slot in player.owned_nades
-        # Armour you already have at full is armour this would not add to.
-        return item.id in player.owned_extras or player.armour >= weapons.MAX_ARMOUR
+        if item.kind == "armour":
+            return item.id in player.owned_extras or player.armour >= weapons.MAX_ARMOUR
+        if item.id == "defuser":
+            return item.id in player.owned_extras or player.team == self.state.attackers
+        return item.id in player.owned_extras
 
     def _clear_action(self, player: MatchPlayer) -> None:
         player.action_progress = 0.0
@@ -806,7 +922,9 @@ class Defuse(GameMode):
                 "fuseTime": FUSE_TIME,
                 "postTime": POST_TIME,
                 "plantTime": PLANT_TIME,
-                "defuseTime": DEFUSE_TIME,
+                "defuseTime": DEFUSE_TIME_STANDARD,
+                "defuseTimeStandard": DEFUSE_TIME_STANDARD,
+                "defuseTimeKit": DEFUSE_TIME_KIT,
                 # The economy, served whole. A client with its own copy of a
                 # price is a buy menu that disagrees with the server about what
                 # you can afford, and the way that fails is a purchase the menu
@@ -846,6 +964,17 @@ class Defuse(GameMode):
                     "fuseIn": round(state.bomb.fuse, 1),
                 }
             )
+        elif state.bomb.state == "defused":
+            bomb.update(
+                {
+                    "site": state.bomb.site,
+                    "x": round(state.bomb.x, 2),
+                    "y": round(state.bomb.y, 2),
+                    "z": round(state.bomb.z, 2),
+                    "fuseIn": 0.0,
+                    **self._last_defuse_accolades,
+                }
+            )
         return {
             "phase": state.phase,
             "phaseIn": round(max(0.0, state.remaining), 1),
@@ -853,9 +982,11 @@ class Defuse(GameMode):
             "attackers": state.attackers,
             "swapped": state.swapped,
             "bomb": bomb,
+            "kits": [k.to_dict() for k in self.dropped_kits],
         }
 
     def private_state(self, room: MatchRoom, player: MatchPlayer) -> dict[str, Any]:
+        has_kit = "defuser" in player.owned_extras
         return {
             "attacking": player.team == self.state.attackers,
             "carrying": self.state.bomb.carrier == player.id,
@@ -868,6 +999,8 @@ class Defuse(GameMode):
             # player, so this is the only place it can go.
             "money": player.money,
             "canBuy": self.state.phase == FREEZE,
+            "hasKit": has_kit,
+            "defuseTime": DEFUSE_TIME_KIT if has_kit else DEFUSE_TIME_STANDARD,
             # Indices into the served catalogue, so a menu can grey out what is
             # already owned without keeping its own idea of what that means.
             "bought": sorted(

@@ -105,7 +105,7 @@ def test_the_catalogue_is_served_so_no_client_carries_a_price(game):
     for served, item in zip(catalog, CATALOG, strict=True):
         assert served["id"] == item.id
         assert served["price"] == item.price
-        assert served["kind"] in ("weapon", "armour", "nade")
+        assert served["kind"] in ("weapon", "armour", "nade", "kit")
 
 
 def test_the_knife_and_pistol_are_not_in_the_catalogue():

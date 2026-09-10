@@ -1523,6 +1523,7 @@ class MatchRoom:
         player.deaths += 1
         player.respawn_at = now + RESPAWN_DELAY
         player.queue.clear()
+        self.mode.on_death(self, player)
         self._noise(player, "die", noise.DIE_LOUDNESS)
         self._emit(
             {
@@ -2034,6 +2035,7 @@ class MatchRoom:
         if head:
             attacker.head_kills += 1
         self.mode.on_kill(self, victim, attacker, head, weapon)
+        self.mode.on_death(self, victim)
 
         # Determine assist (deal >= 40 damage within the last 6.0s, highest damage wins)
         assister_id = ""
