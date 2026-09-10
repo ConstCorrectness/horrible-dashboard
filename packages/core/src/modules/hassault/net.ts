@@ -122,6 +122,20 @@ export interface Command {
    * "already owned", which looks exactly like a menu that does not work.
    */
   buy?: number;
+  /**
+   * Sell back the catalogue entry at this index, for its full price.
+   *
+   * Only ever an index the server listed in `ModeSelf.sellable` — see
+   * `tradeFor` — and edge-triggered for `buy`'s reason.
+   */
+  sell?: number;
+  /**
+   * Drop the bomb if we carry it, and otherwise the gun in hand.
+   *
+   * Edge-triggered: a key read as held would drop the rifle, then the pistol
+   * the server has just refused, sixty times a second.
+   */
+  drop?: boolean;
 }
 
 /** The combat half of a command, decided by `ShotController` rather than by keys. */
@@ -245,7 +259,14 @@ export interface SelfState {
   objectives?: number;
   mag: number;
   /** Hitmarkers since the last snapshot. Drained server-side, so each is sent once. */
-  hits: { victim: string; damage: number; head: boolean; killed: boolean; armour?: boolean; wallbang?: boolean }[];
+  hits: {
+    victim: string;
+    damage: number;
+    head: boolean;
+    killed: boolean;
+    armour?: boolean;
+    wallbang?: boolean;
+  }[];
   /** What prediction rebases on. Absent only from a server older than momentum. */
   move?: MoveState;
   /** Audible noises since the last snapshot, drained server-side. */
@@ -469,6 +490,8 @@ export interface ObjectiveFx {
     | 'bomb_exploded'
     | 'kit_drop'
     | 'kit_pickup'
+    | 'bomb_drop'
+    | 'bomb_pickup'
     | 'round_start'
     | 'round_live'
     | 'round_end'
@@ -572,7 +595,10 @@ export interface ModeInfo {
 }
 
 export interface ModeBomb {
-  /** `carried` | `planted` | `defused`. Absent when the mode has no bomb. */
+  /**
+   * `carried` | `dropped` | `planted` | `defused`. Absent when the mode has no
+   * bomb. `x`/`y`/`z` are set while `dropped`, `planted` or `defused`.
+   */
   state?: string;
   carrier?: string;
   site?: string;
@@ -595,6 +621,19 @@ export interface ModeKit {
   z: number;
 }
 
+/**
+ * A gun somebody dropped. No ammunition: how full it is belongs to whoever picks
+ * it up, and arrives in their own envelope.
+ */
+export interface ModeDrop {
+  id: string;
+  /** Index into the served weapon table. */
+  slot: number;
+  x: number;
+  y: number;
+  z: number;
+}
+
 /** The mode's public state, every tick. */
 export interface ModeShared {
   /**
@@ -610,6 +649,7 @@ export interface ModeShared {
   swapped?: boolean;
   bomb?: ModeBomb;
   kits?: ModeKit[];
+  drops?: ModeDrop[];
   flags?: ModeFlag[];
   over?: boolean;
 }
@@ -642,6 +682,12 @@ export interface ModeSelf {
   canBuy?: boolean;
   /** Catalogue indices already owned, so a menu can grey them out. */
   bought?: number[];
+  /**
+   * Catalogue indices pressing the row would sell back. Not derivable from
+   * `bought`: a gun picked up off a teammate is owned and was never paid for.
+   * Empty outside the freeze.
+   */
+  sellable?: number[];
 }
 
 /**
@@ -749,6 +795,8 @@ export class Predictor {
     use?: boolean,
     buy?: number,
     ping?: PingIntent,
+    sell?: number,
+    drop?: boolean,
   ): Command {
     this.seq += 1;
     // The server clamps dt the same way; recording the unclamped value would
@@ -804,6 +852,9 @@ export class Predictor {
     if (buy !== undefined && buy >= 0) command.buy = buy;
     // Tactical ping: instantaneous edge trigger on this command
     if (ping) command.ping = ping;
+    // Both edges, the `buy` rule: one decision, one frame.
+    if (sell !== undefined && sell >= 0) command.sell = sell;
+    if (drop) command.drop = true;
     this.pending.push(command);
     step(world, player, input, clamped);
     if (kick && (kick.x !== 0 || kick.y !== 0 || kick.z !== 0)) {

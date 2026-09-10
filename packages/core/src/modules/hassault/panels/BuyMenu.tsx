@@ -15,8 +15,14 @@
 
 import type { ModeInfo, ModeSelf } from '../net';
 
-/** The three row states, which are three because they mean three things. */
+/** The four row states, which are four because they mean four things. */
 const OWNED = '#8fce93';
+/**
+ * Owned *and* paid for in this freeze, so pressing the row sells it back. Its
+ * own colour rather than `OWNED`: a row that looks finished but refunds you on
+ * a keypress is a misclick waiting to happen.
+ */
+const SELLABLE = '#e5b567';
 const BUYABLE = 'rgba(255,255,255,0.92)';
 const OUT_OF_REACH = 'rgba(255,255,255,0.38)';
 
@@ -37,6 +43,7 @@ export function BuyMenu({ mode, mine, open, onBuy }: BuyMenuProps) {
 
   const money = mine.money ?? 0;
   const bought = mine.bought ?? [];
+  const sellable = mine.sellable ?? [];
   const canBuy = mine.canBuy ?? false;
 
   return (
@@ -81,8 +88,15 @@ export function BuyMenu({ mode, mine, open, onBuy }: BuyMenuProps) {
       )}
       {catalog.map((item, index) => {
         const owned = bought.includes(index);
+        const refundable = sellable.includes(index);
         const afford = money >= item.price;
-        const colour = owned ? OWNED : afford && canBuy ? BUYABLE : OUT_OF_REACH;
+        const colour = refundable
+          ? SELLABLE
+          : owned
+            ? OWNED
+            : afford && canBuy
+              ? BUYABLE
+              : OUT_OF_REACH;
         const icon =
           item.kind === 'kit'
             ? '✂️ '
@@ -95,14 +109,20 @@ export function BuyMenu({ mode, mine, open, onBuy }: BuyMenuProps) {
           <div
             key={item.id}
             onClick={() => onBuy(index)}
-            style={{ display: 'flex', gap: '0.6rem', color: colour, lineHeight: 1.7, alignItems: 'center' }}
+            style={{
+              display: 'flex',
+              gap: '0.6rem',
+              color: colour,
+              lineHeight: 1.7,
+              alignItems: 'center',
+            }}
           >
             {/* 1-based, matching the key you press. The index on the wire stays
                 0-based; the label is the thing being made friendly. */}
             <span style={{ opacity: 0.6, width: '1.2em' }}>{index + 1}</span>
             <span style={{ opacity: 0.85, fontSize: '0.9em' }}>{icon}</span>
             <span style={{ flex: 1 }}>{item.name}</span>
-            <span>{owned ? 'OWNED' : `$${item.price}`}</span>
+            <span>{refundable ? `SELL +$${item.price}` : owned ? 'OWNED' : `$${item.price}`}</span>
           </div>
         );
       })}

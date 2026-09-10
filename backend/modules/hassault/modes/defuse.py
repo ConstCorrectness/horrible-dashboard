@@ -119,6 +119,14 @@ DEFUSE_TIME_KIT = 5.0
 DEFUSE_TIME = DEFUSE_TIME_STANDARD
 DEFUSER_PRICE = 400
 
+#: Seconds a player's own drop ignores them.
+#:
+#: A drop lands where you are standing, so without this it is picked straight
+#: back up on the next tick and the key appears to do nothing at all. On the
+#: wall clock, like a respawn: it is a property of the thing on the floor, not of
+#: any one player's simulated time.
+DROP_REPICK_DELAY = 1.0
+
 # ---------------------------------------------------------------------------
 # The economy
 # ---------------------------------------------------------------------------
@@ -227,10 +235,11 @@ OVER = "over"
 class Bomb:
     """Where the bomb is in its own little lifecycle.
 
-    `state` is `"carried"`, `"planted"` or `"defused"`. A bomb is never "dropped"
-    — it is handed to a living attacker at the start of every round and stays
-    with whoever holds it, because a dropped bomb on a map this size is a hunt
-    rather than a round.
+    `state` is `"carried"`, `"dropped"`, `"planted"` or `"defused"`. A carrier who
+    *dies* never leaves it on the floor — it passes to another living attacker,
+    because a bomb lying where somebody fell on a map this size is a hunt rather
+    than a round. `"dropped"` is only ever a choice (`Command.drop`, to hand it to
+    a teammate better placed to plant), and `x`/`y`/`z` are then where it lies.
     """
 
     state: str = "carried"
@@ -285,6 +294,62 @@ class DroppedKit:
             "y": round(self.y, 2),
             "z": round(self.z, 2),
         }
+
+
+@dataclass(slots=True, frozen=True)
+class DroppedWeapon:
+    """A bought gun somebody put down with `Command.drop`.
+
+    It keeps its magazine and reserve, so handing a teammate a half-spent rifle
+    hands them exactly that — a drop that refilled itself would be a free reload
+    for two players standing next to each other.
+    """
+
+    id: str
+    slot: int
+    ammo: int
+    reserve: int
+    x: float
+    y: float
+    z: float
+    dropped_by: str
+    #: `time.monotonic()`, for `DROP_REPICK_DELAY`.
+    dropped_at: float
+
+    def to_dict(self) -> dict[str, Any]:
+        # No ammunition: how many rounds are left in a gun on the floor is the
+        # business of whoever picks it up, and it arrives in their own envelope.
+        return {
+            "id": self.id,
+            "slot": self.slot,
+            "x": round(self.x, 2),
+            "y": round(self.y, 2),
+            "z": round(self.z, 2),
+        }
+
+
+def _standing_on(player: "MatchPlayer", x: float, y: float, z: float) -> bool:
+    """Whether a body's feet are close enough to take something lying at `x,y,z`.
+
+    One reach for everything a player can drop — kits, guns, the bomb — so no two
+    of them can be taken from different distances.
+    """
+    dx = player.state.x - x
+    dy = player.state.y - y
+    dz = player.state.z - z
+    return dx * dx + dy * dy <= 1.8 * 1.8 and -1.25 <= dz <= 4.5
+
+
+def _catalog_index(kind: str, slot: int) -> int:
+    """The catalogue row that sells this weapon or grenade slot, or `-1`."""
+    return next(
+        (
+            i
+            for i, item in enumerate(CATALOG)
+            if item.kind == kind and item.slot == slot
+        ),
+        -1,
+    )
 
 
 @dataclass(slots=True, frozen=True)
@@ -463,6 +528,12 @@ class Defuse(GameMode):
         #: who joined two rounds ago is on the same footing as one who did not.
         self._loss_streak = [0, 0]
         self.dropped_kits: list[DroppedKit] = []
+        self.dropped_weapons: list[DroppedWeapon] = []
+        self._drop_seq = 0
+        #: Who put the bomb down, and when — `Bomb` has no room for either and
+        #: the wire has no use for them, but `DROP_REPICK_DELAY` does.
+        self._bomb_dropped_by = ""
+        self._bomb_dropped_at = 0.0
         self._defuse_info: dict[str, Any] = {}
         self._last_defuse_accolades: dict[str, Any] = {}
 
@@ -475,6 +546,7 @@ class Defuse(GameMode):
         self.state = RoundState()
         room.scores[:] = [0, 0]
         self.dropped_kits.clear()
+        self.dropped_weapons.clear()
         self._defuse_info.clear()
         self._last_defuse_accolades.clear()
         self._reset_round(room)
@@ -513,10 +585,7 @@ class Defuse(GameMode):
                     continue
                 if "defuser" in player.owned_extras:
                     continue
-                dx = player.state.x - kit.x
-                dy = player.state.y - kit.y
-                dz = player.state.z - kit.z
-                if (dx * dx + dy * dy <= 1.8 * 1.8) and (-1.25 <= dz <= 4.5):
+                if _standing_on(player, kit.x, kit.y, kit.z):
                     player.owned_extras.add("defuser")
                     self.dropped_kits.remove(kit)
                     room._emit(
@@ -528,6 +597,13 @@ class Defuse(GameMode):
                         }
                     )
                     break
+
+        self._collect_drops(room, now)
+        # **Re-read, never reuse the copy from the top of the tick.** A bomb
+        # picked up just now lives only in `self.state`; advancing the stale copy
+        # would write the pickup back out, leaving the bomb on the floor with a
+        # teammate standing on it.
+        state = self.state
 
         facts = Facts(
             attackers_alive=self._alive(room, state.attackers),
@@ -613,10 +689,12 @@ class Defuse(GameMode):
             player.owned.clear()
             player.owned_nades.clear()
             player.owned_extras.clear()
+            player.purchased.clear()
             room.respawn(player)
             player.action_progress = 0.0
             player.action_kind = ""
         self.dropped_kits.clear()
+        self.dropped_weapons.clear()
         self._defuse_info.clear()
         self._last_defuse_accolades.clear()
         self._give_bomb(room)
@@ -637,6 +715,62 @@ class Defuse(GameMode):
             return
         holder = room.rng.choice(attackers)
         self.state = replace(self.state, bomb=Bomb(state="carried", carrier=holder.id))
+
+    def _collect_drops(self, room: MatchRoom, now: float) -> None:
+        """Hand a dropped bomb or gun to the first living body standing on it.
+
+        The bomb only to an attacker — a defender walking over it leaves it where
+        it is, since taking it off the map would end the round without a shot.
+        A gun to anyone who does not already own one of that kind, and **never
+        into `purchased`**: it was somebody else's money, and refunding it would
+        let a teammate buy once and have it sold back twice.
+        """
+        bomb = self.state.bomb
+        if bomb.state == "dropped":
+            for player in room.players.values():
+                if not player.alive or player.team != self.state.attackers:
+                    continue
+                if (
+                    player.id == self._bomb_dropped_by
+                    and now - self._bomb_dropped_at < DROP_REPICK_DELAY
+                ):
+                    continue
+                if not _standing_on(player, bomb.x, bomb.y, bomb.z):
+                    continue
+                self.state = replace(
+                    self.state, bomb=Bomb(state="carried", carrier=player.id)
+                )
+                room._emit(
+                    {
+                        "kind": "bomb_pickup",
+                        "team": player.team,
+                        "by": player.id,
+                        "byName": player.name,
+                    }
+                )
+                break
+
+        for drop in list(self.dropped_weapons):
+            for player in room.players.values():
+                if not player.alive or drop.slot in player.owned:
+                    continue
+                if (
+                    player.id == drop.dropped_by
+                    and now - drop.dropped_at < DROP_REPICK_DELAY
+                ):
+                    continue
+                if not _standing_on(player, drop.x, drop.y, drop.z):
+                    continue
+                self.dropped_weapons.remove(drop)
+                player.owned.add(drop.slot)
+                player.ammo[drop.slot] = drop.ammo
+                player.reserve[drop.slot] = drop.reserve
+                # Into your hands only if they held nothing worth keeping there.
+                # Swapping somebody off a rifle because they brushed past a
+                # shotgun would be a pickup that costs a fight.
+                if player.weapon in FREE_SLOTS:
+                    self._hold(player, drop.slot)
+                break
 
     # -- simulation ---------------------------------------------------------
 
@@ -712,10 +846,15 @@ class Defuse(GameMode):
         """Plant, defuse and buy.
 
         Buying first, and not gated on `LIVE` like the rest: the whole point of
-        it is that it happens in the freeze.
+        it is that it happens in the freeze. Selling before buying, so one frame
+        can trade a rifle for a sniper on the strength of the refund.
         """
+        if command.sell >= 0:
+            self._sell(room, player, command.sell)
         if command.buy >= 0:
             self._buy(room, player, command.buy)
+        if command.drop:
+            self._drop(room, player, now)
 
         if self.state.phase != LIVE or not player.alive:
             self._clear_action(player)
@@ -824,6 +963,7 @@ class Defuse(GameMode):
         if player.money < item.price:
             return
         player.money -= item.price
+        player.purchased.add(index)
         if item.kind == "weapon":
             player.owned.add(item.slot)
             # Handed over now rather than at the next spawn: the buy happens
@@ -855,6 +995,132 @@ class Defuse(GameMode):
         if item.id == "defuser":
             return item.id in player.owned_extras or player.team == self.state.attackers
         return item.id in player.owned_extras
+
+    def _sellable(self, player: MatchPlayer, index: int) -> bool:
+        """Whether the purchase at `index` can still be undone.
+
+        Paid for, and **still exactly what was sold**: a gun still in your
+        hands, a grenade not yet thrown, armour that has not absorbed anything.
+        Refunding a spent grenade or a dented vest would make the freeze a
+        window in which utility is free.
+        """
+        if index not in player.purchased or index >= len(CATALOG):
+            return False
+        item = CATALOG[index]
+        if item.kind == "weapon":
+            return item.slot in player.owned
+        if item.kind == "nade":
+            return player.nades.counts.get(item.slot, 0) > 0
+        if item.kind == "armour":
+            return (
+                item.id in player.owned_extras and player.armour >= weapons.MAX_ARMOUR
+            )
+        return item.id in player.owned_extras
+
+    def _sell(self, room: MatchRoom, player: MatchPlayer, index: int) -> None:
+        """Undo a purchase made in this freeze, for everything it cost.
+
+        The mirror of `_buy`, and gated the same way — the freeze, and nothing
+        the menu decided. A full refund because the window is short and the
+        mistake it corrects is a misclick on a number row; a partial one would
+        make the buy menu a place you are afraid to press keys.
+        """
+        if self.state.phase != FREEZE or not self._sellable(player, index):
+            return
+        item = CATALOG[index]
+        player.purchased.discard(index)
+        player.money = min(MAX_MONEY, player.money + item.price)
+        if item.kind == "weapon":
+            player.owned.discard(item.slot)
+            player.ammo[item.slot] = 0
+            player.reserve[item.slot] = 0
+            if player.weapon == item.slot:
+                self._hold(player, 1)
+        elif item.kind == "nade":
+            player.owned_nades.discard(item.slot)
+            player.nades.counts[item.slot] = 0
+        elif item.kind == "armour":
+            player.owned_extras.discard(item.id)
+            player.armour = 0.0
+        else:
+            player.owned_extras.discard(item.id)
+
+    def _drop(self, room: MatchRoom, player: MatchPlayer, now: float) -> None:
+        """Put down the bomb if you carry it, and otherwise the gun in your hands.
+
+        **The bomb first**, because that is what a carrier means by it: the
+        drop exists so the player holding the bomb can hand it to one better
+        placed, and a carrier who wanted to give away a rifle instead can do
+        that the moment the bomb is gone.
+
+        Only a bought gun — the knife and the pistol are `FREE_SLOTS`, and
+        dropping something everybody is always given would put a pile of them on
+        the floor for no one. A dead player drops nothing: what they held has
+        already stayed with them, the rule `test_what_you_bought_survives_dying`
+        pins.
+        """
+        if not player.alive:
+            return
+        bomb = self.state.bomb
+        if bomb.state == "carried" and bomb.carrier == player.id:
+            self._bomb_dropped_by = player.id
+            self._bomb_dropped_at = now
+            self.state = replace(
+                self.state,
+                bomb=Bomb(
+                    state="dropped",
+                    x=player.state.x,
+                    y=player.state.y,
+                    z=player.state.z,
+                ),
+            )
+            self._clear_action(player)
+            room._emit(
+                {
+                    "kind": "bomb_drop",
+                    "team": player.team,
+                    "by": player.id,
+                    "byName": player.name,
+                }
+            )
+            return
+
+        slot = player.weapon
+        if slot in FREE_SLOTS or slot not in player.owned:
+            return
+        self._drop_seq += 1
+        self.dropped_weapons.append(
+            DroppedWeapon(
+                id=f"gun{self.state.round}-{self._drop_seq}",
+                slot=slot,
+                ammo=player.ammo.get(slot, 0),
+                reserve=player.reserve.get(slot, 0),
+                x=player.state.x,
+                y=player.state.y,
+                z=player.state.z,
+                dropped_by=player.id,
+                dropped_at=now,
+            )
+        )
+        player.owned.discard(slot)
+        # Out of your hands is out of `purchased`. Otherwise buy, drop for a
+        # teammate, and sell the empty slot back: one rifle, two refunds' worth.
+        player.purchased.discard(_catalog_index("weapon", slot))
+        player.ammo[slot] = 0
+        player.reserve[slot] = 0
+        self._hold(player, 1)
+
+    def _hold(self, player: MatchPlayer, slot: int) -> None:
+        """Switch hands server-side, cancelling whatever the old weapon was doing.
+
+        A reload or a spray index carried across the swap would finish the
+        pistol's reload on the rifle, or start the rifle three shots into its
+        pattern.
+        """
+        player.weapon = slot
+        player.reload_until = -999.0
+        player.reloading_empty = False
+        player.spray_index = 0
 
     def _clear_action(self, player: MatchPlayer) -> None:
         player.action_progress = 0.0
@@ -964,6 +1230,15 @@ class Defuse(GameMode):
                     "fuseIn": round(state.bomb.fuse, 1),
                 }
             )
+        elif state.bomb.state == "dropped":
+            # Public for the carrier's reason: it is lying in plain sight.
+            bomb.update(
+                {
+                    "x": round(state.bomb.x, 2),
+                    "y": round(state.bomb.y, 2),
+                    "z": round(state.bomb.z, 2),
+                }
+            )
         elif state.bomb.state == "defused":
             bomb.update(
                 {
@@ -983,6 +1258,7 @@ class Defuse(GameMode):
             "swapped": state.swapped,
             "bomb": bomb,
             "kits": [k.to_dict() for k in self.dropped_kits],
+            "drops": [d.to_dict() for d in self.dropped_weapons],
         }
 
     def private_state(self, room: MatchRoom, player: MatchPlayer) -> dict[str, Any]:
@@ -1005,6 +1281,15 @@ class Defuse(GameMode):
             # already owned without keeping its own idea of what that means.
             "bought": sorted(
                 index for index, item in enumerate(CATALOG) if self._owns(player, item)
+            ),
+            # What pressing an owned row would sell back. A list of its own and
+            # not derived from `bought`, because owning is not having paid: a
+            # gun picked up off a teammate is owned and is not refundable, and a
+            # menu that guessed would offer a sale the server refuses.
+            "sellable": (
+                sorted(i for i in player.purchased if self._sellable(player, i))
+                if self.state.phase == FREEZE
+                else []
             ),
         }
 
@@ -1052,6 +1337,10 @@ class Defuse(GameMode):
                 use=not attacking,
                 radius=1.8 if not attacking else 4.0,
             )
+        if attacking and bomb.state == "dropped":
+            # A bomb on the floor is the attackers' whole round until somebody
+            # picks it up, and no bot drops one — this is them fetching a human's.
+            return Goal(x=bomb.x, y=bomb.y, z=bomb.z, radius=1.0)
         if not self.sites:
             return None
         if attacking:

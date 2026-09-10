@@ -112,7 +112,8 @@ export function ModeHud({ mode, state, mine, scores, team, objective }: ModeHudP
             </span>
           ) : bomb.clutch ? (
             <span style={{ color: '#fbbf24', textShadow: '0 0 8px rgba(251, 191, 36, 0.8)' }}>
-              ⚡ {bomb.clutchTime?.toFixed(2)}s CLUTCH DEFUSE {bomb.byName ? `BY ${bomb.byName}` : ''}
+              ⚡ {bomb.clutchTime?.toFixed(2)}s CLUTCH DEFUSE{' '}
+              {bomb.byName ? `BY ${bomb.byName}` : ''}
             </span>
           ) : (
             <span>BOMB DEFUSED</span>
@@ -166,6 +167,14 @@ export function ModeHud({ mode, state, mine, scores, team, objective }: ModeHudP
       {mine?.carrying && (
         <div style={{ fontSize: '0.72rem', letterSpacing: '0.1em', color: '#fbd76b' }}>
           {bomb?.state ? 'YOU HAVE THE BOMB' : 'YOU HAVE THE FLAG'}
+        </div>
+      )}
+
+      {/* Attackers only: to a defender a loose bomb is a place to watch, not a
+          job, and the dropped bomb is already drawn in the world for both. */}
+      {mine?.attacking && bomb?.state === 'dropped' && (
+        <div style={{ fontSize: '0.72rem', letterSpacing: '0.1em', color: '#fbd76b' }}>
+          THE BOMB IS ON THE FLOOR
         </div>
       )}
 

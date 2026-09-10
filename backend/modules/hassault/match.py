@@ -333,6 +333,23 @@ class Command:
     buy: int = -1
     """Tactical ping / callout coordinates and kind: (x, y, z, kind)."""
     ping: tuple[float, float, float, str] | None = None
+    """Drop the bomb if carrying it, and otherwise the weapon in hand.
+
+    Only a gun from the mode's catalogue can be dropped — never the knife or the
+    pistol — and only by a living player; deathmatch ignores it, since everybody
+    there already holds everything. The bomb comes first because handing it to a
+    teammate is what a carrier means by the key. See `Defuse._drop`.
+
+    A field on the command for the same reason `buy` is: the fabric forwards
+    commands verbatim, so a field here crosses every wire with no changes.
+    """
+    drop: bool = False
+    """Sell back the catalogue entry at this index for a full refund, or `-1`.
+
+    Only honoured during the freeze phase, and only for items bought during *this*
+    freeze. The shape matches `buy`: an index into the served catalogue.
+    """
+    sell: int = -1
 
 
 @dataclass(slots=True)
@@ -379,6 +396,14 @@ class MatchPlayer:
     owned: set[int] = field(default_factory=set)
     owned_nades: set[int] = field(default_factory=set)
     owned_extras: set[str] = field(default_factory=set)
+    #: Catalogue indices this player *paid for* this round and still holds.
+    #:
+    #: Separate from `owned`, which says what you have and not how you came by
+    #: it: a rifle picked up off a teammate's drop is owned but was never bought,
+    #: and refunding it would turn one purchase into two players' money. Dropping
+    #: or selling removes an entry; a thrown grenade stays in it and is refused by
+    #: `Defuse._sellable` instead, which checks that what was sold is still held.
+    purchased: set[int] = field(default_factory=set)
     #: Objectives completed: flags captured, bombs planted or defused.
     #:
     #: On `MatchPlayer` rather than in a dict the mode keeps, for the reason
@@ -406,7 +431,9 @@ class MatchPlayer:
     kills: int = 0
     assists: int = 0
     deaths: int = 0
-    recent_damagers: list[tuple[str, str, int, float, float]] = field(default_factory=list)
+    recent_damagers: list[tuple[str, str, int, float, float]] = field(
+        default_factory=list
+    )
     #: Damage this player has actually landed, in hit points. **Applied** damage,
     #: not rolled: a 90-damage sniper round into a body with 20 left counts 20.
     #: Overkill would make the number a description of the weapon rather than of
@@ -598,7 +625,8 @@ class MatchPlayer:
             "ammo": self.ammo.get(self.weapon, 0),
             "reserve": self.reserve.get(self.weapon, 0),
             "reloading": self.sim_time < self.reload_until,
-            "reloadingEmpty": (self.sim_time < self.reload_until) and self.reloading_empty,
+            "reloadingEmpty": (self.sim_time < self.reload_until)
+            and self.reloading_empty,
             "reloadIn": max(0.0, round(self.reload_until - self.sim_time, 2)),
             # How far into the spray pattern this player is. Echoed so the client
             # can *adopt* it rather than keeping its own count — predicted
@@ -652,6 +680,7 @@ class RoomSettings:
     recoil_scale: float = 1.0
     recoil_push: float = 0.0
 
+
 @dataclass
 class PseudoWeapon:
     id: str
@@ -676,7 +705,11 @@ def _segment_intersects_zone(
     closest_x = p0[0] + t * vx
     closest_y = p0[1] + t * vy
     closest_z = p0[2] + t * vz
-    dist_sq = (closest_x - zone.x) ** 2 + (closest_y - zone.y) ** 2 + (closest_z - zone.z) ** 2
+    dist_sq = (
+        (closest_x - zone.x) ** 2
+        + (closest_y - zone.y) ** 2
+        + (closest_z - zone.z) ** 2
+    )
     return dist_sq <= zone.radius * zone.radius
 
 
@@ -1140,7 +1173,8 @@ class MatchRoom:
                 in_smoke = any(
                     z.kind == "smoke"
                     and z.cleared_until <= now
-                    and ((z.x - nade.x) ** 2 + (z.y - nade.y) ** 2) <= (z.radius + nade.spec.radius) ** 2
+                    and ((z.x - nade.x) ** 2 + (z.y - nade.y) ** 2)
+                    <= (z.radius + nade.spec.radius) ** 2
                     for z in self.zones
                 )
                 if in_smoke:
@@ -1194,7 +1228,9 @@ class MatchRoom:
         if kind == "he":
             for z in self.zones:
                 if z.kind == "smoke":
-                    dist_sq = (z.x - nade.x) ** 2 + (z.y - nade.y) ** 2 + (z.z - nade.z) ** 2
+                    dist_sq = (
+                        (z.x - nade.x) ** 2 + (z.y - nade.y) ** 2 + (z.z - nade.z) ** 2
+                    )
                     if dist_sq <= (nade.spec.radius + z.radius) ** 2:
                         z.cleared_until = now + 2.5
 
@@ -1763,7 +1799,9 @@ class MatchRoom:
         if player.sim_time < player.reload_until:
             return
         is_knife = getattr(weapon, "id", "") == "knife"
-        fire_interval = (0.75 if command.alt_fire else 0.32) if is_knife else weapon.interval
+        fire_interval = (
+            (0.75 if command.alt_fire else 0.32) if is_knife else weapon.interval
+        )
         if player.sim_time - player.last_fire_at < fire_interval:
             return
         if weapon.mag > 0:
@@ -1837,7 +1875,11 @@ class MatchRoom:
                 other.id, physics.body_height(other.state)
             )
 
-        pen = 1.25 if getattr(weapon, "id", "") == "sniper" else (0.8 if getattr(weapon, "id", "") in ("assault", "carbine") else 0.0)
+        pen = (
+            1.25
+            if getattr(weapon, "id", "") == "sniper"
+            else (0.8 if getattr(weapon, "id", "") in ("assault", "carbine") else 0.0)
+        )
         result = weapons.resolve_shot(
             self.world,
             weapon,
@@ -1864,7 +1906,9 @@ class MatchRoom:
         kick = weapons.kick_vector(weapon, command.yaw, command.pitch, crouching)
         if self.settings.recoil_push > 0.0:
             dx, dy, dz = weapons.aim_vector(command.yaw, command.pitch)
-            push = self.settings.recoil_push * (weapons.CROUCH_KICK_SCALE if crouching else 1.0)
+            push = self.settings.recoil_push * (
+                weapons.CROUCH_KICK_SCALE if crouching else 1.0
+            )
             kick = (kick[0] - dx * push, kick[1] - dy * push, kick[2] - dz * push)
         if kick != (0.0, 0.0, 0.0):
             physics.apply_impulse(player.state, *kick)
@@ -1893,11 +1937,15 @@ class MatchRoom:
                             wx = z.x - origin[0]
                             wy = z.y - origin[1]
                             wz = z.z - origin[2]
-                            t = max(0.0, min(1.0, (wx * vx + wy * vy + wz * vz) / seg_sq))
+                            t = max(
+                                0.0, min(1.0, (wx * vx + wy * vy + wz * vz) / seg_sq)
+                            )
                             cx = origin[0] + t * vx
                             cy = origin[1] + t * vy
                             cz = origin[2] + t * vz
-                            if (cx - z.x) ** 2 + (cy - z.y) ** 2 + (cz - z.z) ** 2 <= z.radius ** 2:
+                            if (cx - z.x) ** 2 + (cy - z.y) ** 2 + (
+                                cz - z.z
+                            ) ** 2 <= z.radius**2:
                                 z.channels.append((cx, cy, cz, 1.2, now + 0.8))
                                 if len(z.channels) > 8:
                                     z.channels.pop(0)
@@ -1911,7 +1959,8 @@ class MatchRoom:
             shot_origin = result.origin
             victim_pos = (victim.state.x, victim.state.y, victim.state.z + 0.8)
             through_smoke = any(
-                z.kind == "smoke" and _segment_intersects_zone(shot_origin, victim_pos, z)
+                z.kind == "smoke"
+                and _segment_intersects_zone(shot_origin, victim_pos, z)
                 for z in self.zones
             )
             airborne = not player.state.on_ground
@@ -2019,7 +2068,9 @@ class MatchRoom:
         attacker.damage_dealt += landed
         victim.health -= amount
         if landed > 0 and attacker.id != victim.id:
-            victim.recent_damagers.append((attacker.id, attacker.name, attacker.team, landed, now))
+            victim.recent_damagers.append(
+                (attacker.id, attacker.name, attacker.team, landed, now)
+            )
         killed = victim.health <= 0
         if len(attacker.pending_hits) < MAX_PENDING_HITS:
             hit = {
@@ -2083,7 +2134,9 @@ class MatchRoom:
                 prev_dmg = prev[2] if prev else 0.0
                 damage_by_player[pid] = (pname, pteam, prev_dmg + dmg)
 
-        eligible = [(pid, info) for pid, info in damage_by_player.items() if info[2] >= 40.0]
+        eligible = [
+            (pid, info) for pid, info in damage_by_player.items() if info[2] >= 40.0
+        ]
         if eligible:
             eligible.sort(key=lambda x: x[1][2], reverse=True)
             best_pid, (best_name, best_team, _dmg) = eligible[0]
@@ -2208,7 +2261,11 @@ class MatchRoom:
         you["pings"] = [
             p.snapshot()
             for p in self.pings
-            if (p.team == player.team if has_teams and player.team >= 0 else p.owner == player.id)
+            if (
+                p.team == player.team
+                if has_teams and player.team >= 0
+                else p.owner == player.id
+            )
         ]
         return you
 
@@ -2699,7 +2756,11 @@ def parse_command(raw: Any) -> Command | None:
             px = _num(ping_raw.get("x"))
             py = _num(ping_raw.get("y"))
             pz = _num(ping_raw.get("z"))
-            if -500.0 <= px <= 500.0 and -500.0 <= py <= 500.0 and -200.0 <= pz <= 200.0:
+            if (
+                -500.0 <= px <= 500.0
+                and -500.0 <= py <= 500.0
+                and -200.0 <= pz <= 200.0
+            ):
                 ping_val = (px, py, pz, kind)
     return Command(
         seq=seq,
@@ -2739,6 +2800,10 @@ def parse_command(raw: Any) -> Command | None:
         # does not know which mode the command lands in — the same division
         # `scoped` documents.
         buy=int(_clamp(_num(raw.get("buy"), -1.0), -1.0, 63.0)),
+        # The same floor and the same unapplied upper bound as `buy`, for the
+        # same reason: the catalogue is the mode's.
+        sell=int(_clamp(_num(raw.get("sell"), -1.0), -1.0, 63.0)),
+        drop=bool(raw.get("drop")),
         # `-1` for absent or out of range, which `grenades.spec_at` reads as "no
         # grenade" — the same shape as `weapon`, and for the same reason: a
         # nonsensical slot must do nothing rather than pick one.
@@ -2755,7 +2820,11 @@ def parse_command(raw: Any) -> Command | None:
         throw_power=(
             float(
                 _clamp(
-                    _num(raw.get("throwPower") if raw.get("throwPower") is not None else raw.get("throw_power")),
+                    _num(
+                        raw.get("throwPower")
+                        if raw.get("throwPower") is not None
+                        else raw.get("throw_power")
+                    ),
                     0.2,
                     1.5,
                 )

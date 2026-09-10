@@ -184,6 +184,10 @@ export function objectiveNote(fx: Fx, self: string): { text: string; mine: boole
       return { text: mine ? 'DEFUSAL KIT EQUIPPED' : 'DEFUSAL KIT RETRIEVED', mine };
     case 'kit_drop':
       return null;
+    case 'bomb_drop':
+      return { text: mine ? 'YOU DROPPED THE BOMB' : 'BOMB DROPPED', mine };
+    case 'bomb_pickup':
+      return { text: mine ? 'YOU HAVE THE BOMB' : 'BOMB PICKED UP', mine };
     case 'bomb_exploded':
       return { text: 'BOMB DETONATED', mine: false };
     case 'round_start':

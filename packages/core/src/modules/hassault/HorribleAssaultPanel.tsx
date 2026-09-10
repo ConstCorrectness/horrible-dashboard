@@ -41,6 +41,8 @@ import { BuyMenu } from './panels/BuyMenu';
 import { ModeHud, ModeProgress } from './panels/ModeHud';
 import { DefuseProgressRing } from './panels/DefuseProgressRing';
 import { KitPool } from './kits';
+import { DropPool } from './drops';
+import { tradeFor } from './trade';
 
 /**
  * Digit codes in catalogue order, so key `n` buys entry `n - 1`.
@@ -101,7 +103,15 @@ import {
   VOLUME_KEY,
 } from './menu-panels';
 import type { ItemsResponse } from './api';
-import type { NoiseEvent, PickedItem, PingIntent, PingKind, PlayerRow, SelfState, Vec3 } from './net';
+import type {
+  NoiseEvent,
+  PickedItem,
+  PingIntent,
+  PingKind,
+  PlayerRow,
+  SelfState,
+  Vec3,
+} from './net';
 import { CalloutWheel, getCalloutFromDelta } from './panels/CalloutWheel';
 import { TacticalPingsOverlay } from './panels/TacticalPingsOverlay';
 import { aimVector, raycastWorld } from './trace';
@@ -134,12 +144,7 @@ import { createPropEnvironment } from './models/weapons';
 import { World } from './world';
 import { createWorld3D, type World3D } from './world3d';
 import { ensureRapierInitialized, RapierPhysicsWorld } from './physics-rapier';
-import {
-  DemoRecorder,
-  DemoPlayer,
-  type DemoBookmark,
-  type DemoData,
-} from './demo';
+import { DemoRecorder, DemoPlayer, type DemoBookmark, type DemoData } from './demo';
 import { KillFeed } from './panels/KillFeed';
 import { KillCardDeck } from './panels/KillCardDeck';
 import {
@@ -405,6 +410,8 @@ export function HorribleAssaultPanel() {
    * something the render never reads.
    */
   const pendingBuyRef = useRef(-1);
+  /** A drop to put on the next command. Edge-triggered, drained like a buy. */
+  const pendingDropRef = useRef(false);
   /**
    * `showBuy`, readable from the key handler.
    *
@@ -1050,11 +1057,13 @@ export function HorribleAssaultPanel() {
   }, [net.objective]);
 
   // Tactical reload multi-phase audio tracking
-  const reloadStageRef = useRef<{ wasReloading: boolean; magInFired: boolean; boltFired: boolean }>({
-    wasReloading: false,
-    magInFired: false,
-    boltFired: false,
-  });
+  const reloadStageRef = useRef<{ wasReloading: boolean; magInFired: boolean; boltFired: boolean }>(
+    {
+      wasReloading: false,
+      magInFired: false,
+      boltFired: false,
+    },
+  );
 
   // Pickup feedback: the line that says what you just ran over, and its sound.
   //
@@ -1300,6 +1309,7 @@ export function HorribleAssaultPanel() {
       // move; which of them are currently gone rides in every snapshot.
       const itemPool = new ItemPool(THREE, scene);
       const kitPool = new KitPool(THREE, scene);
+      const dropPool = new DropPool(THREE, scene);
       let lastBombBeepTime = 0;
       let lastHeartbeatTime = 0;
       let placedForRoom = '';
@@ -1537,6 +1547,8 @@ export function HorribleAssaultPanel() {
             // the server refused puts the number back on the HUD rather than
             // leaving it one short until the next respawn.
             const thrown = nadesRef.current?.frame(now, session.state.you ?? null);
+            const trade = tradeFor(pendingBuyRef.current, session.state.you?.mode);
+            pendingBuyRef.current = -1;
             // Held rather than edge-triggered, unlike `thrown` above: the
             // server accrues progress from each command's own `dt` and resets
             // the moment one arrives without it, so a single edge would be one
@@ -1551,16 +1563,20 @@ export function HorribleAssaultPanel() {
                 kick,
                 thrown,
                 alive && keys.has('use'),
-                // Taken, not read: the next command must not repeat it.
-                (() => {
-                  const queued = pendingBuyRef.current;
-                  pendingBuyRef.current = -1;
-                  return queued;
-                })(),
+                // Taken, not read: the next command must not repeat it. Whether
+                // the row buys or sells is decided *here*, off the latest
+                // envelope's `sellable`, rather than when the key went down.
+                trade.buy,
                 (() => {
                   const ping = pendingPingRef.current;
                   pendingPingRef.current = undefined;
                   return ping;
+                })(),
+                trade.sell,
+                (() => {
+                  const drop = pendingDropRef.current;
+                  pendingDropRef.current = false;
+                  return alive && drop;
                 })(),
               ),
             );
@@ -1716,12 +1732,18 @@ export function HorribleAssaultPanel() {
               wasReloadingRef.current = true;
               audio.own('reload_magout', 0.65);
               const rTime = (shotsRef.current?.weapon?.reloadTime ?? 1.8) * 1000;
-              setTimeout(() => {
-                if (wasReloadingRef.current) audio.own('reload_magin', 0.7);
-              }, Math.round(rTime * 0.45));
-              setTimeout(() => {
-                if (wasReloadingRef.current) audio.own('reload_bolt', 0.75);
-              }, Math.round(rTime * 0.8));
+              setTimeout(
+                () => {
+                  if (wasReloadingRef.current) audio.own('reload_magin', 0.7);
+                },
+                Math.round(rTime * 0.45),
+              );
+              setTimeout(
+                () => {
+                  if (wasReloadingRef.current) audio.own('reload_bolt', 0.75);
+                },
+                Math.round(rTime * 0.8),
+              );
             } else if (!isReloading && wasReloadingRef.current) {
               wasReloadingRef.current = false;
             }
@@ -1773,6 +1795,10 @@ export function HorribleAssaultPanel() {
           }
           itemPool.sync(online ? latest?.itemsOut : trainingRange?.takenIds());
           kitPool.sync(online ? session.state.modeState?.kits : undefined);
+          dropPool.sync(
+            online ? session.state.modeState?.drops : undefined,
+            online ? session.state.modeState?.bomb : undefined,
+          );
           if (session.pendingShots.length > 0) {
             // Teams come from the roster, not from `remote` — that one excludes
             // us, and our own tracer needs a colour too.
@@ -1899,6 +1925,7 @@ export function HorribleAssaultPanel() {
         nadePool.update(dt);
         itemPool.update(dt);
         kitPool.update(dt);
+        dropPool.update(dt);
 
         const elapsed = (now - started) / 1000;
         backdrop.update(elapsed);
@@ -1927,7 +1954,11 @@ export function HorribleAssaultPanel() {
           // visual only: the simulation stays exactly where the server says.
           const c = online && session ? session.predictor.correction : NO_CORRECTION;
           camera.position.set(player.x + c.x, eyeHeight(player) + c.z, player.y + c.y);
-          const camSmoke = nadePool.smokeDensityAt(camera.position.x, camera.position.y, camera.position.z);
+          const camSmoke = nadePool.smokeDensityAt(
+            camera.position.x,
+            camera.position.y,
+            camera.position.z,
+          );
           if (Math.abs(camSmoke - wasSmoke) > 0.02) {
             wasSmoke = camSmoke;
             setSmokeBlindness(camSmoke);
@@ -2014,7 +2045,7 @@ export function HorribleAssaultPanel() {
             : localReloadingRef.current;
           const isReloadingEmpty = online
             ? (session?.state.you?.reloadingEmpty ?? false)
-            : (shots?.ammo === 0);
+            : shots?.ammo === 0;
           const reloadDurationMultiplier = isReloadingEmpty ? 1.25 : 1.0;
           const effectiveReloadTime = reloadTime * reloadDurationMultiplier;
           const reloadProgress =
@@ -2176,6 +2207,7 @@ export function HorribleAssaultPanel() {
         nadePool.dispose();
         itemPool.dispose();
         kitPool.dispose();
+        dropPool.dispose();
         water?.dispose();
         ladders?.dispose();
         viewmodel.dispose();
@@ -2247,8 +2279,8 @@ export function HorribleAssaultPanel() {
         const spawn = pendingSpawn
           ? pendingSpawn
           : is3D && world3d?.spawns.all[0]
-          ? world3d.spawns.all[0]
-          : world.spawns()[0];
+            ? world3d.spawns.all[0]
+            : world.spawns()[0];
 
         if (spawn) {
           playerRef.current = is3D
@@ -2551,6 +2583,8 @@ export function HorribleAssaultPanel() {
       if (e.repeat) return;
       if (action === 'noclip') noclipRef.current = !noclipRef.current;
       if (action === 'reload') shotsRef.current?.requestReload();
+      // An edge, drained by the frame loop onto exactly one command.
+      if (action === 'drop') pendingDropRef.current = true;
       // Purely local — see `WeaponViewModel.inspect`. It is never a command, so
       // it needs no server, works in Train, and costs the wire nothing.
       if (action === 'inspect') sceneRef.current?.weapon.inspect();
@@ -2631,7 +2665,8 @@ export function HorribleAssaultPanel() {
         const world = worldRef.current;
         const player = playerRef.current;
         const session = sessionRef.current;
-        const alive = !session || session.state.status !== 'joined' || (session.state.you?.alive ?? true);
+        const alive =
+          !session || session.state.status !== 'joined' || (session.state.you?.alive ?? true);
         if (world && player && acceptsGameInput(phaseRef.current) && alive) {
           const eyeZ = eyeHeight(player);
           const eye: [number, number, number] = [player.x, player.y, eyeZ];
@@ -2700,7 +2735,12 @@ export function HorribleAssaultPanel() {
     const spawn = spawns[Math.floor(Math.random() * spawns.length)];
     if (spawn) {
       if (world3dRef.current && rapierRef.current) {
-        playerRef.current = createPlayer(spawn.x, spawn.y, spawn.z, ((spawn.yaw ?? 0) * Math.PI) / 180);
+        playerRef.current = createPlayer(
+          spawn.x,
+          spawn.y,
+          spawn.z,
+          ((spawn.yaw ?? 0) * Math.PI) / 180,
+        );
         rapierRef.current.setPosition(spawn.x, spawn.y, spawn.z);
       } else {
         playerRef.current = spawnAt(world, spawn);
@@ -3067,7 +3107,7 @@ export function HorribleAssaultPanel() {
             y: player.y,
             z: player.z,
             yaw: player.yaw,
-            health: godModeRef.current ? 100 : net.you?.hp ?? 100,
+            health: godModeRef.current ? 100 : (net.you?.hp ?? 100),
             armor: net.you?.armour ?? 100,
             weapon: (weapons[net.you?.weapon ?? 0]?.name || 'subgun').toLowerCase(),
             ammo: net.you?.ammo ?? 30,
@@ -3344,16 +3384,15 @@ export function HorribleAssaultPanel() {
             objective={net.objective}
           />
         )}
-        {online && (
-          net.you?.mode?.progressKind === 'defuse' ? (
+        {online &&
+          (net.you?.mode?.progressKind === 'defuse' ? (
             <DefuseProgressRing
               mine={net.you?.mode}
               onWireCut={() => audioRef.current?.defuseWireCut()}
             />
           ) : (
             <ModeProgress mine={net.you?.mode} />
-          )
-        )}
+          ))}
         {online && (
           <BuyMenu
             mode={net.mode}
@@ -3693,8 +3732,15 @@ export function HorribleAssaultPanel() {
                 <span style={{ opacity: 0.5 }}> / {MOVE_SPEED} c/s</span>
                 {hud.crouch > 0.5 && <span style={{ color: '#8ab4f8' }}> · crouched</span>}
                 {hud.onGround ? '' : ' · airborne'}
-                {hud.isSliding && <span style={{ color: 'rgba(242, 204, 96, 1)', fontWeight: 600 }}> · SLIDING</span>}
-                {hud.isSprinting && !hud.isSliding && <span style={{ color: 'rgba(88, 166, 255, 1)', fontWeight: 600 }}> · SPRINT</span>}
+                {hud.isSliding && (
+                  <span style={{ color: 'rgba(242, 204, 96, 1)', fontWeight: 600 }}>
+                    {' '}
+                    · SLIDING
+                  </span>
+                )}
+                {hud.isSprinting && !hud.isSliding && (
+                  <span style={{ color: 'rgba(88, 166, 255, 1)', fontWeight: 600 }}> · SPRINT</span>
+                )}
               </div>
               {/* Stamina bar for sprint & power-slides */}
               <div
@@ -3711,7 +3757,11 @@ export function HorribleAssaultPanel() {
                   style={{
                     width: `${Math.min(100, Math.max(0, hud.stamina ?? 100))}%`,
                     height: '100%',
-                    backgroundColor: hud.isSliding ? 'rgba(242, 204, 96, 1)' : hud.isSprinting ? 'rgba(88, 166, 255, 1)' : 'rgba(126, 231, 135, 1)',
+                    backgroundColor: hud.isSliding
+                      ? 'rgba(242, 204, 96, 1)'
+                      : hud.isSprinting
+                        ? 'rgba(88, 166, 255, 1)'
+                        : 'rgba(126, 231, 135, 1)',
                     transition: 'width 0.05s linear',
                   }}
                 />
@@ -3766,7 +3816,10 @@ export function HorribleAssaultPanel() {
                   inset: 0,
                   pointerEvents: 'none',
                   background: `radial-gradient(ellipse at center, rgba(185,194,204,${(smokeBlindness * 0.96).toFixed(3)}) 0%, rgba(140,150,165,${(smokeBlindness * 0.99).toFixed(3)}) 100%)`,
-                  backdropFilter: smokeBlindness > 0.25 ? `blur(${Math.min(10, smokeBlindness * 10).toFixed(1)}px)` : undefined,
+                  backdropFilter:
+                    smokeBlindness > 0.25
+                      ? `blur(${Math.min(10, smokeBlindness * 10).toFixed(1)}px)`
+                      : undefined,
                 }}
               />
             )}
@@ -3798,10 +3851,7 @@ export function HorribleAssaultPanel() {
             )}
 
             {/* Esports Callout Radial Wheel */}
-            <CalloutWheel
-              active={showCalloutWheel}
-              selected={calloutSelected}
-            />
+            <CalloutWheel active={showCalloutWheel} selected={calloutSelected} />
 
             <NadeTray
               specs={tacticals}
@@ -3907,7 +3957,11 @@ export function HorribleAssaultPanel() {
                   demoPlayerRef.current.seek(t);
                   setReplayTime(t);
                 }}
-                style={{ flex: 1, cursor: 'pointer', accentColor: 'var(--accent, rgba(88, 166, 255, 1))' }}
+                style={{
+                  flex: 1,
+                  cursor: 'pointer',
+                  accentColor: 'var(--accent, rgba(88, 166, 255, 1))',
+                }}
               />
               <span
                 style={{
@@ -3993,7 +4047,8 @@ export function HorribleAssaultPanel() {
                       padding: '1px 5px',
                       borderRadius: '3px',
                       border: '1px solid rgba(48, 54, 61, 1)',
-                      background: replaySpeed === s ? 'rgba(31, 111, 235, 1)' : 'rgba(33, 38, 45, 1)',
+                      background:
+                        replaySpeed === s ? 'rgba(31, 111, 235, 1)' : 'rgba(33, 38, 45, 1)',
                       color: 'white',
                       cursor: 'pointer',
                     }}

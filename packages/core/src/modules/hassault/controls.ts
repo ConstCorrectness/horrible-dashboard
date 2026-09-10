@@ -47,7 +47,8 @@ export type GameAction =
   | 'throw'
   | 'lob'
   | 'use'
-  | 'buy';
+  | 'buy'
+  | 'drop';
 
 /** Two keys per action: the one you expect, and the one somebody else expects. */
 export type Bindings = Record<GameAction, string[]>;
@@ -136,6 +137,12 @@ export const ACTIONS: readonly ActionDoc[] = [
     note: 'Held, not tapped: plant, defuse, take a flag.',
   },
   {
+    action: 'drop',
+    label: 'Drop',
+    group: 'Utility',
+    note: 'The bomb if you carry it, otherwise the gun in your hands. A teammate takes it by walking over it.',
+  },
+  {
     action: 'throw',
     label: 'Throw',
     group: 'Utility',
@@ -191,6 +198,8 @@ export const DEFAULT_CONTROLS: Bindings = {
   use: ['KeyE'],
   // B, and held rather than toggled — the same shape as the scoreboard.
   buy: ['KeyB'],
+  // X rather than CS's G, which throws here — see the grenade note above.
+  drop: ['KeyX'],
 };
 
 /**

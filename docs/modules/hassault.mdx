@@ -1701,7 +1701,8 @@ Rules with a reason:
   plant early.
 - **Time out with no bomb down is a defender win.** The attackers had a job.
 - **The bomb moves to another attacker when its carrier dies**, rather than
-  dropping. A dropped bomb on maps this size is a hunt, not a round.
+  dropping. A dropped bomb on maps this size is a hunt, not a round. The only
+  way it reaches the floor is on purpose — the drop key, below.
 - **A mid-round joiner waits for the next one.** Dropping them in alive hands one
   side a body the other did not have to shoot, deciding the round on when
   somebody's browser finished loading.
@@ -1774,6 +1775,58 @@ Rules with reasons:
   is partial, so a teammate in a doorway is already a cost, and this stops
   shooting through them being free. A debt would follow somebody into a round
   they had nothing to do with.
+
+#### Dropping and selling back
+
+Two more `Command` fields, for `buy`'s reason: `drop` (a flag) and `sell` (a
+catalogue index, `-1` when absent). Both are handled in `Defuse.on_command`,
+so deathmatch — where everyone already holds everything — ignores them. In
+that handler **sell runs before buy**, so one frame can trade a rifle for a
+sniper on the strength of the refund.
+
+**Drop** (`X` in the browser) puts down **the bomb if you carry it, and
+otherwise the gun in your hands**. The bomb comes first because handing it to a
+teammate better placed to plant is what a carrier means by the key.
+
+- Only a bought gun can be dropped, never the knife or pistol (`FREE_SLOTS`),
+  and only by a living player.
+- A dropped gun keeps its magazine and reserve. A drop that refilled itself
+  would be a free reload for two players standing side by side.
+- It rides in the shared state as `drops: [{id, slot, x, y, z}]`, **with no
+  ammunition**. How full it is belongs to whoever picks it up.
+- It is taken by walking over it. One reach, `_standing_on`, covers kits, guns
+  and the bomb, so no two of them can be taken from different distances.
+- A gun goes to anyone who doesn't already own one of that kind. It moves into
+  their hands only if they were holding the knife or pistol: swapping someone off
+  a rifle because they brushed past a shotgun would be a pickup that costs a
+  fight.
+- A dropped bomb (`bomb.state == "dropped"`, with its position) is taken only by
+  an attacker. Attacker bots go and fetch it through `bot_goal`.
+- **Your own drop ignores you for `DROP_REPICK_DELAY` (1s).** It lands at your
+  feet, so without the delay the next tick hands it straight back and the key
+  appears to do nothing.
+
+**Sell** refunds the full price, **only in the freeze**. Pressing a row that
+`you.mode.sellable` lists sells it back. The menu shows that row as
+`SELL +$price` in a colour of its own, because a row that looks finished but
+refunds you on a keypress is a misclick waiting to happen.
+
+`sellable` is its own list and not derived from `bought`, because **owning is
+not having paid**. `MatchPlayer.purchased` records what you bought, and two rules
+keep it honest:
+
+- **A gun that leaves your hands leaves `purchased`.** Without that, one player
+  buys a rifle, drops it for a teammate, and both of them sell it back: one
+  purchase, two refunds. A picked-up gun is never added to `purchased`, so it is
+  owned but not refundable. `test_a_dropped_gun_cannot_be_sold_by_either_player`
+  pins both halves.
+- **What is sold must still be exactly what was bought**: a grenade not yet
+  thrown, armour that has absorbed nothing. Refunding spent utility would make
+  the freeze a window in which it is free.
+
+The client decides buy-or-sell in `trade.ts` from the *latest* envelope at send
+time, never from its own idea of what it paid for. The native client renders
+`dropped` as an ordinary bomb state but does not send either field yet.
 
 #### Two ordering bugs the economy exposed
 
