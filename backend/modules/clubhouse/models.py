@@ -106,6 +106,12 @@ class JoinChannelResult(BaseModel):
     # the room-level flags above do not: a room can have chat on and still
     # refuse this account.
     user_capabilities: dict[str, Any] | None = None
+    # The room's own menus, served by Clubhouse with their wire values and
+    # labels.  Carried so the pane renders what this room actually offers
+    # instead of a hardcoded list that drifts from it.
+    handraise_queue_setting: int | None = None
+    handraise_queue_options: list[dict[str, Any]] | None = None
+    emoji_reaction_options: list[str] | None = None
 
 
 class MuteRequest(BaseModel):
@@ -116,10 +122,22 @@ class HandRequest(BaseModel):
     raise_hands: bool
 
 
+class RoomAudience(str, Enum):
+    """Who can see a new room: Clubhouse's ``privacy_level`` choices.
+
+    Read off the 26.08.30 room-setup screen.  ``house`` is a fourth value but
+    needs a ``social_club_id``, which we have no picker for, and anything else
+    (``private``, ``social``) is refused with ``"x" is not a valid choice``.
+    """
+
+    public = "public"
+    friends = "friend"
+    friends_of_friends = "friend_of_friend"
+
+
 class CreateChannelRequest(BaseModel):
     topic: str = ""
-    is_private: bool = False
-    is_social_mode: bool = False
+    audience: RoomAudience = RoomAudience.public
 
 
 class InviteUserRequest(BaseModel):
@@ -159,6 +177,24 @@ class UpdateTopicRequest(BaseModel):
 
 class ChatSettingsRequest(BaseModel):
     enable_chat: bool
+
+
+class ChatPermission(str, Enum):
+    """Who may write in room chat, named for the same reason as
+    HandraisePermission: the wire value is a bare int (``routes._CHAT_PERMISSION``).
+    """
+
+    everyone = "everyone"
+    host_followers = "host_followers"
+    trusted_followers = "trusted_followers"
+
+
+class ChatPermissionRequest(BaseModel):
+    chat_permission: ChatPermission
+
+
+class ReactionRequest(BaseModel):
+    emoji: str
 
 
 class UninviteSpeakerRequest(BaseModel):

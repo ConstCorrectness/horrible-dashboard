@@ -102,6 +102,11 @@ export interface JoinChannelResult {
    * "may I write here" — a room can have chat on and still refuse this account.
    */
   user_capabilities: { can_post_to_chat?: boolean | null } | null;
+  /** The room's own menus, served with their wire values and labels — render
+   *  these rather than a hardcoded list that drifts from what the room offers. */
+  handraise_queue_setting: number | null;
+  handraise_queue_options: { value: number; label: string; sub_label?: string }[] | null;
+  emoji_reaction_options: string[] | null;
 }
 
 export function joinClubhouseChannel(channel: string): Promise<JoinChannelResult> {
@@ -112,8 +117,15 @@ export function leaveClubhouseChannel(channel: string): Promise<{ success: boole
   return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/leave`, {});
 }
 
-export function pingClubhouseChannel(channel: string): Promise<{ success: boolean }> {
-  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/ping`, {});
+/** `should_leave: true` is Clubhouse saying the account is no longer in the room:
+ *  it ended, or a moderator removed us. */
+export function pingClubhouseChannel(
+  channel: string,
+): Promise<{ success: boolean; should_leave?: boolean | null }> {
+  return apiPost<{ success: boolean; should_leave?: boolean | null }>(
+    `/clubhouse/channels/${channel}/ping`,
+    {},
+  );
 }
 
 export function muteClubhouseChannel(
@@ -197,6 +209,45 @@ export function updateClubhouseChatSettings(
   });
 }
 
+/** Who may write in room chat. Named for the same reason as HandraisePermission. */
+export type ChatPermission = 'everyone' | 'host_followers' | 'trusted_followers';
+
+export function setClubhouseChatPermission(
+  channel: string,
+  permission: ChatPermission,
+): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/chat_permission`, {
+    chat_permission: permission,
+  });
+}
+
+/** Float an emoji over the room; the room lists what it accepts in the join
+ *  result's `emoji_reaction_options`. */
+export function sendClubhouseReaction(
+  channel: string,
+  emoji: string,
+): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/reaction`, { emoji });
+}
+
+/** The room's listeners. Like every room read, only answers for a room you are in. */
+export function getClubhouseChannelAudience(channel: string): Promise<{ users: ChannelUser[] }> {
+  return apiGet<{ users: ChannelUser[] }>(`/clubhouse/channels/${channel}/audience`);
+}
+
+export function searchClubhouseChannelUsers(
+  channel: string,
+  query: string,
+): Promise<{ users: ChannelUser[] }> {
+  return apiGet<{ users: ChannelUser[] }>(
+    `/clubhouse/channels/${channel}/users/search?query=${encodeURIComponent(query)}`,
+  );
+}
+
+export function muteOtherClubhouseSpeakers(channel: string): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/mute_others`, {});
+}
+
 export function getClubhouseChannelDetails(channel: string): Promise<Channel> {
   return apiGet<Channel>(`/clubhouse/channels/${channel}`);
 }
@@ -216,8 +267,14 @@ export interface ApiChatComment {
   [key: string]: unknown;
 }
 
-export function getClubhouseChannelChat(channel: string): Promise<{ comments: ApiChatComment[] }> {
-  return apiGet<{ comments: ApiChatComment[] }>(`/clubhouse/channels/${channel}/chat`);
+/** The latest chat backlog, **oldest first** so it reads like live messages that
+ *  are appended below it. Needs membership: call it after the join. */
+export function getClubhouseChannelChat(
+  channel: string,
+): Promise<{ comments: ApiChatComment[]; next_cursor?: string | null }> {
+  return apiGet<{ comments: ApiChatComment[]; next_cursor?: string | null }>(
+    `/clubhouse/channels/${channel}/chat`,
+  );
 }
 
 export interface ClubhouseUserProfile {
@@ -244,6 +301,24 @@ export function getClubhouseUserProfile(userId: number): Promise<ClubhouseUserPr
   return apiGet<ClubhouseUserProfile>(`/clubhouse/users/${userId}`);
 }
 
+/** Look a profile up by @handle rather than numeric id. */
+export function getClubhouseUserProfileByUsername(username: string): Promise<ClubhouseUserProfile> {
+  return apiGet<ClubhouseUserProfile>(
+    `/clubhouse/users/by-username/${encodeURIComponent(username.replace(/^@/, ''))}`,
+  );
+}
+
+/** People you and `userId` both follow. */
+export function getClubhouseMutualFollows(
+  userId: number,
+  pageSize: number = 50,
+  page: number = 1,
+): Promise<{ users: FollowUser[] }> {
+  return apiGet<{ users: FollowUser[] }>(
+    `/clubhouse/users/${userId}/mutuals?page_size=${pageSize}&page=${page}`,
+  );
+}
+
 export interface SearchUserResult {
   user_id: number;
   name: string | null;
@@ -253,16 +328,15 @@ export interface SearchUserResult {
   is_following?: boolean;
 }
 
+/** Who can see a new room — Clubhouse's own `privacy_level` choices. There is no
+ *  invite-only room any more; the narrowest audience is your friends. */
+export type RoomAudience = 'public' | 'friend' | 'friend_of_friend';
+
 export function createClubhouseChannel(
   topic: string,
-  isPrivate: boolean = false,
-  isSocialMode: boolean = false,
+  audience: RoomAudience = 'public',
 ): Promise<JoinChannelResult> {
-  return apiPost<JoinChannelResult>('/clubhouse/channels', {
-    topic,
-    is_private: isPrivate,
-    is_social_mode: isSocialMode,
-  });
+  return apiPost<JoinChannelResult>('/clubhouse/channels', { topic, audience });
 }
 
 export function followClubhouseUser(userId: number): Promise<{ success: boolean }> {

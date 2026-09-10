@@ -1,5 +1,9 @@
+import asyncio
 import json
+import logging
+import subprocess
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -469,14 +473,16 @@ def test_create_channel(client, tmp_path, monkeypatch) -> None:
 
     async def fake_post(path, payload, token, user_id, device_id=None):
         assert (path, token, user_id, device_id) == ("/create_channel", "T", 4242, "D")
+        # The 26.08.30 shape, verified live: ``source`` is an int code, there is
+        # no ``topic`` field, and chat must be switched on at creation or the
+        # host cannot post in their own room.
         assert payload == {
-            "topic": "Testing Create Room",
             "is_private": False,
-            "is_social_mode": False,
             "privacy_level": "public",
-            "club_id": None,
-            "user_ids": [],
-            "event_id": None,
+            "source": 5,
+            "is_chat_enabled": True,
+            "chat_permission": 1,
+            "handraise_queue_setting": 2,
         }
         return {
             "success": True,
@@ -486,17 +492,44 @@ def test_create_channel(client, tmp_path, monkeypatch) -> None:
         }
 
     monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
-    res = client.post(
-        "/api/clubhouse/channels",
-        json={
-            "topic": "Testing Create Room",
-            "is_private": False,
-            "is_social_mode": False,
-        },
-    )
+    res = client.post("/api/clubhouse/channels", json={"audience": "public"})
     assert res.status_code == 200
     assert res.json()["channel"] == "new-channel"
     assert res.json()["user_id"] == 4242
+
+
+def test_create_channel_titles_the_room_afterwards(
+    client, tmp_path, monkeypatch
+) -> None:
+    _connect(tmp_path)
+    calls = []
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        calls.append((path, payload))
+        if path == "/create_channel":
+            return {"success": True, "channel": "new-channel", "token": "T"}
+        # A title refused in the room's first moment must not fail the create.
+        raise HTTPException(status_code=400, detail="Clubhouse: Invalid operation")
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    res = client.post(
+        "/api/clubhouse/channels", json={"topic": " Hello ", "audience": "friend"}
+    )
+    assert res.status_code == 200
+    assert calls[0][1]["is_private"] is True
+    assert calls[0][1]["privacy_level"] == "friend"
+    assert calls[1] == (
+        "/set_channel_title",
+        {"channel": "new-channel", "title": "Hello"},
+    )
+
+
+def test_create_channel_rejects_retired_privacy(client, tmp_path) -> None:
+    _connect(tmp_path)
+    # Upstream refuses these with '"x" is not a valid choice'; refuse them here.
+    for audience in ("private", "social", "house"):
+        res = client.post("/api/clubhouse/channels", json={"audience": audience})
+        assert res.status_code == 422
 
 
 def test_follow_user(client, tmp_path, monkeypatch) -> None:
@@ -504,7 +537,9 @@ def test_follow_user(client, tmp_path, monkeypatch) -> None:
 
     async def fake_post(path, payload, token, user_id, device_id=None):
         assert (path, token, user_id, device_id) == ("/follow", "T", 4242, "D")
-        assert payload == {"user_id": 99, "source": "feed"}
+        # An int code: the string "feed" was refused with "A valid integer is
+        # required.", so following someone silently never worked.
+        assert payload == {"user_id": 99, "source": 4}
         return {"success": True}
 
     monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
@@ -518,7 +553,7 @@ def test_unfollow_user(client, tmp_path, monkeypatch) -> None:
 
     async def fake_post(path, payload, token, user_id, device_id=None):
         assert (path, token, user_id, device_id) == ("/unfollow", "T", 4242, "D")
-        assert payload == {"user_id": 99}
+        assert payload == {"user_id": 99, "source": 4}
         return {"success": True}
 
     monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
@@ -633,6 +668,144 @@ def test_end_channel(client, tmp_path, monkeypatch) -> None:
     res = client.post("/api/clubhouse/channels/test-room/end")
     assert res.status_code == 200
     assert res.json() == {"success": True}
+
+
+def test_chat_backlog_reads_oldest_first(client, tmp_path, monkeypatch) -> None:
+    _connect(tmp_path)
+
+    async def fake_get(path, token, user_id, device_id=None, params=None):
+        assert path == "/get_channel_messages"
+        assert params == {"channel": "room"}
+        # Upstream's default page: the latest messages, newest first.
+        return {
+            "messages": [{"message": "newest"}, {"message": "older"}],
+            "next_cursor": "c",
+        }
+
+    monkeypatch.setattr(routes, "_ch_authed_get", fake_get)
+    body = client.get("/api/clubhouse/channels/room/chat").json()
+    assert [m["message"] for m in body["comments"]] == ["older", "newest"]
+    assert body["next_cursor"] == "c"
+
+
+def test_room_read_outside_the_room_is_a_409() -> None:
+    # What ``get_channel`` answers for a room we are not in; relayed as a 400 it
+    # read like a malformed payload for months.
+    res = httpx.Response(
+        400,
+        json={
+            "should_leave": True,
+            "error_message": "Invalid request.",
+            "success": False,
+        },
+    )
+    with pytest.raises(HTTPException) as err:
+        routes._raise_for_upstream(res, "/get_channel")
+    assert err.value.status_code == 409
+    assert "not in this room" in err.value.detail
+
+
+def test_upstream_error_keeps_status_and_message() -> None:
+    res = httpx.Response(
+        400, json={"success": False, "error_message": "cannot send message"}
+    )
+    with pytest.raises(HTTPException) as err:
+        routes._raise_for_upstream(res, "/send_channel_message")
+    assert (err.value.status_code, err.value.detail) == (
+        400,
+        "Clubhouse: cannot send message",
+    )
+
+
+def test_handraise_queue_for_a_listener_is_403(client, tmp_path, monkeypatch) -> None:
+    _connect(tmp_path)
+
+    async def fake_get(path, token, user_id, device_id=None, params=None):
+        raise HTTPException(status_code=400, detail="Clubhouse: Invalid request.")
+
+    monkeypatch.setattr(routes, "_ch_authed_get", fake_get)
+    res = client.get("/api/clubhouse/channels/room/handraise_queue")
+    assert res.status_code == 403
+    assert "moderator" in res.json()["detail"]
+
+
+def test_chat_permission_maps_to_wire_ints(client, tmp_path, monkeypatch) -> None:
+    _connect(tmp_path)
+    sent = []
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        sent.append((path, payload))
+        return {"success": True}
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    for name in ("everyone", "host_followers", "trusted_followers"):
+        res = client.post(
+            "/api/clubhouse/channels/room/chat_permission",
+            json={"chat_permission": name},
+        )
+        assert res.status_code == 200
+    # The values a room serves in its own ``chat_permission_options``.
+    assert [p["chat_permission"] for _, p in sent] == [1, 2, 3]
+    assert {path for path, _ in sent} == {"/set_chat_permission"}
+
+
+def test_reaction_and_audience(client, tmp_path, monkeypatch) -> None:
+    _connect(tmp_path)
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        if path == "/emoji_reaction":
+            assert payload == {"channel": "room", "emoji": "🔥"}
+            return {"success": True, "display_time_s": 4}
+        assert (path, payload) == ("/get_channel_audience", {"channel": "room"})
+        return {"users": [{"user_id": 7, "name": "Ann", "skintone": 3}]}
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    res = client.post("/api/clubhouse/channels/room/reaction", json={"emoji": "🔥"})
+    assert res.json()["success"] is True
+    users = client.get("/api/clubhouse/channels/room/audience").json()["users"]
+    assert users == [
+        {
+            "user_id": 7,
+            "name": "Ann",
+            "username": None,
+            "photo_url": None,
+            "is_speaker": None,
+            "is_moderator": False,
+        }
+    ]
+
+
+def test_profile_by_username_strips_at(client, tmp_path, monkeypatch) -> None:
+    _connect(tmp_path)
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        assert (path, payload) == ("/get_profile", {"username": "horrible"})
+        return {"user_profile": FAKE_PROFILE}
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    res = client.get("/api/clubhouse/users/by-username/@horrible")
+    assert res.json()["user_id"] == 4242
+
+
+def test_helper_log_never_carries_the_token(tmp_path, monkeypatch, caplog) -> None:
+    stdout = json.dumps(
+        {
+            "success": True,
+            "auth_token": "SECRET-TOKEN",
+            "refresh_token": "SECRET-REFRESH",
+            "user_profile": FAKE_PROFILE,
+        }
+    ).encode()
+    monkeypatch.setattr(routes, "_get_helper_path", lambda: tmp_path / "helper")
+    monkeypatch.setattr(
+        routes.subprocess,
+        "run",
+        lambda cmd, **_: subprocess.CompletedProcess(cmd, 0, stdout, b""),
+    )
+    with caplog.at_level(logging.INFO, logger=routes.logger.name):
+        data = asyncio.run(routes._run_helper("complete", "+15551234567", "1234"))
+    assert data["auth_token"] == "SECRET-TOKEN"
+    assert "SECRET" not in caplog.text
 
 
 def test_update_bio(client, tmp_path, monkeypatch) -> None:

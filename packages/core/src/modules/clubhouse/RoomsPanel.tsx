@@ -9,6 +9,7 @@ import {
   getClubhouseChannelDetails,
   getClubhouseUserProfile,
   createClubhouseChannel,
+  type RoomAudience,
   followClubhouseUser,
   unfollowClubhouseUser,
   inviteToClubhouseChannel,
@@ -202,7 +203,7 @@ export function RoomsPanel() {
   // New states for extended Clubhouse functionality
   const [showStartRoomModal, setShowStartRoomModal] = useState(false);
   const [newRoomTopic, setNewRoomTopic] = useState('');
-  const [newRoomPrivacy, setNewRoomPrivacy] = useState<'public' | 'social' | 'private'>('public');
+  const [newRoomPrivacy, setNewRoomPrivacy] = useState<RoomAudience>('public');
   const [creatingRoom, setCreatingRoom] = useState(false);
 
   const [followingLoading, setFollowingLoading] = useState(false);
@@ -283,9 +284,7 @@ export function RoomsPanel() {
     e.preventDefault();
     setCreatingRoom(true);
     try {
-      const isPrivate = newRoomPrivacy === 'private';
-      const isSocialMode = newRoomPrivacy === 'social';
-      const res = await createClubhouseChannel(newRoomTopic.trim(), isPrivate, isSocialMode);
+      const res = await createClubhouseChannel(newRoomTopic.trim(), newRoomPrivacy);
       setShowStartRoomModal(false);
       setNewRoomTopic('');
       if (res.channel) {
@@ -5284,35 +5283,35 @@ export function RoomsPanel() {
                     </div>
                   </label>
                   <label
-                    className={`ch-radio-label ${newRoomPrivacy === 'social' ? 'active' : ''}`}
+                    className={`ch-radio-label ${newRoomPrivacy === 'friend_of_friend' ? 'active' : ''}`}
                   >
                     <input
                       className="ch-radio-input"
                       type="radio"
                       name="room-privacy"
-                      value="social"
-                      checked={newRoomPrivacy === 'social'}
-                      onChange={() => setNewRoomPrivacy('social')}
+                      value="friend_of_friend"
+                      checked={newRoomPrivacy === 'friend_of_friend'}
+                      onChange={() => setNewRoomPrivacy('friend_of_friend')}
                     />
                     <div>
-                      <span>Social</span>
-                      <span className="ch-radio-desc">Only people you follow can join</span>
+                      <span>Friends of friends</span>
+                      <span className="ch-radio-desc">Your friends and their friends can join</span>
                     </div>
                   </label>
                   <label
-                    className={`ch-radio-label ${newRoomPrivacy === 'private' ? 'active' : ''}`}
+                    className={`ch-radio-label ${newRoomPrivacy === 'friend' ? 'active' : ''}`}
                   >
                     <input
                       className="ch-radio-input"
                       type="radio"
                       name="room-privacy"
-                      value="private"
-                      checked={newRoomPrivacy === 'private'}
-                      onChange={() => setNewRoomPrivacy('private')}
+                      value="friend"
+                      checked={newRoomPrivacy === 'friend'}
+                      onChange={() => setNewRoomPrivacy('friend')}
                     />
                     <div>
-                      <span>Closed (Private)</span>
-                      <span className="ch-radio-desc">Only people you invite can join</span>
+                      <span>Friends</span>
+                      <span className="ch-radio-desc">Only your friends can join</span>
                     </div>
                   </label>
                 </div>

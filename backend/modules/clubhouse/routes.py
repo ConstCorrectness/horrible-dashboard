@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import subprocess
 import uuid
 from pathlib import Path
@@ -23,7 +24,11 @@ from backend.modules.clubhouse.models import (
     BlockChannelUserRequest,
     Channel,
     ChannelList,
+    ChatPermission,
+    ChatPermissionRequest,
     ClubhouseStatus,
+    ReactionRequest,
+    RoomAudience,
     CompleteAuthRequest,
     CreateChannelRequest,
     FollowingList,
@@ -62,6 +67,23 @@ _HANDRAISE_QUEUE_SETTING = {
     HandraisePermission.everyone: 2,
     HandraisePermission.followed_by_speakers: 3,
 }
+
+# ``set_chat_permission`` takes a bare int too.  These are the values a room
+# serves in its own ``chat_permission_options`` (verified live 2026-09-10).
+_CHAT_PERMISSION = {
+    ChatPermission.everyone: 1,
+    ChatPermission.host_followers: 2,
+    ChatPermission.trusted_followers: 3,
+}
+
+# ``source`` is the client's SourceLocation enum, and it goes on the wire as the
+# enum's int *code* -- not its name, and not its ordinal (SEARCH is ordinal 8
+# but code 9).  Sending a string is refused: ``/follow`` answered "A valid
+# integer is required." for as long as we sent ``"feed"``.
+_SOURCE_PROFILE = 4
+_SOURCE_CHANNEL = 5
+
+_SECRET_FIELDS = re.compile(r'"(auth_token|refresh_token|access_token)"\s*:\s*"[^"]*"')
 
 
 def _data_dir() -> Path:
@@ -148,11 +170,13 @@ async def _run_helper(
     stdout = result.stdout
     stderr = result.stderr
 
+    # Redacted: a successful ``complete`` prints the session's auth token, and
+    # this line used to write it verbatim into ``logs/backend.log``.
     logger.info(
         "ch-auth-helper [%s] exit=%d stdout=%s stderr=%s",
         action,
         result.returncode,
-        stdout.decode().strip(),
+        _SECRET_FIELDS.sub(r'"\1":"<redacted>"', stdout.decode().strip()),
         stderr.decode().strip(),
     )
 
@@ -168,7 +192,7 @@ async def _run_helper(
 
     try:
         data = json.loads(stdout.decode())
-        logger.info("ch-auth-helper [%s] parsed response: %s", action, data)
+        logger.info("ch-auth-helper [%s] response keys: %s", action, sorted(data))
         return data
     except json.JSONDecodeError as err:
         raise HTTPException(
@@ -205,6 +229,35 @@ def _auth_headers(
     }
 
 
+def _raise_for_upstream(res: httpx.Response, path: str) -> None:
+    """Relay an upstream error as an HTTPException carrying Clubhouse's message.
+
+    ``should_leave: true`` on an error is Clubhouse saying the account is not in
+    that room -- ``get_channel`` answers it for a room we never joined, were
+    moved out of, or that has ended.  Room reads all require membership, so
+    that becomes a 409 saying so, rather than a bare ``Invalid request.`` that
+    reads like a malformed payload and sends whoever debugs it the wrong way.
+    """
+    if res.status_code < 400:
+        return
+    message = res.text[:300]
+    should_leave = False
+    try:
+        body = res.json()
+        message = body.get("error_message") or message
+        should_leave = body.get("should_leave") is True
+    except (ValueError, AttributeError):
+        pass
+    status_code = res.status_code if 400 <= res.status_code < 500 else 502
+    logger.warning("Clubhouse API error for %s: %s %s", path, status_code, message)
+    if should_leave:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Clubhouse: not in this room ({message}) -- join it first",
+        )
+    raise HTTPException(status_code=status_code, detail=f"Clubhouse: {message}")
+
+
 async def _ch_authed_post(
     path: str,
     payload: dict[str, Any],
@@ -224,15 +277,7 @@ async def _ch_authed_post(
         raise HTTPException(
             status_code=502, detail=f"Clubhouse unreachable: {exc}"
         ) from exc
-    if res.status_code >= 400:
-        message = res.text[:300]
-        try:
-            message = res.json().get("error_message") or message
-        except (ValueError, AttributeError):
-            pass
-        status_code = res.status_code if 400 <= res.status_code < 500 else 502
-        logger.warning("Clubhouse API error for %s: %s %s", path, status_code, message)
-        raise HTTPException(status_code=status_code, detail=f"Clubhouse: {message}")
+    _raise_for_upstream(res, path)
     return res.json()
 
 
@@ -255,14 +300,7 @@ async def _ch_authed_get(
         raise HTTPException(
             status_code=502, detail=f"Clubhouse unreachable: {exc}"
         ) from exc
-    if res.status_code >= 400:
-        message = res.text[:300]
-        try:
-            message = res.json().get("error_message") or message
-        except (ValueError, AttributeError):
-            pass
-        status_code = res.status_code if 400 <= res.status_code < 500 else 502
-        raise HTTPException(status_code=status_code, detail=f"Clubhouse: {message}")
+    _raise_for_upstream(res, path)
     return res.json()
 
 
@@ -285,14 +323,7 @@ async def _ch_post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(
             status_code=502, detail=f"Clubhouse unreachable: {exc}"
         ) from exc
-    if res.status_code >= 400:
-        message = res.text[:300]
-        try:
-            message = res.json().get("error_message") or message
-        except (ValueError, AttributeError):
-            pass
-        status = res.status_code if 400 <= res.status_code < 500 else 502
-        raise HTTPException(status_code=status, detail=f"Clubhouse: {message}")
+    _raise_for_upstream(res, path)
     return res.json()
 
 
@@ -510,12 +541,14 @@ async def following(page_size: int = 50, page: int = 1) -> dict[str, Any]:
 
 @router.get("/channels/{channel}/chat")
 async def get_channel_chat(channel: str) -> dict[str, Any]:
-    """Recent chat backlog for a channel, so a late joiner sees what was said.
+    """Recent chat backlog for a channel, oldest first, so a late joiner sees
+    what was said.
 
-    Chat is not available in every room (a moderator can disable it, and older
-    rooms predate the endpoint), and a room with no chat is not an error — an
-    empty backlog is the right answer, so an upstream failure degrades to one
-    rather than failing the join.
+    Like every room read it needs membership: asked before ``join_channel`` it
+    answers a bare 400, which is why the pane fetches it after the join.
+    Chat is not available in every room either (a moderator can disable it),
+    and a room with no chat is not an error -- an empty backlog is the right
+    answer, so an upstream failure degrades to one rather than failing the join.
     """
     auth = _require_auth()
     try:
@@ -526,7 +559,15 @@ async def get_channel_chat(channel: str) -> dict[str, Any]:
             auth.get("device_id"),
             {"channel": channel},
         )
-        return {"comments": res.get("messages", [])}
+        # Upstream's default page is the *latest* messages, newest first; the
+        # pane appends live messages below, so the backlog is reversed to read
+        # the same way.  ``is_chronological_order=true`` is not the same thing:
+        # it pages from the start of the room, handing a late joiner its
+        # oldest messages instead of its latest.
+        return {
+            "comments": list(reversed(res.get("messages") or [])),
+            "next_cursor": res.get("next_cursor"),
+        }
     except HTTPException as exc:
         logger.info(
             "Clubhouse chat backlog unavailable for %s: %s", channel, exc.detail
@@ -745,29 +786,44 @@ async def invite_speaker(channel: str, body: InviteUserRequest) -> dict[str, Any
 async def create_channel(body: CreateChannelRequest) -> dict[str, Any]:
     """Start a new room (Clubhouse POST /create_channel) and retrieve tokens."""
     auth = _require_auth()
-
-    # Map visibility settings to the new privacy_level field required by Clubhouse API:
-    # "public" = Open (Public), "house" = Social / Closed (Private)
-    privacy_level_val = "public"
-    if body.is_private or body.is_social_mode:
-        privacy_level_val = "house"
-
     res = await _ch_authed_post(
         "/create_channel",
         {
-            "topic": body.topic,
-            "is_private": body.is_private,
-            "is_social_mode": body.is_social_mode,
-            "privacy_level": privacy_level_val,
-            "club_id": None,
-            "user_ids": [],
-            "event_id": None,
+            # The 26.08.30 request shape.  ``house`` was sent for "private"
+            # before, which needs a social_club_id we never had; and there is
+            # no ``topic`` field at all -- a room is titled afterwards.
+            "is_private": body.audience is not RoomAudience.public,
+            "privacy_level": body.audience.value,
+            "source": _SOURCE_CHANNEL,
+            # Without this a new room starts with chat off *for its own host*
+            # (``can_post_to_chat: false``), so the host's first message is
+            # refused with "cannot send message" in a room they just made.
+            "is_chat_enabled": True,
+            "chat_permission": _CHAT_PERMISSION[ChatPermission.everyone],
+            "handraise_queue_setting": _HANDRAISE_QUEUE_SETTING[
+                HandraisePermission.everyone
+            ],
         },
         auth["auth_token"],
         auth["user_id"],
         auth.get("device_id"),
     )
     res["user_id"] = auth["user_id"]
+    topic = body.topic.strip()
+    if topic and res.get("channel"):
+        # Best-effort: a room that exists without its title beats a create
+        # reported as failed.  Clubhouse can refuse a title in the first moment
+        # of a room's life ("Invalid operation"), so this is logged, not raised.
+        try:
+            await _ch_authed_post(
+                "/set_channel_title",
+                {"channel": res["channel"], "title": topic},
+                auth["auth_token"],
+                auth["user_id"],
+                auth.get("device_id"),
+            )
+        except HTTPException as exc:
+            logger.info("room %s created untitled: %s", res["channel"], exc.detail)
     return res
 
 
@@ -777,7 +833,7 @@ async def follow_user(user_id: int) -> dict[str, Any]:
     auth = _require_auth()
     return await _ch_authed_post(
         "/follow",
-        {"user_id": user_id, "source": "feed"},
+        {"user_id": user_id, "source": _SOURCE_PROFILE},
         auth["auth_token"],
         auth["user_id"],
         auth.get("device_id"),
@@ -790,7 +846,7 @@ async def unfollow_user(user_id: int) -> dict[str, Any]:
     auth = _require_auth()
     return await _ch_authed_post(
         "/unfollow",
-        {"user_id": user_id},
+        {"user_id": user_id, "source": _SOURCE_PROFILE},
         auth["auth_token"],
         auth["user_id"],
         auth.get("device_id"),
@@ -868,17 +924,28 @@ async def change_handraise_settings(
 async def get_handraise_queue(channel: str) -> dict[str, Any]:
     """Who currently has a hand raised (Clubhouse GET /get_handraise_queue).
 
-    The read side of the hand-raise queue that replaced ``audience_reply``.
-    Note it is GET-only upstream, unlike its POST-shaped sibling.
+    GET-only upstream, unlike its POST-shaped sibling.  It is **moderator-only**:
+    a moderator gets the list, a listener in the same room gets a bare 400
+    ``Invalid request.`` (verified both ways live), so that is relayed as the
+    403 it means.  Raising a hand is still ``audience_reply``, which is alive.
     """
     auth = _require_auth()
-    res = await _ch_authed_get(
-        "/get_handraise_queue",
-        auth["auth_token"],
-        auth["user_id"],
-        auth.get("device_id"),
-        params={"channel": channel},
-    )
+    try:
+        res = await _ch_authed_get(
+            "/get_handraise_queue",
+            auth["auth_token"],
+            auth["user_id"],
+            auth.get("device_id"),
+            params={"channel": channel},
+        )
+    except HTTPException as exc:
+        if exc.status_code == 400:
+            raise HTTPException(
+                status_code=403,
+                detail="Clubhouse only shows the hand-raise queue to a "
+                "moderator of a room you are in",
+            ) from exc
+        raise
     return {"handraises": res.get("handraises", [])}
 
 
@@ -908,6 +975,92 @@ async def update_chat_settings(
     )
     return await _ch_authed_post(
         endpoint,
+        {"channel": channel},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.post("/channels/{channel}/chat_permission")
+async def set_chat_permission(
+    channel: str, body: ChatPermissionRequest
+) -> dict[str, Any]:
+    """Who may write in room chat (Clubhouse POST /set_chat_permission)."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/set_chat_permission",
+        {"channel": channel, "chat_permission": _CHAT_PERMISSION[body.chat_permission]},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.post("/channels/{channel}/reaction")
+async def send_reaction(channel: str, body: ReactionRequest) -> dict[str, Any]:
+    """Float an emoji over the room (Clubhouse POST /emoji_reaction).
+
+    The emoji a room accepts are served on join as ``emoji_reaction_options``.
+    """
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/emoji_reaction",
+        {"channel": channel, "emoji": body.emoji},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+def _channel_user(u: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "user_id": u.get("user_id"),
+        "name": u.get("name"),
+        "username": u.get("username"),
+        "photo_url": u.get("photo_url"),
+        "is_speaker": u.get("is_speaker"),
+        "is_moderator": u.get("is_moderator", False),
+    }
+
+
+@router.get("/channels/{channel}/audience")
+async def get_channel_audience(channel: str) -> dict[str, Any]:
+    """The room's listeners (Clubhouse POST /get_channel_audience).
+
+    Membership required, like every room read.
+    """
+    auth = _require_auth()
+    res = await _ch_authed_post(
+        "/get_channel_audience",
+        {"channel": channel},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+    return {"users": [_channel_user(u) for u in res.get("users") or []]}
+
+
+@router.get("/channels/{channel}/users/search")
+async def search_channel_users(channel: str, query: str) -> dict[str, Any]:
+    """Find someone in the room by name (Clubhouse GET /search_channel_users)."""
+    auth = _require_auth()
+    res = await _ch_authed_get(
+        "/search_channel_users",
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+        params={"channel": channel, "query": query},
+    )
+    return {"users": [_channel_user(u) for u in res.get("users") or []]}
+
+
+@router.post("/channels/{channel}/mute_others")
+async def mute_other_speakers(channel: str) -> dict[str, Any]:
+    """Mute every speaker but yourself (Clubhouse POST /mute_other_speakers)."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/mute_other_speakers",
         {"channel": channel},
         auth["auth_token"],
         auth["user_id"],
@@ -1002,6 +1155,39 @@ async def get_followers(
         auth.get("device_id"),
         params={"user_id": user_id, "page_size": page_size, "page": page},
     )
+
+
+@router.get("/users/{user_id}/mutuals")
+async def get_mutual_follows(
+    user_id: int, page_size: int = 50, page: int = 1
+) -> dict[str, Any]:
+    """People you and a user both follow (Clubhouse GET /get_mutual_cofollows)."""
+    auth = _require_auth()
+    return await _ch_authed_get(
+        "/get_mutual_cofollows",
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+        params={"user_id": user_id, "page": page, "page_size": page_size},
+    )
+
+
+@router.get("/users/by-username/{username}")
+async def get_user_profile_by_username(username: str) -> dict[str, Any]:
+    """Look a profile up by @handle (Clubhouse POST /get_profile).
+
+    ``get_profile`` takes ``username`` in place of ``user_id``, which is what a
+    person actually says aloud or types into chat.
+    """
+    auth = _require_auth()
+    res = await _ch_authed_post(
+        "/get_profile",
+        {"username": username.lstrip("@")},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+    return res.get("user_profile") or {}
 
 
 @router.get("/notifications")

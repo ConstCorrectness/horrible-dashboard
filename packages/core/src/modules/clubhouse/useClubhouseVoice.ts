@@ -30,7 +30,6 @@ import {
   sendChannelMessage,
   JoinChannelResult,
   ChannelUser,
-  ApiChatComment,
 } from './api';
 
 const CLUBCARD_AGORA_APP_ID = '938d7e95aeaa4f4ca1f416ab40a498d9';
@@ -233,29 +232,9 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     session.set('comments', []);
     session.set('activeReactions', []);
 
-    // Fetch historical chat
-    try {
-      const chatRes = await fetch(apiUrl(`/api/clubhouse/channels/${channelName}/chat`));
-      if (chatRes.ok) {
-        const chatData = await chatRes.json();
-        if (chatData.comments && Array.isArray(chatData.comments)) {
-          const newComments = chatData.comments
-            .map((c: ApiChatComment) => ({
-              id: c.time_created || Math.random().toString(),
-              userName: c.from_name || c.user_profile?.name || 'Unknown',
-              userId: c.user_profile?.user_id ?? null,
-              username: c.user_profile?.username ?? null,
-              userPhoto: c.from_photo_url || c.user_profile?.photo_url || null,
-              text: c.message || c.text || '',
-              timestamp: c.time_created ? Date.parse(c.time_created) : Date.now(),
-            }))
-            .filter((c: ChatComment) => c.text.length > 0);
-          session.set('comments', newComments.reverse()); // usually oldest first
-        }
-      }
-    } catch (e) {
-      console.error('Failed to fetch historical chat:', e);
-    }
+    // No chat backlog here: `get_channel_messages` only answers for a room the
+    // account is in, so a fetch before `joinClubhouseChannel` was a guaranteed
+    // 400 on every join. The backlog is loaded after the join, below.
 
     try {
       // Get own profile status first
@@ -800,13 +779,26 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         pubnub.subscribe({ channels: channelsToSubscribe });
       }
 
-      // g. Heartbeat ping loop (every 30s)
-      void pingClubhouseChannel(channelName).catch((err) => {
-        console.error('Initial heartbeat ping failed:', err);
-      });
+      // g. Heartbeat ping loop (every 30s). The ping is also how Clubhouse says
+      // the account is out of the room -- it ended, or a moderator removed us --
+      // by answering `should_leave: true`. Ignoring that left a pane still
+      // showing the room while every send and hand-raise was refused as
+      // addressed to a room we are not in. A late answer for a room we have
+      // since switched away from must not tear down the new one.
+      const onPing = (res: { should_leave?: boolean | null }) => {
+        if (!res.should_leave || session.state.activeChannel !== channelName) return;
+        void leaveRoom().then(() =>
+          session.patch({ error: 'This room has ended, or a moderator removed you from it.' }),
+        );
+      };
+      void pingClubhouseChannel(channelName)
+        .then(onPing)
+        .catch((err) => {
+          console.error('Initial heartbeat ping failed:', err);
+        });
       session.pingInterval = setInterval(async () => {
         try {
-          await pingClubhouseChannel(channelName);
+          onPing(await pingClubhouseChannel(channelName));
         } catch (err) {
           console.error('Heartbeat ping failed:', err);
         }
