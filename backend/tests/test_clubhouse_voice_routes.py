@@ -11,8 +11,18 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app import app
+from backend.modules.agent import providers as P
 from backend.modules.clubhouse import voice as V
 from backend.modules.clubhouse import voice_runtime as R
+
+
+def _said(text: str) -> P.ChatResult:
+    return P.ChatResult(
+        assistant_message={"role": "assistant", "content": text},
+        tool_calls=[],
+        content=text,
+    )
+
 
 ROOM = {
     "topic": "Compilers",
@@ -38,9 +48,9 @@ def captured(monkeypatch) -> list[list[dict]]:
     """Stub the generation, keeping every message list it was called with."""
     seen: list[list[dict]] = []
 
-    async def fake_generate(messages, config):
+    async def fake_generate(messages, config, tools=None):
         seen.append(messages)
-        return "Sure, happy to help."
+        return _said("Sure, happy to help.")
 
     monkeypatch.setattr(R, "generate_reply", fake_generate)
     return seen
@@ -290,3 +300,157 @@ def test_turn_with_config_payload_syncs_session(client, captured):
     ).json()
     assert state["config"]["enabled"] is True
     assert state["config"]["persona"] == custom_persona
+
+
+def test_a_plain_reply_costs_exactly_one_generation(client, captured):
+    _enable(client)
+    _turn(client, "agent, hello")
+    assert len(captured) == 1
+
+
+def test_a_tool_call_runs_and_its_result_reaches_a_second_generation(
+    client, monkeypatch
+):
+    calls: list[tuple[list[dict], list | None]] = []
+
+    async def fake_generate(messages, config, tools=None):
+        calls.append((messages, tools))
+        if len(calls) == 1:
+            call = P.ToolCall(
+                id="1", name="play_music", arguments={"query": "Africa by Toto"}
+            )
+            return P.ChatResult({"role": "assistant", "content": ""}, [call], "")
+        return _said("Putting on Africa now.")
+
+    async def fake_play(query):
+        action = {"type": "music.play", "songId": "s1", "title": query, "ready": True}
+        return f"Now playing '{query}'.", action
+
+    monkeypatch.setattr(R, "generate_reply", fake_generate)
+    monkeypatch.setattr(R, "play_music", fake_play)
+    _enable(client)
+    body = _turn(client, "agent, play Africa by Toto")
+
+    assert body["reply"] == "Putting on Africa now."
+    assert body["actions"] == [
+        {"type": "music.play", "songId": "s1", "title": "Africa by Toto", "ready": True}
+    ]
+    assert "play_music" in [t["function"]["name"] for t in calls[0][1]]
+    assert "Now playing 'Africa by Toto'." in calls[1][0][-1]["content"]
+    # The follow-up offers no tools, so it has to speak rather than call again.
+    assert not calls[1][1]
+    roles = [m["role"] for m in calls[1][0]]
+    assert roles[-1] == "user" and roles.count("user") == 1
+
+
+def test_agent_play_command_needs_no_model(client, captured, monkeypatch):
+    async def fake_play(query):
+        action = {"type": "music.play", "songId": "s2", "title": query, "ready": False}
+        return "Found it, downloading.", action
+
+    monkeypatch.setattr(R, "play_music", fake_play)
+    _enable(client)
+    body = _turn(client, "/agent play lofi beats")
+    assert body["notice"] == "Found it, downloading."
+    assert body["actions"][0]["songId"] == "s2"
+    assert captured == []
+
+
+def test_the_first_name_wakes_the_agent_through_the_route(client, captured):
+    _enable(client)
+    room = {**ROOM, "my_name": "Horrible Program"}
+    body = client.post(
+        "/api/clubhouse/voice/turn",
+        json={"channel": "c1", "text": "Horrible, you there?", "room": room},
+    ).json()
+    assert body["spoke"] is True
+
+
+def test_music_volume_is_clamped():
+    said, action = R.music_control("volume", 5)
+    assert action == {"type": "music.volume", "value": 1.0}
+    assert R.music_control("rewind")[1] is None
+
+
+def test_the_music_status_route_reports_a_download(client, monkeypatch):
+    def fake_get(song_id):
+        if song_id != "s1":
+            return None
+        return {"id": "s1", "status": "downloading", "title": "Africa", "error": None}
+
+    monkeypatch.setattr("backend.modules.karaoke.store.get_song", fake_get)
+    assert client.get("/api/clubhouse/voice/music/s1").json()["status"] == "downloading"
+    assert client.get("/api/clubhouse/voice/music/nope").status_code == 404
+
+
+@pytest.fixture
+def recorded(monkeypatch) -> list[tuple[list[dict], list | None]]:
+    calls: list[tuple[list[dict], list | None]] = []
+
+    async def fake_generate(messages, config, tools=None):
+        calls.append((messages, tools))
+        return _said("Done.")
+
+    monkeypatch.setattr(R, "generate_reply", fake_generate)
+    return calls
+
+
+def _say(client: TestClient, text: str, **room) -> dict:
+    res = client.post(
+        "/api/clubhouse/voice/turn",
+        json={"channel": "c1", "text": text, "room": {**ROOM, **room}},
+    )
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def test_a_clear_music_command_is_one_generation_with_the_action_taken(
+    client, recorded
+):
+    _enable(client)
+    body = _say(client, "agent, stop the music", music="Africa")
+    assert body["actions"] == [{"type": "music.stop"}]
+    assert len(recorded) == 1 and not recorded[0][1]
+    assert "Music stopped." in recorded[0][0][-1]["content"]
+
+
+def test_stopping_music_when_none_is_playing_says_so(client, recorded):
+    _enable(client)
+    body = _say(client, "agent, stop the music")
+    assert body["actions"] == []
+    assert "Nothing is playing right now." in recorded[0][0][-1]["content"]
+
+
+def test_turn_it_down_is_a_relative_step(client, recorded):
+    _enable(client)
+    body = _say(client, "agent, turn it down a bit", music="Africa")
+    assert body["actions"] == [{"type": "music.volume", "step": -R.VOLUME_STEP}]
+
+
+def test_look_up_phrasing_runs_the_search(client, recorded, monkeypatch):
+    async def found(query, config):
+        return f"You looked these up just now:\n- {query}: Argentina won."
+
+    monkeypatch.setattr(R, "gather_context", found)
+    _enable(client)
+    _say(client, "agent, look up who won the 2022 World Cup final")
+    assert len(recorded) == 1 and not recorded[0][1]
+    assert "Argentina won." in recorded[0][0][-1]["content"]
+
+
+def test_an_acknowledgement_of_the_prompt_is_neither_spoken_nor_remembered(
+    client, monkeypatch
+):
+    async def acknowledge(messages, config, tools=None):
+        return _said(
+            "I understand the instructions for how I should communicate in this "
+            "setting. I will speak in two or three sentences of plain spoken prose."
+        )
+
+    monkeypatch.setattr(R, "generate_reply", acknowledge)
+    _enable(client)
+    body = _turn(client, "agent, hello")
+    assert body["spoke"] is False
+    assert "acknowledged the prompt" in body["reason"]
+    turns = client.get("/api/clubhouse/voice/state?channel=c1").json()["turns"]
+    assert [t["role"] for t in turns] == ["room"]

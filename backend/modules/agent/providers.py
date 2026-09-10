@@ -509,8 +509,17 @@ async def chat(
     tools: list[dict[str, Any]],
     temperature: float | None = None,
     max_tokens: int | None = None,
+    think: bool | None = None,
 ) -> ChatResult:
-    """One non-streaming tool-calling round, normalized to a `ChatResult`."""
+    """One non-streaming tool-calling round, normalized to a `ChatResult`.
+
+    ``think=False`` asks a thinking model to answer without reasoning first. That
+    matters most when ``max_tokens`` is small: reasoning tokens count against the
+    same budget, so Gemma 4 on LM Studio with a 180-token cap spent 177 of them on
+    "Thinking Process: 1. Analyze the Request" and returned ``content: ""`` with
+    ``finish_reason: "length"`` -- a silent non-answer, not an error. ``None``
+    leaves the model's own default alone.
+    """
     messages = normalize_system_messages(messages)
     if info.dialect == "litellm":
         call_kwargs = litellm_call_kwargs(info)
@@ -546,6 +555,8 @@ async def chat(
             options["num_predict"] = max_tokens
         if options:
             payload["options"] = options
+        if think is not None:
+            payload["think"] = think
         res = await client.post(
             f"{endpoint}/api/chat",
             json=payload,
@@ -563,6 +574,15 @@ async def chat(
             payload["temperature"] = temperature
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
+        if think is False:
+            if info.kind == "lmstudio":
+                # Measured against LM Studio: this is the one knob it honours.
+                # `chat_template_kwargs` and `reasoning: {effort}` are silently
+                # ignored, and a non-thinking model accepts this unharmed.
+                payload["reasoning_effort"] = "none"
+            elif info.kind in {"llamacpp", "peer", "vllm"}:
+                # llama-server and vLLM pass these through to the Jinja template.
+                payload["chat_template_kwargs"] = {"enable_thinking": False}
         res = await client.post(
             f"{endpoint}/v1/chat/completions",
             json=payload,

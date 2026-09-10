@@ -207,6 +207,8 @@ export interface ApiChatComment {
   user_profile?: {
     name?: string;
     photo_url?: string;
+    user_id?: number;
+    username?: string;
   };
   from_name?: string;
   from_photo_url?: string;

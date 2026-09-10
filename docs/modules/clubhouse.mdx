@@ -486,19 +486,56 @@ utterance as the entire prompt. That shape had three faults:
 - **No way to look anything up.** `/agent search` built a prompt asking the model to
   "perform a simulated web search", which is a hallucination with extra steps.
 
-### One generation per turn, deliberately
+### One generation per turn, unless a tool is called
 
-The model never emits a tool call and never gets a second round. A live room is a
-realtime medium, and a tool-calling loop against a local model spends seconds per
-round while people talk over the silence. Instead the **server** decides,
-deterministically, what a turn needs before generating:
+A live room is a realtime medium: every extra round against a local model is seconds
+of silence while people talk. So the **server** still decides, deterministically,
+everything a turn gets for free:
 
 | Need | How it is met | Cost |
 | --- | --- | --- |
-| Who is here, the topic, who is talking | `render_room_brief` — in the system prompt every turn | none |
+| Who is here, the topic, who is talking, what music is on | `render_room_brief` — on the turn message every turn | none |
 | Who these people are | bios fetched for **speakers only**, cached per session | one profile fetch each |
-| A fact from the web or a library | `gather_context` — real `quick_search` + library RAG, run **before** the generation | one concurrent lookup |
+| A fact, when the utterance looks like a question | `gather_context` — real `quick_search` + library RAG, run **before** the generation | one concurrent lookup |
 | Change the room (topic, chat, hands, invite) | an explicit `/agent` command, never a model decision | no generation at all |
+
+On top of that the model is offered three tools (`voice_tools`), and only these —
+a room is strangers talking to your agent, so nothing that acts on a person or a file:
+
+| Tool | Does | Notes |
+| --- | --- | --- |
+| `play_music(query)` | a `ready` song from the karaoke library, else a YouTube search **without** the karaoke bias and a background download | returns a `music.play` action |
+| `music_control(action, value)` | `stop` / `pause` / `resume` / `volume` (0–1, clamped) / `louder` / `quieter` (±0.2 step) | a pane action only; "Nothing is playing" when the room brief says so |
+| `look_up(query)` | web + library snippets via `gather_context` | not offered when `retrieval` is `off` |
+
+A turn where the model calls nothing costs one generation, as before. A turn that
+calls a tool pays a **second** generation with no tools offered, whose prompt is the
+same turn message plus a report of what the tools returned — so the reply describes
+what actually happened. The report rides the turn message rather than `tool` role
+messages, which keeps the roles alternating for strict templates. At most three calls
+per turn are honoured. `/agent play <song>`, `/agent stop`, `/agent pause`,
+`/agent resume` and `/agent volume <0-1>` do the same with no model, for when a small
+one fumbles the call. Anyone who can address the agent can play music.
+
+**Unambiguous requests do not wait for the model to choose a tool.** Measured on
+gemma-4-e2b: offered `music_control`, it answered "stop the music" with "I will stop
+the music" and made no call, and it never called `look_up` even when told to "look
+up" something — `play_music` was the only tool it used reliably. So `detect_intent`
+(pure, in `voice.py`, the `wants_retrieval` precedent) routes a narrow set of
+phrasings directly: stop / pause / resume + a music word, "turn it up/down" (only
+while music is playing — "it" names nothing otherwise), and "look up / search for /
+google X". The tool runs first and the turn costs **one** generation with no tools
+offered. Everything fuzzier still goes to the model with its tools.
+
+**Music is resolved on the server and played by the pane**, because the room's
+published audio track exists only in the pane. The turn response carries `actions`
+(declared on `TurnResponse`, or FastAPI's response model drops them). For a song still
+downloading the pane polls `GET /api/clubhouse/voice/music/{song_id}` and starts it
+when the file lands; a newer request or a stop cancels the wait. Playback runs through
+a gain node into `agentAudioDest` (what the room hears) and a `clubhouse-music` mixer
+strip (what you hear), and the agent's voice ducks it to a quarter while speaking.
+Like TTS, it unmutes the channel while playing and restores the mute when it stops —
+and TTS no longer re-mutes the channel while a song is on. Room teardown stops it.
 
 Moderation is command-only on purpose: `invite_speaker` acts on a real person, and a
 small model asked to pick one will eventually pick wrong. For the same reason
@@ -584,7 +621,7 @@ small models emit both regardless of the prompt, and TTS reads them aloud — fl
 markdown, and truncates on a **sentence boundary**, since a reply cut mid-word sounds
 like the connection dropped.
 
-### The system message is the persona and nothing else
+### The system message is the persona, then the speech rules
 
 The speech rules are kept **separate from the persona**: the user edits the persona
 and must not be able to delete the rules that keep a reply speakable. They used to
@@ -598,12 +635,35 @@ and hears a model that mostly ignores it, with nothing to point at. And a bio is
 in the highest-authority message meant anyone could put "ignore your persona" in
 their Clubhouse profile and have it arrive with the standing of a rule we wrote.
 
-So `build_messages` now sends the persona alone as the system message, and
-`render_turn_context` puts the speech rules, the room brief, the retrieval and the
-bios on the **current turn**, with the bios explicitly labelled as information about
-people rather than instructions to the model. There is still exactly one system
-message, deliberately: strict Jinja chat templates reject a second one outright, so
-a tidier "context" system message is not available here.
+So `render_turn_context` puts the room brief, the retrieval and the bios on the
+**current turn**, with the bios explicitly labelled as information about people
+rather than instructions to the model. There is still exactly one system message,
+deliberately: strict Jinja chat templates reject a second one outright, so a tidier
+"context" system message is not available here.
+
+The **speech rules**, though, went back into the system message, after the persona
+(`persona + "\n\n" + SPEECH_RULES`). For a while they rode the turn too, and on
+gemma-4-e2b that failed in a way worth remembering: "How to speak here: – Two or three
+sentences…" arriving in a `user` message reads as a list of instructions the user just
+handed over, so the model answered it — "I understand the instructions for how I should
+communicate in this setting" — instead of speaking. Every such reply was remembered,
+and a history of assistant turns that all acknowledge the rules is a few-shot example;
+the model kept producing them for unrelated chat lines. The rules are ours and static,
+so the system message is where they belong; what stays on the turn is facts that change
+per turn, or text we did not write.
+
+Three pieces keep it from coming back:
+
+- **The turn ends on a cue** (`REPLY_CUE`: write only what you say next; do not
+  acknowledge these notes), because the last thing a small model reads decides what it
+  writes.
+- **`is_meta_reply` drops an acknowledgement** — it is neither spoken nor remembered,
+  and the turn returns `reason: "dropped a reply that only acknowledged the prompt"`.
+  It needs both an acknowledging opening ("I understand", "I will respond/keep/speak…")
+  *and* a subject that is the prompt itself ("the instructions", "plain spoken prose",
+  "text chat only"), so "I understand your point, Piper" survives.
+- **Remembered acknowledgements are skipped** when history is replayed, so a room
+  already poisoned by them recovers without `/agent forget`.
 
 Riding the turn is also the more correct place on the merits. The room brief changes
 every turn — who is on stage, who has a hand up, who is talking right now — and
@@ -615,6 +675,30 @@ not do: it passed every member, so a silent listener the store happened to know 
 reintroduced by name and biography every turn. The audience is a count in the room
 brief precisely so that does not happen. A listener cannot say anything the agent
 has to answer, so their biography buys nothing and costs a hundred-odd characters.
+
+### Room lines are folded, and chat has a real sender
+
+History is replayed with **every run of consecutive room lines folded into one
+`user` message**, one line per utterance (`Ada: …`, `Grace (@grace) in chat: …`), and
+room lines just before the current turn fold into the turn message itself. Replayed
+one message each, an agent that mostly listens sent a dozen `user` messages in a row,
+which templates enforcing strict user/assistant alternation (older Gemma, Mistral)
+reject. A window that opens on the agent's own line carries it as `(Earlier, you
+said: …)` inside the first user message, since an assistant message straight after
+the system prompt is the other shape those templates refuse.
+
+A chat turn carries the sender the pane actually saw: the display name and
+`@username` (`chatSpeakerLabel`) as `speaker`, and the user id as `speaker_id`. It
+used to be enqueued with no sender at all, so every chat line reached the model as
+"Someone in chat", and the model — told to address people by name — picked a name
+off the stage. People memory now learns against `speaker_id` ahead of a name match,
+because an `@handle` label matches no roster name.
+
+The agent answers to the **first word of its own name** as well as the full name and
+the wake words — "Horrible" for "Horrible Program". A first word under three letters
+or a generic one (`the`, `dr`, `dj`, …) is skipped: the fallback name "the agent"
+would otherwise fire on every "the". The cost is a false positive when the name is
+also an ordinary word ("that's horrible").
 
 ### Switching rooms tears the old one down first
 
@@ -710,6 +794,16 @@ unrepresentable. `model`, `temperature` and `max_tokens` reach the provider from
 that same config, so a room's agent can run a different model from the
 orchestrator's.
 
+The turn is generated with **thinking switched off** (`providers.chat(think=False)`:
+`reasoning_effort: "none"` on LM Studio, `think: false` on Ollama,
+`chat_template_kwargs.enable_thinking: false` on llama-server / vLLM). Reasoning
+tokens count against `max_tokens`, so a thinking model left at its default — Gemma 4
+thinks by default — spent the entire ~160-token spoken-reply budget reasoning and
+came back with `content: ""` and `finish_reason: "length"`. That used to surface as
+`model returned nothing`, indistinguishable from an agent choosing silence. A model
+that reasons regardless (R1 distills) now raises instead, and the pane shows a
+`notice` telling you to pick a non-reasoning model or raise max tokens.
+
 The request also takes an explicit **`is_self`**. The agent must not answer its
 own speech coming back through the room, and the fallbacks for recognizing it —
 matching the speaker id, or overlapping the text it just spoke — both fail on a
@@ -726,6 +820,7 @@ text-overlap check still runs underneath as a backstop.
 | `GET /api/clubhouse/voice/config` | Read them back |
 | `GET /api/clubhouse/voice/state` | What the agent currently remembers (rendered in the Agent tab) |
 | `POST /api/clubhouse/voice/reset` | Forget the conversation, keep the settings |
+| `GET /api/clubhouse/voice/music/{song_id}` | Download status of a song a `music.play` action named (`queued` / `downloading` / `ready` / `failed`) |
 
 A turn carries a **room snapshot** pushed by the pane rather than polled by the server:
 the pane holds the PubNub feed and the Agora volume indicator, so it is seconds fresher

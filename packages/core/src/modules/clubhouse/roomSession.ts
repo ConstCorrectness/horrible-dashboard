@@ -24,6 +24,7 @@
 import AgoraRTC, { type IAgoraRTCClient, type ILocalAudioTrack } from 'agora-rtc-sdk-ng';
 import type PubNub from 'pubnub';
 
+import type { StripHandle } from '../audio/types';
 import { leaveClubhouseChannel } from './api';
 
 export interface LiveUserState {
@@ -36,6 +37,9 @@ export interface LiveUserState {
 export interface ChatComment {
   id: string;
   userName: string;
+  /** The sender's user id and `@handle`, when the payload carried them. */
+  userId?: number | null;
+  username?: string | null;
   userPhoto: string | null;
   text: string;
   timestamp: number;
@@ -76,6 +80,8 @@ export interface RoomState {
    * accepting text it will fail to deliver.
    */
   chatDisabledReason: string | null;
+  /** Music the agent is playing into the room, or `null`. */
+  music: { title: string; paused: boolean } | null;
 }
 
 export const EMPTY_ROOM_STATE: RoomState = {
@@ -92,6 +98,7 @@ export const EMPTY_ROOM_STATE: RoomState = {
   speakerInvite: null,
   speakingVolumes: {},
   chatDisabledReason: null,
+  music: null,
 };
 
 /**
@@ -123,6 +130,22 @@ export class ClubhouseRoomSession {
   agentAudioSource: AudioBufferSourceNode | null = null;
   isAgentSpeaking = false;
   agentTtsAbort: AbortController | null = null;
+
+  /**
+   * Music the agent is playing into the room (see `useClubhouseVoice.playRoomMusic`).
+   * The nodes live here, with the rest of the connection, so a remount does not
+   * orphan a song that is still playing to the room.
+   */
+  music: {
+    el: HTMLAudioElement;
+    source: MediaElementAudioSourceNode;
+    gain: GainNode;
+    strip: StripHandle;
+    /** The level to return to after ducking under the agent's voice. */
+    volume: number;
+    /** Whether the channel was muted before the music opened it. */
+    wasMuted: boolean;
+  } | null = null;
 
   myProfile: { name: string; photoUrl: string | null; userId: number | null } | null = null;
 
@@ -233,6 +256,27 @@ export class ClubhouseRoomSession {
 
   private work: Promise<void> = Promise.resolve();
 
+  /** Stop the room music and drop its nodes. Safe when nothing is playing. */
+  stopMusic(): void {
+    const music = this.music;
+    if (!music) return;
+    this.music = null;
+    music.el.onended = null;
+    music.el.pause();
+    music.el.removeAttribute('src');
+    music.el.load();
+    for (const node of [music.source, music.gain]) {
+      try {
+        node.disconnect();
+      } catch {
+        /* already disconnected */
+      }
+    }
+    // Release, never close: the strip's routing is the user's setting.
+    music.strip.release();
+    if (this.state.music) this.patch({ music: null });
+  }
+
   /**
    * Tear down every resource and tell Clubhouse we left.
    *
@@ -282,6 +326,8 @@ export class ClubhouseRoomSession {
       this.sttRecorder = null;
     }
     this.sttChunk = null;
+    // A song must not keep playing into a room you left, or into the next one.
+    this.stopMusic();
     if (this.localAudioTrack) {
       this.localAudioTrack.close();
       this.localAudioTrack = null;

@@ -56,6 +56,17 @@ class TurnResponse(BaseModel):
     notice: str | None = None
     retrieved: bool = False
     filler: str | None = None
+    # Things for the pane to do besides speaking -- today, room music
+    # (`music.play` / `music.stop` / `music.pause` / `music.resume` / `music.volume`).
+    # Declared here or FastAPI's response model silently drops it.
+    actions: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class MusicStatus(BaseModel):
+    song_id: str
+    status: str
+    title: str = ""
+    error: str | None = None
 
 
 class ConfigRequest(BaseModel):
@@ -125,7 +136,8 @@ async def turn(req: TurnRequest) -> TurnResponse:
                 notice=(
                     "Commands: /agent search <query>, /agent topic <text>, "
                     "/agent chat on|off, /agent handraise on|off, "
-                    "/agent invite <name>, /agent forget"
+                    "/agent invite <name>, /agent play <song>, /agent stop, "
+                    "/agent forget"
                 ),
             )
         if command.name == "forget":
@@ -137,11 +149,19 @@ async def turn(req: TurnRequest) -> TurnResponse:
         handled = await R.run_command(command, room, session)
         if handled is not None:
             return TurnResponse(
-                spoke=False, reason="command", notice=handled.get("notice")
+                spoke=False,
+                reason="command",
+                notice=handled.get("notice"),
+                actions=handled.get("actions") or [],
             )
 
     result = await R.run_turn(
-        session, room, req.text, speaker=req.speaker, source=source
+        session,
+        room,
+        req.text,
+        speaker=req.speaker,
+        source=source,
+        speaker_id=req.speaker_id,
     )
     return TurnResponse(
         spoke=bool(result.get("spoke")),
@@ -150,6 +170,29 @@ async def turn(req: TurnRequest) -> TurnResponse:
         notice=result.get("notice"),
         retrieved=bool(result.get("retrieved")),
         filler=result.get("filler"),
+        actions=result.get("actions") or [],
+    )
+
+
+@router.get("/music/{song_id}", response_model=MusicStatus)
+def music_status(song_id: str) -> MusicStatus:
+    """Whether a song the agent asked for has finished downloading.
+
+    Polled by the pane after a `music.play` action with `ready: false`: the file is
+    fetched in the background so the turn can answer immediately.
+    """
+    from fastapi import HTTPException
+
+    from backend.modules.karaoke import store
+
+    song = store.get_song(song_id)
+    if song is None:
+        raise HTTPException(status_code=404, detail="song not found")
+    return MusicStatus(
+        song_id=song_id,
+        status=str(song.get("status") or ""),
+        title=str(song.get("title") or ""),
+        error=song.get("error"),
     )
 
 

@@ -235,37 +235,174 @@ def test_history_is_replayed_as_turns_not_pasted_as_a_transcript():
 def test_memory_is_capped_to_the_configured_window():
     config = V.VoiceConfig(enabled=True, memory_turns=4)
     history = [V.Turn(role="room", text=f"line {i}", speaker="A") for i in range(20)]
-    messages = V.build_messages(config, _room(), history, "now what")
-    assert len(messages) == 1 + 4 + 1  # system + window + the new utterance
+    turn = V.build_messages(config, _room(), history, "now what")[-1]["content"]
+    assert "A: line 16" in turn and "A: line 19" in turn
+    assert "line 15" not in turn
 
 
-def test_the_system_message_is_the_persona_and_nothing_else():
-    """The persona is the user's, and it is alone in the highest-authority slot.
+def test_consecutive_room_lines_fold_into_one_message():
+    """Twelve user messages in a row is a shape strict chat templates reject."""
+    history = [
+        V.Turn(role="room", text="first", speaker="Ada"),
+        V.Turn(role="room", text="second", speaker="Grace (@grace)", source="chat"),
+        V.Turn(role="agent", text="reply"),
+        V.Turn(role="room", text="third", speaker="Ada"),
+    ]
+    messages = V.build_messages(
+        V.VoiceConfig(enabled=True), _room(), history, "fourth", speaker="Grace"
+    )
+    assert [m["role"] for m in messages] == ["system", "user", "assistant", "user"]
+    assert messages[1]["content"] == "Ada: first\nGrace (@grace) in chat: second"
+    assert messages[-1]["content"].startswith("Ada: third\n\n")
+    assert "Grace said out loud: fourth" in messages[-1]["content"]
 
-    It used to share that message with the speech rules, the room brief and other
-    people's profile bios — up to ~3 kB against a 163-character persona, which the
-    persona reliably lost. Everything else moved onto the turn; this pins that the
-    system message did not quietly re-accumulate it.
-    """
+
+def test_roles_strictly_alternate_whatever_the_history_looks_like():
+    history = [
+        V.Turn(role="agent", text="hi all"),
+        V.Turn(role="agent", text="anyone?"),
+        V.Turn(role="room", text="yes", speaker="Ada"),
+        V.Turn(role="agent", text="great"),
+        V.Turn(role="agent", text="so"),
+        V.Turn(role="room", text="ok", speaker="Grace"),
+    ]
+    roles = [
+        m["role"]
+        for m in V.build_messages(V.VoiceConfig(enabled=True), _room(), history, "hm")
+    ]
+    assert roles[:2] == ["system", "user"]
+    assert all(a != b for a, b in zip(roles[1:], roles[2:]))
+    assert roles[-1] == "user"
+
+
+def test_a_zero_memory_window_replays_nothing():
+    """`history[-0:]` is the whole list, which is the opposite of zero."""
+    history = [V.Turn(role="room", text="secret", speaker="Ada")]
+    config = V.VoiceConfig(enabled=True, memory_turns=0)
+    assert (
+        "secret" not in V.build_messages(config, _room(), history, "hi")[-1]["content"]
+    )
+
+
+def test_the_first_word_of_the_agents_name_addresses_it():
+    assert V.is_addressed("horrible, play something", [], "Horrible Program")
+    assert V.is_addressed("Hey Horrible!", [], "Horrible Program")
+
+
+def test_a_short_or_generic_first_word_is_not_a_wake_word():
+    """The pane's fallback name is "the agent"; its first word is in every sentence."""
+    assert not V.is_addressed("the room is quiet", [], "the agent")
+    assert not V.is_addressed("al fresco dining", [], "Al Smith")
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Horrible, can you stop the music?", ("music_control", {"action": "stop"})),
+        ("pause the song", ("music_control", {"action": "pause"})),
+        ("resume the music please", ("music_control", {"action": "resume"})),
+        ("turn the music down a bit", ("music_control", {"action": "quieter"})),
+        ("Horrible, turn it up", ("music_control", {"action": "louder"})),
+        (
+            "look up who won the 2022 World Cup final?",
+            ("look_up", {"query": "who won the 2022 World Cup final"}),
+        ),
+        ("google Toto's first album", ("look_up", {"query": "Toto's first album"})),
+    ],
+)
+def test_unambiguous_requests_are_routed_without_the_model(text, expected):
+    """gemma-4-e2b answered "stop the music" with "I will stop the music" and no
+    tool call; these phrasings no longer depend on it choosing one."""
+    assert V.detect_intent(text, music_playing=True) == expected
+
+
+def test_ordinary_speech_is_not_an_intent():
+    assert V.detect_intent("stop talking over each other", music_playing=True) is None
+    assert V.detect_intent("I looked into it", music_playing=True) is None
+    # "Turn it up" names no music, so with nothing playing it is just a sentence.
+    assert (
+        V.detect_intent("turn it up a notch, the debate", music_playing=False) is None
+    )
+
+
+def test_music_in_the_room_is_in_the_brief():
+    brief = V.render_room_brief(_room(music="Africa - Toto"))
+    assert "Music you are playing into the room: Africa - Toto" in brief
+
+
+def test_the_system_message_is_the_persona_then_the_speech_rules_only():
+    """The persona leads, followed by our static rules and nothing that changes per
+    turn or was written by someone in the room: the room brief and bios stay on the
+    turn, so a ~3 kB brief never buries a short persona again."""
+    room = _room(
+        members=[V.RoomMember(user_id=1, name="Ada", is_speaker=True, bio="Hi.")]
+    )
     config = V.VoiceConfig(enabled=True, persona="You are a pirate.")
-    system = V.build_messages(config, _room(), [], "hi")[0]["content"]
-    assert system == "You are a pirate."
+    system = V.build_messages(config, room, [], "hi")[0]["content"]
+    assert system == f"You are a pirate.\n\n{V.SPEECH_RULES}"
+    assert "Ada" not in system
 
 
 def test_an_empty_persona_falls_back_rather_than_sending_an_empty_system_message():
     config = V.VoiceConfig(enabled=True, persona="   ")
-    assert (
-        V.build_messages(config, _room(), [], "hi")[0]["content"] == V.DEFAULT_PERSONA
-    )
+    system = V.build_messages(config, _room(), [], "hi")[0]["content"]
+    assert system.startswith(V.DEFAULT_PERSONA + "\n\n")
 
 
 def test_the_speech_rules_survive_a_user_edited_persona():
     """The user owns the persona; they must not be able to delete the rules that
-    keep a reply speakable — every model reaches for bullet lists otherwise. They
-    ride the turn now rather than the system message, but they still ride."""
+    keep a reply speakable — every model reaches for bullet lists otherwise."""
     config = V.VoiceConfig(enabled=True, persona="You are a pirate.")
     messages = V.build_messages(config, _room(), [], "hi")
-    assert "No markdown" in messages[-1]["content"]
+    assert "No markdown" in messages[0]["content"]
+
+
+def test_the_turn_carries_no_instructions_to_acknowledge():
+    """Imperatives on a user turn were acknowledged instead of followed: gemma-4-e2b
+    answered "How to speak here: …" with "I understand the instructions…"."""
+    turn = V.build_messages(V.VoiceConfig(enabled=True), _room(), [], "hi")[-1]
+    assert "How to speak here" not in turn["content"]
+    assert turn["content"].endswith(V.REPLY_CUE)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "I will respond to the chat based on the context provided and the rules you "
+        "have just laid out.",
+        "I understand that I am in the audience of this Clubhouse room and my replies "
+        "must be in the text chat only.",
+        "I understand the instructions for how I should communicate in this setting.",
+        "I will keep my replies to the text chat only and speak in two or three "
+        "sentences of plain spoken prose.",
+    ],
+)
+def test_acknowledgements_of_the_prompt_are_recognised(text):
+    assert V.is_meta_reply(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "I understand your point, Piper, but Hempel's dilemma cuts both ways.",
+        "I will say the rules of logic apply to theology too, Walter.",
+        "Physics underpins chemistry, though chemistry has its own useful laws.",
+    ],
+)
+def test_real_replies_are_not_mistaken_for_acknowledgements(text):
+    assert not V.is_meta_reply(text)
+
+
+def test_remembered_acknowledgements_are_not_replayed():
+    """A session already poisoned by them recovers without `/agent forget`."""
+    history = [
+        V.Turn(role="room", text="does physics explain chemistry", speaker="Walter"),
+        V.Turn(role="agent", text="I understand the instructions for this setting."),
+        V.Turn(role="room", text="idiot", speaker="Walter"),
+    ]
+    messages = V.build_messages(V.VoiceConfig(enabled=True), _room(), history, "hm")
+    assert [m["role"] for m in messages] == ["system", "user"]
+    assert "I understand the instructions" not in str(messages)
 
 
 def test_a_bio_is_fenced_as_information_not_instruction():

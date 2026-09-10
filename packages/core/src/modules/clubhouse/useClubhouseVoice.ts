@@ -34,6 +34,13 @@ import {
 } from './api';
 
 const CLUBCARD_AGORA_APP_ID = '938d7e95aeaa4f4ca1f416ab40a498d9';
+
+/** Mixer strip the agent's room music is monitored through. */
+const MUSIC_STRIP = 'clubhouse-music';
+/** Room music starts below full scale: it is background to a conversation. */
+const MUSIC_VOLUME = 0.6;
+/** Fraction of its level the music keeps while the agent is speaking over it. */
+const MUSIC_DUCK = 0.25;
 const CLUBCARD_PUBNUB_SUB_KEY = 'sub-c-a4abea84-9ca3-11ea-8e71-f2b83ac9263d';
 const CLUBCARD_PUBNUB_PUB_KEY = 'pub-c-6878d382-5ae6-4494-9099-f930f938868b';
 
@@ -78,11 +85,13 @@ export interface PubNubRoomMessage {
   // Sender identity
   user_profile?: {
     name?: string | null;
+    username?: string | null;
     photo_url?: string | null;
     user_id?: number | null;
   } | null;
   user?: {
     name?: string | null;
+    username?: string | null;
     photo_url?: string | null;
     user_id?: number | null;
   } | null;
@@ -234,6 +243,8 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
             .map((c: ApiChatComment) => ({
               id: c.time_created || Math.random().toString(),
               userName: c.from_name || c.user_profile?.name || 'Unknown',
+              userId: c.user_profile?.user_id ?? null,
+              username: c.user_profile?.username ?? null,
               userPhoto: c.from_photo_url || c.user_profile?.photo_url || null,
               text: c.message || c.text || '',
               timestamp: c.time_created ? Date.parse(c.time_created) : Date.now(),
@@ -748,6 +759,8 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
                   {
                     id: String(event.timetoken || Math.random()),
                     userName: sender.name || msg.from_name || 'Anonymous',
+                    userId: senderId ?? null,
+                    username: sender.username ?? null,
                     userPhoto: sender.photo_url || msg.from_photo_url || null,
                     text,
                     timestamp: Math.floor((Number(event.timetoken) || Date.now() * 10000) / 10000),
@@ -1034,6 +1047,8 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       const abort = new AbortController();
       session.agentTtsAbort = abort;
       session.isAgentSpeaking = true;
+      // Duck the room music under the agent's voice, or nobody hears the reply.
+      if (session.music) session.music.gain.gain.value = session.music.volume * MUSIC_DUCK;
 
       const voice = voiceOptions?.voice || 'en-US-ChristopherNeural';
       const rate = voiceOptions?.rate || '+0%';
@@ -1105,7 +1120,10 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         session.isAgentSpeaking = false;
         session.agentAudioSource = null;
         if (session.agentTtsAbort === abort) session.agentTtsAbort = null;
-        if (wasMuted && activeChannel) {
+        if (session.music) session.music.gain.gain.value = session.music.volume;
+        // Not while music is playing: re-muting would cut the song off for the whole
+        // room. The music restores the mute itself when it stops.
+        if (wasMuted && activeChannel && !session.music) {
           try {
             await muteClubhouseChannel(activeChannel, true);
           } catch (e) {
@@ -1116,6 +1134,100 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     },
     [isMuted, activeChannel, reportVoiceError, session],
   );
+
+  /** Stop the room music, restoring the channel's mute if the music opened it. */
+  const stopRoomMusic = useCallback(async () => {
+    const music = session.music;
+    if (!music) return;
+    session.stopMusic();
+    // Not mid-sentence: the agent's own speech restores the mute when it finishes.
+    if (music.wasMuted && activeChannel && !session.isAgentSpeaking) {
+      try {
+        await muteClubhouseChannel(activeChannel, true);
+      } catch (e) {
+        console.error('Failed to restore mute state after music:', e);
+      }
+    }
+  }, [activeChannel, session]);
+
+  /**
+   * Play a song *into the room*.
+   *
+   * It goes where the agent's voice goes — `agentAudioDest`, the published track —
+   * and through a `clubhouse-music` mixer strip so the operator hears it routed like
+   * every other sound in the app (never a private context; see the audio module). A
+   * gain node in front of both is what lets the agent's voice duck it.
+   */
+  const playRoomMusic = useCallback(
+    async (url: string, title: string) => {
+      const ctx = session.audioCtx;
+      const dest = session.agentAudioDest;
+      if (!ctx || !dest) {
+        reportVoiceError('Join a room before playing music into it.');
+        return;
+      }
+      const previous = session.music;
+      // A replaced song keeps the original mute state: the channel is already open.
+      const wasMuted = previous ? previous.wasMuted : isMuted;
+      session.stopMusic();
+
+      const el = new Audio();
+      el.crossOrigin = 'anonymous';
+      el.src = url;
+      const source = ctx.createMediaElementSource(el);
+      const gain = ctx.createGain();
+      gain.gain.value = session.isAgentSpeaking ? MUSIC_VOLUME * MUSIC_DUCK : MUSIC_VOLUME;
+      source.connect(gain);
+      gain.connect(dest);
+      mixer.declareStrip({ id: MUSIC_STRIP, label: 'Clubhouse music', icon: '🎵' });
+      const strip = mixer.connectStrip(MUSIC_STRIP);
+      gain.connect(strip.input);
+      session.music = { el, source, gain, strip, volume: MUSIC_VOLUME, wasMuted };
+      session.patch({ music: { title, paused: false } });
+      el.onended = () => void stopRoomMusic();
+
+      // Like the agent's voice: a muted channel publishes nothing, so open it for the
+      // song. The human microphone stays behind its own gain either way.
+      if (wasMuted && !previous && activeChannel) {
+        try {
+          await muteClubhouseChannel(activeChannel, false);
+        } catch (e) {
+          console.error('Failed to unmute channel for music:', e);
+        }
+      }
+      try {
+        if (ctx.state === 'suspended') await ctx.resume();
+        await el.play();
+      } catch (e) {
+        reportVoiceError(`Couldn't play "${title}": ${e instanceof Error ? e.message : String(e)}`);
+        await stopRoomMusic();
+      }
+    },
+    [session, isMuted, activeChannel, reportVoiceError, stopRoomMusic],
+  );
+
+  const controlRoomMusic = useCallback(
+    (action: 'pause' | 'resume' | 'volume' | 'step', value?: number) => {
+      const music = session.music;
+      const current = session.state.music;
+      if (!music || !current) return;
+      if (action === 'pause') {
+        music.el.pause();
+        session.patch({ music: { ...current, paused: true } });
+      } else if (action === 'resume') {
+        void music.el.play().catch(() => {});
+        session.patch({ music: { ...current, paused: false } });
+      } else if (value != null && Number.isFinite(value)) {
+        const next = action === 'step' ? music.volume + value : value;
+        music.volume = Math.min(1, Math.max(0, next));
+        if (!session.isAgentSpeaking) music.gain.gain.value = music.volume;
+      }
+    },
+    [session],
+  );
+
+  /** Read through the session, not render state: the turn queue outlives renders. */
+  const getRoomMusic = useCallback(() => session.state.music, [session]);
 
   const previewTtsVoice = useCallback(
     async (options?: {
@@ -1234,6 +1346,10 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     playAgentAudio,
     previewTtsVoice,
     stopAgentAudio,
+    playRoomMusic,
+    stopRoomMusic,
+    controlRoomMusic,
+    getRoomMusic,
     loading,
     error,
     voiceError,

@@ -95,7 +95,16 @@ export interface VoiceRoom {
   members: VoiceRoomMember[];
   my_user_id: number | null;
   my_name: string;
+  /** Title of the music the agent is playing into the room, if any. */
+  music?: string | null;
 }
+
+/** Something the server asks the pane to do besides speaking. */
+export type VoiceAction =
+  | { type: 'music.play'; songId: string; title: string; ready: boolean }
+  | { type: 'music.stop' | 'music.pause' | 'music.resume' }
+  /** `value` sets an absolute level (0–1); `step` moves it ("louder" / "quieter"). */
+  | { type: 'music.volume'; value?: number; step?: number };
 
 export interface VoiceTurnResult {
   spoke: boolean;
@@ -104,6 +113,44 @@ export interface VoiceTurnResult {
   notice: string | null;
   retrieved: boolean;
   filler?: string | null;
+  actions?: VoiceAction[];
+}
+
+export interface MusicStatus {
+  song_id: string;
+  status: string;
+  title: string;
+  error: string | null;
+}
+
+/**
+ * A chat sender as the agent should hear them: `Name (@handle)`.
+ *
+ * `Anonymous` and `Unknown` are the pane's own placeholders, not names — passing one
+ * through would tell the model somebody called "Anonymous" is talking.
+ */
+export function chatSpeakerLabel(comment: {
+  userName?: string | null;
+  username?: string | null;
+}): string | undefined {
+  const rawName = comment.userName?.trim() ?? '';
+  const name = rawName === 'Anonymous' || rawName === 'Unknown' ? '' : rawName;
+  const handle = comment.username?.trim().replace(/^@/, '') ?? '';
+  if (name && handle) return `${name} (@${handle})`;
+  if (handle) return `@${handle}`;
+  return name || undefined;
+}
+
+/** Where a song the agent resolved is served from (the karaoke catalog's media route). */
+export function musicUrl(songId: string): string {
+  return apiUrl(`/api/karaoke/media/${encodeURIComponent(songId)}`);
+}
+
+/** Whether a song the agent asked for has finished downloading. */
+export async function getMusicStatus(songId: string): Promise<MusicStatus> {
+  const res = await fetch(apiUrl(`/api/clubhouse/voice/music/${encodeURIComponent(songId)}`));
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return (await res.json()) as MusicStatus;
 }
 
 export interface VoiceStateTurn {

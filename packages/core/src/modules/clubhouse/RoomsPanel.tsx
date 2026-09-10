@@ -40,8 +40,12 @@ import { bindClubhouse } from './actions';
 import { MediaInsightsModal } from './MediaInsightsModal';
 import { useClubhouseVoice } from './useClubhouseVoice';
 import {
+  chatSpeakerLabel,
   DEFAULT_VOICE_CONFIG,
+  getMusicStatus,
   getVoiceState,
+  musicUrl,
+  type VoiceAction,
   pushVoiceConfig,
   resetVoiceMemory,
   takeVoiceTurn,
@@ -678,6 +682,10 @@ export function RoomsPanel() {
     playAgentAudio,
     previewTtsVoice,
     stopAgentAudio,
+    playRoomMusic,
+    stopRoomMusic,
+    controlRoomMusic,
+    getRoomMusic,
     loading: voiceLoading,
     error: voiceError,
     voiceError: speechError,
@@ -931,6 +939,7 @@ export function RoomsPanel() {
       members,
       my_user_id: myUserId,
       my_name: myProfileName || 'the agent',
+      music: getRoomMusic()?.title ?? null,
     };
   };
 
@@ -956,6 +965,59 @@ export function RoomsPanel() {
   >([]);
   const agentBusyRef = useRef(false);
   const agentSentTextsRef = useRef<Set<string>>(new Set());
+
+  /**
+   * Carry out what the server asked for alongside a reply. Music is played here, not
+   * on the server, because only this pane holds the room's published track.
+   *
+   * A `music.play` for a song still downloading polls until the file lands. Any newer
+   * request — or a stop — bumps the counter and cancels the wait, so "play X… no,
+   * play Y" never ends with both.
+   */
+  const musicRequestRef = useRef(0);
+  const applyVoiceActions = async (actions: VoiceAction[] | undefined) => {
+    for (const action of actions ?? []) {
+      if (action.type === 'music.play') {
+        const request = ++musicRequestRef.current;
+        void (async () => {
+          let ready = action.ready;
+          // ~5 minutes: a long video on a slow link is minutes of download.
+          for (let i = 0; !ready && i < 150; i++) {
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            if (request !== musicRequestRef.current) return;
+            try {
+              const status = await getMusicStatus(action.songId);
+              if (status.status === 'ready') ready = true;
+              else if (status.status === 'failed') {
+                toastsStore.add(
+                  'warning',
+                  'Agent',
+                  `Couldn't download "${action.title}": ${status.error ?? 'unknown error'}`,
+                );
+                return;
+              }
+            } catch {
+              /* a transient poll failure — keep waiting */
+            }
+          }
+          if (request !== musicRequestRef.current) return;
+          if (!ready) {
+            toastsStore.add('warning', 'Agent', `"${action.title}" is still downloading.`);
+            return;
+          }
+          await playRoomMusic(musicUrl(action.songId), action.title);
+        })();
+      } else if (action.type === 'music.stop') {
+        musicRequestRef.current++;
+        await stopRoomMusic();
+      } else if (action.type === 'music.volume') {
+        if (action.step != null) controlRoomMusic('step', action.step);
+        else if (action.value != null) controlRoomMusic('volume', action.value);
+      } else {
+        controlRoomMusic(action.type === 'music.pause' ? 'pause' : 'resume');
+      }
+    }
+  };
 
   const drainAgentQueue = async () => {
     if (agentBusyRef.current) return;
@@ -992,6 +1054,7 @@ export function RoomsPanel() {
           setIsAgentThinking(false);
           agentAbortControllerRef.current = null;
           setAgentReason(result.reason);
+          void applyVoiceActions(result.actions);
           if (result.notice) {
             toastsStore.add('info', 'Agent', result.notice);
             if (agentConfigRef.current.postToChat) {
@@ -1304,12 +1367,22 @@ export function RoomsPanel() {
       // The agent's own posts should not be enqueued to avoid self-reply loops.
       const isAgentSelf =
         rawText.startsWith('🤖') ||
+        (newComment.userId != null && myUserId != null && newComment.userId === myUserId) ||
         agentSentTextsRef.current.has(rawText) ||
         (newComment.userName &&
           myProfileName &&
           newComment.userName.toLowerCase() === myProfileName.toLowerCase());
       if (!isAgentSelf) {
-        enqueueUtterance(rawText, 'chat');
+        // Who actually typed it. This used to pass no sender at all, so every chat
+        // line reached the model as "Someone in chat" — and the model, told to address
+        // people by name, picked one off the stage.
+        enqueueUtterance(
+          rawText,
+          'chat',
+          false,
+          chatSpeakerLabel(newComment),
+          newComment.userId ?? null,
+        );
       }
     }
   }, [comments, myProfileName]);

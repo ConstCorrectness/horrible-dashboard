@@ -136,6 +136,9 @@ class RoomSnapshot:
     members: list[RoomMember] = field(default_factory=list)
     my_user_id: int | None = None
     my_name: str = "the agent"
+    # The title of what the pane is playing into the room, if anything. Pushed with
+    # the room so "what's this song?" and "stop the music" are answered from fact.
+    music: str | None = None
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> RoomSnapshot:
@@ -146,6 +149,7 @@ class RoomSnapshot:
             members=[RoomMember.from_dict(u) for u in (raw.get("members") or [])],
             my_user_id=raw.get("my_user_id") or raw.get("myUserId"),
             my_name=str(raw.get("my_name") or raw.get("myName") or "the agent"),
+            music=str(raw["music"]) if raw.get("music") else None,
         )
 
     def member(self, user_id: int | None) -> RoomMember | None:
@@ -340,6 +344,11 @@ def _norm(text: str) -> str:
     return re.sub(r"[^a-z0-9 ]+", " ", text.lower())
 
 
+# First words of a name that are not a name. "the" matters most: the pane's fallback
+# name is "the agent", and answering to its first word would fire on every "the".
+_GENERIC_NAME_WORDS = frozenset({"the", "mr", "mrs", "ms", "dr", "dj", "mc", "sir"})
+
+
 def is_addressed(text: str, wake_words: list[str], my_name: str = "") -> bool:
     """Whether this utterance is aimed at the agent.
 
@@ -352,6 +361,16 @@ def is_addressed(text: str, wake_words: list[str], my_name: str = "") -> bool:
     candidates = [w for w in wake_words if w]
     if my_name:
         candidates.append(my_name)
+        # And the first word of it -- "Horrible" for "Horrible Program" -- because
+        # that is what people call someone in a room. A short or generic first word
+        # is skipped; it would fire on ordinary speech.
+        words = _norm(my_name).split()
+        if (
+            len(words) > 1
+            and len(words[0]) >= 3
+            and words[0] not in _GENERIC_NAME_WORDS
+        ):
+            candidates.append(words[0])
     for word in candidates:
         needle = _norm(str(word)).strip()
         if not needle:
@@ -459,6 +478,66 @@ def parse_command(text: str) -> Command | None:
     )
 
 
+# --- intents ------------------------------------------------------------------------
+
+_MUSIC_WORD = r"(?:music|song|track|tune)"
+_TRANSPORT = [
+    (
+        re.compile(
+            rf"\b(?:stop|kill|cut|turn off)\b(?:\s+\w+){{0,2}}\s+{_MUSIC_WORD}\b", re.I
+        ),
+        "stop",
+    ),
+    (re.compile(rf"\bpause\b(?:\s+\w+){{0,2}}\s+{_MUSIC_WORD}\b", re.I), "pause"),
+    (
+        re.compile(rf"\b(?:resume|unpause)\b(?:\s+\w+){{0,2}}\s+{_MUSIC_WORD}\b", re.I),
+        "resume",
+    ),
+]
+# "Turn it down" names no music, so it only counts while something is playing.
+_VOLUME = [
+    (
+        re.compile(r"\b(?:turn|crank)\b(?:\s+\w+){0,3}\s+up\b|\blouder\b", re.I),
+        "louder",
+    ),
+    (
+        re.compile(
+            r"\bturn\b(?:\s+\w+){0,3}\s+down\b|\b(?:quieter|softer)\b"
+            r"|\blower\s+(?:the\s+)?(?:volume|music)\b",
+            re.I,
+        ),
+        "quieter",
+    ),
+]
+_LOOKUP = re.compile(r"\b(?:look\s+up|search\s+for|google)\s+(?P<q>.{3,})", re.I)
+
+
+def detect_intent(
+    text: str, *, music_playing: bool
+) -> tuple[str, dict[str, Any]] | None:
+    """A tool call the utterance asks for unambiguously, or None.
+
+    Heuristic on purpose, the ``wants_retrieval`` precedent. Measured on
+    gemma-4-e2b: offered ``music_control`` it answered "stop the music" with "I will
+    stop the music" and no call at all, and it never called ``look_up`` even when told
+    to "look up" something -- a small model claiming an action it did not take is
+    worse than silence. These phrasings are narrow enough to route without asking the
+    model; anything fuzzier still goes to the model with its tools.
+    """
+    for pattern, action in _TRANSPORT:
+        if pattern.search(text):
+            return "music_control", {"action": action}
+    if music_playing:
+        for pattern, action in _VOLUME:
+            if pattern.search(text):
+                return "music_control", {"action": action}
+    if match := _LOOKUP.search(text):
+        query = match.group("q").strip().rstrip("?.!").strip()
+        if query:
+            return "look_up", {"query": query}
+    return None
+
+
 # --- prompt assembly ---------------------------------------------------------------
 
 
@@ -514,6 +593,8 @@ def render_room_brief(room: RoomSnapshot) -> str:
         )
     if talking:
         lines.append("Currently talking: " + ", ".join(m.name or "?" for m in talking))
+    if room.music:
+        lines.append(f"Music you are playing into the room: {room.music}")
 
     role = (
         "You are a moderator of this room."
@@ -571,9 +652,12 @@ def build_messages(
 ) -> list[dict[str, str]]:
     """The full prompt for one turn.
 
-    History is replayed as real ``user``/``assistant`` messages rather than pasted
-    into one block, because a model that sees a transcript-shaped blob answers *about*
-    the transcript instead of continuing it.
+    History is replayed as real ``user``/``assistant`` turns, with **every run of
+    consecutive room lines folded into one user message** (one line per utterance).
+    Replayed one message each, an agent that mostly listens sent a dozen user messages
+    in a row, and chat templates that enforce strict user/assistant alternation (older
+    Gemma, Mistral) reject that outright. Room lines just before the current turn fold
+    into the turn message itself, so the roles always alternate and always end on user.
     """
     # The system message carries the **persona and nothing else**.
     #
@@ -590,13 +674,39 @@ def build_messages(
     # turn, so pinning it in front of a twelve-turn history described the room as it
     # was twelve turns ago.
     persona = (config.persona or "").strip() or DEFAULT_PERSONA
-    messages: list[dict[str, str]] = [{"role": "system", "content": persona}]
-    for turn in history[-config.memory_turns :]:
-        if turn.role == "agent":
+    # ...except the speech rules, which moved back here (2026-09-10). Riding the turn
+    # message, "How to speak here: - Two or three sentences…" read to a 2B model as
+    # a list of instructions the *user* had just handed it, and gemma-4-e2b answered
+    # with "I understand the instructions…" instead of speaking. Each of those was
+    # remembered, so the history became a run of acknowledgements it kept copying.
+    # The rules are ours and static, so the system message is the right home; the
+    # persona still leads, and the room brief and bios still ride the turn.
+    messages: list[dict[str, str]] = [
+        {"role": "system", "content": f"{persona}\n\n{SPEECH_RULES}"}
+    ]
+    # `history[-0:]` is the whole list, so a zero window has to be spelled out.
+    window = history[-config.memory_turns :] if config.memory_turns > 0 else []
+    pending: list[str] = []
+    heard = False
+    for turn in window:
+        if turn.role == "agent" and is_meta_reply(turn.text):
+            # Replayed, one acknowledgement teaches the model to write the next.
+            continue
+        if turn.role != "agent":
+            pending.append(_room_line(turn))
+            heard = True
+        elif not heard:
+            # The window opens on the agent's own line. An assistant message straight
+            # after the system prompt is the other shape strict templates refuse, so
+            # it rides the first user message instead.
+            pending.append(f"(Earlier, you said: {turn.text})")
+        elif pending:
+            messages.append({"role": "user", "content": "\n".join(pending)})
+            pending = []
             messages.append({"role": "assistant", "content": turn.text})
         else:
-            who = turn.speaker or "Someone"
-            messages.append({"role": "user", "content": f"{who}: {turn.text}"})
+            # Two replies with nothing heard between them (a nudge is not remembered).
+            messages[-1]["content"] += "\n" + turn.text
     context = render_turn_context(room, retrieval=retrieval)
     if source == "nudge":
         # Nobody said this. Framing it as speech ("Someone said out loud: Say
@@ -611,24 +721,43 @@ def build_messages(
         who = speaker or "Someone"
         channel = "in the room chat" if source == "chat" else "out loud"
         last = f"{context}\n\n{who} said {channel}: {utterance}"
+    if pending:
+        last = "\n".join(pending) + "\n\n" + last
+    # The last thing a small model reads decides what it writes, so the turn ends on
+    # what to produce rather than on a block of facts it might summarise back.
+    last += "\n\n" + REPLY_CUE
     messages.append({"role": "user", "content": last})
     return messages
 
 
-def render_turn_context(room: RoomSnapshot, *, retrieval: str | None = None) -> str:
-    """Everything the model needs for *this* turn that is not the persona.
+REPLY_CUE = (
+    "(Write only the words you say next to the room. Do not acknowledge, repeat or "
+    "discuss these notes.)"
+)
 
-    Assembled here rather than in the system message so the persona keeps the
-    authority the user gave it, and -- more importantly -- so the untrusted half is
-    fenced. The room brief and the retrieval are ours; the bios are written by the
-    people in the room, and are labelled as information about them rather than left
-    to read as instructions to us.
+
+def _room_line(turn: Turn) -> str:
+    """One remembered utterance as a transcript line."""
+    who = turn.speaker or "Someone"
+    if turn.source == "chat":
+        return f"{who} in chat: {turn.text}"
+    return f"{who}: {turn.text}"
+
+
+def render_turn_context(room: RoomSnapshot, *, retrieval: str | None = None) -> str:
+    """Everything the model needs for *this* turn that is not in the system message.
+
+    Facts, not instructions: the speech rules live in the system message (see
+    `build_messages`) because imperatives on a user turn get acknowledged rather than
+    followed. What stays here changes per turn or is untrusted. The room brief and the
+    retrieval are ours; the bios are written by the people in the room, and are
+    labelled as information about them rather than left to read as instructions.
 
     There is exactly one system message by design: strict Jinja chat templates
     reject a second one outright ("must be at the beginning"), so a second "context"
     system message is not an option here even though it would read more naturally.
     """
-    parts = [SPEECH_RULES, render_room_brief(room)]
+    parts = [render_room_brief(room)]
     if retrieval:
         parts.append(retrieval)
     if bios := render_bios(room):
@@ -642,6 +771,30 @@ def render_turn_context(room: RoomSnapshot, *, retrieval: str | None = None) -> 
 
 
 # --- reply hygiene ------------------------------------------------------------------
+
+_META_OPENING = re.compile(
+    r"^\s*(?:ok(?:ay)?[,.!]?\s*)?(?:i understand|understood|got it|noted"
+    r"|i(?: will|'ll) (?:respond|adhere|keep|speak|remain|follow|reply|stick))\b",
+    re.I,
+)
+_META_SUBJECT = re.compile(
+    r"\b(?:instructions?|guidelines|the rules|these rules|plain spoken prose"
+    r"|formatting|as a prefix|text chat only|two or three sentences"
+    r"|how i should (?:communicate|participate|speak))\b",
+    re.I,
+)
+
+
+def is_meta_reply(text: str) -> bool:
+    """Whether a reply talks about the prompt instead of to the room.
+
+    "I understand the instructions for how I should communicate in this setting" is
+    what gemma-4-e2b produced for turn after turn. Both halves must match -- an
+    acknowledging opening *and* a subject that is the prompt itself -- so "I
+    understand your point, Piper" and "I will say the rules of logic apply" survive.
+    """
+    return bool(_META_OPENING.search(text or "") and _META_SUBJECT.search(text or ""))
+
 
 _SPEAKER_PREFIX = re.compile(r"^\s*(?:agent|assistant|bot|you)\s*[:\-—]\s*", re.I)
 _STAGE_DIRECTION = re.compile(r"^\s*[\(\[\*].{0,80}?[\)\]\*]\s*")
