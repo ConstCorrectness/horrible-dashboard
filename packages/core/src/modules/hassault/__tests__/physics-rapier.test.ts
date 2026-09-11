@@ -310,5 +310,53 @@ describe('RapierPhysicsWorld Character Controller', () => {
     physics.dispose();
     world.dispose();
   });
+
+  it('verifies that all vertex normals in hd_bank are valid, non-NaN, and floors/ramps face upwards', async () => {
+    const THREE = await import('three');
+    const { createWorld3D } = await import('../world3d');
+
+    const world = createWorld3D(THREE, {
+      name: 'hd_bank',
+      title: 'The Bank',
+      ssize: 64,
+    } as any);
+
+    let totalNormalsChecked = 0;
+    let upwardFloorCount = 0;
+
+    world.scene.traverse((child) => {
+      const mesh = child as import('three').Mesh;
+      if (!mesh.isMesh) return;
+      const normalAttr = mesh.geometry.getAttribute('normal');
+      expect(normalAttr).toBeDefined();
+
+      for (let i = 0; i < normalAttr.count; i++) {
+        const nx = normalAttr.getX(i);
+        const ny = normalAttr.getY(i);
+        const nz = normalAttr.getZ(i);
+
+        // Crucial: No NaN or Infinite normals allowed anywhere
+        expect(Number.isNaN(nx)).toBe(false);
+        expect(Number.isNaN(ny)).toBe(false);
+        expect(Number.isNaN(nz)).toBe(false);
+        expect(Number.isFinite(nx)).toBe(true);
+        expect(Number.isFinite(ny)).toBe(true);
+        expect(Number.isFinite(nz)).toBe(true);
+
+        totalNormalsChecked++;
+        // Three.js Y is UP (elevation in world coords)
+        if (ny > 0.8) {
+          upwardFloorCount++;
+        }
+      }
+    });
+
+    expect(totalNormalsChecked).toBeGreaterThan(100);
+    // There must be many upward facing floor/ramp normals
+    expect(upwardFloorCount).toBeGreaterThan(20);
+
+    world.dispose();
+  });
 });
+
 

@@ -96,6 +96,51 @@ class World3DBuilder {
     return b;
   }
 
+  addTriangle(
+    p0: [number, number, number],
+    p1: [number, number, number],
+    p2: [number, number, number],
+    material: MaterialKind = 'concrete',
+    isCollider = true,
+    customUVs?: [number, number, number, number, number, number],
+  ) {
+    const t0 = [p0[0], p0[2], p0[1]];
+    const t1 = [p1[0], p1[2], p1[1]];
+    const t2 = [p2[0], p2[2], p2[1]];
+
+    const vA = new this.THREE.Vector3(t1[0] - t0[0], t1[1] - t0[1], t1[2] - t0[2]);
+    const vB = new this.THREE.Vector3(t2[0] - t0[0], t2[1] - t0[1], t2[2] - t0[2]);
+    const cross = new this.THREE.Vector3().crossVectors(vA, vB);
+    if (cross.lengthSq() < 1e-6) {
+      return; // Ignore degenerate triangles
+    }
+    const norm = cross.normalize();
+
+    let uv0: [number, number], uv1: [number, number], uv2: [number, number];
+    if (customUVs) {
+      uv0 = [customUVs[0], customUVs[1]];
+      uv1 = [customUVs[2], customUVs[3]];
+      uv2 = [customUVs[4], customUVs[5]];
+    } else {
+      const tileScale = material === 'hazard' || material === 'crate' ? 2.0 : 4.0;
+      uv0 = computePlanarUV(p0, norm, tileScale);
+      uv1 = computePlanarUV(p1, norm, tileScale);
+      uv2 = computePlanarUV(p2, norm, tileScale);
+    }
+
+    const batch = this.getBatch(material);
+    batch.positions.push(...t0, ...t1, ...t2);
+    batch.normals.push(norm.x, norm.y, norm.z, norm.x, norm.y, norm.z, norm.x, norm.y, norm.z);
+    batch.uvs.push(...uv0, ...uv1, ...uv2);
+
+    if (isCollider) {
+      const bIdx = this.colIndexOffset;
+      this.colVertices.push(...p0, ...p1, ...p2);
+      this.colIndices.push(bIdx, bIdx + 1, bIdx + 2);
+      this.colIndexOffset += 3;
+    }
+  }
+
   addQuad(
     p0: [number, number, number],
     p1: [number, number, number],
@@ -105,47 +150,42 @@ class World3DBuilder {
     isCollider = true,
     customUVs?: [number, number, number, number, number, number, number, number],
   ) {
-    const t0 = [p0[0], p0[2], p0[1]];
-    const t1 = [p1[0], p1[2], p1[1]];
-    const t2 = [p2[0], p2[2], p2[1]];
-    const t3 = [p3[0], p3[2], p3[1]];
-
-    const vA = new this.THREE.Vector3(t1[0] - t0[0], t1[1] - t0[1], t1[2] - t0[2]);
-    const vB = new this.THREE.Vector3(t2[0] - t0[0], t2[1] - t0[1], t2[2] - t0[2]);
-    const norm = new this.THREE.Vector3().crossVectors(vA, vB).normalize();
-
-    let uv0: [number, number], uv1: [number, number], uv2: [number, number], uv3: [number, number];
     if (customUVs) {
-      uv0 = [customUVs[0], customUVs[1]];
-      uv1 = [customUVs[2], customUVs[3]];
-      uv2 = [customUVs[4], customUVs[5]];
-      uv3 = [customUVs[6], customUVs[7]];
+      this.addTriangle(p0, p1, p2, material, isCollider, [
+        customUVs[0], customUVs[1],
+        customUVs[2], customUVs[3],
+        customUVs[4], customUVs[5],
+      ]);
+      this.addTriangle(p0, p2, p3, material, isCollider, [
+        customUVs[0], customUVs[1],
+        customUVs[4], customUVs[5],
+        customUVs[6], customUVs[7],
+      ]);
     } else {
-      const tileScale = material === 'hazard' || material === 'crate' ? 2.0 : 4.0;
-      uv0 = computePlanarUV(p0, norm, tileScale);
-      uv1 = computePlanarUV(p1, norm, tileScale);
-      uv2 = computePlanarUV(p2, norm, tileScale);
-      uv3 = computePlanarUV(p3, norm, tileScale);
+      this.addTriangle(p0, p1, p2, material, isCollider);
+      this.addTriangle(p0, p2, p3, material, isCollider);
     }
+  }
 
-    const batch = this.getBatch(material);
-
-    // Triangle 1: t0, t1, t2
-    batch.positions.push(...t0, ...t1, ...t2);
-    batch.normals.push(norm.x, norm.y, norm.z, norm.x, norm.y, norm.z, norm.x, norm.y, norm.z);
-    batch.uvs.push(...uv0, ...uv1, ...uv2);
-
-    // Triangle 2: t0, t2, t3
-    batch.positions.push(...t0, ...t2, ...t3);
-    batch.normals.push(norm.x, norm.y, norm.z, norm.x, norm.y, norm.z, norm.x, norm.y, norm.z);
-    batch.uvs.push(...uv0, ...uv2, ...uv3);
-
-    if (isCollider) {
-      const bIdx = this.colIndexOffset;
-      this.colVertices.push(...p0, ...p1, ...p2, ...p3);
-      this.colIndices.push(bIdx, bIdx + 1, bIdx + 2, bIdx, bIdx + 2, bIdx + 3);
-      this.colIndexOffset += 4;
-    }
+  addFloor(
+    minX: number, minY: number,
+    maxX: number, maxY: number,
+    z: number,
+    material: MaterialKind = 'concrete',
+    isCollider = true,
+    customUVs?: [number, number, number, number, number, number, number, number],
+  ) {
+    // Top face pointing strictly UP (+y in Three.js coordinates):
+    // p0 = (minX, maxY), p1 = (maxX, maxY), p2 = (maxX, minY), p3 = (minX, minY)
+    this.addQuad(
+      [minX, maxY, z],
+      [maxX, maxY, z],
+      [maxX, minY, z],
+      [minX, minY, z],
+      material,
+      isCollider,
+      customUVs,
+    );
   }
 
   addBox(
@@ -168,9 +208,73 @@ class World3DBuilder {
     material: MaterialKind = 'concrete',
     isCollider = true,
   ) {
-    this.addQuad([minX, minY, z0], [maxX, minY, z0], [maxX, maxY, z1], [minX, maxY, z1], material, isCollider);
-    this.addQuad([minX, maxY, z1], [minX, maxY, Math.min(z0, z1)], [minX, minY, Math.min(z0, z1)], [minX, minY, z0], material, isCollider);
-    this.addQuad([maxX, minY, z0], [maxX, minY, Math.min(z0, z1)], [maxX, maxY, Math.min(z0, z1)], [maxX, maxY, z1], material, isCollider);
+    const minZ = Math.min(z0, z1);
+
+    // 1. Slope Quad (wound so normal points UP into the sky, norm.y > 0)
+    // p0: (minX, minY, z0), p1: (minX, maxY, z1), p2: (maxX, maxY, z1), p3: (maxX, minY, z0)
+    this.addQuad(
+      [minX, minY, z0],
+      [minX, maxY, z1],
+      [maxX, maxY, z1],
+      [maxX, minY, z0],
+      material,
+      isCollider,
+    );
+
+    // 2. West side wall (x = minX, outward normal norm.x < 0)
+    this.addTriangle(
+      [minX, minY, z0],
+      [minX, minY, minZ],
+      [minX, maxY, z1],
+      material,
+      isCollider,
+    );
+    this.addTriangle(
+      [minX, minY, minZ],
+      [minX, maxY, minZ],
+      [minX, maxY, z1],
+      material,
+      isCollider,
+    );
+
+    // 3. East side wall (x = maxX, outward normal norm.x > 0)
+    this.addTriangle(
+      [maxX, minY, minZ],
+      [maxX, minY, z0],
+      [maxX, maxY, z1],
+      material,
+      isCollider,
+    );
+    this.addTriangle(
+      [maxX, maxY, minZ],
+      [maxX, minY, minZ],
+      [maxX, maxY, z1],
+      material,
+      isCollider,
+    );
+
+    // 4. Back vertical wall if elevated above minZ
+    if (z1 > z0 && z1 > minZ) {
+      // Elevated at maxY, wall faces North (+y in game, +z in Three)
+      this.addQuad(
+        [minX, maxY, minZ],
+        [maxX, maxY, minZ],
+        [maxX, maxY, z1],
+        [minX, maxY, z1],
+        material,
+        isCollider,
+      );
+    } else if (z0 > z1 && z0 > minZ) {
+      // Elevated at minY, wall faces South (-y in game, -z in Three)
+      this.addQuad(
+        [maxX, minY, minZ],
+        [minX, minY, minZ],
+        [minX, minY, z0],
+        [maxX, minY, z0],
+        material,
+        isCollider,
+      );
+    }
   }
 
   build(root: THREE.Group): { geometries: THREE.BufferGeometry[]; materials: THREE.Material[]; lib: PBRMaterialLibrary } {
@@ -225,30 +329,31 @@ export function createProceduralFacility3D(
   builder.addQuad([0, 64, 0], [0, 0, 0], [0, 0, 14], [0, 64, 14], 'concrete');
 
   // 2. Ground Floor (z = 0), with central pit opening [20..44, 20..44]
-  builder.addQuad([0, 0, 0], [20, 0, 0], [20, 64, 0], [0, 64, 0], 'concrete');
-  builder.addQuad([44, 0, 0], [64, 0, 0], [64, 64, 0], [44, 64, 0], 'concrete');
-  builder.addQuad([20, 0, 0], [44, 0, 0], [44, 20, 0], [20, 20, 0], 'concrete');
-  builder.addQuad([20, 44, 0], [44, 44, 0], [44, 64, 0], [20, 64, 0], 'concrete');
+  builder.addFloor(0, 0, 20, 64, 0, 'concrete');
+  builder.addFloor(44, 0, 64, 64, 0, 'concrete');
+  builder.addFloor(20, 0, 44, 20, 0, 'concrete');
+  builder.addFloor(20, 44, 44, 64, 0, 'concrete');
 
   // 3. Lower Coolant Pit (z = -5)
-  builder.addQuad([20, 20, -5], [44, 20, -5], [44, 44, -5], [20, 44, -5], 'vault_steel');
-  builder.addQuad([20, 20, 0], [44, 20, 0], [44, 20, -5], [20, 20, -5], 'vault_steel');
-  builder.addQuad([44, 44, 0], [20, 44, 0], [20, 44, -5], [44, 44, -5], 'vault_steel');
-  builder.addQuad([44, 20, 0], [44, 44, 0], [44, 44, -5], [44, 20, -5], 'vault_steel');
-  builder.addQuad([20, 44, 0], [20, 20, 0], [20, 20, -5], [20, 44, -5], 'vault_steel');
+  builder.addFloor(20, 20, 44, 44, -5, 'vault_steel');
+  // Pit walls (facing inward into the coolant pit):
+  builder.addQuad([20, 20, -5], [44, 20, -5], [44, 20, 0], [20, 20, 0], 'vault_steel');
+  builder.addQuad([44, 44, -5], [20, 44, -5], [20, 44, 0], [44, 44, 0], 'vault_steel');
+  builder.addQuad([44, 20, -5], [44, 44, -5], [44, 44, 0], [44, 20, 0], 'vault_steel');
+  builder.addQuad([20, 44, -5], [20, 20, -5], [20, 20, 0], [20, 44, 0], 'vault_steel');
 
   // Ramps into the Pit
   builder.addRamp(28, 14, 0, 36, 20, -5, 'vault_steel');
   builder.addRamp(28, 44, -5, 36, 50, 0, 'vault_steel');
 
   // 4. Upper Mezzanine / Catwalk (z = 6, width = 6 around perimeter)
-  builder.addQuad([0, 0, 6], [64, 0, 6], [64, 6, 6], [0, 6, 6], 'vault_steel');
-  builder.addQuad([0, 58, 6], [64, 58, 6], [64, 64, 6], [0, 64, 6], 'vault_steel');
-  builder.addQuad([0, 6, 6], [6, 6, 6], [6, 58, 6], [0, 58, 6], 'vault_steel');
-  builder.addQuad([58, 6, 6], [64, 6, 6], [64, 58, 6], [58, 58, 6], 'vault_steel');
+  builder.addFloor(0, 0, 64, 6, 6, 'vault_steel');
+  builder.addFloor(0, 58, 64, 64, 6, 'vault_steel');
+  builder.addFloor(0, 6, 6, 58, 6, 'vault_steel');
+  builder.addFloor(58, 6, 64, 58, 6, 'vault_steel');
 
   // Cross-Bridge over the arena at z = 6
-  builder.addQuad([26, 6, 6], [38, 6, 6], [38, 58, 6], [26, 58, 6], 'vault_steel');
+  builder.addFloor(26, 6, 38, 58, 6, 'vault_steel');
 
   // Ramps leading from Ground (z = 0) to Catwalk (z = 6)
   builder.addRamp(2, 10, 0, 6, 26, 6, 'concrete');
@@ -340,25 +445,27 @@ export function createProceduralJunkFlea3D(
   builder.addQuad([4, 60, 0], [4, 4, 0], [4, 4, 14], [4, 60, 14], 'concrete');
 
   // 2. Ground Floor (z = 0) with Trench cutouts
-  builder.addQuad([4, 4, 0], [16, 4, 0], [16, 60, 0], [4, 60, 0], 'concrete');
-  builder.addQuad([48, 4, 0], [60, 4, 0], [60, 60, 0], [48, 60, 0], 'concrete');
-  builder.addQuad([22, 4, 0], [42, 4, 0], [42, 60, 0], [22, 60, 0], 'concrete');
+  builder.addFloor(4, 4, 16, 60, 0, 'concrete');
+  builder.addFloor(48, 4, 60, 60, 0, 'concrete');
+  builder.addFloor(22, 4, 42, 60, 0, 'concrete');
 
-  builder.addQuad([16, 4, 0], [22, 4, 0], [22, 14, 0], [16, 14, 0], 'concrete');
-  builder.addQuad([16, 50, 0], [22, 50, 0], [22, 60, 0], [16, 60, 0], 'concrete');
-  builder.addQuad([42, 4, 0], [48, 4, 0], [48, 14, 0], [42, 14, 0], 'concrete');
-  builder.addQuad([42, 50, 0], [48, 50, 0], [48, 60, 0], [42, 60, 0], 'concrete');
+  builder.addFloor(16, 4, 22, 14, 0, 'concrete');
+  builder.addFloor(16, 50, 22, 60, 0, 'concrete');
+  builder.addFloor(42, 4, 48, 14, 0, 'concrete');
+  builder.addFloor(42, 50, 48, 60, 0, 'concrete');
 
   // 3. Subterranean Trenches (z = -2.0)
-  builder.addQuad([16, 20, -2], [22, 20, -2], [22, 44, -2], [16, 44, -2], 'concrete');
-  builder.addQuad([16, 20, 0], [16, 44, 0], [16, 44, -2], [16, 20, -2], 'concrete');
-  builder.addQuad([22, 44, 0], [22, 20, 0], [22, 20, -2], [22, 44, -2], 'concrete');
+  builder.addFloor(16, 20, 22, 44, -2, 'concrete');
+  // Trench 1 walls facing inward into trench
+  builder.addQuad([16, 20, -2], [16, 44, -2], [16, 44, 0], [16, 20, 0], 'concrete');
+  builder.addQuad([22, 44, -2], [22, 20, -2], [22, 20, 0], [22, 44, 0], 'concrete');
   builder.addRamp(16, 14, 0, 22, 20, -2, 'vault_steel');
   builder.addRamp(16, 44, -2, 22, 50, 0, 'vault_steel');
 
-  builder.addQuad([42, 20, -2], [48, 20, -2], [48, 44, -2], [42, 44, -2], 'concrete');
-  builder.addQuad([42, 20, 0], [42, 44, 0], [42, 44, -2], [42, 20, -2], 'concrete');
-  builder.addQuad([48, 44, 0], [48, 20, 0], [48, 20, -2], [48, 44, -2], 'concrete');
+  builder.addFloor(42, 20, 48, 44, -2, 'concrete');
+  // Trench 2 walls facing inward into trench
+  builder.addQuad([42, 20, -2], [42, 44, -2], [42, 44, 0], [42, 20, 0], 'concrete');
+  builder.addQuad([48, 44, -2], [48, 20, -2], [48, 20, 0], [48, 44, 0], 'concrete');
   builder.addRamp(42, 14, 0, 48, 20, -2, 'vault_steel');
   builder.addRamp(42, 44, -2, 48, 50, 0, 'vault_steel');
 
@@ -374,7 +481,7 @@ export function createProceduralJunkFlea3D(
   builder.addBox(30, 30, 0, 34, 34, 1.4, 'crate');
 
   // 6. High Steel Catwalk Bridge (z = 6.4)
-  builder.addQuad([30, 14, 6.4], [34, 14, 6.4], [34, 50, 6.4], [30, 50, 6.4], 'vault_steel');
+  builder.addFloor(30, 14, 34, 50, 6.4, 'vault_steel');
   builder.addRamp(30, 8, 0, 34, 14, 6.4, 'vault_steel');
   builder.addRamp(30, 50, 6.4, 34, 56, 0, 'vault_steel');
 
@@ -464,11 +571,11 @@ export function createProceduralBank3D(
   builder.addQuad([4, 60, 0], [4, 4, 0], [4, 4, 14], [4, 60, 14], 'concrete');
 
   // 2. Ground Floors (Street Asphalt vs Bank Polished Marble Floor)
-  builder.addQuad([4, 4, 0], [60, 4, 0], [60, 18, 0], [4, 18, 0], 'asphalt');
+  builder.addFloor(4, 4, 60, 18, 0, 'asphalt');
   builder.addBox(4, 14, 0, 60, 18, 0.2, 'concrete'); // Sidewalk Curb
-  builder.addQuad([4, 18, 0], [60, 18, 0], [60, 46, 0], [4, 46, 0], 'marble');
-  builder.addQuad([4, 46, 0], [40, 46, 0], [40, 60, 0], [4, 60, 0], 'concrete');
-  builder.addQuad([40, 46, 0], [60, 46, 0], [60, 60, 0], [40, 60, 0], 'vault_steel');
+  builder.addFloor(4, 18, 60, 46, 0, 'marble');
+  builder.addFloor(4, 46, 40, 60, 0, 'concrete');
+  builder.addFloor(40, 46, 60, 60, 0, 'vault_steel');
 
   // 3. Bank Exterior Facade Wall (y: 18..22) with 3 Entrances
   builder.addBox(4, 18, 0, 8, 22, 14, 'concrete');
@@ -496,11 +603,11 @@ export function createProceduralBank3D(
   builder.addBox(32.5, 32.2, 1.4, 35.5, 32.6, 3.4, 'glass');
 
   // 6. Executive Mezzanine & Balconies (z = 5.0)
-  builder.addQuad([14, 38, 5], [20, 38, 5], [20, 45, 5], [14, 45, 5], 'marble');
+  builder.addFloor(14, 38, 20, 45, 5, 'marble');
   builder.addBox(19.8, 38, 5, 20.2, 45, 6.1, 'wood'); // Balcony railing
   builder.addRamp(14, 32, 0, 18, 38, 5, 'concrete');   // West stairs
   builder.addBox(14, 18, 4.8, 18, 22, 5.0, 'vault_steel'); // Fire escape connection
-  builder.addQuad([44, 38, 5], [50, 38, 5], [50, 45, 5], [44, 45, 5], 'marble');
+  builder.addFloor(44, 38, 50, 45, 5, 'marble');
   builder.addBox(43.8, 38, 5, 44.2, 45, 6.1, 'wood'); // Balcony railing
   builder.addRamp(46, 32, 0, 50, 38, 5, 'concrete');   // East stairs
 
@@ -526,25 +633,19 @@ export function createProceduralBank3D(
 
   // 10. Tactical Bomb Site Spray Decals ("A" and "B")
   // Site A: On the Vault floor in front of gold pallets
-  builder.addQuad(
-    [43, 50, 0.02],
-    [48, 50, 0.02],
-    [48, 55, 0.02],
-    [43, 55, 0.02],
+  builder.addFloor(
+    43, 50, 48, 55, 0.02,
     'site_a',
     false,
-    [0, 0, 1, 0, 1, 1, 0, 1],
+    [0, 1, 1, 1, 1, 0, 0, 0],
   );
 
   // Site B: Centered on the Grand Banking Hall marble floor
-  builder.addQuad(
-    [29, 26, 0.02],
-    [34, 26, 0.02],
-    [34, 31, 0.02],
-    [29, 31, 0.02],
+  builder.addFloor(
+    29, 26, 34, 31, 0.02,
     'site_b',
     false,
-    [0, 0, 1, 0, 1, 1, 0, 1],
+    [0, 1, 1, 1, 1, 0, 0, 0],
   );
 
   const { geometries, materials, lib } = builder.build(root);

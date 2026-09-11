@@ -1178,6 +1178,8 @@ export function HorribleAssaultPanel() {
         // sees exists on every machine. Falling back to whatever is first keeps
         // the panel usable if the bundled maps somehow failed to build.
         const preferred =
+          list.find((m) => m.name === 'hd_bank') ??
+          list.find((m) => m.name === 'hd_facility') ??
           list.find((m) => m.name === 'hd_atrium') ??
           list.find((m) => m.source === 'bundled') ??
           list[0];
@@ -1397,11 +1399,13 @@ export function HorribleAssaultPanel() {
         if (world3dGroup) {
           scene.remove(world3dGroup);
           world3dGroup = null;
+          scene.environment = null;
         }
         water?.dispose();
         ladders?.dispose();
 
         if (world3d) {
+          scene.environment = propEnvironment;
           world3dGroup = world3d.scene;
           world3dGroup.traverse((child) => {
             const m = child as import('three').Mesh;
@@ -1442,6 +1446,7 @@ export function HorribleAssaultPanel() {
           return world3d.collision.triangles;
         }
 
+        scene.environment = null;
         water = createWater(THREE, scene, world);
         ladders = createLadders(THREE, scene, world);
         const data = buildWorldMesh(world);
