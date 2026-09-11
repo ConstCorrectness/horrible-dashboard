@@ -20,8 +20,10 @@ non-flat is roughly a second *per hit* and makes the search box unusable.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import re
+from pathlib import Path
 from typing import Any
 
 from backend.modules.karaoke import store
@@ -174,25 +176,53 @@ def _split_title(title: str) -> tuple[str, str]:
     return "", title.strip()
 
 
-def _download_blocking(song_id: str, url: str) -> dict[str, Any]:
-    """Fetch one video. Returns the info dict; raises on failure."""
-    yt_dlp = _ytdlp()
-    if yt_dlp is None:
-        raise RuntimeError(INSTALL_HINT)
-    target = store.songs_dir()
-    opts = {
+#: JavaScript runtimes yt-dlp may use to solve YouTube's player challenges. yt-dlp
+#: enables only deno by default; without a runtime YouTube withholds most formats
+#: and serves the rest behind 403s. Listing several is safe: an absent runtime is
+#: skipped and the highest-priority one present is used (node and bun are common
+#: on a dev box; deno usually is not). The challenge scripts themselves come from
+#: `yt-dlp-ejs`, pulled in by the `yt-dlp[default]` dependency.
+JS_RUNTIMES: dict[str, dict[str, Any]] = {"deno": {}, "node": {}, "bun": {}}
+
+#: Audio only, for music that is heard rather than watched (the Clubhouse room agent).
+#: A single stream needs no ffmpeg merge -- and it is what YouTube still serves
+#: reliably: measured 2026-09-10, `ba[ext=m4a]` downloaded where the pre-muxed mp4
+#: the video path asks for was gone or 403.
+AUDIO_FORMAT = "ba[ext=m4a]/ba/b"
+
+
+def download_opts(
+    song_id: str, target: Path, *, audio_only: bool = False
+) -> dict[str, Any]:
+    """The yt-dlp options for one download. Split out so tests can pin them."""
+    opts: dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
         # The output name is the row id: unique, ASCII, and short enough for
         # Windows' path limit whatever the video is called. See store.py.
         "outtmpl": str(target / f"{song_id}.%(ext)s"),
+        "js_runtimes": {name: dict(cfg) for name, cfg in JS_RUNTIMES.items()},
+    }
+    if audio_only:
+        opts["format"] = AUDIO_FORMAT
+    else:
         # Prefer a single already-muxed file. Karaoke videos are 720p at worst and
         # the merge step needs ffmpeg, which we don't want to hard-require just to
         # play a song at the original pitch.
-        "format": "best[ext=mp4]/best",
-        "merge_output_format": "mp4",
-    }
+        opts["format"] = "best[ext=mp4]/best"
+        opts["merge_output_format"] = "mp4"
+    return opts
+
+
+def _download_blocking(
+    song_id: str, url: str, *, audio_only: bool = False
+) -> dict[str, Any]:
+    """Fetch one video (or just its audio). Returns the info dict; raises on failure."""
+    yt_dlp = _ytdlp()
+    if yt_dlp is None:
+        raise RuntimeError(INSTALL_HINT)
+    opts = download_opts(song_id, store.songs_dir(), audio_only=audio_only)
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
     if not isinstance(info, dict):
@@ -200,7 +230,7 @@ def _download_blocking(song_id: str, url: str) -> dict[str, Any]:
     return info
 
 
-async def download_song(song_id: str, url: str) -> None:
+async def download_song(song_id: str, url: str, *, audio_only: bool = False) -> None:
     """Download into `song_id`'s row, updating its status as it goes.
 
     Never raises: this runs detached, so a failure has to land in the row (where
@@ -216,7 +246,11 @@ async def download_song(song_id: str, url: str) -> None:
         if song:
             await publish_song(song)
         try:
-            info = await asyncio.to_thread(_download_blocking, song_id, url)
+            info = await asyncio.to_thread(
+                functools.partial(
+                    _download_blocking, song_id, url, audio_only=audio_only
+                )
+            )
         except Exception as exc:
             logger.warning("karaoke download failed for %s: %s", url, exc)
             failed = store.update_song(song_id, status="failed", error=str(exc)[:500])
@@ -278,8 +312,8 @@ async def download_song(song_id: str, url: str) -> None:
         await session.song_downloaded(song_id, ok=True)
 
 
-def start_download(song_id: str, url: str) -> None:
+def start_download(song_id: str, url: str, *, audio_only: bool = False) -> None:
     """Kick off a detached download, keeping a strong reference to the task."""
-    task = asyncio.create_task(download_song(song_id, url))
+    task = asyncio.create_task(download_song(song_id, url, audio_only=audio_only))
     _in_flight.add(task)
     task.add_done_callback(_in_flight.discard)

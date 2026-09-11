@@ -318,7 +318,7 @@ def test_completed_download_wires_through_to_the_playing_entry(
     )
     song = _song(title="Arrives late", status="queued")
 
-    def fake_fetch(song_id, url):
+    def fake_fetch(song_id, url, *, audio_only=False):
         (store.songs_dir() / f"{song_id}.mp4").write_bytes(b"video bytes")
         return {"ext": "mp4", "title": "Arrives late", "duration": 100}
 
@@ -345,7 +345,7 @@ def test_download_replaces_the_url_placeholder_title(data_dir, monkeypatch, sess
     url = "https://www.youtube.com/watch?v=aaaaaaaaaaa"
     song = store.create_song(title=url, url=url, status="queued")
 
-    def fake_fetch(song_id, _url):
+    def fake_fetch(song_id, _url, *, audio_only=False):
         (store.songs_dir() / f"{song_id}.mp4").write_bytes(b"v")
         return {"ext": "mp4", "title": "Toto - Africa (Karaoke)", "duration": 100}
 
@@ -367,7 +367,7 @@ def test_download_keeps_a_caller_supplied_title(data_dir, monkeypatch, session):
         title="My chosen title", url="https://youtu.be/aaaaaaaaaaa", status="queued"
     )
 
-    def fake_fetch(song_id, _url):
+    def fake_fetch(song_id, _url, *, audio_only=False):
         (store.songs_dir() / f"{song_id}.mp4").write_bytes(b"v")
         return {"ext": "mp4", "title": "Something Else Entirely", "duration": 10}
 

@@ -276,7 +276,9 @@ async def play_music(query: str) -> tuple[str, dict[str, Any] | None]:
     song = store.create_song(
         title=hit.title, video_id=hit.video_id, url=hit.url, status="queued"
     )
-    downloader.start_download(song["id"], hit.url)
+    # Audio only: the room hears the song, nobody watches it, and a single audio
+    # stream is what YouTube still serves without an ffmpeg merge.
+    downloader.start_download(song["id"], hit.url, audio_only=True)
     return (
         f"Found '{hit.title}'. It is downloading and will start in a moment.",
         _play_action(song["id"], hit.title, ready=False),

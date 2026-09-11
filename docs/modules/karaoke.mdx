@@ -134,6 +134,23 @@ listing; here the database is the index, so a filename only has to be unique and
 safe on every OS — which a title never is (`AC/DC`, emoji, a 1,200-character
 clickbait title, Windows' 260-character path limit).
 
+**YouTube needs a JavaScript runtime.** yt-dlp solves YouTube's player challenges by
+running scripts from `yt-dlp-ejs` (pulled in by the `yt-dlp[default]` dependency) in a
+JS runtime, and it enables only **deno** by default. Without one, YouTube withholds
+most formats and 403s the rest — measured 2026-09-10 on yt-dlp 2026.7.4, the pre-muxed
+mp4 died with `HTTP Error 403: Forbidden`. `download_opts` therefore passes
+`js_runtimes` for deno, node and bun; a missing runtime is skipped. The table is
+**copied per download**, because yt-dlp mutates it in place.
+
+Downloads also have an **audio-only** mode (`start_download(..., audio_only=True)`,
+format `ba[ext=m4a]/ba/b`), used by the Clubhouse room agent's `play_music`: music
+that is heard rather than watched needs no video, and a single audio stream needs no
+ffmpeg merge. That matters because YouTube's current format set often has **no
+pre-muxed mp4 at all** — only separate video and audio streams — so the video path's
+`best[ext=mp4]/best` can fail with "Requested format is not available" even with a
+runtime present. Fixing video downloads (a merged selector, which needs ffmpeg) is
+tracked separately.
+
 ## Pitch shift
 
 Right the key for a singer with `♭` / `♯`, ±6 semitones. Shifting pitch *without*

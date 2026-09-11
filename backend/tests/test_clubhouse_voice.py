@@ -365,6 +365,15 @@ def test_the_turn_carries_no_instructions_to_acknowledge():
     assert turn["content"].endswith(V.REPLY_CUE)
 
 
+def test_the_reply_cue_leaves_room_for_a_tool_call():
+    """ "Write only the words you say next" took tool calls from 5/5 to 0/5 on
+    gemma-4-e2b — it said "playing Africa by Toto now" and played nothing. The cue
+    must name tools before it asks for words."""
+    cue = V.REPLY_CUE.lower()
+    assert "tool" in cue
+    assert cue.index("tool") < cue.index("write only")
+
+
 @pytest.mark.parametrize(
     "text",
     [

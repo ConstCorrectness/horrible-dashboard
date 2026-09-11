@@ -562,7 +562,7 @@ a room is strangers talking to your agent, so nothing that acts on a person or a
 
 | Tool | Does | Notes |
 | --- | --- | --- |
-| `play_music(query)` | a `ready` song from the karaoke library, else a YouTube search **without** the karaoke bias and a background download | returns a `music.play` action |
+| `play_music(query)` | a `ready` song from the karaoke library, else a YouTube search **without** the karaoke bias and a background **audio-only** download (`ba[ext=m4a]`) | returns a `music.play` action |
 | `music_control(action, value)` | `stop` / `pause` / `resume` / `volume` (0–1, clamped) / `louder` / `quieter` (±0.2 step) | a pane action only; "Nothing is playing" when the room brief says so |
 | `look_up(query)` | web + library snippets via `gather_context` | not offered when `retrieval` is `off` |
 
@@ -712,9 +712,13 @@ per turn, or text we did not write.
 
 Three pieces keep it from coming back:
 
-- **The turn ends on a cue** (`REPLY_CUE`: write only what you say next; do not
-  acknowledge these notes), because the last thing a small model reads decides what it
-  writes.
+- **The turn ends on a cue** (`REPLY_CUE`: call a tool if the request needs one,
+  otherwise write only what you say next; do not acknowledge these notes), because the
+  last thing a small model reads decides what it writes. **The tool clause is
+  load-bearing and comes first.** The first version said only "write only the words
+  you say next", and gemma-4-e2b obeyed it over the tools it was offered: asked to play
+  a song it called `play_music` 0/5 times with that cue and 5/5 without, replying
+  "playing Africa by Toto now" while nothing played.
 - **`is_meta_reply` drops an acknowledgement** — it is neither spoken nor remembered,
   and the turn returns `reason: "dropped a reply that only acknowledged the prompt"`.
   It needs both an acknowledging opening ("I understand", "I will respond/keep/speak…")

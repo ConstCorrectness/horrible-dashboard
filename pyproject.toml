@@ -44,7 +44,7 @@ dependencies = [
     # (no native build, no browser binary) — the cost of shipping it is a few MB.
     # It is still lazy-imported: `import yt_dlp` is ~1s of module scanning, and
     # most sessions never open the karaoke pane.
-    "yt-dlp>=2025.1.15",
+    "yt-dlp[default]>=2026.8.19",
     "gguf>=0.19",
     "playwright>=1.61.0",
     "orjson>=3.11.9",

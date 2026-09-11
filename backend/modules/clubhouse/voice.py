@@ -730,9 +730,15 @@ def build_messages(
     return messages
 
 
+# Tools come first on purpose. The previous wording ("Write only the words you say
+# next to the room…") suppressed tool calls outright: measured on gemma-4-e2b with
+# "Horrible, play Africa by Toto", play_music was called 0/5 times with it and 5/5
+# without — the model obeyed "write only words" and replied "playing Africa by Toto
+# now" with nothing playing.
 REPLY_CUE = (
-    "(Write only the words you say next to the room. Do not acknowledge, repeat or "
-    "discuss these notes.)"
+    "(If what was asked needs one of your tools, call the tool. Otherwise write only "
+    "the words you say next to the room. Do not acknowledge, repeat or discuss these "
+    "notes.)"
 )
 
 
