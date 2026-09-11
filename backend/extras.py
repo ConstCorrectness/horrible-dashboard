@@ -143,7 +143,7 @@ EXTRAS: dict[str, ExtraSpec] = {
         name="ffmpeg",
         binary="ffmpeg",
         install="install ffmpeg and put it on PATH",
-        summary="karaoke pitch shifting and audio decoding",
+        summary="karaoke video downloads, pitch shifting and audio decoding",
     ),
     "yt-dlp": ExtraSpec(
         name="yt-dlp",

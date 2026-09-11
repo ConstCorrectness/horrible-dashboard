@@ -154,6 +154,14 @@ export function KaraokeSearchPanel() {
         </div>
       ) : null}
 
+      {status && status.ytdlp && !status.ffmpeg && tab === 'search' ? (
+        <div className="kk-warning">
+          ffmpeg isn&apos;t on <code>PATH</code>, so songs download as audio only — YouTube serves
+          video and audio separately, and joining them needs ffmpeg. Pitch shift is unavailable too.
+          Install ffmpeg and the next download picks it up.
+        </div>
+      ) : null}
+
       {tab === 'search' ? (
         <>
           <div className="kk-pane__bar">

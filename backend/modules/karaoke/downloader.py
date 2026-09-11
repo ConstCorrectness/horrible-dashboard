@@ -26,7 +26,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from backend.modules.karaoke import store
+from backend.modules.karaoke import store, transpose
 from backend.modules.karaoke.models import SearchResult
 
 logger = logging.getLogger(__name__)
@@ -190,11 +190,43 @@ JS_RUNTIMES: dict[str, dict[str, Any]] = {"deno": {}, "node": {}, "bun": {}}
 #: the video path asks for was gone or 403.
 AUDIO_FORMAT = "ba[ext=m4a]/ba/b"
 
+#: Karaoke video: separate video and audio streams, joined by ffmpeg. YouTube no
+#: longer serves a single pre-muxed mp4 for most songs -- measured 2026-09-10 on
+#: yt-dlp 2026.8.19 with a JS runtime, the format list had separate video-only and
+#: audio-only streams and nothing combined, so the old `best[ext=mp4]/best` failed
+#: with "Requested format is not available". H.264 first because it decodes in every
+#: browser and WebView without a hardware-codec lottery (AV1 and VP9 do not); 720p is
+#: plenty for lyrics on a TV and keeps a song to tens of megabytes. The trailing
+#: single-file choices only matter for a video that still has one.
+VIDEO_FORMAT = (
+    "bv*[vcodec^=avc1][height<=720]+ba[ext=m4a]"
+    "/bv*[ext=mp4][height<=720]+ba[ext=m4a]"
+    "/b[ext=mp4]/b"
+)
+
+#: Without ffmpeg nothing can be joined, so take a single pre-muxed file if the video
+#: still has one and otherwise its audio. A song you can sing to with no picture beats
+#: a download that fails; `download_song` notes the fallback on the row.
+NO_FFMPEG_FORMAT = "b[ext=mp4]/b/ba[ext=m4a]/ba"
+
+#: Shown inline on a library row that asked for video and got only audio.
+AUDIO_ONLY_NOTE = "Audio only: downloading video needs ffmpeg on PATH."
+
+_AUDIO_EXTS = frozenset({".m4a", ".mp3", ".opus", ".ogg", ".aac", ".wav", ".flac"})
+
 
 def download_opts(
-    song_id: str, target: Path, *, audio_only: bool = False
+    song_id: str,
+    target: Path,
+    *,
+    audio_only: bool = False,
+    ffmpeg: str | None = None,
 ) -> dict[str, Any]:
-    """The yt-dlp options for one download. Split out so tests can pin them."""
+    """The yt-dlp options for one download. Split out so tests can pin them.
+
+    `ffmpeg` is the binary to merge with, or None when there is none, and it decides
+    the video format. An audio-only download ignores it: one stream needs no merge.
+    """
     opts: dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
@@ -206,13 +238,27 @@ def download_opts(
     }
     if audio_only:
         opts["format"] = AUDIO_FORMAT
-    else:
-        # Prefer a single already-muxed file. Karaoke videos are 720p at worst and
-        # the merge step needs ffmpeg, which we don't want to hard-require just to
-        # play a song at the original pitch.
-        opts["format"] = "best[ext=mp4]/best"
+    elif ffmpeg:
+        opts["format"] = VIDEO_FORMAT
         opts["merge_output_format"] = "mp4"
+        # The same binary pitch shift uses, rather than whatever yt-dlp finds itself.
+        opts["ffmpeg_location"] = ffmpeg
+    else:
+        opts["format"] = NO_FFMPEG_FORMAT
     return opts
+
+
+def got_audio_only(info: dict[str, Any], path: Path) -> bool:
+    """Whether a finished download has no picture.
+
+    yt-dlp reports `vcodec: "none"` for an audio-only format, and a merged download
+    carries its video codec, so the codec decides; the extension is only a fallback
+    for an info dict that omits codecs.
+    """
+    vcodec = info.get("vcodec")
+    if vcodec is not None:
+        return str(vcodec) == "none"
+    return path.suffix.lower() in _AUDIO_EXTS
 
 
 def _download_blocking(
@@ -222,7 +268,12 @@ def _download_blocking(
     yt_dlp = _ytdlp()
     if yt_dlp is None:
         raise RuntimeError(INSTALL_HINT)
-    opts = download_opts(song_id, store.songs_dir(), audio_only=audio_only)
+    # Looked up per download rather than at import, so installing ffmpeg takes effect
+    # on the next song without restarting the backend.
+    ffmpeg = None if audio_only else transpose.ffmpeg_path()
+    opts = download_opts(
+        song_id, store.songs_dir(), audio_only=audio_only, ffmpeg=ffmpeg
+    )
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
     if not isinstance(info, dict):
@@ -281,12 +332,19 @@ async def download_song(song_id: str, url: str, *, audio_only: bool = False) -> 
         raw_title = str(info.get("title") or "")
         current = store.get_song(song_id) or {}
         artist, title = _split_title(raw_title)
+        # A video download that could only get audio (no ffmpeg to join YouTube's
+        # separate streams) is still a song you can sing to, so it lands as `ready`
+        # -- with a note in `error`, which the library row shows inline without
+        # disabling the song.
+        fell_back = not audio_only and got_audio_only(info, path)
+        if fell_back:
+            logger.info("karaoke download %s fell back to audio only", song_id)
         updates: dict[str, Any] = {
             "filename": path.name,
             "duration": info.get("duration"),
             "size_bytes": path.stat().st_size,
             "status": "ready",
-            "error": None,
+            "error": AUDIO_ONLY_NOTE if fell_back else None,
         }
         # Only fill in metadata the caller didn't supply — an explicit
         # title/artist from the agent or the UI outranks yt-dlp's guess.

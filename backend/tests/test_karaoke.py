@@ -377,6 +377,59 @@ def test_download_keeps_a_caller_supplied_title(data_dir, monkeypatch, session):
     assert store.get_song(song["id"])["title"] == "My chosen title"
 
 
+def _audio_fetch(song_id, _url, *, audio_only=False):
+    """What yt-dlp hands back when the selector fell through to an audio stream."""
+    (store.songs_dir() / f"{song_id}.m4a").write_bytes(b"a")
+    return {
+        "ext": "m4a",
+        "vcodec": "none",
+        "acodec": "mp4a.40.2",
+        "title": "Toto - Africa",
+        "duration": 10,
+    }
+
+
+def test_a_video_download_that_only_got_audio_is_ready_with_a_note(
+    data_dir, monkeypatch, session
+):
+    """No ffmpeg means YouTube's separate streams can't be joined, so the selector
+    falls back to audio. That is still a song -- ready and queueable -- but the library
+    row has to say why there is no picture."""
+    monkeypatch.setattr(
+        "backend.modules.karaoke.session.session", session, raising=False
+    )
+    song = store.create_song(
+        title="Africa", url="https://youtu.be/aaaaaaaaaaa", status="queued"
+    )
+    monkeypatch.setattr(downloader, "_download_blocking", _audio_fetch)
+    asyncio.run(downloader.download_song(song["id"], "https://youtu.be/aaaaaaaaaaa"))
+
+    row = store.get_song(song["id"])
+    assert row["status"] == "ready"
+    assert row["filename"].endswith(".m4a")
+    assert row["error"] == downloader.AUDIO_ONLY_NOTE
+
+
+def test_an_audio_only_request_carries_no_fallback_note(data_dir, monkeypatch, session):
+    """Room music asks for audio on purpose; that is not a degraded download."""
+    monkeypatch.setattr(
+        "backend.modules.karaoke.session.session", session, raising=False
+    )
+    song = store.create_song(
+        title="Africa", url="https://youtu.be/aaaaaaaaaaa", status="queued"
+    )
+    monkeypatch.setattr(downloader, "_download_blocking", _audio_fetch)
+    asyncio.run(
+        downloader.download_song(
+            song["id"], "https://youtu.be/aaaaaaaaaaa", audio_only=True
+        )
+    )
+
+    row = store.get_song(song["id"])
+    assert row["status"] == "ready"
+    assert row["error"] is None
+
+
 def test_failed_download_wires_through_and_clears_the_stage(
     data_dir, monkeypatch, session
 ):
@@ -385,7 +438,7 @@ def test_failed_download_wires_through_and_clears_the_stage(
     )
     song = _song(title="Never arrives", status="queued")
 
-    def boom(song_id, url):
+    def boom(song_id, url, *, audio_only=False):
         raise RuntimeError("video unavailable")
 
     monkeypatch.setattr(downloader, "_download_blocking", boom)

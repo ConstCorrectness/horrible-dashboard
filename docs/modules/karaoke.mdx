@@ -142,14 +142,35 @@ mp4 died with `HTTP Error 403: Forbidden`. `download_opts` therefore passes
 `js_runtimes` for deno, node and bun; a missing runtime is skipped. The table is
 **copied per download**, because yt-dlp mutates it in place.
 
-Downloads also have an **audio-only** mode (`start_download(..., audio_only=True)`,
-format `ba[ext=m4a]/ba/b`), used by the Clubhouse room agent's `play_music`: music
-that is heard rather than watched needs no video, and a single audio stream needs no
-ffmpeg merge. That matters because YouTube's current format set often has **no
-pre-muxed mp4 at all** — only separate video and audio streams — so the video path's
-`best[ext=mp4]/best` can fail with "Requested format is not available" even with a
-runtime present. Fixing video downloads (a merged selector, which needs ffmpeg) is
-tracked separately.
+**Video is two streams joined by ffmpeg.** YouTube no longer serves a single
+pre-muxed mp4 for most songs — measured 2026-09-10 on yt-dlp 2026.8.19 with a runtime,
+the format list held separate video-only and audio-only streams and nothing combined,
+so the old `best[ext=mp4]/best` failed with "Requested format is not available". So
+`download_opts` picks the format by whether ffmpeg is present, looked up **per
+download** (`transpose.ffmpeg_path`, the binary pitch shift uses) so installing it
+takes effect on the next song without a restart:
+
+| Download | Format | Result |
+| --- | --- | --- |
+| Video, ffmpeg present | `VIDEO_FORMAT`: `bv*[vcodec^=avc1][height<=720]+ba[ext=m4a]`, then any mp4 video ≤720p + m4a, then a single file | merged `.mp4`, `ffmpeg_location` passed explicitly |
+| Video, no ffmpeg | `NO_FFMPEG_FORMAT`: `b[ext=mp4]/b/ba[ext=m4a]/ba` | a pre-muxed file if the video still has one, else **audio only** |
+| Audio only (`start_download(..., audio_only=True)`) | `AUDIO_FORMAT`: `ba[ext=m4a]/ba/b` | `.m4a`; ffmpeg is never consulted |
+
+H.264 comes first because it decodes in every browser and WebView without depending
+on hardware codec support, which AV1 and VP9 do; 720p is plenty for lyrics on a TV.
+Verified with a real `--test` download: with ffmpeg the selector took `136+140` (720p
+H.264 + m4a) and merged them into one `.mp4`; without, it fell through to `140` and
+wrote an `.m4a`.
+
+Without ffmpeg the song still downloads, because a song you can sing to with no
+picture beats a failed download. `download_song` recognises the fallback
+(`got_audio_only`: the result's `vcodec` is `"none"`, or the extension is an audio one
+when codecs are missing) and lands the row as **`ready` with a note in `error`**
+(`AUDIO_ONLY_NOTE`). The Library row renders `error` inline and only disables a song
+whose status is `failed`, so the note explains the black stage without blocking the
+song. The Search tab shows an install hint whenever `/status` reports no ffmpeg. An
+audio-only *request* — the Clubhouse room agent's `play_music` — carries no note: it
+asked for audio on purpose.
 
 ## Pitch shift
 
@@ -191,7 +212,7 @@ Mounted at `/api/karaoke`.
 | `POST /queue`, `DELETE /queue/{entry_id}`, `POST /queue/move`, `POST /queue/clear` | Running order. |
 | `POST /player/{play,pause,next,restart,stop,seek,volume,transpose,autoplay}` | Transport. |
 | `POST /player/progress`, `POST /player/ended` | The stage reporting back. |
-| `GET /status` | What this node can do (yt-dlp / ffmpeg present). |
+| `GET /status` | What this node can do (yt-dlp / ffmpeg present). No ffmpeg means audio-only downloads and no pitch shift. |
 
 Every session mutation returns the full `PlayerState` *and* broadcasts it, so a
 caller never re-fetches after acting.
@@ -255,8 +276,10 @@ are the same client.
 ## Setup
 
 yt-dlp is a core dependency (`uv sync`) — it's a pure-Python wheel with no native
-build. ffmpeg is optional and only gates pitch shift; install it however your OS
-prefers and make sure it's on `PATH`.
+build; its `[default]` extra brings `yt-dlp-ejs`, and YouTube additionally needs a JS
+runtime (deno, node or bun) on `PATH`. ffmpeg is optional but gates two things:
+**video** downloads (without it songs download as audio only, with a note on the row)
+and pitch shift. Install it however your OS prefers and make sure it's on `PATH`.
 
 **Content is not bundled and never will be** — the same rule
 [hassault](hassault.mdx) applies to AssaultCube's media and
