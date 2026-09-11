@@ -43,6 +43,12 @@ import { DefuseProgressRing } from './panels/DefuseProgressRing';
 import { KitPool } from './kits';
 import { DropPool } from './drops';
 import { tradeFor } from './trade';
+import {
+  CrossfireKillBadges,
+  CrossfireHeaderHUD,
+  type KillBadgeData,
+  type KillBadgeType,
+} from './CrossfireKillBadges';
 
 /**
  * Digit codes in catalogue order, so key `n` buys entry `n - 1`.
@@ -996,12 +1002,52 @@ export function HorribleAssaultPanel() {
   // trigger: a hitmarker that appears because you fired is a lie.
   const lastHpRef = useRef(100);
   const [, forceTick] = useState(0);
+  const [killBadge, setKillBadge] = useState<KillBadgeData | null>(null);
+  const killStreakRef = useRef<{ count: number; lastTime: number }>({ count: 0, lastTime: 0 });
+  const headHitRef = useRef<boolean>(false);
+
+  const triggerKillBadge = useCallback((isHead: boolean, isKnife: boolean, isWallbang: boolean) => {
+    const now = Date.now();
+    const streakData = killStreakRef.current;
+    if (now - streakData.lastTime < 4500) {
+      streakData.count += 1;
+    } else {
+      streakData.count = 1;
+    }
+    streakData.lastTime = now;
+
+    let badgeType: KillBadgeType = 'kill';
+    if (isKnife) {
+      badgeType = 'knife';
+    } else if (isHead) {
+      badgeType = 'headshot';
+    } else if (isWallbang) {
+      badgeType = 'wallbang';
+    } else if (streakData.count >= 5) {
+      badgeType = 'unstoppable';
+    } else if (streakData.count === 4) {
+      badgeType = 'quad';
+    } else if (streakData.count === 3) {
+      badgeType = 'triple';
+    } else if (streakData.count === 2) {
+      badgeType = 'double';
+    }
+
+    setKillBadge({
+      id: now,
+      type: badgeType,
+      timestamp: now,
+      streak: streakData.count,
+    });
+  }, []);
+
   useEffect(() => {
     const you = net.you;
     if (!you) return;
     const hit = you.hits.length > 0;
     const killed = you.hits.some((h) => h.killed);
     const headHit = you.hits.find((h) => h.head);
+    headHitRef.current = Boolean(headHit);
     if (headHit) {
       if (headHit.armour) {
         audioRef.current?.own('helmet_dink', 0.95);
@@ -1014,6 +1060,12 @@ export function HorribleAssaultPanel() {
     if (you.hits.some((h) => h.wallbang)) {
       audioRef.current?.own('impact_wallbang', 0.75);
     }
+    if (killed) {
+      const isHead = Boolean(headHit);
+      const isWallbang = you.hits.some((h) => h.wallbang);
+      const isKnife = you.weapon === 0;
+      triggerKillBadge(isHead, isKnife, isWallbang);
+    }
     const hurt = you.hp < lastHpRef.current;
     lastHpRef.current = you.hp;
     // Only on an actual event: this effect runs on every emitted snapshot, and
@@ -1025,7 +1077,7 @@ export function HorribleAssaultPanel() {
       killed: killed ? at : f.killed,
       hurt: hurt ? at : f.hurt,
     }));
-  }, [net.you]);
+  }, [net.you, triggerKillBadge]);
 
   // Multikill fanfare audio stingers for round clutch moments (Double, Triple, Quad, Ace!)
   const lastRoundKillsCountRef = useRef(0);
@@ -1272,6 +1324,7 @@ export function HorribleAssaultPanel() {
       scene.add(fill);
 
       let mesh: import('three').Mesh | null = null;
+      let world3dGroup: import('three').Group | null = null;
       const detail = createDetailTexture(THREE, renderer.capabilities.getMaxAnisotropy());
       const material = new THREE.MeshLambertMaterial({
         vertexColors: true,
@@ -1339,18 +1392,25 @@ export function HorribleAssaultPanel() {
         if (mesh) {
           scene.remove(mesh);
           mesh.geometry.dispose();
+          mesh = null;
+        }
+        if (world3dGroup) {
+          scene.remove(world3dGroup);
+          world3dGroup = null;
         }
         water?.dispose();
         ladders?.dispose();
 
         if (world3d) {
-          const w3dMesh = world3d.scene.children[0] as import('three').Mesh;
-          const geo = w3dMesh.geometry;
-          geo.computeBoundingSphere();
-          mesh = new THREE.Mesh(geo, material);
-          mesh.castShadow = true;
-          mesh.receiveShadow = true;
-          scene.add(mesh);
+          world3dGroup = world3d.scene;
+          world3dGroup.traverse((child) => {
+            const m = child as import('three').Mesh;
+            if (m.isMesh) {
+              m.castShadow = m.name !== 'World3D_glass';
+              m.receiveShadow = true;
+            }
+          });
+          scene.add(world3dGroup);
 
           const cx = world3d.bounds.center[0];
           const cz = world3d.bounds.center[1];
@@ -1358,6 +1418,11 @@ export function HorribleAssaultPanel() {
           bounds.current = { cx, cz, extent };
 
           reveal.fit([cx, cz], extent * 1.05, Math.max(extent * 0.6, 1));
+          if (world3d.materials) {
+            for (const mat of world3d.materials) {
+              installReveal(mat);
+            }
+          }
           backdrop.fit([cx, cz], extent * 2);
 
           const reach = extent * 2;
@@ -1659,11 +1724,17 @@ export function HorribleAssaultPanel() {
                 if (shot.hits.length > 0) {
                   const killed = shot.hits.some((h) => h.killed);
                   const headHit = shot.hits.find((h) => h.head);
+                  headHitRef.current = Boolean(headHit);
                   if (headHit) {
                     audioRef.current?.own('helmet_dink', 0.95);
                     if (effects && shot.ends[0]) {
                       effects.helmetDink(shot.ends[0]);
                     }
+                  }
+                  if (killed) {
+                    const isHead = Boolean(headHit);
+                    const isKnife = shots.isKnife || shots.slot === 0;
+                    triggerKillBadge(isHead, Boolean(isKnife), false);
                   }
                   setFlash((f) => ({
                     ...f,
@@ -2213,6 +2284,7 @@ export function HorribleAssaultPanel() {
         viewmodel.dispose();
         backdrop.dispose();
         if (mesh) mesh.geometry.dispose();
+        if (world3dGroup) scene.remove(world3dGroup);
         material.dispose();
         detail.dispose();
         renderer.dispose();
@@ -3300,6 +3372,21 @@ export function HorribleAssaultPanel() {
       <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
         <div ref={mountRef} onClick={onCanvasClick} style={{ position: 'absolute', inset: 0 }} />
 
+        {/* Crossfire Tactical Match Header */}
+        {phase === 'playing' && !cleanView && (
+          <CrossfireHeaderHUD
+            scoreGR={online ? net.scores[1] : 0}
+            scoreBL={online ? net.scores[0] : 0}
+            roundTimerSeconds={online && net.modeState?.remain ? Math.round(net.modeState.remain) : 120}
+            bombPlantedSite={
+              net.modeState?.bombPlanted
+                ? (net.modeState.site === 1 ? 'B' : 'A')
+                : null
+            }
+            myTeam={myTeam}
+          />
+        )}
+
         {showHurt && (
           <div
             style={{
@@ -3679,6 +3766,11 @@ export function HorribleAssaultPanel() {
             ) : (
               <Crosshair gap={crosshairGap} hit={showHit} killed={showKilled} />
             )}
+            <CrossfireKillBadges
+              badge={killBadge}
+              hit={showHit}
+              headHit={now - flash.hit < FLASH_MS && Boolean(headHitRef.current)}
+            />
             <div
               style={{
                 position: 'absolute',
