@@ -100,7 +100,7 @@ fn push_operator_body(out: &mut Vec<Vertex>, p: &PlayerRow, hitbox: &HitboxSpec)
 
     // Crouch height offset
     let crouch_drop = (hitbox.standing_height - hitbox.crouch_height) * crouch;
-    let hip_z = 2.3 - crouch_drop * 0.85;
+    let hip_z = 2.80 - crouch_drop * 0.85;
 
     // Movement speed estimate & walk animation phase (derived from seq or coords)
     let walk_phase = ((p.x * 3.5 + p.y * 3.5).sin() * 2.0).abs() * 3.14159;
@@ -118,7 +118,7 @@ fn push_operator_body(out: &mut Vec<Vertex>, p: &PlayerRow, hitbox: &HitboxSpec)
         out,
         origin,
         [0.0, 0.0, hip_z],
-        [0.45, 0.32, 0.22],
+        [0.36, 0.24, 0.22],
         yaw,
         0.0,
         armor_col,
@@ -128,7 +128,7 @@ fn push_operator_body(out: &mut Vec<Vertex>, p: &PlayerRow, hitbox: &HitboxSpec)
         out,
         origin,
         [0.0, 0.0, hip_z + 0.15],
-        [0.48, 0.35, 0.08],
+        [0.38, 0.26, 0.08],
         yaw,
         0.0,
         trim_col,
@@ -137,13 +137,13 @@ fn push_operator_body(out: &mut Vec<Vertex>, p: &PlayerRow, hitbox: &HitboxSpec)
     // -------------------------------------------------------------------------
     // 2. Spine / Torso (Plate Carrier Vest & Ammo Pouches)
     // -------------------------------------------------------------------------
-    let spine_z = hip_z + 0.55;
+    let spine_z = hip_z + 0.75;
     let spine_pitch = -pitch * 0.4;
     push_oriented_box(
         out,
         origin,
         [0.0, 0.0, spine_z],
-        [0.52, 0.32, 0.55],
+        [0.38, 0.26, 0.50],
         yaw,
         spine_pitch,
         body_col,
@@ -153,7 +153,7 @@ fn push_operator_body(out: &mut Vec<Vertex>, p: &PlayerRow, hitbox: &HitboxSpec)
         out,
         origin,
         [0.0, 0.0, spine_z + 0.05],
-        [0.58, 0.38, 0.48],
+        [0.44, 0.32, 0.45],
         yaw,
         spine_pitch,
         armor_col,
@@ -162,18 +162,18 @@ fn push_operator_body(out: &mut Vec<Vertex>, p: &PlayerRow, hitbox: &HitboxSpec)
     push_oriented_box(
         out,
         origin,
-        [0.0, 0.28, spine_z - 0.05],
-        [0.42, 0.10, 0.18],
+        [0.0, 0.24, spine_z - 0.05],
+        [0.32, 0.08, 0.16],
         yaw,
         spine_pitch,
         trim_col,
     );
-    // Shoulder Pauldrons
+    // Shoulder Pauldrons (bounded strictly within hitbox radius 0.68)
     push_oriented_box(
         out,
         origin,
-        [0.62, 0.0, spine_z + 0.45],
-        [0.16, 0.20, 0.12],
+        [0.48, 0.0, spine_z + 0.45],
+        [0.13, 0.16, 0.12],
         yaw,
         spine_pitch,
         trim_col,
@@ -181,8 +181,8 @@ fn push_operator_body(out: &mut Vec<Vertex>, p: &PlayerRow, hitbox: &HitboxSpec)
     push_oriented_box(
         out,
         origin,
-        [-0.62, 0.0, spine_z + 0.45],
-        [0.16, 0.20, 0.12],
+        [-0.48, 0.0, spine_z + 0.45],
+        [0.13, 0.16, 0.12],
         yaw,
         spine_pitch,
         trim_col,
@@ -191,24 +191,24 @@ fn push_operator_body(out: &mut Vec<Vertex>, p: &PlayerRow, hitbox: &HitboxSpec)
     // -------------------------------------------------------------------------
     // 3. Neck, Head, Helmet & Tactical Visor (At Eye Height ~4.5)
     // -------------------------------------------------------------------------
-    let head_z = spine_z + 0.72;
+    let head_z = spine_z + 1.15;
     let head_pitch = -pitch * 0.6;
-    // Balaclava / Face Base
+    // Balaclava / Face Base (starts at 4.70 - 0.35 = 4.35, matching head_band = 0.85)
     push_oriented_box(
         out,
         origin,
         [0.0, 0.0, head_z],
-        [0.34, 0.35, 0.35],
+        [0.26, 0.28, 0.35],
         yaw,
         head_pitch,
         SKIN_TONE,
     );
-    // Ballistic Helmet
+    // Ballistic Helmet (top reaches 4.85 + 0.30 = 5.15, bounded by standing_height 5.20)
     push_oriented_box(
         out,
         origin,
-        [0.0, -0.02, head_z + 0.16],
-        [0.38, 0.40, 0.22],
+        [0.0, -0.02, head_z + 0.15],
+        [0.30, 0.32, 0.30],
         yaw,
         head_pitch,
         armor_col,
@@ -217,8 +217,8 @@ fn push_operator_body(out: &mut Vec<Vertex>, p: &PlayerRow, hitbox: &HitboxSpec)
     push_oriented_box(
         out,
         origin,
-        [0.0, 0.24, head_z + 0.05],
-        [0.30, 0.12, 0.12],
+        [0.0, 0.22, head_z - 0.20],
+        [0.24, 0.10, 0.10],
         yaw,
         head_pitch,
         visor_col,
@@ -227,9 +227,9 @@ fn push_operator_body(out: &mut Vec<Vertex>, p: &PlayerRow, hitbox: &HitboxSpec)
     // -------------------------------------------------------------------------
     // 4. Articulated Legs (Thighs, Knee Pads, Shins, Boots)
     // -------------------------------------------------------------------------
-    let leg_span = 0.28;
-    let thigh_len = 0.55;
-    let shin_len = 0.60;
+    let leg_span = 0.26;
+    let thigh_len = 0.70;
+    let shin_len = 0.70;
 
     // --- Left Leg ---
     let l_swing = if crouch > 0.05 { -0.35 * crouch } else { leg_swing };
@@ -237,7 +237,7 @@ fn push_operator_body(out: &mut Vec<Vertex>, p: &PlayerRow, hitbox: &HitboxSpec)
         out,
         origin,
         [leg_span, l_swing * 0.35, hip_z - thigh_len],
-        [0.16, 0.16, thigh_len],
+        [0.15, 0.15, thigh_len],
         yaw,
         0.0,
         body_col,
@@ -246,18 +246,18 @@ fn push_operator_body(out: &mut Vec<Vertex>, p: &PlayerRow, hitbox: &HitboxSpec)
     push_oriented_box(
         out,
         origin,
-        [leg_span, l_swing * 0.35 + 0.12, hip_z - thigh_len * 2.0 + 0.1],
-        [0.17, 0.08, 0.12],
+        [leg_span, l_swing * 0.35 + 0.12, hip_z - thigh_len * 2.0 + 0.15],
+        [0.16, 0.08, 0.12],
         yaw,
         0.0,
         armor_col,
     );
-    // Left Shin & Boot
+    // Left Shin & Boot (reaches down to hip_z - 2*thigh_len - 2*shin_len = 2.80 - 1.40 - 1.40 = 0.0)
     push_oriented_box(
         out,
         origin,
         [leg_span, l_swing * 0.18, hip_z - thigh_len * 2.0 - shin_len],
-        [0.15, 0.15, shin_len],
+        [0.14, 0.16, shin_len],
         yaw,
         0.0,
         BOOT_COLOR,
@@ -269,7 +269,7 @@ fn push_operator_body(out: &mut Vec<Vertex>, p: &PlayerRow, hitbox: &HitboxSpec)
         out,
         origin,
         [-leg_span, r_swing * 0.35, hip_z - thigh_len],
-        [0.16, 0.16, thigh_len],
+        [0.15, 0.15, thigh_len],
         yaw,
         0.0,
         body_col,
@@ -278,8 +278,8 @@ fn push_operator_body(out: &mut Vec<Vertex>, p: &PlayerRow, hitbox: &HitboxSpec)
     push_oriented_box(
         out,
         origin,
-        [-leg_span, r_swing * 0.35 + 0.12, hip_z - thigh_len * 2.0 + 0.1],
-        [0.17, 0.08, 0.12],
+        [-leg_span, r_swing * 0.35 + 0.12, hip_z - thigh_len * 2.0 + 0.15],
+        [0.16, 0.08, 0.12],
         yaw,
         0.0,
         armor_col,
@@ -289,7 +289,7 @@ fn push_operator_body(out: &mut Vec<Vertex>, p: &PlayerRow, hitbox: &HitboxSpec)
         out,
         origin,
         [-leg_span, r_swing * 0.18, hip_z - thigh_len * 2.0 - shin_len],
-        [0.15, 0.15, shin_len],
+        [0.14, 0.16, shin_len],
         yaw,
         0.0,
         BOOT_COLOR,
@@ -298,13 +298,13 @@ fn push_operator_body(out: &mut Vec<Vertex>, p: &PlayerRow, hitbox: &HitboxSpec)
     // -------------------------------------------------------------------------
     // 5. Articulated Arms (Tactical Two-Handed Ready Grip)
     // -------------------------------------------------------------------------
-    let arm_z = spine_z + 0.25;
+    let arm_z = spine_z + 0.35;
     // Right Arm (Trigger hand)
     push_oriented_box(
         out,
         origin,
-        [-0.45, 0.20, arm_z],
-        [0.13, 0.25, 0.13],
+        [-0.38, 0.20, arm_z],
+        [0.12, 0.25, 0.12],
         yaw,
         spine_pitch,
         body_col,
@@ -313,8 +313,8 @@ fn push_operator_body(out: &mut Vec<Vertex>, p: &PlayerRow, hitbox: &HitboxSpec)
     push_oriented_box(
         out,
         origin,
-        [0.40, 0.30, arm_z - 0.05],
-        [0.13, 0.30, 0.13],
+        [0.34, 0.30, arm_z - 0.05],
+        [0.12, 0.28, 0.12],
         yaw,
         spine_pitch,
         body_col,
@@ -655,6 +655,7 @@ mod tests {
         let highest = ys.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
         assert!(lowest >= 3.8 && lowest <= 4.2, "lowest vertex is near feet 4.0, got {}", lowest);
         assert!(highest <= 4.0 + spec().standing_height + 0.1, "highest vertex is within standing height, got {}", highest);
+        assert!(highest >= 4.0 + spec().standing_height - 0.25, "highest vertex reaches near standing height, got {}", highest);
     }
 
     #[test]

@@ -28,7 +28,7 @@ export const BODY_HEIGHT = PLAYER_EYE_HEIGHT + PLAYER_ABOVE_EYE;
  * A band rather than an absolute height, because crouching shortens the body and
  * a head pinned to a standing figure would sit above a crouched player entirely.
  */
-export const HEAD_BAND = 1.0;
+export const HEAD_BAND = 0.85;
 
 export type Vec = [number, number, number];
 

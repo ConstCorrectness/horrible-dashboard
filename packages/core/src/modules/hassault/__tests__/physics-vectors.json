@@ -11528,7 +11528,7 @@
     "pistol": {
       "id": "pistol",
       "name": "Pistol",
-      "damage": 19,
+      "damage": 14,
       "headMultiplier": 2.2,
       "rpm": 420,
       "interval": 0.1429,

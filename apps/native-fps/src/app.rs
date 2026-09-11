@@ -466,7 +466,8 @@ impl App {
         let base_fov = settings.video.fov;
         let is_gltf = world.info.format.as_deref() == Some("gltf")
             || map_name == "hd_facility"
-            || map_name == "hd_junkflea";
+            || map_name == "hd_junkflea"
+            || map_name == "hd_bank";
         let (world3d, rapier_physics, mesh) = if is_gltf {
             let w3d = world3d::create_world_3d(world.info.clone());
             let rapier = RapierPhysicsWorld::new(&w3d.col_vertices, &w3d.col_indices);

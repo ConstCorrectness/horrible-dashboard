@@ -266,5 +266,49 @@ describe('RapierPhysicsWorld Character Controller', () => {
 
     physics.dispose();
   });
+
+  it('generates 3D bank world (hd_bank) with matching spawns and valid Rapier mesh', async () => {
+    const THREE = await import('three');
+    const { createWorld3D } = await import('../world3d');
+
+    const world = createWorld3D(THREE, {
+      name: 'hd_bank',
+      title: 'The Bank',
+      ssize: 64,
+    } as any);
+
+    expect(world.collision.triangles).toBeGreaterThan(0);
+    expect(world.spawns.all.length).toBe(8);
+    expect(world.spawns.cla.length).toBe(4);
+    expect(world.spawns.rvsf.length).toBe(4);
+    expect(world.items.length).toBe(10);
+    expect(world.waterlevel).toBe(-100);
+
+    const physics = new RapierPhysicsWorld(world.collision);
+    expect(physics).toBeDefined();
+
+    // Verify raycast straight down to street (z = 0)
+    const hitStreet = physics.castRay({ x: 20, y: 8, z: 5 }, { x: 0, y: 0, z: -1 }, 10);
+    expect(hitStreet.hit).toBe(true);
+    expect(hitStreet.point.z).toBeCloseTo(0.0, 1);
+
+    // Verify raycast down to SWAT van roof (z = 2.8)
+    const hitVan = physics.castRay({ x: 20, y: 14, z: 5 }, { x: 0, y: 0, z: -1 }, 10);
+    expect(hitVan.hit).toBe(true);
+    expect(hitVan.point.z).toBeCloseTo(2.8, 1);
+
+    // Verify raycast down to entrance canopy (z = 4.8)
+    const hitCanopy = physics.castRay({ x: 30, y: 17, z: 7 }, { x: 0, y: 0, z: -1 }, 10);
+    expect(hitCanopy.hit).toBe(true);
+    expect(hitCanopy.point.z).toBeCloseTo(4.8, 1);
+
+    // Verify raycast inside The Vault (Site A) hitting gold pallets (z = 1.8)
+    const hitVault = physics.castRay({ x: 45, y: 54, z: 5 }, { x: 0, y: 0, z: -1 }, 10);
+    expect(hitVault.hit).toBe(true);
+    expect(hitVault.point.z).toBeCloseTo(1.8, 1);
+
+    physics.dispose();
+    world.dispose();
+  });
 });
 

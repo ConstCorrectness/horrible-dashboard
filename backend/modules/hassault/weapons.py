@@ -393,7 +393,7 @@ WEAPONS: tuple[Weapon, ...] = (
     Weapon(
         id="pistol",
         name="Pistol",
-        damage=19,
+        damage=14,
         head_multiplier=2.2,
         rpm=420,
         mag=10,

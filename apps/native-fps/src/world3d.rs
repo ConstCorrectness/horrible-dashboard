@@ -443,11 +443,154 @@ pub fn create_procedural_junk_flea_3d(info: MapInfo) -> World3D {
     }
 }
 
+/// Create the competitive tactical "The Bank" (`hd_bank`) 3D arena.
+/// Features a neoclassical banking hall, fortified vault, mezzanine, street approach,
+/// and high-skill movement shortcuts (SWAT van hood/roof skill jump, counter to balcony skips,
+/// and jump-shooting vantage points).
+pub fn create_procedural_bank_3d(info: MapInfo) -> World3D {
+    let mut b = FacilityBuilder::new();
+
+    // 1. Perimeter Walls (64x64 bounds, height = 14)
+    b.add_quad([4.0, 4.0, 0.0], [60.0, 4.0, 0.0], [60.0, 4.0, 14.0], [4.0, 4.0, 14.0], [0.24, 0.25, 0.28], true); // South street
+    b.add_quad([60.0, 60.0, 0.0], [4.0, 60.0, 0.0], [4.0, 60.0, 14.0], [60.0, 60.0, 14.0], [0.24, 0.25, 0.28], true); // North rear
+    b.add_quad([60.0, 4.0, 0.0], [60.0, 60.0, 0.0], [60.0, 60.0, 14.0], [60.0, 4.0, 14.0], [0.26, 0.27, 0.30], true); // East
+    b.add_quad([4.0, 60.0, 0.0], [4.0, 4.0, 0.0], [4.0, 4.0, 14.0], [4.0, 60.0, 14.0], [0.26, 0.27, 0.30], true); // West
+
+    // 2. Ground Floors (Street Asphalt vs Bank Marble Floor)
+    // Street asphalt (y: 4.0..18.0)
+    b.add_quad([4.0, 4.0, 0.0], [60.0, 4.0, 0.0], [60.0, 18.0, 0.0], [4.0, 18.0, 0.0], [0.20, 0.20, 0.22], true);
+    // Sidewalk concrete curb (y: 14.0..18.0)
+    b.add_box(4.0, 14.0, 0.0, 60.0, 18.0, 0.2, [0.48, 0.46, 0.44]);
+    // Main bank marble floor (y: 18.0..46.0)
+    b.add_quad([4.0, 18.0, 0.0], [60.0, 18.0, 0.0], [60.0, 46.0, 0.0], [4.0, 46.0, 0.0], [0.72, 0.70, 0.66], true);
+    // Rear offices floor (y: 46.0..60.0)
+    b.add_quad([4.0, 46.0, 0.0], [40.0, 46.0, 0.0], [40.0, 60.0, 0.0], [4.0, 60.0, 0.0], [0.58, 0.56, 0.52], true);
+    // Vault steel floor (x: 40.0..60.0, y: 46.0..60.0)
+    b.add_quad([40.0, 46.0, 0.0], [60.0, 46.0, 0.0], [60.0, 60.0, 0.0], [40.0, 60.0, 0.0], [0.28, 0.30, 0.34], true);
+
+    // 3. Bank Exterior Facade Wall (y: 18.0..22.0) with 3 Entrances
+    // Solid sections
+    b.add_box(4.0, 18.0, 0.0, 8.0, 22.0, 14.0, [0.55, 0.52, 0.48]);
+    b.add_box(14.0, 18.0, 0.0, 28.0, 22.0, 14.0, [0.55, 0.52, 0.48]);
+    b.add_box(36.0, 18.0, 0.0, 50.0, 22.0, 14.0, [0.55, 0.52, 0.48]);
+    b.add_box(56.0, 18.0, 0.0, 60.0, 22.0, 14.0, [0.55, 0.52, 0.48]);
+    // Neoclassical Columns flanking Grand Entrance
+    b.add_box(26.0, 16.0, 0.0, 28.0, 18.0, 12.0, [0.82, 0.80, 0.78]);
+    b.add_box(36.0, 16.0, 0.0, 38.0, 18.0, 12.0, [0.82, 0.80, 0.78]);
+    // Entrance Stone Canopy (Key Skill Jump platform at z = 4.2)
+    b.add_box(25.0, 15.0, 4.2, 39.0, 18.5, 4.8, [0.68, 0.66, 0.62]);
+
+    // 4. Street Cover & Tactical Skill Jump Props
+    // Armored SWAT Van (Hood = 1.5, Roof = 2.8)
+    b.add_box(18.0, 10.0, 0.0, 22.0, 12.5, 1.5, [0.15, 0.20, 0.28]); // Hood
+    b.add_box(18.0, 12.5, 0.0, 22.0, 16.0, 2.8, [0.12, 0.16, 0.24]); // Cab & Roof
+    // Police Cruiser / Patrol Barricade
+    b.add_box(42.0, 10.0, 0.0, 46.0, 14.0, 1.6, [0.18, 0.24, 0.35]);
+    // Concrete Jersey Barrier
+    b.add_box(30.0, 8.0, 0.0, 34.0, 10.0, 1.2, [0.50, 0.48, 0.46]);
+
+    // 5. Grand Banking Hall (Site B) - Marble Pillars & Teller Counter
+    // Neoclassical Marble Pillars
+    b.add_box(22.0, 24.0, 0.0, 24.0, 26.0, 14.0, [0.78, 0.76, 0.72]);
+    b.add_box(40.0, 24.0, 0.0, 42.0, 26.0, 14.0, [0.78, 0.76, 0.72]);
+    b.add_box(22.0, 40.0, 0.0, 24.0, 42.0, 14.0, [0.78, 0.76, 0.72]);
+    b.add_box(40.0, 40.0, 0.0, 42.0, 42.0, 14.0, [0.78, 0.76, 0.72]);
+    // Teller Counter Island (Base = 1.4, Partitions = 3.6 for skill jump)
+    b.add_box(28.0, 32.0, 0.0, 36.0, 35.0, 1.4, [0.45, 0.30, 0.18]);
+    b.add_box(28.5, 32.2, 1.4, 31.5, 32.6, 3.4, [0.65, 0.75, 0.85]);
+    b.add_box(32.5, 32.2, 1.4, 35.5, 32.6, 3.4, [0.65, 0.75, 0.85]);
+
+    // 6. Executive Mezzanine & Balconies (z = 5.0)
+    // West Balcony & Railing
+    b.add_quad([14.0, 38.0, 5.0], [20.0, 38.0, 5.0], [20.0, 45.0, 5.0], [14.0, 45.0, 5.0], [0.55, 0.52, 0.48], true);
+    b.add_box(19.8, 38.0, 5.0, 20.2, 45.0, 6.1, [0.65, 0.58, 0.32]); // Brass railing
+    b.add_ramp(14.0, 32.0, 0.0, 18.0, 38.0, 5.0, [0.48, 0.44, 0.40]);  // West stairs
+    // Fire escape connection to exterior
+    b.add_box(14.0, 18.0, 4.8, 18.0, 22.0, 5.0, [0.35, 0.33, 0.30]);
+    // East Balcony & Railing
+    b.add_quad([44.0, 38.0, 5.0], [50.0, 38.0, 5.0], [50.0, 45.0, 5.0], [44.0, 45.0, 5.0], [0.55, 0.52, 0.48], true);
+    b.add_box(43.8, 38.0, 5.0, 44.2, 45.0, 6.1, [0.65, 0.58, 0.32]); // Brass railing
+    b.add_ramp(46.0, 32.0, 0.0, 50.0, 38.0, 5.0, [0.48, 0.44, 0.40]);  // East stairs
+
+    // 7. Dividing Wall between Lobby and Rear Bank (y: 46.0..49.0)
+    b.add_box(4.0, 46.0, 0.0, 10.0, 49.0, 14.0, [0.50, 0.48, 0.45]);
+    b.add_box(16.0, 46.0, 0.0, 28.0, 49.0, 14.0, [0.50, 0.48, 0.45]);
+    b.add_box(36.0, 46.0, 0.0, 48.0, 49.0, 14.0, [0.50, 0.48, 0.45]);
+    b.add_box(54.0, 46.0, 0.0, 60.0, 49.0, 14.0, [0.50, 0.48, 0.45]);
+
+    // 8. The Vault (Site A - x: 40.0..60.0, y: 49.0..60.0)
+    // West Vault Partition Wall
+    b.add_box(39.0, 49.0, 0.0, 41.0, 58.0, 10.0, [0.28, 0.30, 0.34]);
+    // Massive Reinforced Vault Blast Door (semi-open portal)
+    b.add_box(45.0, 49.0, 0.0, 46.5, 51.0, 8.0, [0.22, 0.24, 0.28]); // Portal frame
+    b.add_box(46.5, 48.5, 0.0, 50.5, 49.5, 7.5, [0.35, 0.38, 0.44]); // Heavy round door slab
+    // Safety Deposit Lockers
+    b.add_box(56.5, 51.0, 0.0, 58.0, 58.0, 8.0, [0.60, 0.58, 0.52]);
+    b.add_box(41.0, 56.5, 0.0, 56.5, 58.0, 8.0, [0.60, 0.58, 0.52]);
+    // Cash & Gold Bullion Pallets (Cover inside Vault)
+    b.add_box(44.0, 53.0, 0.0, 47.0, 56.0, 1.8, [0.72, 0.62, 0.25]);
+    // HVAC Unit & Overhead Air Duct (for Jump Shooting into Vault)
+    b.add_box(50.0, 44.0, 0.0, 53.0, 46.0, 1.8, [0.25, 0.32, 0.28]);
+    b.add_box(49.0, 44.0, 3.4, 53.0, 48.0, 4.2, [0.45, 0.48, 0.50]);
+
+    // 9. Staff Offices / Breakroom (Defender territory)
+    b.add_box(14.0, 51.0, 0.0, 18.0, 54.0, 1.5, [0.42, 0.36, 0.30]);
+    b.add_box(26.0, 51.0, 0.0, 30.0, 54.0, 1.5, [0.42, 0.36, 0.30]);
+
+    let spawns = vec![
+        SpawnPoint { x: 12.0, y: 8.0, z: 0.0, yaw: 0.0, team: 0 },
+        SpawnPoint { x: 24.0, y: 8.0, z: 0.0, yaw: 0.0, team: 0 },
+        SpawnPoint { x: 36.0, y: 8.0, z: 0.0, yaw: 0.0, team: 0 },
+        SpawnPoint { x: 48.0, y: 8.0, z: 0.0, yaw: 0.0, team: 0 },
+        SpawnPoint { x: 10.0, y: 55.0, z: 0.0, yaw: 180.0, team: 1 },
+        SpawnPoint { x: 20.0, y: 55.0, z: 0.0, yaw: 180.0, team: 1 },
+        SpawnPoint { x: 32.0, y: 55.0, z: 0.0, yaw: 180.0, team: 1 },
+        SpawnPoint { x: 36.0, y: 51.0, z: 0.0, yaw: 180.0, team: 1 },
+    ];
+
+    let items = vec![
+        ItemRow { id: 1, kind: "health".into(), x: 10.0, y: 14.0, z: 0.0 },
+        ItemRow { id: 2, kind: "health".into(), x: 54.0, y: 14.0, z: 0.0 },
+        ItemRow { id: 3, kind: "health".into(), x: 10.0, y: 51.0, z: 0.0 },
+        ItemRow { id: 4, kind: "armour".into(), x: 32.0, y: 28.0, z: 0.0 },
+        ItemRow { id: 5, kind: "armour".into(), x: 52.0, y: 53.0, z: 0.0 },
+        ItemRow { id: 6, kind: "ammo_assault".into(), x: 20.0, y: 12.0, z: 0.0 },
+        ItemRow { id: 7, kind: "ammo_assault".into(), x: 44.0, y: 12.0, z: 0.0 },
+        ItemRow { id: 8, kind: "ammo_sniper".into(), x: 16.0, y: 40.0, z: 5.0 },
+        ItemRow { id: 9, kind: "clips".into(), x: 32.0, y: 22.0, z: 0.0 },
+        ItemRow { id: 10, kind: "grenade".into(), x: 52.0, y: 28.0, z: 0.0 },
+    ];
+
+    let bounds = WorldBounds {
+        min: [4.0, 4.0, 0.0],
+        max: [60.0, 60.0, 14.0],
+        center: [32.0, 32.0, 5.0],
+        extent: 40.0,
+    };
+
+    let triangles = b.render_positions.len() / 9;
+
+    World3D {
+        info,
+        bounds,
+        render_positions: b.render_positions,
+        render_normals: b.render_normals,
+        render_colors: b.render_colors,
+        render_uvs: b.render_uvs,
+        triangles,
+        col_vertices: b.col_vertices,
+        col_indices: b.col_indices,
+        spawns,
+        items,
+        waterlevel: -100.0,
+    }
+}
+
 /// Universal 3D Arena Factory: selects appropriate procedural 3D map generator.
 pub fn create_world_3d(info: MapInfo) -> World3D {
-    if info.name == "hd_junkflea" {
-        create_procedural_junk_flea_3d(info)
-    } else {
-        create_procedural_facility_3d(info)
+    match info.name.as_str() {
+        "hd_junkflea" => create_procedural_junk_flea_3d(info),
+        "hd_bank" => create_procedural_bank_3d(info),
+        _ => create_procedural_facility_3d(info),
     }
 }

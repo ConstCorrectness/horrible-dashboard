@@ -1,0 +1,349 @@
+{
+  "title": "The Bank",
+  "author": "horrible-dashboard",
+  "license": "CC0-1.0",
+  "sfactor": 6,
+  "waterlevel": -100,
+  "ambient": 48,
+  "format": "gltf",
+  "modes": [
+    "defuse",
+    "tdm",
+    "dm"
+  ],
+  "brushes": [
+    {
+      "op": "room",
+      "rect": [4, 4, 56, 56],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "solid",
+      "rect": [4, 18, 56, 4],
+      "wtex": 89
+    },
+    {
+      "op": "room",
+      "rect": [8, 18, 6, 4],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [28, 18, 8, 4],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [50, 18, 6, 4],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "solid",
+      "rect": [26, 16, 2, 2],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [36, 16, 2, 2],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [18, 10, 4, 6],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [42, 10, 4, 4],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [30, 8, 4, 2],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [28, 32, 8, 3],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [22, 24, 2, 2],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [40, 24, 2, 2],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [22, 40, 2, 2],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [40, 40, 2, 2],
+      "wtex": 131
+    },
+    {
+      "op": "stairs",
+      "rect": [14, 32, 4, 6],
+      "axis": "y",
+      "from": 0,
+      "to": 5,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 58
+    },
+    {
+      "op": "room",
+      "rect": [14, 38, 6, 7],
+      "floor": 5,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 58,
+      "ctex": 33
+    },
+    {
+      "op": "stairs",
+      "rect": [46, 32, 4, 6],
+      "axis": "y",
+      "from": 0,
+      "to": 5,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 58
+    },
+    {
+      "op": "room",
+      "rect": [44, 38, 6, 7],
+      "floor": 5,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 58,
+      "ctex": 33
+    },
+    {
+      "op": "solid",
+      "rect": [4, 46, 56, 3],
+      "wtex": 89
+    },
+    {
+      "op": "room",
+      "rect": [10, 46, 6, 3],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [28, 46, 8, 3],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [48, 46, 6, 3],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [40, 49, 18, 9],
+      "floor": 0,
+      "ceil": 10,
+      "wtex": 131,
+      "ftex": 58,
+      "ctex": 33
+    },
+    {
+      "op": "solid",
+      "rect": [39, 49, 2, 9],
+      "wtex": 89
+    },
+    {
+      "op": "room",
+      "rect": [46, 49, 4, 2],
+      "floor": 0,
+      "ceil": 10,
+      "wtex": 131,
+      "ftex": 58,
+      "ctex": 33
+    },
+    {
+      "op": "solid",
+      "rect": [44, 53, 3, 3],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [14, 51, 4, 3],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [26, 51, 4, 3],
+      "wtex": 131
+    }
+  ],
+  "entities": [
+    {
+      "type": "playerstart",
+      "x": 12,
+      "y": 8,
+      "yaw": 0,
+      "team": 0
+    },
+    {
+      "type": "playerstart",
+      "x": 24,
+      "y": 8,
+      "yaw": 0,
+      "team": 0
+    },
+    {
+      "type": "playerstart",
+      "x": 36,
+      "y": 8,
+      "yaw": 0,
+      "team": 0
+    },
+    {
+      "type": "playerstart",
+      "x": 48,
+      "y": 8,
+      "yaw": 0,
+      "team": 0
+    },
+    {
+      "type": "playerstart",
+      "x": 10,
+      "y": 55,
+      "yaw": 180,
+      "team": 1
+    },
+    {
+      "type": "playerstart",
+      "x": 20,
+      "y": 55,
+      "yaw": 180,
+      "team": 1
+    },
+    {
+      "type": "playerstart",
+      "x": 32,
+      "y": 55,
+      "yaw": 180,
+      "team": 1
+    },
+    {
+      "type": "playerstart",
+      "x": 36,
+      "y": 51,
+      "yaw": 180,
+      "team": 1
+    },
+    {
+      "type": "health",
+      "x": 10,
+      "y": 14,
+      "z": 0
+    },
+    {
+      "type": "health",
+      "x": 54,
+      "y": 14,
+      "z": 0
+    },
+    {
+      "type": "health",
+      "x": 10,
+      "y": 51,
+      "z": 0
+    },
+    {
+      "type": "armour",
+      "x": 32,
+      "y": 28,
+      "z": 0
+    },
+    {
+      "type": "armour",
+      "x": 52,
+      "y": 53,
+      "z": 0
+    },
+    {
+      "type": "ammo",
+      "x": 20,
+      "y": 12,
+      "z": 0
+    },
+    {
+      "type": "ammo",
+      "x": 44,
+      "y": 12,
+      "z": 0
+    },
+    {
+      "type": "ammo",
+      "x": 16,
+      "y": 40,
+      "z": 5
+    },
+    {
+      "type": "clips",
+      "x": 32,
+      "y": 22,
+      "z": 0
+    },
+    {
+      "type": "grenade",
+      "x": 52,
+      "y": 28,
+      "z": 0
+    }
+  ],
+  "objectives": {
+    "sites": [
+      {
+        "id": "A",
+        "x": 52,
+        "y": 53,
+        "radius": 4.0
+      },
+      {
+        "id": "B",
+        "x": 32,
+        "y": 28,
+        "radius": 4.0
+      }
+    ]
+  }
+}

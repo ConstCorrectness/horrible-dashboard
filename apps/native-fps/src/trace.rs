@@ -29,7 +29,7 @@ pub const BODY_HEIGHT: f32 = PLAYER_EYE_HEIGHT + PLAYER_ABOVE_EYE;
 /// and a head pinned to a standing figure would sit above a crouched player
 /// entirely — every headshot on a crouched target would miss the head and every
 /// shot over it would be one.
-pub const HEAD_BAND: f32 = 1.0;
+pub const HEAD_BAND: f32 = 0.85;
 
 pub type Vec3 = [f32; 3];
 

@@ -69,3 +69,55 @@ fn test_junk_flea_3d_generation() {
     assert!((dist_trench - 7.0).abs() < 0.1, "distance to trench floor should be ~7.0, was {}", dist_trench);
 }
 
+#[test]
+fn test_bank_3d_generation() {
+    let info = MapInfo {
+        name: "hd_bank".into(),
+        title: "The Bank".into(),
+        ssize: 64,
+        ..Default::default()
+    };
+
+    let world = hassault_native::world3d::create_world_3d(info);
+
+    assert!(world.triangles > 0, "should produce triangles");
+    assert_eq!(world.render_positions.len(), world.triangles * 9);
+    assert_eq!(world.render_normals.len(), world.triangles * 9);
+    assert_eq!(world.render_colors.len(), world.triangles * 9);
+
+    assert_eq!(world.spawns.len(), 8, "must have 8 spawns");
+    assert_eq!(world.spawns.iter().filter(|s| s.team == 0).count(), 4, "must have 4 CLA spawns");
+    assert_eq!(world.spawns.iter().filter(|s| s.team == 1).count(), 4, "must have 4 RVSF spawns");
+
+    assert_eq!(world.items.len(), 10, "must have 10 pickups");
+    assert_eq!(world.waterlevel, -100.0);
+
+    // Verify Rapier collision
+    let physics = RapierPhysicsWorld::new(&world.col_vertices, &world.col_indices);
+
+    // Ray down onto street
+    let (hit_street, dist_street, _) = physics.cast_ray([20.0, 8.0, 5.0], [0.0, 0.0, -1.0], 10.0);
+    assert!(hit_street, "ray downwards onto street should hit floor at z=0");
+    assert!((dist_street - 5.0).abs() < 0.2);
+
+    // Ray down onto SWAT van roof (z = 2.8)
+    let (hit_van, dist_van, _) = physics.cast_ray([20.0, 14.0, 5.0], [0.0, 0.0, -1.0], 10.0);
+    assert!(hit_van, "ray downwards onto SWAT van roof should hit at z=2.8");
+    assert!((dist_van - 2.2).abs() < 0.2);
+
+    // Ray down onto entrance stone canopy (z = 4.8)
+    let (hit_canopy, dist_canopy, _) = physics.cast_ray([30.0, 17.0, 7.0], [0.0, 0.0, -1.0], 10.0);
+    assert!(hit_canopy, "ray downwards onto entrance canopy should hit at z=4.8");
+    assert!((dist_canopy - 2.2).abs() < 0.2);
+
+    // Ray down onto West Balcony mezzanine (z = 5.0)
+    let (hit_mezz, dist_mezz, _) = physics.cast_ray([16.0, 40.0, 8.0], [0.0, 0.0, -1.0], 10.0);
+    assert!(hit_mezz, "ray downwards onto West Balcony should hit at z=5.0");
+    assert!((dist_mezz - 3.0).abs() < 0.2);
+
+    // Ray down inside The Vault onto gold bullion pallets (z = 1.8)
+    let (hit_vault, dist_vault, _) = physics.cast_ray([45.0, 54.0, 5.0], [0.0, 0.0, -1.0], 10.0);
+    assert!(hit_vault, "ray downwards inside vault should hit gold pallets at z=1.8");
+    assert!((dist_vault - 3.2).abs() < 0.2);
+}
+
