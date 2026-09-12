@@ -1405,6 +1405,8 @@ export function HorribleAssaultPanel() {
         ladders?.dispose();
 
         if (world3d) {
+          scene.background = new THREE.Color(0x76a7eb);
+          scene.fog = new THREE.FogExp2(0x9cbde8, 0.001);
           scene.environment = propEnvironment;
           world3dGroup = world3d.scene;
           world3dGroup.traverse((child) => {
@@ -1442,6 +1444,8 @@ export function HorribleAssaultPanel() {
           return world3d.collision.triangles;
         }
 
+        scene.background = new THREE.Color(HORIZON);
+        scene.fog = new THREE.FogExp2(HORIZON, 0.0055);
         scene.environment = null;
         water = createWater(THREE, scene, world);
         ladders = createLadders(THREE, scene, world);

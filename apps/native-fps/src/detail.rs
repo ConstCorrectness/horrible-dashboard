@@ -257,6 +257,101 @@ pub fn bind_group(
     })
 }
 
+/// Draw one seamless tile of surface detail without cube seam lines, for 3D polygon maps.
+pub fn draw_tile_3d(size: u32) -> Vec<u8> {
+    let mut out = vec![0u8; (size * size * 4) as usize];
+    for py in 0..size {
+        for px in 0..size {
+            let u = px as f64 / size as f64;
+            let v = py as f64 / size as f64;
+            let mut n = 0.0;
+            n += (value_noise(u * 4.0, v * 4.0, 4.0) - 0.5) * 0.55;
+            n += (value_noise(u * 12.0, v * 12.0, 12.0) - 0.5) * 0.3;
+            n += (value_noise(u * 32.0, v * 32.0, 32.0) - 0.5) * 0.15;
+
+            // Seamless tactile material grain: NO cube boundary lines
+            let value = (1.0 + n * GRAIN * 1.5).clamp(0.0, 1.35);
+            let byte = (value * 189.0).round().clamp(0.0, 255.0) as u8;
+            let i = ((py * size + px) * 4) as usize;
+            out[i] = byte;
+            out[i + 1] = byte;
+            out[i + 2] = byte;
+            out[i + 3] = 255;
+        }
+    }
+    out
+}
+
+pub fn bind_group_3d(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    layout: &wgpu::BindGroupLayout,
+) -> wgpu::BindGroup {
+    let size = wgpu::Extent3d {
+        width: SIZE,
+        height: SIZE,
+        depth_or_array_layers: 1,
+    };
+    let levels = mip_chain(draw_tile_3d(SIZE), SIZE);
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("detail-3d"),
+        size,
+        mip_level_count: levels.len() as u32,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    for (level, (edge, pixels)) in levels.iter().enumerate() {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: level as u32,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * edge),
+                rows_per_image: Some(*edge),
+            },
+            wgpu::Extent3d {
+                width: *edge,
+                height: *edge,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("detail-3d-sampler"),
+        address_mode_u: wgpu::AddressMode::Repeat,
+        address_mode_v: wgpu::AddressMode::Repeat,
+        address_mode_w: wgpu::AddressMode::Repeat,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Linear,
+        anisotropy_clamp: crate::mipmap::ANISOTROPY,
+        ..Default::default()
+    });
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("detail-3d"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+        ],
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

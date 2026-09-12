@@ -2987,6 +2987,10 @@ impl ApplicationHandler for App {
                     "hassault: {} on {} — {} triangles",
                     renderer.backend, renderer.adapter_name, self.mesh.triangles
                 );
+                let mut renderer = renderer;
+                if self.world3d.is_some() {
+                    renderer.set_is_3d(true);
+                }
                 self.renderer = Some(renderer);
                 if let (Some(renderer), Some(squad)) = (self.renderer.as_mut(), self.squad.as_ref())
                 {
