@@ -1419,7 +1419,7 @@ fn world_pipeline(
             // here: every surface exists once and faces the space you can stand
             // in, so there is nothing to draw on the far side.
             front_face: wgpu::FrontFace::Ccw,
-            cull_mode: Some(wgpu::Face::Back),
+            cull_mode: None,
             polygon_mode: wgpu::PolygonMode::Fill,
             unclipped_depth: false,
             conservative: false,

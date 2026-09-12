@@ -619,6 +619,9 @@ impl App {
         };
         app.reveal
             .fit(center, extent * 1.05, (extent * 0.6).max(1.0));
+        if is_gltf {
+            app.reveal.complete();
+        }
         app.console.set_definitions(definitions);
         if app.socket.is_none() {
             app.place_offline();

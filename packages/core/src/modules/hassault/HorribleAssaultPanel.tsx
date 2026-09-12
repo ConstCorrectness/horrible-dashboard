@@ -1422,11 +1422,7 @@ export function HorribleAssaultPanel() {
           bounds.current = { cx, cz, extent };
 
           reveal.fit([cx, cz], extent * 1.05, Math.max(extent * 0.6, 1));
-          if (world3d.materials) {
-            for (const mat of world3d.materials) {
-              installReveal(mat);
-            }
-          }
+          reveal.complete();
           backdrop.fit([cx, cz], extent * 2);
 
           const reach = extent * 2;
@@ -2385,7 +2381,7 @@ export function HorribleAssaultPanel() {
         // The build. Runs on its own clock rather than on load progress: the map
         // is already here by now, and the point of the animation is to show the
         // world arriving, not to stall until it has.
-        if (prefersReducedMotion()) {
+        if (is3D || prefersReducedMotion()) {
           scene.reveal.complete();
           setProgress((p) => advance(p, { reveal: 1 }));
           return;

@@ -73,12 +73,11 @@ impl FacilityBuilder {
         }
     }
 
-    fn add_quad(
+    fn add_triangle(
         &mut self,
         p0: [f32; 3],
         p1: [f32; 3],
         p2: [f32; 3],
-        p3: [f32; 3],
         color: [f32; 3],
         is_collider: bool,
     ) {
@@ -86,7 +85,6 @@ impl FacilityBuilder {
         let t0 = [p0[0], p0[2], p0[1]];
         let t1 = [p1[0], p1[2], p1[1]];
         let t2 = [p2[0], p2[2], p2[1]];
-        let t3 = [p3[0], p3[2], p3[1]];
 
         // Normal in render space
         let v_a = [t1[0] - t0[0], t1[1] - t0[1], t1[2] - t0[2]];
@@ -96,12 +94,13 @@ impl FacilityBuilder {
             v_a[2] * v_b[0] - v_a[0] * v_b[2],
             v_a[0] * v_b[1] - v_a[1] * v_b[0],
         ];
-        let len = (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2])
-            .sqrt()
-            .max(1e-5);
+        let len_sq = cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2];
+        if len_sq < 1e-8 {
+            return; // Skip degenerate triangle
+        }
+        let len = len_sq.sqrt();
         let norm = [cross[0] / len, cross[1] / len, cross[2] / len];
 
-        // Triangle 1: t0, t1, t2
         self.render_positions.extend_from_slice(&t0);
         self.render_positions.extend_from_slice(&t1);
         self.render_positions.extend_from_slice(&t2);
@@ -111,26 +110,47 @@ impl FacilityBuilder {
         }
         self.render_uvs.extend_from_slice(&[0.0, 0.0, 1.0, 0.0, 1.0, 1.0]);
 
-        // Triangle 2: t0, t2, t3
-        self.render_positions.extend_from_slice(&t0);
-        self.render_positions.extend_from_slice(&t2);
-        self.render_positions.extend_from_slice(&t3);
-        for _ in 0..3 {
-            self.render_normals.extend_from_slice(&norm);
-            self.render_colors.extend_from_slice(&color);
-        }
-        self.render_uvs.extend_from_slice(&[0.0, 0.0, 1.0, 1.0, 0.0, 1.0]);
-
         if is_collider {
             let base_idx = self.col_vertices.len() as u32;
             self.col_vertices.push(point![p0[0], p0[1], p0[2]]);
             self.col_vertices.push(point![p1[0], p1[1], p1[2]]);
             self.col_vertices.push(point![p2[0], p2[1], p2[2]]);
-            self.col_vertices.push(point![p3[0], p3[1], p3[2]]);
-
             self.col_indices.push([base_idx, base_idx + 1, base_idx + 2]);
-            self.col_indices.push([base_idx, base_idx + 2, base_idx + 3]);
         }
+    }
+
+    fn add_quad(
+        &mut self,
+        p0: [f32; 3],
+        p1: [f32; 3],
+        p2: [f32; 3],
+        p3: [f32; 3],
+        color: [f32; 3],
+        is_collider: bool,
+    ) {
+        self.add_triangle(p0, p1, p2, color, is_collider);
+        self.add_triangle(p0, p2, p3, color, is_collider);
+    }
+
+    fn add_floor(
+        &mut self,
+        min_x: f32,
+        min_y: f32,
+        max_x: f32,
+        max_y: f32,
+        z: f32,
+        color: [f32; 3],
+        is_collider: bool,
+    ) {
+        // Top face pointing strictly UP (+y in render space, norm = [0, 1, 0])
+        self.add_quad(
+            [min_x, max_y, z],
+            [max_x, max_y, z],
+            [max_x, min_y, z],
+            [min_x, min_y, z],
+            color,
+            is_collider,
+        );
     }
 
     fn add_box(
@@ -209,31 +229,70 @@ impl FacilityBuilder {
         z1: f32,
         color: [f32; 3],
     ) {
-        self.add_quad(
-            [min_x, min_y, z0],
-            [max_x, min_y, z0],
-            [max_x, max_y, z1],
-            [min_x, max_y, z1],
-            color,
-            true,
-        );
         let min_z = z0.min(z1);
+
+        // 1. Slope Quad (wound so normal points UP into the sky, norm.y > 0)
         self.add_quad(
-            [min_x, max_y, z1],
-            [min_x, max_y, min_z],
-            [min_x, min_y, min_z],
             [min_x, min_y, z0],
+            [min_x, max_y, z1],
+            [max_x, max_y, z1],
+            [max_x, min_y, z0],
             color,
             true,
         );
-        self.add_quad(
-            [max_x, min_y, z0],
+
+        // 2. West side wall (x = min_x, outward normal norm.x < 0)
+        self.add_triangle(
+            [min_x, min_y, z0],
+            [min_x, min_y, min_z],
+            [min_x, max_y, z1],
+            color,
+            true,
+        );
+        self.add_triangle(
+            [min_x, min_y, min_z],
+            [min_x, max_y, min_z],
+            [min_x, max_y, z1],
+            color,
+            true,
+        );
+
+        // 3. East side wall (x = max_x, outward normal norm.x > 0)
+        self.add_triangle(
             [max_x, min_y, min_z],
-            [max_x, max_y, min_z],
+            [max_x, min_y, z0],
             [max_x, max_y, z1],
             color,
             true,
         );
+        self.add_triangle(
+            [max_x, max_y, min_z],
+            [max_x, min_y, min_z],
+            [max_x, max_y, z1],
+            color,
+            true,
+        );
+
+        // 4. Back vertical wall if elevated above min_z
+        if z1 > z0 && z1 > min_z {
+            self.add_quad(
+                [min_x, max_y, min_z],
+                [max_x, max_y, min_z],
+                [max_x, max_y, z1],
+                [min_x, max_y, z1],
+                color,
+                true,
+            );
+        } else if z0 > z1 && z0 > min_z {
+            self.add_quad(
+                [max_x, min_y, min_z],
+                [min_x, min_y, min_z],
+                [min_x, min_y, z0],
+                [max_x, min_y, z0],
+                color,
+                true,
+            );
+        }
     }
 }
 
@@ -248,29 +307,30 @@ pub fn create_procedural_facility_3d(info: MapInfo) -> World3D {
     b.add_quad([0.0, 64.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 14.0], [0.0, 64.0, 14.0], [0.25, 0.27, 0.31], true);
 
     // 2. Ground Floor (z = 0) with center opening
-    b.add_quad([0.0, 0.0, 0.0], [20.0, 0.0, 0.0], [20.0, 64.0, 0.0], [0.0, 64.0, 0.0], [0.32, 0.34, 0.36], true);
-    b.add_quad([44.0, 0.0, 0.0], [64.0, 0.0, 0.0], [64.0, 64.0, 0.0], [44.0, 64.0, 0.0], [0.32, 0.34, 0.36], true);
-    b.add_quad([20.0, 0.0, 0.0], [44.0, 0.0, 0.0], [44.0, 20.0, 0.0], [20.0, 20.0, 0.0], [0.30, 0.32, 0.35], true);
-    b.add_quad([20.0, 44.0, 0.0], [44.0, 44.0, 0.0], [44.0, 64.0, 0.0], [20.0, 64.0, 0.0], [0.30, 0.32, 0.35], true);
+    b.add_floor(0.0, 0.0, 20.0, 64.0, 0.0, [0.32, 0.34, 0.36], true);
+    b.add_floor(44.0, 0.0, 64.0, 64.0, 0.0, [0.32, 0.34, 0.36], true);
+    b.add_floor(20.0, 0.0, 44.0, 20.0, 0.0, [0.30, 0.32, 0.35], true);
+    b.add_floor(20.0, 44.0, 44.0, 64.0, 0.0, [0.30, 0.32, 0.35], true);
 
     // 3. Lower Coolant Pit (z = -5)
-    b.add_quad([20.0, 20.0, -5.0], [44.0, 20.0, -5.0], [44.0, 44.0, -5.0], [20.0, 44.0, -5.0], [0.18, 0.22, 0.26], true);
-    b.add_quad([20.0, 20.0, 0.0], [44.0, 20.0, 0.0], [44.0, 20.0, -5.0], [20.0, 20.0, -5.0], [0.28, 0.30, 0.34], true);
-    b.add_quad([44.0, 44.0, 0.0], [20.0, 44.0, 0.0], [20.0, 44.0, -5.0], [44.0, 44.0, -5.0], [0.28, 0.30, 0.34], true);
-    b.add_quad([44.0, 20.0, 0.0], [44.0, 44.0, 0.0], [44.0, 44.0, -5.0], [44.0, 20.0, -5.0], [0.28, 0.30, 0.34], true);
-    b.add_quad([20.0, 44.0, 0.0], [20.0, 20.0, 0.0], [20.0, 20.0, -5.0], [20.0, 44.0, -5.0], [0.28, 0.30, 0.34], true);
+    b.add_floor(20.0, 20.0, 44.0, 44.0, -5.0, [0.18, 0.22, 0.26], true);
+    // Pit walls facing inward into pit
+    b.add_quad([20.0, 20.0, -5.0], [44.0, 20.0, -5.0], [44.0, 20.0, 0.0], [20.0, 20.0, 0.0], [0.28, 0.30, 0.34], true);
+    b.add_quad([44.0, 44.0, -5.0], [20.0, 44.0, -5.0], [20.0, 44.0, 0.0], [44.0, 44.0, 0.0], [0.28, 0.30, 0.34], true);
+    b.add_quad([44.0, 20.0, -5.0], [44.0, 44.0, -5.0], [44.0, 44.0, 0.0], [44.0, 20.0, 0.0], [0.28, 0.30, 0.34], true);
+    b.add_quad([20.0, 44.0, -5.0], [20.0, 20.0, -5.0], [20.0, 20.0, 0.0], [20.0, 44.0, 0.0], [0.28, 0.30, 0.34], true);
 
     // Ramps into Pit
     b.add_ramp(28.0, 14.0, 0.0, 36.0, 20.0, -5.0, [0.42, 0.38, 0.32]);
     b.add_ramp(28.0, 44.0, -5.0, 36.0, 50.0, 0.0, [0.42, 0.38, 0.32]);
 
     // 4. Catwalk & Mezzanine (z = 6)
-    b.add_quad([0.0, 0.0, 6.0], [64.0, 0.0, 6.0], [64.0, 6.0, 6.0], [0.0, 6.0, 6.0], [0.48, 0.46, 0.44], true);
-    b.add_quad([0.0, 58.0, 6.0], [64.0, 58.0, 6.0], [64.0, 64.0, 6.0], [0.0, 64.0, 6.0], [0.48, 0.46, 0.44], true);
-    b.add_quad([0.0, 6.0, 6.0], [6.0, 6.0, 6.0], [6.0, 58.0, 6.0], [0.0, 58.0, 6.0], [0.46, 0.44, 0.42], true);
-    b.add_quad([58.0, 6.0, 6.0], [64.0, 6.0, 6.0], [64.0, 58.0, 6.0], [58.0, 58.0, 6.0], [0.46, 0.44, 0.42], true);
+    b.add_floor(0.0, 0.0, 64.0, 6.0, 6.0, [0.48, 0.46, 0.44], true);
+    b.add_floor(0.0, 58.0, 64.0, 64.0, 6.0, [0.48, 0.46, 0.44], true);
+    b.add_floor(0.0, 6.0, 6.0, 58.0, 6.0, [0.46, 0.44, 0.42], true);
+    b.add_floor(58.0, 6.0, 64.0, 58.0, 6.0, [0.46, 0.44, 0.42], true);
     // Catwalk bridge
-    b.add_quad([26.0, 6.0, 6.0], [38.0, 6.0, 6.0], [38.0, 58.0, 6.0], [26.0, 58.0, 6.0], [0.52, 0.50, 0.46], true);
+    b.add_floor(26.0, 6.0, 38.0, 58.0, 6.0, [0.52, 0.50, 0.46], true);
 
     // Connecting Ramps
     b.add_ramp(2.0, 10.0, 0.0, 6.0, 26.0, 6.0, [0.45, 0.40, 0.35]);
@@ -344,29 +404,29 @@ pub fn create_procedural_junk_flea_3d(info: MapInfo) -> World3D {
     b.add_quad([4.0, 60.0, 0.0], [4.0, 4.0, 0.0], [4.0, 4.0, 14.0], [4.0, 60.0, 14.0], [0.26, 0.24, 0.22], true); // West
 
     // 2. Ground Floor (z = 0) with Trench cutouts at x in [16..22] and [42..48], y in [20..44]
-    b.add_quad([4.0, 4.0, 0.0], [16.0, 4.0, 0.0], [16.0, 60.0, 0.0], [4.0, 60.0, 0.0], [0.35, 0.33, 0.30], true); // West strip
-    b.add_quad([48.0, 4.0, 0.0], [60.0, 4.0, 0.0], [60.0, 60.0, 0.0], [48.0, 60.0, 0.0], [0.35, 0.33, 0.30], true); // East strip
-    b.add_quad([22.0, 4.0, 0.0], [42.0, 4.0, 0.0], [42.0, 60.0, 0.0], [22.0, 60.0, 0.0], [0.33, 0.31, 0.28], true); // Center strip
+    b.add_floor(4.0, 4.0, 16.0, 60.0, 0.0, [0.35, 0.33, 0.30], true); // West strip
+    b.add_floor(48.0, 4.0, 60.0, 60.0, 0.0, [0.35, 0.33, 0.30], true); // East strip
+    b.add_floor(22.0, 4.0, 42.0, 60.0, 0.0, [0.33, 0.31, 0.28], true); // Center strip
 
     // North & South ground connectors across trenches
-    b.add_quad([16.0, 4.0, 0.0], [22.0, 4.0, 0.0], [22.0, 14.0, 0.0], [16.0, 14.0, 0.0], [0.33, 0.31, 0.28], true);
-    b.add_quad([16.0, 50.0, 0.0], [22.0, 50.0, 0.0], [22.0, 60.0, 0.0], [16.0, 60.0, 0.0], [0.33, 0.31, 0.28], true);
-    b.add_quad([42.0, 4.0, 0.0], [48.0, 4.0, 0.0], [48.0, 14.0, 0.0], [42.0, 14.0, 0.0], [0.33, 0.31, 0.28], true);
-    b.add_quad([42.0, 50.0, 0.0], [48.0, 50.0, 0.0], [48.0, 60.0, 0.0], [42.0, 60.0, 0.0], [0.33, 0.31, 0.28], true);
+    b.add_floor(16.0, 4.0, 22.0, 14.0, 0.0, [0.33, 0.31, 0.28], true);
+    b.add_floor(16.0, 50.0, 22.0, 60.0, 0.0, [0.33, 0.31, 0.28], true);
+    b.add_floor(42.0, 4.0, 48.0, 14.0, 0.0, [0.33, 0.31, 0.28], true);
+    b.add_floor(42.0, 50.0, 48.0, 60.0, 0.0, [0.33, 0.31, 0.28], true);
 
     // 3. Subterranean Trenches (z = -2.0)
     // West Trench
-    b.add_quad([16.0, 20.0, -2.0], [22.0, 20.0, -2.0], [22.0, 44.0, -2.0], [16.0, 44.0, -2.0], [0.20, 0.18, 0.16], true);
-    b.add_quad([16.0, 20.0, 0.0], [16.0, 44.0, 0.0], [16.0, 44.0, -2.0], [16.0, 20.0, -2.0], [0.28, 0.26, 0.24], true);
-    b.add_quad([22.0, 44.0, 0.0], [22.0, 20.0, 0.0], [22.0, 20.0, -2.0], [22.0, 44.0, -2.0], [0.28, 0.26, 0.24], true);
+    b.add_floor(16.0, 20.0, 22.0, 44.0, -2.0, [0.20, 0.18, 0.16], true);
+    b.add_quad([16.0, 20.0, -2.0], [16.0, 44.0, -2.0], [16.0, 44.0, 0.0], [16.0, 20.0, 0.0], [0.28, 0.26, 0.24], true);
+    b.add_quad([22.0, 44.0, -2.0], [22.0, 20.0, -2.0], [22.0, 20.0, 0.0], [22.0, 44.0, 0.0], [0.28, 0.26, 0.24], true);
     // Ramps into West Trench
     b.add_ramp(16.0, 14.0, 0.0, 22.0, 20.0, -2.0, [0.40, 0.36, 0.32]);
     b.add_ramp(16.0, 44.0, -2.0, 22.0, 50.0, 0.0, [0.40, 0.36, 0.32]);
 
     // East Trench
-    b.add_quad([42.0, 20.0, -2.0], [48.0, 20.0, -2.0], [48.0, 44.0, -2.0], [42.0, 44.0, -2.0], [0.20, 0.18, 0.16], true);
-    b.add_quad([42.0, 20.0, 0.0], [42.0, 44.0, 0.0], [42.0, 44.0, -2.0], [42.0, 20.0, -2.0], [0.28, 0.26, 0.24], true);
-    b.add_quad([48.0, 44.0, 0.0], [48.0, 20.0, 0.0], [48.0, 20.0, -2.0], [48.0, 44.0, -2.0], [0.28, 0.26, 0.24], true);
+    b.add_floor(42.0, 20.0, 48.0, 44.0, -2.0, [0.20, 0.18, 0.16], true);
+    b.add_quad([42.0, 20.0, -2.0], [42.0, 44.0, -2.0], [42.0, 44.0, 0.0], [42.0, 20.0, 0.0], [0.28, 0.26, 0.24], true);
+    b.add_quad([48.0, 44.0, -2.0], [48.0, 20.0, -2.0], [48.0, 20.0, 0.0], [48.0, 44.0, 0.0], [0.28, 0.26, 0.24], true);
     // Ramps into East Trench
     b.add_ramp(42.0, 14.0, 0.0, 48.0, 20.0, -2.0, [0.40, 0.36, 0.32]);
     b.add_ramp(42.0, 44.0, -2.0, 48.0, 50.0, 0.0, [0.40, 0.36, 0.32]);
@@ -383,7 +443,7 @@ pub fn create_procedural_junk_flea_3d(info: MapInfo) -> World3D {
     b.add_box(30.0, 30.0, 0.0, 34.0, 34.0, 1.4, [0.34, 0.38, 0.42]); // Center scrap crate
 
     // 6. High Steel Catwalk Bridge (z = 6.4)
-    b.add_quad([30.0, 14.0, 6.4], [34.0, 14.0, 6.4], [34.0, 50.0, 6.4], [30.0, 50.0, 6.4], [0.46, 0.44, 0.40], true);
+    b.add_floor(30.0, 14.0, 34.0, 50.0, 6.4, [0.46, 0.44, 0.40], true);
     // Catwalk Access Ramps
     b.add_ramp(30.0, 8.0, 0.0, 34.0, 14.0, 6.4, [0.44, 0.40, 0.36]); // South ramp up
     b.add_ramp(30.0, 50.0, 6.4, 34.0, 56.0, 0.0, [0.44, 0.40, 0.36]); // North ramp down
@@ -458,15 +518,15 @@ pub fn create_procedural_bank_3d(info: MapInfo) -> World3D {
 
     // 2. Ground Floors (Street Asphalt vs Bank Marble Floor)
     // Street asphalt (y: 4.0..18.0)
-    b.add_quad([4.0, 4.0, 0.0], [60.0, 4.0, 0.0], [60.0, 18.0, 0.0], [4.0, 18.0, 0.0], [0.20, 0.20, 0.22], true);
+    b.add_floor(4.0, 4.0, 60.0, 18.0, 0.0, [0.20, 0.20, 0.22], true);
     // Sidewalk concrete curb (y: 14.0..18.0)
     b.add_box(4.0, 14.0, 0.0, 60.0, 18.0, 0.2, [0.48, 0.46, 0.44]);
     // Main bank marble floor (y: 18.0..46.0)
-    b.add_quad([4.0, 18.0, 0.0], [60.0, 18.0, 0.0], [60.0, 46.0, 0.0], [4.0, 46.0, 0.0], [0.72, 0.70, 0.66], true);
+    b.add_floor(4.0, 18.0, 60.0, 46.0, 0.0, [0.72, 0.70, 0.66], true);
     // Rear offices floor (y: 46.0..60.0)
-    b.add_quad([4.0, 46.0, 0.0], [40.0, 46.0, 0.0], [40.0, 60.0, 0.0], [4.0, 60.0, 0.0], [0.58, 0.56, 0.52], true);
+    b.add_floor(4.0, 46.0, 40.0, 60.0, 0.0, [0.58, 0.56, 0.52], true);
     // Vault steel floor (x: 40.0..60.0, y: 46.0..60.0)
-    b.add_quad([40.0, 46.0, 0.0], [60.0, 46.0, 0.0], [60.0, 60.0, 0.0], [40.0, 60.0, 0.0], [0.28, 0.30, 0.34], true);
+    b.add_floor(40.0, 46.0, 60.0, 60.0, 0.0, [0.28, 0.30, 0.34], true);
 
     // 3. Bank Exterior Facade Wall (y: 18.0..22.0) with 3 Entrances
     // Solid sections
@@ -502,13 +562,13 @@ pub fn create_procedural_bank_3d(info: MapInfo) -> World3D {
 
     // 6. Executive Mezzanine & Balconies (z = 5.0)
     // West Balcony & Railing
-    b.add_quad([14.0, 38.0, 5.0], [20.0, 38.0, 5.0], [20.0, 45.0, 5.0], [14.0, 45.0, 5.0], [0.55, 0.52, 0.48], true);
+    b.add_floor(14.0, 38.0, 20.0, 45.0, 5.0, [0.55, 0.52, 0.48], true);
     b.add_box(19.8, 38.0, 5.0, 20.2, 45.0, 6.1, [0.65, 0.58, 0.32]); // Brass railing
     b.add_ramp(14.0, 32.0, 0.0, 18.0, 38.0, 5.0, [0.48, 0.44, 0.40]);  // West stairs
     // Fire escape connection to exterior
     b.add_box(14.0, 18.0, 4.8, 18.0, 22.0, 5.0, [0.35, 0.33, 0.30]);
     // East Balcony & Railing
-    b.add_quad([44.0, 38.0, 5.0], [50.0, 38.0, 5.0], [50.0, 45.0, 5.0], [44.0, 45.0, 5.0], [0.55, 0.52, 0.48], true);
+    b.add_floor(44.0, 38.0, 50.0, 45.0, 5.0, [0.55, 0.52, 0.48], true);
     b.add_box(43.8, 38.0, 5.0, 44.2, 45.0, 6.1, [0.65, 0.58, 0.32]); // Brass railing
     b.add_ramp(46.0, 32.0, 0.0, 50.0, 38.0, 5.0, [0.48, 0.44, 0.40]);  // East stairs
 
