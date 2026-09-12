@@ -1374,10 +1374,27 @@ impl App {
     /// the spawn, never from the entity's own `z`, which is the mapper's eye and
     /// scatters up to twenty-two cubes above the floor.
     fn place_offline(&mut self) {
-        let spawn_3d = self.world3d.as_ref().and_then(|w| w.spawns.first().copied());
+        let mut override_pitch = 0.0;
+        let spawn_3d = std::env::var("SPAWN_OVERRIDE").ok().and_then(|v| {
+            let parts: Vec<f32> = v.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+            if parts.len() >= 4 {
+                if parts.len() >= 5 {
+                    override_pitch = parts[4].to_radians();
+                }
+                Some(hassault_native::world3d::SpawnPoint {
+                    x: parts[0],
+                    y: parts[1],
+                    z: parts[2],
+                    yaw: parts[3],
+                    team: 0,
+                })
+            } else {
+                None
+            }
+        }).or_else(|| self.world3d.as_ref().and_then(|w| w.spawns.first().copied()));
         if let Some(sp) = spawn_3d {
             self.camera.yaw = sp.yaw;
-            self.camera.pitch = 0.0;
+            self.camera.pitch = override_pitch;
             self.prediction.reset(
                 sp.x,
                 sp.y,
