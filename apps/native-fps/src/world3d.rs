@@ -927,8 +927,154 @@ pub fn create_procedural_bank_3d(info: MapInfo) -> World3D {
 /// 3. The Vents: Enclosed rooftop crawlable ductwork with dual drops into catwalk and hostage office.
 /// 4. Main Warehouse Interior: High trusses, elevated catwalks (z = 4.2) with ground clearance underneath, semi-truck & trailer, forklift.
 /// 5. Back Office / Hostage Room: 2-story office with panoramic glass observation windows overlooking the floor, CCTV monitors, desks.
+struct ScaledFacilityBuilder<'a> {
+    inner: &'a mut FacilityBuilder,
+    scale: f32,
+}
+
+impl<'a> ScaledFacilityBuilder<'a> {
+    fn add_quad(
+        &mut self,
+        p0: [f32; 3],
+        p1: [f32; 3],
+        p2: [f32; 3],
+        p3: [f32; 3],
+        color: [f32; 3],
+        is_collider: bool,
+    ) {
+        let s = self.scale;
+        self.inner.add_quad(
+            [p0[0] * s, p0[1] * s, p0[2] * s],
+            [p1[0] * s, p1[1] * s, p1[2] * s],
+            [p2[0] * s, p2[1] * s, p2[2] * s],
+            [p3[0] * s, p3[1] * s, p3[2] * s],
+            color,
+            is_collider,
+        );
+    }
+
+    fn add_floor(
+        &mut self,
+        min_x: f32,
+        min_y: f32,
+        max_x: f32,
+        max_y: f32,
+        z: f32,
+        color: [f32; 3],
+        is_collider: bool,
+    ) {
+        let s = self.scale;
+        self.inner.add_floor(
+            min_x * s,
+            min_y * s,
+            max_x * s,
+            max_y * s,
+            z * s,
+            color,
+            is_collider,
+        );
+    }
+
+    fn add_box(
+        &mut self,
+        min_x: f32,
+        min_y: f32,
+        min_z: f32,
+        max_x: f32,
+        max_y: f32,
+        max_z: f32,
+        color: [f32; 3],
+    ) {
+        let s = self.scale;
+        self.inner.add_box(
+            min_x * s,
+            min_y * s,
+            min_z * s,
+            max_x * s,
+            max_y * s,
+            max_z * s,
+            color,
+        );
+    }
+
+    fn add_box_ex(
+        &mut self,
+        min_x: f32,
+        min_y: f32,
+        min_z: f32,
+        max_x: f32,
+        max_y: f32,
+        max_z: f32,
+        color: [f32; 3],
+        is_collider: bool,
+    ) {
+        let s = self.scale;
+        self.inner.add_box_ex(
+            min_x * s,
+            min_y * s,
+            min_z * s,
+            max_x * s,
+            max_y * s,
+            max_z * s,
+            color,
+            is_collider,
+        );
+    }
+
+    fn add_cylinder(
+        &mut self,
+        cx: f32,
+        cy: f32,
+        min_z: f32,
+        max_z: f32,
+        radius: f32,
+        segments: usize,
+        color: [f32; 3],
+        is_collider: bool,
+    ) {
+        let s = self.scale;
+        self.inner.add_cylinder(
+            cx * s,
+            cy * s,
+            min_z * s,
+            max_z * s,
+            radius * s,
+            segments,
+            color,
+            is_collider,
+        );
+    }
+
+    fn add_ramp(
+        &mut self,
+        min_x: f32,
+        min_y: f32,
+        min_z: f32,
+        max_x: f32,
+        max_y: f32,
+        max_z: f32,
+        color: [f32; 3],
+    ) {
+        let s = self.scale;
+        self.inner.add_ramp(
+            min_x * s,
+            min_y * s,
+            min_z * s,
+            max_x * s,
+            max_y * s,
+            max_z * s,
+            color,
+        );
+    }
+}
+
 pub fn create_procedural_assault_3d(info: MapInfo) -> World3D {
-    let mut b = FacilityBuilder::new();
+    let mut builder = FacilityBuilder::new();
+    {
+        let mut b = ScaledFacilityBuilder {
+            inner: &mut builder,
+            scale: 10.0,
+        };
 
     // CS:GO Industrial Palette
     let col_asphalt = [0.20, 0.20, 0.22];
@@ -1197,50 +1343,52 @@ pub fn create_procedural_assault_3d(info: MapInfo) -> World3D {
     b.add_floor(21.0, 48.0, 26.0, 53.0, 4.22, [0.88, 0.20, 0.15], false);
     // Site B: Warehouse floor next to semi-truck
     b.add_floor(30.0, 36.0, 35.0, 41.0, 0.02, [0.88, 0.20, 0.15], false);
+    }
 
+    let s = 10.0;
     let spawns = vec![
-        SpawnPoint { x: 16.0, y: 8.0, z: 0.0, yaw: 0.0, team: 0 },
-        SpawnPoint { x: 24.0, y: 8.0, z: 0.0, yaw: 0.0, team: 0 },
-        SpawnPoint { x: 32.0, y: 8.0, z: 0.0, yaw: 0.0, team: 0 },
-        SpawnPoint { x: 40.0, y: 8.0, z: 0.0, yaw: 0.0, team: 0 },
-        SpawnPoint { x: 16.0, y: 50.0, z: 4.2, yaw: 180.0, team: 1 },
-        SpawnPoint { x: 22.0, y: 50.0, z: 4.2, yaw: 180.0, team: 1 },
-        SpawnPoint { x: 28.0, y: 50.0, z: 4.2, yaw: 180.0, team: 1 },
-        SpawnPoint { x: 38.0, y: 48.0, z: 0.0, yaw: 180.0, team: 1 },
+        SpawnPoint { x: 16.0 * s, y: 8.0 * s, z: 0.0, yaw: 0.0, team: 0 },
+        SpawnPoint { x: 24.0 * s, y: 8.0 * s, z: 0.0, yaw: 0.0, team: 0 },
+        SpawnPoint { x: 32.0 * s, y: 8.0 * s, z: 0.0, yaw: 0.0, team: 0 },
+        SpawnPoint { x: 40.0 * s, y: 8.0 * s, z: 0.0, yaw: 0.0, team: 0 },
+        SpawnPoint { x: 16.0 * s, y: 50.0 * s, z: 4.2 * s, yaw: 180.0, team: 1 },
+        SpawnPoint { x: 22.0 * s, y: 50.0 * s, z: 4.2 * s, yaw: 180.0, team: 1 },
+        SpawnPoint { x: 28.0 * s, y: 50.0 * s, z: 4.2 * s, yaw: 180.0, team: 1 },
+        SpawnPoint { x: 38.0 * s, y: 48.0 * s, z: 0.0, yaw: 180.0, team: 1 },
     ];
 
     let items = vec![
-        ItemRow { id: 1, kind: "health".into(), x: 18.0, y: 12.0, z: 0.0 },
-        ItemRow { id: 2, kind: "health".into(), x: 52.0, y: 14.0, z: 0.0 },
-        ItemRow { id: 3, kind: "health".into(), x: 16.0, y: 52.0, z: 4.2 },
-        ItemRow { id: 4, kind: "armour".into(), x: 26.0, y: 36.0, z: 0.0 },
-        ItemRow { id: 5, kind: "armour".into(), x: 32.0, y: 50.0, z: 4.2 },
-        ItemRow { id: 6, kind: "ammo_assault".into(), x: 22.0, y: 10.0, z: 0.0 },
-        ItemRow { id: 7, kind: "ammo_assault".into(), x: 44.0, y: 32.0, z: 0.0 },
-        ItemRow { id: 8, kind: "ammo_sniper".into(), x: 20.0, y: 14.0, z: 2.8 },
-        ItemRow { id: 9, kind: "clips".into(), x: 32.0, y: 20.0, z: 0.0 },
-        ItemRow { id: 10, kind: "grenade".into(), x: 14.0, y: 38.0, z: 4.2 },
+        ItemRow { id: 1, kind: "health".into(), x: 18.0 * s, y: 12.0 * s, z: 0.0 },
+        ItemRow { id: 2, kind: "health".into(), x: 52.0 * s, y: 14.0 * s, z: 0.0 },
+        ItemRow { id: 3, kind: "health".into(), x: 16.0 * s, y: 52.0 * s, z: 4.2 * s },
+        ItemRow { id: 4, kind: "armour".into(), x: 26.0 * s, y: 36.0 * s, z: 0.0 },
+        ItemRow { id: 5, kind: "armour".into(), x: 32.0 * s, y: 50.0 * s, z: 4.2 * s },
+        ItemRow { id: 6, kind: "ammo_assault".into(), x: 22.0 * s, y: 10.0 * s, z: 0.0 },
+        ItemRow { id: 7, kind: "ammo_assault".into(), x: 44.0 * s, y: 32.0 * s, z: 0.0 },
+        ItemRow { id: 8, kind: "ammo_sniper".into(), x: 20.0 * s, y: 14.0 * s, z: 2.8 * s },
+        ItemRow { id: 9, kind: "clips".into(), x: 32.0 * s, y: 20.0 * s, z: 0.0 },
+        ItemRow { id: 10, kind: "grenade".into(), x: 14.0 * s, y: 38.0 * s, z: 4.2 * s },
     ];
 
     let bounds = WorldBounds {
-        min: [4.0, 4.0, 0.0],
-        max: [60.0, 60.0, 14.0],
-        center: [32.0, 32.0, 5.0],
-        extent: 40.0,
+        min: [4.0 * s, 4.0 * s, 0.0],
+        max: [60.0 * s, 60.0 * s, 14.0 * s],
+        center: [32.0 * s, 32.0 * s, 5.0 * s],
+        extent: 40.0 * s,
     };
 
-    let triangles = b.render_positions.len() / 9;
+    let triangles = builder.render_positions.len() / 9;
 
     World3D {
         info,
         bounds,
-        render_positions: b.render_positions,
-        render_normals: b.render_normals,
-        render_colors: b.render_colors,
-        render_uvs: b.render_uvs,
+        render_positions: builder.render_positions,
+        render_normals: builder.render_normals,
+        render_colors: builder.render_colors,
+        render_uvs: builder.render_uvs,
         triangles,
-        col_vertices: b.col_vertices,
-        col_indices: b.col_indices,
+        col_vertices: builder.col_vertices,
+        col_indices: builder.col_indices,
         spawns,
         items,
         waterlevel: -100.0,

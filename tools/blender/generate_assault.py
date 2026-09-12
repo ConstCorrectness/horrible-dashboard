@@ -137,10 +137,13 @@ def get_or_create_collection(name, parent_collection=None):
     return col
 
 
+SCALE = 10.0
+
+
 def add_box(col, name, min_pt, max_pt, material, is_collider=True):
     """Helper to create an axis-aligned box with material and dimensions."""
-    x0, y0, z0 = min_pt
-    x1, y1, z1 = max_pt
+    x0, y0, z0 = min_pt[0] * SCALE, min_pt[1] * SCALE, min_pt[2] * SCALE
+    x1, y1, z1 = max_pt[0] * SCALE, max_pt[1] * SCALE, max_pt[2] * SCALE
     dx = x1 - x0
     dy = y1 - y0
     dz = z1 - z0
@@ -172,10 +175,13 @@ def add_box(col, name, min_pt, max_pt, material, is_collider=True):
 
 def add_cylinder(col, name, center, radius, height, material, rotation_euler=(0, 0, 0)):
     """Helper to create a cylinder."""
+    cx, cy, cz = center[0] * SCALE, center[1] * SCALE, center[2] * SCALE
+    r = radius * SCALE
+    h = height * SCALE
     bpy.ops.mesh.primitive_cylinder_add(
-        radius=radius,
-        depth=height,
-        location=center,
+        radius=r,
+        depth=h,
+        location=(cx, cy, cz),
         rotation=rotation_euler,
         vertices=16
     )
@@ -437,10 +443,10 @@ def build_assault_scene():
 
     print("[9/10] Setting up Realistic Lighting & Cameras...")
     # Sun Light (Daylight with soft shadow angle)
-    bpy.ops.object.light_add(type='SUN', radius=0.5, location=(30.0, 10.0, 30.0))
+    bpy.ops.object.light_add(type='SUN', radius=0.5 * SCALE, location=(30.0 * SCALE, 10.0 * SCALE, 30.0 * SCALE))
     sun = bpy.context.active_object
     sun.name = "Sun_Key_Light"
-    sun.data.energy = 3.5
+    sun.data.energy = 4.5
     sun.data.color = (1.0, 0.98, 0.92) # warm sunlight
     sun.rotation_euler = (math.radians(45), math.radians(15), math.radians(35))
     if sun.name not in c_lights.objects:
@@ -448,13 +454,13 @@ def build_assault_scene():
         if sun.name in bpy.context.scene.collection.objects:
             bpy.context.scene.collection.objects.unlink(sun)
 
-    # Warehouse interior high-bay floodlights (warm halogen)
+    # Warehouse interior high-bay floodlights (warm halogen, scaled for 10x volume)
     for lx in [22.0, 32.0, 40.0]:
         for ly in [26.0, 36.0, 48.0]:
-            bpy.ops.object.light_add(type='POINT', radius=0.8, location=(lx, ly, 7.8))
+            bpy.ops.object.light_add(type='POINT', radius=8.0, location=(lx * SCALE, ly * SCALE, 7.8 * SCALE))
             light = bpy.context.active_object
             light.name = f"HighBay_Lamp_{int(lx)}_{int(ly)}"
-            light.data.energy = 400.0
+            light.data.energy = 40000.0
             light.data.color = (1.0, 0.92, 0.80)
             if light.name not in c_lights.objects:
                 c_lights.objects.link(light)
@@ -462,7 +468,7 @@ def build_assault_scene():
                     bpy.context.scene.collection.objects.unlink(light)
 
     # Tactical Scene Camera positioned overlooking CT spawn and warehouse
-    bpy.ops.object.camera_add(location=(8.0, 8.0, 4.5), rotation=(math.radians(78), 0, math.radians(-15)))
+    bpy.ops.object.camera_add(location=(8.0 * SCALE, 8.0 * SCALE, 4.5 * SCALE), rotation=(math.radians(78), 0, math.radians(-15)))
     cam = bpy.context.active_object
     cam.name = "Main_Level_Camera"
     bpy.context.scene.camera = cam

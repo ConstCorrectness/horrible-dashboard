@@ -927,13 +927,91 @@ export function createProceduralBank3D(
  * 4. Main Warehouse Interior: High trusses, elevated catwalks (z = 4.2) with ground clearance, semi-truck & trailer, forklift.
  * 5. Back Office / Hostage Room: 2-story office with panoramic glass observation windows overlooking the floor, CCTV monitors, desks.
  */
+class ScaledWorld3DBuilder {
+  constructor(public inner: World3DBuilder, public scale: number = 10.0) {}
+
+  addQuad(
+    p0: [number, number, number],
+    p1: [number, number, number],
+    p2: [number, number, number],
+    p3: [number, number, number],
+    materialName: string,
+    isCollider: boolean = true,
+  ) {
+    const s = this.scale;
+    this.inner.addQuad(
+      [p0[0] * s, p0[1] * s, p0[2] * s],
+      [p1[0] * s, p1[1] * s, p1[2] * s],
+      [p2[0] * s, p2[1] * s, p2[2] * s],
+      [p3[0] * s, p3[1] * s, p3[2] * s],
+      materialName,
+      isCollider,
+    );
+  }
+
+  addFloor(
+    minX: number,
+    minY: number,
+    maxX: number,
+    maxY: number,
+    z: number,
+    materialName: string,
+    isCollider: boolean = true,
+  ) {
+    const s = this.scale;
+    this.inner.addFloor(minX * s, minY * s, maxX * s, maxY * s, z * s, materialName, isCollider);
+  }
+
+  addBox(
+    minX: number,
+    minY: number,
+    minZ: number,
+    maxX: number,
+    maxY: number,
+    maxZ: number,
+    materialName: string,
+    isCollider: boolean = true,
+  ) {
+    const s = this.scale;
+    this.inner.addBox(minX * s, minY * s, minZ * s, maxX * s, maxY * s, maxZ * s, materialName, isCollider);
+  }
+
+  addCylinder(
+    cx: number,
+    cy: number,
+    minZ: number,
+    maxZ: number,
+    radius: number,
+    segments: number,
+    materialName: string,
+    isCollider: boolean = true,
+  ) {
+    const s = this.scale;
+    this.inner.addCylinder(cx * s, cy * s, minZ * s, maxZ * s, radius * s, segments, materialName, isCollider);
+  }
+
+  addRamp(
+    minX: number,
+    minY: number,
+    minZ: number,
+    maxX: number,
+    maxY: number,
+    maxZ: number,
+    materialName: string,
+  ) {
+    const s = this.scale;
+    this.inner.addRamp(minX * s, minY * s, minZ * s, maxX * s, maxY * s, maxZ * s, materialName);
+  }
+}
+
 export function createProceduralAssault3D(
   THREE: typeof import('three'),
   info: MapInfo,
 ): World3D {
   const root = new THREE.Group();
   root.name = 'World3D_Assault';
-  const builder = new World3DBuilder(THREE);
+  const innerBuilder = new World3DBuilder(THREE);
+  const builder = new ScaledWorld3DBuilder(innerBuilder, 10.0);
 
   // 1. Perimeter Walls (64x64 bounds, height = 14)
   builder.addQuad([4, 4, 0], [60, 4, 0], [60, 4, 14], [4, 4, 14], 'concrete');
@@ -1134,48 +1212,49 @@ export function createProceduralAssault3D(
     [0, 1, 1, 1, 1, 0, 0, 0],
   );
 
-  const { geometries, materials, lib } = builder.build(root);
+  const { geometries, materials, lib } = innerBuilder.build(root);
 
+  const s = 10.0;
   const ctSpawns: SpawnPoint[] = [
-    { x: 16, y: 8, z: 0, yaw: 0, team: 0 },
-    { x: 24, y: 8, z: 0, yaw: 0, team: 0 },
-    { x: 32, y: 8, z: 0, yaw: 0, team: 0 },
-    { x: 40, y: 8, z: 0, yaw: 0, team: 0 },
+    { x: 16 * s, y: 8 * s, z: 0, yaw: 0, team: 0 },
+    { x: 24 * s, y: 8 * s, z: 0, yaw: 0, team: 0 },
+    { x: 32 * s, y: 8 * s, z: 0, yaw: 0, team: 0 },
+    { x: 40 * s, y: 8 * s, z: 0, yaw: 0, team: 0 },
   ];
 
   const tSpawns: SpawnPoint[] = [
-    { x: 16, y: 50, z: 4.2, yaw: 180, team: 1 },
-    { x: 22, y: 50, z: 4.2, yaw: 180, team: 1 },
-    { x: 28, y: 50, z: 4.2, yaw: 180, team: 1 },
-    { x: 38, y: 48, z: 0, yaw: 180, team: 1 },
+    { x: 16 * s, y: 50 * s, z: 4.2 * s, yaw: 180, team: 1 },
+    { x: 22 * s, y: 50 * s, z: 4.2 * s, yaw: 180, team: 1 },
+    { x: 28 * s, y: 50 * s, z: 4.2 * s, yaw: 180, team: 1 },
+    { x: 38 * s, y: 48 * s, z: 0, yaw: 180, team: 1 },
   ];
 
   const allSpawns = [...ctSpawns, ...tSpawns];
 
   const items: ItemRow[] = [
-    { id: 1, kind: 'health', x: 18, y: 12, z: 0 },
-    { id: 2, kind: 'health', x: 52, y: 14, z: 0 },
-    { id: 3, kind: 'health', x: 16, y: 52, z: 4.2 },
-    { id: 4, kind: 'armour', x: 26, y: 36, z: 0 },
-    { id: 5, kind: 'armour', x: 32, y: 50, z: 4.2 },
-    { id: 6, kind: 'ammo_assault', x: 22, y: 10, z: 0 },
-    { id: 7, kind: 'ammo_assault', x: 44, y: 32, z: 0 },
-    { id: 8, kind: 'ammo_sniper', x: 20, y: 14, z: 2.8 },
-    { id: 9, kind: 'clips', x: 32, y: 20, z: 0 },
-    { id: 10, kind: 'grenade', x: 14, y: 38, z: 4.2 },
+    { id: 1, kind: 'health', x: 18 * s, y: 12 * s, z: 0 },
+    { id: 2, kind: 'health', x: 52 * s, y: 14 * s, z: 0 },
+    { id: 3, kind: 'health', x: 16 * s, y: 52 * s, z: 4.2 * s },
+    { id: 4, kind: 'armour', x: 26 * s, y: 36 * s, z: 0 },
+    { id: 5, kind: 'armour', x: 32 * s, y: 50 * s, z: 4.2 * s },
+    { id: 6, kind: 'ammo_assault', x: 22 * s, y: 10 * s, z: 0 },
+    { id: 7, kind: 'ammo_assault', x: 44 * s, y: 32 * s, z: 0 },
+    { id: 8, kind: 'ammo_sniper', x: 20 * s, y: 14 * s, z: 2.8 * s },
+    { id: 9, kind: 'clips', x: 32 * s, y: 20 * s, z: 0 },
+    { id: 10, kind: 'grenade', x: 14 * s, y: 38 * s, z: 4.2 * s },
   ];
 
   const bounds: WorldBounds = {
-    min: [4, 4, 0],
-    max: [60, 60, 14],
-    center: [32, 32, 5],
-    extent: 40,
+    min: [4 * s, 4 * s, 0],
+    max: [60 * s, 60 * s, 14 * s],
+    center: [32 * s, 32 * s, 5 * s],
+    extent: 40 * s,
   };
 
   const collision: CollisionGeometry = {
-    vertices: new Float32Array(builder.colVertices),
-    indices: new Uint32Array(builder.colIndices),
-    triangles: builder.colIndices.length / 3,
+    vertices: new Float32Array(innerBuilder.colVertices),
+    indices: new Uint32Array(innerBuilder.colIndices),
+    triangles: innerBuilder.colIndices.length / 3,
   };
 
   return {
@@ -1185,7 +1264,7 @@ export function createProceduralAssault3D(
     collision,
     spawns: { cla: ctSpawns, rvsf: tSpawns, all: allSpawns },
     items,
-    ladders: [{ x: 14, y: 56, base: 0, top: 8 }],
+    ladders: [{ x: 14 * s, y: 56 * s, base: 0, top: 8 * s }],
     waterlevel: -100.0,
     materials,
     dispose() {

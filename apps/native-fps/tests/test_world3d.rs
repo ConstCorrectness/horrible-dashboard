@@ -144,42 +144,42 @@ fn test_assault_3d_generation() {
     assert_eq!(world.items.len(), 10, "must have 10 pickups");
     assert_eq!(world.waterlevel, -100.0);
 
-    // Verify Rapier 3D collision
+    // Verify Rapier 3D collision (scaled 10x)
     let physics = RapierPhysicsWorld::new(&world.col_vertices, &world.col_indices);
 
     // Ray down onto street
-    let (hit_street, dist_street, _) = physics.cast_ray([20.0, 8.0, 5.0], [0.0, 0.0, -1.0], 10.0);
+    let (hit_street, dist_street, _) = physics.cast_ray([200.0, 80.0, 50.0], [0.0, 0.0, -1.0], 100.0);
     assert!(hit_street, "ray downwards onto street should hit floor at z=0");
-    assert!((dist_street - 5.0).abs() < 0.2);
+    assert!((dist_street - 50.0).abs() < 2.0);
 
-    // Ray down onto Highway Bridge Deck (z = 9.0)
-    let (hit_bridge, dist_bridge, _) = physics.cast_ray([28.0, 10.0, 12.0], [0.0, 0.0, -1.0], 10.0);
-    assert!(hit_bridge, "ray downwards onto highway bridge deck should hit at z=9.0");
-    assert!((dist_bridge - 3.0).abs() < 0.2);
+    // Ray down onto Highway Bridge Deck (z = 90.0)
+    let (hit_bridge, dist_bridge, _) = physics.cast_ray([280.0, 100.0, 120.0], [0.0, 0.0, -1.0], 100.0);
+    assert!(hit_bridge, "ray downwards onto highway bridge deck should hit at z=90.0");
+    assert!((dist_bridge - 30.0).abs() < 2.0);
 
     // Ray down under the highway bridge onto the street (z = 0.0)
-    let (hit_under_bridge, dist_under, _) = physics.cast_ray([28.0, 10.0, 5.0], [0.0, 0.0, -1.0], 10.0);
+    let (hit_under_bridge, dist_under, _) = physics.cast_ray([280.0, 100.0, 50.0], [0.0, 0.0, -1.0], 100.0);
     assert!(hit_under_bridge, "ray downwards under bridge should hit street at z=0.0");
-    assert!((dist_under - 5.0).abs() < 0.2);
+    assert!((dist_under - 50.0).abs() < 2.0);
 
-    // Ray down onto Warehouse Rooftop (z = 8.0)
-    let (hit_roof, dist_roof, _) = physics.cast_ray([20.0, 34.0, 12.0], [0.0, 0.0, -1.0], 10.0);
-    assert!(hit_roof, "ray downwards onto warehouse roof should hit at z=8.0");
-    assert!((dist_roof - 4.0).abs() < 0.2);
+    // Ray down onto Warehouse Rooftop (z = 80.0)
+    let (hit_roof, dist_roof, _) = physics.cast_ray([200.0, 340.0, 120.0], [0.0, 0.0, -1.0], 100.0);
+    assert!(hit_roof, "ray downwards onto warehouse roof should hit at z=80.0");
+    assert!((dist_roof - 40.0).abs() < 2.0);
 
-    // Ray down onto Elevated Catwalk (z = 4.2)
-    let (hit_catwalk, dist_catwalk, _) = physics.cast_ray([13.0, 36.0, 6.0], [0.0, 0.0, -1.0], 10.0);
-    assert!(hit_catwalk, "ray downwards onto elevated catwalk should hit at z=4.2");
-    assert!((dist_catwalk - 1.8).abs() < 0.2);
+    // Ray down onto Elevated Catwalk (z = 42.0)
+    let (hit_catwalk, dist_catwalk, _) = physics.cast_ray([130.0, 360.0, 60.0], [0.0, 0.0, -1.0], 100.0);
+    assert!(hit_catwalk, "ray downwards onto elevated catwalk should hit at z=42.0");
+    assert!((dist_catwalk - 18.0).abs() < 2.0);
 
     // Ray down under the Catwalk onto the ground floor (z = 0.0)
-    let (hit_under_catwalk, dist_under_catwalk, _) = physics.cast_ray([13.0, 36.0, 3.0], [0.0, 0.0, -1.0], 10.0);
+    let (hit_under_catwalk, dist_under_catwalk, _) = physics.cast_ray([130.0, 360.0, 30.0], [0.0, 0.0, -1.0], 100.0);
     assert!(hit_under_catwalk, "ray downwards under catwalk should hit ground at z=0.0");
-    assert!((dist_under_catwalk - 3.0).abs() < 0.2);
+    assert!((dist_under_catwalk - 30.0).abs() < 2.0);
 
-    // Ray down onto Hostage Office 2nd floor (z = 4.2)
-    let (hit_office, dist_office, _) = physics.cast_ray([20.0, 50.0, 6.0], [0.0, 0.0, -1.0], 10.0);
-    assert!(hit_office, "ray downwards onto hostage office floor should hit at z=4.2");
-    assert!((dist_office - 1.8).abs() < 0.2);
+    // Ray down onto Hostage Office 2nd floor (z = 42.0)
+    let (hit_office, dist_office, _) = physics.cast_ray([200.0, 500.0, 60.0], [0.0, 0.0, -1.0], 100.0);
+    assert!(hit_office, "ray downwards onto hostage office floor should hit at z=42.0");
+    assert!((dist_office - 18.0).abs() < 2.0);
 }
 
