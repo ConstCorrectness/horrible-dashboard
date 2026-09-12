@@ -228,8 +228,8 @@ export function ClubhouseWidget() {
       ) : method === 'code' ? (
         <>
           <p className="dashboard-hint">
-            Already got a code? Request one in the Clubhouse app, then enter the number it's
-            registered to and the code you were sent.
+            Only for a code this dashboard requested. A code the Clubhouse app asked for belongs to
+            the app's login and Clubhouse will not accept it here — use “Text me a code” instead.
           </p>
           <form
             className="ch-token-form"

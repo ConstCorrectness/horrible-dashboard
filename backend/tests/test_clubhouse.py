@@ -286,13 +286,64 @@ def test_complete_auth_wrong_code_is_400(client: TestClient, monkeypatch) -> Non
     assert res.status_code == 400
 
 
+def test_start_auth_attestation_gate_points_to_token_connect(
+    client: TestClient, monkeypatch
+) -> None:
+    async def fake_run_helper(action, phone, extra=""):
+        return {
+            "success": False,
+            "is_blocked": False,
+            "error_message": "login did not pass token validation!",
+        }
+
+    monkeypatch.setattr(routes, "_run_helper", fake_run_helper)
+    res = client.post(
+        "/api/clubhouse/auth/start", json={"phone_number": "+15551234567"}
+    )
+    assert res.status_code == 400
+    detail = res.json()["detail"]
+    assert "Auth token" in detail
+    assert "attestation" in detail.lower()
+
+
+def test_complete_auth_unverified_code_says_so(client: TestClient, monkeypatch) -> None:
+    # A refused code comes back as success:true + is_verified:false, with no token.
+    _mock_ch(
+        monkeypatch,
+        {
+            "/complete_phone_number_auth": {
+                "success": True,
+                "is_verified": False,
+                "number_of_attempts_remaining": 3,
+            }
+        },
+    )
+    res = client.post(
+        "/api/clubhouse/auth/complete",
+        json={"phone_number": "+15551234567", "verification_code": "123456"},
+    )
+    assert res.status_code == 400
+    detail = res.json()["detail"]
+    assert "3 attempts left" in detail
+    assert "request a new one" in detail
+    assert client.get("/api/clubhouse/status").json()["connected"] is False
+
+
+def test_headers_match_the_current_client() -> None:
+    headers = routes._headers("D")
+    # CH-AppBuild is the numeric build, never the dotted version string.
+    assert headers["CH-AppBuild"].isdigit()
+    assert headers["User-Agent"] == f"clubhouse/android/{headers['CH-AppBuild']}"
+    assert headers["CH-AppVersion"] != headers["CH-AppBuild"]
+
+
 def test_connect_with_token_validates_and_stores(
     client: TestClient, monkeypatch
 ) -> None:
     calls: list[tuple] = []
 
     async def fake_authed_post(path, payload, token, user_id, device_id=None):
-        calls.append((path, token, user_id, device_id))
+        calls.append((path, payload, token, user_id, device_id))
         return {"user_profile": FAKE_PROFILE}
 
     monkeypatch.setattr(routes, "_ch_authed_post", fake_authed_post)
@@ -305,8 +356,9 @@ def test_connect_with_token_validates_and_stores(
     assert body["connected"] is True
     assert body["username"] == "horrible"
     assert "TKN" not in res.text  # token never echoed back
-    # validated against /me with the supplied credentials
-    assert calls == [("/me", "TKN", 4242, "DEV-1")]
+    # Validated against /get_profile, NOT /me: Cloudflare rate-blocks /me, and
+    # connect must not depend on the one route that is intermittently 503.
+    assert calls == [("/get_profile", {"user_id": 4242}, "TKN", 4242, "DEV-1")]
 
     status = client.get("/api/clubhouse/status")
     assert status.json()["connected"] is True
@@ -703,6 +755,21 @@ def test_room_read_outside_the_room_is_a_409() -> None:
         routes._raise_for_upstream(res, "/get_channel")
     assert err.value.status_code == 409
     assert "not in this room" in err.value.detail
+
+
+def test_cloudflare_unavailable_becomes_clean_503() -> None:
+    # Clubhouse's edge refusing the request (recurring on the authed path) must
+    # not read as our bug, and token-connect must not reject a token /me never
+    # actually checked.
+    html = (
+        "<!DOCTYPE html><html><head><title>Application unavailable</title></head>"
+        "<body><h1>Application temporarily unavailable</h1></body></html>"
+    )
+    res = httpx.Response(503, text=html)
+    with pytest.raises(HTTPException) as err:
+        routes._raise_for_upstream(res, "/me")
+    assert err.value.status_code == 503
+    assert "temporarily unavailable" in err.value.detail.lower()
 
 
 def test_upstream_error_keeps_status_and_message() -> None:

@@ -25,19 +25,25 @@ stable per-install `CH-DeviceId`.
 
 ### 1. Client-Version Headers
 
-Clubhouse validates `CH-AppBuild` / `CH-AppVersion` / `User-Agent` and rejects stale clients with `login did not pass token validation` (HTTP 400).
-[routes.py](file:///C:/Users/Horrible/Code/horrible-dashboard/backend/modules/clubhouse/routes.py) pins a current build (build `26.07.12` / app `26.07.12`, Android User-Agent). If requests start failing with version mismatch errors, update these constants.
+Clubhouse validates two version headers — `CH-AppVersion` (`26.08.30`) and the **numeric** `CH-AppBuild` (`1038152`, also the `User-Agent`) — read off the 26.08.30 client's own interceptor (`defpackage/cb1.java`). A stale value earns "Please upgrade your app" on room actions and makes SMS codes come back `is_verified: false`. Update both constants in [routes.py](file:///C:/Users/Horrible/Code/horrible-dashboard/backend/modules/clubhouse/routes.py) `_headers` **and** `auth_helper/Program.cs`, then delete the compiled helper so it rebuilds; confirm with `check_for_update` (`has_update: false`).
 
-### 2. The Verification / reCAPTCHA Gate & Bypass
+### 2. The attestation gate — why SMS sign-in no longer works
 
-To prevent spam, Clubhouse enforces anti-abuse checks on `/start_phone_number_auth` when it detects automated requests, responding with `{"success": true, "send_rc_token": true}`.
+`start_phone_number_auth` in the 26.08.30 client attaches a `tokens` → **`AttestationRequest`** (`rc_token` reCAPTCHA, `integrity_response` Play Integrity, plus the legacy `safety_net_*`). Clubhouse now **rejects a code request that carries none**, answering `{"success": false, "error_message": "login did not pass token validation!"}`.
 
-- **Bypass Solution:** Because standard Python HTTP clients (like `httpx`) generate TLS/JA3 fingerprints that are flagged by Cloudflare/Clubhouse's WAF, the login request is immediately gated, and the SMS is not dispatched. However, the standard .NET 8 `HttpClient` TLS fingerprint is trust-listed. Under this context, the Clubhouse API successfully dispatches the SMS verification text even if it returns `send_rc_token: true`.
-- **Implementation:** The backend now packages and compiles a native C# helper console app (`ch-auth-helper`) under [backend/modules/clubhouse/auth_helper/](file:///home/horrible/horrible-dashboard/backend/modules/clubhouse/auth_helper/).
-- **Execution:** When `/auth/start` or `/auth/complete` is called, the Python backend executes this native helper as a subprocess, matching the exact TLS signature of official trusted clients (like Clubdeck). This successfully bypasses the bot gate, allowing the SMS verification text to arrive on the user's phone.
-- **Platform:** `WinHttpHandler` is Windows-only — it is the Windows HTTP stack, and constructing it elsewhere throws at startup, so the helper simply refused to run on Linux and macOS. It now picks `HttpClientHandler` off Windows so the helper builds and runs everywhere. Be clear about what that buys, though: the *bypass* is the WinHttp fingerprint, so off Windows the helper still runs but is as gateable as plain `httpx` — **Token-Connect is the reliable path there**.
+These tokens can only be minted by the signed Clubhouse app running on a Google-Play-certified device. **No TLS fingerprint or header trick from a desktop helper can produce one**, so the `ch-auth-helper` WinHTTP bypass (which defeated an earlier, softer Cloudflare/JA3 gate) no longer gets an SMS dispatched. `/auth/start` detects this message and steers the user to token-connect rather than surfacing the raw error.
 
-### 3. Headers & Endpoints Reference
+The C# helper still exists and still sends the current version headers; the WinHTTP-vs-`HttpClientHandler` platform split remains (Windows uses the trust-listed WinHTTP stack, other OSes fall back). But this is now moot for `start`: attestation gates every platform equally.
+
+### 3. Token-Connect — the working path
+
+`POST /auth/token` (the **"Auth token"** tab) takes an `auth_token` + `user_id` captured from a real logged-in Clubhouse session and validates them against **`/get_profile`** (of the account's own id) — deliberately **not** `/me`, see the route-block note below. It needs no attestation and is the supported way to link an account. Capture the token from the official app's traffic (or a prior successful sign-in); it is stored server-side only.
+
+### The `/me` + `/get_feed_v3` route block (Cloudflare 503)
+
+Cloudflare intermittently serves a **503 "Application temporarily unavailable"** on **exactly two routes — `/me` and `/get_feed_v3`** — while every *other* authenticated route (`/get_profile`, `/get_settings`, `/get_activities`, `/get_followers`, …) answers normally from the same machine, same IP, same token. Verified 2026-09-12: those two 503 while the rest return a clean `401` on a bad token; the official app on the *same Wi-Fi* uses them fine. It is **not** the IP, the token, TLS/JA3, HTTP version, headers, or the `__cf_bm` cookie — all were tested and ruled out. It is a **per-route rate/abuse rule**, and it is easy to trip by polling: a reconnect loop hitting `/me`, or `channels()` paging `/get_feed_v3` six times a refresh, is exactly the traffic that provokes it. It decays once that traffic stops. Two consequences the code now respects: **token-connect validates via `/get_profile`, not `/me`**, so linking an account works while `/me` is blocked; and a 503 on these routes is surfaced as a clean "temporarily unavailable" (see `_raise_for_upstream`), never as a token or payload error. The **room list still depends on `/get_feed_v3`**, so browsing live rooms is the one thing that waits for the block to clear — a room joined by known id does not.
+
+### 4. Headers & Endpoints Reference
 
 To communicate with Clubhouse, the backend passes specific metadata headers to authenticate and pass validation checks. If Clubhouse updates its mobile apps and starts rejecting requests, these headers and build versions must be updated in the backend config:
 
@@ -135,10 +141,23 @@ Read out of the 26.08.30 serializers and then confirmed on the wire:
   feature flag; `get_replays` needs a `social_club_id`; `search` needs
   `limit_to_object_types`.
 
-Separately, `check_for_update` answers unauthenticated and reports the current
-build as `23.08.31 (1026421)` with `is_mandatory: true` — for our pinned version
-*and* for 26.08.30. The version pin cannot be the cause of an auth failure, and
-bumping `AppVersion` cannot fix one.
+Separately, `check_for_update` answers unauthenticated and is the cheapest check
+that our version headers are current — it keys on the numeric **`CH-AppBuild`**,
+not the dotted version. With the old pin (`26.07.07` in both headers) it answers
+`has_update: true, is_mandatory: true`; with the 26.08.30 client's real values
+(`CH-AppVersion: 26.08.30`, `CH-AppBuild: 1038152`, `User-Agent:
+clubhouse/android/1038152`, read off `defpackage/cb1.java`) it answers
+`has_update: false`. (An earlier version of this page called that response frozen
+for every version — it only looked that way because the build header carried a
+version string.)
+
+**The version is enforced as of 2026-09-10.** A stale client gets "Please upgrade
+your app" on room actions, and an SMS code comes back `success: true,
+is_verified: false` with `number_of_attempts_remaining` that never goes down —
+the code is not even checked. `/auth/complete` now reports that as "Clubhouse did
+not accept that code (N attempts left)" rather than "wrong or expired code". This
+is distinct from `login did not pass token validation` on `start`, which is the
+anti-bot gate and is not fixed by a version bump.
 
 > [!NOTE]
 > **Token-Connect (The Backup Path):** While the C# helper bypasses standard bot gating, users can still use **Token-Connect** to link their accounts directly. Users can supply an existing `auth_token` and `user_id` (captured from an active official app session).

@@ -205,17 +205,21 @@ def _api_base() -> str:
 
 
 def _headers(device_id: str | None = None) -> dict[str, str]:
-    # Current Clubhouse Android client version (26.07.07).  Clubhouse rejects
-    # stale builds with "login did not pass token validation".  Update when
-    # the app publishes a new release.
-    _app_version = "26.07.07"
+    # The 26.08.30 client's own values (decompiled ``defpackage/cb1.java``).
+    # ``CH-AppBuild`` is the numeric build, not the version string: sending
+    # "26.07.07" in both was tolerated until 2026-09-10, when Clubhouse began
+    # answering "Please upgrade your app".  Keep in sync with the auth helper's
+    # Program.cs, and read both values off the new APK when bumping.
+    app_version, app_build = "26.08.30", "1038152"
     return {
+        "Accept": "application/json",
+        "Accept-Language": "en-US",
         "CH-Languages": "en-US",
         "CH-Locale": "en_US",
-        "CH-AppBuild": _app_version,
-        "CH-AppVersion": _app_version,
+        "CH-AppBuild": app_build,
+        "CH-AppVersion": app_version,
         "CH-DeviceId": device_id or _device_id(),
-        "User-Agent": f"clubhouse/android/{_app_version}",
+        "User-Agent": f"clubhouse/android/{app_build}",
     }
 
 
@@ -240,6 +244,24 @@ def _raise_for_upstream(res: httpx.Response, path: str) -> None:
     """
     if res.status_code < 400:
         return
+    # Cloudflare's "Application temporarily unavailable" page: Clubhouse's edge
+    # is refusing to pass the request to its Django app at all (a recurring,
+    # intermittent gate on the authenticated path -- `me`, `get_feed_v3`, join,
+    # send).  It is not our payload and not the token: surfaced as a raw 502 of
+    # HTML it reads like a bug on our side, so map it to a clean 503.  In
+    # particular token-connect must NOT treat a token as invalid here -- `/me`
+    # never actually checked it.
+    if (
+        res.status_code in (502, 503, 504)
+        and "temporarily unavailable" in res.text.lower()
+    ):
+        logger.warning("Clubhouse edge unavailable (503) for %s", path)
+        raise HTTPException(
+            status_code=503,
+            detail="Clubhouse is temporarily unavailable — its API edge is "
+            "refusing requests right now (this is on Clubhouse's side, not your "
+            "account or token). Try again in a little while.",
+        )
     message = res.text[:300]
     should_leave = False
     try:
@@ -349,6 +371,23 @@ async def start_auth(body: StartAuthRequest) -> StartAuthResult:
         error_msg = (
             data.get("error_message") or data.get("error") or "verification gate block"
         )
+        # ``login did not pass token validation`` is Clubhouse's attestation gate:
+        # the 26.08.30 client attaches a ``tokens`` -> AttestationRequest
+        # (``rc_token`` reCAPTCHA + ``integrity_response`` Play Integrity) to
+        # ``start_phone_number_auth``, and the server now rejects a request that
+        # carries none.  Those tokens can only be minted by the signed app on a
+        # Play-certified device, so no header or TLS trick from here produces
+        # one -- SMS sign-in is not recoverable on this path.  Point the user at
+        # token-connect, which needs no attestation.
+        if "token validation" in error_msg.lower():
+            raise HTTPException(
+                status_code=400,
+                detail="Clubhouse now blocks code requests from anything but its "
+                "own app (device-attestation gate), so 'Text me a code' cannot "
+                "work here. Use the 'Auth token' tab instead: sign in on the "
+                "real Clubhouse app, copy that session's auth token and user id, "
+                "and paste them here.",
+            )
         raise HTTPException(
             status_code=400,
             detail=f"Clubhouse verification failed: {error_msg}",
@@ -359,6 +398,21 @@ async def start_auth(body: StartAuthRequest) -> StartAuthResult:
 @router.post("/auth/complete", response_model=ClubhouseStatus)
 async def complete_auth(body: CompleteAuthRequest) -> ClubhouseStatus:
     data = await _run_helper("complete", body.phone_number, body.verification_code)
+    if data.get("is_verified") is False and not data.get("auth_token"):
+        # Clubhouse answers a refused code with ``success: true`` and
+        # ``is_verified: false``.  If the attempts count does not go down between
+        # tries, the code is not being checked against a live verification at
+        # all -- a code from an earlier "send code", or a client Clubhouse turns
+        # away -- which no amount of retyping fixes.
+        remaining = data.get("number_of_attempts_remaining")
+        left = f" ({remaining} attempts left)" if remaining is not None else ""
+        raise HTTPException(
+            status_code=400,
+            detail=f"Verification failed — Clubhouse did not accept that code{left}. "
+            "A code only works for the request that sent it: a code the "
+            "Clubhouse app asked for is tied to the app, not to this dashboard. "
+            "Use 'Text me a code' to request a new one and enter just that.",
+        )
     if not data.get("success") and not data.get("auth_token"):
         error_msg = (
             data.get("error_message") or data.get("error") or "wrong or expired code"
@@ -387,9 +441,21 @@ async def complete_auth(body: CompleteAuthRequest) -> ClubhouseStatus:
 
 @router.post("/auth/token", response_model=ClubhouseStatus)
 async def connect_with_token(body: TokenConnectRequest) -> ClubhouseStatus:
-    """Connect using an existing auth token, validated against /me."""
+    """Connect using an existing auth token, validated against ``/get_profile``.
+
+    Deliberately **not** ``/me``: Cloudflare intermittently rate-blocks ``/me``
+    and ``/get_feed_v3`` (a per-route 503 that has nothing to do with the token
+    -- every *other* authed route answers normally), which would make connect
+    impossible exactly when the account is otherwise fine.  ``/get_profile`` of
+    the account's own id returns the same ``user_profile`` and is not one of the
+    shed routes, so a valid token connects even while ``/me`` is throttled.
+    """
     data = await _ch_authed_post(
-        "/me", {}, body.auth_token, body.user_id, body.device_id
+        "/get_profile",
+        {"user_id": body.user_id},
+        body.auth_token,
+        body.user_id,
+        body.device_id,
     )
     profile = data.get("user_profile") or {}
     record = {

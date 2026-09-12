@@ -148,7 +148,7 @@ buffers, terminal + file explorer.
   platform — branch on a platform capability check instead.
 - Formatting/linting is automatic: a PostToolUse hook runs ruff (Python), prettier +
   eslint (TS/JS), and rustfmt (Rust) on every file you edit. Don't hand-format.
-- **Clubhouse App Versioning:** The Clubhouse API requires a current Android app version header (e.g. `26.07.12`). If auth fails with `login did not pass token validation`, update `AppVersion` in `backend/modules/clubhouse/auth_helper/Program.cs` and `routes.py`, then delete `backend/modules/clubhouse/auth_helper/bin/ch-auth-helper.exe` so the backend forces a recompile.
+- **Clubhouse App Versioning:** Clubhouse enforces the client's version headers (since 2026-09-10 a stale one gets "Please upgrade your app", and SMS codes come back `is_verified: false`). There are **two** values, both read off the APK's header interceptor (`defpackage/cb1.java` in 26.08.30): `CH-AppVersion` (`26.08.30`) and `CH-AppBuild` — the **numeric build** (`1038152`), which also goes in the `User-Agent`. Update both in `backend/modules/clubhouse/auth_helper/Program.cs` and `routes._headers`, then delete `backend/modules/clubhouse/auth_helper/bin/ch-auth-helper.exe` so the backend recompiles it. `login did not pass token validation` on `start` is the separate anti-bot gate, not the version.
 
 ## Documentation (docs/)
 
@@ -181,7 +181,7 @@ Apply a modern, developer-first Kombai aesthetic across the UI components:
   - The 30px height is **already applied**, by `packages/ui/src/controls.css`, to every
     `input`/`select`/`textarea` in the app — you do not implement it per form, and
     `--control-h` is the one place it changes.
-  - **Never set vertical padding on an `input` or `select`.** Their height is *fixed*,
+  - **Never set vertical padding on an `input` or `select`.** Their height is _fixed_,
     so padding does not make the control roomier, it shrinks the content box inside it:
     `padding: 0.5rem` leaves `30 − 16 − 2 = 12px` for 12.8px text, and the label draws
     low and clips along the bottom. Style horizontal padding only (`padding: '0 0.6rem'`).

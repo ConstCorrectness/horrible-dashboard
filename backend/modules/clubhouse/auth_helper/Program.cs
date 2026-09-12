@@ -11,10 +11,12 @@ class Program
 {
     private static readonly string ApiBase = "https://www.clubhouseapi.com/api";
 
-    // Current Clubhouse Android app version (YY.MM.DD format).
-    // Update when Clubhouse publishes a new version and the API starts
-    // rejecting requests with "login did not pass token validation".
-    private static readonly string AppVersion = "26.07.07";
+    // The 26.08.30 client's own header values (decompiled defpackage/cb1.java).
+    // CH-AppBuild is the numeric build, NOT the version string: sending
+    // "26.07.07" in both was tolerated until 2026-09-10, when Clubhouse began
+    // answering "Please upgrade your app". Keep in sync with routes._headers.
+    private static readonly string AppVersion = "26.08.30";
+    private static readonly string AppBuild = "1038152";
 
     static async Task<int> Main(string[] args)
     {
@@ -52,11 +54,13 @@ class Program
         using var client = new HttpClient(handler);
         client.DefaultRequestHeaders.Add("CH-Languages", "en-US");
         client.DefaultRequestHeaders.Add("CH-Locale", "en_US");
-        client.DefaultRequestHeaders.Add("CH-AppBuild", AppVersion);
+        client.DefaultRequestHeaders.Add("CH-AppBuild", AppBuild);
         client.DefaultRequestHeaders.Add("CH-AppVersion", AppVersion);
         client.DefaultRequestHeaders.Add("CH-DeviceId", deviceId);
+        client.DefaultRequestHeaders.Add("Accept-Language", "en-US");
+        client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent",
-            $"clubhouse/android/{AppVersion}");
+            $"clubhouse/android/{AppBuild}");
         client.DefaultRequestHeaders.AcceptEncoding.Add(new StringWithQualityHeaderValue("gzip"));
         client.DefaultRequestHeaders.AcceptEncoding.Add(new StringWithQualityHeaderValue("deflate"));
 
