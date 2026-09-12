@@ -1178,6 +1178,7 @@ export function HorribleAssaultPanel() {
         // sees exists on every machine. Falling back to whatever is first keeps
         // the panel usable if the bundled maps somehow failed to build.
         const preferred =
+          list.find((m) => m.name === 'hd_assault') ??
           list.find((m) => m.name === 'hd_bank') ??
           list.find((m) => m.name === 'hd_facility') ??
           list.find((m) => m.name === 'hd_atrium') ??

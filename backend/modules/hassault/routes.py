@@ -389,7 +389,7 @@ async def get_map(name: str) -> MapInfo:
         "rvsf": len(world.spawns(1)),
         "total": len(world.spawns()),
     }
-    map_format = "gltf" if name in ("hd_facility", "hd_junkflea", "hd_bank") else "cube"
+    map_format = "gltf" if name in ("hd_facility", "hd_junkflea", "hd_bank", "hd_assault") else "cube"
     if map_format == "cube":
         json_path = mapsource.MAPS_DIR / f"{name}.json"
         if json_path.is_file():

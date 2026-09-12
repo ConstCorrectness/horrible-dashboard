@@ -357,6 +357,65 @@ describe('RapierPhysicsWorld Character Controller', () => {
 
     world.dispose();
   });
+
+  it('generates 3D assault world (hd_assault) with multi-level catwalks, roof, vents, and valid Rapier mesh', async () => {
+    const THREE = await import('three');
+    const { createWorld3D } = await import('../world3d');
+
+    const world = createWorld3D(THREE, {
+      name: 'hd_assault',
+      title: 'Assault',
+      ssize: 64,
+    } as any);
+
+    expect(world.collision.triangles).toBeGreaterThan(0);
+    expect(world.spawns.all.length).toBe(8);
+    expect(world.spawns.cla.length).toBe(4);
+    expect(world.spawns.rvsf.length).toBe(4);
+    expect(world.items.length).toBe(10);
+    expect(world.waterlevel).toBe(-100);
+
+    const physics = new RapierPhysicsWorld(world.collision);
+    expect(physics).toBeDefined();
+
+    // Verify raycast straight down to street (z = 0)
+    const hitStreet = physics.castRay({ x: 20, y: 8, z: 5 }, { x: 0, y: 0, z: -1 }, 10);
+    expect(hitStreet.hit).toBe(true);
+    expect(hitStreet.point.z).toBeCloseTo(0.0, 1);
+
+    // Verify raycast down onto Highway Bridge Deck (z = 9)
+    const hitBridge = physics.castRay({ x: 28, y: 10, z: 12 }, { x: 0, y: 0, z: -1 }, 10);
+    expect(hitBridge.hit).toBe(true);
+    expect(hitBridge.point.z).toBeCloseTo(9.0, 1);
+
+    // Verify raycast down under Highway Bridge onto street (z = 0)
+    const hitUnder = physics.castRay({ x: 28, y: 10, z: 5 }, { x: 0, y: 0, z: -1 }, 10);
+    expect(hitUnder.hit).toBe(true);
+    expect(hitUnder.point.z).toBeCloseTo(0.0, 1);
+
+    // Verify raycast down onto Warehouse Rooftop (z = 8)
+    const hitRoof = physics.castRay({ x: 20, y: 34, z: 12 }, { x: 0, y: 0, z: -1 }, 10);
+    expect(hitRoof.hit).toBe(true);
+    expect(hitRoof.point.z).toBeCloseTo(8.0, 1);
+
+    // Verify raycast down onto Elevated Catwalk (z = 4.2)
+    const hitCatwalk = physics.castRay({ x: 13, y: 36, z: 6 }, { x: 0, y: 0, z: -1 }, 10);
+    expect(hitCatwalk.hit).toBe(true);
+    expect(hitCatwalk.point.z).toBeCloseTo(4.2, 1);
+
+    // Verify raycast down under the Catwalk onto ground floor (z = 0)
+    const hitUnderCatwalk = physics.castRay({ x: 13, y: 36, z: 3 }, { x: 0, y: 0, z: -1 }, 10);
+    expect(hitUnderCatwalk.hit).toBe(true);
+    expect(hitUnderCatwalk.point.z).toBeCloseTo(0.0, 1);
+
+    // Verify raycast down onto Hostage Office 2nd floor (z = 4.2)
+    const hitOffice = physics.castRay({ x: 20, y: 50, z: 6 }, { x: 0, y: 0, z: -1 }, 10);
+    expect(hitOffice.hit).toBe(true);
+    expect(hitOffice.point.z).toBeCloseTo(4.2, 1);
+
+    physics.dispose();
+    world.dispose();
+  });
 });
 
 

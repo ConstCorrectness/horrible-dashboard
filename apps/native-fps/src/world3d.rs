@@ -919,11 +919,340 @@ pub fn create_procedural_bank_3d(info: MapInfo) -> World3D {
     }
 }
 
+/// Create the competitive tactical "Assault" (`hd_assault`) 3D arena.
+///
+/// Authentic CS:GO cs_assault industrial warehouse recreation:
+/// 1. CT Spawn & Approach: Highway overpass (z = 8..9), street with yellow lines, SWAT van, train tracks & boxcar, containers.
+/// 2. Warehouse Structure: Corrugated steel hangar, front & rear garage doors, rear alley with climbable ladder.
+/// 3. The Vents: Enclosed rooftop crawlable ductwork with dual drops into catwalk and hostage office.
+/// 4. Main Warehouse Interior: High trusses, elevated catwalks (z = 4.2) with ground clearance underneath, semi-truck & trailer, forklift.
+/// 5. Back Office / Hostage Room: 2-story office with panoramic glass observation windows overlooking the floor, CCTV monitors, desks.
+pub fn create_procedural_assault_3d(info: MapInfo) -> World3D {
+    let mut b = FacilityBuilder::new();
+
+    // CS:GO Industrial Palette
+    let col_asphalt = [0.20, 0.20, 0.22];
+    let col_road_yellow = [0.88, 0.72, 0.15];
+    let col_road_white = [0.88, 0.88, 0.88];
+    let col_gravel = [0.38, 0.36, 0.34];
+    let col_concrete = [0.55, 0.53, 0.50];
+    let col_bridge_pier = [0.58, 0.57, 0.54];
+    let col_bridge_deck = [0.45, 0.44, 0.42];
+    let col_warehouse_wall = [0.38, 0.40, 0.44];
+    let col_warehouse_roof = [0.32, 0.33, 0.35];
+    let col_warehouse_floor = [0.46, 0.45, 0.43];
+    let col_catwalk = [0.28, 0.30, 0.32];
+    let col_railing_yellow = [0.85, 0.70, 0.12];
+    let col_hazard_yellow = [0.90, 0.75, 0.10];
+    let col_hazard_black = [0.12, 0.12, 0.14];
+    let col_vent_sheet = [0.45, 0.48, 0.50];
+    let col_train_red = [0.52, 0.20, 0.16];
+    let col_train_steel = [0.24, 0.25, 0.27];
+    let col_swat_navy = [0.12, 0.16, 0.24];
+    let col_container_blue = [0.16, 0.32, 0.55];
+    let col_container_red = [0.65, 0.22, 0.18];
+    let col_container_green = [0.18, 0.40, 0.26];
+    let col_crate = [0.60, 0.45, 0.30];
+    let col_glass = [0.68, 0.82, 0.92];
+    let col_office_floor = [0.36, 0.38, 0.42];
+    let col_desk = [0.38, 0.32, 0.26];
+    let col_monitor = [0.12, 0.14, 0.16];
+    let col_cctv_screen = [0.22, 0.60, 0.38];
+    let col_ladder = [0.75, 0.75, 0.80];
+    let col_forklift = [0.85, 0.65, 0.10];
+
+    // 1. Perimeter Walls (64x64 bounds, height = 14)
+    b.add_quad([4.0, 4.0, 0.0], [60.0, 4.0, 0.0], [60.0, 4.0, 14.0], [4.0, 4.0, 14.0], col_concrete, true);
+    b.add_quad([60.0, 60.0, 0.0], [4.0, 60.0, 0.0], [4.0, 60.0, 14.0], [60.0, 60.0, 14.0], col_concrete, true);
+    b.add_quad([60.0, 4.0, 0.0], [60.0, 60.0, 0.0], [60.0, 60.0, 14.0], [60.0, 4.0, 14.0], [0.30, 0.32, 0.35], true);
+    b.add_quad([4.0, 60.0, 0.0], [4.0, 4.0, 0.0], [4.0, 4.0, 14.0], [4.0, 60.0, 14.0], [0.30, 0.32, 0.35], true);
+
+    // 2. Ground Floors (Street Asphalt vs Rail Yard vs Warehouse Sealed Concrete)
+    // Street asphalt (y: 4..24, x: 4..42)
+    b.add_floor(4.0, 4.0, 42.0, 24.0, 0.0, col_asphalt, true);
+    // Double solid yellow highway lines along y = 12
+    b.add_floor(4.0, 11.85, 42.0, 11.95, 0.01, col_road_yellow, false);
+    b.add_floor(4.0, 12.05, 42.0, 12.15, 0.01, col_road_yellow, false);
+    // White pedestrian crosswalk stripes
+    for i in 0..6 {
+        let sx = 26.0 + (i as f32) * 2.0;
+        b.add_floor(sx, 16.0, sx + 1.2, 22.0, 0.01, col_road_white, false);
+    }
+    // Sidewalk curb (y: 18..20)
+    b.add_box(4.0, 18.0, 0.0, 42.0, 20.0, 0.2, col_concrete);
+    b.add_box(4.0, 17.8, 0.0, 42.0, 18.0, 0.25, [0.42, 0.40, 0.38]);
+
+    // Rail yard gravel bed (x: 42..60, y: 4..24)
+    b.add_floor(42.0, 4.0, 60.0, 24.0, 0.0, col_gravel, true);
+    // Steel train tracks running North-South
+    for rx in [49.0, 51.0, 55.0, 57.0] {
+        b.add_box_ex(rx - 0.08, 4.0, 0.0, rx + 0.08, 24.0, 0.15, col_train_steel, false);
+    }
+    // Wooden rail ties
+    for ty in (5..24).step_by(2) {
+        let ty_f = ty as f32;
+        b.add_box_ex(48.5, ty_f - 0.2, 0.0, 57.5, ty_f + 0.2, 0.08, [0.32, 0.24, 0.16], false);
+    }
+
+    // Rear alley ground (x: 4..60, y: 54..60)
+    b.add_floor(4.0, 54.0, 60.0, 60.0, 0.0, col_asphalt, true);
+    // West alley ground (x: 4..10, y: 24..54)
+    b.add_floor(4.0, 24.0, 10.0, 54.0, 0.0, col_concrete, true);
+    // East rail spur ground (x: 54..60, y: 24..54)
+    b.add_floor(54.0, 24.0, 60.0, 54.0, 0.0, col_gravel, true);
+
+    // 3. Elevated Highway Overpass Bridge (Suspended above CT Spawn at z = 8.0..9.0)
+    // Highway bridge concrete deck slab
+    b.add_box(4.0, 6.0, 8.0, 60.0, 14.0, 9.0, col_bridge_deck);
+    // Guardrails on highway overpass edges
+    b.add_box(4.0, 5.8, 9.0, 60.0, 6.2, 10.0, col_concrete);
+    b.add_box(4.0, 13.8, 9.0, 60.0, 14.2, 10.0, col_concrete);
+    // 4 Massive Cylindrical Bridge Support Piers (cx: 12, 26, 40, 54, cy = 10, z: 0..8)
+    for px in [12.0, 26.0, 40.0, 54.0] {
+        b.add_cylinder(px, 10.0, 0.0, 8.0, 1.1, 12, col_bridge_pier, true);
+    }
+    // Overhead green highway road sign attached to bridge
+    b.add_box_ex(22.0, 14.05, 6.8, 32.0, 14.25, 8.0, [0.12, 0.48, 0.25], false);
+
+    // 4. CT Spawn Props: Tactical SWAT Van & Rail Yard Boxcar
+    // SWAT Van (x: 18..22, y: 10..16)
+    b.add_box(18.0, 10.0, 0.0, 22.0, 12.5, 1.5, col_swat_navy); // Hood
+    b.add_box(18.0, 12.5, 0.0, 22.0, 16.0, 2.8, [0.10, 0.14, 0.22]); // Cab & Roof
+    // Wheels & Bullbar
+    for wy in [11.0, 14.5] {
+        b.add_box_ex(17.6, wy, 0.0, 18.0, wy + 1.2, 0.75, [0.08, 0.08, 0.09], true);
+        b.add_box_ex(22.0, wy, 0.0, 22.4, wy + 1.2, 0.75, [0.08, 0.08, 0.09], true);
+    }
+    b.add_box_ex(18.2, 12.4, 1.5, 21.8, 12.7, 2.4, col_glass, false); // Windshield
+    b.add_box_ex(18.5, 13.5, 2.8, 20.0, 14.0, 3.05, [0.85, 0.15, 0.15], false); // Red siren
+    b.add_box_ex(20.0, 13.5, 2.8, 21.5, 14.0, 3.05, [0.15, 0.25, 0.85], false); // Blue siren
+    b.add_box_ex(17.8, 9.7, 0.3, 22.2, 10.0, 0.9, [0.70, 0.72, 0.75], true); // Bullbar
+
+    // Freight Train Boxcar in Rail Yard (x: 48..56, y: 8..20, z: 0..3.6)
+    b.add_box(48.0, 8.0, 0.0, 56.0, 20.0, 0.8, col_train_steel); // Steel chassis & bogies
+    // Hollow Boxcar Interior: Floor at z = 0.8, Walls to z = 3.6, Roof at z = 3.6
+    b.add_box(48.0, 8.0, 0.8, 48.4, 20.0, 3.6, col_train_red); // West wall
+    b.add_box(55.6, 8.0, 0.8, 56.0, 20.0, 3.6, col_train_red); // East wall
+    b.add_box(48.0, 7.8, 0.8, 56.0, 8.2, 3.6, col_train_red);  // South wall
+    b.add_box(48.0, 19.8, 0.8, 56.0, 20.2, 3.6, col_train_red); // North wall
+    b.add_box(48.0, 8.0, 3.5, 56.0, 20.0, 3.7, col_train_steel); // Boxcar roof
+    // Open sliding door on West wall (middle open from y: 12.5..15.5)
+    // Boxcar inner floor is walkable platform at z = 0.8!
+
+    // Stacked Shipping Containers in Rail Yard
+    b.add_box(44.0, 20.0, 0.0, 50.0, 23.5, 2.8, col_container_blue);
+    b.add_box(50.5, 20.0, 0.0, 56.5, 23.5, 2.8, col_container_red);
+    b.add_box(46.0, 20.0, 2.8, 52.0, 23.5, 5.6, col_container_green); // Upper stacked container
+
+    // 5. The Main Warehouse Shell (x: 10..54, y: 24..54, z: 0..8.0)
+    // Warehouse sealed concrete floor
+    b.add_floor(10.0, 24.0, 54.0, 54.0, 0.0, col_warehouse_floor, true);
+
+    // Exterior Walls:
+    // South Wall (Front Facade with giant Garage Shutter Door):
+    b.add_box(10.0, 23.5, 0.0, 26.0, 24.5, 8.0, col_warehouse_wall); // West of door
+    b.add_box(38.0, 23.5, 0.0, 54.0, 24.5, 8.0, col_warehouse_wall); // East of door
+    b.add_box(26.0, 23.5, 4.5, 38.0, 24.5, 8.0, col_warehouse_wall); // Above door
+    // Front Rolling Shutter (raised with 2.8m opening into warehouse!)
+    b.add_box(26.0, 23.8, 2.8, 38.0, 24.2, 4.5, col_hazard_yellow);
+    b.add_box_ex(26.0, 23.7, 2.7, 38.0, 24.3, 2.85, col_hazard_black, false);
+
+    // North Wall (Rear Facade with Rear Garage Door & Ladder):
+    b.add_box(10.0, 53.5, 0.0, 38.0, 54.5, 8.0, col_warehouse_wall);
+    b.add_box(48.0, 53.5, 0.0, 54.0, 54.5, 8.0, col_warehouse_wall);
+    b.add_box(38.0, 53.5, 4.2, 48.0, 54.5, 8.0, col_warehouse_wall);
+    // Rear Rolling Shutter (raised with 2.6m opening into back alley!)
+    b.add_box(38.0, 53.8, 2.6, 48.0, 54.2, 4.2, col_train_steel);
+
+    // West Wall (with side service door at y: 34..36):
+    b.add_box(9.5, 24.0, 0.0, 10.5, 34.0, 8.0, col_warehouse_wall);
+    b.add_box(9.5, 36.0, 0.0, 10.5, 54.0, 8.0, col_warehouse_wall);
+    b.add_box(9.5, 34.0, 2.4, 10.5, 36.0, 8.0, col_warehouse_wall);
+
+    // East Wall (Solid warehouse wall facing rail spur):
+    b.add_box(53.5, 24.0, 0.0, 54.5, 54.0, 8.0, col_warehouse_wall);
+
+    // Rear Exterior Ladder (Climb from rear alley onto warehouse roof!)
+    // Rails & Rungs at x = 14.0, y = 54.2, z: 0.0..8.2
+    b.add_cylinder(13.6, 54.2, 0.0, 8.4, 0.04, 6, col_ladder, true);
+    b.add_cylinder(14.4, 54.2, 0.0, 8.4, 0.04, 6, col_ladder, true);
+    for rz in 1..17 {
+        let rz_f = (rz as f32) * 0.5;
+        b.add_box(13.6, 54.15, rz_f - 0.03, 14.4, 54.25, rz_f + 0.03, col_ladder);
+    }
+
+    // 6. Rooftop (z = 8.0) & Skylights
+    b.add_floor(10.0, 24.0, 54.0, 54.0, 8.0, col_warehouse_roof, true);
+    // Rooftop parapet safety wall
+    b.add_box(9.6, 23.6, 8.0, 54.4, 24.0, 8.9, col_concrete);
+    b.add_box(9.6, 54.0, 8.0, 54.4, 54.4, 8.9, col_concrete);
+    b.add_box(9.6, 24.0, 8.0, 10.0, 54.0, 8.9, col_concrete);
+    b.add_box(54.0, 24.0, 8.0, 54.4, 54.0, 8.9, col_concrete);
+
+    // Rooftop industrial HVAC chiller units
+    b.add_box(20.0, 26.0, 8.0, 24.0, 30.0, 9.8, [0.35, 0.38, 0.42]);
+    b.add_box(44.0, 44.0, 8.0, 48.0, 48.0, 9.8, [0.35, 0.38, 0.42]);
+    // Large skylights peering down into hangar floor
+    b.add_floor(28.0, 32.0, 36.0, 40.0, 8.02, col_glass, false);
+
+    // 7. The Iconic Ventilation System ("The Vents" - Crouch/Crawlable 3D Ducts)
+    // Vent Intake Housing on roof near top of exterior ladder (x: 14..17, y: 50..53)
+    b.add_box(14.0, 50.0, 8.0, 17.0, 53.0, 9.4, col_vent_sheet);
+    // Hollow open mouth of the vent (cut into south face at y = 50.0)
+    // Duct internal floor: z = 8.0, internal ceiling: z = 9.4, width: 1.4m
+
+    // Main Vent Trunk running South (x: 14.8..16.2, y: 36.0..50.0):
+    // Floor, Ceiling, West and East Walls
+    b.add_box(14.7, 36.0, 7.95, 16.3, 50.0, 8.05, col_vent_sheet); // Vent floor
+    b.add_box(14.7, 36.0, 9.35, 16.3, 50.0, 9.45, col_vent_sheet); // Vent ceiling
+    b.add_box(14.7, 36.0, 8.0, 14.8, 50.0, 9.4, col_vent_sheet);   // West wall
+    b.add_box(16.2, 36.0, 8.0, 16.3, 50.0, 9.4, col_vent_sheet);   // East wall
+
+    // Vent Branch 1: Turns East at y = 36.0 to drop onto Catwalk
+    b.add_box(16.3, 35.3, 7.95, 24.0, 36.7, 8.05, col_vent_sheet);
+    b.add_box(16.3, 35.3, 9.35, 24.0, 36.7, 9.45, col_vent_sheet);
+    b.add_box(16.3, 35.3, 8.0, 24.0, 35.4, 9.4, col_vent_sheet);
+    b.add_box(16.3, 36.6, 8.0, 24.0, 36.7, 9.4, col_vent_sheet);
+    // Vertical drop shaft hole at x: 23..25, y: 35..37 (drops straight down onto catwalk at z = 4.2!)
+    b.add_box(22.8, 35.3, 4.2, 23.0, 36.7, 8.0, col_vent_sheet);
+    b.add_box(24.8, 35.3, 4.2, 25.0, 36.7, 8.0, col_vent_sheet);
+
+    // Vent Branch 2: Turns East at y = 48.0 into Hostage Office ceiling
+    b.add_box(16.3, 47.3, 7.95, 20.0, 48.7, 8.05, col_vent_sheet);
+    b.add_box(16.3, 47.3, 9.35, 20.0, 48.7, 9.45, col_vent_sheet);
+    b.add_box(16.3, 47.3, 8.0, 20.0, 47.4, 9.4, col_vent_sheet);
+    b.add_box(16.3, 48.6, 8.0, 20.0, 48.7, 9.4, col_vent_sheet);
+    // Vertical drop shaft hole at x: 19..21, y: 47..49 (drops straight down into Hostage Room at z = 4.2!)
+    b.add_box(18.8, 47.3, 4.2, 19.0, 48.7, 8.0, col_vent_sheet);
+    b.add_box(20.8, 47.3, 4.2, 21.0, 48.7, 8.0, col_vent_sheet);
+
+    // 8. Elevated Industrial Catwalk System (z = 4.2)
+    // West Catwalk: x: 11..15, y: 26..46, z = 4.2
+    b.add_floor(11.0, 26.0, 15.0, 46.0, 4.2, col_catwalk, true);
+    // Catwalk thickness slab
+    b.add_box(11.0, 26.0, 4.15, 15.0, 46.0, 4.2, col_catwalk);
+    // Catwalk Safety Handrail along open East edge (x = 15.0, y: 26..46, z: 4.2..5.3)
+    b.add_box(14.85, 26.0, 4.2, 15.05, 46.0, 5.3, col_railing_yellow);
+
+    // South Catwalk: x: 15..36, y: 25..28, z = 4.2
+    b.add_floor(15.0, 25.0, 36.0, 28.0, 4.2, col_catwalk, true);
+    b.add_box(15.0, 25.0, 4.15, 36.0, 28.0, 4.2, col_catwalk);
+    // Handrail along open North edge (y = 28.0, x: 15..36, z: 4.2..5.3)
+    b.add_box(15.0, 27.85, 4.2, 36.0, 28.05, 5.3, col_railing_yellow);
+
+    // Industrial Steel Stairs connecting ground floor to Catwalk (x: 11..14, y: 26..32, z: 0..4.2)
+    b.add_ramp(11.0, 26.0, 0.0, 14.0, 32.0, 4.2, col_catwalk);
+
+    // Catwalk Support Pillars down to warehouse floor (radius = 0.15)
+    for (cx, cy) in [(14.8, 34.0), (14.8, 42.0), (24.0, 27.8), (34.0, 27.8)] {
+        b.add_cylinder(cx, cy, 0.0, 4.2, 0.15, 8, col_train_steel, true);
+    }
+
+    // 9. Warehouse Floor Props: 18-Wheeler Semi-Truck & Forklift
+    // Semi-Truck Cab (x: 30..34, y: 28..32, z: 0..2.8)
+    b.add_box(30.0, 28.0, 0.0, 34.0, 32.0, 2.8, [0.75, 0.18, 0.18]);
+    b.add_box_ex(30.2, 27.8, 1.4, 33.8, 28.1, 2.4, col_glass, false); // Front windshield
+    // Flatbed Trailer (x: 29..35, y: 32..42, z: 0..1.5)
+    b.add_box(29.0, 32.0, 0.0, 35.0, 42.0, 1.5, col_train_steel);
+    // Cargo loaded on flatbed trailer: Stacked tactical wooden crates (z: 1.5..3.0)
+    b.add_box(29.5, 33.0, 1.5, 34.5, 41.0, 3.0, col_crate);
+
+    // Industrial Forklift (x: 42..45, y: 32..35, z: 0..2.2)
+    b.add_box(42.0, 32.0, 0.0, 45.0, 35.0, 1.4, col_forklift);
+    b.add_box_ex(42.2, 32.2, 1.4, 44.8, 34.8, 2.2, [0.15, 0.15, 0.15], false); // Roll-cage
+    b.add_box_ex(41.4, 31.8, 0.0, 41.8, 34.8, 1.8, col_train_steel, true); // Front mast & forks
+
+    // Stacked Shipping Containers inside warehouse along East wall (x: 46..52, y: 38..48)
+    b.add_box(46.0, 38.0, 0.0, 52.0, 48.0, 2.8, col_container_blue);
+
+    // 10. The 2-Story Back Office / Hostage Room (x: 11..34, y: 46..54)
+    // Lower Floor Workshop / Storage (z: 0..4.2)
+    // Upper Floor Hostage Office (z: 4.2..7.8)
+    b.add_floor(11.0, 46.0, 34.0, 54.0, 4.2, col_office_floor, true); // Office Floor slab
+
+    // Dividing Wall between Office and Warehouse Hangar (y = 46.0, x: 11..34):
+    b.add_box(11.0, 45.8, 0.0, 34.0, 46.2, 4.2, col_concrete); // Ground wall
+    b.add_box(11.0, 45.8, 4.2, 14.0, 46.2, 7.8, col_concrete); // Upper West wall
+    b.add_box(28.0, 45.8, 4.2, 34.0, 46.2, 7.8, col_concrete); // Upper East wall
+    b.add_box(14.0, 45.8, 7.2, 28.0, 46.2, 7.8, col_concrete); // Header above window
+    // Panoramic Observation Glass Window (x: 14..28, y = 46.0, z: 4.2..7.2)
+    b.add_box(14.0, 45.9, 4.2, 28.0, 46.1, 7.2, col_glass);
+
+    // Interior Staircase inside workshop leading up to Hostage Office (x: 30..34, y: 46..52, z: 0..4.2)
+    b.add_ramp(30.0, 46.0, 0.0, 33.5, 52.0, 4.2, col_concrete);
+
+    // Hostage Office Furniture & Props
+    // Security Monitoring Desk with CCTV Screens
+    b.add_box(14.0, 51.5, 4.2, 18.0, 53.0, 5.2, col_desk);
+    b.add_box_ex(14.5, 52.2, 5.2, 17.5, 52.8, 5.9, col_monitor, false);
+    b.add_box_ex(14.6, 52.15, 5.25, 17.4, 52.2, 5.85, col_cctv_screen, false); // CCTV feed
+
+    // Hostage Chairs (Site A)
+    for (hx, hy) in [(22.0, 52.0), (25.0, 52.0), (22.0, 49.0), (25.0, 49.0)] {
+        b.add_box(hx - 0.35, hy - 0.35, 4.2, hx + 0.35, hy + 0.35, 4.9, [0.45, 0.25, 0.18]);
+    }
+
+    // 11. Tactical Bomb Site Floor Decals
+    // Site A: Hostage Office floor
+    b.add_floor(21.0, 48.0, 26.0, 53.0, 4.22, [0.88, 0.20, 0.15], false);
+    // Site B: Warehouse floor next to semi-truck
+    b.add_floor(30.0, 36.0, 35.0, 41.0, 0.02, [0.88, 0.20, 0.15], false);
+
+    let spawns = vec![
+        SpawnPoint { x: 16.0, y: 8.0, z: 0.0, yaw: 0.0, team: 0 },
+        SpawnPoint { x: 24.0, y: 8.0, z: 0.0, yaw: 0.0, team: 0 },
+        SpawnPoint { x: 32.0, y: 8.0, z: 0.0, yaw: 0.0, team: 0 },
+        SpawnPoint { x: 40.0, y: 8.0, z: 0.0, yaw: 0.0, team: 0 },
+        SpawnPoint { x: 16.0, y: 50.0, z: 4.2, yaw: 180.0, team: 1 },
+        SpawnPoint { x: 22.0, y: 50.0, z: 4.2, yaw: 180.0, team: 1 },
+        SpawnPoint { x: 28.0, y: 50.0, z: 4.2, yaw: 180.0, team: 1 },
+        SpawnPoint { x: 38.0, y: 48.0, z: 0.0, yaw: 180.0, team: 1 },
+    ];
+
+    let items = vec![
+        ItemRow { id: 1, kind: "health".into(), x: 18.0, y: 12.0, z: 0.0 },
+        ItemRow { id: 2, kind: "health".into(), x: 52.0, y: 14.0, z: 0.0 },
+        ItemRow { id: 3, kind: "health".into(), x: 16.0, y: 52.0, z: 4.2 },
+        ItemRow { id: 4, kind: "armour".into(), x: 26.0, y: 36.0, z: 0.0 },
+        ItemRow { id: 5, kind: "armour".into(), x: 32.0, y: 50.0, z: 4.2 },
+        ItemRow { id: 6, kind: "ammo_assault".into(), x: 22.0, y: 10.0, z: 0.0 },
+        ItemRow { id: 7, kind: "ammo_assault".into(), x: 44.0, y: 32.0, z: 0.0 },
+        ItemRow { id: 8, kind: "ammo_sniper".into(), x: 20.0, y: 14.0, z: 2.8 },
+        ItemRow { id: 9, kind: "clips".into(), x: 32.0, y: 20.0, z: 0.0 },
+        ItemRow { id: 10, kind: "grenade".into(), x: 14.0, y: 38.0, z: 4.2 },
+    ];
+
+    let bounds = WorldBounds {
+        min: [4.0, 4.0, 0.0],
+        max: [60.0, 60.0, 14.0],
+        center: [32.0, 32.0, 5.0],
+        extent: 40.0,
+    };
+
+    let triangles = b.render_positions.len() / 9;
+
+    World3D {
+        info,
+        bounds,
+        render_positions: b.render_positions,
+        render_normals: b.render_normals,
+        render_colors: b.render_colors,
+        render_uvs: b.render_uvs,
+        triangles,
+        col_vertices: b.col_vertices,
+        col_indices: b.col_indices,
+        spawns,
+        items,
+        waterlevel: -100.0,
+    }
+}
+
 /// Universal 3D Arena Factory: selects appropriate procedural 3D map generator.
 pub fn create_world_3d(info: MapInfo) -> World3D {
     match info.name.as_str() {
         "hd_junkflea" => create_procedural_junk_flea_3d(info),
         "hd_bank" => create_procedural_bank_3d(info),
+        "hd_assault" => create_procedural_assault_3d(info),
         _ => create_procedural_facility_3d(info),
     }
 }
