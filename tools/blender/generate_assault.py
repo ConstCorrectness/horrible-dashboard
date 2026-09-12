@@ -293,8 +293,11 @@ def build_assault_scene():
 
     print("[4/10] Building Massive Warehouse Shell & Roof...")
     # Warehouse boundary: x: 14 to 46, y: 18 to 56, z: 0 to 8.2
-    # Floor slab
-    add_box(c_arch, "Warehouse_Floor", (14.0, 18.0, 0.0), (46.0, 56.0, 0.1), mats["Warehouse_Floor"])
+    # Floor slab (0.15m human height)
+    add_box(c_arch, "Warehouse_Floor", (14.0, 18.0, 0.0), (46.0, 56.0, 0.015), mats["Warehouse_Floor"])
+    # Sidewalk surrounding building (0.15m height, fully walk-on-able)
+    add_box(c_arch, "Sidewalk_Front", (12.0, 16.5, 0.0), (48.0, 18.0, 0.015), mats["Curb"])
+    add_box(c_arch, "Sidewalk_West", (12.0, 18.0, 0.0), (14.0, 56.0, 0.015), mats["Curb"])
     # Exterior North Wall (y=56)
     add_box(c_arch, "Warehouse_Wall_North", (14.0, 55.6, 0.0), (46.0, 56.0, 8.2), mats["Warehouse_Wall"])
     # Exterior East Wall (x=46)

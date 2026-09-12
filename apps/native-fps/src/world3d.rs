@@ -1124,9 +1124,11 @@ pub fn create_procedural_assault_3d(info: MapInfo) -> World3D {
         let sx = 26.0 + (i as f32) * 2.0;
         b.add_floor(sx, 16.0, sx + 1.2, 22.0, 0.01, col_road_white, false);
     }
-    // Sidewalk curb (y: 18..20)
-    b.add_box(4.0, 18.0, 0.0, 42.0, 20.0, 0.2, col_concrete);
-    b.add_box(4.0, 17.8, 0.0, 42.0, 18.0, 0.25, [0.42, 0.40, 0.38]);
+    // Sidewalk curb (y: 18..20): Human-scale curb height 0.15m..0.2m (scale * 0.015..0.02)
+    b.add_box(4.0, 18.0, 0.0, 42.0, 20.0, 0.015, col_concrete);
+    b.add_box(4.0, 17.8, 0.0, 42.0, 18.0, 0.02, [0.42, 0.40, 0.38]);
+    // Smooth pedestrian curb cut ramps along crosswalks
+    b.add_ramp(25.0, 17.0, 0.0, 39.0, 18.5, 0.02, col_concrete);
 
     // Rail yard gravel bed (x: 42..60, y: 4..24)
     b.add_floor(42.0, 4.0, 60.0, 24.0, 0.0, col_gravel, true);

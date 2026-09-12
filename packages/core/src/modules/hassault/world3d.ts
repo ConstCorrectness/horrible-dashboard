@@ -1029,9 +1029,11 @@ export function createProceduralAssault3D(
     const sx = 26 + i * 2.0;
     builder.addFloor(sx, 16, sx + 1.2, 22, 0.01, 'concrete', false);
   }
-  // Sidewalk curb (y: 18..20)
-  builder.addBox(4, 18, 0, 42, 20, 0.2, 'concrete');
-  builder.addBox(4, 17.8, 0, 42, 18, 0.25, 'concrete');
+  // Sidewalk curb (y: 18..20): Human-scale curb height 0.15m..0.2m (scale * 0.015..0.02)
+  builder.addBox(4, 18, 0, 42, 20, 0.015, 'concrete');
+  builder.addBox(4, 17.8, 0, 42, 18, 0.02, 'concrete');
+  // Smooth pedestrian curb cut ramps along crosswalks
+  builder.addRamp(25, 17.0, 0, 39, 18.5, 0.02, 'concrete');
 
   // Rail yard gravel bed (x: 42..60, y: 4..24)
   builder.addFloor(42, 4, 60, 24, 0, 'concrete');
