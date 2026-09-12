@@ -3,7 +3,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-import lancedb
+try:
+    import lancedb
+except ImportError:
+    lancedb = None
 from backend import paths
 
 
@@ -13,6 +16,8 @@ def get_db_path() -> Path:
 
 
 def _get_db():
+    if lancedb is None:
+        return None
     db_path = get_db_path()
     db_path.mkdir(parents=True, exist_ok=True)
     return lancedb.connect(str(db_path))
@@ -41,6 +46,8 @@ def is_sibling_table(name: str) -> bool:
 
 def init_db() -> None:
     """Initialize the database. LanceDB handles this automatically on connect/create_table."""
+    if lancedb is None:
+        return
     _get_db()
 
 

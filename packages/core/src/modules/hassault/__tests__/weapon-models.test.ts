@@ -29,16 +29,14 @@ describe('loadWeaponModel', () => {
   it('answers null for a weapon with no prop rather than rejecting', async () => {
     // "This weapon is boxes" is an ordinary answer. Making callers tell it apart
     // from a network failure by catching guarantees they eventually stop trying.
-    await expect(loadWeaponModel('knife')).resolves.toBeNull();
+    await expect(loadWeaponModel('unarmed')).resolves.toBeNull();
     await expect(loadWeaponModel('nonsense')).resolves.toBeNull();
   });
 
   it('only claims props for weapons that have one built', () => {
-    // There is no knife model, so it is deliberately absent — an entry here
-    // pointing at a file that does not exist would turn a decision into a
-    // failed fetch on every weapon swap.
     expect(Object.keys(WEAPON_MODEL_URLS).sort()).toEqual([
       'assault',
+      'knife',
       'pistol',
       'shotgun',
       'sniper',

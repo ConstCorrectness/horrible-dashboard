@@ -31,6 +31,7 @@ import type * as THREE from 'three';
  * as the other three.
  */
 export const WEAPON_MODEL_URLS: Readonly<Record<string, string>> = {
+  knife: '/hassault-weapon-knife.glb',
   pistol: '/hassault-weapon-pistol.glb',
   assault: '/hassault-weapon-assault.glb',
   shotgun: '/hassault-weapon-shotgun.glb',

@@ -379,39 +379,39 @@ describe('RapierPhysicsWorld Character Controller', () => {
     expect(physics).toBeDefined();
 
     // Verify raycast straight down to street (z = 0)
-    const hitStreet = physics.castRay({ x: 200, y: 80, z: 50 }, { x: 0, y: 0, z: -1 }, 100);
+    const hitStreet = physics.castRay({ x: 10, y: 14, z: 5 }, { x: 0, y: 0, z: -1 }, 10);
     expect(hitStreet.hit).toBe(true);
     expect(hitStreet.point.z).toBeCloseTo(0.0, 0);
 
-    // Verify raycast down onto Highway Bridge Deck (z = 90)
-    const hitBridge = physics.castRay({ x: 280, y: 100, z: 120 }, { x: 0, y: 0, z: -1 }, 100);
+    // Verify raycast down onto Highway Bridge Deck (z = 7.5)
+    const hitBridge = physics.castRay({ x: 18, y: 6, z: 10 }, { x: 0, y: 0, z: -1 }, 10);
     expect(hitBridge.hit).toBe(true);
-    expect(hitBridge.point.z).toBeCloseTo(90.0, 0);
+    expect(hitBridge.point.z).toBeCloseTo(7.5, 0);
 
-    // Verify raycast down under Highway Bridge onto street (z = 0)
-    const hitUnder = physics.castRay({ x: 280, y: 100, z: 50 }, { x: 0, y: 0, z: -1 }, 100);
+    // Verify raycast down under Highway Bridge onto sidewalk (z = 0.18)
+    const hitUnder = physics.castRay({ x: 18, y: 6, z: 4 }, { x: 0, y: 0, z: -1 }, 10);
     expect(hitUnder.hit).toBe(true);
-    expect(hitUnder.point.z).toBeCloseTo(0.0, 0);
+    expect(hitUnder.point.z).toBeCloseTo(0.18, 0);
 
-    // Verify raycast down onto Warehouse Rooftop (z = 80)
-    const hitRoof = physics.castRay({ x: 200, y: 340, z: 120 }, { x: 0, y: 0, z: -1 }, 100);
+    // Verify raycast down onto Warehouse Rooftop (z = 9.0)
+    const hitRoof = physics.castRay({ x: 25, y: 35, z: 12 }, { x: 0, y: 0, z: -1 }, 10);
     expect(hitRoof.hit).toBe(true);
-    expect(hitRoof.point.z).toBeCloseTo(80.0, 0);
+    expect(hitRoof.point.z).toBeCloseTo(9.0, 0);
 
-    // Verify raycast down onto Elevated Catwalk (z = 42)
-    const hitCatwalk = physics.castRay({ x: 130, y: 360, z: 60 }, { x: 0, y: 0, z: -1 }, 100);
+    // Verify raycast down onto Elevated Catwalk (z = 4.2)
+    const hitCatwalk = physics.castRay({ x: 10.5, y: 40, z: 6 }, { x: 0, y: 0, z: -1 }, 10);
     expect(hitCatwalk.hit).toBe(true);
-    expect(hitCatwalk.point.z).toBeCloseTo(42.0, 0);
+    expect(hitCatwalk.point.z).toBeCloseTo(4.2, 0);
 
     // Verify raycast down under the Catwalk onto ground floor (z = 0)
-    const hitUnderCatwalk = physics.castRay({ x: 130, y: 360, z: 30 }, { x: 0, y: 0, z: -1 }, 100);
+    const hitUnderCatwalk = physics.castRay({ x: 10.5, y: 40, z: 3 }, { x: 0, y: 0, z: -1 }, 10);
     expect(hitUnderCatwalk.hit).toBe(true);
     expect(hitUnderCatwalk.point.z).toBeCloseTo(0.0, 0);
 
-    // Verify raycast down onto Hostage Office 2nd floor (z = 42)
-    const hitOffice = physics.castRay({ x: 200, y: 500, z: 60 }, { x: 0, y: 0, z: -1 }, 100);
+    // Verify raycast down onto Hostage Office 2nd floor (z = 4.2)
+    const hitOffice = physics.castRay({ x: 36, y: 48, z: 6 }, { x: 0, y: 0, z: -1 }, 10);
     expect(hitOffice.hit).toBe(true);
-    expect(hitOffice.point.z).toBeCloseTo(42.0, 0);
+    expect(hitOffice.point.z).toBeCloseTo(4.2, 0);
 
     physics.dispose();
     world.dispose();

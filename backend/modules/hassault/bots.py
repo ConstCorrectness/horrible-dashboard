@@ -141,6 +141,34 @@ LONG_RANGE = 42.0
 STUCK_WINDOW = 1.0
 STUCK_DISTANCE = 1.5
 
+#: Tactical cover waypoints on key competitive maps.
+#:
+#: A bot roaming on these maps mixes between enemy spawn pressure and holding
+#: tactical cover positions (around forklift, pallet racks, and high catwalks),
+#: creating realistic defensive anchors rather than mindless bee-lining.
+TACTICAL_COVER_NODES: dict[str, list[tuple[float, float, str]]] = {
+    "assault": [
+        (138.0, 126.0, "forklift_cover"),
+        (142.0, 128.0, "forklift_front"),
+        (145.0, 115.0, "pallet_rack_east"),
+        (130.0, 118.0, "pallet_rack_west"),
+        (152.0, 142.0, "hostage_office_door"),
+        (160.0, 145.0, "hostage_corner"),
+        (135.0, 138.0, "catwalk_ladder"),
+        (150.0, 138.0, "catwalk_overlook"),
+    ],
+    "ac_assault": [
+        (138.0, 126.0, "forklift_cover"),
+        (142.0, 128.0, "forklift_front"),
+        (145.0, 115.0, "pallet_rack_east"),
+        (130.0, 118.0, "pallet_rack_west"),
+        (152.0, 142.0, "hostage_office_door"),
+        (160.0, 145.0, "hostage_corner"),
+        (135.0, 138.0, "catwalk_ladder"),
+        (150.0, 138.0, "catwalk_overlook"),
+    ],
+}
+
 
 class BotBrain:
     """One bot's mind. Ticked once per server tick by `MatchRoom._think`."""
@@ -311,6 +339,19 @@ class BotBrain:
         it is walking towards where the enemy comes from.
         """
         enemy = 1 - me.team
+        map_name = getattr(room, "map_name", "") or getattr(getattr(room, "world", None), "name", "")
+        tactical_pts = TACTICAL_COVER_NODES.get(map_name.lower(), [])
+        valid_tactical = [
+            (pt[0], pt[1])
+            for pt in tactical_pts
+            if math.hypot(pt[0] - me.state.x, pt[1] - me.state.y) > 8
+        ]
+        # 45% chance to patrol/hold a tactical cover node (forklift, racks, catwalk)
+        if valid_tactical and self.rng.random() < 0.45:
+            self.roam = self.rng.choice(valid_tactical)
+            self.roam_in = 9.0
+            return
+
         options = [
             (s.x + 0.5, s.y + 0.5)
             for s in room.spawns

@@ -1,22 +1,5 @@
-//! Render the operator to a PNG, with no window and no match.
-//!
-//! ```text
-//! cargo run --example operator_preview -- operator.png
-//! ```
-//!
-//! This exists because the native client's character is the one part of it that
-//! cannot be checked by a unit test or by reading the code. The tests in
-//! `character.rs` prove the rig is 34 bones, that every joint index is in range
-//! and that the bind pose is 5.2 cubes tall — all of which stayed true while the
-//! character was drawn facing the wrong way, or inside out, or in the wrong
-//! colour. Those are properties of the *picture*, so there has to be a picture.
-//!
-//! An `examples/` binary rather than a test on purpose: it needs a real GPU
-//! adapter, and a test suite that fails on a machine without one is a test suite
-//! that gets ignored.
-//!
-//! It draws one operator per clip across a row, the same five clips the browser
-//! check page uses, so the two can be compared side by side.
+//! Render both Counter-Terrorist (SWAT) and Terrorist (Phoenix/Yaku Ignite)
+//! operators side-by-side with weapons and tactical combat knives to a PNG.
 
 use std::f32::consts::PI;
 
@@ -30,54 +13,100 @@ use hassault_native::protocol::PlayerRow;
 use hassault_native::renderer::{Vertex, DEPTH_FORMAT};
 use wgpu::util::DeviceExt;
 
-const WIDTH: u32 = 1200;
-const HEIGHT: u32 = 720;
+const WIDTH: u32 = 1600;
+const HEIGHT: u32 = 900;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
-/// The same five the browser's `operator-check.html` poses, so a difference
-/// between the two clients is a difference in one picture rather than in two
-/// different ones.
-const SHOWCASE: [(&str, f32); 5] = [
-    ("rifle_aiming_idle", 0.35),
-    ("standard_walk", 0.56),
-    ("crouch_walking", 0.77),
-    ("firing_rifle", 0.98),
-    ("dying", 1.19),
+struct ShowcaseEntry {
+    team: usize, // 0 = CT, 1 = T
+    clip_name: &'static str,
+    time: f32,
+    weapon: i32, // 0 = knife, 1 = pistol, 2 = assault, 3 = shotgun, 4 = sniper
+    x: f32,
+    y: f32,
+    yaw: f32,
+}
+
+const LINEUP: [ShowcaseEntry; 4] = [
+    // CT - SWAT with Assault Rifle (M4A1)
+    ShowcaseEntry {
+        team: 0,
+        clip_name: "rifle_aiming_idle",
+        time: 0.35,
+        weapon: 2, // Assault
+        x: 0.0,
+        y: -4.8,
+        yaw: PI + 0.65,
+    },
+    // CT - SWAT with Tactical Knife
+    ShowcaseEntry {
+        team: 0,
+        clip_name: "standard_walk",
+        time: 0.55,
+        weapon: 0, // Knife
+        x: 0.0,
+        y: -1.6,
+        yaw: PI + 0.35,
+    },
+    // T - Phoenix with Tactical Knife
+    ShowcaseEntry {
+        team: 1,
+        clip_name: "crouch_walking",
+        time: 0.70,
+        weapon: 0, // Knife
+        x: 0.0,
+        y: 1.6,
+        yaw: PI - 0.35,
+    },
+    // T - Phoenix with Sniper Rifle
+    ShowcaseEntry {
+        team: 1,
+        clip_name: "firing_rifle",
+        time: 0.98,
+        weapon: 4, // Sniper
+        x: 0.0,
+        y: 4.8,
+        yaw: PI - 0.65,
+    },
 ];
 
 fn main() {
-    let path = std::env::args().nth(1).unwrap_or("operator.png".into());
+    let path = std::env::args().nth(1).unwrap_or("dual_operators.png".into());
     pollster::block_on(run(&path));
 }
 
 async fn run(path: &str) {
-    let operator = Operator::load().expect("the compiled-in operator GLB should parse");
+    let op_ct = Operator::load().expect("the CT operator GLB should parse");
+    let op_t = Operator::load_t().expect("the Terrorist operator GLB should parse");
     println!(
-        "operator: {} bones, {} vertices, {} primitives, {} textures, {} clips",
-        operator.bone_count(),
-        operator.vertices.len(),
-        operator.primitives.len(),
-        operator.textures.len(),
-        operator.clip_names().count(),
+        "CT operator: {} bones, {} vertices, {} primitives, {} textures",
+        op_ct.bone_count(),
+        op_ct.vertices.len(),
+        op_ct.primitives.len(),
+        op_ct.textures.len(),
+    );
+    println!(
+        "T operator: {} bones, {} vertices, {} primitives, {} textures",
+        op_t.bone_count(),
+        op_t.vertices.len(),
+        op_t.primitives.len(),
+        op_t.textures.len(),
     );
 
     let instance = wgpu::Instance::default();
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions::default())
         .await
-        .expect("no GPU adapter — this example needs a real one");
+        .expect("no GPU adapter");
     println!("adapter: {}", adapter.get_info().name);
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
-            label: Some("operator-preview"),
+            label: Some("dual-operator-preview"),
             ..Default::default()
         })
         .await
         .expect("device");
 
-    // The camera bind group layout the shared shader expects. Rebuilt here
-    // rather than borrowed from `Renderer`, which owns a surface this example
-    // deliberately does not have.
     let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("camera"),
         entries: &[wgpu::BindGroupLayoutEntry {
@@ -92,22 +121,18 @@ async fn run(path: &str) {
         }],
     });
 
-    // Placed to look along +x at a row of operators spread across y, from a
-    // little above the waist — roughly where another player's eyes would be.
     let camera = Camera {
-        x: -21.0,
+        x: -10.5,
         y: 0.0,
-        z: 3.4,
+        z: 3.2,
         yaw: 0.0,
         pitch: -2.0,
         roll: 0.0,
-        fov: 48.0,
+        fov: 52.0,
     };
-    // `params.x` is the fog end and `.y` the detail level: 2 is the highest, so
-    // the preview shows what the shader actually does rather than its flat path.
     let mut uniform = [0f32; 40];
     uniform[..16].copy_from_slice(&camera.view_projection(WIDTH, HEIGHT).to_cols_array());
-    uniform[16] = 0.0; // Fog density (0.0 for clear showcase preview; 0.0055 is in-game FogExp2)
+    uniform[16] = 0.0;
     uniform[17] = 2.0;
     uniform[24..40].copy_from_slice(&glam::Mat4::IDENTITY.to_cols_array());
     let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -126,112 +151,123 @@ async fn run(path: &str) {
         }],
     });
 
-    // A shadow map with nothing in it: the preview has no world, so every
-    // fragment is lit. Built rather than skipped because the pipeline layout has
-    // to match the shader either way, and an empty map is the honest answer to
-    // "what does this character's surroundings cast?" when there are none.
-    let empty_world = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("no-world"),
-        contents: bytemuck::cast_slice(&[Vertex {
-            position: [0.0; 3],
-            normal: [0.0, 1.0, 0.0],
-            color: [0.0; 3],
-        }]),
+    // Floor plane
+    let mut floor_verts = Vec::new();
+    let floor_half = 20.0f32;
+    let floor_color = [0.18f32, 0.20, 0.23];
+    let n = [0.0f32, 0.0, 1.0];
+    floor_verts.extend_from_slice(&[
+        Vertex { position: [-floor_half, -floor_half, 0.0], normal: n, color: floor_color },
+        Vertex { position: [floor_half, -floor_half, 0.0], normal: n, color: floor_color },
+        Vertex { position: [floor_half, floor_half, 0.0], normal: n, color: floor_color },
+        Vertex { position: [-floor_half, -floor_half, 0.0], normal: n, color: floor_color },
+        Vertex { position: [floor_half, floor_half, 0.0], normal: n, color: floor_color },
+        Vertex { position: [-floor_half, floor_half, 0.0], normal: n, color: floor_color },
+    ]);
+
+    let world_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("floor"),
+        contents: bytemuck::cast_slice(&floor_verts),
         usage: wgpu::BufferUsages::VERTEX,
     });
+
     let shadow = hassault_native::shadow::ShadowMap::new(
         &device,
         &queue,
-        &empty_world,
-        0,
-        (glam::Vec3::ZERO, glam::Vec3::splat(8.0)),
+        &world_buffer,
+        floor_verts.len() as u32,
+        (glam::Vec3::new(-10.0, -10.0, -1.0), glam::Vec3::new(10.0, 10.0, 8.0)),
     );
 
-    let mut characters = Characters::new(
+    let mut characters_ct = Characters::new(
         &device,
         &queue,
-        &operator,
+        &op_ct,
+        &camera_layout,
+        &shadow.layout,
+        FORMAT,
+        1,
+    );
+    let mut characters_t = Characters::new(
+        &device,
+        &queue,
+        &op_t,
         &camera_layout,
         &shadow.layout,
         FORMAT,
         1,
     );
 
-    // One actor per clip. Posed directly rather than through `Squad`, because
-    // what is being checked is the rig and the shader — driving it from derived
-    // velocities would put clip *selection* in the picture too, and that part
-    // already has unit tests.
-    let mut poses = Vec::new();
-    for (index, (clip_name, time)) in SHOWCASE.iter().enumerate() {
-        let clip = operator
-            .clip(clip_name)
-            .unwrap_or_else(|| panic!("{clip_name} missing from the GLB"));
-        let mut pose = Pose::new(&operator);
-        pose.reset(&operator);
-        pose.blend(&operator, clip, *time, 1.0, Mask::All);
+    let mut ct_poses = Vec::new();
+    let mut t_poses = Vec::new();
+    let mut all_held_poses = Vec::new();
 
-        // Spread across the camera's right, placed and turned through the
-        // client's own `model_matrix` rather than a hand-built transform — the
-        // facing convention is exactly what this picture is here to check, and a
-        // second copy of it could agree with itself while both were wrong.
-        //
-        // The camera looks along +x, so a player at yaw = PI faces it head on —
-        // which is the worst angle for checking a weapon, because a rifle held
-        // forward then points straight at the lens and foreshortens into the
-        // chest. Turned three-quarters instead, so both the face and the gun
-        // are in the picture.
-        let offset = (index as f32 - (SHOWCASE.len() as f32 - 1.0) / 2.0) * 3.6;
+    for entry in &LINEUP {
+        let is_ct = entry.team == 0;
+        let op = if is_ct { &op_ct } else { &op_t };
+        let clip = op.clip(entry.clip_name).expect("clip missing");
+
+        let mut pose = Pose::new(op);
+        pose.reset(op);
+        pose.blend(op, clip, entry.time, 1.0, Mask::All);
+
         let model = model_matrix(&PlayerRow {
-            x: 0.0,
-            y: offset,
+            x: entry.x,
+            y: entry.y,
             z: 0.0,
-            yaw: PI + 0.8,
+            yaw: entry.yaw,
             ..Default::default()
         });
-        let mut bones = vec![Mat4::IDENTITY; operator.bone_count()];
-        pose.skinning(&operator, model, &mut bones);
-        poses.push(ActorPose {
-            bones,
-            // Alternating teams, so the wash is visible as a difference rather
-            // than as a colour you have to take on faith.
-            tint: if index % 2 == 0 {
-                Vec4::new(0.29, 0.23, 0.17, 0.28)
-            } else {
-                Vec4::new(0.12, 0.16, 0.23, 0.28)
-            },
-            grip: pose.bone_matrix(&operator, "RightHand", model),
-            // A different weapon per actor, so the five silhouettes are all in
-            // one picture rather than one of them five times.
-            weapon: index as i32,
-        });
-    }
-    characters.prepare(&queue, &poses);
 
-    // The weapons in their hands ride the untextured world pipeline, so the
-    // preview has to stand one up too — the grip transform is the part of this
-    // port most likely to be subtly wrong, and it is only wrong in a picture.
-    let held_verts = held::build(&poses);
-    println!("held weapon triangles: {}", held_verts.len() / 3);
-    // Reported because it is the trap: the rig's internal unit is about 1/35th
-    // of a cube, so anything parented to a bone inherits that scale and a prop
-    // stated in cubes renders sub-pixel. `held.rs` drops it deliberately.
-    if let Some(grip) = poses.first().and_then(|p| p.grip) {
-        let (scale, _, translation) = grip.to_scale_rotation_translation();
-        println!(
-            "  right hand at {translation} cubes, bone scale {:.4}",
-            scale.x
-        );
+        let mut bones = vec![Mat4::IDENTITY; op.bone_count()];
+        pose.skinning(op, model, &mut bones);
+
+        let grip = pose.bone_matrix(op, "RightHand", model);
+
+        all_held_poses.push(ActorPose {
+            bones: Vec::new(),
+            tint: Vec4::ZERO,
+            grip,
+            weapon: entry.weapon,
+        });
+
+        let actor_pose = ActorPose {
+            bones,
+            tint: if is_ct {
+                Vec4::new(0.12, 0.20, 0.32, 0.22) // CT blue tint
+            } else {
+                Vec4::new(0.32, 0.18, 0.12, 0.22) // T amber tint
+            },
+            grip,
+            weapon: entry.weapon,
+        };
+
+        if is_ct {
+            ct_poses.push(actor_pose);
+        } else {
+            t_poses.push(actor_pose);
+        }
     }
+
+    if !ct_poses.is_empty() {
+        characters_ct.prepare(&queue, &ct_poses);
+    }
+    if !t_poses.is_empty() {
+        characters_t.prepare(&queue, &t_poses);
+    }
+
+    let held_verts = held::build(&all_held_poses);
+    println!("held weapon vertices: {}", held_verts.len());
+
     let held_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("held"),
         contents: bytemuck::cast_slice(&held_verts),
         usage: wgpu::BufferUsages::VERTEX,
     });
+
     let world_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("world"),
         source: wgpu::ShaderSource::Wgsl(
-            // Same concatenation the renderer does — the lighting lives in its
-            // own file so both shaders share one copy.
             concat!(
                 include_str!("../src/lighting.wgsl.inc"),
                 include_str!("../src/shader.wgsl")
@@ -239,8 +275,7 @@ async fn run(path: &str) {
             .into(),
         ),
     });
-    // The world shader samples the surface grain, so its layout needs that group
-    // too — built through the client's own helper rather than a copy here.
+
     let detail_layout = hassault_native::detail::bind_group_layout(&device);
     let detail_group = hassault_native::detail::bind_group(&device, &queue, &detail_layout);
     let world_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -293,7 +328,6 @@ async fn run(path: &str) {
         cache: None,
     });
 
-    // --- draw ------------------------------------------------------------
     let size = wgpu::Extent3d {
         width: WIDTH,
         height: HEIGHT,
@@ -323,8 +357,6 @@ async fn run(path: &str) {
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
 
-    // Rows must be 256-byte aligned for a texture-to-buffer copy; the padding is
-    // trimmed back out below.
     let unpadded = WIDTH * 4;
     let padded = unpadded.div_ceil(256) * 256;
     let readback = device.create_buffer(&wgpu::BufferDescriptor {
@@ -343,12 +375,10 @@ async fn run(path: &str) {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    // The client's own fog colour, so the preview is lit and
-                    // backed the way a real frame is.
                     load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.02,
-                        g: 0.024,
-                        b: 0.035,
+                        r: 0.03,
+                        g: 0.035,
+                        b: 0.045,
                         a: 1.0,
                     }),
                     store: wgpu::StoreOp::Store,
@@ -366,7 +396,22 @@ async fn run(path: &str) {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        characters.draw(&mut pass, &camera_group, &shadow.bind_group);
+
+        // 1. Draw floor
+        pass.set_pipeline(&world_pipeline);
+        pass.set_bind_group(0, &camera_group, &[]);
+        pass.set_bind_group(1, &detail_group, &[]);
+        pass.set_bind_group(2, &shadow.bind_group, &[]);
+        pass.set_vertex_buffer(0, world_buffer.slice(..));
+        pass.draw(0..floor_verts.len() as u32, 0..1);
+
+        // 2. Draw CT Characters
+        characters_ct.draw(&mut pass, &camera_group, &shadow.bind_group);
+
+        // 3. Draw T Characters
+        characters_t.draw(&mut pass, &camera_group, &shadow.bind_group);
+
+        // 4. Draw Held Weapons
         if !held_verts.is_empty() {
             pass.set_pipeline(&world_pipeline);
             pass.set_bind_group(0, &camera_group, &[]);
@@ -376,6 +421,7 @@ async fn run(path: &str) {
             pass.draw(0..held_verts.len() as u32, 0..1);
         }
     }
+
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
             texture: &color,
@@ -420,6 +466,6 @@ async fn run(path: &str) {
         .write_header()
         .expect("png header")
         .write_image_data(&pixels)
-        .expect("png data");
-    println!("wrote {path}");
+        .expect("png write");
+    println!("wrote {path} ({}x{})", WIDTH, HEIGHT);
 }

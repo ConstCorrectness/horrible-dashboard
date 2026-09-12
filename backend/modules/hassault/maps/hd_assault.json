@@ -2,7 +2,7 @@
   "title": "Assault",
   "author": "horrible-dashboard",
   "license": "CC0-1.0",
-  "sfactor": 10,
+  "sfactor": 6,
   "waterlevel": -100,
   "ambient": 52,
   "format": "gltf",
@@ -14,90 +14,98 @@
   "brushes": [
     {
       "op": "room",
-      "rect": [40, 40, 560, 560],
+      "rect": [4, 4, 56, 56],
       "floor": 0,
-      "ceil": 140,
+      "ceil": 14,
       "wtex": 47,
       "ftex": 21,
       "ctex": 33
     },
     {
       "op": "solid",
-      "rect": [100, 240, 440, 320],
+      "rect": [8, 22, 38, 34],
       "wtex": 89
     },
     {
       "op": "room",
-      "rect": [120, 260, 400, 280],
+      "rect": [8, 22, 38, 34],
       "floor": 0,
-      "ceil": 80,
+      "ceil": 9,
       "wtex": 47,
       "ftex": 21,
       "ctex": 33
     },
     {
       "op": "room",
-      "rect": [260, 240, 120, 20],
+      "rect": [14, 21, 8, 2],
       "floor": 0,
-      "ceil": 50,
+      "ceil": 4,
       "wtex": 47,
       "ftex": 21,
       "ctex": 33
     },
     {
       "op": "room",
-      "rect": [200, 540, 80, 20],
+      "rect": [30, 21, 8, 2],
       "floor": 0,
-      "ceil": 50,
+      "ceil": 4,
+      "wtex": 47,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [24, 55, 3, 2],
+      "floor": 0,
+      "ceil": 3,
       "wtex": 47,
       "ftex": 21,
       "ctex": 33
     }
   ],
   "spawns": [
-    { "x": 160, "y": 80, "z": 0, "yaw": 0, "team": 0 },
-    { "x": 240, "y": 80, "z": 0, "yaw": 0, "team": 0 },
-    { "x": 320, "y": 80, "z": 0, "yaw": 0, "team": 0 },
-    { "x": 400, "y": 80, "z": 0, "yaw": 0, "team": 0 },
-    { "x": 160, "y": 500, "z": 42.0, "yaw": 180, "team": 1 },
-    { "x": 220, "y": 500, "z": 42.0, "yaw": 180, "team": 1 },
-    { "x": 280, "y": 500, "z": 42.0, "yaw": 180, "team": 1 },
-    { "x": 380, "y": 480, "z": 0, "yaw": 180, "team": 1 }
+    { "x": 16, "y": 7, "z": 0, "yaw": 90, "team": 0 },
+    { "x": 20, "y": 7, "z": 0, "yaw": 90, "team": 0 },
+    { "x": 24, "y": 7, "z": 0, "yaw": 90, "team": 0 },
+    { "x": 28, "y": 7, "z": 0, "yaw": 90, "team": 0 },
+    { "x": 32, "y": 48, "z": 4, "yaw": 270, "team": 1 },
+    { "x": 36, "y": 48, "z": 4, "yaw": 270, "team": 1 },
+    { "x": 40, "y": 48, "z": 4, "yaw": 270, "team": 1 },
+    { "x": 34, "y": 52, "z": 4, "yaw": 270, "team": 1 }
   ],
   "entities": [
-    { "type": "playerstart", "x": 160, "y": 80, "z": 0, "yaw": 0, "team": 0 },
-    { "type": "playerstart", "x": 240, "y": 80, "z": 0, "yaw": 0, "team": 0 },
-    { "type": "playerstart", "x": 320, "y": 80, "z": 0, "yaw": 0, "team": 0 },
-    { "type": "playerstart", "x": 400, "y": 80, "z": 0, "yaw": 0, "team": 0 },
-    { "type": "playerstart", "x": 160, "y": 500, "z": 42, "yaw": 180, "team": 1 },
-    { "type": "playerstart", "x": 220, "y": 500, "z": 42, "yaw": 180, "team": 1 },
-    { "type": "playerstart", "x": 280, "y": 500, "z": 42, "yaw": 180, "team": 1 },
-    { "type": "playerstart", "x": 380, "y": 480, "z": 0, "yaw": 180, "team": 1 },
-    { "type": "ladder", "x": 140, "y": 560, "attrs": [80] },
-    { "type": "health", "x": 180, "y": 120, "z": 0 },
-    { "type": "health", "x": 520, "y": 140, "z": 0 },
-    { "type": "health", "x": 160, "y": 520, "z": 42 },
-    { "type": "armour", "x": 260, "y": 360, "z": 0 },
-    { "type": "armour", "x": 320, "y": 500, "z": 42 },
-    { "type": "ammo", "x": 220, "y": 100, "z": 0 },
-    { "type": "ammo", "x": 440, "y": 320, "z": 0 },
-    { "type": "ammo", "x": 200, "y": 140, "z": 30 },
-    { "type": "clips", "x": 320, "y": 200, "z": 0 },
-    { "type": "grenade", "x": 140, "y": 380, "z": 42 }
+    { "type": "playerstart", "x": 16, "y": 7, "z": 0, "yaw": 90, "team": 0 },
+    { "type": "playerstart", "x": 20, "y": 7, "z": 0, "yaw": 90, "team": 0 },
+    { "type": "playerstart", "x": 24, "y": 7, "z": 0, "yaw": 90, "team": 0 },
+    { "type": "playerstart", "x": 28, "y": 7, "z": 0, "yaw": 90, "team": 0 },
+    { "type": "playerstart", "x": 32, "y": 48, "z": 4, "yaw": 270, "team": 1 },
+    { "type": "playerstart", "x": 36, "y": 48, "z": 4, "yaw": 270, "team": 1 },
+    { "type": "playerstart", "x": 40, "y": 48, "z": 4, "yaw": 270, "team": 1 },
+    { "type": "playerstart", "x": 34, "y": 52, "z": 4, "yaw": 270, "team": 1 },
+    { "type": "health", "x": 14, "y": 6, "z": 0 },
+    { "type": "health", "x": 55, "y": 16, "z": 0 },
+    { "type": "health", "x": 38, "y": 52, "z": 4 },
+    { "type": "armour", "x": 20, "y": 36, "z": 0 },
+    { "type": "armour", "x": 32, "y": 44, "z": 4 },
+    { "type": "ammo", "x": 21, "y": 15, "z": 0 },
+    { "type": "ammo", "x": 54, "y": 30, "z": 0 },
+    { "type": "ammo", "x": 24, "y": 7, "z": 7 },
+    { "type": "clips", "x": 10, "y": 40, "z": 4 },
+    { "type": "grenade", "x": 16, "y": 30, "z": 9 }
   ],
   "objectives": {
     "sites": [
       {
         "id": "A",
-        "x": 230,
-        "y": 500,
-        "radius": 40.0
+        "x": 37,
+        "y": 49,
+        "radius": 5.0
       },
       {
         "id": "B",
-        "x": 320,
-        "y": 380,
-        "radius": 40.0
+        "x": 21,
+        "y": 35,
+        "radius": 5.0
       }
     ]
   }

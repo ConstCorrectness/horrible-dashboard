@@ -44,6 +44,10 @@ use crate::character::{decode_image, normalise_glb, MaterialDef, Primitive, Text
 /// identical list for the browser.
 pub const WEAPON_GLBS: &[(&str, &[u8])] = &[
     (
+        "knife",
+        include_bytes!("../../web/public/hassault-weapon-knife.glb"),
+    ),
+    (
         "pistol",
         include_bytes!("../../web/public/hassault-weapon-pistol.glb"),
     ),

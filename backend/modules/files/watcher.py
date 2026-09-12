@@ -15,7 +15,10 @@ import os
 from pathlib import Path
 from typing import Any
 
-from watchfiles import Change, awatch
+try:
+    from watchfiles import Change, awatch
+except ImportError:
+    Change, awatch = None, None
 
 from backend.modules.files.routes import _roots
 

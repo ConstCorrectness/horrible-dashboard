@@ -18,7 +18,10 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from tree_sitter_language_pack import get_parser
+try:
+    from tree_sitter_language_pack import get_parser
+except ImportError:
+    get_parser = None
 
 from backend.modules.code.models import Position, Range, Symbol
 

@@ -17,6 +17,8 @@ import type { OperatorClip } from './clips';
 
 /** Where the built GLB is served from. Written to `apps/web/public/`. */
 export const OPERATOR_URL = '/hassault-operator.glb';
+export const OPERATOR_CT_URL = '/hassault-operator.glb';
+export const OPERATOR_T_URL = '/hassault-operator-t.glb';
 
 export interface OperatorAsset {
   /** The loaded scene, kept as the template. Never added to a live scene. */
@@ -26,12 +28,12 @@ export interface OperatorAsset {
   readonly clone: (source: THREE.Object3D) => THREE.Object3D;
 }
 
-let pending: Promise<OperatorAsset> | null = null;
+const cache = new Map<string, Promise<OperatorAsset>>();
 
 /**
  * Fetch and parse the operator GLB, once per page.
  *
- * The promise is cached rather than the result, so eight players joining in the
+ * The promise is cached per URL rather than the result, so eight players joining in the
  * same frame share one download instead of racing eight of them. A failed load
  * clears the cache so a later attempt can retry rather than inheriting the
  * rejection forever.
@@ -39,8 +41,9 @@ let pending: Promise<OperatorAsset> | null = null;
 import { getCachedAssetUrl } from './assetCache';
 
 export function loadOperator(url: string = OPERATOR_URL): Promise<OperatorAsset> {
-  if (pending) return pending;
-  pending = (async () => {
+  const existing = cache.get(url);
+  if (existing) return existing;
+  const pending = (async () => {
     const [{ GLTFLoader }, SkeletonUtils] = await Promise.all([
       import('three/examples/jsm/loaders/GLTFLoader.js'),
       import('three/examples/jsm/utils/SkeletonUtils.js'),
@@ -52,14 +55,20 @@ export function loadOperator(url: string = OPERATOR_URL): Promise<OperatorAsset>
     return { prototype: gltf.scene, clips, clone: SkeletonUtils.clone };
   })();
   pending.catch(() => {
-    pending = null;
+    cache.delete(url);
   });
+  cache.set(url, pending);
   return pending;
+}
+
+export function loadOperatorForTeam(team: number | string): Promise<OperatorAsset> {
+  const isT = team === 1 || team === 'T' || team === 'TERRORIST';
+  return loadOperator(isT ? OPERATOR_T_URL : OPERATOR_CT_URL);
 }
 
 /** Drop the cached asset. Tests only — a match never needs to forget it. */
 export function resetOperatorCache(): void {
-  pending = null;
+  cache.clear();
 }
 
 export interface OperatorInstance {

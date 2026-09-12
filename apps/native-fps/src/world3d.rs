@@ -5,6 +5,7 @@
 
 use crate::api::{ItemRow, MapInfo};
 use crate::geometry::MeshData;
+use glam::{Mat4, Quat, Vec3};
 use rapier3d::prelude::*;
 
 #[derive(Debug, Clone, Copy)]
@@ -927,166 +928,24 @@ pub fn create_procedural_bank_3d(info: MapInfo) -> World3D {
 /// 3. The Vents: Enclosed rooftop crawlable ductwork with dual drops into catwalk and hostage office.
 /// 4. Main Warehouse Interior: High trusses, elevated catwalks (z = 4.2) with ground clearance underneath, semi-truck & trailer, forklift.
 /// 5. Back Office / Hostage Room: 2-story office with panoramic glass observation windows overlooking the floor, CCTV monitors, desks.
-struct ScaledFacilityBuilder<'a> {
-    inner: &'a mut FacilityBuilder,
-    scale: f32,
-}
-
-impl<'a> ScaledFacilityBuilder<'a> {
-    fn add_quad(
-        &mut self,
-        p0: [f32; 3],
-        p1: [f32; 3],
-        p2: [f32; 3],
-        p3: [f32; 3],
-        color: [f32; 3],
-        is_collider: bool,
-    ) {
-        let s = self.scale;
-        self.inner.add_quad(
-            [p0[0] * s, p0[1] * s, p0[2] * s],
-            [p1[0] * s, p1[1] * s, p1[2] * s],
-            [p2[0] * s, p2[1] * s, p2[2] * s],
-            [p3[0] * s, p3[1] * s, p3[2] * s],
-            color,
-            is_collider,
-        );
-    }
-
-    fn add_floor(
-        &mut self,
-        min_x: f32,
-        min_y: f32,
-        max_x: f32,
-        max_y: f32,
-        z: f32,
-        color: [f32; 3],
-        is_collider: bool,
-    ) {
-        let s = self.scale;
-        self.inner.add_floor(
-            min_x * s,
-            min_y * s,
-            max_x * s,
-            max_y * s,
-            z * s,
-            color,
-            is_collider,
-        );
-    }
-
-    fn add_box(
-        &mut self,
-        min_x: f32,
-        min_y: f32,
-        min_z: f32,
-        max_x: f32,
-        max_y: f32,
-        max_z: f32,
-        color: [f32; 3],
-    ) {
-        let s = self.scale;
-        self.inner.add_box(
-            min_x * s,
-            min_y * s,
-            min_z * s,
-            max_x * s,
-            max_y * s,
-            max_z * s,
-            color,
-        );
-    }
-
-    fn add_box_ex(
-        &mut self,
-        min_x: f32,
-        min_y: f32,
-        min_z: f32,
-        max_x: f32,
-        max_y: f32,
-        max_z: f32,
-        color: [f32; 3],
-        is_collider: bool,
-    ) {
-        let s = self.scale;
-        self.inner.add_box_ex(
-            min_x * s,
-            min_y * s,
-            min_z * s,
-            max_x * s,
-            max_y * s,
-            max_z * s,
-            color,
-            is_collider,
-        );
-    }
-
-    fn add_cylinder(
-        &mut self,
-        cx: f32,
-        cy: f32,
-        min_z: f32,
-        max_z: f32,
-        radius: f32,
-        segments: usize,
-        color: [f32; 3],
-        is_collider: bool,
-    ) {
-        let s = self.scale;
-        self.inner.add_cylinder(
-            cx * s,
-            cy * s,
-            min_z * s,
-            max_z * s,
-            radius * s,
-            segments,
-            color,
-            is_collider,
-        );
-    }
-
-    fn add_ramp(
-        &mut self,
-        min_x: f32,
-        min_y: f32,
-        min_z: f32,
-        max_x: f32,
-        max_y: f32,
-        max_z: f32,
-        color: [f32; 3],
-    ) {
-        let s = self.scale;
-        self.inner.add_ramp(
-            min_x * s,
-            min_y * s,
-            min_z * s,
-            max_x * s,
-            max_y * s,
-            max_z * s,
-            color,
-        );
-    }
-}
-
 pub fn create_procedural_assault_3d(info: MapInfo) -> World3D {
-    let mut builder = FacilityBuilder::new();
-    {
-        let mut b = ScaledFacilityBuilder {
-            inner: &mut builder,
-            scale: 10.0,
-        };
+    let mut b = FacilityBuilder::new();
 
-    // CS:GO Industrial Palette
-    let col_asphalt = [0.20, 0.20, 0.22];
+    // CS:GO Industrial Color Palette
+    let col_asphalt = [0.15, 0.15, 0.16];
     let col_road_yellow = [0.88, 0.72, 0.15];
     let col_road_white = [0.88, 0.88, 0.88];
     let col_gravel = [0.38, 0.36, 0.34];
     let col_concrete = [0.55, 0.53, 0.50];
+    let col_concrete_dark = [0.36, 0.35, 0.34];
+    let _col_concrete_light = [0.65, 0.63, 0.60];
     let col_bridge_pier = [0.58, 0.57, 0.54];
     let col_bridge_deck = [0.45, 0.44, 0.42];
     let col_warehouse_wall = [0.38, 0.40, 0.44];
-    let col_warehouse_roof = [0.32, 0.33, 0.35];
-    let col_warehouse_floor = [0.46, 0.45, 0.43];
+    let _col_warehouse_dark = [0.28, 0.30, 0.33];
+    let col_warehouse_trim = [0.22, 0.23, 0.25];
+    let col_warehouse_roof = [0.28, 0.29, 0.31];
+    let col_warehouse_floor = [0.42, 0.42, 0.40];
     let col_catwalk = [0.28, 0.30, 0.32];
     let col_railing_yellow = [0.85, 0.70, 0.12];
     let col_hazard_yellow = [0.90, 0.75, 0.10];
@@ -1100,309 +959,699 @@ pub fn create_procedural_assault_3d(info: MapInfo) -> World3D {
     let col_container_green = [0.18, 0.40, 0.26];
     let col_crate = [0.60, 0.45, 0.30];
     let col_glass = [0.68, 0.82, 0.92];
+    let col_glass_dark = [0.25, 0.35, 0.45];
     let col_office_floor = [0.36, 0.38, 0.42];
     let col_desk = [0.38, 0.32, 0.26];
     let col_monitor = [0.12, 0.14, 0.16];
     let col_cctv_screen = [0.22, 0.60, 0.38];
-    let col_ladder = [0.75, 0.75, 0.80];
     let col_forklift = [0.85, 0.65, 0.10];
+    let col_rubber = [0.08, 0.08, 0.09];
+    let col_chrome = [0.82, 0.85, 0.88];
+    let col_lamp_glow = [0.98, 0.92, 0.75];
+    let col_dumpster_green = [0.15, 0.35, 0.20];
 
-    // 1. Perimeter Walls (64x64 bounds, height = 14)
+    // 1. Perimeter Boundary Walls (56x56 bounds: 4.0..60.0, height = 14.0m)
     b.add_quad([4.0, 4.0, 0.0], [60.0, 4.0, 0.0], [60.0, 4.0, 14.0], [4.0, 4.0, 14.0], col_concrete, true);
     b.add_quad([60.0, 60.0, 0.0], [4.0, 60.0, 0.0], [4.0, 60.0, 14.0], [60.0, 60.0, 14.0], col_concrete, true);
     b.add_quad([60.0, 4.0, 0.0], [60.0, 60.0, 0.0], [60.0, 60.0, 14.0], [60.0, 4.0, 14.0], [0.30, 0.32, 0.35], true);
     b.add_quad([4.0, 60.0, 0.0], [4.0, 4.0, 0.0], [4.0, 4.0, 14.0], [4.0, 60.0, 14.0], [0.30, 0.32, 0.35], true);
 
-    // 2. Ground Floors (Street Asphalt vs Rail Yard vs Warehouse Sealed Concrete)
-    // Street asphalt (y: 4..24, x: 4..42)
-    b.add_floor(4.0, 4.0, 42.0, 24.0, 0.0, col_asphalt, true);
-    // Double solid yellow highway lines along y = 12
-    b.add_floor(4.0, 11.85, 42.0, 11.95, 0.01, col_road_yellow, false);
-    b.add_floor(4.0, 12.05, 42.0, 12.15, 0.01, col_road_yellow, false);
-    // White pedestrian crosswalk stripes
-    for i in 0..6 {
-        let sx = 26.0 + (i as f32) * 2.0;
-        b.add_floor(sx, 16.0, sx + 1.2, 22.0, 0.01, col_road_white, false);
+    // 2. Outside Street & Sidewalks (Human-scale 0.18m curb)
+    // Road asphalt (y: 8.5..21.0, x: 4.0..60.0)
+    b.add_floor(4.0, 8.5, 60.0, 21.0, 0.0, col_asphalt, true);
+    // Double solid yellow center lines along y = 14.75
+    b.add_floor(4.0, 14.65, 46.0, 14.75, 0.01, col_road_yellow, false);
+    b.add_floor(4.0, 14.85, 46.0, 14.95, 0.01, col_road_yellow, false);
+    // White pedestrian crosswalk stripes near CT spawn (x: 14.0..18.0)
+    for i in 0..5 {
+        let sx = 14.0 + (i as f32) * 0.9;
+        b.add_floor(sx, 8.7, sx + 0.55, 20.8, 0.01, col_road_white, false);
     }
-    // Sidewalk curb (y: 18..20): Human-scale curb height 0.15m..0.2m (scale * 0.015..0.02)
-    b.add_box(4.0, 18.0, 0.0, 42.0, 20.0, 0.015, col_concrete);
-    b.add_box(4.0, 17.8, 0.0, 42.0, 18.0, 0.02, [0.42, 0.40, 0.38]);
-    // Smooth pedestrian curb cut ramps along crosswalks
-    b.add_ramp(25.0, 17.0, 0.0, 39.0, 18.5, 0.02, col_concrete);
-
-    // Rail yard gravel bed (x: 42..60, y: 4..24)
-    b.add_floor(42.0, 4.0, 60.0, 24.0, 0.0, col_gravel, true);
-    // Steel train tracks running North-South
-    for rx in [49.0, 51.0, 55.0, 57.0] {
-        b.add_box_ex(rx - 0.08, 4.0, 0.0, rx + 0.08, 24.0, 0.15, col_train_steel, false);
+    // Cast-iron storm drain catch basins along the curb gutter
+    for dx in [13.0, 25.0, 37.0] {
+        b.add_box_ex(dx, 8.6, 0.005, dx + 1.2, 9.2, 0.015, [0.10, 0.10, 0.11], false);
+        for bar in 0..4 {
+            let bx = dx + 0.15 + (bar as f32) * 0.25;
+            b.add_box_ex(bx, 8.65, 0.015, bx + 0.1, 9.15, 0.02, [0.25, 0.26, 0.28], false);
+        }
     }
-    // Wooden rail ties
-    for ty in (5..24).step_by(2) {
-        let ty_f = ty as f32;
-        b.add_box_ex(48.5, ty_f - 0.2, 0.0, 57.5, ty_f + 0.2, 0.08, [0.32, 0.24, 0.16], false);
+    // Cast-iron circular manhole cover in street
+    b.add_cylinder(26.0, 16.0, 0.0, 0.015, 0.45, 12, [0.18, 0.19, 0.20], false);
+    b.add_cylinder(26.0, 16.0, 0.015, 0.02, 0.35, 10, [0.24, 0.25, 0.26], false);
+
+    // South sidewalk (CT spawn curb at z = 0.18m)
+    b.add_box(4.0, 4.0, 0.0, 60.0, 8.5, 0.18, col_concrete);
+    b.add_box(4.0, 8.35, 0.0, 60.0, 8.5, 0.19, col_concrete_dark); // Curb edge
+    // North sidewalk (Warehouse apron curb at z = 0.18m)
+    b.add_box(4.0, 21.0, 0.0, 46.0, 22.0, 0.18, col_concrete);
+    b.add_box(4.0, 21.0, 0.0, 46.0, 21.15, 0.19, col_concrete_dark);
+    // Smooth pedestrian curb cut ramps for seamless movement
+    b.add_ramp(13.0, 8.0, 0.18, 19.0, 8.7, 0.0, col_concrete);
+    b.add_ramp(23.0, 8.0, 0.18, 29.0, 8.7, 0.0, col_concrete);
+    b.add_ramp(13.0, 20.8, 0.0, 19.0, 21.5, 0.18, col_concrete);
+
+    // Street Furniture on Sidewalk
+    // Commercial 6-yard steel dumpster in forest green
+    b.add_box(10.0, 5.0, 0.18, 12.5, 7.2, 1.4, col_dumpster_green);
+    b.add_box(9.95, 4.95, 1.4, 12.55, 7.25, 1.6, [0.10, 0.11, 0.12]); // Hinged plastic lids
+    b.add_box(9.85, 5.8, 0.5, 10.0, 6.4, 0.8, [0.10, 0.11, 0.12]); // Fork pockets
+    b.add_box(12.5, 5.8, 0.5, 12.65, 6.4, 0.8, [0.10, 0.11, 0.12]);
+    // Stack of wooden shipping pallets with shrink-wrapped freight
+    b.add_box(29.5, 5.2, 0.18, 31.8, 7.2, 0.5, col_crate);
+    b.add_box(29.6, 5.3, 0.5, 31.7, 7.1, 1.4, [0.82, 0.80, 0.75]);
+    // Red municipal fire hydrant
+    b.add_cylinder(13.0, 8.0, 0.18, 0.85, 0.18, 8, [0.85, 0.12, 0.12], true);
+    b.add_cylinder(13.0, 8.0, 0.85, 0.98, 0.12, 8, [0.85, 0.12, 0.12], false);
+    // Streetlight pole with curved mast arm and luminaire
+    b.add_cylinder(12.0, 7.8, 0.18, 6.5, 0.10, 8, col_train_steel, true);
+    b.add_box_ex(12.0, 7.8, 6.3, 14.5, 8.0, 6.5, col_train_steel, false);
+    b.add_box_ex(14.0, 7.7, 6.1, 14.6, 8.1, 6.3, col_lamp_glow, false);
+
+    // 3. Highway Overpass (High clearance: Deck at z = 7.5m, out of CT line of sight)
+    b.add_box(4.0, 4.0, 7.2, 60.0, 9.5, 7.5, col_bridge_deck);
+    b.add_floor(4.0, 4.2, 60.0, 9.3, 7.51, col_asphalt, true);
+    // Concrete safety guardrail along overpass edge
+    b.add_box(4.0, 9.3, 7.5, 60.0, 9.6, 8.5, col_concrete);
+    b.add_box(4.0, 4.0, 7.5, 60.0, 4.3, 8.5, col_concrete);
+    // Support piers tucked against south perimeter wall
+    for px in [10.0, 24.0, 38.0, 52.0] {
+        b.add_cylinder(px, 5.0, 0.0, 7.2, 0.8, 12, col_bridge_pier, true);
+        b.add_box(px - 1.0, 4.0, 6.8, px + 1.0, 9.5, 7.2, col_bridge_pier);
     }
+    // Overhead green highway sign
+    b.add_box(21.0, 9.6, 8.2, 27.0, 9.75, 9.4, [0.05, 0.42, 0.20]);
+    b.add_box_ex(21.4, 9.76, 8.7, 26.6, 9.77, 8.85, col_road_white, false); // Sign text bar
 
-    // Rear alley ground (x: 4..60, y: 54..60)
-    b.add_floor(4.0, 54.0, 60.0, 60.0, 0.0, col_asphalt, true);
-    // West alley ground (x: 4..10, y: 24..54)
-    b.add_floor(4.0, 24.0, 10.0, 54.0, 0.0, col_concrete, true);
-    // East rail spur ground (x: 54..60, y: 24..54)
-    b.add_floor(54.0, 24.0, 60.0, 54.0, 0.0, col_gravel, true);
-
-    // 3. Elevated Highway Overpass Bridge (Suspended above CT Spawn at z = 8.0..9.0)
-    // Highway bridge concrete deck slab
-    b.add_box(4.0, 6.0, 8.0, 60.0, 14.0, 9.0, col_bridge_deck);
-    // Guardrails on highway overpass edges
-    b.add_box(4.0, 5.8, 9.0, 60.0, 6.2, 10.0, col_concrete);
-    b.add_box(4.0, 13.8, 9.0, 60.0, 14.2, 10.0, col_concrete);
-    // 4 Massive Cylindrical Bridge Support Piers (cx: 12, 26, 40, 54, cy = 10, z: 0..8)
-    for px in [12.0, 26.0, 40.0, 54.0] {
-        b.add_cylinder(px, 10.0, 0.0, 8.0, 1.1, 12, col_bridge_pier, true);
+    // 4. Ultra-Detailed SWAT Tactical Van (parked on street at x: 19.2..24.8, y: 12.8..15.2)
+    // 4 Detailed Cylindrical Wheels with Rubber Tires & Chrome Rims
+    let wx_front = 23.6;
+    let wx_rear = 20.2;
+    for &wx in &[wx_front, wx_rear] {
+        // Left wheels (y ~ 12.75)
+        b.add_cylinder(wx, 12.75, 0.0, 0.76, 0.38, 10, col_rubber, true);
+        b.add_cylinder(wx, 12.65, 0.15, 0.61, 0.23, 8, col_chrome, false);
+        b.add_cylinder(wx, 12.63, 0.34, 0.42, 0.08, 6, [0.15, 0.15, 0.16], false); // Lug hub
+        // Right wheels (y ~ 15.25)
+        b.add_cylinder(wx, 15.25, 0.0, 0.76, 0.38, 10, col_rubber, true);
+        b.add_cylinder(wx, 15.35, 0.15, 0.61, 0.23, 8, col_chrome, false);
+        b.add_cylinder(wx, 15.37, 0.34, 0.42, 0.08, 6, [0.15, 0.15, 0.16], false);
     }
-    // Overhead green highway road sign attached to bridge
-    b.add_box_ex(22.0, 14.05, 6.8, 32.0, 14.25, 8.0, [0.12, 0.48, 0.25], false);
+    // Wheel well fender arches
+    b.add_box(19.8, 12.7, 0.65, 20.6, 12.9, 0.85, col_warehouse_trim);
+    b.add_box(23.2, 12.7, 0.65, 24.0, 12.9, 0.85, col_warehouse_trim);
+    b.add_box(19.8, 15.1, 0.65, 20.6, 15.3, 0.85, col_warehouse_trim);
+    b.add_box(23.2, 15.1, 0.65, 24.0, 15.3, 0.85, col_warehouse_trim);
 
-    // 4. CT Spawn Props: Tactical SWAT Van & Rail Yard Boxcar
-    // SWAT Van (x: 18..22, y: 10..16)
-    b.add_box(18.0, 10.0, 0.0, 22.0, 12.5, 1.5, col_swat_navy); // Hood
-    b.add_box(18.0, 12.5, 0.0, 22.0, 16.0, 2.8, [0.10, 0.14, 0.22]); // Cab & Roof
-    // Wheels & Bullbar
-    for wy in [11.0, 14.5] {
-        b.add_box_ex(17.6, wy, 0.0, 18.0, wy + 1.2, 0.75, [0.08, 0.08, 0.09], true);
-        b.add_box_ex(22.0, wy, 0.0, 22.4, wy + 1.2, 0.75, [0.08, 0.08, 0.09], true);
+    // Black steel undercarriage chassis & fuel tanks
+    b.add_box(19.4, 13.0, 0.2, 24.6, 15.0, 0.5, [0.08, 0.08, 0.10]);
+    // Front heavy tactical bullbar push bumper
+    b.add_box(24.8, 12.8, 0.2, 25.1, 15.2, 0.55, [0.12, 0.13, 0.14]);
+    b.add_box(24.85, 13.0, 0.55, 25.15, 13.2, 1.15, [0.12, 0.13, 0.14]); // Upright push bars
+    b.add_box(24.85, 14.8, 0.55, 25.15, 15.0, 1.15, [0.12, 0.13, 0.14]);
+    b.add_box(24.88, 13.0, 1.05, 25.12, 15.0, 1.15, [0.12, 0.13, 0.14]); // Crossbar
+    // Front hood with beveled nose
+    b.add_box(23.2, 13.0, 0.5, 24.8, 15.0, 1.3, col_swat_navy);
+    b.add_box_ex(24.4, 13.4, 1.31, 24.7, 14.6, 1.33, [0.08, 0.08, 0.09], false); // Hood air vent
+    // Headlights and amber turn indicators
+    b.add_box(24.81, 13.1, 0.75, 24.85, 13.5, 0.95, [0.95, 0.95, 0.75]);
+    b.add_box(24.81, 13.52, 0.78, 24.84, 13.7, 0.92, [0.95, 0.65, 0.10]);
+    b.add_box(24.81, 14.5, 0.75, 24.85, 14.9, 0.95, [0.95, 0.95, 0.75]);
+    b.add_box(24.81, 14.3, 0.78, 24.84, 14.48, 0.92, [0.95, 0.65, 0.10]);
+    // Slanted windshield with black rubber gasket frame
+    b.add_box_ex(22.7, 13.1, 1.3, 23.2, 14.9, 1.9, col_glass, false);
+    b.add_box_ex(22.68, 13.08, 1.28, 23.22, 14.92, 1.32, [0.08, 0.08, 0.09], false); // Gasket bottom
+    // Protruding side mirrors
+    b.add_box_ex(23.0, 12.5, 1.5, 23.2, 12.9, 1.7, [0.08, 0.08, 0.09], false);
+    b.add_box_ex(23.0, 15.1, 1.5, 23.2, 15.5, 1.7, [0.08, 0.08, 0.09], false);
+
+    // Armored Cab and Troop Compartment
+    b.add_box(19.2, 12.9, 0.5, 22.7, 15.1, 2.5, col_swat_navy);
+    // Rear twin doors: vertical divide seam and handle
+    b.add_box_ex(19.18, 13.98, 0.6, 19.21, 14.02, 2.3, [0.08, 0.08, 0.09], false); // Door divide seam
+    b.add_box_ex(19.15, 13.85, 1.2, 19.20, 13.95, 1.3, col_chrome, false); // Door latch
+    b.add_box_ex(19.18, 13.2, 1.5, 19.21, 13.8, 1.9, col_glass_dark, false); // Rear window slits
+    b.add_box_ex(19.18, 14.2, 1.5, 19.21, 14.8, 1.9, col_glass_dark, false);
+    // Rear diamond-plate step bumper
+    b.add_box(18.8, 12.8, 0.25, 19.2, 15.2, 0.52, [0.12, 0.13, 0.14]);
+    // Rear taillight clusters
+    b.add_box_ex(19.18, 12.95, 0.7, 19.21, 13.15, 1.05, [0.88, 0.10, 0.10], false);
+    b.add_box_ex(19.18, 14.85, 0.7, 19.21, 15.05, 1.05, [0.88, 0.10, 0.10], false);
+
+    // Side windows and access door
+    b.add_box_ex(21.8, 12.88, 1.6, 22.6, 12.92, 2.1, col_glass, false);
+    b.add_box_ex(21.8, 15.08, 1.6, 22.6, 15.12, 2.1, col_glass, false);
+    // White "SWAT / POLICE" side stripe panels
+    b.add_box_ex(19.8, 12.88, 1.1, 22.2, 12.91, 1.35, [0.92, 0.92, 0.95], false);
+    b.add_box_ex(19.8, 15.09, 1.1, 22.2, 15.12, 1.35, [0.92, 0.92, 0.95], false);
+    // Roof Emergency Strobe Lightbar (Red & Blue flashing beacons)
+    b.add_box(21.8, 13.2, 2.5, 22.4, 13.95, 2.72, [0.95, 0.08, 0.08]);
+    b.add_box(21.8, 14.05, 2.5, 22.4, 14.8, 2.72, [0.08, 0.35, 0.95]);
+    b.add_box(21.9, 13.95, 2.5, 22.3, 14.05, 2.70, col_chrome);
+
+    // 5. Semi-Truck & Trailer backed into Bay 2 (x: 32.0..36.0, y: 15.0..25.0)
+    // White Cab (y: 15.0..18.5)
+    b.add_box(32.5, 15.0, 0.3, 35.5, 18.5, 3.2, [0.88, 0.88, 0.90]);
+    // Chrome vertical exhaust stacks
+    b.add_cylinder(32.3, 18.3, 1.2, 3.8, 0.08, 8, col_chrome, false);
+    b.add_cylinder(35.7, 18.3, 1.2, 3.8, 0.08, 8, col_chrome, false);
+    // Cargo Trailer (y: 18.5..25.0, z: 0.8..3.8)
+    b.add_box(32.2, 18.5, 0.8, 35.8, 25.0, 3.8, [0.65, 0.67, 0.70]);
+
+    // 6. East Rail Yard, Train Boxcar & Stacked Containers (x: 46.0..60.0, y: 10.0..58.0)
+    b.add_floor(46.0, 10.0, 60.0, 58.0, 0.0, col_gravel, true);
+    // Parallel train rails
+    for tx in [49.0, 55.0] {
+        b.add_box_ex(tx - 0.72, 10.0, 0.0, tx - 0.62, 58.0, 0.2, col_train_steel, false);
+        b.add_box_ex(tx + 0.62, 10.0, 0.0, tx + 0.72, 58.0, 0.2, col_train_steel, false);
     }
-    b.add_box_ex(18.2, 12.4, 1.5, 21.8, 12.7, 2.4, col_glass, false); // Windshield
-    b.add_box_ex(18.5, 13.5, 2.8, 20.0, 14.0, 3.05, [0.85, 0.15, 0.15], false); // Red siren
-    b.add_box_ex(20.0, 13.5, 2.8, 21.5, 14.0, 3.05, [0.15, 0.25, 0.85], false); // Blue siren
-    b.add_box_ex(17.8, 9.7, 0.3, 22.2, 10.0, 0.9, [0.70, 0.72, 0.75], true); // Bullbar
+    // Freight Boxcar on East track (x: 53.5..56.5, y: 32.0..46.0, z: 0.36..3.8)
+    b.add_box(53.5, 32.0, 0.36, 56.5, 46.0, 3.8, col_train_red);
+    b.add_box(53.4, 31.9, 3.8, 56.6, 46.1, 4.0, col_train_steel);
+    // Steel ladder on boxcar side
+    b.add_box(56.5, 33.0, 0.5, 56.7, 33.5, 3.8, col_catwalk);
+    // Intermodal Shipping Containers
+    b.add_box(47.0, 18.0, 0.0, 49.5, 28.0, 2.6, col_container_blue);
+    b.add_box(47.0, 30.0, 0.0, 49.5, 40.0, 2.6, col_container_red);
+    b.add_box(47.0, 22.0, 2.6, 49.5, 32.0, 5.2, col_container_green);
 
-    // Freight Train Boxcar in Rail Yard (x: 48..56, y: 8..20, z: 0..3.6)
-    b.add_box(48.0, 8.0, 0.0, 56.0, 20.0, 0.8, col_train_steel); // Steel chassis & bogies
-    // Hollow Boxcar Interior: Floor at z = 0.8, Walls to z = 3.6, Roof at z = 3.6
-    b.add_box(48.0, 8.0, 0.8, 48.4, 20.0, 3.6, col_train_red); // West wall
-    b.add_box(55.6, 8.0, 0.8, 56.0, 20.0, 3.6, col_train_red); // East wall
-    b.add_box(48.0, 7.8, 0.8, 56.0, 8.2, 3.6, col_train_red);  // South wall
-    b.add_box(48.0, 19.8, 0.8, 56.0, 20.2, 3.6, col_train_red); // North wall
-    b.add_box(48.0, 8.0, 3.5, 56.0, 20.0, 3.7, col_train_steel); // Boxcar roof
-    // Open sliding door on West wall (middle open from y: 12.5..15.5)
-    // Boxcar inner floor is walkable platform at z = 0.8!
+    // 7. Main Warehouse Shell (x: 8.0..46.0, y: 22.0..56.0, z: 0.0..9.0m)
+    // Floor slab
+    b.add_floor(8.0, 22.0, 46.0, 56.0, 0.0, col_warehouse_floor, true);
 
-    // Stacked Shipping Containers in Rail Yard
-    b.add_box(44.0, 20.0, 0.0, 50.0, 23.5, 2.8, col_container_blue);
-    b.add_box(50.5, 20.0, 0.0, 56.5, 23.5, 2.8, col_container_red);
-    b.add_box(46.0, 20.0, 2.8, 52.0, 23.5, 5.6, col_container_green); // Upper stacked container
+    // --- South Facade Realism & Architectural Articulation (y = 22.0) ---
+    // Concrete foundation plinth along the entire base (z: 0.0..0.8m)
+    b.add_box(8.0, 21.5, 0.0, 46.0, 22.0, 0.8, col_concrete_dark);
+    b.add_box(8.0, 21.45, 0.75, 46.0, 22.0, 0.85, col_concrete); // Drip cap
 
-    // 5. The Main Warehouse Shell (x: 10..54, y: 24..54, z: 0..8.0)
-    // Warehouse sealed concrete floor
-    b.add_floor(10.0, 24.0, 54.0, 54.0, 0.0, col_warehouse_floor, true);
+    // Solid wall left of Bay 1 (x: 8.0..14.0) with corrugated panel relief
+    b.add_box(8.0, 21.6, 0.8, 14.0, 22.0, 9.0, col_warehouse_wall);
+    // Bay 1 header (x: 14.0..22.0, z: 3.8..9.0m)
+    b.add_box(14.0, 21.6, 3.8, 22.0, 22.0, 9.0, col_warehouse_wall);
+    // Wall between Bay 1 and Bay 2 (x: 22.0..30.0)
+    b.add_box(22.0, 21.6, 0.8, 30.0, 22.0, 9.0, col_warehouse_wall);
+    // Bay 2 header (x: 30.0..38.0)
+    b.add_box(30.0, 21.6, 4.0, 38.0, 22.0, 9.0, col_warehouse_wall);
+    // Personnel door header (portal at x: 38.5..41.5)
+    b.add_box(38.0, 21.6, 2.6, 42.0, 22.0, 9.0, col_warehouse_wall);
+    b.add_box(42.0, 21.6, 0.8, 46.0, 22.0, 9.0, col_warehouse_wall);
 
-    // Exterior Walls:
-    // South Wall (Front Facade with giant Garage Shutter Door):
-    b.add_box(10.0, 23.5, 0.0, 26.0, 24.5, 8.0, col_warehouse_wall); // West of door
-    b.add_box(38.0, 23.5, 0.0, 54.0, 24.5, 8.0, col_warehouse_wall); // East of door
-    b.add_box(26.0, 23.5, 4.5, 38.0, 24.5, 8.0, col_warehouse_wall); // Above door
-    // Front Rolling Shutter (raised with 2.8m opening into warehouse!)
-    b.add_box(26.0, 23.8, 2.8, 38.0, 24.2, 4.5, col_hazard_yellow);
-    b.add_box_ex(26.0, 23.7, 2.7, 38.0, 24.3, 2.85, col_hazard_black, false);
-
-    // North Wall (Rear Facade with Rear Garage Door & Ladder):
-    b.add_box(10.0, 53.5, 0.0, 38.0, 54.5, 8.0, col_warehouse_wall);
-    b.add_box(48.0, 53.5, 0.0, 54.0, 54.5, 8.0, col_warehouse_wall);
-    b.add_box(38.0, 53.5, 4.2, 48.0, 54.5, 8.0, col_warehouse_wall);
-    // Rear Rolling Shutter (raised with 2.6m opening into back alley!)
-    b.add_box(38.0, 53.8, 2.6, 48.0, 54.2, 4.2, col_train_steel);
-
-    // West Wall (with side service door at y: 34..36):
-    b.add_box(9.5, 24.0, 0.0, 10.5, 34.0, 8.0, col_warehouse_wall);
-    b.add_box(9.5, 36.0, 0.0, 10.5, 54.0, 8.0, col_warehouse_wall);
-    b.add_box(9.5, 34.0, 2.4, 10.5, 36.0, 8.0, col_warehouse_wall);
-
-    // East Wall (Solid warehouse wall facing rail spur):
-    b.add_box(53.5, 24.0, 0.0, 54.5, 54.0, 8.0, col_warehouse_wall);
-
-    // Rear Exterior Ladder (Climb from rear alley onto warehouse roof!)
-    // Rails & Rungs at x = 14.0, y = 54.2, z: 0.0..8.2
-    b.add_cylinder(13.6, 54.2, 0.0, 8.4, 0.04, 6, col_ladder, true);
-    b.add_cylinder(14.4, 54.2, 0.0, 8.4, 0.04, 6, col_ladder, true);
-    for rz in 1..17 {
-        let rz_f = (rz as f32) * 0.5;
-        b.add_box(13.6, 54.15, rz_f - 0.03, 14.4, 54.25, rz_f + 0.03, col_ladder);
-    }
-
-    // 6. Rooftop (z = 8.0) & Skylights
-    b.add_floor(10.0, 24.0, 54.0, 54.0, 8.0, col_warehouse_roof, true);
-    // Rooftop parapet safety wall
-    b.add_box(9.6, 23.6, 8.0, 54.4, 24.0, 8.9, col_concrete);
-    b.add_box(9.6, 54.0, 8.0, 54.4, 54.4, 8.9, col_concrete);
-    b.add_box(9.6, 24.0, 8.0, 10.0, 54.0, 8.9, col_concrete);
-    b.add_box(54.0, 24.0, 8.0, 54.4, 54.0, 8.9, col_concrete);
-
-    // Rooftop industrial HVAC chiller units
-    b.add_box(20.0, 26.0, 8.0, 24.0, 30.0, 9.8, [0.35, 0.38, 0.42]);
-    b.add_box(44.0, 44.0, 8.0, 48.0, 48.0, 9.8, [0.35, 0.38, 0.42]);
-    // Large skylights peering down into hangar floor
-    b.add_floor(28.0, 32.0, 36.0, 40.0, 8.02, col_glass, false);
-
-    // 7. The Iconic Ventilation System ("The Vents" - Crouch/Crawlable 3D Ducts)
-    // Vent Intake Housing on roof near top of exterior ladder (x: 14..17, y: 50..53)
-    b.add_box(14.0, 50.0, 8.0, 17.0, 53.0, 9.4, col_vent_sheet);
-    // Hollow open mouth of the vent (cut into south face at y = 50.0)
-    // Duct internal floor: z = 8.0, internal ceiling: z = 9.4, width: 1.4m
-
-    // Main Vent Trunk running South (x: 14.8..16.2, y: 36.0..50.0):
-    // Floor, Ceiling, West and East Walls
-    b.add_box(14.7, 36.0, 7.95, 16.3, 50.0, 8.05, col_vent_sheet); // Vent floor
-    b.add_box(14.7, 36.0, 9.35, 16.3, 50.0, 9.45, col_vent_sheet); // Vent ceiling
-    b.add_box(14.7, 36.0, 8.0, 14.8, 50.0, 9.4, col_vent_sheet);   // West wall
-    b.add_box(16.2, 36.0, 8.0, 16.3, 50.0, 9.4, col_vent_sheet);   // East wall
-
-    // Vent Branch 1: Turns East at y = 36.0 to drop onto Catwalk
-    b.add_box(16.3, 35.3, 7.95, 24.0, 36.7, 8.05, col_vent_sheet);
-    b.add_box(16.3, 35.3, 9.35, 24.0, 36.7, 9.45, col_vent_sheet);
-    b.add_box(16.3, 35.3, 8.0, 24.0, 35.4, 9.4, col_vent_sheet);
-    b.add_box(16.3, 36.6, 8.0, 24.0, 36.7, 9.4, col_vent_sheet);
-    // Vertical drop shaft hole at x: 23..25, y: 35..37 (drops straight down onto catwalk at z = 4.2!)
-    b.add_box(22.8, 35.3, 4.2, 23.0, 36.7, 8.0, col_vent_sheet);
-    b.add_box(24.8, 35.3, 4.2, 25.0, 36.7, 8.0, col_vent_sheet);
-
-    // Vent Branch 2: Turns East at y = 48.0 into Hostage Office ceiling
-    b.add_box(16.3, 47.3, 7.95, 20.0, 48.7, 8.05, col_vent_sheet);
-    b.add_box(16.3, 47.3, 9.35, 20.0, 48.7, 9.45, col_vent_sheet);
-    b.add_box(16.3, 47.3, 8.0, 20.0, 47.4, 9.4, col_vent_sheet);
-    b.add_box(16.3, 48.6, 8.0, 20.0, 48.7, 9.4, col_vent_sheet);
-    // Vertical drop shaft hole at x: 19..21, y: 47..49 (drops straight down into Hostage Room at z = 4.2!)
-    b.add_box(18.8, 47.3, 4.2, 19.0, 48.7, 8.0, col_vent_sheet);
-    b.add_box(20.8, 47.3, 4.2, 21.0, 48.7, 8.0, col_vent_sheet);
-
-    // 8. Elevated Industrial Catwalk System (z = 4.2)
-    // West Catwalk: x: 11..15, y: 26..46, z = 4.2
-    b.add_floor(11.0, 26.0, 15.0, 46.0, 4.2, col_catwalk, true);
-    // Catwalk thickness slab
-    b.add_box(11.0, 26.0, 4.15, 15.0, 46.0, 4.2, col_catwalk);
-    // Catwalk Safety Handrail along open East edge (x = 15.0, y: 26..46, z: 4.2..5.3)
-    b.add_box(14.85, 26.0, 4.2, 15.05, 46.0, 5.3, col_railing_yellow);
-
-    // South Catwalk: x: 15..36, y: 25..28, z = 4.2
-    b.add_floor(15.0, 25.0, 36.0, 28.0, 4.2, col_catwalk, true);
-    b.add_box(15.0, 25.0, 4.15, 36.0, 28.0, 4.2, col_catwalk);
-    // Handrail along open North edge (y = 28.0, x: 15..36, z: 4.2..5.3)
-    b.add_box(15.0, 27.85, 4.2, 36.0, 28.05, 5.3, col_railing_yellow);
-
-    // Industrial Steel Stairs connecting ground floor to Catwalk (x: 11..14, y: 26..32, z: 0..4.2)
-    b.add_ramp(11.0, 26.0, 0.0, 14.0, 32.0, 4.2, col_catwalk);
-
-    // Catwalk Support Pillars down to warehouse floor (radius = 0.15)
-    for (cx, cy) in [(14.8, 34.0), (14.8, 42.0), (24.0, 27.8), (34.0, 27.8)] {
-        b.add_cylinder(cx, cy, 0.0, 4.2, 0.15, 8, col_train_steel, true);
-    }
-
-    // 9. Warehouse Floor Props: 18-Wheeler Semi-Truck & Forklift
-    // Semi-Truck Cab (x: 30..34, y: 28..32, z: 0..2.8)
-    b.add_box(30.0, 28.0, 0.0, 34.0, 32.0, 2.8, [0.75, 0.18, 0.18]);
-    b.add_box_ex(30.2, 27.8, 1.4, 33.8, 28.1, 2.4, col_glass, false); // Front windshield
-    // Flatbed Trailer (x: 29..35, y: 32..42, z: 0..1.5)
-    b.add_box(29.0, 32.0, 0.0, 35.0, 42.0, 1.5, col_train_steel);
-    // Cargo loaded on flatbed trailer: Stacked tactical wooden crates (z: 1.5..3.0)
-    b.add_box(29.5, 33.0, 1.5, 34.5, 41.0, 3.0, col_crate);
-
-    // Industrial Forklift (x: 42..45, y: 32..35, z: 0..2.2)
-    b.add_box(42.0, 32.0, 0.0, 45.0, 35.0, 1.4, col_forklift);
-    b.add_box_ex(42.2, 32.2, 1.4, 44.8, 34.8, 2.2, [0.15, 0.15, 0.15], false); // Roll-cage
-    b.add_box_ex(41.4, 31.8, 0.0, 41.8, 34.8, 1.8, col_train_steel, true); // Front mast & forks
-
-    // Stacked Shipping Containers inside warehouse along East wall (x: 46..52, y: 38..48)
-    b.add_box(46.0, 38.0, 0.0, 52.0, 48.0, 2.8, col_container_blue);
-
-    // 10. The 2-Story Back Office / Hostage Room (x: 11..34, y: 46..54)
-    // Lower Floor Workshop / Storage (z: 0..4.2)
-    // Upper Floor Hostage Office (z: 4.2..7.8)
-    b.add_floor(11.0, 46.0, 34.0, 54.0, 4.2, col_office_floor, true); // Office Floor slab
-
-    // Dividing Wall between Office and Warehouse Hangar (y = 46.0, x: 11..34):
-    b.add_box(11.0, 45.8, 0.0, 34.0, 46.2, 4.2, col_concrete); // Ground wall
-    b.add_box(11.0, 45.8, 4.2, 14.0, 46.2, 7.8, col_concrete); // Upper West wall
-    b.add_box(28.0, 45.8, 4.2, 34.0, 46.2, 7.8, col_concrete); // Upper East wall
-    b.add_box(14.0, 45.8, 7.2, 28.0, 46.2, 7.8, col_concrete); // Header above window
-    // Panoramic Observation Glass Window (x: 14..28, y = 46.0, z: 4.2..7.2)
-    b.add_box(14.0, 45.9, 4.2, 28.0, 46.1, 7.2, col_glass);
-
-    // Interior Staircase inside workshop leading up to Hostage Office (x: 30..34, y: 46..52, z: 0..4.2)
-    b.add_ramp(30.0, 46.0, 0.0, 33.5, 52.0, 4.2, col_concrete);
-
-    // Hostage Office Furniture & Props
-    // Security Monitoring Desk with CCTV Screens
-    b.add_box(14.0, 51.5, 4.2, 18.0, 53.0, 5.2, col_desk);
-    b.add_box_ex(14.5, 52.2, 5.2, 17.5, 52.8, 5.9, col_monitor, false);
-    b.add_box_ex(14.6, 52.15, 5.25, 17.4, 52.2, 5.85, col_cctv_screen, false); // CCTV feed
-
-    // Hostage Chairs (Site A)
-    for (hx, hy) in [(22.0, 52.0), (25.0, 52.0), (22.0, 49.0), (25.0, 49.0)] {
-        b.add_box(hx - 0.35, hy - 0.35, 4.2, hx + 0.35, hy + 0.35, 4.9, [0.45, 0.25, 0.18]);
+    // Exposed Structural Steel I-Beam Pilasters (Deep 3D shadows every bay)
+    for &px in &[8.0, 14.0, 22.0, 30.0, 38.0, 46.0] {
+        b.add_box(px - 0.25, 21.38, 0.8, px + 0.25, 21.65, 9.0, col_warehouse_trim);
+        b.add_box(px - 0.35, 21.32, 0.0, px + 0.35, 21.68, 0.85, col_concrete_dark); // Base boot
     }
 
-    // 11. Tactical Bomb Site Floor Decals
-    // Site A: Hostage Office floor
-    b.add_floor(21.0, 48.0, 26.0, 53.0, 4.22, [0.88, 0.20, 0.15], false);
-    // Site B: Warehouse floor next to semi-truck
-    b.add_floor(30.0, 36.0, 35.0, 41.0, 0.02, [0.88, 0.20, 0.15], false);
+    // Heavy Roof Parapet Cornice & Sheet Metal Coping Cap
+    b.add_box(7.6, 21.3, 8.9, 46.4, 22.1, 9.2, col_warehouse_trim);
+
+    // Row of Industrial Steel-Framed Clerestory Transom Windows (z: 7.2..8.2m)
+    for &(wx0, wx1) in &[(9.0, 13.0), (23.0, 29.0), (39.0, 45.0)] {
+        b.add_box_ex(wx0, 21.52, 7.2, wx1, 21.58, 8.2, col_glass, false);
+        // Window mullion grid
+        for i in 1..4 {
+            let mx = wx0 + (wx1 - wx0) * (i as f32) / 4.0;
+            b.add_box_ex(mx - 0.06, 21.50, 7.2, mx + 0.06, 21.60, 8.2, col_warehouse_trim, false);
+        }
+        b.add_box_ex(wx0, 21.50, 7.68, wx1, 21.60, 7.74, col_warehouse_trim, false);
     }
 
-    let s = 10.0;
+    // --- Loading Bay 1 Fine Details ---
+    // Overhead Roll-up Shutter Drum Profile (z: 3.6..4.1m, across x: 13.8..22.2)
+    b.add_box_ex(13.9, 21.35, 3.65, 22.1, 21.75, 4.05, col_warehouse_trim, false);
+    b.add_box_ex(13.9, 21.30, 3.75, 22.1, 21.80, 3.95, col_warehouse_trim, false);
+    b.add_box_ex(13.9, 21.40, 3.60, 22.1, 21.70, 4.10, col_warehouse_trim, false);
+    // Hanging slatted curtain hood
+    b.add_box_ex(14.0, 21.54, 3.4, 22.0, 21.58, 3.8, [0.45, 0.47, 0.50], false);
+    // Yellow & black alternating chevron hazard frame on Bay 1 jambs
+    b.add_box_ex(13.8, 21.50, 0.0, 14.0, 22.0, 3.8, col_hazard_yellow, false);
+    b.add_box_ex(22.0, 21.50, 0.0, 22.2, 22.0, 3.8, col_hazard_yellow, false);
+    for h in 0..6 {
+        let hz = (h as f32) * 0.6;
+        b.add_box_ex(13.78, 21.48, hz, 14.02, 21.52, hz + 0.3, col_hazard_black, false);
+        b.add_box_ex(21.98, 21.48, hz, 22.22, 21.52, hz + 0.3, col_hazard_black, false);
+    }
+    // Heavy steel crash safety bollards in front of Bay 1
+    b.add_cylinder(13.5, 20.8, 0.0, 1.1, 0.14, 10, col_hazard_yellow, true);
+    b.add_cylinder(13.5, 20.8, 0.95, 1.12, 0.15, 10, col_hazard_black, false);
+    b.add_cylinder(22.5, 20.8, 0.0, 1.1, 0.14, 10, col_hazard_yellow, true);
+    b.add_cylinder(22.5, 20.8, 0.95, 1.12, 0.15, 10, col_hazard_black, false);
+    // Over-bay industrial gooseneck floodlight fixture
+    b.add_box_ex(17.8, 21.1, 5.3, 18.2, 21.6, 5.4, col_train_steel, false);
+    b.add_box_ex(17.5, 20.9, 5.0, 18.5, 21.3, 5.3, col_lamp_glow, false);
+
+    // Weathered Industrial Signboard ("ASSAULT LOGISTICS / BAY 1 & 2")
+    b.add_box_ex(15.5, 21.42, 5.6, 24.5, 21.46, 6.8, [0.85, 0.83, 0.78], false);
+    b.add_box_ex(15.3, 21.40, 5.5, 24.7, 21.44, 5.6, col_hazard_yellow, false); // Bottom safety band
+    b.add_box_ex(15.3, 21.40, 6.8, 24.7, 21.44, 6.9, col_hazard_yellow, false); // Top safety band
+    b.add_box_ex(16.0, 21.47, 6.2, 24.0, 21.48, 6.5, [0.12, 0.14, 0.18], false); // Stencil logo bar
+
+    // Rainwater drainage vertical downspouts
+    b.add_cylinder(8.6, 21.45, 0.2, 9.2, 0.08, 8, col_warehouse_trim, false);
+    b.add_cylinder(45.4, 21.45, 0.2, 9.2, 0.08, 8, col_warehouse_trim, false);
+
+    // West Wall (x = 8.0)
+    b.add_box(7.6, 22.0, 0.0, 8.0, 56.0, 9.0, col_warehouse_wall);
+    // North Wall (y = 56.0) with rear exit portal at x: 24.0..27.0
+    b.add_box(8.0, 56.0, 0.0, 24.0, 56.4, 9.0, col_warehouse_wall);
+    b.add_box(24.0, 56.0, 2.6, 27.0, 56.4, 9.0, col_warehouse_wall);
+    b.add_box(27.0, 56.0, 0.0, 46.0, 56.4, 9.0, col_warehouse_wall);
+    // East Wall (x = 46.0) with doorway to fire escape at y: 44.0..47.0, z: 4.2..6.8
+    b.add_box(46.0, 22.0, 0.0, 46.4, 44.0, 9.0, col_warehouse_wall);
+    b.add_box(46.0, 44.0, 6.8, 46.4, 47.0, 9.0, col_warehouse_wall);
+    b.add_box(46.0, 47.0, 0.0, 46.4, 56.0, 9.0, col_warehouse_wall);
+
+    // Exterior Steel Fire Escape Staircase on East Wall (x: 46.4..48.8)
+    b.add_ramp(46.4, 30.0, 0.0, 48.8, 36.0, 2.1, col_catwalk);
+    b.add_box(46.4, 36.0, 2.0, 48.8, 38.5, 2.1, col_catwalk);
+    b.add_ramp(46.4, 38.5, 2.1, 48.8, 44.0, 4.2, col_catwalk);
+    b.add_box(46.4, 44.0, 4.1, 48.8, 47.0, 4.2, col_catwalk);
+    b.add_ramp(46.4, 47.0, 4.2, 48.8, 54.0, 9.0, col_catwalk);
+
+    // Warehouse Roof (z = 9.0m) with Parapets
+    b.add_floor(8.0, 22.0, 46.0, 56.0, 9.0, col_warehouse_roof, true);
+    b.add_box(7.8, 21.8, 9.0, 46.2, 22.2, 9.8, col_concrete);
+    b.add_box(7.8, 55.8, 9.0, 46.2, 56.2, 9.8, col_concrete);
+    b.add_box(7.8, 21.8, 9.0, 8.2, 56.2, 9.8, col_concrete);
+    b.add_box(45.8, 21.8, 9.0, 46.2, 56.2, 9.8, col_concrete);
+
+    // 8. Rooftop Ventilation System & Chillers
+    b.add_box(14.0, 28.0, 9.0, 18.0, 32.0, 10.2, col_vent_sheet);
+    b.add_box(28.0, 44.0, 9.0, 32.0, 48.0, 10.2, col_vent_sheet);
+    b.add_box(36.0, 28.0, 9.0, 40.0, 34.0, 10.4, [0.35, 0.38, 0.40]);
+
+    // 9. Warehouse Interior Catwalks, Structural Trusses & Columns
+    // Structural steel H-beam columns
+    for cx in [18.0, 32.0] {
+        for cy in [30.0, 42.0] {
+            b.add_box(cx - 0.35, cy - 0.35, 0.0, cx + 0.35, cy + 0.35, 9.0, [0.18, 0.19, 0.20]);
+        }
+    }
+    // High-bay roof trusses
+    for ty in [28.0, 38.0, 48.0] {
+        b.add_box_ex(8.0, ty - 0.15, 8.0, 46.0, ty + 0.15, 8.8, [0.18, 0.19, 0.20], false);
+        // Zigzag diagonal truss webbing
+        for tx in 0..6 {
+            let wx0 = 10.0 + (tx as f32) * 5.5;
+            b.add_box_ex(wx0, ty - 0.08, 8.0, wx0 + 2.5, ty + 0.08, 8.8, [0.24, 0.25, 0.27], false);
+        }
+    }
+    // High-bay pendant warehouse dome lamps
+    for lx in [18.0, 30.0] {
+        for ly in [28.0, 38.0, 48.0] {
+            b.add_cylinder(lx, ly, 7.6, 7.8, 0.45, 10, [0.18, 0.19, 0.20], false);
+            b.add_box_ex(lx - 0.2, ly - 0.2, 7.45, lx + 0.2, ly + 0.2, 7.6, col_lamp_glow, false);
+        }
+    }
+
+    // Catwalk at z = 4.2m along West wall
+    b.add_box(8.5, 26.0, 4.15, 12.5, 52.0, 4.2, col_catwalk);
+    b.add_box(12.4, 26.0, 4.2, 12.5, 52.0, 5.2, col_railing_yellow);
+    // Catwalk along North wall connecting to Office
+    b.add_box(12.5, 49.0, 4.15, 28.0, 52.5, 4.2, col_catwalk);
+    b.add_box(12.5, 49.0, 4.2, 28.0, 49.1, 5.2, col_railing_yellow);
+    // Interior steel staircase climbing from floor to catwalk
+    b.add_ramp(10.0, 26.0, 0.0, 12.5, 36.0, 4.2, col_catwalk);
+
+    // 10. Upstairs Hostage Office (2nd level, x: 28.0..45.5, y: 40.0..55.5, z: 4.2..8.8m)
+    b.add_floor(28.0, 40.0, 45.5, 55.5, 4.2, col_office_floor, true);
+    // South Wall overlooking main floor with large observation window
+    b.add_box(28.0, 39.8, 4.2, 45.5, 40.0, 5.0, [0.75, 0.72, 0.68]);
+    b.add_box_ex(29.0, 39.85, 5.0, 44.5, 39.95, 7.2, col_glass, false);
+    // Window mullions
+    for i in 1..5 {
+        let mx = 29.0 + (15.5) * (i as f32) / 5.0;
+        b.add_box_ex(mx - 0.08, 39.82, 5.0, mx + 0.08, 39.98, 7.2, col_warehouse_trim, false);
+    }
+    b.add_box_ex(29.0, 39.82, 6.05, 44.5, 39.98, 6.15, col_warehouse_trim, false);
+
+    b.add_box(28.0, 39.8, 7.2, 45.5, 40.0, 8.8, [0.75, 0.72, 0.68]);
+    // West office wall with doorway to catwalk
+    b.add_box(28.0, 40.0, 4.2, 28.4, 48.0, 8.8, [0.75, 0.72, 0.68]);
+    b.add_box(28.0, 48.0, 6.6, 28.4, 51.0, 8.8, [0.75, 0.72, 0.68]);
+    b.add_box(28.0, 51.0, 4.2, 28.4, 55.5, 8.8, [0.75, 0.72, 0.68]);
+    // Office furniture & CCTV security monitors
+    for dx in [33.0, 39.0] {
+        b.add_box(dx - 1.2, 44.0, 4.2, dx + 1.2, 45.5, 5.0, col_desk);
+        b.add_box(dx - 0.4, 44.8, 5.0, dx + 0.4, 45.0, 5.6, col_monitor);
+    }
+    b.add_box_ex(34.0, 54.8, 5.4, 38.0, 55.0, 6.6, col_cctv_screen, false);
+
+    // 11. Tactical Cover Props (Forklift, Crates, Pallets, Barrels)
+    // Detailed Yellow Forklift near Bay 1
+    b.add_box(16.0, 34.0, 0.0, 18.5, 36.5, 1.4, col_forklift);
+    b.add_box(16.2, 34.2, 1.4, 18.3, 36.3, 2.2, [0.18, 0.19, 0.20]); // Roll cage
+    b.add_box(17.0, 36.5, 0.0, 17.5, 36.8, 2.8, [0.22, 0.24, 0.26]); // Lift mast
+    b.add_box(16.4, 36.8, 0.1, 18.1, 38.0, 0.2, [0.22, 0.24, 0.26]); // Forks
+    // Heavy Pallet racks along west wall
+    b.add_box(8.2, 38.0, 0.0, 10.2, 48.0, 3.8, col_container_blue);
+    b.add_box_ex(8.15, 38.0, 1.8, 10.25, 48.0, 1.95, col_hazard_yellow, false); // Shelf beams
+    b.add_box_ex(8.15, 38.0, 3.6, 10.25, 48.0, 3.75, col_hazard_yellow, false);
+    // Wooden crate stacks
+    b.add_box(22.0, 34.0, 0.0, 24.5, 36.5, 1.6, col_crate);
+    b.add_box(14.0, 42.0, 0.0, 16.5, 44.5, 1.8, col_crate);
+    // Steel oil drums with bung rims
+    for bx in [13.0, 36.0, 51.0] {
+        b.add_cylinder(bx, 24.0, 0.0, 0.9, 0.32, 10, [0.12, 0.25, 0.65], true);
+        b.add_cylinder(bx, 24.0, 0.88, 0.92, 0.34, 10, [0.20, 0.22, 0.25], false); // Chime
+    }
+
+    // Bomb site / Hostage zone decals
+    b.add_floor(34.0, 46.0, 40.0, 52.0, 4.21, [0.88, 0.20, 0.15], false);
+    b.add_floor(18.0, 32.0, 24.0, 38.0, 0.01, [0.88, 0.20, 0.15], false);
+
+    // Spawns: CT at South Street facing North (yaw = 90.0), T in Hostage Office facing South (yaw = 270.0)
     let spawns = vec![
-        SpawnPoint { x: 16.0 * s, y: 8.0 * s, z: 0.0, yaw: 0.0, team: 0 },
-        SpawnPoint { x: 24.0 * s, y: 8.0 * s, z: 0.0, yaw: 0.0, team: 0 },
-        SpawnPoint { x: 32.0 * s, y: 8.0 * s, z: 0.0, yaw: 0.0, team: 0 },
-        SpawnPoint { x: 40.0 * s, y: 8.0 * s, z: 0.0, yaw: 0.0, team: 0 },
-        SpawnPoint { x: 16.0 * s, y: 50.0 * s, z: 4.2 * s, yaw: 180.0, team: 1 },
-        SpawnPoint { x: 22.0 * s, y: 50.0 * s, z: 4.2 * s, yaw: 180.0, team: 1 },
-        SpawnPoint { x: 28.0 * s, y: 50.0 * s, z: 4.2 * s, yaw: 180.0, team: 1 },
-        SpawnPoint { x: 38.0 * s, y: 48.0 * s, z: 0.0, yaw: 180.0, team: 1 },
+        SpawnPoint { x: 16.0, y: 7.0, z: 0.18, yaw: 90.0, team: 0 },
+        SpawnPoint { x: 20.0, y: 7.0, z: 0.18, yaw: 90.0, team: 0 },
+        SpawnPoint { x: 24.0, y: 7.0, z: 0.18, yaw: 90.0, team: 0 },
+        SpawnPoint { x: 28.0, y: 7.0, z: 0.18, yaw: 90.0, team: 0 },
+        SpawnPoint { x: 32.0, y: 48.0, z: 4.2, yaw: 270.0, team: 1 },
+        SpawnPoint { x: 36.0, y: 48.0, z: 4.2, yaw: 270.0, team: 1 },
+        SpawnPoint { x: 40.0, y: 48.0, z: 4.2, yaw: 270.0, team: 1 },
+        SpawnPoint { x: 34.0, y: 52.0, z: 4.2, yaw: 270.0, team: 1 },
     ];
 
     let items = vec![
-        ItemRow { id: 1, kind: "health".into(), x: 18.0 * s, y: 12.0 * s, z: 0.0 },
-        ItemRow { id: 2, kind: "health".into(), x: 52.0 * s, y: 14.0 * s, z: 0.0 },
-        ItemRow { id: 3, kind: "health".into(), x: 16.0 * s, y: 52.0 * s, z: 4.2 * s },
-        ItemRow { id: 4, kind: "armour".into(), x: 26.0 * s, y: 36.0 * s, z: 0.0 },
-        ItemRow { id: 5, kind: "armour".into(), x: 32.0 * s, y: 50.0 * s, z: 4.2 * s },
-        ItemRow { id: 6, kind: "ammo_assault".into(), x: 22.0 * s, y: 10.0 * s, z: 0.0 },
-        ItemRow { id: 7, kind: "ammo_assault".into(), x: 44.0 * s, y: 32.0 * s, z: 0.0 },
-        ItemRow { id: 8, kind: "ammo_sniper".into(), x: 20.0 * s, y: 14.0 * s, z: 2.8 * s },
-        ItemRow { id: 9, kind: "clips".into(), x: 32.0 * s, y: 20.0 * s, z: 0.0 },
-        ItemRow { id: 10, kind: "grenade".into(), x: 14.0 * s, y: 38.0 * s, z: 4.2 * s },
+        ItemRow { id: 1, kind: "health".into(), x: 14.0, y: 6.0, z: 0.18 },
+        ItemRow { id: 2, kind: "health".into(), x: 55.0, y: 16.0, z: 0.0 },
+        ItemRow { id: 3, kind: "health".into(), x: 38.0, y: 52.0, z: 4.2 },
+        ItemRow { id: 4, kind: "armour".into(), x: 20.0, y: 36.0, z: 0.0 },
+        ItemRow { id: 5, kind: "armour".into(), x: 32.0, y: 44.0, z: 4.2 },
+        ItemRow { id: 6, kind: "ammo_assault".into(), x: 21.0, y: 15.5, z: 0.0 },
+        ItemRow { id: 7, kind: "ammo_assault".into(), x: 54.0, y: 30.0, z: 0.0 },
+        ItemRow { id: 8, kind: "ammo_sniper".into(), x: 24.0, y: 7.0, z: 7.5 },
+        ItemRow { id: 9, kind: "clips".into(), x: 10.5, y: 40.0, z: 4.2 },
+        ItemRow { id: 10, kind: "grenade".into(), x: 16.0, y: 30.0, z: 9.0 },
     ];
 
     let bounds = WorldBounds {
-        min: [4.0 * s, 4.0 * s, 0.0],
-        max: [60.0 * s, 60.0 * s, 14.0 * s],
-        center: [32.0 * s, 32.0 * s, 5.0 * s],
-        extent: 40.0 * s,
+        min: [4.0, 4.0, 0.0],
+        max: [60.0, 60.0, 14.0],
+        center: [32.0, 32.0, 7.0],
+        extent: 56.0,
     };
 
-    let triangles = builder.render_positions.len() / 9;
+    let triangles = b.render_positions.len() / 9;
 
     World3D {
         info,
         bounds,
-        render_positions: builder.render_positions,
-        render_normals: builder.render_normals,
-        render_colors: builder.render_colors,
-        render_uvs: builder.render_uvs,
+        render_positions: b.render_positions,
+        render_normals: b.render_normals,
+        render_colors: b.render_colors,
+        render_uvs: b.render_uvs,
         triangles,
-        col_vertices: builder.col_vertices,
-        col_indices: builder.col_indices,
+        col_vertices: b.col_vertices,
+        col_indices: b.col_indices,
         spawns,
         items,
         waterlevel: -100.0,
     }
 }
 
-/// Universal 3D Arena Factory: selects appropriate procedural 3D map generator.
+const HD_ASSAULT_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_assault.glb");
+
+fn local_node_matrix(node: &gltf::Node) -> Mat4 {
+    match node.transform() {
+        gltf::scene::Transform::Matrix { matrix } => Mat4::from_cols_array_2d(&matrix),
+        gltf::scene::Transform::Decomposed {
+            translation,
+            rotation,
+            scale,
+        } => Mat4::from_scale_rotation_translation(
+            Vec3::from_array(scale),
+            Quat::from_array(rotation),
+            Vec3::from_array(translation),
+        ),
+    }
+}
+
+fn walk_glb_node(
+    node: &gltf::Node,
+    parent: Mat4,
+    blob: Option<&[u8]>,
+    render_positions: &mut Vec<f32>,
+    render_normals: &mut Vec<f32>,
+    render_colors: &mut Vec<f32>,
+    render_uvs: &mut Vec<f32>,
+    col_vertices: &mut Vec<Point<Real>>,
+    col_indices: &mut Vec<[u32; 3]>,
+) {
+    let world = parent * local_node_matrix(node);
+    let normal_matrix = world.inverse().transpose();
+
+    if let Some(mesh) = node.mesh() {
+        let node_name = node.name().unwrap_or("");
+        let is_non_collider = node_name.contains("Glass")
+            || node_name.contains("Window")
+            || node_name.contains("Lamp")
+            || node_name.contains("Glow")
+            || node_name.contains("Decal")
+            || node_name.contains("Stripe")
+            || node_name.contains("Sign")
+            || node_name.contains("Text")
+            || node_name.contains("Turn")
+            || node_name.contains("Siren")
+            || node_name.contains("Taillight")
+            || node_name.contains("Headlight")
+            || node_name.contains("Arm")
+            || node_name.contains("Vent")
+            || node_name.contains("Rim")
+            || node_name.contains("Hub")
+            || node_name.contains("Latch")
+            || node_name.contains("Divide")
+            || node_name.contains("Cap")
+            || node_name.contains("Hood")
+            || node_name.contains("Mullion")
+            || node_name.contains("Camera")
+            || node_name.contains("Light");
+
+        for prim in mesh.primitives() {
+            let mat_name = prim.material().name().unwrap_or("");
+            let pbr = prim.material().pbr_metallic_roughness();
+            let base_color = pbr.base_color_factor();
+            let emissive = prim.material().emissive_factor();
+            let color = if emissive != [0.0, 0.0, 0.0] {
+                [emissive[0], emissive[1], emissive[2]]
+            } else {
+                [base_color[0], base_color[1], base_color[2]]
+            };
+
+            let is_collider = !is_non_collider
+                && !mat_name.contains("Glass")
+                && !mat_name.contains("Glow")
+                && !mat_name.contains("Lamp")
+                && !mat_name.contains("Indicator")
+                && !mat_name.contains("Taillight");
+
+            let reader = prim.reader(|b| match b.source() {
+                gltf::buffer::Source::Bin => blob,
+                gltf::buffer::Source::Uri(_) => None,
+            });
+
+            let Some(positions) = reader.read_positions() else { continue; };
+            let positions: Vec<[f32; 3]> = positions.collect();
+            let normals: Vec<[f32; 3]> = reader
+                .read_normals()
+                .map(|n| n.collect())
+                .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; positions.len()]);
+            let uvs: Vec<[f32; 2]> = reader
+                .read_tex_coords(0)
+                .map(|t| t.into_f32().collect())
+                .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
+            let indices: Vec<u32> = match reader.read_indices() {
+                Some(read) => read.into_u32().collect(),
+                None => (0..positions.len() as u32).collect(),
+            };
+
+            for chunk in indices.chunks_exact(3) {
+                let (i0, i1, i2) = (chunk[0] as usize, chunk[1] as usize, chunk[2] as usize);
+                if i0 >= positions.len() || i1 >= positions.len() || i2 >= positions.len() {
+                    continue;
+                }
+
+                // glTF coordinates: X is East, Y is Elevation (Up), Z is -North
+                let p0 = world.transform_point3(Vec3::from_array(positions[i0]));
+                let p1 = world.transform_point3(Vec3::from_array(positions[i1]));
+                let p2 = world.transform_point3(Vec3::from_array(positions[i2]));
+
+                let n0 = normal_matrix
+                    .transform_vector3(Vec3::from_array(normals.get(i0).copied().unwrap_or([0.0, 1.0, 0.0])))
+                    .normalize_or_zero();
+                let n1 = normal_matrix
+                    .transform_vector3(Vec3::from_array(normals.get(i1).copied().unwrap_or([0.0, 1.0, 0.0])))
+                    .normalize_or_zero();
+                let n2 = normal_matrix
+                    .transform_vector3(Vec3::from_array(normals.get(i2).copied().unwrap_or([0.0, 1.0, 0.0])))
+                    .normalize_or_zero();
+
+                let uv0 = uvs.get(i0).copied().unwrap_or([0.0, 0.0]);
+                let uv1 = uvs.get(i1).copied().unwrap_or([0.0, 0.0]);
+                let uv2 = uvs.get(i2).copied().unwrap_or([0.0, 0.0]);
+
+                // Render space: x = gltf_x, y = gltf_y (elevation), z = -gltf_z (North)
+                // Winding order inverted: (i0, i2, i1) because of z negation
+                let r_p0 = [p0.x, p0.y, -p0.z];
+                let r_p1 = [p1.x, p1.y, -p1.z];
+                let r_p2 = [p2.x, p2.y, -p2.z];
+
+                let r_n0 = [n0.x, n0.y, -n0.z];
+                let r_n1 = [n1.x, n1.y, -n1.z];
+                let r_n2 = [n2.x, n2.y, -n2.z];
+
+                render_positions.extend_from_slice(&r_p0);
+                render_positions.extend_from_slice(&r_p2);
+                render_positions.extend_from_slice(&r_p1);
+
+                render_normals.extend_from_slice(&r_n0);
+                render_normals.extend_from_slice(&r_n2);
+                render_normals.extend_from_slice(&r_n1);
+
+                render_colors.extend_from_slice(&color);
+                render_colors.extend_from_slice(&color);
+                render_colors.extend_from_slice(&color);
+
+                render_uvs.extend_from_slice(&uv0);
+                render_uvs.extend_from_slice(&uv2);
+                render_uvs.extend_from_slice(&uv1);
+
+                if is_collider {
+                    // Game/Rapier physics coordinates: x = gltf_x, y = -gltf_z (North), z = gltf_y (Elevation)
+                    let g_p0 = [p0.x, -p0.z, p0.y];
+                    let g_p1 = [p1.x, -p1.z, p1.y];
+                    let g_p2 = [p2.x, -p2.z, p2.y];
+
+                    let base_idx = col_vertices.len() as u32;
+                    col_vertices.push(Point::new(g_p0[0], g_p0[1], g_p0[2]));
+                    col_vertices.push(Point::new(g_p2[0], g_p2[1], g_p2[2]));
+                    col_vertices.push(Point::new(g_p1[0], g_p1[1], g_p1[2]));
+                    col_indices.push([base_idx, base_idx + 1, base_idx + 2]);
+                }
+            }
+        }
+    }
+
+    for child in node.children() {
+        walk_glb_node(
+            &child,
+            world,
+            blob,
+            render_positions,
+            render_normals,
+            render_colors,
+            render_uvs,
+            col_vertices,
+            col_indices,
+        );
+    }
+}
+
+pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, String> {
+    let normalised = crate::character::normalise_glb(bytes)?;
+    let gltf = gltf::Gltf::from_slice(&normalised).map_err(|e| format!("Map GLB parse error: {e}"))?;
+    let blob = gltf.blob.as_deref();
+    let document = &gltf.document;
+
+    let mut render_positions = Vec::new();
+    let mut render_normals = Vec::new();
+    let mut render_colors = Vec::new();
+    let mut render_uvs = Vec::new();
+    let mut col_vertices = Vec::new();
+    let mut col_indices = Vec::new();
+
+    for scene in document.scenes() {
+        for node in scene.nodes() {
+            walk_glb_node(
+                &node,
+                Mat4::IDENTITY,
+                blob,
+                &mut render_positions,
+                &mut render_normals,
+                &mut render_colors,
+                &mut render_uvs,
+                &mut col_vertices,
+                &mut col_indices,
+            );
+        }
+    }
+
+    let triangles = render_positions.len() / 9;
+
+    let spawns = vec![
+        SpawnPoint { x: 16.0, y: 7.0, z: 0.18, yaw: 90.0, team: 0 },
+        SpawnPoint { x: 20.0, y: 7.0, z: 0.18, yaw: 90.0, team: 0 },
+        SpawnPoint { x: 24.0, y: 7.0, z: 0.18, yaw: 90.0, team: 0 },
+        SpawnPoint { x: 28.0, y: 7.0, z: 0.18, yaw: 90.0, team: 0 },
+        SpawnPoint { x: 32.0, y: 48.0, z: 4.2, yaw: 270.0, team: 1 },
+        SpawnPoint { x: 36.0, y: 48.0, z: 4.2, yaw: 270.0, team: 1 },
+        SpawnPoint { x: 40.0, y: 48.0, z: 4.2, yaw: 270.0, team: 1 },
+        SpawnPoint { x: 34.0, y: 52.0, z: 4.2, yaw: 270.0, team: 1 },
+    ];
+
+    let items = vec![
+        ItemRow { id: 1, kind: "health".into(), x: 14.0, y: 6.0, z: 0.18 },
+        ItemRow { id: 2, kind: "health".into(), x: 55.0, y: 16.0, z: 0.0 },
+        ItemRow { id: 3, kind: "health".into(), x: 38.0, y: 52.0, z: 4.2 },
+        ItemRow { id: 4, kind: "armour".into(), x: 20.0, y: 36.0, z: 0.0 },
+        ItemRow { id: 5, kind: "armour".into(), x: 32.0, y: 44.0, z: 4.2 },
+        ItemRow { id: 6, kind: "ammo_assault".into(), x: 21.0, y: 15.5, z: 0.0 },
+        ItemRow { id: 7, kind: "ammo_assault".into(), x: 54.0, y: 30.0, z: 0.0 },
+        ItemRow { id: 8, kind: "ammo_sniper".into(), x: 24.0, y: 7.0, z: 7.5 },
+        ItemRow { id: 9, kind: "clips".into(), x: 10.5, y: 40.0, z: 4.2 },
+        ItemRow { id: 10, kind: "grenade".into(), x: 16.0, y: 30.0, z: 9.0 },
+    ];
+
+    let bounds = WorldBounds {
+        min: [4.0, 4.0, 0.0],
+        max: [60.0, 60.0, 14.0],
+        center: [32.0, 32.0, 7.0],
+        extent: 56.0,
+    };
+
+    Ok(World3D {
+        info,
+        bounds,
+        render_positions,
+        render_normals,
+        render_colors,
+        render_uvs,
+        triangles,
+        col_vertices,
+        col_indices,
+        spawns,
+        items,
+        waterlevel: -100.0,
+    })
+}
+
+pub fn load_assault_glb(info: MapInfo) -> Result<World3D, String> {
+    for path in [
+        "../../backend/modules/hassault/maps/hd_assault.glb",
+        "backend/modules/hassault/maps/hd_assault.glb",
+        "assets/maps/hd_assault.glb",
+        "apps/web/public/hd_assault.glb",
+    ] {
+        if let Ok(bytes) = std::fs::read(path) {
+            return load_world_3d_from_glb(&bytes, info);
+        }
+    }
+    load_world_3d_from_glb(HD_ASSAULT_GLB_BYTES, info)
+}
+
+/// Universal 3D Arena Factory: selects appropriate procedural or modeled 3D map generator.
 pub fn create_world_3d(info: MapInfo) -> World3D {
     match info.name.as_str() {
         "hd_junkflea" => create_procedural_junk_flea_3d(info),
         "hd_bank" => create_procedural_bank_3d(info),
-        "hd_assault" => create_procedural_assault_3d(info),
+        "hd_assault" => {
+            match load_assault_glb(info.clone()) {
+                Ok(w) => w,
+                Err(err) => {
+                    eprintln!("hassault: failed to load GLB for hd_assault ({err}), falling back to procedural");
+                    create_procedural_assault_3d(info)
+                }
+            }
+        }
         _ => create_procedural_facility_3d(info),
     }
 }

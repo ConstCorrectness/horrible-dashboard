@@ -1380,7 +1380,7 @@ impl App {
             let parts: Vec<f32> = v.split(',').filter_map(|s| s.trim().parse().ok()).collect();
             if parts.len() >= 4 {
                 if parts.len() >= 5 {
-                    override_pitch = parts[4].to_radians();
+                    override_pitch = parts[4];
                 }
                 Some(hassault_native::world3d::SpawnPoint {
                     x: parts[0],

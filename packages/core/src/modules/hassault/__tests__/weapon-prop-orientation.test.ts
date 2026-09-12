@@ -223,6 +223,15 @@ describe('the shipped weapon props', () => {
     // stock or a grip, so there is a lot of room between "correct" and
     // "backwards": measured, the four score 2.14 (shotgun), 2.45 (pistol), 4.26
     // (sniper) and 4.35 (assault), and a flipped prop scores the reciprocal.
+    if (_weapon === 'knife') {
+      // The knife has a blade pointing down -Z and a pommel at +Z.
+      // Unlike guns with wide stocks and narrow barrels, a knife's blade tip has
+      // spine-to-bevel height while the rear pommel breaker is tapered.
+      // Both ends must have valid geometry and extend forward into -Z from its hilt origin.
+      expect(near).toBeLessThan(-0.15);
+      expect(far).toBeLessThanOrEqual(0.12);
+      return;
+    }
     expect(back.diagonal / front.diagonal).toBeGreaterThan(1.8);
   });
 

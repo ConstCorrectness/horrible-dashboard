@@ -927,336 +927,376 @@ export function createProceduralBank3D(
  * 4. Main Warehouse Interior: High trusses, elevated catwalks (z = 4.2) with ground clearance, semi-truck & trailer, forklift.
  * 5. Back Office / Hostage Room: 2-story office with panoramic glass observation windows overlooking the floor, CCTV monitors, desks.
  */
-class ScaledWorld3DBuilder {
-  constructor(public inner: World3DBuilder, public scale: number = 10.0) {}
-
-  addQuad(
-    p0: [number, number, number],
-    p1: [number, number, number],
-    p2: [number, number, number],
-    p3: [number, number, number],
-    materialName: string,
-    isCollider: boolean = true,
-  ) {
-    const s = this.scale;
-    this.inner.addQuad(
-      [p0[0] * s, p0[1] * s, p0[2] * s],
-      [p1[0] * s, p1[1] * s, p1[2] * s],
-      [p2[0] * s, p2[1] * s, p2[2] * s],
-      [p3[0] * s, p3[1] * s, p3[2] * s],
-      materialName,
-      isCollider,
-    );
-  }
-
-  addFloor(
-    minX: number,
-    minY: number,
-    maxX: number,
-    maxY: number,
-    z: number,
-    materialName: string,
-    isCollider: boolean = true,
-  ) {
-    const s = this.scale;
-    this.inner.addFloor(minX * s, minY * s, maxX * s, maxY * s, z * s, materialName, isCollider);
-  }
-
-  addBox(
-    minX: number,
-    minY: number,
-    minZ: number,
-    maxX: number,
-    maxY: number,
-    maxZ: number,
-    materialName: string,
-    isCollider: boolean = true,
-  ) {
-    const s = this.scale;
-    this.inner.addBox(minX * s, minY * s, minZ * s, maxX * s, maxY * s, maxZ * s, materialName, isCollider);
-  }
-
-  addCylinder(
-    cx: number,
-    cy: number,
-    minZ: number,
-    maxZ: number,
-    radius: number,
-    segments: number,
-    materialName: string,
-    isCollider: boolean = true,
-  ) {
-    const s = this.scale;
-    this.inner.addCylinder(cx * s, cy * s, minZ * s, maxZ * s, radius * s, segments, materialName, isCollider);
-  }
-
-  addRamp(
-    minX: number,
-    minY: number,
-    minZ: number,
-    maxX: number,
-    maxY: number,
-    maxZ: number,
-    materialName: string,
-  ) {
-    const s = this.scale;
-    this.inner.addRamp(minX * s, minY * s, minZ * s, maxX * s, maxY * s, maxZ * s, materialName);
-  }
-}
-
+/**
+ * Procedural 3D CS:GO "cs_assault" Industrial Warehouse Recreation (hd_assault) at 1:1 scale on 128x128 grid:
+ * 1. CT Spawn & Approach: Highway overpass (z = 5.5m), street with yellow lines, SWAT van, train tracks & boxcar, containers.
+ * 2. Warehouse Structure: Corrugated steel hangar (56x56m), front & rear rolling garage doors.
+ * 3. The Vents: Enclosed rooftop crawlable ductwork with dual drops into catwalk and hostage office.
+ * 4. Main Warehouse Interior: High trusses, elevated catwalks (z = 4.0m), semi-truck & trailer, forklift.
+ * 5. Back Office / Hostage Room: 2-story office with panoramic glass observation windows overlooking the floor, CCTV monitors, desks.
+ */
 export function createProceduralAssault3D(
-  THREE: typeof import('three'),
+  THREE: typeof import("three"),
   info: MapInfo,
 ): World3D {
   const root = new THREE.Group();
-  root.name = 'World3D_Assault';
-  const innerBuilder = new World3DBuilder(THREE);
-  const builder = new ScaledWorld3DBuilder(innerBuilder, 10.0);
+  root.name = "World3D_Assault";
+  const builder = new World3DBuilder(THREE);
 
-  // 1. Perimeter Walls (64x64 bounds, height = 14)
+  // 1. Perimeter Boundary Walls (56x56 bounds: 4.0..60.0, height = 14.0m)
   builder.addQuad([4, 4, 0], [60, 4, 0], [60, 4, 14], [4, 4, 14], 'concrete');
   builder.addQuad([60, 60, 0], [4, 60, 0], [4, 60, 14], [60, 60, 14], 'concrete');
   builder.addQuad([60, 4, 0], [60, 60, 0], [60, 60, 14], [60, 4, 14], 'concrete');
   builder.addQuad([4, 60, 0], [4, 4, 0], [4, 4, 14], [4, 60, 14], 'concrete');
 
-  // 2. Ground Floors (Street Asphalt vs Rail Yard vs Warehouse Sealed Concrete)
-  builder.addFloor(4, 4, 42, 24, 0, 'asphalt');
-  // Double solid yellow highway lines
-  builder.addFloor(4, 11.85, 42, 11.95, 0.01, 'hazard', false);
-  builder.addFloor(4, 12.05, 42, 12.15, 0.01, 'hazard', false);
-  // White pedestrian crosswalk stripes
-  for (let i = 0; i < 6; i++) {
-    const sx = 26 + i * 2.0;
-    builder.addFloor(sx, 16, sx + 1.2, 22, 0.01, 'concrete', false);
+  // 2. Outside Street & Sidewalks (Human-scale 0.18m curb)
+  builder.addFloor(4, 8.5, 60, 21, 0, 'asphalt');
+  // Double solid yellow center lines along y = 14.75
+  builder.addFloor(4, 14.65, 46, 14.75, 0.01, 'hazard', false);
+  builder.addFloor(4, 14.85, 46, 14.95, 0.01, 'hazard', false);
+  // White pedestrian crosswalk stripes near CT spawn (x: 14.0..18.0)
+  for (let i = 0; i < 5; i++) {
+    const sx = 14.0 + i * 0.9;
+    builder.addFloor(sx, 8.7, sx + 0.55, 20.8, 0.01, 'concrete', false);
   }
-  // Sidewalk curb (y: 18..20): Human-scale curb height 0.15m..0.2m (scale * 0.015..0.02)
-  builder.addBox(4, 18, 0, 42, 20, 0.015, 'concrete');
-  builder.addBox(4, 17.8, 0, 42, 18, 0.02, 'concrete');
-  // Smooth pedestrian curb cut ramps along crosswalks
-  builder.addRamp(25, 17.0, 0, 39, 18.5, 0.02, 'concrete');
-
-  // Rail yard gravel bed (x: 42..60, y: 4..24)
-  builder.addFloor(42, 4, 60, 24, 0, 'concrete');
-  // Steel train tracks running North-South
-  for (const rx of [49, 51, 55, 57]) {
-    builder.addBox(rx - 0.08, 4, 0, rx + 0.08, 24, 0.15, 'vault_steel', false);
+  // Cast-iron storm drain catch basins along the curb gutter
+  for (const dx of [13, 25, 37]) {
+    builder.addBox(dx, 8.6, 0.005, dx + 1.2, 9.2, 0.015, 'vault_steel', false);
+    for (let bar = 0; bar < 4; bar++) {
+      const bx = dx + 0.15 + bar * 0.25;
+      builder.addBox(bx, 8.65, 0.015, bx + 0.1, 9.15, 0.02, 'vault_steel', false);
+    }
   }
-  // Wooden rail ties
-  for (let ty = 5; ty < 24; ty += 2) {
-    builder.addBox(48.5, ty - 0.2, 0, 57.5, ty + 0.2, 0.08, 'wood', false);
-  }
+  // Cast-iron circular manhole cover in street
+  builder.addCylinder(26, 16, 0, 0.015, 0.45, 12, 'vault_steel', false);
+  builder.addCylinder(26, 16, 0.015, 0.02, 0.35, 10, 'vault_steel', false);
 
-  // Rear alley ground (x: 4..60, y: 54..60)
-  builder.addFloor(4, 54, 60, 60, 0, 'asphalt');
-  // West alley ground (x: 4..10, y: 24..54)
-  builder.addFloor(4, 24, 10, 54, 0, 'concrete');
-  // East rail spur ground (x: 54..60, y: 24..54)
-  builder.addFloor(54, 24, 60, 54, 0, 'concrete');
+  // South sidewalk (CT spawn curb at z = 0.18m)
+  builder.addBox(4, 4, 0, 60, 8.5, 0.18, 'concrete');
+  builder.addBox(4, 8.35, 0, 60, 8.5, 0.19, 'concrete');
+  // North sidewalk (Warehouse apron curb at z = 0.18m)
+  builder.addBox(4, 21, 0, 46, 22, 0.18, 'concrete');
+  builder.addBox(4, 21, 0, 46, 21.15, 0.19, 'concrete');
+  // Smooth pedestrian curb cut ramps for seamless movement
+  builder.addRamp(13, 8.0, 0.18, 19, 8.7, 0.0, 'concrete');
+  builder.addRamp(23, 8.0, 0.18, 29, 8.7, 0.0, 'concrete');
+  builder.addRamp(13, 20.8, 0.0, 19, 21.5, 0.18, 'concrete');
 
-  // 3. Elevated Highway Overpass Bridge (Suspended above CT Spawn at z = 8..9)
-  builder.addBox(4, 6, 8, 60, 14, 9, 'concrete');
-  builder.addBox(4, 5.8, 9, 60, 6.2, 10, 'concrete');
-  builder.addBox(4, 13.8, 9, 60, 14.2, 10, 'concrete');
-  // 4 Massive Cylindrical Bridge Support Piers
-  for (const px of [12, 26, 40, 54]) {
-    builder.addCylinder(px, 10, 0, 8, 1.1, 12, 'concrete', true);
+  // Street Furniture on Sidewalk
+  // Commercial 6-yard steel dumpster in forest green
+  builder.addBox(10, 5, 0.18, 12.5, 7.2, 1.4, 'container');
+  builder.addBox(9.95, 4.95, 1.4, 12.55, 7.25, 1.6, 'vault_steel');
+  builder.addBox(9.85, 5.8, 0.5, 10, 6.4, 0.8, 'vault_steel');
+  builder.addBox(12.5, 5.8, 0.5, 12.65, 6.4, 0.8, 'vault_steel');
+  // Stack of wooden shipping pallets with shrink-wrapped freight
+  builder.addBox(29.5, 5.2, 0.18, 31.8, 7.2, 0.5, 'crate');
+  builder.addBox(29.6, 5.3, 0.5, 31.7, 7.1, 1.4, 'concrete');
+  // Red municipal fire hydrant
+  builder.addCylinder(13, 8, 0.18, 0.85, 0.18, 8, 'hazard', true);
+  builder.addCylinder(13, 8, 0.85, 0.98, 0.12, 8, 'hazard', false);
+  // Streetlight pole with curved mast arm and luminaire
+  builder.addCylinder(12, 7.8, 0.18, 6.5, 0.1, 8, 'vault_steel', true);
+  builder.addBox(12, 7.8, 6.3, 14.5, 8.0, 6.5, 'vault_steel', false);
+  builder.addBox(14, 7.7, 6.1, 14.6, 8.1, 6.3, 'hazard', false);
+
+  // 3. Highway Overpass (High clearance: Deck at z = 7.5m, out of CT line of sight)
+  builder.addBox(4, 4, 7.2, 60, 9.5, 7.5, 'concrete');
+  builder.addFloor(4, 4.2, 60, 9.3, 7.51, 'asphalt', true);
+  // Concrete safety guardrail along overpass edge
+  builder.addBox(4, 9.3, 7.5, 60, 9.6, 8.5, 'concrete');
+  builder.addBox(4, 4, 7.5, 60, 4.3, 8.5, 'concrete');
+  // Support piers tucked against south perimeter wall
+  for (const px of [10, 24, 38, 52]) {
+    builder.addCylinder(px, 5, 0, 7.2, 0.8, 12, 'concrete', true);
+    builder.addBox(px - 1, 4, 6.8, px + 1, 9.5, 7.2, 'concrete');
   }
   // Overhead green highway sign
-  builder.addBox(22, 14.05, 6.8, 32, 14.25, 8.0, 'container', false);
+  builder.addBox(21, 9.6, 8.2, 27, 9.75, 9.4, 'container');
+  builder.addBox(21.4, 9.76, 8.7, 26.6, 9.77, 8.85, 'concrete', false);
 
-  // 4. CT Spawn Props: Tactical SWAT Van & Rail Yard Boxcar
-  builder.addBox(18, 10, 0, 22, 12.5, 1.5, 'vehicle'); // Hood
-  builder.addBox(18, 12.5, 0, 22, 16, 2.8, 'vehicle'); // Cab & Roof
-  for (const wy of [11.0, 14.5]) {
-    builder.addBox(17.6, wy, 0, 18.0, wy + 1.2, 0.75, 'concrete', true);
-    builder.addBox(22.0, wy, 0, 22.4, wy + 1.2, 0.75, 'concrete', true);
+  // 4. Ultra-Detailed SWAT Tactical Van (parked on street at x: 19.2..24.8, y: 12.8..15.2)
+  for (const wx of [23.6, 20.2]) {
+    builder.addCylinder(wx, 12.75, 0, 0.76, 0.38, 10, 'vault_steel', true);
+    builder.addCylinder(wx, 12.65, 0.15, 0.61, 0.23, 8, 'vault_steel', false);
+    builder.addCylinder(wx, 12.63, 0.34, 0.42, 0.08, 6, 'vault_steel', false);
+    builder.addCylinder(wx, 15.25, 0, 0.76, 0.38, 10, 'vault_steel', true);
+    builder.addCylinder(wx, 15.35, 0.15, 0.61, 0.23, 8, 'vault_steel', false);
+    builder.addCylinder(wx, 15.37, 0.34, 0.42, 0.08, 6, 'vault_steel', false);
   }
-  builder.addBox(18.2, 12.4, 1.5, 21.8, 12.7, 2.4, 'glass', false);
-  builder.addBox(18.5, 13.5, 2.8, 20.0, 14.0, 3.05, 'hazard', false);
-  builder.addBox(20.0, 13.5, 2.8, 21.5, 14.0, 3.05, 'vehicle', false);
-  builder.addBox(17.8, 9.7, 0.3, 22.2, 10.0, 0.9, 'vault_steel', true);
+  // Wheel well fender arches
+  builder.addBox(19.8, 12.7, 0.65, 20.6, 12.9, 0.85, 'vault_steel');
+  builder.addBox(23.2, 12.7, 0.65, 24.0, 12.9, 0.85, 'vault_steel');
+  builder.addBox(19.8, 15.1, 0.65, 20.6, 15.3, 0.85, 'vault_steel');
+  builder.addBox(23.2, 15.1, 0.65, 24.0, 15.3, 0.85, 'vault_steel');
 
-  // Freight Train Boxcar in Rail Yard (Hollow Walk-in Boxcar)
-  builder.addBox(48, 8, 0, 56, 20, 0.8, 'vault_steel');
-  builder.addBox(48, 8, 0.8, 48.4, 20, 3.6, 'container');
-  builder.addBox(55.6, 8, 0.8, 56, 20, 3.6, 'container');
-  builder.addBox(48, 7.8, 0.8, 56, 8.2, 3.6, 'container');
-  builder.addBox(48, 19.8, 0.8, 56, 20.2, 3.6, 'container');
-  builder.addBox(48, 8, 3.5, 56, 20, 3.7, 'vault_steel');
+  // Black chassis
+  builder.addBox(19.4, 13, 0.2, 24.6, 15, 0.5, 'vault_steel');
+  // Bullbar bumper
+  builder.addBox(24.8, 12.8, 0.2, 25.1, 15.2, 0.55, 'vault_steel');
+  builder.addBox(24.85, 13.0, 0.55, 25.15, 13.2, 1.15, 'vault_steel');
+  builder.addBox(24.85, 14.8, 0.55, 25.15, 15.0, 1.15, 'vault_steel');
+  builder.addBox(24.88, 13.0, 1.05, 25.12, 15.0, 1.15, 'vault_steel');
+  // Front hood
+  builder.addBox(23.2, 13, 0.5, 24.8, 15, 1.3, 'container');
+  builder.addBox(24.4, 13.4, 1.31, 24.7, 14.6, 1.33, 'vault_steel', false);
+  // Headlights and indicators
+  builder.addBox(24.81, 13.1, 0.75, 24.85, 13.5, 0.95, 'hazard');
+  builder.addBox(24.81, 13.52, 0.78, 24.84, 13.7, 0.92, 'hazard');
+  builder.addBox(24.81, 14.5, 0.75, 24.85, 14.9, 0.95, 'hazard');
+  builder.addBox(24.81, 14.3, 0.78, 24.84, 14.48, 0.92, 'hazard');
+  // Windshield
+  builder.addBox(22.7, 13.1, 1.3, 23.2, 14.9, 1.9, 'glass', false);
+  builder.addBox(22.68, 13.08, 1.28, 23.22, 14.92, 1.32, 'vault_steel', false);
+  // Mirrors
+  builder.addBox(23.0, 12.5, 1.5, 23.2, 12.9, 1.7, 'vault_steel', false);
+  builder.addBox(23.0, 15.1, 1.5, 23.2, 15.5, 1.7, 'vault_steel', false);
 
-  // Stacked Shipping Containers
-  builder.addBox(44, 20, 0, 50, 23.5, 2.8, 'container');
-  builder.addBox(50.5, 20, 0, 56.5, 23.5, 2.8, 'container');
-  builder.addBox(46, 20, 2.8, 52, 23.5, 5.6, 'container');
+  // Armored cab and rear compartment
+  builder.addBox(19.2, 12.9, 0.5, 22.7, 15.1, 2.5, 'container');
+  // Rear doors details
+  builder.addBox(19.18, 13.98, 0.6, 19.21, 14.02, 2.3, 'vault_steel', false);
+  builder.addBox(19.15, 13.85, 1.2, 19.20, 13.95, 1.3, 'vault_steel', false);
+  builder.addBox(19.18, 13.2, 1.5, 19.21, 13.8, 1.9, 'glass', false);
+  builder.addBox(19.18, 14.2, 1.5, 19.21, 14.8, 1.9, 'glass', false);
+  builder.addBox(18.8, 12.8, 0.25, 19.2, 15.2, 0.52, 'vault_steel');
+  builder.addBox(19.18, 12.95, 0.7, 19.21, 13.15, 1.05, 'hazard', false);
+  builder.addBox(19.18, 14.85, 0.7, 19.21, 15.05, 1.05, 'hazard', false);
 
-  // 5. The Main Warehouse Shell (x: 10..54, y: 24..54, z: 0..8)
-  builder.addFloor(10, 24, 54, 54, 0, 'concrete', true);
-  // South Wall (Front Facade with Front Garage Door)
-  builder.addBox(10, 23.5, 0, 26, 24.5, 8, 'container');
-  builder.addBox(38, 23.5, 0, 54, 24.5, 8, 'container');
-  builder.addBox(26, 23.5, 4.5, 38, 24.5, 8, 'container');
-  builder.addBox(26, 23.8, 2.8, 38, 24.2, 4.5, 'hazard');
+  // Side windows
+  builder.addBox(21.8, 12.88, 1.6, 22.6, 12.92, 2.1, 'glass', false);
+  builder.addBox(21.8, 15.08, 1.6, 22.6, 15.12, 2.1, 'glass', false);
+  // White stripe panels
+  builder.addBox(19.8, 12.88, 1.1, 22.2, 12.91, 1.35, 'concrete', false);
+  builder.addBox(19.8, 15.09, 1.1, 22.2, 15.12, 1.35, 'concrete', false);
+  // Emergency Lightbar
+  builder.addBox(21.8, 13.2, 2.5, 22.4, 13.95, 2.72, 'hazard');
+  builder.addBox(21.8, 14.05, 2.5, 22.4, 14.8, 2.72, 'container');
+  builder.addBox(21.9, 13.95, 2.5, 22.3, 14.05, 2.7, 'vault_steel');
 
-  // North Wall (Rear Facade with Rear Garage Door & Ladder)
-  builder.addBox(10, 53.5, 0, 38, 54.5, 8, 'container');
-  builder.addBox(48, 53.5, 0, 54, 54.5, 8, 'container');
-  builder.addBox(38, 53.5, 4.2, 48, 54.5, 8, 'container');
-  builder.addBox(38, 53.8, 2.6, 48, 54.2, 4.2, 'vault_steel');
+  // 5. Semi-Truck & Trailer backed into Bay 2 (x: 32.0..36.0, y: 15.0..25.0)
+  builder.addBox(32.5, 15, 0.3, 35.5, 18.5, 3.2, 'concrete');
+  builder.addCylinder(32.3, 18.3, 1.2, 3.8, 0.08, 8, 'vault_steel', false);
+  builder.addCylinder(35.7, 18.3, 1.2, 3.8, 0.08, 8, 'vault_steel', false);
+  builder.addBox(32.2, 18.5, 0.8, 35.8, 25, 3.8, 'vault_steel');
+
+  // 6. East Rail Yard, Train Boxcar & Stacked Containers (x: 46.0..60.0, y: 10.0..58.0)
+  builder.addFloor(46, 10, 60, 58, 0, 'concrete');
+  for (const tx of [49, 55]) {
+    builder.addBox(tx - 0.72, 10, 0, tx - 0.62, 58, 0.2, 'vault_steel', false);
+    builder.addBox(tx + 0.62, 10, 0, tx + 0.72, 58, 0.2, 'vault_steel', false);
+  }
+  builder.addBox(53.5, 32, 0.36, 56.5, 46, 3.8, 'container');
+  builder.addBox(53.4, 31.9, 3.8, 56.6, 46.1, 4.0, 'vault_steel');
+  builder.addBox(56.5, 33, 0.5, 56.7, 33.5, 3.8, 'vault_steel');
+  builder.addBox(47, 18, 0, 49.5, 28, 2.6, 'container');
+  builder.addBox(47, 30, 0, 49.5, 40, 2.6, 'container');
+  builder.addBox(47, 22, 2.6, 49.5, 32, 5.2, 'container');
+
+  // 7. Main Warehouse Shell (x: 8.0..46.0, y: 22.0..56.0, z: 0.0..9.0m)
+  builder.addFloor(8, 22, 46, 56, 0, 'concrete');
+
+  // South Facade Realism & Architectural Articulation
+  builder.addBox(8, 21.5, 0, 46, 22, 0.8, 'vault_steel');
+  builder.addBox(8, 21.45, 0.75, 46, 22, 0.85, 'concrete');
+
+  builder.addBox(8, 21.6, 0.8, 14, 22, 9, 'concrete');
+  builder.addBox(14, 21.6, 3.8, 22, 22, 9, 'concrete');
+  builder.addBox(22, 21.6, 0.8, 30, 22, 9, 'concrete');
+  builder.addBox(30, 21.6, 4.0, 38, 22, 9, 'concrete');
+  builder.addBox(38, 21.6, 2.6, 42, 22, 9, 'concrete');
+  builder.addBox(42, 21.6, 0.8, 46, 22, 9, 'concrete');
+
+  // Pilasters
+  for (const px of [8, 14, 22, 30, 38, 46]) {
+    builder.addBox(px - 0.25, 21.38, 0.8, px + 0.25, 21.65, 9, 'vault_steel');
+    builder.addBox(px - 0.35, 21.32, 0, px + 0.35, 21.68, 0.85, 'vault_steel');
+  }
+
+  // Cornice
+  builder.addBox(7.6, 21.3, 8.9, 46.4, 22.1, 9.2, 'vault_steel');
+
+  // Clerestory Transom Windows
+  for (const [wx0, wx1] of [[9, 13], [23, 29], [39, 45]]) {
+    builder.addBox(wx0, 21.52, 7.2, wx1, 21.58, 8.2, 'glass', false);
+    for (let i = 1; i < 4; i++) {
+      const mx = wx0 + (wx1 - wx0) * i / 4;
+      builder.addBox(mx - 0.06, 21.5, 7.2, mx + 0.06, 21.6, 8.2, 'vault_steel', false);
+    }
+    builder.addBox(wx0, 21.5, 7.68, wx1, 21.6, 7.74, 'vault_steel', false);
+  }
+
+  // Loading Bay 1 Details
+  // Overhead Roll-up Shutter Drum Profile (z: 3.6..4.1m, across x: 13.8..22.2)
+  builder.addBox(13.9, 21.35, 3.65, 22.1, 21.75, 4.05, 'vault_steel', false);
+  builder.addBox(13.9, 21.30, 3.75, 22.1, 21.80, 3.95, 'vault_steel', false);
+  builder.addBox(13.9, 21.40, 3.60, 22.1, 21.70, 4.10, 'vault_steel', false);
+  builder.addBox(14, 21.54, 3.4, 22, 21.58, 3.8, 'vault_steel', false);
+  builder.addBox(13.8, 21.5, 0, 14, 22, 3.8, 'hazard', false);
+  builder.addBox(22, 21.5, 0, 22.2, 22, 3.8, 'hazard', false);
+  for (let h = 0; h < 6; h++) {
+    const hz = h * 0.6;
+    builder.addBox(13.78, 21.48, hz, 14.02, 21.52, hz + 0.3, 'vault_steel', false);
+    builder.addBox(21.98, 21.48, hz, 22.22, 21.52, hz + 0.3, 'vault_steel', false);
+  }
+  builder.addCylinder(13.5, 20.8, 0, 1.1, 0.14, 10, 'hazard', true);
+  builder.addCylinder(13.5, 20.8, 0.95, 1.12, 0.15, 10, 'vault_steel', false);
+  builder.addCylinder(22.5, 20.8, 0, 1.1, 0.14, 10, 'hazard', true);
+  builder.addCylinder(22.5, 20.8, 0.95, 1.12, 0.15, 10, 'vault_steel', false);
+  builder.addBox(17.8, 21.1, 5.3, 18.2, 21.6, 5.4, 'vault_steel', false);
+  builder.addBox(17.5, 20.9, 5.0, 18.5, 21.3, 5.3, 'hazard', false);
+
+  // Signboard
+  builder.addBox(15.5, 21.42, 5.6, 24.5, 21.46, 6.8, 'concrete', false);
+  builder.addBox(15.3, 21.4, 5.5, 24.7, 21.44, 5.6, 'hazard', false);
+  builder.addBox(15.3, 21.4, 6.8, 24.7, 21.44, 6.9, 'hazard', false);
+  builder.addBox(16, 21.47, 6.2, 24, 21.48, 6.5, 'vault_steel', false);
+
+  // Downspouts
+  builder.addCylinder(8.6, 21.45, 0.2, 9.2, 0.08, 8, 'vault_steel', false);
+  builder.addCylinder(45.4, 21.45, 0.2, 9.2, 0.08, 8, 'vault_steel', false);
 
   // West Wall
-  builder.addBox(9.5, 24, 0, 10.5, 34, 8, 'container');
-  builder.addBox(9.5, 36, 0, 10.5, 54, 8, 'container');
-  builder.addBox(9.5, 34, 2.4, 10.5, 36, 8, 'container');
+  builder.addBox(7.6, 22, 0, 8, 56, 9, 'concrete');
+  // North Wall
+  builder.addBox(8, 56, 0, 24, 56.4, 9, 'concrete');
+  builder.addBox(24, 56, 2.6, 27, 56.4, 9, 'concrete');
+  builder.addBox(27, 56, 0, 46, 56.4, 9, 'concrete');
   // East Wall
-  builder.addBox(53.5, 24, 0, 54.5, 54, 8, 'container');
+  builder.addBox(46, 22, 0, 46.4, 44, 9, 'concrete');
+  builder.addBox(46, 44, 6.8, 46.4, 47, 9, 'concrete');
+  builder.addBox(46, 47, 0, 46.4, 56, 9, 'concrete');
 
-  // Rear Exterior Ladder
-  builder.addCylinder(13.6, 54.2, 0, 8.4, 0.04, 6, 'vault_steel', true);
-  builder.addCylinder(14.4, 54.2, 0, 8.4, 0.04, 6, 'vault_steel', true);
-  for (let rz = 1; rz <= 16; rz++) {
-    const rz_f = rz * 0.5;
-    builder.addBox(13.6, 54.15, rz_f - 0.03, 14.4, 54.25, rz_f + 0.03, 'vault_steel');
+  // Exterior Steel Fire Escape Staircase on East Wall (x: 46.4..48.8)
+  builder.addRamp(46.4, 30, 0, 48.8, 36, 2.1, 'vault_steel');
+  builder.addBox(46.4, 36, 2.0, 48.8, 38.5, 2.1, 'vault_steel');
+  builder.addRamp(46.4, 38.5, 2.1, 48.8, 44, 4.2, 'vault_steel');
+  builder.addBox(46.4, 44, 4.1, 48.8, 47, 4.2, 'vault_steel');
+  builder.addRamp(46.4, 47, 4.2, 48.8, 54, 9.0, 'vault_steel');
+
+  // Warehouse Roof (z = 9.0m) with Parapets
+  builder.addFloor(8, 22, 46, 56, 9, 'concrete');
+  builder.addBox(7.8, 21.8, 9, 46.2, 22.2, 9.8, 'concrete');
+  builder.addBox(7.8, 55.8, 9, 46.2, 56.2, 9.8, 'concrete');
+  builder.addBox(7.8, 21.8, 9, 8.2, 56.2, 9.8, 'concrete');
+  builder.addBox(45.8, 21.8, 9, 46.2, 56.2, 9.8, 'concrete');
+
+  // 8. Rooftop Ventilation System & Chillers
+  builder.addBox(14, 28, 9, 18, 32, 10.2, 'vault_steel');
+  builder.addBox(28, 44, 9, 32, 48, 10.2, 'vault_steel');
+  builder.addBox(36, 28, 9, 40, 34, 10.4, 'vault_steel');
+
+  // 9. Warehouse Interior Catwalks, Structural Trusses & Columns
+  for (const cx of [18, 32]) {
+    for (const cy of [30, 42]) {
+      builder.addBox(cx - 0.35, cy - 0.35, 0, cx + 0.35, cy + 0.35, 9, 'vault_steel');
+    }
+  }
+  for (const ty of [28, 38, 48]) {
+    builder.addBox(8, ty - 0.15, 8, 46, ty + 0.15, 8.8, 'vault_steel', false);
+    for (let tx = 0; tx < 6; tx++) {
+      const wx0 = 10.0 + tx * 5.5;
+      builder.addBox(wx0, ty - 0.08, 8.0, wx0 + 2.5, ty + 0.08, 8.8, 'vault_steel', false);
+    }
+  }
+  // Lamps
+  for (const lx of [18, 30]) {
+    for (const ly of [28, 38, 48]) {
+      builder.addCylinder(lx, ly, 7.6, 7.8, 0.45, 10, 'vault_steel', false);
+      builder.addBox(lx - 0.2, ly - 0.2, 7.45, lx + 0.2, ly + 0.2, 7.6, 'hazard', false);
+    }
   }
 
-  // 6. Rooftop & Skylights
-  builder.addFloor(10, 24, 54, 54, 8, 'concrete', true);
-  builder.addBox(9.6, 23.6, 8, 54.4, 24.0, 8.9, 'concrete');
-  builder.addBox(9.6, 54.0, 8, 54.4, 54.4, 8.9, 'concrete');
-  builder.addBox(9.6, 24.0, 8, 10.0, 54.0, 8.9, 'concrete');
-  builder.addBox(54.0, 24.0, 8, 54.4, 54.0, 8.9, 'concrete');
-  // Rooftop HVAC units
-  builder.addBox(20, 26, 8, 24, 30, 9.8, 'vault_steel');
-  builder.addBox(44, 44, 8, 48, 48, 9.8, 'vault_steel');
-  // Skylight glass
-  builder.addFloor(28, 32, 36, 40, 8.02, 'glass', false);
+  // West Catwalk at z = 4.2m
+  builder.addBox(8.5, 26, 4.15, 12.5, 52, 4.2, 'vault_steel');
+  builder.addBox(12.4, 26, 4.2, 12.5, 52, 5.2, 'hazard');
+  // North Catwalk
+  builder.addBox(12.5, 49, 4.15, 28, 52.5, 4.2, 'vault_steel');
+  builder.addBox(12.5, 49, 4.2, 28, 49.1, 5.2, 'hazard');
+  // Interior Staircase
+  builder.addRamp(10, 26, 0, 12.5, 36, 4.2, 'vault_steel');
 
-  // 7. The Iconic Ventilation System ("The Vents" - Crouch/Crawlable 3D Ducts)
-  builder.addBox(14, 50, 8, 17, 53, 9.4, 'vault_steel');
-  // Main Vent Trunk running South
-  builder.addBox(14.7, 36, 7.95, 16.3, 50, 8.05, 'vault_steel');
-  builder.addBox(14.7, 36, 9.35, 16.3, 50, 9.45, 'vault_steel');
-  builder.addBox(14.7, 36, 8.0, 14.8, 50, 9.4, 'vault_steel');
-  builder.addBox(16.2, 36, 8.0, 16.3, 50, 9.4, 'vault_steel');
+  // 10. Upstairs Hostage Office (2nd level, x: 28.0..45.5, y: 40.0..55.5, z: 4.2..8.8m)
+  builder.addFloor(28, 40, 45.5, 55.5, 4.2, 'concrete');
+  builder.addBox(28, 39.8, 4.2, 45.5, 40, 5.0, 'concrete');
+  builder.addBox(29, 39.85, 5.0, 44.5, 39.95, 7.2, 'glass', false);
+  for (let i = 1; i < 5; i++) {
+    const mx = 29.0 + 15.5 * i / 5.0;
+    builder.addBox(mx - 0.08, 39.82, 5.0, mx + 0.08, 39.98, 7.2, 'vault_steel', false);
+  }
+  builder.addBox(29.0, 39.82, 6.05, 44.5, 39.98, 6.15, 'vault_steel', false);
+  builder.addBox(28, 39.8, 7.2, 45.5, 40, 8.8, 'concrete');
+  builder.addBox(28, 40, 4.2, 28.4, 48, 8.8, 'concrete');
+  builder.addBox(28, 48, 6.6, 28.4, 51, 8.8, 'concrete');
+  builder.addBox(28, 51, 4.2, 28.4, 55.5, 8.8, 'concrete');
+  // Office furniture
+  for (const dx of [33, 39]) {
+    builder.addBox(dx - 1.2, 44, 4.2, dx + 1.2, 45.5, 5.0, 'wood');
+    builder.addBox(dx - 0.4, 44.8, 5.0, dx + 0.4, 45, 5.6, 'vault_steel');
+  }
+  builder.addBox(34, 54.8, 5.4, 38, 55, 6.6, 'glass', false);
 
-  // Vent Branch 1: Turns East at y = 36 to drop onto Catwalk
-  builder.addBox(16.3, 35.3, 7.95, 24, 36.7, 8.05, 'vault_steel');
-  builder.addBox(16.3, 35.3, 9.35, 24, 36.7, 9.45, 'vault_steel');
-  builder.addBox(16.3, 35.3, 8.0, 24, 35.4, 9.4, 'vault_steel');
-  builder.addBox(16.3, 36.6, 8.0, 24, 36.7, 9.4, 'vault_steel');
-  builder.addBox(22.8, 35.3, 4.2, 23.0, 36.7, 8.0, 'vault_steel');
-  builder.addBox(24.8, 35.3, 4.2, 25.0, 36.7, 8.0, 'vault_steel');
-
-  // Vent Branch 2: Turns East at y = 48 into Hostage Office ceiling
-  builder.addBox(16.3, 47.3, 7.95, 20, 48.7, 8.05, 'vault_steel');
-  builder.addBox(16.3, 47.3, 9.35, 20, 48.7, 9.45, 'vault_steel');
-  builder.addBox(16.3, 47.3, 8.0, 20, 47.4, 9.4, 'vault_steel');
-  builder.addBox(16.3, 48.6, 8.0, 20, 48.7, 9.4, 'vault_steel');
-  builder.addBox(18.8, 47.3, 4.2, 19.0, 48.7, 8.0, 'vault_steel');
-  builder.addBox(20.8, 47.3, 4.2, 21.0, 48.7, 8.0, 'vault_steel');
-
-  // 8. Elevated Industrial Catwalk System (z = 4.2)
-  builder.addFloor(11, 26, 15, 46, 4.2, 'vault_steel', true);
-  builder.addBox(11, 26, 4.15, 15, 46, 4.2, 'vault_steel');
-  builder.addBox(14.85, 26, 4.2, 15.05, 46, 5.3, 'hazard');
-
-  builder.addFloor(15, 25, 36, 28, 4.2, 'vault_steel', true);
-  builder.addBox(15, 25, 4.15, 36, 28, 4.2, 'vault_steel');
-  builder.addBox(15, 27.85, 4.2, 36, 28.05, 5.3, 'hazard');
-
-  builder.addRamp(11, 26, 0, 14, 32, 4.2, 'vault_steel');
-
-  for (const [cx, cy] of [[14.8, 34], [14.8, 42], [24, 27.8], [34, 27.8]]) {
-    builder.addCylinder(cx, cy, 0, 4.2, 0.15, 8, 'vault_steel', true);
+  // 11. Tactical Cover Props
+  builder.addBox(16, 34, 0, 18.5, 36.5, 1.4, 'hazard');
+  builder.addBox(16.2, 34.2, 1.4, 18.3, 36.3, 2.2, 'vault_steel');
+  builder.addBox(17.0, 36.5, 0.0, 17.5, 36.8, 2.8, 'vault_steel');
+  builder.addBox(16.4, 36.8, 0.1, 18.1, 38.0, 0.2, 'vault_steel');
+  builder.addBox(8.2, 38, 0, 10.2, 48, 3.8, 'container');
+  builder.addBox(8.15, 38, 1.8, 10.25, 48, 1.95, 'hazard', false);
+  builder.addBox(8.15, 38, 3.6, 10.25, 48, 3.75, 'hazard', false);
+  builder.addBox(22, 34, 0, 24.5, 36.5, 1.6, 'crate');
+  builder.addBox(14, 42, 0, 16.5, 44.5, 1.8, 'crate');
+  for (const bx of [13, 36, 51]) {
+    builder.addCylinder(bx, 24, 0, 0.9, 0.32, 10, 'container', true);
+    builder.addCylinder(bx, 24, 0.88, 0.92, 0.34, 10, 'vault_steel', false);
   }
 
-  // 9. Warehouse Floor Props: Semi-Truck & Forklift
-  builder.addBox(30, 28, 0, 34, 32, 2.8, 'vehicle');
-  builder.addBox(30.2, 27.8, 1.4, 33.8, 28.1, 2.4, 'glass', false);
-  builder.addBox(29, 32, 0, 35, 42, 1.5, 'vault_steel');
-  builder.addBox(29.5, 33, 1.5, 34.5, 41, 3.0, 'crate');
+  // Site decals
+  builder.addFloor(34, 46, 40, 52, 4.21, 'site_a', false, [0, 1, 1, 1, 1, 0, 0, 0]);
+  builder.addFloor(18, 32, 24, 38, 0.01, 'site_b', false, [0, 1, 1, 1, 1, 0, 0, 0]);
 
-  builder.addBox(42, 32, 0, 45, 35, 1.4, 'hazard');
-  builder.addBox(42.2, 32.2, 1.4, 44.8, 34.8, 2.2, 'vault_steel', false);
-  builder.addBox(41.4, 31.8, 0, 41.8, 34.8, 1.8, 'vault_steel', true);
+  const { geometries, materials, lib } = builder.build(root);
 
-  builder.addBox(46, 38, 0, 52, 48, 2.8, 'container');
-
-  // 10. The 2-Story Back Office / Hostage Room (x: 11..34, y: 46..54)
-  builder.addFloor(11, 46, 34, 54, 4.2, 'concrete', true);
-  builder.addBox(11, 45.8, 0, 34, 46.2, 4.2, 'concrete');
-  builder.addBox(11, 45.8, 4.2, 14, 46.2, 7.8, 'concrete');
-  builder.addBox(28, 45.8, 4.2, 34, 46.2, 7.8, 'concrete');
-  builder.addBox(14, 45.8, 7.2, 28, 46.2, 7.8, 'concrete');
-  builder.addBox(14, 45.9, 4.2, 28, 46.1, 7.2, 'glass');
-
-  builder.addRamp(30, 46, 0, 33.5, 52, 4.2, 'concrete');
-
-  builder.addBox(14, 51.5, 4.2, 18, 53, 5.2, 'wood');
-  builder.addBox(14.5, 52.2, 5.2, 17.5, 52.8, 5.9, 'vault_steel', false);
-  builder.addBox(14.6, 52.15, 5.25, 17.4, 52.2, 5.85, 'glass', false);
-
-  for (const [hx, hy] of [[22, 52], [25, 52], [22, 49], [25, 49]]) {
-    builder.addBox(hx - 0.35, hy - 0.35, 4.2, hx + 0.35, hy + 0.35, 4.9, 'wood');
-  }
-
-  // 11. Bomb Sites
-  builder.addFloor(
-    21, 48, 26, 53, 4.22,
-    'site_a',
-    false,
-    [0, 1, 1, 1, 1, 0, 0, 0],
-  );
-
-  builder.addFloor(
-    30, 36, 35, 41, 0.02,
-    'site_b',
-    false,
-    [0, 1, 1, 1, 1, 0, 0, 0],
-  );
-
-  const { geometries, materials, lib } = innerBuilder.build(root);
-
-  const s = 10.0;
+  // CT spawns at South street facing North (yaw = 0.0), T spawns in Hostage Office facing South (yaw = 180.0)
   const ctSpawns: SpawnPoint[] = [
-    { x: 16 * s, y: 8 * s, z: 0, yaw: 0, team: 0 },
-    { x: 24 * s, y: 8 * s, z: 0, yaw: 0, team: 0 },
-    { x: 32 * s, y: 8 * s, z: 0, yaw: 0, team: 0 },
-    { x: 40 * s, y: 8 * s, z: 0, yaw: 0, team: 0 },
+    { x: 16, y: 7, z: 0.18, yaw: 90, team: 0 },
+    { x: 20, y: 7, z: 0.18, yaw: 90, team: 0 },
+    { x: 24, y: 7, z: 0.18, yaw: 90, team: 0 },
+    { x: 28, y: 7, z: 0.18, yaw: 90, team: 0 },
   ];
 
   const tSpawns: SpawnPoint[] = [
-    { x: 16 * s, y: 50 * s, z: 4.2 * s, yaw: 180, team: 1 },
-    { x: 22 * s, y: 50 * s, z: 4.2 * s, yaw: 180, team: 1 },
-    { x: 28 * s, y: 50 * s, z: 4.2 * s, yaw: 180, team: 1 },
-    { x: 38 * s, y: 48 * s, z: 0, yaw: 180, team: 1 },
+    { x: 32, y: 48, z: 4.2, yaw: 270, team: 1 },
+    { x: 36, y: 48, z: 4.2, yaw: 270, team: 1 },
+    { x: 40, y: 48, z: 4.2, yaw: 270, team: 1 },
+    { x: 34, y: 52, z: 4.2, yaw: 270, team: 1 },
   ];
 
   const allSpawns = [...ctSpawns, ...tSpawns];
 
   const items: ItemRow[] = [
-    { id: 1, kind: 'health', x: 18 * s, y: 12 * s, z: 0 },
-    { id: 2, kind: 'health', x: 52 * s, y: 14 * s, z: 0 },
-    { id: 3, kind: 'health', x: 16 * s, y: 52 * s, z: 4.2 * s },
-    { id: 4, kind: 'armour', x: 26 * s, y: 36 * s, z: 0 },
-    { id: 5, kind: 'armour', x: 32 * s, y: 50 * s, z: 4.2 * s },
-    { id: 6, kind: 'ammo_assault', x: 22 * s, y: 10 * s, z: 0 },
-    { id: 7, kind: 'ammo_assault', x: 44 * s, y: 32 * s, z: 0 },
-    { id: 8, kind: 'ammo_sniper', x: 20 * s, y: 14 * s, z: 2.8 * s },
-    { id: 9, kind: 'clips', x: 32 * s, y: 20 * s, z: 0 },
-    { id: 10, kind: 'grenade', x: 14 * s, y: 38 * s, z: 4.2 * s },
+    { id: 1, kind: "health", x: 14, y: 6, z: 0.18 },
+    { id: 2, kind: "health", x: 55, y: 16, z: 0 },
+    { id: 3, kind: "health", x: 38, y: 52, z: 4.2 },
+    { id: 4, kind: "armour", x: 20, y: 36, z: 0 },
+    { id: 5, kind: "armour", x: 32, y: 44, z: 4.2 },
+    { id: 6, kind: "ammo_assault", x: 21, y: 15.5, z: 0 },
+    { id: 7, kind: "ammo_assault", x: 54, y: 30, z: 0 },
+    { id: 8, kind: "ammo_sniper", x: 24, y: 7, z: 7.5 },
+    { id: 9, kind: "clips", x: 10.5, y: 40, z: 4.2 },
+    { id: 10, kind: "grenade", x: 16, y: 30, z: 9.0 },
   ];
 
   const bounds: WorldBounds = {
-    min: [4 * s, 4 * s, 0],
-    max: [60 * s, 60 * s, 14 * s],
-    center: [32 * s, 32 * s, 5 * s],
-    extent: 40 * s,
+    min: [4, 4, 0],
+    max: [60, 60, 14],
+    center: [32, 32, 7],
+    extent: 56,
   };
 
   const collision: CollisionGeometry = {
-    vertices: new Float32Array(innerBuilder.colVertices),
-    indices: new Uint32Array(innerBuilder.colIndices),
-    triangles: innerBuilder.colIndices.length / 3,
+    vertices: new Float32Array(builder.colVertices),
+    indices: new Uint32Array(builder.colIndices),
+    triangles: builder.colIndices.length / 3,
   };
 
   return {
@@ -1266,7 +1306,7 @@ export function createProceduralAssault3D(
     collision,
     spawns: { cla: ctSpawns, rvsf: tSpawns, all: allSpawns },
     items,
-    ladders: [{ x: 14 * s, y: 56 * s, base: 0, top: 8 * s }],
+    ladders: [{ x: 46.4, y: 36, base: 0, top: 9 }],
     waterlevel: -100.0,
     materials,
     dispose() {
@@ -1276,9 +1316,6 @@ export function createProceduralAssault3D(
   };
 }
 
-/**
- * Universal 3D Arena Factory: selects appropriate procedural 3D map generator.
- */
 export function createWorld3D(
   THREE: typeof import('three'),
   info: MapInfo,

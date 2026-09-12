@@ -10,7 +10,14 @@
 import type * as THREE from 'three';
 
 import { currentHitbox } from './hitbox';
-import { CharacterAnimator, CharacterModel, loadOperator, type OperatorAsset } from './models';
+import {
+  CharacterAnimator,
+  CharacterModel,
+  loadOperator,
+  OPERATOR_CT_URL,
+  OPERATOR_T_URL,
+  type OperatorAsset,
+} from './models';
 import type { PlayerRow } from './net';
 
 /**
@@ -56,26 +63,35 @@ export class AvatarPool {
    * model is still downloading is missing its bodies for a moment rather than
    * throwing — and hitboxes, which need no asset, keep drawing throughout.
    */
-  private asset: OperatorAsset | null = null;
+  private assetCT: OperatorAsset | null = null;
+  private assetT: OperatorAsset | null = null;
   private assetFailed = false;
 
   constructor(
     private readonly three: typeof THREE,
     private readonly scene: THREE.Scene,
   ) {
-    loadOperator()
+    loadOperator(OPERATOR_CT_URL)
       .then((asset) => {
-        this.asset = asset;
+        this.assetCT = asset;
       })
       .catch((err) => {
         this.assetFailed = true;
-        console.error('hassault: operator model failed to load; players will not be drawn', err);
+        console.error('hassault: CT operator model failed to load; players will not be drawn', err);
+      });
+
+    loadOperator(OPERATOR_T_URL)
+      .then((asset) => {
+        this.assetT = asset;
+      })
+      .catch((err) => {
+        console.warn('hassault: T operator model failed to load; will fall back to CT', err);
       });
   }
 
   /** Whether the operator model is in hand. Surfaced for the boot overlay. */
   get ready(): boolean {
-    return this.asset !== null;
+    return this.assetCT !== null;
   }
 
   /** Whether the model gave up loading, so a caller can say so rather than wait. */
@@ -182,9 +198,10 @@ export class AvatarPool {
 
   sync(rows: PlayerRow[], dt = 0.016): void {
     const seen = new Set<string>();
-    const asset = this.asset;
     for (const row of rows) {
       seen.add(row.id);
+      const isT = row.team === 1;
+      const asset = isT ? (this.assetT ?? this.assetCT) : (this.assetCT ?? this.assetT);
       if (!asset) continue;
 
       let avatar = this.avatars.get(row.id);

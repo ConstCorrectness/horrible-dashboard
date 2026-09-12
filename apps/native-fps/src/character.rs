@@ -42,6 +42,8 @@ use crate::clips::{bone_key, is_upper_body};
 
 /// The built asset, compiled into the binary. See the module note.
 pub const OPERATOR_GLB: &[u8] = include_bytes!("../../web/public/hassault-operator.glb");
+/// The Terrorist variant (Phoenix / Yaku Ignite), also compiled into the binary.
+pub const OPERATOR_T_GLB: &[u8] = include_bytes!("../../web/public/hassault-operator-t.glb");
 
 /// Mixamo characters face **+Z** in model space; the renderer's forward for a
 /// player at yaw 0 is derived in `bodies.rs` as `[-sin, cos]` of
@@ -167,6 +169,11 @@ impl Operator {
     /// Parse the compiled-in asset.
     pub fn load() -> Result<Operator, String> {
         Operator::from_slice(OPERATOR_GLB)
+    }
+
+    /// Parse the compiled-in Terrorist variant.
+    pub fn load_t() -> Result<Operator, String> {
+        Operator::from_slice(OPERATOR_T_GLB)
     }
 
     pub fn from_slice(bytes: &[u8]) -> Result<Operator, String> {
@@ -771,15 +778,30 @@ mod tests {
     }
 
     #[test]
+    fn the_terrorist_asset_carries_one_skeleton_and_every_clip() {
+        let op = Operator::load_t().expect("the compiled-in terrorist operator GLB should parse");
+        // The Terrorist variant carries the full Mixamo 65-bone armature (including detailed finger bones).
+        assert_eq!(op.bone_count(), 65, "the terrorist rig carries 65 bones");
+        for name in crate::clips::OPERATOR_CLIPS {
+            assert!(
+                op.clip(name).is_some(),
+                "clip {name} is missing from the terrorist GLB"
+            );
+        }
+        assert_eq!(op.clip_names().count(), crate::clips::OPERATOR_CLIPS.len());
+    }
+
+    #[test]
     fn every_vertex_indexes_a_bone_that_exists() {
         // The per-skin -> global joint remap is the thing most likely to be
         // wrong, and being wrong reads as a character turned inside out rather
         // than as an error. An out-of-range index would sample garbage matrices.
-        let op = operator();
-        let bones = op.bone_count() as u32;
-        for v in &op.vertices {
-            for j in v.joints {
-                assert!(j < bones, "joint index {j} is outside the {bones}-bone rig");
+        for op in [operator(), Operator::load_t().expect("terrorist operator")] {
+            let bones = op.bone_count() as u32;
+            for v in &op.vertices {
+                for j in v.joints {
+                    assert!(j < bones, "joint index {j} is outside the {bones}-bone rig");
+                }
             }
         }
     }
@@ -789,29 +811,30 @@ mod tests {
         // 5.2 cubes is the canonical standing height a shot is resolved against.
         // If the scale lives above the armature and we walked only the joints,
         // this is the assertion that catches it.
-        let op = operator();
-        let mut pose = Pose::new(&op);
-        let mut bones = vec![Mat4::IDENTITY; op.bone_count()];
-        pose.skinning(&op, Mat4::IDENTITY, &mut bones);
+        for op in [operator(), Operator::load_t().expect("terrorist operator")] {
+            let mut pose = Pose::new(&op);
+            let mut bones = vec![Mat4::IDENTITY; op.bone_count()];
+            pose.skinning(&op, Mat4::IDENTITY, &mut bones);
 
-        let (mut low, mut high) = (f32::MAX, f32::MIN);
-        for v in &op.vertices {
-            let p = Vec3::from(v.position);
-            let mut skinned = Vec3::ZERO;
-            for k in 0..4 {
-                let w = v.weights[k];
-                if w > 0.0 {
-                    skinned += (bones[v.joints[k] as usize] * p.extend(1.0)).truncate() * w;
+            let (mut low, mut high) = (f32::MAX, f32::MIN);
+            for v in &op.vertices {
+                let p = Vec3::from(v.position);
+                let mut skinned = Vec3::ZERO;
+                for k in 0..4 {
+                    let w = v.weights[k];
+                    if w > 0.0 {
+                        skinned += (bones[v.joints[k] as usize] * p.extend(1.0)).truncate() * w;
+                    }
                 }
+                low = low.min(skinned.y);
+                high = high.max(skinned.y);
             }
-            low = low.min(skinned.y);
-            high = high.max(skinned.y);
+            let height = high - low;
+            assert!(
+                (height - 5.2).abs() < 0.05,
+                "bind pose is {height} cubes tall, expected 5.2"
+            );
         }
-        let height = high - low;
-        assert!(
-            (height - 5.2).abs() < 0.05,
-            "bind pose is {height} cubes tall, expected 5.2"
-        );
     }
 
     #[test]

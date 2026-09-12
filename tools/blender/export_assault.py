@@ -41,8 +41,8 @@ def export_map():
         export_apply=True,
         export_yup=True,
         export_materials='EXPORT',
-        export_lights=True,
-        export_cameras=True
+        export_lights=False,
+        export_cameras=False
     )
 
     shutil.copyfile(glb_backend_path, glb_web_path)
