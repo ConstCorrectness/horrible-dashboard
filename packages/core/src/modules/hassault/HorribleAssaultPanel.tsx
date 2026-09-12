@@ -1405,6 +1405,8 @@ export function HorribleAssaultPanel() {
         ladders?.dispose();
 
         if (world3d) {
+          scene.background = new THREE.Color(0x76a7eb);
+          scene.fog = new THREE.FogExp2(0x9cbde8, 0.001);
           scene.environment = propEnvironment;
           world3dGroup = world3d.scene;
           world3dGroup.traverse((child) => {
@@ -1422,11 +1424,7 @@ export function HorribleAssaultPanel() {
           bounds.current = { cx, cz, extent };
 
           reveal.fit([cx, cz], extent * 1.05, Math.max(extent * 0.6, 1));
-          if (world3d.materials) {
-            for (const mat of world3d.materials) {
-              installReveal(mat);
-            }
-          }
+          reveal.complete();
           backdrop.fit([cx, cz], extent * 2);
 
           const reach = extent * 2;
@@ -1446,6 +1444,8 @@ export function HorribleAssaultPanel() {
           return world3d.collision.triangles;
         }
 
+        scene.background = new THREE.Color(HORIZON);
+        scene.fog = new THREE.FogExp2(HORIZON, 0.0055);
         scene.environment = null;
         water = createWater(THREE, scene, world);
         ladders = createLadders(THREE, scene, world);
@@ -2385,7 +2385,7 @@ export function HorribleAssaultPanel() {
         // The build. Runs on its own clock rather than on load progress: the map
         // is already here by now, and the point of the animation is to show the
         // world arriving, not to stall until it has.
-        if (prefersReducedMotion()) {
+        if (is3D || prefersReducedMotion()) {
           scene.reveal.complete();
           setProgress((p) => advance(p, { reveal: 1 }));
           return;

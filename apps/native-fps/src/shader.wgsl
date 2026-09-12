@@ -180,10 +180,14 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
     // The grain, as a multiplier. Sampled linearly — it is not a colour, and an
     // sRGB decode here would darken every surface in the game by a third.
+    var grain_uv = detail_uv(in.world_position, in.normal);
+    if (camera.params.x <= 0.0001) {
+        grain_uv = grain_uv * 0.25;
+    }
     let grain = textureSample(
         detail_texture,
         detail_sampler,
-        detail_uv(in.world_position, in.normal),
+        grain_uv,
     ).r;
     albedo = albedo * grain * DETAIL_GAIN;
 

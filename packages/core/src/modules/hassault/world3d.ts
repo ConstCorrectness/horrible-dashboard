@@ -202,6 +202,56 @@ class World3DBuilder {
     this.addQuad([minX, maxY, minZ], [minX, maxY, maxZ], [minX, minY, maxZ], [minX, minY, minZ], material, isCollider);
   }
 
+  addCylinder(
+    cx: number,
+    cy: number,
+    minZ: number,
+    maxZ: number,
+    radius: number,
+    segments: number,
+    material: MaterialKind = 'concrete',
+    isCollider = true,
+  ) {
+    const seg = Math.max(6, segments);
+    const step = (Math.PI * 2) / seg;
+    for (let i = 0; i < seg; i++) {
+      const a0 = i * step;
+      const a1 = (i + 1) * step;
+      const x0 = cx + radius * Math.cos(a0);
+      const y0 = cy + radius * Math.sin(a0);
+      const x1 = cx + radius * Math.cos(a1);
+      const y1 = cy + radius * Math.sin(a1);
+
+      // Wall quad (faces outwards)
+      this.addQuad(
+        [x0, y0, minZ],
+        [x1, y1, minZ],
+        [x1, y1, maxZ],
+        [x0, y0, maxZ],
+        material,
+        isCollider,
+      );
+
+      // Top disc (facing +z up)
+      this.addTriangle(
+        [cx, cy, maxZ],
+        [x1, y1, maxZ],
+        [x0, y0, maxZ],
+        material,
+        isCollider,
+      );
+
+      // Bottom disc (facing -z down)
+      this.addTriangle(
+        [cx, cy, minZ],
+        [x0, y0, minZ],
+        [x1, y1, minZ],
+        material,
+        isCollider,
+      );
+    }
+  }
+
   addRamp(
     minX: number, minY: number, z0: number,
     maxX: number, maxY: number, z1: number,
@@ -570,11 +620,48 @@ export function createProceduralBank3D(
   builder.addQuad([60, 4, 0], [60, 60, 0], [60, 60, 14], [60, 4, 14], 'concrete');
   builder.addQuad([4, 60, 0], [4, 4, 0], [4, 4, 14], [4, 60, 14], 'concrete');
 
-  // 2. Ground Floors (Street Asphalt vs Bank Polished Marble Floor)
+  // 2. Ground Floors (Street Asphalt vs Bank Marble Floor)
   builder.addFloor(4, 4, 60, 18, 0, 'asphalt');
-  builder.addBox(4, 14, 0, 60, 18, 0.2, 'concrete'); // Sidewalk Curb
+  // Double solid yellow center divider stripe along y = 10
+  builder.addFloor(4, 9.85, 60, 9.95, 0.01, 'hazard', false);
+  builder.addFloor(4, 10.05, 60, 10.15, 0.01, 'hazard', false);
+  // Pedestrian crosswalk stripes leading straight into bank entrance
+  for (let i = 0; i < 5; i++) {
+    const sx = 27.5 + i * 2.0;
+    builder.addFloor(sx, 7.0, sx + 1.2, 13.5, 0.01, 'concrete', false);
+  }
+
+  // Sidewalk concrete curb (y: 14..18)
+  builder.addBox(4, 14, 0, 60, 18, 0.2, 'concrete');
+  builder.addBox(4, 13.8, 0, 60, 14, 0.25, 'concrete');
+
+  // Street lamps
+  for (const lx of [12, 52]) {
+    builder.addCylinder(lx, 6, 0, 5.5, 0.12, 8, 'vault_steel', false);
+    builder.addBox(lx - 0.2, 5.8, 5.3, lx + 0.2, 7.5, 5.6, 'vault_steel', false);
+    builder.addBox(lx - 0.35, 7.0, 5.0, lx + 0.35, 7.6, 5.4, 'gold', false);
+  }
+  // Red fire hydrants
+  for (const hx of [8, 54]) {
+    builder.addCylinder(hx, 13, 0, 0.85, 0.22, 8, 'hazard', true);
+  }
+  // Sidewalk tree planters with lush green hedges
+  for (const px of [14, 48]) {
+    builder.addBox(px, 14.5, 0.2, px + 2.6, 17.5, 0.6, 'concrete');
+    builder.addBox(px + 0.2, 14.7, 0.6, px + 2.4, 17.3, 1.6, 'wood');
+  }
+
+  // Main bank marble floor (y: 18..46)
   builder.addFloor(4, 18, 60, 46, 0, 'marble');
+  // Polished borders around lobby
+  builder.addFloor(4, 18, 60, 19, 0.01, 'wood', false);
+  builder.addFloor(4, 45, 60, 46, 0.01, 'wood', false);
+  builder.addFloor(4, 19, 5, 45, 0.01, 'wood', false);
+  builder.addFloor(59, 19, 60, 45, 0.01, 'wood', false);
+
+  // Rear offices floor (y: 46..60)
   builder.addFloor(4, 46, 40, 60, 0, 'concrete');
+  // Vault steel floor (x: 40..60, y: 46..60)
   builder.addFloor(40, 46, 60, 60, 0, 'vault_steel');
 
   // 3. Bank Exterior Facade Wall (y: 18..22) with 3 Entrances
@@ -582,34 +669,132 @@ export function createProceduralBank3D(
   builder.addBox(14, 18, 0, 28, 22, 14, 'concrete');
   builder.addBox(36, 18, 0, 50, 22, 14, 'concrete');
   builder.addBox(56, 18, 0, 60, 22, 14, 'concrete');
-  builder.addBox(26, 16, 0, 28, 18, 12, 'marble'); // Grand Classical Columns
-  builder.addBox(36, 16, 0, 38, 18, 12, 'marble');
-  builder.addBox(25, 15, 4.2, 39, 18.5, 4.8, 'concrete'); // Canopy skill-jump platform
 
-  // 4. Street Vehicles & Tactical Skill Jump Props
-  builder.addBox(18, 10, 0, 22, 12.5, 1.5, 'vehicle'); // SWAT Van Hood
-  builder.addBox(18, 12.5, 0, 22, 16, 2.8, 'vehicle'); // SWAT Van Cab / Roof
-  builder.addBox(42, 10, 0, 46, 14, 1.6, 'vehicle');  // Police Cruiser
-  builder.addBox(30, 8, 0, 34, 10, 1.2, 'concrete');   // Jersey Barrier
+  // Outdoor 24/7 ATM Wall Unit on west facade
+  builder.addBox(9.5, 17.6, 0.4, 12.5, 18.0, 2.4, 'vault_steel', true);
+  builder.addBox(9.8, 17.55, 1.2, 12.2, 17.6, 1.8, 'glass', false);
+  builder.addBox(9.2, 17.4, 2.4, 12.8, 17.6, 2.8, 'vehicle', false);
 
-  // 5. Grand Banking Hall (Site B) - Marble Pillars & Mahogany Teller Counter
-  builder.addBox(22, 24, 0, 24, 26, 14, 'marble');
-  builder.addBox(40, 24, 0, 42, 26, 14, 'marble');
-  builder.addBox(22, 40, 0, 24, 42, 14, 'marble');
-  builder.addBox(40, 40, 0, 42, 42, 14, 'marble');
-  // Teller Counter Island (Rich Mahogany Wood with Bulletproof Glass)
+  // Neoclassical Columns flanking Grand Entrance
+  for (const cx of [26, 36]) {
+    builder.addBox(cx, 16, 0, cx + 2, 18, 0.8, 'marble');
+    builder.addCylinder(cx + 1, 17, 0.8, 12.5, 0.9, 12, 'marble', true);
+    builder.addBox(cx - 0.2, 15.8, 12.5, cx + 2.2, 18.2, 14, 'marble');
+  }
+  // Entrance Stone Canopy (Key Skill Jump platform at z = 4.2..4.8)
+  builder.addBox(25, 15, 4.2, 39, 18.5, 4.8, 'concrete');
+  // Classical Triangular Pediment / Gable above entrance canopy
+  builder.addTriangle([24, 17.8, 4.8], [40, 17.8, 4.8], [32, 17.8, 8.2], 'concrete', true);
+  builder.addTriangle([40, 18.2, 4.8], [24, 18.2, 4.8], [32, 18.2, 8.2], 'concrete', true);
+  // Gold embossed bank architrave banner
+  builder.addBox(26, 17.6, 5.0, 38, 17.8, 5.8, 'gold', false);
+
+  // Brass-trimmed Grand Double Doors in entrance portal
+  builder.addBox(29, 18.1, 0, 35, 18.4, 3.8, 'wood', false);
+  builder.addBox(29.5, 18.0, 0.4, 31.8, 18.2, 3.4, 'glass', false);
+  builder.addBox(32.2, 18.0, 0.4, 34.5, 18.2, 3.4, 'glass', false);
+
+  // 4. Street Cover & Tactical Skill Jump Props
+  // Armored SWAT / Cash Van (Hood = 1.5, Roof = 2.8)
+  builder.addBox(18, 10, 0, 22, 12.5, 1.5, 'vehicle'); // Hood
+  builder.addBox(18, 12.5, 0, 22, 16, 2.8, 'vehicle'); // Cab & Roof
+  // Van wheels
+  for (const wy of [11.0, 14.5]) {
+    builder.addBox(17.6, wy, 0, 18.0, wy + 1.2, 0.75, 'concrete', true);
+    builder.addBox(22.0, wy, 0, 22.4, wy + 1.2, 0.75, 'concrete', true);
+  }
+  // Van windshield & emergency strobe lightbar
+  builder.addBox(18.2, 12.4, 1.5, 21.8, 12.7, 2.4, 'glass', false);
+  builder.addBox(18.5, 13.5, 2.8, 20.0, 14.0, 3.05, 'hazard', false);
+  builder.addBox(20.0, 13.5, 2.8, 21.5, 14.0, 3.05, 'vehicle', false);
+  builder.addBox(17.8, 9.7, 0.3, 22.2, 10.0, 0.9, 'vault_steel', true); // Bullbar
+
+  // Police Patrol Cruiser
+  builder.addBox(42, 10, 0, 46, 14, 1.6, 'vehicle');
+  builder.addBox(42.5, 11.8, 1.6, 44.0, 12.3, 1.85, 'hazard', false);
+  builder.addBox(44.0, 11.8, 1.6, 45.5, 12.3, 1.85, 'vehicle', false);
+
+  // Concrete Jersey Barrier with hazard warning top
+  builder.addBox(30, 8, 0, 34, 10, 1.2, 'concrete');
+  builder.addBox(30, 8, 1.15, 34, 10, 1.25, 'hazard', false);
+
+  // 5. Grand Banking Hall (Site B) - Neoclassical Pillars, Coffered Ceiling, Teller Island
+  for (const [px, py] of [[22, 24], [40, 24], [22, 40], [40, 40]]) {
+    builder.addBox(px, py, 0, px + 2, py + 2, 0.8, 'marble');
+    builder.addCylinder(px + 1, py + 1, 0.8, 12.5, 0.88, 12, 'marble', true);
+    builder.addBox(px - 0.2, py - 0.2, 12.5, px + 2.2, py + 2.2, 14, 'marble');
+  }
+
+  // Classical Coffered Ceiling Beams
+  for (const bx of [22, 32, 42]) {
+    builder.addBox(bx - 0.4, 18, 13, bx + 0.4, 46, 14, 'concrete', false);
+  }
+  for (const by of [24, 32, 40]) {
+    builder.addBox(4, by - 0.4, 13, 60, by + 0.4, 14, 'concrete', false);
+  }
+
+  // Grand Central Chandelier
+  builder.addCylinder(32, 32, 11.5, 12.0, 2.2, 8, 'gold', false);
+  builder.addCylinder(32, 32, 10.8, 11.5, 1.4, 8, 'gold', false);
+
+  // Large Gold Wall-Mounted Bank Clock
+  builder.addCylinder(32, 18.2, 7.5, 9.0, 0.85, 12, 'gold', false);
+  builder.addCylinder(32, 18.15, 7.6, 8.9, 0.75, 12, 'marble', false);
+
+  // Teller Counter Island (Base = 1.4, Partitions = 3.4 for skill jump)
   builder.addBox(28, 32, 0, 36, 35, 1.4, 'wood');
+  builder.addBox(27.8, 31.8, 1.35, 36.2, 35.2, 1.45, 'marble', true);
   builder.addBox(28.5, 32.2, 1.4, 31.5, 32.6, 3.4, 'glass');
   builder.addBox(32.5, 32.2, 1.4, 35.5, 32.6, 3.4, 'glass');
+  // Computer monitors
+  for (const tx of [29.0, 30.5, 33.0, 34.5]) {
+    builder.addBox(tx, 33.2, 1.45, tx + 0.6, 33.6, 1.95, 'vault_steel', false);
+    builder.addBox(tx + 0.05, 33.15, 1.5, tx + 0.55, 33.2, 1.9, 'glass', false);
+  }
+
+  // Customer Queue Stanchions & Velvet Rope
+  for (const qx of [28, 30, 32, 34, 36]) {
+    builder.addCylinder(qx, 28.5, 0, 0.9, 0.08, 6, 'gold', false);
+    builder.addCylinder(qx, 28.5, 0.85, 0.95, 0.12, 6, 'gold', false);
+  }
+  builder.addBox(28, 28.45, 0.7, 36, 28.55, 0.8, 'hazard', false);
+
+  // Customer Island Writing Desks
+  for (const dx of [23, 39]) {
+    builder.addBox(dx, 27.5, 0, dx + 2, 29.5, 1.0, 'wood');
+    builder.addBox(dx + 0.2, 28.0, 1.0, dx + 1.8, 29.0, 1.15, 'gold', false);
+  }
+
+  // Free-standing Indoor ATM Kiosks along west wall
+  for (const ay of [26, 34]) {
+    builder.addBox(4.8, ay, 0, 6.2, ay + 1.4, 2.1, 'vault_steel');
+    builder.addBox(6.0, ay + 0.2, 1.2, 6.25, ay + 1.2, 1.8, 'glass', false);
+  }
+
+  // Waiting Lounge Area (East wall)
+  builder.addBox(57, 27, 0, 59.2, 33, 0.85, 'wood');
+  builder.addBox(58.5, 27, 0.85, 59.5, 33, 1.4, 'wood', false);
+  builder.addBox(54.5, 28.5, 0, 56.2, 31.5, 0.5, 'glass');
+
+  // Potted Trees in Lobby Corners
+  for (const [px, py] of [[6, 20], [58, 20], [6, 44]]) {
+    builder.addCylinder(px, py, 0, 0.7, 0.55, 8, 'marble', false);
+    builder.addCylinder(px, py, 0.7, 2.4, 0.9, 8, 'wood', false);
+  }
 
   // 6. Executive Mezzanine & Balconies (z = 5.0)
   builder.addFloor(14, 38, 20, 45, 5, 'marble');
-  builder.addBox(19.8, 38, 5, 20.2, 45, 6.1, 'wood'); // Balcony railing
-  builder.addRamp(14, 32, 0, 18, 38, 5, 'concrete');   // West stairs
-  builder.addBox(14, 18, 4.8, 18, 22, 5.0, 'vault_steel'); // Fire escape connection
+  builder.addFloor(15.5, 38, 18.5, 45, 5.01, 'wood', false);
+  builder.addBox(19.8, 38, 5, 20.2, 45, 6.1, 'gold');
+  builder.addBox(19.9, 38, 5.2, 20.1, 45, 6.0, 'glass', false);
+  builder.addRamp(14, 32, 0, 18, 38, 5, 'concrete');
+  builder.addBox(14, 18, 4.8, 18, 22, 5.0, 'vault_steel');
+
   builder.addFloor(44, 38, 50, 45, 5, 'marble');
-  builder.addBox(43.8, 38, 5, 44.2, 45, 6.1, 'wood'); // Balcony railing
-  builder.addRamp(46, 32, 0, 50, 38, 5, 'concrete');   // East stairs
+  builder.addFloor(45.5, 38, 48.5, 45, 5.01, 'wood', false);
+  builder.addBox(43.8, 38, 5, 44.2, 45, 6.1, 'gold');
+  builder.addBox(43.9, 38, 5.2, 44.1, 45, 6.0, 'glass', false);
+  builder.addRamp(46, 32, 0, 50, 38, 5, 'concrete');
 
   // 7. Dividing Wall between Lobby and Rear Bank (y: 46..49)
   builder.addBox(4, 46, 0, 10, 49, 14, 'concrete');
@@ -617,32 +802,57 @@ export function createProceduralBank3D(
   builder.addBox(36, 46, 0, 48, 49, 14, 'concrete');
   builder.addBox(54, 46, 0, 60, 49, 14, 'concrete');
 
-  // 8. The Vault (Site A)
+  // Security Surveillance Desk
+  builder.addBox(32, 46.5, 0, 35.5, 48.5, 1.1, 'vault_steel');
+  builder.addBox(32.2, 47.0, 1.1, 35.3, 47.4, 1.8, 'vault_steel', false);
+  builder.addBox(32.3, 47.35, 1.15, 35.2, 47.4, 1.75, 'glass', false);
+
+  // 8. The Vault (Site A - x: 40..60, y: 49..60)
   builder.addBox(39, 49, 0, 41, 58, 10, 'concrete');
-  builder.addBox(45, 49, 0, 46.5, 51, 8, 'hazard'); // Vault archway with warning hazard stripes!
-  builder.addBox(46.5, 48.5, 0, 50.5, 49.5, 7.5, 'vault_steel'); // Heavy blast door slab
-  builder.addBox(56.5, 51, 0, 58, 58, 8, 'vault_steel'); // Deposit lockers
+  // Vault Entrance Portal with Hazard Warning Stripes
+  builder.addBox(45, 49, 0, 46.5, 51, 8, 'hazard');
+
+  // Massive Round Vault Blast Door
+  builder.addBox(46.5, 48.5, 0, 50.5, 49.5, 7.5, 'vault_steel');
+  builder.addCylinder(48.5, 49.0, 1.0, 6.5, 2.0, 12, 'vault_steel', false);
+  builder.addCylinder(48.5, 48.6, 3.2, 4.2, 0.55, 8, 'gold', false);
+  builder.addBox(47.6, 48.5, 3.65, 49.4, 48.65, 3.85, 'gold', false);
+  builder.addBox(48.4, 48.5, 2.9, 48.6, 48.65, 4.6, 'gold', false);
+
+  // Safety Deposit Lockers
+  builder.addBox(56.5, 51, 0, 58, 58, 8, 'vault_steel');
   builder.addBox(41, 56.5, 0, 56.5, 58, 8, 'vault_steel');
-  builder.addBox(44, 53, 0, 47, 56, 1.8, 'gold'); // Pallets of gleaming gold bullion!
-  builder.addBox(50, 44, 0, 53, 46, 1.8, 'vault_steel'); // HVAC Unit
-  builder.addBox(49, 44, 3.4, 53, 48, 4.2, 'vault_steel'); // Overhead duct for jump shooting
+
+  // Cash & Gold Bullion Pallets (Cover inside Vault)
+  builder.addBox(44, 53, 0, 47, 56, 1.8, 'gold');
+  builder.addBox(44.3, 53.3, 1.8, 46.7, 55.7, 2.3, 'gold', false);
+
+  // Wire-Mesh Money Carts
+  builder.addBox(51, 52, 0, 53.5, 54.5, 1.4, 'vault_steel');
+  builder.addBox(51.2, 52.2, 0.3, 53.3, 54.3, 1.35, 'wood', false);
+
+  // HVAC Unit & Overhead Air Duct
+  builder.addBox(50, 44, 0, 53, 46, 1.8, 'vault_steel');
+  builder.addBox(49, 44, 3.4, 53, 48, 4.2, 'vault_steel');
 
   // 9. Staff Offices (Defender territory)
-  builder.addBox(14, 51, 0, 18, 54, 1.5, 'wood');
-  builder.addBox(26, 51, 0, 30, 54, 1.5, 'wood');
+  builder.addBox(14, 51, 0, 18, 54, 1.2, 'wood');
+  builder.addBox(15.2, 52, 1.2, 16.8, 53, 1.6, 'vault_steel', false);
+  builder.addBox(13, 52, 0, 14, 53.5, 1.4, 'wood');
+  builder.addBox(26, 51, 0, 30, 54, 1.1, 'wood');
+  builder.addCylinder(31, 53, 0, 1.0, 0.3, 8, 'concrete', true);
+  builder.addCylinder(31, 53, 1.0, 1.7, 0.26, 8, 'glass', false);
 
   // 10. Tactical Bomb Site Spray Decals ("A" and "B")
-  // Site A: On the Vault floor in front of gold pallets
   builder.addFloor(
-    43, 50, 48, 55, 0.02,
+    44, 50.5, 48, 53.5, 0.02,
     'site_a',
     false,
     [0, 1, 1, 1, 1, 0, 0, 0],
   );
 
-  // Site B: Centered on the Grand Banking Hall marble floor
   builder.addFloor(
-    29, 26, 34, 31, 0.02,
+    30, 24.5, 34, 27.5, 0.02,
     'site_b',
     false,
     [0, 1, 1, 1, 1, 0, 0, 0],

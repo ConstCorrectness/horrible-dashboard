@@ -310,6 +310,7 @@ pub struct Renderer {
     /// The translucent-volume pipeline's layout, kept for the same reason.
     volume_layout: wgpu::PipelineLayout,
     detail_bind_group: wgpu::BindGroup,
+    detail_bind_group_3d: wgpu::BindGroup,
     shadow: crate::shadow::ShadowMap,
     video: Video,
     /// Where the world is drawn: a texture at `render_scale` of the window, and
@@ -320,6 +321,7 @@ pub struct Renderer {
     blit_layout: wgpu::BindGroupLayout,
     blit_bind_group: wgpu::BindGroup,
     sampler: wgpu::Sampler,
+    pub is_3d: bool,
     /// The skinned operator. `None` only if the asset failed to parse, which is
     /// reported once at startup and then falls back to `bodies.rs` rather than
     /// leaving the match with invisible players.
@@ -490,6 +492,7 @@ impl Renderer {
         // than a map's artwork. Built before the pipeline layout, which needs it.
         let detail_layout = crate::detail::bind_group_layout(&device);
         let detail_bind_group = crate::detail::bind_group(&device, &queue, &detail_layout);
+        let detail_bind_group_3d = crate::detail::bind_group_3d(&device, &queue, &detail_layout);
 
         let vertices = mesh_vertices(mesh);
         let world_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -773,6 +776,7 @@ impl Renderer {
             world_layout,
             volume_layout,
             detail_bind_group,
+            detail_bind_group_3d,
             shadow,
             video,
             scene,
@@ -780,6 +784,7 @@ impl Renderer {
             blit_layout,
             blit_bind_group,
             sampler,
+            is_3d: false,
             characters: None,
         })
     }
@@ -884,6 +889,10 @@ impl Renderer {
         }
     }
 
+    pub fn set_is_3d(&mut self, is_3d: bool) {
+        self.is_3d = is_3d;
+    }
+
     /// Set the build-in's state for this frame. See `reveal.rs`.
     pub fn set_reveal(&mut self, reveal: crate::reveal::Reveal) {
         self.reveal = reveal;
@@ -983,21 +992,26 @@ impl Renderer {
     /// did not happen" is not the same event as "the GPU is gone".
     pub fn render(&mut self, camera: &Camera) -> Result<bool, String> {
         let vp = camera.view_projection(self.config.width, self.config.height);
+        let fog = if self.is_3d { 0.0 } else { self.video.quality.fog_density() };
+        let mut u_main = CameraUniform::new(vp, self.video, self.reveal);
+        u_main.params[0] = fog;
         self.queue.write_buffer(
             &self.camera_buffer,
             0,
-            bytemuck::cast_slice(&[CameraUniform::new(vp, self.video, self.reveal)]),
+            bytemuck::cast_slice(&[u_main]),
         );
         // The same camera, with the build-in already over. See
         // `settled_bind_group`.
+        let mut u_settled = CameraUniform::new(
+            vp,
+            self.video,
+            crate::reveal::Reveal::done(),
+        );
+        u_settled.params[0] = fog;
         self.queue.write_buffer(
             &self.settled_camera_buffer,
             0,
-            bytemuck::cast_slice(&[CameraUniform::new(
-                vp,
-                self.video,
-                crate::reveal::Reveal::done(),
-            )]),
+            bytemuck::cast_slice(&[u_settled]),
         );
 
         // The view model's projection, rebuilt with the window: its view matrix
@@ -1092,15 +1106,21 @@ impl Renderer {
                     ops: wgpu::Operations {
                         // The fog colour, so geometry fading into the distance
                         // meets a matching background rather than a hard edge
-                        // against the void. `FOG_COLOR` in `lighting.wgsl.inc`,
-                        // which is the browser's `0x11161f` horizon decoded to
-                        // linear — this is written to an sRGB surface, so a raw
-                        // hex here would come out three shades too pale.
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.0056,
-                            g: 0.0080,
-                            b: 0.0137,
-                            a: 1.0,
+                        // against the void. For 3D maps, clear to bright Crossfire daylight sky.
+                        load: wgpu::LoadOp::Clear(if self.is_3d {
+                            wgpu::Color {
+                                r: 0.38,
+                                g: 0.58,
+                                b: 0.88,
+                                a: 1.0,
+                            }
+                        } else {
+                            wgpu::Color {
+                                r: 0.0056,
+                                g: 0.0080,
+                                b: 0.0137,
+                                a: 1.0,
+                            }
                         }),
                         store: wgpu::StoreOp::Store,
                     },
@@ -1120,7 +1140,12 @@ impl Renderer {
 
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            pass.set_bind_group(1, &self.detail_bind_group, &[]);
+            let detail_bg = if self.is_3d {
+                &self.detail_bind_group_3d
+            } else {
+                &self.detail_bind_group
+            };
+            pass.set_bind_group(1, detail_bg, &[]);
             pass.set_bind_group(2, &self.shadow.bind_group, &[]);
             pass.set_vertex_buffer(0, self.world_buffer.slice(..));
             pass.draw(0..self.world_verts, 0..1);
@@ -1419,7 +1444,7 @@ fn world_pipeline(
             // here: every surface exists once and faces the space you can stand
             // in, so there is nothing to draw on the far side.
             front_face: wgpu::FrontFace::Ccw,
-            cull_mode: Some(wgpu::Face::Back),
+            cull_mode: None,
             polygon_mode: wgpu::PolygonMode::Fill,
             unclipped_depth: false,
             conservative: false,
