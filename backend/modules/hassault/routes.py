@@ -443,6 +443,15 @@ async def get_map(name: str) -> MapInfo:
     )
 
 
+@router.get("/maps/{name}/mesh")
+async def get_map_mesh(name: str) -> FileResponse:
+    """Returns the 3D GLTF/GLB model for a map if one exists."""
+    glb_path = mapsource.MAPS_DIR / f"{name}.glb"
+    if not glb_path.is_file():
+        raise HTTPException(status_code=404, detail=f"No 3D mesh model found for map '{name}'")
+    return FileResponse(glb_path, media_type="model/gltf-binary")
+
+
 @router.get("/matches", response_model=list[MatchSummary])
 async def get_matches() -> list[MatchSummary]:
     """Live matches on this node. Cheap and pollable — the authoritative view of
