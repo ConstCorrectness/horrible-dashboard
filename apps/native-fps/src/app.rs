@@ -151,6 +151,7 @@ pub struct App {
     world: World,
     pub world3d: Option<World3D>,
     pub rapier_physics: Option<RapierPhysicsWorld>,
+    pub spawn_index: Option<usize>,
     /// The match, when there is one. **Train has none** — it is one player on a
     /// map, off the wire entirely, which is what the browser client's Train is
     /// too. A solo mode implemented as a room of one would not be solo: the
@@ -492,6 +493,7 @@ impl App {
             world,
             world3d,
             rapier_physics,
+            spawn_index: None,
             socket,
             pending_bots: None,
             prediction: Prediction::default(),
@@ -628,6 +630,13 @@ impl App {
             app.place_offline();
         }
         app
+    }
+
+    pub fn spawn_at_index(&mut self, idx: usize) {
+        self.spawn_index = Some(idx);
+        if self.socket.is_none() {
+            self.place_offline();
+        }
     }
 
     /// The weapon currently in hand, if the loadout names one.
@@ -1424,7 +1433,12 @@ impl App {
             return;
         }
 
-        let spawn = self.world.spawns(None).first().map(|e| physics::Spawn {
+        let all_spawns = self.world.spawns(None);
+        let spawn = if let Some(idx) = self.spawn_index {
+            all_spawns.get(idx).or_else(|| all_spawns.first())
+        } else {
+            all_spawns.first()
+        }.map(|e| physics::Spawn {
             x: e.x,
             y: e.y,
             z: e.z,
@@ -3389,6 +3403,10 @@ impl ApplicationHandler for App {
                         KeyCode::Digit7 if down => self.utility.equip(1),
                         KeyCode::Digit8 if down => self.utility.equip(2),
                         KeyCode::Digit9 if down => self.utility.equip(3),
+                        KeyCode::ArrowLeft if down => self.look(-25.0, 0.0),
+                        KeyCode::ArrowRight if down => self.look(25.0, 0.0),
+                        KeyCode::ArrowUp if down => self.look(0.0, -15.0),
+                        KeyCode::ArrowDown if down => self.look(0.0, 15.0),
                         // Still bound, and still working: a player who has
                         // learned these should not lose them because the default
                         // moved. `KeyG` is where every shooter since Half-Life

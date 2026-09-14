@@ -110,6 +110,7 @@ struct Args {
     blank: bool,
     /// Load and mesh the map, print what it found, and exit without connecting.
     check_only: bool,
+    spawn: Option<usize>,
 }
 
 impl Default for Args {
@@ -135,6 +136,7 @@ impl Default for Args {
             sensitivity: None,
             headless: false,
             check_only: false,
+            spawn: None,
         }
     }
 }
@@ -184,6 +186,10 @@ fn parse_args() -> Args {
             // input is not an option, it is how the mouse is read.
         } else if arg == "--new" {
             args.blank = true;
+        } else if let Some(v) = arg.strip_prefix("--spawn=") {
+            if let Ok(n) = v.parse::<usize>() {
+                args.spawn = Some(n);
+            }
         } else if arg == "--headless" {
             args.headless = true;
         } else if arg == "--check" {
@@ -516,6 +522,9 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             definitions,
             plan,
         );
+        if let Some(sp) = args.spawn {
+            app.spawn_at_index(sp);
+        }
         event_loop.run_app(&mut app)?;
         return Ok(());
     }

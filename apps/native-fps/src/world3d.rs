@@ -888,7 +888,7 @@ pub fn create_procedural_bank_3d(info: MapInfo) -> World3D {
         ItemRow { id: 3, kind: "health".into(), x: 10.0, y: 51.0, z: 0.0 },
         ItemRow { id: 4, kind: "armour".into(), x: 32.0, y: 28.0, z: 0.0 },
         ItemRow { id: 5, kind: "armour".into(), x: 52.0, y: 53.0, z: 0.0 },
-        ItemRow { id: 6, kind: "ammo_assault".into(), x: 20.0, y: 12.0, z: 0.0 },
+        ItemRow { id: 6, kind: "ammo_assault".into(), x: 20.0, y: 11.0, z: 0.0 },
         ItemRow { id: 7, kind: "ammo_assault".into(), x: 44.0, y: 12.0, z: 0.0 },
         ItemRow { id: 8, kind: "ammo_sniper".into(), x: 16.0, y: 40.0, z: 5.0 },
         ItemRow { id: 9, kind: "clips".into(), x: 32.0, y: 22.0, z: 0.0 },
@@ -1370,6 +1370,7 @@ pub fn create_procedural_assault_3d(info: MapInfo) -> World3D {
 }
 
 const HD_ASSAULT_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_assault.glb");
+const HD_BANK_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_bank.glb");
 
 fn local_node_matrix(node: &gltf::Node) -> Mat4 {
     match node.transform() {
@@ -1424,7 +1425,45 @@ fn walk_glb_node(
             || node_name.contains("Hood")
             || node_name.contains("Mullion")
             || node_name.contains("Camera")
-            || node_name.contains("Light");
+            || node_name.contains("Light")
+            || node_name.contains("Truss")
+            || node_name.contains("Detail")
+            || node_name.contains("Pipe")
+            || node_name.contains("Conduit")
+            || node_name.contains("Wire")
+            || node_name.contains("Debris")
+            || node_name.contains("Stain")
+            || node_name.contains("Crack")
+            || node_name.contains("Drain")
+            || node_name.contains("Manhole")
+            || node_name.contains("Cable")
+            || node_name.contains("Joint")
+            || node_name.contains("Rung")
+            || node_name.contains("Flange")
+            || node_name.contains("Web")
+            || node_name.contains("Rail_")
+            || node_name.contains("Tie_")
+            || node_name.contains("Gusset")
+            || node_name.contains("Purlin")
+            || node_name.contains("Louver")
+            || node_name.contains("Hose")
+            || node_name.contains("Vise")
+            || node_name.contains("Blind")
+            || node_name.contains("Antenna")
+            || node_name.contains("Blade")
+            || node_name.contains("Propane")
+            || node_name.contains("Spool")
+            || node_name.contains("Cushion")
+            || node_name.contains("Skylight")
+            || node_name.contains("Foliage")
+            || node_name.contains("Plant")
+            || node_name.contains("Chandelier")
+            || node_name.contains("Stanchion")
+            || node_name.contains("Flute")
+            || node_name.contains("Globe")
+            || node_name.contains("Clock")
+            || node_name.contains("Plaque")
+            || node_name.contains("Urn");
 
         for prim in mesh.primitives() {
             let mat_name = prim.material().name().unwrap_or("");
@@ -1577,29 +1616,57 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
 
     let triangles = render_positions.len() / 9;
 
-    let spawns = vec![
-        SpawnPoint { x: 16.0, y: 7.0, z: 0.18, yaw: 90.0, team: 0 },
-        SpawnPoint { x: 20.0, y: 7.0, z: 0.18, yaw: 90.0, team: 0 },
-        SpawnPoint { x: 24.0, y: 7.0, z: 0.18, yaw: 90.0, team: 0 },
-        SpawnPoint { x: 28.0, y: 7.0, z: 0.18, yaw: 90.0, team: 0 },
-        SpawnPoint { x: 32.0, y: 48.0, z: 4.2, yaw: 270.0, team: 1 },
-        SpawnPoint { x: 36.0, y: 48.0, z: 4.2, yaw: 270.0, team: 1 },
-        SpawnPoint { x: 40.0, y: 48.0, z: 4.2, yaw: 270.0, team: 1 },
-        SpawnPoint { x: 34.0, y: 52.0, z: 4.2, yaw: 270.0, team: 1 },
-    ];
-
-    let items = vec![
-        ItemRow { id: 1, kind: "health".into(), x: 14.0, y: 6.0, z: 0.18 },
-        ItemRow { id: 2, kind: "health".into(), x: 55.0, y: 16.0, z: 0.0 },
-        ItemRow { id: 3, kind: "health".into(), x: 38.0, y: 52.0, z: 4.2 },
-        ItemRow { id: 4, kind: "armour".into(), x: 20.0, y: 36.0, z: 0.0 },
-        ItemRow { id: 5, kind: "armour".into(), x: 32.0, y: 44.0, z: 4.2 },
-        ItemRow { id: 6, kind: "ammo_assault".into(), x: 21.0, y: 15.5, z: 0.0 },
-        ItemRow { id: 7, kind: "ammo_assault".into(), x: 54.0, y: 30.0, z: 0.0 },
-        ItemRow { id: 8, kind: "ammo_sniper".into(), x: 24.0, y: 7.0, z: 7.5 },
-        ItemRow { id: 9, kind: "clips".into(), x: 10.5, y: 40.0, z: 4.2 },
-        ItemRow { id: 10, kind: "grenade".into(), x: 16.0, y: 30.0, z: 9.0 },
-    ];
+    let (spawns, items) = if info.name == "hd_bank" {
+        (
+            vec![
+                SpawnPoint { x: 12.0, y: 8.0, z: 0.0, yaw: 0.0, team: 0 },
+                SpawnPoint { x: 24.0, y: 8.0, z: 0.0, yaw: 0.0, team: 0 },
+                SpawnPoint { x: 36.0, y: 8.0, z: 0.0, yaw: 0.0, team: 0 },
+                SpawnPoint { x: 48.0, y: 8.0, z: 0.0, yaw: 0.0, team: 0 },
+                SpawnPoint { x: 10.0, y: 55.0, z: 0.0, yaw: 180.0, team: 1 },
+                SpawnPoint { x: 20.0, y: 55.0, z: 0.0, yaw: 180.0, team: 1 },
+                SpawnPoint { x: 32.0, y: 55.0, z: 0.0, yaw: 180.0, team: 1 },
+                SpawnPoint { x: 36.0, y: 51.0, z: 0.0, yaw: 180.0, team: 1 },
+            ],
+            vec![
+                ItemRow { id: 1, kind: "health".into(), x: 10.0, y: 14.0, z: 0.0 },
+                ItemRow { id: 2, kind: "health".into(), x: 54.0, y: 14.0, z: 0.0 },
+                ItemRow { id: 3, kind: "health".into(), x: 10.0, y: 51.0, z: 0.0 },
+                ItemRow { id: 4, kind: "armour".into(), x: 32.0, y: 28.0, z: 0.0 },
+                ItemRow { id: 5, kind: "armour".into(), x: 52.0, y: 53.0, z: 0.0 },
+                ItemRow { id: 6, kind: "ammo_assault".into(), x: 20.0, y: 11.0, z: 0.0 },
+                ItemRow { id: 7, kind: "ammo_assault".into(), x: 44.0, y: 12.0, z: 0.0 },
+                ItemRow { id: 8, kind: "ammo_sniper".into(), x: 16.0, y: 40.0, z: 5.0 },
+                ItemRow { id: 9, kind: "clips".into(), x: 32.0, y: 22.0, z: 0.0 },
+                ItemRow { id: 10, kind: "grenade".into(), x: 52.0, y: 28.0, z: 0.0 },
+            ],
+        )
+    } else {
+        (
+            vec![
+                SpawnPoint { x: 16.0, y: 7.0, z: 0.18, yaw: 90.0, team: 0 },
+                SpawnPoint { x: 20.0, y: 7.0, z: 0.18, yaw: 90.0, team: 0 },
+                SpawnPoint { x: 24.0, y: 7.0, z: 0.18, yaw: 90.0, team: 0 },
+                SpawnPoint { x: 28.0, y: 7.0, z: 0.18, yaw: 90.0, team: 0 },
+                SpawnPoint { x: 32.0, y: 48.0, z: 4.2, yaw: 270.0, team: 1 },
+                SpawnPoint { x: 36.0, y: 48.0, z: 4.2, yaw: 270.0, team: 1 },
+                SpawnPoint { x: 40.0, y: 48.0, z: 4.2, yaw: 270.0, team: 1 },
+                SpawnPoint { x: 34.0, y: 52.0, z: 4.2, yaw: 270.0, team: 1 },
+            ],
+            vec![
+                ItemRow { id: 1, kind: "health".into(), x: 14.0, y: 6.0, z: 0.18 },
+                ItemRow { id: 2, kind: "health".into(), x: 55.0, y: 16.0, z: 0.0 },
+                ItemRow { id: 3, kind: "health".into(), x: 38.0, y: 52.0, z: 4.2 },
+                ItemRow { id: 4, kind: "armour".into(), x: 20.0, y: 36.0, z: 0.0 },
+                ItemRow { id: 5, kind: "armour".into(), x: 32.0, y: 44.0, z: 4.2 },
+                ItemRow { id: 6, kind: "ammo_assault".into(), x: 21.0, y: 15.5, z: 0.0 },
+                ItemRow { id: 7, kind: "ammo_assault".into(), x: 54.0, y: 30.0, z: 0.0 },
+                ItemRow { id: 8, kind: "ammo_sniper".into(), x: 24.0, y: 7.0, z: 7.5 },
+                ItemRow { id: 9, kind: "clips".into(), x: 10.5, y: 40.0, z: 4.2 },
+                ItemRow { id: 10, kind: "grenade".into(), x: 16.0, y: 30.0, z: 9.0 },
+            ],
+        )
+    };
 
     let bounds = WorldBounds {
         min: [4.0, 4.0, 0.0],
@@ -1624,6 +1691,20 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
     })
 }
 
+pub fn load_bank_glb(info: MapInfo) -> Result<World3D, String> {
+    for path in [
+        "../../backend/modules/hassault/maps/hd_bank.glb",
+        "backend/modules/hassault/maps/hd_bank.glb",
+        "assets/maps/hd_bank.glb",
+        "apps/web/public/hd_bank.glb",
+    ] {
+        if let Ok(bytes) = std::fs::read(path) {
+            return load_world_3d_from_glb(&bytes, info);
+        }
+    }
+    load_world_3d_from_glb(HD_BANK_GLB_BYTES, info)
+}
+
 pub fn load_assault_glb(info: MapInfo) -> Result<World3D, String> {
     for path in [
         "../../backend/modules/hassault/maps/hd_assault.glb",
@@ -1642,7 +1723,15 @@ pub fn load_assault_glb(info: MapInfo) -> Result<World3D, String> {
 pub fn create_world_3d(info: MapInfo) -> World3D {
     match info.name.as_str() {
         "hd_junkflea" => create_procedural_junk_flea_3d(info),
-        "hd_bank" => create_procedural_bank_3d(info),
+        "hd_bank" => {
+            match load_bank_glb(info.clone()) {
+                Ok(w) => w,
+                Err(err) => {
+                    eprintln!("hassault: failed to load GLB for hd_bank ({err}), falling back to procedural");
+                    create_procedural_bank_3d(info)
+                }
+            }
+        }
         "hd_assault" => {
             match load_assault_glb(info.clone()) {
                 Ok(w) => w,
@@ -1655,3 +1744,4 @@ pub fn create_world_3d(info: MapInfo) -> World3D {
         _ => create_procedural_facility_3d(info),
     }
 }
+
