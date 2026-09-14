@@ -73,13 +73,9 @@
       "ctex": 33
     },
     {
-      "op": "room",
+      "op": "solid",
       "rect": [18, 13, 4, 3],
-      "floor": 3,
-      "ceil": 14,
-      "wtex": 131,
-      "ftex": 131,
-      "ctex": 33
+      "wtex": 131
     },
     {
       "op": "room",
@@ -222,13 +218,9 @@
       "ctex": 33
     },
     {
-      "op": "room",
+      "op": "solid",
       "rect": [44, 53, 3, 3],
-      "floor": 2,
-      "ceil": 14,
-      "wtex": 131,
-      "ftex": 131,
-      "ctex": 33
+      "wtex": 131
     },
     {
       "op": "room",
@@ -339,7 +331,7 @@
     {
       "type": "ammo",
       "x": 20,
-      "y": 12,
+      "y": 11,
       "z": 0
     },
     {
