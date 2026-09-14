@@ -155,6 +155,12 @@
         ],
         "createdAt": "2026-09-04T23:17:17.878Z",
         "reason": "CLAUDE.local.md UI standards call for 'subtle border accents (e.g. a 2px top border in the accent colour) over full-perimeter glowing borders' - this is that rule applied to the left edge. It is also semantic, not decoration: the 2px rail is the cell's run-state channel (idle / running-accent / error-danger / done-ok), the same left-gutter indicator Jupyter and VS Code notebooks use. It is a cell in a vertical stack, not a card."
+      },
+      {
+        "rule": "design-system-color",
+        "value": "#3b82f6",
+        "createdAt": "2026-09-14T14:49:42.546Z",
+        "reason": "CLAUDE.md UI standards designate #3B82F6 as the accent; used as var(--accent, #3b82f6) fallback, matching existing usage in this file"
       }
     ]
   }

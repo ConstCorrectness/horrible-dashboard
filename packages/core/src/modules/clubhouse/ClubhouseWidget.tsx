@@ -6,8 +6,11 @@ import {
   completeClubhouseAuth,
   connectClubhouseWithToken,
   disconnectClubhouse,
+  getClubdeckAvailability,
   getClubhouseStatus,
+  importClubhouseFromClubdeck,
   startClubhouseAuth,
+  type ClubdeckAvailability,
   type ClubhouseStatus,
 } from './api';
 
@@ -40,6 +43,7 @@ export function ClubhouseWidget() {
   const [error, setError] = useState<string | null>(null);
   const [token, setToken] = useState('');
   const [userId, setUserId] = useState('');
+  const [clubdeck, setClubdeck] = useState<ClubdeckAvailability | null>(null);
 
   const refresh = () =>
     getClubhouseStatus()
@@ -47,6 +51,14 @@ export function ClubhouseWidget() {
       .catch(() => setStatus('backend-down'));
   useEffect(() => {
     void refresh();
+  }, []);
+
+  // Offer one-click import only when Clubdeck is signed in on this machine. A
+  // failed probe (backend down, browser-only layout) just hides the button.
+  useEffect(() => {
+    getClubdeckAvailability()
+      .then(setClubdeck)
+      .catch(() => setClubdeck(null));
   }, []);
 
   // Expose the connection state so the agent knows whose account is linked.
@@ -174,11 +186,79 @@ export function ClubhouseWidget() {
     }
   };
 
+  const importClubdeck = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await importClubhouseFromClubdeck();
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const phoneValid = /^\+\d{7,15}$/.test(phone.trim());
   const codeValid = /^\d{4,8}$/.test(code.trim());
 
   return (
     <div className="ch-onboarding">
+      {clubdeck?.available && (
+        <div
+          className="ch-clubdeck-import"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '0.75rem',
+            padding: '0.6rem 0.75rem',
+            marginBottom: '0.75rem',
+            border: '1px solid var(--border)',
+            borderTop: '2px solid var(--accent, #3b82f6)',
+            borderRadius: '6px',
+            background: 'var(--bg-raised)',
+          }}
+        >
+          <div style={{ minWidth: 0 }}>
+            <strong
+              style={{
+                display: 'block',
+                fontSize: '0.7rem',
+                textTransform: 'uppercase',
+                letterSpacing: '0.14em',
+                color: 'var(--text)',
+              }}
+            >
+              Clubdeck detected
+            </strong>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
+              {clubdeck.name || clubdeck.username
+                ? `Import ${clubdeck.name ?? `@${clubdeck.username}`}'s session — no code needed.`
+                : 'Import the signed-in session — no code needed.'}
+            </span>
+          </div>
+          <button
+            type="button"
+            className="ch-import-btn"
+            disabled={busy}
+            onClick={() => void importClubdeck()}
+            style={{
+              flexShrink: 0,
+              background: 'var(--accent, #3b82f6)',
+              border: 'none',
+              borderRadius: '6px',
+              padding: '0 0.75rem',
+              fontSize: '0.8rem',
+              fontWeight: 600,
+              color: '#fff',
+              cursor: 'pointer',
+            }}
+          >
+            {busy ? 'Importing…' : 'Import'}
+          </button>
+        </div>
+      )}
       <div className="ch-methods" role="tablist">
         {(Object.keys(METHOD_LABELS) as AuthMethod[]).map((m) => (
           <button

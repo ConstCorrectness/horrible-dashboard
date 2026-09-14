@@ -42,6 +42,24 @@ export function disconnectClubhouse(): Promise<ClubhouseStatus> {
   return apiDelete<ClubhouseStatus>('/clubhouse/auth');
 }
 
+export interface ClubdeckAvailability {
+  available: boolean;
+  username: string | null;
+  name: string | null;
+  reason: string | null;
+}
+
+/** Whether a Clubdeck session on this machine can be one-click imported. Only
+ *  meaningful when the backend runs on the same box as Clubdeck. */
+export function getClubdeckAvailability(): Promise<ClubdeckAvailability> {
+  return apiGet<ClubdeckAvailability>('/clubhouse/auth/clubdeck');
+}
+
+/** Link the account using the token Clubdeck already holds — no paste. */
+export function importClubhouseFromClubdeck(): Promise<ClubhouseStatus> {
+  return apiPost<ClubhouseStatus>('/clubhouse/auth/import-clubdeck', {});
+}
+
 export interface ChannelUser {
   user_id: number | null;
   name: string | null;

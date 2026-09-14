@@ -26,6 +26,20 @@ class TokenConnectRequest(BaseModel):
     device_id: str | None = None
 
 
+class ClubdeckAvailability(BaseModel):
+    """Whether a local Clubdeck session can be imported, for the widget's button.
+
+    ``username``/``name`` preview *whose* session would be imported so the button
+    can say so; they are never a credential.  ``reason`` explains an unavailable
+    one (Clubdeck not installed, present but signed out, unreadable file).
+    """
+
+    available: bool
+    username: str | None = None
+    name: str | None = None
+    reason: str | None = None
+
+
 class StartAuthResult(BaseModel):
     success: bool
 

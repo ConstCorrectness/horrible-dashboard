@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import platform
 import re
 import subprocess
 import uuid
@@ -26,6 +27,7 @@ from backend.modules.clubhouse.models import (
     ChannelList,
     ChatPermission,
     ChatPermissionRequest,
+    ClubdeckAvailability,
     ClubhouseStatus,
     ReactionRequest,
     RoomAudience,
@@ -94,8 +96,8 @@ def _auth_path() -> Path:
     return _data_dir() / "clubhouse-auth.json"
 
 
-def _device_id() -> str:
-    """Stable per-install device id, as the mobile client would have."""
+def _install_device_id() -> str:
+    """This install's own device id, generated once, as the mobile client would."""
     path = _data_dir() / "clubhouse-device-id"
     if path.is_file():
         return path.read_text().strip()
@@ -103,6 +105,36 @@ def _device_id() -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(device_id)
     return device_id
+
+
+def _device_id() -> str:
+    """The ``CH-DeviceId`` every request presents.
+
+    Clubhouse issues a session to a device, and a real client never changes its
+    device id mid-session -- Clubdeck sends the ``deviceId`` saved beside its
+    token.  So a connected session's device id wins on *every* call, including
+    the unauthenticated ones and the auth helper, not only the authed routes
+    that pass it explicitly.  Otherwise this install's own id.
+    """
+    path = _auth_path()
+    if path.is_file():
+        try:
+            saved = json.loads(path.read_text()).get("device_id")
+        except (ValueError, AttributeError):
+            saved = None
+        if isinstance(saved, str) and saved:
+            return saved
+    return _install_device_id()
+
+
+def _adopt_device_id(device_id: str) -> None:
+    """Make ``device_id`` this install's own, so it outlives the session.
+
+    After connecting a session issued to another client's device (Clubdeck's),
+    a later sign-in from this machine should present that same device rather
+    than a stranger Clubhouse has never seen.
+    """
+    jsonstore.write_text(_data_dir() / "clubhouse-device-id", device_id)
 
 
 def _get_helper_path() -> Path:
@@ -152,6 +184,27 @@ def _get_helper_path() -> Path:
     return bin_path
 
 
+# ch-auth-helper exits 1 on every non-2xx and wraps Clubhouse's reply in its own
+# error string: ``{"error": "Clubhouse returned status 400: {...}"}`` (Program.cs).
+_HELPER_UPSTREAM = re.compile(
+    r"^Clubhouse returned status \d+: (\{.*\})\s*$", re.DOTALL
+)
+
+
+def _upstream_reply(err_msg: object) -> dict[str, Any] | None:
+    """Clubhouse's own JSON reply out of a helper failure, if it carried one."""
+    if not isinstance(err_msg, str):
+        return None
+    match = _HELPER_UPSTREAM.match(err_msg)
+    if not match:
+        return None
+    try:
+        reply = json.loads(match.group(1))
+    except ValueError:
+        return None
+    return reply if isinstance(reply, dict) else None
+
+
 async def _run_helper(
     action: str, phone_number: str, extra_arg: str = ""
 ) -> dict[str, Any]:
@@ -188,6 +241,12 @@ async def _run_helper(
                 err_msg = data["error"]
         except Exception:
             pass
+        # A rejection Clubhouse explained goes back to the route, which reads its
+        # ``error_message``.  Raising here on the exit code alone is what kept
+        # ``start_auth``'s attestation-gate message from ever being reached.
+        upstream = _upstream_reply(err_msg)
+        if upstream is not None:
+            return upstream
         raise HTTPException(status_code=400, detail=f"Authentication failed: {err_msg}")
 
     try:
@@ -430,6 +489,8 @@ async def complete_auth(body: CompleteAuthRequest) -> ClubhouseStatus:
     record = {
         "auth_token": token,
         "refresh_token": data.get("refresh_token"),
+        # The device the helper signed in as; the session belongs to it.
+        "device_id": _device_id(),
         "user_id": profile.get("user_id"),
         "username": profile.get("username"),
         "name": profile.get("name"),
@@ -439,9 +500,10 @@ async def complete_auth(body: CompleteAuthRequest) -> ClubhouseStatus:
     return status()
 
 
-@router.post("/auth/token", response_model=ClubhouseStatus)
-async def connect_with_token(body: TokenConnectRequest) -> ClubhouseStatus:
-    """Connect using an existing auth token, validated against ``/get_profile``.
+async def _connect_with_token(
+    auth_token: str, user_id: int, device_id: str | None
+) -> ClubhouseStatus:
+    """Validate a token against ``/get_profile`` and persist the session.
 
     Deliberately **not** ``/me``: Cloudflare intermittently rate-blocks ``/me``
     and ``/get_feed_v3`` (a per-route 503 that has nothing to do with the token
@@ -450,24 +512,141 @@ async def connect_with_token(body: TokenConnectRequest) -> ClubhouseStatus:
     the account's own id returns the same ``user_profile`` and is not one of the
     shed routes, so a valid token connects even while ``/me`` is throttled.
     """
+    # Recorded explicitly either way, so the session's device never drifts with
+    # whatever the install id later becomes.
+    resolved_device = device_id or _install_device_id()
     data = await _ch_authed_post(
         "/get_profile",
-        {"user_id": body.user_id},
-        body.auth_token,
-        body.user_id,
-        body.device_id,
+        {"user_id": user_id},
+        auth_token,
+        user_id,
+        resolved_device,
     )
     profile = data.get("user_profile") or {}
     record = {
-        "auth_token": body.auth_token,
-        "device_id": body.device_id,
-        "user_id": profile.get("user_id") or body.user_id,
+        "auth_token": auth_token,
+        "device_id": resolved_device,
+        "user_id": profile.get("user_id") or user_id,
         "username": profile.get("username"),
         "name": profile.get("name"),
         "photo_url": profile.get("photo_url"),
     }
     jsonstore.write_text(_auth_path(), json.dumps(record))
+    if device_id:
+        _adopt_device_id(device_id)
     return status()
+
+
+@router.post("/auth/token", response_model=ClubhouseStatus)
+async def connect_with_token(body: TokenConnectRequest) -> ClubhouseStatus:
+    """Connect using an existing auth token pasted into the widget."""
+    return await _connect_with_token(body.auth_token, body.user_id, body.device_id)
+
+
+def _clubdeck_profile_path() -> Path:
+    """Where Clubdeck (an Electron app) keeps its session, per OS.
+
+    Electron's ``app.getPath('userData')`` is ``%APPDATA%\\Clubdeck`` on Windows,
+    ``~/Library/Application Support/Clubdeck`` on macOS, and
+    ``$XDG_CONFIG_HOME`` or ``~/.config/Clubdeck`` on Linux.  Overridable with
+    ``HORRIBLE_CLUBDECK_PROFILE`` (the tests point it at a fixture, and it lets a
+    non-standard install work).
+    """
+    override = os.environ.get("HORRIBLE_CLUBDECK_PROFILE")
+    if override:
+        return Path(override)
+    system = platform.system().lower()
+    if system == "windows":
+        base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+    elif system == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    return base / "Clubdeck" / "profile.json"
+
+
+def _read_clubdeck_session() -> dict[str, Any] | None:
+    """Clubdeck's saved ``{token, userId, deviceId}``, or ``None`` if not signed in.
+
+    Reads only the three fields it needs and never logs the token.  A malformed
+    or half-written file (Clubdeck rewrites it on every login) reads as "no
+    session" rather than raising -- the caller distinguishes absent from
+    unreadable via the file's existence, not this return.
+    """
+    path = _clubdeck_profile_path()
+    if not path.is_file():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    token = raw.get("token")
+    user_id = raw.get("userId")
+    if not isinstance(token, str) or not token:
+        return None
+    try:
+        user_id = int(user_id)
+    except (TypeError, ValueError):
+        return None
+    device_id = raw.get("deviceId")
+    user = raw.get("user") if isinstance(raw.get("user"), dict) else {}
+    return {
+        "auth_token": token,
+        "user_id": user_id,
+        "device_id": device_id if isinstance(device_id, str) and device_id else None,
+        "username": user.get("username"),
+        "name": user.get("name"),
+    }
+
+
+@router.get("/auth/clubdeck", response_model=ClubdeckAvailability)
+def clubdeck_availability() -> ClubdeckAvailability:
+    """Whether a local Clubdeck session is present, so the widget can offer import.
+
+    Never returns the token -- only whether one exists and whose it is.  The three
+    unavailable states are kept distinct (Clubhouse's hardware-probe rule): no
+    Clubdeck install, an install that is signed out, and a file we cannot read.
+    """
+    path = _clubdeck_profile_path()
+    if not path.is_file():
+        return ClubdeckAvailability(
+            available=False, reason="Clubdeck isn't installed on this machine."
+        )
+    session = _read_clubdeck_session()
+    if session is None:
+        return ClubdeckAvailability(
+            available=False,
+            reason="Clubdeck is installed but not signed in — log in there first.",
+        )
+    return ClubdeckAvailability(
+        available=True,
+        username=session.get("username"),
+        name=session.get("name"),
+    )
+
+
+@router.post("/auth/import-clubdeck", response_model=ClubhouseStatus)
+async def import_from_clubdeck() -> ClubhouseStatus:
+    """Link the account using the session Clubdeck already has on this machine.
+
+    Clubdeck can still get an SMS dispatched where our own helper is refused by
+    the attestation gate, so its live session is the practical way in.  This
+    reads the token Clubdeck saved and connects with it -- the same path as the
+    Auth-token tab, with nothing to paste.  Backend-only by nature: the browser
+    cannot read a file off the user's disk.
+    """
+    session = _read_clubdeck_session()
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No Clubdeck session found on this machine. Sign in with "
+            "Clubdeck first, then import.",
+        )
+    return await _connect_with_token(
+        session["auth_token"], session["user_id"], session["device_id"]
+    )
 
 
 def _parse_channel_data(ch_raw: dict[str, Any]) -> dict[str, Any] | None:

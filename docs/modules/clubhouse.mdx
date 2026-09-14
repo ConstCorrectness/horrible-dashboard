@@ -12,6 +12,8 @@ in, chosen from a switcher at the top of the card:
 - **I have a code** — enter a phone number _and_ a code you already hold, skipping our `/auth/start` call entirely. Use this when you requested the code from the real Clubhouse app, or when the anti-abuse gate swallowed our SMS request: `/complete_phone_number_auth` carries no server-side state from the start call, so a code obtained anywhere completes the same way.
 - **Auth token** — connect directly with an existing `auth_token` + `user_id`.
 
+Above those, when the backend runs on the same machine as **Clubdeck** and Clubdeck is signed in, a **“Clubdeck detected”** banner offers one-click **Import** — no code, no paste. It reads the session Clubdeck already holds (see the Clubdeck note under §3) and connects with it. `GET /auth/clubdeck` reports availability (present + whose, or one of three unavailable reasons — not installed / signed out / unreadable) so the banner only appears when it will work; `POST /auth/import-clubdeck` performs the link, sharing the token-connect path. Since it reads a file off local disk it is inherently same-machine only (the browser can't), and it never returns the token to the frontend.
+
 **Status: implemented** — frontend in [ClubhouseWidget.tsx](file:///home/horrible/horrible-dashboard/packages/core/src/modules/clubhouse/ClubhouseWidget.tsx),
 backend in [routes.py](file:///home/horrible/horrible-dashboard/backend/modules/clubhouse/routes.py). Token-connect is verified end to end
 against the live API; phone-auth depends on Clubhouse's gate (see below).
@@ -21,7 +23,11 @@ against the live API; phone-auth depends on Clubhouse's gate (see below).
 Clubhouse has no public API. Like Clubdeck, the backend speaks the
 reverse-engineered mobile client protocol (`www.clubhouseapi.com/api`,
 overridable via `HORRIBLE_CLUBHOUSE_API`), sending mobile-client headers and a
-stable per-install `CH-DeviceId`.
+`CH-DeviceId`. That device id is the **connected session's own** — the device the
+token was issued to — on _every_ call, unauthenticated ones and the auth helper
+included (`_device_id`), falling back to a stable per-install id only when nothing
+is connected. A real client never changes device mid-session; Clubdeck sends the
+`deviceId` saved beside its token.
 
 ### 1. Client-Version Headers
 
@@ -31,13 +37,15 @@ Clubhouse validates two version headers — `CH-AppVersion` (`26.08.30`) and the
 
 `start_phone_number_auth` in the 26.08.30 client attaches a `tokens` → **`AttestationRequest`** (`rc_token` reCAPTCHA, `integrity_response` Play Integrity, plus the legacy `safety_net_*`). Clubhouse now **rejects a code request that carries none**, answering `{"success": false, "error_message": "login did not pass token validation!"}`.
 
-These tokens can only be minted by the signed Clubhouse app running on a Google-Play-certified device. **No TLS fingerprint or header trick from a desktop helper can produce one**, so the `ch-auth-helper` WinHTTP bypass (which defeated an earlier, softer Cloudflare/JA3 gate) no longer gets an SMS dispatched. `/auth/start` detects this message and steers the user to token-connect rather than surfacing the raw error.
+These tokens can only be minted by the signed Clubhouse app running on a Google-Play-certified device. **No TLS fingerprint or header trick from a desktop helper can produce one**, so the `ch-auth-helper` WinHTTP bypass (which defeated an earlier, softer Cloudflare/JA3 gate) no longer gets an SMS dispatched. `/auth/start` detects this message and steers the user to token-connect rather than surfacing the raw error. That depends on `_run_helper` handing Clubhouse's reply back: the helper exits 1 on **every** non-2xx and wraps the reply as `{"error": "Clubhouse returned status 400: {…}"}`, and raising on the exit code alone once hid the steer behind a generic "Authentication failed" (a test with a mocked `_run_helper` could not see it — `test_start_auth_attestation_gate_survives_the_real_helper_exit` fakes the subprocess instead).
 
 The C# helper still exists and still sends the current version headers; the WinHTTP-vs-`HttpClientHandler` platform split remains (Windows uses the trust-listed WinHTTP stack, other OSes fall back). But this is now moot for `start`: attestation gates every platform equally.
 
 ### 3. Token-Connect — the working path
 
 `POST /auth/token` (the **"Auth token"** tab) takes an `auth_token` + `user_id` captured from a real logged-in Clubhouse session and validates them against **`/get_profile`** (of the account's own id) — deliberately **not** `/me`, see the route-block note below. It needs no attestation and is the supported way to link an account. Capture the token from the official app's traffic (or a prior successful sign-in); it is stored server-side only.
+
+**From Clubdeck (verified 2026-09-14).** Clubdeck still gets an SMS dispatched where the helper is refused. After signing in there, `%APPDATA%\Clubdeck\profile.json` holds `token`, `userId` and `deviceId` — pass **all three**. The session is issued to that device, so `/auth/token` records it and also **adopts it as the install id** (`_adopt_device_id`), so a later sign-in from this machine presents the same device rather than a new one. Without a `device_id`, the install id is recorded explicitly. The session is shared with Clubdeck: signing out there likely ends it here too. Clubdeck's API calls ignore `HTTP_PROXY` and `--proxy-server`, so a proxy capture of its login records nothing.
 
 ### The `/me` + `/get_feed_v3` route block (Cloudflare 503)
 
@@ -51,10 +59,10 @@ To communicate with Clubhouse, the backend passes specific metadata headers to a
 - **Common Request Headers:**
   - `CH-Languages`: `en-US`
   - `CH-Locale`: `en_US`
-  - `CH-AppBuild`: `26.07.07` (build version)
-  - `CH-AppVersion`: `26.07.07` (app version)
-  - `CH-DeviceId`: A stable, per-install UUID generated by the backend (stored in `.data/clubhouse-device-id`).
-  - `User-Agent`: `clubhouse/android/26.07.07`
+  - `CH-AppBuild`: `1038152` (numeric build)
+  - `CH-AppVersion`: `26.08.30` (app version)
+  - `CH-DeviceId`: the connected session's `device_id`; otherwise the per-install uppercase UUID in `.data/clubhouse-device-id` (which token-connect overwrites with the device it was given).
+  - `User-Agent`: `clubhouse/android/1038152`
 - **Authenticated Request Headers:**
   - `Authorization`: `Token <auth_token>`
   - `CH-UserID`: The numeric user ID linked to the session.

@@ -364,6 +364,89 @@ def test_connect_with_token_validates_and_stores(
     assert status.json()["connected"] is True
 
 
+def _write_clubdeck_profile(monkeypatch, tmp_path, data: dict) -> None:
+    profile = tmp_path / "clubdeck-profile.json"
+    profile.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setenv("HORRIBLE_CLUBDECK_PROFILE", str(profile))
+
+
+CLUBDECK_PROFILE = {
+    "token": "CD-TOKEN",
+    "userId": 2125780680,
+    "deviceId": "CLUBDECK-DEVICE",
+    "user": {"username": "horribleguru", "name": "Horrible Program"},
+}
+
+
+def test_clubdeck_availability_absent(client, tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("HORRIBLE_CLUBDECK_PROFILE", str(tmp_path / "nope.json"))
+    body = client.get("/api/clubhouse/auth/clubdeck").json()
+    assert body["available"] is False
+    assert "isn't installed" in body["reason"]
+
+
+def test_clubdeck_availability_signed_out(client, tmp_path, monkeypatch) -> None:
+    # File present (Clubdeck installed) but no token -> signed out, a distinct state.
+    _write_clubdeck_profile(monkeypatch, tmp_path, {"user": {"username": "x"}})
+    body = client.get("/api/clubhouse/auth/clubdeck").json()
+    assert body["available"] is False
+    assert "not signed in" in body["reason"]
+
+
+def test_clubdeck_availability_previews_without_leaking_token(
+    client, tmp_path, monkeypatch
+) -> None:
+    _write_clubdeck_profile(monkeypatch, tmp_path, CLUBDECK_PROFILE)
+    res = client.get("/api/clubhouse/auth/clubdeck")
+    assert res.json() == {
+        "available": True,
+        "username": "horribleguru",
+        "name": "Horrible Program",
+        "reason": None,
+    }
+    assert "CD-TOKEN" not in res.text  # the token is never in the availability reply
+
+
+def test_import_clubdeck_connects_with_its_session(
+    client, tmp_path, monkeypatch
+) -> None:
+    _write_clubdeck_profile(monkeypatch, tmp_path, CLUBDECK_PROFILE)
+    calls: list[tuple] = []
+
+    async def fake_authed_post(path, payload, token, user_id, device_id=None):
+        calls.append((path, payload, token, user_id, device_id))
+        return {"user_profile": FAKE_PROFILE}
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_authed_post)
+    res = client.post("/api/clubhouse/auth/import-clubdeck")
+    assert res.status_code == 200
+    assert res.json()["connected"] is True
+    assert "CD-TOKEN" not in res.text
+    # Clubdeck's own token, user id and device id are what get used.
+    assert calls == [
+        (
+            "/get_profile",
+            {"user_id": 2125780680},
+            "CD-TOKEN",
+            2125780680,
+            "CLUBDECK-DEVICE",
+        )
+    ]
+    stored = json.loads((tmp_path / "clubhouse-auth.json").read_text())
+    assert stored["device_id"] == "CLUBDECK-DEVICE"
+    # The device is adopted so a later sign-in from here presents the same one.
+    assert (tmp_path / "clubhouse-device-id").read_text().strip() == "CLUBDECK-DEVICE"
+
+
+def test_import_clubdeck_without_a_session_is_404(
+    client, tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("HORRIBLE_CLUBDECK_PROFILE", str(tmp_path / "nope.json"))
+    res = client.post("/api/clubhouse/auth/import-clubdeck")
+    assert res.status_code == 404
+    assert "Clubdeck" in res.json()["detail"]
+
+
 def test_connect_with_token_rejects_bad_token(client: TestClient, monkeypatch) -> None:
     from fastapi import HTTPException
 
@@ -873,6 +956,153 @@ def test_helper_log_never_carries_the_token(tmp_path, monkeypatch, caplog) -> No
         data = asyncio.run(routes._run_helper("complete", "+15551234567", "1234"))
     assert data["auth_token"] == "SECRET-TOKEN"
     assert "SECRET" not in caplog.text
+
+
+def _fake_helper(
+    monkeypatch, tmp_path, returncode: int, stdout: dict
+) -> list[list[str]]:
+    cmds: list[list[str]] = []
+    monkeypatch.setattr(routes, "_get_helper_path", lambda: tmp_path / "helper")
+
+    def fake_run(cmd, **_):
+        cmds.append(cmd)
+        return subprocess.CompletedProcess(
+            cmd, returncode, json.dumps(stdout).encode(), b""
+        )
+
+    monkeypatch.setattr(routes.subprocess, "run", fake_run)
+    return cmds
+
+
+def _helper_rejection(status: int, reply: dict) -> dict:
+    """What ch-auth-helper prints on a non-2xx: exit 1, the reply wrapped."""
+    return {
+        "success": False,
+        "error": f"Clubhouse returned status {status}: {json.dumps(reply)}",
+    }
+
+
+def test_start_auth_attestation_gate_survives_the_real_helper_exit(
+    client, tmp_path, monkeypatch
+) -> None:
+    # _run_helper used to raise a generic "Authentication failed" on the exit
+    # code, so start_auth's steer to token-connect never ran against the real
+    # helper -- only against a mocked _run_helper that returned the reply.
+    reply = {
+        "success": False,
+        "is_blocked": False,
+        "error_message": "login did not pass token validation!",
+    }
+    _fake_helper(monkeypatch, tmp_path, 1, _helper_rejection(400, reply))
+    res = client.post(
+        "/api/clubhouse/auth/start", json={"phone_number": "+15551234567"}
+    )
+    assert res.status_code == 400
+    detail = res.json()["detail"]
+    assert "Auth token" in detail
+    assert "Authentication failed" not in detail
+
+
+def test_complete_auth_relays_clubhouse_message_from_helper_failure(
+    client, tmp_path, monkeypatch
+) -> None:
+    reply = {"success": False, "error_message": "Too many attempts"}
+    _fake_helper(monkeypatch, tmp_path, 1, _helper_rejection(429, reply))
+    res = client.post(
+        "/api/clubhouse/auth/complete",
+        json={"phone_number": "+15551234567", "verification_code": "1234"},
+    )
+    assert res.status_code == 400
+    assert "Too many attempts" in res.json()["detail"]
+
+
+def test_helper_failure_without_a_clubhouse_reply_still_raises(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path))
+    _fake_helper(
+        monkeypatch,
+        tmp_path,
+        1,
+        {"success": False, "error": "Clubhouse returned status 503: <html>down</html>"},
+    )
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes._run_helper("start", "+15551234567"))
+    assert "Authentication failed" in exc.value.detail
+
+
+def test_connected_session_device_id_wins_everywhere(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path))
+    (tmp_path / "clubhouse-device-id").write_text("INSTALL")
+    _connect(tmp_path)  # a session issued to device "D"
+    # Unauthenticated calls and the auth helper too, not just authed routes.
+    assert routes._headers()["CH-DeviceId"] == "D"
+    cmds = _fake_helper(monkeypatch, tmp_path, 0, {"success": True})
+    asyncio.run(routes._run_helper("start", "+15551234567"))
+    assert cmds[0][-1] == "D"
+
+
+def test_install_device_id_when_disconnected_is_stable(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path))
+    first = routes._headers()["CH-DeviceId"]
+    assert routes._headers()["CH-DeviceId"] == first
+    assert (tmp_path / "clubhouse-device-id").read_text().strip() == first
+
+
+def test_connect_with_token_adopts_its_device_id(client, tmp_path, monkeypatch) -> None:
+    (tmp_path / "clubhouse-device-id").write_text("INSTALL")
+
+    async def fake_authed_post(path, payload, token, user_id, device_id=None):
+        return {"user_profile": FAKE_PROFILE}
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_authed_post)
+    res = client.post(
+        "/api/clubhouse/auth/token",
+        json={"auth_token": "TKN", "user_id": 4242, "device_id": "DEV-1"},
+    )
+    assert res.status_code == 200
+    stored = json.loads((tmp_path / "clubhouse-auth.json").read_text())
+    assert stored["device_id"] == "DEV-1"
+    # It outlives the session: signing in again from here presents that device.
+    client.delete("/api/clubhouse/auth")
+    assert routes._headers()["CH-DeviceId"] == "DEV-1"
+
+
+def test_every_sign_in_records_the_device_it_used(
+    client, tmp_path, monkeypatch
+) -> None:
+    (tmp_path / "clubhouse-device-id").write_text("INSTALL")
+    seen: list[str | None] = []
+
+    async def fake_authed_post(path, payload, token, user_id, device_id=None):
+        seen.append(device_id)
+        return {"user_profile": FAKE_PROFILE}
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_authed_post)
+    client.post(
+        "/api/clubhouse/auth/token", json={"auth_token": "TKN", "user_id": 4242}
+    )
+    assert seen == ["INSTALL"]
+    stored = json.loads((tmp_path / "clubhouse-auth.json").read_text())
+    assert stored["device_id"] == "INSTALL"
+
+    client.delete("/api/clubhouse/auth")
+    _mock_ch(
+        monkeypatch,
+        {
+            "/complete_phone_number_auth": {
+                "auth_token": "SECRET-TOKEN",
+                "user_profile": FAKE_PROFILE,
+            }
+        },
+    )
+    res = client.post(
+        "/api/clubhouse/auth/complete",
+        json={"phone_number": "+15551234567", "verification_code": "1234"},
+    )
+    assert res.status_code == 200
+    stored = json.loads((tmp_path / "clubhouse-auth.json").read_text())
+    assert stored["device_id"] == "INSTALL"
 
 
 def test_update_bio(client, tmp_path, monkeypatch) -> None:
