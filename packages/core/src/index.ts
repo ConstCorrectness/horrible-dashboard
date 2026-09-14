@@ -379,7 +379,7 @@ export {
 export { stubModule } from './modules/stub';
 export { databaseModule } from './modules/database';
 export { karaokeModule } from './modules/karaoke';
-export { audioModule } from './modules/audio';
+export { audioModule, initAudio } from './modules/audio';
 export { libraryModule } from './modules/library';
 export { docviewerModule } from './modules/docviewer';
 export { recordsModule } from './modules/records';

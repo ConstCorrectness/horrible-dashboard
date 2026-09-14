@@ -152,7 +152,7 @@ takes effect on the next song without a restart:
 
 | Download | Format | Result |
 | --- | --- | --- |
-| Video, ffmpeg present | `VIDEO_FORMAT`: `bv*[vcodec^=avc1][height<=720]+ba[ext=m4a]`, then any mp4 video ≤720p + m4a, then a single file | merged `.mp4`, `ffmpeg_location` passed explicitly |
+| Video, ffmpeg present | `VIDEO_FORMAT`: `bv*[vcodec^=avc1][height<=720]+ba[ext=m4a]`, then any mp4 video ≤720p + m4a, then a single file, then **last** video ≤720p (H.264 preferred) + any audio, for a video whose only audio is Opus/WebM — ffmpeg copies Opus into the mp4 | merged `.mp4`, `ffmpeg_location` passed explicitly |
 | Video, no ffmpeg | `NO_FFMPEG_FORMAT`: `b[ext=mp4]/b/ba[ext=m4a]/ba` | a pre-muxed file if the video still has one, else **audio only** |
 | Audio only (`start_download(..., audio_only=True)`) | `AUDIO_FORMAT`: `ba[ext=m4a]/ba/b` | `.m4a`; ffmpeg is never consulted |
 

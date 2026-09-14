@@ -57,6 +57,7 @@ import {
   recordsModule,
   browserModule,
   audioModule,
+  initAudio,
   hardwareModule,
   storageModule,
   updatesModule,
@@ -289,6 +290,9 @@ async function boot(): Promise<void> {
     // you are doing something else by definition, and a channel that only starts
     // when the share pane mounts would drop it on the floor.
     initShare();
+    // The saved audio routing. Without it the mixer has no buses until its pane is
+    // opened, and anything routed through it (a karaoke song) has nowhere to play.
+    initAudio();
     initNotifications();
     // Same reason as initSocial, and the same bug it fixed: the records watch used to
     // start only when a records pane mounted, so an agent proposal filed while you

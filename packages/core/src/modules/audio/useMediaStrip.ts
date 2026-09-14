@@ -43,13 +43,12 @@ const attached = new WeakMap<HTMLMediaElement, MediaElementAudioSourceNode>();
 /**
  * Attach a media element to a mixer strip for as long as the component lives.
  *
- * Pass a ref, not an element: the element does not exist on the first render,
- * and the effect re-runs when it appears.
+ * Pass the element itself (held in state via a callback ref), **not** a
+ * `RefObject`. A ref object is stable, so an effect keyed on it never re-runs
+ * when the element appears: a `<video>` mounted after the first render — the
+ * karaoke stage's splash giving way to a song — was never attached at all.
  */
-export function useMediaStrip(
-  ref: React.RefObject<HTMLMediaElement | null>,
-  decl: StripDecl,
-): void {
+export function useMediaStrip(element: HTMLMediaElement | null, decl: StripDecl): void {
   const { id, label, icon } = decl;
 
   useEffect(() => {
@@ -57,7 +56,6 @@ export function useMediaStrip(
   }, [id, label, icon]);
 
   useEffect(() => {
-    const element = ref.current;
     if (!element) return;
 
     const handle = mixer.connectStrip(id);
@@ -87,5 +85,5 @@ export function useMediaStrip(
       }
       handle.release();
     };
-  }, [ref, id]);
+  }, [element, id]);
 }

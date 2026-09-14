@@ -61,6 +61,8 @@ interface LiveStrip {
   sends: Map<string, GainNode>;
   /** True once a module has actually connected audio to `fader`. */
   live: boolean;
+  /** True while `fader` is wired straight to `ctx.destination` — see `syncBypass`. */
+  bypass: boolean;
 }
 
 interface LiveBus {
@@ -172,10 +174,11 @@ class MixerEngine {
 
     let strip = this.strips.get(id);
     if (!strip) {
-      strip = { decl, fader: ctx.createGain(), sends: new Map(), live: false };
+      strip = { decl, fader: ctx.createGain(), sends: new Map(), live: false, bypass: false };
       this.strips.set(id, strip);
       this.wireStrip(strip);
     }
+    this.syncBypass();
     strip.live = true;
     this.emit();
 
@@ -237,8 +240,31 @@ class MixerEngine {
 
     // Every strip needs a send to every bus, including buses added just now.
     for (const strip of this.strips.values()) this.wireStrip(strip);
+    this.syncBypass();
     this.applyLevels();
     this.emit();
+  }
+
+  /**
+   * With no bus to reach, wire every strip straight to the default output; with
+   * one, remove that wire.
+   *
+   * Buses only exist once a routing has been applied — at launch, when the mixer
+   * is opened, or never if the backend is down. A strip connected before then had
+   * a fader leading nowhere, and because `createMediaElementSource` had already
+   * taken the element's audio, a karaoke song played in total silence with no
+   * error anywhere. The default output is what an app without a mixer would do,
+   * which is the promise `audio.startOnBoot` makes when it is off.
+   */
+  private syncBypass(): void {
+    if (!this.ctx) return;
+    const bypass = this.buses.size === 0;
+    for (const strip of this.strips.values()) {
+      if (bypass === strip.bypass) continue;
+      if (bypass) strip.fader.connect(this.ctx.destination);
+      else strip.fader.disconnect(this.ctx.destination);
+      strip.bypass = bypass;
+    }
   }
 
   /** The saved state, or null before the first apply. */

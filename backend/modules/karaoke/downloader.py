@@ -196,12 +196,21 @@ AUDIO_FORMAT = "ba[ext=m4a]/ba/b"
 #: audio-only streams and nothing combined, so the old `best[ext=mp4]/best` failed
 #: with "Requested format is not available". H.264 first because it decodes in every
 #: browser and WebView without a hardware-codec lottery (AV1 and VP9 do not); 720p is
-#: plenty for lyrics on a TV and keeps a song to tens of megabytes. The trailing
-#: single-file choices only matter for a video that still has one.
+#: plenty for lyrics on a TV and keeps a song to tens of megabytes. The single-file
+#: choices only matter for a video that still has one.
+#:
+#: The final `+ba` pair is for a video whose only audio is Opus/WebM and which has no
+#: combined file: every choice before it needs m4a audio or a single file, so such a
+#: video used to fail outright. It must stay *last* -- nearly every video has separate
+#: streams, so anywhere earlier it would win before H.264 + AAC was ever tried. It
+#: still prefers H.264: measured 2026-09-12, an unconstrained `bv*` picked AV1. ffmpeg
+#: copies Opus into the mp4 container (checked with ffprobe) and browsers play it.
 VIDEO_FORMAT = (
     "bv*[vcodec^=avc1][height<=720]+ba[ext=m4a]"
     "/bv*[ext=mp4][height<=720]+ba[ext=m4a]"
     "/b[ext=mp4]/b"
+    "/bv*[vcodec^=avc1][height<=720]+ba"
+    "/bv*[height<=720]+ba"
 )
 
 #: Without ffmpeg nothing can be joined, so take a single pre-muxed file if the video

@@ -57,6 +57,13 @@ const PROGRESS_MS = 1000;
 export function KaraokeStagePanel() {
   useSyncExternalStore(subscribeKaraoke, karaokeVersion);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  // The same element, as state, so the mixer hook re-runs when a `<video>` mounts
+  // (after the splash, or the fresh element that replaces a finished download).
+  const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
+  const attachVideo = useCallback((el: HTMLVideoElement | null) => {
+    videoRef.current = el;
+    setVideoEl(el);
+  }, []);
   const [bannerVisible, setBannerVisible] = useState(true);
   const state = getPlayerState();
   const status = getKaraokeStatus();
@@ -68,7 +75,7 @@ export function KaraokeStagePanel() {
   // at the same time — the singer hears the backing track while a call, a stream
   // or a recording gets it too. The media is served by our own backend, so the
   // same-origin requirement in `useMediaStrip` holds.
-  useMediaStrip(videoRef, { id: 'karaoke', label: 'Karaoke', icon: '🎤' });
+  useMediaStrip(videoEl, { id: 'karaoke', label: 'Karaoke', icon: '🎤' });
 
   useEffect(() => {
     connectKaraoke();
@@ -206,7 +213,7 @@ export function KaraokeStagePanel() {
         ) : entry ? (
           <>
             <video
-              ref={videoRef}
+              ref={attachVideo}
               className="kk-stage__video"
               src={src}
               onEnded={onEnded}

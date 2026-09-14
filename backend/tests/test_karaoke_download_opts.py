@@ -36,6 +36,22 @@ def test_with_ffmpeg_video_joins_h264_video_to_m4a_audio(tmp_path: Path):
     assert opts["ffmpeg_location"] == "C:/tools/ffmpeg.exe"
 
 
+def test_a_video_with_only_opus_audio_still_downloads(tmp_path: Path):
+    """Every choice ahead of the fallback needs m4a audio or a single file, so a video
+    whose only audio is Opus/WebM used to fail with "Requested format is not
+    available". The fallback must come last (nearly every video has separate streams,
+    so earlier it would beat H.264 + AAC) and still prefer H.264, because an
+    unconstrained `bv*` picks AV1."""
+    alternatives = downloader.download_opts("song1", tmp_path, ffmpeg="ffmpeg")[
+        "format"
+    ].split("/")
+    assert alternatives[-2:] == [
+        "bv*[vcodec^=avc1][height<=720]+ba",
+        "bv*[height<=720]+ba",
+    ]
+    assert all("ext=m4a" in a or "+" not in a for a in alternatives[:-2])
+
+
 def test_without_ffmpeg_nothing_is_merged_and_audio_is_the_fallback(tmp_path: Path):
     opts = downloader.download_opts("song1", tmp_path, ffmpeg=None)
     assert opts["format"] == downloader.NO_FFMPEG_FORMAT

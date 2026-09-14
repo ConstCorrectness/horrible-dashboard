@@ -18,6 +18,7 @@
 import './audio.css';
 
 import { registry, type ModuleManifest } from '../../registry';
+import { getSetting } from '../../settings';
 import { AudioMixerPanel } from './panels/MixerPanel';
 import { AudioDevicesSection } from './settings/DevicesSection';
 import { connectAudio, ensureLoaded } from './store';
@@ -73,6 +74,19 @@ export const audioModule: ModuleManifest = {
     { id: 'audio.devices', title: 'Audio devices', component: AudioDevicesSection },
   ],
 };
+
+/**
+ * Load the saved routing at launch when `audio.startOnBoot` is on.
+ *
+ * Call after settings load. The setting was declared long before anything read
+ * it, so the routing loaded only when the mixer pane opened, and until then
+ * every strip had no bus to play through.
+ */
+export function initAudio(): void {
+  if (getSetting<boolean>('audio.startOnBoot') === false) return;
+  connectAudio();
+  void ensureLoaded();
+}
 
 export { mixer, dbToGain } from './engine';
 export { connectAudio, ensureLoaded, getState, subscribeMixer } from './store';

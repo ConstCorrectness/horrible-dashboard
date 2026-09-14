@@ -114,8 +114,19 @@ const handle = mixer.connectStrip('karaoke');
 source.connect(handle.input); // never handle.context.destination
 ```
 
-For a media element there is a hook, `useMediaStrip(ref, decl)`, which handles
-the once-per-element rule below.
+For a media element there is a hook, `useMediaStrip(element, decl)`, which handles
+the once-per-element rule below. Pass the element held in state through a callback
+ref, not a `RefObject`: a ref object never changes, so an effect keyed on it does
+not re-run when a `<video>` mounts after the first render, and that element is
+never attached.
+
+**Until a bus exists, a strip plays straight to the default output.** Buses come
+from the saved routing, which loads at launch (`audio.startOnBoot`, on by default)
+or when the mixer is first opened. A strip connected before that, or with the
+backend down, used to reach a fader wired to nothing. `createMediaElementSource`
+had already taken the element's audio, so a karaoke song played in total silence.
+The engine now wires such a fader to `ctx.destination` and unwires it the moment
+`apply` builds a bus.
 
 Capturing a microphone goes through `inputConstraints()` so the chosen input
 device is honoured — a module that keeps calling `getUserMedia({ audio: true })`
