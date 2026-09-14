@@ -1463,7 +1463,52 @@ fn walk_glb_node(
             || node_name.contains("Globe")
             || node_name.contains("Clock")
             || node_name.contains("Plaque")
-            || node_name.contains("Urn");
+            || node_name.contains("Urn")
+            || node_name.contains("Hatch")
+            || node_name.contains("Ingot")
+            || node_name.contains("NonCol")
+            || node_name.contains("Rope")
+            || node_name.contains("Lug")
+            || node_name.contains("Dial")
+            || node_name.contains("Spoke")
+            || node_name.contains("Caster")
+            || node_name.contains("Cart_Rail")
+            || node_name.contains("Trophy")
+            || node_name.contains("Frame")
+            || node_name.contains("Painting")
+            || node_name.contains("Sconce")
+            || node_name.contains("Screen")
+            || node_name.contains("Keyhole")
+            || node_name.contains("Dunnage")
+            || node_name.contains("Stringer")
+            || node_name.contains("Slat")
+            || node_name.contains("Strap")
+            || node_name.contains("Buckle")
+            || node_name.contains("Rosette")
+            || node_name.contains("Medallion")
+            || node_name.contains("Inlay")
+            || node_name.contains("Blotter")
+            || node_name.contains("Keyboard")
+            || node_name.contains("Mouse")
+            || node_name.contains("Speaker")
+            || node_name.contains("Mic")
+            || node_name.contains("Nameplate")
+            || node_name.contains("Wicket")
+            || node_name.contains("Spindle")
+            || node_name.contains("Winch")
+            || node_name.contains("Lightbar")
+            || node_name.contains("Cup")
+            || node_name.contains("Mug")
+            || node_name.contains("Spigot")
+            || node_name.contains("Shade")
+            || node_name.contains("Bulb")
+            || node_name.contains("Chain")
+            || node_name.contains("Handwheel")
+            || node_name.contains("Bushing")
+            || node_name.contains("Bolt")
+            || node_name.contains("Cart_");
+
+        let is_invisible = node_name.contains("Invisible") || node_name.contains("ColOnly");
 
         for prim in mesh.primitives() {
             let mat_name = prim.material().name().unwrap_or("");
@@ -1528,31 +1573,33 @@ fn walk_glb_node(
                 let uv1 = uvs.get(i1).copied().unwrap_or([0.0, 0.0]);
                 let uv2 = uvs.get(i2).copied().unwrap_or([0.0, 0.0]);
 
-                // Render space: x = gltf_x, y = gltf_y (elevation), z = -gltf_z (North)
-                // Winding order inverted: (i0, i2, i1) because of z negation
-                let r_p0 = [p0.x, p0.y, -p0.z];
-                let r_p1 = [p1.x, p1.y, -p1.z];
-                let r_p2 = [p2.x, p2.y, -p2.z];
+                if !is_invisible {
+                    // Render space: x = gltf_x, y = gltf_y (elevation), z = -gltf_z (North)
+                    // Winding order inverted: (i0, i2, i1) because of z negation
+                    let r_p0 = [p0.x, p0.y, -p0.z];
+                    let r_p1 = [p1.x, p1.y, -p1.z];
+                    let r_p2 = [p2.x, p2.y, -p2.z];
 
-                let r_n0 = [n0.x, n0.y, -n0.z];
-                let r_n1 = [n1.x, n1.y, -n1.z];
-                let r_n2 = [n2.x, n2.y, -n2.z];
+                    let r_n0 = [n0.x, n0.y, -n0.z];
+                    let r_n1 = [n1.x, n1.y, -n1.z];
+                    let r_n2 = [n2.x, n2.y, -n2.z];
 
-                render_positions.extend_from_slice(&r_p0);
-                render_positions.extend_from_slice(&r_p2);
-                render_positions.extend_from_slice(&r_p1);
+                    render_positions.extend_from_slice(&r_p0);
+                    render_positions.extend_from_slice(&r_p2);
+                    render_positions.extend_from_slice(&r_p1);
 
-                render_normals.extend_from_slice(&r_n0);
-                render_normals.extend_from_slice(&r_n2);
-                render_normals.extend_from_slice(&r_n1);
+                    render_normals.extend_from_slice(&r_n0);
+                    render_normals.extend_from_slice(&r_n2);
+                    render_normals.extend_from_slice(&r_n1);
 
-                render_colors.extend_from_slice(&color);
-                render_colors.extend_from_slice(&color);
-                render_colors.extend_from_slice(&color);
+                    render_colors.extend_from_slice(&color);
+                    render_colors.extend_from_slice(&color);
+                    render_colors.extend_from_slice(&color);
 
-                render_uvs.extend_from_slice(&uv0);
-                render_uvs.extend_from_slice(&uv2);
-                render_uvs.extend_from_slice(&uv1);
+                    render_uvs.extend_from_slice(&uv0);
+                    render_uvs.extend_from_slice(&uv2);
+                    render_uvs.extend_from_slice(&uv1);
+                }
 
                 if is_collider {
                     // Game/Rapier physics coordinates: x = gltf_x, y = -gltf_z (North), z = gltf_y (Elevation)

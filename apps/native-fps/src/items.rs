@@ -194,7 +194,7 @@ pub fn tint(kind: &str) -> Option<u32> {
         "health" => Some(TINT_HEALTH),
         "helmet" => Some(TINT_HELMET),
         "armour" => Some(TINT_ARMOUR),
-        "ammo" => Some(TINT_AMMO),
+        "ammo" | "ammo_assault" | "ammo_sniper" => Some(TINT_AMMO),
         "clips" => Some(TINT_CLIPS),
         "grenade" => Some(TINT_GRENADE),
         _ => None,
@@ -212,10 +212,7 @@ fn scale(c: [f32; 3], k: f32) -> [f32; 3] {
 
 /// One item's silhouette, from primitives.
 ///
-/// The same six the browser draws. Exact vertex-for-vertex agreement between two
-/// renderers is not a thing worth chasing — the colour is the identifying signal
-/// and that *is* pinned — but the silhouettes match, so a player who learns to
-/// read a map in one client can read it in the other.
+/// Refined with multi-part tactical detailing to eliminate primitive toy blockiness.
 fn push_shape(
     out: &mut Vec<Vertex>,
     kind: &str,
@@ -224,53 +221,86 @@ fn push_shape(
     spin: f32,
     colour: [f32; 3],
 ) {
+    let white = [0.92, 0.92, 0.92];
+    let dark = [0.14, 0.15, 0.18];
+    let red_cross = [0.88, 0.12, 0.12];
     match kind {
-        // A cross: the one item shape that needs no legend.
+        // Tactical Medic Trauma Hardcase with embossed Red Cross
         "health" => {
+            // Main hardcase shell
+            push_box(out, at, [0.75 * size, 0.38 * size, 0.55 * size], spin, white);
+            // Black protective corner bumpers & latch band
+            push_box(out, at, [0.78 * size, 0.40 * size, 0.12 * size], spin, dark);
+            // Red cross emblem: horizontal bar
+            push_box(out, at, [0.45 * size, 0.42 * size, 0.14 * size], spin, red_cross);
+            // Red cross emblem: vertical bar
+            push_box(out, at, [0.14 * size, 0.42 * size, 0.45 * size], spin, red_cross);
+        }
+        // Ballistic FAST Combat Helmet with NVG shroud and brim
+        "helmet" => {
+            push_sphere(
+                out,
+                at,
+                [0.45 * size, 0.45 * size, 0.32 * size],
+                12,
+                8,
+                colour,
+            );
+            // Brim / rim lip
+            push_box(out, at, [0.48 * size, 0.48 * size, 0.08 * size], spin, dark);
+            // Front NVG mount plate
+            push_box(out, at, [0.14 * size, 0.50 * size, 0.14 * size], spin, dark);
+        }
+        // Tactical Ballistic Plate Carrier with trauma plate insert
+        "armour" => {
+            // Main vest carrier body
+            push_box(out, at, [0.70 * size, 0.28 * size, 0.85 * size], spin, colour);
+            // Raised front trauma plate insert
+            push_box(out, at, [0.55 * size, 0.34 * size, 0.55 * size], spin, scale(colour, 1.25));
+            // Heavy shoulder harness straps
+            push_box(out, at, [0.74 * size, 0.30 * size, 0.12 * size], spin, dark);
+        }
+        // Military Steel Ammunition Canister
+        "ammo" | "ammo_assault" | "ammo_sniper" => {
+            // Main steel ammo box
+            push_box(out, at, [0.75 * size, 0.40 * size, 0.50 * size], spin, colour);
+            // Top lid rim
+            push_box(out, at, [0.79 * size, 0.44 * size, 0.12 * size], spin, scale(colour, 0.85));
+            // Front latch clasp
+            push_box(out, at, [0.16 * size, 0.46 * size, 0.18 * size], spin, dark);
+        }
+        // Dual Clamped STANAG 30-round Magazines
+        "clips" => {
             push_box(
                 out,
                 at,
-                [0.9 * size, 0.28 * size, 0.28 * size],
+                [0.22 * size, 0.38 * size, 0.65 * size],
                 spin,
                 colour,
             );
+            // Steel mag coupler clamp
             push_box(
                 out,
                 at,
-                [0.28 * size, 0.28 * size, 0.9 * size],
+                [0.26 * size, 0.44 * size, 0.18 * size],
                 spin,
-                colour,
+                dark,
             );
         }
-        // A dome. A squashed sphere rather than a true hemisphere: the flat
-        // underside of one is never visible on a floating item, so the half that
-        // would need a new primitive is the half nobody sees.
-        "helmet" => push_sphere(
-            out,
-            at,
-            [0.45 * size, 0.45 * size, 0.3 * size],
-            10,
-            6,
-            colour,
-        ),
-        // A plate, wider than it is thick, so it reads as a vest end-on too.
-        "armour" => push_box(out, at, [0.75 * size, 0.3 * size, 0.9 * size], spin, colour),
-        "ammo" => push_box(out, at, [0.8 * size, 0.5 * size, 0.5 * size], spin, colour),
-        "clips" => push_box(
-            out,
-            at,
-            [0.45 * size, 0.28 * size, 0.6 * size],
-            spin,
-            colour,
-        ),
-        "grenade" => push_sphere(
-            out,
-            at,
-            [0.24 * size, 0.24 * size, 0.41 * size],
-            8,
-            6,
-            colour,
-        ),
+        // M67 Fragmentation Grenade
+        "grenade" => {
+            push_sphere(
+                out,
+                at,
+                [0.25 * size, 0.25 * size, 0.35 * size],
+                10,
+                8,
+                colour,
+            );
+            // Fuse neck & safety spoon lever
+            push_box(out, at, [0.10 * size, 0.10 * size, 0.50 * size], spin, dark);
+            push_box(out, at, [0.06 * size, 0.26 * size, 0.24 * size], spin, scale(colour, 0.6));
+        }
         _ => push_box(out, at, [0.5 * size; 3], spin, colour),
     }
 }

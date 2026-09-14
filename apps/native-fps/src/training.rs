@@ -252,6 +252,9 @@ impl TrainingRange {
     /// checks), so this cannot put a target inside a wall on a map it has never
     /// seen. Nearest first, and never the one the player is standing on.
     pub fn place(&mut self, world: &World, from_x: f32, from_y: f32) {
+        if std::env::var_os("NO_DUMMIES").is_some() {
+            return;
+        }
         let mut points: Vec<(f32, f32, f32, f32)> = world
             .spawns(None)
             .iter()
