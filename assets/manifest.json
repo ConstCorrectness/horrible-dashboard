@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "baseUrl": "https://github.com/ConstCorrectness/horrible-dashboard/releases/download/assets-v1",
+  "version": 2,
+  "baseUrl": "https://github.com/ConstCorrectness/horrible-dashboard/releases/download/assets-v2",
   "assets": {
     "hassault-arms": {
       "filename": "hassault-arms.glb",
@@ -18,6 +18,30 @@
       "category": "animation",
       "description": "Skeletal locomotion clips for player operators"
     },
+    "hassault-grenade-flash": {
+      "filename": "hassault-grenade-flash.glb",
+      "destination": "apps/web/public/hassault-grenade-flash.glb",
+      "sha256": "2cbb31bfedd350e50a033475c643341a28f2d9ea5fc075f289dfab4724e651e0",
+      "size": 41204,
+      "category": "grenade",
+      "description": "Flashbang stun grenade prop"
+    },
+    "hassault-grenade-he": {
+      "filename": "hassault-grenade-he.glb",
+      "destination": "apps/web/public/hassault-grenade-he.glb",
+      "sha256": "1309e8566903c413e2db31273556a142ac1a6768c569004aa3f2853258810cb0",
+      "size": 38432,
+      "category": "grenade",
+      "description": "HE fragmentation grenade prop"
+    },
+    "hassault-grenade-smoke": {
+      "filename": "hassault-grenade-smoke.glb",
+      "destination": "apps/web/public/hassault-grenade-smoke.glb",
+      "sha256": "1f2608f2996f88fc1d18e889561dfd6c5c48ef41629e9c35954b6bbca875344f",
+      "size": 27596,
+      "category": "grenade",
+      "description": "Smoke grenade prop"
+    },
     "hassault-operator": {
       "filename": "hassault-operator.glb",
       "destination": "apps/web/public/hassault-operator.glb",
@@ -25,6 +49,14 @@
       "size": 7925192,
       "category": "operator",
       "description": "Base operator character model with 23 Mixamo animations"
+    },
+    "hassault-operator-t": {
+      "filename": "hassault-operator-t.glb",
+      "destination": "apps/web/public/hassault-operator-t.glb",
+      "sha256": "cf610f900a14d998862455b4edff8ed6a8c7493224eb49d4ac044cd498d2e441",
+      "size": 3616040,
+      "category": "operator",
+      "description": "T-side operator character model for dual-team rig dispatch"
     },
     "hassault-weapon-assault": {
       "filename": "hassault-weapon-assault.glb",
@@ -41,6 +73,14 @@
       "size": 706676,
       "category": "weapon",
       "description": "FN FAL Rifle with animated magazine and bolt receiver"
+    },
+    "hassault-weapon-knife": {
+      "filename": "hassault-weapon-knife.glb",
+      "destination": "apps/web/public/hassault-weapon-knife.glb",
+      "sha256": "b200aeac39716d450addf98a138964f2ef55251ff015419ae4e36428a8f4395e",
+      "size": 121956,
+      "category": "weapon",
+      "description": "Combat knife melee weapon prop"
     },
     "hassault-weapon-pistol": {
       "filename": "hassault-weapon-pistol.glb",

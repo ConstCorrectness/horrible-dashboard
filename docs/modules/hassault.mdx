@@ -240,6 +240,19 @@ one commit. `GET /api/hassault/status` then 500'd, and because that call is the
 loader's `install` stage, the pane froze at 17% showing a bare fetch error rather
 than anything naming the module that had gone missing.
 
+The manifest (`packages/core/src/modules/hassault/assets.manifest.json`, mirrored
+to `assets/manifest.json` by `pnpm assets:pack`) is **one release**: its `sha256`
+values describe the files on the `assets-v<version>` GitHub release its `baseUrl`
+points at. Adding or rebuilding a GLB therefore means bumping `version`, moving
+`baseUrl` to the new tag, and publishing that release with every file — not just the
+changed ones, since a client pulls everything from one URL. Neither `assets:pull` nor
+`asset_cache.sync_assets` refuses a hash mismatch (both warn and install), so a stale
+`baseUrl` silently serves the previous release; `assets-manifest.test.ts` pins the tag
+to the version. The browser's CacheStorage name is derived from the same `version`
+(`models/assetCache.ts`), which is what invalidates GLBs cached under an unchanged
+filename. **v2** added `hassault-operator-t`, `hassault-weapon-knife` and the three
+`hassault-grenade-*` props.
+
 ### The source of truth is JSON, not a `.cgz`
 
 A committed binary would be an opaque blob in a public repo — unreviewable,
