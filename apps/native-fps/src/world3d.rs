@@ -1814,6 +1814,163 @@ pub fn create_procedural_inferno_3d(info: MapInfo) -> World3D {
     }
 }
 
+/// Create the Middle East Sand Arena ("Mirage" / `hd_mirage`) 3D tournament arena.
+/// Features:
+/// 1. Palace Colonnade & Balcony: Elevated balcony (z=2.8m) with ornate colonnade arches overlooking Site A.
+/// 2. Bomb Site A: Tetris boxes (z=1.2m, 2.4m), Triple box cover, Ticket booth structure, and circular plant marker.
+/// 3. Middle & Sniper Nest: Window room (z=2.4m) overlooking Mid, Connector ramp connecting Mid to Site A, Catwalk (z=1.8m) to B Apartments, and sunken Underpass (z=-1.0m).
+/// 4. Bomb Site B & Apartments: Two-story residential block (z=2.8m) with arched window opening onto Site B, central pillar, and market counter.
+/// 5. SWAT / Barricade Van: Armored transport van on B site providing headshot angle cover.
+/// 6. Spawns & Aesthetics: Palm trees, terracotta shade canopies, and decorative amphoras.
+pub fn create_procedural_mirage_3d(info: MapInfo) -> World3D {
+    let mut b = FacilityBuilder::new();
+
+    let col_sand = [0.82, 0.76, 0.62];
+    let col_sandstone = [0.76, 0.66, 0.52];
+    let col_sandstone_dark = [0.65, 0.54, 0.40];
+    let col_limestone = [0.88, 0.85, 0.78];
+    let col_terracotta = [0.72, 0.35, 0.20];
+    let col_wood = [0.42, 0.30, 0.18];
+    let col_crate = [0.55, 0.42, 0.28];
+    let col_iron = [0.20, 0.22, 0.24];
+    let col_palm_trunk = [0.36, 0.26, 0.18];
+    let col_palm_frond = [0.18, 0.42, 0.16];
+    let col_canopy = [0.78, 0.32, 0.28];
+
+    // 1. Terrain Ground (4.0..66.0, 4.0..66.0)
+    b.add_floor(4.0, 4.0, 66.0, 66.0, 0.0, col_sand, true);
+
+    // High Perimeter Sandstone Walls (height 10.0)
+    b.add_quad([4.0, 4.0, 0.0], [66.0, 4.0, 0.0], [66.0, 4.0, 10.0], [4.0, 4.0, 10.0], col_sandstone, true);
+    b.add_quad([66.0, 66.0, 0.0], [4.0, 66.0, 0.0], [4.0, 66.0, 10.0], [66.0, 66.0, 10.0], col_sandstone, true);
+    b.add_quad([66.0, 4.0, 0.0], [66.0, 66.0, 0.0], [66.0, 66.0, 10.0], [66.0, 4.0, 10.0], col_sandstone_dark, true);
+    b.add_quad([4.0, 66.0, 0.0], [4.0, 4.0, 0.0], [4.0, 4.0, 10.0], [4.0, 66.0, 10.0], col_sandstone_dark, true);
+
+    // Decorative blue terracotta trim
+    b.add_box_ex(4.0, 4.2, 9.7, 66.0, 4.6, 10.1, [0.20, 0.45, 0.65], false);
+    b.add_box_ex(4.0, 65.4, 9.7, 66.0, 65.8, 10.1, [0.20, 0.45, 0.65], false);
+
+    // 2. Palace Colonnade & Balcony (Site A)
+    // Palace main outer block
+    b.add_box(44.0, 40.0, 0.0, 64.0, 62.0, 8.5, col_sandstone);
+    // Palace elevated balcony overlooking Site A
+    b.add_floor(44.0, 36.0, 56.0, 40.0, 2.8, col_sandstone_dark, true);
+    // Balcony railing
+    b.add_box_ex(44.0, 35.9, 2.8, 56.0, 36.1, 3.8, col_wood, true);
+    // Columns
+    b.add_cylinder(46.0, 36.0, 0.0, 2.8, 0.4, 12, col_limestone, true);
+    b.add_cylinder(54.0, 36.0, 0.0, 2.8, 0.4, 12, col_limestone, true);
+
+    // 3. Bomb Site A Structures & Cover
+    // Tetris boxes at (45.0, 28.0)
+    b.add_box(43.8, 26.8, 0.0, 46.2, 29.2, 1.2, col_crate);
+    b.add_box(44.4, 27.4, 1.2, 45.6, 28.6, 2.4, col_crate);
+    // Triple boxes at (53.0, 26.0)
+    b.add_box(52.0, 24.8, 0.0, 54.0, 26.8, 1.2, col_crate);
+    b.add_box(52.0, 26.8, 0.0, 54.0, 28.8, 1.2, col_crate);
+    b.add_box(52.2, 25.4, 1.2, 53.8, 27.6, 2.2, col_crate);
+    // Ticket booth at (38.0, 24.0)
+    b.add_box(36.8, 22.8, 0.0, 39.2, 25.2, 2.6, col_sandstone);
+    b.add_ramp(36.8, 25.2, 0.0, 39.2, 28.0, 1.4, col_sandstone);
+    // Site A plant disc marker
+    b.add_cylinder(48.0, 30.0, 0.0, 0.08, 2.5, 16, col_terracotta, false);
+
+    // 4. Middle, Window Room, Connector & Catwalk
+    // Mid dividing walls
+    b.add_box(40.0, 14.0, 0.0, 41.2, 42.0, 7.5, col_sandstone);
+    // Sniper Nest / Window Room at (34.0, 48.0)
+    b.add_floor(30.0, 46.0, 40.0, 54.0, 2.4, col_wood, true);
+    b.add_box(30.0, 45.8, 0.0, 40.0, 46.2, 2.4, col_sandstone); // front wall under window
+    b.add_box(30.0, 45.8, 3.8, 40.0, 46.2, 7.0, col_sandstone); // wall above window
+    b.add_box(30.0, 45.8, 2.4, 33.0, 46.2, 3.8, col_sandstone); // window left jamb
+    b.add_box(37.0, 45.8, 2.4, 40.0, 46.2, 3.8, col_sandstone); // window right jamb
+    // Connector ramp linking Mid to Site A
+    b.add_ramp(38.0, 36.0, 0.0, 44.0, 40.0, 1.4, col_sandstone);
+    // Catwalk elevated walkway
+    b.add_floor(22.0, 34.0, 30.0, 36.0, 1.8, col_iron, true);
+    b.add_box_ex(22.0, 33.9, 1.8, 30.0, 34.1, 2.6, col_iron, true);
+    // Underpass sunken floor
+    b.add_floor(30.0, 26.0, 34.0, 36.0, -1.0, col_sandstone_dark, true);
+    b.add_ramp(30.0, 24.0, 0.0, 34.0, 26.0, -1.0, col_sandstone_dark);
+
+    // 5. Bomb Site B, Apartments, Market & Van
+    // B Apartments residential block
+    b.add_box(8.0, 26.0, 0.0, 22.0, 42.0, 8.0, col_sandstone_dark);
+    b.add_floor(8.0, 26.0, 22.0, 42.0, 2.8, col_wood, true);
+    // Arched window sill overlooking Site B
+    b.add_box_ex(14.0, 41.8, 2.8, 18.0, 42.2, 3.2, col_limestone, true);
+    // Site B raised platform
+    b.add_floor(10.0, 44.0, 24.0, 56.0, 0.8, col_sandstone, true);
+    b.add_cylinder(17.0, 50.0, 0.8, 4.0, 1.2, 12, col_limestone, true); // Site B central pillar
+    // Barricade Van at (14.0, 44.0)
+    b.add_box(12.4, 42.8, 0.0, 15.6, 45.2, 0.7, col_iron);
+    b.add_box(12.6, 43.0, 0.7, 15.4, 45.0, 1.8, [0.38, 0.42, 0.36]); // Van body
+    // Market building south of Site B
+    b.add_box(20.0, 44.0, 0.0, 28.0, 56.0, 7.5, col_sandstone);
+
+    // 6. Aesthetics: Palm Trees, Sun Canopy & Urns
+    for (cx, cy) in [(28.0, 10.0), (42.0, 10.0), (28.0, 60.0), (42.0, 60.0)] {
+        b.add_cylinder(cx, cy, 0.0, 3.5, 0.25, 8, col_palm_trunk, false);
+        b.add_cylinder(cx, cy, 3.5, 1.2, 1.6, 8, col_palm_frond, false);
+        b.add_cylinder(cx, cy, 4.5, 0.8, 1.2, 8, col_palm_frond, false);
+    }
+    // Sun canopy at T Spawn
+    b.add_quad([30.0, 8.0, 3.2], [36.0, 8.0, 3.2], [36.0, 14.0, 3.6], [30.0, 14.0, 3.6], col_canopy, false);
+    // Urns
+    for (ux, uy) in [(46.0, 30.0), (54.0, 32.0), (22.0, 42.0), (12.0, 48.0)] {
+        b.add_cylinder(ux, uy, 0.0, 0.9, 0.35, 8, col_terracotta, false);
+    }
+
+    let spawns = vec![
+        SpawnPoint { x: 32.0, y: 10.0, z: 0.0, yaw: 90.0, team: 1 },
+        SpawnPoint { x: 36.0, y: 10.0, z: 0.0, yaw: 90.0, team: 1 },
+        SpawnPoint { x: 32.0, y: 14.0, z: 0.0, yaw: 90.0, team: 1 },
+        SpawnPoint { x: 36.0, y: 14.0, z: 0.0, yaw: 90.0, team: 1 },
+        SpawnPoint { x: 32.0, y: 58.0, z: 0.0, yaw: 270.0, team: 0 },
+        SpawnPoint { x: 36.0, y: 58.0, z: 0.0, yaw: 270.0, team: 0 },
+        SpawnPoint { x: 32.0, y: 54.0, z: 0.0, yaw: 270.0, team: 0 },
+        SpawnPoint { x: 36.0, y: 54.0, z: 0.0, yaw: 270.0, team: 0 },
+    ];
+
+    let items = vec![
+        ItemRow { id: 1, kind: "health".into(), x: 18.0, y: 14.0, z: 0.0 },
+        ItemRow { id: 2, kind: "health".into(), x: 50.0, y: 14.0, z: 0.0 },
+        ItemRow { id: 3, kind: "health".into(), x: 34.0, y: 34.0, z: 0.0 },
+        ItemRow { id: 4, kind: "armour".into(), x: 16.0, y: 48.0, z: 0.8 },
+        ItemRow { id: 5, kind: "armour".into(), x: 50.0, y: 48.0, z: 2.8 },
+        ItemRow { id: 6, kind: "ammo_assault".into(), x: 14.0, y: 32.0, z: 2.8 },
+        ItemRow { id: 7, kind: "ammo_assault".into(), x: 48.0, y: 32.0, z: 0.0 },
+        ItemRow { id: 8, kind: "ammo_sniper".into(), x: 34.0, y: 50.0, z: 2.4 },
+        ItemRow { id: 9, kind: "clips".into(), x: 34.0, y: 18.0, z: 0.0 },
+        ItemRow { id: 10, kind: "grenade".into(), x: 26.0, y: 36.0, z: 1.8 },
+    ];
+
+    let bounds = WorldBounds {
+        min: [4.0, 4.0, -2.0],
+        max: [66.0, 66.0, 14.0],
+        center: [35.0, 35.0, 6.0],
+        extent: 62.0,
+    };
+
+    let triangles = b.render_positions.len() / 9;
+
+    World3D {
+        info,
+        bounds,
+        render_positions: b.render_positions,
+        render_normals: b.render_normals,
+        render_colors: b.render_colors,
+        render_uvs: b.render_uvs,
+        triangles,
+        col_vertices: b.col_vertices,
+        col_indices: b.col_indices,
+        spawns,
+        items,
+        waterlevel: -100.0,
+    }
+}
+
+const HD_MIRAGE_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_mirage.glb");
 const HD_INFERNO_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_inferno.glb");
 const HD_DUST2_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_dust2.glb");
 const HD_OFFICE_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_office.glb");
@@ -2209,6 +2366,31 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
                 ItemRow { id: 10, kind: "grenade".into(), x: 28.0, y: 12.0, z: 0.0 },
             ],
         )
+    } else if info.name == "hd_mirage" {
+        (
+            vec![
+                SpawnPoint { x: 32.0, y: 10.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 36.0, y: 10.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 32.0, y: 14.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 36.0, y: 14.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 32.0, y: 58.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 36.0, y: 58.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 32.0, y: 54.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 36.0, y: 54.0, z: 0.0, yaw: 270.0, team: 0 },
+            ],
+            vec![
+                ItemRow { id: 1, kind: "health".into(), x: 18.0, y: 14.0, z: 0.0 },
+                ItemRow { id: 2, kind: "health".into(), x: 50.0, y: 14.0, z: 0.0 },
+                ItemRow { id: 3, kind: "health".into(), x: 34.0, y: 34.0, z: 0.0 },
+                ItemRow { id: 4, kind: "armour".into(), x: 16.0, y: 48.0, z: 0.8 },
+                ItemRow { id: 5, kind: "armour".into(), x: 50.0, y: 48.0, z: 2.8 },
+                ItemRow { id: 6, kind: "ammo_assault".into(), x: 14.0, y: 32.0, z: 2.8 },
+                ItemRow { id: 7, kind: "ammo_assault".into(), x: 48.0, y: 32.0, z: 0.0 },
+                ItemRow { id: 8, kind: "ammo_sniper".into(), x: 34.0, y: 50.0, z: 2.4 },
+                ItemRow { id: 9, kind: "clips".into(), x: 34.0, y: 18.0, z: 0.0 },
+                ItemRow { id: 10, kind: "grenade".into(), x: 26.0, y: 36.0, z: 1.8 },
+            ],
+        )
     } else if info.name == "hd_inferno" {
         (
             vec![
@@ -2300,7 +2482,7 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
             center: [32.0, 32.0, 5.75],
             extent: 38.0,
         }
-    } else if info.name == "hd_dust2" || info.name == "hd_inferno" {
+    } else if info.name == "hd_dust2" || info.name == "hd_inferno" || info.name == "hd_mirage" {
         WorldBounds {
             min: [4.0, 4.0, -2.0],
             max: [66.0, 66.0, 14.0],
@@ -2330,6 +2512,20 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
         items,
         waterlevel: if info.name == "hd_facility" { -3.5 } else if info.name == "hd_junkflea" { -5.0 } else { -100.0 },
     })
+}
+
+pub fn load_mirage_glb(info: MapInfo) -> Result<World3D, String> {
+    for path in [
+        "../../backend/modules/hassault/maps/hd_mirage.glb",
+        "backend/modules/hassault/maps/hd_mirage.glb",
+        "assets/maps/hd_mirage.glb",
+        "apps/web/public/hd_mirage.glb",
+    ] {
+        if let Ok(bytes) = std::fs::read(path) {
+            return load_world_3d_from_glb(&bytes, info);
+        }
+    }
+    load_world_3d_from_glb(HD_MIRAGE_GLB_BYTES, info)
 }
 
 pub fn load_inferno_glb(info: MapInfo) -> Result<World3D, String> {
@@ -2433,6 +2629,15 @@ pub fn load_office_glb(info: MapInfo) -> Result<World3D, String> {
 /// Universal 3D Arena Factory: selects appropriate procedural or modeled 3D map generator.
 pub fn create_world_3d(info: MapInfo) -> World3D {
     match info.name.as_str() {
+        "hd_mirage" => {
+            match load_mirage_glb(info.clone()) {
+                Ok(w) => w,
+                Err(err) => {
+                    eprintln!("hassault: failed to load GLB for hd_mirage ({err}), falling back to procedural");
+                    create_procedural_mirage_3d(info)
+                }
+            }
+        }
         "hd_inferno" => {
             match load_inferno_glb(info.clone()) {
                 Ok(w) => w,

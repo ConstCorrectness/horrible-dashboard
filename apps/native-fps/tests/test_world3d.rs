@@ -412,5 +412,73 @@ fn test_inferno_glb_generation() {
     assert!(dist <= 7.0, "dist was {}", dist);
 }
 
+#[test]
+fn test_mirage_3d_generation() {
+    let info = MapInfo {
+        name: "hd_mirage".into(),
+        title: "Middle East Arena (Mirage)".into(),
+        ssize: 64,
+        ..Default::default()
+    };
+
+    let world = hassault_native::world3d::create_procedural_mirage_3d(info);
+
+    assert!(world.triangles > 0, "should produce triangles");
+    assert_eq!(world.render_positions.len(), world.triangles * 9);
+    assert_eq!(world.render_normals.len(), world.triangles * 9);
+    assert_eq!(world.render_colors.len(), world.triangles * 9);
+
+    assert_eq!(world.spawns.len(), 8, "must have 8 spawns");
+    assert_eq!(world.spawns.iter().filter(|s| s.team == 0).count(), 4, "must have 4 CT spawns");
+    assert_eq!(world.spawns.iter().filter(|s| s.team == 1).count(), 4, "must have 4 T spawns");
+
+    assert_eq!(world.items.len(), 10, "must have 10 pickups");
+    assert_eq!(world.waterlevel, -100.0);
+
+    let physics = RapierPhysicsWorld::new(&world.col_vertices, &world.col_indices);
+
+    // Ray down onto sand ground (z = 0.0m)
+    let (hit_ground, dist_ground, _) = physics.cast_ray([30.0, 20.0, 5.0], [0.0, 0.0, -1.0], 10.0);
+    assert!(hit_ground, "ray downwards onto ground should hit at z=0");
+    assert!((dist_ground - 5.0).abs() < 0.2, "dist_ground was {}", dist_ground);
+
+    // Ray down onto Palace Balcony slab (z = 2.8m)
+    let (hit_palace, dist_palace, _) = physics.cast_ray([48.0, 38.0, 5.0], [0.0, 0.0, -1.0], 10.0);
+    assert!(hit_palace, "ray downwards onto Palace Balcony slab should hit at z=2.8");
+    assert!((dist_palace - 2.2).abs() < 0.2, "dist_palace was {}", dist_palace);
+
+    // Ray down onto Sniper Nest Window Room floor (z = 2.4m)
+    let (hit_nest, dist_nest, _) = physics.cast_ray([34.0, 50.0, 5.0], [0.0, 0.0, -1.0], 10.0);
+    assert!(hit_nest, "ray downwards onto Sniper Nest floor should hit at z=2.4");
+    assert!((dist_nest - 2.6).abs() < 0.2, "dist_nest was {}", dist_nest);
+}
+
+#[test]
+fn test_mirage_glb_generation() {
+    let info = MapInfo {
+        name: "hd_mirage".into(),
+        title: "Middle East Arena (Mirage GLB)".into(),
+        ssize: 64,
+        ..Default::default()
+    };
+
+    let world = hassault_native::world3d::create_world_3d(info);
+
+    assert!(world.triangles > 0, "should produce triangles");
+    assert_eq!(world.render_positions.len(), world.triangles * 9);
+    assert_eq!(world.render_normals.len(), world.triangles * 9);
+    assert_eq!(world.render_colors.len(), world.triangles * 9);
+
+    assert_eq!(world.spawns.len(), 8, "must have 8 spawns");
+    assert_eq!(world.items.len(), 10, "must have 10 pickups");
+
+    let physics = RapierPhysicsWorld::new(&world.col_vertices, &world.col_indices);
+    // Ray down to terrain floor
+    let (hit, dist, _) = physics.cast_ray([35.0, 35.0, 6.0], [0.0, 0.0, -1.0], 10.0);
+    assert!(hit, "ray downwards should hit mirage GLB collision mesh");
+    assert!(dist <= 7.0, "dist was {}", dist);
+}
+
+
 
 

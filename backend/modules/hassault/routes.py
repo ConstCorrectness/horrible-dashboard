@@ -1662,9 +1662,60 @@ async def get_account_rating(account_id: str) -> dict[str, Any]:
 @router.get("/ranked/leaderboard")
 async def get_ranked_leaderboard(limit: int = 50) -> list[dict[str, Any]]:
     """Top ranked competitive players by Elo/Glicko-2 rating."""
-    from backend.modules.hassault import rating
+    from backend.modules.hassault import ranked_mmr
 
-    return rating.get_leaderboard(limit)
+    return ranked_mmr.get_ranked_leaderboard_extended(limit)
+
+
+@router.get("/ranked/profile")
+async def get_my_ranked_profile() -> dict[str, Any]:
+    """Current player's full competitive profile with calibration and match history."""
+    from backend.modules.hassault import ranked_mmr
+
+    return ranked_mmr.get_player_ranked_profile(_account_id())
+
+
+@router.get("/ranked/profile/{account_id}")
+async def get_account_ranked_profile(account_id: str) -> dict[str, Any]:
+    """Target player's full competitive profile with calibration and match history."""
+    from backend.modules.hassault import ranked_mmr
+
+    return ranked_mmr.get_player_ranked_profile(account_id)
+
+
+@router.get("/ranked/season")
+async def get_ranked_season_info() -> dict[str, Any]:
+    """Current active tournament season info and tier division list."""
+    from backend.modules.hassault import ranked_mmr
+
+    return {
+        "season": ranked_mmr.CURRENT_SEASON,
+        "placementMatchesRequired": ranked_mmr.PLACEMENT_MATCHES_REQUIRED,
+        "tiers": ranked_mmr.TIER_DETAILS,
+    }
+
+
+@router.post("/ranked/calibrate")
+async def calibrate_ranked_match(payload: dict[str, Any]) -> dict[str, Any]:
+    """Record a competitive match and advance calibration placement."""
+    import time
+    from backend.modules.hassault import ranked_mmr
+
+    account_id = payload.get("accountId") or _account_id()
+    match_id = payload.get("matchId", f"match_{int(time.time())}")
+    map_name = payload.get("mapName", "hd_mirage")
+    result = payload.get("result", {})
+    opp_rating = float(payload.get("oppRating", 1500.0))
+    opp_rd = float(payload.get("oppRd", 200.0))
+
+    return ranked_mmr.record_ranked_match(
+        account_id=account_id,
+        match_id=match_id,
+        map_name=map_name,
+        result=result,
+        opp_rating=opp_rating,
+        opp_rd=opp_rd,
+    )
 
 
 @router.get("/skins/catalog")

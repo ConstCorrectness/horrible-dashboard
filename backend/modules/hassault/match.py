@@ -795,6 +795,8 @@ class MatchRoom:
         # Tactical pings placed in 3D world space. Private to teammates,
         # rate-limited, and pruned on TTL expiration.
         self.pings: list[Ping] = []
+        #: Anti-Cheat PVS Fog-of-War packet culling flag.
+        self.pvs_culling: bool = False
         self.now: float = 0.0
         #: Rolling tick cost. Per room, not per server: two matches on one node
         #: have separate budgets and averaging them describes neither.
@@ -2325,6 +2327,56 @@ class MatchRoom:
         ]
         return you
 
+    def cull_pvs_snapshot_rows(
+        self,
+        viewer: MatchPlayer,
+        rows: list[dict],
+        spotted_by_team: dict[int, list[str]] | None = None,
+    ) -> list[dict]:
+        """Anti-Cheat PVS Fog-of-War: Cull occluded silent enemy coordinates."""
+        if not getattr(self, "pvs_culling", False):
+            return rows
+
+        spotted = spotted_by_team.get(viewer.team, []) if spotted_by_team else []
+        spotted_set = set(spotted)
+        has_teams = getattr(self.mode, "teams", True)
+        now = time.monotonic()
+        culled = []
+
+        for row in rows:
+            pid = row.get("id")
+            team = row.get("team")
+            if pid == viewer.id or (has_teams and team == viewer.team):
+                culled.append(row)
+                continue
+
+            if pid in spotted_set:
+                culled.append(row)
+                continue
+
+            # Check audibility: weapon fire or recent loud sounds
+            p_obj = self.players.get(pid)
+            is_audible = False
+            if p_obj:
+                last_fire = getattr(p_obj, "last_fire_time", 0.0)
+                if now - last_fire < 1.0:
+                    is_audible = True
+
+            if is_audible:
+                culled.append(row)
+            else:
+                sanitized = dict(row)
+                sanitized["occluded"] = True
+                sanitized["x"] = 0.0
+                sanitized["y"] = 0.0
+                sanitized["z"] = -100.0
+                sanitized["vx"] = 0.0
+                sanitized["vy"] = 0.0
+                sanitized["vz"] = 0.0
+                culled.append(sanitized)
+
+        return culled
+
     def snapshot_message(
         self,
         now: float,
@@ -2628,14 +2680,16 @@ class MatchServer:
                 # called exactly once per player per tick on both paths.
                 you = room.private_view_for(player, spotted)
                 send_text = getattr(conn, "send_text", None)
-                if template is not None and send_text is not None:
+                pvs_active = getattr(room, "pvs_culling", False)
+                if not pvs_active and template is not None and send_text is not None:
                     head, mid, tail = template
                     frame = f"{head}{player.ack}{mid}{json.dumps(you)}{tail}"
                     sent_bytes += len(frame)
                     await send_text(frame)
                 else:
+                    player_rows = room.cull_pvs_snapshot_rows(player, rows, spotted) if pvs_active else rows
                     await conn.send_json(
-                        room.snapshot_message(now, rows, shared, player.ack, you)
+                        room.snapshot_message(now, player_rows, shared, player.ack, you)
                     )
             except Exception:
                 # A dead socket is the /ws loop's problem; dropping the player

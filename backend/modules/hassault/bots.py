@@ -178,6 +178,18 @@ TACTICAL_COVER_NODES: dict[str, list[tuple[float, float, str]]] = {
         (50.0, 50.0, "site_a_default"),
         (55.0, 56.0, "site_a_graveyard"),
     ],
+    "hd_mirage": [
+        (45.0, 28.0, "site_a_tetris"),
+        (53.0, 26.0, "site_a_triple"),
+        (38.0, 24.0, "site_a_ticket"),
+        (48.0, 38.0, "palace_balcony"),
+        (34.0, 48.0, "mid_window_room"),
+        (40.0, 38.0, "connector_ramp"),
+        (26.0, 36.0, "catwalk_walkway"),
+        (16.0, 44.0, "site_b_van"),
+        (17.0, 50.0, "site_b_pillar"),
+        (14.0, 36.0, "b_apartments"),
+    ],
     "hd_dust2": [
         (54.0, 14.0, "long_a_pit"),
         (55.0, 58.0, "site_a_goose"),
@@ -372,6 +384,20 @@ class BotBrain:
         knowledge rather than player knowledge — the bot is not tracking anyone,
         it is walking towards where the enemy comes from.
         """
+        # Check if bot has an active tactical squad command
+        cmd = getattr(me, "squad_command", None)
+        if cmd:
+            cmd_type = cmd.get("type", "")
+            tx, ty, _ = cmd.get("target", (me.state.x, me.state.y, me.state.z))
+            if cmd_type == "HOLD":
+                self.roam = (me.state.x, me.state.y)
+                self.roam_in = 6.0
+                return
+            elif cmd_type in ("BREACH", "COVER", "REGROUP", "SMOKE"):
+                self.roam = (tx, ty)
+                self.roam_in = 6.0
+                return
+
         enemy = 1 - me.team
         map_name = getattr(room, "map_name", "") or getattr(getattr(room, "world", None), "name", "")
         tactical_pts = TACTICAL_COVER_NODES.get(map_name.lower(), [])

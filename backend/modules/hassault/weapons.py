@@ -1344,3 +1344,50 @@ def resolve_shot(
         hits=hits,
         rewound_ms=rewound_ms,
     )
+
+
+#: Physical material bullet penetration coefficients.
+MATERIAL_PENETRATION: dict[str, float] = {
+    "wood": 0.85,
+    "drywall": 0.90,
+    "metal": 0.45,
+    "stone": 0.30,
+    "glass": 0.95,
+}
+
+
+def calculate_material_penetration(
+    weapon: Weapon,
+    material: str = "wood",
+    thickness: float = 0.5,
+) -> tuple[bool, float]:
+    """Calculate whether a bullet can penetrate a physical material barrier and the resulting damage falloff factor.
+
+    Returns:
+        tuple[bool, float]: (can_penetrate, damage_factor)
+    """
+    mat_factor = MATERIAL_PENETRATION.get(material.lower(), 0.5)
+    wid = getattr(weapon, "id", "")
+
+    if wid == "sniper":
+        max_thickness = 1.8 * mat_factor
+        base_falloff = 0.75
+    elif wid in ("assault", "carbine"):
+        max_thickness = 1.0 * mat_factor
+        base_falloff = 0.55
+    elif wid in ("subgun", "pistol"):
+        max_thickness = 0.45 * mat_factor
+        base_falloff = 0.35
+    elif wid == "shotgun":
+        max_thickness = 0.30 * mat_factor
+        base_falloff = 0.25
+    else:
+        return False, 0.0
+
+    if thickness > max_thickness:
+        return False, 0.0
+
+    penetration_ratio = 1.0 - (thickness / max_thickness) * 0.4
+    damage_factor = max(0.1, min(0.9, base_falloff * mat_factor * penetration_ratio))
+    return True, round(damage_factor, 3)
+
