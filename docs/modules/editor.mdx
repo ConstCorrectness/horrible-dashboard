@@ -475,9 +475,14 @@ Completion, resolve, and hover results are **cached per document version** and c
 on every debounced `didChange`, so re-opening a dropdown or re-hovering the same spot
 doesn't re-hit the server.
 
-Servers spawn only when present on `PATH` (else the editor silently degrades); each
+Servers spawn only when installed (else the editor silently degrades); each
 language maps to an **ordered list of candidate servers** — the first whose executable
-resolves wins. Python prefers **`basedpyright`** (`basedpyright-langserver --stdio`;
+resolves wins. An executable resolves from the **backend interpreter's own scripts
+directory first**, then `PATH`. The scripts directory is not optional: the desktop
+supervisor launches `.venv\Scripts\python.exe` directly, which puts nothing on `PATH`,
+so a PATH-only lookup never found the dev dependency `basedpyright` and silently
+picked a globally installed `pylsp` instead — whose pyflakes reports `!pip install` in
+a notebook cell as `invalid syntax`, where basedpyright understands IPython lines. Python prefers **`basedpyright`** (`basedpyright-langserver --stdio`;
 MIT-licensed pyright fork with Pylance-grade completions, hover docstrings, and inlay
 hints — install with `uv add --dev basedpyright`) and falls back to **`pylsp`** (needs
 `pyflakes`/`pycodestyle` for diagnostics) when basedpyright isn't installed. Pylance

@@ -53,7 +53,7 @@ def test_unknown_language_errors_without_spawning() -> None:
 
 
 def test_missing_server_binary_errors(monkeypatch) -> None:  # noqa: ANN001
-    monkeypatch.setattr(lsp_mod.shutil, "which", lambda _cmd: None)
+    monkeypatch.setattr(lsp_mod.shutil, "which", lambda _cmd, path=None: None)
     conn = FakeConn()
     mgr = LspManager(conn)
 
@@ -87,17 +87,37 @@ def test_python_prefers_basedpyright_then_pylsp() -> None:
 
 
 def test_resolve_server_falls_back_to_next_candidate(monkeypatch) -> None:  # noqa: ANN001
-    # basedpyright missing → resolve_server skips it and picks pylsp.
-    monkeypatch.setattr(
-        lsp_mod.shutil,
-        "which",
-        lambda cmd: None if cmd == "basedpyright-langserver" else f"/usr/bin/{cmd}",
-    )
+    # basedpyright missing everywhere → resolve_server skips it and picks pylsp.
+    def which(cmd: str, path: str | None = None) -> str | None:
+        if cmd == "basedpyright-langserver" or path is not None:
+            return None
+        return f"/usr/bin/{cmd}"
+
+    monkeypatch.setattr(lsp_mod.shutil, "which", which)
     resolved = lsp_mod.resolve_server("python")
     assert resolved is not None
     exe, cmd = resolved
     assert cmd == ["pylsp"]
     assert exe.endswith("pylsp")
+
+
+def test_resolve_server_finds_venv_server_not_on_path(monkeypatch) -> None:  # noqa: ANN001
+    # The desktop supervisor runs `.venv\Scripts\python.exe` directly, so the venv's
+    # scripts dir is NOT on PATH. basedpyright living only there must still beat a
+    # pylsp that is on PATH — otherwise notebooks get pyflakes, which rejects `!pip`.
+    monkeypatch.setattr(lsp_mod.sysconfig, "get_path", lambda _name: "/venv/Scripts")
+
+    def which(cmd: str, path: str | None = None) -> str | None:
+        if path == "/venv/Scripts":
+            return f"/venv/Scripts/{cmd}" if cmd == "basedpyright-langserver" else None
+        return "/global/pylsp" if cmd == "pylsp" else None
+
+    monkeypatch.setattr(lsp_mod.shutil, "which", which)
+    resolved = lsp_mod.resolve_server("python")
+    assert resolved == (
+        "/venv/Scripts/basedpyright-langserver",
+        ["basedpyright-langserver", "--stdio"],
+    )
 
 
 def test_resolve_server_unknown_language_is_none() -> None:

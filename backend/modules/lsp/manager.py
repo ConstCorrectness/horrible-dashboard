@@ -41,6 +41,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sysconfig
 import threading
 from typing import Any
 
@@ -48,10 +49,22 @@ from backend.modules.lsp.pyenv import resolve_python_interpreter
 
 logger = logging.getLogger(__name__)
 
+
+def _which(name: str) -> str | None:
+    """Resolve an executable from this interpreter's scripts dir first, then PATH.
+
+    The scripts dir is load-bearing: the desktop supervisor launches
+    `.venv\\Scripts\\python.exe` directly (and a packaged build its bundled python),
+    neither of which puts that dir on PATH. A PATH-only lookup then never finds the
+    dev-dependency `basedpyright` and silently falls back to a globally installed
+    `pylsp` — whose pyflakes flags every `!pip install` in a notebook cell."""
+    return shutil.which(name, path=sysconfig.get_path("scripts")) or shutil.which(name)
+
+
 # languageId → ordered server candidates. Each candidate is a full argv; the first
-# whose executable resolves on PATH wins (so we prefer the richer server and fall back
-# to a simpler one). Only these are ever spawned — the client can't supply a command,
-# so this is not an arbitrary-exec surface. Python prefers **basedpyright** (MIT,
+# whose executable resolves wins (so we prefer the richer server and fall back to a
+# simpler one). Only these are ever spawned — the client can't supply a command, so
+# this is not an arbitrary-exec surface. Python prefers **basedpyright** (MIT,
 # uv-installable, Pylance-grade completions/hover; `uv add --dev basedpyright`) and
 # falls back to `pylsp` when it isn't installed.
 LSP_SERVERS: dict[str, list[list[str]]] = {
@@ -66,10 +79,12 @@ LSP_SERVERS: dict[str, list[list[str]]] = {
 
 
 def resolve_server(language: str) -> tuple[str, list[str]] | None:
-    """The first candidate server for `language` whose executable is on PATH, as
-    `(resolved_exe, argv)`, or None if the language is unknown / no server installed."""
+    """The first candidate server for `language` whose executable resolves (see
+    `_which`), as `(resolved_exe, argv)`, or None if the language is unknown / no
+    server installed. Candidate order wins over location: a basedpyright only in the
+    venv still beats a pylsp on PATH."""
     for cmd in LSP_SERVERS.get(language, []):
-        exe = shutil.which(cmd[0])
+        exe = _which(cmd[0])
         if exe is not None:
             return exe, cmd
     return None
