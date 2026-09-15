@@ -200,3 +200,48 @@ def envelope(
             entry["weapon"] = noise.weapon
         out.append(entry)
     return out
+
+
+def hrtf_spatial_params(
+    listener_pos: tuple[float, float, float],
+    listener_yaw: float,
+    sound_pos: tuple[float, float, float],
+) -> dict[str, float]:
+    """Calculate HRTF spatial acoustic parameters: azimuth (degrees -180..180),
+    elevation (degrees -90..90), and interaural time difference (ITD in ms).
+    Head radius approx 0.0875m, speed of sound 343 m/s.
+    """
+    lx, ly, lz = listener_pos
+    sx, sy, sz = sound_pos
+    dx = sx - lx
+    dy = sy - ly
+    dz = sz - lz
+    dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+    if dist < 1e-6:
+        return {"azimuth": 0.0, "elevation": 0.0, "itd_ms": 0.0, "pan": 0.0}
+
+    sound_angle = math.atan2(dy, dx)
+    rel_azimuth = (sound_angle - listener_yaw + math.pi) % (2.0 * math.pi) - math.pi
+    azimuth_deg = math.degrees(rel_azimuth)
+
+    elevation_rad = math.asin(max(-1.0, min(1.0, dz / dist)))
+    elevation_deg = math.degrees(elevation_rad)
+
+    # Woodworth's formula for ITD: (r / c) * (sin(theta) + theta)
+    r = 0.0875  # head radius in meters
+    c = 343.0   # speed of sound in m/s
+    theta = abs(rel_azimuth)
+    itd_sec = (r / c) * (math.sin(theta) + theta)
+    if rel_azimuth < 0:
+        itd_sec = -itd_sec
+    itd_ms = itd_sec * 1000.0
+
+    pan = max(-1.0, min(1.0, math.sin(rel_azimuth)))
+
+    return {
+        "azimuth": round(azimuth_deg, 2),
+        "elevation": round(elevation_deg, 2),
+        "itd_ms": round(itd_ms, 3),
+        "pan": round(pan, 3),
+    }
+

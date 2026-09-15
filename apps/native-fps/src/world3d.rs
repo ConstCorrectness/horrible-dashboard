@@ -1970,6 +1970,145 @@ pub fn create_procedural_mirage_3d(info: MapInfo) -> World3D {
     }
 }
 
+/// Create the Nuclear Containment Facility ("Nuke" / `hd_nuke`) 3D tournament arena.
+/// Features:
+/// 1. True Multi-Level Verticality: Upper Reactor Hall (Site A, z=0.0m) directly above Lower Reactor Silo (Site B, z=-4.5m).
+/// 2. Bomb Site A: Overhead Rafters & Catwalks (z=3.8m), Yellow Gantry Crane (z=6.8m), Hut structure, and Vent hatch.
+/// 3. Bomb Site B: Massive cylindrical nuclear reactor core with glowing ring, coolant containment tanks, and decon chamber.
+/// 4. Connectors & Ramps: Vertical ventilation shaft linking A and B, Ramp room connecting ground level down to Site B.
+/// 5. Outside Yard: Outer Silo tower, shipping containers, and garage.
+pub fn create_procedural_nuke_3d(info: MapInfo) -> World3D {
+    let mut b = FacilityBuilder::new();
+
+    let col_concrete_floor = [0.64, 0.65, 0.66];
+    let col_concrete_wall = [0.72, 0.74, 0.76];
+    let col_hazard_yellow = [0.86, 0.75, 0.12];
+    let col_steel_grate = [0.42, 0.44, 0.46];
+    let col_reactor_glow = [0.12, 0.85, 0.95];
+    let col_reactor_hull = [0.32, 0.35, 0.38];
+    let col_coolant = [0.20, 0.42, 0.72];
+    let col_container_red = [0.72, 0.20, 0.16];
+    let col_container_blue = [0.18, 0.32, 0.62];
+
+    // 1. Terrain Ground (4.0..66.0, 4.0..66.0, z=0.0)
+    b.add_floor(4.0, 4.0, 66.0, 66.0, 0.0, col_concrete_floor, true);
+
+    // High Perimeter Concrete Security Walls (height 12.0)
+    b.add_quad([4.0, 4.0, 0.0], [66.0, 4.0, 0.0], [66.0, 4.0, 12.0], [4.0, 4.0, 12.0], col_concrete_wall, true);
+    b.add_quad([66.0, 66.0, 0.0], [4.0, 66.0, 0.0], [4.0, 66.0, 12.0], [66.0, 66.0, 12.0], col_concrete_wall, true);
+    b.add_quad([66.0, 4.0, 0.0], [66.0, 66.0, 0.0], [66.0, 66.0, 12.0], [66.0, 4.0, 12.0], col_concrete_wall, true);
+    b.add_quad([4.0, 66.0, 0.0], [4.0, 4.0, 0.0], [4.0, 4.0, 12.0], [4.0, 66.0, 12.0], col_concrete_wall, true);
+
+    // Hazard yellow perimeter trim
+    b.add_box_ex(4.0, 4.2, 11.6, 66.0, 4.6, 12.2, col_hazard_yellow, false);
+    b.add_box_ex(4.0, 65.4, 11.6, 66.0, 65.8, 12.2, col_hazard_yellow, false);
+
+    // 2. Bomb Site A (Upper Reactor Hall) at Z=0.0m
+    // Outer containment building walls
+    b.add_box(22.0, 28.0, 0.0, 50.0, 29.2, 8.0, col_concrete_wall);
+    b.add_box(22.0, 50.8, 0.0, 50.0, 52.0, 8.0, col_concrete_wall);
+    b.add_box(21.4, 28.0, 0.0, 22.6, 52.0, 8.0, col_concrete_wall);
+    b.add_box(49.4, 28.0, 0.0, 50.6, 52.0, 8.0, col_concrete_wall);
+
+    // Site A Hut structure
+    b.add_box(24.0, 34.0, 0.0, 28.0, 40.0, 2.8, col_concrete_wall);
+    b.add_box_ex(24.0, 34.0, 2.8, 28.0, 40.0, 3.0, col_hazard_yellow, true);
+
+    // Overhead Rafters / Catwalks at Z=3.8m
+    b.add_floor(47.0, 30.0, 49.0, 50.0, 3.8, col_steel_grate, true);
+    b.add_floor(25.0, 48.0, 47.0, 50.0, 3.8, col_steel_grate, true);
+    b.add_box_ex(46.9, 30.0, 3.8, 47.1, 50.0, 4.8, col_hazard_yellow, true);
+
+    // Yellow Gantry Crane beam across ceiling (z=6.8m)
+    b.add_box_ex(23.0, 39.2, 6.8, 49.0, 40.8, 7.6, col_hazard_yellow, false);
+
+    // Site A Plant disc marker
+    b.add_cylinder(36.0, 40.0, 0.0, 0.08, 2.5, 16, col_hazard_yellow, false);
+
+    // 3. Bomb Site B (Lower Reactor Silo) at Z=-4.5m
+    // Subterranean excavation pit floor
+    b.add_floor(23.0, 29.0, 49.0, 51.0, -4.5, col_concrete_floor, true);
+
+    // Central Reactor Core Cylinder
+    b.add_cylinder(36.0, 40.0, -4.5, 4.5, 2.6, 16, col_reactor_hull, true);
+    // Glowing core ring
+    b.add_cylinder(36.0, 40.0, -2.5, 0.6, 2.7, 16, col_reactor_glow, false);
+
+    // Coolant tanks
+    b.add_cylinder(26.0, 44.0, -4.5, 3.0, 1.4, 12, col_coolant, true);
+    b.add_cylinder(46.0, 44.0, -4.5, 3.0, 1.4, 12, col_coolant, true);
+
+    // Site B Plant disc marker
+    b.add_cylinder(36.0, 40.0, -4.5, 0.08, 3.8, 16, col_hazard_yellow, false);
+
+    // 4. Connectors: Vents & Ramp
+    // Vertical vent chute from z=0 down to z=-4.5
+    b.add_box(30.4, 35.4, -4.5, 31.6, 36.6, 0.0, col_steel_grate);
+
+    // Sloped Ramp Room (from y=20 down to y=28)
+    b.add_ramp(18.0, 20.0, 0.0, 22.0, 28.0, -4.5, col_concrete_floor);
+
+    // 5. Outside Yard: Silo Tower & Shipping Containers
+    b.add_cylinder(16.0, 20.0, 0.0, 5.0, 2.4, 16, col_concrete_wall, true);
+    b.add_cylinder(16.0, 20.0, 5.0, 0.6, 2.2, 16, col_hazard_yellow, true);
+
+    // Containers
+    b.add_box(14.6, 33.0, 0.0, 17.4, 39.0, 2.6, col_container_red);
+    b.add_box(14.6, 41.0, 0.0, 17.4, 47.0, 2.6, col_container_blue);
+
+    // Garage
+    b.add_box(52.0, 40.0, 0.0, 60.0, 52.0, 5.0, col_concrete_wall);
+
+    let spawns = vec![
+        SpawnPoint { x: 32.0, y: 8.0, z: 0.0, yaw: 90.0, team: 1 },
+        SpawnPoint { x: 36.0, y: 8.0, z: 0.0, yaw: 90.0, team: 1 },
+        SpawnPoint { x: 32.0, y: 12.0, z: 0.0, yaw: 90.0, team: 1 },
+        SpawnPoint { x: 36.0, y: 12.0, z: 0.0, yaw: 90.0, team: 1 },
+        SpawnPoint { x: 32.0, y: 62.0, z: 0.0, yaw: 270.0, team: 0 },
+        SpawnPoint { x: 36.0, y: 62.0, z: 0.0, yaw: 270.0, team: 0 },
+        SpawnPoint { x: 32.0, y: 58.0, z: 0.0, yaw: 270.0, team: 0 },
+        SpawnPoint { x: 36.0, y: 58.0, z: 0.0, yaw: 270.0, team: 0 },
+    ];
+
+    let items = vec![
+        ItemRow { id: 1, kind: "health".into(), x: 18.0, y: 18.0, z: 0.0 },
+        ItemRow { id: 2, kind: "health".into(), x: 52.0, y: 18.0, z: 0.0 },
+        ItemRow { id: 3, kind: "health".into(), x: 36.0, y: 40.0, z: -4.5 },
+        ItemRow { id: 4, kind: "armour".into(), x: 36.0, y: 40.0, z: 0.0 },
+        ItemRow { id: 5, kind: "armour".into(), x: 26.0, y: 36.0, z: 0.0 },
+        ItemRow { id: 6, kind: "ammo_assault".into(), x: 18.0, y: 44.0, z: 0.0 },
+        ItemRow { id: 7, kind: "ammo_assault".into(), x: 42.0, y: 54.0, z: 3.8 },
+        ItemRow { id: 8, kind: "ammo_sniper".into(), x: 16.0, y: 20.0, z: 5.0 },
+        ItemRow { id: 9, kind: "clips".into(), x: 32.0, y: 22.0, z: 0.0 },
+        ItemRow { id: 10, kind: "grenade".into(), x: 20.0, y: 28.0, z: -2.2 },
+    ];
+
+    let bounds = WorldBounds {
+        min: [4.0, 4.0, -5.5],
+        max: [66.0, 66.0, 14.0],
+        center: [35.0, 35.0, 4.0],
+        extent: 62.0,
+    };
+
+    let triangles = b.render_positions.len() / 9;
+
+    World3D {
+        info,
+        bounds,
+        render_positions: b.render_positions,
+        render_normals: b.render_normals,
+        render_colors: b.render_colors,
+        render_uvs: b.render_uvs,
+        triangles,
+        col_vertices: b.col_vertices,
+        col_indices: b.col_indices,
+        spawns,
+        items,
+        waterlevel: -100.0,
+    }
+}
+
+const HD_NUKE_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_nuke.glb");
 const HD_MIRAGE_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_mirage.glb");
 const HD_INFERNO_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_inferno.glb");
 const HD_DUST2_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_dust2.glb");
@@ -2441,6 +2580,31 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
                 ItemRow { id: 10, kind: "grenade".into(), x: 30.0, y: 36.0, z: 0.0 },
             ],
         )
+    } else if info.name == "hd_nuke" {
+        (
+            vec![
+                SpawnPoint { x: 34.0, y: 12.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 38.0, y: 12.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 34.0, y: 15.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 38.0, y: 15.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 26.0, y: 56.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 30.0, y: 56.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 26.0, y: 52.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 30.0, y: 52.0, z: 0.0, yaw: 270.0, team: 0 },
+            ],
+            vec![
+                ItemRow { id: 1, kind: "health".into(), x: 30.0, y: 35.0, z: 0.0 },
+                ItemRow { id: 2, kind: "health".into(), x: 30.0, y: 35.0, z: -4.5 },
+                ItemRow { id: 3, kind: "health".into(), x: 12.0, y: 30.0, z: 0.0 },
+                ItemRow { id: 4, kind: "armour".into(), x: 32.0, y: 37.0, z: 0.0 },
+                ItemRow { id: 5, kind: "armour".into(), x: 32.0, y: 37.0, z: -4.5 },
+                ItemRow { id: 6, kind: "ammo_assault".into(), x: 24.0, y: 20.0, z: 0.0 },
+                ItemRow { id: 7, kind: "ammo_assault".into(), x: 36.0, y: 48.0, z: 0.0 },
+                ItemRow { id: 8, kind: "ammo_sniper".into(), x: 20.0, y: 35.0, z: 3.8 },
+                ItemRow { id: 9, kind: "clips".into(), x: 48.0, y: 35.0, z: 0.0 },
+                ItemRow { id: 10, kind: "grenade".into(), x: 30.0, y: 25.0, z: 0.0 },
+            ],
+        )
     } else {
         (
             vec![
@@ -2482,6 +2646,13 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
             center: [32.0, 32.0, 5.75],
             extent: 38.0,
         }
+    } else if info.name == "hd_nuke" {
+        WorldBounds {
+            min: [4.0, 4.0, -5.5],
+            max: [66.0, 66.0, 14.0],
+            center: [35.0, 35.0, 4.0],
+            extent: 62.0,
+        }
     } else if info.name == "hd_dust2" || info.name == "hd_inferno" || info.name == "hd_mirage" {
         WorldBounds {
             min: [4.0, 4.0, -2.0],
@@ -2512,6 +2683,20 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
         items,
         waterlevel: if info.name == "hd_facility" { -3.5 } else if info.name == "hd_junkflea" { -5.0 } else { -100.0 },
     })
+}
+
+pub fn load_nuke_glb(info: MapInfo) -> Result<World3D, String> {
+    for path in [
+        "../../backend/modules/hassault/maps/hd_nuke.glb",
+        "backend/modules/hassault/maps/hd_nuke.glb",
+        "assets/maps/hd_nuke.glb",
+        "apps/web/public/hd_nuke.glb",
+    ] {
+        if let Ok(bytes) = std::fs::read(path) {
+            return load_world_3d_from_glb(&bytes, info);
+        }
+    }
+    load_world_3d_from_glb(HD_NUKE_GLB_BYTES, info)
 }
 
 pub fn load_mirage_glb(info: MapInfo) -> Result<World3D, String> {
@@ -2629,6 +2814,15 @@ pub fn load_office_glb(info: MapInfo) -> Result<World3D, String> {
 /// Universal 3D Arena Factory: selects appropriate procedural or modeled 3D map generator.
 pub fn create_world_3d(info: MapInfo) -> World3D {
     match info.name.as_str() {
+        "hd_nuke" => {
+            match load_nuke_glb(info.clone()) {
+                Ok(w) => w,
+                Err(err) => {
+                    eprintln!("hassault: failed to load GLB for hd_nuke ({err}), falling back to procedural");
+                    create_procedural_nuke_3d(info)
+                }
+            }
+        }
         "hd_mirage" => {
             match load_mirage_glb(info.clone()) {
                 Ok(w) => w,

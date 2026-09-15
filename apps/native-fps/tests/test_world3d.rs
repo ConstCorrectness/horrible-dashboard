@@ -479,6 +479,78 @@ fn test_mirage_glb_generation() {
     assert!(dist <= 7.0, "dist was {}", dist);
 }
 
+#[test]
+fn test_nuke_3d_generation() {
+    let info = MapInfo {
+        name: "hd_nuke".into(),
+        title: "Nuclear Facility (Nuke)".into(),
+        ssize: 64,
+        ..Default::default()
+    };
+
+    let world = hassault_native::world3d::create_procedural_nuke_3d(info);
+
+    assert!(world.triangles > 0, "should produce triangles");
+    assert_eq!(world.render_positions.len(), world.triangles * 9);
+    assert_eq!(world.render_normals.len(), world.triangles * 9);
+    assert_eq!(world.render_colors.len(), world.triangles * 9);
+
+    assert_eq!(world.spawns.len(), 8, "must have 8 spawns");
+    assert_eq!(world.spawns.iter().filter(|s| s.team == 0).count(), 4, "must have 4 CT spawns");
+    assert_eq!(world.spawns.iter().filter(|s| s.team == 1).count(), 4, "must have 4 T spawns");
+
+    assert_eq!(world.items.len(), 10, "must have 10 pickups");
+    assert_eq!(world.waterlevel, -100.0);
+
+    let physics = RapierPhysicsWorld::new(&world.col_vertices, &world.col_indices);
+
+    // Ray down onto outside ground (z = 0.0m)
+    let (hit_ground, dist_ground, _) = physics.cast_ray([10.0, 10.0, 5.0], [0.0, 0.0, -1.0], 10.0);
+    assert!(hit_ground, "ray downwards onto ground should hit at z=0");
+    assert!((dist_ground - 5.0).abs() < 0.2, "dist_ground was {}", dist_ground);
+
+    // Ray down onto Site A Hut roof (z = 3.0m)
+    let (hit_hut, dist_hut, _) = physics.cast_ray([26.0, 36.0, 5.0], [0.0, 0.0, -1.0], 10.0);
+    assert!(hit_hut, "ray downwards onto Hut roof should hit at z=3.0");
+    assert!((dist_hut - 2.0).abs() < 0.2, "dist_hut was {}", dist_hut);
+
+    // Ray down onto Site A Rafters / Catwalks (z = 3.8m)
+    let (hit_rafters, dist_rafters, _) = physics.cast_ray([48.0, 40.0, 6.0], [0.0, 0.0, -1.0], 10.0);
+    assert!(hit_rafters, "ray downwards onto Rafters should hit at z=3.8");
+    assert!((dist_rafters - 2.2).abs() < 0.2, "dist_rafters was {}", dist_rafters);
+
+    // Ray down onto Site B Subterranean pit floor (z = -4.5m)
+    let (hit_b_floor, dist_b_floor, _) = physics.cast_ray([30.0, 30.0, 0.0], [0.0, 0.0, -1.0], 10.0);
+    assert!(hit_b_floor, "ray downwards onto Site B floor should hit at z=-4.5");
+    assert!((dist_b_floor - 4.5).abs() < 0.2, "dist_b_floor was {}", dist_b_floor);
+}
+
+#[test]
+fn test_nuke_glb_generation() {
+    let info = MapInfo {
+        name: "hd_nuke".into(),
+        title: "Nuclear Facility (Nuke GLB)".into(),
+        ssize: 64,
+        ..Default::default()
+    };
+
+    let world = hassault_native::world3d::create_world_3d(info);
+
+    assert!(world.triangles > 0, "should produce triangles");
+    assert_eq!(world.render_positions.len(), world.triangles * 9);
+    assert_eq!(world.render_normals.len(), world.triangles * 9);
+    assert_eq!(world.render_colors.len(), world.triangles * 9);
+
+    assert_eq!(world.spawns.len(), 8, "must have 8 spawns");
+    assert_eq!(world.items.len(), 10, "must have 10 pickups");
+
+    let physics = RapierPhysicsWorld::new(&world.col_vertices, &world.col_indices);
+    // Ray down to terrain floor
+    let (hit, dist, _) = physics.cast_ray([35.0, 35.0, 6.0], [0.0, 0.0, -1.0], 15.0);
+    assert!(hit, "ray downwards should hit nuke GLB collision mesh");
+    assert!(dist <= 12.0, "dist was {}", dist);
+}
+
 
 
 

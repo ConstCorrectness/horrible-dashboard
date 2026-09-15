@@ -1,0 +1,127 @@
+{
+  "title": "Nuclear Facility (Nuke)",
+  "author": "horrible-dashboard",
+  "license": "CC0-1.0",
+  "sfactor": 6,
+  "waterlevel": -100,
+  "ambient": 55,
+  "format": "gltf",
+  "modes": [
+    "defuse",
+    "tdm",
+    "dm"
+  ],
+  "brushes": [
+    {
+      "op": "room",
+      "rect": [4, 4, 56, 56],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "solid",
+      "rect": [26, 18, 2, 28],
+      "wtex": 89
+    },
+    {
+      "op": "room",
+      "rect": [26, 28, 2, 6],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "solid",
+      "rect": [44, 18, 2, 28],
+      "wtex": 89
+    },
+    {
+      "op": "room",
+      "rect": [44, 28, 2, 6],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "solid",
+      "rect": [10, 44, 18, 2],
+      "wtex": 89
+    },
+    {
+      "op": "room",
+      "rect": [16, 44, 6, 2],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "solid",
+      "rect": [42, 46, 16, 2],
+      "wtex": 89
+    },
+    {
+      "op": "room",
+      "rect": [46, 46, 6, 2],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 21,
+      "ctex": 33
+    }
+  ],
+  "spawns": [
+    { "x": 32, "y": 10, "z": 0, "yaw": 90, "team": 1 },
+    { "x": 36, "y": 10, "z": 0, "yaw": 90, "team": 1 },
+    { "x": 32, "y": 14, "z": 0, "yaw": 90, "team": 1 },
+    { "x": 36, "y": 14, "z": 0, "yaw": 90, "team": 1 },
+    { "x": 32, "y": 58, "z": 0, "yaw": 270, "team": 0 },
+    { "x": 36, "y": 58, "z": 0, "yaw": 270, "team": 0 },
+    { "x": 32, "y": 54, "z": 0, "yaw": 270, "team": 0 },
+    { "x": 36, "y": 54, "z": 0, "yaw": 270, "team": 0 }
+  ],
+  "entities": [
+    { "type": "playerstart", "x": 32, "y": 10, "z": 0, "yaw": 90, "team": 1 },
+    { "type": "playerstart", "x": 36, "y": 10, "z": 0, "yaw": 90, "team": 1 },
+    { "type": "playerstart", "x": 32, "y": 14, "z": 0, "yaw": 90, "team": 1 },
+    { "type": "playerstart", "x": 36, "y": 14, "z": 0, "yaw": 90, "team": 1 },
+    { "type": "playerstart", "x": 32, "y": 58, "z": 0, "yaw": 270, "team": 0 },
+    { "type": "playerstart", "x": 36, "y": 58, "z": 0, "yaw": 270, "team": 0 },
+    { "type": "playerstart", "x": 32, "y": 54, "z": 0, "yaw": 270, "team": 0 },
+    { "type": "playerstart", "x": 36, "y": 54, "z": 0, "yaw": 270, "team": 0 },
+    { "type": "health", "x": 16, "y": 14, "z": 0 },
+    { "type": "health", "x": 50, "y": 14, "z": 0 },
+    { "type": "health", "x": 34, "y": 34, "z": 0 },
+    { "type": "armour", "x": 18, "y": 48, "z": 0 },
+    { "type": "armour", "x": 50, "y": 48, "z": 0 },
+    { "type": "ammo", "x": 14, "y": 32, "z": 0 },
+    { "type": "ammo", "x": 48, "y": 32, "z": 0 },
+    { "type": "ammo", "x": 34, "y": 50, "z": 0 },
+    { "type": "clips", "x": 34, "y": 20, "z": 0 },
+    { "type": "grenade", "x": 20, "y": 24, "z": 0 }
+  ],
+  "objectives": {
+    "sites": [
+      {
+        "id": "A",
+        "x": 36,
+        "y": 42,
+        "radius": 4.0
+      },
+      {
+        "id": "B",
+        "x": 20,
+        "y": 40,
+        "radius": 4.0
+      }
+    ]
+  }
+}

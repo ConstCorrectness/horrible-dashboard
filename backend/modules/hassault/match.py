@@ -352,6 +352,8 @@ class Command:
     sell: int = -1
     """Gunsmith attachments dict: slot -> attachment id, e.g. {'optic': 'red_dot', 'barrel': 'suppressor'}."""
     attachments: dict[str, str] | None = None
+    """Fractional sub-tick timestamp in [0.0, 1.0) indicating exact input timing within server tick."""
+    subtick: float = 0.0
 
 
 @dataclass(slots=True)
@@ -1078,6 +1080,7 @@ class MatchRoom:
                             seq=command.seq,
                             knife=(player.weapon == 0),
                             knife_boost=self.settings.knife_speed_boost,
+                            subtick=command.subtick,
                         ),
                         dt,
                     )
@@ -1237,6 +1240,13 @@ class MatchRoom:
                     remaining=nade.spec.duration,
                     duration=nade.spec.duration,
                     damage_per_second=nade.spec.damage_per_second,
+                    volumetric_nodes=(
+                        grenades.generate_volumetric_smoke_nodes(
+                            self.world, nade.x, nade.y, nade.z, nade.spec.radius
+                        )
+                        if kind == "smoke"
+                        else []
+                    ),
                 )
             )
             return
@@ -2969,4 +2979,5 @@ def parse_command(raw: Any) -> Command | None:
             if isinstance(raw.get("attachments"), dict)
             else None
         ),
+        subtick=_clamp(_num(raw.get("subtick")), 0.0, 0.999),
     )

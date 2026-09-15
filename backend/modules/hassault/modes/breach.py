@@ -185,6 +185,7 @@ class Breach(GameMode):
     def welcome_state(self, room: MatchRoom) -> dict[str, Any]:
         return {
             "mode": self.id,
+            "teams": self.teams,
             "extractionZone": list(self.extraction_zone),
             "extractionRadius": self.extraction_radius,
             "totalHostages": len(self.hostages),

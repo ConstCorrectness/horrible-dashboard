@@ -284,6 +284,7 @@ class Zone:
     channels: list[tuple[float, float, float, float, float]] = field(
         default_factory=list
     )
+    volumetric_nodes: list[dict[str, float]] = field(default_factory=list)
 
     def snapshot(self) -> dict[str, Any]:
         data = {
@@ -298,6 +299,8 @@ class Zone:
         }
         if self.cleared_until > 0.0:
             data["cleared"] = round(self.cleared_until, 2)
+        if self.volumetric_nodes:
+            data["nodes"] = self.volumetric_nodes
         active_channels = [c for c in self.channels if c[4] > 0]
         if active_channels:
             now = time.monotonic()
@@ -316,9 +319,43 @@ class Zone:
         return data
 
     def contains(self, x: float, y: float, z: float) -> bool:
-        return (
-            (x - self.x) ** 2 + (y - self.y) ** 2 + (z - self.z) ** 2
-        ) <= self.radius**2
+        if ((x - self.x) ** 2 + (y - self.y) ** 2 + (z - self.z) ** 2) <= self.radius**2:
+            return True
+        for node in self.volumetric_nodes:
+            if (
+                (x - node["x"]) ** 2 + (y - node["y"]) ** 2 + (z - node["z"]) ** 2
+            ) <= node["r"] ** 2:
+                return True
+        return False
+
+
+def generate_volumetric_smoke_nodes(
+    world: Any, x: float, y: float, z: float, radius: float = 4.2
+) -> list[dict[str, float]]:
+    """Compute volumetric sub-nodes expanding outwards from detonation point,
+    wrapping around corners and stopping at solid geometry walls.
+    """
+    nodes = [{"x": round(x, 2), "y": round(y, 2), "z": round(z, 2), "r": round(radius * 0.65, 2)}]
+    angles = [i * (math.pi / 4.0) for i in range(8)]
+    offset_dist = radius * 0.55
+    for ang in angles:
+        nx = x + math.cos(ang) * offset_dist
+        ny = y + math.sin(ang) * offset_dist
+        blocked = False
+        if world is not None and hasattr(world, "solid"):
+            try:
+                if world.solid(int(nx), int(ny), int(z)):
+                    blocked = True
+            except Exception:
+                pass
+        if not blocked:
+            nodes.append({
+                "x": round(nx, 2),
+                "y": round(ny, 2),
+                "z": round(z, 2),
+                "r": round(radius * 0.5, 2),
+            })
+    return nodes
 
 
 def throw_velocity(

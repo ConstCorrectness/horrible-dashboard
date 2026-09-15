@@ -420,6 +420,7 @@ class MoveInput:
     seq: int = 0
     knife: bool = False
     knife_boost: float = 1.10
+    subtick: float = 0.0
 
 
 def body_height(player: PlayerState) -> float:
@@ -716,6 +717,13 @@ def step(world: World, player: PlayerState, move: MoveInput, dt: float) -> None:
         player.vel_z = JUMP_SPEED
         player.on_ground = False
         player.time_in_air = 0.0
+        if move.subtick > 0.0:
+            frac = max(0.001, 1.0 - move.subtick)
+            frac_dt = frac * dt
+            dz = JUMP_SPEED * frac_dt - 0.5 * GRAVITY * (frac_dt**2)
+            player.z += max(0.0, dz)
+            player.vel_z -= GRAVITY * frac_dt
+            player.time_in_air += frac_dt
 
     # -- horizontal: move, one axis at a time ------------------------------
     #

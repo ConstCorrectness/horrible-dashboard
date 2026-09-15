@@ -2268,3 +2268,62 @@ async def delete_tournament_replay(replay_id: str):
         raise HTTPException(status_code=404, detail=f"Replay '{replay_id}' not found")
     return {"status": "deleted", "id": replay_id}
 
+
+@router.get("/tournaments/major")
+async def get_major_tournament(tournament_id: str = "major_2026"):
+    """Retrieve the 16-team Major tournament bracket, standing, and active matches."""
+    from backend.modules.hassault.tournaments import tournament_manager
+
+    return tournament_manager.get_or_create_major(tournament_id)
+
+
+@router.get("/tournaments/match/{match_id}")
+async def get_tournament_match(match_id: str):
+    """Retrieve match information and active map veto state."""
+    from backend.modules.hassault.tournaments import tournament_manager
+
+    state = tournament_manager.get_veto_state(match_id)
+    if "error" in state:
+        raise HTTPException(status_code=404, detail=state["error"])
+    return state
+
+
+class VetoRequest(BaseModel):
+    match_id: str
+    team_id: str
+    action: str  # 'ban' or 'pick'
+    map_name: str
+
+
+@router.post("/tournaments/veto")
+async def submit_map_veto(payload: VetoRequest):
+    """Execute a map pick or ban action for a tournament match."""
+    from backend.modules.hassault.tournaments import tournament_manager
+
+    try:
+        return tournament_manager.perform_veto(
+            payload.match_id, payload.team_id, payload.action, payload.map_name
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class MatchCompleteRequest(BaseModel):
+    winner_id: str
+    score_a: int
+    score_b: int
+
+
+@router.post("/tournaments/match/{match_id}/complete")
+async def complete_tournament_match(match_id: str, payload: MatchCompleteRequest):
+    """Report match score and winner, updating standings and advancing tournament."""
+    from backend.modules.hassault.tournaments import tournament_manager
+
+    try:
+        return tournament_manager.complete_match(
+            match_id, payload.winner_id, payload.score_a, payload.score_b
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
