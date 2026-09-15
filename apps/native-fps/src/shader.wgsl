@@ -215,6 +215,14 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         out_color.rgb + vec3<f32>(0.35, 0.62, 1.0) * edge * 0.85,
         out_color.a
     );
+
+    // Emissive radiance bloom: self-luminous elements (radioactive coolant, server telemetry screens, LEDs)
+    // radiate optical radiance without tone-curve desaturation or shadow occlusion.
+    let max_comp = max(in.color.r, max(in.color.g, in.color.b));
+    if (max_comp > 1.0) {
+        let bloom = in.color * (max_comp - 0.75) * 0.35;
+        out_color = vec4<f32>(out_color.rgb + bloom, out_color.a);
+    }
     return out_color;
 }
 

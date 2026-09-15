@@ -241,6 +241,43 @@ pub fn timbre(kind: &str) -> Timbre {
             body: 620.0,
             thump: 0.0,
         },
+        // Surface-aware material footsteps:
+        // Steel plate / industrial metal catwalk grating (hd_facility, hd_junkflea)
+        "step_metal" => Timbre {
+            frequency: 1450.0,
+            q: 3.5,
+            decay: 0.14,
+            gain: 0.55,
+            body: 240.0,
+            thump: 0.0,
+        },
+        // Polished marble & ceramic tile (hd_bank, hd_facility lab floor)
+        "step_marble" | "step_tile" => Timbre {
+            frequency: 1100.0,
+            q: 2.2,
+            decay: 0.08,
+            gain: 0.50,
+            body: 120.0,
+            thump: 0.0,
+        },
+        // Asphalt pavement & urban concrete (hd_assault, streets)
+        "step_asphalt" | "step_concrete" => Timbre {
+            frequency: 680.0,
+            q: 1.3,
+            decay: 0.11,
+            gain: 0.48,
+            body: 75.0,
+            thump: 0.0,
+        },
+        // Scrap yard gravel & subterranean dirt trenches (hd_junkflea)
+        "step_gravel" | "step_dirt" => Timbre {
+            frequency: 520.0,
+            q: 0.8,
+            decay: 0.13,
+            gain: 0.50,
+            body: 40.0,
+            thump: 0.0,
+        },
         // `step`, and the fallback for a kind this build does not know: a noise
         // the server invented later must still be *audible*, because the whole
         // mechanic is hearing that something happened.

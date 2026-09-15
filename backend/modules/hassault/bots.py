@@ -202,6 +202,7 @@ class BotBrain:
         self.last_pos = (0.0, 0.0)
         self.moved = 0.0
         self.avoid_bias = 0.0
+        self.buy_in = 0.0
 
     # -- perception ---------------------------------------------------------
 
@@ -509,7 +510,10 @@ class BotBrain:
             bearing = math.atan2(
                 target.state.y - me.state.y, target.state.x - me.state.x
             )
-            if distance < CLOSE_RANGE:
+            # Cover-seeking / retreat under fire or while reloading
+            if reload_now or getattr(me, "health", 100.0) < 35:
+                wanted_heading = bearing + math.pi + self.strafe_dir * 0.8
+            elif distance < CLOSE_RANGE:
                 wanted_heading = bearing + math.pi + self.strafe_dir * 0.6
             elif distance > LONG_RANGE:
                 wanted_heading = bearing + self.strafe_dir * 0.35
@@ -642,6 +646,29 @@ class BotBrain:
         if held.zoom_levels and target is not None:
             scoped = 2 if distance > LONG_RANGE * 1.5 else 1
 
+        # -- economy buy ----------------------------------------------------
+        buy_item = -1
+        self.buy_in -= dt
+        if self.buy_in <= 0:
+            self.buy_in = 0.5 + self.rng.random() * 0.4
+            mode_state = getattr(room.mode, "state", None)
+            buy_open = getattr(mode_state, "buy_open", False)
+            if buy_open and hasattr(me, "money"):
+                owned_weapons = getattr(me, "owned", set())
+                if not any(slot in owned_weapons for slot in (2, 3, 4)):
+                    if me.money >= 4750 and self.skill.name in ("hard", "expert") and self.rng.random() < 0.35:
+                        buy_item = 2  # Sniper Rifle
+                    elif me.money >= 2700:
+                        buy_item = 0  # Assault Rifle
+                    elif me.money >= 1800:
+                        buy_item = 1  # Shotgun
+                elif me.money >= 1000 and "armour" not in getattr(me, "owned_extras", set()) and getattr(me, "armour", 0) < 100:
+                    buy_item = 3  # Armour
+                elif me.money >= 400 and "defuser" not in getattr(me, "owned_extras", set()) and getattr(me, "team", 0) != getattr(mode_state, "attackers", 0):
+                    buy_item = 8  # Defusal Kit
+                elif me.money >= 300 and not getattr(me, "owned_nades", set()):
+                    buy_item = 4  # HE Grenade
+
         me.bot_seq += 1
         return Command(
             seq=me.bot_seq,
@@ -657,6 +684,7 @@ class BotBrain:
             weapon=switch,
             scoped=scoped,
             use=use,
+            buy=buy_item,
             # No rewind: a bot's input is produced here, on this tick, so the
             # world it "saw" is the world as it is.
             view_t=None,

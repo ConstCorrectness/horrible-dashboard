@@ -166,6 +166,13 @@ enum Shape {
     },
     /// A slow, coarse puff of dust.
     Puff { at: [f32; 3], radius: f32 },
+    /// Tumbling ejected brass shell casing with ballistic physics and tumble.
+    Casing {
+        origin: [f32; 3],
+        vel: [f32; 3],
+        rot_axis: [f32; 3],
+        rot_speed: f32,
+    },
 }
 
 struct Live {
@@ -356,6 +363,33 @@ impl EffectsPool {
         });
     }
 
+    /// Eject a brass shell casing with randomized physics velocity and tumble rotation.
+    pub fn eject_casing(
+        &mut self,
+        origin: [f32; 3],
+        forward: [f32; 3],
+        right: [f32; 3],
+        up: [f32; 3],
+    ) {
+        let vel = [
+            right[0] * 2.5 - forward[0] * 0.35 + up[0] * 1.8,
+            right[1] * 2.5 - forward[1] * 0.35 + up[1] * 1.8,
+            right[2] * 2.5 - forward[2] * 0.35 + up[2] * 1.8,
+        ];
+        self.push(Live {
+            shape: Shape::Casing {
+                origin,
+                vel,
+                rot_axis: right,
+                rot_speed: 28.0,
+            },
+            color: rgb(0xe6b800), // Polished cartridge brass gold
+            base: 0.95,
+            age: 0.0,
+            life: 0.65,
+        });
+    }
+
     fn push(&mut self, effect: Live) {
         if self.live.len() >= MAX_LIVE {
             // The oldest goes, not the newest: the shot that just happened is
@@ -370,6 +404,12 @@ impl EffectsPool {
     pub fn update(&mut self, dt: f32) {
         for e in &mut self.live {
             e.age += dt;
+            if let Shape::Casing { origin, vel, .. } = &mut e.shape {
+                vel[2] -= 9.8 * dt; // gravity in Z-up cube coords
+                origin[0] += vel[0] * dt;
+                origin[1] += vel[1] * dt;
+                origin[2] += vel[2] * dt;
+            }
         }
         self.live.retain(|e| e.age < e.life);
     }
@@ -437,6 +477,34 @@ impl EffectsPool {
                         continue;
                     }
                     push_ball(out, *at, grown, e.color, alpha, 5, 3);
+                }
+                Shape::Casing {
+                    origin,
+                    rot_axis,
+                    rot_speed,
+                    ..
+                } => {
+                    let angle = e.age * *rot_speed;
+                    let (sin, cos) = angle.sin_cos();
+                    let axis = *rot_axis;
+                    let dir = [
+                        axis[0] * cos + axis[1] * sin,
+                        axis[1] * cos - axis[0] * sin,
+                        sin * 0.6 + cos * 0.4,
+                    ];
+                    let norm = normalize(dir);
+                    let half_len = 0.035;
+                    let from = [
+                        origin[0] - norm[0] * half_len,
+                        origin[1] - norm[1] * half_len,
+                        origin[2] - norm[2] * half_len,
+                    ];
+                    let to = [
+                        origin[0] + norm[0] * half_len,
+                        origin[1] + norm[1] * half_len,
+                        origin[2] + norm[2] * half_len,
+                    ];
+                    push_beam(out, from, to, 0.016, e.color, alpha);
                 }
             }
         }

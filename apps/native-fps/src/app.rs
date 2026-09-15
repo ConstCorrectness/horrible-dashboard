@@ -991,7 +991,8 @@ impl App {
             if self.stride >= STRIDE_DISTANCE {
                 self.stride = 0.0;
                 if audible {
-                    self.play_own("step", 0.45, false);
+                    let step_kind = self.surface_footstep_kind(state.x, state.y, state.z);
+                    self.play_own(step_kind, 0.45, false);
                 }
             }
         } else {
@@ -1023,6 +1024,43 @@ impl App {
         // of a match for a player who was already standing in water.
         self.was_wet = wet;
         self.was_grounded = grounded;
+    }
+
+    /// Determine acoustic surface material tag for footsteps and landings.
+    fn surface_footstep_kind(&self, _x: f32, _y: f32, z: f32) -> &'static str {
+        match self.map_name.as_str() {
+            "hd_bank" => {
+                if z >= 3.8 {
+                    "step_metal" // Mezzanine catwalk & executive balcony
+                } else {
+                    "step_marble" // Grand banking floor
+                }
+            }
+            "hd_facility" => {
+                if z >= 4.0 {
+                    "step_metal" // High catwalk bridge
+                } else {
+                    "step_tile" // Containment lab floor
+                }
+            }
+            "hd_junkflea" => {
+                if z >= 3.5 {
+                    "step_metal" // Catwalk bridge & container roofs
+                } else if z < -0.5 {
+                    "step_dirt" // Subterranean trenches
+                } else {
+                    "step_gravel" // Scrap yard gravel
+                }
+            }
+            "hd_assault" => {
+                if z >= 4.0 {
+                    "step_metal" // Elevated industrial gantry
+                } else {
+                    "step_asphalt" // Street asphalt
+                }
+            }
+            _ => "step",
+        }
     }
 
     /// Say goodbye and stop.
@@ -1656,6 +1694,29 @@ impl App {
                                 self.effects
                                     .shot_ex(*origin, ends, faces, is_mine, *hit, draw_beam);
                                 self.decals.shot(ends, faces);
+                                if !ends.is_empty() {
+                                    let dir = [ends[0][0] - origin[0], ends[0][1] - origin[1], ends[0][2] - origin[2]];
+                                    let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+                                    if len > 1e-4 {
+                                        let f = [dir[0] / len, dir[1] / len, dir[2] / len];
+                                        let h = if f[2].abs() < 0.9 { [0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0] };
+                                        let r = [
+                                            f[1] * h[2] - f[2] * h[1],
+                                            f[2] * h[0] - f[0] * h[2],
+                                            f[0] * h[1] - f[1] * h[0],
+                                        ];
+                                        let r_len = (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt();
+                                        if r_len > 1e-4 {
+                                            let r = [r[0] / r_len, r[1] / r_len, r[2] / r_len];
+                                            let u = [
+                                                r[1] * f[2] - r[2] * f[1],
+                                                r[2] * f[0] - r[0] * f[2],
+                                                r[0] * f[1] - r[1] * f[0],
+                                            ];
+                                            self.effects.eject_casing(*origin, f, r, u);
+                                        }
+                                    }
+                                }
                             }
                         }
                         if let Fx::Detonate {
@@ -2181,6 +2242,29 @@ impl App {
             self.effects
                 .shot_ex(shot.origin, &shot.ends, &shot.faces, true, false, draw_beam);
             self.decals.shot(&shot.ends, &shot.faces);
+            if !shot.ends.is_empty() {
+                let dir = [shot.ends[0][0] - shot.origin[0], shot.ends[0][1] - shot.origin[1], shot.ends[0][2] - shot.origin[2]];
+                let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+                if len > 1e-4 {
+                    let f = [dir[0] / len, dir[1] / len, dir[2] / len];
+                    let h = if f[2].abs() < 0.9 { [0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0] };
+                    let r = [
+                        f[1] * h[2] - f[2] * h[1],
+                        f[2] * h[0] - f[0] * h[2],
+                        f[0] * h[1] - f[1] * h[0],
+                    ];
+                    let r_len = (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt();
+                    if r_len > 1e-4 {
+                        let r = [r[0] / r_len, r[1] / r_len, r[2] / r_len];
+                        let u = [
+                            r[1] * f[2] - r[2] * f[1],
+                            r[2] * f[0] - r[0] * f[2],
+                            r[0] * f[1] - r[1] * f[0],
+                        ];
+                        self.effects.eject_casing(shot.origin, f, r, u);
+                    }
+                }
+            }
         }
     }
 

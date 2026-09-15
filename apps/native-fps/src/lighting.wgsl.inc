@@ -73,18 +73,29 @@ const FILL_DIR: vec3<f32> = vec3<f32>(-0.538, 0.377, -0.754);
 /// wrong rather than the exposure.
 const RECIPROCAL_PI: f32 = 0.31830987;
 
+const POISSON_16: array<vec2<f32>, 16> = array<vec2<f32>, 16>(
+    vec2<f32>(-0.94201624, -0.39906216),
+    vec2<f32>(0.94558609, -0.76890725),
+    vec2<f32>(-0.094184101, -0.92938870),
+    vec2<f32>(0.34495938, 0.29387760),
+    vec2<f32>(-0.91588581, 0.45771432),
+    vec2<f32>(-0.81544232, -0.87912464),
+    vec2<f32>(-0.38277543, 0.27676845),
+    vec2<f32>(0.97484398, 0.75648379),
+    vec2<f32>(0.44323325, -0.97511554),
+    vec2<f32>(0.53742981, -0.47373420),
+    vec2<f32>(-0.26496911, -0.41893023),
+    vec2<f32>(0.79197514, 0.19090188),
+    vec2<f32>(-0.24188840, 0.99706507),
+    vec2<f32>(-0.81409955, 0.91437590),
+    vec2<f32>(0.19984126, 0.78641367),
+    vec2<f32>(0.14383161, -0.14100790)
+);
+
 /// How much of the sun reaches a point, 0 fully shadowed to 1 fully lit.
 ///
-/// Takes the map and its sampler as parameters because the two shaders that call
-/// it bind them at **different group indices** — the world has no bone or
-/// material group and the character has both — and this file is textually shared
-/// by both. WGSL allows a texture and a sampler as function parameters, which is
-/// what lets the PCF live in one place instead of two.
-///
-/// 3x3 PCF over a comparison sampler: the hardware does the depth test as part
-/// of each fetch and returns a filtered occlusion rather than a depth, so this is
-/// nine bilinear compares rather than nine compares plus nine filters. Anything
-/// less than a kernel leaves shadow edges that crawl visibly as you walk.
+/// 16-tap Poisson disk PCF over a comparison sampler: provides cinematic soft
+/// contact shadows with smooth penumbra transitions without grid artifacts.
 fn sun_shadow(
     map: texture_depth_2d,
     map_sampler: sampler_comparison,
@@ -93,37 +104,25 @@ fn sun_shadow(
     texel: f32,
     bias: f32,
 ) -> f32 {
-    // Perspective divide, then into texture space. The light camera is
-    // orthographic so `w` is 1, but dividing anyway costs nothing and means this
-    // still works if the fit ever becomes a perspective one.
+    // Perspective divide, then into texture space.
     var ndc = light_position.xyz / light_position.w;
-    // y flips: clip space is y-up and texture space is y-down. Getting this
-    // wrong mirrors every shadow about the map's centre line, which looks like
-    // the sun is in the wrong place rather than like a sign error.
     var uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
 
-    // Outside the map's shadow frustum is **lit**, not shadowed. The opposite
-    // default puts everything beyond the fitted box in darkness, which on a
-    // large map is a black border round the edge of the world.
     if (ndc.z > 1.0 || ndc.z < 0.0 || uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
         return 1.0;
     }
 
-    // A surface nearly edge-on to the sun has a depth error across one texel
-    // proportional to its slope, so the constant bias is scaled by it. Without
-    // this a floor lit head-on either shadow-acnes or its walls detach.
     let ndotl = max(dot(normalize(normal), normalize(SUN_DIR)), 0.0);
     let slope = clamp(1.0 - ndotl, 0.0, 1.0);
     let depth = ndc.z - (bias + bias * 4.0 * slope);
 
     var sum = 0.0;
-    for (var y = -1; y <= 1; y = y + 1) {
-        for (var x = -1; x <= 1; x = x + 1) {
-            let offset = vec2<f32>(f32(x), f32(y)) * texel;
-            sum = sum + textureSampleCompare(map, map_sampler, uv + offset, depth);
-        }
+    let radius = texel * 1.5;
+    for (var i = 0; i < 16; i = i + 1) {
+        let offset = POISSON_16[i] * radius;
+        sum = sum + textureSampleCompare(map, map_sampler, uv + offset, depth);
     }
-    return sum / 9.0;
+    return sum * 0.0625;
 }
 
 /// Lambert shading with the three lights above. `albedo` must already be linear.
