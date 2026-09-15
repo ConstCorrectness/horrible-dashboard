@@ -283,3 +283,71 @@ fn test_office_glb_generation() {
     assert!(dist <= 6.0, "dist was {}", dist);
 }
 
+#[test]
+fn test_dust2_3d_generation() {
+    let info = MapInfo {
+        name: "hd_dust2".into(),
+        title: "Desert Citadel II (Dust II)".into(),
+        ssize: 64,
+        ..Default::default()
+    };
+
+    let world = hassault_native::world3d::create_procedural_dust2_3d(info);
+
+    assert!(world.triangles > 0, "should produce triangles");
+    assert_eq!(world.render_positions.len(), world.triangles * 9);
+    assert_eq!(world.render_normals.len(), world.triangles * 9);
+    assert_eq!(world.render_colors.len(), world.triangles * 9);
+
+    assert_eq!(world.spawns.len(), 8, "must have 8 spawns");
+    assert_eq!(world.spawns.iter().filter(|s| s.team == 0).count(), 4, "must have 4 CT spawns");
+    assert_eq!(world.spawns.iter().filter(|s| s.team == 1).count(), 4, "must have 4 T spawns");
+
+    assert_eq!(world.items.len(), 10, "must have 10 pickups");
+    assert_eq!(world.waterlevel, -100.0);
+
+    let physics = RapierPhysicsWorld::new(&world.col_vertices, &world.col_indices);
+
+    // Ray down onto Site A elevated plateau (z = 1.2m)
+    let (hit_a, dist_a, _) = physics.cast_ray([50.0, 55.0, 5.0], [0.0, 0.0, -1.0], 10.0);
+    assert!(hit_a, "ray downwards onto Site A should hit plateau at z=1.2");
+    assert!((dist_a - 3.8).abs() < 0.2, "dist_a was {}", dist_a);
+
+    // Ray down onto Catwalk (z = 2.4m)
+    let (hit_catwalk, dist_catwalk, _) = physics.cast_ray([38.0, 45.0, 5.0], [0.0, 0.0, -1.0], 10.0);
+    assert!(hit_catwalk, "ray downwards onto Catwalk should hit walkway at z=2.4");
+    assert!((dist_catwalk - 2.6).abs() < 0.2, "dist_catwalk was {}", dist_catwalk);
+
+    // Ray down onto Mid ground (z = 0.0m)
+    let (hit_mid, dist_mid, _) = physics.cast_ray([30.0, 25.0, 5.0], [0.0, 0.0, -1.0], 10.0);
+    assert!(hit_mid, "ray downwards onto Mid should hit ground at z=0");
+    assert!((dist_mid - 5.0).abs() < 0.2, "dist_mid was {}", dist_mid);
+}
+
+#[test]
+fn test_dust2_glb_generation() {
+    let info = MapInfo {
+        name: "hd_dust2".into(),
+        title: "Desert Citadel II (Dust II GLB)".into(),
+        ssize: 64,
+        ..Default::default()
+    };
+
+    let world = hassault_native::world3d::create_world_3d(info);
+
+    assert!(world.triangles > 0, "should produce triangles");
+    assert_eq!(world.render_positions.len(), world.triangles * 9);
+    assert_eq!(world.render_normals.len(), world.triangles * 9);
+    assert_eq!(world.render_colors.len(), world.triangles * 9);
+
+    assert_eq!(world.spawns.len(), 8, "must have 8 spawns");
+    assert_eq!(world.items.len(), 10, "must have 10 pickups");
+
+    let physics = RapierPhysicsWorld::new(&world.col_vertices, &world.col_indices);
+    // Ray down to floor
+    let (hit, dist, _) = physics.cast_ray([35.0, 35.0, 6.0], [0.0, 0.0, -1.0], 10.0);
+    assert!(hit, "ray downwards should hit dust2 GLB collision mesh");
+    assert!(dist <= 7.0, "dist was {}", dist);
+}
+
+

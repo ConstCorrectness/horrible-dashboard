@@ -362,6 +362,8 @@ def _record_result(result: dict[str, Any]) -> None:
     account_id = str((account or {}).get("account_id") or "local_player")
     try:
         results.record(account_id, result)
+        from backend.modules.hassault import rating
+        rating.update_player_rating(account_id, result)
     except Exception:
         logger.exception("hassault: could not record the match result")
 

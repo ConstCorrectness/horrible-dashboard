@@ -49,6 +49,33 @@ const MAX_VOICES: usize = 12;
 /// a frame loop with the audio thread's scheduling jitter in it.
 const QUEUE: usize = 64;
 
+/// Acoustic environmental zones for spatial reverberation modeling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AcousticZone {
+    #[default]
+    OpenAir,
+    SandstoneCorridor,
+    StoneTunnels,
+    IndoorEnclosure,
+    WarehouseMetal,
+}
+
+impl AcousticZone {
+    pub fn decay_mult(&self) -> f32 {
+        match self {
+            Self::OpenAir => 0.85,
+            Self::SandstoneCorridor => 1.15,
+            Self::StoneTunnels => 1.85,
+            Self::IndoorEnclosure => 0.95,
+            Self::WarehouseMetal => 1.50,
+        }
+    }
+
+    pub fn apply(&self, timbre: &mut Timbre) {
+        timbre.decay *= self.decay_mult();
+    }
+}
+
 /// One kind of sound. The browser's `Timbre`, field for field.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Timbre {
@@ -285,6 +312,24 @@ pub fn timbre(kind: &str) -> Timbre {
             decay: 0.13,
             gain: 0.50,
             body: 40.0,
+            thump: 0.0,
+        },
+        // Sandstone pavers & sun-bleached desert dust (hd_dust2)
+        "step_sand" | "step_sandstone" => Timbre {
+            frequency: 720.0,
+            q: 1.1,
+            decay: 0.12,
+            gain: 0.52,
+            body: 65.0,
+            thump: 0.0,
+        },
+        // Flashbang high-frequency acoustic tinnitus ringing
+        "tinnitus" => Timbre {
+            frequency: 4100.0,
+            q: 12.0,
+            decay: 2.8,
+            gain: 0.70,
+            body: 3850.0,
             thump: 0.0,
         },
         // `step`, and the fallback for a kind this build does not know: a noise
@@ -563,9 +608,18 @@ impl GameAudio {
             0 => 1.0,
             _ => 1.25,
         };
-        // The sine of the bearing relative to the listener is the left/right
-        // component, and all a stereo pan can carry.
-        let pan = (bearing - listener_yaw).sin().clamp(-1.0, 1.0);
+        // The angle of the bearing relative to the listener
+        let rel_angle = bearing - listener_yaw;
+        let pan = rel_angle.sin().clamp(-1.0, 1.0);
+        let cos_angle = rel_angle.cos();
+
+        // Directional HRTF Pinna and Contralateral Head-Shadowing:
+        // Rear sound sources are filtered by ear pinna acoustic shadow
+        if cos_angle < -0.15 {
+            timbre.frequency *= 0.88;
+            timbre.q *= 1.12;
+        }
+
         let voice = Voice {
             timbre,
             gain: volume * timbre.gain,
@@ -591,6 +645,22 @@ impl GameAudio {
             Err(TrySendError::Full(_)) => {}
             Err(TrySendError::Disconnected(_)) => {}
         }
+    }
+
+    /// Play one noise within an acoustic environmental reverb zone.
+    pub fn play_in_zone(
+        &self,
+        kind: &str,
+        volume: f32,
+        bearing: f32,
+        listener_yaw: f32,
+        up: i32,
+        voice: Option<Timbre>,
+        zone: AcousticZone,
+    ) {
+        let mut timbre = voice.unwrap_or_else(|| self::timbre(kind));
+        zone.apply(&mut timbre);
+        self.play(kind, volume, bearing, listener_yaw, up, Some(timbre));
     }
 
     /// Play a noise the server sent us.

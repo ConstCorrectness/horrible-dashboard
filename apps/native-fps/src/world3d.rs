@@ -1511,6 +1511,155 @@ pub fn create_procedural_office_3d(info: MapInfo) -> World3D {
     }
 }
 
+/// Create the Desert Citadel II ("Dust II" / `hd_dust2`) 3D arena.
+/// Features:
+/// 1. Long A: Sunken Pit with sniper ramp, Long corridor, corner, double sandstone archway, ramp up to A.
+/// 2. Bomb Site A: Elevated sandstone plateau (+1.2m), double wooden boxes, goose wall, ramp to CT.
+/// 3. Catwalk / Short A: Elevated stone walkway (+2.4m) overlooking Mid, Xbox jump crate, stairs to Lower Dark.
+/// 4. Middle & Mid Doors: Central street with heavy wooden double doors slightly ajar with sniper slit.
+/// 5. Dark Tunnels: Subterranean vaulted stone tunnel network connecting T side, Lower Dark, and Upper B.
+/// 6. Bomb Site B: Enclosed Moroccan fortress courtyard, Upper B tunnel lip, B Window, B Double Doors, Back Platform.
+/// 7. T & CT Spawns: Terracotta souk courtyard with fabric sun canopies, Persian rugs, and desert palm trees.
+pub fn create_procedural_dust2_3d(info: MapInfo) -> World3D {
+    let mut b = FacilityBuilder::new();
+
+    let col_sandstone_light = [0.84, 0.74, 0.58];
+    let col_sandstone_ochre = [0.76, 0.58, 0.40];
+    let col_sandstone_dark = [0.58, 0.46, 0.35];
+    let col_limestone_paving = [0.78, 0.72, 0.62];
+    let col_wood_cedar = [0.38, 0.28, 0.20];
+    let col_wood_crate = [0.52, 0.38, 0.24];
+    let col_tile_blue = [0.12, 0.35, 0.58];
+    let col_metal_iron = [0.25, 0.20, 0.18];
+    let col_scaffolding = [0.45, 0.45, 0.48];
+    let col_canopy_crimson = [0.58, 0.12, 0.14];
+    let col_palm_bark = [0.30, 0.22, 0.16];
+
+    // 1. Terrain Ground & Outer Perimeter Walls (4.0..66.0, 4.0..66.0)
+    b.add_floor(4.0, 4.0, 66.0, 66.0, 0.0, col_limestone_paving, true);
+
+    // High Sandstone Fortress Perimeter Walls (height 10.0)
+    b.add_quad([4.0, 4.0, 0.0], [66.0, 4.0, 0.0], [66.0, 4.0, 10.0], [4.0, 4.0, 10.0], col_sandstone_ochre, true);
+    b.add_quad([66.0, 66.0, 0.0], [4.0, 66.0, 0.0], [4.0, 66.0, 10.0], [66.0, 66.0, 10.0], col_sandstone_ochre, true);
+    b.add_quad([66.0, 4.0, 0.0], [66.0, 66.0, 0.0], [66.0, 66.0, 10.0], [66.0, 4.0, 10.0], col_sandstone_ochre, true);
+    b.add_quad([4.0, 66.0, 0.0], [4.0, 4.0, 0.0], [4.0, 4.0, 10.0], [4.0, 66.0, 10.0], col_sandstone_ochre, true);
+
+    // Decorative Moorish blue tile trim along perimeter
+    b.add_box_ex(4.0, 4.1, 9.6, 66.0, 4.3, 10.0, col_tile_blue, false);
+    b.add_box_ex(4.0, 65.7, 9.6, 66.0, 65.9, 10.0, col_tile_blue, false);
+
+    // 2. Long A & Pit
+    b.add_box(43.4, 8.0, 0.0, 44.6, 48.0, 9.0, col_sandstone_light);
+    b.add_floor(52.0, 6.0, 65.0, 18.0, -1.4, col_sandstone_dark, true);
+    b.add_ramp(52.0, 18.0, -1.4, 56.0, 22.0, 0.0, col_limestone_paving);
+    b.add_box(56.0, 11.0, -1.4, 60.0, 13.0, -0.4, col_metal_iron);
+    b.add_box(44.0, 15.2, 0.0, 48.0, 16.8, 4.8, col_sandstone_ochre);
+    b.add_box(56.0, 15.2, 0.0, 66.0, 16.8, 4.8, col_sandstone_ochre);
+    b.add_box(48.0, 15.2, 3.8, 56.0, 16.8, 4.8, col_sandstone_ochre);
+    b.add_box(55.0, 35.4, 0.0, 66.0, 36.6, 8.0, col_sandstone_light);
+    b.add_cylinder(54.0, 34.0, 0.0, 1.2, 0.45, 8, col_wood_cedar, true);
+    b.add_cylinder(54.8, 34.0, 0.0, 1.2, 0.45, 8, col_wood_cedar, true);
+    b.add_ramp(48.0, 42.0, 0.0, 56.0, 48.0, 1.2, col_limestone_paving);
+
+    // 3. Bomb Site A (Elevated plateau at Z = 1.2m)
+    b.add_floor(42.0, 48.0, 58.0, 62.0, 1.2, col_limestone_paving, true);
+    b.add_box(45.0, 51.0, 1.2, 46.3, 53.6, 2.4, col_wood_crate);
+    b.add_box(45.0, 51.0, 2.4, 46.3, 52.3, 3.6, col_wood_crate);
+    b.add_box(52.0, 61.4, 1.2, 66.0, 62.6, 6.0, col_sandstone_ochre);
+    b.add_box_ex(54.0, 61.3, 2.0, 56.0, 61.4, 3.5, col_tile_blue, false);
+    b.add_ramp(42.0, 56.0, 1.2, 46.0, 62.0, 0.0, col_limestone_paving);
+
+    // 4. Catwalk & Short A (Elevated walkway at Z = 2.4m)
+    b.add_floor(34.0, 42.0, 44.0, 48.0, 2.4, col_sandstone_light, true);
+    b.add_ramp(30.0, 40.0, 0.0, 34.0, 44.0, 2.4, col_limestone_paving);
+    b.add_box_ex(34.0, 42.0, 2.4, 34.2, 48.0, 3.4, col_metal_iron, true);
+
+    // 5. Middle & Mid Doors
+    b.add_box(25.4, 16.0, 0.0, 26.6, 48.0, 8.0, col_sandstone_light);
+    b.add_box(26.6, 32.1, 0.0, 30.2, 32.35, 4.0, col_wood_cedar);
+    b.add_box(30.65, 31.7, 0.0, 34.2, 31.95, 4.0, col_wood_cedar);
+    b.add_box(26.6, 31.5, 4.0, 34.2, 32.5, 5.2, col_sandstone_ochre);
+    b.add_box(29.2, 37.2, 0.0, 30.8, 38.8, 1.6, col_wood_crate);
+
+    // 6. Dark Tunnels (Subterranean Vaulted)
+    b.add_box(7.4, 22.0, 0.0, 8.6, 46.0, 4.2, col_sandstone_dark);
+    b.add_box(21.4, 22.0, 0.0, 22.6, 38.0, 4.2, col_sandstone_dark);
+    b.add_floor(8.6, 22.0, 22.6, 42.0, 4.2, col_sandstone_dark, true);
+    for ty in [26.0, 32.0, 38.0] {
+        b.add_box(8.6, ty - 0.4, 0.0, 10.0, ty + 0.4, 3.6, col_sandstone_ochre);
+        b.add_box(20.0, ty - 0.4, 0.0, 21.4, ty + 0.4, 3.6, col_sandstone_ochre);
+        b.add_box(8.6, ty - 0.4, 3.2, 21.4, ty + 0.4, 3.8, col_sandstone_ochre);
+    }
+
+    // 7. Bomb Site B (Fortress Courtyard)
+    b.add_box(5.4, 46.0, 0.0, 6.6, 64.0, 8.0, col_sandstone_ochre);
+    b.add_box(5.4, 63.4, 0.0, 26.6, 64.6, 8.0, col_sandstone_ochre);
+    b.add_box(25.4, 48.0, 0.0, 26.6, 64.0, 8.0, col_sandstone_ochre);
+    b.add_floor(12.0, 50.0, 20.0, 58.0, 0.6, col_limestone_paving, true);
+    b.add_box(21.4, 44.0, 0.0, 22.6, 48.0, 2.0, col_sandstone_light);
+    b.add_box(21.4, 44.0, 4.2, 22.6, 48.0, 8.0, col_sandstone_light);
+    b.add_box(20.0, 45.0, 0.0, 21.4, 47.0, 1.2, col_wood_crate);
+    b.add_box_ex(22.8, 44.2, 0.0, 23.0, 47.8, 5.0, col_scaffolding, false);
+    b.add_box(25.4, 55.0, 0.0, 25.7, 57.0, 3.6, col_wood_cedar);
+    b.add_box(25.4, 57.5, 0.0, 25.7, 59.5, 3.6, col_wood_cedar);
+    b.add_floor(7.0, 54.0, 11.0, 62.0, 1.0, col_limestone_paving, true);
+    b.add_box(8.0, 56.0, 1.0, 9.4, 57.4, 2.2, col_wood_crate);
+
+    // 8. T Souk courtyards, sun canopies & palm trees
+    b.add_box_ex(26.0, 8.0, 4.2, 38.0, 14.0, 4.3, col_canopy_crimson, false);
+    b.add_cylinder(22.0, 8.0, 0.0, 6.0, 0.25, 8, col_palm_bark, false);
+    b.add_cylinder(36.0, 62.0, 0.0, 6.0, 0.25, 8, col_palm_bark, false);
+
+    let spawns = vec![
+        SpawnPoint { x: 30.0, y: 10.0, z: 0.0, yaw: 90.0, team: 1 },
+        SpawnPoint { x: 34.0, y: 10.0, z: 0.0, yaw: 90.0, team: 1 },
+        SpawnPoint { x: 30.0, y: 14.0, z: 0.0, yaw: 90.0, team: 1 },
+        SpawnPoint { x: 34.0, y: 14.0, z: 0.0, yaw: 90.0, team: 1 },
+        SpawnPoint { x: 34.0, y: 60.0, z: 0.0, yaw: 270.0, team: 0 },
+        SpawnPoint { x: 38.0, y: 60.0, z: 0.0, yaw: 270.0, team: 0 },
+        SpawnPoint { x: 34.0, y: 56.0, z: 0.0, yaw: 270.0, team: 0 },
+        SpawnPoint { x: 38.0, y: 56.0, z: 0.0, yaw: 270.0, team: 0 },
+    ];
+
+    let items = vec![
+        ItemRow { id: 1, kind: "health".into(), x: 58.0, y: 12.0, z: 0.0 },
+        ItemRow { id: 2, kind: "health".into(), x: 20.0, y: 34.0, z: 0.0 },
+        ItemRow { id: 3, kind: "health".into(), x: 36.0, y: 58.0, z: 0.0 },
+        ItemRow { id: 4, kind: "armour".into(), x: 54.0, y: 36.0, z: 0.0 },
+        ItemRow { id: 5, kind: "armour".into(), x: 10.0, y: 56.0, z: 0.0 },
+        ItemRow { id: 6, kind: "ammo_assault".into(), x: 30.0, y: 30.0, z: 0.0 },
+        ItemRow { id: 7, kind: "ammo_assault".into(), x: 48.0, y: 52.0, z: 1.2 },
+        ItemRow { id: 8, kind: "ammo_sniper".into(), x: 16.0, y: 32.0, z: 0.0 },
+        ItemRow { id: 9, kind: "clips".into(), x: 38.0, y: 44.0, z: 2.4 },
+        ItemRow { id: 10, kind: "grenade".into(), x: 28.0, y: 12.0, z: 0.0 },
+    ];
+
+    let bounds = WorldBounds {
+        min: [4.0, 4.0, -2.0],
+        max: [66.0, 66.0, 14.0],
+        center: [35.0, 35.0, 6.0],
+        extent: 62.0,
+    };
+
+    let triangles = b.render_positions.len() / 9;
+
+    World3D {
+        info,
+        bounds,
+        render_positions: b.render_positions,
+        render_normals: b.render_normals,
+        render_colors: b.render_colors,
+        render_uvs: b.render_uvs,
+        triangles,
+        col_vertices: b.col_vertices,
+        col_indices: b.col_indices,
+        spawns,
+        items,
+        waterlevel: -100.0,
+    }
+}
+
+const HD_DUST2_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_dust2.glb");
 const HD_OFFICE_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_office.glb");
 const HD_ASSAULT_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_assault.glb");
 const HD_BANK_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_bank.glb");
@@ -1879,6 +2028,31 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
                 ItemRow { id: 10, kind: "grenade".into(), x: 52.0, y: 28.0, z: 0.0 },
             ],
         )
+    } else if info.name == "hd_dust2" {
+        (
+            vec![
+                SpawnPoint { x: 30.0, y: 10.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 34.0, y: 10.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 30.0, y: 14.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 34.0, y: 14.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 34.0, y: 60.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 38.0, y: 60.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 34.0, y: 56.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 38.0, y: 56.0, z: 0.0, yaw: 270.0, team: 0 },
+            ],
+            vec![
+                ItemRow { id: 1, kind: "health".into(), x: 58.0, y: 12.0, z: 0.0 },
+                ItemRow { id: 2, kind: "health".into(), x: 20.0, y: 34.0, z: 0.0 },
+                ItemRow { id: 3, kind: "health".into(), x: 36.0, y: 58.0, z: 0.0 },
+                ItemRow { id: 4, kind: "armour".into(), x: 54.0, y: 36.0, z: 0.0 },
+                ItemRow { id: 5, kind: "armour".into(), x: 10.0, y: 56.0, z: 0.0 },
+                ItemRow { id: 6, kind: "ammo_assault".into(), x: 30.0, y: 30.0, z: 0.0 },
+                ItemRow { id: 7, kind: "ammo_assault".into(), x: 48.0, y: 52.0, z: 1.2 },
+                ItemRow { id: 8, kind: "ammo_sniper".into(), x: 16.0, y: 32.0, z: 0.0 },
+                ItemRow { id: 9, kind: "clips".into(), x: 38.0, y: 44.0, z: 2.4 },
+                ItemRow { id: 10, kind: "grenade".into(), x: 28.0, y: 12.0, z: 0.0 },
+            ],
+        )
     } else if info.name == "hd_office" {
         (
             vec![
@@ -1945,6 +2119,13 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
             center: [32.0, 32.0, 5.75],
             extent: 38.0,
         }
+    } else if info.name == "hd_dust2" {
+        WorldBounds {
+            min: [4.0, 4.0, -2.0],
+            max: [66.0, 66.0, 14.0],
+            center: [35.0, 35.0, 6.0],
+            extent: 62.0,
+        }
     } else {
         WorldBounds {
             min: [4.0, 4.0, 0.0],
@@ -1968,6 +2149,20 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
         items,
         waterlevel: if info.name == "hd_facility" { -3.5 } else if info.name == "hd_junkflea" { -5.0 } else { -100.0 },
     })
+}
+
+pub fn load_dust2_glb(info: MapInfo) -> Result<World3D, String> {
+    for path in [
+        "../../backend/modules/hassault/maps/hd_dust2.glb",
+        "backend/modules/hassault/maps/hd_dust2.glb",
+        "assets/maps/hd_dust2.glb",
+        "apps/web/public/hd_dust2.glb",
+    ] {
+        if let Ok(bytes) = std::fs::read(path) {
+            return load_world_3d_from_glb(&bytes, info);
+        }
+    }
+    load_world_3d_from_glb(HD_DUST2_GLB_BYTES, info)
 }
 
 pub fn load_facility_glb(info: MapInfo) -> Result<World3D, String> {
@@ -2043,6 +2238,15 @@ pub fn load_office_glb(info: MapInfo) -> Result<World3D, String> {
 /// Universal 3D Arena Factory: selects appropriate procedural or modeled 3D map generator.
 pub fn create_world_3d(info: MapInfo) -> World3D {
     match info.name.as_str() {
+        "hd_dust2" => {
+            match load_dust2_glb(info.clone()) {
+                Ok(w) => w,
+                Err(err) => {
+                    eprintln!("hassault: failed to load GLB for hd_dust2 ({err}), falling back to procedural");
+                    create_procedural_dust2_3d(info)
+                }
+            }
+        }
         "hd_facility" => {
             match load_facility_glb(info.clone()) {
                 Ok(w) => w,

@@ -204,6 +204,8 @@ def _record(result: dict[str, Any]) -> None:
     account_id = str((account or {}).get("account_id") or "local_player")
     try:
         results.record(account_id, result, authority="server")
+        from backend.modules.hassault import rating
+        rating.update_player_rating(account_id, result)
     except Exception:
         logger.exception("hassault: could not record a ranked result")
 

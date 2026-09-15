@@ -1883,6 +1883,12 @@ impl App {
                     if let Some(mode) = &s.mode {
                         self.mode_state = Some(mode.clone());
                     }
+                    if let Some(audio) = self.audio.as_ref() {
+                        let prev_flash = self.you.as_ref().map(|y| y.flash).unwrap_or(0.0);
+                        if s.you.flash > 0.35 && prev_flash <= 0.15 {
+                            audio.play("tinnitus", s.you.flash.clamp(0.5, 1.0), 0.0, 0.0, 0, None);
+                        }
+                    }
                     self.apply_match_recoil(s.you.spray_index, s.you.weapon);
                     self.you = Some(s.you.clone());
                     // Filed for interpolation *before* the roster is replaced,

@@ -771,3 +771,27 @@ def test_pellet_hit_reports_hit_zone_and_rewind_delta():
     assert hit.hit_zone == "head"
     assert hit.rewind_delta_ms == 64.5
 
+
+def test_weapon_attachments_modify_stats():
+    """Attachments properly modify magazine size, zoom, spread, and recoil spray."""
+    base_rifle = weapons.WEAPON_BY_ID["assault"]
+    assert base_rifle.mag == 20
+    assert base_rifle.zoom_levels == ()
+
+    # Apply extended mag + reflex sight + compensator
+    modded = weapons.apply_attachments(
+        base_rifle,
+        ["extended_mag", "reflex_sight", "compensator"],
+    )
+
+    # 20 * 1.5 = 30
+    assert modded.mag == 30
+    # Reload time scaled by 1.15
+    assert modded.reload_time == pytest.approx(base_rifle.reload_time * 1.15, rel=0.01)
+    # Reflex sight gives 1.25x zoom
+    assert modded.zoom_levels == (1.25,)
+    # Compensator reduces kickback and recoil spray by 25%
+    assert modded.kickback == pytest.approx(base_rifle.kickback * 0.75, rel=0.01)
+    assert modded.spray[1][1] == pytest.approx(base_rifle.spray[1][1] * 0.75, rel=0.01)
+
+

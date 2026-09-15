@@ -510,6 +510,12 @@ async def get_weapons() -> list[WeaponOut]:
     return [WeaponOut(**w.to_dict()) for w in weapons.WEAPONS]
 
 
+@router.get("/weapons/attachments")
+async def get_weapon_attachments() -> list[dict[str, Any]]:
+    """Modular weapon attachments catalog (Optics, Muzzle devices, Magazines)."""
+    return [a.to_dict() for a in weapons.ATTACHMENTS]
+
+
 @router.get("/items", response_model=ItemsResponse)
 async def get_items() -> ItemsResponse:
     """The item table, for the same reason `/weapons` exists.
@@ -990,7 +996,10 @@ def _watchdog_game_process(account_id: str, map_name: str, proc: Any) -> None:
     deadline = time.monotonic() + RESULT_GRACE_SECONDS
     summary: dict[str, Any] | None = None
     while time.monotonic() < deadline:
-        summary = results.latest(account_id)
+        try:
+            summary = results.latest(account_id)
+        except Exception:
+            summary = None
         # Only a result from *this* session: an older undismissed card is not
         # evidence that the match just played produced one.
         if summary and summary["timestamp"] >= _LAUNCHED_AT.get(account_id, 0.0):
@@ -1632,6 +1641,30 @@ async def get_match_history(limit: int = 20) -> list[dict[str, Any]]:
     from backend.modules.hassault import results
 
     return results.history(_account_id(), limit)
+
+
+@router.get("/ranked/rating")
+async def get_my_rating() -> dict[str, Any]:
+    """Current player's Glicko-2 competitive rating, tier and record."""
+    from backend.modules.hassault import rating
+
+    return rating.get_player_rating(_account_id())
+
+
+@router.get("/ranked/rating/{account_id}")
+async def get_account_rating(account_id: str) -> dict[str, Any]:
+    """Target player's competitive rating, tier and record."""
+    from backend.modules.hassault import rating
+
+    return rating.get_player_rating(account_id)
+
+
+@router.get("/ranked/leaderboard")
+async def get_ranked_leaderboard(limit: int = 50) -> list[dict[str, Any]]:
+    """Top ranked competitive players by Elo/Glicko-2 rating."""
+    from backend.modules.hassault import rating
+
+    return rating.get_leaderboard(limit)
 
 
 @router.get("/skins/catalog")

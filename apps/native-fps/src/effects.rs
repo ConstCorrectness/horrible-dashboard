@@ -173,6 +173,14 @@ enum Shape {
         rot_axis: [f32; 3],
         rot_speed: f32,
     },
+    /// Dynamic volumetric multi-lobed smoke cloud with bullet carve-through voids.
+    VolumetricSmoke {
+        at: [f32; 3],
+        max_radius: f32,
+        seed: u32,
+        tunnel_start: Option<[f32; 3]>,
+        tunnel_dir: Option<[f32; 3]>,
+    },
 }
 
 struct Live {
@@ -232,6 +240,12 @@ impl EffectsPool {
         draw_beam: bool,
     ) {
         for (i, end) in ends.iter().enumerate() {
+            let dir = [end[0] - origin[0], end[1] - origin[1], end[2] - origin[2]];
+            let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+            if len > 0.001 {
+                let d = [dir[0] / len, dir[1] / len, dir[2] / len];
+                self.carve_smoke_void(origin, d);
+            }
             let face = faces.get(i).copied().unwrap_or(crate::trace::FACE_NONE);
             let on_a_surface = if faces.is_empty() { !hit } else { face >= 0 };
             // Your own tracer leaves the weapon muzzle rather than your eye,
@@ -343,6 +357,10 @@ impl EffectsPool {
     /// player gets to learn how far an HE reaches, and a shell scaled for looks
     /// would teach the wrong number.
     pub fn detonate(&mut self, kind: &str, at: [f32; 3], radius: f32) {
+        if kind == "smoke" {
+            self.detonate_smoke(at, radius);
+            return;
+        }
         let tint = blast_tint(kind);
         self.push(Live {
             shape: Shape::Ball { at, radius },
@@ -361,6 +379,10 @@ impl EffectsPool {
             age: 0.0,
             life: BLAST_LIFE * 0.45,
         });
+        if kind == "he" {
+            // Explosive blast wave disperses smoke center
+            self.carve_smoke_void(at, [0.0, 0.0, 1.0]);
+        }
     }
 
     /// Eject a brass shell casing with randomized physics velocity and tumble rotation.
@@ -388,6 +410,33 @@ impl EffectsPool {
             age: 0.0,
             life: 0.65,
         });
+    }
+
+    /// Detonate a volumetric smoke grenade deploying an expanding cloud.
+    pub fn detonate_smoke(&mut self, at: [f32; 3], radius: f32) {
+        self.push(Live {
+            shape: Shape::VolumetricSmoke {
+                at,
+                max_radius: radius,
+                seed: 0x9371_abcd ^ (at[0].to_bits()),
+                tunnel_start: None,
+                tunnel_dir: None,
+            },
+            color: [0.75, 0.78, 0.82],
+            base: 0.85,
+            age: 0.0,
+            life: 18.0,
+        });
+    }
+
+    /// Bullet or explosion shockwave carving a sightline void through active smokes.
+    pub fn carve_smoke_void(&mut self, ray_start: [f32; 3], ray_dir: [f32; 3]) {
+        for live in self.live.iter_mut() {
+            if let Shape::VolumetricSmoke { tunnel_start, tunnel_dir, .. } = &mut live.shape {
+                *tunnel_start = Some(ray_start);
+                *tunnel_dir = Some(ray_dir);
+            }
+        }
     }
 
     fn push(&mut self, effect: Live) {
@@ -505,6 +554,50 @@ impl EffectsPool {
                         origin[2] + norm[2] * half_len,
                     ];
                     push_beam(out, from, to, 0.016, e.color, alpha);
+                }
+                Shape::VolumetricSmoke {
+                    at,
+                    max_radius,
+                    seed,
+                    tunnel_start,
+                    tunnel_dir,
+                } => {
+                    let expand_phase = (e.age / 1.5).min(1.0);
+                    let current_radius = max_radius * expand_phase;
+                    let fade_phase = if e.age > 16.0 {
+                        (18.0 - e.age) / 2.0
+                    } else {
+                        1.0
+                    };
+                    let smoke_alpha = alpha * 0.42 * fade_phase;
+
+                    for i in 0..8 {
+                        let offset_seed = (*seed).wrapping_add(i as u32 * 0x1928_3741);
+                        let angle = (i as f32) * (std::f32::consts::PI * 2.0 / 8.0);
+                        let lobe_dist = current_radius * 0.48 * (0.8 + 0.4 * ((offset_seed & 0xFF) as f32 / 255.0));
+                        let lobe_center = [
+                            at[0] + angle.cos() * lobe_dist,
+                            at[1] + angle.sin() * lobe_dist,
+                            at[2] + (((offset_seed >> 8) & 0x7F) as f32 / 128.0) * 0.6,
+                        ];
+
+                        let mut carved = false;
+                        if let (Some(t_start), Some(t_dir)) = (tunnel_start, tunnel_dir) {
+                            let to_lobe = [lobe_center[0] - t_start[0], lobe_center[1] - t_start[1], lobe_center[2] - t_start[2]];
+                            let proj = to_lobe[0] * t_dir[0] + to_lobe[1] * t_dir[1] + to_lobe[2] * t_dir[2];
+                            if proj > 0.0 {
+                                let perp = [to_lobe[0] - t_dir[0] * proj, to_lobe[1] - t_dir[1] * proj, to_lobe[2] - t_dir[2] * proj];
+                                let d_sq = perp[0] * perp[0] + perp[1] * perp[1] + perp[2] * perp[2];
+                                if d_sq < 1.44 {
+                                    carved = true;
+                                }
+                            }
+                        }
+
+                        if !carved && dist(lobe_center, eye) >= (current_radius * 0.6) + EYE_CLEAR {
+                            push_ball(out, lobe_center, current_radius * 0.58, e.color, smoke_alpha, 6, 4);
+                        }
+                    }
                 }
             }
         }

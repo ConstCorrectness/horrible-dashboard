@@ -1,0 +1,127 @@
+{
+  "title": "Desert Citadel II (Dust II)",
+  "author": "horrible-dashboard",
+  "license": "CC0-1.0",
+  "sfactor": 6,
+  "waterlevel": -100,
+  "ambient": 54,
+  "format": "gltf",
+  "modes": [
+    "defuse",
+    "tdm",
+    "dm"
+  ],
+  "brushes": [
+    {
+      "op": "room",
+      "rect": [4, 4, 56, 56],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "solid",
+      "rect": [44, 16, 2, 34],
+      "wtex": 89
+    },
+    {
+      "op": "room",
+      "rect": [44, 20, 2, 6],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "solid",
+      "rect": [26, 16, 2, 30],
+      "wtex": 89
+    },
+    {
+      "op": "room",
+      "rect": [26, 30, 2, 4],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "solid",
+      "rect": [6, 44, 20, 2],
+      "wtex": 89
+    },
+    {
+      "op": "room",
+      "rect": [14, 44, 4, 2],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "solid",
+      "rect": [42, 46, 16, 2],
+      "wtex": 89
+    },
+    {
+      "op": "room",
+      "rect": [46, 46, 4, 2],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 21,
+      "ctex": 33
+    }
+  ],
+  "spawns": [
+    { "x": 28, "y": 10, "z": 0, "yaw": 90, "team": 1 },
+    { "x": 34, "y": 10, "z": 0, "yaw": 90, "team": 1 },
+    { "x": 28, "y": 14, "z": 0, "yaw": 90, "team": 1 },
+    { "x": 34, "y": 14, "z": 0, "yaw": 90, "team": 1 },
+    { "x": 34, "y": 56, "z": 0, "yaw": 270, "team": 0 },
+    { "x": 38, "y": 56, "z": 0, "yaw": 270, "team": 0 },
+    { "x": 34, "y": 52, "z": 0, "yaw": 270, "team": 0 },
+    { "x": 38, "y": 52, "z": 0, "yaw": 270, "team": 0 }
+  ],
+  "entities": [
+    { "type": "playerstart", "x": 28, "y": 10, "z": 0, "yaw": 90, "team": 1 },
+    { "type": "playerstart", "x": 34, "y": 10, "z": 0, "yaw": 90, "team": 1 },
+    { "type": "playerstart", "x": 28, "y": 14, "z": 0, "yaw": 90, "team": 1 },
+    { "type": "playerstart", "x": 34, "y": 14, "z": 0, "yaw": 90, "team": 1 },
+    { "type": "playerstart", "x": 34, "y": 56, "z": 0, "yaw": 270, "team": 0 },
+    { "type": "playerstart", "x": 38, "y": 56, "z": 0, "yaw": 270, "team": 0 },
+    { "type": "playerstart", "x": 34, "y": 52, "z": 0, "yaw": 270, "team": 0 },
+    { "type": "playerstart", "x": 38, "y": 52, "z": 0, "yaw": 270, "team": 0 },
+    { "type": "health", "x": 56, "y": 12, "z": 0 },
+    { "type": "health", "x": 20, "y": 34, "z": 0 },
+    { "type": "health", "x": 36, "y": 58, "z": 0 },
+    { "type": "armour", "x": 54, "y": 36, "z": 0 },
+    { "type": "armour", "x": 10, "y": 54, "z": 0 },
+    { "type": "ammo", "x": 30, "y": 30, "z": 0 },
+    { "type": "ammo", "x": 48, "y": 52, "z": 0 },
+    { "type": "ammo", "x": 16, "y": 32, "z": 0 },
+    { "type": "clips", "x": 38, "y": 44, "z": 0 },
+    { "type": "grenade", "x": 28, "y": 12, "z": 0 }
+  ],
+  "objectives": {
+    "sites": [
+      {
+        "id": "A",
+        "x": 48,
+        "y": 52,
+        "radius": 4.0
+      },
+      {
+        "id": "B",
+        "x": 16,
+        "y": 54,
+        "radius": 4.0
+      }
+    ]
+  }
+}

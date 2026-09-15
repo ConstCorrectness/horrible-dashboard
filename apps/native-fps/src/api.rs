@@ -13,7 +13,7 @@
 //! Rust — the same rule the TS client follows for `plane_order`, and for the same
 //! reason: a hardcoded copy is a divergence that produces no error.
 
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::console::Definitions;
 use std::io::Read;
@@ -331,6 +331,39 @@ pub struct WeaponSpec {
     /// rather than like a missing field.
     #[serde(rename = "residualSpread", default)]
     pub residual_spread: f32,
+    /// Active equipped attachments on this weapon.
+    #[serde(default)]
+    pub attachments: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
+pub struct WeaponAttachmentSpec {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub slot: String, // "optic" | "muzzle" | "mag"
+    #[serde(default)]
+    pub description: String,
+    #[serde(rename = "zoomMult", default = "default_one")]
+    pub zoom_mult: f32,
+    #[serde(rename = "recoilMult", default = "default_one")]
+    pub recoil_mult: f32,
+    #[serde(rename = "noiseMult", default = "default_one")]
+    pub noise_mult: f32,
+    #[serde(rename = "spreadMult", default = "default_one")]
+    pub spread_mult: f32,
+    #[serde(rename = "magMult", default = "default_one")]
+    pub mag_mult: f32,
+    #[serde(rename = "reloadMult", default = "default_one")]
+    pub reload_mult: f32,
+    #[serde(rename = "flashHidden", default)]
+    pub flash_hidden: bool,
+}
+
+fn default_one() -> f32 {
+    1.0
 }
 
 impl WeaponSpec {

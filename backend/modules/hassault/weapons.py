@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import math
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from backend.modules.hassault import hitbox
@@ -319,6 +319,148 @@ TACTICALS: tuple[TacticalUtility, ...] = (
         bounce_damping=0.55,
     ),
 )
+
+
+@dataclass(frozen=True, slots=True)
+class WeaponAttachment:
+    """Modular weapon attachment (Optics, Muzzle devices, Extended magazines)."""
+
+    id: str
+    name: str
+    slot: str  # "optic" | "muzzle" | "mag"
+    description: str
+    zoom_mult: float = 1.0
+    recoil_mult: float = 1.0
+    noise_mult: float = 1.0
+    spread_mult: float = 1.0
+    mag_mult: float = 1.0
+    reload_mult: float = 1.0
+    flash_hidden: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "slot": self.slot,
+            "description": self.description,
+            "zoomMult": self.zoom_mult,
+            "recoilMult": self.recoil_mult,
+            "noiseMult": self.noise_mult,
+            "spreadMult": self.spread_mult,
+            "magMult": self.mag_mult,
+            "reloadMult": self.reload_mult,
+            "flashHidden": self.flash_hidden,
+        }
+
+
+ATTACHMENTS: tuple[WeaponAttachment, ...] = (
+    WeaponAttachment(
+        id="iron_sight",
+        name="Iron Sights",
+        slot="optic",
+        description="Standard factory metallic sights.",
+        zoom_mult=1.0,
+    ),
+    WeaponAttachment(
+        id="reflex_sight",
+        name="Reflex Holo Sight",
+        slot="optic",
+        description="Open collimator holographic sight with illuminated red reticle (+25% zoom, -15% spread).",
+        zoom_mult=1.25,
+        spread_mult=0.85,
+    ),
+    WeaponAttachment(
+        id="acog_scope",
+        name="ACOG 4x Combat Scope",
+        slot="optic",
+        description="Magnified optical scope with ballistic chevron reticle (+150% zoom, -30% spread).",
+        zoom_mult=2.5,
+        spread_mult=0.70,
+    ),
+    WeaponAttachment(
+        id="standard_muzzle",
+        name="Birdcage Flash Hider",
+        slot="muzzle",
+        description="Standard military flash hider.",
+    ),
+    WeaponAttachment(
+        id="suppressor",
+        name="Tactical Suppressor",
+        slot="muzzle",
+        description="Acoustic silencer (-60% noise radius, eliminates visible muzzle flash).",
+        noise_mult=0.40,
+        flash_hidden=True,
+        recoil_mult=0.95,
+    ),
+    WeaponAttachment(
+        id="compensator",
+        name="Recoil Compensator",
+        slot="muzzle",
+        description="Muzzle gas compensator (-25% vertical/horizontal recoil impulse, -10% spread).",
+        recoil_mult=0.75,
+        spread_mult=0.90,
+    ),
+    WeaponAttachment(
+        id="standard_mag",
+        name="Standard Magazine",
+        slot="mag",
+        description="Factory ammunition magazine capacity.",
+    ),
+    WeaponAttachment(
+        id="extended_mag",
+        name="Extended Quick-Draw Mag",
+        slot="mag",
+        description="High-capacity magazine (+50% round capacity, +15% reload time).",
+        mag_mult=1.50,
+        reload_mult=1.15,
+    ),
+)
+
+ATTACHMENTS_BY_ID: dict[str, WeaponAttachment] = {a.id: a for a in ATTACHMENTS}
+
+
+def apply_attachments(base: Weapon, attachment_ids: list[str] | tuple[str, ...]) -> Weapon:
+    """Derive a modified weapon instance with attachments applied."""
+    if not attachment_ids:
+        return base
+
+    zoom_m = 1.0
+    recoil_m = 1.0
+    spread_m = 1.0
+    mag_m = 1.0
+    reload_m = 1.0
+
+    for att_id in attachment_ids:
+        att = ATTACHMENTS_BY_ID.get(att_id)
+        if not att:
+            continue
+        zoom_m *= att.zoom_mult
+        recoil_m *= att.recoil_mult
+        spread_m *= att.spread_mult
+        mag_m *= att.mag_mult
+        reload_m *= att.reload_mult
+
+    new_zooms = (
+        tuple(round(z * zoom_m, 2) for z in base.zoom_levels)
+        if base.zoom_levels
+        else ((round(zoom_m, 2),) if zoom_m > 1.05 else ())
+    )
+
+    new_spray = tuple(
+        (round(yaw * recoil_m, 5), round(pitch * recoil_m, 5))
+        for yaw, pitch in base.spray
+    )
+
+    return replace(
+        base,
+        mag=max(1, int(round(base.mag * mag_m))),
+        reload_time=round(base.reload_time * reload_m, 2),
+        spread=round(base.spread * spread_m, 5),
+        kickback=round(base.kickback * recoil_m, 3),
+        zoom_levels=new_zooms,
+        spray=new_spray,
+    )
+
 
 
 # The loadout. AssaultCube-flavoured rather than AssaultCube-derived: these are
