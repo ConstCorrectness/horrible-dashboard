@@ -72,6 +72,7 @@ DIE_LOUDNESS = 60.0
 #: An explosion, which is the loudest thing in the game and should be — an HE
 #: going off is information everybody in the building has earned.
 EXPLOSION_LOUDNESS = 160.0
+C4_BEEP_LOUDNESS = 75.0
 
 SHOT_LOUDNESS_BASE = 120.0
 

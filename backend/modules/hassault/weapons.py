@@ -954,45 +954,91 @@ class PositionHistory:
 
     def _bracket(self, t_ms: float) -> tuple[HistoryFrame, HistoryFrame, float] | None:
         """The two frames `t_ms` falls between, and how far along it sits."""
+        res = self._bracket_4(t_ms)
+        if res is None:
+            return None
+        return res[0], res[1], res[2]
+
+    def _bracket_4(
+        self, t_ms: float
+    ) -> tuple[HistoryFrame, HistoryFrame, float, HistoryFrame | None, HistoryFrame | None] | None:
+        """The bracket plus prior and subsequent frames for sub-tick Catmull-Rom interpolation."""
         if not self.frames:
             return None
+        if len(self.frames) == 1:
+            return self.frames[0], self.frames[0], 0.0, None, None
         if t_ms >= self.frames[-1].t:
-            return self.frames[-1], self.frames[-1], 0.0
+            return self.frames[-1], self.frames[-1], 0.0, None, None
         if t_ms <= self.frames[0].t:
-            return self.frames[0], self.frames[0], 0.0
+            return self.frames[0], self.frames[0], 0.0, None, None
         older = self.frames[0]
         newer = self.frames[-1]
+        idx = 1
         for i in range(1, len(self.frames)):
             if self.frames[i].t >= t_ms:
+                idx = i
                 older = self.frames[i - 1]
                 newer = self.frames[i]
                 break
         span = newer.t - older.t
-        return older, newer, 0.0 if span <= 0 else (t_ms - older.t) / span
+        f = 0.0 if span <= 0 else (t_ms - older.t) / span
+        p_prev = self.frames[idx - 2] if idx >= 2 else None
+        p_next = self.frames[idx + 1] if idx + 1 < len(self.frames) else None
+        return older, newer, f, p_prev, p_next
 
-    def rewind(self, t_ms: float) -> dict[str, tuple[float, float, float]] | None:
+    def rewind(
+        self, t_ms: float, smooth: bool = True
+    ) -> dict[str, tuple[float, float, float]] | None:
         """Interpolated positions at `t_ms`, or `None` if nothing covers it.
 
         `None` means "use the present" — with no history there is nothing better
         to say, and refusing the shot would be worse than resolving it live.
+        When `smooth` is True and 3+ history frames are available, sub-tick Catmull-Rom
+        cubic interpolation is used to model velocity curvature under strafing.
         """
-        bracket = self._bracket(t_ms)
+        bracket = self._bracket_4(t_ms)
         if bracket is None:
             return None
-        older, newer, f = bracket
+        older, newer, f, p_prev, p_next = bracket
         out: dict[str, tuple[float, float, float]] = {}
         for pid, (x, y, z) in newer.positions.items():
             prev = older.positions.get(pid)
             if prev is None:
-                # Someone who joined between the two frames: no earlier position
-                # to move from, so they are simply where they are.
                 out[pid] = (x, y, z)
                 continue
-            out[pid] = (
-                prev[0] + (x - prev[0]) * f,
-                prev[1] + (y - prev[1]) * f,
-                prev[2] + (z - prev[2]) * f,
-            )
+
+            # Sub-tick Catmull-Rom cubic spline if surrounding frames exist
+            pp = p_prev.positions.get(pid) if p_prev else None
+            pn = p_next.positions.get(pid) if p_next else None
+            if smooth and (pp is not None or pn is not None):
+                # Tangents with finite difference
+                m0 = (
+                    (x - pp[0]) * 0.5 if pp else (x - prev[0]),
+                    (y - pp[1]) * 0.5 if pp else (y - prev[1]),
+                    (z - pp[2]) * 0.5 if pp else (z - prev[2]),
+                )
+                m1 = (
+                    (pn[0] - prev[0]) * 0.5 if pn else (x - prev[0]),
+                    (pn[1] - prev[1]) * 0.5 if pn else (y - prev[1]),
+                    (pn[2] - prev[2]) * 0.5 if pn else (z - prev[2]),
+                )
+                f2 = f * f
+                f3 = f2 * f
+                h00 = 2.0 * f3 - 3.0 * f2 + 1.0
+                h10 = f3 - 2.0 * f2 + f
+                h01 = -2.0 * f3 + 3.0 * f2
+                h11 = f3 - f2
+                out[pid] = (
+                    h00 * prev[0] + h10 * m0[0] + h01 * x + h11 * m1[0],
+                    h00 * prev[1] + h10 * m0[1] + h01 * y + h11 * m1[1],
+                    h00 * prev[2] + h10 * m0[2] + h01 * z + h11 * m1[2],
+                )
+            else:
+                out[pid] = (
+                    prev[0] + (x - prev[0]) * f,
+                    prev[1] + (y - prev[1]) * f,
+                    prev[2] + (z - prev[2]) * f,
+                )
         return out
 
     def rewind_heights(self, t_ms: float) -> dict[str, float]:
@@ -1026,6 +1072,8 @@ class PelletHit:
     point: tuple[float, float, float]
     nutshot: bool = False
     wallbang: bool = False
+    hit_zone: str = "chest"
+    rewind_delta_ms: float = 0.0
 
 
 @dataclass(slots=True)
@@ -1120,6 +1168,15 @@ def resolve_shot(
         head = point[2] >= targets[pid][2] + (tall - _spec.head_band)
         rel_z = point[2] - targets[pid][2]
         nutshot = (not head) and (0.38 * tall <= rel_z <= 0.54 * tall)
+        hit_zone = (
+            "head"
+            if head
+            else (
+                "groin"
+                if nutshot
+                else ("chest" if rel_z > 0.54 * tall else "legs")
+            )
+        )
         base_dmg = damage_at(weapon, distance) * (weapon.head_multiplier if head else 1.0)
         amount = base_dmg * (0.6 if is_wallbang else 1.0)
         hits.append(
@@ -1131,6 +1188,8 @@ def resolve_shot(
                 point=point,
                 nutshot=nutshot,
                 wallbang=is_wallbang,
+                hit_zone=hit_zone,
+                rewind_delta_ms=rewound_ms,
             )
         )
         endpoints.append(point)

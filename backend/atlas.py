@@ -76,7 +76,10 @@ def client() -> Any:
         return None
     if _client is not None and _client_key == uri:
         return _client
-    from pymongo import AsyncMongoClient
+    try:
+        from pymongo import AsyncMongoClient
+    except ImportError:
+        return None
 
     _client = AsyncMongoClient(
         uri,

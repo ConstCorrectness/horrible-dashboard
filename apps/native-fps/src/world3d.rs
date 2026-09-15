@@ -1369,6 +1369,149 @@ pub fn create_procedural_assault_3d(info: MapInfo) -> World3D {
     }
 }
 
+/// Create the high-rise corporate headquarters "Office" (`hd_office`) 3D arena.
+/// Features:
+/// 1. Executive Boardroom: 8m mahogany conference table, chairs, wall AV screen, Site A.
+/// 2. Open-plan Cubicle Farm: acoustic felt dividers, workstations with dual monitors.
+/// 3. Central Reception & Elevator Lobby: Calacatta marble counter, twin stainless elevator doors.
+/// 4. High-Density IT Datacenter: 42U server racks with pulsing LED status strips, Site B.
+/// 5. Panoramic exterior perimeter windows and drop-ceiling fluorescent lights.
+pub fn create_procedural_office_3d(info: MapInfo) -> World3D {
+    let mut b = FacilityBuilder::new();
+
+    let col_carpet_gray = [0.20, 0.22, 0.25];
+    let col_marble_lobby = [0.85, 0.85, 0.88];
+    let col_server_floor = [0.55, 0.58, 0.62];
+    let col_boardroom_carpet = [0.18, 0.20, 0.26];
+    let col_wall_drywall = [0.82, 0.83, 0.85];
+    let col_wall_accent = [0.15, 0.25, 0.35];
+    let col_mahogany = [0.30, 0.14, 0.09];
+    let col_acoustic_felt = [0.16, 0.38, 0.48];
+    let col_stainless = [0.72, 0.74, 0.76];
+    let col_black_metal = [0.10, 0.10, 0.12];
+    let col_server_led = [0.0, 0.95, 0.55];
+    let col_screen_blue = [0.15, 0.50, 0.90];
+    let col_ceiling_tile = [0.90, 0.90, 0.92];
+    let col_fluorescent = [0.98, 0.98, 1.0];
+
+    // 1. Perimeter Walls & Windows (64x64 bounds, height 12.0)
+    b.add_quad([4.0, 4.0, 0.0], [60.0, 4.0, 0.0], [60.0, 4.0, 12.0], [4.0, 4.0, 12.0], col_wall_drywall, true);
+    b.add_quad([60.0, 60.0, 0.0], [4.0, 60.0, 0.0], [4.0, 60.0, 12.0], [60.0, 60.0, 12.0], col_wall_drywall, true);
+    b.add_quad([60.0, 4.0, 0.0], [60.0, 60.0, 0.0], [60.0, 60.0, 12.0], [60.0, 4.0, 12.0], col_wall_drywall, true);
+    b.add_quad([4.0, 60.0, 0.0], [4.0, 4.0, 0.0], [4.0, 4.0, 12.0], [4.0, 60.0, 12.0], col_wall_drywall, true);
+
+    // 2. Flooring zones
+    b.add_floor(4.0, 4.0, 36.0, 30.0, 0.0, col_marble_lobby, true);
+    b.add_floor(36.0, 4.0, 60.0, 60.0, 0.0, col_carpet_gray, true);
+    b.add_floor(4.0, 30.0, 36.0, 60.0, 0.0, col_boardroom_carpet, true);
+    b.add_floor(6.0, 6.0, 26.0, 26.0, 0.15, col_server_floor, true);
+
+    // 3. Structural Concrete Columns
+    for cx in [20.0, 36.0, 48.0] {
+        for cy in [16.0, 32.0, 48.0] {
+            b.add_box(cx - 0.6, cy - 0.6, 0.0, cx + 0.6, cy + 0.6, 12.0, col_wall_accent);
+        }
+    }
+
+    // 4. Boardroom Interior
+    b.add_box(4.0, 30.0, 0.0, 26.0, 30.8, 12.0, col_wall_drywall);
+    b.add_box_ex(20.0, 30.0, 2.8, 24.0, 30.8, 12.0, col_wall_drywall, true);
+    b.add_box(12.0, 44.8, 0.0, 20.0, 47.2, 0.8, col_mahogany);
+    for i in 0..5 {
+        let x = 13.0 + (i as f32) * 1.5;
+        b.add_box(x, 43.8, 0.0, x + 0.6, 44.4, 0.9, col_black_metal);
+        b.add_box(x, 47.6, 0.0, x + 0.6, 48.2, 0.9, col_black_metal);
+    }
+    b.add_box(4.1, 43.0, 1.8, 4.3, 49.0, 4.2, col_screen_blue);
+
+    // 5. Cubicle Farm
+    for row_x in [42.0, 50.0] {
+        for pod_y in [14.0, 26.0, 38.0, 50.0] {
+            b.add_box(row_x - 3.0, pod_y - 0.1, 0.0, row_x + 3.0, pod_y + 0.1, 1.4, col_acoustic_felt);
+            b.add_box(row_x - 3.0, pod_y - 1.5, 0.0, row_x - 2.8, pod_y + 1.5, 1.4, col_acoustic_felt);
+            b.add_box(row_x + 2.8, pod_y - 1.5, 0.0, row_x + 3.0, pod_y + 1.5, 1.4, col_acoustic_felt);
+            b.add_box(row_x - 2.6, pod_y + 0.2, 0.0, row_x + 2.6, pod_y + 1.2, 0.75, col_wall_drywall);
+            b.add_box(row_x - 2.6, pod_y - 1.2, 0.0, row_x + 2.6, pod_y - 0.2, 0.75, col_wall_drywall);
+            b.add_box(row_x - 1.0, pod_y + 0.6, 0.75, row_x - 0.2, pod_y + 0.8, 1.3, col_screen_blue);
+            b.add_box(row_x + 0.2, pod_y + 0.6, 0.75, row_x + 1.0, pod_y + 0.8, 1.3, col_screen_blue);
+        }
+    }
+
+    // 6. Central Reception Lobby & Elevators
+    b.add_box(26.0, 17.0, 0.0, 32.0, 19.0, 1.1, col_marble_lobby);
+    b.add_box(25.8, 16.8, 1.1, 32.2, 19.2, 1.15, col_stainless);
+    b.add_box(25.0, 7.0, 0.0, 33.0, 9.0, 12.0, col_wall_accent);
+    b.add_box(26.2, 8.9, 0.0, 28.2, 9.1, 2.6, col_stainless);
+    b.add_box(29.8, 8.9, 0.0, 31.8, 9.1, 2.6, col_stainless);
+
+    // 7. IT Datacenter
+    for r in 0..3 {
+        let sx = 9.0 + (r as f32) * 4.0;
+        for s in 0..3 {
+            let sy = 9.0 + (s as f32) * 4.5;
+            b.add_box(sx, sy, 0.15, sx + 1.2, sy + 2.4, 2.4, col_black_metal);
+            b.add_box_ex(sx + 1.21, sy + 0.2, 0.4, sx + 1.23, sy + 2.2, 2.2, col_server_led, false);
+        }
+    }
+
+    // 8. Ceiling & Fluorescent Lighting
+    b.add_floor(4.0, 4.0, 60.0, 60.0, 12.0, col_ceiling_tile, false);
+    for lx in [16.0, 28.0, 40.0, 52.0] {
+        for ly in [14.0, 26.0, 38.0, 50.0] {
+            b.add_floor(lx - 1.2, ly - 0.4, lx + 1.2, ly + 0.4, 11.98, col_fluorescent, false);
+        }
+    }
+
+    let spawns = vec![
+        SpawnPoint { x: 28.0, y: 10.0, z: 0.0, yaw: 90.0, team: 1 },
+        SpawnPoint { x: 32.0, y: 10.0, z: 0.0, yaw: 90.0, team: 1 },
+        SpawnPoint { x: 28.0, y: 14.0, z: 0.0, yaw: 90.0, team: 1 },
+        SpawnPoint { x: 32.0, y: 14.0, z: 0.0, yaw: 90.0, team: 1 },
+        SpawnPoint { x: 50.0, y: 32.0, z: 0.0, yaw: 270.0, team: 0 },
+        SpawnPoint { x: 52.0, y: 28.0, z: 0.0, yaw: 270.0, team: 0 },
+        SpawnPoint { x: 52.0, y: 36.0, z: 0.0, yaw: 270.0, team: 0 },
+        SpawnPoint { x: 48.0, y: 24.0, z: 0.0, yaw: 270.0, team: 0 },
+    ];
+
+    let items = vec![
+        ItemRow { id: 1, kind: "health".into(), x: 10.0, y: 48.0, z: 0.0 },
+        ItemRow { id: 2, kind: "health".into(), x: 10.0, y: 12.0, z: 0.0 },
+        ItemRow { id: 3, kind: "health".into(), x: 54.0, y: 32.0, z: 0.0 },
+        ItemRow { id: 4, kind: "armour".into(), x: 16.0, y: 46.0, z: 0.0 },
+        ItemRow { id: 5, kind: "armour".into(), x: 16.0, y: 16.0, z: 0.0 },
+        ItemRow { id: 6, kind: "ammo_assault".into(), x: 22.0, y: 32.0, z: 0.0 },
+        ItemRow { id: 7, kind: "ammo_assault".into(), x: 44.0, y: 18.0, z: 0.0 },
+        ItemRow { id: 8, kind: "ammo_sniper".into(), x: 44.0, y: 44.0, z: 0.0 },
+        ItemRow { id: 9, kind: "clips".into(), x: 30.0, y: 28.0, z: 0.0 },
+        ItemRow { id: 10, kind: "grenade".into(), x: 30.0, y: 36.0, z: 0.0 },
+    ];
+
+    let bounds = WorldBounds {
+        min: [4.0, 4.0, 0.0],
+        max: [60.0, 60.0, 12.0],
+        center: [32.0, 32.0, 6.0],
+        extent: 56.0,
+    };
+
+    let triangles = b.render_positions.len() / 9;
+
+    World3D {
+        info,
+        bounds,
+        render_positions: b.render_positions,
+        render_normals: b.render_normals,
+        render_colors: b.render_colors,
+        render_uvs: b.render_uvs,
+        triangles,
+        col_vertices: b.col_vertices,
+        col_indices: b.col_indices,
+        spawns,
+        items,
+        waterlevel: -100.0,
+    }
+}
+
+const HD_OFFICE_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_office.glb");
 const HD_ASSAULT_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_assault.glb");
 const HD_BANK_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_bank.glb");
 const HD_JUNKFLEA_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_junkflea.glb");
@@ -1736,6 +1879,31 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
                 ItemRow { id: 10, kind: "grenade".into(), x: 52.0, y: 28.0, z: 0.0 },
             ],
         )
+    } else if info.name == "hd_office" {
+        (
+            vec![
+                SpawnPoint { x: 28.0, y: 10.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 32.0, y: 10.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 28.0, y: 14.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 32.0, y: 14.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 50.0, y: 32.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 52.0, y: 28.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 52.0, y: 36.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 48.0, y: 24.0, z: 0.0, yaw: 270.0, team: 0 },
+            ],
+            vec![
+                ItemRow { id: 1, kind: "health".into(), x: 10.0, y: 48.0, z: 0.0 },
+                ItemRow { id: 2, kind: "health".into(), x: 10.0, y: 12.0, z: 0.0 },
+                ItemRow { id: 3, kind: "health".into(), x: 54.0, y: 32.0, z: 0.0 },
+                ItemRow { id: 4, kind: "armour".into(), x: 16.0, y: 46.0, z: 0.0 },
+                ItemRow { id: 5, kind: "armour".into(), x: 16.0, y: 16.0, z: 0.0 },
+                ItemRow { id: 6, kind: "ammo_assault".into(), x: 22.0, y: 32.0, z: 0.0 },
+                ItemRow { id: 7, kind: "ammo_assault".into(), x: 44.0, y: 18.0, z: 0.0 },
+                ItemRow { id: 8, kind: "ammo_sniper".into(), x: 44.0, y: 44.0, z: 0.0 },
+                ItemRow { id: 9, kind: "clips".into(), x: 30.0, y: 28.0, z: 0.0 },
+                ItemRow { id: 10, kind: "grenade".into(), x: 30.0, y: 36.0, z: 0.0 },
+            ],
+        )
     } else {
         (
             vec![
@@ -1858,6 +2026,20 @@ pub fn load_assault_glb(info: MapInfo) -> Result<World3D, String> {
     load_world_3d_from_glb(HD_ASSAULT_GLB_BYTES, info)
 }
 
+pub fn load_office_glb(info: MapInfo) -> Result<World3D, String> {
+    for path in [
+        "../../backend/modules/hassault/maps/hd_office.glb",
+        "backend/modules/hassault/maps/hd_office.glb",
+        "assets/maps/hd_office.glb",
+        "apps/web/public/hd_office.glb",
+    ] {
+        if let Ok(bytes) = std::fs::read(path) {
+            return load_world_3d_from_glb(&bytes, info);
+        }
+    }
+    load_world_3d_from_glb(HD_OFFICE_GLB_BYTES, info)
+}
+
 /// Universal 3D Arena Factory: selects appropriate procedural or modeled 3D map generator.
 pub fn create_world_3d(info: MapInfo) -> World3D {
     match info.name.as_str() {
@@ -1894,6 +2076,15 @@ pub fn create_world_3d(info: MapInfo) -> World3D {
                 Err(err) => {
                     eprintln!("hassault: failed to load GLB for hd_assault ({err}), falling back to procedural");
                     create_procedural_assault_3d(info)
+                }
+            }
+        }
+        "hd_office" => {
+            match load_office_glb(info.clone()) {
+                Ok(w) => w,
+                Err(err) => {
+                    eprintln!("hassault: failed to load GLB for hd_office ({err}), falling back to procedural");
+                    create_procedural_office_3d(info)
                 }
             }
         }

@@ -28,11 +28,15 @@ logger = logging.getLogger(__name__)
 # pick up a settings change without an explicit restart signal.
 _ROOTS_RECHECK_MS = 5000
 
-_CHANGE_NAMES = {
-    Change.added: "added",
-    Change.modified: "modified",
-    Change.deleted: "deleted",
-}
+_CHANGE_NAMES = (
+    {
+        Change.added: "added",
+        Change.modified: "modified",
+        Change.deleted: "deleted",
+    }
+    if Change is not None
+    else {}
+)
 
 
 class FileWatcher:

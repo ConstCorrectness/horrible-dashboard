@@ -70,7 +70,7 @@ import time
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
-from .. import grenades, weapons
+from .. import grenades, noise, weapons
 from .base import GameMode, Goal
 from .objectives import Site
 
@@ -536,6 +536,7 @@ class Defuse(GameMode):
         self._bomb_dropped_at = 0.0
         self._defuse_info: dict[str, Any] = {}
         self._last_defuse_accolades: dict[str, Any] = {}
+        self._last_beep_fuse = 999.0
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -549,6 +550,7 @@ class Defuse(GameMode):
         self.dropped_weapons.clear()
         self._defuse_info.clear()
         self._last_defuse_accolades.clear()
+        self._last_beep_fuse = 999.0
         self._reset_round(room)
 
     def _seed_money(self, player: MatchPlayer) -> None:
@@ -622,6 +624,34 @@ class Defuse(GameMode):
         self.state = new_state
         for emit in emits:
             self._perform(room, emit)
+
+        # Check accelerating C4 bomb audio beep
+        if self.state.bomb.state == "planted":
+            fuse = self.state.bomb.fuse
+            interval = (
+                0.12
+                if fuse <= 3.0
+                else (
+                    0.25
+                    if fuse <= 8.0
+                    else (0.5 if fuse <= 15.0 else (0.75 if fuse <= 25.0 else 1.0))
+                )
+            )
+            if self._last_beep_fuse - fuse >= interval:
+                self._last_beep_fuse = fuse
+                bx = self.state.bomb.x
+                by = self.state.bomb.y
+                bz = self.state.bomb.z
+                room._noise(None, "bomb_beep", noise.C4_BEEP_LOUDNESS, at=(bx, by, bz))
+                room._emit(
+                    {
+                        "kind": "bomb_beep",
+                        "fuse": round(fuse, 2),
+                        "x": round(bx, 2),
+                        "y": round(by, 2),
+                        "z": round(bz, 2),
+                    }
+                )
 
         room.scores[:] = list(new_state.wins)
 
@@ -697,6 +727,7 @@ class Defuse(GameMode):
         self.dropped_weapons.clear()
         self._defuse_info.clear()
         self._last_defuse_accolades.clear()
+        self._last_beep_fuse = 999.0
         self._give_bomb(room)
 
     def _give_bomb(self, room: MatchRoom) -> None:
@@ -963,6 +994,7 @@ class Defuse(GameMode):
         if player.money < item.price:
             return
         player.money -= item.price
+        player.total_spent += float(item.price)
         player.purchased.add(index)
         if item.kind == "weapon":
             player.owned.add(item.slot)

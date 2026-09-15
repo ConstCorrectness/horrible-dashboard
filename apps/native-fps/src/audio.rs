@@ -242,7 +242,16 @@ pub fn timbre(kind: &str) -> Timbre {
             thump: 0.0,
         },
         // Surface-aware material footsteps:
-        // Steel plate / industrial metal catwalk grating (hd_facility, hd_junkflea)
+        // High-pitch electronic C4 detonator countdown chirp
+        "bomb_beep" => Timbre {
+            frequency: 1850.0,
+            q: 8.0,
+            decay: 0.08,
+            gain: 0.65,
+            body: 350.0,
+            thump: 0.0,
+        },
+        // Structural steel plates, catwalks, & missile silo hatches (hd_facility, hd_junkflea)
         "step_metal" => Timbre {
             frequency: 1450.0,
             q: 3.5,

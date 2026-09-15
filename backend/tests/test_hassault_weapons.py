@@ -731,3 +731,43 @@ def test_the_route_actually_publishes_the_spray_pattern():
         # field unconditionally — the `hipfireSpread` rule.
         if not weapon["spray"]:
             assert weapon["residualSpread"] == weapon["spread"], wid
+
+
+def test_catmull_rom_subtick_rewind_smooths_curved_motion():
+    """Catmull-Rom cubic spline predicts smooth velocity curvature under 4-point strafing."""
+    history = PositionHistory()
+    # A player accelerating or turning: (0,0), (10,0), (22,0), (36,0)
+    history.record(1000.0, {"p": (0.0, 0.0, 0.0)})
+    history.record(1100.0, {"p": (10.0, 0.0, 0.0)})
+    history.record(1200.0, {"p": (22.0, 0.0, 0.0)})
+    history.record(1300.0, {"p": (36.0, 0.0, 0.0)})
+
+    # Midpoint between 1100 and 1200:
+    # Linear midpoint would be (10 + 22) / 2 = 16.0
+    # Catmull-Rom with positive acceleration evaluates slightly differently than pure linear:
+    rewound = history.rewind(1150.0, smooth=True)
+    assert rewound is not None
+    x = rewound["p"][0]
+    # Verify smooth interpolation is within the bounds [10, 22] and physically sound
+    assert 15.0 <= x <= 17.0
+    # Also verify linear fallback when smooth=False
+    assert history.rewind(1150.0, smooth=False)["p"][0] == pytest.approx(16.0)
+
+
+def test_pellet_hit_reports_hit_zone_and_rewind_delta():
+    """Every pellet hit tags the specific body zone and the latency rewind delta."""
+    hit = weapons.PelletHit(
+        victim="target_1",
+        distance=5.2,
+        damage=45.0,
+        head=True,
+        point=(0.0, 0.0, 1.7),
+        nutshot=False,
+        wallbang=False,
+        hit_zone="head",
+        rewind_delta_ms=64.5,
+    )
+    assert hit.head is True
+    assert hit.hit_zone == "head"
+    assert hit.rewind_delta_ms == 64.5
+

@@ -230,6 +230,9 @@ pub struct App {
     /// than borrowing the reveal's clock, which stops advancing once the map has
     /// finished arriving.
     elapsed: f32,
+    pub freecam_active: bool,
+    pub auto_director_active: bool,
+    pub freecam_pos: [f32; 3],
     nades: NadePool,
     /// Items on the map: placements from `MapInfo`, availability from the
     /// snapshot. A renderer only — the server decides every pickup.
@@ -528,6 +531,9 @@ impl App {
             reveal: Reveal::default(),
             utility: GrenadeController::new(tacticals),
             elapsed: 0.0,
+            freecam_active: false,
+            auto_director_active: false,
+            freecam_pos: [0.0, 0.0, 0.0],
             nades: NadePool::default(),
             // Placed from the map rather than from the welcome: the placements
             // are a property of the map, so one source serves a live room and a
@@ -1537,10 +1543,92 @@ impl App {
     /// from the same point the camera sits at — two spellings of it would mean
     /// aiming from somewhere you are not looking from.
     fn follow_prediction(&mut self) {
+        if self.freecam_active {
+            self.camera.x = self.freecam_pos[0];
+            self.camera.y = self.freecam_pos[1];
+            self.camera.z = self.freecam_pos[2];
+            return;
+        }
+        if self.auto_director_active {
+            if let Some(target) = self.drawn.iter().filter(|p| p.alive && p.hp > 0.0).min_by(|a, b| a.hp.partial_cmp(&b.hp).unwrap_or(std::cmp::Ordering::Equal)) {
+                self.camera.x = target.x;
+                self.camera.y = target.y;
+                self.camera.z = target.z + 1.6;
+                self.camera.yaw = target.yaw.to_degrees();
+                self.camera.pitch = target.pitch.to_degrees();
+                return;
+            }
+        }
         let p = &self.prediction.state;
         self.camera.x = p.x;
         self.camera.y = p.y;
         self.camera.z = eye_height(p);
+    }
+
+    pub fn toggle_freecam(&mut self) {
+        self.freecam_active = !self.freecam_active;
+        if self.freecam_active {
+            self.auto_director_active = false;
+            self.freecam_pos = [self.camera.x, self.camera.y, self.camera.z];
+            self.console.push("spectator: freecam active (fly with WASD + Space/Ctrl)", console::Tone::Note);
+        } else {
+            self.console.push("spectator: freecam disabled", console::Tone::Note);
+        }
+    }
+
+    pub fn toggle_auto_director(&mut self) {
+        self.auto_director_active = !self.auto_director_active;
+        if self.auto_director_active {
+            self.freecam_active = false;
+            self.console.push("spectator: auto-director active", console::Tone::Note);
+        } else {
+            self.console.push("spectator: auto-director disabled", console::Tone::Note);
+        }
+    }
+
+    pub fn update_freecam(&mut self, dt: f32) {
+        if !self.freecam_active {
+            return;
+        }
+        let yaw = self.camera.yaw.to_radians();
+        let pitch = self.camera.pitch.to_radians();
+        let speed = if self.keys.sprint { 30.0 } else { 14.0 };
+
+        let forward = [yaw.cos() * pitch.cos(), yaw.sin() * pitch.cos(), pitch.sin()];
+        let right = [-yaw.sin(), yaw.cos(), 0.0];
+
+        let mut mx = 0.0;
+        let mut my = 0.0;
+        let mut mz = 0.0;
+
+        if self.keys.forward {
+            mx += forward[0];
+            my += forward[1];
+            mz += forward[2];
+        }
+        if self.keys.back {
+            mx -= forward[0];
+            my -= forward[1];
+            mz -= forward[2];
+        }
+        if self.keys.right {
+            mx += right[0];
+            my += right[1];
+        }
+        if self.keys.left {
+            mx -= right[0];
+            my -= right[1];
+        }
+        if self.keys.jump {
+            mz += 1.0;
+        }
+        if self.keys.crouch {
+            mz -= 1.0;
+        }
+
+        self.freecam_pos[0] += mx * speed * dt;
+        self.freecam_pos[1] += my * speed * dt;
+        self.freecam_pos[2] += mz * speed * dt;
     }
 
     /// Take the server's word for our own body and replay what it has not seen.
@@ -1998,6 +2086,7 @@ impl App {
             // step: a shot leaves from where the body is this frame, and firing
             // before moving aims from where it was on the previous one.
             self.train(dt);
+            self.update_freecam(dt);
             self.follow_prediction();
             return;
         }
@@ -2107,6 +2196,7 @@ impl App {
         self.prediction
             .predict(&self.world, seq, input, dt, yaw, pitch);
         self.prediction.ease(dt);
+        self.update_freecam(dt);
         self.follow_prediction();
 
         // Rate-limited inside `flush` — see `SEND_INTERVAL`. Called every frame
@@ -2642,6 +2732,15 @@ impl App {
 
     /// Run one console line and send it on if the node has to answer it.
     fn run_console(&mut self, line: &str) {
+        let trimmed = line.trim();
+        if trimmed == "freecam" {
+            self.toggle_freecam();
+            return;
+        }
+        if trimmed == "director" || trimmed == "autodirector" {
+            self.toggle_auto_director();
+            return;
+        }
         let online = self.socket.is_some();
         let dispatch = self.console.execute(line, &mut self.cvars, online);
         self.dispatch_console(dispatch);
@@ -3508,6 +3607,8 @@ impl ApplicationHandler for App {
                             self.cvars
                                 .set("net.graph", serde_json::json!(self.net_graph_default));
                         }
+                        KeyCode::F6 if down => self.toggle_freecam(),
+                        KeyCode::F7 if down => self.toggle_auto_director(),
                         KeyCode::KeyY if down && !self.editing() => {
                             self.chat.open_prompt(ChatChannel::All);
                         }

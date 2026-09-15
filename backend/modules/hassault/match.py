@@ -444,6 +444,9 @@ class MatchPlayer:
     #: the debrief divides this by `kills` to show a percentage, and counting hits
     #: there would print numbers over 100%.
     head_kills: int = 0
+    nutshot_kills: int = 0
+    first_bloods: int = 0
+    total_spent: float = 0.0
     # Simulated seconds this player has been advanced by. Fire rate and reloads
     # are measured on this clock, not the wall clock: commands arrive in batches,
     # and gating on real time would silently halve a fast weapon's rate. It is
@@ -761,6 +764,7 @@ class MatchRoom:
         self.scores: list[int] = [0, 0]
         self.mode: GameMode = mode if mode is not None else modes.build()
         self.settings: RoomSettings = RoomSettings()
+        self._round_kills: int = 0
         #: Flag stands and bomb sites, already resolved onto the floor. Optional
         #: and empty by default for the same reason `items` is: a room built out
         #: of four numbers in a test has no objectives, and that is not an error.
@@ -895,6 +899,19 @@ class MatchRoom:
                 "objectives": player.objectives,
             }
         )
+        rounds_played = max(
+            1,
+            sum(self.scores)
+            if self.mode.id == "defuse"
+            else max(1, player.kills + player.deaths),
+        )
+        adr = round(player.damage_dealt / rounds_played, 1)
+        hs_rate = round(player.head_kills / max(1, player.kills) * 100.0, 1)
+        econ_eff = (
+            round(player.damage_dealt / max(1.0, player.total_spent), 2)
+            if player.total_spent > 0
+            else 1.0
+        )
         return {
             "map": self.map_name,
             "room": self.id,
@@ -907,7 +924,12 @@ class MatchRoom:
             "kills": player.kills,
             "deaths": player.deaths,
             "headKills": player.head_kills,
+            "nutshotKills": player.nutshot_kills,
+            "firstBloods": player.first_bloods,
             "damageDealt": round(player.damage_dealt),
+            "adr": adr,
+            "hsRate": hs_rate,
+            "economyEfficiency": econ_eff,
             # Bombs planted or defused, flags captured — the reason this method
             # stopped being able to describe a match by kills alone. A player who
             # defused twice and never fired filed as "not a match".
@@ -1529,17 +1551,30 @@ class MatchRoom:
             self._noise(player, "pickup", noise.PICKUP_LOUDNESS)
 
     def _noise(
-        self, player: MatchPlayer, kind: str, loudness: float, weapon: str = ""
+        self,
+        player: MatchPlayer | None,
+        kind: str,
+        loudness: float,
+        weapon: str = "",
+        at: tuple[float, float, float] | None = None,
     ) -> None:
         if len(self.noises) >= MAX_NOISE_PER_TICK:
+            return
+        if at is not None:
+            nx, ny, nz = at
+            src_id = player.id if player is not None else ""
+        elif player is not None:
+            nx, ny, nz = player.state.x, player.state.y, player.state.z
+            src_id = player.id
+        else:
             return
         self.noises.append(
             Noise(
                 kind=kind,
-                source=player.id,
-                x=player.state.x,
-                y=player.state.y,
-                z=player.state.z,
+                source=src_id,
+                x=nx,
+                y=ny,
+                z=nz,
                 loudness=loudness,
                 weapon=weapon,
             )
@@ -2119,6 +2154,11 @@ class MatchRoom:
         attacker.kills += 1
         if head:
             attacker.head_kills += 1
+        if nutshot:
+            attacker.nutshot_kills += 1
+        if self._round_kills == 0:
+            attacker.first_bloods += 1
+        self._round_kills += 1
         self.mode.on_kill(self, victim, attacker, head, weapon)
         self.mode.on_death(self, victim)
 

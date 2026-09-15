@@ -220,3 +220,66 @@ fn test_assault_3d_generation() {
     assert!((dist_office - 1.8).abs() < 0.2, "dist_office was {}", dist_office);
 }
 
+#[test]
+fn test_office_3d_generation() {
+    let info = MapInfo {
+        name: "hd_office".into(),
+        title: "Corporate Office".into(),
+        ssize: 64,
+        ..Default::default()
+    };
+
+    let world = hassault_native::world3d::create_procedural_office_3d(info);
+
+    assert!(world.triangles > 0, "should produce triangles");
+    assert_eq!(world.render_positions.len(), world.triangles * 9);
+    assert_eq!(world.render_normals.len(), world.triangles * 9);
+    assert_eq!(world.render_colors.len(), world.triangles * 9);
+
+    assert_eq!(world.spawns.len(), 8, "must have 8 spawns");
+    assert_eq!(world.spawns.iter().filter(|s| s.team == 0).count(), 4, "must have 4 CLA spawns");
+    assert_eq!(world.spawns.iter().filter(|s| s.team == 1).count(), 4, "must have 4 RVSF spawns");
+
+    assert_eq!(world.items.len(), 10, "must have 10 pickups");
+    assert_eq!(world.waterlevel, -100.0);
+
+    // Verify Rapier physics
+    let physics = RapierPhysicsWorld::new(&world.col_vertices, &world.col_indices);
+
+    // Ray down onto Reception lobby floor (z = 0.0)
+    let (hit_lobby, dist_lobby, _) = physics.cast_ray([20.0, 20.0, 5.0], [0.0, 0.0, -1.0], 10.0);
+    assert!(hit_lobby, "ray downwards onto lobby should hit floor at z=0");
+    assert!((dist_lobby - 5.0).abs() < 0.2, "dist_lobby was {}", dist_lobby);
+
+    // Ray down onto Datacenter raised floor (z = 0.15)
+    let (hit_datacenter, dist_dc, _) = physics.cast_ray([15.0, 15.0, 5.0], [0.0, 0.0, -1.0], 10.0);
+    assert!(hit_datacenter, "ray downwards onto datacenter floor should hit at z=0.15");
+    assert!((dist_dc - 4.85).abs() < 0.2, "dist_dc was {}", dist_dc);
+}
+
+#[test]
+fn test_office_glb_generation() {
+    let info = MapInfo {
+        name: "hd_office".into(),
+        title: "Corporate Office (GLB)".into(),
+        ssize: 64,
+        ..Default::default()
+    };
+
+    let world = hassault_native::world3d::create_world_3d(info);
+
+    assert!(world.triangles > 0, "should produce triangles");
+    assert_eq!(world.render_positions.len(), world.triangles * 9);
+    assert_eq!(world.render_normals.len(), world.triangles * 9);
+    assert_eq!(world.render_colors.len(), world.triangles * 9);
+
+    assert_eq!(world.spawns.len(), 8, "must have 8 spawns");
+    assert_eq!(world.items.len(), 10, "must have 10 pickups");
+
+    let physics = RapierPhysicsWorld::new(&world.col_vertices, &world.col_indices);
+    // Ray down to floor
+    let (hit, dist, _) = physics.cast_ray([0.0, 0.0, 5.0], [0.0, 0.0, -1.0], 10.0);
+    assert!(hit, "ray downwards should hit office collision mesh");
+    assert!(dist <= 6.0, "dist was {}", dist);
+}
+

@@ -1,0 +1,123 @@
+{
+  "title": "Corporate Office",
+  "author": "horrible-dashboard",
+  "license": "CC0-1.0",
+  "sfactor": 6,
+  "waterlevel": -100,
+  "ambient": 50,
+  "format": "gltf",
+  "modes": [
+    "defuse",
+    "tdm",
+    "dm"
+  ],
+  "brushes": [
+    {
+      "op": "room",
+      "rect": [4, 4, 56, 56],
+      "floor": 0,
+      "ceil": 12,
+      "wtex": 47,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "solid",
+      "rect": [34, 4, 2, 56],
+      "wtex": 89
+    },
+    {
+      "op": "room",
+      "rect": [34, 14, 2, 8],
+      "floor": 0,
+      "ceil": 12,
+      "wtex": 47,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [34, 42, 2, 8],
+      "floor": 0,
+      "ceil": 12,
+      "wtex": 47,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "solid",
+      "rect": [4, 32, 30, 2],
+      "wtex": 89
+    },
+    {
+      "op": "room",
+      "rect": [18, 32, 6, 2],
+      "floor": 0,
+      "ceil": 12,
+      "wtex": 47,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "solid",
+      "rect": [46, 20, 2, 2],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [46, 44, 2, 2],
+      "wtex": 131
+    },
+    {
+      "op": "solid",
+      "rect": [18, 16, 2, 2],
+      "wtex": 131
+    }
+  ],
+  "spawns": [
+    { "x": 10, "y": 10, "z": 0, "yaw": 90, "team": 1 },
+    { "x": 14, "y": 10, "z": 0, "yaw": 90, "team": 1 },
+    { "x": 10, "y": 14, "z": 0, "yaw": 90, "team": 1 },
+    { "x": 14, "y": 14, "z": 0, "yaw": 90, "team": 1 },
+    { "x": 52, "y": 50, "z": 0, "yaw": 270, "team": 0 },
+    { "x": 52, "y": 46, "z": 0, "yaw": 270, "team": 0 },
+    { "x": 52, "y": 42, "z": 0, "yaw": 270, "team": 0 },
+    { "x": 52, "y": 38, "z": 0, "yaw": 270, "team": 0 }
+  ],
+  "entities": [
+    { "type": "playerstart", "x": 10, "y": 10, "z": 0, "yaw": 90, "team": 1 },
+    { "type": "playerstart", "x": 14, "y": 10, "z": 0, "yaw": 90, "team": 1 },
+    { "type": "playerstart", "x": 10, "y": 14, "z": 0, "yaw": 90, "team": 1 },
+    { "type": "playerstart", "x": 14, "y": 14, "z": 0, "yaw": 90, "team": 1 },
+    { "type": "playerstart", "x": 52, "y": 50, "z": 0, "yaw": 270, "team": 0 },
+    { "type": "playerstart", "x": 52, "y": 46, "z": 0, "yaw": 270, "team": 0 },
+    { "type": "playerstart", "x": 52, "y": 42, "z": 0, "yaw": 270, "team": 0 },
+    { "type": "playerstart", "x": 52, "y": 38, "z": 0, "yaw": 270, "team": 0 },
+    { "type": "health", "x": 8, "y": 24, "z": 0 },
+    { "type": "health", "x": 52, "y": 14, "z": 0 },
+    { "type": "health", "x": 8, "y": 50, "z": 0 },
+    { "type": "armour", "x": 24, "y": 48, "z": 0 },
+    { "type": "armour", "x": 24, "y": 14, "z": 0 },
+    { "type": "ammo", "x": 42, "y": 14, "z": 0 },
+    { "type": "ammo", "x": 42, "y": 30, "z": 0 },
+    { "type": "ammo", "x": 42, "y": 48, "z": 0 },
+    { "type": "clips", "x": 20, "y": 24, "z": 0 },
+    { "type": "grenade", "x": 48, "y": 30, "z": 0 }
+  ],
+  "objectives": {
+    "sites": [
+      {
+        "id": "A",
+        "x": 14,
+        "y": 48,
+        "radius": 4.0
+      },
+      {
+        "id": "B",
+        "x": 42,
+        "y": 20,
+        "radius": 4.0
+      }
+    ]
+  }
+}
