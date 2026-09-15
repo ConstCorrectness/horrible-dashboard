@@ -538,3 +538,60 @@ def test_every_skill_level_produces_usable_input(skill: str):
         room.simulate(1 / 20)
     assert bot.alive
     assert 0 <= bot.weapon < len(weapons.WEAPONS)
+
+
+def test_tactical_cover_nodes_contain_hd_inferno_and_hd_dust2():
+    assert "hd_inferno" in bots.TACTICAL_COVER_NODES
+    assert "hd_dust2" in bots.TACTICAL_COVER_NODES
+    assert len(bots.TACTICAL_COVER_NODES["hd_inferno"]) >= 8
+    assert len(bots.TACTICAL_COVER_NODES["hd_dust2"]) >= 8
+
+
+def test_bot_archetypes_and_acoustic_investigation():
+    from backend.modules.hassault.noise import Noise
+
+    room = make_room()
+    bot = bots.add_bots(room, 1, team=0)[0]
+    assert bot.brain.archetype in bots.BOT_ARCHETYPES
+
+    # Face bot eastward (yaw = 0.0) and put an enemy behind the bot (outside FOV)
+    bot.state.yaw = 0.0
+    enemy = room.add("enemy_p", None, team=1)
+    enemy.state.x = bot.state.x - 10.0
+    enemy.state.y = bot.state.y
+
+    room.noises.append(
+        Noise(
+            kind="footstep",
+            source=enemy.id,
+            x=enemy.state.x,
+            y=enemy.state.y,
+            z=bot.state.z,
+            loudness=20.0,
+        )
+    )
+
+    cmd = bot.brain.think(room, bot, 1 / 20)
+    assert bot.brain.investigate is not None
+    assert (bot.brain.investigate[0] - enemy.state.x)**2 < 0.1
+
+
+def test_bot_utility_throw_decision():
+    room = make_room()
+    bot = bots.add_bots(room, 1, team=0)[0]
+    target = room.add("target", None, team=1)
+    place(bot, 10.0, 10.0)
+    place(target, 28.0, 10.0)
+    # Give bot a flashbang
+    bot.nades.counts[1] = 2
+    bot.brain.throw_in = 0.0
+
+    # Think over a few ticks
+    threw = False
+    for _ in range(25):
+        cmd = bot.brain.think(room, bot, 1 / 20)
+        if cmd.throw and cmd.nade in (0, 1, 2):
+            threw = True
+            break
+    assert threw, "bot with grenades in engagement range should attempt tactical utility throw"
+

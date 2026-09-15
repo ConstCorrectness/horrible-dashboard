@@ -350,4 +350,67 @@ fn test_dust2_glb_generation() {
     assert!(dist <= 7.0, "dist was {}", dist);
 }
 
+#[test]
+fn test_inferno_3d_generation() {
+    let info = MapInfo {
+        name: "hd_inferno".into(),
+        title: "Tuscan Village (Inferno)".into(),
+        ssize: 64,
+        ..Default::default()
+    };
+
+    let world = hassault_native::world3d::create_procedural_inferno_3d(info);
+
+    assert!(world.triangles > 0, "should produce triangles");
+    assert_eq!(world.render_positions.len(), world.triangles * 9);
+    assert_eq!(world.render_normals.len(), world.triangles * 9);
+    assert_eq!(world.render_colors.len(), world.triangles * 9);
+
+    assert_eq!(world.spawns.len(), 8, "must have 8 spawns");
+    assert_eq!(world.spawns.iter().filter(|s| s.team == 0).count(), 4, "must have 4 CT spawns");
+    assert_eq!(world.spawns.iter().filter(|s| s.team == 1).count(), 4, "must have 4 T spawns");
+
+    assert_eq!(world.items.len(), 10, "must have 10 pickups");
+    assert_eq!(world.waterlevel, -100.0);
+
+    let physics = RapierPhysicsWorld::new(&world.col_vertices, &world.col_indices);
+
+    // Ray down onto ground (z = 0.0m)
+    let (hit_ground, dist_ground, _) = physics.cast_ray([30.0, 20.0, 5.0], [0.0, 0.0, -1.0], 10.0);
+    assert!(hit_ground, "ray downwards onto cobblestone ground should hit at z=0");
+    assert!((dist_ground - 5.0).abs() < 0.2, "dist_ground was {}", dist_ground);
+
+    // Ray down onto Apartments 2nd floor slab (z = 2.8m)
+    let (hit_apts, dist_apts, _) = physics.cast_ray([40.0, 39.0, 5.0], [0.0, 0.0, -1.0], 10.0);
+    assert!(hit_apts, "ray downwards onto Apartments slab should hit at z=2.8");
+    assert!((dist_apts - 2.2).abs() < 0.2, "dist_apts was {}", dist_apts);
+}
+
+#[test]
+fn test_inferno_glb_generation() {
+    let info = MapInfo {
+        name: "hd_inferno".into(),
+        title: "Tuscan Village (Inferno GLB)".into(),
+        ssize: 64,
+        ..Default::default()
+    };
+
+    let world = hassault_native::world3d::create_world_3d(info);
+
+    assert!(world.triangles > 0, "should produce triangles");
+    assert_eq!(world.render_positions.len(), world.triangles * 9);
+    assert_eq!(world.render_normals.len(), world.triangles * 9);
+    assert_eq!(world.render_colors.len(), world.triangles * 9);
+
+    assert_eq!(world.spawns.len(), 8, "must have 8 spawns");
+    assert_eq!(world.items.len(), 10, "must have 10 pickups");
+
+    let physics = RapierPhysicsWorld::new(&world.col_vertices, &world.col_indices);
+    // Ray down to terrain floor
+    let (hit, dist, _) = physics.cast_ray([35.0, 35.0, 6.0], [0.0, 0.0, -1.0], 10.0);
+    assert!(hit, "ray downwards should hit inferno GLB collision mesh");
+    assert!(dist <= 7.0, "dist was {}", dist);
+}
+
+
 

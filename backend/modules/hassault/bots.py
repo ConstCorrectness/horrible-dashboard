@@ -167,15 +167,45 @@ TACTICAL_COVER_NODES: dict[str, list[tuple[float, float, str]]] = {
         (135.0, 138.0, "catwalk_ladder"),
         (150.0, 138.0, "catwalk_overlook"),
     ],
+    "hd_inferno": [
+        (18.0, 28.0, "banana_car_cover"),
+        (15.0, 34.0, "banana_sandbags"),
+        (18.0, 50.0, "site_b_fountain"),
+        (22.0, 52.0, "site_b_coffins"),
+        (36.0, 30.0, "boiler_room_door"),
+        (46.0, 42.0, "apts_balcony"),
+        (54.0, 44.0, "site_a_pit"),
+        (50.0, 50.0, "site_a_default"),
+        (55.0, 56.0, "site_a_graveyard"),
+    ],
+    "hd_dust2": [
+        (54.0, 14.0, "long_a_pit"),
+        (55.0, 58.0, "site_a_goose"),
+        (46.0, 52.0, "site_a_default"),
+        (30.0, 38.0, "catwalk_xbox"),
+        (30.0, 32.0, "mid_doors"),
+        (18.0, 42.0, "upper_b_tunnel"),
+        (24.0, 52.0, "site_b_window"),
+        (8.0, 58.0, "site_b_back_plat"),
+    ],
 }
+
+
+BOT_ARCHETYPES = ("entry", "sniper", "anchor", "support", "balanced")
 
 
 class BotBrain:
     """One bot's mind. Ticked once per server tick by `MatchRoom._think`."""
 
-    def __init__(self, skill: str = DEFAULT_SKILL, seed: int | None = None) -> None:
+    def __init__(
+        self,
+        skill: str = DEFAULT_SKILL,
+        seed: int | None = None,
+        archetype: str = "balanced",
+    ) -> None:
         self.skill = SKILLS.get(skill, SKILLS[DEFAULT_SKILL])
         self.rng = random.Random(seed)
+        self.archetype = archetype if archetype in BOT_ARCHETYPES else "balanced"
         self.target_id: str | None = None
         self.seen_at = 0.0
         self.retarget_in = 0.0
@@ -188,6 +218,9 @@ class BotBrain:
         self.strafe_in = 0.0
         self.roam: tuple[float, float] | None = None
         self.roam_in = 0.0
+        self.investigate: tuple[float, float] | None = None
+        self.investigate_in = 0.0
+        self.throw_in = 2.0 + self.rng.random() * 4.0
         #: The objective the mode wants this bot on, and how long it may chase it.
         #:
         #: The timeout is not politeness. Bots stick on concave geometry, and a
@@ -499,6 +532,20 @@ class BotBrain:
             weapon = weapons.weapon_at(me.weapon)
             if weapon.mag > 0 and me.ammo.get(me.weapon, 0) < weapon.mag * 0.4:
                 reload_now = True
+            # Acoustic perception: listen to nearby noises
+            self.investigate_in -= dt
+            if self.investigate_in <= 0:
+                self.investigate = None
+            if self.investigate is None and hasattr(room, "noises"):
+                for noise in getattr(room, "noises", []):
+                    if noise.source != me.id:
+                        other_p = room.players.get(noise.source)
+                        if other_p and other_p.team != me.team and other_p.alive:
+                            dist_noise = math.hypot(noise.x - me.state.x, noise.y - me.state.y)
+                            if dist_noise <= noise.loudness:
+                                self.investigate = (noise.x, noise.y)
+                                self.investigate_in = 2.5 + self.rng.random() * 1.5
+                                break
 
         # -- where to walk --------------------------------------------------
         self.strafe_in -= dt
@@ -520,24 +567,23 @@ class BotBrain:
             else:
                 wanted_heading = bearing + self.strafe_dir * 1.15
         else:
-            # The mode's objective first, roaming as the fallback. Combat still
-            # preempts both — `_acquire` ran above, and a bot with somebody in
-            # front of it fights and picks the objective back up afterwards,
-            # which is what a player does.
-            #
-            # No navmesh is needed for this: every goal a mode produces is a flag
-            # stand, a bomb site or a position a player actually reached, all of
-            # which `maplint` has already proved standable and connected. That is
-            # the same class of position `_pick_roam` steers to, and `_steer`'s
-            # avoidance is what gets round what is in between.
             goal = self._objective(room, me, dt)
             if goal is not None:
                 if math.hypot(goal.x - me.state.x, goal.y - me.state.y) <= goal.radius:
-                    # Arrived: re-ask next tick rather than standing there, since
-                    # what the mode wants of a bot *on* the objective is usually
-                    # different from what it wanted on the way.
                     self.goal_in = 0.0
                 wanted_heading = math.atan2(goal.y - me.state.y, goal.x - me.state.x)
+            elif self.investigate is not None:
+                # Steer towards investigated sound source
+                if math.hypot(self.investigate[0] - me.state.x, self.investigate[1] - me.state.y) < 2.5:
+                    self.investigate = None
+                    self._pick_roam(room, me)
+                    wanted_heading = math.atan2(
+                        self.roam[1] - me.state.y, self.roam[0] - me.state.x
+                    )
+                else:
+                    wanted_heading = math.atan2(
+                        self.investigate[1] - me.state.y, self.investigate[0] - me.state.x
+                    )
             else:
                 self.roam_in -= dt
                 if self.roam is None or self.roam_in <= 0:
@@ -669,6 +715,20 @@ class BotBrain:
                 elif me.money >= 300 and not getattr(me, "owned_nades", set()):
                     buy_item = 4  # HE Grenade
 
+        # -- tactical utility throw -----------------------------------------
+        throw = False
+        throw_nade = -1
+        self.throw_in -= dt
+        if self.throw_in <= 0 and target is not None:
+            if 10.0 < distance < 38.0 and self.rng.random() < 0.12:
+                counts = getattr(me.nades, "counts", {})
+                for slot_idx in (1, 2, 0):  # Flashbang, Smoke, Frag
+                    if counts.get(slot_idx, 0) > 0:
+                        throw = True
+                        throw_nade = slot_idx
+                        self.throw_in = 6.0 + self.rng.random() * 4.0
+                        break
+
         me.bot_seq += 1
         return Command(
             seq=me.bot_seq,
@@ -683,6 +743,8 @@ class BotBrain:
             reload=reload_now,
             weapon=switch,
             scoped=scoped,
+            throw=throw,
+            nade=throw_nade,
             use=use,
             buy=buy_item,
             # No rewind: a bot's input is produced here, on this tick, so the
@@ -718,7 +780,7 @@ def add_bots(
 
     taken = {p.name for p in room.players.values()}
     out: list[MatchPlayer] = []
-    for _ in range(max(0, count)):
+    for i in range(max(0, count)):
         if len(room.players) >= MAX_PLAYERS:
             break
         name = next(
@@ -726,6 +788,11 @@ def add_bots(
             f"[bot] {len(room.players)}",
         )
         taken.add(name)
-        brain = BotBrain(skill=skill, seed=room.rng.randrange(1 << 30))
+        archetype = BOT_ARCHETYPES[i % len(BOT_ARCHETYPES)]
+        brain = BotBrain(
+            skill=skill,
+            seed=room.rng.randrange(1 << 30),
+            archetype=archetype,
+        )
         out.append(room.add(name, None, brain=brain, team=team))
     return out

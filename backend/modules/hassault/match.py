@@ -350,6 +350,8 @@ class Command:
     freeze. The shape matches `buy`: an index into the served catalogue.
     """
     sell: int = -1
+    """Gunsmith attachments dict: slot -> attachment id, e.g. {'optic': 'red_dot', 'barrel': 'suppressor'}."""
+    attachments: dict[str, str] | None = None
 
 
 @dataclass(slots=True)
@@ -361,6 +363,7 @@ class MatchPlayer:
     conn: Any = None
     queue: deque[Command] = field(default_factory=deque)
     last_ping_at: float = -999.0
+    attachments: dict[str, str] = field(default_factory=dict)
     # Last command sequence the simulation has actually consumed. Sent back as
     # `ack` so the client knows what to replay.
     ack: int = 0
@@ -558,7 +561,7 @@ class MatchPlayer:
     def snapshot(self, now: float) -> dict[str, Any]:
         """The wire form. Rounded hard — a millimetre of a cube is not a thing
         anyone can see, and the digits are most of the packet."""
-        return {
+        snap = {
             "id": self.id,
             "name": self.name,
             "team": self.team,
@@ -583,6 +586,9 @@ class MatchPlayer:
             # the avatar is drawn to this height and a shot is rewound against it.
             "crouch": round(self.state.crouch, 2),
         }
+        if self.attachments:
+            snap["attachments"] = self.attachments
+        return snap
 
     def private_view(self, now: float) -> dict[str, Any]:
         """The half of a player's state only they get to see, and the flush point
@@ -802,6 +808,12 @@ class MatchRoom:
         # and the shot count, which is worth nothing to a cheat and worth a lot
         # when a test needs a shotgun to pattern the same way twice.
         self.rng = random.Random(room_id)
+        from backend.modules.hassault.replay import ReplayRecorder
+        self.recorder = ReplayRecorder(
+            room_id=self.id,
+            map_name=self.map_name,
+            mode_name=getattr(self.mode, "id", "dm"),
+        )
         self.mode.attach(self)
 
     # -- membership ---------------------------------------------------------
@@ -846,6 +858,8 @@ class MatchRoom:
         player.reset_loadout()
         self.mode.outfit(self, player)
         self.players[player.id] = player
+        if hasattr(self, "recorder") and self.recorder is not None:
+            self.recorder.register_player(player.id, player.name, player.team, player.is_bot)
         if not player.is_bot:
             self.empty_since = None
         self.mode.on_join(self, player)
@@ -1659,6 +1673,8 @@ class MatchRoom:
     def _handle_combat(
         self, player: MatchPlayer, command: Command, now: float, now_ms: float
     ) -> None:
+        if command.attachments is not None:
+            player.attachments = command.attachments
         if command.weapon >= 0 and command.weapon != player.weapon:
             player.weapon = max(0, min(len(weapons.WEAPONS) - 1, command.weapon))
             # Switching cancels a reload rather than queueing behind it: that is
@@ -2539,6 +2555,8 @@ class MatchServer:
                     # simulate for: a match with no humans in it is a screensaver.
                     if not room.humans:
                         if (started - (room.empty_since or started)) > EMPTY_GRACE:
+                            if hasattr(room, "recorder") and room.recorder is not None:
+                                room.recorder.finish()
                             self.rooms.pop(room.id, None)
                         continue
                     room.tick += 1
@@ -2573,6 +2591,21 @@ class MatchServer:
         # Everything else that is the same for everyone — grenades, zones, the
         # tick's effects — built once here rather than inside each envelope.
         shared = room.shared_view()
+
+        # Authoritative match replay recording
+        if hasattr(room, "recorder") and room.recorder is not None:
+            room.recorder.record_tick(
+                tick=room.tick,
+                timestamp=now,
+                players=rows,
+                shared={
+                    "fx": list(room.fx),
+                    "nades": shared.get("nades", []),
+                    "zones": shared.get("zones", []),
+                    "mode": shared.get("mode"),
+                },
+                scores=room.scores,
+            )
         # The radar, once per team rather than once per player. It is the same
         # list for everyone on a side, and deriving it raycasts every ally against
         # every living enemy — which made it the most expensive thing in this
@@ -2873,4 +2906,13 @@ def parse_command(raw: Any) -> Command | None:
             else None
         ),
         ping=ping_val,
+        attachments=(
+            {
+                str(k): str(v)
+                for k, v in raw.get("attachments").items()
+                if len(str(k)) <= 24 and len(str(v)) <= 48
+            }
+            if isinstance(raw.get("attachments"), dict)
+            else None
+        ),
     )

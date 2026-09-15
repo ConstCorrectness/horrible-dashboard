@@ -2175,3 +2175,45 @@ async def sync_hassault_assets(force: bool = False):
     from backend.modules.hassault.asset_cache import sync_assets
 
     return await sync_assets(force=force)
+
+
+@router.get("/replays")
+async def list_tournament_replays(limit: int = 50):
+    """List recorded tournament match replays (.hrec) with duration, teams, and winner."""
+    from backend.modules.hassault.replay import list_replays
+
+    return list_replays(limit=limit)
+
+
+@router.get("/replays/{replay_id}")
+async def get_tournament_replay(replay_id: str):
+    """Retrieve metadata and participant summary for a specific recorded replay."""
+    from backend.modules.hassault.replay import get_replay_metadata
+
+    meta = get_replay_metadata(replay_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail=f"Replay '{replay_id}' not found")
+    return meta
+
+
+@router.get("/replays/{replay_id}/frames")
+async def get_tournament_replay_frames(replay_id: str):
+    """Retrieve the full tick-by-tick trajectory frames and events for replay playback."""
+    from backend.modules.hassault.replay import get_replay_data
+
+    data = get_replay_data(replay_id)
+    if not data:
+        raise HTTPException(status_code=404, detail=f"Replay frames for '{replay_id}' not found")
+    return data
+
+
+@router.delete("/replays/{replay_id}")
+async def delete_tournament_replay(replay_id: str):
+    """Delete a recorded match replay and its on-disk .hrec file."""
+    from backend.modules.hassault.replay import delete_replay
+
+    success = delete_replay(replay_id)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Replay '{replay_id}' not found")
+    return {"status": "deleted", "id": replay_id}
+
