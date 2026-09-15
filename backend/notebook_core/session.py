@@ -31,7 +31,10 @@ import base64
 import logging
 import os
 import queue
+import shutil
 import threading
+from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 from backend.notebook_core import notebooks
@@ -39,6 +42,25 @@ from backend.notebook_core.config import SessionConfig
 from backend.notebook_core.reactive import ReactiveGraph
 
 logger = logging.getLogger(__name__)
+
+#: Holds `horrible_pip`, the IPython extension every kernel loads so `%pip`/`!pip`
+#: install into the kernel's own interpreter through uv (a uv venv has no pip).
+KERNEL_EXT_DIR = Path(__file__).resolve().parent / "kernel_ext"
+
+
+def _kernel_env(extra: Mapping[str, str]) -> dict[str, str]:
+    """The kernel's environment: the backend's own, the session's extras, the
+    extension directory on `PYTHONPATH`, and uv resolved here — a packaged app's
+    PATH is not a terminal's, and the kernel should find the same uv we do."""
+    env = {**os.environ, **dict(extra)}
+    env["PYTHONPATH"] = os.pathsep.join(
+        p for p in (str(KERNEL_EXT_DIR), env.get("PYTHONPATH", "")) if p
+    )
+    uv = shutil.which("uv")
+    if uv and "HORRIBLE_UV" not in env:
+        env["HORRIBLE_UV"] = uv
+    return env
+
 
 SAVE_DEBOUNCE_S = 2.0
 START_TIMEOUT_S = 60.0
@@ -121,6 +143,9 @@ def _make_kernel_manager(python_executable: str, display_name: str):
             "ipykernel_launcher",
             "-f",
             "{connection_file}",
+            # Found via the PYTHONPATH `_kernel_env` sets. A failed load is logged by
+            # ipykernel and the kernel starts anyway — it just keeps stock `%pip`.
+            "--IPKernelApp.extensions=horrible_pip",
         ],
         display_name=display_name,
         language="python",
@@ -185,11 +210,9 @@ class KernelSession:
             self.config.python_executable, self.config.display_name
         )
         # `env` replaces rather than extends the child's environment, so the
-        # backend's own is merged in explicitly — passing only the extras would
-        # start a kernel with no PATH.
-        self.km.start_kernel(
-            cwd=self.config.cwd, env={**os.environ, **dict(self.config.env)}
-        )
+        # backend's own is merged in explicitly (inside `_kernel_env`) — passing
+        # only the extras would start a kernel with no PATH.
+        self.km.start_kernel(cwd=self.config.cwd, env=_kernel_env(self.config.env))
         self.kc = self.km.client()
         self.kc.start_channels()
         try:

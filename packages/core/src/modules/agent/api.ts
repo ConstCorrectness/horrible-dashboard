@@ -19,6 +19,9 @@ export interface DetectedProvider {
   has_api_key: boolean;
   /** Where the user creates a key. */
   api_key_url: string;
+  /** Models served at no cost, from the provider's public catalog. Listed even
+   * without a key, so it says nothing about `reachable`. */
+  free_models: string[];
 }
 
 /** Lifecycle of an optional backend-spawned vLLM server. */

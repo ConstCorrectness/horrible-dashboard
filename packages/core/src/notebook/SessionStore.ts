@@ -25,6 +25,16 @@ export interface DependencyEdge {
   to: string;
 }
 
+/** A completed execution retained for the notebook's local-session timeline. */
+export interface ExecutionRecord {
+  cellId: string;
+  state: Extract<CellRunState, 'done' | 'error'>;
+  startedAt: number;
+  finishedAt: number;
+}
+
+const EXECUTION_HISTORY_LIMIT = 80;
+
 export interface SessionState {
   sessionKey: string | null; // null until `opened` arrives
   id: string; // deterministic backend session key
@@ -34,6 +44,10 @@ export interface SessionState {
   runStates: Record<string, CellRunState>;
   edges: DependencyEdge[]; // reactive dependency DAG
   diagnostics: CellDiagnostic[]; // multiple_defs / cycle / syntax
+  /** Cells whose source or upstream values changed after their last successful run. */
+  staleCells: string[];
+  /** Most recent completed executions. Deliberately session-local, not notebook metadata. */
+  executionHistory: ExecutionRecord[];
   comms: CommSnapshot[]; // live widget comms, for reattach-resync
   error: string | null;
   errorCode: string | null;
@@ -53,6 +67,8 @@ const EMPTY = (id: string): SessionState => ({
   runStates: {},
   edges: [],
   diagnostics: [],
+  staleCells: [],
+  executionHistory: [],
   comms: [],
   error: null,
   errorCode: null,
@@ -61,6 +77,7 @@ const EMPTY = (id: string): SessionState => ({
 export class SessionStore {
   private state: SessionState;
   private listeners = new Set<() => void>();
+  private executionStartedAt = new Map<string, number>();
   readonly id: string; // === the backend session key
   readonly channel: string;
 
@@ -111,7 +128,24 @@ export class SessionStore {
     } else if (execCount != null) {
       cells = cells.map((c) => (c.id === cellId ? { ...c, execution_count: execCount } : c));
     }
-    this.set({ runStates, cells });
+    const stale = new Set(this.state.staleCells);
+    let executionHistory = this.state.executionHistory;
+    if (state === 'queued') {
+      // A queued cell will receive new values, so it and every dependent remain
+      // stale until their own executions complete.
+      stale.add(cellId);
+    } else if (state === 'done' || state === 'error') {
+      stale.delete(cellId);
+      const startedAt = this.executionStartedAt.get(cellId) ?? Date.now();
+      executionHistory = [
+        { cellId, state, startedAt, finishedAt: Date.now() },
+        ...executionHistory,
+      ].slice(0, EXECUTION_HISTORY_LIMIT);
+      this.executionStartedAt.delete(cellId);
+    } else if (state === 'running') {
+      this.executionStartedAt.set(cellId, Date.now());
+    }
+    this.set({ runStates, cells, staleCells: [...stale], executionHistory });
   }
 
   onOutput(cellId: string, output: NbOutput | null): void {
@@ -186,7 +220,29 @@ export class SessionStore {
   // --- local mutations (optimistic; backend doc is authoritative) -----------
 
   applyLocal(ops: CellOp[], optimistic: NotebookCell[]): void {
-    this.set({ cells: optimistic });
+    const changed = new Set(
+      ops
+        .filter((op) => op.op === 'edit' || op.op === 'delete')
+        .flatMap((op) => (op.cellId ? [op.cellId] : [])),
+    );
+    const stale = new Set(this.state.staleCells);
+    // Mark every transitive dependent stale immediately. The backend will rebuild
+    // the graph after the edit; using the last known graph here is intentional: it
+    // tells the truth without waiting for the websocket round-trip.
+    const downstream = new Map<string, string[]>();
+    for (const edge of this.state.edges) {
+      const next = downstream.get(edge.from) ?? [];
+      next.push(edge.to);
+      downstream.set(edge.from, next);
+    }
+    const pending = [...changed];
+    while (pending.length) {
+      const id = pending.pop();
+      if (!id || stale.has(id)) continue;
+      stale.add(id);
+      pending.push(...(downstream.get(id) ?? []));
+    }
+    this.set({ cells: optimistic, staleCells: [...stale] });
     if (this.state.sessionKey) sendCellOps(this.channel, this.state.sessionKey, ops);
   }
 }

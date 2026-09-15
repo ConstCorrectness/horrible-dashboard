@@ -32,6 +32,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { resetSetting, setSetting, useSetting } from '../../settings';
 import { getAgentStatus, type AgentStatus } from './api';
+import { matchesModelQuery } from './model-filter';
 
 /** `provider::model`. A single option value, because the two are chosen together. */
 function encode(kind: string, model: string): string {
@@ -116,17 +117,11 @@ export function ModelPicker({
     return out;
   }, [providers, configuredLabel, effective, known, model, provider]);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return choices;
-    // Every whitespace-separated word must appear somewhere in "group label", so
-    // `free qwen` narrows rather than widening the way an OR would.
-    const words = q.split(/\s+/);
-    return choices.filter((c) => {
-      const hay = `${c.group} ${c.label}`.toLowerCase();
-      return words.every((w) => hay.includes(w));
-    });
-  }, [choices, query]);
+  // Over "group label" together, so a provider name narrows as well as a model id.
+  const filtered = useMemo(
+    () => choices.filter((c) => matchesModelQuery(`${c.group} ${c.label}`, query)),
+    [choices, query],
+  );
 
   // Keep the highlight on a row that exists as the query narrows the list.
   useEffect(() => setCursor(0), [query]);

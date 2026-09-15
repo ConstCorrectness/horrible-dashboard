@@ -30,6 +30,7 @@ import {
   subscribeRecents,
   useSetting,
   useWorkspaces,
+  WORKSPACES_ENABLED_KEY,
   type PanelDecl,
   type WidgetDecl,
 } from '@horrible/core';
@@ -204,6 +205,29 @@ function StartMenu({ onClose }: { onClose: () => void }) {
       {/* The footer. Settings is what people come to this corner for, and it was
           previously reachable only as one row of sixty, filed under S. */}
       <div className="os-start-footer">
+        {/* Home first: the taskbar is on screen in both paradigms, so this is the
+            way back to the desktop from a tiled workspace, where the frame covers
+            the home screen completely. */}
+        <button
+          type="button"
+          role="menuitem"
+          className="os-start-foot-btn"
+          onClick={() => {
+            void registry.runCommand('desktop.home');
+            onClose();
+          }}
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+            <path
+              d="M1.5 6 6 2l4.5 4M3 5v5h2.2V7.5h1.6V10H9V5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.2"
+              strokeLinejoin="round"
+            />
+          </svg>{' '}
+          Home
+        </button>
         <button
           type="button"
           role="menuitem"
@@ -325,6 +349,10 @@ function DesktopsGroup({ onClose }: { onClose: () => void }) {
   const { frame } = useSyncExternalStore(layoutStore.subscribe, layoutStore.getSnapshot);
   const defaultMode = useSetting<string>(DEFAULT_DESKTOP_MODE_KEY) ?? 'tiling';
   const floats = defaultMode === 'floating';
+  // Every row here switches, makes or manages a workspace; with workspaces off
+  // (`desktop.workspaces`) there is one desktop and the group has nothing to offer.
+  const workspacesOn = useSetting<boolean>(WORKSPACES_ENABLED_KEY) === true;
+  if (!workspacesOn) return null;
   const presets = registry.framePresets;
   const presetIds = new Set(presets.map((p) => p.id));
   const run = (command: string) => {
@@ -369,11 +397,7 @@ function DesktopsGroup({ onClose }: { onClose: () => void }) {
               else (the tab strip, the home launcher). A custom desktop has none
               and keeps the neutral dot. */}
           <span className="os-start-icon" aria-hidden="true">
-            {entry.id === activeId
-              ? frame.mode === 'tiling'
-                ? '▦'
-                : '❐'
-              : (entry.glyph ?? '·')}
+            {entry.id === activeId ? (frame.mode === 'tiling' ? '▦' : '❐') : (entry.glyph ?? '·')}
           </span>
           <span className="os-start-title">{entry.name}</span>
         </button>

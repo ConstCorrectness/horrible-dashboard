@@ -390,6 +390,9 @@ from the project venv, with the stdout sentinel scan. The backend side runs one
   after each completed cell), so the on-disk notebook stays Kaggle-compatible truth.
 - Executions run serially through a queue; stream output passes through the sentinel
   splitter, so `horrible_train` telemetry never appears as cell text.
+- `!pip install x` / `%pip install x` install into **the project venv** through uv (a
+  uv venv has no pip), via the kernel extension every shared-engine kernel loads — see
+  [Installing packages](./notebook.mdx#installing-packages).
 - **Interrupt** rides the platform interrupt (Win32 event / SIGINT). Windows caveat:
   it lands *between* statements — training loops stop in milliseconds, but a single
   long blocking C call (one `time.sleep(600)`) defers it until that call returns;

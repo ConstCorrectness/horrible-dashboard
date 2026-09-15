@@ -24,6 +24,7 @@ import { seedFromPreset, type FramePreset } from './presets';
 import { isDockable, regionsFor, resolveView } from './controller';
 import { deserialize, serialize } from './serialize';
 import { layoutStore } from './store';
+import { workspacesEnabled } from './workspaces-setting';
 import type { FrameState, WindowState } from './types';
 
 const AUTOSAVE_MS = 600;
@@ -293,6 +294,14 @@ function bindUnloadFlush(): void {
  * seed path as the empty slate.
  */
 function resolveBootWorkspace(workspaces: WorkspaceModel[]): string | null {
+  // With workspaces off there is one desktop, and boot always lands on it — even
+  // under `last`, which would otherwise reopen a tiled preset the user has no
+  // remaining UI to leave.
+  if (!workspacesEnabled()) {
+    const known =
+      workspaces.some((w) => w.id === DEFAULT_BOOT_WORKSPACE) || presetFor(DEFAULT_BOOT_WORKSPACE);
+    return known ? DEFAULT_BOOT_WORKSPACE : null;
+  }
   const want = getSetting<string>(BOOT_WORKSPACE_KEY) ?? DEFAULT_BOOT_WORKSPACE;
   if (!want || want === BOOT_WORKSPACE_LAST) return null;
   if (workspaces.some((w) => w.id === want)) return want;

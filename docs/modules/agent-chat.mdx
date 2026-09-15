@@ -768,6 +768,28 @@ is the worse failure. The other three hosted providers have no public catalog, s
 they list `static_models` — a starting point for the dropdown, never a claim to be
 the provider's full range. Every model field in the UI stays free text.
 
+**Free models are listed without a key.** The catalog is public, and onboarding is the
+moment someone has no key yet and wants to know what they could run for nothing, so
+`free_models(client, info)` never checks for one and `/agent/status` reports
+`free_models` on every provider (empty for providers without a catalog). It says
+nothing about usability — a free OpenRouter model still needs a key to call, and
+`reachable` still means "we hold one". An entry is free when both `pricing.prompt` and
+`pricing.completion` parse to exactly zero, or its id ends in `:free`; the auto-router
+is priced `-1` and is not. The free list shares the catalog cache with the model list,
+so a keyed provider costs no second fetch. Onboarding picks a free model by default
+when switching to a provider, lists free ids first and tags them.
+
+**Every model field is a substring-searchable combobox.** The onboarding field was a
+`<datalist>` and the settings page's model override a `<select>`, and both effectively
+match from the start of the id — so with several hundred OpenRouter ids, typing `free`
+found nothing. Both are now `ModelCombobox`, filtering through `matchesModelQuery`, the
+same match the Agent pane's `ModelPicker` uses: every word anywhere in the id. A free
+model also matches the word `free`, which finds zero-priced ids without the suffix.
+The field still accepts an id that is not listed (Enter uses what was typed), and it
+commits on pick, Enter or blur rather than per keystroke, because on the settings page
+each commit is a settings write and a half-typed id is a broken agent until the typing
+stops.
+
 `orjson` is a hard dependency because litellm's OpenRouter transformation imports it;
 without it every OpenRouter call fails as an `APIConnectionError` naming a missing
 module, which reads as a network fault.

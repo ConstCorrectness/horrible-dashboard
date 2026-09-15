@@ -43,3 +43,39 @@ describe('SessionStore error handling', () => {
     expect(store.snapshot().kernel).toBe('dead');
   });
 });
+
+describe('SessionStore execution provenance', () => {
+  it('marks edited cells and their transitive consumers stale until they run', () => {
+    const store = new SessionStore('notebook', 'nb:main.ipynb');
+    // `onCellsChanged` leaves the session unopened, so this unit test exercises
+    // the local provenance update without trying to open a browser websocket.
+    store.onCellsChanged({
+      path: 'main.ipynb',
+      metadata: {},
+      cells: [
+        { id: 'a', cell_type: 'code', source: 'x = 1', outputs: [] },
+        { id: 'b', cell_type: 'code', source: 'y = x + 1', outputs: [] },
+        { id: 'c', cell_type: 'code', source: 'z = y + 1', outputs: [] },
+      ],
+    });
+    store.onGraph(
+      [
+        { from: 'a', to: 'b' },
+        { from: 'b', to: 'c' },
+      ],
+      [],
+    );
+
+    store.applyLocal(
+      [{ op: 'edit', cellId: 'a', source: 'x = 2' }],
+      store.snapshot().cells.map((cell) => (cell.id === 'a' ? { ...cell, source: 'x = 2' } : cell)),
+    );
+    expect(store.snapshot().staleCells).toEqual(expect.arrayContaining(['a', 'b', 'c']));
+
+    store.onExecutionState('a', 'running');
+    store.onExecutionState('a', 'done', 1);
+    expect(store.snapshot().staleCells).not.toContain('a');
+    expect(store.snapshot().staleCells).toEqual(expect.arrayContaining(['b', 'c']));
+    expect(store.snapshot().executionHistory[0]).toMatchObject({ cellId: 'a', state: 'done' });
+  });
+});

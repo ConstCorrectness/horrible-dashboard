@@ -43,6 +43,10 @@ class DetectedProvider(BaseModel):
     has_api_key: bool = False
     #: Where to create a key, for the link in the API-keys settings section.
     api_key_url: str = ""
+    #: Models this provider serves at no cost, read from its public catalog. Filled
+    #: even without a key — onboarding shows them before one is saved — so it says
+    #: nothing about whether the provider is usable yet; `reachable` does.
+    free_models: list[str] = []
 
 
 class AgentStatus(BaseModel):

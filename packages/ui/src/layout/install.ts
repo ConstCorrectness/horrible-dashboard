@@ -32,6 +32,9 @@ import {
   toggleDock,
   toggleRegion,
   workspaceStore,
+  DEFAULT_BOOT_WORKSPACE,
+  settingsStore,
+  workspacesEnabled,
   type OpenPaneOptions,
 } from '@horrible/core';
 
@@ -175,6 +178,9 @@ export function installFrameShell(): void {
         id: `workspace.switch:${i + 1}`,
         title: `Workspace: Switch to #${i + 1}`,
         run: () => {
+          // A no-op with workspaces off: these would switch to a desktop no other
+          // surface can show or leave.
+          if (!workspacesEnabled()) return;
           const id = nthWorkspace(i + 1);
           if (id) registry.switchWorkspace(id);
         },
@@ -232,6 +238,25 @@ export function installFrameShell(): void {
       const queued = pending.splice(0);
       for (const run of queued) run();
     });
+  followWorkspacesToggle();
+}
+
+/**
+ * Turning workspaces off while standing in one would leave a tiled desktop with no
+ * tab strip, launcher or Start-menu group to leave it by. So the toggle is
+ * followed: switching it off moves you to the floating desktop. Switching it on
+ * changes nothing about where you are.
+ */
+function followWorkspacesToggle(): void {
+  let wasOn = workspacesEnabled();
+  settingsStore.subscribe(() => {
+    const on = workspacesEnabled();
+    if (on === wasOn) return;
+    wasOn = on;
+    if (!on && layoutStore.getSnapshot().workspaceId !== DEFAULT_BOOT_WORKSPACE) {
+      switchWorkspaceWhenReady(DEFAULT_BOOT_WORKSPACE);
+    }
+  });
 }
 
 /**

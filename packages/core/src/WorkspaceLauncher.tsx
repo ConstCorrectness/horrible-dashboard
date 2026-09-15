@@ -1,5 +1,7 @@
 import { staggerIndex } from './DataList';
+import { WORKSPACES_ENABLED_KEY } from './layout/workspaces-setting';
 import { registry } from './registry';
+import { useSetting } from './settings';
 import { useWorkspaces } from './workspace-store';
 
 import './workspace-launcher.css';
@@ -29,8 +31,11 @@ import './workspace-launcher.css';
  */
 export function WorkspaceLauncher() {
   const { activeId } = useWorkspaces();
+  // Workspaces are opt-in (`desktop.workspaces`); with them off, a row of tiles
+  // that each switch to one would be the only door into a feature that is off.
+  const enabled = useSetting<boolean>(WORKSPACES_ENABLED_KEY) === true;
   const presets = registry.framePresets.filter((p) => p.id !== activeId);
-  if (presets.length === 0) return null;
+  if (!enabled || presets.length === 0) return null;
 
   return (
     <section className="ws-launcher" aria-label="Workspaces">

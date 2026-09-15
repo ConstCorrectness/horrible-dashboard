@@ -88,7 +88,9 @@ def test_only_bundled_maps_can_be_adjudicated(referee: HassaultReferee):
     # adjudicable set is *closed*, so a map appearing here without being added
     # deliberately is exactly what it should catch.
     assert set(referee.maps()) == {
+        "hd_assault",
         "hd_atrium",
+        "hd_bank",
         "hd_crossing",
         "hd_facility",
         "hd_junkflea",
@@ -311,7 +313,9 @@ def server(tmp_path, monkeypatch):
 
 def test_the_map_list_is_served(server):
     assert server.get("/hassault/maps").json()["maps"] == [
+        "hd_assault",
         "hd_atrium",
+        "hd_bank",
         "hd_crossing",
         "hd_facility",
         "hd_junkflea",

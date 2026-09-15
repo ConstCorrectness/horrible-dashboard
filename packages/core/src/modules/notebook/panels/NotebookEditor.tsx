@@ -5,6 +5,7 @@ import { useAgentContext } from '../../../agent-context';
 import { usePaneScroll, usePaneUiState } from '../../../layout/use-pane-ui-state';
 import { usePaneParams } from '../../../panes';
 import { CellEditor } from '../../../notebook/CellEditor';
+import { ExecutionTimeline } from '../../../notebook/ExecutionTimeline';
 import { useNotebookLsp } from '../../../notebook/useNotebookLsp';
 import { listNotebooks } from '../api';
 import { OutputRenderer } from '../../../notebook/OutputRenderer';
@@ -50,6 +51,7 @@ export function NotebookEditor() {
   const scrollRef = usePaneScroll<HTMLDivElement>();
   const [editingMd, setEditingMd] = usePaneUiState<string | null>('editingMd', null);
   const editTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const cellRefs = useRef(new Map<string, HTMLDivElement>());
   // A notebook is addressed *relative to the notebook root* everywhere in this
   // module, but the language server resolves the interpreter and the project root by
   // walking up from the file, so it needs the real path. `useNotebookLsp` turns
@@ -170,6 +172,10 @@ export function NotebookEditor() {
     store.setMode(state.mode === 'reactive' ? 'classic' : 'reactive');
   }, [store, state.mode]);
 
+  const focusCell = useCallback((cellId: string) => {
+    cellRefs.current.get(cellId)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, []);
+
   // Diagnostics grouped by cell, for per-cell markers + a header summary.
   const diagByCell = useMemo(() => {
     const m = new Map<string, CellDiagnostic[]>();
@@ -249,6 +255,15 @@ export function NotebookEditor() {
           {state.diagnostics.length > 1 ? 's' : ''} — cells won’t auto-run until resolved.
         </div>
       )}
+      {state.mode === 'reactive' && (
+        <ExecutionTimeline
+          cells={state.cells}
+          edges={state.edges}
+          staleCells={state.staleCells}
+          history={state.executionHistory}
+          onFocusCell={focusCell}
+        />
+      )}
       <div className="nb-scroll" ref={scrollRef}>
         {!sessionKey && !state.error && (
           <div style={{ fontSize: 'var(--fs-body)', ...dim }}>Starting kernel…</div>
@@ -264,6 +279,11 @@ export function NotebookEditor() {
             lspExtensions={lsp.cellExtensions(cell)}
             runState={state.runStates[cell.id]}
             diagnostics={diagByCell.get(cell.id)}
+            stale={state.staleCells.includes(cell.id)}
+            cellRef={(element) => {
+              if (element) cellRefs.current.set(cell.id, element);
+              else cellRefs.current.delete(cell.id);
+            }}
             widgetManager={widgetManager}
             onChange={(src) => syncEdit(cell.id, src)}
             onRun={() => run(cell.id)}
@@ -316,6 +336,8 @@ function Cell({
   index,
   runState,
   diagnostics,
+  stale,
+  cellRef,
   widgetManager,
   editing,
   onEditing,
@@ -331,6 +353,8 @@ function Cell({
   index: number;
   runState?: CellRunState;
   diagnostics?: CellDiagnostic[];
+  stale: boolean;
+  cellRef: (element: HTMLDivElement | null) => void;
   widgetManager?: WidgetManager;
   /** Whether this markdown cell is open in the editor. Owned by the pane so it
    *  survives an unmount — a cell you were writing must not snap back to rendered
@@ -353,10 +377,12 @@ function Cell({
 
   return (
     <div
+      ref={cellRef}
       className={[
         'nb-cell',
         isCode ? 'nb-cell--code' : 'nb-cell--markdown',
         runState ? `nb-cell--${runState}` : '',
+        stale ? 'nb-cell--stale' : '',
       ]
         .filter(Boolean)
         .join(' ')}
@@ -371,6 +397,11 @@ function Cell({
           </>
         ) : (
           <span className="nb-gutter-kind">md</span>
+        )}
+        {stale && (
+          <span className="nb-stale" title="This cell depends on changed code or values">
+            stale
+          </span>
         )}
       </div>
       <div className="nb-body">

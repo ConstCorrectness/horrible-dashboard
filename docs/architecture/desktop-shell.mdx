@@ -122,6 +122,42 @@ launcher's own list was competing with the panes it exists to launch. The fold n
 hides the *active* desktop, whatever its position — a switcher that cannot show you
 where you are reads as though you are nowhere.
 
+### Workspaces are opt-in
+
+The named, pre-arranged desktops — AI Research, Training, Lab and the rest of the
+`frames:` presets — are **off by default**, behind the `desktop.workspaces` setting
+(Settings ▸ Desktop ▸ Workspaces). The app is a floating desktop first: you log in to
+one desktop and open windows on it, and seventeen presets are an opt-in way of working
+rather than seventeen tabs to understand before doing anything.
+
+With it off, everything that switches, makes or manages a workspace goes away rather
+than going inert:
+
+- boot always opens the floating `desktop`, even when `desktop.bootWorkspace` says
+  `last` (`resolveBootWorkspace`), since a tiled preset reopened there would have no
+  remaining UI to leave by;
+- the top strip shows no tabs on any desktop (under the native shell it is still the
+  slim titlebar);
+- the home screen's `WorkspaceLauncher` and the Start menu's **Desktops** group render
+  nothing, and the Desktops submenus leave the app and desktop menus;
+- `workspace.switch:N` (`mod+1..9` / `alt+1..9`) does nothing.
+
+Switching the setting off while standing in a workspace moves you to the floating
+desktop (`followWorkspacesToggle` in `layout/install.ts`). The key is read through
+`layout/workspaces-setting.ts`, a file of its own so `WorkspaceLauncher` can check it
+without importing the layout engine.
+
+### Getting back to the desktop
+
+A tiling workspace covers its home screen with the frame, so `desktop.showHome` —
+which acts on the desktop you are on — cannot help from one. **`desktop.home`** switches
+to the floating `desktop` and then expands its home screen. It expands only a desktop
+actually showing the home screen: `setHomeCollapsed` writes the backdrop id, and
+calling it on a desktop with a wallpaper would replace that wallpaper. It is reachable
+from the **Home** tab that leads the workspace strip (the `desktop` preset is not listed
+a second time among the tabs), the app menu, and the Start menu footer — the taskbar is
+on screen in both paradigms.
+
 ### What boots
 
 `hydrate()` opens the desktop named by the **`desktop.bootWorkspace`** setting, which

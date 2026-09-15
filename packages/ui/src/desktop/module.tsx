@@ -24,6 +24,9 @@ import {
   toastsStore,
   BOOT_WORKSPACE_KEY,
   DEFAULT_BOOT_WORKSPACE,
+  framePersistence,
+  WORKSPACES_ENABLED_KEY,
+  workspacesEnabled,
   setBackdrop,
   setDesktopMode,
   setSetting,
@@ -149,6 +152,19 @@ export const desktopModule: ModuleManifest = {
       id: 'desktop.showHome',
       title: 'Desktop: Show the home screen',
       run: () => void setHomeCollapsed(false),
+    },
+    {
+      /**
+       * The way back from a tiled workspace. `desktop.showHome` only acts on the
+       * desktop you are on, and a tiling workspace covers its home screen with the
+       * frame entirely — so from there, nothing led back to the desktop.
+       */
+      id: 'desktop.home',
+      title: 'Desktop: Go to the desktop home',
+      run: () =>
+        void goToDesktopHome().catch((err: unknown) => {
+          toastsStore.add('error', 'Could not open the desktop', String(err), 4000);
+        }),
     },
     {
       id: 'desktop.cascade',
@@ -279,10 +295,18 @@ export const desktopModule: ModuleManifest = {
       default: JSON.stringify(DEFAULT_TASKBAR),
     },
     {
+      key: WORKSPACES_ENABLED_KEY,
+      title: 'Workspaces',
+      description:
+        'Named, pre-arranged desktops (AI Research, Training, Lab…) with their tab strip, the home screen launcher, the Start menu’s Desktops group and the workspace-switching keys. Off means one floating desktop.',
+      type: 'boolean',
+      default: false,
+    },
+    {
       key: BOOT_WORKSPACE_KEY,
       title: 'Desktop to open at startup',
       description:
-        'The id of the desktop to open when the app starts — `desktop` is the empty floating one. Use `last` to reopen whichever desktop you were on. Whatever you pick, every other desktop keeps its arrangement.',
+        'The id of the desktop to open when the app starts — `desktop` is the empty floating one. Use `last` to reopen whichever desktop you were on. Only applies with Workspaces on; otherwise the app always opens the floating desktop. Whatever you pick, every other desktop keeps its arrangement.',
       type: 'string',
       default: DEFAULT_BOOT_WORKSPACE,
     },
@@ -383,11 +407,20 @@ export function appMenuItems(): ContextMenuItem[] {
     // paradigm by switching to a desktop that has the one you want; this row
     // reports which kind you are on and offers to make another.
     {
-      id: 'app.desktops',
-      label: tiling ? 'Desktops (this one tiles)' : 'Desktops (this one floats)',
-      run: () => {},
-      submenu: modeMenuItems(),
+      id: 'desktop.home',
+      label: 'Desktop home',
+      run: () => void registry.runCommand('desktop.home'),
     },
+    ...(workspacesEnabled()
+      ? [
+          {
+            id: 'app.desktops',
+            label: tiling ? 'Desktops (this one tiles)' : 'Desktops (this one floats)',
+            run: () => {},
+            submenu: modeMenuItems(),
+          },
+        ]
+      : []),
     {
       id: 'shell.oobe',
       label: 'Run first-run setup again',
@@ -589,13 +622,35 @@ function desktopMenuItems(): ContextMenuItem[] {
           },
         ]
       : []),
-    {
-      id: 'desktop.desktops',
-      label: tiling ? 'Desktops (this one tiles)' : 'Desktops (this one floats)',
-      run: () => {},
-      submenu: modeMenuItems(),
-    },
+    // Making, saving and converting desktops is workspace management; with
+    // workspaces off there is one desktop and nothing here to manage.
+    ...(workspacesEnabled()
+      ? [
+          {
+            id: 'desktop.desktops',
+            label: tiling ? 'Desktops (this one tiles)' : 'Desktops (this one floats)',
+            run: () => {},
+            submenu: modeMenuItems(),
+          },
+        ]
+      : []),
   ];
+}
+
+/**
+ * Go to the floating desktop and bring its home screen up.
+ *
+ * Switches first, then expands: `setHomeCollapsed` writes the *active* desktop's
+ * backdrop, so expanding before the switch lands would edit the workspace being
+ * left. And it only expands a desktop that is actually showing the home screen —
+ * `patchHome` sets the backdrop id, so calling it on a desktop with a wallpaper
+ * would silently replace that wallpaper with the home screen.
+ */
+async function goToDesktopHome(): Promise<void> {
+  await framePersistence.switchWorkspace(DEFAULT_BOOT_WORKSPACE);
+  if (layoutStore.getSnapshot().frame.backdrop.id === SPLASH_BACKDROP_ID) {
+    setHomeCollapsed(false);
+  }
 }
 
 /** Idempotent, like every other `registry.register` call. */

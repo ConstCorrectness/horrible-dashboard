@@ -15,6 +15,7 @@ import { useEffect, useState } from 'react';
 
 import { isSettingOverridden, resetSetting, setSetting, useSetting } from '../../settings';
 import { getAgentRoster, getAgentStatus, type DetectedProvider, type RosterAgent } from './api';
+import { ModelCombobox } from './ModelCombobox';
 
 const MODES = ['default', 'plan', 'acceptEdits', 'autonomous'] as const;
 
@@ -83,6 +84,7 @@ export function OrchestratorSettings() {
   // means nothing on that server, and the failure only shows up mid-turn.
   const overrideProvider = provider ? providers.find((p) => p.kind === provider) : undefined;
   const providerModels = overrideProvider ? overrideProvider.models : models;
+  const activeProvider = overrideProvider ?? providers.find((p) => p.kind === configuredProvider);
   // Keep an override that isn't in the live list (e.g. provider offline) selectable.
   const options =
     model && !providerModels.includes(model) ? [model, ...providerModels] : providerModels;
@@ -183,18 +185,22 @@ export function OrchestratorSettings() {
           </p>
         </div>
         <div className="setting-control">
-          <select value={model} onChange={(e) => onModelChange(e.target.value)}>
-            <option value="">
-              {isMain
+          {/* A searchable combobox rather than a `<select>`: with an OpenRouter key
+              this list is several hundred ids, and a select's type-ahead only
+              matches from the start, so `free` or `qwen` found nothing. */}
+          <ModelCombobox
+            value={model}
+            onChange={onModelChange}
+            models={options}
+            // Only a reachable provider's free list: without a key those ids are
+            // suggestions this agent could not actually run.
+            freeModels={activeProvider?.reachable ? activeProvider.free_models : []}
+            emptyLabel={
+              isMain
                 ? `Configured agent model${configuredModel ? ` (${configuredModel})` : ''}`
-                : 'Orchestrator model'}
-            </option>
-            {options.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
+                : 'Orchestrator model'
+            }
+          />
         </div>
       </div>
 

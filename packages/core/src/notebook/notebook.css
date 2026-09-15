@@ -78,6 +78,22 @@
   --nb-rail: color-mix(in srgb, var(--ok) 55%, transparent);
 }
 
+/* A changed upstream value makes an old output actively misleading. This is a
+   quiet marker rather than an error state: running the cell resolves it. */
+.nb-cell--stale {
+  border-left-color: var(--warn);
+}
+
+.nb-stale {
+  margin-top: 0.2rem;
+  color: var(--warn);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-badge);
+  text-transform: uppercase;
+}
+
 /* --- prompt gutter ------------------------------------------------------- */
 
 .nb-gutter {
@@ -414,6 +430,103 @@
 .nb-header button.is-on {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+/* --- execution timeline / provenance ------------------------------------ */
+
+.nb-timeline {
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--text-dim) 4%, transparent);
+}
+
+.nb-timeline-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.25rem 0.5rem;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-badge);
+  text-transform: uppercase;
+}
+
+.nb-timeline-stale-count {
+  color: var(--warn);
+}
+
+.nb-timeline-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(12rem, 0.8fr);
+  gap: 0.5rem;
+  padding: 0.15rem 0.5rem 0.5rem;
+  font-size: var(--fs-meta);
+}
+
+.nb-timeline-provenance strong {
+  display: block;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-meta);
+}
+
+.nb-timeline-provenance p {
+  margin: 0.25rem 0;
+  color: var(--text-secondary, var(--text-dim));
+}
+
+.nb-timeline-provenance > button,
+.nb-timeline-links button,
+.nb-timeline-history button {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.nb-timeline-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.55rem;
+}
+
+.nb-timeline-history {
+  max-height: 8rem;
+  margin: 0;
+  padding: 0 0 0 1.1rem;
+  overflow: auto;
+  font-family: var(--font-mono, monospace);
+}
+
+.nb-timeline-history li + li {
+  margin-top: 0.15rem;
+}
+
+.nb-timeline-history button {
+  display: grid;
+  grid-template-columns: 3.8rem minmax(0, 1fr) auto;
+  gap: 0.35rem;
+  width: 100%;
+}
+
+.nb-timeline-history time {
+  color: var(--text-dim);
+}
+
+.nb-timeline-history .is-done {
+  color: var(--ok);
+}
+
+.nb-timeline-history .is-error {
+  color: var(--danger);
+}
+
+@media (max-width: 34rem) {
+  .nb-timeline-body {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* Kernel status: a dot plus a monospace word, the metadata treatment. */

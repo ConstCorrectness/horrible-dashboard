@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import {
   DEFAULT_AGENT_MODEL,
   DEFAULT_VLLM_MODEL,
+  ModelCombobox,
   pullAgentModel,
   saveAgentConfig,
   saveProviderKey,
@@ -57,9 +58,12 @@ export function OnboardingCard({
   const pickProvider = (p: DetectedProvider) => {
     setProviderKind(p.kind);
     setError(null);
-    // Switch to a model the new provider actually offers.
-    if (!p.models.includes(model)) {
-      setModel(p.models[0] ?? (p.kind === 'ollama' ? DEFAULT_AGENT_MODEL : ''));
+    // Switch to a model the new provider actually offers — a free one first, since
+    // someone onboarding onto a hosted API has not decided to pay for anything yet.
+    // The free list arrives before a key does (it is read from the public catalog),
+    // so this lands on a runnable choice the moment the key is saved.
+    if (!p.models.includes(model) && !p.free_models.includes(model)) {
+      setModel(p.free_models[0] ?? p.models[0] ?? (p.kind === 'ollama' ? DEFAULT_AGENT_MODEL : ''));
     }
   };
 
@@ -126,11 +130,14 @@ export function OnboardingCard({
           <span className={hasModel ? 'step done' : 'step'}>2</span>
           <div className="onboarding-field">
             {provider.hosted ? 'Model:' : 'Local model:'}
-            <input
-              list="agent-models"
+            {/* Not a `<datalist>`: its suggestions effectively match from the start
+                of the id, so with OpenRouter's several hundred models typing `free`
+                found nothing. The combobox matches anywhere in the string. */}
+            <ModelCombobox
               value={model}
-              onChange={(e) => setModel(e.target.value)}
-              spellCheck={false}
+              onChange={setModel}
+              models={provider.models}
+              freeModels={provider.free_models}
               placeholder={
                 provider.kind === 'ollama'
                   ? DEFAULT_AGENT_MODEL
@@ -139,11 +146,12 @@ export function OnboardingCard({
                     : 'loaded model id'
               }
             />
-            <datalist id="agent-models">
-              {[...new Set(provider.models)].map((m) => (
-                <option key={m} value={m} />
-              ))}
-            </datalist>
+            {provider.free_models.length > 0 && (
+              <span className="home-hint">
+                {provider.free_models.length} free on {provider.label}, listed first
+                {provider.reachable ? '' : ' — they still need a key'}
+              </span>
+            )}
             {provider.can_pull &&
               provider.reachable &&
               !hasModel &&

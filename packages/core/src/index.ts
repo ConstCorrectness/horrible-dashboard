@@ -267,6 +267,7 @@ export {
   BOOT_WORKSPACE_LAST,
   DEFAULT_BOOT_WORKSPACE,
 } from './layout/persistence';
+export { WORKSPACES_ENABLED_KEY, workspacesEnabled } from './layout/workspaces-setting';
 export {
   useWorkspaces,
   workspaceStore,
@@ -571,6 +572,8 @@ export {
   type VllmStatus,
 } from './modules/agent';
 export { openChatSession } from './modules/agent/openSession';
+export { ModelCombobox } from './modules/agent/ModelCombobox';
+export { matchesModelQuery } from './modules/agent/model-filter';
 export { executeTool } from './modules/agent/tool-exec';
 export * from './keymap';
 export {

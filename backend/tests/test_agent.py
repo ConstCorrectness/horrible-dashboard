@@ -287,3 +287,62 @@ async def test_catalog_failure_falls_back_rather_than_raising() -> None:
     models = await P._catalog_models(_Down(), P.PROVIDERS["openrouter"])
     assert models == list(P.PROVIDERS["openrouter"].static_models)
     P._CATALOG_CACHE.clear()
+
+
+@pytest.mark.anyio
+async def test_catalog_free_models_come_from_pricing() -> None:
+    """Free is decided by price (or the `:free` suffix), tool-capable first — and
+    the `-1` price OpenRouter gives its auto-router is not free."""
+
+    class _Catalog:
+        async def get(self, url, **kwargs):
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "vendor/paid",
+                            "supported_parameters": ["tools"],
+                            "pricing": {"prompt": "0.000001", "completion": "0.000002"},
+                        },
+                        {
+                            "id": "vendor/chat:free",
+                            "supported_parameters": [],
+                            "pricing": {"prompt": "0", "completion": "0"},
+                        },
+                        {
+                            "id": "vendor/zero-priced",
+                            "supported_parameters": ["tools"],
+                            "pricing": {"prompt": "0", "completion": "0"},
+                        },
+                        {
+                            "id": "openrouter/auto",
+                            "supported_parameters": ["tools"],
+                            "pricing": {"prompt": "-1", "completion": "-1"},
+                        },
+                    ]
+                },
+                request=httpx.Request("GET", url),
+            )
+
+    P._CATALOG_CACHE.clear()
+    free = await P.free_models(_Catalog(), P.PROVIDERS["openrouter"])
+    assert free == ["vendor/zero-priced", "vendor/chat:free"]
+    assert await P.free_models(_Catalog(), P.PROVIDERS["openai"]) == []
+    P._CATALOG_CACHE.clear()
+
+
+def test_status_lists_free_models_before_a_key(client: TestClient, monkeypatch) -> None:
+    """Onboarding shows what is free before a key exists, so the field must reach
+    the HTTP response — a `response_model` drops a field it does not declare."""
+
+    async def fake_free(_client, info):
+        return ["vendor/zero-priced"] if info.kind == "openrouter" else []
+
+    monkeypatch.setattr(P, "free_models", fake_free)
+    providers = {
+        p["kind"]: p for p in client.get("/api/agent/status").json()["providers"]
+    }
+    assert providers["openrouter"]["reachable"] is False
+    assert providers["openrouter"]["free_models"] == ["vendor/zero-priced"]
+    assert providers["ollama"]["free_models"] == []

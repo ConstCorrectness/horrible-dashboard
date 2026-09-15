@@ -82,7 +82,13 @@ async def _probe(
         reachable = True
     except httpx.HTTPError:
         pass
+    # Outside the try, and independent of the key: the catalog is public, and the
+    # free list is what onboarding shows *before* a key exists. When the provider
+    # was reachable, `list_models` has just filled the catalog cache, so this reuses
+    # that fetch rather than making a second one.
+    free = await P.free_models(client, info) if info.catalog_url else []
     return DetectedProvider(
+        free_models=free,
         kind=info.kind,
         label=info.label,
         endpoint=endpoint,

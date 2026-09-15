@@ -70,6 +70,42 @@ LSP/terminal/training). The `notebook.python` setting overrides it with an exist
 interpreter (which must have ipykernel + ipywidgets); `notebook.python.version` pins the
 managed venv's Python.
 
+## Installing packages
+
+`!pip install regex`, `%pip install regex` and `%uv pip install regex` all install into
+**the interpreter the kernel is running on**, through uv. A cell is handed to ipykernel
+verbatim, so IPython syntax always ran. It just did the wrong thing:
+
+- `!pip` shells out to whichever `pip` is first on `PATH`. The kernel inherits the
+  backend's environment, so that is the _backend's_ venv or a system pip, and a uv venv
+  has **no pip at all**. At best it failed; at worst it installed into a different
+  Python and reported success.
+- `%pip` runs `sys.executable -m pip`, which fails with `No module named pip` for the
+  same reason.
+
+The fix is an IPython extension, `backend/notebook_core/kernel_ext/horrible_pip.py`,
+loaded into **every** kernel by `KernelSession` (`--IPKernelApp.extensions=horrible_pip`
+in the kernelspec, with its directory prepended to the kernel's `PYTHONPATH`). Training
+notebooks share that engine, so they get it too. It replaces `%pip` with
+`uv pip <cmd> --python <sys.executable>`, and adds an input transformer that rewrites
+`!pip …`, `!pip3 …`, `!python -m pip …` and `!uv pip …` into `%pip …`, so there is one
+code path. Any other `!` command is still a shell command.
+
+- `uv` is resolved by the backend and passed as `HORRIBLE_UV`, because a packaged app's
+  `PATH` is not a terminal's. Without uv the magic falls back to `python -m pip` and says
+  so, which is right for a `notebook.python` override that has real pip.
+- Only `install`, `uninstall`, `list`, `show` and `freeze` pass through. pip flags with a
+  different uv spelling are translated: `uninstall -y` is dropped (uv never prompts, and
+  rejects the flag) and `--no-cache-dir` becomes `--no-cache`.
+- A failed install raises `UsageError`, so the cell fails and **Run all** stops.
+- After an install, `importlib.invalidate_caches()` runs, so a **new** package imports in
+  the next cell with no restart. An **already-imported** package keeps its old code in
+  `sys.modules`; the magic names it and tells you to restart the kernel rather than
+  restarting behind your back.
+- `-r requirements.txt` resolves against the kernel's cwd, which is the notebook's folder.
+
+The cell language server still underlines `!` lines; that is cosmetic.
+
 ## Execution modes
 
 - **Classic** — run cells manually in any order on a shared namespace (standard Jupyter).
@@ -82,6 +118,12 @@ managed venv's Python.
   Single-definition (`multiple_defs`) and cycle violations surface as per-cell
   diagnostics. Toggled per notebook from the pane header (⚡/↳); persisted in `.ipynb`
   `metadata.horrible.execution_mode`.
+  IPython syntax is analyzed, not rejected: once the raw cell fails to parse, `!cmd` and
+  `%magic` lines count as `pass` and `name = !cmd` still defines `name`, so
+  `!pip install regex` above `import regex` provides `regex` downstream. A `%%` cell
+  magic's body is analyzed as Python when it parses (`%%time`) and is otherwise opaque
+  (`%%bash`): no defs and no `syntax` diagnostic. Stripping only after a failed parse
+  means a `!` inside a triple-quoted string is never rewritten.
 
 ## Interactive widgets (ipywidgets)
 

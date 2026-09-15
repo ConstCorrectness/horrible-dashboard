@@ -14,10 +14,26 @@ import {
   openContextMenu,
   registry,
   toastsStore,
+  useSetting,
   useWorkspaces,
   windowControl,
+  DEFAULT_BOOT_WORKSPACE,
+  WORKSPACES_ENABLED_KEY,
   type ContextMenuItem,
 } from '@horrible/core';
+
+/** Stroke house glyph for the Home tab; inherits the tab's text colour. */
+const HomeIcon = () => (
+  <svg className="frame-tab-glyph" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+    <path
+      d="M1.5 6 6 2l4.5 4M3 5v5h2.2V7.5h1.6V10H9V5"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.2"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
 
 import { useHorizontalWheel } from '../hooks/useHorizontalWheel';
 import { useAppFullscreen } from '../hooks/useAppFullscreen';
@@ -116,6 +132,8 @@ export function WorkspaceTabs() {
   const wheelRef = useHorizontalWheel<HTMLDivElement>();
   const { frame } = useSyncExternalStore(layoutStore.subscribe, layoutStore.getSnapshot);
   const mode = frame.mode;
+  // Read before the early return below: it is a hook.
+  const workspacesOn = useSetting<boolean>(WORKSPACES_ENABLED_KEY) === true;
 
   /**
    * A floating desktop hides the strip: it is a desktop, and a desktop does not
@@ -138,11 +156,16 @@ export function WorkspaceTabs() {
    * slim drag bar takes its place instead, which is exactly what a detached
    * per-workspace window already does.
    */
-  if (mode === 'floating') {
+  // With workspaces off (`desktop.workspaces`) there is nothing to switch between,
+  // so the tabs go the same way they do on a floating desktop — on any desktop.
+  if (mode === 'floating' || !workspacesOn) {
     if (!nativeChrome) return null;
     return (
       <header className="frame-tabs frame-tabs--native frame-tabs--bare">
-        <div className="frame-tabs-scroll" {...(dragRegion ? { 'data-tauri-drag-region': '' } : {})} />
+        <div
+          className="frame-tabs-scroll"
+          {...(dragRegion ? { 'data-tauri-drag-region': '' } : {})}
+        />
         <WindowControls />
       </header>
     );
@@ -150,11 +173,15 @@ export function WorkspaceTabs() {
   const presets = registry.framePresets;
   const presetIds = new Set(presets.map((p) => p.id));
   const entries = [
-    ...presets.map((p) => ({ id: p.id, label: p.name, glyph: p.icon ?? p.name[0] })),
+    // The floating desktop is the Home tab below, not one tab among the presets.
+    ...presets
+      .filter((p) => p.id !== DEFAULT_BOOT_WORKSPACE)
+      .map((p) => ({ id: p.id, label: p.name, glyph: p.icon ?? p.name[0] })),
     ...workspaces
       .filter((w) => !presetIds.has(w.id))
       .map((w) => ({ id: w.id, label: w.name, glyph: undefined as string | undefined })),
   ];
+  const onHome = activeId === DEFAULT_BOOT_WORKSPACE;
 
   return (
     <header
@@ -184,6 +211,20 @@ export function WorkspaceTabs() {
         ref={wheelRef}
         {...(dragRegion ? { 'data-tauri-drag-region': '' } : {})}
       >
+        {/* First, and always there: the way back to the desktop and its home
+            screen. A tiled workspace covers the home screen with the frame, so
+            without this nothing on screen led back to it. It also expands a
+            minimized home screen, which switching to the desktop tab never did. */}
+        <button
+          role="tab"
+          aria-selected={onHome}
+          className={`frame-tab frame-tab--home${onHome ? ' active' : ''}`}
+          title="Desktop home"
+          onClick={() => void registry.runCommand('desktop.home')}
+        >
+          <HomeIcon />
+          <span className="frame-tab-label">Home</span>
+        </button>
         {entries.map((entry) => (
           <button
             key={entry.id}

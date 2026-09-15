@@ -428,10 +428,45 @@ def normalize_system_messages(
 #: settings page both hit. A vendor's model range does not change by the minute, so
 #: a short TTL keeps a settings page from re-downloading a few hundred KB per visit.
 _CATALOG_TTL = 600.0
-_CATALOG_CACHE: dict[str, tuple[float, list[str]]] = {}
 
 
-async def _catalog_models(client: httpx.AsyncClient, info: ProviderInfo) -> list[str]:
+@dataclass(frozen=True)
+class CatalogListing:
+    """A hosted provider's public catalog, reduced to the two lists the UI uses."""
+
+    #: Every model id, tool-capable first.
+    models: tuple[str, ...]
+    #: The ids that cost nothing to call, in the same order.
+    free: tuple[str, ...]
+
+
+_CATALOG_CACHE: dict[str, tuple[float, CatalogListing]] = {}
+
+
+def _is_free(entry: dict[str, Any]) -> bool:
+    """Whether a catalog entry costs nothing to call.
+
+    Pricing decides, not only the `:free` suffix: most free variants carry both,
+    but an id without the suffix can still be priced at zero. Both prices must
+    parse and be exactly zero -- OpenRouter prices its `openrouter/auto` router at
+    `-1` ("depends on what it routes to"), which is not free.
+    """
+    if str(entry.get("id", "")).endswith(":free"):
+        return True
+    pricing = entry.get("pricing")
+    if not isinstance(pricing, dict):
+        return False
+    try:
+        prompt = float(pricing.get("prompt"))
+        completion = float(pricing.get("completion"))
+    except (TypeError, ValueError):
+        return False
+    return prompt == 0 and completion == 0
+
+
+async def _catalog_listing(
+    client: httpx.AsyncClient, info: ProviderInfo
+) -> CatalogListing:
     """Model ids from a hosted provider's public catalog, cheapest/most useful
     ordering left exactly as the provider returned it.
 
@@ -447,7 +482,7 @@ async def _catalog_models(client: httpx.AsyncClient, info: ProviderInfo) -> list
     """
     cached = _CATALOG_CACHE.get(info.kind)
     if cached and time.monotonic() - cached[0] < _CATALOG_TTL:
-        return list(cached[1])
+        return cached[1]
     try:
         # An explicit timeout, because the caller's client is the *probe* client and
         # its 2s budget is sized for a loopback port. This is a few hundred KB from
@@ -457,7 +492,10 @@ async def _catalog_models(client: httpx.AsyncClient, info: ProviderInfo) -> list
         res.raise_for_status()
         data = res.json().get("data") or []
     except (httpx.HTTPError, ValueError):
-        return list(info.static_models)
+        return CatalogListing(
+            models=tuple(info.static_models),
+            free=tuple(m for m in info.static_models if m.endswith(":free")),
+        )
 
     # Tool-capable models first. The orchestrator is a tool-calling loop, so a
     # model without tool support does not merely do worse there — it never calls a
@@ -466,14 +504,40 @@ async def _catalog_models(client: httpx.AsyncClient, info: ProviderInfo) -> list
     # feeds plain chat, where those models are perfectly good.
     tools_first: list[str] = []
     rest: list[str] = []
+    free_tools_first: list[str] = []
+    free_rest: list[str] = []
     for m in data:
         if not isinstance(m, dict) or not m.get("id"):
             continue
-        params = m.get("supported_parameters") or []
-        (tools_first if "tools" in params else rest).append(str(m["id"]))
-    models = tools_first + rest
-    _CATALOG_CACHE[info.kind] = (time.monotonic(), models)
-    return models
+        tools = "tools" in (m.get("supported_parameters") or [])
+        model_id = str(m["id"])
+        (tools_first if tools else rest).append(model_id)
+        if _is_free(m):
+            (free_tools_first if tools else free_rest).append(model_id)
+    listing = CatalogListing(
+        models=tuple(tools_first + rest), free=tuple(free_tools_first + free_rest)
+    )
+    _CATALOG_CACHE[info.kind] = (time.monotonic(), listing)
+    return listing
+
+
+async def _catalog_models(client: httpx.AsyncClient, info: ProviderInfo) -> list[str]:
+    """Every model id in a hosted provider's catalog -- see `_catalog_listing`."""
+    return list((await _catalog_listing(client, info)).models)
+
+
+async def free_models(client: httpx.AsyncClient, info: ProviderInfo) -> list[str]:
+    """The catalog's free models, **with or without a key**.
+
+    Unlike `list_models` this never checks for a key, and that is the point: the
+    catalog is public, and onboarding is exactly the moment a user has no key yet
+    and wants to know what they could run for nothing once they get one. It says
+    nothing about reachability -- a free model on OpenRouter still needs a key to
+    call. Providers without a public catalog have no free list.
+    """
+    if not info.catalog_url:
+        return []
+    return list((await _catalog_listing(client, info)).free)
 
 
 async def list_models(

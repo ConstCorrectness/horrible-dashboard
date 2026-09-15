@@ -62,12 +62,48 @@ def _walk(
         _walk(child, defs, refs, module=False)
 
 
+def _strip_ipython(source: str) -> str:
+    """The cell with IPython's line syntax neutralized, line numbers intact.
+
+    A cell goes to the kernel verbatim — IPython parses it, not Python — so
+    `!pip install x` above `import x` is a perfectly good cell that `ast` rejects,
+    and rejecting it would drop `x` from the graph. `!cmd` and `%magic` lines
+    become `pass`; `name = !cmd` stays a definition of `name`.
+    """
+    out: list[str] = []
+    for line in source.split("\n"):
+        body = line.lstrip()
+        indent = line[: len(line) - len(body)]
+        if body.startswith(("!", "%")):
+            line = f"{indent}pass"
+        else:
+            head, eq, tail = body.partition("=")
+            target = head.strip()
+            if eq and target.isidentifier() and tail.lstrip().startswith(("!", "%")):
+                line = f"{indent}{target} = None"
+        out.append(line)
+    return "\n".join(out)
+
+
 def analyze(source: str) -> CellAnalysis:
-    """Static defs/refs for one code cell. Never raises."""
+    """Static defs/refs for one code cell. Never raises.
+
+    IPython syntax is stripped only after the raw source fails to parse, so a line
+    inside a triple-quoted string that happens to start with `!` is never rewritten.
+    """
     try:
         tree = ast.parse(source)
     except SyntaxError as exc:
-        return CellAnalysis(parse_error=str(exc))
+        stripped = _strip_ipython(source)
+        try:
+            tree = ast.parse(stripped)
+        except SyntaxError:
+            if source.lstrip().startswith("%%"):
+                # A cell magic whose body isn't Python (`%%bash`, `%%html`) is
+                # opaque, not broken: it defines nothing the graph can see.
+                return CellAnalysis()
+            return CellAnalysis(parse_error=str(exc))
+        source = stripped
     try:
         table = symtable.symtable(source, "<cell>", "exec")
     except SyntaxError as exc:  # pragma: no cover — ast.parse would have caught it
