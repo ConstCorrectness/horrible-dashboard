@@ -229,6 +229,7 @@ async fn run(path: &str) {
             tint: Vec4::ZERO,
             grip,
             weapon: entry.weapon,
+            team: entry.team,
         });
 
         let actor_pose = ActorPose {
@@ -240,6 +241,7 @@ async fn run(path: &str) {
             },
             grip,
             weapon: entry.weapon,
+            team: entry.team,
         };
 
         if is_ct {

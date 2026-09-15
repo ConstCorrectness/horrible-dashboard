@@ -249,6 +249,7 @@ mod tests {
             tint: Vec4::ONE,
             grip,
             weapon,
+            team: 0,
         }
     }
 

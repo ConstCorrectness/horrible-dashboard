@@ -84,6 +84,7 @@ struct Overlay {
 }
 
 /// What the renderer needs to draw one player.
+#[derive(Clone, Debug)]
 pub struct ActorPose {
     /// One skinning matrix per bone, already in world space.
     pub bones: Vec<Mat4>,
@@ -94,19 +95,34 @@ pub struct ActorPose {
     pub grip: Option<Mat4>,
     /// Which weapon slot this player is holding, for the prop in that hand.
     pub weapon: i32,
+    /// Team index: 0 = CT, 1 = T.
+    pub team: usize,
 }
+
+use std::sync::{Arc, OnceLock};
+
+static CT_OPERATOR: OnceLock<Result<Arc<Operator>, String>> = OnceLock::new();
+static T_OPERATOR: OnceLock<Result<Arc<Operator>, String>> = OnceLock::new();
 
 /// Every drawn player's operator.
 pub struct Squad {
-    operator: Operator,
+    operator: Arc<Operator>,
+    operator_t: Arc<Operator>,
     actors: HashMap<String, Actor>,
     poses: Vec<ActorPose>,
 }
 
 impl Squad {
     pub fn load() -> Result<Squad, String> {
+        let op_ct = CT_OPERATOR
+            .get_or_init(|| Operator::load().map(Arc::new))
+            .clone()?;
+        let op_t = T_OPERATOR
+            .get_or_init(|| Operator::load_t().map(Arc::new))
+            .clone()?;
         Ok(Squad {
-            operator: Operator::load()?,
+            operator: op_ct,
+            operator_t: op_t,
             actors: HashMap::new(),
             poses: Vec::new(),
         })
@@ -114,6 +130,10 @@ impl Squad {
 
     pub fn operator(&self) -> &Operator {
         &self.operator
+    }
+
+    pub fn operator_t(&self) -> &Operator {
+        &self.operator_t
     }
 
     /// The poses computed by the last `update`.
@@ -181,7 +201,11 @@ impl Squad {
             // Dead players are still drawn — that is the whole point of having
             // death animations. `bodies.rs` skipped them, so a kill made the
             // body vanish rather than fall over.
-            let operator = &self.operator;
+            let operator = if row.team == 1 {
+                &self.operator_t
+            } else {
+                &self.operator
+            };
             let actor = self
                 .actors
                 .entry(row.id.clone())
@@ -312,6 +336,7 @@ impl Actor {
             tint: armor.extend(TINT_STRENGTH),
             grip: self.pose.bone_matrix(operator, "RightHand", model),
             weapon: row.weapon,
+            team: if row.team == 1 { 1 } else { 0 },
         }
     }
 

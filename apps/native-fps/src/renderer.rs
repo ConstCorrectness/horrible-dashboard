@@ -322,10 +322,9 @@ pub struct Renderer {
     blit_bind_group: wgpu::BindGroup,
     sampler: wgpu::Sampler,
     pub is_3d: bool,
-    /// The skinned operator. `None` only if the asset failed to parse, which is
-    /// reported once at startup and then falls back to `bodies.rs` rather than
-    /// leaving the match with invisible players.
-    characters: Option<crate::characters_gpu::Characters>,
+    /// The skinned operators for Counter-Terrorist and Terrorist teams.
+    characters_ct: Option<crate::characters_gpu::Characters>,
+    characters_t: Option<crate::characters_gpu::Characters>,
 }
 
 /// The offscreen target the world is rendered into.
@@ -785,21 +784,48 @@ impl Renderer {
             blit_bind_group,
             sampler,
             is_3d: false,
-            characters: None,
+            characters_ct: None,
+            characters_t: None,
         })
     }
 
-    /// Upload the operator's geometry, textures and materials.
+    /// Upload the operator's geometry, textures and materials (fallback / single-team).
     ///
     /// Separate from `new` so the asset is **parsed once**: the CPU side needs
     /// the same `Operator` to pose from, and having the renderer load its own
     /// copy would mean two parses of an 8 MB file and two decodes of fourteen
     /// textures, one of each thrown away.
     pub fn install_characters(&mut self, operator: &crate::character::Operator) {
-        self.characters = Some(crate::characters_gpu::Characters::new(
+        self.characters_ct = Some(crate::characters_gpu::Characters::new(
             &self.device,
             &self.queue,
             operator,
+            &self.camera_layout,
+            &self.shadow.layout,
+            self.config.format,
+            self.video.samples(),
+        ));
+    }
+
+    /// Upload both Counter-Terrorist and Terrorist operators' geometry, textures and materials.
+    pub fn install_dual_operators(
+        &mut self,
+        op_ct: &crate::character::Operator,
+        op_t: &crate::character::Operator,
+    ) {
+        self.characters_ct = Some(crate::characters_gpu::Characters::new(
+            &self.device,
+            &self.queue,
+            op_ct,
+            &self.camera_layout,
+            &self.shadow.layout,
+            self.config.format,
+            self.video.samples(),
+        ));
+        self.characters_t = Some(crate::characters_gpu::Characters::new(
+            &self.device,
+            &self.queue,
+            op_t,
             &self.camera_layout,
             &self.shadow.layout,
             self.config.format,
@@ -812,12 +838,28 @@ impl Renderer {
     /// The caller uses it to decide whether to also build the old box bodies —
     /// drawing both would put two overlapping characters on every player.
     pub fn has_characters(&self) -> bool {
-        self.characters.is_some()
+        self.characters_ct.is_some() || self.characters_t.is_some()
     }
 
-    /// Upload this frame's operator poses.
+    /// Upload this frame's operator poses, partitioning into CT and T teams.
     pub fn set_characters(&mut self, poses: &[crate::animator::ActorPose]) {
-        if let Some(characters) = self.characters.as_mut() {
+        if self.characters_ct.is_some() && self.characters_t.is_some() {
+            let mut ct_poses = Vec::with_capacity(poses.len());
+            let mut t_poses = Vec::with_capacity(poses.len());
+            for p in poses {
+                if p.team == 1 {
+                    t_poses.push(p.clone());
+                } else {
+                    ct_poses.push(p.clone());
+                }
+            }
+            if let Some(ct) = self.characters_ct.as_mut() {
+                ct.prepare(&self.queue, &ct_poses);
+            }
+            if let Some(t) = self.characters_t.as_mut() {
+                t.prepare(&self.queue, &t_poses);
+            }
+        } else if let Some(characters) = self.characters_ct.as_mut() {
             characters.prepare(&self.queue, poses);
         }
     }
@@ -1161,12 +1203,11 @@ impl Renderer {
             // After the world and the untextured bodies, into the same depth
             // buffer: an operator behind a wall is hidden by the wall, and the
             // hitbox wireframes still overlay it.
-            if let Some(characters) = self.characters.as_ref() {
-                // Settled, like the boxes above: `skin.wgsl` declares a
-                // `Camera` without the reveal field, so the skinned path ignored
-                // it either way — handing it the settled group makes the two
-                // body paths agree explicitly rather than by omission.
-                characters.draw(&mut pass, &self.settled_bind_group, &self.shadow.bind_group);
+            if let Some(ct) = self.characters_ct.as_ref() {
+                ct.draw(&mut pass, &self.settled_bind_group, &self.shadow.bind_group);
+            }
+            if let Some(t) = self.characters_t.as_ref() {
+                t.draw(&mut pass, &self.settled_bind_group, &self.shadow.bind_group);
             }
 
             // Translucent volumes last, inside the *same* pass. Deliberately not
@@ -1362,8 +1403,17 @@ impl Renderer {
             // The character pass draws into the same attachment, so its
             // multisample state has to move with it — a pipeline left at the old
             // count is a validation error on the next frame, not a soft failure.
-            if let Some(characters) = self.characters.as_mut() {
-                characters.rebuild(
+            if let Some(ct) = self.characters_ct.as_mut() {
+                ct.rebuild(
+                    &self.device,
+                    &self.camera_layout,
+                    &self.shadow.layout,
+                    self.config.format,
+                    video.samples(),
+                );
+            }
+            if let Some(t) = self.characters_t.as_mut() {
+                t.rebuild(
                     &self.device,
                     &self.camera_layout,
                     &self.shadow.layout,

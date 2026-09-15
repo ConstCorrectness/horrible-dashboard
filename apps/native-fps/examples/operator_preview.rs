@@ -203,6 +203,7 @@ async fn run(path: &str) {
             // A different weapon per actor, so the five silhouettes are all in
             // one picture rather than one of them five times.
             weapon: index as i32,
+            team: index % 2,
         });
     }
     characters.prepare(&queue, &poses);

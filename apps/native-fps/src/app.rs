@@ -3026,7 +3026,7 @@ impl ApplicationHandler for App {
                 self.renderer = Some(renderer);
                 if let (Some(renderer), Some(squad)) = (self.renderer.as_mut(), self.squad.as_ref())
                 {
-                    renderer.install_characters(squad.operator());
+                    renderer.install_dual_operators(squad.operator(), squad.operator_t());
                 }
             }
             Err(e) => {
