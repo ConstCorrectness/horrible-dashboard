@@ -19,6 +19,7 @@ import {
 } from '@horrible/core';
 
 import { useAppFullscreen } from '../../hooks/useAppFullscreen';
+import { ShellIndicators } from '../../layout/ShellIndicators';
 
 export function Tray({ showLabels }: { showLabels: boolean }) {
   const health = useSyncExternalStore(backendHealth.subscribe, backendHealth.getSnapshot);
@@ -40,6 +41,10 @@ export function Tray({ showLabels }: { showLabels: boolean }) {
 
   return (
     <div className="os-taskbar-tray" role="group" aria-label="Status">
+      {/* Module readouts first — "your screen is being broadcast" outranks the
+          theme button. The floating desktop has no tab strip, so without this the
+          boot desktop would show nothing while a share was live. */}
+      <ShellIndicators />
       {/* An indicator, not a toggle.
        *
        * The paradigm is a property of the **workspace** now — you pick it when you

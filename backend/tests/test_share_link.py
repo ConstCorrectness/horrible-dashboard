@@ -18,12 +18,17 @@ from backend.modules.share import link as link_api
 from backend.modules.share.session import ShareManager
 
 
-class FakeHandle:
-    def __init__(self) -> None:
-        self.token = "tok-abc"
-        self.view_url = "https://share.example.com/s/tok-abc"
-        self.ingest_url = "https://share.example.com/whip/tok-abc"
-        self.expires_at = 4102444800.0
+SHORT = "https://share.example.com/k7m2x9qp"
+
+
+def FakeHandle(*, short_url: str = SHORT) -> link_api.LinkHandle:
+    return link_api.LinkHandle(
+        token="tok-abc",
+        view_url="https://share.example.com/s/k7m2x9qp",
+        ingest_url="https://share.example.com/whip/tok-abc",
+        expires_at=4102444800.0,
+        short_url=short_url,
+    )
 
 
 @pytest.fixture
@@ -85,14 +90,37 @@ def test_minting_publishes_only_the_view_url_to_the_session(client) -> None:
     _start(client)
     res = client.post("/api/share/link", json={})
     body = res.json()
-    assert body["view_url"].endswith("/s/tok-abc")
+    assert body["view_url"] == SHORT
     assert body["ingest_url"].endswith("/whip/tok-abc")
 
     # The broadcast model carries the public URL and nothing else about the link.
     state = client.get("/api/share").json()
-    assert state["hosting"]["link"] == body["view_url"]
-    assert "tok-abc" not in str(state["hosting"].get("ingest_url", ""))
+    assert state["hosting"]["link"] == SHORT
+    assert state["hosting"]["link_expires_at"] == 4102444800.0
+    # The token is publish authority, and this model goes to every guest.
+    assert "tok-abc" not in str(state["hosting"])
     assert "whip" not in str(state["hosting"])
+
+
+def test_an_older_relay_without_short_urls_still_yields_a_link(
+    client, monkeypatch
+) -> None:
+    # The node and the relay deploy separately; a node must not stop minting
+    # because the relay it talks to predates short codes.
+    async def old_relay_mint(*, title, ttl_s=None, passphrase=""):
+        return FakeHandle(short_url="")
+
+    monkeypatch.setattr(link_api, "mint", old_relay_mint)
+    _start(client)
+    body = client.post("/api/share/link", json={}).json()
+    assert body["view_url"] == "https://share.example.com/s/k7m2x9qp"
+
+
+def test_revoking_clears_the_expiry_too(client) -> None:
+    _start(client)
+    client.post("/api/share/link", json={})
+    client.delete("/api/share/link")
+    assert client.get("/api/share").json()["hosting"]["link_expires_at"] == 0.0
 
 
 def test_the_ingest_url_is_not_in_the_session_model_at_all(client) -> None:
@@ -144,7 +172,10 @@ def test_the_passphrase_is_passed_through_but_never_echoed(client) -> None:
     res = client.post("/api/share/link", json={"passphrase": "hunter2"})
     assert client.minted[-1]["passphrase"] == "hunter2"
     assert "hunter2" not in res.text
-    assert "hunter2" not in client.get("/api/share").text
+    state = client.get("/api/share")
+    assert "hunter2" not in state.text
+    # The *fact* of a passphrase is public, so an invite can say "ask me for it".
+    assert state.json()["hosting"]["link_protected"] is True
 
 
 def test_an_unconfigured_relay_reports_a_fixable_error(manager, monkeypatch) -> None:
@@ -197,7 +228,46 @@ def _relay_answering(monkeypatch, response, *, url: str = "https://relay.example
                 raise response
             return response
 
+        post = get
+
     monkeypatch.setattr(link_api.httpx, "AsyncClient", FakeClient)
+
+
+def test_mint_reads_the_short_url_when_the_relay_sends_one(monkeypatch) -> None:
+    _relay_answering(
+        monkeypatch,
+        _FakeResponse(
+            200,
+            {
+                "token": "tok-abc",
+                "code": "k7m2x9qp",
+                "short_url": SHORT,
+                "view_url": "https://share.example.com/s/k7m2x9qp",
+                "ingest_url": "https://share.example.com/whip/tok-abc",
+                "expires_at": 5.0,
+            },
+        ),
+    )
+    handle = asyncio.run(link_api.mint(title="t"))
+    assert handle.public_url == SHORT
+
+
+def test_mint_tolerates_a_relay_that_sends_no_short_url(monkeypatch) -> None:
+    # `body["short_url"]` would be a KeyError against every relay deployed before
+    # short codes, which would break minting outright.
+    _relay_answering(
+        monkeypatch,
+        _FakeResponse(
+            200,
+            {
+                "token": "tok-abc",
+                "view_url": "https://share.example.com/s/tok-abc",
+                "ingest_url": "https://share.example.com/whip/tok-abc",
+            },
+        ),
+    )
+    handle = asyncio.run(link_api.mint(title="t"))
+    assert handle.public_url == "https://share.example.com/s/tok-abc"
 
 
 def test_relay_holding_media_reads_as_live(monkeypatch) -> None:

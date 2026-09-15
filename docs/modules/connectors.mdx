@@ -176,10 +176,18 @@ sequenceDiagram
     N-->>H: {connected: true, account}
 ```
 
-Scopes: `read:user` (identify the account) and `repo` (search code, read files, list
-issues — private repos included). GitHub has **no read-only `repo` scope** for OAuth
-Apps, so the grant also permits writes; the agent still routes writes through the
-permission gate. Configure it **in the app** (the tile's Set up form), or with
+Scopes: `read:user` (identify the account), `repo` (search code, read files, list
+issues — private repos included) and `gist` (for
+[notebook publishing](notebook.mdx#publishing)). GitHub has **no read-only `repo`
+scope** for OAuth Apps, so the grant also permits writes; the agent still routes
+writes through the permission gate.
+
+`gist` was added after the first sign-ins, and a token only carries the scopes it was
+issued with. `github.granted_scopes()` reads them off the stored credential rather
+than assuming `SCOPES`, so a feature that needs a newer scope can say *reconnect
+GitHub* instead of relaying GitHub's bare 404. The HTTP call itself lives in
+`github_api.request`, shared by the agent tools and the publisher; its error dicts
+carry a `status` so a caller can tell "not found" (create it) from "forbidden". Configure it **in the app** (the tile's Set up form), or with
 `GITHUB_CLIENT_ID` / the `connectors.github.clientId` setting. No client secret is
 asked for, because the device flow doesn't use one.
 

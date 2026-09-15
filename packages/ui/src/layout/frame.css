@@ -66,6 +66,11 @@
 .frame-tabs-scroll::-webkit-scrollbar {
   display: none;
 }
+/* Module status readouts (ShellIndicators.tsx). `contents`, so an empty slot —
+   the usual case — adds no gap to the strip. */
+.shell-indicators {
+  display: contents;
+}
 /* The scrollbar is hidden, so the edge fade is the only sign there is more to
    see. `data-overflowing` is stamped by `useHorizontalWheel` only while the
    content genuinely exceeds the strip — fading unconditionally would dim the

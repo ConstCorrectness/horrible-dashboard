@@ -1,0 +1,166 @@
+/* PublishPanel — a strip under the notebook header. Flat and structured: a 2px
+   accent rule on top, a faint grid behind, and every type size taken from the
+   ramp tokens, which design-tokens.test.ts enforces across this module. */
+.nb-publish {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border-top: 2px solid var(--accent);
+  border-bottom: 1px solid var(--border);
+  background-color: var(--bg-inset);
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--border) 35%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--border) 35%, transparent) 1px, transparent 1px);
+  background-size: 24px 24px;
+  max-height: 55%;
+  overflow-y: auto;
+  flex: none;
+}
+
+.nb-publish__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.nb-publish__title {
+  font-size: var(--fs-label);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-display);
+  text-transform: uppercase;
+}
+
+.nb-publish__meta,
+.nb-publish__excerpt {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.nb-publish__spacer {
+  flex: 1;
+}
+
+.nb-publish__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.nb-publish__close:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* Destinations: a flat row of angular tabs, the selected one ruled in accent. */
+.nb-publish__targets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.nb-publish__target {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--control-h);
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-bottom: 2px solid transparent;
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--fs-label);
+  cursor: pointer;
+  clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 0 100%);
+}
+
+.nb-publish__target.is-on {
+  border-bottom-color: var(--accent);
+  color: var(--accent);
+}
+
+.nb-publish__target.is-unavailable {
+  color: var(--text-dim);
+}
+
+.nb-publish__published {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+}
+
+.nb-publish__options,
+.nb-publish__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.nb-publish__segmented {
+  display: inline-flex;
+  border: 1px solid var(--border);
+}
+
+.nb-publish__segment {
+  height: var(--control-h);
+  padding: 0 10px;
+  border: none;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--fs-label);
+  cursor: pointer;
+}
+
+.nb-publish__segment:last-child {
+  border-right: none;
+}
+
+.nb-publish__segment.is-on {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text);
+}
+
+.nb-publish__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-label);
+  color: var(--text);
+}
+
+.nb-publish__hint {
+  margin: 0;
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+}
+
+.nb-publish__notice {
+  margin: 0;
+  padding: 6px 10px;
+  border-left: 2px solid var(--kind, var(--warn));
+  font-size: var(--fs-body);
+  color: var(--text);
+  background: color-mix(in srgb, var(--kind, var(--warn)) 10%, transparent);
+}
+
+.nb-publish__notice--warn {
+  --kind: var(--warn);
+}
+
+.nb-publish__notice--danger {
+  --kind: var(--danger);
+}

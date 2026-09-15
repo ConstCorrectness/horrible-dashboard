@@ -518,7 +518,7 @@ async function connect() {
 
   let res;
   try {
-    res = await fetch('/whep/' + CFG.token, {
+    res = await fetch('/whep/' + CFG.code, {
       method: 'POST',
       headers: { 'Content-Type': 'application/sdp', 'X-Share-Passphrase': passphrase },
       body: self.localDescription.sdp,
@@ -548,6 +548,11 @@ async function connect() {
   if (res.status === 503) {
     setStatus('full', false);
     showOverlay('Stream is full', 'This relay caps how many people can watch one stream at once. Try again shortly.', false);
+    return;
+  }
+  if (res.status === 429) {
+    setStatus('slow down', false);
+    showOverlay('Too many attempts', 'This address tried too many wrong links or passphrases. Wait a minute, then retry.', false);
     return;
   }
   if (!res.ok) {
@@ -645,7 +650,7 @@ function addMessage(who, text) {
 
 function openChat() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(proto + '://' + location.host + '/chat/' + CFG.token);
+  ws = new WebSocket(proto + '://' + location.host + '/chat/' + CFG.code);
   ws.onopen = () => sysLine('Connected to chat.');
   ws.onclose = () => sysLine('Chat disconnected.');
   ws.onmessage = (e) => {
@@ -668,7 +673,7 @@ $('say').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('send').c
 $('diag-copy').addEventListener('click', () => {
   const text = [
     'share viewer diagnostics',
-    'token: ' + CFG.token,
+    'code:  ' + CFG.code,
     'agent: ' + navigator.userAgent,
     'ice:   ' + JSON.stringify((CFG.iceServers || []).map((s) => s.urls)),
     '',
@@ -712,13 +717,18 @@ def _page(body: str, script: str, config: dict[str, object]) -> str:
 
 def render(
     *,
-    token: str,
+    code: str,
     title: str,
     found: bool,
     needs_passphrase: bool,
     live: bool,
 ) -> str:
-    """The viewer page for one token."""
+    """The viewer page for one watch code.
+
+    Never handed the stream's token. This page is public, and the token is
+    publish authority: a viewer page that carried it let anyone watching replace
+    the host's stream with their own.
+    """
     safe_title = html.escape(title) if title else "Shared screen"
     body = f"""
 <header>
@@ -773,7 +783,7 @@ def render(
 <footer>You are watching a shared screen. Viewers can watch and chat — nothing else.</footer>
 """
     config = {
-        "token": token,
+        "code": code,
         "found": found,
         "needsPassphrase": needs_passphrase,
         "live": live,
@@ -794,8 +804,25 @@ def render_index() -> str:
   <div class='stage'>
     <div class='overlay'>
       <h1>Nothing to see here</h1>
-      <p>This is a relay for shared screens. A share link looks like
-         <code>/s/&lt;token&gt;</code> and is handed out by the person sharing.</p>
+      <p>This is a relay for shared screens. A share link is a short code like
+         <code>/k7m2x9qp</code> and is handed out by the person sharing.</p>
+    </div>
+  </div>
+</main>
+"""
+    return _page(body, "", {})
+
+
+def render_limited() -> str:
+    """What an address that has guessed too often gets instead of a viewer page."""
+    body = """
+<header><span class='title'>horrible share relay</span></header>
+<main>
+  <div class='stage'>
+    <div class='overlay'>
+      <h1>Too many attempts</h1>
+      <p>This address has opened too many links that do not exist. Wait a minute,
+         then try again.</p>
     </div>
   </div>
 </main>

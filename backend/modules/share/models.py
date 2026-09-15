@@ -71,6 +71,12 @@ class ShareSession(BaseModel):
     #: The public relay link, once one has been minted (Phase 4). Empty means the
     #: session is fabric-only — which is the safe default and the Phase 1 state.
     link: str = ""
+    #: When that link dies (epoch seconds; 0 with no link). Public for the same
+    #: reason `link` is, and it is what lets the pane say "expires in 3h 12m".
+    link_expires_at: float = 0.0
+    #: Whether that link needs a passphrase -- so an invite can say "ask me for
+    #: it". Never the passphrase, which the node does not keep at all.
+    link_protected: bool = False
     #: How many panes the latest projection carries, and how many of those were
     #: withheld. Reported back to the **host**, because the one thing a person
     #: sharing a workspace needs and cannot otherwise get is a straight answer to

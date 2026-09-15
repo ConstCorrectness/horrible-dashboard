@@ -10,6 +10,11 @@ ICE is deliberately *not* driven to completion. Two peers inside one process on 
 CI box do not reliably connect, and media flow is not what these routes are
 responsible for: they are responsible for pairing an offer with an answer and for
 saying no to the right people.
+
+Every stream has two keys: a short **code** (watch) and a long **token**
+(publish). Viewer-facing routes take the code, WHIP takes the token, and the
+tests below that matter most are the ones proving neither stands in for the
+other.
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from backend.share_relay import app as relay_app
+from backend.share_relay.ratelimit import DEFAULT_MISS_LIMIT, MissLimiter
 from backend.share_relay.tokens import DEFAULT_MAX_VIEWERS, Registry
 
 #: Every test here drives a real peer connection, so the whole module needs the
@@ -30,10 +36,12 @@ pytest.importorskip("aiortc", reason="needs the `webrtc` extra")
 
 @pytest.fixture(autouse=True)
 def clean_relay(monkeypatch):
-    """A fresh registry and room table per test -- both are process globals."""
+    """A fresh registry, room table and limiter per test -- all process globals."""
     monkeypatch.setattr(relay_app, "registry", Registry())
+    monkeypatch.setattr(relay_app, "limiter", MissLimiter())
     monkeypatch.setenv("SHARE_RELAY_PUBLIC_URL", "https://share.example.com")
     monkeypatch.delenv("SHARE_RELAY_KEY", raising=False)
+    monkeypatch.delenv("FLY_APP_NAME", raising=False)
     yield
 
 
@@ -42,6 +50,12 @@ async def client():
     transport = ASGITransport(app=relay_app.app)
     async with AsyncClient(transport=transport, base_url="http://relay") as c:
         yield c
+
+
+async def mint(client, **body) -> dict:
+    res = await client.post("/streams", json=body)
+    assert res.status_code == 200
+    return res.json()
 
 
 async def publisher_offer():
@@ -66,13 +80,20 @@ async def viewer_offer():
 
 
 @pytest.mark.anyio
-async def test_mint_returns_a_view_url_on_the_public_origin(client) -> None:
-    res = await client.post("/streams", json={"title": "Standup"})
-    assert res.status_code == 200
-    body = res.json()
-    assert body["view_url"] == f"https://share.example.com/s/{body['token']}"
+async def test_mint_returns_short_and_long_urls_on_the_public_origin(client) -> None:
+    body = await mint(client, title="Standup")
+    assert body["short_url"] == f"https://share.example.com/{body['code']}"
+    assert body["view_url"] == f"https://share.example.com/s/{body['code']}"
     assert body["ingest_url"].endswith(f"/whip/{body['token']}")
+    assert len(body["code"]) == 8
     assert body["has_passphrase"] is False
+
+
+@pytest.mark.anyio
+async def test_no_viewer_facing_url_carries_the_token(client) -> None:
+    body = await mint(client)
+    assert body["token"] not in body["short_url"]
+    assert body["token"] not in body["view_url"]
 
 
 @pytest.mark.anyio
@@ -85,7 +106,8 @@ async def test_minting_is_gated_when_a_key_is_configured(client, monkeypatch) ->
 
 @pytest.mark.anyio
 async def test_whip_then_whep_pairs_offers_with_answers(client) -> None:
-    token = (await client.post("/streams", json={})).json()["token"]
+    body = await mint(client)
+    token, code = body["token"], body["code"]
 
     pub, offer = await publisher_offer()
     try:
@@ -105,7 +127,7 @@ async def test_whip_then_whep_pairs_offers_with_answers(client) -> None:
 
         view, view_sdp = await viewer_offer()
         try:
-            played = await client.post(f"/whep/{token}", content=view_sdp)
+            played = await client.post(f"/whep/{code}", content=view_sdp)
             assert played.status_code == 201
             # The answer must actually carry the video the viewer asked for.
             assert "m=video" in played.text
@@ -116,14 +138,143 @@ async def test_whip_then_whep_pairs_offers_with_answers(client) -> None:
         await relay_app.rooms.drop(token)
 
 
+# --- the two keys are not interchangeable -------------------------------------
+
+
+@pytest.mark.anyio
+async def test_a_viewer_cannot_publish_with_the_code_from_their_link(client) -> None:
+    """THE regression. The viewer URL used to carry the publish token, and
+    `Room.publish` replaces the current publisher -- so anyone watching could push
+    their own video into the host's stream. The code must open nothing on WHIP."""
+    code = (await mint(client))["code"]
+    pub, offer = await publisher_offer()
+    try:
+        assert (await client.post(f"/whip/{code}", content=offer)).status_code == 404
+    finally:
+        await pub.close()
+
+
+@pytest.mark.anyio
+async def test_the_viewer_page_does_not_contain_the_token(client) -> None:
+    body = await mint(client, title="Standup")
+    for path in (f"/{body['code']}", f"/s/{body['code']}"):
+        page = await client.get(path)
+        assert page.status_code == 200
+        assert body["token"] not in page.text
+        assert body["code"] in page.text
+
+
+@pytest.mark.anyio
+async def test_the_token_does_not_open_viewer_routes(client) -> None:
+    token = (await mint(client))["token"]
+    view, sdp = await viewer_offer()
+    try:
+        assert (await client.post(f"/whep/{token}", content=sdp)).status_code == 404
+    finally:
+        await view.close()
+    page = await client.get(f"/s/{token}")
+    assert '"found": false' in page.text
+
+
+# --- the short link ------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_the_short_link_serves_the_viewer_page_in_place(client) -> None:
+    code = (await mint(client, title="Standup"))["code"]
+    page = await client.get(f"/{code}")
+    assert page.status_code == 200
+    assert "Standup" in page.text
+    assert '"found": true' in page.text
+
+
+@pytest.mark.anyio
+async def test_a_code_survives_being_typed_by_a_person(client) -> None:
+    # Upper case, a hyphen, and the Crockford look-alikes: a code is read aloud
+    # and copied off QR codes, so each of these is the same link.
+    code = (await mint(client, title="Standup"))["code"]
+    typed = code.upper()[:4] + "-" + code.upper()[4:]
+    page = await client.get(f"/{typed}")
+    assert '"found": true' in page.text
+
+
+@pytest.mark.anyio
+async def test_the_short_route_does_not_shadow_the_others(client) -> None:
+    assert (await client.get("/health")).json()["service"] == "horrible-share"
+    assert (await client.get("/")).status_code == 200
+
+
+@pytest.mark.anyio
+async def test_non_codes_are_404_and_not_charged_as_guesses(client) -> None:
+    # A browser fetches /favicon.ico beside every page; charging that as a miss
+    # would lock out a viewer who merely reloaded.
+    for _ in range(DEFAULT_MISS_LIMIT + 5):
+        assert (await client.get("/favicon.ico")).status_code == 404
+    code = (await mint(client))["code"]
+    assert (await client.get(f"/{code}")).status_code == 200
+
+
+# --- guessing is slow ----------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_too_many_wrong_codes_are_refused(client) -> None:
+    code = (await mint(client))["code"]
+    for _ in range(DEFAULT_MISS_LIMIT):
+        page = await client.get("/zzzzzzzz")
+        assert page.status_code == 200
+        assert '"found": false' in page.text
+    assert (await client.get("/zzzzzzzz")).status_code == 429
+    # Blocked means blocked -- including the real code, or the limit is a filter
+    # a guesser simply walks past once they land on a hit.
+    assert (await client.get(f"/{code}")).status_code == 429
+    view, sdp = await viewer_offer()
+    try:
+        assert (await client.post(f"/whep/{code}", content=sdp)).status_code == 429
+    finally:
+        await view.close()
+
+
+@pytest.mark.anyio
+async def test_wrong_passphrases_count_as_misses(client) -> None:
+    code = (await mint(client, passphrase="open sesame"))["code"]
+    view, sdp = await viewer_offer()
+    try:
+        for _ in range(DEFAULT_MISS_LIMIT):
+            res = await client.post(
+                f"/whep/{code}", content=sdp, headers={"X-Share-Passphrase": "nope"}
+            )
+            assert res.status_code == 403
+        res = await client.post(
+            f"/whep/{code}", content=sdp, headers={"X-Share-Passphrase": "open sesame"}
+        )
+        assert res.status_code == 429
+    finally:
+        await view.close()
+
+
+def test_fly_client_ip_is_trusted_only_on_fly(monkeypatch) -> None:
+    from backend.share_relay.ratelimit import client_ip
+
+    headers = {"fly-client-ip": "203.0.113.9"}
+    monkeypatch.delenv("FLY_APP_NAME", raising=False)
+    # Off Fly it is a header the caller wrote -- a fresh "address" per request.
+    assert client_ip(headers, "10.0.0.1") == "10.0.0.1"
+    monkeypatch.setenv("FLY_APP_NAME", "horrible-share")
+    assert client_ip(headers, "10.0.0.1") == "203.0.113.9"
+
+
+# --- the rest of the surface ---------------------------------------------------
+
+
 @pytest.mark.anyio
 async def test_watching_before_the_host_starts_is_409_not_404(client) -> None:
     # A host mints a link and sends it, then starts sharing a minute later. If
     # that window answered "no such stream" the host would look broken.
-    token = (await client.post("/streams", json={})).json()["token"]
+    code = (await mint(client))["code"]
     view, sdp = await viewer_offer()
     try:
-        res = await client.post(f"/whep/{token}", content=sdp)
+        res = await client.post(f"/whep/{code}", content=sdp)
         assert res.status_code == 409
     finally:
         await view.close()
@@ -131,19 +282,18 @@ async def test_watching_before_the_host_starts_is_409_not_404(client) -> None:
 
 @pytest.mark.anyio
 async def test_a_passphrase_is_required_before_any_sdp_is_processed(client) -> None:
-    token = (await client.post("/streams", json={"passphrase": "open sesame"})).json()[
-        "token"
-    ]
+    body = await mint(client, passphrase="open sesame")
+    token, code = body["token"], body["code"]
     pub, offer = await publisher_offer()
     try:
         await client.post(f"/whip/{token}", content=offer)
         view, sdp = await viewer_offer()
         try:
-            denied = await client.post(f"/whep/{token}", content=sdp)
+            denied = await client.post(f"/whep/{code}", content=sdp)
             assert denied.status_code == 403
 
             allowed = await client.post(
-                f"/whep/{token}",
+                f"/whep/{code}",
                 content=sdp,
                 headers={"X-Share-Passphrase": "open sesame"},
             )
@@ -157,7 +307,8 @@ async def test_a_passphrase_is_required_before_any_sdp_is_processed(client) -> N
 
 @pytest.mark.anyio
 async def test_revoking_kills_the_link_immediately(client) -> None:
-    token = (await client.post("/streams", json={})).json()["token"]
+    body = await mint(client)
+    token, code = body["token"], body["code"]
     pub, offer = await publisher_offer()
     try:
         await client.post(f"/whip/{token}", content=offer)
@@ -165,10 +316,12 @@ async def test_revoking_kills_the_link_immediately(client) -> None:
 
         view, sdp = await viewer_offer()
         try:
-            assert (await client.post(f"/whep/{token}", content=sdp)).status_code == 404
+            assert (await client.post(f"/whep/{code}", content=sdp)).status_code == 404
         finally:
             await view.close()
         assert (await client.get(f"/streams/{token}")).status_code == 404
+        # The short link dies with it, not at expiry.
+        assert '"found": false' in (await client.get(f"/{code}")).text
     finally:
         await pub.close()
 
@@ -178,13 +331,14 @@ async def test_a_full_stream_is_refused_rather_than_degraded(
     client, monkeypatch
 ) -> None:
     monkeypatch.setattr(relay_app.registry, "max_viewers_per_stream", 0)
-    token = (await client.post("/streams", json={})).json()["token"]
+    body = await mint(client)
+    token, code = body["token"], body["code"]
     pub, offer = await publisher_offer()
     try:
         await client.post(f"/whip/{token}", content=offer)
         view, sdp = await viewer_offer()
         try:
-            assert (await client.post(f"/whep/{token}", content=sdp)).status_code == 503
+            assert (await client.post(f"/whep/{code}", content=sdp)).status_code == 503
         finally:
             await view.close()
     finally:
@@ -194,16 +348,14 @@ async def test_a_full_stream_is_refused_rather_than_degraded(
 
 @pytest.mark.anyio
 async def test_an_empty_body_is_rejected_before_aiortc_sees_it(client) -> None:
-    token = (await client.post("/streams", json={})).json()["token"]
+    token = (await mint(client))["token"]
     assert (await client.post(f"/whip/{token}", content="")).status_code == 400
 
 
 @pytest.mark.anyio
 async def test_the_viewer_page_escapes_the_host_supplied_title(client) -> None:
-    token = (
-        await client.post("/streams", json={"title": "<img src=x onerror=alert(1)>"})
-    ).json()["token"]
-    page = await client.get(f"/s/{token}")
+    code = (await mint(client, title="<img src=x onerror=alert(1)>"))["code"]
+    page = await client.get(f"/s/{code}")
     assert page.status_code == 200
     assert "<img src=x" not in page.text
     assert "&lt;img src=x" in page.text
@@ -219,12 +371,11 @@ async def test_a_dead_link_still_renders_an_explanation(client) -> None:
 
 @pytest.mark.anyio
 async def test_the_index_names_no_streams(client) -> None:
-    token = (await client.post("/streams", json={"title": "Secret standup"})).json()[
-        "token"
-    ]
-    body = (await client.get("/")).text
-    assert token not in body
-    assert "Secret standup" not in body
+    body = await mint(client, title="Secret standup")
+    index = (await client.get("/")).text
+    assert body["token"] not in index
+    assert body["code"] not in index
+    assert "Secret standup" not in index
 
 
 @pytest.mark.anyio
@@ -242,7 +393,7 @@ async def test_whip_answers_a_cross_origin_preflight(client) -> None:
     so every route test passed while a real browser's preflight was refused and
     the public link carried no video with only a console message to say so.
     """
-    token = (await client.post("/streams", json={})).json()["token"]
+    token = (await mint(client))["token"]
     res = await client.options(
         f"/whip/{token}",
         headers={
@@ -259,9 +410,9 @@ async def test_whip_answers_a_cross_origin_preflight(client) -> None:
 async def test_the_passphrase_header_survives_preflight(client) -> None:
     # A preflight that does not name the header fails, and the browser reports it
     # as an indistinguishable network error.
-    token = (await client.post("/streams", json={"passphrase": "p"})).json()["token"]
+    code = (await mint(client, passphrase="p"))["code"]
     res = await client.options(
-        f"/whep/{token}",
+        f"/whep/{code}",
         headers={
             "Origin": "https://example.com",
             "Access-Control-Request-Method": "POST",
@@ -277,7 +428,7 @@ async def test_the_passphrase_header_survives_preflight(client) -> None:
 async def test_restreaming_needs_a_live_stream(client) -> None:
     # A link with nothing published yet: 409, the same distinction WHEP makes
     # between "no such stream" and "not started".
-    token = (await client.post("/streams", json={})).json()["token"]
+    token = (await mint(client))["token"]
     res = await client.post(
         f"/restream/{token}", json={"target": "rtmp://x/app/k", "label": "Twitch"}
     )
@@ -305,10 +456,8 @@ async def test_restreaming_is_gated_on_the_relay_key_not_the_token(
 async def test_a_relay_without_ffmpeg_says_so_rather_than_500ing(
     client, monkeypatch
 ) -> None:
-    from backend.share_relay import app as relay_module
-
-    monkeypatch.setattr(relay_module.restreams, "start", _raise_no_ffmpeg)
-    token = (await client.post("/streams", json={})).json()["token"]
+    monkeypatch.setattr(relay_app.restreams, "start", _raise_no_ffmpeg)
+    token = (await mint(client))["token"]
     pub, offer = await publisher_offer()
     try:
         await client.post(f"/whip/{token}", content=offer)
@@ -344,10 +493,8 @@ async def test_revoking_stops_the_restream_too(client, monkeypatch) -> None:
         stopped.append(token)
         return True
 
-    from backend.share_relay import app as relay_module
-
-    monkeypatch.setattr(relay_module.restreams, "stop", fake_stop)
-    token = (await client.post("/streams", json={})).json()["token"]
+    monkeypatch.setattr(relay_app.restreams, "stop", fake_stop)
+    token = (await mint(client))["token"]
     await client.delete(f"/streams/{token}")
     assert stopped == [token]
 

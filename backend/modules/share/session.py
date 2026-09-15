@@ -190,10 +190,12 @@ class ShareManager:
         self.link_token = handle.token
         self.link_ingest = handle.ingest_url
         self.link_expires_at = handle.expires_at
-        self.hosting.link = handle.view_url
+        self.hosting.link = handle.public_url
+        self.hosting.link_expires_at = handle.expires_at
+        self.hosting.link_protected = bool(passphrase)
         await self._publish()
         logger.info("share session %s minted a public link", self.hosting.id)
-        return handle.view_url
+        return handle.public_url
 
     async def revoke_link(self) -> bool:
         """Kill the public link. Safe when there is none."""
@@ -204,6 +206,8 @@ class ShareManager:
         revoked = await link_api.revoke(token) if token else False
         if self.hosting is not None and self.hosting.link:
             self.hosting.link = ""
+            self.hosting.link_expires_at = 0.0
+            self.hosting.link_protected = False
             await self._publish()
         return revoked
 

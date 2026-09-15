@@ -17,11 +17,14 @@ from backend.modules.notebook import env
 from backend.modules.notebook.manager import notebook_manager, notebook_root, resolve
 from backend.modules.notebook.models import (
     CreateNotebookRequest,
+    EnvLibrariesOut,
+    EnvStatusOut,
     NotebookFile,
     NotebookListResponse,
     NotebookModel,
     SetModeRequest,
 )
+from backend.modules.notebook.publish.routes import router as publish_router
 from backend.notebook_core import notebooks
 
 router = APIRouter(prefix="/notebook", tags=["notebook"])
@@ -36,10 +39,19 @@ def _rel(path: Path, root: Path) -> str:
     return path.relative_to(root).as_posix()
 
 
-@router.get("/env")
-def env_status() -> dict[str, bool]:
-    """Whether the kernel interpreter is ready (first open otherwise bootstraps it)."""
-    return {"ready": env.python_ready()}
+@router.get("/env", response_model=EnvStatusOut)
+def env_status() -> EnvStatusOut:
+    """Whether the kernel interpreter is ready, and how far along its libraries are."""
+    return EnvStatusOut(
+        ready=env.python_ready(), libraries=EnvLibrariesOut(**env.library_status())
+    )
+
+
+@router.post("/env/install", response_model=EnvStatusOut)
+def install_libraries() -> EnvStatusOut:
+    """Start — or retry — installing the configured libraries into the managed venv."""
+    env.start_library_install()
+    return env_status()
 
 
 @router.get("/files", response_model=NotebookListResponse)
@@ -119,3 +131,8 @@ async def set_mode(req: SetModeRequest) -> NotebookModel:
         return notebooks.to_model(nb, rel)
 
     return await asyncio.to_thread(apply)
+
+
+# Publishing lives in its own package (`publish/`) but under this router, so it
+# shares the notebook root and its escape guard: `/api/notebook/publish/*`.
+router.include_router(publish_router)

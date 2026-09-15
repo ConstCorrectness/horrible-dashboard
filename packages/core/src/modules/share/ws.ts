@@ -283,6 +283,43 @@ export function startViaChannel(title: string, mode = 'semantic'): void {
   sendChannel('share', 'start', { title, mode });
 }
 
+/** How long to wait for the node to confirm a session before giving up. */
+const SESSION_START_TIMEOUT_MS = 8000;
+
+/**
+ * Open a session and resolve once the node confirms it — or at once if one is
+ * already open.
+ *
+ * `startViaChannel` is fire-and-forget, which is fine for a button whose result
+ * the pane simply renders, and wrong for one-click screen sharing, which has to
+ * know the session exists before it can hand guests a stream. Rejects on the
+ * node's own error, or on silence, rather than leaving a capture running with
+ * nowhere to send it.
+ */
+export function startSessionAndWait(title: string, mode = 'both'): Promise<ShareSession> {
+  if (state.hosting) return Promise.resolve(state.hosting);
+  const priorError = state.error;
+  return new Promise((resolve, reject) => {
+    let off = () => {};
+    const timer = setTimeout(() => {
+      off();
+      reject(new Error('The node did not open a session in time. Is the backend running?'));
+    }, SESSION_START_TIMEOUT_MS);
+    off = subscribeShare(() => {
+      if (state.hosting) {
+        clearTimeout(timer);
+        off();
+        resolve(state.hosting);
+      } else if (state.error && state.error !== priorError) {
+        clearTimeout(timer);
+        off();
+        reject(new Error(state.error));
+      }
+    });
+    startViaChannel(title, mode);
+  });
+}
+
 export function stopViaChannel(): void {
   sendChannel('share', 'stop', {});
 }

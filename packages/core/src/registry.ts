@@ -102,6 +102,24 @@ export interface ModuleManifest {
    * See `ContextMenuProvider` and docs/architecture/context-menus.mdx.
    */
   contextMenu?: ContextMenuProvider[];
+  /**
+   * Small always-visible status surfaces in the shell chrome — the workspace tab
+   * strip and the taskbar tray. See `ShellIndicatorDecl`.
+   */
+  shellIndicators?: ShellIndicatorDecl[];
+}
+
+/**
+ * A status readout the shell draws in its own chrome, outside every pane.
+ *
+ * For state a person must not lose track of when the pane that controls it is
+ * closed — the canonical case is "your screen is being broadcast right now". The
+ * component renders `null` when there is nothing to say, which is most of the
+ * time; the shell does not decide visibility, the module does.
+ */
+export interface ShellIndicatorDecl {
+  id: string;
+  component: ComponentType;
 }
 
 /**
@@ -392,6 +410,11 @@ class ModuleRegistry {
   /** Every contributed desktop backdrop, in module registration order. */
   get backdrops(): BackdropDecl[] {
     return [...this.modules.values()].flatMap((m) => m.backdrops ?? []);
+  }
+
+  /** Every contributed shell indicator, in module registration order. */
+  get shellIndicators(): ShellIndicatorDecl[] {
+    return [...this.modules.values()].flatMap((m) => m.shellIndicators ?? []);
   }
 
   /**

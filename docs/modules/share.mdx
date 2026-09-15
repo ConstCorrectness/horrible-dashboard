@@ -40,6 +40,8 @@ is written down where the host can read it.
   phrased as what it does, because somebody reaching for it in the palette is in a
   hurry).
 - **Keybindings:** none. Nothing here should be one keystroke away.
+- **Shell indicator:** `share.live` — "you are broadcasting", drawn in the shell
+  chrome while the pane is closed. See [knowing you are live](#knowing-you-are-live).
 - **Neither share pane declares `share`**, so neither ever appears in a
   projection. A guest looking at the host's own grant controls would be the
   module leaking itself.
@@ -189,6 +191,47 @@ Publishing is bound to the **session**, not to a pane: a host who never opens th
 share pane is still hosting. A joining guest is handed the stored projection
 immediately and the host republishes on their arrival, so the first thing they see
 is current rather than however stale the last layout change left it.
+
+## Starting a share
+
+**Share screen** is one click from an empty pane: it opens the picker and the
+session together. It used to be three steps — start a session (which asked for a
+title before anything visible had happened), share, then mint a link. Nothing
+about the permission model moved: everyone still joins at `view`, and a public
+link is still its own deliberate step. **Session only** remains, for sharing the
+workspace layout with no video.
+
+The order inside is load-bearing: **the capture is taken before the session is
+opened**, with no await in front of it. `getDisplayMedia` needs the click's
+transient user activation, and the `/ws` round trip that opens a session can
+outlast it — which surfaces as `NotAllowedError`, indistinguishable from a
+dismissed picker, so nothing would say why. `startSessionAndWait` then resolves
+on the node's `state` broadcast (or rejects on its error, or after 8s of silence),
+and a session that fails to open **releases the capture** rather than leaving the
+browser's sharing bar up over nothing.
+
+While live, the pane shows a muted **preview of what viewers see**. The native
+picker shows the choice once; after that, which window is going out is otherwise
+only discoverable by somebody on the other end saying so.
+
+### Knowing you are live
+
+A share outlives the pane that started it, so "you are broadcasting" cannot live
+only in that pane. The module contributes a **shell indicator**
+(`ModuleManifest.shellIndicators`, see [windowing](../architecture/windowing.mdx))
+that the shell draws in **both** the workspace tab strip and the floating desktop's
+taskbar tray: a desktop never shows both, and the default boot desktop is floating,
+so either one alone would miss half the cases.
+
+| State | Reads | Stop button |
+| --- | --- | --- |
+| Capture running | **LIVE** · 1 guest · 3 via link | yes |
+| Link minted, no capture | **LINK OPEN** | no — it is exposure, not broadcast |
+| Neither | nothing at all | — |
+
+The viewer count is the relay's own, and it is omitted when no capture is running
+rather than shown as a confident zero: the node only polls the relay while
+publishing. Clicking the indicator opens the Share pane.
 
 ## The pixel stream
 
@@ -483,21 +526,38 @@ silently published a screen to the open internet because somebody was looking fo
 a link would be the most surprising thing this module could do. The pane puts it
 on its own row with its own button, and an optional passphrase beside it.
 
-Once minted, the link row carries a **copy button** — `CopyableLink`'s opt-in
-`showCopy`, off for every other caller. Elsewhere in the app a link is somewhere
-to *go*, and clicking it is the point; here the URL **is** the artefact being
-handed to somebody else, so opening it yourself is the least useful thing you can
-do with it. It duplicates the `share.copyLink` command deliberately: the command
-is for someone who already knows it exists, and the pane is where everyone else
-is looking.
+Once minted, the link is drawn as a **shareable link card** (`ShareableLink`, also
+used by notebook publishing) rather than a bare URL. Elsewhere in the app a link
+is somewhere to *go*; here the URL **is** the artefact being handed to somebody
+else, so the card is built for giving it away:
+
+- the address without its scheme, with a copy button;
+- a **QR code** for the person across the room — always black on white with a
+  quiet zone, whatever the theme, because an inverted code fails on many readers;
+- **Copy invite**: a message with the link, when it expires, and whether it needs
+  a passphrase. **Never the passphrase itself** — the invite is the thing that gets
+  forwarded and pasted into the wrong channel;
+- an **expiry countdown**, in minutes, that turns into a warning in the last ten.
+  A link that dies mid-sentence is only a surprise if nothing on screen was
+  counting down.
+
+The expiry and whether a passphrase is set ride the session model
+(`link_expires_at`, `link_protected`); the passphrase does not, and the node never
+keeps it. The card duplicates the `share.copyLink` command deliberately: the
+command is for someone who already knows it exists, and the pane is where everyone
+else is looking.
 
 Six things about the link are worth knowing:
 
-- **The view URL is public; the ingest URL is authority.** The session model
-  carries only the first, because that model is broadcast verbatim to every
-  guest. Anyone holding the ingest URL could push their own video into the host's
-  stream, so it is served only to the host's own browser from
-  `GET /api/share/link`.
+- **The link carries a watch code; publishing needs a different token.** A link
+  looks like `horrible-share.fly.dev/k7m2x9qp` — eight characters a person can
+  read aloud — and it lets you watch and chat, nothing else. The long token that
+  publishes video (`/whip/<token>`) is a separate value, served only to the host's
+  own browser from `GET /api/share/link` and never part of the session model,
+  which is broadcast verbatim to every guest. The two used to be **one** token,
+  and because the relay replaces whoever is publishing, anyone holding the public
+  link could push their own video into the host's stream. See
+  [share relay](../architecture/share-relay.mdx).
 - **The relay leg fails independently.** Friends on the fabric can be watching
   happily while the relay is unreachable, so `relaying` and `relayError` are their
   own fields rather than folded into the stream's `error`. A relay that is down

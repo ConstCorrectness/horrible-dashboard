@@ -24,33 +24,73 @@ flowchart LR
         MINT["POST /streams<br/>(holds SHARE_RELAY_KEY)"]
     end
     subgraph Relay["horrible-share"]
-        REG["Registry<br/>token to stream"]
+        REG["Registry<br/>code and token to stream"]
         ROOM["MediaRelay<br/>one track to N viewers"]
-        PAGE["GET /s/token"]
+        PAGE["GET /code"]
     end
     STRANGER["Any browser"]
 
     MINT -->|"mint, revoke"| REG
-    CAP -->|"WHIP: SDP offer"| ROOM
+    CAP -->|"WHIP /whip/token: SDP offer"| ROOM
     STRANGER -->|"opens the link"| PAGE
-    PAGE -->|"WHEP: SDP offer"| ROOM
+    PAGE -->|"WHEP /whep/code: SDP offer"| ROOM
     ROOM -->|"encoded frames"| STRANGER
 ```
 
 ## What a public viewer is
 
-A viewer holds a token and gets **pixels and chat**. Never a grant, never a
+A viewer holds a watch code and gets **pixels and chat**. Never a grant, never a
 cursor with authority, never a way to reach the host's dashboard. Interactivity
 requires an authenticated person on the fabric, which is exactly what keeps this
 service a dumb pipe rather than something security-critical: the worst thing a
 compromised relay can do is show video to the wrong people, or stop showing it to
 the right ones.
 
+## Two keys per stream
+
+Every stream is minted with two values, and they are **never interchangeable**:
+
+| | Looks like | Addresses | Authority |
+| --- | --- | --- | --- |
+| **Code** | `k7m2x9qp` — 8 Crockford base32 characters, ≈40 bits | `/<code>`, `/s/<code>`, `/whep/<code>`, `/chat/<code>` | Watch and chat |
+| **Token** | 43 URL-safe characters, 256 bits | `/whip/<token>` (and the key-gated `/streams`, `/restream`) | Publish video |
+
+The link a host hands out is the short one, `https://horrible-share.fly.dev/k7m2x9qp`,
+served in place (no redirect) so the URL a viewer sees stays the one they were given.
+The viewer page carries the code and **never** the token.
+
+**Why two.** Until this split a stream had one token, used in both the viewer URL
+(`/s/<token>`) and the ingest URL (`/whip/<token>`). WHIP is gated on nothing but that
+token, and `Room.publish` closes whoever is publishing and takes over — so anyone
+holding a public link could POST to `/whip/<token>` and **replace the host's screen with
+their own video**. `Registry.get` (token) and `Registry.get_by_code` (code) now refuse
+each other's value, and `test_a_viewer_cannot_publish_with_the_code_from_their_link`
+pins it over HTTP.
+
+**Why 40 bits is enough for the code.** It would be thin for a permanent secret. It is
+not thin for a value that dies within hours, can carry a passphrase, and sits behind a
+**miss limiter** (`ratelimit.py`): an address that names 20 well-formed codes that do not
+exist — or supplies 20 wrong passphrases — in a minute is answered **429** for the rest
+of that minute, on every code-addressed route, including the real code, since a limit a
+guesser walks past once they land on a hit is a filter, not a limit. Three rules that are
+quiet if wrong:
+
+- **Only well-formed codes count.** A browser requests `/favicon.ico` beside every page;
+  charging it as a guess would lock out a viewer who reloaded twenty times.
+- **`Fly-Client-IP` is trusted only on Fly** (`FLY_APP_NAME` is set). Fly's proxy
+  overwrites it; anywhere else it is a header the caller wrote, and trusting it would
+  hand a guesser a fresh "address" per request.
+- **A wrong passphrase is a miss too.** It is a guess, and each check is a PBKDF2 run —
+  an unlimited stream of them is also a cheap way to spend the relay's CPU.
+
+A code is normalised the way people type it: case-insensitive, hyphens ignored, and
+Crockford's look-alikes folded (`i`/`l` → `1`, `o` → `0`).
+
 ## The token
 
-A token is the whole of a viewer's authority, so:
+The token is publish authority, and the rules below apply to both values:
 
-- **Opaque and random (256 bits), not signed.** A JWT would let the relay verify
+- **Opaque and random, not signed.** A JWT would let the relay verify
   a link with no state at all, which is tempting for a service meant to scale
   out — but a signed token cannot be **revoked**, and immediate revocation is a
   requirement. Someone who stops a share expects the link to die at that instant,
@@ -77,7 +117,8 @@ still has the fabric path, and re-minting is one click.
 | --- | --- | --- |
 | Mint a stream | `SHARE_RELAY_KEY` header | Otherwise the relay is free video hosting for anyone who can reach it |
 | Publish (WHIP) | The token | The key must never reach the host's _browser_; the token already names the stream |
-| Watch (WHEP) | The token (+ passphrase) | This is the public path — it is meant to be openable by a stranger |
+| Watch (page, WHEP, chat) | The code (+ passphrase) | This is the public path — meant to be openable by a stranger, and never able to publish |
+| Guess a code | — | 20 misses per address per minute, then 429 |
 | Revoke | `SHARE_RELAY_KEY` header | The same authority that minted it |
 
 `SHARE_RELAY_KEY` is **env-only, never a setting**: `GET /api/settings` hands the
@@ -89,10 +130,16 @@ If the key is unset the relay logs a warning at boot and `/health` reports
 
 ## The ingest URL is publish authority
 
-`ShareSession.link` (the view URL) is broadcast to every guest. The **ingest URL
-is not, and must never be** — anyone holding it can push their own video into the
-host's stream. It lives on the node's session object and is served only from
-`GET /api/share/link`, a route no guest can reach.
+`ShareSession.link` (the short view URL) is broadcast to every guest. The **ingest
+URL is not, and must never be** — anyone holding it can push their own video into
+the host's stream. It lives on the node's session object and is served only from
+`GET /api/share/link`, a route no guest can reach. That protection was hollow for
+as long as the view URL carried the same token; see
+[two keys per stream](#two-keys-per-stream).
+
+A node talking to a relay that predates short codes still works: `link.mint` reads
+`short_url` with `.get` and falls back to `view_url`, because the node and the relay
+deploy separately and a `KeyError` there would break minting outright.
 
 `test_share_link.py` asserts the string `whip` never appears in the serialized
 session model, because that model is exactly what `_tell_guests` sends over the

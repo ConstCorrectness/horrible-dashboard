@@ -62,12 +62,24 @@ class LinkHandle:
     """
 
     def __init__(
-        self, token: str, view_url: str, ingest_url: str, expires_at: float
+        self,
+        token: str,
+        view_url: str,
+        ingest_url: str,
+        expires_at: float,
+        short_url: str = "",
     ) -> None:
         self.token = token
         self.view_url = view_url
         self.ingest_url = ingest_url
         self.expires_at = expires_at
+        #: The link to hand out. Empty from a relay that predates short codes.
+        self.short_url = short_url
+
+    @property
+    def public_url(self) -> str:
+        """What the host copies: the short form when the relay offers one."""
+        return self.short_url or self.view_url
 
 
 async def mint(
@@ -105,6 +117,9 @@ async def mint(
         view_url=body["view_url"],
         ingest_url=body["ingest_url"],
         expires_at=float(body.get("expires_at") or 0.0),
+        # `.get`, not `[]`: the node and the relay deploy separately, and an older
+        # relay mints no short URL. A KeyError here would break minting outright.
+        short_url=str(body.get("short_url") or ""),
     )
 
 

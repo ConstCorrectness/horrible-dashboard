@@ -239,6 +239,37 @@ export function IconWholeWord(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+/** Stop a broadcast. A filled square, the transport-control convention. */
+export function IconStop(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <rect x="4.5" y="4.5" width="7" height="7" rx="1" fill="currentColor" stroke="none" />
+    </Glyph>
+  );
+}
+
+/** A screen — sharing a display. */
+export function IconScreen(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <rect x="2" y="2.75" width="12" height="8.5" rx="1.25" />
+      <path d="M6 13.75h4M8 11.25v2.5" />
+    </Glyph>
+  );
+}
+
+/** A QR code. Three finder squares and a scatter, legible at 13px. */
+export function IconQr(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <rect x="2.5" y="2.5" width="4" height="4" rx="0.5" />
+      <rect x="9.5" y="2.5" width="4" height="4" rx="0.5" />
+      <rect x="2.5" y="9.5" width="4" height="4" rx="0.5" />
+      <path d="M9.5 9.5h1.5v1.5M13.5 9.5v.01M9.5 13.5h.01M12 12h1.5v1.5" />
+    </Glyph>
+  );
+}
+
 /** Use regular expression. */
 export function IconRegex(props: SVGProps<SVGSVGElement>) {
   return (

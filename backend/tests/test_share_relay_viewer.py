@@ -30,7 +30,7 @@ from backend.share_relay import viewer
 def _script() -> str:
     """The page's own script, as the browser would receive it."""
     html = viewer.render(
-        token="tok", title="Standup", found=True, needs_passphrase=False, live=False
+        code="tok", title="Standup", found=True, needs_passphrase=False, live=False
     )
     blocks = re.findall(r"<script>(.*?)</script>", html, re.S)
     assert blocks, "the viewer page served no script at all"
@@ -144,7 +144,7 @@ def test_the_retry_is_cancellable() -> None:
 def test_a_missing_link_never_reaches_the_network() -> None:
     """A revoked token should render as an explanation, not an offer."""
     html = viewer.render(
-        token="tok", title="", found=False, needs_passphrase=False, live=False
+        code="tok", title="", found=False, needs_passphrase=False, live=False
     )
     assert '"found": false' in html
 
@@ -152,7 +152,7 @@ def test_a_missing_link_never_reaches_the_network() -> None:
 def test_the_title_is_escaped() -> None:
     """The one host-supplied value that reaches the document."""
     html = viewer.render(
-        token="tok",
+        code="tok",
         title="<img src=x onerror=alert(1)>",
         found=True,
         needs_passphrase=False,
@@ -174,7 +174,7 @@ def test_the_page_is_exactly_one_viewport_tall() -> None:
     shared screen you cannot watch.
     """
     html = viewer.render(
-        token="tok", title="x", found=True, needs_passphrase=False, live=False
+        code="tok", title="x", found=True, needs_passphrase=False, live=False
     )
     body_rule = re.search(r"\nbody \{(.*?)\}", html, re.S)
     assert body_rule, "no body rule in the page style"
@@ -196,7 +196,7 @@ def test_every_scrolling_column_can_actually_shrink() -> None:
     content have to say otherwise explicitly.
     """
     html = viewer.render(
-        token="tok", title="x", found=True, needs_passphrase=False, live=False
+        code="tok", title="x", found=True, needs_passphrase=False, live=False
     )
     for selector in ("main {", ".stage {", "aside {"):
         rule = re.search(re.escape(selector) + r"(.*?)\}", html, re.S)
@@ -217,7 +217,7 @@ def test_the_viewer_is_shown_connection_progress() -> None:
     for phase in ("offer", "gather", "relay", "negotiate", "path", "live"):
         assert f"'{phase}'" in script, f"phase {phase} is not reported"
     html = viewer.render(
-        token="tok", title="x", found=True, needs_passphrase=False, live=False
+        code="tok", title="x", found=True, needs_passphrase=False, live=False
     )
     assert "role='progressbar'" in html
     assert "aria-valuenow" in html

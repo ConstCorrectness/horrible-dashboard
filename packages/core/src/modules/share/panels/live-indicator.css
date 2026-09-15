@@ -1,0 +1,108 @@
+/* ShareLiveIndicator — the shell-chrome readout for an outgoing share.
+   Angular and flat: a clipped corner and a 2px rule, no glow. The danger colour
+   is reserved for a live capture; an open link with nothing behind it is the
+   warn colour, because it is exposure, not broadcast. */
+.share-live {
+  --share-live-color: var(--warn);
+  display: inline-flex;
+  align-items: stretch;
+  flex: none;
+  align-self: center;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--share-live-color);
+  background: var(--bg-inset);
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%);
+}
+
+.share-live--on {
+  --share-live-color: var(--danger);
+}
+
+.share-live__open,
+.share-live__stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0 8px;
+}
+
+.share-live__open:hover,
+.share-live__stop:hover {
+  background: color-mix(in srgb, var(--share-live-color) 14%, transparent);
+}
+
+.share-live__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--share-live-color);
+}
+
+.share-live--on .share-live__dot {
+  animation: share-live-pulse 1.6s ease-in-out infinite;
+}
+
+.share-live__label {
+  font-size: var(--fs-micro, 0.64rem);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--share-live-color);
+}
+
+.share-live__meta {
+  font-family: var(--font-mono, ui-monospace, 'JetBrains Mono', monospace);
+  font-size: var(--fs-meta, 0.72rem);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.share-live__stop {
+  --icon-size: 11px;
+  border-left: 1px solid var(--border);
+  padding: 0 7px 0 6px;
+  color: var(--share-live-color);
+}
+
+@keyframes share-live-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .share-live--on .share-live__dot {
+    animation: none;
+  }
+}
+
+/* The capture preview in the Share pane. */
+.share-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.share-preview__label {
+  font-size: var(--fs-micro, 0.64rem);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.share-preview video {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
+  background: #000;
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--danger);
+}

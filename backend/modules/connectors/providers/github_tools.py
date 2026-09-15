@@ -13,62 +13,31 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from backend.modules.connectors.providers import github
+from backend.modules.connectors.providers import github_api
 from backend.sdk.registry import registry
 from backend.sdk.types import AgentTool
 
 logger = logging.getLogger(__name__)
 
-API = "https://api.github.com"
+API = github_api.API
+#: The same object `github_api.request` returns when there is no token, so callers
+#: comparing against it still match.
+_NOT_CONNECTED = github_api.NOT_CONNECTED
 
 # Enough for the model to work with, small enough not to blow the context window.
 MAX_RESULTS = 20
 MAX_FILE_BYTES = 100_000
 
-_NOT_CONNECTED = {
-    "error": "GitHub isn't connected — connect it from the home page, then try again."
-}
-
 
 async def _request(
     method: str, path: str, *, params: dict[str, Any] | None = None, json: Any = None
 ) -> Any:
-    """One authenticated GitHub API call, with errors as values."""
-    import httpx
+    """One authenticated GitHub API call, with errors as values.
 
-    token = await github.token()
-    if not token:
-        return _NOT_CONNECTED
-    try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            res = await client.request(
-                method,
-                f"{API}{path}",
-                params=params,
-                json=json,
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Accept": "application/vnd.github+json",
-                    "X-GitHub-Api-Version": "2022-11-28",
-                },
-            )
-    except httpx.HTTPError as exc:
-        return {"error": f"couldn't reach GitHub: {exc}"}
-
-    if res.status_code == 401:
-        return {
-            "error": "GitHub rejected the stored token — reconnect GitHub from the home page."
-        }
-    if res.status_code == 403 and "rate limit" in res.text.lower():
-        return {"error": "GitHub rate limit hit — wait a minute and try again."}
-    if res.status_code >= 400:
-        detail = ""
-        try:
-            detail = str(res.json().get("message") or "")
-        except ValueError:
-            detail = res.text[:200]
-        return {"error": f"GitHub returned {res.status_code}: {detail}"}
-    return res.json()
+    A thin seam over `github_api.request` (shared with notebook publishing) that stays
+    here so the route tests can keep replacing it.
+    """
+    return await github_api.request(method, path, params=params, json=json)
 
 
 def _repo_line(repo: dict[str, Any]) -> dict[str, Any]:

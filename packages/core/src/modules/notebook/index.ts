@@ -37,6 +37,34 @@ export const notebookModule: ModuleManifest = {
       type: 'string',
       default: '3.12',
     },
+    {
+      key: 'notebook.python.packages',
+      title: 'Notebook libraries',
+      description:
+        'Packages the managed notebook environment always has, separated by spaces (version specifiers allowed, e.g. "torch>=2.4"). Missing ones install in the background when a notebook opens; removing one does not uninstall it. Ignored when a kernel interpreter override is set.',
+      type: 'string',
+      // Keep in step with DEFAULT_PACKAGES in backend/modules/notebook/env.py.
+      default:
+        'numpy pandas scipy matplotlib scikit-learn tqdm torch transformers datasets accelerate huggingface_hub safetensors sentencepiece',
+    },
+    {
+      key: 'notebook.python.torchIndex',
+      title: 'PyTorch package index',
+      description:
+        'Where PyTorch is installed from. Blank chooses automatically: the CUDA build on Windows with an NVIDIA GPU, PyPI everywhere else. "pypi" forces PyPI; a URL such as https://download.pytorch.org/whl/cpu forces that index (CPU-only wheels skip a multi-gigabyte CUDA download on Linux).',
+      type: 'string',
+      default: '',
+      advanced: true,
+    },
+    {
+      key: 'notebook.publish.pagesRepo',
+      title: 'GitHub Pages repository',
+      description:
+        'Where Publish → GitHub Pages puts notebooks, as "owner/name" or just "name" on your own account. Blank uses "notebooks", created public if it does not exist. Must be public: Pages on a private repository needs a paid plan.',
+      type: 'string',
+      default: '',
+      advanced: true,
+    },
   ],
   panels: [
     {

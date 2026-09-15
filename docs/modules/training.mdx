@@ -500,6 +500,14 @@ project's `main.ipynb` to cloud compute:
   (settings `training.google.clientId/clientSecret`), manual-code flow, refresh token in
   `.data/training_google_token.json` — **never** returned to the client.
 
+Both pushers are also used by [notebook publishing](notebook.mdx#publishing), through
+keyword-only options whose defaults are the training behaviour, so the training routes
+call them unchanged: `KagglePush.push(..., private=, enable_gpu=)` (a publish can be
+public and does not spend GPU quota) and `ColabPush.push(..., anyone_with_link=)`, where
+`None` leaves a file's Drive sharing alone. `kaggle_push.has_credentials()` answers
+"could a push authenticate" without importing the kaggle package, and
+`ColabPush.delete` removes the pushed Drive file and forgets it.
+
 ## Peer fabric (advertise + manual handoff)
 
 Training compute is shared across the distributed [network](network.mdx) fabric without

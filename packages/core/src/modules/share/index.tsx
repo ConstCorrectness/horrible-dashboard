@@ -1,6 +1,7 @@
 import { registry, type ModuleManifest } from '../../registry';
 import { MirrorPanel } from './panels/MirrorPanel';
 import { SessionPanel } from './panels/SessionPanel';
+import { ShareLiveIndicator } from './panels/LiveIndicator';
 import { getLink, revokeLink } from './api';
 import { bindPublishing } from './publish';
 import { bindStreamLifecycle, stopStream } from './stream';
@@ -69,6 +70,8 @@ export const shareModule: ModuleManifest = {
       singleton: true,
     },
   ],
+  // "You are broadcasting" must stay on screen with the Share pane closed.
+  shellIndicators: [{ id: 'share.live', component: ShareLiveIndicator }],
   settings: [
     {
       key: 'share.relayUrl',

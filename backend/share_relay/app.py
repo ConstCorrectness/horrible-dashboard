@@ -9,7 +9,12 @@ This is the public half of the `share` module. A host node mints a link, pushes
 its already-encoded screen capture in over **WHIP** (one HTTP POST of an SDP
 offer -- the standard every broadcaster speaks), and anyone holding the URL pulls
 it back out over **WHEP**. Nothing here authenticates a *person*: a public viewer
-holds a token and gets pixels, and never a grant. That is precisely what keeps
+holds a short watch code and gets pixels, and never a grant.
+
+**The code watches; the token publishes.** Viewer-facing routes (`/<code>`,
+`/s/<code>`, `/whep/<code>`, `/chat/<code>`) take the code, and only WHIP takes
+the token. Never let one stand in for the other -- see `tokens.py` for the hijack
+that sharing them allowed. That is precisely what keeps
 this service a dumb pipe rather than something security-critical -- see
 docs/architecture/share-relay.mdx.
 
@@ -52,7 +57,13 @@ from backend.share_relay.chat import parse as parse_chat
 from backend.share_relay import ice
 from backend.share_relay.fanout import Rooms
 from backend.share_relay.restream import Restreams, ffmpeg_available
-from backend.share_relay.tokens import DEFAULT_MAX_VIEWERS, Registry, Stream
+from backend.share_relay.ratelimit import MissLimiter, client_ip
+from backend.share_relay.tokens import (
+    DEFAULT_MAX_VIEWERS,
+    Registry,
+    Stream,
+    normalize_code,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +102,7 @@ registry = Registry(max_viewers_per_stream=_max_viewers())
 rooms = Rooms()
 chat = Chat()
 restreams = Restreams()
+limiter = MissLimiter()
 
 
 def _public_base() -> str:
@@ -170,8 +182,14 @@ class MintIn(BaseModel):
 
 
 class MintOut(BaseModel):
+    #: Publish authority. Returned only to the minting node (this route is
+    #: key-gated) and never part of anything a viewer is handed.
     token: str
-    #: The URL a human opens. This is what the host copies and sends.
+    #: Watch authority: what every viewer-facing URL carries.
+    code: str
+    #: The URL a human opens -- `/<code>`. This is what the host copies and sends.
+    short_url: str
+    #: The long-form equivalent, `/s/<code>`.
     view_url: str
     #: Where the host POSTs its WHIP offer.
     ingest_url: str
@@ -246,11 +264,29 @@ async def mint(body: MintIn) -> MintOut:
     base = _public_base()
     return MintOut(
         token=stream.token,
-        view_url=f"{base}/s/{stream.token}",
+        code=stream.code,
+        short_url=f"{base}/{stream.code}",
+        view_url=f"{base}/s/{stream.code}",
         ingest_url=f"{base}/whip/{stream.token}",
         expires_at=stream.expires_at,
         has_passphrase=bool(stream.passphrase_hash),
     )
+
+
+def _ip(request: Request | WebSocket) -> str:
+    return client_ip(request.headers, request.client.host if request.client else None)
+
+
+def _resolve_code(raw: str, ip: str) -> Stream:
+    """The stream a viewer-facing route names, charging a wrong guess to `ip`."""
+    if limiter.blocked(ip):
+        raise HTTPException(status_code=429, detail="too many attempts; slow down")
+    stream = registry.get_by_code(raw)
+    if stream is None:
+        if normalize_code(raw) is not None:
+            limiter.miss(ip)
+        raise HTTPException(status_code=404, detail="no such stream")
+    return stream
 
 
 def _resolve(token: str) -> Stream:
@@ -330,6 +366,11 @@ async def whip(token: str, request: Request) -> Response:
     here: it was minted by a node that held the key, and requiring the key again
     would mean shipping it to the host's *browser*, which is the one place it
     must never be.
+
+    Addressed by the token and **never** the watch code. `Room.publish` replaces
+    whoever is publishing, so a route a viewer can address is a route a viewer
+    can use to swap the host's screen for their own video -- which is exactly
+    what the viewer URL allowed while it carried this token.
     """
     stream = _resolve(token)
     offer = await _sdp_body(request)
@@ -352,15 +393,23 @@ async def whip_stop(token: str) -> dict[str, bool]:
     return {"stopped": True}
 
 
-@app.post("/whep/{token}")
+@app.post("/whep/{code}")
 async def whep(
-    token: str,
+    code: str,
     request: Request,
     x_share_passphrase: str = Header(default=""),
 ) -> Response:
-    """Viewer -> relay. The body is an SDP offer; the reply is the answer."""
-    stream = _resolve(token)
+    """Viewer -> relay. The body is an SDP offer; the reply is the answer.
+
+    A wrong passphrase is charged as a miss too. It is a guess like any other,
+    and each check is a PBKDF2 run, so an unlimited stream of them is also a
+    cheap way to spend the relay's CPU.
+    """
+    ip = _ip(request)
+    stream = _resolve_code(code, ip)
+    token = stream.token
     if not stream.check_passphrase(x_share_passphrase):
+        limiter.miss(ip)
         raise HTTPException(status_code=403, detail="passphrase required")
     room = rooms.get(token)
     if room is None or not room.live:
@@ -377,23 +426,31 @@ async def whep(
     return _sdp_response(answer, token)
 
 
-@app.get("/s/{token}", response_class=HTMLResponse)
-async def viewer_page(token: str) -> HTMLResponse:
+def _viewer_response(raw: str, ip: str) -> HTMLResponse:
     """The page a stranger opens. Self-contained: no CDN, no build step.
 
-    A dead token still renders a page rather than a bare 404, because the person
+    A dead code still renders a page rather than a bare 404, because the person
     holding a stale link needs a sentence explaining it, not a status code.
     """
-    stream = registry.get(token)
-    room = rooms.get(token)
+    if limiter.blocked(ip):
+        return HTMLResponse(viewer.render_limited(), status_code=429)
+    stream = registry.get_by_code(raw)
+    if stream is None and normalize_code(raw) is not None:
+        limiter.miss(ip)
+    room = rooms.get(stream.token) if stream else None
     html = viewer.render(
-        token=token,
+        code=stream.code if stream else "",
         title=stream.title if stream else "",
         found=stream is not None,
         needs_passphrase=bool(stream and stream.passphrase_hash),
         live=bool(room and room.live),
     )
     return HTMLResponse(html)
+
+
+@app.get("/s/{code}", response_class=HTMLResponse)
+async def viewer_page(code: str, request: Request) -> HTMLResponse:
+    return _viewer_response(code, _ip(request))
 
 
 @app.post(
@@ -442,18 +499,26 @@ async def stop_restream(token: str) -> dict[str, bool]:
     return {"stopped": await restreams.stop(token)}
 
 
-@app.websocket("/chat/{token}")
-async def chat_ws(ws: WebSocket, token: str) -> None:
+@app.websocket("/chat/{code}")
+async def chat_ws(ws: WebSocket, code: str) -> None:
     """Viewer chat for one stream.
 
-    Accepted for any *usable* token, including one whose stream has not started:
+    Accepted for any *usable* code, including one whose stream has not started:
     people open a link early and talk while they wait, and closing the socket on
-    them would look like the link was broken. A dead token is closed with a code
+    them would look like the link was broken. A dead code is closed with a code
     rather than left hanging, so the page can say so.
     """
-    if registry.get(token) is None:
+    ip = _ip(ws)
+    if limiter.blocked(ip):
+        await ws.close(code=4429)
+        return
+    stream = registry.get_by_code(code)
+    if stream is None:
+        if normalize_code(code) is not None:
+            limiter.miss(ip)
         await ws.close(code=4404)
         return
+    token = stream.token
     await ws.accept()
     room = chat.room(token)
     await room.join(ws)
@@ -477,3 +542,15 @@ async def chat_ws(ws: WebSocket, token: str) -> None:
 @app.get("/", response_class=HTMLResponse)
 async def index() -> HTMLResponse:
     return HTMLResponse(viewer.render_index())
+
+
+# Registered LAST, and that is load-bearing: a bare `/{code}` would otherwise
+# claim `/health` and every other single-segment route declared after it.
+@app.get("/{code}", response_class=HTMLResponse)
+async def short_link(code: str, request: Request) -> HTMLResponse:
+    """The short link itself. Serves the viewer page in place, no redirect, so the
+    URL a viewer sees stays the one they were given."""
+    if normalize_code(code) is None:
+        # Not a code at all (`/favicon.ico`, a probe). Not a guess, so not charged.
+        raise HTTPException(status_code=404, detail="not found")
+    return _viewer_response(code, _ip(request))

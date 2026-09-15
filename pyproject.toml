@@ -48,6 +48,7 @@ dependencies = [
     "gguf>=0.19",
     "playwright>=1.61.0",
     "orjson>=3.11.9",
+    "nbconvert>=7.17.1",
 ]
 
 [project.optional-dependencies]

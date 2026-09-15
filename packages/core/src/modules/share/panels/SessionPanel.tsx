@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import { Button, Chip, EmptyState, Field, PaneHeader } from '../../../Primitives';
-import { CopyableLink } from '../../../CopyableLink';
+import { ShareableLink } from '../../../ShareableLink';
 import type { GuestCursor } from '../ws';
 import { DataList, DataRow, type RowKind } from '../../../DataList';
-import { IconAlert, IconCheck, IconPlus, IconTrash } from '../../../glyphs';
+import { IconAlert, IconCheck, IconPlus, IconScreen, IconStop, IconTrash } from '../../../glyphs';
 import {
   GRANT_BLURB,
   GRANT_LADDER,
@@ -21,13 +21,7 @@ import {
 } from '../api';
 import { probeCapture } from '../capture';
 import type { Preflight } from '../preflight';
-import {
-  attachRelay,
-  getStreamState,
-  startStream,
-  stopStream,
-  subscribeStream,
-} from '../stream';
+import { attachRelay, getStreamState, startStream, stopStream, subscribeStream } from '../stream';
 import {
   dismissInviteViaChannel,
   getShareSnapshot,
@@ -43,24 +37,22 @@ import {
   subscribeShare,
 } from '../ws';
 
+import './live-indicator.css';
+
 /**
  * The share pane: who is in this workspace, and what each of them may do.
  *
  * It is a *permission* surface first and a video one second, and that ordering is
  * why the grant sits on the participant row rather than behind a dialog: a host
  * has to see every rung at a glance and take any of them away in one click.
- * Screen sharing is a button here rather than the headline for the same reason —
- * the ladder governs what a guest can *do*, and the capture only governs what
- * they can see.
+ *
+ * Starting, though, is one click: **Share screen** opens the picker and the
+ * session together. It used to take three steps (start a session, share, mint a
+ * link) and the first one asked for a title before anything visible had happened.
+ * Nothing about the permission model moved — everyone still joins at `view`, and
+ * a public link is still its own deliberate step.
  */
 
-/** A rung's position, for deciding how loudly to draw it. */
-/** How each audit outcome reads in the list.
- *
- * `asked` is deliberately not a refusal: the host's own rules wanted a human,
- * which is a different fact from "denied" and points the host at a different
- * action (approve it, or write a rule).
- */
 /** Labels for the destinations the connector knows. Mirrors `DESTINATIONS` in
  *  `backend/modules/share/streaming.py`; an id with no entry renders as itself,
  *  so a destination added there is never invisible here. */
@@ -98,6 +90,12 @@ const RELAY_CHIP: Record<RelayState, { label: string; kind: RowKind; title: stri
   },
 };
 
+/** How each audit outcome reads in the list.
+ *
+ * `asked` is deliberately not a refusal: the host's own rules wanted a human,
+ * which is a different fact from "denied" and points the host at a different
+ * action (approve it, or write a rule).
+ */
 const AUDIT_KIND: Record<string, RowKind> = {
   allowed: 'ok',
   denied: 'warn',
@@ -137,7 +135,10 @@ function GuestCursors({ cursors }: { cursors: Record<string, GuestCursor> }) {
         <div
           key={c.node_id}
           className="share-cursor"
-          style={{ left: `${Math.min(100, Math.max(0, c.x * 100))}%`, top: `${Math.min(100, Math.max(0, c.y * 100))}%` }}
+          style={{
+            left: `${Math.min(100, Math.max(0, c.x * 100))}%`,
+            top: `${Math.min(100, Math.max(0, c.y * 100))}%`,
+          }}
         >
           <div className="share-cursor__dot" />
           <span className="share-cursor__label">{c.name}</span>
@@ -227,15 +228,69 @@ function PreflightWarning({
         </>
       }
     >
-      A screen capture sends light, not structure — so unlike the mirror it cannot
-      hide anything on screen. These panes never declared themselves shareable and
-      will be in the video:
+      A screen capture sends light, not structure — so unlike the mirror it cannot hide anything on
+      screen. These panes never declared themselves shareable and will be in the video:
       <ul style={{ margin: '8px 0 0', paddingLeft: '1.1rem' }}>
         {result.undeclared.map((p) => (
           <li key={p.instanceId}>{p.title}</li>
         ))}
       </ul>
     </EmptyState>
+  );
+}
+
+/**
+ * What is actually leaving this machine.
+ *
+ * The native picker shows the choice once, and after that the only evidence of
+ * *which* window is being sent is somebody on the other end saying so. Muted,
+ * because the audio is already going out and a local echo of it helps nobody.
+ */
+function CapturePreview({ stream }: { stream: MediaStream }) {
+  const ref = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const video = ref.current;
+    if (!video) return;
+    video.srcObject = stream;
+    return () => {
+      video.srcObject = null;
+    };
+  }, [stream]);
+  return (
+    <div className="share-preview">
+      <span className="share-preview__label">What viewers see</span>
+      <video ref={ref} autoPlay muted playsInline aria-label="Preview of your shared screen" />
+    </div>
+  );
+}
+
+/** Notices that apply whether or not a session is open yet. */
+function StreamNotices({
+  capture,
+  error,
+}: {
+  capture: ReturnType<typeof probeCapture>;
+  error: string | null;
+}) {
+  return (
+    <>
+      {capture.support !== 'available' && (
+        // The probe's reason was a `title` only, which is a hover tooltip: it
+        // never appears on a touch device, is never read aloud, and cannot be
+        // seen at all on the disabled button most people will actually look
+        // at. "An unexplained no is the failure" means visible text.
+        <p
+          style={{
+            margin: 0,
+            fontSize: 12.5,
+            color: capture.support === 'insecure-context' ? 'var(--warn)' : 'var(--text-dim)',
+          }}
+        >
+          {capture.reason}
+        </p>
+      )}
+      {error && <p style={{ margin: 0, fontSize: 12.5, color: 'var(--danger)' }}>{error}</p>}
+    </>
   );
 }
 
@@ -308,11 +363,16 @@ export function SessionPanel() {
     setRestream(await getRestream());
   }, []);
 
-
-  const beginStream = useCallback(async (force: boolean) => {
-    const blocked = await startStream(force);
-    setPending(blocked);
-  }, []);
+  // Called straight from a click, with no await in front of it: the capture
+  // inside needs the click's user activation (see `startStream`).
+  const beginStream = useCallback(
+    async (force: boolean) => {
+      const blocked = await startStream(force, { title });
+      setPending(blocked);
+      if (!blocked) setTitle('');
+    },
+    [title],
+  );
 
   useEffect(() => {
     requestShareState();
@@ -330,6 +390,17 @@ export function SessionPanel() {
 
   const guests = hosting?.participants.filter((p) => p.role === 'guest') ?? [];
   const raised = guests.filter((p) => p.grant !== 'view').length;
+
+  const preflight = pending && (
+    <PreflightWarning
+      result={pending}
+      onCancel={() => setPending(null)}
+      onConfirm={() => {
+        setPending(null);
+        void beginStream(true);
+      }}
+    />
+  );
 
   return (
     <div
@@ -362,7 +433,7 @@ export function SessionPanel() {
                 Revoke all
               </Button>
               <Button intent="danger" size="sm" icon={<IconTrash />} onClick={stopViaChannel}>
-                Stop
+                End session
               </Button>
             </>
           ) : undefined
@@ -373,29 +444,45 @@ export function SessionPanel() {
         <EmptyState
           title="Nothing shared"
           actions={
-            <Button
-              intent="primary"
-              icon={<IconPlus />}
-              onClick={() => {
-                startViaChannel(title);
-                setTitle('');
-              }}
-            >
-              Start session
-            </Button>
+            <>
+              <Button
+                intent="primary"
+                icon={<IconScreen />}
+                disabled={capture.support !== 'available'}
+                title={capture.support === 'available' ? undefined : capture.reason}
+                onClick={() => void beginStream(false)}
+              >
+                Share screen
+              </Button>
+              <Button
+                intent="ghost"
+                icon={<IconPlus />}
+                onClick={() => {
+                  startViaChannel(title);
+                  setTitle('');
+                }}
+              >
+                Session only
+              </Button>
+            </>
           }
         >
-          <Field label="Session name" hint="What you are working on. Guests see this.">
+          <Field label="Session name" hint="Optional. Guests and link viewers see this.">
             <input
+              type="text"
               value={title}
-              placeholder="debugging the crawler"
+              placeholder="Screen share"
               onChange={(e) => setTitle(e.target.value)}
             />
           </Field>
-          Start a session, then invite a friend. Everyone joins view-only — nothing is shared until
-          you say which panes, and nobody can act until you raise them.
+          Share screen asks which screen or window to send, then opens a session. Friends you invite
+          join view-only, and a public link is a separate step you take on purpose.
+          <em> Session only</em> shares your workspace layout without any video.
         </EmptyState>
       )}
+
+      {!hosting && preflight}
+      {!hosting && <StreamNotices capture={capture} error={stream.error} />}
 
       {hosting && (
         <>
@@ -404,6 +491,168 @@ export function SessionPanel() {
           <div style={{ position: 'relative' }}>
             <GuestCursors cursors={state.cursors} />
           </div>
+
+          {/* The screen, first: it is the thing that is happening. */}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            {stream.live ? (
+              <Button
+                intent="danger"
+                size="sm"
+                icon={<IconStop />}
+                onClick={() => void stopStream()}
+              >
+                Stop sharing screen
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                intent="primary"
+                icon={<IconScreen />}
+                disabled={capture.support !== 'available'}
+                title={capture.reason}
+                onClick={() => void beginStream(false)}
+              >
+                Share screen
+              </Button>
+            )}
+            {stream.live && (
+              <Chip kind="ok" dot title={`${stream.peers} guest connection(s).`}>
+                {stream.audio ? 'screen + audio' : 'screen, no audio'}
+              </Chip>
+            )}
+            {/* What the guests can actually see. The one thing a person sharing
+                a workspace needs and cannot otherwise get: a redaction model
+                nobody can audit is a redaction model nobody trusts. */}
+            {hosting.mirror_panes === null ? (
+              <Chip title="Your workspace has not been projected yet.">not projected</Chip>
+            ) : (
+              <Chip
+                kind={hosting.mirror_hidden ? 'warn' : 'ok'}
+                dot
+                title={
+                  `Guests see ${hosting.mirror_panes - (hosting.mirror_hidden ?? 0)} of your ` +
+                  `${hosting.mirror_panes} panes. The rest are redacted — not even their titles left this machine.`
+                }
+              >
+                {hosting.mirror_panes - (hosting.mirror_hidden ?? 0)}/{hosting.mirror_panes} panes
+                visible
+              </Chip>
+            )}
+            {stream.live && hosting.link && (
+              <Chip
+                kind={RELAY_CHIP[stream.relayState].kind}
+                dot
+                title={stream.relayError ?? RELAY_CHIP[stream.relayState].title}
+              >
+                {RELAY_CHIP[stream.relayState].label}
+                {stream.relayState === 'live' && stream.relayViewers > 0
+                  ? ` · ${stream.relayViewers}`
+                  : ''}
+              </Chip>
+            )}
+          </div>
+
+          {stream.live && stream.preview && <CapturePreview stream={stream.preview} />}
+
+          {preflight}
+          <StreamNotices capture={capture} error={stream.error} />
+
+          {stream.live && !stream.audio && !stream.audioFault && (
+            <p style={{ margin: 0, fontSize: 12.5, color: 'var(--text-dim)' }}>
+              Guests hear nothing. Route a strip to the <strong>Viewers</strong> bus in the audio
+              mixer to send them sound — starting a share deliberately does not move audio on its
+              own.
+            </p>
+          )}
+
+          {stream.live && stream.audioFault && (
+            <p style={{ margin: 0, fontSize: 12.5, color: 'var(--warn)' }}>
+              {stream.audioFault} Guests are getting video only; reopen the audio mixer to retry,
+              then restart the share.
+            </p>
+          )}
+
+          {/* The public link is its own block, not a button beside Share screen:
+              minting one is the single most consequential thing in this pane and
+              deliberately never happens as a side effect of starting a share. */}
+          {hosting.link ? (
+            <ShareableLink
+              url={hosting.link}
+              lead={stream.live ? 'Watch my screen' : `Join “${hosting.title || 'my session'}”`}
+              expiresAt={hosting.link_expires_at}
+              passphrase={hosting.link_protected}
+              actions={
+                <Button size="sm" intent="danger" onClick={() => void dropLink()}>
+                  Revoke link
+                </Button>
+              }
+            />
+          ) : (
+            <Field
+              label="Public link"
+              hint="Anyone with the link can watch and chat — nothing else. Only invited friends can reach this session until you make one."
+            >
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input
+                  type="password"
+                  value={passphrase}
+                  autoComplete="new-password"
+                  aria-label="Passphrase for the public link (optional)"
+                  onChange={(e) => setPassphrase(e.target.value)}
+                  placeholder="passphrase (optional)"
+                  style={{ flex: '1 1 10rem', minWidth: 0 }}
+                />
+                <Button size="sm" onClick={() => void makeLink()} disabled={minting}>
+                  {minting ? 'Creating…' : 'Create public link'}
+                </Button>
+              </div>
+            </Field>
+          )}
+
+          {linkError && (
+            <p style={{ margin: 0, fontSize: 12.5, color: 'var(--danger)' }}>{linkError}</p>
+          )}
+
+          {stream.live && stream.relayError && (
+            <p style={{ margin: 0, fontSize: 12.5, color: 'var(--warn)' }}>
+              The public link is live but the stream is not reaching the relay: {stream.relayError}{' '}
+              Friends on the fabric are unaffected.
+            </p>
+          )}
+
+          {/* Restreaming is deliberately below the link and only appears with one:
+              it pushes the public stream, so without a link there is nothing to
+              push. Starting a broadcast to a platform is never implicit. */}
+          {hosting.link && restream && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              {restream.live ? (
+                <>
+                  <Chip kind="ok" dot>
+                    broadcasting to {restream.label}
+                  </Chip>
+                  <Button size="sm" intent="danger" onClick={() => void endRestream()}>
+                    Stop broadcast
+                  </Button>
+                </>
+              ) : (
+                restream.available.map((d) => (
+                  <Button key={d} size="sm" onClick={() => void beginRestream(d)}>
+                    Go live on {DESTINATION_LABEL[d] ?? d}
+                  </Button>
+                ))
+              )}
+              {restream.available.length === 0 && !restream.live && (
+                <span style={{ fontSize: 12.5, color: 'var(--text-dim)' }}>
+                  Add a stream key in the <strong>Streaming</strong> connector to broadcast this to
+                  Twitch, YouTube or your own RTMP server.
+                </span>
+              )}
+            </div>
+          )}
+
+          {restream?.error && (
+            <p style={{ margin: 0, fontSize: 12.5, color: 'var(--danger)' }}>{restream.error}</p>
+          )}
 
           <DataList label="Participants">
             {hosting.participants.map((p, i) => (
@@ -439,227 +688,16 @@ export function SessionPanel() {
             ))}
           </DataList>
 
-          {guests.length === 0 && (
-            <EmptyState title="No guests yet">
-              Invite a friend whose machine is online. They join view-only.
-            </EmptyState>
-          )}
-
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <Button icon={<IconPlus />} onClick={() => setPicking((v) => !v)}>
               {picking ? 'Done' : 'Invite a friend'}
             </Button>
-            {/* What the guests can actually see. The one thing a person sharing
-                a workspace needs and cannot otherwise get: a redaction model
-                nobody can audit is a redaction model nobody trusts. */}
-            {hosting.mirror_panes === null ? (
-              <Chip title="Your workspace has not been projected yet.">not projected</Chip>
-            ) : (
-              <Chip
-                kind={hosting.mirror_hidden ? 'warn' : 'ok'}
-                dot
-                title={
-                  `Guests see ${hosting.mirror_panes - (hosting.mirror_hidden ?? 0)} of your ` +
-                  `${hosting.mirror_panes} panes. The rest are redacted — not even their titles left this machine.`
-                }
-              >
-                {hosting.mirror_panes - (hosting.mirror_hidden ?? 0)}/{hosting.mirror_panes} panes
-                visible
-              </Chip>
-            )}
-            {stream.live ? (
-              <Button intent="danger" size="sm" onClick={() => void stopStream()}>
-                Stop sharing screen
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                disabled={capture.support !== 'available'}
-                title={capture.reason}
-                onClick={() => void beginStream(false)}
-              >
-                Share screen
-              </Button>
-            )}
-            {stream.live && (
-              <Chip kind="ok" dot title={`${stream.peers} guest connection(s).`}>
-                {stream.audio ? 'screen + audio' : 'screen, no audio'}
-              </Chip>
-            )}
-            {hosting.link ? (
-              <Chip kind="ok" dot>
-                public link live
-              </Chip>
-            ) : (
-              <Chip title="No public link has been minted. Only invited friends can reach this session.">
-                fabric only
-              </Chip>
-            )}
-            {stream.live && hosting.link && (
-              <Chip
-                kind={RELAY_CHIP[stream.relayState].kind}
-                dot
-                title={stream.relayError ?? RELAY_CHIP[stream.relayState].title}
-              >
-                {RELAY_CHIP[stream.relayState].label}
-                {stream.relayState === 'live' && stream.relayViewers > 0
-                  ? ` · ${stream.relayViewers}`
-                  : ''}
-              </Chip>
+            {guests.length === 0 && (
+              <span style={{ fontSize: 12.5, color: 'var(--text-dim)' }}>
+                No guests yet. Friends join view-only.
+              </span>
             )}
           </div>
-
-          {/* The public link is its own row, not a button beside Share screen:
-              minting one is the single most consequential thing in this pane and
-              deliberately never happens as a side effect of starting a share. */}
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            {hosting.link ? (
-              <>
-                <CopyableLink url={hosting.link} label={hosting.link} showCopy />
-                <Button size="sm" intent="danger" onClick={() => void dropLink()}>
-                  Revoke link
-                </Button>
-              </>
-            ) : (
-              <>
-                <input
-                  value={passphrase}
-                  onChange={(e) => setPassphrase(e.target.value)}
-                  placeholder="passphrase (optional)"
-                  style={{
-                    height: 30,
-                    borderRadius: 6,
-                    border: '1px solid var(--border)',
-                    background: 'var(--bg-inset)',
-                    color: 'var(--text-primary)',
-                    padding: '0 10px',
-                    fontSize: 12.5,
-                  }}
-                />
-                <Button size="sm" onClick={() => void makeLink()} disabled={minting}>
-                  {minting ? 'Minting…' : 'Create public link'}
-                </Button>
-              </>
-            )}
-          </div>
-
-          {/* Restreaming is deliberately below the link and only appears with one:
-              it pushes the public stream, so without a link there is nothing to
-              push. Starting a broadcast to a platform is never implicit. */}
-          {hosting.link && restream && (
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              {restream.live ? (
-                <>
-                  <Chip kind="ok" dot>
-                    broadcasting to {restream.label}
-                  </Chip>
-                  <Button size="sm" intent="danger" onClick={() => void endRestream()}>
-                    Stop broadcast
-                  </Button>
-                </>
-              ) : (
-                restream.available.map((d) => (
-                  <Button key={d} size="sm" onClick={() => void beginRestream(d)}>
-                    Go live on {DESTINATION_LABEL[d] ?? d}
-                  </Button>
-                ))
-              )}
-              {restream.available.length === 0 && !restream.live && (
-                <span style={{ fontSize: 12.5, color: 'var(--text-dim)' }}>
-                  Add a stream key in the <strong>Streaming</strong> connector to broadcast
-                  this to Twitch, YouTube or your own RTMP server.
-                </span>
-              )}
-            </div>
-          )}
-
-          {restream?.error && (
-            <p style={{ margin: 0, fontSize: 12.5, color: 'var(--danger)' }}>
-              {restream.error}
-            </p>
-          )}
-
-          {linkError && (
-            <p style={{ margin: 0, fontSize: 12.5, color: 'var(--danger)' }}>{linkError}</p>
-          )}
-
-          {stream.live && stream.relayError && (
-            <p style={{ margin: 0, fontSize: 12.5, color: 'var(--warn)' }}>
-              The public link is live but the stream is not reaching the relay:{' '}
-              {stream.relayError} Friends on the fabric are unaffected.
-            </p>
-          )}
-
-          {pending && (
-            <PreflightWarning
-              result={pending}
-              onCancel={() => setPending(null)}
-              onConfirm={() => {
-                setPending(null);
-                void beginStream(true);
-              }}
-            />
-          )}
-
-          {capture.support !== 'available' && (
-            // The probe's reason was a `title` only, which is a hover tooltip: it
-            // never appears on a touch device, is never read aloud, and cannot be
-            // seen at all on the disabled button most people will actually look
-            // at. "An unexplained no is the failure" means visible text.
-            <p
-              style={{
-                margin: 0,
-                fontSize: 12.5,
-                color: capture.support === 'insecure-context' ? 'var(--warn)' : 'var(--text-dim)',
-              }}
-            >
-              {capture.reason}
-            </p>
-          )}
-
-          {stream.error && (
-            <p style={{ margin: 0, fontSize: 12.5, color: 'var(--danger)' }}>{stream.error}</p>
-          )}
-
-          {stream.live && !stream.audio && !stream.audioFault && (
-            <p style={{ margin: 0, fontSize: 12.5, color: 'var(--text-dim)' }}>
-              Guests hear nothing. Route a strip to the <strong>Viewers</strong> bus in the
-              audio mixer to send them sound — starting a share deliberately does not move
-              audio on its own.
-            </p>
-          )}
-
-          {stream.live && stream.audioFault && (
-            <p style={{ margin: 0, fontSize: 12.5, color: 'var(--warn)' }}>
-              {stream.audioFault} Guests are getting video only; reopen the audio mixer to
-              retry, then restart the share.
-            </p>
-          )}
-
-          {state.audit.length > 0 && (
-            <DataList label="What guests have done">
-              {[...state.audit]
-                .slice(-12)
-                .reverse()
-                .map((entry, i) => (
-                  <DataRow
-                    key={`${entry.ts}-${i}`}
-                    index={i}
-                    title={entry.action}
-                    // A refusal is the more interesting half — it is the only
-                    // trace a blocked guest leaves anywhere.
-                    kind={AUDIT_KIND[entry.outcome] ?? 'idle'}
-                    meta={[
-                      entry.name,
-                      entry.outcome,
-                      String(entry.detail.specifier ?? ''),
-                    ].filter(Boolean)}
-                  >
-                    {entry.reason}
-                  </DataRow>
-                ))}
-            </DataList>
-          )}
 
           {picking && (
             <DataList label="Friends you can invite">
@@ -695,6 +733,29 @@ export function SessionPanel() {
                     : 'Online, but their app does not support shared sessions yet.'}
                 </DataRow>
               ))}
+            </DataList>
+          )}
+
+          {state.audit.length > 0 && (
+            <DataList label="What guests have done">
+              {[...state.audit]
+                .slice(-12)
+                .reverse()
+                .map((entry, i) => (
+                  <DataRow
+                    key={`${entry.ts}-${i}`}
+                    index={i}
+                    title={entry.action}
+                    // A refusal is the more interesting half — it is the only
+                    // trace a blocked guest leaves anywhere.
+                    kind={AUDIT_KIND[entry.outcome] ?? 'idle'}
+                    meta={[entry.name, entry.outcome, String(entry.detail.specifier ?? '')].filter(
+                      Boolean,
+                    )}
+                  >
+                    {entry.reason}
+                  </DataRow>
+                ))}
             </DataList>
           )}
         </>

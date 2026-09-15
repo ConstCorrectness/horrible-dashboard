@@ -33,15 +33,36 @@ def _username() -> str:
     raise PushError("no Kaggle username — set training.kaggle.username in Settings")
 
 
-def kernel_metadata(project: ProjectModel, username: str) -> dict[str, Any]:
+def has_credentials() -> bool:
+    """Whether a push could authenticate, without importing the kaggle package.
+
+    Cheap on purpose: the notebook publish panel asks on every open, and `_api()`
+    imports kaggle and makes a network round trip to find the same thing out.
+    """
+    from backend.modules.settings.routes import get_value
+
+    if get_value("training.kaggle.username", "") and get_value(
+        "training.kaggle.key", ""
+    ):
+        return True
+    return (Path.home() / ".kaggle" / "kaggle.json").is_file()
+
+
+def kernel_metadata(
+    project: ProjectModel,
+    username: str,
+    *,
+    private: bool = True,
+    enable_gpu: bool = True,
+) -> dict[str, Any]:
     return {
         "id": f"{username}/{project.id}",
         "title": project.name,
         "code_file": "main.ipynb",
         "language": "python",
         "kernel_type": "notebook",
-        "is_private": True,
-        "enable_gpu": True,
+        "is_private": private,
+        "enable_gpu": enable_gpu,
         "enable_internet": True,
         "competition_sources": [
             r.id
@@ -59,10 +80,20 @@ class KagglePush:
     label = "Kaggle kernels"
 
     def push(
-        self, project: ProjectModel, notebook: Path, progress: ProgressLine
+        self,
+        project: ProjectModel,
+        notebook: Path,
+        progress: ProgressLine,
+        *,
+        private: bool = True,
+        enable_gpu: bool = True,
     ) -> PushResultModel:
+        """Keyword options default to the training behaviour; notebook publishing
+        overrides both (a publish can be public, and should not spend GPU quota)."""
         username = _username()
-        meta = kernel_metadata(project, username)
+        meta = kernel_metadata(
+            project, username, private=private, enable_gpu=enable_gpu
+        )
         meta_path = Path(project.root) / "kernel-metadata.json"
         meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
         progress(f"pushing {meta['id']} to Kaggle kernels…")

@@ -41,6 +41,9 @@ class NotebookManager(KernelSessionManager):
         if not abs_path.is_file():
             raise ValueError(f"notebook not found: {rel}")
         python_executable = env.ensure_python()
+        # Libraries (torch, transformers, …) install in the background so the kernel
+        # is usable now; the pane polls `GET /notebook/env` for progress.
+        env.start_library_install()
         return SessionConfig(
             key=key,
             python_executable=python_executable,

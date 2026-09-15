@@ -18,7 +18,7 @@ import type { ViewShareInfo } from './mirror';
 import { isClear, preflight, type Preflight } from './preflight';
 import { SharePublisher } from './rtc';
 import { parseSignal } from './signal';
-import { getShareSnapshot, onShareSignal, subscribeShare } from './ws';
+import { getShareSnapshot, onShareSignal, startSessionAndWait, subscribeShare } from './ws';
 import { getLink, getLinkStatus, type LinkStatus, type RelayState } from './api';
 import { reconcileRelay } from './relay-status';
 import { WhipPublisher } from './whip';
@@ -75,6 +75,13 @@ export interface StreamState {
    * a strip into a bus that does not exist is the failure this names.
    */
   audioFault: string | null;
+  /**
+   * The host's own capture, for a local preview — "is that the window I meant to
+   * share?" is a question the native picker answers once and never again.
+   * Rendered muted: the audio is already going out, and playing it back locally
+   * would echo.
+   */
+  preview: MediaStream | null;
 }
 
 let state: StreamState = {
@@ -87,6 +94,7 @@ let state: StreamState = {
   relayError: null,
   relayState: 'unknown',
   relayViewers: 0,
+  preview: null,
 };
 const listeners = new Set<() => void>();
 
@@ -247,22 +255,31 @@ function guestNodes(): string[] {
   return hosting.participants.filter((p) => p.role === 'guest').map((p) => p.node_id);
 }
 
+export interface StartStreamOptions {
+  /** The title for a session opened on the host's behalf, when none is open. */
+  title?: string;
+}
+
 /**
- * Start sharing the screen.
+ * Start sharing the screen, opening a session first if there is none.
  *
  * `force` is the host acknowledging the pre-flight warning. It is a separate
- * argument rather than a flag on some options object so that every call site has
- * to say, in one word, whether a human agreed to this — a default that let it
- * through would be the single worst line in this module.
+ * argument rather than a field on `options` so that every call site has to say,
+ * in one word, whether a human agreed to this — a default that let it through
+ * would be the single worst line in this module.
+ *
+ * **The capture comes before the session, and before any other await.**
+ * `getDisplayMedia` requires transient user activation, which a browser grants
+ * for a few seconds after a click and which does not survive an arbitrary chain
+ * of awaits. Opening the session first means a `/ws` round trip, and on a slow
+ * node that round trip is exactly long enough for the picker to be refused as
+ * "not triggered by a user gesture" — which surfaces as `NotAllowedError`,
+ * indistinguishable from a dismissed picker, so nothing would say why.
  */
-export async function startStream(force = false): Promise<Preflight | null> {
-  const hosting = getShareSnapshot().hosting;
-  if (!hosting) {
-    state.error = 'Start a session first.';
-    emit();
-    return null;
-  }
-
+export async function startStream(
+  force = false,
+  options: StartStreamOptions = {},
+): Promise<Preflight | null> {
   const check = checkPreflight();
   if (!isClear(check) && !force) return check;
 
@@ -275,6 +292,21 @@ export async function startStream(force = false): Promise<Preflight | null> {
     state.error = e.cancelled ? null : e.message;
     emit();
     return null;
+  }
+
+  let hosting = getShareSnapshot().hosting;
+  if (!hosting) {
+    try {
+      hosting = await startSessionAndWait(options.title?.trim() || 'Screen share');
+    } catch (err) {
+      // Release the capture: a picker that was accepted and then led nowhere must
+      // not leave the browser's "you are sharing" bar up over nothing.
+      stopCapture(capture);
+      capture = null;
+      state.error = (err as Error).message;
+      emit();
+      return null;
+    }
   }
 
   // The viewers' bus carries whatever the host routed into it; the capture's own
@@ -331,6 +363,7 @@ export async function startStream(force = false): Promise<Preflight | null> {
     relayError: null,
     relayState: 'unknown',
     relayViewers: 0,
+    preview: capture,
   };
   emit();
 
@@ -369,6 +402,7 @@ export async function stopStream(): Promise<void> {
     relayError: null,
     relayState: 'unknown',
     relayViewers: 0,
+    preview: null,
   };
   emit();
 }

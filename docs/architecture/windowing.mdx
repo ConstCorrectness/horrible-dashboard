@@ -327,6 +327,18 @@ lives. A view opts in with `explorerHost: true`, and any module (or plugin) adds
 tab through `ModuleManifest.explorerSources`. `ExplorerSourceDecl` **is** a
 `SectionDecl`, so nothing downstream is a second mechanism.
 
+**Shell indicators.** Some state must stay on screen when no pane shows it — the
+canonical case is [share](../modules/share.mdx#knowing-you-are-live)'s "your screen
+is being broadcast". A module declares `ModuleManifest.shellIndicators`
+(`{id, component}`), and `packages/ui/src/layout/ShellIndicators.tsx` renders every one
+in **both** chrome surfaces: the trailing end of `WorkspaceTabs` and the taskbar
+`Tray`. Both, because a desktop shows only one of them — a tiling workspace has the
+tab strip, a floating desktop (the default boot desktop) has the taskbar — and an
+indicator must never depend on which paradigm happens to be active. The **module**
+decides visibility: each component renders `null` when it has nothing to say, and the
+slot is `display: contents`, so an empty one adds no gap. Keep them rare; the tray's
+own rule applies — a strip that grows one icon per module is a strip nobody reads.
+
 The merge happens in the `registry.panels` / `registry.widgets` getters — at **read
 time, not registration** — so module order cannot matter; the host may register
 before or after its contributors. Merged decls are memoized against a registration

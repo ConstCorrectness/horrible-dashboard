@@ -49,9 +49,20 @@ SCOPES = [
             "agent still asks before any write."
         ),
     ),
+    ConnectorScope(
+        id="gist",
+        label="Create gists",
+        description=(
+            "Publish notebooks as gists. Nothing is published unless you press "
+            "Publish, and a gist is secret unless you choose public."
+        ),
+    ),
 ]
 
-_SCOPE_PARAM = "read:user repo"
+# `gist` is separate from `repo` on GitHub, and was added after the first sign-ins:
+# a token issued before it carries no gist permission, which `granted_scopes` exposes
+# so the publisher can say "reconnect" instead of surfacing GitHub's bare 404.
+_SCOPE_PARAM = "read:user repo gist"
 
 
 ID_ENV = "GITHUB_CLIENT_ID"
@@ -209,6 +220,19 @@ def _status() -> ConnectorStatus:
 async def _disconnect() -> None:
     oauth.cancel_flow(CONNECTOR_ID)
     store.clear(CONNECTOR_ID)
+
+
+def granted_scopes() -> list[str] | None:
+    """The scopes the stored token actually carries, or None when not connected.
+
+    Read from the credential rather than assumed from `SCOPES`: that list says what
+    a *new* sign-in asks for, and a token from before a scope was added does not
+    have it.
+    """
+    cred, error = store.load_or_error(CONNECTOR_ID)
+    if error or cred is None:
+        return None
+    return list(cred.scopes or [])
 
 
 async def token() -> str | None:

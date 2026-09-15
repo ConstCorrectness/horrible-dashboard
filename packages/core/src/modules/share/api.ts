@@ -51,6 +51,10 @@ export interface ShareSession {
   revision: number;
   /** The public relay link, once one is minted. Empty means fabric-only. */
   link: string;
+  /** When the link stops working, epoch seconds. 0 with no link. */
+  link_expires_at: number;
+  /** Whether the link needs a passphrase. The passphrase itself is never here. */
+  link_protected: boolean;
   /**
    * What the guests can actually see, as counted by this browser when it last
    * published. Null until something has been published. Shown to the host,

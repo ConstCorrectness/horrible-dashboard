@@ -10,10 +10,13 @@ from __future__ import annotations
 import time
 
 from backend.share_relay.tokens import (
+    CODE_ALPHABET,
+    CODE_LENGTH,
     DEFAULT_MAX_VIEWERS,
     DEFAULT_TTL_S,
     MAX_TTL_S,
     Registry,
+    normalize_code,
 )
 
 
@@ -111,6 +114,53 @@ def test_viewer_ceiling_is_enforced_per_stream() -> None:
 def test_title_is_bounded() -> None:
     stream = Registry().mint(title="x" * 500)
     assert len(stream.title) == 120
+
+
+def test_codes_are_short_crockford_and_unique() -> None:
+    registry = Registry()
+    codes = {registry.mint().code for _ in range(200)}
+    assert len(codes) == 200
+    assert all(len(c) == CODE_LENGTH for c in codes)
+    # No I, L, O or U: a code is read aloud and typed by hand.
+    assert all(set(c) <= set(CODE_ALPHABET) for c in codes)
+    assert not set("ilou") & set(CODE_ALPHABET)
+
+
+def test_a_code_and_a_token_are_never_interchangeable() -> None:
+    """The hijack, at the registry level: watch authority must not open publish
+    authority's lookup, nor the reverse."""
+    registry = Registry()
+    stream = registry.mint()
+    assert registry.get(stream.code) is None
+    assert registry.get_by_code(stream.token) is None
+    assert registry.get_by_code(stream.code) is stream
+    assert registry.get(stream.token) is stream
+
+
+def test_codes_normalize_the_way_people_type_them() -> None:
+    assert normalize_code("K7M2-X9QP") == "k7m2x9qp"
+    # Crockford's decoding rule: the look-alikes fold onto the digits.
+    assert normalize_code("ioLo0000") == "10100000"
+    assert normalize_code("favicon.ico") is None
+    assert normalize_code("k7m2x9q") is None
+    assert normalize_code("k7m2x9quu") is None
+
+
+def test_revoked_and_expired_codes_resolve_to_nothing() -> None:
+    registry = Registry()
+    live = registry.mint()
+    registry.revoke(live.token)
+    expired = registry.mint(ttl_s=60)
+    assert registry.get_by_code(live.code) is None
+    assert registry.get_by_code(expired.code, now=time.time() + 120) is None
+
+
+def test_sweep_drops_the_code_index_too() -> None:
+    registry = Registry()
+    gone = registry.mint()
+    registry.revoke(gone.token)
+    registry.sweep()
+    assert gone.code not in registry._codes
 
 
 def test_default_ceiling_is_a_handful_not_twenty_five() -> None:

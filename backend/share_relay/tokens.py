@@ -11,6 +11,18 @@ a requirement, not a nicety. Someone who stops a share expects the link to die a
 that instant, not at expiry. So the registry is the authority and the token is a
 lookup key with no meaning of its own.
 
+**Two keys, not one.** Every stream carries a short **code** (watch authority) and
+a long **token** (publish authority), and they are never interchangeable. The code
+is what a viewer URL carries — `/k7m2x9qp` — so it is public by construction and
+is short enough to read aloud. The token addresses WHIP and never appears in
+anything a viewer is handed. Until this split the viewer URL carried the token
+itself, and since `Room.publish` replaces the current publisher, anyone watching
+could POST to `/whip/<token>` and swap the host's screen for their own video.
+
+A code is 8 Crockford base32 characters (≈40 bits). That would be thin for a
+permanent secret; it is not thin for a link that dies within hours, sits behind a
+per-address miss limit (`ratelimit.py`), and can carry a passphrase.
+
 **The passphrase is stored hashed**, even though this is a short-lived in-memory
 registry. A relay process holds other people's live video; a crash dump or a stray
 log line that spills plaintext passphrases is exactly the kind of thing that never
@@ -38,6 +50,33 @@ MAX_TTL_S = 24 * 60 * 60
 #: principle, so it must not be guessable in practice.
 TOKEN_BYTES = 32
 
+#: Crockford base32: no I, L, O or U, so a code survives being read aloud, typed
+#: off a QR code or copied by hand. 32 symbols x 8 = 40 bits.
+CODE_ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz"
+CODE_LENGTH = 8
+
+#: What a person plausibly typed instead. Crockford's own decoding rule.
+_CODE_ALIASES = str.maketrans({"i": "1", "l": "1", "o": "0"})
+
+
+def normalize_code(raw: str) -> str | None:
+    """A code in canonical form, or None if it cannot be one.
+
+    Case-insensitive, hyphens ignored, and the look-alikes folded, because a code
+    is meant to be handled by people. `None` for anything the wrong shape, which
+    callers use to tell a *guess* (well-formed, unknown) from noise like
+    `favicon.ico` that no rate limit should count.
+    """
+    code = raw.strip().lower().replace("-", "").translate(_CODE_ALIASES)
+    if len(code) != CODE_LENGTH or any(ch not in CODE_ALPHABET for ch in code):
+        return None
+    return code
+
+
+def _new_code() -> str:
+    return "".join(secrets.choice(CODE_ALPHABET) for _ in range(CODE_LENGTH))
+
+
 #: How many viewers one stream may hold before the relay starts refusing them.
 #:
 #: Six, not the twenty-five this used to be, and the change was forced rather
@@ -64,9 +103,12 @@ def _hash_passphrase(passphrase: str, salt: bytes) -> str:
 class Stream:
     """One minted link, and the ingest that may (eventually) feed it."""
 
+    #: Publish authority. Addresses WHIP; never in a viewer-facing URL or page.
     token: str
     created_at: float
     expires_at: float
+    #: Watch authority. What the viewer URL, WHEP and chat are addressed by.
+    code: str = ""
     #: Empty when the link needs no passphrase.
     passphrase_hash: str = ""
     passphrase_salt: bytes = b""
@@ -105,6 +147,9 @@ class Registry:
 
     def __init__(self, *, max_viewers_per_stream: int = DEFAULT_MAX_VIEWERS) -> None:
         self._streams: dict[str, Stream] = {}
+        #: code -> token. A second index rather than a scan: every viewer request
+        #: resolves through it.
+        self._codes: dict[str, str] = {}
         self.max_viewers_per_stream = max_viewers_per_stream
 
     def mint(
@@ -118,8 +163,12 @@ class Registry:
         now = now if now is not None else time.time()
         ttl = DEFAULT_TTL_S if ttl_s is None else max(60, min(int(ttl_s), MAX_TTL_S))
         salt = secrets.token_bytes(16)
+        code = _new_code()
+        while code in self._codes:
+            code = _new_code()
         stream = Stream(
             token=secrets.token_urlsafe(TOKEN_BYTES),
+            code=code,
             created_at=now,
             expires_at=now + ttl,
             passphrase_hash=_hash_passphrase(passphrase, salt) if passphrase else "",
@@ -127,6 +176,7 @@ class Registry:
             title=title[:120],
         )
         self._streams[stream.token] = stream
+        self._codes[code] = stream.token
         return stream
 
     def get(self, token: str, now: float | None = None) -> Stream | None:
@@ -140,6 +190,16 @@ class Registry:
         if stream is None or not stream.usable(now):
             return None
         return stream
+
+    def get_by_code(self, raw: str, now: float | None = None) -> Stream | None:
+        """The stream a watch code names, under the same one-answer rule as `get`.
+
+        Deliberately cannot be reached with a token, nor `get` with a code: the
+        two authorities must not be interchangeable anywhere.
+        """
+        code = normalize_code(raw)
+        token = self._codes.get(code) if code else None
+        return self.get(token, now) if token else None
 
     def revoke(self, token: str) -> bool:
         """Kill a link now. Returns whether it was live to begin with."""
@@ -155,6 +215,7 @@ class Registry:
         now = now if now is not None else time.time()
         dead = [t for t, s in self._streams.items() if s.revoked or s.expired(now)]
         for token in dead:
+            self._codes.pop(self._streams[token].code, None)
             del self._streams[token]
         return len(dead)
 

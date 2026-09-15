@@ -27,6 +27,8 @@ import {
   WarnIcon,
 } from '../../../notebook/CellIcons';
 import { NOTEBOOK_CHANNEL, openNotebookSession } from '../store';
+import { PublishPanel } from '../publish/PublishPanel';
+import { useLibraryInstall } from '../useLibraryInstall';
 import { NotebookBrowser } from './NotebookBrowser';
 import '../../../notebook/notebook.css';
 
@@ -75,6 +77,9 @@ export function NotebookEditor() {
     return `${nbRoot}${sep}${path.replace(/[\\/]/g, sep)}`;
   }, [nbRoot, path]);
   const lsp = useNotebookLsp(absPath, state.cells);
+  // Declared above the no-path early return: it is a hook.
+  const [publishing, setPublishing] = useState(false);
+  const libs = useLibraryInstall(Boolean(path));
 
   useAgentContext(() => ({
     path,
@@ -232,6 +237,14 @@ export function NotebookEditor() {
         <span className={`nb-kernel nb-kernel--${state.kernel}`} title="Kernel status">
           {state.kernel}
         </span>
+        <button
+          title="Publish this notebook — a gist, GitHub Pages, Kaggle, Colab, or an HTML file"
+          className={publishing ? 'is-on' : undefined}
+          aria-expanded={publishing}
+          onClick={() => setPublishing((v) => !v)}
+        >
+          Publish
+        </button>
         <button disabled={!sessionKey} onClick={() => store.runAll()}>
           Run all
         </button>
@@ -248,7 +261,34 @@ export function NotebookEditor() {
           Restart
         </button>
       </div>
+      {publishing && <PublishPanel path={path} onClose={() => setPublishing(false)} />}
       {state.error && <div className="nb-banner nb-banner--error">{state.error}</div>}
+      {libs.libraries?.state === 'installing' && (
+        <div className="nb-banner nb-banner--warn" role="status">
+          Installing AI libraries into the notebook environment
+          {libs.libraries.installing.length ? ` (${libs.libraries.installing.join(', ')})` : ''}.
+          The first time takes a few minutes — PyTorch alone is large — and the kernel works
+          meanwhile; an import of something still installing will fail until it lands.
+          {libs.libraries.line && (
+            <>
+              {' '}
+              <code>{libs.libraries.line}</code>
+            </>
+          )}
+        </div>
+      )}
+      {libs.libraries?.state === 'failed' && (
+        <div className="nb-banner nb-banner--error">
+          Could not install the notebook's libraries: {libs.libraries.error}{' '}
+          <button onClick={() => void libs.retry()}>Retry</button>
+        </div>
+      )}
+      {libs.finished && (
+        <div className="nb-banner" role="status">
+          AI libraries installed. If an import still fails, restart the kernel.{' '}
+          <button onClick={libs.dismiss}>Dismiss</button>
+        </div>
+      )}
       {state.mode === 'reactive' && state.diagnostics.length > 0 && (
         <div className="nb-banner nb-banner--warn">
           {state.diagnostics.length} reactive issue

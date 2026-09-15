@@ -70,6 +70,45 @@ LSP/terminal/training). The `notebook.python` setting overrides it with an exist
 interpreter (which must have ipykernel + ipywidgets); `notebook.python.version` pins the
 managed venv's Python.
 
+### AI libraries by default
+
+The managed venv also carries the common AI stack — `numpy pandas scipy matplotlib
+scikit-learn tqdm torch transformers datasets accelerate huggingface_hub safetensors
+sentencepiece` — configurable as `notebook.python.packages`. Two stages, because their
+costs differ by three orders of magnitude:
+
+- **Kernel packages** install **blocking** on first open, as before: nothing runs
+  without them, and they take seconds.
+- **Libraries** install **in the background** (`env.start_library_install`, started on
+  every kernel open) while the kernel is already usable. The pane polls
+  `GET /notebook/env` and shows a banner with the live installer line, a Retry on
+  failure (`POST /notebook/env/install`), and — once, to whoever watched it finish —
+  "restart the kernel if an import still fails". Blocking the kernel on a multi-gigabyte
+  PyTorch download would make first open look hung for minutes.
+
+Three rules that are quiet if wrong:
+
+- **A stamp file records what is installed** (`notebook-venv/.horrible-packages.json`).
+  The venv used to bootstrap once and never be revisited, so a package added to the
+  defaults simply never reached an existing install — the `ModuleNotFoundError:
+  transformers` this section exists because of. Missing specs are diffed against the
+  stamp on every open; uv skips anything already satisfied, so a mostly-present list
+  costs seconds.
+- **PyTorch installs first, from its own index.** PyPI's Windows torch wheels are
+  CPU-only, so Windows with an NVIDIA card (per the [hardware](hardware.mdx) probe) uses
+  `download.pytorch.org/whl/cu128`; Linux PyPI wheels already bundle CUDA, and macOS
+  wheels use Metal. The order matters as much as the index: `transformers` and
+  `accelerate` only require *some* torch, and run first they would pull the CPU wheel
+  from PyPI. A torch spec also counts as missing when the index it was installed from is
+  not the one that would be chosen now. `notebook.python.torchIndex` overrides the
+  choice (`pypi`, or an index URL).
+- **An override interpreter is never installed into.** `notebook.python` points at the
+  user's own Python; its library status is `unmanaged`, and managing someone else's
+  environment behind their back is not this module's call.
+
+The stamp is written after each stage, so a failure installing `transformers` leaves
+torch recorded and a retry does not download it again.
+
 ## Installing packages
 
 `!pip install regex`, `%pip install regex` and `%uv pip install regex` all install into
@@ -226,7 +265,13 @@ dict), `cells_changed` `{notebook}`, `mode` `{mode}`, `graph`
 | `GET /notebook/doc?path=` | load a document (`NotebookModel`) |
 | `POST /notebook` | create a notebook (starter cells + mode) |
 | `PUT /notebook/mode` | set the execution mode |
-| `GET /notebook/env` | whether the kernel interpreter is ready |
+| `GET /notebook/env` | whether the kernel interpreter is ready, and the library install state |
+| `POST /notebook/env/install` | start or retry installing `notebook.python.packages` |
+| `GET /notebook/publish?path=` | where this notebook is published, and which targets are usable now |
+| `POST /notebook/publish/preflight` | what would leave the machine: secrets, home paths, tracebacks, widgets |
+| `POST /notebook/publish` | publish to `gist`, `pages`, `kaggle` or `colab` (see [Publishing](#publishing)) |
+| `DELETE /notebook/publish?path=&target=` | delete the remote copy and the record; `&forget=true` drops only the record |
+| `GET /notebook/publish/html` · `POST /notebook/publish/html` | download a standalone HTML page, or save it beside the notebook |
 
 ## Rendering a cell
 
@@ -339,6 +384,81 @@ the store's optimistic copy hid that until the notebook was reloaded from disk.
 
 `training.notebook` consumes the same kit, so it inherits all of this.
 
+## Publishing
+
+**Publish** in the notebook header opens a panel that puts the notebook somewhere
+other people can read it, on free services:
+
+| Target | What you get | Visibility | Removing it |
+| --- | --- | --- | --- |
+| **GitHub Gist** | An [nbviewer](https://nbviewer.org) render of a gist, plus the gist page | secret (unlisted) or public | Unpublish deletes the gist |
+| **GitHub Pages** | `https://<you>.github.io/notebooks/<slug>/` as static HTML, plus an nbviewer link | public only | Unpublish deletes the files |
+| **Kaggle** | A Kaggle notebook, which Kaggle runs once | private or public | **Forget** only — Kaggle has no delete API |
+| **Google Colab** | A Drive file that opens in Colab | only you, or anyone with the link | Unpublish deletes the Drive file |
+| **Save as HTML** | `<name>.html` beside the notebook | — | — |
+
+The pipeline is always **prepare → preflight → publish → record**, in that order:
+
+- **Prepare a copy.** The user's file is never modified: *Strip outputs* and the
+  removal of saved widget state happen to a deep copy. The copy comes from the
+  **live kernel session's document** when one is open, because that is what the
+  person is looking at; the file on disk otherwise.
+- **Preflight the copy** — after preparation, so stripping outputs really clears
+  the findings that lived in outputs. It looks for credential shapes (GitHub, `sk-`
+  keys, Hugging Face, AWS, Google, Slack, private keys, and quoted `TOKEN = "…"`
+  assignments), home-directory paths that name the account, tracebacks, and widgets
+  (which render as nothing without a kernel). Base64 image payloads are skipped:
+  random base64 matches short key prefixes often enough to train people to click
+  through.
+- **A secret blocks.** Publishing waits for an explicit *Publish anyway*, and the
+  server enforces it **before any network call**, so a target never receives
+  content that was flagged and not confirmed. Everything else is a warning.
+- A finding shows only a secret's **first four characters**: the list goes to the
+  browser, and finding lists get pasted.
+- The panel says **"found these"**, never "clean". A pattern list does not know
+  every credential format, and a green tick over a notebook holding an unrecognised
+  key would be the most harmful thing it could draw.
+
+There is **no agent tool that publishes**. Putting a file on the internet from a
+sentence is the same problem `share.grant` refuses.
+
+### Where publications are recorded
+
+`notebook_publications` in `app.db`, keyed by the path relative to the notebook
+root plus the target, so publishing again updates the same gist, page, kernel or
+Drive file instead of scattering copies. Deliberately not the `.ipynb` metadata:
+publishing must never rewrite the file, and a record inside a notebook would itself
+get published. The cost, stated plainly: renaming or moving a notebook forgets where
+it was published, and the next publish makes a new copy.
+
+### Target rules that are quiet if wrong
+
+- **A secret gist is unlisted, not private.** Anyone holding the link can read it,
+  and the panel says so under the choice. GitHub cannot change a gist's visibility,
+  so switching creates a new gist and deletes the old one — and the result says the
+  old link stopped working rather than leaving it to be discovered.
+- **The link handed out is nbviewer**, not the gist page: GitHub's own renderer
+  gives up on large notebooks.
+- **`gist` is its own GitHub scope**, added after the first sign-ins, so an older
+  token simply lacks it. `github.granted_scopes()` reads what the stored token
+  actually carries, and the panel says *Reconnect GitHub* instead of relaying
+  GitHub's bare 404.
+- **Pages is public-only.** Pages on a private repository needs a paid plan, so a
+  private repository is refused up front rather than producing a link that 404s.
+  The repository (`notebook.publish.pagesRepo`, default `notebooks` on your
+  account) is created public when missing; `.nojekyll` goes in first so Jekyll does
+  not drop `_`-prefixed paths; and the slug is remembered, so renaming a notebook
+  does not move its public URL. Pages builds asynchronously and the result says the
+  first publish takes about a minute — a fresh link that 404s looks exactly like a
+  broken one.
+- **Kaggle and Colab reuse the training pushers**, handed a real `ProjectModel`
+  whose root is `$HORRIBLE_DATA_DIR/notebook-publish/<notebook>/` with the copy
+  staged as `main.ipynb`, so push bookkeeping (`kernel-metadata.json`,
+  `.push-colab.json`) never lands in the notebook folder. Kaggle is pushed with the
+  GPU off — a publish is for reading, not for spending quota — and keeps the title
+  and slug of its first push, because Kaggle checks that a title resolves to the
+  kernel id. Credentials stay where [training](training.mdx) keeps them.
+
 ## Contributions to the Layout Shell
 
 - **Panels** — `notebook.browser` ("Notebooks", singleton, left: file catalog +
@@ -378,7 +498,8 @@ the store's optimistic copy hid that until the notebook was reloaded from disk.
   `switch_workspace` takes); only the display name changed. `show "notebook"` is
   pinned by a `VIEW_ALIASES` entry to the editor pane, since the workspace pass
   runs before pane titles and would otherwise claim the word.
-- **Settings** — `notebook.root`, `notebook.python`, `notebook.python.version`.
+- **Settings** — `notebook.root`, `notebook.python`, `notebook.python.version`,
+  `notebook.python.packages`, `notebook.python.torchIndex`, `notebook.publish.pagesRepo`.
 
 ## Roadmap
 
@@ -436,3 +557,4 @@ inspect reply cannot eat each other) is described in
 | Custom `anywidget` (`_esm`/`_css`) views | ✅ | ✅ |
 | Widget reattach-resync (live kernel) | ✅ | ✅ |
 | Classic AMD `@jupyter-widgets` views | ⏳ (fallback) | ⏳ (fallback) |
+| Publish (Gist, Pages, Kaggle, Colab, HTML file) | ✅ | ✅ |

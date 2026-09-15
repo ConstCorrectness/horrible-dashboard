@@ -1,0 +1,49 @@
+/* ShareableLink (packages/core/src/ShareableLink.tsx). A recessed well with a 2px
+   accent rule on top rather than a glowing border: it is the one thing on the
+   pane meant to leave this machine, so it is marked, not decorated. */
+.shareable-link {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+  border-radius: var(--radius-md);
+  min-width: 0;
+}
+
+.shareable-link__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.shareable-link__url {
+  font-family: var(--font-mono, ui-monospace, 'JetBrains Mono', monospace);
+  font-size: var(--fs-body, 0.8rem);
+}
+
+.shareable-link__spacer {
+  flex: 1;
+}
+
+.shareable-link__qr {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+}
+
+.shareable-link__qr svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.shareable-link__qr figcaption {
+  color: var(--text-dim);
+  font-size: var(--fs-meta, 0.72rem);
+}

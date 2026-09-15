@@ -37,6 +37,7 @@ const HomeIcon = () => (
 
 import { useHorizontalWheel } from '../hooks/useHorizontalWheel';
 import { useAppFullscreen } from '../hooks/useAppFullscreen';
+import { ShellIndicators } from './ShellIndicators';
 import { WindowControls } from './WindowChrome';
 
 // The strip renders from AppShell before the Frame ever mounts (home view), so
@@ -166,6 +167,7 @@ export function WorkspaceTabs() {
           className="frame-tabs-scroll"
           {...(dragRegion ? { 'data-tauri-drag-region': '' } : {})}
         />
+        <ShellIndicators />
         <WindowControls />
       </header>
     );
@@ -270,6 +272,7 @@ export function WorkspaceTabs() {
           ＋
         </button>
       </div>
+      <ShellIndicators />
       {nativeChrome && <WindowControls />}
     </header>
   );

@@ -186,7 +186,8 @@ def test_list_includes_builtin_github(client: TestClient):
     assert gh["kind"] == "oauth"
     assert gh["connected"] is False
     assert gh["blurb"]
-    assert {s["id"] for s in gh["scopes"]} == {"read:user", "repo"}
+    # `gist` is what notebook publishing needs; it is its own scope on GitHub.
+    assert {s["id"] for s in gh["scopes"]} == {"read:user", "repo", "gist"}
 
 
 def test_list_never_leaks_a_token(client: TestClient):

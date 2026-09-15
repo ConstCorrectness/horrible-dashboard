@@ -32,8 +32,15 @@ class ColabPush:
     label = "Google Colab"
 
     def push(
-        self, project: ProjectModel, notebook: Path, progress: ProgressLine
+        self,
+        project: ProjectModel,
+        notebook: Path,
+        progress: ProgressLine,
+        *,
+        anyone_with_link: bool | None = None,
     ) -> PushResultModel:
+        """`anyone_with_link` sets Drive link sharing after the upload; None (the
+        training default) leaves whatever sharing the file already has alone."""
         try:
             from googleapiclient.http import MediaFileUpload
         except ImportError as exc:  # pragma: no cover
@@ -67,6 +74,8 @@ class ColabPush:
             raise PushError(f"Drive upload failed: {exc}") from exc
         file_id = str(file["id"])
         self._remember_file_id(project, file_id)
+        if anyone_with_link is not None:
+            self._set_link_sharing(drive, file_id, anyone_with_link)
         url = f"https://colab.research.google.com/drive/{file_id}"
         progress(f"pushed → {url}")
         return PushResultModel(target=self.target, url=url, status="pushed")
@@ -80,6 +89,51 @@ class ColabPush:
             url=f"https://colab.research.google.com/drive/{file_id}",
             status="pushed",
         )
+
+    def delete(self, project: ProjectModel) -> None:
+        """Delete the pushed Drive file and forget it. Safe when nothing was pushed.
+
+        A file already gone from Drive counts as deleted: the person asked for it not
+        to exist, and it does not.
+        """
+        file_id = self._remembered_file_id(project)
+        if file_id:
+            try:
+                _drive().files().delete(fileId=file_id).execute()
+            except PushError:
+                raise
+            except Exception as exc:
+                if "404" not in str(exc) and "notFound" not in str(exc):
+                    raise PushError(f"Drive delete failed: {exc}") from exc
+        self._marker(project).unlink(missing_ok=True)
+
+    @staticmethod
+    def _set_link_sharing(drive: Any, file_id: str, enabled: bool) -> None:
+        """Turn "anyone with the link can view" on or off for one Drive file."""
+        try:
+            listed = (
+                drive.permissions()
+                .list(fileId=file_id, fields="permissions(id,type)")
+                .execute()
+            )
+            anyone = [
+                p for p in listed.get("permissions", []) if p.get("type") == "anyone"
+            ]
+            if enabled and not anyone:
+                drive.permissions().create(
+                    fileId=file_id,
+                    body={"type": "anyone", "role": "reader"},
+                    fields="id",
+                ).execute()
+            elif not enabled:
+                for permission in anyone:
+                    drive.permissions().delete(
+                        fileId=file_id, permissionId=permission["id"]
+                    ).execute()
+        except Exception as exc:
+            raise PushError(
+                f"Uploaded, but could not change who can open the link: {exc}"
+            ) from exc
 
     # The Drive file id persists in a side file next to project.json, so a
     # re-push updates the same Drive file instead of littering new copies.
