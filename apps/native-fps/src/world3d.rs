@@ -1372,6 +1372,7 @@ pub fn create_procedural_assault_3d(info: MapInfo) -> World3D {
 const HD_ASSAULT_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_assault.glb");
 const HD_BANK_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_bank.glb");
 const HD_JUNKFLEA_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_junkflea.glb");
+const HD_FACILITY_GLB_BYTES: &[u8] = include_bytes!("../../../backend/modules/hassault/maps/hd_facility.glb");
 
 fn local_node_matrix(node: &gltf::Node) -> Mat4 {
     match node.transform() {
@@ -1664,7 +1665,28 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
 
     let triangles = render_positions.len() / 9;
 
-    let (spawns, items) = if info.name == "hd_junkflea" {
+    let (spawns, items) = if info.name == "hd_facility" {
+        (
+            vec![
+                SpawnPoint { x: 10.0, y: 8.0, z: 0.0, yaw: 0.0, team: 0 },
+                SpawnPoint { x: 32.0, y: 4.0, z: 6.0, yaw: 0.0, team: 0 },
+                SpawnPoint { x: 54.0, y: 8.0, z: 0.0, yaw: 315.0, team: 0 },
+                SpawnPoint { x: 32.0, y: 10.0, z: 0.0, yaw: 0.0, team: 0 },
+                SpawnPoint { x: 10.0, y: 56.0, z: 0.0, yaw: 180.0, team: 1 },
+                SpawnPoint { x: 32.0, y: 60.0, z: 6.0, yaw: 180.0, team: 1 },
+                SpawnPoint { x: 54.0, y: 56.0, z: 0.0, yaw: 225.0, team: 1 },
+                SpawnPoint { x: 32.0, y: 54.0, z: 0.0, yaw: 180.0, team: 1 },
+            ],
+            vec![
+                ItemRow { id: 1, kind: "ammo_assault".into(), x: 32.0, y: 32.0, z: 6.0 },
+                ItemRow { id: 2, kind: "armour".into(), x: 32.0, y: 32.0, z: -5.0 },
+                ItemRow { id: 3, kind: "health".into(), x: 8.0, y: 32.0, z: 0.0 },
+                ItemRow { id: 4, kind: "health".into(), x: 56.0, y: 32.0, z: 0.0 },
+                ItemRow { id: 5, kind: "ammo_sniper".into(), x: 4.0, y: 4.0, z: 6.0 },
+                ItemRow { id: 6, kind: "ammo_sniper".into(), x: 60.0, y: 60.0, z: 6.0 },
+            ],
+        )
+    } else if info.name == "hd_junkflea" {
         (
             vec![
                 SpawnPoint { x: 16.0, y: 12.0, z: 0.0, yaw: 0.0, team: 0 },
@@ -1741,7 +1763,14 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
         )
     };
 
-    let bounds = if info.name == "hd_junkflea" {
+    let bounds = if info.name == "hd_facility" {
+        WorldBounds {
+            min: [0.0, 0.0, -5.0],
+            max: [64.0, 64.0, 14.0],
+            center: [32.0, 32.0, 4.5],
+            extent: 42.0,
+        }
+    } else if info.name == "hd_junkflea" {
         WorldBounds {
             min: [4.0, 4.0, -2.5],
             max: [60.0, 60.0, 14.0],
@@ -1769,8 +1798,22 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
         col_indices,
         spawns,
         items,
-        waterlevel: if info.name == "hd_junkflea" { -5.0 } else { -100.0 },
+        waterlevel: if info.name == "hd_facility" { -3.5 } else if info.name == "hd_junkflea" { -5.0 } else { -100.0 },
     })
+}
+
+pub fn load_facility_glb(info: MapInfo) -> Result<World3D, String> {
+    for path in [
+        "../../backend/modules/hassault/maps/hd_facility.glb",
+        "backend/modules/hassault/maps/hd_facility.glb",
+        "assets/maps/hd_facility.glb",
+        "apps/web/public/hd_facility.glb",
+    ] {
+        if let Ok(bytes) = std::fs::read(path) {
+            return load_world_3d_from_glb(&bytes, info);
+        }
+    }
+    load_world_3d_from_glb(HD_FACILITY_GLB_BYTES, info)
 }
 
 pub fn load_junkflea_glb(info: MapInfo) -> Result<World3D, String> {
@@ -1818,6 +1861,15 @@ pub fn load_assault_glb(info: MapInfo) -> Result<World3D, String> {
 /// Universal 3D Arena Factory: selects appropriate procedural or modeled 3D map generator.
 pub fn create_world_3d(info: MapInfo) -> World3D {
     match info.name.as_str() {
+        "hd_facility" => {
+            match load_facility_glb(info.clone()) {
+                Ok(w) => w,
+                Err(err) => {
+                    eprintln!("hassault: failed to load GLB for hd_facility ({err}), falling back to procedural");
+                    create_procedural_facility_3d(info)
+                }
+            }
+        }
         "hd_junkflea" => {
             match load_junkflea_glb(info.clone()) {
                 Ok(w) => w,

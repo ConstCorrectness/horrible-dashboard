@@ -33,6 +33,42 @@ fn test_facility_3d_generation() {
 }
 
 #[test]
+fn test_facility_glb_generation() {
+    let info = MapInfo {
+        name: "hd_facility".into(),
+        title: "Deadzone Facility (GLB)".into(),
+        ssize: 64,
+        ..Default::default()
+    };
+
+    let world = hassault_native::world3d::create_world_3d(info);
+
+    assert!(world.triangles > 0, "should produce triangles");
+    assert_eq!(world.render_positions.len(), world.triangles * 9);
+    assert_eq!(world.render_normals.len(), world.triangles * 9);
+    assert_eq!(world.render_colors.len(), world.triangles * 9);
+
+    assert_eq!(world.spawns.len(), 8, "must have 8 spawns");
+    assert_eq!(world.spawns.iter().filter(|s| s.team == 0).count(), 4, "must have 4 CLA spawns");
+    assert_eq!(world.spawns.iter().filter(|s| s.team == 1).count(), 4, "must have 4 RVSF spawns");
+
+    assert_eq!(world.items.len(), 6, "must have 6 pickups");
+    assert_eq!(world.waterlevel, -3.5);
+
+    // Verify Rapier collision
+    let physics = RapierPhysicsWorld::new(&world.col_vertices, &world.col_indices);
+    // Ray down to catwalk deck
+    let (hit_catwalk, dist_catwalk, _) = physics.cast_ray([32.0, 32.0, 10.0], [0.0, 0.0, -1.0], 20.0);
+    assert!(hit_catwalk, "ray downwards onto center catwalk should hit collision mesh");
+    assert!((dist_catwalk - 4.0).abs() < 0.25, "distance to catwalk at z=6 should be ~4.0, was {}", dist_catwalk);
+
+    // Ray down onto West laboratory ground floor
+    let (hit_floor, dist_floor, _) = physics.cast_ray([10.0, 32.0, 5.0], [0.0, 0.0, -1.0], 10.0);
+    assert!(hit_floor, "ray downwards onto ground floor should hit floor at z=0");
+    assert!((dist_floor - 5.0).abs() < 0.25, "distance to ground floor at z=0 should be ~5.0, was {}", dist_floor);
+}
+
+#[test]
 fn test_junk_flea_3d_generation() {
     let info = MapInfo {
         name: "hd_junkflea".into(),
