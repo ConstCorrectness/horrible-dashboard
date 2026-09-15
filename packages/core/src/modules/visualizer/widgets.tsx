@@ -6,6 +6,7 @@ import { registry } from '../../registry';
 import { sendChannel, subscribeChannel } from '../../ws';
 import { registerVisualizerInstance } from './store';
 import { languageForMode } from './bridge';
+import { describeRunError } from './run-error';
 import type { EditorService } from '../editor/service';
 
 /** The editor's buffer surface, looked up lazily (the editor module registers it
@@ -451,19 +452,8 @@ export function VisualizerWidget() {
         };
       }
     } catch (err) {
-      const errMsg = String(err);
-      if (
-        errMsg.includes('WebGL') ||
-        errMsg.includes('webgl') ||
-        errMsg.includes('context') ||
-        errMsg.toLowerCase().includes('webgl')
-      ) {
-        setError(
-          `WebGL Error: Failed to create WebGL context. Hardware acceleration or WebGL support might be disabled in this environment (e.g. headless shell, VM, or browser settings). Please switch to 'canvas' (Canvas 2D) or 'pygame' mode, or enable hardware acceleration in your client settings.`,
-        );
-      } else {
-        setError(`Compilation error: ${errMsg}`);
-      }
+      console.error('Visualizer script failed:', err);
+      setError(describeRunError(err, mode));
     }
   };
 

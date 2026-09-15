@@ -38,6 +38,12 @@ JS visualizations execute in the main browser thread to achieve high-performance
   so the loop is cancelled on stop/re-run, and `document.body.appendChild(...)` is a no-op to
   keep a detached canvas from escaping the pane. This makes weak models' typical output render
   without them having to emit the hook shape.
+- **Errors show the real cause** (`run-error.ts`). "WebGL is unavailable" is only reported
+  when a throwaway canvas genuinely cannot create a WebGL context; otherwise the script's own
+  error is shown. The earlier handler relabeled _any_ message containing `context` as a
+  hardware problem, which hid the common real cause: a canvas keeps its first context type,
+  so a script (or the linked editor buffer — **Source** defaults to the active one) that calls
+  `canvas.getContext('2d')` makes a later WebGL renderer fail on a machine with a working GPU.
 
 ### 2. Backend-Side Headless Pygame Simulations
 Python simulations run inside an isolated subprocess on the backend, streaming frames in real-time.
