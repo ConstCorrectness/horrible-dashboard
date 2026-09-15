@@ -446,6 +446,80 @@ describe('Knife archetypes and PBR skin materials', () => {
     // Empty reload pulls bolt rearward (more negative Z)
     expect(emptyZ).toBeLessThan(tacticalZ);
   });
+
+  it('builds high-fidelity detailed weapon models with rich part counts (anti-roblox)', () => {
+    const pistol = stand();
+    pistol.vm.setWeapon('pistol');
+    const pistolMeshCount = colors(pistol.vm, pistol.camera).length;
+    expect(pistolMeshCount).toBeGreaterThanOrEqual(20);
+
+    const shotgun = stand();
+    shotgun.vm.setWeapon('shotgun');
+    const shotgunMeshCount = colors(shotgun.vm, shotgun.camera).length;
+    expect(shotgunMeshCount).toBeGreaterThanOrEqual(25);
+
+    const sniper = stand();
+    sniper.vm.setWeapon('sniper');
+    const sniperMeshCount = colors(sniper.vm, sniper.camera).length;
+    expect(sniperMeshCount).toBeGreaterThanOrEqual(30);
+
+    const assault = stand();
+    assault.vm.setWeapon('assault');
+    const assaultMeshCount = colors(assault.vm, assault.camera).length;
+    expect(assaultMeshCount).toBeGreaterThanOrEqual(35);
+  });
+
+  it('executes category-specific inspect choreography for pistol, sniper, shotgun, and knives', () => {
+    // Pistol inspect (one-handed slide tilt)
+    const pistol = stand();
+    pistol.vm.setWeapon('pistol');
+    pistol.vm.inspect();
+    pistol.vm.update(0.8, { ...frame });
+    expect(pistol.vm.inspecting).toBe(true);
+    expect(pistol.vm.pivot.rotation.z).not.toBe(0);
+
+    // Sniper inspect (optic & chamber pan)
+    const sniper = stand();
+    sniper.vm.setWeapon('sniper');
+    sniper.vm.inspect();
+    sniper.vm.update(0.8, { ...frame });
+    expect(sniper.vm.inspecting).toBe(true);
+    expect(sniper.vm.pivot.rotation.y).not.toBe(0);
+
+    // Karambit knife inspect (ring spin flourish)
+    const karambit = stand();
+    karambit.vm.setWeapon('knife', {
+      id: 'knife_karambit_fade',
+      name: 'Karambit | Fade',
+      baseColor: '#ec4899',
+      accentColor: '#8b5cf6',
+      patternType: 'marble',
+      floatValue: 0.01,
+    });
+    karambit.vm.inspect();
+    karambit.vm.update(0.5, { ...frame });
+    expect(karambit.vm.inspecting).toBe(true);
+    // Karambit executes high roll rotation during ring twirl
+    expect(Math.abs(karambit.vm.pivot.rotation.z)).toBeGreaterThan(0.5);
+  });
+
+  it('executes multi-phase reload impulses (mag drop, mag seat, bolt rack)', () => {
+    const { vm } = stand();
+    vm.setWeapon('assault');
+
+    // Mag drop jolt at ~0.22 progress
+    vm.update(0.016, { ...frame, reloading: true, reloadProgress: 0.22 });
+    const dropY = vm.pivot.position.y;
+
+    // Mag seat slam at ~0.62 progress
+    vm.update(0.016, { ...frame, reloading: true, reloadProgress: 0.62 });
+    const seatY = vm.pivot.position.y;
+
+    // Both phases induce dynamic vertical impulses distinct from baseline rest
+    expect(dropY).not.toBe(0);
+    expect(seatY).not.toBe(0);
+  });
 });
+
 
 

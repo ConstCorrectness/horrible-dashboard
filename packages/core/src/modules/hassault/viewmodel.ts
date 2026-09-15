@@ -508,6 +508,7 @@ export class WeaponViewModel {
   /** The skin the current model was built with, so a change of skin rebuilds it
    * and an unchanged one does not. */
   private skinKey = '';
+  private currentSkin: WeaponSkin | null = null;
   /** Geometries created by the build in progress, collected by `box`/`tube`. */
   private building: THREE.BufferGeometry[] = [];
 
@@ -655,6 +656,7 @@ export class WeaponViewModel {
     const swapped = id !== this.weaponId;
     this.weaponId = id;
     this.skinKey = skinKey;
+    this.currentSkin = skin;
     this.release();
     if (!id) return;
     this.setPalette(skin);
@@ -1102,24 +1104,150 @@ export class WeaponViewModel {
     // For firearms: two-stage inspect showcasing the play-side receiver/chamber first,
     // then subtly tilting across to inspect the top and reverse side.
     const isKnife = this.weaponId === 'knife';
-    const knifeFlourish = isKnife ? Math.sin(Math.min(1.0, turn * 2.5) * Math.PI) : 0;
-    const knifeSpin = isKnife ? knifeFlourish * Math.PI * 1.6 : 0;
+    const skinId = this.currentSkin?.id ?? '';
+    const skinName = (this.currentSkin?.name ?? '').toLowerCase();
+    const isKarambit = isKnife && (skinId.includes('karambit') || skinName.includes('karambit'));
+    const isButterfly = isKnife && (skinId.includes('butterfly') || skinName.includes('butterfly'));
+    const isBayonet =
+      isKnife &&
+      (skinId.includes('bayonet') || skinName.includes('bayonet') || skinId.includes('lore'));
+    const isTacticalKnife = isKnife && !isKarambit && !isButterfly && !isBayonet;
 
-    const inspectPitch = isKnife
-      ? inspect * (0.28 + 0.35 * Math.sin(turn * Math.PI))
-      : inspect * (0.34 - 0.12 * Math.sin(turn * Math.PI));
+    const isPistol = this.weaponId === 'pistol';
+    const isShotgun = this.weaponId === 'shotgun';
+    const isSniper = this.weaponId === 'sniper';
+    const isNade = this.weaponId.startsWith('nade') || this.weaponId.startsWith('grenade');
 
-    const inspectYaw = isKnife
-      ? -inspect * 0.45 + knifeFlourish * 0.35
-      : -inspect * (0.95 - 0.35 * turn);
+    let inspectPitch = 0;
+    let inspectYaw = 0;
+    let inspectRoll = 0;
+    let inspectLiftX = 0;
+    let inspectLiftY = 0;
+    let inspectLiftZ = 0;
 
-    const inspectRoll = isKnife
-      ? inspect * (1.2 + knifeSpin)
-      : inspect * (INSPECT_ROLL + INSPECT_TURN * turn);
+    if (isKarambit) {
+      // Karambit continuous finger-ring twirl on phase 1, followed by reverse blade showcase
+      const ringTwirl = turn < 0.35 ? (turn / 0.35) * Math.PI * 4.0 : 0;
+      inspectPitch = inspect * (0.35 + 0.25 * Math.sin(turn * Math.PI));
+      inspectYaw = -inspect * 0.45 + Math.sin(turn * Math.PI) * 0.30;
+      inspectRoll = inspect * (1.25 + ringTwirl + Math.sin(turn * Math.PI) * 0.40);
+      inspectLiftX = lift * 0.18;
+      inspectLiftY = lift * 0.22;
+      inspectLiftZ = lift * 0.28;
+    } else if (isButterfly) {
+      // Balisong aerial dual-handle flip and whip
+      const flipOsc = Math.sin(turn * Math.PI * 4.0);
+      inspectPitch = inspect * (0.22 + 0.25 * flipOsc);
+      inspectYaw = inspect * (-0.35 + 0.35 * Math.cos(turn * Math.PI * 2.0));
+      inspectRoll = inspect * (1.10 + flipOsc * 1.50);
+      inspectLiftX = lift * 0.16;
+      inspectLiftY = lift * 0.20;
+      inspectLiftZ = lift * 0.24;
+    } else if (isBayonet) {
+      // Heavy combat bayonet vertical toss-and-catch with 360 flip
+      const toss = Math.sin(turn * Math.PI);
+      const tossFlip = turn < 0.38 ? (turn / 0.38) * Math.PI * 2.0 : 0;
+      inspectPitch = inspect * (0.30 + tossFlip + 0.12 * toss);
+      inspectYaw = -inspect * 0.40;
+      inspectRoll = inspect * (0.65 + 0.20 * toss);
+      inspectLiftX = lift * 0.15;
+      inspectLiftY = lift * 0.26 + (turn < 0.45 ? Math.sin((turn / 0.45) * Math.PI) * 0.22 : 0);
+      inspectLiftZ = lift * 0.25;
+    } else if (isTacticalKnife) {
+      // Tactical knife tanto bevel and spine serration inspection
+      inspectPitch = inspect * (0.28 + 0.25 * Math.sin(turn * Math.PI));
+      inspectYaw = -inspect * (0.50 - 0.20 * turn);
+      inspectRoll = inspect * (1.45 + 0.40 * turn);
+      inspectLiftX = lift * 0.18;
+      inspectLiftY = lift * 0.22;
+      inspectLiftZ = lift * 0.26;
+    } else if (isPistol) {
+      // Tactical pistol one-handed chamber and slide inspection
+      inspectPitch = inspect * (0.25 + 0.15 * Math.sin(turn * Math.PI));
+      inspectYaw = -inspect * (0.65 - 0.30 * turn);
+      inspectRoll = inspect * (1.40 + 0.55 * turn);
+      inspectLiftX = lift * 0.24;
+      inspectLiftY = lift * 0.22;
+      inspectLiftZ = lift * 0.15;
+    } else if (isShotgun) {
+      // Shotgun barrel rib and underside loading gate check
+      inspectPitch = inspect * (0.42 - 0.28 * Math.sin(turn * Math.PI));
+      inspectYaw = -inspect * (0.75 - 0.45 * turn);
+      inspectRoll = inspect * (1.85 + 0.70 * turn);
+      inspectLiftX = lift * 0.26;
+      inspectLiftY = lift * 0.16;
+      inspectLiftZ = lift * 0.24;
+    } else if (isSniper) {
+      // Sniper rifle precision optical reflection and bolt check
+      inspectPitch = inspect * (0.30 - 0.18 * Math.sin(turn * Math.PI));
+      inspectYaw = -inspect * (0.85 - 0.25 * turn);
+      inspectRoll = inspect * (1.65 + 0.60 * turn);
+      inspectLiftX = lift * 0.34;
+      inspectLiftY = lift * 0.14;
+      inspectLiftZ = lift * 0.28;
+    } else if (isNade) {
+      // Grenade palm toss and fuse ring check
+      inspectPitch = inspect * (0.20 + 0.35 * Math.sin(turn * Math.PI));
+      inspectYaw = -inspect * 0.30;
+      inspectRoll = inspect * 0.85;
+      inspectLiftX = lift * 0.15;
+      inspectLiftY = lift * 0.25;
+      inspectLiftZ = lift * 0.20;
+    } else {
+      // Tactical assault rifle two-handed receiver and dust cover inspection
+      inspectPitch = inspect * (0.34 - 0.12 * Math.sin(turn * Math.PI));
+      inspectYaw = -inspect * (0.95 - 0.35 * turn);
+      inspectRoll = inspect * (INSPECT_ROLL + INSPECT_TURN * turn);
+      inspectLiftX = lift * 0.30;
+      inspectLiftY = lift * 0.16;
+      inspectLiftZ = lift * 0.20;
+    }
 
-    const inspectLiftX = isKnife ? lift * 0.18 : lift * 0.3;
-    const inspectLiftY = isKnife ? lift * 0.22 : lift * 0.16;
-    const inspectLiftZ = isKnife ? lift * 0.26 : lift * 0.2;
+    // Mechanical reload physical dynamics: mag release jolt, mag seat slam, and action rack
+    let reloadImpulseY = 0;
+    let reloadImpulseZ = 0;
+    let reloadImpulsePitch = 0;
+    let reloadImpulseRoll = 0;
+
+    if (frame.reloadProgress !== null && frame.reloadProgress !== undefined) {
+      const p = Math.max(0, Math.min(1, frame.reloadProgress));
+      // 1. Mag drop jolt (p in 0.18..0.28)
+      if (p >= 0.18 && p <= 0.28) {
+        const s = Math.sin(((p - 0.18) / 0.10) * Math.PI);
+        reloadImpulseY -= 0.045 * s;
+        reloadImpulsePitch += 0.08 * s;
+      }
+      // 2. Mag insert upward slam impact (p in 0.58..0.68)
+      if (p >= 0.58 && p <= 0.68) {
+        const s = Math.sin(((p - 0.58) / 0.10) * Math.PI);
+        reloadImpulseY += 0.065 * s;
+        reloadImpulseZ -= 0.04 * s;
+        reloadImpulsePitch -= 0.12 * s;
+      }
+      // 3. Action rack / slide release / shotgun pump / bolt cycle (p in 0.74..0.88)
+      if (p >= 0.74 && p <= 0.88) {
+        const rackT = (p - 0.74) / 0.14;
+        if (isPistol) {
+          const s = Math.sin(rackT * Math.PI);
+          reloadImpulseZ += 0.06 * s;
+          reloadImpulsePitch -= 0.10 * s;
+        } else if (isShotgun) {
+          const s = Math.sin(rackT * Math.PI * 2.0);
+          reloadImpulseZ -= 0.08 * s;
+          reloadImpulsePitch += 0.12 * s;
+        } else if (isSniper) {
+          const s = Math.sin(rackT * Math.PI);
+          reloadImpulseZ -= 0.12 * s;
+          reloadImpulsePitch += 0.16 * s;
+          reloadImpulseRoll -= 0.10 * s;
+        } else {
+          const s = Math.sin(rackT * Math.PI);
+          reloadImpulseZ -= 0.09 * s;
+          reloadImpulsePitch += 0.14 * s;
+          reloadImpulseRoll += 0.08 * s;
+        }
+      }
+    }
 
     let knifeX = 0;
     let knifeY = 0;
@@ -1161,16 +1289,17 @@ export class WeaponViewModel {
       // axis as the reload dip and *added* rather than blended, so a switch
       // asked for mid-reload takes the gun the rest of the way down instead of
       // fighting the dip for the pivot.
-      curHomeY + (bobY + this.swayY * adsDamp + landDip) - this.reloadT * 0.55 + inspectLiftY - stow * 1.15 + knifeY,
+      curHomeY + (bobY + this.swayY * adsDamp + landDip) - this.reloadT * 0.55 + reloadImpulseY + inspectLiftY - stow * 1.15 + knifeY,
       // Recoil is mostly backwards: a gun that only rotates looks hinged.
-      curHomeZ + this.kick * 0.28 + boltPullZ + inspectLiftZ + knifeZ,
+      curHomeZ + this.kick * 0.28 + boltPullZ + reloadImpulseZ + inspectLiftZ + knifeZ,
     );
     this.pivot.rotation.set(
-      this.kick * -0.16 + this.reloadT * 0.7 + boltPullPitch + bobY * 0.4 + inspectPitch + stow * 0.9 + knifePitch,
+      this.kick * -0.16 + this.reloadT * 0.7 + boltPullPitch + reloadImpulsePitch + bobY * 0.4 + inspectPitch + stow * 0.9 + knifePitch,
       (this.swayX * 0.7 + this.strafeSway * 0.5) * adsDamp + this.reloadT * 0.25 + inspectYaw + knifeYaw,
       (this.swayX * 0.5 + this.swayRoll) * adsDamp +
         bobX * 0.6 +
         boltPullRoll +
+        reloadImpulseRoll +
         inspectRoll +
         stow * 0.35 +
         knifeRoll,
@@ -1697,6 +1826,190 @@ export class WeaponViewModel {
     return { group, muzzle: [0, 0.03, -1.5], rest: [0.06, -0.32, 0.22] };
   }
 
+  private buildTacticalPistol(): Shape {
+    const group = new this.three.Group();
+    // Slide assembly with chamfered profile
+    group.add(this.box([0.21, 0.22, 1.15], [0, 0.04, -0.52], this.metal));
+    group.add(this.box([0.04, 0.04, 1.15], [-0.10, 0.14, -0.52], this.metal, [0, 0, 0.78]));
+    group.add(this.box([0.04, 0.04, 1.15], [0.10, 0.14, -0.52], this.metal, [0, 0, -0.78]));
+    // Ejection port and extractor claw
+    group.add(this.box([0.04, 0.12, 0.32], [0.10, 0.05, -0.42], this.dark));
+    group.add(this.box([0.02, 0.04, 0.12], [0.115, 0.05, -0.28], this.accent));
+    group.add(this.box([0.20, 0.18, 0.04], [0, 0.04, 0.06], this.dark));
+    // Match-grade crowned barrel and recoil spring plug
+    group.add(this.tube(0.052, 0.28, [0, 0, -1.16], this.accent));
+    group.add(this.tube(0.038, 0.06, [0, 0, -1.30], this.dark));
+    group.add(this.tube(0.046, 0.06, [0, -0.10, -1.12], this.dark));
+    // Frame, dust cover & Picatinny rail
+    group.add(this.box([0.19, 0.13, 0.95], [0, -0.12, -0.48], this.dark));
+    group.add(this.box([0.02, 0.04, 0.14], [-0.11, -0.04, -0.32], this.accent));
+    // Grip frame, stippled backstrap, and mag baseplate
+    group.add(this.box([0.20, 0.62, 0.32], [0, -0.42, -0.02], this.grip, [0.30, 0, 0]));
+    group.add(this.box([0.08, 0.52, 0.08], [0, -0.40, 0.14], this.dark, [0.30, 0, 0]));
+    group.add(this.box([0.21, 0.10, 0.34], [0, -0.72, 0.08], this.dark, [0.30, 0, 0]));
+    group.add(this.box([0.04, 0.06, 0.06], [-0.11, -0.28, -0.12], this.accent));
+    // Beavertail and skeletonized hammer
+    group.add(this.box([0.14, 0.06, 0.16], [0, -0.06, 0.12], this.dark, [-0.25, 0, 0]));
+    group.add(this.box([0.06, 0.12, 0.08], [0, 0.02, 0.14], this.accent, [-0.40, 0, 0]));
+    // Trigger guard loop and trigger shoe with safety blade
+    group.add(this.box([0.09, 0.05, 0.34], [0, -0.28, -0.36], this.dark));
+    group.add(this.box([0.09, 0.14, 0.05], [0, -0.21, -0.52], this.dark));
+    group.add(this.box([0.05, 0.14, 0.05], [0, -0.20, -0.28], this.accent, [0.25, 0, 0]));
+    // 3-Dot Combat Sights
+    group.add(this.box([0.14, 0.06, 0.06], [0, 0.17, -0.05], this.dark));
+    group.add(this.box([0.04, 0.07, 0.06], [0, 0.17, -1.02], this.dark));
+    // Front and rear slide serrations
+    for (let i = 0; i < 4; i += 1) {
+      group.add(this.box([0.222, 0.18, 0.03], [0, 0.04, -0.06 - i * 0.08], this.dark));
+    }
+    for (let i = 0; i < 3; i += 1) {
+      group.add(this.box([0.222, 0.18, 0.03], [0, 0.04, -0.80 - i * 0.08], this.dark));
+    }
+    return { group, muzzle: [0, -0.01, -1.32], rest: [0, -0.05, 0] };
+  }
+
+  private buildTacticalShotgun(): Shape {
+    const group = new this.three.Group();
+    // Over-and-under twin barrels
+    group.add(this.tube(0.078, 2.20, [0, 0.09, -1.50], this.metal));
+    group.add(this.tube(0.076, 2.05, [0, -0.05, -1.42], this.metal));
+    // Ventilated barrel rib with brass bead sight
+    group.add(this.box([0.04, 0.06, 2.00], [0, 0.17, -1.45], this.dark));
+    group.add(this.box([0.05, 0.06, 0.06], [0, 0.20, -2.48], this.accent));
+    // Breacher standoff choke with aggressive muzzle teeth
+    group.add(this.tube(0.095, 0.14, [0, 0.09, -2.58], this.dark));
+    group.add(this.tube(0.092, 0.12, [0, -0.05, -2.48], this.dark));
+    // Magazine tube clamp and sling swivel
+    group.add(this.box([0.18, 0.24, 0.08], [0, 0.02, -2.15], this.dark));
+    // Ribbed ergonomic forend pump with dual action bars
+    group.add(this.box([0.30, 0.24, 0.62], [0, -0.19, -1.20], this.grip));
+    group.add(this.box([0.04, 0.04, 0.75], [-0.10, -0.02, -0.80], this.metal));
+    group.add(this.box([0.04, 0.04, 0.75], [0.10, -0.02, -0.80], this.metal));
+    // Milled tactical receiver with ejection port and shell lifter
+    group.add(this.box([0.32, 0.38, 0.85], [0, -0.04, -0.30], this.dark));
+    group.add(this.box([0.34, 0.42, 0.12], [0, -0.04, 0.14], this.metal));
+    group.add(this.box([0.04, 0.16, 0.36], [0.16, 0.02, -0.28], this.dark));
+    group.add(this.box([0.18, 0.04, 0.42], [0, -0.21, -0.32], this.accent));
+    group.add(this.box([0.09, 0.05, 0.30], [0, -0.26, -0.16], this.dark));
+    group.add(this.box([0.05, 0.11, 0.05], [0, -0.20, -0.20], this.accent, [0.2, 0, 0]));
+    // Stock: contoured wrist, comb, and ventilated recoil pad
+    group.add(this.box([0.22, 0.30, 0.50], [0, -0.14, 0.42], this.grip, [-0.12, 0, 0]));
+    group.add(this.box([0.20, 0.34, 0.60], [0, -0.24, 0.90], this.grip, [-0.08, 0, 0]));
+    group.add(this.box([0.21, 0.36, 0.10], [0, -0.28, 1.22], this.dark, [-0.08, 0, 0]));
+    // Pump grip ridges
+    for (let i = 0; i < 5; i += 1) {
+      group.add(
+        this.box([0.315, 0.055, 0.05], [0, -0.19, -1.42 + i * 0.11], this.dark),
+      );
+    }
+    return { group, muzzle: [0, 0.02, -2.62], rest: [0, -0.04, 0] };
+  }
+
+  private buildTacticalSniper(): Shape {
+    const group = new this.three.Group();
+    // Heavy match-grade fluted barrel
+    group.add(this.tube(0.078, 1.10, [0, 0.02, -1.05], this.metal));
+    group.add(this.tube(0.052, 1.60, [0, 0.02, -2.35], this.metal));
+    // Dual-port tactical muzzle brake
+    group.add(this.tube(0.085, 0.28, [0, 0.02, -3.24], this.dark));
+    group.add(this.box([0.20, 0.05, 0.05], [0, 0.08, -3.20], this.accent));
+    group.add(this.box([0.20, 0.05, 0.05], [0, 0.08, -3.30], this.accent));
+    // Receiver & chassis forend
+    group.add(this.box([0.26, 0.34, 1.20], [0, -0.04, -0.50], this.dark));
+    group.add(this.box([0.22, 0.24, 1.05], [0, -0.06, -1.60], this.grip));
+    // 34mm Tactical Optic Scope
+    group.add(this.tube(0.11, 0.95, [0, 0.34, -0.85], this.dark));
+    group.add(this.tube(0.145, 0.24, [0, 0.34, -1.36], this.dark));
+    group.add(this.tube(0.135, 0.08, [0, 0.34, -1.50], this.accent));
+    group.add(this.tube(0.125, 0.20, [0, 0.34, -0.33], this.dark));
+    group.add(this.tube(0.12, 0.06, [0, 0.34, -0.20], this.dark));
+    // Scope target turrets
+    group.add(this.box([0.09, 0.12, 0.16], [0, 0.47, -0.90], this.accent));
+    group.add(this.box([0.16, 0.09, 0.14], [0.12, 0.34, -0.90], this.accent));
+    group.add(this.box([0.10, 0.20, 0.10], [0, 0.19, -0.55], this.metal));
+    group.add(this.box([0.10, 0.20, 0.10], [0, 0.19, -1.18], this.metal));
+    // Fluted bolt and tactical knob
+    group.add(this.tube(0.045, 0.40, [0.12, 0.06, -0.12], this.metal));
+    group.add(this.box([0.30, 0.06, 0.06], [0.24, 0.04, -0.04], this.metal));
+    group.add(this.box([0.08, 0.08, 0.08], [0.38, 0.0, -0.04], this.accent));
+    // Detachable box magazine and paddle release
+    group.add(this.box([0.19, 0.44, 0.34], [0, -0.36, -0.50], this.dark));
+    group.add(this.box([0.21, 0.06, 0.36], [0, -0.57, -0.50], this.metal));
+    group.add(this.box([0.06, 0.08, 0.04], [0, -0.22, -0.34], this.accent));
+    // Ergonomic sniper pistol grip
+    group.add(this.box([0.18, 0.46, 0.26], [0, -0.32, -0.06], this.grip, [0.26, 0, 0]));
+    // Skeletonized marksman stock with cheek riser
+    group.add(this.box([0.20, 0.09, 0.95], [0, 0.06, 0.55], this.dark));
+    group.add(this.box([0.20, 0.09, 0.80], [0, -0.28, 0.50], this.dark));
+    group.add(this.box([0.22, 0.16, 0.40], [0, 0.19, 0.55], this.grip));
+    group.add(this.box([0.24, 0.44, 0.10], [0, -0.06, 1.00], this.dark));
+    // Barrel fluting grooves
+    for (let i = 0; i < 4; i += 1) {
+      const angle = (i / 4) * Math.PI * 2;
+      group.add(
+        this.box(
+          [0.02, 0.02, 0.85],
+          [Math.cos(angle) * 0.07, 0.02 + Math.sin(angle) * 0.07, -1.05],
+          this.dark,
+        ),
+      );
+    }
+    // Forend M-LOK slots
+    for (let i = 0; i < 3; i += 1) {
+      group.add(this.box([0.235, 0.07, 0.12], [0, -0.06, -1.25 - i * 0.30], this.dark));
+    }
+    return { group, muzzle: [0, 0.02, -3.40], rest: [0, -0.03, 0] };
+  }
+
+  private buildTacticalAssault(): Shape {
+    const group = new this.three.Group();
+    // Split upper and lower forged receiver
+    group.add(this.box([0.24, 0.22, 1.50], [0, 0.08, -0.75], this.dark));
+    group.add(this.box([0.23, 0.20, 0.95], [0, -0.11, -0.55], this.metal));
+    // Ejection port, bolt carrier group & hinged dust cover
+    group.add(this.box([0.03, 0.12, 0.32], [0.115, 0.08, -0.45], this.accent));
+    group.add(this.box([0.06, 0.09, 0.09], [0.11, 0.0, -0.30], this.metal));
+    group.add(this.box([0.16, 0.05, 0.12], [0, 0.17, 0.02], this.accent));
+    // Modular railed handguard
+    group.add(this.box([0.21, 0.22, 1.00], [0, 0.04, -1.65], this.grip));
+    // Stepped chrome-moly barrel and gas block
+    group.add(this.tube(0.048, 0.75, [0, 0.04, -2.40], this.metal));
+    group.add(this.box([0.13, 0.16, 0.16], [0, 0.09, -2.20], this.dark));
+    group.add(this.box([0.06, 0.20, 0.06], [0, 0.24, -2.20], this.accent));
+    // A2 birdcage compensator with radial vents
+    group.add(this.tube(0.072, 0.24, [0, 0.04, -2.78], this.dark));
+    group.add(this.box([0.15, 0.05, 0.05], [0, 0.10, -2.74], this.accent));
+    // Flattop Picatinny optic rail with aperture rear sight
+    group.add(this.box([0.14, 0.06, 1.50], [0, 0.21, -0.85], this.metal));
+    group.add(this.box([0.12, 0.14, 0.07], [0, 0.29, -0.20], this.accent));
+    // Curved STANAG magazine in two segments with floorplate
+    group.add(this.box([0.19, 0.36, 0.30], [0, -0.36, -0.79], this.metal, [-0.10, 0, 0]));
+    group.add(this.box([0.18, 0.34, 0.29], [0, -0.66, -0.72], this.metal, [-0.26, 0, 0]));
+    group.add(this.box([0.20, 0.06, 0.31], [0, -0.83, -0.68], this.dark, [-0.26, 0, 0]));
+    group.add(this.box([0.08, 0.05, 0.34], [0, -0.28, -0.28], this.dark));
+    group.add(this.box([0.08, 0.12, 0.05], [0, -0.24, -0.44], this.dark));
+    group.add(this.box([0.05, 0.12, 0.05], [0, -0.20, -0.22], this.accent));
+    // Ergonomic A2 pistol grip
+    group.add(this.box([0.18, 0.44, 0.26], [0, -0.30, -0.02], this.grip, [0.30, 0, 0]));
+    // Buffer tube, CTR stock, and buttpad
+    group.add(this.tube(0.09, 0.70, [0, 0.02, 0.42], this.metal));
+    group.add(this.box([0.22, 0.30, 0.60], [0, -0.04, 0.50], this.dark, [-0.04, 0, 0]));
+    group.add(this.box([0.23, 0.34, 0.09], [0, -0.06, 0.82], this.dark));
+    // Handguard vent slots
+    for (let i = 0; i < 3; i += 1) {
+      group.add(
+        this.box([0.225, 0.06, 0.14], [0, 0.04, -1.35 - i * 0.28], this.dark),
+      );
+    }
+    // Top rail cross ribs
+    for (let i = 0; i < 5; i += 1) {
+      group.add(
+        this.box([0.15, 0.09, 0.05], [0, 0.21, -0.35 - i * 0.16], this.dark),
+      );
+    }
+    return { group, muzzle: [0, 0.04, -2.92], rest: [0, -0.04, 0] };
+  }
+
   /**
    * The weapon, by id.
    *
@@ -1705,7 +2018,6 @@ export class WeaponViewModel {
    * should look wrong, not invisible.
    */
   private build(id: string, skin: WeaponSkin | null = null): Shape {
-    const group = new this.three.Group();
     switch (id) {
       case 'knife': {
         const skinId = skin?.id ?? '';
@@ -1721,180 +2033,18 @@ export class WeaponViewModel {
         return this.buildTacticalKnife();
       }
 
-      case 'pistol': {
-        // A slide riding a frame, as two stacked boxes with a seam between them.
-        group.add(this.box([0.21, 0.24, 1.15], [0, 0.03, -0.52], this.metal));
-        group.add(this.box([0.19, 0.12, 0.95], [0, -0.13, -0.45], this.dark));
-        // Ejection port, inset on the right of the slide.
-        group.add(this.box([0.03, 0.13, 0.34], [0.1, 0.05, -0.42], this.dark));
-        // Slide serrations: four ribs at the rear. Small, but they are what make
-        // the top of a pistol read as machined rather than moulded.
-        for (let i = 0; i < 4; i += 1) {
-          group.add(this.box([0.225, 0.2, 0.035], [0, 0.03, -0.04 - i * 0.09], this.dark));
-        }
-        // Tapered, so the muzzle end is visibly the narrow one.
-        group.add(this.cone(0.052, 0.042, 0.26, [0, -0.01, -1.16], this.accent));
-        group.add(this.tube(0.064, 0.06, [0, -0.01, -1.27], this.dark));
-        // The recoil spring plug under the barrel — a small round face at the
-        // front of the slide, and the thing that stops the muzzle end being one
-        // flat rectangle.
-        group.add(this.tube(0.05, 0.05, [0, -0.11, -1.05], this.dark));
-        // Grip, with a backstrap and a magazine baseplate under it.
-        group.add(this.box([0.2, 0.62, 0.32], [0, -0.42, -0.02], this.grip, [0.3, 0, 0]));
-        group.add(this.box([0.21, 0.1, 0.3], [0, -0.7, 0.08], this.dark, [0.3, 0, 0]));
-        group.add(this.box([0.06, 0.5, 0.08], [0, -0.4, 0.14], this.dark, [0.3, 0, 0]));
-        // Trigger guard as three bars, so it is a loop with a hole in it.
-        group.add(this.box([0.09, 0.05, 0.34], [0, -0.28, -0.36], this.dark));
-        group.add(this.box([0.09, 0.13, 0.05], [0, -0.22, -0.52], this.dark));
-        group.add(this.box([0.05, 0.13, 0.05], [0, -0.2, -0.28], this.accent));
-        // Sights: a notch at the back and a blade at the front. They are what the
-        // eye follows down the top of the gun, so the weapon has a direction.
-        group.add(this.box([0.14, 0.06, 0.05], [0, 0.17, -0.05], this.accent));
-        group.add(this.box([0.05, 0.07, 0.05], [0, 0.18, -1.02], this.accent));
-        return { group, muzzle: [0, -0.01, -1.32], rest: [0, -0.05, 0] };
-      }
+      case 'pistol':
+        return this.buildTacticalPistol();
 
-      case 'shotgun': {
-        // Over-and-under rather than side-by-side: stacked barrels read as a
-        // shotgun from the shooter's eye, where two tubes abreast look merely wide.
-        group.add(this.cone(0.078, 0.068, 2.2, [0, 0.09, -1.5], this.metal));
-        group.add(this.cone(0.078, 0.068, 2.2, [0, -0.05, -1.5], this.metal));
-        // Rib joining them, with a bead sight at the end of it.
-        group.add(this.box([0.05, 0.16, 2.0], [0, 0.02, -1.5], this.dark));
-        group.add(this.box([0.06, 0.06, 0.06], [0, 0.19, -2.45], this.accent));
-        // A wider ring at each muzzle, so the bore has a mouth.
-        group.add(this.tube(0.095, 0.12, [0, 0.09, -2.55], this.dark));
-        group.add(this.tube(0.095, 0.12, [0, -0.05, -2.55], this.dark));
-        // Receiver, deeper than the barrels and squared off at the breech.
-        group.add(this.box([0.32, 0.38, 0.85], [0, -0.04, -0.3], this.dark));
-        group.add(this.box([0.34, 0.42, 0.12], [0, -0.04, 0.14], this.metal));
-        group.add(this.box([0.2, 0.06, 0.5], [0, -0.24, -0.3], this.accent));
-        // Pump, ribbed, forward under the barrels, with the action bar running
-        // back to the receiver — the part that moves when it is worked.
-        group.add(this.box([0.3, 0.24, 0.62], [0, -0.19, -1.2], this.grip));
-        for (let i = 0; i < 4; i += 1) {
-          group.add(this.box([0.315, 0.055, 0.05], [0, -0.19, -1.42 + i * 0.14], this.dark));
-        }
-        group.add(this.box([0.06, 0.05, 0.75], [0.1, -0.24, -0.82], this.metal));
-        group.add(this.box([0.09, 0.05, 0.3], [0, -0.26, -0.16], this.dark));
-        group.add(this.box([0.05, 0.11, 0.05], [0, -0.2, -0.2], this.accent));
-        // Stock: a wrist that drops away, a comb, and a recoil pad.
-        group.add(this.box([0.22, 0.3, 0.5], [0, -0.14, 0.42], this.grip, [-0.12, 0, 0]));
-        group.add(this.box([0.2, 0.34, 0.6], [0, -0.24, 0.9], this.grip, [-0.08, 0, 0]));
-        group.add(this.box([0.21, 0.36, 0.09], [0, -0.28, 1.22], this.dark, [-0.08, 0, 0]));
-        return { group, muzzle: [0, 0.02, -2.62], rest: [0, -0.04, 0] };
-      }
+      case 'shotgun':
+        return this.buildTacticalShotgun();
 
-      case 'sniper': {
-        // A heavy section out of the receiver stepping down to a thin one: the
-        // step is what gives a sniper its length rather than the length alone.
-        // The step from a heavy chamber section to a thin barrel, drawn as a
-        // taper rather than two pipes meeting at a shoulder.
-        group.add(this.cone(0.078, 0.055, 1.1, [0, 0.02, -1.05], this.metal));
-        group.add(this.cone(0.052, 0.045, 1.6, [0, 0.02, -2.35], this.metal));
-        // Fluting: four shallow grooves along the heavy section, which is the
-        // detail that says "target rifle" at a glance.
-        for (let i = 0; i < 4; i += 1) {
-          const angle = (i / 4) * Math.PI * 2;
-          group.add(
-            this.box(
-              [0.02, 0.02, 0.85],
-              [Math.cos(angle) * 0.07, 0.02 + Math.sin(angle) * 0.07, -1.05],
-              this.dark,
-            ),
-          );
-        }
-        // Muzzle brake, ported.
-        group.add(this.tube(0.085, 0.28, [0, 0.02, -3.24], this.dark));
-        group.add(this.box([0.2, 0.05, 0.05], [0, 0.08, -3.2], this.accent));
-        group.add(this.box([0.2, 0.05, 0.05], [0, 0.08, -3.3], this.accent));
+      case 'sniper':
+        return this.buildTacticalSniper();
 
-        group.add(this.box([0.26, 0.34, 1.2], [0, -0.04, -0.5], this.dark));
-        group.add(this.box([0.22, 0.24, 1.0], [0, -0.06, -1.6], this.grip));
-        for (let i = 0; i < 3; i += 1) {
-          group.add(this.box([0.235, 0.07, 0.12], [0, -0.06, -1.25 - i * 0.3], this.dark));
-        }
-        // Scope: a body, two bells, turrets, and mounts under it. The bells are
-        // what stop a scope reading as a length of pipe.
-        group.add(this.tube(0.11, 0.95, [0, 0.34, -0.85], this.dark));
-        group.add(this.tube(0.145, 0.22, [0, 0.34, -1.36], this.dark));
-        group.add(this.tube(0.125, 0.18, [0, 0.34, -0.33], this.dark));
-        group.add(this.tube(0.135, 0.04, [0, 0.34, -1.47], this.accent));
-        group.add(this.box([0.09, 0.11, 0.16], [0, 0.47, -0.9], this.accent));
-        group.add(this.box([0.16, 0.09, 0.14], [0.12, 0.34, -0.9], this.accent));
-        group.add(this.box([0.1, 0.2, 0.1], [0, 0.19, -0.55], this.metal));
-        group.add(this.box([0.1, 0.2, 0.1], [0, 0.19, -1.18], this.metal));
-        // Bolt: a body along the receiver, its handle turned down at the end.
-        group.add(this.tube(0.045, 0.4, [0.12, 0.06, -0.12], this.metal));
-        group.add(this.box([0.3, 0.06, 0.06], [0.24, 0.04, -0.04], this.metal));
-        group.add(this.box([0.07, 0.07, 0.07], [0.38, 0.0, -0.04], this.accent));
-        // Magazine, straight and boxy the way a bolt gun's is — the shape that
-        // tells it apart from the rifle's curve at a glance.
-        group.add(this.box([0.19, 0.44, 0.34], [0, -0.36, -0.5], this.dark));
-        group.add(this.box([0.21, 0.06, 0.36], [0, -0.57, -0.5], this.metal));
-        group.add(this.box([0.18, 0.46, 0.26], [0, -0.32, -0.06], this.grip, [0.26, 0, 0]));
-        // Stock, skeletonised: a top rail and a bottom rail with a gap between
-        // them, then a cheek riser and a butt pad.
-        group.add(this.box([0.2, 0.09, 0.95], [0, 0.06, 0.55], this.dark));
-        group.add(this.box([0.2, 0.09, 0.8], [0, -0.28, 0.5], this.dark));
-        group.add(this.box([0.22, 0.16, 0.4], [0, 0.19, 0.55], this.grip));
-        group.add(this.box([0.24, 0.44, 0.1], [0, -0.06, 1.0], this.dark));
-        return { group, muzzle: [0, 0.02, -3.4], rest: [0, -0.03, 0] };
-      }
-
-      default: {
+      default:
         // Assault rifle, and the fallback for anything new.
-        // Upper and lower receiver as separate boxes, with a visible seam.
-        group.add(this.box([0.24, 0.22, 1.5], [0, 0.08, -0.75], this.dark));
-        group.add(this.box([0.23, 0.2, 0.95], [0, -0.11, -0.55], this.metal));
-        group.add(this.box([0.03, 0.12, 0.3], [0.115, 0.08, -0.45], this.accent));
-        group.add(this.box([0.06, 0.09, 0.09], [0.11, 0.0, -0.3], this.metal));
-        group.add(this.box([0.16, 0.05, 0.12], [0, 0.17, 0.02], this.accent));
-
-        // Slotted handguard, then the barrel and a birdcage muzzle device.
-        group.add(this.box([0.21, 0.22, 1.0], [0, 0.04, -1.65], this.grip));
-        for (let i = 0; i < 3; i += 1) {
-          group.add(this.box([0.225, 0.06, 0.14], [0, 0.04, -1.35 - i * 0.28], this.dark));
-        }
-        group.add(this.cone(0.048, 0.04, 0.75, [0, 0.04, -2.4], this.metal));
-        // Birdcage: a wider ring with slots cut in it, rather than a plain cap.
-        group.add(this.tube(0.072, 0.24, [0, 0.04, -2.78], this.dark));
-        for (let i = 0; i < 3; i += 1) {
-          const angle = Math.PI * (0.25 + i * 0.25);
-          group.add(
-            this.box(
-              [0.03, 0.09, 0.1],
-              [Math.cos(angle) * 0.06, 0.04 + Math.sin(angle) * 0.06, -2.78],
-              this.metal,
-            ),
-          );
-        }
-        group.add(this.box([0.15, 0.05, 0.05], [0, 0.1, -2.74], this.accent));
-        // Gas block and front sight post.
-        group.add(this.box([0.13, 0.16, 0.16], [0, 0.09, -2.2], this.dark));
-        group.add(this.box([0.06, 0.2, 0.06], [0, 0.24, -2.2], this.accent));
-        // Top rail, ribbed, with a rear aperture sight.
-        group.add(this.box([0.14, 0.06, 1.5], [0, 0.21, -0.85], this.metal));
-        for (let i = 0; i < 5; i += 1) {
-          group.add(this.box([0.15, 0.09, 0.05], [0, 0.21, -0.35 - i * 0.16], this.dark));
-        }
-        group.add(this.box([0.12, 0.14, 0.07], [0, 0.29, -0.2], this.accent));
-
-        // Magazine in two raked segments, so the curve is drawn rather than
-        // implied by one tilted box.
-        group.add(this.box([0.19, 0.36, 0.3], [0, -0.36, -0.79], this.metal, [-0.1, 0, 0]));
-        group.add(this.box([0.18, 0.34, 0.29], [0, -0.66, -0.72], this.metal, [-0.26, 0, 0]));
-        group.add(this.box([0.2, 0.06, 0.31], [0, -0.83, -0.68], this.dark, [-0.26, 0, 0]));
-        group.add(this.box([0.08, 0.05, 0.34], [0, -0.28, -0.28], this.dark));
-        group.add(this.box([0.08, 0.12, 0.05], [0, -0.24, -0.44], this.dark));
-        group.add(this.box([0.05, 0.12, 0.05], [0, -0.2, -0.22], this.accent));
-        // Pistol grip, and a buffer-tube stock with a cheek weld and a butt pad.
-        group.add(this.box([0.18, 0.44, 0.26], [0, -0.3, -0.02], this.grip, [0.3, 0, 0]));
-        group.add(this.tube(0.09, 0.7, [0, 0.02, 0.42], this.metal));
-        group.add(this.box([0.22, 0.3, 0.6], [0, -0.04, 0.5], this.dark, [-0.04, 0, 0]));
-        group.add(this.box([0.23, 0.34, 0.09], [0, -0.06, 0.82], this.dark));
-        return { group, muzzle: [0, 0.04, -2.92], rest: [0, -0.04, 0] };
-      }
+        return this.buildTacticalAssault();
     }
   }
 }
