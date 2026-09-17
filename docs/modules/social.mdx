@@ -302,6 +302,12 @@ friend each other. Now:
 - Your own machines **trust each other on sight**: a `social_hello` whose
   certificate names the account this machine is enrolled in grants trust
   (`roster._is_own_machine`), and the reconnect loop redials them like friends.
+- Claiming a username enrolls again, so a sign-in whose enrollment failed does not
+  wait for a restart to become findable. The People pane's Me section and Friends
+  header render `AccountGate` (core) until the account has a username: the sign-in
+  card when signed out, a chooser pre-filled from the account name when signed in
+  without one. Both used to say "sign in to get a username" with no control, even to
+  an account that was already signed in.
 - Signing out unlists the machine (`DELETE /account/devices/{node_id}`, awaited
   before the token is deleted) and drops the adopted certificate.
 - `GET /directory/resolve` returns the certificates as `devices`; a friend's node

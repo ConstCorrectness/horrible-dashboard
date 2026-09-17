@@ -520,10 +520,15 @@ async def set_username_route(body: SetUsernameRequest) -> dict[str, Any]:
     HorribleAssault both play you as.
 
     The username leads to this machine because the machine is enrolled in the
-    account (on sign-in, `server_auth.schedule_enrollment`); the account, not the
-    name, is the identity, so claiming or renaming needs nothing else.
+    account; the account, not the name, is the identity. Enrollment runs on sign-in,
+    and again here: claiming a name is the moment someone expects to be findable,
+    and a sign-in enrollment that failed (server unreachable, older server) would
+    otherwise wait for the next restart.
     """
-    return await server_auth.set_username(body.username)
+    result = await server_auth.set_username(body.username)
+    if result.get("ok"):
+        server_auth.schedule_enrollment()
+    return result
 
 
 @router.post("/auth/{provider}/web/start")

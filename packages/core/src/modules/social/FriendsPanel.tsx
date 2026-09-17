@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 
+import { AccountGate } from '../../AccountGate';
 import { useAgentContext } from '../../agent-context';
 import { revealSection } from '../../layout/controller';
 import { useAccount } from '../../useAccount';
@@ -301,7 +302,7 @@ export function FriendsPanel() {
                 @{me.handle}
               </button>
             ) : (
-              <span className="people-dim">sign in to get a username</span>
+              <span className="people-dim">no username yet</span>
             )}
           </div>
           {me.handle ? (
@@ -313,6 +314,7 @@ export function FriendsPanel() {
       ) : (
         <p className="people-dim">Loading your identity…</p>
       )}
+      {me && !me.handle ? <AccountGate onDone={requestRoster} /> : null}
 
       {listed.length > 3 && (
         <input

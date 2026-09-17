@@ -364,6 +364,7 @@ export { ConnectionGate } from './connectors/ConnectionGate';
 export { accountStore, refreshAccount, type AccountState } from './account-store';
 export { useAccount } from './useAccount';
 export { SignInCard } from './SignInCard';
+export { AccountGate } from './AccountGate';
 export { dashboardModule } from './modules/dashboard';
 export { layoutsModule } from './modules/layouts';
 export { scratchModule } from './modules/scratch';

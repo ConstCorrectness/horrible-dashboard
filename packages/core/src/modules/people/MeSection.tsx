@@ -9,6 +9,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 
+import { AccountGate } from '../../AccountGate';
 import { CommonsProfileEditor } from '../commons';
 import { AgentRelayPanel } from '../network/AgentRelayPanel';
 import { LinkHealth } from '../network/LinkHealth';
@@ -81,11 +82,18 @@ export function MeSection() {
               </button>
             </>
           ) : (
-            <span className="people-dim">
-              Sign in or sign up to get one. It is how people add you.
-            </span>
+            <span className="people-dim">none yet</span>
           )}
         </div>
+        {me.handle ? null : (
+          <AccountGate
+            onDone={() =>
+              void getSelfProfile()
+                .then(setMe)
+                .catch(() => undefined)
+            }
+          />
+        )}
         <p className="people-hint">
           Share your username; it reaches you on every machine you are signed in on.
         </p>
