@@ -304,6 +304,27 @@ async def bind_person_route(
     return {"ok": True, "account": auth.account_payload(viewer)}
 
 
+class _PublishDevice(BaseModel):
+    cert: dict[str, Any]
+
+
+@app.post("/directory/devices")
+async def publish_device_route(body: _PublishDevice) -> dict[str, Any]:
+    """A node lists itself as one of its person's machines.
+
+    No sign-in: the device certificate is signed by the person key and is accepted
+    only for a person bound to an account here, so it can only say something true.
+    That is also what lets a *linked* machine, which holds no account token, list
+    itself. See `store.publish_device`.
+    """
+    outcome = store.publish_device(body.cert)
+    if outcome == "ok":
+        return {"ok": True}
+    if outcome == "unbound":
+        return {"error": "that person is not bound to an account"}
+    return {"error": "invalid device certificate"}
+
+
 @app.get("/directory/resolve")
 async def directory_resolve(handle: str) -> dict[str, Any]:
     """`@handle` → the public directory entry, so a node can add them as a friend.
@@ -778,3 +799,21 @@ async def game_ws(websocket: WebSocket) -> None:
         pass
     finally:
         await hub.disconnect(session)
+
+
+# ---- peer relay -----------------------------------------------------------------
+#
+# The rendezvous broker two dashboards use to reach each other across NATs. Hosted
+# here because this is the one public service every node already talks to (sign-in,
+# the username directory), so a friend at another house is reachable with no
+# port-forward, VPN or second deployment. Registration is proven with the node key,
+# frames are pinned to their sender, and relayed envelopes are signed end to end but
+# not encrypted. See backend/relay_broker.py and docs/modules/social.mdx.
+from backend import relay_broker as _relay_broker  # noqa: E402
+
+app.add_api_websocket_route("/relay-ws", _relay_broker.relay_ws)
+
+
+@app.get("/relay/health")
+def relay_health() -> dict[str, object]:
+    return {"status": "ok", "clients": len(_relay_broker._clients)}

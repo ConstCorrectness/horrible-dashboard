@@ -527,3 +527,46 @@ def test_deleting_one_run_keeps_the_harness(store_mod):
     store_mod.delete_run(a)
     assert store_mod.get_harness(fingerprint) is not None
     assert store_mod.get_harness(fingerprint).run_count == 0
+
+
+def test_parent_seq_round_trips(store_mod):
+    """Explicit nesting, for sources whose traces genuinely are nested."""
+    from backend.modules.trajectories.models import StepWrite
+
+    store_mod.create_dataset("n", "N")
+    run_id = store_mod.start_run("n")
+    store_mod.append_step(run_id, StepWrite(kind="action", name="graph"))
+    store_mod.append_step(run_id, StepWrite(kind="action", name="node", parent_seq=0))
+
+    steps = store_mod.get_run(run_id).step_list
+    assert [s.parent_seq for s in steps] == [None, 0]
+
+
+def test_an_existing_steps_table_gains_parent_seq(store_mod):
+    """The upgrade path. `CREATE TABLE IF NOT EXISTS` does nothing to a table that
+    already exists, so an install whose `traj_steps` predates the column would never
+    get it — and every append would then fail on an unknown column. `_ensure_column`
+    is what prevents that; this pins it against a table built the old way."""
+    import sqlite3
+
+    from backend.modules.database.app_db import ensure_app_db_dir
+    from backend.modules.trajectories.models import StepWrite
+
+    path = str(ensure_app_db_dir())
+    with sqlite3.connect(path) as conn:
+        conn.execute("DROP TABLE traj_steps")
+        conn.execute(
+            "CREATE TABLE traj_steps (run_id TEXT NOT NULL, seq INTEGER NOT NULL,"
+            " round INTEGER NOT NULL DEFAULT 0, kind TEXT NOT NULL DEFAULT 'action',"
+            " role TEXT, name TEXT, args TEXT, result TEXT, ok INTEGER, content TEXT,"
+            " tokens INTEGER, duration_ms INTEGER, gated INTEGER NOT NULL DEFAULT 0,"
+            " error TEXT, ts REAL NOT NULL DEFAULT 0, PRIMARY KEY (run_id, seq))"
+        )
+
+    store_mod._initialized.clear()
+    store_mod.init_trajectories_db()
+
+    store_mod.create_dataset("u", "U")
+    run_id = store_mod.start_run("u")
+    store_mod.append_step(run_id, StepWrite(kind="action", name="t", parent_seq=None))
+    assert store_mod.get_run(run_id).step_list[0].parent_seq is None

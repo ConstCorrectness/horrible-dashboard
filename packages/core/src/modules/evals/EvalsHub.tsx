@@ -10,12 +10,7 @@ import { registry } from '../../registry';
 // thing an inline style cannot express — a :hover/:focus-visible state.
 import './evals.css';
 import { subscribeChannel } from '../../ws';
-import {
-  getNetworkState,
-  initNetwork,
-  requestPeers,
-  subscribeNetwork,
-} from '../network/ws';
+import { getNetworkState, initNetwork, requestPeers, subscribeNetwork } from '../network/ws';
 import {
   benchmarkPresets,
   cancelSweep,
@@ -55,7 +50,10 @@ import {
   type RunDiff,
   type SuggestedTarget,
   type ToolCall,
+  withdrawOffer,
 } from './api';
+import { budgetCut } from './budget';
+import { IncomingOffers, OfferToFriend } from './RemoteRun';
 
 /**
  * Evals: one pane, four sections — Suites, Run, Results, Compare.
@@ -727,7 +725,12 @@ function RankRow({ run, place }: { run: BoardRun; place: number }) {
   return (
     <tr>
       <td style={{ ...S.mono, padding: '3px 8px 3px 0', width: 24 }}>{place}</td>
-      <td style={{ padding: '3px 8px 3px 0' }}>{run.label}</td>
+      <td style={{ padding: '3px 8px 3px 0' }}>
+        {run.label}
+        {/* Ranked beside local runs, but never passed off as one: every verdict on
+            this row was reported by a friend's node. */}
+        {run.peerAttested && <span style={{ ...S.mono, marginLeft: 8 }}>peer-reported</span>}
+      </td>
       <td style={{ ...S.mono, padding: '3px 8px', whiteSpace: 'nowrap' }}>
         {run.passed}/{run.attempted}
       </td>
@@ -803,11 +806,36 @@ function Diff({ diff }: { diff: RunDiff }) {
  * harness is not a run whose harness matched.
  */
 function HarnessBanner({ harness }: { harness: RunDiff['harness'] }) {
+  return (
+    <>
+      {harness.peerAttested && (
+        // First, and whatever the hashes say: matching hashes from a friend's node mean
+        // "they reported the same catalog", not that it was measured here.
+        <div
+          style={{
+            ...S.mono,
+            color: 'var(--text-dim)',
+            borderLeft: '2px solid var(--border)',
+            paddingLeft: 8,
+            marginBottom: 6,
+          }}
+        >
+          One of these runs was graded on a friend&apos;s node, which <em>reported</em> its model
+          and tool catalog. The report is signed, so their node said it — it is not verifiable here,
+          and it covers skills and MCP tools, not model weights.
+        </div>
+      )}
+      <HarnessCatalog harness={harness} />
+    </>
+  );
+}
+
+function HarnessCatalog({ harness }: { harness: RunDiff['harness'] }) {
   if (harness.unknown) {
     return (
       <div style={{ ...S.mono, color: 'var(--text-dim)', marginBottom: 6 }}>
-        The tool catalog was not recorded for one of these runs, so a skill or MCP server
-        toggled between them cannot be ruled out.
+        The tool catalog was not recorded for one of these runs, so a skill or MCP server toggled
+        between them cannot be ruled out.
       </div>
     );
   }
@@ -1432,6 +1460,8 @@ function Run({
             rather than scoring it zero.
           </div>
         ) : null}
+        {/* A friend's offer waits on a person, so it sits above everything else here. */}
+        <IncomingOffers />
         {targets.length === 0 && <div style={S.mono}>No models resolved on this node.</div>}
         {/* A grid, not a column of checkboxes: these are peers being chosen
             between for one sweep, and the stacked-label form is exactly the
@@ -1461,6 +1491,8 @@ function Run({
           ))}
         </DataList>
         {message && <div style={{ ...S.mono, marginTop: 10 }}>{message}</div>}
+
+        <OfferToFriend suiteId={selected} onOffered={reload} />
 
         {sweeps.length > 0 && (
           <>
@@ -1522,7 +1554,25 @@ function Run({
                 // Only when it was somebody else's machine: "ran on this node" on
                 // every row would be noise, and its absence already means local.
                 ...(r.node ? [`ran on ${peers[r.node]?.node_name ?? r.node}`] : []),
+                // Graded there and reported back — not a lease, where grading is ours.
+                ...(r.attestation === 'peer'
+                  ? [r.status === 'queued' ? 'waiting for them to accept' : 'peer-reported']
+                  : []),
               ]}
+              actions={
+                r.attestation === 'peer' && (r.status === 'queued' || r.status === 'running') ? (
+                  <button
+                    style={S.button}
+                    onClick={() =>
+                      withdrawOffer(r.id)
+                        .then(() => reload())
+                        .catch((e) => setMessage(String(e)))
+                    }
+                  >
+                    Withdraw
+                  </button>
+                ) : undefined
+              }
               metaTone={r.error ? 'fail' : undefined}
               footnotes={
                 r.error ? (
@@ -1624,12 +1674,23 @@ function Results({ selected }: { selected: string }) {
                       expected {describeCalls(r.expected)} · actual {describeCalls(r.actual)}
                     </div>
                   )}
-                  {r.tools_dropped.length > 0 && (
+                  {budgetCut(r).length > 0 ? (
+                    // The expected tool itself was never offered: this failure measured
+                    // the catalog, not the model. Said first and plainly, because the
+                    // red verdict beside it says the opposite.
+                    <div style={{ ...S.mono, color: 'var(--warn)' }}>
+                      the expected {budgetCut(r).join(', ')} was cut by the tool budget — the model
+                      never saw it
+                      {r.tools_dropped.length > budgetCut(r).length
+                        ? ` (${r.tools_dropped.length} tools cut in all)`
+                        : ''}
+                    </div>
+                  ) : r.tools_dropped.length > 0 ? (
                     <div style={{ ...S.mono, color: 'var(--warn)' }}>
                       {r.tools_dropped.length} tool(s) dropped by the budget — this model never saw{' '}
                       {r.tools_dropped.slice(0, 3).join(', ')}
                     </div>
-                  )}
+                  ) : null}
                   {r.groups_loaded.length > 0 && (
                     <div style={S.mono}>loaded {r.groups_loaded.join(', ')}</div>
                   )}

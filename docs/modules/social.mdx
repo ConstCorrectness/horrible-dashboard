@@ -234,6 +234,97 @@ grants their machines fabric trust, while a meet request is from a *stranger*
 found through the [commons](commons.mdx) and keeps its own consent handshake and
 trust tiers.
 
+## Adding someone anywhere, by username
+
+Two people at two homes add each other by `@username` and become friends. No
+invite, no shared network, no linking step. Nothing about that is LAN-only; a
+direct connection on the same network is just the fast path when there is one.
+Four things make it work, and until 2026-09-16 each one was missing:
+
+| Step | What happens | What used to go wrong |
+| --- | --- | --- |
+| Resolve | `@ben` → person key, from the game server's directory (fingerprint-checked) | The account-to-person binding ran only when a username was first *claimed*, so any other account was never findable. It now runs on every sign-in and at startup (`server_auth.schedule_person_binding`) |
+| Find | person → their machines, from the **same directory entry**: device certificates signed by the person key, each dialable as `relay:<node_id>` | Machines came only from the Atlas presence record, which an ordinary install has no credentials for, and which held only LAN and tailnet addresses |
+| Reach | direct candidates race for 4 s, then **`relay:<node_id>`** through the relay broker | The relay was off by default, so two homes had no route at all |
+| Admit | their node accepts us as a **stranger** that may deliver a friend request | The handshake rejected anyone not paired by invite: "pairing required" |
+
+### Strangers
+
+A node that proves its identity in the handshake but is not trusted is admitted as
+a **stranger** rather than rejected. The hub enforces what that means in one place,
+not in each of its dozens of handlers:
+
+- It may send and be sent only `social_hello`, `social_friend_request` and
+  `social_friend_response` (`hub.allow_from_strangers`). Everything else is dropped
+  at dispatch, and `send_to` / `request` refuse to address a stranger with anything
+  else. `social_device_cert` is deliberately **not** open, because it replaces this
+  machine's identity.
+- It is absent from `peer_hub.peers` and `list_peers()`. About twenty-five call
+  sites use those to decide who gets work, invitations, embeddings or a research
+  subagent, and filtering at the source keeps every one correct. Browsers get no
+  `peer_update` for it.
+- It is closed after `STRANGER_TTL_S` (two minutes) unless trust arrives, and at
+  most `MAX_STRANGER_SESSIONS` (64) are held at once. The rest are refused as `busy`.
+- **The dialer decides its own trust too.** Every successful dial used to write a
+  trusted peer record. Now it trusts the node it reached only if it redeemed that
+  node's invite, already trusted it, or runs open-LAN trust.
+
+When a person accepts, `_grant_trust` upgrades the **live** session in place
+(`hub.set_trusted`), so the new friend works at once instead of after a reconnect.
+Removing or blocking closes the session.
+
+### A username lists its machines
+
+Resolving a username used to yield only a *person*. Which machines that person runs
+came from the Atlas presence directory, whose credentials live in a developer's
+`.env`, so on an ordinary install `@ben` resolved and then reached nobody. The game
+server now keeps each bound person's machines (`person_devices`, capped at the 8
+newest):
+
+- A node **posts its device certificate** to `POST /directory/devices` after binding
+  its account, and at startup (`server_auth.schedule_person_binding`). No sign-in is
+  needed: the certificate is signed by the person key, and the server accepts it
+  only if the node id is the fingerprint of the node key and **the person key is
+  the one bound to an account**. So it can only restate something true, which also
+  lets a linked machine without an account list itself.
+- `GET /directory/resolve` returns those certificates as `devices`. The node checks
+  each one against the entry's person key (`handles.verified_devices`), because a
+  lying directory could otherwise list someone else's machine under your friend's
+  name, and records each with a `relay:<node_id>` address that `_dial` then uses.
+- The certificate bytes are computed twice, by the node and by the game server, and
+  `test_games_person_devices.py` pins the two together.
+
+### The relay
+
+`network.relayUrl` blank means the game server's relay (`wss://<game server>/relay-ws`),
+since that is the one public service every node already talks to. `off` disables it,
+and `HORRIBLE_RELAY_URL` overrides both (the test suite sets it to `off`). The
+broker (`backend/relay_broker.py`, at the backend root because the game server hosts it and must not import the node's module graph):
+
+- **authenticates registration.** It sends a challenge, and the node answers with its
+  public key and a signature. The node id must be that key's fingerprint.
+  Registration used to be a bare `{"register": id}`, which on a shared broker would
+  let anyone receive a friend's traffic.
+- **pins frames to their sender.** A frame's `src` must be the registered node.
+- **answers a frame to nobody** with `undeliverable`, so a dial to someone offline
+  fails at once with "not online".
+
+The transport never blocks startup and reconnects with backoff when the broker
+restarts. Its frame limit is 16 MiB, because one oversized message on the shared
+connection would otherwise drop every relayed friend at once. **The broker can read
+relayed traffic:** envelopes are signed, not encrypted, and TLS ends at the broker.
+
+### Friends reconnect on their own
+
+Nothing used to redial a friend. A session lasted only while both nodes stayed up,
+and after a restart everyone read offline until someone connected by hand.
+`roster.reconnect_round` runs every minute and dials each accepted friend (and each
+pending request) that has no live session. Per person it backs off from one minute
+to thirty, and a pending request is resent when the person is reached. A friend's
+hello records a dialable address: `relay:<node_id>` always, because it names the
+node rather than a place, and a direct URL only when we dialed it. So reconnecting
+works even with the presence directory down.
+
 ## Trust, and what friendship actually grants
 
 Accepting a friend writes every one of their devices into the network module's
@@ -307,6 +398,52 @@ the person, and its addresses reach you through the primary regardless. Records 
 stale after 15 minutes rather than being deleted, so a brief outage doesn't erase
 someone.
 
+### Keeping a record current
+
+`lookup` ignores a record older than `TTL_SECONDS` (15 minutes), and for a long time
+the record was published **exactly once, at startup** — while the module's own comment
+claimed it was republished "whenever its address changes". So any node that had been
+up for more than fifteen minutes was invisible to `roster._dial`, and a friend's
+reconnect through the directory failed with nothing to say why.
+
+A running node now keeps it current with `directory.refresh_loop`, started beside the
+startup publish in `network/setup.py` and cancelled in `stop_network()`:
+
+- **Every `REFRESH_SECONDS` (TTL / 3, five minutes)**, so one missed round — Atlas
+  briefly unreachable — still leaves a current record.
+- **Early, when the local addresses change**: a laptop moving networks, Tailscale
+  coming up. The check runs every minute against the host candidates only, so it
+  never costs a STUN round trip.
+- **A failed publish is retried on the next check**, including a failed startup
+  publish, without a full refresh interval of invisibility. Nothing in a round can
+  end the loop; a loop that dies on its first surprise is the same bug, only later.
+- **Not started at all** when Atlas is not configured. A linked machine runs it but
+  publishes nothing, because `build_record` returns `None` for it.
+
+Shutdown **does not unpublish**, deliberately. Records are keyed by person, so
+deleting on every stop would make you unfindable across a restart, and under
+`--reload` a restart is every save. A stopped node stops refreshing and its record
+goes stale on its own, which also covers the crash no shutdown hook would see.
+
+### The test suite never publishes
+
+Every test that enters `with TestClient(app)` runs the full lifespan, including the
+publish above — and `backend/__init__.py` loads `.env`, so the real credentials were
+present during `pytest`. Each test's temporary data dir mints a fresh person key, so
+each run left new records in a directory other people's nodes read: on 2026-09-16 the
+collection held 677 records, **674 of them stale junk** from two developers' machines.
+
+`backend/tests/conftest.py` sets every `ATLAS_*` variable to an **empty string** in
+`pytest_configure`, before anything imports `backend`, and again per test.
+`_load_dotenv` never overrides a variable that is already present, so the empty value
+beats the file, and every reader treats blank as not configured.
+`test_atlas_isolation.py` pins it, including that booting the app publishes to
+nothing. A test that needs credentials sets fake ones itself.
+
+`scripts/presence_stale_records.py` lists stale records whose `person_id` is not one
+you keep, optionally narrowed by `--name`, and deletes exactly that list only with
+`--delete`.
+
 ### What gets published, and the reachability catch
 
 A record carries the node's full **ICE candidate list**, not one address: LAN host
@@ -316,13 +453,22 @@ This matters more than it looks. `trust.advertised_address()` auto-detects the
 **LAN** IP, so a record built from it alone publishes something like
 `ws://10.0.0.18:8100/peer-ws` — perfectly good for finding your own second machine
 on the same network, and completely useless to a friend across the internet. The
-public candidate only appears when **`network.iceEnabled` is on**, so with ICE off
-the directory is a LAN convenience rather than real remote discovery.
+public candidate only appears when **`network.iceEnabled` is on**, and even then a
+home router drops the connection without a port forward.
 
-Even with a public candidate, a friend still has to actually reach you: a home
-router will drop an unsolicited connection without a port forward. The existing
-relay and WebRTC transports are the answer there — the directory's job is
-rendezvous, not traversal.
+So a record also carries **`relay:<node_id>`** whenever the node runs the relay
+transport, which is the default. That is the candidate a friend anywhere can use; see
+[Adding someone anywhere, by username](#adding-someone-anywhere-by-username).
+
+Every candidate carries the port the backend is **actually serving on**, not an
+assumed 8000 (see [network](network.mdx#the-advertised-port)). A record with the wrong
+port looks valid, verifies, and dials nothing: that was a friend's node advertising
+`:8000` while listening on `:8100`, and `_dial` → `directory.lookup` failed every
+reconnect without a word. If the first request reveals a different port from the one
+assumed at startup, the record is republished.
+
+The directory's job is rendezvous, not traversal: it says *where* a person is, and
+the relay candidate is how a friend actually gets there.
 
 Configuration is environment-only — `ATLAS_DB_USER`, `ATLAS_DB_PASS`, and
 `ATLAS_CLUSTER_HOST` in `.env`, never settings, because `GET /api/settings`
@@ -374,10 +520,17 @@ identity and networking lives on the backend.
 - **No certificate revocation.** Unlinking a machine removes it from your roster
   but does not invalidate the certificate it already holds. Rotating the person
   key invalidates all of them, and changes your friend code.
-- **Discovery needs Atlas, or an address.** Off your LAN, resolving a friend code
-  to a machine you have never met needs the presence directory below. With Atlas
-  unconfigured, supply their `ws://…/peer-ws` address once; known devices are
-  redialed from their stored address automatically after that.
+- **Adding by username needs the game server.** It is the uniqueness authority for
+  usernames, the list of a person's machines and the relay. A friend code still
+  works without it, given an address such as `relay:<their node id>`, and friends
+  already made are redialed from their recorded address.
+- **A username lists machine ids publicly.** The directory entry carries each
+  machine's node id and public key, which is what lets anyone who knows your
+  username reach you. It carries no hostname: the certificate published there is
+  minted with an empty label (`handles.directory_cert`). A linked machine can only
+  present the certificate its owner issued, label included.
+- **Relayed traffic is readable by the relay operator.** Envelopes are signed
+  end to end, not encrypted.
 - **Profiles need the game server.** Avatars, levels and comment walls come from
   the ladder, so a friend with no username renders with an initial and no level,
   and every face falls back to an initial when that server is unreachable. The

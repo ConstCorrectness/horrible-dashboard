@@ -10,9 +10,9 @@ import { TrajectoriesHub } from './TrajectoriesHub';
  * "which tool does the coder waste rounds on" and "did last week's prompt edit
  * help" had no data behind them.
  *
- * **One pane, three sections**, per the pane-consolidation rule: the runs, the
- * collections they land in, and the harness that produced them are three views of
- * one object.
+ * **One pane, four sections**, per the pane-consolidation rule: what is happening
+ * now, the runs it becomes, the collections they land in, and the harness that
+ * produced them are four views of one object.
  *
  * Capture is **off by default** and dataset-scoped — see the Datasets section.
  * Runs are stored raw, including tool arguments, and redacted only on the way out
@@ -36,8 +36,15 @@ export const trajectoriesModule: ModuleManifest = {
       singleton: true,
       sections: [
         { id: 'runs', label: 'Runs', icon: '▤', key: 'r', default: true },
+        { id: 'live', label: 'Live', icon: '◉', key: 'l' },
         { id: 'datasets', label: 'Datasets', icon: '▦', key: 'd' },
         { id: 'harness', label: 'Harness', icon: '⚖', key: 'h' },
+        // Friends' shared runs. A section, not a pane: a pulled run *is* a run, and it
+        // lands in Runs beside this node's own with the same detail view.
+        { id: 'peers', label: 'Friends', icon: '⇄', key: 'p' },
+        // Strangers, not friends: digests of runs — their shape, never their payloads —
+        // on the agent commons index. Publishing happens from a run's detail view.
+        { id: 'commons', label: 'Commons', icon: '◎', key: 'c' },
       ],
     },
   ],

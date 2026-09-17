@@ -48,6 +48,10 @@ export const mcpModule: ModuleManifest = {
         // see of it was the `exposeContent` toggle in the generic settings page —
         // describing a server they had no way to know existed, let alone enable.
         { id: 'export', label: 'Export', icon: '📡', key: 'x' },
+        // What the connected servers have *done*: call volume, latency, and failures
+        // split into tool vs transport. A section rather than a dashboard pane because
+        // its object is the same server the other four show, read over time.
+        { id: 'activity', label: 'Activity', icon: '📈', key: 'y' },
       ],
     },
   ],

@@ -136,6 +136,17 @@ export const agentModule: ModuleManifest = {
       type: 'number',
       default: 24000,
     },
+    {
+      // Free text rather than a structured editor: the shape is a small JSON object
+      // and a bad value is ignored with a warning rather than breaking a turn. Not a
+      // secret, so a setting is the right home — see the connector rule in CLAUDE.md.
+      key: 'agent.modelPricing',
+      title: 'Model prices (USD per 1M tokens)',
+      description:
+        'Override or extend the bundled price table, as JSON — for example {"my-model*": {"in": 1.5, "out": 6}}. Merged over the built-in list, longest matching pattern wins. A model in no table shows no cost rather than $0.00, because unpriced and free are different facts.',
+      type: 'string',
+      default: '',
+    },
   ],
   // The orchestrator model is a dropdown of the provider's live models (not a static
   // enum), so it's a custom section rather than a declarative SettingDecl; temperature

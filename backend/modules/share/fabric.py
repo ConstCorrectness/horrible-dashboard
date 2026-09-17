@@ -94,6 +94,53 @@ def _display_name(session: PeerSession, claimed_username: str) -> tuple[str, str
     return (session.info.node_name or "a friend"), person_id
 
 
+def _host_display_name(host_node: str, session_id: str, payload: dict[str, Any]) -> str:
+    """What to call the host of a session we just joined.
+
+    `RemoteSession.host_name` is shown to a person, so it must be a *name* — it used
+    to hold the join reply's `host_person`, an opaque person id. Precedence, most
+    trustworthy first: the name this node's own roster keeps for the person that
+    machine belongs to; the invite that brought us here (read before
+    `adopt_remote`, which drops it); the host participant's name in the join reply;
+    and only then a short node id. Everything after the roster is a label the
+    remote side chose. Identity stays the authenticated `host_node`.
+    """
+    from backend.modules.social import store
+
+    try:
+        person_id = store.person_for_node(host_node)
+        if person_id:
+            row = store.get_friend_row(person_id) or {}
+            if row.get("display_name"):
+                return str(row["display_name"])[:40]
+    except Exception:  # pragma: no cover - roster is best-effort here
+        logger.debug("could not resolve a host against the roster", exc_info=True)
+
+    invite = next(
+        (
+            i
+            for i in share_manager.live_invites()
+            if i.session_id == session_id and i.host == host_node
+        ),
+        None,
+    )
+    if invite is not None and invite.host_name:
+        return invite.host_name
+    host = next(
+        (
+            p
+            for p in payload.get("participants") or []
+            if isinstance(p, dict)
+            and p.get("role") == "host"
+            and p.get("node_id") == host_node
+        ),
+        None,
+    )
+    if host is not None and host.get("name"):
+        return str(host["name"])[:40]
+    return host_node[:8]
+
+
 def _invite_payload(session_id: str, title: str) -> dict[str, Any]:
     """What goes on the wire, stamped with **our username** rather than only our
     machine name — the sender is the one place that knows its own username without
@@ -510,7 +557,7 @@ async def join_remote(session_id: str, host_node: str) -> tuple[bool, str | None
             id=str(payload.get("id") or session_id),
             title=str(payload.get("title") or "Shared session"),
             host_node=host_node,
-            host_name=str(payload.get("host_person") or host_node[:8]),
+            host_name=_host_display_name(host_node, session_id, payload),
             grant=(mine or {}).get("grant") or "view",
             joined_at=time.time(),
         )

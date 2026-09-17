@@ -42,6 +42,11 @@ class ScriptedModel:
     pairs (tool calls). Running off the end returns a bland answer rather than
     raising, so a test that under-scripts fails on its assertion rather than on a
     StopIteration from inside the orchestrator.
+
+    A turn may also be `{"content": str, "calls": [(name, args), ...]}` — a real
+    model routinely narrates *and* calls in the same turn, and the two-form version
+    above could only express one or the other. That form may also carry
+    `"usage": Usage(...)`, so token accounting can be driven through the real loop.
     """
 
     def __init__(self, turns: list) -> None:
@@ -60,6 +65,12 @@ class ScriptedModel:
                 tool_calls=[],
                 content=turn,
             )
+        prose = ""
+        usage = None
+        if isinstance(turn, dict):
+            prose = turn.get("content", "")
+            usage = turn.get("usage")
+            turn = turn.get("calls", [])
         calls = [
             P.ToolCall(id=f"c{i}", name=name, arguments=args)
             for i, (name, args) in enumerate(turn)
@@ -67,14 +78,15 @@ class ScriptedModel:
         return P.ChatResult(
             assistant_message={
                 "role": "assistant",
-                "content": "",
+                "content": prose,
                 "tool_calls": [
                     {"function": {"name": c.name, "arguments": c.arguments}}
                     for c in calls
                 ],
             },
             tool_calls=calls,
-            content="",
+            content=prose,
+            usage=usage,
         )
 
 
@@ -263,6 +275,101 @@ async def test_a_provider_error_is_a_failed_row_not_a_dead_sweep(scripted, monke
 
     assert not result.passed, "an errored case must not pass, even under no_call"
     assert "connection refused" in result.error
+
+
+# --- the tool budget ---------------------------------------------------------
+
+
+@pytest.fixture
+def tight_budget(monkeypatch):
+    """Cap the catalog at exactly the core, so every dynamic tool is past the budget.
+
+    Found live: an `all`-mode case expecting `scratch.open` failed because 38 slots
+    filled with backend tools first, and the row said `tools_dropped: []` — so the
+    failure read as the model's. Browser-pushed tools come last in the dynamic list,
+    which is what makes them the first casualties.
+    """
+    from backend.modules.agent import orchestrator
+    from backend.modules.agent.roster import get_agent
+
+    core = len(orchestrator._core_tools(get_agent("main")))
+    monkeypatch.setattr(orchestrator, "tool_budget_for", lambda agent_id="main": core)
+    return core
+
+
+@pytest.mark.anyio
+async def test_an_expected_tool_cut_by_the_budget_is_named(scripted, tight_budget):
+    model = scripted(["I have no tool for that."])
+    case = EvalCase(
+        id="cut",
+        prompt="open a scratch pad",
+        expose=Expose(mode="all"),
+        expect=Expect(grade="subset", calls=[ToolCall(name="scratch.open")]),
+    )
+    result = await run(case, [tool_decl("scratch.open")])
+
+    offered = {t["function"]["name"] for t in model.seen[0]["tools"]}
+    assert "scratch.open" not in offered
+    assert result.tools_offered == tight_budget
+    assert "scratch.open" in result.tools_dropped
+    assert result.tools_dropped == sorted(result.tools_dropped)
+    assert not result.passed
+    # The verdict alone would blame the model; the detail says whose fault it was.
+    assert "scratch.open was dropped by the tool budget" in result.detail
+
+
+@pytest.mark.anyio
+async def test_a_group_loaded_mid_turn_and_then_cut_counts_as_dropped(
+    scripted, tight_budget
+):
+    """Progressive: nothing is cut up front (core only). The model loads `scratch`,
+    and the budget then refuses to show it the group's tool — that is a drop, even
+    though it happened on a later round than the initial catalog."""
+    model = scripted(
+        [[("load_tools", {"groups": ["scratch"]})], "Still no tool for that."]
+    )
+    case = EvalCase(
+        id="loaded-then-cut",
+        prompt="open a scratch pad",
+        expose=Expose(mode="progressive"),
+        expect=Expect(grade="subset", calls=[ToolCall(name="scratch.open")]),
+    )
+    result = await run(case, [tool_decl("scratch.open")])
+
+    assert result.groups_loaded == ["scratch"]
+    second = {t["function"]["name"] for t in model.seen[1]["tools"]}
+    assert "scratch.open" not in second
+    assert result.tools_dropped == ["scratch.open"]
+
+
+@pytest.mark.anyio
+async def test_a_group_never_loaded_is_out_of_scope_not_dropped(
+    scripted, tight_budget
+):
+    """Progressive disclosure keeping a group off the list is the design working;
+    only the budget cutting something in scope is a drop."""
+    scripted(["done"])
+    case = EvalCase(
+        id="unloaded",
+        prompt="hello",
+        expose=Expose(mode="progressive"),
+        expect=Expect(grade="no_call"),
+    )
+    result = await run(case, [tool_decl("scratch.open")])
+    assert result.tools_dropped == []
+
+
+@pytest.mark.anyio
+async def test_nothing_is_dropped_when_the_catalog_fits(scripted):
+    scripted(["done"])
+    case = EvalCase(
+        id="fits",
+        prompt="hello",
+        expose=Expose(mode="explicit", preload=["scratch"]),
+        expect=Expect(grade="no_call"),
+    )
+    result = await run(case, [tool_decl("scratch.open")])
+    assert result.tools_dropped == []
 
 
 @pytest.mark.anyio

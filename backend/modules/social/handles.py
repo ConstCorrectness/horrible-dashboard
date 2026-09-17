@@ -119,6 +119,67 @@ async def publish_binding() -> dict[str, Any]:
         return {"error": f"game server unreachable: {exc}"}
 
 
+def directory_cert() -> dict[str, Any]:
+    """The certificate this machine lists itself with in the public directory.
+
+    **With an empty label.** A certificate's label is the machine's hostname, and
+    the directory answers anyone who asks; the signature covers the label, so the
+    server cannot strip it. A machine holding the person key mints a label-less
+    certificate for this. A linked machine can only present the one its owner
+    issued, label and all.
+    """
+    if person_identity.is_linked_device():
+        return person_identity.self_cert()
+    from backend.modules.network import identity as node_identity
+
+    node = node_identity.load_identity()
+    return person_identity.load_person().issue_device_cert(
+        node.node_id, node.public_key, ""
+    )
+
+
+async def publish_device() -> dict[str, Any]:
+    """List this machine under its person in the game server's directory.
+
+    This is what lets `@username` lead to a machine, not just to a person: the
+    directory entry carries each machine's device certificate, and a friend dials
+    `relay:<node_id>` from it. Works from a linked machine too — the certificate it
+    adopted is signed by its owner's person key, and no account token is needed.
+    """
+    try:
+        cert = directory_cert()
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            res = await client.post(f"{_base()}/directory/devices", json={"cert": cert})
+            return dict(res.json())
+    except Exception as exc:  # noqa: BLE001 — best effort, never fatal
+        logger.debug("device publish failed: %s", exc)
+        return {"error": f"game server unreachable: {exc}"}
+
+
+def verified_devices(entry: dict[str, Any]) -> list[dict[str, Any]]:
+    """The device certificates in a directory entry that are really that person's.
+
+    The directory is not trusted to have told the truth: each certificate must
+    verify under the entry's person key, which must itself be the one whose
+    fingerprint is the person id — the same rule `resolve` applies to the entry.
+    """
+    person_id = str(entry.get("person_id") or "")
+    person_key = str(entry.get("person_public_key") or "")
+    out = []
+    for device in entry.get("devices") or []:
+        cert = device.get("cert") if isinstance(device, dict) else None
+        if not isinstance(cert, dict):
+            continue
+        if str(cert.get("person_id")) != person_id:
+            continue
+        if str(cert.get("person_public_key")) != person_key:
+            continue
+        if not person_identity.verify_device_cert(cert):
+            continue
+        out.append(cert)
+    return out
+
+
 async def resolve(handle: str) -> dict[str, Any] | None:
     """`@rob` → `{handle, display_name, person_id, person_public_key}`, or None.
 

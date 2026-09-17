@@ -134,6 +134,65 @@ The frontend store (`telemetry.ts`) merges `client` events with the streamed
 so an amended event (a filled-in streaming body, re-emitted under the same id)
 replaces its row in place rather than duplicating it.
 
+## Persistence for agent turns
+
+The ring forgets, and that is right for a live view and useless for a postmortem: by
+the time anyone opens yesterday's agent run, the wire that produced it is gone. So the
+**turn-stamped** slice is also written to `telemetry_events` in `app.db`
+(`backend/modules/telemetry/store.py`), where it joins onto `traj_runs.turn_id` and
+`agent_turns.turn_id`. Everything else stays ring-only.
+
+- **Only events with a `turn_id` are kept.** A node's background traffic is not part of
+  any agent postmortem, and a row that joins to nothing is noise in a table whose only
+  purpose is the join. It also keeps retention nearly a non-problem.
+- **The key is `(boot_id, ev_id)`.** `IoEvent.id` is an `itertools.count(1)` that
+  restarts every process, so it is not durable alone. With a per-process `boot_id`
+  prefixed, `INSERT OR REPLACE` makes an `amend` — deliberately re-emitted under the
+  *same* id — idempotent by construction.
+- **A batched subscriber writes, never `record()`.** `record()` is on the hot path of
+  every instrumented request, and a synchronous sqlite write there would put file I/O
+  in the middle of a chat turn to serve a debugging feature (`drain.py`, flushing on
+  200 events or 1 s). It starts in the app lifespan, before any turn can run.
+- **Drops are counted, not prevented.** `Recorder._notify` discards on a full queue.
+  Backpressure on `record()` would slow the app to protect a postmortem, so instead a
+  gap in `ev_id` is counted and reported by `GET /api/telemetry/stats` as `dropped` — a
+  visible number rather than a table that silently claims to be complete.
+- **Shutdown flushes what is in hand, synchronously, queue included.** Two traps, each
+  of which made the flush look implemented while doing nothing. Every `await` inside a
+  task that is already being cancelled raises `CancelledError` again, so an
+  `await asyncio.to_thread(persist)` there never reaches the database. And the batch is
+  not all we hold: the newest events — the in-flight turn's — are usually still in the
+  queue, not yet batched, so the handler drains the queue before writing.
+
+### Headers are blanked by name, bodies are opt-in
+
+Header names containing any of `SENSITIVE_HEADER_PARTS` (`authorization`, `auth`,
+`token`, `key`, `secret`, `password`, `cookie`, `credential`) are stored as `***` —
+blanked rather than dropped, since "this request carried credentials" is itself worth
+knowing. A substring match because header names are not a closed vocabulary
+(`x-api-key`, `x-goog-api-key`, `x-amz-security-token`), and over-blanking costs a line
+of detail where under-blanking writes a live credential to disk.
+
+**`trajectories.store.redact()` is not used for this, and cannot be.** It matches
+`SECRET_KEY_SUFFIXES`, a *dotted settings-key* vocabulary (`github.token`,
+`foo.apiKey`). It matches neither `Authorization` nor `x-api-key` — so reusing it, as
+first planned, would have written every credential header to disk in full.
+
+Bodies are opaque text no name match can help, so they are persisted only with
+`telemetry.persistBodies` on (default off), capped at 4 KB. The live inspector keeps
+full bodies either way.
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| `telemetry.retentionDays` | `7` | Delete stored events older than this; `0` disables |
+| `telemetry.retentionEvents` | `200000` | Hard cap, pruned oldest-first; `0` disables |
+| `telemetry.persistBodies` | `false` | Also store request/response bodies, capped at 4 KB |
+
+Retention is enforced from the drain every 60th flush rather than on a timer — the
+only moment the table is known to have just grown. Deleting a trajectory run also
+deletes its turn's stored events (`trajectories.store.delete_run`), which would
+otherwise sit unreachable until they aged out.
+
 ## Muting a source
 
 The toolbar's source control is a row of **toggles, one per source**, not a
@@ -197,9 +256,11 @@ something.
 
 ## Backend surface
 
-`backend/modules/telemetry/` — `GET /api/telemetry/recent` (backlog) and the
-`/ws` telemetry stream. The telemetry endpoints are excluded from recording to
-avoid feedback noise.
+`backend/modules/telemetry/` — `GET /api/telemetry/recent` (backlog), the `/ws`
+telemetry stream, `GET /api/telemetry/turn/{turn_id}?round=` (stored events for one
+turn) and `GET /api/telemetry/stats` (`written` / `dropped` / `stored`). A run-scoped
+view of the same rows is `GET /api/trajectories/runs/{run_id}/io`. The telemetry
+endpoints are excluded from recording to avoid feedback noise.
 
 ## Browser vs desktop
 
@@ -217,5 +278,6 @@ so the agent can reason about live traffic — e.g. "did that request fail?". Se
 
 Client-side streaming calls (the agent chat/pull streams bypass `request<T>`, so
 they show as outbound on the backend but not as client events), inbound response
-bodies (see above), and persistence across reloads (the buffer is in-memory). The
+bodies (see above), and persistence across reloads for anything outside an agent turn
+(only turn-stamped events are stored — see Persistence for agent turns). The
 panel filter is panel-local state, so it resets when the pane is unmounted.

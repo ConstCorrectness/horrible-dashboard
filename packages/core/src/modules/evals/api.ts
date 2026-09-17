@@ -136,6 +136,10 @@ export interface EvalRun {
   harness_hash: string;
   /** The harness itself, so a differing hash can say what differed. */
   harness_json: string;
+  /** `peer` when a friend's node ran the suite on its own agent and *reported* the
+   *  model, harness and every verdict. A signature proves the node said it, not that
+   *  it is true, and the harness hash does not cover model weights. */
+  attestation: '' | 'peer';
 }
 
 export interface SuggestedTarget {
@@ -221,6 +225,57 @@ export interface ActiveSweep {
 export const listSweeps = () =>
   apiGet<{ sweeps: ActiveSweep[] }>('/evals/sweeps').then((r) => r.sweeps);
 
+// --- running on a friend's agent (backend/modules/evals/fabric.py) -----------
+
+export interface RemoteFriend {
+  node_id: string;
+  name: string;
+}
+
+/** An offer from a friend to run their suite on this node's agent. */
+export interface IncomingOffer {
+  offerId: string;
+  fromNode: string;
+  fromName: string;
+  suiteName: string;
+  cases: number;
+  /** A floor: the case text alone. Every round also resends the system prompt and
+   *  the tool catalog. */
+  estimateTokens: number;
+  /** `0` on a local model, `null` when no price is known — never conflated. */
+  estimateCostUsd: number | null;
+  receivedAt: number;
+  expiresAt: number;
+  state: 'pending' | 'running';
+  model: string;
+}
+
+export const listRemoteFriends = () =>
+  apiGet<{ friends: RemoteFriend[] }>('/evals/remote/friends').then((r) => r.friends);
+
+export const offerSuite = (body: { node_id: string; suite_id: string; case_ids?: string[] }) =>
+  apiPost<{ run: EvalRun; skipped: { caseId: string; reason: string }[] }>(
+    '/evals/remote/offer',
+    body,
+  );
+
+export const withdrawOffer = (runId: string) =>
+  apiDelete<{ withdrawn: boolean }>(`/evals/remote/runs/${encodeURIComponent(runId)}`);
+
+export const listIncomingOffers = () =>
+  apiGet<{ accepting: boolean; offers: IncomingOffer[] }>('/evals/remote/offers');
+
+export const acceptOffer = (id: string) =>
+  apiPost<IncomingOffer>(`/evals/remote/offers/${encodeURIComponent(id)}/accept`, {});
+
+export const declineOffer = (id: string) =>
+  apiPost<{ ok: boolean }>(`/evals/remote/offers/${encodeURIComponent(id)}/decline`, {
+    reason: 'declined',
+  });
+
+export const stopOffer = (id: string) =>
+  apiPost<{ stopped: boolean }>(`/evals/remote/offers/${encodeURIComponent(id)}/stop`, {});
+
 /** Stop a sweep. Targets it already finished keep their results. */
 export const cancelSweep = (key: string) =>
   apiDelete<{ cancelled: boolean }>(`/evals/sweeps/${encodeURIComponent(key)}`);
@@ -298,6 +353,9 @@ export interface BoardRun {
   rate: number;
   avgRounds: number;
   avgMs: number;
+  node: string;
+  /** A friend's node ran it and reported every verdict. Labelled, never pooled. */
+  peerAttested: boolean;
 }
 
 export interface BoardCase {
@@ -351,6 +409,8 @@ export interface RunDiff {
     other: string;
     /** Plain lines naming what changed. Empty unless `differs`. */
     changes: string[];
+    /** Either harness was reported by a friend's node rather than read here. */
+    peerAttested: boolean;
   };
 }
 

@@ -168,6 +168,14 @@ to `commons-reports.json`, and stores embeddings in the [database](database.mdx)
 SQLite vector store. Disconnect marks a
 profile offline (kept, still discoverable); `unpublish` removes it.
 
+It also stores **trajectory digests** — a run's shape, never its payloads — via
+`publish_trajectory` → `trajectory_published` (or an `error` carrying the digest id as
+`ref`), `list_trajectories` → `trajectories`, and `unpublish_trajectory` →
+`trajectory_unpublished`, persisted to `commons-trajectories.json`. A digest is signed
+by the node key like a profile, and verified on load as well as on publish. What goes
+into one, and the typed confirmation before it leaves, are in
+[trajectories](trajectories.mdx#publishing-to-the-commons).
+
 ## Settings
 
 | Key | Type | Default | Meaning |

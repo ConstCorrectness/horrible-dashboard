@@ -6,11 +6,21 @@
  * and a `<button>` may not contain interactive descendants. The list holds identities;
  * everything you *do* to a run happens in this column.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { Button, Chip } from '../../../Primitives';
-import { addLabel, type TrajectoryDetail, type TrajectoryStep } from '../api';
+import {
+  addLabel,
+  getRunMcp,
+  type McpCallSummary,
+  type TrajectoryDetail,
+  type TrajectoryStep,
+} from '../api';
 import { CheckIcon, CircleIcon, ScaleIcon, TrashIcon, XIcon } from '../icons';
+import { CommonsPublish } from './CommonsPublish';
+import { IoLane } from './IoLane';
+import { McpStepDetail } from './McpStepDetail';
+import { Timeline } from './Timeline';
 import {
   ago,
   card,
@@ -21,16 +31,32 @@ import {
   outcomeKind,
   outcomeLabel,
   StepIcon,
+  tokens,
   usd,
 } from './common';
 
-function StepRow({ step, index }: { step: TrajectoryStep; index: number }) {
+function StepRow({
+  runId,
+  step,
+  index,
+  selected,
+  mcpCall,
+}: {
+  runId: string;
+  step: TrajectoryStep;
+  index: number;
+  selected: boolean;
+  /** Present when this step was an MCP tool call with a recorded summary. */
+  mcpCall?: McpCallSummary;
+}) {
   const [open, setOpen] = useState(false);
   const failed = step.ok === false;
   return (
     <div
       className="traj-in"
+      id={`traj-step-${step.seq}`}
       style={{
+        background: selected ? 'var(--bg-hover)' : undefined,
         borderLeft: `2px solid ${failed ? 'var(--danger)' : 'var(--border)'}`,
         paddingLeft: 'var(--space-4)',
         marginBottom: 'var(--space-3)',
@@ -72,6 +98,7 @@ function StepRow({ step, index }: { step: TrajectoryStep; index: number }) {
           {step.error}
         </div>
       ) : null}
+      {mcpCall ? <McpStepDetail runId={runId} seq={step.seq} call={mcpCall} /> : null}
       {open ? (
         <div style={{ marginTop: 'var(--space-2)' }}>
           {step.args != null ? (
@@ -105,6 +132,25 @@ export function RunDetail({
   onInspectHarness: (fingerprint: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [selectedSeq, setSelectedSeq] = useState<number | null>(null);
+  const [mcpCalls, setMcpCalls] = useState<Record<string, McpCallSummary>>({});
+
+  // Fetched only when the run has a turn to join on and at least one step is an MCP
+  // tool — most runs call none, and a request per opened run would buy nothing.
+  const hasMcpStep = run.step_list.some((s) => s.name?.startsWith('mcp-'));
+  useEffect(() => {
+    setMcpCalls({});
+    if (!run.turn_id || !hasMcpStep) return;
+    let cancelled = false;
+    getRunMcp(run.id)
+      .then((res) => !cancelled && setMcpCalls(res.calls))
+      .catch(() => {
+        // The steps still render without their server-side detail; nothing to report.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [run.id, run.turn_id, hasMcpStep]);
 
   const grade = async (value: string) => {
     setBusy(true);
@@ -117,10 +163,7 @@ export function RunDetail({
   };
 
   const cost = usd(run.cost_usd);
-  const tokens =
-    run.tokens_in != null || run.tokens_out != null
-      ? `${run.tokens_in ?? 0}↓ ${run.tokens_out ?? 0}↑ tok`
-      : null;
+  const tokenLine = tokens(run.tokens_in, run.tokens_out);
 
   return (
     <div>
@@ -144,7 +187,7 @@ export function RunDetail({
           <span>{run.model || '—'}</span>
           <span>{run.steps} steps</span>
           <span>{ms(run.duration_ms)}</span>
-          {tokens ? <span>{tokens}</span> : null}
+          {tokenLine ? <span>{tokenLine}</span> : null}
           {/* Cost only when the provider reported one. A run with no cost figure
               shows nothing rather than "$0.00", which would read as free. */}
           {cost ? <span>{cost}</span> : null}
@@ -227,6 +270,14 @@ export function RunDetail({
         </div>
       </div>
 
+      {/* Not offered for a friend's run: they shared it with you, not with strangers.
+          The backend refuses it too; this only avoids offering a button that cannot work. */}
+      {run.source !== 'peer' ? (
+        <div style={{ marginBottom: 'var(--space-5)' }}>
+          <CommonsPublish runId={run.id} running={run.status === 'running'} />
+        </div>
+      ) : null}
+
       {run.labels.length ? (
         <div style={{ marginBottom: 'var(--space-5)' }}>
           <div style={heading}>Labels</div>
@@ -239,11 +290,36 @@ export function RunDetail({
         </div>
       ) : null}
 
+      {/* Where the time went, then what was done with it. Both, not one: the
+          waterfall is unreadable at 200 steps and the list hides latency entirely. */}
+      <Timeline
+        steps={run.step_list}
+        startedAt={run.started_at}
+        selectedSeq={selectedSeq}
+        onSelect={(seq) => {
+          setSelectedSeq(seq);
+          document
+            .getElementById(`traj-step-${seq}`)
+            ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }}
+      />
+
+      {/* What went over the wire during the turn — read from disk, so it survives
+          long after the 500-event live ring has forgotten it. */}
+      <IoLane runId={run.id} hasTurn={Boolean(run.turn_id)} />
+
       <div style={{ ...heading, marginBottom: 'var(--space-3)' }}>
         Steps ({run.step_list.length})
       </div>
       {run.step_list.map((step, index) => (
-        <StepRow key={step.seq} step={step} index={index} />
+        <StepRow
+          key={step.seq}
+          runId={run.id}
+          step={step}
+          index={index}
+          selected={selectedSeq === step.seq}
+          mcpCall={mcpCalls[String(step.seq)]}
+        />
       ))}
     </div>
   );

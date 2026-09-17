@@ -1,9 +1,11 @@
 """Live capture of this node's own agent runs.
 
-One seam: `run_agent_loop` in `agent/orchestrator.py`. All four internal callers —
-the chat orchestrator, `delegate.run_delegate`, the flow executor's Agent node, and
-the evals runner — go through that function, so hooking it once captures every
-internal source and there is no second place to keep in sync.
+One seam: `run_agent_loop` in `agent/orchestrator.py`. All five internal callers —
+the chat orchestrator, `delegate.run_delegate`, the flow executor's Agent node, the
+evals runner and `agentpedia.fork` — go through that function, so hooking it once
+captures every internal source and there is no second place to keep in sync. A sixth
+call site that forgets it does not fail; it silently records nothing, which is why
+`roster.resolve_provider` carries the same warning about the same five sites.
 
 ## Observation must not break the thing it observes
 
@@ -17,12 +19,21 @@ This is the same rule `interpretability/recorder.py` follows, for the same reaso
 question with a single indexed lookup. A node that never turns capture on pays one
 SELECT per agent turn.
 
+## Token counts are the provider's, not an estimate
+
+`traj_runs.tokens_in/out/cost_usd` carry what the **provider reported** for the
+rounds of this turn, summed. That is a different number from interpretability's
+`agent_turns`, which holds a *tokenizer estimate* of what the model was shown, and
+the two are worth keeping apart: the estimate exists so a context window can be
+drawn before a request is made, and the report exists so a bill can be reconciled
+after one. A round no provider reported on leaves the totals `None` — never zero.
+
 ## What this deliberately does not record
 
-Token counts and the per-round context blocks. Those are interpretability's
-`agent_turns`, keyed by the same `turn_id` — that table holds what the model was
-*shown*, this one holds what it *did*, and duplicating the first into the second
-would mean two copies of a 4 KB prompt drifting apart. The join is the design.
+The per-round context blocks. Those are interpretability's `agent_turns`, keyed by
+the same `turn_id` — that table holds what the model was *shown*, this one holds
+what it *did*, and duplicating the first into the second would mean two copies of a
+4 KB prompt drifting apart. The join is the design.
 """
 
 from __future__ import annotations
@@ -99,11 +110,22 @@ def _tool_names(tools: list[dict[str, Any]]) -> list[str]:
 class RunRecorder:
     """A handle on one in-flight run. Cheap, and never raises at a caller."""
 
-    def __init__(self, run_id: str) -> None:
+    def __init__(
+        self, run_id: str, *, model: str = "", provider_kind: str = ""
+    ) -> None:
         self.run_id = run_id
         self.rounds = 0
         self._seq = 0
         self._failed: str = ""
+        #: What the model and provider were, so `usage()` can price a round without
+        #: the caller repeating itself every time.
+        self._model = model
+        self._provider_kind = provider_kind
+        #: Totals, summed across every round of the turn. They stay `None` until a
+        #: provider actually reports something — see `usage()`.
+        self._tokens_in: int | None = None
+        self._tokens_out: int | None = None
+        self._cost: float | None = None
 
     def _next(self) -> int:
         seq = self._seq
@@ -131,6 +153,7 @@ class RunRecorder:
         result: Any,
         *,
         duration_ms: int | None = None,
+        ts: float | None = None,
     ) -> None:
         """One tool call and the result it returned — a single step.
 
@@ -138,6 +161,12 @@ class RunRecorder:
         orchestrator represents both as an `error` key on the result dict and the
         distinction between "the tool failed" and "the harness blocked it" is one
         of the more useful things a trajectory can tell you.
+
+        **`ts` is when the call *started*.** The caller must pass it, because this
+        method is invoked after the tool has been awaited and the store's default
+        (`time.time()` at insert) is therefore the call's *end*. A timeline drawn
+        from that default puts every bar one full duration to the right of where it
+        belongs — which is wrong in a way that still looks entirely plausible.
         """
         error = None
         gated = False
@@ -155,9 +184,43 @@ class RunRecorder:
                 error=error,
                 gated=gated,
                 duration_ms=duration_ms,
+                ts=ts,
                 seq=self._next(),
             )
         )
+
+    def usage(self, usage: Any) -> None:
+        """Add one round's consumption to the run's totals.
+
+        Called once per `chat_stream`, which means **twice** on a turn that took the
+        forced-tool-call retry. Summing rather than assigning is the whole point: the
+        retry reassigns `result` in the orchestrator, so an implementation that
+        overwrote would silently under-report exactly the turns that needed repair.
+
+        A field only leaves `None` when some round reported it. Seeding the totals at
+        zero would turn "no provider ever said" into a confident "this turn used no
+        tokens", which is the error this module exists to avoid making.
+        """
+        if usage is None:
+            return
+        try:
+            for attr, key in (
+                ("tokens_in", "_tokens_in"),
+                ("tokens_out", "_tokens_out"),
+            ):
+                value = getattr(usage, attr, None)
+                if value is not None:
+                    setattr(self, key, (getattr(self, key) or 0) + int(value))
+
+            from backend.modules.agent import cost as cost_mod
+
+            priced = cost_mod.resolve(
+                usage, model=self._model, provider_kind=self._provider_kind
+            )
+            if priced is not None:
+                self._cost = (self._cost or 0.0) + priced
+        except Exception as exc:  # pragma: no cover - never cost the user a turn
+            logger.debug("trajectories: usage dropped for %s: %s", self.run_id, exc)
 
     def _record(self, step: StepWrite) -> None:
         try:
@@ -185,6 +248,9 @@ class RunRecorder:
                 self.run_id,
                 status="failed" if self._failed else "complete",
                 rounds=self.rounds or None,
+                tokens_in=self._tokens_in,
+                tokens_out=self._tokens_out,
+                cost_usd=self._cost,
                 error=self._failed,
             )
             self._schedule_index()
@@ -297,7 +363,10 @@ def begin(
             provider=provider,
             goal=_goal_from(messages),
         )
-        recorder = RunRecorder(run_id)
+        # `provider` here is the provider *kind* (`ollama`, `openai`, …), which is
+        # what decides whether an unpriced model costs a known zero or an unknown
+        # amount — see `agent/cost.LOCAL_KINDS`.
+        recorder = RunRecorder(run_id, model=model, provider_kind=provider)
         recorder.message(0, _goal_from(messages), role="user")
         # Enforce retention here rather than on a timer: this is the only moment
         # the dataset is known to have just grown.

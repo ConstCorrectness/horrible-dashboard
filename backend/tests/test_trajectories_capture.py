@@ -8,6 +8,8 @@ between the script and the recorded trajectory is production code.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from backend.modules.evals import runner_agent
@@ -213,3 +215,247 @@ async def test_two_prompts_share_a_harness_but_not_a_run(scripted, capture_on):
     assert total == 2
     assert runs[0].harness == runs[1].harness
     assert len(capture_on.list_harnesses()) == 1
+
+
+@pytest.mark.anyio
+async def test_prose_alongside_tool_calls_is_recorded(scripted, capture_on):
+    """The model's stated reason for acting is part of the trajectory.
+
+    A real model narrates and calls in the same turn. That prose used to be dropped
+    on the floor — `message()` ran exactly twice per run, for the goal and the final
+    answer — so a run read as a bare list of calls with no account of why any of them
+    happened, which is the half a postmortem is actually looking for.
+    """
+    scripted(
+        [
+            {
+                "content": "I'll open the terminal for you.",
+                "calls": [("open_pane", {"id": "terminal"})],
+            },
+            "Opened the terminal.",
+        ]
+    )
+    result = await _run(_case(), [tool_decl("ui.noop")])
+    assert result.passed, result.detail
+
+    run = capture_on.get_run(capture_on.list_runs()[0][0].id)
+    prose = [s for s in run.step_list if s.kind == "message" and s.role == "assistant"]
+    assert [s.content for s in prose] == [
+        "I'll open the terminal for you.",
+        "Opened the terminal.",
+    ]
+    # The narration belongs to the round that acted, and it must come before the
+    # action it explains — a reason recorded after its consequence is not a reason.
+    assert prose[0].round == 0
+    action = next(s for s in run.step_list if s.kind == "action")
+    assert prose[0].seq < action.seq
+
+
+@pytest.mark.anyio
+async def test_a_final_answer_is_not_recorded_twice(scripted, capture_on):
+    """The no-tool-call branch is `finish()`'s job alone.
+
+    Recording prose in both places would duplicate every single-round answer, and a
+    duplicated assistant message is invisible in the pane and poison in an SFT export.
+    """
+    scripted(["No tool needed."])
+    await _run(
+        _case(expect=Expect(grade="no_call"), fixtures={}), [tool_decl("ui.noop")]
+    )
+
+    run = capture_on.get_run(capture_on.list_runs()[0][0].id)
+    answers = [
+        s for s in run.step_list if s.kind == "message" and s.role == "assistant"
+    ]
+    assert [s.content for s in answers] == ["No tool needed."]
+
+
+@pytest.mark.anyio
+async def test_an_action_timestamp_is_when_the_call_started(
+    scripted, capture_on, monkeypatch
+):
+    """`ts` is the bar's left edge, so it must be the call's start, not its end.
+
+    `rec.action` is invoked *after* the tool has been awaited, so letting the store
+    default `ts` recorded the moment the call finished. Every bar on a timeline then
+    sits one full duration to the right of where it belongs — a failure that draws a
+    perfectly plausible chart, which is why it needs a test rather than an eyeball.
+
+    The baseline is stamped *inside* the tool rather than before the turn: assembling
+    a turn takes longer than this tool does, so measuring from before `_run` compares
+    the wrong two numbers and fails whichever way `ts` is recorded.
+    """
+    import time
+
+    from backend.modules.agent.offline_conn import OfflineConnection
+
+    real = OfflineConnection.fixture_for
+    entered: list[float] = []
+    HELD = 0.2
+
+    def slow(self, name):
+        entered.append(time.time())
+        time.sleep(HELD)
+        return real(self, name)
+
+    monkeypatch.setattr(OfflineConnection, "fixture_for", slow)
+
+    scripted([[("open_pane", {"id": "terminal"})], "Opened the terminal."])
+    await _run(_case(), [tool_decl("ui.noop")])
+
+    run = capture_on.get_run(capture_on.list_runs()[0][0].id)
+    action = next(s for s in run.step_list if s.kind == "action")
+    assert len(entered) == 1
+    # Recorded at the call's start, not HELD seconds later at its end. The margin is
+    # generous because it only has to separate "start" from "start + 200ms".
+    assert abs(action.ts - entered[0]) < HELD / 2
+    assert action.duration_ms >= HELD * 1000 * 0.75
+
+
+@pytest.mark.anyio
+async def test_provider_tokens_are_summed_onto_the_run(scripted, capture_on):
+    """Token counts reach `traj_runs`, summed across the turn's rounds.
+
+    They used to be NULL for every local run — `ChatResult` dropped the provider's
+    usage block entirely, so the columns existed and nothing ever filled them.
+    """
+    from backend.modules.agent.providers import Usage
+
+    scripted(
+        [
+            {
+                "calls": [("open_pane", {"id": "terminal"})],
+                "usage": Usage(tokens_in=100, tokens_out=20),
+            },
+            {
+                "content": "Opened the terminal.",
+                "usage": Usage(tokens_in=140, tokens_out=8),
+            },
+        ]
+    )
+    result = await _run(_case(), [tool_decl("ui.noop")])
+    assert result.passed, result.detail
+
+    run = capture_on.get_run(capture_on.list_runs()[0][0].id)
+    assert run.tokens_in == 240
+    assert run.tokens_out == 28
+
+
+@pytest.mark.anyio
+async def test_a_local_run_costs_a_known_zero(scripted, capture_on):
+    """`0.0`, not NULL. The pane renders this as `free`; NULL renders as nothing,
+    which would be indistinguishable from a hosted model we have no price for."""
+    from backend.modules.agent.providers import Usage
+
+    scripted(
+        [
+            {
+                "calls": [("open_pane", {"id": "terminal"})],
+                "usage": Usage(tokens_in=10, tokens_out=2),
+            },
+            "Opened the terminal.",
+        ]
+    )
+    await _run(_case(), [tool_decl("ui.noop")])
+
+    run = capture_on.get_run(capture_on.list_runs()[0][0].id)
+    # The scripted harness runs as the `ollama` provider — see test_evals_runner.INFO.
+    assert run.cost_usd == 0.0
+
+
+@pytest.mark.anyio
+async def test_a_provider_that_reports_nothing_leaves_the_totals_null(
+    scripted, capture_on
+):
+    """Absent must not become zero on the way through. A run showing `0 tokens`
+    reads as a measurement; NULL reads as "not reported", which is the truth."""
+    scripted([[("open_pane", {"id": "terminal"})], "Opened the terminal."])
+    await _run(_case(), [tool_decl("ui.noop")])
+
+    run = capture_on.get_run(capture_on.list_runs()[0][0].id)
+    assert run.tokens_in is None
+    assert run.tokens_out is None
+
+
+@pytest.mark.anyio
+async def test_the_forced_tool_retry_does_not_lose_its_first_rounds_tokens(
+    scripted, capture_on
+):
+    """The bug a single end-of-round capture would have caused.
+
+    When a model narrates an action without emitting the call, the loop re-asks and
+    **reassigns** `result`. Counting once, at the end, would silently under-report
+    exactly the turns that needed repairing — the ones already costing double.
+    """
+    from backend.modules.agent.providers import Usage
+
+    scripted(
+        [
+            # Prose that trips `_looks_like_unemitted_tool_call`, with no call.
+            {
+                "content": "I'll open the terminal for you.",
+                "usage": Usage(tokens_in=70, tokens_out=9),
+            },
+            # The retry, which does emit one.
+            {
+                "calls": [("open_pane", {"id": "terminal"})],
+                "usage": Usage(tokens_in=85, tokens_out=11),
+            },
+            {
+                "content": "Opened the terminal.",
+                "usage": Usage(tokens_in=90, tokens_out=6),
+            },
+        ]
+    )
+    await _run(_case(), [tool_decl("ui.noop")])
+
+    run = capture_on.get_run(capture_on.list_runs()[0][0].id)
+    assert run.tokens_in == 70 + 85 + 90
+    assert run.tokens_out == 9 + 11 + 6
+
+
+@pytest.mark.anyio
+async def test_a_turns_wire_traffic_is_persisted_against_its_run(scripted, capture_on):
+    """The join this whole table exists for, end to end.
+
+    The orchestrator stamps every request it makes with the turn (`telemetry/turn.py`),
+    the drain keeps the stamped ones, and `traj_runs.turn_id` is what turns them back
+    into "the I/O this run produced". Before this, the live ring held 500 events and
+    a finished run's wire was simply gone.
+    """
+    from backend.modules.telemetry import drain, store as telemetry_store
+    from backend.modules.telemetry.recorder import recorder as io_recorder
+
+    telemetry_store._initialized.clear()
+    telemetry_store.init_telemetry_db()
+    drain.reset()
+    io_recorder.clear()
+    drain.start()
+    # Let the task actually reach `recorder.subscribe()`. `create_task` only
+    # schedules it, and an event recorded before it subscribes goes nowhere — the
+    # same subscribe-before-you-produce ordering the trajectory client follows.
+    await asyncio.sleep(0)
+
+    scripted([[("open_pane", {"id": "terminal"})], "Opened the terminal."])
+    await _run(_case(), [tool_decl("ui.noop")])
+
+    # The scripted model replaces `chat_stream`, so no real HTTP happens. Record one
+    # event inside the turn by hand: what is under test is the stamping and the
+    # join, not httpx.
+    run = capture_on.get_run(capture_on.list_runs()[0][0].id)
+    io_recorder.record(
+        source="outbound",
+        method="POST",
+        target="http://localhost:11434/api/chat",
+        status=200,
+        turn_id=run.turn_id,
+        round=0,
+    )
+    await drain.stop()
+
+    events = telemetry_store.for_turn(run.turn_id)
+    assert [e["target"] for e in events] == ["http://localhost:11434/api/chat"]
+
+    # And deleting the run takes it with it, rather than orphaning it.
+    capture_on.delete_run(run.id)
+    assert telemetry_store.for_turn(run.turn_id) == []

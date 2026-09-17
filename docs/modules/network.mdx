@@ -666,8 +666,8 @@ weight taught people to skim past the six that matter.
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `network.advertisedAddress` | string | `""` (auto) | URL peers dial to reach this node, encoded into invites. Blank auto-detects this machine's LAN IPv4 — `localhost` would make every invite undialable from another device. Set it for a public hostname or a forwarded port. |
-| `network.relayUrl` | string | `""` | Rendezvous broker URL (blank = off). **Restart.** |
+| `network.advertisedAddress` | string | `""` (auto) | URL peers dial to reach this node, encoded into invites. Blank auto-detects this machine's LAN IPv4 — `localhost` would make every invite undialable from another device — and the port this backend is **actually serving on** (see [The advertised port](#the-advertised-port)). Set it for a public hostname or a forwarded port. |
+| `network.relayUrl` | string | `""` (the game server's relay) | Relay broker URL, which is how friends on other networks reach this node. Blank uses `wss://<game server>/relay-ws`; `off` disables relaying, leaving direct and LAN only. `HORRIBLE_RELAY_URL` overrides it. See [social](social.mdx#the-relay). **Restart.** |
 | `network.iceEnabled` | boolean | `false` | Gather a STUN server-reflexive candidate (public IP) alongside host/LAN candidates. |
 | `network.stunServer` | string | `stun.l.google.com:19302` | `host:port` for STUN public-IP discovery (when ICE is on); also the STUN ICE server for the WebRTC transport. |
 | `network.enableWebRtc` | boolean | `false` | Connect over a WebRTC data channel, SDP signaled via the lobby. Needs `uv sync --extra webrtc`; the relay stays the fallback. **Restart.** |
@@ -681,6 +681,53 @@ weight taught people to skim past the six that matter.
 transport owns a bound socket or a multicast thread, so swapping one under live
 sessions is a different job from reading a flag; before they said so, they looked
 like live switches that silently did nothing.
+
+### Strangers are admitted, not rejected
+
+`trust.admit` replaces the handshake's accept-or-reject. A node that proves its
+identity but is not trusted gets a **stranger** session: it can carry only the types
+opened with `hub.allow_from_strangers`, is invisible to `peers` and `list_peers()`,
+and is closed after two minutes unless it becomes trusted. Rejecting it used to make
+friending anyone not already paired by invite impossible. The full rules are in
+[social](social.mdx#strangers). An older node still rejects strangers, and the
+dialer's `AUTH_RESULT` handling reads a missing `trusted` field as trusted, since
+such a node admitted only peers it trusted.
+
+`hub.connect` is bounded by `HANDSHAKE_TIMEOUT_S` (20 s). A relay dial to an offline
+node, or a direct dial into a router that drops the packet, used to wait forever.
+
+### The advertised port
+
+Every address this node hands out — invites, ICE host candidates, the
+[presence record](social.mdx#the-presence-directory-mongodb-atlas), the tunnel target
+for lent extras, the OAuth redirect back to this backend — takes its port from
+`backend/server_port.py`, the one authority for it. It used to be
+`HORRIBLE_DEV_BACKEND_PORT` with a default of 8000, and only `scripts/dev.mjs` sets
+that variable. So a node started any other way — the documented bare
+`uv run uvicorn backend.app:app --port 8100`, a systemd unit — advertised 8000 wherever
+it listened. Found live: a friend's Linux node published `ws://10.0.0.142:8000/peer-ws`
+while answering on 8100, and every reconnect through the directory dialed a closed
+port, silently. A repo `.env` that sets the variable has the mirror-image effect: any
+node on that machine on a *different* port advertised the `.env` one.
+
+The port cannot simply be read off the socket at startup, because **uvicorn runs
+lifespan startup before it binds** — and presence is published from lifespan. So the
+answer is resolved in order of authority:
+
+| Source | When it is known |
+| --- | --- |
+| `scope["server"]` of a real request | from the first HTTP or WebSocket request on. It is `getsockname()` of the socket the request arrived on — behind the Vite proxy still the backend's own |
+| `--port` / `--bind host:port` on the command line, or `UVICORN_PORT` | at startup. Under `--reload` the worker is a spawned child whose `sys.argv` is the parent's, so this holds there too (checked on Windows) |
+| `HORRIBLE_DEV_BACKEND_PORT` | fallback only |
+| `8000` | nothing else is known |
+
+`network.advertisedAddress` still overrides all of it. When the first request shows a
+port different from the one startup assumed — a server started from Python with
+`uvicorn.run(...)`, whose command line names no port — the presence record is
+**republished**, since the one already out carries a dead address, and the log says
+`serving on port N, not the port assumed at startup`. The OAuth redirect additionally
+honours an explicit `HORRIBLE_BACKEND_PORT`, because a registered redirect URI names a
+port and whoever pinned it meant that one.
 
 ### Two settings that were removed
 

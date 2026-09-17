@@ -112,6 +112,12 @@ class WireMessageModel(BaseModel):
     id: str = ""
     payload: str = ""
     truncated: bool = False
+    # Declared here as well as on `transcript.WireMessage.public()`: a `response_model`
+    # strips any field it does not name, so adding them in one place alone ships
+    # nothing and raises nothing.
+    turn_id: str | None = None
+    round: int | None = None
+    session: str = ""
 
 
 class TranscriptResponse(BaseModel):

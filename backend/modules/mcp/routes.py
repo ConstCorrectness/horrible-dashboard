@@ -7,8 +7,9 @@ bridge, so the tool catalog the model sees never lags what the pane shows.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from backend.modules.mcp import config as cfg
 from backend.modules.mcp.client import manager
@@ -117,16 +118,65 @@ async def disconnect_server(server_id: str) -> ServerStatus:
 
 
 @router.get("/servers/{server_id}/transcript", response_model=TranscriptResponse)
-def server_transcript(server_id: str) -> TranscriptResponse:
+def server_transcript(
+    server_id: str,
+    rpc_ids: str = "",
+    session: str | None = None,
+) -> TranscriptResponse:
     """The recent JSON-RPC conversation with one server.
 
     Survives a reconnect on purpose: the handshake of the attempt that *failed* is
     usually what you came to read, and clearing it on retry would delete the evidence
     at the moment the user goes looking.
+
+    `rpc_ids` (comma-separated) narrows it to one call's request and response, which
+    is how a trajectory step opens its own wire. The ring is small and in-memory, so
+    an old call's messages are usually gone; the caller must say so rather than show
+    an empty exchange as if nothing was sent. Ids restart per connection, so pass the
+    call's `session` too or another connection's exchange comes back with it.
     """
     from backend.modules.mcp import transcript
 
-    return TranscriptResponse(messages=transcript.for_server(server_id).public())
+    ring = transcript.for_server(server_id)
+    ids = [i for i in rpc_ids.split(",") if i]
+    if ids:
+        return TranscriptResponse(
+            messages=[m.public() for m in ring.by_ids(ids, session=session)]
+        )
+    return TranscriptResponse(messages=ring.public())
+
+
+@router.get("/calls")
+def list_calls(
+    turn_id: str | None = None,
+    server_id: str | None = None,
+    limit: int = Query(200, ge=1, le=2000),
+) -> dict[str, Any]:
+    """Durable per-call summaries — no arguments, no results. See `calls.py`."""
+    from backend.modules.mcp import calls
+
+    return {
+        "calls": calls.list_calls(turn_id=turn_id, server_id=server_id, limit=limit)
+    }
+
+
+@router.get("/activity")
+def activity(days: float = Query(7, gt=0, le=365)) -> dict[str, Any]:
+    """Per-server call volume, latency percentiles, split error rates and the cost of
+    the runs that used each server, over the last `days`.
+
+    Context cost — what a server's schemas cost the model before it is ever called —
+    is a different question with its own route (`/servers/{id}/cost`), because it
+    needs a live session and a tokenizer, and this one needs neither.
+    """
+    import time as _time
+
+    from backend.modules.mcp import calls
+
+    return {
+        "since": _time.time() - days * 86400,
+        "servers": calls.activity(since=_time.time() - days * 86400),
+    }
 
 
 @router.delete("/servers/{server_id}/transcript", response_model=TranscriptResponse)

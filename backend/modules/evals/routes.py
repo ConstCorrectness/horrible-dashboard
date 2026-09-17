@@ -335,6 +335,92 @@ async def start_run(req: StartRunRequest) -> StartRunResponse:
     return StartRunResponse(started=True, key=key)
 
 
+# --- running on a friend's agent -------------------------------------------------
+# See evals/fabric.py. Offering is this node's; accepting is the friend's person.
+
+
+class OfferRequest(BaseModel):
+    node_id: str
+    suite_id: str
+    case_ids: list[str] = []
+
+
+class DeclineRequest(BaseModel):
+    reason: str = "declined"
+
+
+@router.get("/remote/friends")
+async def remote_friends() -> dict[str, Any]:
+    """Connected friends whose node understands suite offers.
+
+    Whether they are *accepting* is not listed: that is a setting on their node that
+    changes after the handshake, and an offer refused with its reason is more honest
+    than a stale "accepting" badge.
+    """
+    from backend.modules.evals import fabric
+    from backend.modules.network.hub import peer_hub
+
+    return {
+        "friends": [
+            {"node_id": p.node_id, "name": fabric._friend_name(p.node_id)}
+            for p in peer_hub.list_peers()
+            if p.trusted
+            and any(
+                getattr(c, "id", c) == fabric.CAPABILITY for c in (p.capabilities or [])
+            )
+        ]
+    }
+
+
+@router.post("/remote/offer")
+async def offer_to_friend(req: OfferRequest) -> dict[str, Any]:
+    from backend.modules.evals import fabric
+
+    try:
+        return await fabric.offer_suite(req.node_id, req.suite_id, req.case_ids or None)
+    except fabric.OfferRefused as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.delete("/remote/runs/{run_id}")
+async def withdraw_offer(run_id: str) -> dict[str, Any]:
+    from backend.modules.evals import fabric
+
+    return {"withdrawn": await fabric.withdraw(run_id)}
+
+
+@router.get("/remote/offers")
+async def incoming_offers() -> dict[str, Any]:
+    from backend.modules.evals import fabric
+
+    return {"accepting": fabric.accepting(), "offers": fabric.list_incoming()}
+
+
+@router.post("/remote/offers/{offer_id}/accept")
+async def accept_offer(offer_id: str) -> dict[str, Any]:
+    from backend.modules.evals import fabric
+
+    try:
+        return await fabric.accept(offer_id, _live_agent_tools())
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/remote/offers/{offer_id}/decline")
+async def decline_offer(offer_id: str, req: DeclineRequest) -> dict[str, Any]:
+    from backend.modules.evals import fabric
+
+    await fabric.decline(offer_id, req.reason)
+    return {"ok": True}
+
+
+@router.post("/remote/offers/{offer_id}/stop")
+async def stop_offer(offer_id: str) -> dict[str, Any]:
+    from backend.modules.evals import fabric
+
+    return {"stopped": fabric.stop(offer_id)}
+
+
 @router.get("/sweeps")
 async def list_sweeps() -> dict[str, Any]:
     """The sweeps running on this node right now.

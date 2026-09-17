@@ -39,6 +39,16 @@ export const evalsModule: ModuleManifest = {
       ],
     },
   ],
+  settings: [
+    {
+      key: 'evals.acceptRemoteSuites',
+      title: "Accept suites from friends",
+      description:
+        "Let a friend offer an eval suite to run on this node's agent. Each offer still needs your accept, which shows its size and estimated cost; no tool acts, but your tokens are spent and your model plus your skills' and MCP tools' names and hashes are reported back. Off: offers are refused with this reason.",
+      type: 'boolean',
+      default: false,
+    },
+  ],
   frames: [
     {
       id: 'evals',

@@ -384,6 +384,25 @@ def _m9_rich_profiles(conn: sqlite3.Connection) -> None:
     )
 
 
+def _m10_person_devices(conn: sqlite3.Connection) -> None:
+    """Which machines a bound person has, so `@handle` leads somewhere dialable.
+
+    A username resolved to a *person*; the machines that person runs came only from
+    the Atlas presence directory, whose credentials live in a developer's `.env`.
+    So on an ordinary install `@rob` resolved and then reached nobody. Each row is a
+    device certificate signed by the person key, which is what lets the directory
+    serve it without being trusted to have made it up.
+    """
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS person_devices ("
+        " person_id TEXT NOT NULL,"
+        " node_id TEXT NOT NULL,"
+        " cert TEXT NOT NULL,"
+        " updated_at REAL NOT NULL,"
+        " PRIMARY KEY (person_id, node_id))"
+    )
+
+
 MIGRATIONS: list[Any] = [
     _m1_identity_and_series,
     _m2_replays,
@@ -394,6 +413,7 @@ MIGRATIONS: list[Any] = [
     _m7_local_credentials,
     _m8_person_binding,
     _m9_rich_profiles,
+    _m10_person_devices,
 ]
 
 
@@ -675,6 +695,98 @@ def bind_person(account_id: str, person_id: str, person_public_key: str) -> str:
     return "ok"
 
 
+#: Machines listed per person. The newest win; an old laptop falls off the end.
+MAX_DEVICES_PER_PERSON = 8
+
+
+def cert_bytes(cert: dict[str, Any]) -> bytes:
+    """The bytes a device certificate's signature covers.
+
+    Must match `backend.modules.social.identity.canonical_cert_bytes` byte for byte;
+    `test_games_person_devices.py` pins the two together. Duplicated rather than
+    imported so the game server does not depend on a node module for its crypto.
+    """
+    payload = {k: v for k, v in cert.items() if k != "sig"}
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def publish_device(cert: Any) -> str:
+    """Record one machine of a bound person. Returns 'ok', 'invalid' or 'unbound'.
+
+    Unauthenticated, and safe to be: the certificate is signed by the person key,
+    so it can only restate something true. Three checks make that so — the
+    signature verifies, the node id is the fingerprint of the node key it names,
+    and the person key is **the one bound to an account here**, not merely one
+    that matches its own id (otherwise anyone could list machines under a fresh
+    key and a borrowed person id). Replaying someone's old certificate adds a
+    machine they really had; the cap keeps that from growing.
+    """
+    from backend.games_server import crypto
+
+    if not isinstance(cert, dict):
+        return "invalid"
+    try:
+        person_id = str(cert["person_id"])
+        person_key = str(cert["person_public_key"])
+        node_id = str(cert["node_id"])
+        node_key = str(cert["node_public_key"])
+        sig = str(cert["sig"])
+    except (KeyError, TypeError):
+        return "invalid"
+    try:
+        if fingerprint_person(person_key) != person_id:
+            return "invalid"
+        if fingerprint_person(node_key) != node_id:
+            return "invalid"
+    except Exception:  # noqa: BLE001 - a malformed key is not a certificate
+        return "invalid"
+    if not crypto.verify(person_key, cert_bytes(cert), sig):
+        return "invalid"
+
+    init_db()
+    with get_conn() as conn:
+        bound = conn.execute(
+            "SELECT 1 FROM accounts WHERE person_id = ? AND person_public_key = ?",
+            (person_id, person_key),
+        ).fetchone()
+        if bound is None:
+            return "unbound"
+        conn.execute(
+            "INSERT INTO person_devices (person_id, node_id, cert, updated_at)"
+            " VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(person_id, node_id) DO UPDATE SET"
+            " cert = excluded.cert, updated_at = excluded.updated_at",
+            (person_id, node_id, json.dumps(cert), time.time()),
+        )
+        conn.execute(
+            "DELETE FROM person_devices WHERE person_id = ? AND node_id NOT IN ("
+            " SELECT node_id FROM person_devices WHERE person_id = ?"
+            " ORDER BY updated_at DESC LIMIT ?)",
+            (person_id, person_id, MAX_DEVICES_PER_PERSON),
+        )
+    return "ok"
+
+
+def devices_for_person(person_id: str | None) -> list[dict[str, Any]]:
+    """`[{node_id, cert}]`, newest first. Certificates, so a reader verifies them."""
+    if not person_id:
+        return []
+    init_db()
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT node_id, cert FROM person_devices WHERE person_id = ?"
+            " ORDER BY updated_at DESC LIMIT ?",
+            (person_id, MAX_DEVICES_PER_PERSON),
+        ).fetchall()
+    out = []
+    for row in rows:
+        try:
+            out.append({"node_id": row["node_id"], "cert": json.loads(row["cert"])})
+        except ValueError:
+            continue
+    return out
+
+
 def _directory_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
     """The public slice of an account: enough to add someone, nothing more.
 
@@ -698,7 +810,12 @@ def account_by_handle(handle: str) -> dict[str, Any] | None:
         row = conn.execute(
             "SELECT * FROM accounts WHERE handle = ?", (handle.strip().lower(),)
         ).fetchone()
-    return _directory_row(row)
+    entry = _directory_row(row)
+    if entry is not None:
+        # The machines, so a username leads somewhere dialable (see
+        # `_m10_person_devices`). Only on a single lookup: search results stay slim.
+        entry["devices"] = devices_for_person(entry["person_id"])
+    return entry
 
 
 #: How many people one directory lookup may ask about. A roster is tens of rows;

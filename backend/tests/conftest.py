@@ -1,9 +1,51 @@
+import os
+
 import pytest
+
+#: Every variable from which `backend/atlas.py` or the database module can build a
+#: connection to the shared cluster.
+ATLAS_ENV_VARS = (
+    "ATLAS_DB_URI",
+    "ATLAS_DB_USER",
+    "ATLAS_DB_PASS",
+    "ATLAS_CLUSTER_HOST",
+    "ATLAS_ADMIN",
+    "ATLAS_ADMIN_URI",
+)
+
+
+def pytest_configure(config):
+    """Keep the test suite off the real Atlas cluster, whatever `.env` says.
+
+    Found on 2026-09-16: the shared `presence` directory held dozens of records
+    named after this machine, each under a different person id. Every test that
+    enters `with TestClient(app)` runs the full lifespan, which publishes presence
+    (`network/setup.py` → `social/directory.publish`) — and `backend/__init__.py`
+    loads `.env`, so the credentials were there. Each test's temp data dir minted a
+    fresh person key, so each run left a new record in a directory other people's
+    nodes read.
+
+    Set to **empty strings, before anything imports `backend`**: `_load_dotenv` never
+    overrides a variable that is already present, so an empty one beats the file,
+    and every `atlas` reader treats blank as "not configured". Here rather than only
+    in a fixture because collection imports the app, session fixtures and
+    subprocesses a test spawns all run outside any per-test monkeypatch. A test that
+    needs credentials sets fake ones itself (see `test_database_mongo.py`).
+    """
+    for name in ATLAS_ENV_VARS:
+        os.environ[name] = ""
+    # The relay is on by default and hosted by the game server; a test that boots the
+    # app must not open a connection to it (see `network.setup.relay_url`).
+    os.environ["HORRIBLE_RELAY_URL"] = "off"
 
 
 @pytest.fixture(autouse=True)
 def isolate_data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path))
+    # Again per test, in case one restored the environment wholesale: nothing in the
+    # suite may reach the shared cluster (see `pytest_configure`).
+    for name in ATLAS_ENV_VARS:
+        monkeypatch.setenv(name, "")
     # The secrets master key lives outside the data dir by design (see
     # secrets_store.get_key_path), so it needs isolating separately — otherwise a test
     # would read and write the developer's real ~/.horrible/secrets.key.
@@ -52,3 +94,10 @@ def reset_process_global_stores():
     memory = sys.modules.get("backend.modules.clubhouse.people_memory")
     if memory is not None:
         memory.people_memory_store.reset()
+
+    # The port learned from the first request. `TestClient` reports its fake server
+    # as `("testserver", 80)`, so without this every test after one that drove the
+    # app saw port 80 in invites, presence records and the OAuth redirect.
+    server_port = sys.modules.get("backend.server_port")
+    if server_port is not None:
+        server_port.reset()

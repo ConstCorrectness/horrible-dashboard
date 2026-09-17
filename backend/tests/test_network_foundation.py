@@ -82,20 +82,29 @@ def test_two_hub_handshake(monkeypatch, tmp_path):
     assert trusted
 
 
-def test_manual_mode_rejects_without_token(monkeypatch, tmp_path):
+def test_manual_mode_without_a_token_is_a_stranger_not_a_peer(monkeypatch, tmp_path):
+    """No token no longer means "rejected": that made friending anyone you had not
+    paired with by invite impossible. It means a **stranger** on both sides, which
+    neither lists as a peer. What a stranger may do is pinned in
+    test_network_strangers.py."""
     hub_a, id_a = _make_hub(monkeypatch, tmp_path, "a")
     hub_b, id_b = _make_hub(monkeypatch, tmp_path, "b", trust_mode="manual")
 
     async def go():
         monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path / "b"))
-        with pytest.raises(Exception):
-            await connect_pair(hub_a, hub_b)
+        await connect_pair(hub_a, hub_b)
         await asyncio.sleep(0.05)
-        return id_a in hub_b.peers, id_b in hub_a.peers
+        return (
+            id_a in hub_b.peers,
+            id_b in hub_a.peers,
+            id_a in hub_b.strangers,
+            id_b in hub_a.strangers,
+        )
 
-    b_has_a, a_has_b = asyncio.run(go())
+    b_has_a, a_has_b, b_holds_stranger, a_holds_stranger = asyncio.run(go())
     assert not b_has_a
     assert not a_has_b
+    assert b_holds_stranger and a_holds_stranger
 
 
 def test_manual_mode_accepts_with_token(monkeypatch, tmp_path):

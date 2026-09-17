@@ -149,6 +149,10 @@ def init_evals_db() -> None:
         # exists, so an upgraded install needs this or the column is simply
         # never there — the `case_hash` precedent.
         _ensure_column(conn, "eval_runs", "model_path", "TEXT NOT NULL DEFAULT ''")
+        # `peer` when a friend's node ran the suite on its own agent and *reported*
+        # the harness and model (see evals/fabric.py). Distinct from `node`, which a
+        # compute-lease run also sets while grading happens here.
+        _ensure_column(conn, "eval_runs", "attestation", "TEXT NOT NULL DEFAULT ''")
 
         # The two questions the scoreboard asks: every result for one run, and
         # every run's verdict on one case (the "which model fixed this" column).

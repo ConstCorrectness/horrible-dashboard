@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { DataList, DataRow, RollingNumber } from '../../../DataList';
+import { dialogs } from '../../../dialogs';
 import { Button, Chip, EmptyState, PaneHeader } from '../../../Primitives';
 import { ControlBar } from '../../../ResourceCard';
 import {
@@ -143,6 +144,27 @@ export function DatasetsSection() {
 
   const toggleCapture = async (dataset: Dataset) => {
     await updateDataset(dataset.id, { capture: !dataset.capture });
+    void refresh();
+  };
+
+  const toggleShared = async (dataset: Dataset) => {
+    if (!dataset.shared) {
+      // Confirmed, and the part that cannot be undone is said plainly: switching
+      // sharing off stops *future* pulls, but a copy a friend already pulled is on
+      // their machine and stays there.
+      const ok = await dialogs.confirm({
+        title: `Share "${dataset.name}" with friends?`,
+        message:
+          'Friends will be able to list these runs, pull copies of finished ones, and watch new ones live during a share session — goals, steps, tool arguments and results included. Credential-shaped values are masked on a best-effort basis; anything else in the data is sent as it is. Turning sharing off later stops new pulls, but copies already pulled stay on your friends’ machines.',
+        confirmLabel: 'Share',
+      });
+      if (!ok) return;
+    }
+    try {
+      await updateDataset(dataset.id, { shared: !dataset.shared });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
     void refresh();
   };
 
@@ -360,17 +382,35 @@ export function DatasetsSection() {
                         <Chip kind="fail" dot>
                           recording
                         </Chip>
+                      ) : dataset.shared ? (
+                        <Chip kind="info" dot>
+                          shared
+                        </Chip>
                       ) : undefined
                     }
                     meta={[dataset.id, `${dataset.run_count} runs`, dataset.source_kind]}
                     actions={
-                      <Button
-                        size="sm"
-                        icon={<RecordIcon />}
-                        onClick={() => void toggleCapture(dataset)}
-                      >
-                        {dataset.capture ? 'Stop capture' : 'Capture here'}
-                      </Button>
+                      <>
+                        {/* Absent rather than disabled for a friend's runs: they were
+                            shared with you, and sharing them onward is refused by the
+                            backend, so a greyed button would only invite the question. */}
+                        {dataset.source_kind !== 'peer' ? (
+                          <Button
+                            size="sm"
+                            intent="ghost"
+                            onClick={() => void toggleShared(dataset)}
+                          >
+                            {dataset.shared ? 'Stop sharing' : 'Share'}
+                          </Button>
+                        ) : null}
+                        <Button
+                          size="sm"
+                          icon={<RecordIcon />}
+                          onClick={() => void toggleCapture(dataset)}
+                        >
+                          {dataset.capture ? 'Stop capture' : 'Capture here'}
+                        </Button>
+                      </>
                     }
                   />
                 ))}

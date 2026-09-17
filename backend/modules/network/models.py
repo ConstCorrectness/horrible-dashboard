@@ -232,3 +232,71 @@ def canonical_vouch_bytes(voucher_id: NodeId, subject_id: NodeId) -> bytes:
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
+
+
+class CommonsDigestStep(BaseModel):
+    """One step of a published trajectory: its shape, never its payload."""
+
+    seq: int
+    kind: str
+    round: int = 0
+    #: The tool name for an action; empty for a message. Names are the shape of the
+    #: run — `args` and `result` are what would carry the user's own text.
+    name: str = ""
+    ok: bool | None = None
+    duration_ms: int | None = None
+    gated: bool = False
+
+
+class CommonsTrajectoryDigest(BaseModel):
+    """A trajectory published to the agent commons, reduced to its shape.
+
+    What makes a run useful as a public dataset — the harness fingerprint, the tool
+    sequence, per-step outcome and timing, the rounds, the outcome — with every
+    payload, the run's own ids and `meta` left out. `goal` is present only when the
+    publisher opted in for this run.
+
+    Signed with the node key, like `CommonsProfile`, so the index can verify it and
+    only its publisher can withdraw it. That is also why `node_id` is present: a
+    signature is attribution, and a digest that hid its publisher could be neither
+    verified nor unpublished.
+    """
+
+    schema_version: int = 1
+    #: Content hash over everything but `digest_id`, `published_at` and `sig`, so a
+    #: republish of the same run dedupes rather than listing twice.
+    digest_id: str = ""
+    node_id: NodeId
+    public_key: str
+    published_at: float = 0.0
+    harness_fingerprint: str = ""
+    model: str = ""
+    provider: str = ""
+    tool_names: list[str] = Field(default_factory=list)
+    goal: str | None = None
+    status: str = ""
+    outcome: str | None = None
+    reward: float | None = None
+    rounds: int = 0
+    steps: list[CommonsDigestStep] = Field(default_factory=list)
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+    duration_ms: int | None = None
+    sig: str | None = None
+
+
+def _canonical(data: dict[str, Any]) -> bytes:
+    return json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def digest_content_id(digest: CommonsTrajectoryDigest) -> str:
+    """The dedupe key: a hash of what the digest *says*, not when it was said."""
+    import hashlib
+
+    data = digest.model_dump(exclude={"digest_id", "published_at", "sig"})
+    return hashlib.sha256(_canonical(data)).hexdigest()[:32]
+
+
+def canonical_digest_bytes(digest: CommonsTrajectoryDigest) -> bytes:
+    """The bytes a digest's `sig` covers: every field except the signature."""
+    return _canonical(digest.model_dump(exclude={"sig"}))

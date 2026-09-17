@@ -86,6 +86,15 @@ The schema follows from these; they are stated in full in
    chronological.
 7. **A run with no actions is still a run.** "The agent answered instead of
    acting" is the finding, not the absence of one.
+8. **A step's `ts` is when it *started*.** `RunRecorder.action` is called after the
+   tool has been awaited, so the store's own default would record the moment it
+   *finished* — and a waterfall drawn from that sits one whole duration to the right
+   of the truth while still looking entirely plausible. The orchestrator stamps
+   `started_wall = time.time()` before dispatch and passes it explicitly.
+9. **Prose the model emits alongside its calls is recorded.** A round that both
+   narrates and acts writes a `message` step *before* its actions. Without it a run
+   read as a bare list of calls with no account of why any of them happened, which is
+   the half a postmortem is usually looking for.
 
 ## Capture is off by default
 
@@ -280,6 +289,271 @@ recorder already captures it. All it lacked was provenance: `recorder.begin` rea
 requesting `node_id`. Recording it as `local` would mix another node's questions into
 your own dataset with no way to tell them apart.
 
+## Sharing with friends
+
+A friend can **list** your shared datasets, **pull** a copy of a finished run, and
+**watch** a run live while in a share session you host. The wire vocabulary lives in
+`backend/modules/trajectories/fabric.py` — `traj_list`, `traj_fetch`, `traj_live` —
+declared there rather than in `network/protocol.py`, the share/hassault precedent.
+
+### Three gates, none skippable
+
+1. **`session.info.trusted`** — the envelope came from a friend. Reachability only;
+   an untrusted node gets silence, not an error.
+2. **`traj_datasets.shared`**, default off, set per dataset from the Datasets section
+   behind a confirmation that says what cannot be undone: switching sharing off stops
+   *new* pulls, but copies already pulled stay on your friends' machines. A missing,
+   unshared or peer-sourced dataset all answer the same `not shared`, so the reply does
+   not confirm what exists.
+3. **For live watching only**, the friend is a participant in the share session this
+   node is **hosting** and passes `share.gate.require(participant, "view")`. Being a
+   friend is not enough — a trusted peer who has not invited you into a session cannot
+   push its agent's work onto your screen, and a guest who leaves stops receiving.
+
+**A friend's runs are not yours to share onward.** A pulled run lands in a
+`peer-<node_id>` dataset (`source_kind="peer"`), and `store.update_dataset` refuses
+`shared=True` there with `SharingRefused` (409 on the route). The serving side also
+refuses peer-sourced runs outright, so a row edited directly in `app.db` still cannot
+turn this node into a relay.
+
+### Redaction happens on the sending node
+
+`outbound.py` runs before the envelope is signed. It is **not** `store.redact`, which
+matches dotted settings-key suffixes and so misses `api_key`, `Authorization`,
+`x-api-key` and `cookie`. Two independent passes: key names normalized and matched
+against credential words (bare `key` deliberately excluded — it is how key-value tools
+name ordinary arguments), and string contents scanned for credential-shaped tokens —
+bearer values, vendor key prefixes, JWTs, PEM private keys, `password=` pairs, URL
+userinfo. The scheme-word pattern requires a digit in the value, because without it
+"the token generation step" and "basic arithmetic" were masked; an explicit
+`Authorization:` label is masked regardless of shape. `turn_id`, `external_id`,
+`person_id`, `node_id`, `parent_run_id` and `meta` are never sent at all. This is best
+effort, and the confirmation says so: a secret typed as prose has no shape to find.
+
+### Replies are paged, because of who dialed whom
+
+The dialing side of a peer link runs a `websockets` client whose `max_size` is 1 MiB;
+one larger inbound message closes the **entire** link — chat and shared panes with it.
+The accepting side is uvicorn, at 16 MiB. An unpaged reply would therefore work for
+some friend pairs and sever others depending only on who connected first. `traj_fetch`
+fills a reply up to `PEER_REPLY_MAX` (512 KiB), always at least one step, and the puller
+asks again from `next_seq` — which it treats as untrusted: pages that do not move
+forward, or more than `MAX_PAGES`, are refused. A single payload over 128 KiB becomes an
+explicit `{"_omitted": …, "bytes": n}` marker. Spilled `blob:` payloads are resolved to
+their content before sending; the pointer is a path on the serving disk.
+
+Serving runs off the event loop (`asyncio.to_thread`) and `traj_fetch` is registered
+`detach`, since a page is the heaviest thing this module does and an inline handler is
+head-of-line delay for everything else on that friend's link.
+
+### Pulling
+
+`POST /api/trajectories/peers/{node_id}/runs/{run_id}/pull` assembles every page,
+validates the whole payload, and only then writes — a malformed reply used to leave an
+empty `peer-…` dataset behind. Provenance comes from the fabric (the authenticated node
+id, and the person the local roster maps it to), never from the payload. Re-pulling is
+idempotent on `external_id = node:run`; the friend's labels are cleared and re-applied
+rather than appended, and arrive as `source="import"` so a friend's grade never
+averages with your own human labels. A local grade you added to a pulled run survives a
+re-pull. **A run still in progress cannot be pulled**: its snapshot would be sealed
+here as if finished — watch it live instead.
+
+Every friend route checks the node is a connected, trusted peer first (404 otherwise),
+or this node would relay requests to anything it happened to be connected to.
+
+### Watching live
+
+The share mirror relays *layout* only, so a mirrored trajectories pane would show a
+guest their own runs. Live runs therefore get their own content stream, `traj_live`,
+hung off the same `stream._send` that feeds the local pane — a watcher sees exactly the
+events this node's own Live view does, from every source — while authority comes
+entirely from the share session. On the guest, frames arrive on the local
+`trajectories` channel as `peer` events, tagged with the host, and are kept in a
+separate map keyed `host:runId` (run ids are only unique per node). A guest joining
+mid-run catches up through `GET /api/trajectories/watching` and the paged fetch.
+
+### Found with two real nodes
+
+The unit suite uses a loopback hub that enforces the 1 MiB frame limit. Two things only
+appeared with two real backends friended over the fabric:
+
+- **The shared-dataset count was stale.** The `trajectories` capability advertises
+  `sharedDatasets`, computed at handshake. A friend connected before you shared saw
+  `0` for the life of the link. Changing `shared` (or deleting a shared dataset) now
+  calls `peer_hub.announce_presence()`, the fabric's mechanism for a provider whose
+  answer changed; it debounces at 5 s.
+- **The watched host was labelled with a person id.** `RemoteSession.host_name` held
+  the host's person id. Fixed in share, which now resolves it from the roster at join
+  (see [share](share.mdx#the-peer-wire)); the feed and `/watching` pass it through.
+
+## Publishing to the commons
+
+Friends are people you chose. The [agent commons](commons.mdx) is strangers, re-served
+by an index you do not run — and **a federated index has no recall**: withdrawing a
+digest stops the index serving it and reaches no copy already fetched. So what a run
+publishes is a **digest of its shape** (`CommonsTrajectoryDigest`, built by
+`backend/modules/trajectories/commons.py`), never the run:
+
+| Kept | Dropped |
+| --- | --- |
+| harness fingerprint, model, provider kind, tool names | every `args` / `result` / `content` payload |
+| tool-call sequence by name; per step `ok`, `duration_ms`, `gated`, `round` | `turn_id`, `external_id`, `person_id`, `parent_run_id`, `meta` |
+| rounds, status, outcome, reward, token counts, duration | labels, the system prompt (the fingerprint stands in) |
+| `goal` — **only** if opted in for this run, scrubbed, first 500 characters | |
+
+Two things are not anonymous, and the publish panel says so instead of hiding them:
+
+- **It is signed with this node's key**, so it names this node. That is the price of
+  verification: an unsigned digest could be forged under anyone's name, and only its
+  signer can withdraw it.
+- **Tool names are shape, and can still say something.** An MCP server id is whatever
+  its owner called it.
+
+### The confirmation is bound to the content
+
+A toggle would be wrong for something with no recall. **Publish to commons…** on a
+finished run shows the exact digest, then asks you to type a short code printed under
+it — the first characters of the digest's content hash. The backend rebuilds the digest
+at send time and refuses if the code does not match, so a confirmation cannot be
+replayed onto different content: turning the goal on after the preview, or a status
+that changed since, changes the code and nothing is sent. A friend's pulled run and a
+run still in progress are refused outright.
+
+### What the index checks
+
+`commons_server.py` verifies three things before storing a digest: `node_id` is the
+fingerprint of `public_key`, the signature covers the digest, and **`digest_id` is the
+digest's actual content hash**. The last is not implied by the signature — a publisher
+could sign a digest carrying *someone else's* content hash, and if the index trusted the
+id, the real digest would then be answered `duplicate` and never stored. A republish of
+the same run dedupes on that id; the index keeps at most 200 per node and **refuses**
+past that rather than evicting the oldest, which nobody would notice. Only a connection
+that has published the signing node's profile can withdraw a digest.
+
+The **Commons** section lists digests on the connected index — everyone's, or yours with
+Withdraw — and says *not connected* rather than rendering an empty list that would read
+as nobody having published anything.
+
+## Tokens and cost
+
+`traj_runs.tokens_in / tokens_out / cost_usd` carry what the **provider reported**,
+summed across the turn's rounds. They were NULL for every local run until this
+landed: `ChatResult` dropped the usage block on every dialect, so the columns existed
+and nothing ever filled them.
+
+Where the numbers come from, per dialect:
+
+| Path | Source |
+| --- | --- |
+| ollama (stream and not) | top-level `prompt_eval_count` / `eval_count` — the streamed one rides the `done` chunk, which was already in scope and discarded by the `break` |
+| openai dialect, non-stream | `usage.{prompt_tokens,completion_tokens}` + `usage.prompt_tokens_details.cached_tokens` |
+| openai dialect, **stream** | a usage-only frame, which arrives **only** if `stream_options: {include_usage: true}` was sent |
+| litellm | `response.usage`, plus `_hidden_params["response_cost"]` — litellm prices its own call |
+
+Two silent failures this shape exists to avoid:
+
+- **A streamed OpenAI-dialect response carries no usage block unless asked.** Add the
+  parsing without the request and it returns `None` forever, and the obvious
+  conclusion — "this provider doesn't report usage" — is wrong. Not every local
+  server accepts the field, so a 400 disables it for that endpoint for the rest of
+  the process (`_NO_STREAM_USAGE`), the same shape as the existing `think=True`
+  retry: one failed request per server, never one per turn.
+- **The usage frame has an empty `choices` list.** It has to be read before the
+  `(frame.get("choices") or [{}])[0]` below it turns it into a blank choice.
+
+**The forced-tool-call retry calls `chat_stream` twice** and reassigns `result`, so
+usage is captured at each call site and `RunRecorder.usage()` **sums**. A single
+capture at the end of the round would under-report exactly the turns that needed
+repairing — the ones already costing double.
+
+### Cost, and why zero is not null
+
+`backend/modules/agent/cost.py` resolves in a strict order of trust:
+
+1. **The provider's own figure** (litellm's `response_cost`). It priced the call it
+   made, against the model that served it, with a table that ships with the package.
+2. **The bundled table** `backend/modules/agent/pricing.json`, overlaid with the
+   `agent.modelPricing` setting. fnmatch globs, **longest pattern wins** so a dated
+   snapshot beats its family; first-match-wins would make the answer depend on dict
+   ordering, which is a silent way for an override to be ignored. A routing prefix
+   (`anthropic/…`) is stripped first, or a prefixed id matches nothing.
+3. **Zero**, for a provider kind that runs on hardware nobody bills for
+   (`cost.LOCAL_KINDS`). `nim` is deliberately excluded: it is the same dialect
+   whether it is a local container or NVIDIA's metered API, and calling a billed API
+   free is the worse error.
+
+Anything else is `None`. **`0.0` and `None` are different facts** — a local run costs
+a known nothing, an unpriced hosted model costs an amount we do not know — and the
+pane keeps them apart: `free` for the first, nothing at all for the second. The same
+rule governs the token line, where each half is rendered independently so a provider
+reporting only completion tokens shows `—↓ 340↑` rather than a measured-looking `0↓`.
+
+These are a different number from interpretability's `agent_turns`, which holds a
+*tokenizer estimate* of what the model was shown. The estimate exists so a context
+window can be drawn before a request is made; the report exists so a bill can be
+reconciled after one. Keeping them in separate tables keeps them from being averaged
+together.
+
+## The live channel
+
+Runs stream as they happen on the shared `/ws` channel `trajectories`. Three events:
+
+| Event | Payload | When |
+| --- | --- | --- |
+| `run` | the whole `TrajectoryRun` | a run opens, and on any change to its header |
+| `step` | `{runId, step}` | one step appended |
+| `seal` | `{runId, status, steps, rounds, duration_ms}` | the run is sealed |
+
+**Published from the store, not the recorder.** `store.append_step` / `start_run` /
+`finish_run` is the one chokepoint every source passes — the chat orchestrator, the
+evals runner, the flow executor, `delegate`, `agentpedia.fork`, the SDK's `/ingest`,
+file import and a run pulled from a peer. Hanging the broadcast off `RunRecorder`
+instead would have been a smaller change and would have streamed exactly one of
+those, leaving the other seven silently static.
+
+`backend/modules/trajectories/stream.py` captures the event loop from the app
+lifespan (`trajectories_stream.init_loop()` in `backend/app.py`) rather than
+discovering it lazily: `append_step` is a sync function reached from HTTP handlers
+and worker threads, and a thread has no running loop to find — the event would vanish
+with only a debug line. Publishing never raises into a writer.
+
+Two shapes are worth knowing:
+
+- **Payloads are elided above `STREAM_PAYLOAD_MAX` (2 KiB).** The wire carries
+  `args_bytes`/`result_bytes` and a null payload; the pane fetches the real bytes from
+  `GET /runs/{id}` when the row is opened. A byte count of `null` means there was
+  nothing, and a number means there is something you have not fetched — the two must
+  not render alike.
+- **A bulk write is one event.** `append_step(..., notify=False)` is what `ingest_run`
+  passes for every step, and a single `run` event follows once the run is whole.
+  Importing a 200-step file is one thing that happened, not two hundred.
+
+### Reconciling on the client
+
+`packages/core/src/modules/trajectories/ws.ts` subscribes **before** it fetches, then
+merges. The other order drops every step that lands between the two, silently and
+permanently — the race that is still live in `telemetry/stream.py`, which drains its
+backlog and only then subscribes, and the reason this file does not copy it.
+
+`traj_steps.seq` is a per-run monotonic primary key, so it is the cursor for free: a
+buffered step is a duplicate exactly when the snapshot already holds its `seq`. No
+server-side cursor, no `since` parameter, no per-subscriber state.
+
+Two cases that are easy to miss and were each a bug first:
+
+- **The socket has no past.** A run that started before the tab connected emits
+  nothing until its next step, so the view opens empty however much work is in flight.
+  `GET /runs?status=running` is fetched on start and on every reconnect.
+- **A `run` frame can arrive for a run already several steps old** — the pane opened
+  mid-turn, or the writer suppressed per-step frames. The header alone renders
+  "0 steps" beside a live pulse, which reads as an agent that has done nothing rather
+  than one we joined late; the store hydrates when `run.steps > 0` and it holds none.
+
+On reconnect every still-live run is refetched whole. Steps emitted while the socket
+was down are gone from the wire and no server keeps them, so refetching is the only
+honest recovery — treating the buffer as complete would render a run with a hole in it
+and nothing to say there was one.
+
 ## Backend surface
 
 Routes are mounted under `/api/trajectories`.
@@ -336,17 +610,23 @@ FROM traj_runs r JOIN agent_turns t ON t.turn_id = r.turn_id;
 
 ## Frontend
 
-One pane, `trajectories.hub` (`role: document`, singleton), three sections:
+One pane, `trajectories.hub` (`role: document`, singleton), four sections:
 
 | Section | Key | What it is |
 | --- | --- | --- |
-| **Runs** | `r` | Run index + step-by-step detail, with grading, deletion and search |
+| **Runs** | `r` | Run index + timeline + step-by-step detail, with grading, deletion and search |
+| **Live** | `l` | Runs happening right now, socket-fed |
 | **Datasets** | `d` | Collections, the capture toggle, headline counts, tool usage, import/export |
 | **Harness** | `h` | The A/B comparison and the harness inspector |
+| **Friends** | `p` | Friends' shared datasets and runs; pull a finished one |
+| **Commons** | `c` | Digests published to the agent commons index; withdraw your own |
 
-Three sections rather than three panes, per the pane-consolidation rule: they are
-three views of one object. No `RENAMED_VIEWS` entry is needed — no view id was
-removed.
+Four sections rather than four panes, per the pane-consolidation rule: they are four
+views of one object. No `RENAMED_VIEWS` entry is needed — no view id was removed.
+
+**Live has no polling fallback, deliberately.** A poll would paper over a broken
+channel and make "the stream is down" indistinguishable from "nothing is running",
+which is the one ambiguity the view exists to remove.
 
 Each section lives in `panels/` (`RunsSection`, `RunDetail`, `DatasetsSection`,
 `HarnessSection`, plus a shared `common.tsx`); `TrajectoriesHub.tsx` is only the
@@ -378,6 +658,74 @@ Iconography inside the pane is inline stroke SVG (`icons.tsx` and the shared
 activity-rail glyph, typed as a string, and follows the rail's existing emoji
 convention.
 
+### The timeline
+
+`panels/Timeline.tsx` draws a run as rounds down the page and wall-clock left to
+right; the geometry is in `timeline-model.ts`, kept separate so it is testable with no
+DOM. It sits **above** the flat step list rather than replacing it — they answer
+different questions, and a 200-step run is unreadable as bars while a 12-step one is
+unreadable as rows. Clicking a bar scrolls to and highlights its step.
+
+A waterfall is fully derivable here because the orchestrator runs a round's tool calls
+strictly in sequence — one `await` per call — so there is no concurrency to
+reconstruct. The only nesting that exists is delegation, and that lives on
+`parent_run_id` rather than between steps.
+
+Three things the model is careful about:
+
+- **A step with no duration is an instant, not a zero.** A `message` drawn at its true
+  width is zero pixels and simply absent, which reads as a missing step. It gets a
+  minimum width and is flagged `instant` so the renderer can say which it is.
+- **The run's own `started_at` is used only when it precedes the first step.** An
+  imported run carries another machine's clock, and a start that postdates its first
+  step yields negative offsets and bars off the left edge.
+- **The gap before the first call is kept.** That gap is the model thinking, and
+  collapsing it would attribute think time to the tool that followed.
+
+**Network** sits under the timeline, collapsed until asked for
+(`panels/IoLane.tsx`, `GET /runs/{run_id}/io`). It reads the turn's stored wire traffic
+from `telemetry_events` — see [observability](observability.mdx#persistence-for-agent-turns).
+The route returns `joinable: false` for a run with no `turn_id` (anything imported or
+pushed in by the SDK) rather than an empty list, because an empty list reads as "this
+run made no requests", which is a claim nobody has evidence for; the pane hides the
+control entirely for those runs. Rows are keyed by `(boot_id, ev_id)`, the table's own
+identity, since `ev_id` alone restarts every boot.
+
+### MCP steps
+
+A step named `mcp-<server>.<tool>` shows what the step itself cannot know: which server
+answered, how long the round trip took on the wire, whether a failure was the tool or
+the connection, and — on request — the JSON-RPC exchange
+(`panels/McpStepDetail.tsx`, `GET /runs/{run_id}/mcp`, `GET /runs/{run_id}/mcp/{seq}/wire`).
+
+A call row cannot record its step, because the step is written after the call returns.
+So `_pair_mcp` joins on `(round, agent-facing tool name)` plus ordinal within that group
+— exact, since a round's calls run strictly in sequence and both rows come from the one
+invocation. Names are compared through `bridge.tool_name`, which applies the sanitizing
+the agent saw; a raw MCP tool name like `list.dir` would otherwise never match the step
+`mcp-fs.list_dir`. A step with no partner stays unpaired rather than taking a guess.
+
+The wire is looked up by the call's JSON-RPC ids **and its connection**, since ids restart
+on every reconnect ([mcp](mcp.mdx#a-messages-identity-is-its-connection-plus-its-id)).
+The summary is durable and the wire is not: the transcript is a small in-memory ring.
+The wire route returns `available: false` when the exchange has been forgotten, and the
+pane says so — an empty list would read as a call that sent nothing. The run fetches
+MCP detail only when it has a `turn_id` and at least one MCP step.
+
+**Step nesting — `traj_steps.parent_seq`.** A nullable column, and every step this
+node records leaves it `NULL`, which means "derive the layout from `round`". It exists
+for the sources that are genuinely nested and had nowhere to say so: SDK ingest of a
+LangGraph subgraph or a Pydantic AI tool group, and parallel tool execution if the loop
+ever gains it. Added with `_ensure_column` — `CREATE TABLE IF NOT EXISTS` does nothing
+to a table that already exists, so an upgraded install would otherwise fail every
+append on an unknown column. `test_an_existing_steps_table_gains_parent_seq` builds the
+old table and pins that.
+
+Deliberately *not* extracted into a shared `viz/Timeline`. There is one consumer, and
+the generic version would need a colour mapper, a nesting strategy and a label
+renderer as props — three abstractions invented for a second caller that does not
+exist.
+
 ### What the pane surfaces
 
 Search runs a **mode toggle**, not a second box. Plain mode is `GET /runs?q=`
@@ -406,6 +754,7 @@ params — a fingerprint is a hash, and "a3f2 beats 91cd" is unusable without it
 | --- | --- | --- |
 | `trajectories.retentionRuns` | `5000` | Prune a dataset to this many runs, oldest first |
 | `trajectories.captureDelegates` | `true` | Record delegated sub-agent turns as linked child runs |
+| `agent.modelPricing` | `''` | JSON overriding the bundled price table (declared by the agent module; see Tokens and cost) |
 
 ## Browser vs desktop
 

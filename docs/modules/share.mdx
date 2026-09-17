@@ -463,6 +463,17 @@ queued invite somewhere, it means nothing was sent and nobody would ever find ou
 It is deliberately not persisted: it expires with `INVITE_TTL` (300s), and a
 session does not outlive the process hosting it.
 
+**Names are labels; the node id is the identity.** A joined session's
+`RemoteSession.host_name` is what the share pane, the mirror header and anything
+reading `share_manager.joined` shows, so it must be a name. `_host_display_name`
+resolves it once, at join, most trustworthy first: the `display_name` **this node's
+own roster** keeps for the person that machine belongs to (the only answer that is
+not the remote side's claim); the invite that brought you in; the host participant's
+name in the join reply; and only then a short node id. It used to be the reply's
+`host_person` — an opaque person id, found with two real nodes friended over the
+fabric, where the guest saw `gdnekr7j7kqovny4` where a friend's name belonged.
+`host_node` stays the authenticated key everything is looked up by.
+
 A departing peer is swept out of the participant list by `_on_peer_event`. A guest
 has no browser socket on this node, so nothing else would ever notice they left —
 without the sweep they sit in the list forever, holding whatever rung they had.
@@ -721,6 +732,16 @@ feature.
 | Semantic mirror | ✅ | ✅ |
 | Pixel capture | ✅ | Windows/Linux only — WKWebView has no capture API |
 | Viewers audio bus | ✅ | ✅ |
+
+## Watching a friend's agent
+
+A participant holding `view` in a session this node hosts also receives this node's
+**live trajectory runs** from datasets marked shared — see
+[trajectories](trajectories.mdx#watching-live). The mirror cannot carry that: it relays
+layout, not pane content. So trajectories streams its own `traj_live` frames, but asks
+`gate.require(participant, "view")` for every recipient rather than keeping a second
+permission check. Leaving the session stops the stream; being a friend without being a
+participant never starts it.
 
 ## See also
 

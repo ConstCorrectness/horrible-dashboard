@@ -162,6 +162,36 @@ the same thing.
 | `all` | every group at once, still capped by `TOOL_BUDGET`. The comparison that says whether disclosure earns its keep |
 | `explicit` | only the named groups, and it cannot load its way out — for isolating one capability |
 
+### What the budget cut is recorded
+
+A tool the budget keeps off the list is indistinguishable, from the verdict alone,
+from a tool the model chose not to call. So each result carries `tools_dropped`:
+the tools **in the case's scope** that `_select_tools` cut, sorted. Found live, and
+the reason it exists: an `all`-mode case expecting `scratch.open` failed because 38
+slots filled with backend tools first — browser-pushed tools come last in the
+dynamic list, so they are the first casualties — and the row said
+`tools_offered: 38, tools_dropped: []`. The field had been declared, stored and
+rendered for a long time; nothing ever filled it.
+
+"Dropped" means **cut from the largest catalog the case reached**:
+
+| Mode | `tools_dropped` |
+| --- | --- |
+| `all` | the cut of the one list the run started with |
+| `progressive` | the cut of the **final** selection. The catalog grows as the model calls `load_tools`, so a tool in a group it loaded, which the budget then refused to show it, was dropped just as surely as one cut up front. A group the model never loaded is out of scope, not dropped — that is disclosure working, not the budget |
+| `explicit` | always empty: that mode is uncapped by design |
+
+One recomputation after the loop is enough, because the selection only grows by
+appending groups and the cap slices from the tail: a tool past the budget in an early
+round is still past it in the last.
+
+When a **failing** case's expected tool is among them, the result's `detail` leads
+with *"expected tool … was dropped by the tool budget and never offered to the
+model"*, and the Results pane says the same in place of the generic budget line.
+That failure measured the catalog, not the model, and the red verdict beside it says
+the opposite. A pass is left alone — a case that succeeded without the tool was not
+held back by its absence.
+
 ## Bundled suites are data, not code
 
 The starter cases began life as Python constructors in a `seed.py`, copied into
@@ -412,6 +442,85 @@ Two rules carry over unchanged from `llama_target.serving`:
 - **The lease is released in a `finally`.** A sweep that dies must not leave a
   friend's GPU reserved until the lease expires on its own.
 
+## Running on a friend's agent
+
+A peer target borrows a friend's *GPU*; grading, the catalog and the harness stay
+here. The Run section's **On a friend's agent** block does something different: it
+hands the cases to the friend's node, which runs them through **its own**
+`run_agent_loop` — its skills, its MCP servers, its model — and reports each verdict
+back. That is the only way to ask "how does their setup do on my suite", and it is
+also why none of it can be verified from here. `backend/modules/evals/fabric.py`
+owns the wire:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as Offerer
+    participant B as Friend's node
+    participant P as Person at B
+    A->>B: eval_offer (cases)
+    B-->>A: eval_decline (reason) or eval_pending
+    B->>P: notification + Offers from friends
+    P->>B: Accept
+    B->>A: eval_accept (model, harness hash)
+    loop each case
+        B->>A: eval_progress (bounded, scrubbed)
+    end
+    B->>A: eval_result (done / failed / cancelled)
+    A-->>B: eval_cancel (withdraw, any time)
+```
+
+### Two gates, because it spends somebody else's tokens
+
+1. **`evals.acceptRemoteSuites`, default off.** The handler is registered anyway, so
+   an offer to a node with it off comes back as a **reasoned refusal** on the run row
+   (`declined: … evals.acceptRemoteSuites is off`) — silence would read as a network
+   fault. The capability is advertised with no live detail on purpose: "accepting"
+   changes after the handshake, and a stale badge would be worse than a refusal.
+2. **A person accepts each offer.** The offer shows the case count and a cost floor —
+   the case text at ~4 characters a token, priced through the node's own pricing
+   table, `free` on a local model and `price unknown` rather than `$0` when there is
+   no price. It is a floor and says so: every round also resends the system prompt and
+   the catalog. `network.remoteAgentMode` is deliberately not reused; it answers a
+   different question, and "read-only" means nothing for an N-case suite.
+
+`session.info.trusted` comes first on every handler, and every message about an offer
+is checked against **the node it was offered to** — a friend who knows a run id cannot
+report results into it.
+
+### What a friend's node will not run
+
+Only cases `run_case` executes in-process with `simulate`, so **no tool acts on their
+machine**: every call gets the offerer's fixture. `hf_benchmark` cases (a venv, and
+for `code_exec` model-written code) and `judge` grades (a second model call nobody
+estimated, against a judge the *offerer* names) are refused **on the runner** — the
+offerer leaves them out too and says how many, but that is a courtesy, not the gate.
+
+### Honesty about what came back
+
+- The friend's node reports `fingerprint.compute()` and its model name. The envelope
+  is signed, which proves **their node said it**, not that it is true, and the hash
+  covers skills and MCP tools — **not model weights**. A friend reporting `qwen3:8b`
+  could be running a fine-tune.
+- So the run is stored with `attestation = 'peer'`. It ranks beside local runs, never
+  merged into them: the ranking row says *peer-reported*, and Compare's harness banner
+  says the catalog was *reported* — even when the hashes match, which then means only
+  "they reported the same catalog".
+- **`case_hash` is computed here, from this node's case**, never taken from the reply:
+  the question asked is the offerer's to vouch for.
+- A reply of `done` with cases missing is recorded as **failed**, naming how many never
+  reported; a run that answered half a suite must not rank beside one that answered it
+  all.
+
+What leaves the friend's node is bounded and scrubbed with the trajectories redactor
+(`outbound.py`): the model's answer is clipped to 4,000 characters, call arguments
+redacted, `turn_id` dropped. Each progress message is kept under 256 KiB, because one
+frame over 1 MiB closes the dialing side's whole link (see
+[trajectories](trajectories.mdx#replies-are-paged-because-of-who-dialed-whom)).
+
+An open offer lives in memory on both nodes. A restart of the offerer closes its open
+peer runs as **failed** with that reason, rather than leaving them `running` forever.
+
 ## Contributions to the layout shell
 
 | Kind | Id | Notes |
@@ -511,6 +620,13 @@ counter reading `0` for a figure that is `62` is worse than no animation at all.
 | `POST /api/evals/exports` | Turn a run's results into an SFT dataset on disk |
 | `GET /api/evals/exports/preview` | The first few examples, without writing a file |
 | `GET /api/evals/targets` | Models this node could sweep — the agent provider plus every catalog GGUF — so the launcher is a picker not a form |
+| `GET /api/evals/remote/friends` | Connected friends whose node understands suite offers |
+| `POST /api/evals/remote/offer` | Offer a suite to a friend's agent; **409** with the reason when refused |
+| `DELETE /api/evals/remote/runs/{id}` | Withdraw an offer, pending or running |
+| `GET /api/evals/remote/offers` | Offers friends sent this node, and whether it is accepting |
+| `POST /api/evals/remote/offers/{id}/accept` | Accept one — needs a browser attached, like a sweep |
+| `POST /api/evals/remote/offers/{id}/decline` | Decline one; the friend's run row records it |
+| `POST /api/evals/remote/offers/{id}/stop` | Stop a friend's suite running on this node |
 
 ## Agent tools
 

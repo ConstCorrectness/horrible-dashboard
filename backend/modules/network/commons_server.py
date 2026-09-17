@@ -36,8 +36,11 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from backend.modules.network import identity, lobby_server, relay_broker
 from backend.modules.network.models import (
     CommonsProfile,
+    CommonsTrajectoryDigest,
+    canonical_digest_bytes,
     canonical_profile_bytes,
     canonical_vouch_bytes,
+    digest_content_id,
 )
 from backend.modules.database.vectorstore import (
     delete_document,
@@ -70,6 +73,7 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
     init_db()
     load_profiles()
     load_vouches()
+    load_digests()
     yield
 
 
@@ -253,6 +257,20 @@ async def commons_ws(websocket: WebSocket) -> None:
             elif mtype == "report":
                 if node_id is not None:
                     _handle_report(node_id, msg)
+            elif mtype == "publish_trajectory":
+                await _handle_publish_trajectory(websocket, msg)
+            elif mtype == "list_trajectories":
+                await _send(
+                    websocket,
+                    {
+                        "type": "trajectories",
+                        "digests": _list_digests(
+                            str(msg.get("node_id") or ""), int(msg.get("limit") or 50)
+                        ),
+                    },
+                )
+            elif mtype == "unpublish_trajectory":
+                await _handle_unpublish_trajectory(websocket, node_id, msg)
     except WebSocketDisconnect:
         pass
     finally:
@@ -481,3 +499,141 @@ def _handle_report(reporter_id: str, msg: dict[str, Any]) -> None:
     existing.append(record)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(existing), encoding="utf-8")
+
+
+# ---- trajectory digests -----------------------------------------------------------
+#
+# A published trajectory is its *shape* (see `CommonsTrajectoryDigest`). The index
+# verifies, dedupes and re-serves; it never decides what is worth publishing, and it
+# cannot recall a digest from anyone who already fetched one — which is why the node
+# side asks for a typed confirmation before sending.
+
+#: A digest is a few hundred bytes a step; anything this large is not a digest.
+DIGEST_MAX_BYTES = 256 * 1024
+DIGEST_MAX_STEPS = 2000
+#: Per publisher. Refused beyond it rather than evicting the oldest: silently
+#: dropping someone's earlier publication is the kind of thing nobody finds out about.
+DIGESTS_PER_NODE = 200
+
+# digest_id -> digest (as dumped). Persisted beside the profiles.
+_digests: dict[str, dict[str, Any]] = {}
+
+
+def _digests_path() -> Path:
+    return _data_dir() / "commons-trajectories.json"
+
+
+def save_digests() -> None:
+    jsonstore.write_text(_digests_path(), json.dumps(list(_digests.values())))
+
+
+def load_digests() -> None:
+    _digests.clear()
+    path = _digests_path()
+    if not path.is_file():
+        return
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError:
+        logger.warning("commons trajectories file is corrupt; starting empty")
+        return
+    for item in raw if isinstance(raw, list) else []:
+        try:
+            digest = CommonsTrajectoryDigest.model_validate(item)
+        except Exception:
+            continue
+        # Re-verified on load: the file is the index's own, but a digest that no
+        # longer verifies must not be re-served as if it did.
+        if verify_digest(digest) is None:
+            _digests[digest.digest_id] = digest.model_dump()
+
+
+def verify_digest(digest: CommonsTrajectoryDigest) -> str | None:
+    """None when the digest is sound, else the reason it is not."""
+    if identity.fingerprint(digest.public_key) != digest.node_id:
+        return "node_id is not the fingerprint of public_key"
+    if digest.digest_id != digest_content_id(digest):
+        return "digest_id does not match the content"
+    if not digest.sig or not identity.verify(
+        digest.public_key, canonical_digest_bytes(digest), digest.sig
+    ):
+        return "signature invalid"
+    return None
+
+
+async def _handle_publish_trajectory(ws: WebSocket, msg: dict[str, Any]) -> None:
+    raw = msg.get("digest") or {}
+    ref = str(raw.get("digest_id") or "") if isinstance(raw, dict) else ""
+
+    async def refuse(code: str, message: str) -> None:
+        await _send(ws, {"type": "error", "code": code, "message": message, "ref": ref})
+
+    if len(json.dumps(raw)) > DIGEST_MAX_BYTES:
+        await refuse("too_large", "digest exceeds the size limit")
+        return
+    try:
+        digest = CommonsTrajectoryDigest.model_validate(raw)
+    except Exception:
+        await refuse("bad_digest", "invalid trajectory digest")
+        return
+    if len(digest.steps) > DIGEST_MAX_STEPS:
+        await refuse("too_large", f"more than {DIGEST_MAX_STEPS} steps")
+        return
+    problem = verify_digest(digest)
+    if problem is not None:
+        await refuse("auth", problem)
+        return
+
+    duplicate = digest.digest_id in _digests
+    if not duplicate:
+        mine = sum(1 for d in _digests.values() if d["node_id"] == digest.node_id)
+        if mine >= DIGESTS_PER_NODE:
+            await refuse(
+                "limit",
+                f"this index keeps at most {DIGESTS_PER_NODE} digests per node",
+            )
+            return
+        _digests[digest.digest_id] = digest.model_dump()
+        save_digests()
+    await _send(
+        ws,
+        {
+            "type": "trajectory_published",
+            "digest_id": digest.digest_id,
+            "duplicate": duplicate,
+        },
+    )
+
+
+def _list_digests(node_id: str, limit: int) -> list[dict[str, Any]]:
+    items = [d for d in _digests.values() if not node_id or d["node_id"] == node_id]
+    items.sort(key=lambda d: d.get("published_at") or 0.0, reverse=True)
+    out = []
+    for item in items[: max(1, min(limit, 200))]:
+        entry = _profiles.get(item["node_id"])
+        out.append(
+            {
+                **item,
+                # Index-held annotations, like `_profile_out`: who published it as
+                # their profile names them, never part of the signed object.
+                "publisher_name": entry.profile.display_name if entry else "",
+            }
+        )
+    return out
+
+
+async def _handle_unpublish_trajectory(
+    ws: WebSocket, node_id: str | None, msg: dict[str, Any]
+) -> None:
+    """Only the publisher may withdraw a digest — the connection must have published
+    the profile whose node signed it. Withdrawal stops *future* fetches; it cannot
+    reach a copy someone already has."""
+    digest_id = str(msg.get("digest_id") or "")
+    item = _digests.get(digest_id)
+    ok = item is not None and node_id is not None and item["node_id"] == node_id
+    if ok:
+        _digests.pop(digest_id, None)
+        save_digests()
+    await _send(
+        ws, {"type": "trajectory_unpublished", "digest_id": digest_id, "ok": ok}
+    )

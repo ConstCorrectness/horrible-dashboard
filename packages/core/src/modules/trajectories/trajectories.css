@@ -29,3 +29,119 @@
     animation: none;
   }
 }
+
+/* The run timeline.
+ *
+ * Absolute bars inside a relative track: a flex/grid layout cannot express "starts
+ * 38% in", which is the whole point of a waterfall. Geometry comes from
+ * `timeline-model.ts` as percentages, so nothing here needs a measured pixel width
+ * and the chart reflows with the pane for free — which also means it works in a
+ * hidden preview, where ResizeObserver never fires. */
+
+.traj-timeline {
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  padding: var(--space-4);
+}
+
+.traj-lane {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 22px;
+}
+
+.traj-lane + .traj-lane {
+  margin-top: var(--space-2);
+}
+
+.traj-lane-name {
+  flex: 0 0 2.2rem;
+  text-align: right;
+}
+
+.traj-track {
+  position: relative;
+  flex: 1;
+  height: 18px;
+  /* The faint grid the house style asks for, in place of a gradient. */
+  background-image: linear-gradient(to right, var(--border) 1px, transparent 1px);
+  background-size: 25% 100%;
+  border-radius: var(--radius-sm);
+}
+
+/* A bar carries a class, so it opts out of the 30px control height rule — it is a
+ * chart element, not an action button. */
+.traj-bar {
+  position: absolute;
+  top: 2px;
+  height: 14px;
+  min-width: 3px;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 0;
+  cursor: pointer;
+  overflow: hidden;
+  transition: filter var(--dur-fast) var(--ease-standard);
+}
+
+.traj-bar:hover {
+  filter: brightness(1.25);
+}
+
+.traj-bar-label {
+  display: block;
+  padding: 0 var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  line-height: 14px;
+  color: var(--bg-primary);
+  white-space: nowrap;
+}
+
+.traj-axis {
+  margin-top: var(--space-3);
+}
+
+.traj-axis .traj-track {
+  height: var(--fs-meta);
+  background-image: none;
+}
+
+.traj-tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-100%);
+  padding-right: var(--space-1);
+}
+
+/* The live pulse. A run either is or is not still moving, and that is the first
+ * thing a reader looks for — a static "running" word cannot say it. */
+@keyframes traj-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+}
+
+.traj-pulse {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+  animation: traj-pulse 1.4s var(--ease-standard) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .traj-pulse {
+    animation: none;
+  }
+}

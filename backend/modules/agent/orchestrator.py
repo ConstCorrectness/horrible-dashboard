@@ -2190,6 +2190,12 @@ async def run_agent_loop(
                     top_p=top_p,
                 )
                 messages.append(result.assistant_message)
+                # Recorded here rather than after the retry below, because the retry
+                # *reassigns* `result` — a single capture at the end of the round
+                # would silently drop the first call's tokens on exactly the turns
+                # that needed repairing. `usage()` sums.
+                if rec:
+                    rec.usage(result.usage)
 
                 # Weak models sometimes narrate an action without emitting the call, so
                 # retry once with an explicit nudge. This deliberately runs on EVERY
@@ -2220,14 +2226,27 @@ async def run_agent_loop(
                         top_p=top_p,
                     )
                     messages.append(result.assistant_message)
+                    if rec:
+                        rec.usage(result.usage)
 
                 if rec:
                     rec.rounds = round_no + 1
+                    if result.content and result.tool_calls:
+                        # Prose the model emitted *alongside* its calls — its stated
+                        # reason for making them. Recorded only in this branch: with
+                        # no tool calls the content is the final answer, which
+                        # `finish()` already writes, and doing both would duplicate it.
+                        rec.message(round_no, result.content)
                 if not result.tool_calls:
                     answer = result.content
                     return answer
                 for call in result.tool_calls:
                     started = time.monotonic()
+                    # Two clocks on purpose: `monotonic` measures the duration (it
+                    # cannot jump), `time()` is the wall instant a timeline draws the
+                    # bar's left edge at. `rec.action` runs after the await, so
+                    # letting the store default `ts` would record the call's *end*.
+                    started_wall = time.time()
                     if call.name in denied:
                         # Not offered this round, but the model can still name a
                         # tool it remembers from the conversation — and under
@@ -2268,6 +2287,7 @@ async def run_agent_loop(
                             call.arguments,
                             tool_result,
                             duration_ms=int((time.monotonic() - started) * 1000),
+                            ts=started_wall,
                         )
                     messages.append(P.tool_result_message(info, call, tool_result))
         return answer

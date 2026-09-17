@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from pathlib import Path
+from typing import Any
 import os
 
 # Auto-enable full browser engine if Playwright is installed and not explicitly disabled.
@@ -97,6 +98,7 @@ from backend.modules.trajectories import (
     register_agent_tools as register_trajectories_tools,
 )
 from backend.modules.trajectories import router as trajectories_router
+from backend.modules.trajectories import stream as trajectories_stream
 from backend.modules.agentpedia import (
     register_agent_tools as register_agentpedia_tools,
 )
@@ -158,6 +160,7 @@ from backend.modules.secrets import router as secrets_router
 from backend.modules.telemetry import push_telemetry
 from backend.modules.notifications.routes import router as notifications_router
 from backend.modules.telemetry import router as telemetry_router
+from backend.modules.telemetry import drain as telemetry_drain
 from backend.modules.telemetry.instrument import (
     observes_ws_frame,
     record_ws_frame,
@@ -226,6 +229,14 @@ async def lifespan(app: FastAPI):
     # runs, and the first writer is very likely a worker thread (the training
     # metrics pump), which has no running loop of its own to discover.
     localtrack_stream.init_loop()
+    # Same requirement for the trajectory channel: `store.append_step` is a sync
+    # function reached from HTTP handlers and worker threads as well as from the
+    # orchestrator, so the loop has to be handed to it rather than discovered.
+    trajectories_stream.init_loop()
+    # Persist the turn-stamped slice of the I/O ring. A batched subscriber rather
+    # than a write inside `record()`, which is on the hot path of every instrumented
+    # request -- a postmortem feature must not put sqlite in the middle of a turn.
+    telemetry_drain.start()
     # Deep-research runner: resumes any run that was in flight when the process
     # last died (steps stuck `running` reset to `pending`), then works the queue.
     research_runner.start()
@@ -246,6 +257,9 @@ async def lifespan(app: FastAPI):
 
         _finish_training()
         research_runner.stop()
+        # Flushes the batch in hand on the way out: those are the events of the turn
+        # that was most likely still running, which is the one somebody will want.
+        await telemetry_drain.stop()
         queue.stop()
         # MCP servers are child processes (stdio transport); leaving them behind on
         # reload would strand orphaned node/python servers.
@@ -282,6 +296,51 @@ app.add_middleware(
 
 # Observe every inbound /api request (metadata only) — see modules/telemetry.
 app.middleware("http")(telemetry_middleware)
+
+
+_port_logger = logging.getLogger("backend.server_port")
+
+
+class _ObserveServerPort:
+    """Learn the port this backend really listens on from the first request.
+
+    Uvicorn runs lifespan startup *before* binding, so the presence record is
+    published with the configured port (`backend/server_port.py`). `scope["server"]`
+    is the socket a request actually arrived on; if it disagrees, what was
+    published carried a dead address, so it is published again. Pure ASGI rather
+    than `@app.middleware("http")` so WebSocket connections count too, and a no-op
+    after the first request that agrees.
+    """
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+        self._settled = False
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if not self._settled and scope.get("type") in ("http", "websocket"):
+            self._settled = True
+            from backend import server_port
+
+            if server_port.observe(scope.get("server")):
+                _port_logger.info(
+                    "serving on port %s, not the port assumed at startup; "
+                    "republishing presence",
+                    server_port.port(),
+                )
+                asyncio.ensure_future(_republish_presence())
+        await self.inner(scope, receive, send)
+
+
+async def _republish_presence() -> None:
+    from backend.modules.social import directory as social_directory
+
+    try:
+        await social_directory.publish()
+    except Exception:  # noqa: BLE001 - publishing is best-effort by contract
+        _port_logger.debug("presence republish failed", exc_info=True)
+
+
+app.add_middleware(_ObserveServerPort)
 
 
 @app.get("/api/health")

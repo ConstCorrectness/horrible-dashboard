@@ -95,6 +95,10 @@ export interface McpWireMessage {
   id: string;
   payload: string;
   truncated: boolean;
+  /** Which connection carried it — ids restart on every reconnect. */
+  session?: string;
+  turn_id?: string | null;
+  round?: number | null;
 }
 
 export interface McpCost {
@@ -203,6 +207,39 @@ export function clearTranscript(id: string): Promise<{ messages: McpWireMessage[
   return apiDelete<{ messages: McpWireMessage[] }>(
     `/mcp/servers/${encodeURIComponent(id)}/transcript`,
   );
+}
+
+/** Aggregates over one server or one tool. Mirrors `calls._summarize`. */
+export interface McpActivityStats {
+  calls: number;
+  tool_errors: number;
+  transport_errors: number;
+  /** Null with no calls: "never failed" and "never ran" must not render alike. */
+  tool_error_rate: number | null;
+  transport_error_rate: number | null;
+  /** Nearest-rank: every value is a latency some call actually had. */
+  p50_ms: number | null;
+  p95_ms: number | null;
+  p99_ms: number | null;
+  request_bytes: number;
+  response_bytes: number;
+  content_blocks: number;
+  last_at: number | null;
+}
+
+export interface McpServerActivity extends McpActivityStats {
+  server_id: string;
+  tools: (McpActivityStats & { tool: string })[];
+  runs: {
+    runs_seen: number;
+    runs_priced: number;
+    /** The total over runs that used this server — not what the server cost. */
+    cost_usd_of_runs_using_server: number | null;
+  };
+}
+
+export function mcpActivity(days = 7): Promise<{ since: number; servers: McpServerActivity[] }> {
+  return apiGet(`/mcp/activity?days=${days}`);
 }
 
 export function serverCost(id: string): Promise<McpCost> {

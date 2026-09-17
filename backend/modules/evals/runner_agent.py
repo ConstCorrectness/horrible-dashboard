@@ -82,13 +82,17 @@ EvalConnection = OfflineConnection
 
 
 def _tools_for_case(
-    conn: Any, case: EvalCase, spec: Any
+    conn: Any, case: EvalCase, spec: Any, stats: dict[str, Any] | None = None
 ) -> tuple[list[dict], set[str] | None]:
     """The tool list and the active-group set a case starts with.
 
     Returns `(tools, active_groups)`. `active_groups` is `None` for the non-
     progressive modes, which is what tells `run_agent_loop` to use the fixed list
     with direct dispatch instead of recomputing per round.
+
+    `stats`, when given, receives `_select_tools`' account of the cap — `dropped`
+    names the tools the budget cut. `explicit` never fills it: that mode is uncapped
+    by design, so nothing in scope is ever cut.
     """
     from backend.modules.agent.orchestrator import (
         _all_dynamic_tools,
@@ -102,7 +106,7 @@ def _tools_for_case(
     if mode == "progressive":
         # The shipped path: a small core plus the meta-tools, with `preload` as the
         # head start a roster agent's `preload_groups` gives it.
-        return _select_tools(conn, preload, spec), preload
+        return _select_tools(conn, preload, spec, stats), preload
 
     if mode == "explicit":
         # Only the named groups. `active_groups=None` so the model cannot load its
@@ -117,7 +121,39 @@ def _tools_for_case(
     # `all`: every group at once, still capped by TOOL_BUDGET, which is precisely
     # the comparison that says whether progressive disclosure earns its keep.
     groups = {_group_of(t["function"]["name"]) for t in _all_dynamic_tools(conn, spec)}
-    return _select_tools(conn, groups, spec), None
+    return _select_tools(conn, groups, spec, stats), None
+
+
+def _dropped_by_budget(
+    conn: Any,
+    case: EvalCase,
+    spec: Any,
+    initial: dict[str, Any],
+    active_groups: set[str] | None,
+) -> list[str]:
+    """The tools in the case's scope that the budget kept off the model's list.
+
+    **"Dropped" means cut from the largest catalog the case reached.** For `all`
+    that is the one list the run started with. For `progressive` the catalog grows
+    as the model calls `load_tools` — `run_agent_loop` adds to `active_groups` in
+    place — so the answer is the cut of the *final* selection: a tool in a group the
+    model loaded, which the budget then refused to show it, was dropped just as
+    surely as one cut up front. Groups the model never loaded are out of scope, not
+    dropped; that is progressive disclosure working, not the budget.
+
+    Recomputing once at the end is enough, because the selection only grows by
+    appending groups and the cap slices from the tail: a tool past the budget in an
+    early round is still past it in the last.
+    """
+    from backend.modules.agent.orchestrator import _select_tools
+
+    dropped = set(initial.get("dropped") or [])
+    if case.expose.mode == "progressive" and active_groups is not None:
+        if active_groups != set(case.expose.preload):
+            final: dict[str, Any] = {}
+            _select_tools(conn, active_groups, spec, final)
+            dropped |= set(final.get("dropped") or [])
+    return sorted(dropped)
 
 
 async def run_case(
@@ -152,7 +188,8 @@ async def run_case(
     conn = EvalConnection(agent_tools, case.fixtures)
     turn_id = uuid.uuid4().hex[:12]
 
-    tools, active_groups = _tools_for_case(conn, case, spec)
+    budget_stats: dict[str, Any] = {}
+    tools, active_groups = _tools_for_case(conn, case, spec, budget_stats)
     offered = len(tools)
 
     # Assembled the way `run_agent_turn` assembles a chat turn, not simplified. The
@@ -236,16 +273,28 @@ async def run_case(
         sorted(active_groups - set(case.expose.preload)) if active_groups else []
     )
 
+    tools_dropped = _dropped_by_budget(conn, case, spec, budget_stats, active_groups)
+
     result = result_for(
         case,
         observed,
         answer,
         rounds=rounds,
         tools_offered=offered,
+        tools_dropped=tools_dropped,
         groups_loaded=groups_loaded,
         duration_ms=duration_ms,
         turn_id=turn_id,
     )
+    # A failure whose expected tool was never offered is a measurement of the
+    # catalog, not of the model — and the verdict alone reads the other way. Said in
+    # the detail, which is what every consumer (pane, agent tools, export) shows.
+    cut = [c.name for c in case.expect.calls if c.name in set(tools_dropped)]
+    if cut and not result.passed:
+        result.detail = (
+            f"expected tool {', '.join(cut)} was dropped by the tool budget and never "
+            f"offered to the model — {result.detail}"
+        )
     if error:
         # An errored case is a failure whatever the grader thought of an empty
         # call list — most obviously for `no_call`, which an exception would

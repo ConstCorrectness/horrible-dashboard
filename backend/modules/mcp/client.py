@@ -22,7 +22,10 @@ surfaces per-plugin failures instead of crashing the app.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import time
+import uuid
 from collections import deque
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
@@ -32,7 +35,7 @@ from mcp import ClientSession
 from mcp import types as mcp_types
 
 from backend.modules.mcp import config as cfg
-from backend.modules.mcp import transcript
+from backend.modules.mcp import calls, transcript
 from backend.modules.mcp.transport import describe_target, popen_stdio_client
 
 logger = logging.getLogger(__name__)
@@ -166,6 +169,10 @@ class McpSession:
         # logs chattily for hours must not accumulate.
         self._stderr: deque[str] = deque(maxlen=40)
         self._session: ClientSession | None = None
+        #: Identifies the current connection. Minted per connect, and stamped on every
+        #: wire message and every call row, because JSON-RPC ids restart per connection
+        #: and the transcript deliberately outlives one — see `Transcript.by_ids`.
+        self._connection = ""
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
         self._ready = asyncio.Event()
@@ -245,7 +252,8 @@ class McpSession:
                 )
         # Teed before `ClientSession` ever sees them, so the handshake itself is
         # recorded — which is the half of the conversation a failing server fails in.
-        read, write = transcript.tee(read, write, self.transcript)
+        self._connection = uuid.uuid4().hex[:12]
+        read, write = transcript.tee(read, write, self.transcript, self._connection)
         session = await stack.enter_async_context(ClientSession(read, write))
         return session
 
@@ -353,18 +361,71 @@ class McpSession:
         self.runtime.instructions = (info.instructions or "").strip()
 
     async def call_tool(self, tool: str, args: dict[str, Any]) -> dict[str, Any]:
-        """Invoke a tool on this server; return a JSON-able result for the agent."""
-        if self._session is None or self.runtime.state != "ready":
-            return {"error": f"MCP server '{self.id}' is not connected"}
+        """Invoke a tool on this server; return a JSON-able result for the agent.
+
+        Every path out of here — including "not connected" — writes one summary row
+        (`calls.py`). A call that never reached the server is still a call someone
+        made, and a dashboard that only counts the ones that got through reports a
+        broken server as a quiet one.
+        """
+        started_at = time.time()
+        started = time.monotonic()
+        # The turn is read here, in the caller's task, where it is correct — see
+        # `transcript.py` for why the receive side cannot be trusted with it.
+        from backend.modules.telemetry import turn as telemetry_turn
+
+        mark = telemetry_turn.current()
+        # Read before the await: a reconnect during the call mints a new id, and this
+        # call's messages went out on the connection that was current when it started.
+        connection = self._connection
+        capture = transcript.begin_capture()
+        content_blocks: int | None = None
+        error_kind: str | None = None
         try:
-            result = await asyncio.wait_for(
-                self._session.call_tool(tool, args), timeout=CALL_TIMEOUT_S
-            )
-        except TimeoutError:
-            return {"error": f"MCP tool '{tool}' timed out after {CALL_TIMEOUT_S:.0f}s"}
-        except Exception as exc:  # noqa: BLE001 - surfaced to the model as a result
-            return {"error": f"{type(exc).__name__}: {exc}"}
-        return _flatten_result(result)
+            if self._session is None or self.runtime.state != "ready":
+                out: dict[str, Any] = {
+                    "error": f"MCP server '{self.id}' is not connected"
+                }
+                error_kind = "transport"
+            else:
+                try:
+                    result = await asyncio.wait_for(
+                        self._session.call_tool(tool, args), timeout=CALL_TIMEOUT_S
+                    )
+                except TimeoutError:
+                    out = {
+                        "error": f"MCP tool '{tool}' timed out after {CALL_TIMEOUT_S:.0f}s"
+                    }
+                    error_kind = "transport"
+                except Exception as exc:  # noqa: BLE001 - surfaced to the model
+                    out = {"error": f"{type(exc).__name__}: {exc}"}
+                    error_kind = "transport"
+                else:
+                    out = _flatten_result(result)
+                    content_blocks = len(result.content or [])
+                    if result.isError:
+                        error_kind = "tool"
+        finally:
+            rpc_ids = transcript.end_capture(capture)
+
+        await asyncio.to_thread(
+            calls.record,
+            server_id=self.id,
+            tool=tool,
+            started_at=started_at,
+            duration_ms=int((time.monotonic() - started) * 1000),
+            ok=error_kind is None,
+            error_kind=error_kind,
+            error=str(out.get("error")) if error_kind else None,
+            request_bytes=_json_size(args),
+            response_bytes=_json_size(out),
+            content_blocks=content_blocks,
+            rpc_ids=rpc_ids,
+            session=connection if rpc_ids else "",
+            turn_id=mark[0] if mark else None,
+            round_no=mark[1] if mark else None,
+        )
+        return out
 
     async def read_resource(self, uri: str) -> dict[str, Any]:
         if self._session is None or self.runtime.state != "ready":
@@ -383,6 +444,14 @@ class McpSession:
             else:
                 parts.append({"uri": str(content.uri), "blob": "<binary omitted>"})
         return {"contents": parts}
+
+
+def _json_size(value: Any) -> int | None:
+    """Byte size of a payload as JSON, or None when it is not serializable."""
+    try:
+        return len(json.dumps(value, default=str))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _with_stderr(message: str, lines: deque[str]) -> str:

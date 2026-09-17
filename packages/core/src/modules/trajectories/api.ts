@@ -18,6 +18,8 @@ export interface Dataset {
   description: string;
   source_kind: TrajectorySource;
   capture: boolean;
+  /** Friends may list, pull and live-watch its runs. Never true for a `peer` dataset. */
+  shared: boolean;
   tags: string[];
   schema_version: number;
   created_at: number;
@@ -183,6 +185,8 @@ export function listRuns(params: {
   outcome?: string;
   harness?: string;
   source?: string;
+  /** `running` is what the Live view asks for on mount — see `ws.ts`. */
+  status?: RunStatus;
   q?: string;
   limit?: number;
   offset?: number;
@@ -195,6 +199,231 @@ export function listRuns(params: {
 }
 
 export const getRun = (id: string) => req<TrajectoryDetail>(`/runs/${encodeURIComponent(id)}`);
+
+/** One persisted request this run made. Mirrors `telemetry_events`. */
+export interface RunIoEvent {
+  /** Per-process id. `ev_id` restarts at 1 on every boot, so identity is the pair. */
+  boot_id: string;
+  ev_id: number;
+  turn_id: string;
+  round: number | null;
+  ts: number;
+  source: string;
+  method: string;
+  target: string;
+  status: number | null;
+  duration_ms: number | null;
+  request_bytes: number | null;
+  response_bytes: number | null;
+  error: string | null;
+  verdict: string | null;
+  remote_ip: string | null;
+  http_protocol: string | null;
+  timing: Record<string, number> | null;
+  detail: Record<string, unknown> | null;
+}
+
+export interface RunIoResponse {
+  events: RunIoEvent[];
+  /**
+   * False when the run has no `turn_id` to join on — anything imported or pushed in
+   * by the SDK. Distinct from an empty list, which means the turn genuinely made no
+   * requests; rendering both the same way would claim a fact we do not have.
+   */
+  joinable: boolean;
+}
+
+export const getRunIo = (id: string, round?: number) =>
+  req<RunIoResponse>(
+    `/runs/${encodeURIComponent(id)}/io${round == null ? '' : `?round=${round}`}`,
+  );
+
+/** One MCP call's durable summary. Mirrors `backend/modules/mcp/calls.py`. */
+export interface McpCallSummary {
+  id: string;
+  server_id: string;
+  tool: string;
+  turn_id: string | null;
+  round: number | null;
+  started_at: number;
+  duration_ms: number | null;
+  ok: boolean;
+  /** `tool`: the server answered and said the call failed. `transport`: it never
+   * answered usefully (not connected, timed out, the session raised). */
+  error_kind: 'tool' | 'transport' | null;
+  error: string | null;
+  request_bytes: number | null;
+  response_bytes: number | null;
+  content_blocks: number | null;
+  rpc_ids: string[];
+  /** The connection the call went out on. JSON-RPC ids restart per connection, so
+   * `(session, rpc_ids)` identifies the exchange and the ids alone do not. */
+  session: string;
+}
+
+export interface McpWireMessage {
+  at: number;
+  direction: 'in' | 'out';
+  method: string;
+  id: string;
+  payload: string;
+  truncated: boolean;
+  turn_id: string | null;
+  round: number | null;
+  session: string;
+}
+
+/** MCP steps keyed by step `seq`. */
+export const getRunMcp = (id: string) =>
+  req<{ calls: Record<string, McpCallSummary>; joinable: boolean }>(
+    `/runs/${encodeURIComponent(id)}/mcp`,
+  );
+
+export const getStepWire = (id: string, seq: number) =>
+  req<{ call: McpCallSummary; messages: McpWireMessage[]; available: boolean }>(
+    `/runs/${encodeURIComponent(id)}/mcp/${seq}/wire`,
+  );
+
+// --- friends ---------------------------------------------------------------
+
+export interface PeerDevice {
+  node_id: string;
+  label: string;
+  /** Null when the friend's build does not report it — not the same as zero. */
+  shared_datasets: number | null;
+}
+
+export interface PeerPerson {
+  person_id: string;
+  name: string;
+  devices: PeerDevice[];
+}
+
+export interface PeerDataset {
+  id: string;
+  name: string;
+  description: string;
+  run_count: number;
+}
+
+/** A friend's run header. Their node withholds turn ids, identities and meta. */
+export type PeerRun = Pick<
+  TrajectoryRun,
+  | 'id'
+  | 'dataset_id'
+  | 'agent_id'
+  | 'agent_name'
+  | 'model'
+  | 'provider'
+  | 'goal'
+  | 'status'
+  | 'outcome'
+  | 'reward'
+  | 'steps'
+  | 'rounds'
+  | 'tokens_in'
+  | 'tokens_out'
+  | 'cost_usd'
+  | 'started_at'
+  | 'finished_at'
+  | 'duration_ms'
+  | 'error'
+  | 'harness'
+>;
+
+export interface PeerRunDetail {
+  run: PeerRun;
+  steps: TrajectoryStep[];
+  labels: { key: string; value: string; score: number | null; source: string }[];
+}
+
+export interface WatchedSession {
+  session_id: string;
+  host: string;
+  host_name: string;
+  title: string;
+  grant: string;
+}
+
+export const listPeers = () => req<{ people: PeerPerson[] }>('/peers').then((r) => r.people);
+
+export const listPeerDatasets = (node: string) =>
+  req<{ datasets: PeerDataset[] }>(`/peers/${encodeURIComponent(node)}/datasets`).then(
+    (r) => r.datasets,
+  );
+
+export const listPeerRuns = (node: string, dataset: string, status?: RunStatus) => {
+  const qs = new URLSearchParams({ dataset });
+  if (status) qs.set('status', status);
+  return req<{ runs: PeerRun[] }>(`/peers/${encodeURIComponent(node)}/runs?${qs}`).then(
+    (r) => r.runs,
+  );
+};
+
+export const getPeerRun = (node: string, runId: string) =>
+  req<PeerRunDetail>(`/peers/${encodeURIComponent(node)}/runs/${encodeURIComponent(runId)}`);
+
+export const pullPeerRun = (node: string, runId: string) =>
+  req<{ run_id: string }>(
+    `/peers/${encodeURIComponent(node)}/runs/${encodeURIComponent(runId)}/pull`,
+    { method: 'POST' },
+  );
+
+/**
+ * A run as published to the agent commons: its shape, never its payloads. Mirrors
+ * `CommonsTrajectoryDigest` in `backend/modules/network/models.py`.
+ */
+export interface CommonsDigest {
+  schema_version: number;
+  digest_id: string;
+  node_id: string;
+  public_key: string;
+  published_at?: number;
+  harness_fingerprint: string;
+  model: string;
+  provider: string;
+  tool_names: string[];
+  goal: string | null;
+  status: string;
+  outcome: string | null;
+  reward: number | null;
+  rounds: number;
+  steps: {
+    seq: number;
+    kind: string;
+    round: number;
+    name: string;
+    ok: boolean | null;
+    duration_ms: number | null;
+    gated: boolean;
+  }[];
+  tokens_in: number | null;
+  tokens_out: number | null;
+  duration_ms: number | null;
+  /** Index-held, not signed: the publisher's commons profile name. */
+  publisher_name?: string;
+}
+
+/** Exactly what `publishRun` would send, and the code that confirms it. */
+export const getCommonsDigest = (id: string, includeGoal: boolean) =>
+  req<{ digest: CommonsDigest; confirm: string }>(
+    `/runs/${encodeURIComponent(id)}/commons-digest?include_goal=${includeGoal}`,
+  );
+
+export const publishRun = (id: string, body: { include_goal: boolean; confirm: string }) =>
+  req<{ digest_id: string; duplicate: boolean }>(`/runs/${encodeURIComponent(id)}/publish`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+
+export const listCommons = (mine: boolean) =>
+  req<{ connected: boolean; me: string; digests: CommonsDigest[] }>(`/commons?mine=${mine}`);
+
+export const unpublishDigest = (digestId: string) =>
+  req<{ ok: boolean }>(`/commons/${encodeURIComponent(digestId)}`, { method: 'DELETE' });
+
+export const listWatching = () =>
+  req<{ sessions: WatchedSession[] }>('/watching').then((r) => r.sessions);
 
 export const deleteRun = (id: string) =>
   req<{ ok: boolean }>(`/runs/${encodeURIComponent(id)}`, { method: 'DELETE' });

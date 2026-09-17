@@ -49,10 +49,13 @@ def backend_origin() -> str:
     registered redirect URI works in dev (behind the Vite proxy), in prod, and under
     Tauri alike.
     """
-    port = os.environ.get("HORRIBLE_DEV_BACKEND_PORT") or os.environ.get(
-        "HORRIBLE_BACKEND_PORT", "8000"
-    )
-    return f"http://127.0.0.1:{port}"
+    from backend import server_port
+
+    # `HORRIBLE_BACKEND_PORT` is still honoured as an explicit pin — a registered
+    # redirect URI names a port, and whoever set it meant that one. Otherwise the
+    # port actually served on (see backend/server_port.py).
+    pinned = os.environ.get("HORRIBLE_BACKEND_PORT")
+    return f"http://127.0.0.1:{pinned or server_port.port()}"
 
 
 def redirect_uri(connector_id: str) -> str:

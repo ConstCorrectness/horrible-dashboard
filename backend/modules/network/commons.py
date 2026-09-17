@@ -77,6 +77,10 @@ class CommonsClient:
         self._ws: Any = None
         self._reader: asyncio.Task[None] | None = None
         self._subscribers: set[Any] = set()
+        #: Replies the node is waiting on, keyed `kind:id` — the index answers over
+        #: the same socket everything else rides, so a request that wants its answer
+        #: (a publish the pane will report on) parks a future here.
+        self._waiters: dict[str, asyncio.Future[dict[str, Any]]] = {}
 
     # ---- frontend fanout ----------------------------------------------------------
 
@@ -178,6 +182,58 @@ class CommonsClient:
 
     async def request_directory(self) -> None:
         await self._send({"type": "directory"})
+
+    # ---- trajectory digests -------------------------------------------------------
+
+    async def _ask(
+        self, key: str, message: dict[str, Any], timeout: float = 10.0
+    ) -> dict[str, Any]:
+        if self._ws is None or not self.connected:
+            raise ConnectionError("not connected to a commons index")
+        loop = asyncio.get_running_loop()
+        future = self._waiters[key] = loop.create_future()
+        try:
+            await self._send(message)
+            return await asyncio.wait_for(future, timeout)
+        finally:
+            self._waiters.pop(key, None)
+
+    async def publish_trajectory(self, digest: dict[str, Any]) -> dict[str, Any]:
+        """Send a signed digest and wait for the index's verdict.
+
+        Raises `ConnectionError` when there is no index, `RuntimeError` carrying the
+        index's reason when it refuses, `TimeoutError` when it does not answer.
+        """
+        reply = await self._ask(
+            f"publish:{digest.get('digest_id')}",
+            {"type": "publish_trajectory", "digest": digest},
+        )
+        if reply.get("type") == "error":
+            raise RuntimeError(str(reply.get("message") or "the index refused it"))
+        return reply
+
+    async def list_trajectories(
+        self, node_id: str = "", limit: int = 50
+    ) -> list[dict[str, Any]]:
+        reply = await self._ask(
+            "list",
+            {"type": "list_trajectories", "node_id": node_id, "limit": limit},
+        )
+        return list(reply.get("digests") or [])
+
+    async def unpublish_trajectory(self, digest_id: str) -> bool:
+        reply = await self._ask(
+            f"unpublish:{digest_id}",
+            {"type": "unpublish_trajectory", "digest_id": digest_id},
+        )
+        return bool(reply.get("ok"))
+
+    def _resolve(self, key: str, msg: dict[str, Any]) -> bool:
+        future = self._waiters.get(key)
+        if future is None or future.done():
+            return False
+        future.set_result(msg)
+        return True
 
     # ---- consent handshake --------------------------------------------------------
 
@@ -334,6 +390,12 @@ class CommonsClient:
             self._emit("candidates", {"results": self.results})
         elif mtype == "published":
             self._emit("state", self.snapshot())
+        elif mtype == "trajectory_published":
+            self._resolve(f"publish:{msg.get('digest_id')}", msg)
+        elif mtype == "trajectories":
+            self._resolve("list", msg)
+        elif mtype == "trajectory_unpublished":
+            self._resolve(f"unpublish:{msg.get('digest_id')}", msg)
         elif mtype == "connect_request":
             request = {
                 "request_id": msg.get("request_id"),
@@ -366,6 +428,10 @@ class CommonsClient:
                 },
             )
         elif mtype == "error":
+            # A refusal of a digest carries the id it refers to, and belongs to the
+            # route waiting on it rather than to a toast.
+            if msg.get("ref") and self._resolve(f"publish:{msg.get('ref')}", msg):
+                return
             self._emit("error", {"message": msg.get("message", "commons error")})
 
 

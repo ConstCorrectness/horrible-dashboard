@@ -143,6 +143,11 @@ def _run_summary(run: EvalRun, results: list[CaseResult]) -> dict[str, Any]:
         "model": run.model,
         "provider": run.provider,
         "startedAt": run.started_at,
+        "node": run.node,
+        # A friend's node ran it on its own agent and reported every verdict. Ranked,
+        # never silently pooled: the pane labels the row rather than leaving it to
+        # read as a measurement taken here.
+        "peerAttested": run.attestation == "peer",
         "attempted": attempted,
         "passed": passed,
         "errored": errored,
@@ -250,6 +255,10 @@ def _harness_verdict(base: EvalRun, other: EvalRun) -> dict[str, Any]:
     return {
         "unknown": not known,
         "differs": differs,
+        # Either side's harness was *reported* by a friend's node. Matching hashes
+        # then mean "they said the same thing", and neither hash covers model
+        # weights — so the banner says so instead of "same harness".
+        "peerAttested": "peer" in (base.attestation, other.attestation),
         "base": base.harness_hash,
         "other": other.harness_hash,
         # Only worth computing when they actually differ; a list of changes

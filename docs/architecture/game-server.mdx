@@ -159,6 +159,21 @@ default fallback so local play/tests need no OAuth — disable with `GAMES_ALLOW
 Google sign-in and node-key binding are later additions. Play-money chips only — no
 real-money stakes.
 
+The server is also the **username directory and peer relay** the friends layer
+depends on (see [social](../modules/social.mdx#adding-someone-anywhere-by-username)):
+
+| Route | Purpose |
+| --- | --- |
+| `POST /account/person` | Bind the signed-in account to a person key (bearer + person signature) |
+| `POST /directory/devices` | List a machine under its bound person, as a device certificate. No sign-in: the certificate must verify under the bound key |
+| `GET /directory/resolve` | `@handle` → person key and its machines (`devices`) |
+| `WS /relay-ws` | The peer relay broker (`backend/relay_broker.py`): challenge-signed registration, frames pinned to their sender, `undeliverable` for offline targets |
+| `GET /relay/health` | Relay client count |
+
+The broker is imported from `backend/relay_broker.py`, not from
+`backend.modules.network`, whose package init would pull the node's settings store
+into this process. A test asserts the game server never imports it.
+
 ## Ladder & persistence (done)
 
 Finished games are recorded to SQLite `game_server.db` by the referee's `on_result`

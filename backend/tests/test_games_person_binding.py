@@ -189,7 +189,15 @@ def test_resolve_returns_only_public_fields(db: None) -> None:
     store.bind_person("a1", crypto.fingerprint_person(public), public)
     entry = store.account_by_handle("Rob")  # case-insensitive
     assert entry is not None
-    assert set(entry) == {"handle", "display_name", "person_id", "person_public_key"}
+    assert set(entry) == {
+        "handle",
+        "display_name",
+        "person_id",
+        "person_public_key",
+        # Device certificates: node ids and keys, signed by the person key. Public
+        # by design (see test_games_person_devices.py), and published label-less.
+        "devices",
+    }
 
 
 def test_resolve_misses_are_none(db: None) -> None:

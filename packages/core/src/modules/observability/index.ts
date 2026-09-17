@@ -82,5 +82,29 @@ export const observabilityModule: ModuleManifest = {
       type: 'number',
       default: 16384,
     },
+    {
+      key: 'telemetry.retentionDays',
+      title: 'Keep agent I/O for (days)',
+      description:
+        "I/O that happened inside an agent turn is kept on disk so a finished run's wire traffic can still be read; everything else stays in the 500-event live ring and is forgotten. 0 disables the age limit.",
+      type: 'number',
+      default: 7,
+    },
+    {
+      key: 'telemetry.retentionEvents',
+      title: 'Keep at most this many agent I/O events',
+      description:
+        'Hard cap on the stored events, pruned oldest-first. A backstop under the age limit, so a single very busy day cannot fill the disk. 0 disables the cap.',
+      type: 'number',
+      default: 200000,
+    },
+    {
+      key: 'telemetry.persistBodies',
+      title: 'Store request and response bodies',
+      description:
+        'Off by default. Headers are stored with secret-shaped keys blanked, but a body is opaque text that redaction cannot help — it may hold credentials or your own prompts. Turning this on writes up to 4 KB of each body to disk; the live inspector shows full bodies either way.',
+      type: 'boolean',
+      default: false,
+    },
   ],
 };

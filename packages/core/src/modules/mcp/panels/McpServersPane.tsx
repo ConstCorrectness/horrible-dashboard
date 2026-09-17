@@ -15,6 +15,7 @@ import {
   type McpTransport,
 } from '../api';
 import { AuthorSection } from './AuthorSection';
+import { ActivitySection } from './ActivitySection';
 import { ExportSection } from './ExportSection';
 import { DiscoverSection } from './DiscoverSection';
 import { ServerInspector } from './ServerInspector';
@@ -337,6 +338,10 @@ export function McpServersPane() {
   // pane would mean a fourth opener for something you reach twice a year.
   if (section === 'export') {
     return <ExportSection />;
+  }
+
+  if (section === 'activity') {
+    return <ActivitySection />;
   }
 
   const ready = servers.filter((s) => s.state === 'ready').length;

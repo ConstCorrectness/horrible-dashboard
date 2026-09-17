@@ -10,12 +10,11 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import os
 import secrets
 import socket
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from backend.modules.settings.routes import get_value
 from backend import jsonstore, paths
@@ -176,10 +175,36 @@ def advertised_address() -> str:
     into every invite QR code, and a phone scanning `ws://localhost:…` dials
     itself. An explicit `network.advertisedAddress` setting still wins (needed
     for a public hostname or a port-forwarded box); blank means auto-detect.
+
+    The port is the one this backend is **actually** serving on
+    (`backend.server_port`), not `HORRIBLE_DEV_BACKEND_PORT` with a default of 8000:
+    only `pnpm dev` sets that variable, so a node started with a bare
+    `uvicorn --port 8100` used to advertise a closed port in every invite and
+    presence record.
     """
-    port = os.environ.get("HORRIBLE_DEV_BACKEND_PORT", "8000")
-    default = f"ws://{lan_ip() or 'localhost'}:{port}/peer-ws"
+    from backend import server_port
+
+    default = f"ws://{lan_ip() or 'localhost'}:{server_port.port()}/peer-ws"
     return str(get_value("network.advertisedAddress", "") or default)
+
+
+def admit(
+    node_id: str, token: str | None
+) -> tuple[Literal["trusted", "stranger"] | None, str | None]:
+    """How to admit a node that proved its identity: as a trusted peer, as a
+    stranger, or not at all. Returns `(admission, reason_if_rejected)`.
+
+    A node this node has no reason to trust is admitted as a **stranger** rather
+    than rejected, because that is how a friend request arrives: from someone who
+    found you by `@username` and has never paired with you. What a stranger may do
+    is decided by the hub's dispatch gate, not here. Blocked stays rejected.
+    """
+    ok, reason = evaluate(node_id, token)
+    if ok:
+        return "trusted", None
+    if reason == "pairing required":
+        return "stranger", None
+    return None, reason
 
 
 def evaluate(node_id: str, token: str | None) -> tuple[bool, str | None]:

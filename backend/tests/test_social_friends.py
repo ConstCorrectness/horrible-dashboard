@@ -174,17 +174,29 @@ class FakeHub:
 
     def __init__(self, connected: list[str] | None = None) -> None:
         self.peers = {n: object() for n in (connected or [])}
+        self.strangers: dict[str, object] = {}
         self.sent: list[tuple[str, str, dict[str, Any]]] = []
         self.handlers: dict[str, Any] = {}
+        self.stranger_types: set[str] = set()
+        #: `(node_id, trusted)` for every live trust change the roster asked for.
+        self.trust_changes: list[tuple[str, bool]] = []
 
     def register_handler(self, msg_type: str, handler: Any) -> None:
         self.handlers[msg_type] = handler
+
+    def allow_from_strangers(self, *msg_types: str) -> None:
+        self.stranger_types.update(msg_types)
+
+    def set_trusted(self, node_id: str, trusted: bool) -> None:
+        self.trust_changes.append((node_id, trusted))
 
     def subscribe(self, cb: Any) -> Any:
         return lambda: None
 
     async def send_to(self, node_id: str, msg_type: str, data: dict[str, Any]) -> None:
-        if node_id not in self.peers:
+        # The real hub's rule: a stranger may be sent only the types opened to it.
+        stranger_ok = node_id in self.strangers and msg_type in self.stranger_types
+        if node_id not in self.peers and not stranger_ok:
             raise KeyError(node_id)
         self.sent.append((node_id, msg_type, data))
 
@@ -252,6 +264,10 @@ def test_accepting_grants_fabric_trust_to_every_device(data_dir, hub, stranger):
         assert trust.is_trusted("their-laptop"), (
             "every device of a friend becomes trusted"
         )
+        # ...and live, not only on disk: the request arrived on a stranger's
+        # session, which must be upgraded in place.
+        assert ("their-node", True) in hub.trust_changes
+        assert ("their-laptop", True) in hub.trust_changes
 
     asyncio.run(go())
 
@@ -326,8 +342,41 @@ def test_removing_a_friend_revokes_trust(data_dir, hub, stranger):
 
         await roster.remove(stranger.person_id)
         assert not trust.is_trusted("their-node")
+        assert hub.trust_changes[-1] == ("their-node", False)
 
     asyncio.run(go())
+
+
+def test_accepting_answers_a_requester_connected_only_as_a_stranger(
+    data_dir, hub, stranger
+):
+    """Someone who found you by @username has never paired with you, so their
+    request arrives over a stranger's session. The accept used to look for them
+    among trusted peers only and found nobody to answer."""
+
+    async def go():
+        roster.register(hub)
+        hub.strangers["their-node"] = object()
+        cert = _peer_cert(stranger, "their-node")
+        await roster.handle_friend_request(
+            hub,
+            None,
+            PeerEnvelope(
+                type=roster.SOCIAL_FRIEND_REQUEST,
+                src="their-node",
+                data={"cert": cert, "display_name": "Stranger"},
+            ),
+        )
+        await roster.respond(stranger.person_id, accept=True)
+
+    asyncio.run(go())
+    assert (roster.SOCIAL_FRIEND_RESPONSE in hub.stranger_types) and (
+        roster.SOCIAL_FRIEND_REQUEST in hub.stranger_types
+    )
+    assert roster.SOCIAL_DEVICE_CERT not in hub.stranger_types
+    responses = [s for s in hub.sent if s[1] == roster.SOCIAL_FRIEND_RESPONSE]
+    assert responses and responses[0][0] == "their-node"
+    assert responses[0][2]["accept"] is True
 
 
 def test_cannot_friend_yourself(data_dir, hub):

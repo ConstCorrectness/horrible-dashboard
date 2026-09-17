@@ -504,13 +504,12 @@ def _own_api_endpoint() -> tuple[str, int] | None:
     so lending them is a matter of letting a lease holder reach this backend --
     through the tunnel only, never by binding another port.
     """
-    import os
+    from backend import server_port
 
-    try:
-        port = int(os.environ.get("HORRIBLE_DEV_BACKEND_PORT", "8000"))
-    except ValueError:
-        port = 8000
-    return "127.0.0.1", port
+    # The port actually served on, not the dev launcher's env var — a node started
+    # with a bare `uvicorn --port` would otherwise tunnel lease holders to a closed
+    # port (see backend/server_port.py).
+    return "127.0.0.1", server_port.port()
 
 
 def register(hub: PeerHub) -> None:

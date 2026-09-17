@@ -164,6 +164,8 @@ def test_two_runs_of_one_harness_agree(suite):
         "base": "abc123",
         "other": "abc123",
         "changes": [],
+        # Both measured here. A friend's reported harness would say so (evals/fabric.py).
+        "peerAttested": False,
     }
 
 

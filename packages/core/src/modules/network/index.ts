@@ -121,7 +121,7 @@ export const networkModule: ModuleManifest = {
       key: 'network.relayUrl',
       title: 'Relay URL',
       description:
-        'Rendezvous broker WebSocket URL for discovery / NAT traversal (blank = off). Takes effect on restart.',
+        "Relay broker WebSocket URL, how friends on other networks reach this node. Blank = the game server's relay (the default); 'off' disables relaying, leaving only direct and LAN connections. Takes effect on restart.",
       type: 'string',
       default: '',
       advanced: true,

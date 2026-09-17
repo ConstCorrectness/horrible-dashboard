@@ -70,6 +70,28 @@ def _schema_of(runtime: ServerRuntime, tool: str) -> dict[str, Any]:
     return {"type": "object", "properties": {}}
 
 
+async def _record_unreachable(server_id: str, tool: str, error: str) -> None:
+    import asyncio
+    import time
+
+    from backend.modules.mcp import calls
+    from backend.modules.telemetry import turn as telemetry_turn
+
+    mark = telemetry_turn.current()
+    await asyncio.to_thread(
+        calls.record,
+        server_id=server_id,
+        tool=tool,
+        started_at=time.time(),
+        duration_ms=0,
+        ok=False,
+        error_kind="transport",
+        error=error,
+        turn_id=mark[0] if mark else None,
+        round_no=mark[1] if mark else None,
+    )
+
+
 def _make_handler(server_id: str, tool: str):
     """A handler bound to one server+tool, resolved through the live manager.
 
@@ -82,7 +104,12 @@ def _make_handler(server_id: str, tool: str):
 
         session = manager.get(server_id)
         if session is None:
-            return {"error": f"MCP server '{server_id}' is not connected"}
+            out = {"error": f"MCP server '{server_id}' is not connected"}
+            # Recorded here because this branch never reaches `call_tool`, which is
+            # where every other outcome is written. Without it a server the model
+            # keeps reaching for after it was removed would read as idle.
+            await _record_unreachable(server_id, tool, out["error"])
+            return out
         return await session.call_tool(tool, args or {})
 
     return handler

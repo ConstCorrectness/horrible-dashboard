@@ -27,8 +27,8 @@ frontend `packages/core/src/modules/mcp/`.
 
 - **Panels** — `mcp.servers` ("MCP Servers", 🔌, `role: 'document'` + `dockable: 'left'` — four sections including an authoring surface do not fit a 280px rail, and `dockable` keeps the rail glyph for consulting one beside your work,
   singleton). Configuration you consult while working, not a document you work in.
-  Four **sections**: `servers` (<kbd>s</kbd>, default), `discover` (<kbd>d</kbd>),
-  `author` (<kbd>a</kbd>) and `export` (<kbd>x</kbd>).
+  Five **sections**: `servers` (<kbd>s</kbd>, default), `discover` (<kbd>d</kbd>),
+  `author` (<kbd>a</kbd>), `export` (<kbd>x</kbd>) and `activity` (<kbd>y</kbd>).
 - **Commands** — `mcp.openServers`, `mcp.addServer`, `mcp.discover`, `mcp.author`,
   `mcp.export`, `mcp.status`.
   `section.show:mcp.servers:discover` is synthesized by the registry; `mcp.discover`
@@ -38,8 +38,9 @@ frontend `packages/core/src/modules/mcp/`.
   rendered in the Export section beside the server it describes as well as in the
   generic settings page.
 
-One pane with four sections rather than four panes: finding a server, writing one,
-running one and *being* one are the same object at four moments. Discover hands its result straight to
+One pane with five sections rather than five panes: finding a server, writing one,
+running one, *being* one and reading what one has done are the same object at five
+moments. Discover hands its result straight to
 Servers, and a scaffolded project *becomes* an ordinary row in Servers the moment it is
 provisioned. Splitting them would mean three copies of the config shape and a hand-off
 across every pane boundary.
@@ -162,6 +163,77 @@ not an audit log, and tool arguments frequently carry the user's own text. It
 **survives a reconnect** — the handshake of the attempt that failed is usually what you
 came to read — but not a delete, or a later server reusing the id would inherit
 someone else's conversation.
+
+### Which agent turn a message belongs to
+
+Each wire message carries `turn_id` and `round`, so a transcript can be read against the
+agent turn that produced it. The two directions are stamped differently, and that is the
+whole design: **requests are sent from the task that made the call; responses are
+received on `ClientSession`'s own receive loop**, a long-lived task started when the
+session connected. The turn contextvar (`telemetry/turn.py`) is therefore correct on the
+send side and stale on the receive side — usually empty, occasionally the turn that was
+current at connect time.
+
+So outbound messages are stamped from the contextvar, and an inbound message inherits
+the stamp of the outbound request with the same JSON-RPC `id` **on the same connection**.
+Stamping both from the contextvar was tried as a mutation against the real fixture
+server, and it mis-attributes every response.
+
+### A message's identity is its connection plus its id
+
+JSON-RPC ids restart at every connect, and the ring deliberately survives reconnects, so
+id `4` names a different exchange on each connection. Every `WireMessage` and every call
+row therefore carries `session` — an id minted per connection in `McpSession._open` and
+passed to `transcript.tee` — and `Transcript.by_ids` takes it.
+
+This was found in the running app, not in review: after reconnecting the fixture server,
+an old call's wire came back with two later connections' id-4 exchanges appended. A time
+window was the first fix and it was not enough — a quick reconnect put two connections'
+id-4 calls one second apart. The connection is the exact disambiguator. A row with ids but
+no recorded session is reported as unavailable rather than guessed at, and the column was
+added with an explicit `ALTER` because `CREATE TABLE IF NOT EXISTS` leaves an existing
+table alone and `record` swallows the resulting insert errors.
+
+The same send-side property gives each call its exact request ids: `call_tool` opens a
+capture (`transcript.begin_capture`, a contextvar) and every id sent from its task lands
+in it. That stays exact when two calls run at once on one session, where scanning the
+ring for "ids sent since I started" would hand each call the other's.
+
+`WireMessageModel` declares both fields as well as `WireMessage.public()` — a
+`response_model` strips anything it does not name, so adding them in one place ships
+nothing and raises nothing.
+
+## Call summaries and the Activity section
+
+The transcript forgets; a dashboard cannot. `backend/modules/mcp/calls.py` writes one row
+per tool call to `mcp_calls` in `app.db` — server, tool, turn and round, start time,
+duration, outcome, request/response bytes, content-block count, the JSON-RPC ids and the
+connection they went out on —
+and **no arguments and no results**, for the reason the ring is small: they frequently
+carry the user's own text.
+
+- **Written from `McpSession.call_tool`**, the one path the agent bridge, the Servers
+  inspector's invoker and the conformance runner all share. Every exit writes a row,
+  including "not connected", and so does the bridge's early return when a server has no
+  session at all — a dashboard that counted only calls that got through would show a
+  broken server as a quiet one. The write is off the event loop (`asyncio.to_thread`)
+  and never raises into the call.
+- **Two kinds of failure.** `error_kind` is `tool` when the server answered with
+  `isError`, and `transport` when it never answered usefully — not connected, timed out,
+  or the session raised. Both reach the model as an `error` key and mean opposite things
+  to a human; the Activity section keeps them in separate columns.
+- **Latency is nearest-rank** (`calls.percentile`). An interpolated p95 of `[10, 3000]`
+  is a duration no call ever had.
+- **The dollar figure is for runs that used the server.** A turn's tokens are spent
+  reading all of its tool results together and cannot be split per tool. The
+  aggregate is named `cost_usd_of_runs_using_server`, reports `runs_priced` of
+  `runs_seen`, and is `null` rather than `0` when nothing was priced.
+- Capped at 50 000 rows, oldest pruned first. Context cost — what a server's schemas
+  cost the model before it is ever called — stays in the inspector (`/servers/{id}/cost`),
+  which needs a live session and a tokenizer.
+
+Trajectories pairs each MCP step with its row — see
+[trajectories](trajectories.mdx#mcp-steps).
 
 ## One server is one tool group
 
@@ -290,7 +362,9 @@ Mounted at `/api/mcp`:
 | `POST` | `/servers/{id}/disconnect` | Drop the session, keep the config |
 | `POST` | `/servers/{id}/resource` | Read one resource by URI |
 | `GET` | `/servers/{id}/cost` | Context cost + which agents have the group in scope (409 when not connected) |
-| `GET`/`DELETE` | `/servers/{id}/transcript` | The JSON-RPC wire, and clearing it |
+| `GET`/`DELETE` | `/servers/{id}/transcript` | The JSON-RPC wire, and clearing it; `?rpc_ids=a,b&session=…` narrows it to one call |
+| `GET` | `/calls` | Durable per-call summaries, by `turn_id` and/or `server_id` |
+| `GET` | `/activity` | Per-server and per-tool aggregates over `?days=` (default 7) |
 | `GET` | `/discover` | Registry search with the curated overlay in front |
 | `POST` | `/probe` | Connect a candidate once, report what it is, discard it |
 | `POST` | `/servers/{id}/call` | Invoke one tool by hand (409 when not connected) |

@@ -39,6 +39,8 @@ class RelayLink(PeerLink):
         self.address = f"relay:{peer_node_id}"
         self._inbox: asyncio.Queue[PeerEnvelope] = asyncio.Queue()
         self._closed = asyncio.Event()
+        #: Why the link closed, surfaced to whoever was dialing ("not on the relay").
+        self.close_reason = ""
 
     async def send(self, env: PeerEnvelope) -> None:
         # Stamp the routing dst so the broker can forward (excluded from the sig).
@@ -61,7 +63,7 @@ class RelayLink(PeerLink):
             task.cancel()
         if getter in done:
             return getter.result()
-        raise LinkClosed
+        raise LinkClosed(self.close_reason or "relay link closed")
 
     async def close(self) -> None:
         self._closed.set()
@@ -72,36 +74,63 @@ class RelayLink(PeerLink):
 
 
 class RelayTransport(Transport):
+    """One authenticated, self-healing connection to a relay broker.
+
+    `start` never blocks on the broker and never raises: it launches a supervisor
+    that connects, proves this node's identity, pumps frames, and reconnects with
+    backoff when the connection drops. This is the default transport off the LAN now
+    (the broker is hosted by the game server), so a broker restart must not take the
+    node's reachability with it, and a broker that is down at boot must not stop the
+    rest of the fabric from starting.
+    """
+
     name = "relay"
+
+    #: Reconnect backoff, doubling from the first value up to the second.
+    BACKOFF_S = (1.0, 60.0)
+    #: A relayed frame can be as large as anything a direct link carries. The
+    #: `websockets` default of 1 MiB would close the *shared* connection — every
+    #: relayed friend at once — on one large message.
+    MAX_FRAME = 16 * 1024 * 1024
 
     def __init__(self, url: str) -> None:
         self._url = url
         self._ws: Any = None
         self._hub: PeerHub | None = None
         self._links: dict[str, RelayLink] = {}
-        self._reader: asyncio.Task[None] | None = None
+        self._supervisor: asyncio.Task[None] | None = None
+        self.registered = asyncio.Event()
+
+    @property
+    def url(self) -> str:
+        return self._url
 
     async def start(self, hub: PeerHub) -> None:
         self._hub = hub
-        self._ws = await ws_connect(self._url)
-        await self._ws.send(json.dumps({"register": hub.signer.node_id}))
-        self._reader = asyncio.ensure_future(self._read_loop())
-        logger.info("relay transport connected to %s", self._url)
+        if self._supervisor is None or self._supervisor.done():
+            self._supervisor = asyncio.create_task(self._supervise())
 
     async def stop(self) -> None:
-        if self._reader is not None:
-            self._reader.cancel()
-        if self._ws is not None:
-            await self._ws.close()
+        if self._supervisor is not None:
+            self._supervisor.cancel()
+            try:
+                await self._supervisor
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+            self._supervisor = None
+        await self._close_ws()
 
     async def dial(self, address: str) -> PeerLink:
-        # For relay, `address` is the target peer's node_id.
-        link = RelayLink(self, address)
-        self._links[address] = link
+        """`address` is the target's node id (a `relay:` prefix is accepted)."""
+        node_id = address.removeprefix("relay:")
+        if not self.registered.is_set():
+            raise LinkClosed("not connected to the relay")
+        link = RelayLink(self, node_id)
+        self._links[node_id] = link
         return link
 
     async def _send_raw(self, raw: str) -> None:
-        if self._ws is None:
+        if self._ws is None or not self.registered.is_set():
             raise LinkClosed
         try:
             await self._ws.send(raw)
@@ -110,6 +139,60 @@ class RelayTransport(Transport):
 
     def _drop_link(self, node_id: str) -> None:
         self._links.pop(node_id, None)
+
+    async def _close_ws(self) -> None:
+        self.registered.clear()
+        ws, self._ws = self._ws, None
+        if ws is not None:
+            try:
+                await ws.close()
+            except Exception:  # noqa: BLE001
+                pass
+        # Every relayed link rode this connection; none of them survive it.
+        for link in list(self._links.values()):
+            link._closed.set()
+        self._links.clear()
+
+    async def _supervise(self) -> None:
+        delay = self.BACKOFF_S[0]
+        while True:
+            try:
+                await self._connect_and_pump()
+                delay = self.BACKOFF_S[0]
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.info("relay %s unavailable: %s", self._url, exc)
+            finally:
+                await self._close_ws()
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, self.BACKOFF_S[1])
+
+    async def _connect_and_pump(self) -> None:
+        from backend.modules.network.relay_broker import challenge_bytes
+
+        assert self._hub is not None
+        self._ws = await ws_connect(self._url, max_size=self.MAX_FRAME)
+        first = json.loads(await asyncio.wait_for(self._ws.recv(), 15))
+        challenge = first.get("challenge") if isinstance(first, dict) else None
+        if not isinstance(challenge, str):
+            raise ConnectionError("relay sent no challenge")
+        signer = self._hub.signer
+        await self._ws.send(
+            json.dumps(
+                {
+                    "register": signer.node_id,
+                    "public_key": signer.public_key,
+                    "sig": signer.sign(challenge_bytes(challenge)),
+                }
+            )
+        )
+        ack = json.loads(await asyncio.wait_for(self._ws.recv(), 15))
+        if not isinstance(ack, dict) or ack.get("registered") != signer.node_id:
+            raise ConnectionError(f"relay refused registration: {ack}")
+        self.registered.set()
+        logger.info("relay transport registered at %s", self._url)
+        await self._read_loop()
 
     async def _read_loop(self) -> None:
         assert self._hub is not None
@@ -120,7 +203,8 @@ class RelayTransport(Transport):
                 try:
                     env = protocol.decode(text)
                 except Exception:
-                    continue  # broker control frames (e.g. registration ack)
+                    self._control(text)
+                    continue
                 link = self._links.get(env.src)
                 if link is None:
                     # First contact from a new peer: spin up a virtual link and run
@@ -133,5 +217,18 @@ class RelayTransport(Transport):
                     link._deliver(env)
         except (ConnectionClosed, LinkClosed):
             pass
-        except Exception:
-            logger.exception("relay read loop failed")
+
+    def _control(self, text: str) -> None:
+        """A broker frame that is not an envelope."""
+        try:
+            msg = json.loads(text)
+        except ValueError:
+            return
+        dst = msg.get("undeliverable") if isinstance(msg, dict) else None
+        if isinstance(dst, str):
+            # The node is not on the relay. Fail its link now, so a dial surfaces
+            # "offline" at once rather than after the handshake timeout.
+            link = self._links.pop(dst, None)
+            if link is not None:
+                link.close_reason = f"{dst} is not online (not connected to the relay)"
+                link._closed.set()

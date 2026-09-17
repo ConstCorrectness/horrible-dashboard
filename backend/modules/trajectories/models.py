@@ -122,6 +122,13 @@ class TrajectoryStep(BaseModel):
     gated: bool = False
     error: str | None = None
     ts: float = 0.0
+    #: Explicit parent step, for sources whose traces are genuinely nested (a
+    #: LangGraph subgraph, a Pydantic AI tool group). `None` -- which is every step
+    #: this node records -- means "derive the nesting from `round`", and that
+    #: derivation is complete for a local run because the orchestrator executes a
+    #: round's tool calls strictly in sequence. Nesting *between runs* is
+    #: `TrajectoryRun.parent_run_id` and is a different thing: that is delegation.
+    parent_seq: int | None = None
 
 
 class TrajectoryLabel(BaseModel):
@@ -204,6 +211,10 @@ class Dataset(BaseModel):
     description: str = ""
     source_kind: TrajectorySource = "local"
     capture: bool = False
+    #: Friends may list, pull and live-watch this dataset's runs. Off by default, and
+    #: impossible for a `peer` dataset: runs a friend shared with *you* are not yours
+    #: to hand on to your other friends. See `store.SharingRefused`.
+    shared: bool = False
     tags: list[str] = []
     schema_version: int = 1
     created_at: float = 0.0
@@ -226,6 +237,7 @@ class UpdateDataset(BaseModel):
     name: str | None = None
     description: str | None = None
     capture: bool | None = None
+    shared: bool | None = None
     tags: list[str] | None = None
 
 
@@ -247,6 +259,13 @@ class StepWrite(BaseModel):
     gated: bool = False
     error: str | None = None
     ts: float | None = None
+    #: Explicit parent step, for sources whose traces are genuinely nested (a
+    #: LangGraph subgraph, a Pydantic AI tool group). `None` -- which is every step
+    #: this node records -- means "derive the nesting from `round`", and that
+    #: derivation is complete for a local run because the orchestrator executes a
+    #: round's tool calls strictly in sequence. Nesting *between runs* is
+    #: `TrajectoryRun.parent_run_id` and is a different thing: that is delegation.
+    parent_seq: int | None = None
 
 
 class HarnessWrite(BaseModel):

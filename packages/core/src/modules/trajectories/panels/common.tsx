@@ -49,7 +49,28 @@ export function ms(value: number | null | undefined): string {
 
 export function usd(value: number | null | undefined): string | null {
   if (value == null) return null;
+  // Zero and "too small to show" are different facts and must not share a label:
+  // a local model costs nothing, and rendering that as `<$0.01` reads as "it cost
+  // a little". `null` stays null — nobody measured — and the caller renders nothing.
+  if (value === 0) return 'free';
   return value < 0.01 ? `<$0.01` : `$${value.toFixed(2)}`;
+}
+
+/**
+ * The token line for a run, or null when no provider ever reported one.
+ *
+ * Each half is rendered independently: `?? 0` would print a measured-looking `0↓`
+ * for a provider that reported only completion tokens, which is the same
+ * absent-means-zero mistake `usd` used to make one column over.
+ */
+export function tokens(
+  inTokens: number | null | undefined,
+  outTokens: number | null | undefined,
+): string | null {
+  if (inTokens == null && outTokens == null) return null;
+  const half = (value: number | null | undefined, arrow: string) =>
+    value == null ? `—${arrow}` : `${value.toLocaleString()}${arrow}`;
+  return `${half(inTokens, '↓')} ${half(outTokens, '↑')} tok`;
 }
 
 export function ago(seconds: number): string {

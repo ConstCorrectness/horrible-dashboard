@@ -311,12 +311,110 @@ class ProviderStreamError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class Usage:
+    """What one round actually consumed, as the provider reported it.
+
+    Every field is nullable and nullable means *nobody said* — never zero. A round
+    whose provider reports nothing and a round that genuinely used no tokens are
+    different facts, and averaging the first into a total as though it were the
+    second is how a cost readout becomes confidently wrong.
+
+    `cost_usd` is set here **only when the provider priced the call itself**
+    (litellm does). A price looked up from our own table is applied later, in
+    `agent/cost.py`, so that "the vendor billed this" and "we estimated this from a
+    table that may be months stale" never get conflated at the point of display.
+    """
+
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+    #: Prompt tokens served from the provider's cache. A subset of `tokens_in`, not
+    #: an addition to it — billed at a lower rate where it is billed at all.
+    cached_in: int | None = None
+    cost_usd: float | None = None
+
+    def is_empty(self) -> bool:
+        return (
+            self.tokens_in is None and self.tokens_out is None and self.cost_usd is None
+        )
+
+
+def _int_or_none(value: Any) -> int | None:
+    """A token count, or None when the provider omitted it or sent nonsense.
+
+    Deliberately not `int(value or 0)`: that turns "absent" into a confident zero.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _usage_from_openai(raw: Any) -> Usage:
+    """Usage from an OpenAI-dialect `usage` block (also litellm's shape)."""
+    if not isinstance(raw, dict):
+        # litellm returns an object, not a dict. Ask it for the same fields.
+        raw = {
+            "prompt_tokens": getattr(raw, "prompt_tokens", None),
+            "completion_tokens": getattr(raw, "completion_tokens", None),
+            "prompt_tokens_details": getattr(raw, "prompt_tokens_details", None),
+        }
+    details = raw.get("prompt_tokens_details")
+    cached = None
+    if isinstance(details, dict):
+        cached = _int_or_none(details.get("cached_tokens"))
+    elif details is not None:
+        cached = _int_or_none(getattr(details, "cached_tokens", None))
+    return Usage(
+        tokens_in=_int_or_none(raw.get("prompt_tokens")),
+        tokens_out=_int_or_none(raw.get("completion_tokens")),
+        cached_in=cached,
+    )
+
+
+def _litellm_usage(response: Any) -> Usage:
+    """Usage from a litellm response, including the cost litellm computed itself.
+
+    litellm prices the call against its own model table and hangs the result on
+    `_hidden_params["response_cost"]`. That figure is worth strictly more than
+    anything we can look up: it came from the library that made the request, knows
+    which model actually served it, and is updated with the package. We only fall
+    back to our own table when it is absent.
+    """
+    usage = _usage_from_openai(getattr(response, "usage", None))
+    cost = None
+    hidden = getattr(response, "_hidden_params", None)
+    if isinstance(hidden, dict):
+        raw = hidden.get("response_cost")
+        if raw is not None:
+            try:
+                cost = float(raw)
+            except (TypeError, ValueError):
+                cost = None
+    if cost is None:
+        return usage
+    return Usage(usage.tokens_in, usage.tokens_out, usage.cached_in, cost)
+
+
+def _usage_from_ollama(obj: dict[str, Any]) -> Usage:
+    """Usage from Ollama's terminal (`done: true`) chunk."""
+    return Usage(
+        tokens_in=_int_or_none(obj.get("prompt_eval_count")),
+        tokens_out=_int_or_none(obj.get("eval_count")),
+    )
+
+
+@dataclass(frozen=True)
 class ChatResult:
     """One assistant turn, normalized across dialects."""
 
     assistant_message: dict[str, Any]  # appended verbatim to the running messages
     tool_calls: list[ToolCall]
     content: str
+    #: What the round consumed, when the provider said. Defaulted so the six existing
+    #: construction sites keep working unchanged.
+    usage: Usage | None = None
 
 
 def _coerce_args(raw: Any) -> tuple[dict[str, Any], str | None]:
@@ -603,6 +701,7 @@ async def chat(
             assistant_message=msg_dict,
             tool_calls=_parse_tool_calls(msg_dict.get("tool_calls") or []),
             content=msg_dict.get("content") or "",
+            usage=_litellm_usage(response),
         )
 
     if info.dialect == "ollama":
@@ -626,7 +725,9 @@ async def chat(
             json=payload,
         )
         res.raise_for_status()
-        msg = res.json().get("message", {})
+        body = res.json()
+        msg = body.get("message", {})
+        usage = _usage_from_ollama(body)
     else:
         payload = {
             "model": model,
@@ -653,12 +754,15 @@ async def chat(
             headers=auth_headers(info),
         )
         res.raise_for_status()
-        choices = res.json().get("choices") or [{}]
+        body = res.json()
+        choices = body.get("choices") or [{}]
         msg = choices[0].get("message", {})
+        usage = _usage_from_openai(body.get("usage"))
     return ChatResult(
         assistant_message=msg,
         tool_calls=_parse_tool_calls(msg.get("tool_calls") or []),
         content=msg.get("content") or "",
+        usage=usage,
     )
 
 
@@ -861,6 +965,7 @@ async def _ollama_chat_stream(
         logger.info(f"Ollama Request Payload: {json.dumps(payload)}")
         extractor = ThinkingExtractor(on_delta)
         tool_calls_raw: list[dict[str, Any]] = []
+        usage = Usage()
         async with client.stream("POST", url, json=payload) as res:
             logger.info(f"Ollama Response Status: {res.status_code}")
             if res.status_code >= 400:
@@ -884,6 +989,9 @@ async def _ollama_chat_stream(
                     # Ollama emits the (accumulated) tool_calls in a chunk; take latest.
                     tool_calls_raw = msg["tool_calls"]
                 if obj.get("done"):
+                    # The terminal chunk carries `prompt_eval_count`/`eval_count`.
+                    # It was already in scope and the `break` threw it away.
+                    usage = _usage_from_ollama(obj)
                     break
         reasoning, full = await extractor.flush()
         assistant: dict[str, Any] = {"role": "assistant", "content": full}
@@ -891,7 +999,7 @@ async def _ollama_chat_stream(
             assistant["reasoning_content"] = reasoning
         if tool_calls_raw:
             assistant["tool_calls"] = tool_calls_raw
-        return ChatResult(assistant, _parse_tool_calls(tool_calls_raw), full)
+        return ChatResult(assistant, _parse_tool_calls(tool_calls_raw), full, usage)
 
     try:
         return await run(think=True)
@@ -901,6 +1009,20 @@ async def _ollama_chat_stream(
         if exc.response is not None and exc.response.status_code == 400:
             return await run(think=False)
         raise
+
+
+#: Endpoints that answered 400 to `stream_options`. Remembered per process so the
+#: probe costs one failed request per server, not one per turn. Never persisted: a
+#: server upgraded under us should get another chance on the next restart.
+_NO_STREAM_USAGE: set[str] = set()
+
+
+def _wants_stream_usage(url: str) -> bool:
+    return url not in _NO_STREAM_USAGE
+
+
+def _disable_stream_usage(url: str) -> None:
+    _NO_STREAM_USAGE.add(url)
 
 
 async def _openai_chat_stream(
@@ -933,10 +1055,38 @@ async def _openai_chat_stream(
         payload["max_tokens"] = max_tokens
     if top_p is not None:
         payload["top_p"] = top_p
+    # A streamed OpenAI-dialect response carries **no usage block at all** unless it
+    # is asked for. Without this the parsing below is dead code that returns None
+    # forever, and the obvious conclusion — "this provider doesn't report usage" —
+    # is wrong. Not every local server accepts the field, so `_wants_stream_usage`
+    # remembers the ones that rejected it.
+    if _wants_stream_usage(url):
+        payload["stream_options"] = {"include_usage": True}
     extractor = ThinkingExtractor(on_delta)
+    usage = Usage()
     # OpenAI streams tool calls as partial deltas keyed by index; assemble them.
     tool_acc: dict[int, dict[str, Any]] = {}
     async with client.stream("POST", url, json=payload, headers=headers or None) as res:
+        if res.status_code == 400 and "stream_options" in payload:
+            # An older or stricter server rejecting the unknown field. Remember it
+            # and retry plainly, the same shape as the `think=True` retry above —
+            # one 400 per endpoint per process, not one per turn.
+            await res.aread()
+            _disable_stream_usage(url)
+            payload.pop("stream_options", None)
+            return await _openai_chat_stream(
+                client,
+                endpoint,
+                model,
+                messages,
+                tools,
+                on_delta,
+                temperature,
+                tool_choice,
+                max_tokens,
+                top_p,
+                headers,
+            )
         res.raise_for_status()
         async for line in tee_stream(res, res.aiter_lines()):
             if not line or not line.startswith("data:"):
@@ -964,6 +1114,10 @@ async def _openai_chat_stream(
                     detail.get("message") if isinstance(detail, dict) else str(detail)
                 ) or "the provider reported an error mid-stream"
                 raise ProviderStreamError(message)
+            # The usage frame arrives with an empty `choices` list, so it has to be
+            # read before the `or [{}]` below quietly turns it into a blank choice.
+            if frame.get("usage"):
+                usage = _usage_from_openai(frame["usage"])
             choice = (frame.get("choices") or [{}])[0]
             delta = choice.get("delta") or {}
             # DeepSeek/vLLM reasoning parsers use `reasoning_content`; some use `reasoning`.
@@ -1002,7 +1156,7 @@ async def _openai_chat_stream(
             }
             for i, s in enumerate(ordered)
         ]
-    return ChatResult(assistant, tool_calls, full)
+    return ChatResult(assistant, tool_calls, full, usage)
 
 
 async def _litellm_chat_stream(
@@ -1033,12 +1187,28 @@ async def _litellm_chat_stream(
 
     extractor = ThinkingExtractor(on_delta)
     tool_acc: dict[int, dict[str, Any]] = {}
+    usage = Usage()
 
     response = await litellm.acompletion(
-        model=qualify_model(info, model), messages=messages, stream=True, **kwargs
+        model=qualify_model(info, model),
+        messages=messages,
+        stream=True,
+        # Same requirement as the raw OpenAI path: no usage is emitted unless asked.
+        # litellm normalizes this across vendors, so there is no per-endpoint retry
+        # to do here.
+        stream_options={"include_usage": True},
+        **kwargs,
     )
 
     async for chunk in response:
+        # The final chunk carries usage and may have no choices at all.
+        chunk_usage = getattr(chunk, "usage", None)
+        if chunk_usage is not None:
+            merged = _usage_from_openai(chunk_usage)
+            if not merged.is_empty():
+                usage = merged
+        if not getattr(chunk, "choices", None):
+            continue
         delta = chunk.choices[0].delta
         if not delta:
             continue
@@ -1084,7 +1254,9 @@ async def _litellm_chat_stream(
             }
             for i, s in enumerate(ordered)
         ]
-    return ChatResult(assistant, tool_calls, full)
+    # A streamed call has no `_hidden_params`, so litellm computes no cost for it.
+    # Ours is looked up from the price table instead — see `agent/cost.py`.
+    return ChatResult(assistant, tool_calls, full, usage)
 
 
 def tool_result_message(

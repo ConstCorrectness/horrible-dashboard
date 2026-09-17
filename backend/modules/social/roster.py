@@ -20,6 +20,7 @@ step. Removing or blocking a friend revokes it again.
 from __future__ import annotations
 
 import asyncio
+import time
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -151,16 +152,24 @@ def snapshot() -> RosterSnapshot:
 
 
 def _grant_trust(person_id: str) -> None:
-    """Mark every known device of `person_id` as a trusted peer."""
+    """Mark every known device of `person_id` as a trusted peer — stored **and** live.
+
+    Stored alone used to be enough, because a session only ever existed with a
+    trusted peer. Now a friend request travels over a stranger's session, so the
+    session the friendship was accepted on has to be upgraded in place, or the new
+    friend stays a stranger until one of you reconnects.
+    """
     for device in store.list_devices(person_id):
         trust.save_known_peer(
             device["node_id"], {"trusted": True, "via": "friend", "blocked": False}
         )
+        peer_hub.set_trusted(device["node_id"], True)
 
 
 def _revoke_trust(person_id: str, *, blocked: bool = False) -> None:
     for device in store.list_devices(person_id):
         trust.save_known_peer(device["node_id"], {"trusted": False, "blocked": blocked})
+        peer_hub.set_trusted(device["node_id"], False)
 
 
 def _on_accepted(person_id: str) -> None:
@@ -267,12 +276,41 @@ def _accept_cert(env: PeerEnvelope, cert: Any, display_name: str) -> str | None:
     return person_id
 
 
+def dialable_address(session: Any) -> str | None:
+    """An address this session can be dialed back on later, or None.
+
+    A relay address (`relay:<node_id>`) names the node, not a place, so it stays
+    valid wherever the friend goes. A direct address is dialable only when *we*
+    dialed it (a `ws://…/peer-ws` URL); an inbound socket reports the far end's
+    ephemeral port, which nobody can dial.
+    """
+    info = getattr(session, "info", None)
+    address = str(getattr(info, "address", "") or "")
+    if address.startswith("relay:"):
+        return address
+    if address.startswith(("ws://", "wss://")) and address.endswith("/peer-ws"):
+        return address
+    return None
+
+
 async def handle_hello(hub: PeerHub, session: PeerSession, env: PeerEnvelope) -> None:
     person_id = _accept_cert(
         env, env.data.get("cert"), str(env.data.get("display_name", ""))
     )
     if person_id is None:
         return
+    # Remember how this machine was reached, so reconnecting does not depend on the
+    # presence directory being up. Nothing recorded a friend's address before, and
+    # the reconnect after a restart had only Atlas to go on.
+    address = dialable_address(session)
+    if address is not None and store.get_friend_row(person_id) is not None:
+        store.upsert_device(
+            node_id=env.src,
+            person_id=person_id,
+            node_public_key=str((env.data.get("cert") or {}).get("node_public_key", "")),
+            label=str((env.data.get("cert") or {}).get("label") or env.src),
+            address=address,
+        )
     # A device of an existing friend just came online — re-grant trust so a machine
     # added to their account after we friended them is reachable too.
     row = store.get_friend_row(person_id)
@@ -375,7 +413,7 @@ async def handle_device_cert(
 
 async def _send_response(person_id: str, accept: bool) -> None:
     payload = {**_hello_payload(), "accept": accept}
-    for node_id in reachable_nodes(person_id):
+    for node_id in reachable_nodes(person_id, include_strangers=True):
         try:
             await peer_hub.send_to(node_id, SOCIAL_FRIEND_RESPONSE, payload)
             return
@@ -383,9 +421,105 @@ async def _send_response(person_id: str, accept: bool) -> None:
             continue
 
 
-def reachable_nodes(person_id: str) -> list[str]:
-    """That person's devices which currently have a live session, connected first."""
+#: How often the reconnect loop looks for friends without a live session.
+RECONNECT_CHECK_S = 60.0
+#: Per-person backoff after a failed dial, doubling up to the cap. A friend who is
+#: simply offline would otherwise be dialed — relay and all — every minute forever.
+RECONNECT_BACKOFF_S = (60.0, 30 * 60.0)
+#: Friends dialed per round, so a large roster cannot stall the loop.
+RECONNECT_BATCH = 20
+
+_reconnect_task: asyncio.Task[None] | None = None
+#: person_id -> (next attempt, current backoff).
+_reconnect_backoff: dict[str, tuple[float, float]] = {}
+
+
+async def reconnect_round(now: float | None = None) -> list[str]:
+    """Dial the friends that have no live session and are due. Returns who connected.
+
+    Nothing used to reconnect friends at all: a session existed only while both
+    nodes stayed up, and after any restart the roster showed everyone offline until
+    someone pressed connect by hand. A **pending** request is retried the same way
+    and resent on connection — `add_friend` has always promised that ("retried the
+    next time one of their machines connects"), and nothing did it.
+    """
+    now = time.monotonic() if now is None else now
+    connected: list[str] = []
+    rows = [
+        r
+        for r in store.list_friends()
+        if r.status in ("accepted", "pending_out") and not r.is_self
+    ]
+    due = [
+        r
+        for r in rows
+        if not reachable_nodes(r.person_id, include_strangers=True)
+        and _reconnect_backoff.get(r.person_id, (0.0, 0.0))[0] <= now
+    ][:RECONNECT_BATCH]
+    for row in due:
+        person_id = row.person_id
+        try:
+            node_id = await _dial(person_id, None)
+        except Exception:  # noqa: BLE001 - one friend must not stop the round
+            logger.debug("reconnect to %s failed", person_id, exc_info=True)
+            node_id = None
+        if node_id is None:
+            _, backoff = _reconnect_backoff.get(person_id, (0.0, 0.0))
+            backoff = min(
+                max(backoff * 2, RECONNECT_BACKOFF_S[0]), RECONNECT_BACKOFF_S[1]
+            )
+            _reconnect_backoff[person_id] = (now + backoff, backoff)
+            continue
+        _reconnect_backoff.pop(person_id, None)
+        connected.append(person_id)
+        if row.status == "pending_out":
+            try:
+                await peer_hub.send_to(node_id, SOCIAL_FRIEND_REQUEST, _hello_payload())
+            except Exception:  # noqa: BLE001
+                logger.debug("resending friend request to %s failed", person_id)
+    if connected:
+        broadcast_roster()
+    return connected
+
+
+async def _reconnect_loop() -> None:
+    while True:
+        await asyncio.sleep(RECONNECT_CHECK_S)
+        try:
+            await reconnect_round()
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - the loop must outlive a bad round
+            logger.debug("friend reconnect round failed", exc_info=True)
+
+
+def start_reconnect() -> None:
+    global _reconnect_task
+    if _reconnect_task is None or _reconnect_task.done():
+        _reconnect_task = asyncio.create_task(_reconnect_loop())
+
+
+async def stop_reconnect() -> None:
+    global _reconnect_task
+    task, _reconnect_task = _reconnect_task, None
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except (asyncio.CancelledError, Exception):  # noqa: BLE001
+        pass
+
+
+def reachable_nodes(person_id: str, *, include_strangers: bool = False) -> list[str]:
+    """That person's devices which currently have a live session, connected first.
+
+    `include_strangers` is for the friend handshake only: a request and its answer
+    travel over a session that is not trusted yet, and nothing else may.
+    """
     online = online_nodes()
+    if include_strangers:
+        online |= set(peer_hub.strangers)
     devices = [d["node_id"] for d in store.list_devices(person_id)]
     return [n for n in devices if n in online]
 
@@ -415,6 +549,19 @@ async def resolve_target(who: str) -> tuple[str | None, str | None]:
         entry = await handles.resolve(who)
         if entry is None:
             return None, f"no such username: {who}"
+        # Remember their machines, reachable through the relay wherever they are.
+        # This is what makes a username enough on its own: without it, finding the
+        # machine behind a person needed the Atlas presence directory, which an
+        # ordinary install has no credentials for.
+        for cert in handles.verified_devices(entry):
+            store.upsert_device(
+                node_id=str(cert["node_id"]),
+                person_id=str(entry["person_id"]),
+                node_public_key=str(cert["node_public_key"]),
+                label=str(cert.get("label") or cert["node_id"]),
+                cert=cert,
+                address=f"relay:{cert['node_id']}",
+            )
         # First sighting of this person — record the name the directory gave, so the
         # roster row is not just a 16-character id while the request is pending.
         return str(entry["person_id"]), None
@@ -427,16 +574,24 @@ async def resolve_target(who: str) -> tuple[str | None, str | None]:
 # ---- browser-driven operations ----------------------------------------------------
 
 
+#: How long the direct candidates get, together, before the relay is tried. Direct
+#: is an optimization — the same LAN, a tailnet — not the path: an address from
+#: someone else's network usually just times out, and waiting the full handshake
+#: timeout on each of five before trying the relay made adding a friend feel broken.
+DIRECT_DIAL_BUDGET_S = 4.0
+
+
 async def _dial(person_id: str, address: str | None) -> str | None:
     """Get a live session to one of `person_id`'s machines, dialing if needed.
 
-    Tries, in order: a session we already have, the caller-supplied address, the
-    last address each known device answered on, and finally the Atlas presence
-    directory. The directory goes last on purpose — a LAN address we already know
-    is both faster and more likely to work than a published one, and this ordering
-    means the whole flow still works with Atlas unconfigured or down.
+    A session we already have wins. Otherwise every **direct** candidate — the
+    address the caller typed, each device's last good address, the addresses in
+    their presence record — is tried at once for `DIRECT_DIAL_BUDGET_S`, and the
+    first handshake to finish wins. Only then the **relay** candidates, which reach
+    a node wherever it is. Directory lookups stay best-effort: with Atlas down the
+    known addresses still work.
     """
-    reachable = reachable_nodes(person_id)
+    reachable = reachable_nodes(person_id, include_strangers=True)
     if reachable:
         return reachable[0]
     candidates = [address] if address else []
@@ -444,12 +599,47 @@ async def _dial(person_id: str, address: str | None) -> str | None:
         d["last_address"] for d in store.list_devices(person_id) if d["last_address"]
     ]
     candidates += await directory.lookup(person_id)
-    for candidate in candidates:
+    candidates = list(dict.fromkeys(c for c in candidates if c))
+    direct = [c for c in candidates if not c.startswith("relay:")]
+    relayed = [c for c in candidates if c.startswith("relay:")]
+
+    node_id = await _first_direct(direct)
+    if node_id is not None:
+        return node_id
+    if relayed and not any(t.name == "relay" for t in peer_hub.transports):
+        logger.info("social dial: %s is only reachable by relay, and it is off", person_id)
+    for candidate in relayed:
         try:
-            info = await peer_hub.connect(candidate, "direct")
+            info = await peer_hub.connect(candidate, "relay")
             return info.node_id
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.info("social dial %s failed: %s", candidate, exc)
+    return None
+
+
+async def _first_direct(candidates: list[str]) -> str | None:
+    """Race the direct candidates; the first completed handshake wins."""
+    if not candidates:
+        return None
+    tasks = [
+        asyncio.ensure_future(
+            peer_hub.connect(c, "direct", timeout=DIRECT_DIAL_BUDGET_S)
+        )
+        for c in candidates
+    ]
+    try:
+        for next_done in asyncio.as_completed(tasks, timeout=DIRECT_DIAL_BUDGET_S):
+            try:
+                info = await next_done
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("social direct dial failed: %s", exc)
+                continue
+            return info.node_id
+    except TimeoutError:
+        pass
+    finally:
+        for task in tasks:
+            task.cancel()
     return None
 
 
@@ -555,6 +745,13 @@ async def link_device(
 
 def _on_peer_event(event: str, data: dict[str, Any]) -> None:
     """Greet peers as they connect, and keep presence in the panel live."""
+    if event == "stranger_connected":
+        # Greet strangers too: the hello carries our certificate, which is how their
+        # node learns we are a friend's machine and upgrades the session.
+        node_id = str(data.get("node_id") or "")
+        if node_id:
+            asyncio.ensure_future(say_hello(node_id))
+        return
     if event != "peer_update":
         return
     peer = data.get("peer") or {}
@@ -571,6 +768,11 @@ def register(hub: PeerHub) -> None:
     hub.register_handler(SOCIAL_FRIEND_REQUEST, handle_friend_request)
     hub.register_handler(SOCIAL_FRIEND_RESPONSE, handle_friend_response)
     hub.register_handler(SOCIAL_DEVICE_CERT, handle_device_cert)
+    # The friend handshake is the one conversation a stranger may have: each of these
+    # verifies a device certificate before believing anything, and trust is granted
+    # only when a person accepts. `SOCIAL_DEVICE_CERT` is deliberately NOT here — it
+    # replaces this machine's identity and needs an invite-paired session.
+    hub.allow_from_strangers(SOCIAL_HELLO, SOCIAL_FRIEND_REQUEST, SOCIAL_FRIEND_RESPONSE)
     hub.subscribe(_on_peer_event)
     from backend.modules.social.agent_tools import register_social_tools
 

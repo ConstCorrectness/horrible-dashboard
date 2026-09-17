@@ -1,10 +1,13 @@
 /**
- * Trajectories: one pane, three sections — Runs, Datasets, Harness.
+ * Trajectories: one pane, four sections — Runs, Live, Datasets, Harness.
  *
- * One pane rather than three, per the pane-consolidation rule: these are three views
- * of one thing (the runs, where they are collected, and what configuration produced
- * them), and three panes would mean three openers and three copies of "which dataset
- * are we looking at".
+ * One pane rather than four, per the pane-consolidation rule: these are four views
+ * of one thing (what is running, the runs it becomes, where they are collected, and
+ * what configuration produced them), and four panes would mean four openers and four
+ * copies of "which dataset are we looking at".
+ *
+ * Live is socket-fed and has no polling fallback, on purpose: a poll would make "the
+ * stream is broken" look identical to "nothing is running".
  *
  * The Runs section is failure-first in the same spirit as the evals results view —
  * nobody opens a trajectory browser to admire the runs that worked. The Harness
@@ -25,6 +28,9 @@ import { useState } from 'react';
 import { usePaneSection } from '../../layout/use-sections';
 import { DatasetsSection } from './panels/DatasetsSection';
 import { HarnessSection } from './panels/HarnessSection';
+import { LiveSection } from './panels/LiveSection';
+import { CommonsSection } from './panels/CommonsSection';
+import { PeersSection } from './panels/PeersSection';
 import { RunsSection } from './panels/RunsSection';
 import './trajectories.css';
 
@@ -48,7 +54,13 @@ export function TrajectoriesHub() {
         fontSize: 'var(--fs-body)',
       }}
     >
-      {section === 'datasets' ? (
+      {section === 'live' ? (
+        <LiveSection />
+      ) : section === 'peers' ? (
+        <PeersSection onPulled={() => setSection('runs')} />
+      ) : section === 'commons' ? (
+        <CommonsSection />
+      ) : section === 'datasets' ? (
         <DatasetsSection />
       ) : section === 'harness' ? (
         <HarnessSection inspect={inspect} />

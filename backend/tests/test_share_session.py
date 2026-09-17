@@ -579,7 +579,9 @@ def test_a_projection_is_forwarded_to_every_guest(captured):
         await mgr.start("s", "semantic")
         await mgr.add_participant(person_id="gp", node_id=GUEST_NODE, name="G")
         hub.sent.clear()
-        await mgr.set_mirror({"center": {"kind": "area", "tabs": []}, "redactedCount": 2})
+        await mgr.set_mirror(
+            {"center": {"kind": "area", "tabs": []}, "redactedCount": 2}
+        )
 
     asyncio.run(go())
     assert "share_mirror" in hub.types()
@@ -696,7 +698,8 @@ def test_a_projection_from_the_real_host_is_adopted_and_relayed(captured):
             )
         )
         await mgr.apply_remote_mirror(
-            "theirnode", {"sessionId": "s1", "frame": {"center": {}, "redactedCount": 3}}
+            "theirnode",
+            {"sessionId": "s1", "frame": {"center": {}, "redactedCount": 3}},
         )
 
     asyncio.run(go())
@@ -750,3 +753,108 @@ def test_an_untrusted_peer_cannot_publish_a_projection(captured, monkeypatch):
 
     asyncio.run(go())
     assert mgr.remote_mirrors == {}
+
+
+# ---------------------------------------------------------------------------
+# Naming the host of a joined session
+# ---------------------------------------------------------------------------
+
+HOST_PERSON = "gdnekr7j7kqovny4"
+
+
+def _join_as_guest(
+    monkeypatch, *, roster=None, invite_name=None, host_participant=True
+):
+    """Join a remote session through `join_remote` and return what was adopted.
+
+    `roster` is the display name this node's own roster keeps for the host's person
+    (None: the host's machine is not on the roster at all).
+    """
+    mgr = ShareManager()
+    monkeypatch.setattr("backend.modules.share.fabric.share_manager", mgr)
+    monkeypatch.setattr(
+        "backend.modules.games.server_auth.signed_in_username", lambda: "guest"
+    )
+    monkeypatch.setattr(
+        "backend.modules.social.store.person_for_node",
+        lambda node_id: HOST_PERSON if roster and node_id == HOST_NODE else None,
+    )
+    monkeypatch.setattr(
+        "backend.modules.social.store.get_friend_row",
+        lambda person_id: {"person_id": person_id, "display_name": roster},
+    )
+
+    participants = [
+        {"node_id": GUEST_NODE, "role": "guest", "grant": "view", "name": "guest"}
+    ]
+    if host_participant:
+        participants.append(
+            {"node_id": HOST_NODE, "role": "host", "grant": "control", "name": "Ada?"}
+        )
+
+    class Reply:
+        type = "share_state"
+        data = {
+            "id": "s1",
+            "title": "t",
+            "host_node": HOST_NODE,
+            "host_person": HOST_PERSON,
+            "participants": participants,
+        }
+
+    class JoinHub:
+        def identity(self):
+            class Me:
+                node_id = GUEST_NODE
+
+            return Me()
+
+        async def request(self, node_id, msg_type, data):
+            return Reply()
+
+    monkeypatch.setattr("backend.modules.network.hub.peer_hub", JoinHub())
+
+    async def fake_broadcast(channel, event, data):
+        pass
+
+    monkeypatch.setattr("backend.modules.ws.broadcast_event", fake_broadcast)
+    monkeypatch.setattr(mgr, "apply_remote_state", lambda *a, **k: asyncio.sleep(0))
+
+    async def go():
+        if invite_name is not None:
+            now = time.time()
+            await mgr.record_invite(
+                ShareInvite(
+                    session_id="s1",
+                    title="t",
+                    host=HOST_NODE,
+                    host_name=invite_name,
+                    ts=now,
+                    expires_at=now + 60,
+                )
+            )
+        ok, err = await fabric.join_remote("s1", HOST_NODE)
+        assert ok, err
+
+    asyncio.run(go())
+    return mgr.joined["s1"]
+
+
+def test_joined_host_is_named_by_the_roster_not_by_person_id(monkeypatch):
+    """`host_name` is shown to a person. It used to hold `host_person` — found with
+    two real nodes, where the watcher saw "gdnekr7j7kqovny4" instead of a name."""
+    joined = _join_as_guest(monkeypatch, roster="Ada", invite_name="@claimed")
+    assert joined.host_name == "Ada"
+    assert joined.host_name != HOST_PERSON
+    # Identity is still the authenticated node, never the label.
+    assert joined.host_node == HOST_NODE
+
+
+def test_joined_host_falls_back_to_the_invite_then_the_reply_then_a_short_id(
+    monkeypatch,
+):
+    assert _join_as_guest(monkeypatch, invite_name="@ada").host_name == "@ada"
+    assert _join_as_guest(monkeypatch).host_name == "Ada?"
+    bare = _join_as_guest(monkeypatch, host_participant=False).host_name
+    assert bare == HOST_NODE[:8]
+    assert bare != HOST_PERSON

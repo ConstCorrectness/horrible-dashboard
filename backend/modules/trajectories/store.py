@@ -45,6 +45,7 @@ from typing import Any, Generator
 
 from backend.modules.database.app_db import ensure_app_db_dir, get_data_dir
 from backend.modules.settings.models import SECRET_KEY_SUFFIXES
+from backend.modules.trajectories import stream
 from backend.modules.trajectories.models import (
     Dataset,
     Harness,
@@ -218,6 +219,20 @@ def init_trajectories_db() -> None:
         # exists, and skipping this is how a new column reaches nobody's machine
         # but the one it was written on.
         _ensure_column(conn, "traj_runs", "indexed_at", "REAL")
+        # Explicit step nesting. Unused by this node's own runs, and deliberately
+        # so: the orchestrator executes a round's tool calls strictly in sequence —
+        # one `await` per call — so `(round, ts, duration_ms)` already describes the
+        # layout completely, and the only nesting that exists is delegation, which
+        # lives on `traj_runs.parent_run_id`. The column is here for the sources
+        # that *are* natively nested and currently have nowhere to say so: SDK
+        # ingest of a LangGraph subgraph or a Pydantic AI tool group, and parallel
+        # tool execution if the loop ever gains it. `NULL` means "derive from
+        # round", which is what every reader does today.
+        _ensure_column(conn, "traj_steps", "parent_seq", "INTEGER")
+        # Peer sharing, deny-by-default. `_ensure_column` for the usual reason:
+        # an existing `traj_datasets` would otherwise never get it, and every
+        # read of `row["shared"]` would raise on an upgraded install.
+        _ensure_column(conn, "traj_datasets", "shared", "INTEGER NOT NULL DEFAULT 0")
 
         # Idempotent ingest depends on this being enforced by the database rather
         # than by a SELECT-then-INSERT, which races two SDK clients against
@@ -382,6 +397,7 @@ def _dataset_from_row(row: sqlite3.Row, run_count: int = 0) -> Dataset:
         description=row["description"],
         source_kind=row["source_kind"],
         capture=bool(row["capture"]),
+        shared=bool(row["shared"]) if "shared" in row.keys() else False,
         tags=json.loads(row["tags"] or "[]"),
         schema_version=row["schema_version"],
         created_at=row["created_at"],
@@ -452,14 +468,31 @@ def get_dataset(dataset_id: str) -> Dataset | None:
         return _dataset_from_row(row, n)
 
 
+class SharingRefused(ValueError):
+    """Raised when a dataset may not be shared with friends."""
+
+
 def update_dataset(dataset_id: str, **fields: Any) -> Dataset | None:
+    """Partial update. Raises `SharingRefused` for `shared=True` on a peer dataset.
+
+    A `peer` dataset holds runs a friend shared with *this* node. Sharing it onward
+    would republish their data to people they never chose, so it is refused here —
+    in the store, not only in the route, because the store is what a future agent
+    tool or script would reach first.
+    """
+    if fields.get("shared"):
+        current = get_dataset(dataset_id)
+        if current is not None and current.source_kind == "peer":
+            raise SharingRefused(
+                "runs a friend shared with you cannot be shared onward"
+            )
     sets: list[str] = []
     values: list[Any] = []
-    for key in ("name", "description", "capture", "tags"):
+    for key in ("name", "description", "capture", "shared", "tags"):
         if fields.get(key) is None:
             continue
         value = fields[key]
-        if key == "capture":
+        if key in ("capture", "shared"):
             value = 1 if value else 0
         elif key == "tags":
             value = json.dumps(value)
@@ -694,8 +727,12 @@ def start_run(
     person_id: str = "",
     meta: dict[str, Any] | None = None,
     started_at: float | None = None,
+    notify: bool = True,
 ) -> str:
-    """Open a run in `running` state. Returns its id."""
+    """Open a run in `running` state. Returns its id.
+
+    `notify=False` suppresses the live broadcast — see `append_step`.
+    """
     rid = run_id or new_run_id()
     with get_db_conn() as conn:
         conn.execute(
@@ -722,15 +759,22 @@ def start_run(
                 canonical_json(meta or {}),
             ),
         )
+    if notify:
+        stream.publish_run(rid)
     return rid
 
 
-def append_step(run_id: str, step: StepWrite) -> int:
+def append_step(run_id: str, step: StepWrite, *, notify: bool = True) -> int:
     """Append one step. Returns the assigned `seq`.
 
     Refuses to append to a sealed run: a run's steps are what an export is built
     from, and a step arriving after the export was taken would make that export
     unreproducible without anything ever reporting an error.
+
+    `notify=False` suppresses the live broadcast, and `ingest_run` passes it for
+    every step of a bulk write. Importing a 200-step file is one thing that
+    happened, not two hundred — streaming it step by step would flood the socket
+    to animate a run that finished last week.
     """
     with get_db_conn() as conn:
         row = conn.execute(
@@ -743,8 +787,9 @@ def append_step(run_id: str, step: StepWrite) -> int:
         seq = step.seq if step.seq is not None else int(row["steps"])
         conn.execute(
             "INSERT OR REPLACE INTO traj_steps (run_id, seq, round, kind, role, name,"
-            " args, result, ok, content, tokens, duration_ms, gated, error, ts)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " args, result, ok, content, tokens, duration_ms, gated, error, ts,"
+            " parent_seq)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 run_id,
                 seq,
@@ -761,6 +806,7 @@ def append_step(run_id: str, step: StepWrite) -> int:
                 1 if step.gated else 0,
                 step.error,
                 step.ts if step.ts is not None else _now(),
+                step.parent_seq,
             ),
         )
         conn.execute(
@@ -768,6 +814,8 @@ def append_step(run_id: str, step: StepWrite) -> int:
             " run_id = ?) WHERE id = ?",
             (run_id, run_id),
         )
+    if notify:
+        stream.publish_step(run_id, step, seq)
     return seq
 
 
@@ -783,8 +831,12 @@ def finish_run(
     cost_usd: float | None = None,
     error: str = "",
     finished_at: float | None = None,
+    notify: bool = True,
 ) -> None:
-    """Seal a run. After this, steps are immutable and only labels may be added."""
+    """Seal a run. After this, steps are immutable and only labels may be added.
+
+    `notify=False` suppresses the live broadcast — see `append_step`.
+    """
     end = finished_at if finished_at is not None else _now()
     with get_db_conn() as conn:
         row = conn.execute(
@@ -813,6 +865,17 @@ def finish_run(
                 run_id,
             ),
         )
+        sealed = conn.execute(
+            "SELECT steps, rounds FROM traj_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+    if notify:
+        stream.publish_seal(
+            run_id,
+            status=status,
+            steps=int(sealed["steps"] or 0) if sealed else 0,
+            rounds=int(sealed["rounds"] or 0) if sealed else 0,
+            duration_ms=duration,
+        )
 
 
 def get_run(run_id: str, *, with_steps: bool = True) -> TrajectoryDetail | None:
@@ -840,6 +903,22 @@ def get_run(run_id: str, *, with_steps: bool = True) -> TrajectoryDetail | None:
     return detail
 
 
+def list_steps(
+    run_id: str, *, from_seq: int = 0, limit: int = 50
+) -> list[TrajectoryStep]:
+    """A window of a run's steps, `seq >= from_seq`, in order.
+
+    For callers that page — serving a run to a peer walks it a budget at a time, and
+    `get_run` would re-read every step and every spilled blob on every page.
+    """
+    with get_db_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM traj_steps WHERE run_id = ? AND seq >= ? ORDER BY seq LIMIT ?",
+            (run_id, from_seq, limit),
+        ).fetchall()
+    return [_step_from_row(run_id, r) for r in rows]
+
+
 def _step_from_row(run_id: str, row: sqlite3.Row) -> TrajectoryStep:
     return TrajectoryStep(
         seq=row["seq"],
@@ -856,6 +935,9 @@ def _step_from_row(run_id: str, row: sqlite3.Row) -> TrajectoryStep:
         gated=bool(row["gated"]),
         error=row["error"],
         ts=row["ts"],
+        # Read defensively: this column was added by `_ensure_column` after the
+        # table shipped, and a row written before then simply has no key here.
+        parent_seq=(row["parent_seq"] if "parent_seq" in row.keys() else None),
     )
 
 
@@ -994,6 +1076,14 @@ def find_by_turn_id(turn_id: str) -> TrajectoryRun | None:
 
 
 def delete_run(run_id: str) -> bool:
+    # Read before the delete: the turn id is how the wire traffic is addressed, and
+    # once the row is gone there is no way to find it. Orphaned events would sit in
+    # `telemetry_events` until retention aged them out, unreachable the whole time.
+    with get_db_conn() as conn:
+        row = conn.execute(
+            "SELECT turn_id FROM traj_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        turn_id = row["turn_id"] if row else None
     with get_db_conn() as conn:
         conn.execute("DELETE FROM traj_steps WHERE run_id = ?", (run_id,))
         conn.execute("DELETE FROM traj_labels WHERE run_id = ?", (run_id,))
@@ -1010,6 +1100,13 @@ def delete_run(run_id: str) -> bool:
             directory.rmdir()
         except OSError:  # pragma: no cover
             pass
+    if turn_id:
+        try:
+            from backend.modules.telemetry import store as telemetry_store
+
+            telemetry_store.delete_turn(turn_id)
+        except Exception:  # noqa: BLE001 - deleting a run must still succeed
+            logger.debug("trajectories: could not clear I/O for turn %s", turn_id)
     return removed
 
 
@@ -1091,8 +1188,13 @@ def ingest_run(write: TrajectoryWrite) -> tuple[str, bool]:
         with get_db_conn() as conn:
             conn.execute("DELETE FROM traj_steps WHERE run_id = ?", (run_id,))
 
+    # A bulk write is one event, not N+2. Every store call below is silenced and a
+    # single `run` event is published at the end, once the run is whole — a pane
+    # that saw the `run` frame first and then 200 `step` frames would animate an
+    # import as though the agent were working right now.
     start_run(
         write.dataset_id,
+        notify=False,
         source=write.source,
         run_id=run_id,
         external_id=write.external_id,
@@ -1112,10 +1214,11 @@ def ingest_run(write: TrajectoryWrite) -> tuple[str, bool]:
     for index, step in enumerate(write.step_list):
         if step.seq is None:
             step = step.model_copy(update={"seq": index})
-        append_step(run_id, step)
+        append_step(run_id, step, notify=False)
     if write.status != "running":
         finish_run(
             run_id,
+            notify=False,
             status=write.status,
             outcome=write.outcome,
             reward=write.reward,
@@ -1138,4 +1241,7 @@ def ingest_run(write: TrajectoryWrite) -> tuple[str, bool]:
                 rationale=label.rationale,
             ),
         )
+    # Published after the labels, so the one frame a subscriber sees describes the
+    # finished run rather than a headline that is already out of date.
+    stream.publish_run(run_id)
     return run_id, existing is None

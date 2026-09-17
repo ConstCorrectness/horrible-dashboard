@@ -399,6 +399,11 @@ class EvalRun(BaseModel):
     node: str = ""
     #: The harness itself, so a differing hash can say *what* differed.
     harness_json: str = ""
+    #: `peer` when a friend's node ran this suite on its own agent: the harness, the
+    #: model and every verdict are what that node *reported*. A signature proves the
+    #: node said it, not that it is true — and the harness hash does not cover model
+    #: weights at all. Empty for anything graded on this node.
+    attestation: str = ""
 
 
 class StartRunRequest(BaseModel):

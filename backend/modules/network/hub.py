@@ -60,6 +60,21 @@ SERIAL_QUEUE_MAXSIZE = 256
 #: peer on every join.
 PRESENCE_DEBOUNCE_S = 5.0
 
+#: A **stranger** is a node that proved its identity in the handshake but that this
+#: node does not trust: someone who found you by `@username` and is sending a friend
+#: request. It used to be rejected at the handshake ("pairing required"), which made
+#: friending anyone you had not already paired with by invite impossible, on any
+#: network. It is now admitted into a session that can carry only the message types
+#: registered with `allow_from_strangers`, is invisible to `peers` / `list_peers`
+#: (so no feature that fans work out to peers can reach it), and is closed after
+#: `STRANGER_TTL_S` unless trust arrives. The cap bounds what a flood of throwaway
+#: identities can hold open.
+STRANGER_TTL_S = 120.0
+
+#: How long `connect` waits for a dial plus handshake.
+HANDSHAKE_TIMEOUT_S = 20.0
+MAX_STRANGER_SESSIONS = 64
+
 # The bench probe, installed only while a measurement run is in flight (see
 # bench.py). It is a module-level global read behind `if _probe is not None`
 # rather than a hook object, a decorator or a context manager, because at 20 Hz
@@ -131,7 +146,11 @@ class PeerSession:
 
 class PeerHub:
     def __init__(self, signer: identity.Identity | None = None) -> None:
-        self.peers: dict[str, PeerSession] = {}
+        #: Every live session, trusted or not. Only `send_to`, `request` and the
+        #: handshake read it directly; everything else goes through `peers`.
+        self._sessions: dict[str, PeerSession] = {}
+        #: Message types a stranger's session may dispatch (see STRANGER_TTL_S).
+        self._stranger_types: set[str] = set()
         self.transports: list[Transport] = []
         self._seen = protocol.SeenGuard()
         self._subscribers: set[Callable[[str, dict[str, Any]], None]] = set()
@@ -148,6 +167,44 @@ class PeerHub:
         # singleton (the app has one identity); passed explicitly in tests so two
         # hubs in one process stay distinct.
         self._signer = signer
+
+    @property
+    def peers(self) -> dict[str, PeerSession]:
+        """Sessions with **trusted** peers, as a fresh dict, so iterate freely.
+
+        Strangers are deliberately absent. About twenty-five call sites across the
+        app iterate this or `list_peers()` to decide who gets work, invitations,
+        embeddings or a research subagent; filtering here is what keeps every one
+        of them correct without each remembering to check `trusted`.
+        """
+        return {k: s for k, s in self._sessions.items() if s.info.trusted}
+
+    @property
+    def strangers(self) -> dict[str, PeerSession]:
+        return {k: s for k, s in self._sessions.items() if not s.info.trusted}
+
+    def allow_from_strangers(self, *msg_types: str) -> None:
+        """Let a stranger's session dispatch these types. Each one is a door to
+        someone you do not know, so the handler must treat the sender as unproven
+        (the friend-request handlers verify a device certificate first)."""
+        self._stranger_types.update(msg_types)
+
+    def set_trusted(self, node_id: str, trusted: bool) -> None:
+        """Change a live session's trust: a friendship accepted or revoked.
+
+        Upgrading reveals the peer to the rest of the app (it appears in `peers`);
+        downgrading closes the session outright rather than leaving a formerly
+        trusted peer holding a live session.
+        """
+        session = self._sessions.get(node_id)
+        if session is None or session.info.trusted == trusted:
+            return
+        if not trusted:
+            asyncio.ensure_future(session.link.close())
+            return
+        session.info.trusted = True
+        self._emit("peer_update", {"peer": session.info.model_dump()})
+        logger.info("peer %s is now trusted", node_id)
 
     @property
     def signer(self) -> identity.Identity:
@@ -183,9 +240,9 @@ class PeerHub:
                 logger.exception("transport %s failed to start", transport.name)
 
     async def stop(self) -> None:
-        for session in list(self.peers.values()):
+        for session in list(self._sessions.values()):
             await session.link.close()
-        self.peers.clear()
+        self._sessions.clear()
         for tp in self.transports:
             try:
                 await tp.stop()
@@ -331,7 +388,22 @@ class PeerHub:
             await link.close()
             raise LinkClosed(str(result.data.get("reason") or "auth rejected"))
 
-        info = self._peer_info(ack, public_key, link, trusted=True)
+        # Whether *we* trust the node we reached is our decision, not a consequence
+        # of having reached it. It used to be unconditional, which was harmless only
+        # while every acceptor rejected strangers; now that dialing someone to send a
+        # friend request succeeds, "I connected to it" must not become "I trust it".
+        # Trusted: we redeemed an invite it accepted, we already trusted it, or this
+        # node runs open-LAN trust. An older acceptor sends no `trusted` field and
+        # only ever admitted peers it trusted.
+        acceptor_trusts_us = bool(result.data.get("trusted", True))
+        trusted = (
+            (bool(token) and acceptor_trusts_us)
+            or trust.is_trusted(ack.src)
+            or trust.trust_mode() == trust.TRUST_OPEN_LAN
+        )
+        info = self._peer_info(ack, public_key, link, trusted=trusted)
+        if not trusted:
+            return self._register(link, info)
         # **Persist the trust, not just the session.** Pairing used to be
         # one-sided: the acceptor wrote a `known_peers` record (`trust.evaluate`
         # → `save_known_peer`) while the dialer marked trust in memory only. So
@@ -390,10 +462,15 @@ class PeerHub:
                 await link.close()
                 return None
 
-            ok, reason = trust.evaluate(hello.src, auth.data.get("token"))
+            admission, reason = trust.admit(hello.src, auth.data.get("token"))
+            if admission == "stranger" and len(self.strangers) >= MAX_STRANGER_SESSIONS:
+                admission, reason = None, "busy"
+            ok = admission is not None
             await link.send(
                 await self._signed(
-                    protocol.AUTH_RESULT, hello.src, {"ok": ok, "reason": reason}
+                    protocol.AUTH_RESULT,
+                    hello.src,
+                    {"ok": ok, "reason": reason, "trusted": admission == "trusted"},
                 )
             )
             if not ok:
@@ -405,8 +482,10 @@ class PeerHub:
                 await link.close()
                 return None
 
-            logger.info("Handshake complete for %s", hello.src)
-            info = self._peer_info(hello, public_key, link, trusted=True)
+            logger.info("Handshake complete for %s (%s)", hello.src, admission)
+            info = self._peer_info(
+                hello, public_key, link, trusted=admission == "trusted"
+            )
             session = self._register(link, info)
             return session
         except LinkClosed:
@@ -439,11 +518,35 @@ class PeerHub:
     def _register(self, link: PeerLink, info: PeerInfo) -> PeerSession:
         link.peer_node_id = info.node_id
         session = PeerSession(link, info)
-        self.peers[info.node_id] = session
+        previous = self._sessions.get(info.node_id)
+        self._sessions[info.node_id] = session
+        if previous is not None and previous.link is not link:
+            # A second link to the same node (two dial candidates both answered, or
+            # a reconnect). The newest wins; the older one would otherwise stay
+            # open, pumped, and invisible.
+            asyncio.ensure_future(previous.link.close())
         asyncio.ensure_future(self._pump(session))
-        self._emit("peer_update", {"peer": info.model_dump()})
-        logger.info("peer connected: %s (%s)", info.node_name, info.node_id)
+        if info.trusted:
+            self._emit("peer_update", {"peer": info.model_dump()})
+            logger.info("peer connected: %s (%s)", info.node_name, info.node_id)
+        else:
+            # Not a `peer_update`: a stranger is not a peer anything may use. The
+            # social layer still needs to greet it, because the greeting carries the
+            # device certificate that tells a known friend's new machine apart from
+            # a stranger's.
+            logger.info("stranger connected: %s (%s)", info.node_name, info.node_id)
+            self._emit("stranger_connected", {"node_id": info.node_id})
+            asyncio.ensure_future(self._expire_stranger(session))
         return session
+
+    async def _expire_stranger(self, session: PeerSession) -> None:
+        """Close a stranger's session that has not become trusted in time."""
+        try:
+            await asyncio.wait_for(session.closed.wait(), STRANGER_TTL_S)
+        except TimeoutError:
+            if not session.info.trusted:
+                logger.info("closing idle stranger session %s", session.info.node_id)
+                await session.link.close()
 
     # ---- inbound pump + dispatch --------------------------------------------------
 
@@ -461,8 +564,8 @@ class PeerHub:
 
     def _drop(self, session: PeerSession) -> None:
         node_id = session.info.node_id
-        if self.peers.get(node_id) is session:
-            del self.peers[node_id]
+        if self._sessions.get(node_id) is session:
+            del self._sessions[node_id]
         for fut in session.pending.values():
             if not fut.done():
                 fut.cancel()
@@ -475,7 +578,8 @@ class PeerHub:
         session.serial_queues.clear()
         session.info.status = "disconnected"
         session.closed.set()
-        self._emit("peer_update", {"peer": session.info.model_dump()})
+        if session.info.trusted:
+            self._emit("peer_update", {"peer": session.info.model_dump()})
         logger.info("peer disconnected: %s", node_id)
 
     async def _dispatch(self, session: PeerSession, env: PeerEnvelope) -> None:
@@ -509,6 +613,12 @@ class PeerHub:
             return
         if env.type == protocol.PRESENCE:
             self._apply_presence(session, env)
+            return
+
+        # The stranger gate, in one place rather than in every handler: a node this
+        # node does not trust may send only what was explicitly opened to strangers.
+        if not session.info.trusted and env.type not in self._stranger_types:
+            logger.debug("dropping %s from stranger %s", env.type, env.src)
             return
 
         handler = self._handlers.get(env.type)
@@ -659,12 +769,25 @@ class PeerHub:
             except Exception:  # noqa: BLE001 - one dead peer must not stop the rest
                 logger.debug("presence announce to %s failed", session.info.node_id)
 
+    def _session_for(self, node_id: str, msg_type: str) -> PeerSession:
+        """The session a message to `node_id` may go out on.
+
+        The dispatch gate's mirror image: a stranger may be *sent* only the types it
+        may send. Without this, any feature holding a node id (an invite, a share, a
+        stale roster entry) could hand data to someone who is not trusted, just
+        because a friend request happened to open a session to them.
+        """
+        session = self._sessions.get(node_id)
+        if session is None or (
+            not session.info.trusted and msg_type not in self._stranger_types
+        ):
+            raise KeyError(f"no peer {node_id}")
+        return session
+
     async def send_to(
         self, node_id: str, msg_type: str, data: dict[str, Any], re: str | None = None
     ) -> None:
-        session = self.peers.get(node_id)
-        if session is None:
-            raise KeyError(f"no peer {node_id}")
+        session = self._session_for(node_id, msg_type)
         await session.send(await self._signed(msg_type, node_id, data, re=re))
 
     async def request(
@@ -676,9 +799,7 @@ class PeerHub:
     ) -> PeerEnvelope:
         """Send a message and await the peer's reply (an envelope whose `re` equals
         this message's `msg_id`). Raises `TimeoutError` if the peer doesn't reply."""
-        session = self.peers.get(node_id)
-        if session is None:
-            raise KeyError(f"no peer {node_id}")
+        session = self._session_for(node_id, msg_type)
         env = await self._signed(msg_type, node_id, data)
         fut: asyncio.Future[PeerEnvelope] = asyncio.get_running_loop().create_future()
         session.pending[env.msg_id] = fut
@@ -689,19 +810,40 @@ class PeerHub:
             session.pending.pop(env.msg_id, None)
 
     async def connect(
-        self, address: str, transport: str = "direct", token: str | None = None
+        self,
+        address: str,
+        transport: str = "direct",
+        token: str | None = None,
+        *,
+        timeout: float = HANDSHAKE_TIMEOUT_S,
     ) -> PeerInfo:
         """Dial an address with the named transport and complete the handshake. A
-        `token` (from an invite) is presented during auth for manual-mode peers."""
+        `token` (from an invite) is presented during auth for manual-mode peers.
+
+        Bounded: a relay dial to a node that is not online, or a direct dial into a
+        router that silently drops the packet, would otherwise wait forever, and the
+        friend-add route awaiting it would never answer.
+        """
         tp = next((t for t in self.transports if t.name == transport), None)
         if tp is None:
             raise ValueError(f"transport {transport!r} not enabled")
-        link = await tp.dial(address)
-        session = await self.handshake_dial(link, token=token)
-        return session.info
+        link: PeerLink | None = None
+
+        async def _go() -> PeerInfo:
+            nonlocal link
+            link = await tp.dial(address)
+            session = await self.handshake_dial(link, token=token)
+            return session.info
+
+        try:
+            return await asyncio.wait_for(_go(), timeout)
+        except TimeoutError:
+            if link is not None:
+                await link.close()
+            raise
 
     async def disconnect(self, node_id: str) -> None:
-        session = self.peers.get(node_id)
+        session = self._sessions.get(node_id)
         if session is not None:
             await session.link.close()
 

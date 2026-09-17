@@ -45,6 +45,63 @@ def _read() -> dict[str, Any] | None:
         return None
 
 
+#: Strong references to background binding tasks (asyncio keeps only weak ones).
+_binding_tasks: set[Any] = set()
+
+
+def _save_session(data: dict[str, Any]) -> None:
+    """Persist a completed sign-in, and bind the account to this person.
+
+    Every sign-in path ends here. The binding (`social.handles.publish_binding`) is
+    what makes `@username` resolve to this person's key, so a friend can add you by
+    name. It used to run only when a username was *claimed*: anyone who signed in to
+    an account whose username already existed, or whose one binding attempt failed,
+    stayed unreachable by username with nothing to say so. Detached and
+    best-effort: sign-in has succeeded whether or not the game server answers this.
+    """
+    jsonstore.write_text(_token_path(), json.dumps(data))
+    schedule_person_binding()
+
+
+def schedule_person_binding() -> None:
+    """Bind this account to this person, and list this machine under them, in the
+    background.
+
+    Runs when signed in, or on a *linked* machine (it has no account, but its
+    owner's account is bound, and its certificate is enough to list itself). A
+    machine that is neither has nothing the directory would accept.
+    """
+    import asyncio
+
+    from backend.modules.social import identity as person_identity
+
+    signed_in = bool(get_token())
+    if not signed_in and not person_identity.is_linked_device():
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    async def _bind() -> None:
+        import logging
+
+        from backend.modules.social import handles
+
+        log = logging.getLogger(__name__)
+        if signed_in and not person_identity.is_linked_device():
+            result = await handles.publish_binding()
+            if result.get("error"):
+                log.info("account not bound to this person: %s", result["error"])
+        listed = await handles.publish_device()
+        if listed.get("error"):
+            log.info("machine not listed in the directory: %s", listed["error"])
+
+    task = loop.create_task(_bind())
+    _binding_tasks.add(task)
+    task.add_done_callback(_binding_tasks.discard)
+
+
 def get_token() -> str | None:
     data = _read()
     return str(data["token"]) if data and data.get("token") else None
@@ -191,7 +248,7 @@ async def _auth_poll(provider: str, device_code: str) -> dict[str, Any]:
     except httpx.HTTPError as exc:
         return {"error": f"Failed to communicate with game server: {exc}"}
     if data.get("token"):
-        jsonstore.write_text(_token_path(), json.dumps(data))
+        _save_session(data)
         return {"signed_in": True, "account": data.get("account")}
     return data  # {pending: true} or {error: ...}
 
@@ -294,7 +351,7 @@ async def web_login_poll(provider: str) -> dict[str, Any]:
     if data.get("pending"):
         return {"pending": True}
     if data.get("token"):
-        jsonstore.write_text(_token_path(), json.dumps(data))
+        _save_session(data)
         _pending_web.pop(provider, None)
         return {"signed_in": True, "account": data.get("account")}
     _pending_web.pop(provider, None)
@@ -339,7 +396,7 @@ async def _local_auth(action: str, payload: dict[str, Any]) -> dict[str, Any]:
     except httpx.HTTPError as exc:
         return {"error": f"Failed to communicate with game server: {exc}"}
     if data.get("token"):
-        jsonstore.write_text(_token_path(), json.dumps(data))
+        _save_session(data)
         return {"signed_in": True, "account": data.get("account")}
     return {"error": data.get("error") or "sign-in failed"}
 
