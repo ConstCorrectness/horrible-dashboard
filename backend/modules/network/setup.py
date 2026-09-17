@@ -200,7 +200,7 @@ async def start_network() -> None:
     # on every sign-in; here for sessions that predate that.
     from backend.modules.games import server_auth
 
-    server_auth.schedule_person_binding()
+    server_auth.schedule_enrollment()
     peer_hub.set_transports(build_transports())
     await peer_hub.start()
     # Heartbeat the peers for live link health (RTT, throughput).

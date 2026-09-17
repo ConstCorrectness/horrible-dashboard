@@ -3,13 +3,9 @@
  *
  * Before this, the answer lived in three panes with three different ideas of
  * identity: a friend code in the Friends panel, an "Account ID" in the games
- * profile, and a node id in Peers. This shows both names that matter, says which
- * is which, and makes the binding between them explicit.
- *
- * **Username** is the convenient name (globally unique, from the game server).
- * **Friend code** is the durable one (derived from your own key, works offline and
- * on a LAN, and cannot be forged by a directory). Neither replaces the other, so
- * the pane degrades honestly when signed out: the code is always there.
+ * profile, and a node id in Peers. The answer is now one thing: your **username**,
+ * chosen at sign-up and globally unique. Every machine you sign in on is enrolled
+ * in your account and reachable through it, so there is nothing else to link.
  */
 import { useCallback, useEffect, useState } from 'react';
 
@@ -17,7 +13,7 @@ import { CommonsProfileEditor } from '../commons';
 import { AgentRelayPanel } from '../network/AgentRelayPanel';
 import { LinkHealth } from '../network/LinkHealth';
 import { PeerMonitor } from '../network/PeerMonitor';
-import { bindHandle, getSelfProfile, updateSelfProfile, type SelfProfile } from '../social/api';
+import { getSelfProfile, updateSelfProfile, type SelfProfile } from '../social/api';
 import { getSocialState, subscribeSocial } from '../social/ws';
 
 export function MeSection() {
@@ -25,8 +21,6 @@ export function MeSection() {
     () => getSocialState().roster?.self_profile ?? null,
   );
   const [name, setName] = useState('');
-  const [binding, setBinding] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
 
   // The roster push carries the self profile, so a username claimed on another
@@ -59,24 +53,6 @@ export function MeSection() {
     );
   }, []);
 
-  const claim = useCallback(async () => {
-    setBinding(true);
-    setNote(null);
-    try {
-      const res = await bindHandle();
-      setNote(
-        res.error
-          ? res.error
-          : `Linked — people can now add you as @${res.handle ?? 'your username'}.`,
-      );
-      await getSelfProfile()
-        .then(setMe)
-        .catch(() => undefined);
-    } finally {
-      setBinding(false);
-    }
-  }, []);
-
   if (!me) return <p className="people-hint">Loading your identity…</p>;
 
   return (
@@ -106,42 +82,14 @@ export function MeSection() {
             </>
           ) : (
             <span className="people-dim">
-              Sign in to the game server to claim one — it is the name people can search for.
+              Sign in or sign up to get one. It is how people add you.
             </span>
           )}
         </div>
-        <div className="people-identity-row">
-          <span className="people-label">Friend code</span>
-          <code>{me.friend_code}</code>
-          <button type="button" onClick={() => copy('code', me.friend_code)}>
-            {copied === 'code' ? 'Copied' : 'Copy'}
-          </button>
-        </div>
         <p className="people-hint">
-          Your username is the easy name; the friend code always works, including offline and on a
-          LAN, because it comes from your own key rather than from a directory.
+          Share your username; it reaches you on every machine you are signed in on.
         </p>
       </div>
-
-      {me.holds_person_key ? (
-        <div className="people-field">
-          <button type="button" disabled={binding} onClick={() => void claim()}>
-            {binding ? 'Linking…' : 'Link my username to this identity'}
-          </button>
-          <p className="people-hint">
-            Tells the game server that @{me.handle ?? 'yourusername'} and this machine&rsquo;s
-            identity are the same person, so searching your username finds you. Safe to press more
-            than once.
-          </p>
-        </div>
-      ) : (
-        <p className="people-hint">
-          This machine is linked to your identity but does not hold the key, so the username link
-          has to be made from your primary machine.
-        </p>
-      )}
-
-      {note ? <p className="people-note">{note}</p> : null}
 
       <div className="people-field">
         <span className="people-label">My devices</span>
@@ -157,7 +105,9 @@ export function MeSection() {
               </span>
             </li>
           ))}
-          {me.devices.length === 0 ? <li className="people-hint">No linked devices.</li> : null}
+          {me.devices.length === 0 ? (
+            <li className="people-hint">Sign in on another computer to add it here.</li>
+          ) : null}
         </ul>
       </div>
 

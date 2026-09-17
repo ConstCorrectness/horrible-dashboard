@@ -403,6 +403,28 @@ def _m10_person_devices(conn: sqlite3.Connection) -> None:
     )
 
 
+def _m11_account_identities(conn: sqlite3.Connection) -> None:
+    """The account **is** the identity: its person key is held here.
+
+    Each machine used to invent its own person key and bind it to whatever account
+    it signed in to, so two computers on one account took turns owning its
+    username, whichever had started last. Now the server mints one key per account
+    and signs the certificate of every machine that signs in, so they are all the
+    same person.
+
+    A separate table, like `local_credentials`: the private key must never ride
+    along on the `SELECT *` in `get_account`. It is as sensitive as the JWT secret
+    beside it, and no more: whoever holds that secret can already sign in as anyone
+    and enroll a machine.
+    """
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS account_identities ("
+        " account_id TEXT PRIMARY KEY,"
+        " private_key TEXT NOT NULL,"
+        " created_at REAL NOT NULL)"
+    )
+
+
 MIGRATIONS: list[Any] = [
     _m1_identity_and_series,
     _m2_replays,
@@ -414,6 +436,7 @@ MIGRATIONS: list[Any] = [
     _m8_person_binding,
     _m9_rich_profiles,
     _m10_person_devices,
+    _m11_account_identities,
 ]
 
 
@@ -645,54 +668,69 @@ def ensure_handle(account_id: str, preferred: str) -> str:
     return base
 
 
-# ---- person binding (game-server account ↔ peer-fabric person) --------------
+# ---- account identity (the account is the peer-fabric person) ----------------
 
 
 #: Re-exported so a caller has one place to look for "the person primitives".
 fingerprint_person = _crypto.fingerprint_person
 
 
-def person_challenge(account_id: str, person_id: str) -> bytes:
-    """The bytes a binding signature covers.
+def account_identity(account_id: str) -> tuple[str, str, str] | None:
+    """`(person_id, public_key, private_key)` for an account, minted on first use.
 
-    It **includes the account id** on purpose: without it, a signature proving
-    "I hold this person key" could be lifted from any other context and replayed
-    to bind someone else's person to your account. Same canonical-JSON discipline
-    as the peer wire and device certs, because signer and verifier are different
-    machines running different code.
-    """
-    payload = {
-        "purpose": "horrible.account.person",
-        "account_id": account_id,
-        "person_id": person_id,
-    }
-    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-
-
-def bind_person(account_id: str, person_id: str, person_public_key: str) -> str:
-    """Attach a person identity to an account. Returns 'ok' or 'taken'.
-
-    Idempotent for the same pair, so a node re-binding on every sign-in is free.
-    'taken' comes from the unique index rather than a pre-read, so two concurrent
-    binds can't both win.
+    None for an unknown account. The insert is `OR IGNORE` and re-read, so two
+    machines enrolling at the same moment agree on one key instead of each writing
+    their own.
     """
     init_db()
     with get_conn() as conn:
-        row = conn.execute(
-            "SELECT person_id FROM accounts WHERE id = ?", (account_id,)
-        ).fetchone()
-        if row is None:
-            return "unknown-account"
-        if row["person_id"] == person_id:
-            return "ok"
-        try:
+        if (
             conn.execute(
-                "UPDATE accounts SET person_id = ?, person_public_key = ? WHERE id = ?",
-                (person_id, person_public_key, account_id),
-            )
-        except sqlite3.IntegrityError:
-            return "taken"
-    return "ok"
+                "SELECT 1 FROM accounts WHERE id = ?", (account_id,)
+            ).fetchone()
+            is None
+        ):
+            return None
+        conn.execute(
+            "INSERT OR IGNORE INTO account_identities (account_id, private_key, created_at)"
+            " VALUES (?, ?, ?)",
+            (account_id, _crypto.new_private_key(), time.time()),
+        )
+        private = str(
+            conn.execute(
+                "SELECT private_key FROM account_identities WHERE account_id = ?",
+                (account_id,),
+            ).fetchone()["private_key"]
+        )
+        public = _crypto.public_key_of(private)
+        person_id = fingerprint_person(public)
+        conn.execute(
+            "UPDATE accounts SET person_id = ?, person_public_key = ? WHERE id = ?",
+            (person_id, public, account_id),
+        )
+    return person_id, public, private
+
+
+#: How far a machine's enrollment timestamp may be from the server's clock.
+ENROLL_SKEW_S = 300.0
+
+
+def enroll_challenge(account_id: str, node_id: str, ts: float) -> bytes:
+    """The bytes a machine signs with its **node** key to enroll in an account.
+
+    Proves the caller holds the node key it names. Without it, a signed-in user
+    could list someone else's machine under their own username, and everyone who
+    added them would dial a stranger. The account id is inside so the proof cannot
+    be replayed into another account, and the timestamp bounds how long a captured
+    one stays useful. Must match `social.handles.enroll_challenge` byte for byte.
+    """
+    payload = {
+        "purpose": "horrible.account.device",
+        "account_id": account_id,
+        "node_id": node_id,
+        "ts": ts,
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 #: Machines listed per person. The newest win; an old laptop falls off the end.
@@ -710,47 +748,43 @@ def cert_bytes(cert: dict[str, Any]) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def publish_device(cert: Any) -> str:
-    """Record one machine of a bound person. Returns 'ok', 'invalid' or 'unbound'.
+def enroll_device(
+    account_id: str, node_id: str, node_public_key: str, ts: float, sig: str
+) -> tuple[str, dict[str, Any] | None]:
+    """Make a machine one of this account's. Returns `('ok', cert)` or `(reason, None)`.
 
-    Unauthenticated, and safe to be: the certificate is signed by the person key,
-    so it can only restate something true. Three checks make that so — the
-    signature verifies, the node id is the fingerprint of the node key it names,
-    and the person key is **the one bound to an account here**, not merely one
-    that matches its own id (otherwise anyone could list machines under a fresh
-    key and a borrowed person id). Replaying someone's old certificate adds a
-    machine they really had; the cap keeps that from growing.
+    The caller is already authenticated as the account; this checks that it holds
+    the node key (see `enroll_challenge`), then signs the machine's certificate with
+    the account's person key and lists it in the directory.
+
+    The certificate's label is empty: the directory answers anyone who resolves a
+    username, and a label is the machine's hostname.
     """
-    from backend.games_server import crypto
-
-    if not isinstance(cert, dict):
-        return "invalid"
     try:
-        person_id = str(cert["person_id"])
-        person_key = str(cert["person_public_key"])
-        node_id = str(cert["node_id"])
-        node_key = str(cert["node_public_key"])
-        sig = str(cert["sig"])
-    except (KeyError, TypeError):
-        return "invalid"
-    try:
-        if fingerprint_person(person_key) != person_id:
-            return "invalid"
-        if fingerprint_person(node_key) != node_id:
-            return "invalid"
-    except Exception:  # noqa: BLE001 - a malformed key is not a certificate
-        return "invalid"
-    if not crypto.verify(person_key, cert_bytes(cert), sig):
-        return "invalid"
-
-    init_db()
+        if fingerprint_person(node_public_key) != node_id:
+            return "invalid", None
+    except Exception:  # noqa: BLE001 - a malformed key is not a machine
+        return "invalid", None
+    if abs(time.time() - float(ts)) > ENROLL_SKEW_S:
+        return "stale", None
+    if not _crypto.verify(
+        node_public_key, enroll_challenge(account_id, node_id, ts), sig
+    ):
+        return "invalid", None
+    identity = account_identity(account_id)
+    if identity is None:
+        return "unknown-account", None
+    person_id, public, private = identity
+    cert: dict[str, Any] = {
+        "person_id": person_id,
+        "person_public_key": public,
+        "node_id": node_id,
+        "node_public_key": node_public_key,
+        "label": "",
+        "issued_at": time.time(),
+    }
+    cert["sig"] = _crypto.sign(private, cert_bytes(cert))
     with get_conn() as conn:
-        bound = conn.execute(
-            "SELECT 1 FROM accounts WHERE person_id = ? AND person_public_key = ?",
-            (person_id, person_key),
-        ).fetchone()
-        if bound is None:
-            return "unbound"
         conn.execute(
             "INSERT INTO person_devices (person_id, node_id, cert, updated_at)"
             " VALUES (?, ?, ?, ?)"
@@ -764,7 +798,19 @@ def publish_device(cert: Any) -> str:
             " ORDER BY updated_at DESC LIMIT ?)",
             (person_id, person_id, MAX_DEVICES_PER_PERSON),
         )
-    return "ok"
+    return "ok", cert
+
+
+def remove_device(account_id: str, node_id: str) -> None:
+    """Unlist a machine from its account, on sign-out."""
+    account = get_account(account_id)
+    if not account or not account.get("person_id"):
+        return
+    with get_conn() as conn:
+        conn.execute(
+            "DELETE FROM person_devices WHERE person_id = ? AND node_id = ?",
+            (account["person_id"], node_id),
+        )
 
 
 def devices_for_person(person_id: str | None) -> list[dict[str, Any]]:

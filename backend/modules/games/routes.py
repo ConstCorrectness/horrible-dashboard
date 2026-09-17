@@ -519,27 +519,11 @@ async def set_username_route(body: SetUsernameRequest) -> dict[str, Any]:
     """Claim or rename the username — the globally unique handle the ladder and
     HorribleAssault both play you as.
 
-    A successful claim also **binds the username to this person key**, which is
-    what makes `@name` resolvable to a friend code — the difference between a
-    label on a scoreboard and an identity you can be reached at. It is done here,
-    server-side, rather than in each caller: the hassault enlist screen, the games
-    first-run hero and the people panel all claim through this one route, and a
-    binding driven from three clients is a binding that runs from two of them.
-
-    A failure is logged and swallowed on purpose. The username *is* claimed by
-    this point — reporting an error would tell the person their name did not take
-    when it did, and the binding is idempotent, so the next sign-in retries it.
+    The username leads to this machine because the machine is enrolled in the
+    account (on sign-in, `server_auth.schedule_enrollment`); the account, not the
+    name, is the identity, so claiming or renaming needs nothing else.
     """
-    result = await server_auth.set_username(body.username)
-    if result.get("ok"):
-        from backend.modules.social import handles
-
-        bound = await handles.publish_binding()
-        if bound.get("error"):
-            logger.warning(
-                "username claimed but not bound to a person: %s", bound["error"]
-            )
-    return result
+    return await server_auth.set_username(body.username)
 
 
 @router.post("/auth/{provider}/web/start")
@@ -555,7 +539,10 @@ async def web_login_poll_route(provider: str) -> dict[str, Any]:
 
 
 @router.post("/signout")
-def signout_route() -> dict[str, bool]:
+async def signout_route() -> dict[str, bool]:
+    from backend.modules.social import handles
+
+    await handles.unenroll_device()
     server_auth.sign_out()
     return {"ok": True}
 

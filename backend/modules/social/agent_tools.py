@@ -19,7 +19,11 @@ from backend.modules.network.chat import chat_manager
 from backend.modules.network.hub import peer_hub
 from backend.modules.social import identity as person_identity
 from backend.modules.social import handles, roster, store
-from backend.modules.social.friendcode import is_friend_code, parse_friend_code
+from backend.modules.social.friendcode import (
+    format_friend_code,
+    is_friend_code,
+    parse_friend_code,
+)
 from backend.sdk.registry import registry
 from backend.sdk.types import AgentTool
 
@@ -86,7 +90,7 @@ async def list_friends(_args: dict[str, Any]) -> dict[str, Any]:
             }
             for f in friends
         ],
-        "you": person_identity.load_person().friend_code,
+        "you": format_friend_code(person_identity.effective_person_id()),
     }
 
 

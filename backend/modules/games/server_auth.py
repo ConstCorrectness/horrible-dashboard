@@ -50,54 +50,54 @@ _binding_tasks: set[Any] = set()
 
 
 def _save_session(data: dict[str, Any]) -> None:
-    """Persist a completed sign-in, and bind the account to this person.
+    """Persist a completed sign-in, and enroll this machine in the account.
 
-    Every sign-in path ends here. The binding (`social.handles.publish_binding`) is
-    what makes `@username` resolve to this person's key, so a friend can add you by
-    name. It used to run only when a username was *claimed*: anyone who signed in to
-    an account whose username already existed, or whose one binding attempt failed,
-    stayed unreachable by username with nothing to say so. Detached and
+    Every sign-in path ends here. Enrollment (`social.handles.enroll_device`) is what
+    makes this machine the account's person, so `@username` reaches it. Detached and
     best-effort: sign-in has succeeded whether or not the game server answers this.
     """
     jsonstore.write_text(_token_path(), json.dumps(data))
-    schedule_person_binding()
+    schedule_enrollment()
 
 
-def schedule_person_binding() -> None:
-    """Bind this account to this person, and list this machine under them, in the
-    background.
+def schedule_enrollment() -> None:
+    """Enroll this machine in the signed-in account, in the background.
 
-    Runs when signed in, or on a *linked* machine (it has no account, but its
-    owner's account is bound, and its certificate is enough to list itself). A
-    machine that is neither has nothing the directory would accept.
+    Runs on every sign-in and at startup. A signed-out machine has no account, so
+    no identity to enroll in.
     """
     import asyncio
 
-    from backend.modules.social import identity as person_identity
-
-    signed_in = bool(get_token())
-    if not signed_in and not person_identity.is_linked_device():
+    if not get_token():
         return
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return
 
-    async def _bind() -> None:
+    async def _enroll() -> None:
         import logging
 
         from backend.modules.social import handles
 
-        log = logging.getLogger(__name__)
-        if signed_in and not person_identity.is_linked_device():
-            result = await handles.publish_binding()
-            if result.get("error"):
-                log.info("account not bound to this person: %s", result["error"])
-        listed = await handles.publish_device()
-        if listed.get("error"):
-            log.info("machine not listed in the directory: %s", listed["error"])
+        result = await handles.enroll_device()
+        if result.get("error"):
+            logging.getLogger(__name__).info(
+                "machine not enrolled in its account: %s", result["error"]
+            )
+            return
+        # Reach the account's other machines now, not at the next reconnect tick a
+        # minute from now: signing in on a second computer should just work.
+        from backend.modules.social import roster
 
-    task = loop.create_task(_bind())
+        try:
+            await roster.reconnect_round()
+        except Exception:  # noqa: BLE001 - the loop retries on its own schedule
+            logging.getLogger(__name__).debug(
+                "post-enrollment dial failed", exc_info=True
+            )
+
+    task = loop.create_task(_enroll())
     _binding_tasks.add(task)
     task.add_done_callback(_binding_tasks.discard)
 
@@ -166,7 +166,16 @@ def signed_in_username() -> str | None:
 
 
 def sign_out() -> None:
+    """Forget the session, and with it the account's identity on this machine.
+
+    `social.handles.unenroll_device` also unlists the machine on the server; it
+    needs the token, so the sign-out route awaits it first. This is the local half,
+    and runs on every sign-out, including an expired session being cleared.
+    """
+    from backend.modules.social import identity as person_identity
+
     _token_path().unlink(missing_ok=True)
+    person_identity.drop_adopted_cert()
 
 
 def _http_base() -> str:

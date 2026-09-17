@@ -477,7 +477,6 @@ export {
   getSocialState,
   subscribeSocial,
   addFriend,
-  linkDevice,
   type Friend,
   type DeviceInfo,
   type SelfProfile,

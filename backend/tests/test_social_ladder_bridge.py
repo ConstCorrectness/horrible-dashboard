@@ -58,9 +58,9 @@ def _account(account_id: str, handle: str | None = None) -> str:
             " VALUES (?, 'test', ?, ?, ?, ?)",
             (account_id, account_id, account_id, time.time(), handle),
         )
-    public = _public_key()
-    gstore.bind_person(account_id, crypto.fingerprint_person(public), public)
-    return crypto.fingerprint_person(public)
+    identity = gstore.account_identity(account_id)
+    assert identity is not None
+    return identity[0]
 
 
 def test_accounts_by_person_finds_bound_accounts(gdb: None) -> None:

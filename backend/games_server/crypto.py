@@ -1,4 +1,8 @@
-"""The two Ed25519 primitives the game server needs to verify a person binding.
+"""The Ed25519 primitives the game server needs to hold account identities.
+
+Each account's person key lives here (`store.account_identity`): the server signs
+the device certificate of every machine signed in to the account, and verifies the
+node's proof that it holds the node key it names.
 
 **Why these are re-implemented rather than imported.** The node's versions live in
 `backend/modules/social/identity.py` and `backend/modules/network/identity.py`,
@@ -7,7 +11,7 @@ directory, the peer fabric) into a service that deploys on its own to Fly and ha
 no business knowing about any of it.
 
 That leaves a duplication, which is the dangerous kind: it fails **silently and
-open** — a fingerprint scheme that drifts by one character makes every binding
+open** — a fingerprint scheme that drifts by one character makes every enrollment
 signature fail to verify, and a verify() that drifts makes it succeed when it
 shouldn't. So it is handled the same way the Kotlin wire is: the copies are tiny,
 they are pure, and `backend/tests/test_games_person_binding.py` asserts they agree
@@ -46,3 +50,36 @@ def verify(public_key_b64: str, payload: bytes, signature_b64: str) -> bool:
         return True
     except Exception:
         return False
+
+
+def new_private_key() -> str:
+    """A fresh Ed25519 private key as base64 of its 32 raw bytes."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.serialization import (
+        Encoding,
+        NoEncryption,
+        PrivateFormat,
+    )
+
+    raw = Ed25519PrivateKey.generate().private_bytes(
+        Encoding.Raw, PrivateFormat.Raw, NoEncryption()
+    )
+    return base64.b64encode(raw).decode("ascii")
+
+
+def public_key_of(private_key_b64: str) -> str:
+    """The base64 raw public half of a key made by `new_private_key`."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+    key = Ed25519PrivateKey.from_private_bytes(base64.b64decode(private_key_b64))
+    raw = key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+    return base64.b64encode(raw).decode("ascii")
+
+
+def sign(private_key_b64: str, payload: bytes) -> str:
+    """Sign `payload` with a key made by `new_private_key`; base64 signature."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    key = Ed25519PrivateKey.from_private_bytes(base64.b64decode(private_key_b64))
+    return base64.b64encode(key.sign(payload)).decode("ascii")

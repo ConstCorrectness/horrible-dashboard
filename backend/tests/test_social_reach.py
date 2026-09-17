@@ -172,6 +172,21 @@ def test_an_offline_friend_backs_off_instead_of_being_dialed_every_minute(
     assert backoff == 120.0 and next_at == now + 61 + 120.0
 
 
+def test_a_friend_from_before_the_relay_is_found_by_machine_id(
+    data_dir,
+    monkeypatch,
+    lookup,
+):
+    """A friendship made on a LAN recorded no address the relay could use. Their
+    machine ids are known, and an id is all the relay needs."""
+    hub = _hub(monkeypatch, DialHub({"relay:laptopnode000000": "laptopnode000000"}))
+    store.upsert_friend("oldfriend00000000", display_name="Laptop", status="accepted")
+    store.upsert_device("laptopnode000000", "oldfriend00000000", "pub", "laptop")
+
+    assert asyncio.run(roster.reconnect_round()) == ["oldfriend00000000"]
+    assert hub.dials == [("relay", "relay:laptopnode000000")]
+
+
 def test_a_friend_already_connected_is_not_redialed(data_dir, monkeypatch, lookup):
     hub = _hub(monkeypatch, DialHub({"relay:n": "n"}))
     store.upsert_friend("onlineperson00000", display_name="Cy", status="accepted")
@@ -278,3 +293,76 @@ def test_a_username_alone_reaches_the_machine_behind_it(data_dir, monkeypatch, l
 
     assert asyncio.run(go()) == ben_node.node_id
     assert hub.dials == [("relay", f"relay:{ben_node.node_id}")]
+
+
+def _enrolled(monkeypatch):
+    """This machine enrolled in an account: it holds that account's certificate."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    from backend.modules.network import identity as node_identity
+    from backend.modules.social import identity as person_identity
+
+    account = person_identity.PersonIdentity(Ed25519PrivateKey.generate())
+    me = node_identity.load_identity()
+    person_identity.adopt_cert(account.issue_device_cert(me.node_id, me.public_key, ""))
+    return account, me
+
+
+def test_a_machine_on_the_same_account_is_trusted_on_hello(data_dir, monkeypatch):
+    from backend.modules.network.models import PeerEnvelope
+
+    trusted: list[str] = []
+    hub = DialHub({})
+    hub.set_trusted = lambda node_id, value: trusted.append(node_id) if value else None
+    monkeypatch.setattr(roster, "peer_hub", hub)
+    account, _me = _enrolled(monkeypatch)
+    sibling = account.issue_device_cert("siblingnode00000", "pub", "")
+    session = SimpleNamespace(info=SimpleNamespace(address="relay:siblingnode00000"))
+
+    asyncio.run(
+        roster.handle_hello(
+            hub,
+            session,
+            PeerEnvelope(
+                type=roster.SOCIAL_HELLO, src="siblingnode00000", data={"cert": sibling}
+            ),
+        )
+    )
+    assert trusted == ["siblingnode00000"]
+
+
+def test_a_signed_out_machine_trusts_nobody_by_person(data_dir, monkeypatch):
+    """Without enrollment there is no account whose machines would be ours."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    from backend.modules.network.models import PeerEnvelope
+    from backend.modules.social import identity as person_identity
+
+    trusted: list[str] = []
+    hub = DialHub({})
+    hub.set_trusted = lambda node_id, value: trusted.append(node_id) if value else None
+    monkeypatch.setattr(roster, "peer_hub", hub)
+    someone = person_identity.PersonIdentity(Ed25519PrivateKey.generate())
+    cert = someone.issue_device_cert("othernode0000000", "pub", "")
+    asyncio.run(
+        roster.handle_hello(
+            hub,
+            SimpleNamespace(info=SimpleNamespace(address="relay:othernode0000000")),
+            PeerEnvelope(
+                type=roster.SOCIAL_HELLO, src="othernode0000000", data={"cert": cert}
+            ),
+        )
+    )
+    assert trusted == []
+
+
+def test_our_other_machines_are_redialed_but_never_ourselves(
+    data_dir, monkeypatch, lookup
+):
+    account, me = _enrolled(monkeypatch)
+    hub = _hub(monkeypatch, DialHub({"relay:siblingnode00000": "siblingnode00000"}))
+    store.upsert_device(me.node_id, account.person_id, me.public_key, "this one")
+    store.upsert_device("siblingnode00000", account.person_id, "pub", "the other one")
+
+    assert asyncio.run(roster.reconnect_round()) == [account.person_id]
+    assert hub.dials == [("relay", "relay:siblingnode00000")]

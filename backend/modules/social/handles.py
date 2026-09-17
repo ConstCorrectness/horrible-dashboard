@@ -7,26 +7,27 @@ code). One screen asked for an "Account ID" while the one next to it asked for a
 friend code, and neither could answer "who is this?" about the other's answer.
 
 The game server is the only uniqueness authority every node agrees on, so the
-mapping lives there (`accounts.person_id`, unique both ways) and this module is the
-node's client for it:
+**account is the identity**: the server holds each account's person key, and this
+module is the node's client for it:
 
-- `publish_binding()` proves to the game server that this person owns this account,
+- `enroll_device()` makes this machine one of the signed-in account's, adopting the
+  certificate the server signs for it,
 - `resolve('@rob')` turns a username into something `roster.add_friend` can dial,
 - `search('ro')` is the "easier way to find people".
 
-**What a handle is and isn't.** It is a *directory* name: proof that some account
-claims this person key, vouched for by the game server. It is not an authority on
-the fabric — reaching someone still means their signed presence record and the
-usual device-certificate checks. A hostile game server could point `@rob` at the
-wrong person key, which is exactly why the friend code (self-certifying, derived
-from the key) remains the offline path and stays first-class. See
+**What this trusts.** A friend's machines are still checked against the person key
+offline, but that key is the server's to vouch for: whoever runs the game server
+can enroll a machine under any account. That is the price of "sign in anywhere and
+you are you", chosen deliberately over a key only your own machines hold. See
 docs/modules/social.mdx.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+import time
 from typing import Any
 
 import httpx
@@ -64,96 +65,114 @@ def _base() -> str:
     return url.replace("wss://", "https://").replace("ws://", "http://").rstrip("/")
 
 
-async def publish_binding() -> dict[str, Any]:
-    """Tell the game server which person this signed-in account is.
+def enroll_challenge(account_id: str, node_id: str, ts: float) -> bytes:
+    """What this machine signs with its node key to enroll.
 
-    Called after sign-in and whenever the person key is available. Idempotent, so
-    running it on every sign-in costs one request and nothing else.
-
-    A **linked device** cannot do this: it holds no person private key, so it
-    cannot sign the challenge. That is correct rather than a limitation — the
-    binding is a statement about a person, and only the machine holding the key
-    can make one. The link is already published by whichever machine holds it.
+    Must match the game server's `store.enroll_challenge` byte for byte;
+    `test_games_account_identity.py` pins the two together.
     """
-    token = server_auth.get_token()
-    if not token:
-        return {"error": "sign in to the game server first"}
-    if person_identity.is_linked_device():
-        return {"error": "this machine is linked to a person; bind from the primary"}
+    payload = {
+        "purpose": "horrible.account.device",
+        "account_id": account_id,
+        "node_id": node_id,
+        "ts": ts,
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
+
+async def enroll_device() -> dict[str, Any]:
+    """Become one of the signed-in account's machines.
+
+    The server signs this machine's certificate with the account's person key, and
+    it is adopted as this machine's identity (`identity.adopt_cert`). Its other
+    machines come back too and are recorded as ours, reachable over the relay.
+    Idempotent, so it runs on every sign-in and startup.
+    """
+    from backend.modules.network import identity as node_identity
+
+    token = server_auth.get_token()
     account = server_auth.signed_in_account() or {}
     account_id = str(account.get("id") or "")
-    if not account_id:
-        return {"error": "no account id on the stored session"}
-
-    me = person_identity.load_person()
-    # The challenge must match the server's `store.person_challenge` byte for byte —
-    # canonical JSON, sorted keys, compact separators, and the account id inside it
-    # so the signature cannot be replayed onto a different account.
-    import json
-
-    challenge = json.dumps(
-        {
-            "purpose": "horrible.account.person",
-            "account_id": account_id,
-            "person_id": me.person_id,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-
+    if not token or not account_id:
+        return {"error": "sign in to the game server first"}
+    node = node_identity.load_identity()
+    ts = time.time()
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             res = await client.post(
-                f"{_base()}/account/person",
+                f"{_base()}/account/devices",
                 headers={"Authorization": f"Bearer {token}"},
                 json={
-                    "person_id": me.person_id,
-                    "person_public_key": me.public_key,
-                    "sig": me.sign(challenge),
+                    "node_id": node.node_id,
+                    "node_public_key": node.public_key,
+                    "ts": ts,
+                    "sig": node.sign(enroll_challenge(account_id, node.node_id, ts)),
                 },
             )
-            return dict(res.json())
+            data = dict(res.json())
     except Exception as exc:  # noqa: BLE001 — best effort, never fatal
-        logger.debug("person binding failed: %s", exc)
+        logger.debug("device enrollment failed: %s", exc)
         return {"error": f"game server unreachable: {exc}"}
+    cert = data.get("cert")
+    if data.get("error") or not isinstance(cert, dict):
+        return {"error": str(data.get("error") or "no certificate in the reply")}
+    # Believe nothing the server says about us that does not verify, and nothing
+    # addressed to a different machine.
+    if (
+        not person_identity.verify_device_cert(cert)
+        or str(cert.get("node_id")) != node.node_id
+        or str(cert.get("node_public_key")) != node.public_key
+    ):
+        return {"error": "the game server returned a certificate for another machine"}
+    person_identity.adopt_cert(cert)
+    entry = {
+        "person_id": cert["person_id"],
+        "person_public_key": cert["person_public_key"],
+        "devices": data.get("devices") or [],
+    }
+    others = verified_devices(entry)
+    from backend.modules.social import store
+
+    store.upsert_device(
+        node_id=node.node_id,
+        person_id=str(cert["person_id"]),
+        node_public_key=node.public_key,
+        label=node_identity.node_name(),
+        cert=cert,
+    )
+    for other in others:
+        store.upsert_device(
+            node_id=str(other["node_id"]),
+            person_id=str(other["person_id"]),
+            node_public_key=str(other["node_public_key"]),
+            label=str(other.get("label") or other["node_id"]),
+            cert=other,
+            address=f"relay:{other['node_id']}",
+        )
+    return {"ok": True, "person_id": cert["person_id"], "devices": len(others)}
 
 
-def directory_cert() -> dict[str, Any]:
-    """The certificate this machine lists itself with in the public directory.
+async def unenroll_device() -> None:
+    """Unlist this machine from its account and drop the adopted identity.
 
-    **With an empty label.** A certificate's label is the machine's hostname, and
-    the directory answers anyone who asks; the signature covers the label, so the
-    server cannot strip it. A machine holding the person key mints a label-less
-    certificate for this. A linked machine can only present the one its owner
-    issued, label and all.
+    Called on sign-out, **before** the token is deleted (the request needs it). The
+    local drop happens whether or not the server answers: a signed-out machine is
+    nobody's, even if the directory still lists it until the next enrollment.
     """
-    if person_identity.is_linked_device():
-        return person_identity.self_cert()
     from backend.modules.network import identity as node_identity
 
-    node = node_identity.load_identity()
-    return person_identity.load_person().issue_device_cert(
-        node.node_id, node.public_key, ""
-    )
-
-
-async def publish_device() -> dict[str, Any]:
-    """List this machine under its person in the game server's directory.
-
-    This is what lets `@username` lead to a machine, not just to a person: the
-    directory entry carries each machine's device certificate, and a friend dials
-    `relay:<node_id>` from it. Works from a linked machine too — the certificate it
-    adopted is signed by its owner's person key, and no account token is needed.
-    """
-    try:
-        cert = directory_cert()
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            res = await client.post(f"{_base()}/directory/devices", json={"cert": cert})
-            return dict(res.json())
-    except Exception as exc:  # noqa: BLE001 — best effort, never fatal
-        logger.debug("device publish failed: %s", exc)
-        return {"error": f"game server unreachable: {exc}"}
+    token = server_auth.get_token()
+    if token:
+        node_id = node_identity.load_identity().node_id
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                await client.delete(
+                    f"{_base()}/account/devices/{node_id}",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("device unenrollment failed: %s", exc)
+    person_identity.drop_adopted_cert()
 
 
 def verified_devices(entry: dict[str, Any]) -> list[dict[str, Any]]:

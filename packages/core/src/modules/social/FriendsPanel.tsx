@@ -13,7 +13,7 @@ import {
   subscribeProfileCards,
 } from '../people/profile-cards';
 import { openConversation } from '../people/conversation';
-import { addFriend, linkDevice, updateSelfProfile, type Friend } from './api';
+import { addFriend, updateSelfProfile, type Friend } from './api';
 import {
   blockViaChannel,
   getSocialState,
@@ -190,7 +190,6 @@ export function FriendsPanel() {
   const { account } = useAccount();
   const [code, setCode] = useState('');
   const [address, setAddress] = useState('');
-  const [invite, setInvite] = useState('');
   const [name, setName] = useState('');
   const [filter, setFilter] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -248,22 +247,9 @@ export function FriendsPanel() {
     }
   }, [code, address]);
 
-  const submitLink = useCallback(async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await linkDevice(invite.trim());
-      if (!res.ok) setError(res.error ?? 'could not link that machine');
-      else setInvite('');
-    } finally {
-      setBusy(false);
-      requestRoster();
-    }
-  }, [invite]);
-
   const copyCode = useCallback(() => {
-    if (!me) return;
-    void navigator.clipboard?.writeText(me.friend_code);
+    if (!me?.handle) return;
+    void navigator.clipboard?.writeText(`@${me.handle}`);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1500);
   }, [me]);
@@ -315,12 +301,14 @@ export function FriendsPanel() {
                 @{me.handle}
               </button>
             ) : (
-              <span className="people-dim">not signed in to the ladder</span>
+              <span className="people-dim">sign in to get a username</span>
             )}
           </div>
-          <button onClick={copyCode} title={me.friend_code}>
-            {copied ? 'Copied' : 'Friend code'}
-          </button>
+          {me.handle ? (
+            <button onClick={copyCode} title={`@${me.handle}`}>
+              {copied ? 'Copied' : 'Copy username'}
+            </button>
+          ) : null}
         </header>
       ) : (
         <p className="people-dim">Loading your identity…</p>
@@ -336,7 +324,7 @@ export function FriendsPanel() {
       )}
 
       {listed.length === 0 ? (
-        <p className="people-dim">No friends yet. Add someone with their friend code below.</p>
+        <p className="people-dim">No friends yet. Add someone by their @username below.</p>
       ) : (
         <>
           <h4 className="friends-group">Online ({online.length})</h4>
@@ -373,7 +361,7 @@ export function FriendsPanel() {
       )}
 
       <details className="people-fold">
-        <summary>Add a friend, link a machine, rename yourself</summary>
+        <summary>Add a friend, rename yourself</summary>
         <div className="friends-admin">
           <form
             onSubmit={(e) => {
@@ -384,7 +372,7 @@ export function FriendsPanel() {
             <label className="people-label">Add a friend</label>
             <input
               value={code}
-              placeholder="HD-XXXX-XXXX-XXXX-XXXX-XXXX"
+              placeholder="@username"
               spellCheck={false}
               onChange={(e) => setCode(e.target.value)}
             />
@@ -396,28 +384,6 @@ export function FriendsPanel() {
             />
             <button type="submit" disabled={!code.trim() || busy}>
               {busy ? 'Sending…' : 'Send friend request'}
-            </button>
-          </form>
-
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              void submitLink();
-            }}
-          >
-            <label className="people-label">Link another of your machines</label>
-            <p className="people-hint">
-              Generate an invite on the other computer, then paste it here. It joins your identity
-              rather than becoming a separate friend.
-            </p>
-            <input
-              value={invite}
-              placeholder="paste that machine’s invite"
-              spellCheck={false}
-              onChange={(e) => setInvite(e.target.value)}
-            />
-            <button type="submit" disabled={!invite.trim() || busy || !me?.holds_person_key}>
-              Link
             </button>
           </form>
 
@@ -438,17 +404,10 @@ export function FriendsPanel() {
               placeholder={me ? `currently “${me.display_name}”` : ''}
               onChange={(e) => setName(e.target.value)}
             />
-            <button type="submit" disabled={!name.trim() || !me?.holds_person_key}>
+            <button type="submit" disabled={!name.trim()}>
               Rename
             </button>
           </form>
-
-          {me && !me.holds_person_key && (
-            <p className="people-note">
-              This machine was linked by another device, so it can’t link further machines or rename
-              you.
-            </p>
-          )}
         </div>
       </details>
 

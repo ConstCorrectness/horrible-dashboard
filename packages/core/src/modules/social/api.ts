@@ -84,12 +84,6 @@ export interface AddFriendResult {
   error?: string | null;
 }
 
-export interface LinkDeviceResult {
-  ok: boolean;
-  device?: DeviceInfo | null;
-  error?: string | null;
-}
-
 export function getRoster(): Promise<RosterSnapshot> {
   return apiGet<RosterSnapshot>('/social/roster');
 }
@@ -121,14 +115,9 @@ export function blockFriend(personId: string): Promise<RosterSnapshot> {
   return apiPost<RosterSnapshot>(`/social/friends/${personId}/block`, {});
 }
 
-/** Claim another of your machines, using the peer-fabric invite it minted. */
-export function linkDevice(invite: string, label?: string): Promise<LinkDeviceResult> {
-  return apiPost<LinkDeviceResult>('/social/devices/link', { invite, label });
-}
-
 /**
- * Bind this machine's person identity to the signed-in game-server account, so
- * `@username` resolves to it. Idempotent — safe to fire on every sign-in.
+ * Enroll this machine in the signed-in account now, so `@username` reaches it.
+ * The same enrollment runs on every sign-in; this lets a screen wait for it.
  */
 export function bindHandle(): Promise<BindHandleResult> {
   return apiPost<BindHandleResult>('/social/handle/bind', {});

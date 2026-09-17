@@ -17,8 +17,6 @@ from backend.modules.social.models import (
     AddFriendResult,
     BindHandleResult,
     DirectorySearchResult,
-    LinkDeviceRequest,
-    LinkDeviceResult,
     RespondRequest,
     RosterSnapshot,
     SelfProfile,
@@ -71,20 +69,6 @@ async def block_friend(person_id: str) -> RosterSnapshot:
     return roster.snapshot()
 
 
-@router.post("/devices/link", response_model=LinkDeviceResult)
-async def link_device(request: LinkDeviceRequest) -> LinkDeviceResult:
-    cert, error = await roster.link_device(request.invite, request.label)
-    device = None
-    if cert is not None:
-        # Read the newly-linked machine back off the profile, so presence is
-        # computed the one way rather than restated here.
-        device = next(
-            (d for d in roster.self_profile().devices if d.node_id == cert["node_id"]),
-            None,
-        )
-    return LinkDeviceResult(ok=error is None, device=device, error=error)
-
-
 # ---- usernames (@handle) -----------------------------------------------------------
 #
 # The bridge between the two identities a person used to have: the game server's
@@ -93,16 +77,17 @@ async def link_device(request: LinkDeviceRequest) -> LinkDeviceResult:
 
 @router.post("/handle/bind", response_model=BindHandleResult)
 async def bind_handle() -> BindHandleResult:
-    """Prove to the game server that this account and this person are the same one.
+    """Enroll this machine in the signed-in account now, rather than in the
+    background — so a first-run screen can wait for `@username` to reach it.
 
-    Safe to call repeatedly — the binding is idempotent, so the UI can fire it on
-    every sign-in rather than tracking whether it has run.
+    Idempotent; the same enrollment runs on every sign-in and startup.
     """
-    result = await handles.publish_binding()
+    from backend.modules.games import server_auth
+
+    result = await handles.enroll_device()
     if result.get("error"):
         return BindHandleResult(error=str(result["error"]))
-    account = result.get("account") or {}
-    return BindHandleResult(ok=True, handle=account.get("handle"))
+    return BindHandleResult(ok=True, handle=server_auth.signed_in_username())
 
 
 @router.get("/directory/search", response_model=DirectorySearchResult)

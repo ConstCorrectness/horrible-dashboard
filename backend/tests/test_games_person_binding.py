@@ -1,15 +1,9 @@
-"""Binding a game-server account to a peer-fabric person, and the `@handle` directory.
+"""The `@handle` directory, and the crypto the game server duplicates from the node.
 
-Two things are under test here, and the second one is the reason this file exists
-at all:
-
-1. the **binding route** — that a bearer token alone can't claim a person, that a
-   signature alone can't claim an account, and that neither direction of the
-   mapping can be doubled up; and
-2. the **duplicated crypto** in `games_server/crypto.py`. The game server deploys
+The **duplicated crypto** in `games_server/crypto.py` is the reason this file exists. The game server deploys
    on its own and must not import the node's module graph, so the fingerprint
    scheme and the Ed25519 verify exist twice. That duplication fails *silently*
-   when it drifts — a fingerprint one character off makes every binding look
+   when it drifts — a fingerprint one character off makes every certificate look
    forged — so it is pinned the same way the Kotlin wire is: the two copies are
    replayed against each other.
 """
@@ -17,7 +11,6 @@ at all:
 from __future__ import annotations
 
 import base64
-import json
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -87,55 +80,6 @@ def test_verify_never_raises_on_garbage(bad: str) -> None:
     assert crypto.fingerprint_person is crypto.fingerprint_person  # import sanity
 
 
-# ---- the challenge -----------------------------------------------------------------
-
-
-def test_challenge_binds_the_account_id() -> None:
-    """A signature for one account must not verify for another.
-
-    Without the account id inside the signed bytes, a signature proving "I hold
-    this person key" could be lifted from anywhere and replayed to bind someone
-    else's person to your account.
-    """
-    a = store.person_challenge("acct-1", "person-abc")
-    b = store.person_challenge("acct-2", "person-abc")
-    assert a != b
-
-
-def test_challenge_is_canonical_json() -> None:
-    """Sorted keys, compact separators — the node builds these bytes independently
-    (social/handles.py), so the two must agree exactly or nothing ever verifies."""
-    raw = store.person_challenge("acct-1", "person-abc")
-    assert raw == json.dumps(
-        {
-            "purpose": "horrible.account.person",
-            "account_id": "acct-1",
-            "person_id": "person-abc",
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    # No spaces anywhere is the cheap observable proof of "compact".
-    assert b" " not in raw
-
-
-def test_node_and_server_build_the_same_challenge() -> None:
-    """The node's copy of the challenge (inlined in `handles.publish_binding`) is
-    the same bytes the server checks. Kept as an explicit assertion because the two
-    are written in different files and neither imports the other."""
-    account_id, person_id = "acct-xyz", "abcdefghijklmnop"
-    node_side = json.dumps(
-        {
-            "purpose": "horrible.account.person",
-            "account_id": account_id,
-            "person_id": person_id,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    assert node_side == store.person_challenge(account_id, person_id)
-
-
 # ---- the store ---------------------------------------------------------------------
 
 
@@ -156,37 +100,11 @@ def _account(account_id: str, handle: str | None = None) -> None:
         )
 
 
-def test_bind_person_is_idempotent(db: None) -> None:
-    _account("a1", "rob")
-    _private, public = _keypair()
-    person = crypto.fingerprint_person(public)
-    assert store.bind_person("a1", person, public) == "ok"
-    assert store.bind_person("a1", person, public) == "ok"
-
-
-def test_one_person_cannot_hold_two_accounts(db: None) -> None:
-    """Otherwise one human would have two names on the same ladder."""
-    _account("a1", "rob")
-    _account("a2", "roberta")
-    _private, public = _keypair()
-    person = crypto.fingerprint_person(public)
-    assert store.bind_person("a1", person, public) == "ok"
-    assert store.bind_person("a2", person, public) == "taken"
-
-
-def test_binding_an_unknown_account_is_refused(db: None) -> None:
-    _private, public = _keypair()
-    assert store.bind_person("nope", crypto.fingerprint_person(public), public) == (
-        "unknown-account"
-    )
-
-
 def test_resolve_returns_only_public_fields(db: None) -> None:
     """This is served to anyone who asks, so it must carry no email, token, or
     provider subject — only what someone needs in order to add you."""
     _account("a1", "rob")
-    _private, public = _keypair()
-    store.bind_person("a1", crypto.fingerprint_person(public), public)
+    store.account_identity("a1")
     entry = store.account_by_handle("Rob")  # case-insensitive
     assert entry is not None
     assert set(entry) == {
@@ -195,7 +113,7 @@ def test_resolve_returns_only_public_fields(db: None) -> None:
         "person_id",
         "person_public_key",
         # Device certificates: node ids and keys, signed by the person key. Public
-        # by design (see test_games_person_devices.py), and published label-less.
+        # by design (see test_games_account_identity.py), and issued label-less.
         "devices",
     }
 
@@ -251,6 +169,5 @@ def test_accounts_with_no_handle_are_not_directory_entries(db: None) -> None:
     """A handle is the name; an account without one is not findable, and must not
     come back as a half-filled row."""
     _account("a1", None)
-    _private, public = _keypair()
-    store.bind_person("a1", crypto.fingerprint_person(public), public)
+    store.account_identity("a1")
     assert store.search_handles("a1") == []

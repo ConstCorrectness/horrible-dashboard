@@ -136,19 +136,6 @@ class UpdateProfileRequest(BaseModel):
     avatar: str | None = None
 
 
-class LinkDeviceRequest(BaseModel):
-    """Claim another machine as one of yours, by its peer-fabric invite string."""
-
-    invite: str
-    label: str | None = None
-
-
-class LinkDeviceResult(BaseModel):
-    ok: bool
-    device: DeviceInfo | None = None
-    error: str | None = None
-
-
 class DeviceCertPayload(BaseModel):
     """A device certificate as it crosses the wire (see identity.verify_device_cert)."""
 

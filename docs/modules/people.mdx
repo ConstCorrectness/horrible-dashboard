@@ -59,44 +59,39 @@ So one screen asked for an "Account ID" while the pane beside it asked for a fri
 code, and neither could answer "who is this?" about the other's answer. Adding
 someone meant reading a 25-character code aloud.
 
-The game server is the only uniqueness authority every node agrees on, so the
-mapping lives there: `accounts.person_id` + `person_public_key`, **unique in both
-directions** (migration `_m8_person_binding`). One account is one person — sharing a
-handle across two person keys would make `@rob` ambiguous, and letting one person
-hold two handles would put them on the same ladder twice.
+The game server is the only uniqueness authority every node agrees on, so **the
+account is the identity**. A username is chosen at sign-up and is unique; the
+server holds one person key per account and signs the certificate of every machine
+that signs in to it, so all of them are one person. See
+[One account, every machine](social.mdx#one-account-every-machine).
 
 ```mermaid
 sequenceDiagram
-    participant N as Node (holds person key)
+    participant N as Your machine
     participant G as Game server
     participant P as Someone looking for you
-    N->>G: POST /account/person {person_id, pubkey, sig}
-    Note over G: bearer proves the ACCOUNT<br/>signature proves the PERSON
-    G-->>N: ok, bound
-    P->>G: GET /directory/search?q=rob
-    G-->>P: @robert → person_id + pubkey
-    Note over P: fingerprint(pubkey) == person_id?
-    P->>N: friend request over the fabric
+    N->>G: POST /account/devices {node_id, node key, ts, node signature}
+    Note over G: bearer proves the ACCOUNT<br/>signature proves the MACHINE
+    G-->>N: certificate signed by the account's person key
+    P->>G: GET /directory/resolve?handle=rob
+    G-->>P: @rob → person_id + pubkey + machines
+    Note over P: fingerprint(pubkey) == person_id?<br/>each machine's certificate verifies?
+    P->>N: friend request over the fabric (relay)
 ```
 
 ### What the two proofs are for
 
-The bearer token proves *account*; the signature proves *person*. **Both** are
-required: a bearer alone would let anyone claim to be any person, and a signature
-alone would let anyone bind a person to any account.
-
-The signed challenge **includes the account id** — without it, a signature proving
-"I hold this person key" could be lifted from any other context and replayed to bind
-someone else's person to your account.
+The bearer token proves *account*; the node signature proves *machine*. **Both** are
+required: without the machine proof, a signed-in user could list someone else's
+machine under their own username. The signed challenge includes the account id and
+a timestamp, so it cannot be replayed into another account or reused later.
 
 ### A handle is a directory name, not an authority
 
 `handles.resolve` checks that the returned `person_id` really is the fingerprint of
-the key it came with, so a compromised directory can **withhold** someone but never
-substitute a different key for them. Beyond that, a handle is a claim the game
-server vouches for — which is exactly why the **friend code stays first-class**: it
-is derived from the person's own key, so it works offline, on a LAN, and with no
-server to trust. Username search is the convenience; the code is the guarantee.
+the key it came with, and each machine's certificate verifies under it. Since the
+server holds that key, it vouches for the whole entry; the username is how people
+add each other, and trusting the server that issues it is the design.
 
 The presence record published to Atlas carries `handle` too, and that copy is
 **a claim, not proof** — `verify_record` checks the record was signed by the person
@@ -141,8 +136,8 @@ base64url) and the Ed25519 verify.
 
 That duplication fails **silently and open** when it drifts, so it is pinned the way
 the Kotlin wire is: `backend/tests/test_games_person_binding.py` replays both copies
-against the node's implementations, and asserts the two sides build byte-identical
-challenge bytes. The fixture pins *agreement*; each side's own tests pin correctness.
+against the node's implementations, and `test_games_account_identity.py` asserts
+the two sides build byte-identical enrollment challenge bytes. The fixture pins *agreement*; each side's own tests pin correctness.
 
 ## The Steam shape
 
@@ -154,7 +149,7 @@ waiting for me**.
   unread badge, and a `⋯` menu (View profile / Message / their machines / Remove /
   Block). Grouped **Online** then **Offline**, with offline dimmed rather than
   hidden — the trick that makes the list scannable. A search box appears past three
-  friends. Adding a friend, linking a machine and renaming yourself moved into a
+  friends. Adding a friend and renaming yourself moved into a
   fold at the bottom: they are setup, not daily use.
 - **Messages** — a conversation list with unread badges beside a thread, keyed by
   person and persisted server-side. See [Messages](social.mdx#messages).
@@ -180,7 +175,7 @@ The roster must never acquire a network dependency to draw.
   inside this pane's instance id, so two providers would silently overwrite each other.
 - **Commands:** `people.open`, `people.find` (jumps to Discover), `people.me`.
 - **Routes:** `POST /api/social/handle/bind`, `GET /api/social/directory/search`.
-- **Game server:** `POST /account/person`, `GET /directory/resolve`,
+- **Game server:** `POST /account/devices`, `GET /directory/resolve`,
   `GET /directory/search`, `POST /directory/people` (the reverse lookup: fabric
   people → their ladder accounts, which a node needs to discover that a friend it
   already trusts is the same human as an account it already sees),

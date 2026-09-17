@@ -45,7 +45,6 @@ logger = logging.getLogger(__name__)
 SOCIAL_HELLO = "social_hello"
 SOCIAL_FRIEND_REQUEST = "social_friend_request"
 SOCIAL_FRIEND_RESPONSE = "social_friend_response"
-SOCIAL_DEVICE_CERT = "social_device_cert"
 
 # Callbacks the `/ws` social channel registers to push roster updates to browsers.
 _subscribers: set[Any] = set()
@@ -303,11 +302,14 @@ async def handle_hello(hub: PeerHub, session: PeerSession, env: PeerEnvelope) ->
     # presence directory being up. Nothing recorded a friend's address before, and
     # the reconnect after a restart had only Atlas to go on.
     address = dialable_address(session)
-    if address is not None and store.get_friend_row(person_id) is not None:
+    own = _is_own_machine(person_id, env.src)
+    if address is not None and (own or store.get_friend_row(person_id) is not None):
         store.upsert_device(
             node_id=env.src,
             person_id=person_id,
-            node_public_key=str((env.data.get("cert") or {}).get("node_public_key", "")),
+            node_public_key=str(
+                (env.data.get("cert") or {}).get("node_public_key", "")
+            ),
             label=str((env.data.get("cert") or {}).get("label") or env.src),
             address=address,
         )
@@ -316,7 +318,27 @@ async def handle_hello(hub: PeerHub, session: PeerSession, env: PeerEnvelope) ->
     row = store.get_friend_row(person_id)
     if row is not None and row["status"] == "accepted":
         _grant_trust(person_id)
+    if own:
+        # Another machine signed in to our account. Its certificate is signed by
+        # the account's key, which is exactly what makes it ours.
+        trust.save_known_peer(
+            env.src, {"trusted": True, "via": "own-device", "blocked": False}
+        )
+        peer_hub.set_trusted(env.src, True)
     broadcast_roster()
+
+
+def _is_own_machine(person_id: str, node_id: str) -> bool:
+    """Whether `node_id` is another machine of the account this one is enrolled in.
+
+    Only an *enrolled* machine has owners' machines: a signed-out one speaks for a
+    local key no other machine holds.
+    """
+    return (
+        person_identity.is_linked_device()
+        and person_id == person_identity.effective_person_id()
+        and node_id != node_identity.load_identity().node_id
+    )
 
 
 async def handle_friend_request(
@@ -373,44 +395,6 @@ async def handle_friend_response(
     broadcast_roster()
 
 
-async def handle_device_cert(
-    hub: PeerHub, session: PeerSession, env: PeerEnvelope
-) -> None:
-    """Another of our machines minted us a certificate — adopt it.
-
-    Adoption replaces which person this machine speaks for, so it needs consent.
-    That consent is the **invite this machine itself minted**: the peer only got a
-    session by redeeming a single-use pairing token, which the handshake records as
-    `trusted`. An untrusted peer offering a certificate is refused, which is what
-    stops a stranger talking this node out of its identity.
-
-    Note the check is *not* "do I already hold a person key" — a machine generates
-    one the moment anything asks who it is, so that test would refuse every real
-    second computer.
-    """
-    cert = env.data.get("cert")
-    if session is None or not session.info.trusted:
-        logger.info("ignoring device cert from %s: peer is not trusted", env.src)
-        return
-    if not isinstance(cert, dict) or not person_identity.verify_device_cert(cert):
-        return
-    me = node_identity.load_identity()
-    if str(cert.get("node_id")) != me.node_id:
-        logger.info("ignoring device cert from %s: not addressed to this node", env.src)
-        return
-    person_identity.save_profile(device_cert=cert, person_id=str(cert["person_id"]))
-    # Re-file this machine under its new owner so the roster stops showing it as a
-    # separate person.
-    store.upsert_device(
-        node_id=me.node_id,
-        person_id=str(cert["person_id"]),
-        node_public_key=me.public_key,
-        label=str(cert.get("label") or node_identity.node_name()),
-        cert=cert,
-    )
-    broadcast_roster()
-
-
 async def _send_response(person_id: str, accept: bool) -> None:
     payload = {**_hello_payload(), "accept": accept}
     for node_id in reachable_nodes(person_id, include_strangers=True):
@@ -446,18 +430,20 @@ async def reconnect_round(now: float | None = None) -> list[str]:
     now = time.monotonic() if now is None else now
     connected: list[str] = []
     rows = [
-        r
+        (r.person_id, r.status)
         for r in store.list_friends()
         if r.status in ("accepted", "pending_out") and not r.is_self
     ]
+    if person_identity.is_linked_device():
+        # Our own other machines, so signing in on two computers joins them up.
+        rows.insert(0, (person_identity.effective_person_id(), "self"))
     due = [
-        r
-        for r in rows
-        if not reachable_nodes(r.person_id, include_strangers=True)
-        and _reconnect_backoff.get(r.person_id, (0.0, 0.0))[0] <= now
+        (person_id, status)
+        for person_id, status in rows
+        if not reachable_nodes(person_id, include_strangers=True)
+        and _reconnect_backoff.get(person_id, (0.0, 0.0))[0] <= now
     ][:RECONNECT_BATCH]
-    for row in due:
-        person_id = row.person_id
+    for person_id, status in due:
         try:
             node_id = await _dial(person_id, None)
         except Exception:  # noqa: BLE001 - one friend must not stop the round
@@ -472,7 +458,7 @@ async def reconnect_round(now: float | None = None) -> list[str]:
             continue
         _reconnect_backoff.pop(person_id, None)
         connected.append(person_id)
-        if row.status == "pending_out":
+        if status == "pending_out":
             try:
                 await peer_hub.send_to(node_id, SOCIAL_FRIEND_REQUEST, _hello_payload())
             except Exception:  # noqa: BLE001
@@ -599,7 +585,14 @@ async def _dial(person_id: str, address: str | None) -> str | None:
         d["last_address"] for d in store.list_devices(person_id) if d["last_address"]
     ]
     candidates += await directory.lookup(person_id)
-    candidates = list(dict.fromkeys(c for c in candidates if c))
+    # Every machine we know is reachable through the relay by its id alone. Without
+    # this, a friend made before the relay existed — no `relay:` address recorded —
+    # was only ever redialed at their old LAN address, and never found again once
+    # either side left that network.
+    candidates += [f"relay:{d['node_id']}" for d in store.list_devices(person_id)]
+    # Never dial ourselves: our own machine is on our own person's device list.
+    me = node_identity.load_identity().node_id
+    candidates = list(dict.fromkeys(c for c in candidates if c and c != f"relay:{me}"))
     direct = [c for c in candidates if not c.startswith("relay:")]
     relayed = [c for c in candidates if c.startswith("relay:")]
 
@@ -607,7 +600,9 @@ async def _dial(person_id: str, address: str | None) -> str | None:
     if node_id is not None:
         return node_id
     if relayed and not any(t.name == "relay" for t in peer_hub.transports):
-        logger.info("social dial: %s is only reachable by relay, and it is off", person_id)
+        logger.info(
+            "social dial: %s is only reachable by relay, and it is off", person_id
+        )
     for candidate in relayed:
         try:
             info = await peer_hub.connect(candidate, "relay")
@@ -651,8 +646,7 @@ async def add_friend(
     person_id, error = await resolve_target(code)
     if person_id is None:
         return None, error
-    me = person_identity.load_person()
-    if person_id == me.person_id:
+    if person_id == person_identity.effective_person_id():
         return None, "that is your own friend code"
 
     store.upsert_friend(person_id, status="pending_out", note=note)
@@ -700,46 +694,6 @@ async def block(person_id: str) -> None:
     broadcast_roster()
 
 
-async def link_device(
-    invite: str, label: str | None = None
-) -> tuple[dict[str, Any] | None, str | None]:
-    """Claim another machine as one of ours, using its peer-fabric invite.
-
-    Runs on the machine holding the person key: it dials the other box, mints it a
-    certificate, and records it as one of our devices. The other end adopts the
-    certificate in `handle_device_cert`.
-    """
-    if person_identity.is_linked_device():
-        return None, "only the machine holding your person key can link devices"
-    try:
-        address, token = trust.parse_invite(invite)
-    except Exception:
-        return None, "that does not look like an invite"
-    try:
-        info = await peer_hub.connect(address, "direct", token=token)
-    except Exception as exc:
-        return None, f"could not reach that machine: {exc}"
-
-    me = person_identity.load_person()
-    cert = me.issue_device_cert(info.node_id, info.public_key, label or info.node_name)
-    try:
-        await peer_hub.send_to(info.node_id, SOCIAL_DEVICE_CERT, {"cert": cert})
-    except Exception as exc:
-        return None, f"could not hand over the certificate: {exc}"
-
-    store.upsert_device(
-        node_id=info.node_id,
-        person_id=me.person_id,
-        node_public_key=info.public_key,
-        label=label or info.node_name,
-        cert=cert,
-        address=address,
-    )
-    trust.save_known_peer(info.node_id, {"trusted": True, "via": "own-device"})
-    broadcast_roster()
-    return cert, None
-
-
 # ---- startup ----------------------------------------------------------------------
 
 
@@ -767,12 +721,12 @@ def register(hub: PeerHub) -> None:
     hub.register_handler(SOCIAL_HELLO, handle_hello)
     hub.register_handler(SOCIAL_FRIEND_REQUEST, handle_friend_request)
     hub.register_handler(SOCIAL_FRIEND_RESPONSE, handle_friend_response)
-    hub.register_handler(SOCIAL_DEVICE_CERT, handle_device_cert)
     # The friend handshake is the one conversation a stranger may have: each of these
     # verifies a device certificate before believing anything, and trust is granted
-    # only when a person accepts. `SOCIAL_DEVICE_CERT` is deliberately NOT here — it
-    # replaces this machine's identity and needs an invite-paired session.
-    hub.allow_from_strangers(SOCIAL_HELLO, SOCIAL_FRIEND_REQUEST, SOCIAL_FRIEND_RESPONSE)
+    # only when a person accepts.
+    hub.allow_from_strangers(
+        SOCIAL_HELLO, SOCIAL_FRIEND_REQUEST, SOCIAL_FRIEND_RESPONSE
+    )
     hub.subscribe(_on_peer_event)
     from backend.modules.social.agent_tools import register_social_tools
 

@@ -22,7 +22,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
 from backend.games_engine.base import list_games
-from backend.games_server import auth, crypto, store
+from backend.games_server import auth, store
 from backend.games_server.hub import GameHub
 
 logger = logging.getLogger(__name__)
@@ -218,9 +218,10 @@ class _SetHandle(BaseModel):
     handle: str
 
 
-class _BindPerson(BaseModel):
-    person_id: str
-    person_public_key: str
+class _EnrollDevice(BaseModel):
+    node_id: str
+    node_public_key: str
+    ts: float
     sig: str
 
 
@@ -272,57 +273,52 @@ async def set_handle_route(
     return {"ok": True, "account": auth.account_payload(viewer)}
 
 
-@app.post("/account/person")
-async def bind_person_route(
-    body: _BindPerson, authorization: str | None = Header(default=None)
+@app.post("/account/devices")
+async def enroll_device_route(
+    body: _EnrollDevice, authorization: str | None = Header(default=None)
 ) -> dict[str, Any]:
-    """Bind the caller's account to their peer-fabric **person** identity.
+    """Make the calling machine one of the signed-in account's.
 
-    This is what makes `@handle` a way to reach someone: the game server is the
-    only uniqueness authority every node agrees on, so it is where the mapping
-    handle → person_id has to live.
+    **The account is the identity.** Its person key lives here, so every machine
+    signed in to one account gets a certificate from the same key and is the same
+    person to friends. Machines used to mint their own keys and bind them to the
+    account, and two computers on one account took turns owning its username.
 
-    The bearer token proves *account*; the signature proves *person*. Both are
-    required — a bearer alone would let anyone claim to be any person, and a
-    signature alone would let anyone bind a person to any account. The signed
-    challenge includes the account id so a signature can't be replayed from
-    elsewhere onto a different account.
+    The bearer proves the account; the signature proves the machine holds the node
+    key it names (`store.enroll_challenge`). Returns the certificate, and the
+    account's other machines so this one can reach them.
     """
     viewer = _viewer(authorization)
     if viewer is None:
         return {"error": "sign in required"}
-    if store.fingerprint_person(body.person_public_key) != body.person_id:
-        return {"error": "person_id does not match the public key"}
-    challenge = store.person_challenge(viewer, body.person_id)
-    if not crypto.verify(body.person_public_key, challenge, body.sig):
-        return {"error": "signature did not verify"}
-    outcome = store.bind_person(viewer, body.person_id, body.person_public_key)
-    if outcome == "taken":
-        return {"error": "that identity is already bound to another account"}
-    if outcome != "ok":
-        return {"error": outcome}
-    return {"ok": True, "account": auth.account_payload(viewer)}
+    outcome, cert = store.enroll_device(
+        viewer, body.node_id, body.node_public_key, body.ts, body.sig
+    )
+    if cert is None:
+        return {
+            "error": {
+                "stale": "this machine's clock is too far off to enroll",
+                "unknown-account": "that account no longer exists",
+            }.get(outcome, "the machine's proof did not verify")
+        }
+    others = [
+        d
+        for d in store.devices_for_person(str(cert["person_id"]))
+        if d["node_id"] != body.node_id
+    ]
+    return {"ok": True, "cert": cert, "devices": others}
 
 
-class _PublishDevice(BaseModel):
-    cert: dict[str, Any]
-
-
-@app.post("/directory/devices")
-async def publish_device_route(body: _PublishDevice) -> dict[str, Any]:
-    """A node lists itself as one of its person's machines.
-
-    No sign-in: the device certificate is signed by the person key and is accepted
-    only for a person bound to an account here, so it can only say something true.
-    That is also what lets a *linked* machine, which holds no account token, list
-    itself. See `store.publish_device`.
-    """
-    outcome = store.publish_device(body.cert)
-    if outcome == "ok":
-        return {"ok": True}
-    if outcome == "unbound":
-        return {"error": "that person is not bound to an account"}
-    return {"error": "invalid device certificate"}
+@app.delete("/account/devices/{node_id}")
+async def remove_device_route(
+    node_id: str, authorization: str | None = Header(default=None)
+) -> dict[str, Any]:
+    """Unlist a machine from the caller's account (sign-out)."""
+    viewer = _viewer(authorization)
+    if viewer is None:
+        return {"error": "sign in required"}
+    store.remove_device(viewer, node_id)
+    return {"ok": True}
 
 
 @app.get("/directory/resolve")

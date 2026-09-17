@@ -373,7 +373,6 @@ def test_accepting_answers_a_requester_connected_only_as_a_stranger(
     assert (roster.SOCIAL_FRIEND_RESPONSE in hub.stranger_types) and (
         roster.SOCIAL_FRIEND_REQUEST in hub.stranger_types
     )
-    assert roster.SOCIAL_DEVICE_CERT not in hub.stranger_types
     responses = [s for s in hub.sent if s[1] == roster.SOCIAL_FRIEND_RESPONSE]
     assert responses and responses[0][0] == "their-node"
     assert responses[0][2]["accept"] is True
@@ -393,80 +392,6 @@ def test_a_mistyped_code_fails_before_touching_the_network(data_dir, hub):
         friend, error = await roster.add_friend("HD-AAAA-BBBB-CCCC-DDDD-EEEE")
         assert friend is None and "typo" in (error or "")
         assert hub.sent == []
-
-    asyncio.run(go())
-
-
-class FakeSession:
-    """A peer session carrying just the trust flag `handle_device_cert` consults."""
-
-    def __init__(self, trusted: bool) -> None:
-        self.info = type("Info", (), {"trusted": trusted})()
-
-
-def test_an_untrusted_peer_cannot_talk_this_machine_out_of_its_identity(
-    data_dir, hub, stranger
-):
-    async def go():
-        from backend.modules.network import identity as node_identity
-
-        me = node_identity.load_identity()
-        hostile = stranger.issue_device_cert(me.node_id, me.public_key, "pwned")
-        await roster.handle_device_cert(
-            hub,
-            FakeSession(trusted=False),
-            PeerEnvelope(
-                type=roster.SOCIAL_DEVICE_CERT, src="their-node", data={"cert": hostile}
-            ),
-        )
-        assert not person_identity.is_linked_device()
-
-    asyncio.run(go())
-
-
-def test_a_trusted_peer_may_link_this_machine(data_dir, hub, stranger):
-    """Consent is the invite this machine minted — redeeming it makes the peer
-    trusted, and only then may it hand over a certificate.
-
-    A second computer generates its own person key the moment anything asks who it
-    is, so gating on "do I already hold a key" would refuse every real link.
-    """
-
-    async def go():
-        from backend.modules.network import identity as node_identity
-
-        person_identity.load_person()  # this machine has its own key already
-        me = node_identity.load_identity()
-        cert = stranger.issue_device_cert(me.node_id, me.public_key, "my-laptop")
-        await roster.handle_device_cert(
-            hub,
-            FakeSession(trusted=True),
-            PeerEnvelope(
-                type=roster.SOCIAL_DEVICE_CERT, src="their-node", data={"cert": cert}
-            ),
-        )
-        assert person_identity.is_linked_device()
-        assert person_identity.effective_person_id() == stranger.person_id
-        # And it now presents its owner's friend code, not its own unused one.
-        assert roster.self_profile().person_id == stranger.person_id
-        assert roster.self_profile().holds_person_key is False
-
-    asyncio.run(go())
-
-
-def test_a_cert_addressed_to_another_node_is_refused_even_from_a_trusted_peer(
-    data_dir, hub, stranger
-):
-    async def go():
-        cert = stranger.issue_device_cert("some-other-node", "k", "not-me")
-        await roster.handle_device_cert(
-            hub,
-            FakeSession(trusted=True),
-            PeerEnvelope(
-                type=roster.SOCIAL_DEVICE_CERT, src="their-node", data={"cert": cert}
-            ),
-        )
-        assert not person_identity.is_linked_device()
 
     asyncio.run(go())
 

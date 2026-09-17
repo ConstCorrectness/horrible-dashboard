@@ -188,9 +188,14 @@ def save_profile(**fields: Any) -> dict[str, Any]:
 
 
 def display_name() -> str:
-    """The name friends see. Falls back to this node's advertised name."""
+    """The name friends see: the one you chose, else your username, else this
+    machine's name (a signed-out machine has no username)."""
     name = str(load_profile().get("display_name", "")).strip()
-    return name or node_identity.node_name()
+    if name:
+        return name
+    from backend.modules.games import server_auth
+
+    return server_auth.signed_in_username() or node_identity.node_name()
 
 
 def adopted_cert() -> dict[str, Any] | None:
@@ -205,6 +210,20 @@ def adopted_cert() -> dict[str, Any] | None:
     if isinstance(cached, dict) and verify_device_cert(cached):
         return cached
     return None
+
+
+def adopt_cert(cert: dict[str, Any]) -> None:
+    """Speak as the person `cert` names — the account's, when signed in."""
+    save_profile(device_cert=cert, person_id=str(cert["person_id"]))
+
+
+@jsonstore.serialized(_profile_path)
+def drop_adopted_cert() -> None:
+    """Stop speaking as another person's machine (sign-out)."""
+    profile = load_profile()
+    profile.pop("device_cert", None)
+    profile.pop("person_id", None)
+    jsonstore.write_text(_profile_path(), json.dumps(profile))
 
 
 def is_linked_device() -> bool:
