@@ -6,7 +6,7 @@
  * and focusing the pane makes it the frame's focused pane — which is what the
  * keybinding service resolves `paneFocus` / `paneInstance` against.
  */
-import { useMemo } from 'react';
+import { Suspense, useMemo } from 'react';
 import {
   activeSectionOf,
   layoutStore,
@@ -108,7 +108,22 @@ export function PaneHost({ pane, areaId }: { pane: PaneState; areaId?: string })
               component is pane-level, and stamping the active section on it would
               put it and any body it renders internally back on one key. */}
           <SectionInstanceContext.Provider value={sectionBody ? (activeSection ?? null) : null}>
-            <Component />
+            <Suspense
+              fallback={
+                <div
+                  className="frame-pane-loading"
+                  style={{
+                    padding: '1.25rem',
+                    color: 'var(--text-dim)',
+                    fontSize: '0.85rem',
+                  }}
+                >
+                  Loading…
+                </div>
+              }
+            >
+              <Component />
+            </Suspense>
           </SectionInstanceContext.Provider>
         </div>
       </PaneParamsContext.Provider>

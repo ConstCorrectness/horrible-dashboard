@@ -309,6 +309,17 @@ export {
   type ThemeDecl,
 } from './theme';
 export {
+  applyGraphicsQuality,
+  currentGraphicsQuality,
+  detectDefaultGraphicsQuality,
+  GRAPHICS_QUALITIES,
+  GRAPHICS_QUALITY_SETTING_KEY,
+  initGraphicsQuality,
+  isKnownGraphicsQuality,
+  useGraphicsQuality,
+  type GraphicsQuality,
+} from './graphics';
+export {
   registry,
   type AgentCommandDecl,
   type AgentContextSnapshot,

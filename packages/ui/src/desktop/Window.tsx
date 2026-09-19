@@ -14,7 +14,7 @@
  *    in-flight rect is local state; dispatching per frame would bump `revision` a
  *    hundred times per drag and drive the autosave debounce into a write loop.
  */
-import { useCallback, useRef, useState, useSyncExternalStore } from 'react';
+import { memo, useCallback, useRef, useState, useSyncExternalStore } from 'react';
 import {
   clampRect,
   closePaneGuarded,
@@ -49,7 +49,7 @@ const EDGES = [
   ['se', 1, 1],
 ] as const;
 
-export function DesktopWindow({
+export const DesktopWindow = memo(function DesktopWindow({
   win,
   focused,
   presented,
@@ -86,8 +86,11 @@ export function DesktopWindow({
   const decl = active ? resolveView(active.viewId) : null;
   // Windows exist on a tiling desktop too (a pane popped out of the frame), so
   // this is read per render rather than assumed from "we are rendering a window".
-  const floatingDesktop =
-    useSyncExternalStore(layoutStore.subscribe, layoutStore.getSnapshot).frame.mode === 'floating';
+  // Selected granularly so other layout dispatches don't force a re-render.
+  const floatingDesktop = useSyncExternalStore(
+    layoutStore.subscribe,
+    useCallback(() => layoutStore.getSnapshot().frame.mode === 'floating', []),
+  );
 
   const startGesture = useCallback(
     (e: React.PointerEvent, kind: 'move' | 'resize', edge?: readonly [string, number, number]) => {
@@ -106,7 +109,19 @@ export function DesktopWindow({
       zoneRef.current = null;
       mergeRef.current = null;
 
-      const onMove = (me: PointerEvent) => {
+      if (kind === 'move') {
+        document.body.classList.add('is-window-dragging');
+      } else {
+        document.body.classList.add('is-window-resizing');
+      }
+
+      let pendingEvent: PointerEvent | null = null;
+      let rafId = 0;
+
+      const processMove = () => {
+        rafId = 0;
+        const me = pendingEvent;
+        if (!me) return;
         const dx = me.clientX - start.x;
         const dy = me.clientY - start.y;
         let next: WindowRect;
@@ -134,10 +149,26 @@ export function DesktopWindow({
         setLive(clamped);
       };
 
+      const onMove = (me: PointerEvent) => {
+        pendingEvent = me;
+        if (!rafId) {
+          rafId = requestAnimationFrame(processMove);
+        }
+      };
+
       const onUp = (ue: PointerEvent) => {
+        document.body.classList.remove('is-window-dragging', 'is-window-resizing');
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
         window.removeEventListener('pointercancel', onUp);
+        if (rafId) {
+          cancelAnimationFrame(rafId);
+          rafId = 0;
+        }
+        if (pendingEvent) {
+          processMove();
+          pendingEvent = null;
+        }
         const committed = liveRef.current;
         const zone = zoneRef.current;
         const mergeId = mergeRef.current;
@@ -364,4 +395,4 @@ export function DesktopWindow({
         ))}
     </div>
   );
-}
+});

@@ -34,6 +34,49 @@ export default defineConfig({
       '@emotion/styled',
     ],
   },
+  build: {
+    chunkSizeWarningLimit: 1200,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/three') || id.includes('three/examples')) {
+            return 'vendor-three';
+          }
+          if (id.includes('node_modules/@dimforge/rapier3d')) {
+            return 'vendor-rapier';
+          }
+          if (
+            id.includes('node_modules/@mui') ||
+            id.includes('node_modules/@emotion')
+          ) {
+            return 'vendor-mui';
+          }
+          if (
+            id.includes('node_modules/codemirror') ||
+            id.includes('node_modules/@codemirror') ||
+            id.includes('node_modules/@lezer')
+          ) {
+            return 'vendor-codemirror';
+          }
+          if (id.includes('node_modules/@xterm')) {
+            return 'vendor-xterm';
+          }
+          if (id.includes('node_modules/agora-rtc-sdk-ng')) {
+            return 'vendor-agora';
+          }
+          if (id.includes('node_modules/pdfjs-dist')) {
+            return 'vendor-pdfjs';
+          }
+          if (id.includes('node_modules/@xyflow')) {
+            return 'vendor-xyflow';
+          }
+          if (id.includes('node_modules/react/') || id.includes('node_modules/react-dom/')) {
+            return 'vendor-react';
+          }
+        },
+      },
+    },
+  },
   server: {
     // Listen host: `pnpm dev:lan` sets HORRIBLE_DEV_HOST=0.0.0.0 to expose the UI on
     // the LAN (peer-fabric collaboration); plain `pnpm dev` stays on localhost.

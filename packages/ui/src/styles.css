@@ -8395,3 +8395,52 @@ button.agent-model-option.is-selected .agent-model-option-name {
   font: inherit;
   cursor: pointer;
 }
+
+/* Quality <----> Performance segmented control in Settings */
+.quality-slider-control {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 260px;
+}
+
+.quality-slider-track {
+  display: flex;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 2px;
+  gap: 2px;
+}
+
+.quality-slider-step {
+  flex: 1;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 0.35rem 0.6rem;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  text-align: center;
+}
+
+.quality-slider-step:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.quality-slider-step.is-active {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.quality-slider-hint {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  line-height: 1.3;
+}
+

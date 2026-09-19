@@ -75,23 +75,53 @@ export function Avatar3D({
         let mixer: AnimationMixer | undefined;
         const actions: Record<string, AnimationAction> = {};
         let active: AnimationAction | undefined;
+
+        const loadMoodAction = async (moodName: string) => {
+          if (actions[moodName] || !mixer) return actions[moodName];
+          const url = moods[moodName];
+          if (!url) return undefined;
+          try {
+            const animGltf = await loader.loadAsync(url);
+            if (disposed || !mixer) return undefined;
+            const clip = animGltf.animations[0];
+            if (clip) {
+              const action = mixer.clipAction(clip);
+              actions[moodName] = action;
+              return action;
+            }
+          } catch (e) {
+            console.error(`Failed to load mood ${moodName}:`, e);
+          }
+          return undefined;
+        };
+
         const setMood = (next: string) => {
-          const action = actions[next] ?? actions[DEFAULT_AVATAR_MOOD];
-          if (!action || action === active) return;
-          action.reset().setLoop(THREE.LoopRepeat, Infinity).setEffectiveWeight(1).play();
-          if (active) active.crossFadeTo(action, 0.4, false);
-          active = action;
+          const targetMood = moods[next] ? next : DEFAULT_AVATAR_MOOD;
+          const playAction = (action?: AnimationAction) => {
+            if (!action || action === active) return;
+            action.reset().setLoop(THREE.LoopRepeat, Infinity).setEffectiveWeight(1).play();
+            if (active) active.crossFadeTo(action, 0.4, false);
+            active = action;
+          };
+
+          if (actions[targetMood]) {
+            playAction(actions[targetMood]);
+          } else {
+            void loadMoodAction(targetMood).then(playAction);
+          }
         };
 
         const loader = new GLTFLoader();
-        const moodEntries = Object.entries(moods);
+        const initialMood = desiredMood.current || DEFAULT_AVATAR_MOOD;
+        const initialMoodUrl = moods[initialMood] ?? moods[DEFAULT_AVATAR_MOOD];
 
-        // Load the avatar mesh and every mood's animation clip together.
+        // Load only the avatar mesh and the initial mood's animation clip upfront.
+        // Other mood clips load on-demand when requested.
         Promise.all([
           loader.loadAsync(modelUrl),
-          ...moodEntries.map(([, url]) => loader.loadAsync(url)),
+          initialMoodUrl ? loader.loadAsync(initialMoodUrl) : Promise.resolve(null),
         ])
-          .then(([avatarGltf, ...animGltfs]) => {
+          .then(([avatarGltf, initialAnimGltf]) => {
             if (disposed) return;
 
             const model = avatarGltf.scene;
@@ -108,10 +138,9 @@ export function Avatar3D({
             friend.add(model);
 
             mixer = new THREE.AnimationMixer(model);
-            moodEntries.forEach(([moodName], i) => {
-              const clip = animGltfs[i].animations[0];
-              if (clip) actions[moodName] = mixer!.clipAction(clip);
-            });
+            if (initialAnimGltf && initialAnimGltf.animations[0]) {
+              actions[initialMood] = mixer.clipAction(initialAnimGltf.animations[0]);
+            }
 
             applyMood.current = setMood;
             setMood(desiredMood.current); // honor the latest requested mood
@@ -160,11 +189,16 @@ export function Avatar3D({
           pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
           pointer.y = (e.clientY / window.innerHeight) * 2 - 1;
         };
-        window.addEventListener('pointermove', onPointer);
+        window.addEventListener('pointermove', onPointer, { passive: true });
 
         let frame = 0;
+        let isVisible = true;
+        let isDocVisible = !document.hidden;
         const clock = new THREE.Clock();
+
         const tick = () => {
+          frame = 0;
+          if (!isVisible || !isDocVisible) return;
           const delta = clock.getDelta();
           const t = clock.getElapsedTime();
           mixer?.update(delta);
@@ -185,10 +219,46 @@ export function Avatar3D({
           renderer.render(scene, camera);
           frame = requestAnimationFrame(tick);
         };
-        tick();
+
+        const startLoop = () => {
+          if (!frame && isVisible && isDocVisible) {
+            clock.start();
+            frame = requestAnimationFrame(tick);
+          }
+        };
+
+        const stopLoop = () => {
+          if (frame) {
+            cancelAnimationFrame(frame);
+            frame = 0;
+            clock.stop();
+          }
+        };
+
+        const onVisibilityChange = () => {
+          isDocVisible = !document.hidden;
+          if (isDocVisible && isVisible) startLoop();
+          else stopLoop();
+        };
+        document.addEventListener('visibilitychange', onVisibilityChange);
+
+        const observer = new IntersectionObserver(
+          (entries) => {
+            const entry = entries[0];
+            isVisible = entry ? entry.isIntersecting : true;
+            if (isVisible && isDocVisible) startLoop();
+            else stopLoop();
+          },
+          { threshold: 0.05 },
+        );
+        observer.observe(el);
+
+        startLoop();
 
         cleanup = () => {
-          cancelAnimationFrame(frame);
+          stopLoop();
+          observer.disconnect();
+          document.removeEventListener('visibilitychange', onVisibilityChange);
           applyMood.current = () => {};
           window.removeEventListener('pointermove', onPointer);
           renderer.dispose();

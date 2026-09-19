@@ -323,7 +323,10 @@ export function AppShell({
             finished or skipped, and a dismissible overlay over a half-configured
             desktop is exactly the "did I finish that?" state it exists to avoid. */}
         {view === 'oobe' && <Oobe onDone={() => setView('desktop')} />}
-        <div hidden={view !== 'desktop'} className="shell-view os-shell-view">
+        <div
+          hidden={view !== 'desktop'}
+          className={`shell-view os-shell-view${tiling ? ' is-tiling' : ''}`}
+        >
           <Desktop />
           {tiling && <Frame />}
         </div>
