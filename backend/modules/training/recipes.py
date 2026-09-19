@@ -757,15 +757,35 @@ def recipe_path(project: ProjectModel) -> Path:
     return Path(project.root) / "recipe.json"
 
 
+def default_recipe(project: ProjectModel) -> Recipe:
+    """A fresh recipe, pointed at the dataset the project was created from.
+
+    A project made from `trl-lib/Capybara` used to open a recipe whose dataset
+    field was empty — the one thing the project already knew, asked for again.
+    Only a Hugging Face dataset ref qualifies: that is the one kind whose id is
+    exactly what `load_dataset` takes. A Kaggle ref names files under `data/`, and
+    guessing a loader for them would be a recipe that looks filled in but is not.
+    """
+    ref = next(
+        (
+            r
+            for r in project.refs
+            if r.provider == "huggingface" and r.kind == "dataset"
+        ),
+        None,
+    )
+    return Recipe(dataset=ref.id) if ref is not None else Recipe()
+
+
 def load_recipe(project: ProjectModel) -> Recipe:
     path = recipe_path(project)
     if not path.is_file():
-        return Recipe()
+        return default_recipe(project)
     try:
         return Recipe.from_dict(json.loads(path.read_text(encoding="utf-8")))
     except (OSError, ValueError) as exc:
         logger.info("training: unreadable recipe for %s (%s)", project.id, exc)
-        return Recipe()
+        return default_recipe(project)
 
 
 def save_recipe(project: ProjectModel, recipe: Recipe) -> None:

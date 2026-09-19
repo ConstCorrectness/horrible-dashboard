@@ -21,6 +21,7 @@ import { CommonsPublish } from './CommonsPublish';
 import { IoLane } from './IoLane';
 import { McpStepDetail } from './McpStepDetail';
 import { Timeline } from './Timeline';
+import { TraceView } from './TraceView';
 import {
   ago,
   card,
@@ -41,11 +42,13 @@ function StepRow({
   index,
   selected,
   mcpCall,
+  depth = 0,
 }: {
   runId: string;
   step: TrajectoryStep;
   index: number;
   selected: boolean;
+  depth?: number;
   /** Present when this step was an MCP tool call with a recorded summary. */
   mcpCall?: McpCallSummary;
 }) {
@@ -60,6 +63,8 @@ function StepRow({
         borderLeft: `2px solid ${failed ? 'var(--danger)' : 'var(--border)'}`,
         paddingLeft: 'var(--space-4)',
         marginBottom: 'var(--space-3)',
+        // A natively nested trace (received over OTLP) indents by its depth.
+        marginLeft: depth ? `calc(${depth} * var(--space-5))` : undefined,
         // Capped by `--stagger-cap` in the stylesheet, so a 200-step run does not
         // take twenty seconds to finish arriving.
         ['--traj-i' as string]: Math.min(index, 12),
@@ -117,6 +122,19 @@ function StepRow({
       ) : null}
     </div>
   );
+}
+
+/** Depth from `parent_seq` links, capped so a pathological chain cannot push a row
+ * off the pane (and a cycle cannot loop). */
+function stepDepth(steps: TrajectoryStep[], step: TrajectoryStep): number {
+  const bySeq = new Map(steps.map((s) => [s.seq, s]));
+  let depth = 0;
+  let parent = step.parent_seq;
+  while (parent != null && depth < 6) {
+    depth += 1;
+    parent = bySeq.get(parent)?.parent_seq;
+  }
+  return depth;
 }
 
 export function RunDetail({
@@ -304,6 +322,10 @@ export function RunDetail({
         }}
       />
 
+      {/* The span tree: nesting and concurrency, which the waterfall above cannot
+          draw. Absent entirely for a run with no trace. */}
+      <TraceView run={run} />
+
       {/* What went over the wire during the turn — read from disk, so it survives
           long after the 500-event live ring has forgotten it. */}
       <IoLane runId={run.id} hasTurn={Boolean(run.turn_id)} />
@@ -313,6 +335,7 @@ export function RunDetail({
       </div>
       {run.step_list.map((step, index) => (
         <StepRow
+          depth={stepDepth(run.step_list, step)}
           key={step.seq}
           runId={run.id}
           step={step}

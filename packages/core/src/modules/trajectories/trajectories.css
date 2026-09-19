@@ -145,3 +145,90 @@
     animation: none;
   }
 }
+
+/* --- Trace view (OTel span tree) ------------------------------------------- */
+
+/* The name column is wider than the Timeline's round label: it carries the span
+ * name *and* its depth as indentation, which is how the tree reads. */
+.traj-span-lane .traj-span-name {
+  flex: 0 0 34%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- Connect section -------------------------------------------------------- */
+
+.traj-connect-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--space-5);
+}
+
+/* A recessed command container: sunk below the card, not raised above it. */
+.traj-snippet {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  box-shadow: inset 0 1px 0 var(--border);
+  overflow: hidden;
+}
+
+.traj-snippet-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.traj-snippet-body {
+  margin: 0;
+  padding: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-primary);
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.traj-snippet-key {
+  color: var(--accent);
+}
+
+/* Segmented framework picker. Buttons carry a class, so they opt out of the
+ * classless-button height rule and set their own. */
+.traj-segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.traj-segment {
+  height: var(--control-h);
+  padding: 0 var(--space-4);
+  border: none;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--fs-meta);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-standard);
+}
+
+.traj-segment:last-child {
+  border-right: none;
+}
+
+.traj-segment:hover {
+  background: var(--bg-hover);
+}
+
+.traj-segment.is-active {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}

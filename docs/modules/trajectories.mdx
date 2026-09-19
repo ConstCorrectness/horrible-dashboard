@@ -279,6 +279,20 @@ interleave two policies and void every per-harness aggregate. A timed-out move i
 recorded as a failed action rather than a normal one, and a replay with no winner and
 no returns stays ungraded rather than guessed at.
 
+## Received over OTLP
+
+Agents you write can report here with no SDK of ours: point any OpenTelemetry
+exporter at `/api/otel` and each trace becomes a run with `source: external`,
+`external_id` equal to the trace id, and `meta.otel`. It lands in the `otel` dataset, or
+the one named by the `horrible.dataset` resource attribute. Notebook and training
+kernels get the `OTEL_*` variables at spawn. The **Connect** section shows the endpoint,
+the ingest token for other machines, and a snippet per framework.
+
+A received run is a **projection** of its spans. It is rebuilt whenever a batch for its
+trace arrives, so it goes live, then complete once the root span lands. Nesting survives
+as `parent_seq`, which the step list now indents by. Mapping rules, auth and the
+built-in agents' own spans are in [OpenTelemetry](otel.mdx).
+
 ## Peer runs
 
 There is no peer importer, because there is nothing to import. A turn a peer asks for
@@ -620,9 +634,21 @@ One pane, `trajectories.hub` (`role: document`, singleton), four sections:
 | **Harness** | `h` | The A/B comparison and the harness inspector |
 | **Friends** | `p` | Friends' shared datasets and runs; pull a finished one |
 | **Commons** | `c` | Digests published to the agent commons index; withdraw your own |
+| **Connect** | `o` | Wire an OTLP exporter up: endpoint, ingest token, per-framework snippets, last-span indicator |
 
 Four sections rather than four panes, per the pane-consolidation rule: they are four
 views of one object. No `RENAMED_VIEWS` entry is needed — no view id was removed.
+
+A run with an OTel trace (a received one, or a built-in turn while `otel.enabled`)
+shows a **Trace** view between the Timeline and the I/O lane: the span tree, indented
+by parentage, with concurrent bars. The Timeline cannot draw that shape, because it
+lays out round by round. Selecting a span shows its attributes and events. The view
+renders nothing for a run with no trace (`panels/TraceView.tsx`, geometry in the pure
+`panels/trace-model.ts`).
+
+The Connect section *does* poll (`GET /api/otel/ingest`, every 5 s). It is a "did my
+exporter reach you yet" indicator for the minute you spend wiring one up, and the
+ingest route publishes nothing to watch.
 
 **Live has no polling fallback, deliberately.** A poll would paper over a broken
 channel and make "the stream is down" indistinguishable from "nothing is running",
@@ -754,6 +780,7 @@ params — a fingerprint is a hash, and "a3f2 beats 91cd" is unusable without it
 | --- | --- | --- |
 | `trajectories.retentionRuns` | `5000` | Prune a dataset to this many runs, oldest first |
 | `trajectories.captureDelegates` | `true` | Record delegated sub-agent turns as linked child runs |
+| `otel.enabled` / `otel.captureContent` / `otel.injectEnv` / `otel.forwardReceived` | `true` / `false` / `true` / `false` | OpenTelemetry — see [otel.mdx](otel.mdx) |
 | `agent.modelPricing` | `''` | JSON overriding the bundled price table (declared by the agent module; see Tokens and cost) |
 
 ## Browser vs desktop

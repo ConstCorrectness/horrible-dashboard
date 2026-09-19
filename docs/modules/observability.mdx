@@ -104,6 +104,13 @@ at the call site, so a new auth route inherits the protection by where it lives
 instead of by someone remembering to annotate it. See
 [the games module](games.mdx) for the flow itself.
 
+The list also carries the **OTLP receiver** (`/api/otel/v1/`). Its bodies are protobuf
+batches of other programs' spans, already stored in full in `otel_spans`. On these
+paths the inbound capture also **blanks credential-shaped request headers**
+(`telemetry.store.is_sensitive_header`). A remote exporter authenticates with the
+node's ingest token, and on a LAN-bound node this ring is readable by the same network
+the token exists to keep out. See [OpenTelemetry](otel.mdx).
+
 Response bodies are captured on `client` events and on all `outbound` calls — so
 the request↔response pair to the LLM reads end to end — truncated like request
 bodies:

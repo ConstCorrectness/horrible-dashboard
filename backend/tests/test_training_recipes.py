@@ -124,6 +124,20 @@ def test_the_local_callback_is_always_installed() -> None:
         assert "callbacks=[ht.callback()]" in code
 
 
+def test_a_lora_recipe_also_saves_a_merged_servable_model() -> None:
+    """An adapter GGUF needs `--lora` beside its base, which nothing here serves,
+    so the default LoRA path used to end at a file that could not be served."""
+    lora = code_of(recipes.materialize(recipes.Recipe(), intro(sft=all_names("sft"))))
+    assert "merge_and_unload()" in lora
+    assert "save_pretrained('outputs/run1/merged')" in lora
+    full = code_of(
+        recipes.materialize(
+            recipes.Recipe(use_lora=False), intro(sft=all_names("sft"))
+        )
+    )
+    assert "merge_and_unload" not in full
+
+
 def test_report_to_is_a_list_and_none_is_spelled_the_librarys_way() -> None:
     assert recipes.report_to(recipes.Recipe(trackers=["none"])) == ["none"]
     assert recipes.report_to(recipes.Recipe(trackers=[])) == ["none"]
@@ -238,6 +252,33 @@ def project(tmp_path) -> ProjectModel:
     return ProjectModel(id="proj", name="proj", root=str(tmp_path))
 
 
+def test_a_new_recipe_starts_on_the_projects_dataset(tmp_path) -> None:
+    from backend.modules.training.models import EnvironmentRefModel
+
+    hf = ProjectModel(
+        id="p",
+        name="p",
+        root=str(tmp_path),
+        refs=[
+            EnvironmentRefModel(
+                provider="huggingface", kind="dataset", id="trl-lib/Capybara"
+            )
+        ],
+    )
+    assert recipes.load_recipe(hf).dataset == "trl-lib/Capybara"
+    # A saved recipe is the user's statement and wins, even when it is blank.
+    recipes.save_recipe(hf, recipes.Recipe(dataset=""))
+    assert recipes.load_recipe(hf).dataset == ""
+
+    kaggle = ProjectModel(
+        id="k",
+        name="k",
+        root=str(tmp_path / "k"),
+        refs=[EnvironmentRefModel(provider="kaggle", kind="competition", id="titanic")],
+    )
+    assert recipes.load_recipe(kaggle).dataset == ""
+
+
 def test_a_lora_adapter_is_not_mistaken_for_a_model(tmp_path, project) -> None:
     """Feeding an adapter to the base converter fails with an error about missing
     weights that reads like a corrupt checkpoint."""
@@ -318,6 +359,52 @@ def test_the_gguf_lands_in_the_managed_directory(
 
     lora = convert._output_path(project, tmp_path / "adapter", "lora", "f16")
     assert lora.name.endswith("-lora-f16.gguf")
+
+
+def test_the_converter_is_extracted_as_a_tree_not_one_script(tmp_path) -> None:
+    """`convert_hf_to_gguf.py` imports a sibling `conversion/` package; fetching
+    the lone script failed every conversion with `No module named 'conversion'`."""
+    import io
+    import tarfile
+
+    archive = tmp_path / "src.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        for name in (
+            "llama.cpp-b1/convert_hf_to_gguf.py",
+            "llama.cpp-b1/convert_lora_to_gguf.py",
+            "llama.cpp-b1/conversion/__init__.py",
+            "llama.cpp-b1/gguf-py/gguf/__init__.py",
+            "llama.cpp-b1/src/llama.cpp",
+            "llama.cpp-b1/../escape.py",
+        ):
+            info = tarfile.TarInfo(name)
+            info.size = 1
+            tar.addfile(info, io.BytesIO(b"x"))
+    dest = tmp_path / "tree"
+    convert._extract_converter(archive, dest)
+    kept = sorted(
+        str(f.relative_to(dest)).replace("\\", "/")
+        for f in dest.rglob("*")
+        if f.is_file()
+    )
+    assert kept == [
+        "conversion/__init__.py",
+        "convert_hf_to_gguf.py",
+        "convert_lora_to_gguf.py",
+        "gguf-py/gguf/__init__.py",
+    ]
+    assert not (tmp_path / "escape.py").exists()
+
+
+def test_a_hub_base_model_goes_to_base_model_id(tmp_path) -> None:
+    # `--base` is a Path in convert_lora_to_gguf.py; the Hub id every adapter's
+    # adapter_config.json records made the converter look for a directory
+    # called `Qwen/Qwen3-0.6B` and exit.
+    assert convert._base_args("Qwen/Qwen3-0.6B") == [
+        "--base-model-id",
+        "Qwen/Qwen3-0.6B",
+    ]
+    assert convert._base_args(str(tmp_path)) == ["--base", str(tmp_path)]
 
 
 def test_warmup_ratio_and_warmup_steps_are_not_aliases() -> None:

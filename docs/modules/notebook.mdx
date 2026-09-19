@@ -251,9 +251,18 @@ client-assigned `cellId`), `set_mode` `{sessionKey, mode}`, `comm_msg`
 `{sessionKey, commId, data}` (widget update), `interrupt`, `restart`, `shutdown`.
 Server → client: `opened` `{sessionKey, path, notebook, kernel, mode}`, `kernel_status`,
 `execution_state` `{cellId, state, execCount?}`, `output` `{cellId, output}` (raw nbformat
-dict), `cells_changed` `{notebook}`, `mode` `{mode}`, `graph`
+dict), `output_updated` `{cellId, index, output}` (a `display_id` output rewritten in
+place — see below), `cells_changed` `{notebook}`, `mode` `{mode}`, `graph`
 `{edges, defs, diagnostics}` (the reactive DAG), `comm_open`/`comm_msg`/`comm_close`
 `{comm, buffers}` (ipywidgets), `error` `{sessionKey?, message}`.
+
+**`update_display_data` is honoured.** `display(obj, display_id=True)` followed by
+`handle.update(...)` rewrites the original output instead of appending a new one — it
+is how the Hugging Face `Trainer` draws its progress bar and loss table. It used to be
+dropped, so a fine-tune's cell sat on its first frame ("2/50", an empty loss table)
+for the whole of a run that was progressing. The session holds each display's output
+**by identity**, not by index: a re-run clears the cell's outputs, and an index kept
+from before would rewrite whatever output landed in that slot next.
 
 ## Backend surface
 

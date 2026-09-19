@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import re
+import contextlib
 import time
 import uuid
 import weakref
@@ -23,6 +24,7 @@ import httpx
 from backend.modules.agent import permission_store, permissions
 from backend.modules.agent import providers as P
 from backend.modules.agent.routes import _load_config
+from backend.modules.otel import tracing as otel_tracing
 from backend.modules.telemetry import turn as telemetry_turn
 from backend.modules.telemetry.instrument import instrumented_client
 from backend.modules.ws import WsConnection
@@ -2141,6 +2143,21 @@ async def run_agent_loop(
     # outside the client so the provider calls, the tool calls they trigger, and any
     # egress a backend tool performs all carry it.
     turn_token = telemetry_turn.enter(turn_id)
+    # The OTel `invoke_agent` span (otel/tracing.py). Entered beside the telemetry
+    # stamp for the same reason: everything the turn does nests inside it — chat
+    # spans at the provider chokepoint, tool spans below, and a delegate's whole
+    # sub-turn, whose context is inherited through the await.
+    spans = contextlib.ExitStack()
+    agent_span = spans.enter_context(
+        otel_tracing.agent_span(
+            turn_id=turn_id,
+            agent_id=agent_id,
+            agent_name=spec.name if spec else "",
+            model=model,
+            provider=str(getattr(info, "kind", "")),
+            parent_turn_id=parent_turn_id,
+        )
+    )
     try:
         async with instrumented_client(timeout=120) as client:
             for round_no in range(MAX_ROUNDS):
@@ -2247,37 +2264,46 @@ async def run_agent_loop(
                     # bar's left edge at. `rec.action` runs after the await, so
                     # letting the store default `ts` would record the call's *end*.
                     started_wall = time.time()
-                    if call.name in denied:
-                        # Not offered this round, but the model can still name a
-                        # tool it remembers from the conversation — and under
-                        # progressive disclosure `_dispatch_call` would forgivingly
-                        # load the group and run it. Said plainly so the transcript
-                        # shows the model reaching for the removed tool, which is
-                        # usually the interesting half of the counterfactual.
-                        tool_result = {
-                            "error": f"tool {call.name} is not available in this run"
-                        }
-                    elif progressive:
-                        tool_result = await _dispatch_call(
-                            conn,
-                            turn_id,
-                            call,
-                            active_groups,
-                            spec,
-                            mode_override,
-                            simulate,
-                        )
-                    elif not await _gate(conn, turn_id, call, mode_override):
-                        tool_result = {"error": "denied by permission policy"}
-                    elif simulate is not None:
-                        tool_result = await simulate(call.name, call.arguments)
-                    elif call.name in BACKEND_TOOL_NAMES:
-                        # Resolved in the backend (peer fabric), not relayed to the UI.
-                        tool_result = await _run_backend_tool(conn, turn_id, call)
-                    else:
-                        tool_result = await _call_frontend_tool(
-                            conn, turn_id, call.name, call.arguments
-                        )
+                    # Every call gets a span, refused ones included: "the model
+                    # reached for a tool it was denied" is what a trace is read for.
+                    with otel_tracing.tool_span(
+                        call.name,
+                        call_id=call.id,
+                        round_no=round_no,
+                        args=call.arguments,
+                    ) as tool_span:
+                        if call.name in denied:
+                            # Not offered this round, but the model can still name a
+                            # tool it remembers from the conversation — and under
+                            # progressive disclosure `_dispatch_call` would forgivingly
+                            # load the group and run it. Said plainly so the transcript
+                            # shows the model reaching for the removed tool, which is
+                            # usually the interesting half of the counterfactual.
+                            tool_result = {
+                                "error": f"tool {call.name} is not available in this run"
+                            }
+                        elif progressive:
+                            tool_result = await _dispatch_call(
+                                conn,
+                                turn_id,
+                                call,
+                                active_groups,
+                                spec,
+                                mode_override,
+                                simulate,
+                            )
+                        elif not await _gate(conn, turn_id, call, mode_override):
+                            tool_result = {"error": "denied by permission policy"}
+                        elif simulate is not None:
+                            tool_result = await simulate(call.name, call.arguments)
+                        elif call.name in BACKEND_TOOL_NAMES:
+                            # Resolved in the backend (peer fabric), not relayed to the UI.
+                            tool_result = await _run_backend_tool(conn, turn_id, call)
+                        else:
+                            tool_result = await _call_frontend_tool(
+                                conn, turn_id, call.name, call.arguments
+                            )
+                        tool_span.finish(tool_result)
                     if rec:
                         # The call and its result as ONE step — pairing them later by
                         # name and ordinal breaks the moment a round calls one twice.
@@ -2294,10 +2320,13 @@ async def run_agent_loop(
     except BaseException as exc:
         if rec:
             rec.fail(exc)
+        agent_span.fail(exc)
         raise
     finally:
         if rec:
             rec.finish(answer)
+        agent_span.set("horrible.rounds", rec.rounds if rec else None)
+        spans.close()
         telemetry_turn.leave(turn_token)
         await _finish_capture(turn_id, info, endpoint, model)
 

@@ -390,7 +390,8 @@ class McpSession:
             else:
                 try:
                     result = await asyncio.wait_for(
-                        self._session.call_tool(tool, args), timeout=CALL_TIMEOUT_S
+                        self._session.call_tool(tool, args, meta=_trace_meta()),
+                        timeout=CALL_TIMEOUT_S,
                     )
                 except TimeoutError:
                     out = {
@@ -563,3 +564,15 @@ def _rebuild_bridge() -> None:
 
 # One manager per backend process; the routes, the lifespan, and the bridge share it.
 manager = McpManager()
+
+
+def _trace_meta() -> dict[str, Any] | None:
+    """W3C trace context for `params._meta`, per the MCP convention for carrying
+    `traceparent` on a request. Per *call*, not per connection: an HTTP header set
+    on the transport would stamp every call with whichever turn opened it. A
+    server instrumented with OTel that exports to this node then nests its spans
+    under the `execute_tool` span that called it (otel/tracing.py)."""
+    from backend.modules.otel.tracing import current_traceparent
+
+    traceparent = current_traceparent()
+    return {"traceparent": traceparent} if traceparent else None

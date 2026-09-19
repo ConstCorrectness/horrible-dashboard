@@ -192,6 +192,10 @@ class KernelSession:
         self.inspect_pending: dict[str, _Inspect] = {}
         self.comms: dict[str, dict[str, Any]] = {}  # comm_id -> {target, state}
         self.msg_to_cell: dict[str, str] = {}
+        #: display_id -> the outputs carrying it, for `update_display_data`. Held
+        #: by identity rather than index, because re-running a cell clears its
+        #: outputs and an index would then point at somebody else's output.
+        self.displays: dict[str, list[tuple[str, Any]]] = {}
         self._save_timer: threading.Timer | None = None
         self._worker: threading.Thread | None = None
         self._iopub: threading.Thread | None = None
@@ -657,6 +661,11 @@ class KernelSession:
         if msg_type in ("comm_open", "comm_msg", "comm_close"):
             self._route_comm(msg_type, content, msg.get("buffers"))
             return
+        if msg_type == "update_display_data":
+            # Before the cell guard: an update may come from a later cell (or a
+            # background thread) than the one that created the display.
+            self._update_display(content)
+            return
         if cell_id is None:
             return
 
@@ -670,7 +679,10 @@ class KernelSession:
             }
             if msg_type == "execute_result":
                 output["execution_count"] = content.get("execution_count")
-            self._append_output(cell_id, output)
+            stored = self._append_output(cell_id, output)
+            display_id = (content.get("transient") or {}).get("display_id")
+            if display_id and stored is not None:
+                self.displays.setdefault(str(display_id), []).append((cell_id, stored))
         elif msg_type == "error":
             self._append_output(
                 cell_id,
@@ -758,11 +770,47 @@ class KernelSession:
                 cell_id, {"output_type": "stream", "name": name, "text": text}
             )
 
-    def _append_output(self, cell_id: str, output: dict[str, Any]) -> None:
+    def _update_display(self, content: dict[str, Any]) -> None:
+        """Rewrite every output showing `display_id` in place (Jupyter's
+        `display(..., display_id=True)` then `handle.update(...)`).
+
+        This is how the Hugging Face Trainer draws its progress bar and loss
+        table in a notebook. Dropped, the cell froze on its first frame —
+        "2/50" and an empty loss table — for the whole of a run that was in
+        fact progressing.
+        """
+        display_id = str((content.get("transient") or {}).get("display_id") or "")
+        targets = self.displays.get(display_id)
+        if not targets:
+            return
+        live: list[tuple[str, Any]] = []
+        changed: list[tuple[str, int, dict[str, Any]]] = []
+        with self.doc_lock:
+            for cell_id, stored in targets:
+                cell = self._cell(cell_id)
+                outputs = cell["outputs"] if cell is not None else []
+                index = next((i for i, o in enumerate(outputs) if o is stored), None)
+                if index is None:
+                    continue  # the cell was cleared or re-run since
+                stored["data"] = content.get("data", {})
+                stored["metadata"] = content.get("metadata", {})
+                live.append((cell_id, stored))
+                changed.append((cell_id, index, dict(stored)))
+        self.displays[display_id] = live
+        for cell_id, index, output in changed:
+            self._emit(
+                "output_updated", {"cellId": cell_id, "index": index, "output": output}
+            )
+        if changed:
+            self.save_soon()
+
+    def _append_output(self, cell_id: str, output: dict[str, Any]) -> Any:
+        """Append (or stream-merge) one output; returns the stored output object."""
+        stored: Any = None
         with self.doc_lock:
             cell = self._cell(cell_id)
             if cell is None:
-                return
+                return None
             outputs = cell["outputs"]
             # Merge consecutive stream chunks of the same name (nbformat norm).
             if (
@@ -772,12 +820,15 @@ class KernelSession:
                 and outputs[-1].get("name") == output["name"]
             ):
                 outputs[-1]["text"] += output["text"]
+                stored = outputs[-1]
             else:
                 import nbformat
 
-                outputs.append(nbformat.from_dict(output))
+                stored = nbformat.from_dict(output)
+                outputs.append(stored)
         self._emit("output", {"cellId": cell_id, "output": output})
         self.save_soon()
+        return stored
 
     # --- fanout ---------------------------------------------------------------
 

@@ -146,3 +146,55 @@ def test_send_comm_queues_for_worker(tmp_path) -> None:
         assert item.buffers == [b"x"]
 
     asyncio.run(go())
+
+
+def test_update_display_data_rewrites_the_output_in_place(tmp_path) -> None:
+    """`display(..., display_id=True)` then `handle.update(...)` — the HF Trainer's
+    progress table. Dropped, the cell froze on its first frame for the whole run."""
+
+    async def go() -> None:
+        sess = _session(tmp_path, asyncio.get_running_loop())
+        conn = FakeConn()
+        sess.subscribers.add(conn)
+        cell = sess.doc.cells[0]
+        sess.msg_to_cell["m1"] = cell["id"]
+
+        def display(msg_type: str, text: str) -> None:
+            sess._route_iopub(
+                {
+                    "msg_type": msg_type,
+                    "content": {
+                        "data": {"text/plain": text},
+                        "metadata": {},
+                        "transient": {"display_id": "d1"},
+                    },
+                    "parent_header": {"msg_id": "m1"},
+                }
+            )
+
+        display("display_data", "2/50")
+        sess._route_iopub(
+            {
+                "msg_type": "stream",
+                "content": {"name": "stdout", "text": "hi\n"},
+                "parent_header": {"msg_id": "m1"},
+            }
+        )
+        # An update may arrive parented to another request entirely.
+        sess.msg_to_cell.clear()
+        display("update_display_data", "50/50")
+        await asyncio.sleep(0.05)
+
+        assert cell["outputs"][0]["data"] == {"text/plain": "50/50"}
+        assert len(cell["outputs"]) == 2
+        (event,) = conn.events("output_updated")
+        assert event["index"] == 0
+        assert event["output"]["data"] == {"text/plain": "50/50"}
+
+        # A cleared cell forgets its displays rather than updating a stranger.
+        cell["outputs"] = []
+        display("update_display_data", "stale")
+        await asyncio.sleep(0.05)
+        assert len(conn.events("output_updated")) == 1
+
+    asyncio.run(go())

@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import uuid
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any
 
 from backend.modules.agent.permissions import Mode
 from backend.modules.network import protocol
+from backend.modules.otel import tracing as otel_tracing
 from backend.modules.settings.routes import get_value
 
 if TYPE_CHECKING:
@@ -76,11 +78,23 @@ async def ask_peer(
     if me not in chain:
         chain.append(me)
     request_id = uuid.uuid4().hex
+    payload: dict[str, Any] = {
+        "request_id": request_id,
+        "prompt": prompt,
+        "origin_chain": chain,
+    }
+    # W3C trace context, so the peer's turn is a child of this `execute_tool` span
+    # in the same trace. Optional on the wire: an older peer ignores it, and the
+    # spans stay on that node unless it exports them too.
+    from backend.modules.otel.tracing import current_traceparent
+
+    if traceparent := current_traceparent():
+        payload["traceparent"] = traceparent
     try:
         reply = await hub.request(
             peer_id,
             protocol.AGENT_REQUEST,
-            {"request_id": request_id, "prompt": prompt, "origin_chain": chain},
+            payload,
             timeout=PEER_AGENT_TIMEOUT_S,
         )
     except KeyError:
@@ -148,6 +162,16 @@ class RemoteAgentConn:
             self.error = self.error or "remote agent turn timed out"
 
 
+_TRACEPARENT = re.compile(r"^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$")
+
+
+def _valid_traceparent(data: dict[str, Any]) -> str | None:
+    """A peer-supplied header is data from another machine: only a well-formed
+    one is honoured, and a malformed one just means a fresh trace."""
+    value = data.get("traceparent")
+    return value if isinstance(value, str) and _TRACEPARENT.match(value) else None
+
+
 async def handle_remote_agent_request(
     hub: PeerHub, session: PeerSession, env: PeerEnvelope
 ) -> None:
@@ -196,7 +220,8 @@ async def handle_remote_agent_request(
         try:
             try:
                 # remote=True restricts the turn to no actuating tools (no browser behind it).
-                await run_agent_turn(rconn, request_id, prompt, remote=True)  # type: ignore[arg-type]
+                with otel_tracing.remote_parent(_valid_traceparent(data)):
+                    await run_agent_turn(rconn, request_id, prompt, remote=True)  # type: ignore[arg-type]
                 await rconn.wait_done(timeout=PEER_AGENT_TIMEOUT_S)
             except Exception as exc:  # never let a remote turn crash the session
                 logger.exception("remote agent turn failed")

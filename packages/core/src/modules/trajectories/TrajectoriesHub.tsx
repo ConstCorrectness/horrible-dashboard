@@ -30,6 +30,7 @@ import { DatasetsSection } from './panels/DatasetsSection';
 import { HarnessSection } from './panels/HarnessSection';
 import { LiveSection } from './panels/LiveSection';
 import { CommonsSection } from './panels/CommonsSection';
+import { ConnectSection } from './panels/ConnectSection';
 import { PeersSection } from './panels/PeersSection';
 import { RunsSection } from './panels/RunsSection';
 import './trajectories.css';
@@ -60,6 +61,8 @@ export function TrajectoriesHub() {
         <PeersSection onPulled={() => setSection('runs')} />
       ) : section === 'commons' ? (
         <CommonsSection />
+      ) : section === 'connect' ? (
+        <ConnectSection />
       ) : section === 'datasets' ? (
         <DatasetsSection />
       ) : section === 'harness' ? (

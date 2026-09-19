@@ -87,7 +87,13 @@ export default defineConfig({
     proxy: {
       // Backend port matches scripts/dev.mjs (HORRIBLE_DEV_BACKEND_PORT sidesteps
       // Windows' Hyper-V port-exclusion ranges when they swallow 8000).
-      '/api': `http://127.0.0.1:${process.env.HORRIBLE_DEV_BACKEND_PORT || '8000'}`,
+      '/api': {
+        target: `http://127.0.0.1:${process.env.HORRIBLE_DEV_BACKEND_PORT || '8000'}`,
+        // X-Forwarded-For, so the backend can tell a request this proxy relayed
+        // from a LAN client (`pnpm dev:lan`) from one made on this machine. Without
+        // it every proxied request looks like loopback -- see otel/auth.py.
+        xfwd: true,
+      },
       '/ws': {
         target: `ws://127.0.0.1:${process.env.HORRIBLE_DEV_BACKEND_PORT || '8000'}`,
         ws: true,

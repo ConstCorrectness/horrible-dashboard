@@ -12,10 +12,13 @@ Three things make this less obvious than "run a script":
   is fetched on demand from GitHub **at the tag of the build that is installed**,
   cached under the data dir, and its sha256 recorded — a converter from a
   different release than the runtime is exactly the kind of mismatch that
-  produces a file which loads and is subtly wrong. It is the same on-demand
-  fetch as the binary itself; GitHub publishes no digest for a raw file, so the
-  record says `verified: false` rather than implying we checked it against
-  anything.
+  produces a file which loads and is subtly wrong. It is **not one file**: the
+  script imports a sibling `conversion/` package (one module per architecture)
+  and prefers the repo's own `gguf-py` over the PyPI `gguf`, so the tag's source
+  archive is fetched and exactly those parts extracted. Fetching the lone script
+  — which this once did — fails every conversion with `No module named
+  'conversion'`. GitHub publishes no digest for an archive, so the record says
+  `verified: false` rather than implying we checked it against anything.
 - **A LoRA checkpoint is not a model.** A PEFT run writes `adapter_config.json`
   and a few megabytes of adapter — feeding that to the base converter fails with
   an error about missing weights that reads like a corrupt checkpoint. The two
@@ -34,8 +37,11 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -48,7 +54,21 @@ from backend import paths
 
 logger = logging.getLogger(__name__)
 
-RAW_BASE = "https://raw.githubusercontent.com/ggml-org/llama.cpp"
+# `tar.gz/<ref>` takes a tag or a branch, so the `master` fallback works too.
+ARCHIVE_BASE = "https://codeload.github.com/ggml-org/llama.cpp/tar.gz"
+
+#: What a converter needs from the repo, relative to its root: the scripts
+#: themselves (the LoRA one imports the HF one), the per-architecture package the
+#: HF one imports, and the `gguf-py` it puts ahead of the installed `gguf`.
+CONVERTER_PARTS = (
+    "convert_hf_to_gguf.py",
+    "convert_lora_to_gguf.py",
+    "conversion/",
+    "gguf-py/",
+)
+
+#: Written last into a converter directory; its absence means "incomplete".
+COMPLETE_MARKER = "converter.json"
 
 #: Quantizations the converter itself can write. Anything smaller is a second
 #: step through `llama-quantize`, which this deliberately does not wrap: offering
@@ -145,39 +165,85 @@ def installed_tag() -> str:
     return "master"
 
 
+def _wanted(name: str) -> str | None:
+    """The repo-relative path for an archive member we keep, else None.
+
+    Archive members are `llama.cpp-<tag>/<path>`; the prefix is dropped, and
+    anything that is not a regular path under a wanted part is refused — which
+    is also what keeps `..` or an absolute name from escaping the directory.
+    """
+    _, _, rel = name.partition("/")
+    if not rel or rel.startswith("/") or ".." in Path(rel).parts:
+        return None
+    for part in CONVERTER_PARTS:
+        if rel == part or (part.endswith("/") and rel.startswith(part)):
+            return rel
+    return None
+
+
+def _extract_converter(archive: Path, dest: Path) -> None:
+    with tarfile.open(archive, "r:gz") as tar:
+        for member in tar:
+            rel = _wanted(member.name)
+            if rel is None or not member.isfile():
+                continue
+            source = tar.extractfile(member)
+            if source is None:
+                continue
+            out = dest / rel
+            out.parent.mkdir(parents=True, exist_ok=True)
+            with source, out.open("wb") as sink:
+                shutil.copyfileobj(source, sink)
+    for part in CONVERTER_PARTS:
+        if not (dest / part.rstrip("/")).exists():
+            raise FileNotFoundError(f"the llama.cpp archive has no {part}")
+
+
 async def ensure_converter(kind: str, tag: str) -> Path:
     """The converter script for `kind` at `tag`, fetched once and cached.
 
-    Written via `.part` + rename like every other download here, so an
-    interrupted fetch can never be executed as a truncated script.
+    The whole converter tree lands in a temporary directory that is renamed into
+    place only once it is complete, so an interrupted fetch can never be executed
+    as a half-extracted package. A directory without the marker — including the
+    single-script layout an earlier version cached — is replaced.
     """
     name = CONVERTERS[kind]
-    target = scripts_dir() / tag / name
-    if target.is_file():
+    target_dir = scripts_dir() / tag
+    target = target_dir / name
+    if target.is_file() and (target_dir / COMPLETE_MARKER).is_file():
         return target
-    target.parent.mkdir(parents=True, exist_ok=True)
-    url = f"{RAW_BASE}/{tag}/{name}"
-    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-        res = await client.get(url)
-        res.raise_for_status()
-        body = res.content
-    part = target.with_suffix(target.suffix + ".part")
-    part.write_bytes(body)
-    part.replace(target)
-    (target.parent / f"{name}.json").write_text(
-        json.dumps(
-            {
-                "url": url,
-                "tag": tag,
-                "sha256": hashlib.sha256(body).hexdigest(),
-                # GitHub publishes no digest for a raw file, so this records what
-                # arrived rather than claiming it matched something.
-                "verified": False,
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    scripts_dir().mkdir(parents=True, exist_ok=True)
+    url = f"{ARCHIVE_BASE}/{tag}"
+    digest = hashlib.sha256()
+    with tempfile.TemporaryDirectory(dir=scripts_dir(), prefix=f".{tag}-") as tmp:
+        archive = Path(tmp) / "src.tar.gz"
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+            async with client.stream("GET", url) as res:
+                res.raise_for_status()
+                with archive.open("wb") as sink:
+                    async for chunk in res.aiter_bytes():
+                        digest.update(chunk)
+                        sink.write(chunk)
+        staged = Path(tmp) / "tree"
+        await asyncio.to_thread(_extract_converter, archive, staged)
+        (staged / COMPLETE_MARKER).write_text(
+            json.dumps(
+                {
+                    "url": url,
+                    "tag": tag,
+                    "sha256": digest.hexdigest(),
+                    "parts": list(CONVERTER_PARTS),
+                    # GitHub publishes no digest for a source archive, so this
+                    # records what arrived rather than claiming it matched.
+                    "verified": False,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+        staged.replace(target_dir)
     return target
 
 
@@ -279,7 +345,7 @@ async def run_conversion(
         out_type,
     ]
     if kind == "lora":
-        cmd += ["--base", base_model]
+        cmd += _base_args(base_model)
 
     yield {"status": "converting", "outfile": str(out_path), "kind": kind}
     code, tail = await _run(cmd, cwd=str(root))
@@ -378,6 +444,19 @@ def _base_from_adapter(path: Path) -> str:
     except (OSError, ValueError):
         return ""
     return str(data.get("base_model_name_or_path") or "")
+
+
+def _base_args(base_model: str) -> list[str]:
+    """How to tell `convert_lora_to_gguf.py` which model the adapter adapts.
+
+    Its `--base` is a `Path` to a local model directory: handed a Hub id such as
+    `Qwen/Qwen3-0.6B` — which is what `adapter_config.json` records for every
+    adapter trained from the Hub — it looks for that directory, finds nothing, and
+    exits. A Hub id goes to `--base-model-id`, which fetches only the config.
+    """
+    if Path(base_model).expanduser().is_dir():
+        return ["--base", str(Path(base_model).expanduser())]
+    return ["--base-model-id", base_model]
 
 
 async def _run(cmd: list[str], *, cwd: str) -> tuple[int, list[str]]:

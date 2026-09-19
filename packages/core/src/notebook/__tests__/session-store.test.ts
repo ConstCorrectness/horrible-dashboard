@@ -79,3 +79,26 @@ describe('SessionStore execution provenance', () => {
     expect(store.snapshot().executionHistory[0]).toMatchObject({ cellId: 'a', state: 'done' });
   });
 });
+
+describe('SessionStore display updates', () => {
+  it('replaces one output in place and ignores an index that no longer exists', () => {
+    const store = new SessionStore('training', 'p:main.ipynb');
+    store.onCellsChanged({
+      path: 'main.ipynb',
+      metadata: {},
+      cells: [{ id: 'a', cell_type: 'code', source: 'trainer.train()', outputs: [] }],
+    });
+    store.onOutput('a', { output_type: 'display_data', data: { 'text/plain': '2/50' } });
+    store.onOutput('a', { output_type: 'stream', name: 'stdout', text: 'hi' });
+
+    store.onOutputUpdated('a', 0, {
+      output_type: 'display_data',
+      data: { 'text/plain': '50/50' },
+    });
+    store.onOutputUpdated('a', 7, { output_type: 'display_data', data: {} });
+
+    const outputs = store.snapshot().cells[0]?.outputs ?? [];
+    expect(outputs).toHaveLength(2);
+    expect(outputs[0]?.data).toEqual({ 'text/plain': '50/50' });
+  });
+});

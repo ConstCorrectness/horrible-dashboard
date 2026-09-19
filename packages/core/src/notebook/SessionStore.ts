@@ -172,6 +172,18 @@ export class SessionStore {
     this.set({ cells });
   }
 
+  /** Replace one output in place — a `display_id` update, e.g. the HF Trainer's
+   *  progress table, which would otherwise freeze on its first frame. */
+  onOutputUpdated(cellId: string, index: number, output: NbOutput): void {
+    const cells = this.state.cells.map((c) => {
+      if (c.id !== cellId || index < 0 || index >= c.outputs.length) return c;
+      const outputs = [...c.outputs];
+      outputs[index] = output;
+      return { ...c, outputs };
+    });
+    this.set({ cells });
+  }
+
   onCellsChanged(notebook: Notebook): void {
     this.set({ cells: notebook.cells, mode: readMode(notebook) });
   }
@@ -263,6 +275,9 @@ function wireChannel(channel: string): void {
     stores.get(d.sessionKey)?.onExecutionState(d.cellId, d.state, d.execCount),
   );
   onKernelEvent(channel, 'output', (d) => stores.get(d.sessionKey)?.onOutput(d.cellId, d.output));
+  onKernelEvent(channel, 'output_updated', (d) =>
+    stores.get(d.sessionKey)?.onOutputUpdated(d.cellId, d.index, d.output),
+  );
   onKernelEvent(channel, 'cells_changed', (d) =>
     stores.get(d.sessionKey)?.onCellsChanged(d.notebook),
   );

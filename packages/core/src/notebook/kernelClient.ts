@@ -24,6 +24,8 @@ export interface KernelEventMap {
     execCount?: number | null;
   };
   output: { sessionKey: string; cellId: string; output: NbOutput | null };
+  /** A `display_id` output rewritten in place (Jupyter's `update_display_data`). */
+  output_updated: { sessionKey: string; cellId: string; index: number; output: NbOutput };
   cells_changed: { sessionKey: string; notebook: Notebook };
   mode: { sessionKey: string; mode: 'reactive' | 'classic' };
   graph: {

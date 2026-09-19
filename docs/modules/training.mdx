@@ -147,7 +147,9 @@ run on the same kernel in the same venv, their `ht.log()` output is
 indistinguishable from hand-written code's, and the same notebook is what the
 Kaggle and Colab push already send. The recipe itself lives in `recipe.json` so
 the *form* round-trips; the cells are yours the moment they land and are never
-read back. A regenerate **replaces** the previous block (found by a
+read back. A project with no `recipe.json` yet starts on **its own dataset**: the
+Hugging Face dataset it was created from fills the dataset field, rather than
+asking again for the one thing the project already knew. A regenerate **replaces** the previous block (found by a
 `horrible_recipe` cell-metadata flag, with the header line as a fallback) rather
 than appending — two `SFTConfig` definitions in one notebook is a bug where the
 second silently wins, discovered after a wasted run.
@@ -207,9 +209,19 @@ Autocomplete coverage was never a completion-engine problem; it was an empty ven
 The torch wheel is chosen from the hardware probe by **card and OS together**, the
 same rule `hardware._variant_for` follows for llama.cpp builds — and the *reason* is
 returned to the pane, because a CPU build landing on a machine whose owner knows
-they have a card needs an explanation rather than a shrug. Notably, when the probe
-**could not ask**, the default GPU-capable wheel is installed rather than the CPU
-one: a CPU build on a machine with a card would train slowly with nothing saying why.
+they have a card needs an explanation rather than a shrug. **NVIDIA on Windows
+needs the CUDA index** (`notebook.env.PYTORCH_CUDA_INDEX`, shared so the two venvs
+cannot disagree): PyPI's Windows torch wheels are CPU-only. This used to claim the
+default wheel "already targets" the card, which put `+cpu` on an RTX 4080 and only
+surfaced three cells later as trl's *"Your setup doesn't support bf16/gpu"*. When
+the probe **could not ask**, a GPU-capable wheel is installed rather than the CPU
+one — on Windows that again means the CUDA index.
+
+A venv that already has a **CPU build is replaced**, not kept: `uv pip install
+torch` counts any installed torch as satisfying the request, so without
+`--reinstall-package` re-running the install reports success and changes nothing.
+The build is read from `torch/version.py`, because the wheel's `METADATA` and
+dist-info name both say plain `2.14.0` for `2.14.0+cpu`.
 
 ### Validated against what is actually installed
 
@@ -326,11 +338,27 @@ its delete route may touch — so a model you trained is one this node serves. S
   in the llama.cpp repo, so it is fetched on demand **at the tag of the installed
   build** (a converter from a different release can write a file the server reads
   slightly wrong), cached under the data dir with its sha256 recorded as
-  `verified: false` — GitHub publishes no digest for a raw file.
+  `verified: false` — GitHub publishes no digest for a source archive.
+- **And it is not one file.** The script imports a sibling `conversion/` package
+  (one module per architecture) and puts the repo's `gguf-py` ahead of the PyPI
+  `gguf`, so the tag's **source archive** is fetched and exactly those parts —
+  both converter scripts, `conversion/`, `gguf-py/` — are extracted into a staging
+  directory that is renamed into place with a `converter.json` marker only once it
+  is complete. Fetching the lone script, as this once did, failed every conversion
+  with `No module named 'conversion'`; a cached directory without the marker (that
+  old layout) is replaced.
 - **A LoRA checkpoint is not a model.** Told apart by `adapter_config.json` and
   sent to `convert_lora_to_gguf.py` with the base model read from that file; the
   result is labelled an adapter, since `llama-server` loads it with `--lora`
-  beside a base model rather than serving it alone.
+  beside a base model rather than serving it alone. The base goes to
+  `--base-model-id` when it is a Hub id and `--base` only when it is a local
+  directory — `--base` is a *path*, so the Hub id every adapter records made the
+  converter look for a directory called `Qwen/Qwen3-0.6B` and exit.
+- **So a LoRA recipe also saves a merged model.** Nothing on this node serves an
+  adapter beside its base, so the default recipe used to end at a file that could
+  not be served. The generated save cell now also runs `merge_and_unload()` into
+  `<output_dir>/merged` (weights and tokenizer), which the checkpoint list offers
+  as a whole model and the converter turns into a servable GGUF.
 - **It runs in the project venv**, which is where torch lives. Missing converter
   deps (`gguf`, `sentencepiece`, `protobuf`) are installed through `envs.install`
   — `uv pip install --python <venv>`, because a uv-created venv has **no pip in

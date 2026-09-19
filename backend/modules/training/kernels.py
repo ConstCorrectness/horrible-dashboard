@@ -184,7 +184,9 @@ class TrainingKernelManager(KernelSessionManager):
             # project's recipe actually selected. They never touch the notebook,
             # `project.json`, or an HTTP response — and connecting the tile does
             # not by itself start shipping runs anywhere.
-            env=_tracker_env(project),
+            # Plus the OTLP endpoint, so an agent run from this project traces to
+            # this node with no configuration (otel/env.py).
+            env={**_otlp_env(project), **_tracker_env(project)},
         )
         session = TrainingKernelSession(config, self._loop(), project)
         session.start()
@@ -203,6 +205,12 @@ class TrainingKernelManager(KernelSessionManager):
     def session_for(self, project_id: str, nb_rel: str) -> TrainingKernelSession | None:  # type: ignore[override]
         session = self.sessions.get(f"{project_id}:{nb_rel}")
         return session  # type: ignore[return-value]
+
+
+def _otlp_env(project: ProjectModel) -> dict[str, str]:
+    from backend.modules.otel.env import otlp_env
+
+    return otlp_env(service=f"training:{project.name}", dataset=f"training-{project.id}")
 
 
 def _tracker_env(project: ProjectModel) -> dict[str, str]:

@@ -69,7 +69,7 @@ class ScriptRunner:
             # Same contract as the kernel: tracker credentials arrive through the
             # environment at spawn, for the trackers this project's recipe asked
             # for, and are never written anywhere the browser can read.
-            env={**os.environ, **_tracker_env(project)},
+            env={**os.environ, **_otlp_env(project), **_tracker_env(project)},
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -176,6 +176,12 @@ class ScriptRunner:
 
 
 script_runner = ScriptRunner()
+
+
+def _otlp_env(project: ProjectModel) -> dict[str, str]:
+    from backend.modules.training.kernels import _otlp_env as kernel_otlp_env
+
+    return kernel_otlp_env(project)
 
 
 def _tracker_env(project: ProjectModel) -> dict[str, str]:

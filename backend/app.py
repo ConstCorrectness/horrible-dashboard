@@ -93,6 +93,12 @@ from backend.modules.interpretability import (
 from backend.modules.interpretability import router as interpretability_router
 from backend.modules.evals import register_agent_tools as register_evals_tools
 from backend.modules.evals import router as evals_router
+from backend.modules.otel import materialize as otel_materialize
+from backend.modules.otel import tracing as otel_tracing
+from backend.modules.otel.export import configure as configure_otel_export
+from backend.modules.otel.export import register as register_otel_connector
+from backend.modules.otel.routes import router as otel_router
+from backend.modules.otel.store import init_otel_db
 from backend.modules.trajectories import init_trajectories_db
 from backend.modules.trajectories import (
     register_agent_tools as register_trajectories_tools,
@@ -233,6 +239,13 @@ async def lifespan(app: FastAPI):
     # function reached from HTTP handlers and worker threads as well as from the
     # orchestrator, so the loop has to be handed to it rather than discovered.
     trajectories_stream.init_loop()
+    # OTLP receiver: the span table, and the worker that projects received traces
+    # into trajectory runs once each has been quiet for a moment (see
+    # otel/materialize.py -- batches arrive child-first, the root last).
+    init_otel_db()
+    otel_materialize.start()
+    # Attach the external exporter if one is configured (connector or OTEL_* env).
+    await asyncio.to_thread(configure_otel_export)
     # Persist the turn-stamped slice of the I/O ring. A batched subscriber rather
     # than a write inside `record()`, which is on the hot path of every instrumented
     # request -- a postmortem feature must not put sqlite in the middle of a turn.
@@ -260,6 +273,10 @@ async def lifespan(app: FastAPI):
         # Flushes the batch in hand on the way out: those are the events of the turn
         # that was most likely still running, which is the one somebody will want.
         await telemetry_drain.stop()
+        # Project any trace whose batch arrived just before shutdown, and flush the
+        # node's own spans (local store + external exporter) before the loop goes.
+        await otel_materialize.stop()
+        otel_tracing.shutdown()
         queue.stop()
         # MCP servers are child processes (stdio transport); leaving them behind on
         # reload would strand orphaned node/python servers.
@@ -365,6 +382,7 @@ app.include_router(docviewer_router, prefix="/api")
 app.include_router(karaoke_router, prefix="/api")
 app.include_router(evals_router, prefix="/api")
 app.include_router(trajectories_router, prefix="/api")
+app.include_router(otel_router, prefix="/api")
 app.include_router(records_router, prefix="/api")
 app.include_router(artifacts_router, prefix="/api")
 app.include_router(research_router, prefix="/api")
@@ -469,6 +487,9 @@ register_evals_tools()
 # free when unloaded). `search` is the continual-learning read path: the agent
 # looks up how a similar task went before.
 register_trajectories_tools()
+# The `otel` connector (external trace export). Contributes no agent tools — where
+# the node's traces go is not something the agent should change (otel/export.py).
+register_otel_connector()
 # Agentpedia's own tools (grouped under `agentpedia`): the agent stepping through
 # the turn it just took, and forking it to ask what it would have done without a
 # tool. `fork` is gated — a simulated fork cannot act, but it spends a real model

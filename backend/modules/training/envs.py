@@ -14,6 +14,7 @@ manager side, jupyter_client, lives only in the backend env) and the local
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
@@ -124,7 +125,7 @@ def bootstrap(
     install(project, ["ipykernel", str(HELPER_DIR), *requirements], progress)
 
 
-def torch_index_url(profile: Any) -> tuple[str, str]:
+def torch_index_url(profile: Any, os_name: str = sys.platform) -> tuple[str, str]:
     """(index URL, why) for `torch` on this machine — or ("", why) for the default.
 
     The step that was missing, and the reason the recipe form has spent its whole
@@ -135,24 +136,40 @@ def torch_index_url(profile: Any) -> tuple[str, str]:
     Getting `torch` itself right needs the **card and the OS together**, the same
     rule `hardware._variant_for` follows for llama.cpp builds:
 
-    - **CUDA**: PyPI's default `torch` wheel is already a CUDA build on Windows and
-      Linux, so no index override — pointing at a cu12x index would pin a version
-      that may not exist for the current torch release.
+    - **CUDA on Windows**: PyPI's Windows `torch` wheels are **CPU-only**, so the
+      CUDA index is required. This used to claim the default wheel "already
+      targets" the card, which installed `+cpu` on an RTX machine and surfaced
+      three cells later as trl's "Your setup doesn't support bf16/gpu". The index
+      is the notebook module's (`notebook.env.PYTORCH_CUDA_INDEX`), so the two
+      venvs a user trains in cannot disagree about it.
+    - **CUDA on Linux**: PyPI's default wheel already bundles CUDA. No override.
     - **ROCm**: needs an explicit index; the default wheel has no ROCm support at
       all and fails at `torch.cuda.is_available()` with no useful message.
     - **Metal**: the default macOS wheel carries MPS. Nothing to override.
-    - **No accelerator, or we could not ask**: the CPU index, which is a much
-      smaller download — but only when the probe is *certain*. If it could not
-      ask, installing the CPU build would silently make a machine with a card
-      train at CPU speed, which is the failure mode this module exists to avoid.
+    - **No accelerator**: the CPU index, which is a much smaller download — but
+      only when the probe is *certain*. If it could not ask, a GPU-capable wheel is
+      installed instead, because a CPU build on a machine with a card would train
+      slowly with nothing saying why. On Windows "GPU-capable" means the CUDA
+      index again: PyPI's default there is the CPU build this rule is avoiding.
     """
-    if profile is None:
-        return "", "no hardware profile; using the default wheel"
-    if not getattr(profile, "certain", True):
+    from backend.modules.notebook.env import PYTORCH_CUDA_INDEX
+
+    windows = os_name.lower().startswith("win")
+    if profile is None or not getattr(profile, "certain", True):
+        why = (
+            "no hardware profile"
+            if profile is None
+            else "the accelerator probe could not run"
+        )
+        if windows:
+            return PYTORCH_CUDA_INDEX, (
+                f"{why}, so the CUDA wheel is installed rather than PyPI's "
+                "CPU-only Windows build — it also runs on a machine with no card"
+            )
         return "", (
-            "the accelerator probe could not run, so the default (GPU-capable) "
-            "wheel is installed rather than the CPU one — a CPU build on a machine "
-            "with a card would train slowly with nothing saying why"
+            f"{why}, so the default (GPU-capable) wheel is installed rather than "
+            "the CPU one — a CPU build on a machine with a card would train slowly "
+            "with nothing saying why"
         )
     primary = getattr(profile, "primary", None)
     if primary is None:
@@ -164,10 +181,34 @@ def torch_index_url(profile: Any) -> tuple[str, str]:
             f"{primary.name} detected via {primary.detected_by}; the default wheel "
             "has no ROCm support"
         )
+    if primary.kind == "cuda" and windows:
+        return PYTORCH_CUDA_INDEX, (
+            f"{primary.name} detected via {primary.detected_by}; PyPI's Windows "
+            "torch wheels are CPU-only, so the CUDA build is installed"
+        )
     return "", (
         f"{primary.name} detected via {primary.detected_by}; the default wheel "
         "already targets it"
     )
+
+
+def installed_torch_version(project: ProjectModel) -> str:
+    """The venv's torch build as torch reports it (`2.14.0+cpu`), or "".
+
+    Read off disk rather than by importing torch (an import is seconds), and from
+    `torch/version.py` specifically: the wheel's `METADATA` and dist-info name
+    both say plain `2.14.0` for the CPU build, so the local label that decides
+    everything here exists only in the file torch itself reads `__version__` from.
+    """
+    for version_py in venv_dir(project).glob("**/site-packages/torch/version.py"):
+        try:
+            text = version_py.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        found = re.search(r"^__version__\s*=\s*['\"]([^'\"]+)['\"]", text, re.M)
+        if found:
+            return found.group(1)
+    return ""
 
 
 def install_stack(
@@ -182,6 +223,11 @@ def install_stack(
     and passing `--index-url` to a combined install would send *every* package
     through PyTorch's index, where most of them do not exist.
 
+    A **CPU build already in the venv is replaced** when the index says otherwise.
+    `uv pip install torch` treats any installed torch as satisfying the request, so
+    without `--reinstall-package` a venv that got the wrong wheel once keeps it
+    forever, and re-running the install reports success while changing nothing.
+
     Returns the sentence explaining the torch choice, so the pane can say why a
     CPU build landed on a machine whose owner knows they have a card.
     """
@@ -189,6 +235,10 @@ def install_stack(
     torch_cmd = ["torch"]
     if index_url:
         torch_cmd = ["torch", "--index-url", index_url]
+        wants_cpu = index_url.rstrip("/").endswith("/cpu")
+        if installed_torch_version(project).endswith("+cpu") and not wants_cpu:
+            torch_cmd.append("--reinstall-package=torch")
+            reason += " (replacing the CPU build that was installed before)"
     progress(f"resolving torch: {reason}")
     install(project, torch_cmd, progress)
     install(project, [p for p in packages if p != "torch"], progress)

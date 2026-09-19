@@ -45,6 +45,9 @@ export const trajectoriesModule: ModuleManifest = {
         // Strangers, not friends: digests of runs — their shape, never their payloads —
         // on the agent commons index. Publishing happens from a run's detail view.
         { id: 'commons', label: 'Commons', icon: '◎', key: 'c' },
+        // Agents you wrote, reporting in over OTLP: the endpoint, the token for other
+        // machines, and a snippet per framework. Their runs land in Runs.
+        { id: 'connect', label: 'Connect', icon: '⊕', key: 'o' },
       ],
     },
   ],
@@ -70,6 +73,40 @@ export const trajectoriesModule: ModuleManifest = {
         'Record delegated sub-agent turns as their own runs, linked to the parent. Off keeps a dataset to top-level turns only.',
       type: 'boolean',
       default: true,
+    },
+    // OpenTelemetry (backend/modules/otel). None of these is a credential — the
+    // export endpoint and its headers live in the `otel` connector.
+    {
+      key: 'otel.enabled',
+      title: 'Trace built-in agents (OpenTelemetry)',
+      description:
+        "Record invoke_agent / chat / execute_tool spans for every agent turn, shown in a run's Trace view and sent to the export connector if one is set.",
+      type: 'boolean',
+      default: true,
+    },
+    {
+      key: 'otel.captureContent',
+      title: 'Include prompts and tool data in spans',
+      description:
+        'Add prompts, completions and tool arguments/results to spans (credential-shaped strings are masked). Off by default because spans can be exported to a third party.',
+      type: 'boolean',
+      default: false,
+    },
+    {
+      key: 'otel.injectEnv',
+      title: 'Point notebook and training kernels at this node',
+      description:
+        'Set OTEL_EXPORTER_OTLP_ENDPOINT and friends when a kernel starts, so an instrumented agent reports here with no configuration. Your own OTEL_* variables take precedence.',
+      type: 'boolean',
+      default: true,
+    },
+    {
+      key: 'otel.forwardReceived',
+      title: 'Forward received traces to the export connector',
+      description:
+        'Relay traces your own agents send here on to the external OTLP backend as well.',
+      type: 'boolean',
+      default: false,
     },
   ],
 };

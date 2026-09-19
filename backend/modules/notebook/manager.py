@@ -10,6 +10,7 @@ from typing import Any
 
 from backend.modules.notebook import env
 from backend.modules.settings.routes import get_value
+from backend.modules.otel.env import otlp_env
 from backend.notebook_core import KernelSession, KernelSessionManager, SessionConfig
 from backend.notebook_core import notebooks as _core
 
@@ -53,6 +54,9 @@ class NotebookManager(KernelSessionManager):
             channel="notebook",
             display_name="notebook",
             default_mode="reactive",
+            # An agent written in a cell traces to this node with no endpoint in
+            # the code: the standard OTEL_* variables, set at spawn (otel/env.py).
+            env=otlp_env(service=abs_path.stem, dataset="notebooks"),
         )
 
     def _opened_extra(

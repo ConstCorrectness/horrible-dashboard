@@ -28,6 +28,8 @@ DeltaSink = Callable[[str, str], Awaitable[None]]
 import httpx
 import litellm
 
+# One `chat` span per provider call, at the chokepoint every caller shares.
+from backend.modules.otel.tracing import traced_chat
 from backend.modules.telemetry.instrument import tee_stream
 
 
@@ -662,6 +664,7 @@ async def list_models(
     return [m["id"] for m in res.json().get("data", [])]
 
 
+@traced_chat
 async def chat(
     client: httpx.AsyncClient,
     info: ProviderInfo,
@@ -766,6 +769,7 @@ async def chat(
     )
 
 
+@traced_chat
 async def chat_stream(
     client: httpx.AsyncClient,
     info: ProviderInfo,

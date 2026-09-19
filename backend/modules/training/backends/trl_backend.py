@@ -593,18 +593,29 @@ class TrlBackend:
         trainer += [f"    callbacks=[{callback}],", ")", "trainer.train()"]
         cells.append(code("\n".join(trainer)))
 
-        cells.append(
-            code(
-                "\n".join(
-                    [
-                        "trainer.save_model()",
-                        "# The checkpoint under output_dir is what 'Convert to GGUF' converts,",
-                        "# which is how a model you trained ends up served by this node.",
-                        f"print({literal(recipe.output_dir)})",
-                    ]
-                )
-            )
-        )
+        save = [
+            "trainer.save_model()",
+            "# The checkpoint under output_dir is what 'Convert to GGUF' converts,",
+            "# which is how a model you trained ends up served by this node.",
+            f"print({literal(recipe.output_dir)})",
+        ]
+        if recipe.use_lora and task != "reward":
+            # An adapter converts to an adapter GGUF, which llama-server only loads
+            # with `--lora` beside its base — and nothing on this node serves one
+            # that way. So the default LoRA path ended at a file that could not be
+            # served. Merging here makes `merged/` a whole model the checkpoint
+            # list offers and the converter turns into something servable.
+            merged = f"{recipe.output_dir.rstrip('/')}/merged"
+            save += [
+                "",
+                "# A LoRA adapter is not servable by itself: merge it into the base so",
+                "# the checkpoint list also offers a whole model to convert.",
+                "merged = trainer.model.merge_and_unload()",
+                f"merged.save_pretrained({literal(merged)})",
+                f"trainer.processing_class.save_pretrained({literal(merged)})",
+                f"print({literal(merged)})",
+            ]
+        cells.append(code("\n".join(save)))
         return cells
 
 

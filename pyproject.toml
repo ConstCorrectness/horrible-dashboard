@@ -50,6 +50,10 @@ dependencies = [
     "orjson>=3.11.9",
     "nbconvert>=7.17.1",
     "regex>=2026.6.28",
+    "opentelemetry-api>=1.44",
+    "opentelemetry-sdk>=1.44",
+    "opentelemetry-proto>=1.44",
+    "opentelemetry-exporter-otlp-proto-http>=1.44",
 ]
 
 [project.optional-dependencies]

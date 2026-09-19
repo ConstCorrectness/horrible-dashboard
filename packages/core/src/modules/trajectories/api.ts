@@ -42,6 +42,9 @@ export interface TrajectoryStep {
   gated: boolean;
   error: string | null;
   ts: number;
+  /** Explicit parent step, for natively nested traces (a received OTel trace, a
+   * LangGraph subgraph). Null means "nesting derives from `round`". */
+  parent_seq?: number | null;
 }
 
 export interface TrajectoryLabel {

@@ -43,6 +43,10 @@ _SKIP_PREFIXES = ("/api/telemetry",)
 _REDACT_BODY_PREFIXES = (
     "/api/games/auth/local",
     "/auth/local",
+    # Not a credential but the OTLP receiver: its bodies are protobuf batches of
+    # other programs' spans, already stored in full in `otel_spans`. Copying them
+    # into the I/O ring would be binary noise evicting the events it exists for.
+    "/api/otel/v1/",
 )
 
 
@@ -109,6 +113,22 @@ def capture_headers(headers: object) -> dict[str, str]:
     for name, value in dict(headers).items():  # type: ignore[call-overload]
         out[str(name).lower()] = str(value)
     return out
+
+
+def _inbound_headers(path: str, headers: object) -> dict[str, str]:
+    """Raw, except on a redacted path, where credential-shaped headers are blanked
+    too. The OTLP receiver is the case: a remote exporter authenticates with a
+    bearer token, and on a LAN-bound node the I/O ring is readable by the same
+    network the token exists to keep out — capture would hand it back."""
+    captured = capture_headers(headers)
+    if not _redacts_body(path):
+        return captured
+    from backend.modules.telemetry.store import HEADER_REDACTED, is_sensitive_header
+
+    return {
+        k: (HEADER_REDACTED if is_sensitive_header(k) else v)
+        for k, v in captured.items()
+    }
 
 
 def safe_body(raw: bytes | None, *, max_chars: int = _MAX_BODY_CHARS) -> str | None:
@@ -197,7 +217,7 @@ async def telemetry_middleware(
             status=status,
             duration_ms=(time.perf_counter() - start) * 1000,
             error=error,
-            request_headers=capture_headers(request.headers),
+            request_headers=_inbound_headers(path, request.headers),
             response_headers=response_headers,
             request_body=safe_body(raw_body, max_chars=_max_body_chars()),
             # Response bodies are not captured inbound: responses stream, and the
