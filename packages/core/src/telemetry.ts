@@ -69,8 +69,15 @@ const listeners = new Set<() => void>();
 let clientSeq = 0;
 let boundToWs = false;
 
+let emitPending = false;
+
 function emit(): void {
-  for (const listener of listeners) listener();
+  if (emitPending) return;
+  emitPending = true;
+  queueMicrotask(() => {
+    emitPending = false;
+    for (const listener of listeners) listener();
+  });
 }
 
 function eventKey(e: IoEvent): string {
@@ -120,6 +127,7 @@ export const telemetryStore = {
   },
   clear(): void {
     events = [];
-    emit();
+    emitPending = false;
+    for (const listener of listeners) listener();
   },
 };

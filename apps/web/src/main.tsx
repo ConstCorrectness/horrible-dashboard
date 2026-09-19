@@ -43,6 +43,7 @@ import {
   initRecordsWatch,
   initSocial,
   initTheme,
+  initGraphicsQuality,
   bootFailed,
   bootReady,
   bootStep,
@@ -253,6 +254,7 @@ async function boot(): Promise<void> {
   // shell paints already themed rather than flashing the default and correcting
   // itself. (The boot splash above renders earlier and may correct once.)
   initTheme();
+  initGraphicsQuality();
   // Same reason as settings: seed the user's overrides before the first render so
   // the palette and the Shortcuts pane show the bindings that will actually fire.
   await bootStep('keymap', 'Loading keybindings', loadKeymapOverrides);

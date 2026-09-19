@@ -44,13 +44,15 @@ export function FighterCanvas({ board }: { board: PublicState }) {
 
   useEffect(() => {
     let raf = 0;
+    let isVisible = true;
+    let isDocVisible = !document.hidden;
+
     const draw = () => {
+      raf = 0;
+      if (!isVisible || !isDocVisible) return;
       const canvas = canvasRef.current;
       const ctx = canvas?.getContext('2d');
-      if (!ctx || !canvas) {
-        raf = requestAnimationFrame(draw);
-        return;
-      }
+      if (!ctx || !canvas) return;
       const a = prev.current;
       const b = target.current;
       ctx.clearRect(0, 0, W, H);
@@ -83,8 +85,47 @@ export function FighterCanvas({ board }: { board: PublicState }) {
       }
       raf = requestAnimationFrame(draw);
     };
-    raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
+
+    const start = () => {
+      if (!raf && isVisible && isDocVisible) {
+        raf = requestAnimationFrame(draw);
+      }
+    };
+
+    const stop = () => {
+      if (raf) {
+        cancelAnimationFrame(raf);
+        raf = 0;
+      }
+    };
+
+    const onVisibility = () => {
+      isDocVisible = !document.hidden;
+      if (isDocVisible && isVisible) start();
+      else stop();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
+    const canvas = canvasRef.current;
+    let observer: IntersectionObserver | null = null;
+    if (canvas) {
+      observer = new IntersectionObserver(
+        ([entry]) => {
+          isVisible = entry?.isIntersecting ?? true;
+          if (isVisible && isDocVisible) start();
+          else stop();
+        },
+        { threshold: 0.05 },
+      );
+      observer.observe(canvas);
+    }
+
+    start();
+    return () => {
+      stop();
+      observer?.disconnect();
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [stageW]);
 
   const hpBar = (i: number) => {

@@ -72,6 +72,7 @@ export function Region({ pane, position }: { pane: PaneState; position: RegionPo
     const startSize = region.size;
     let pendingEvent: PointerEvent | null = null;
     let rafId = 0;
+    document.body.classList.add('is-layout-resizing');
 
     const processMove = () => {
       rafId = 0;
@@ -99,6 +100,7 @@ export function Region({ pane, position }: { pane: PaneState; position: RegionPo
       }
     };
     const onUp = () => {
+      document.body.classList.remove('is-layout-resizing');
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       if (rafId) {

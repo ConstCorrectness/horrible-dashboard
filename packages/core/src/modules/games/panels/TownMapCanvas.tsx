@@ -478,14 +478,40 @@ export function TownMapCanvas({ town, accountId }: { town: TownState; accountId:
   }, []);
 
   // The world clock: redraw on an interval (~8fps is plenty for water glints
-  // and the fountain, and unlike rAF it still paints in a hidden/backgrounded
-  // pane). Draw once immediately so the map never flashes empty.
+  // and the fountain). Pauses when the tab is hidden to conserve battery and CPU.
   useEffect(() => {
-    const ctx = canvasRef.current?.getContext('2d');
-    if (!ctx) return;
-    render(ctx, townRef.current, performance.now());
-    const id = setInterval(() => render(ctx, townRef.current, performance.now()), 120);
-    return () => clearInterval(id);
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    const paint = () => {
+      const ctx = canvasRef.current?.getContext('2d');
+      if (ctx) render(ctx, townRef.current, performance.now());
+    };
+
+    const start = () => {
+      if (timer) return;
+      paint();
+      timer = setInterval(paint, 120);
+    };
+
+    const stop = () => {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+
+    const onVisibility = () => {
+      if (document.hidden) stop();
+      else start();
+    };
+
+    if (!document.hidden) start();
+    document.addEventListener('visibilitychange', onVisibility);
+
+    return () => {
+      stop();
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, []);
 
   return (

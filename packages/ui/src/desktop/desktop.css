@@ -282,6 +282,17 @@
   contain: strict;
 }
 
+/* While dragging or resizing, disable pointer-events across all window bodies
+   and pane hosts to eliminate high-frequency hit-testing across deep DOM trees. */
+body.is-window-dragging .os-window-body,
+body.is-window-resizing .os-window-body,
+body.is-layout-resizing .frame-pane-host,
+body.is-window-dragging iframe,
+body.is-window-resizing iframe {
+  pointer-events: none !important;
+  user-select: none !important;
+}
+
 /* --- resize grips ------------------------------------------------------- */
 
 .os-window-resize {

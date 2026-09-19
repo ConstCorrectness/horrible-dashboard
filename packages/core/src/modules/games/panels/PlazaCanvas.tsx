@@ -252,7 +252,6 @@ export function PlazaCanvas({
     // ── Animation Frame loop ──
     const animate = () => {
       if (disposed) return;
-      requestAnimationFrame(animate);
 
       const present = new Set(occRef.current.map((o) => o.account_id));
 
@@ -436,7 +435,49 @@ export function PlazaCanvas({
 
       renderer.render(scene, camera);
     };
-    animate();
+
+    let raf = 0;
+    let isVisible = true;
+    let isDocVisible = !document.hidden;
+
+    const tick = () => {
+      raf = 0;
+      if (disposed || !isVisible || !isDocVisible) return;
+      animate();
+      raf = requestAnimationFrame(tick);
+    };
+
+    const startLoop = () => {
+      if (!raf && !disposed && isVisible && isDocVisible) {
+        raf = requestAnimationFrame(tick);
+      }
+    };
+
+    const stopLoop = () => {
+      if (raf) {
+        cancelAnimationFrame(raf);
+        raf = 0;
+      }
+    };
+
+    const onVisibility = () => {
+      isDocVisible = !document.hidden;
+      if (isDocVisible && isVisible) startLoop();
+      else stopLoop();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        isVisible = entry?.isIntersecting ?? true;
+        if (isVisible && isDocVisible) startLoop();
+        else stopLoop();
+      },
+      { threshold: 0.05 },
+    );
+    observer.observe(container);
+
+    startLoop();
 
     // Resize listener
     const handleResize = () => {
@@ -451,6 +492,9 @@ export function PlazaCanvas({
     // Clean up
     return () => {
       disposed = true;
+      stopLoop();
+      observer.disconnect();
+      document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('resize', handleResize);
       if (container.contains(renderer.domElement)) {
         container.removeChild(renderer.domElement);

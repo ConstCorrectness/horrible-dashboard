@@ -109,6 +109,12 @@ export const DesktopWindow = memo(function DesktopWindow({
       zoneRef.current = null;
       mergeRef.current = null;
 
+      if (kind === 'move') {
+        document.body.classList.add('is-window-dragging');
+      } else {
+        document.body.classList.add('is-window-resizing');
+      }
+
       let pendingEvent: PointerEvent | null = null;
       let rafId = 0;
 
@@ -151,6 +157,7 @@ export const DesktopWindow = memo(function DesktopWindow({
       };
 
       const onUp = (ue: PointerEvent) => {
+        document.body.classList.remove('is-window-dragging', 'is-window-resizing');
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
         window.removeEventListener('pointercancel', onUp);

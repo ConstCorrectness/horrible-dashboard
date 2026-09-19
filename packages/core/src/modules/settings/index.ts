@@ -1,3 +1,8 @@
+import {
+  detectDefaultGraphicsQuality,
+  GRAPHICS_QUALITIES,
+  GRAPHICS_QUALITY_SETTING_KEY,
+} from '../../graphics';
 import { registry, type ModuleManifest } from '../../registry';
 import { setSetting } from '../../settings';
 import { DEFAULT_THEME, THEME_SETTING_KEY, THEMES } from '../../theme';
@@ -35,6 +40,15 @@ export const settingsModule: ModuleManifest = {
       type: 'enum',
       default: DEFAULT_THEME,
       enumValues: THEMES.map((t) => t.id),
+    },
+    {
+      key: GRAPHICS_QUALITY_SETTING_KEY,
+      title: 'Graphics Quality & Performance',
+      description:
+        'Visual fidelity vs. frame rate and battery savings. Automatically set to Performance on weaker or low-memory hardware.',
+      type: 'enum',
+      default: detectDefaultGraphicsQuality(),
+      enumValues: [...GRAPHICS_QUALITIES],
     },
   ],
   commands: [

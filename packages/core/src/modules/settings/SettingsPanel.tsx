@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 
+import { GRAPHICS_QUALITY_SETTING_KEY } from '../../graphics';
 import { type SettingDecl } from '../../registry';
 import { registry } from '../../registry';
 import {
@@ -55,17 +56,43 @@ function SettingRow({ decl }: { decl: SettingDecl }) {
       );
       break;
     case 'enum':
-      control = (
-        <div className="select-wrap">
-          <select value={String(value)} onChange={(e) => commit(e.target.value)}>
-            {(decl.enumValues ?? []).map((opt) => (
-              <option key={opt} value={opt}>
-                {opt}
-              </option>
-            ))}
-          </select>
-        </div>
-      );
+      if (decl.key === GRAPHICS_QUALITY_SETTING_KEY) {
+        const qualityVal = String(value);
+        control = (
+          <div className="quality-slider-control" role="group" aria-label="Graphics Quality">
+            <div className="quality-slider-track">
+              {(decl.enumValues ?? []).map((opt) => (
+                <button
+                  key={opt}
+                  type="button"
+                  className={`quality-slider-step${opt === qualityVal ? ' is-active' : ''}`}
+                  aria-pressed={opt === qualityVal}
+                  onClick={() => commit(opt)}
+                >
+                  {opt.charAt(0).toUpperCase() + opt.slice(1)}
+                </button>
+              ))}
+            </div>
+            <div className="quality-slider-hint">
+              {qualityVal === 'performance' && '⚡ Max speed: blurs disabled, static ambient effects, throttled loops'}
+              {qualityVal === 'balanced' && '⚖️ Balanced: subtle blurs, optimized animations, standard effects'}
+              {qualityVal === 'quality' && '✨ High fidelity: full glassmorphism, 60/120 FPS particles & lighting'}
+            </div>
+          </div>
+        );
+      } else {
+        control = (
+          <div className="select-wrap">
+            <select value={String(value)} onChange={(e) => commit(e.target.value)}>
+              {(decl.enumValues ?? []).map((opt) => (
+                <option key={opt} value={opt}>
+                  {opt}
+                </option>
+              ))}
+            </select>
+          </div>
+        );
+      }
       break;
     default:
       control = secret ? (
