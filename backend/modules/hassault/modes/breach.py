@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import math
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
-from .base import GameMode, Goal
+from .base import GameMode
 
 if TYPE_CHECKING:
     from ..match import Command, MatchPlayer, MatchRoom

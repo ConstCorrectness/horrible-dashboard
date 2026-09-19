@@ -6,11 +6,8 @@ placement matches, season progression, and ranked career profiles.
 
 from __future__ import annotations
 
-import math
-import sqlite3
 import time
 from typing import Any
-from backend.modules.database.app_db import ensure_app_db_dir
 from backend.modules.hassault.results import get_db_conn
 from backend.modules.hassault import rating
 

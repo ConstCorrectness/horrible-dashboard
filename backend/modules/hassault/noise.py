@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Any
 
 from backend.modules.hassault.physics import World
 from backend.modules.hassault.weapons import raycast_world
@@ -229,7 +230,7 @@ def hrtf_spatial_params(
 
     # Woodworth's formula for ITD: (r / c) * (sin(theta) + theta)
     r = 0.0875  # head radius in meters
-    c = 343.0   # speed of sound in m/s
+    c = 343.0  # speed of sound in m/s
     theta = abs(rel_azimuth)
     itd_sec = (r / c) * (math.sin(theta) + theta)
     if rel_azimuth < 0:
@@ -244,4 +245,3 @@ def hrtf_spatial_params(
         "itd_ms": round(itd_ms, 3),
         "pan": round(pan, 3),
     }
-

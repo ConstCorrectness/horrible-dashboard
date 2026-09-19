@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Optional
 
 
@@ -41,7 +41,9 @@ class ObserverDirector:
     def __init__(self, min_shot_duration: float = 2.5) -> None:
         self.min_shot_duration = min_shot_duration
         self.current_target_id: Optional[str] = None
-        self.current_mode: str = "FIRST_PERSON"  # FIRST_PERSON, THIRD_PERSON, TACTICAL_OVERVIEW
+        self.current_mode: str = (
+            "FIRST_PERSON"  # FIRST_PERSON, THIRD_PERSON, TACTICAL_OVERVIEW
+        )
         self.focus_reason: str = "Free Camera"
         self.last_switch_time: float = 0.0
         self.camera: CameraFrame = CameraFrame(32.0, 32.0, 6.0, 0.0, -15.0)
@@ -54,7 +56,8 @@ class ObserverDirector:
             now = time.monotonic()
 
         living_players = [
-            p for p in room.players.values()
+            p
+            for p in room.players.values()
             if getattr(p, "alive", True) and getattr(p.state, "health", 100) > 0
         ]
 
@@ -74,7 +77,6 @@ class ObserverDirector:
             }
 
         # Check for bomb planting / defusing
-        bomb_zone = getattr(room, "bomb_planted", False)
         mode = getattr(room, "mode", None)
         planter_id = getattr(mode, "planter_id", None) if mode else None
         defuser_id = getattr(mode, "defuser_id", None) if mode else None
@@ -119,7 +121,11 @@ class ObserverDirector:
 
             # 4. Sniper in Sightline
             held_weapon = getattr(p.state, "weapon", "")
-            if "sniper" in held_weapon or "awp" in held_weapon or "scout" in held_weapon:
+            if (
+                "sniper" in held_weapon
+                or "awp" in held_weapon
+                or "scout" in held_weapon
+            ):
                 score += 30.0
                 if reason == "Standard Patrol":
                     reason = "Long-Range Sniper Angle"
@@ -149,11 +155,21 @@ class ObserverDirector:
 
         # Pacing: switch target only if min_shot_duration elapsed or emergency (plant/defuse)
         elapsed = now - self.last_switch_time
-        can_switch = elapsed >= self.min_shot_duration or "Bomb" in best_reason or self.current_target_id is None
+        can_switch = (
+            elapsed >= self.min_shot_duration
+            or "Bomb" in best_reason
+            or self.current_target_id is None
+        )
 
         # Check if current target died
-        curr_p = room.players.get(self.current_target_id) if self.current_target_id else None
-        if curr_p is None or not getattr(curr_p, "alive", True) or getattr(curr_p.state, "health", 0) <= 0:
+        curr_p = (
+            room.players.get(self.current_target_id) if self.current_target_id else None
+        )
+        if (
+            curr_p is None
+            or not getattr(curr_p, "alive", True)
+            or getattr(curr_p.state, "health", 0) <= 0
+        ):
             can_switch = True
 
         if can_switch and self.current_target_id != best_player.id:

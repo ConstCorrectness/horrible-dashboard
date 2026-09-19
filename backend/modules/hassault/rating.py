@@ -7,10 +7,8 @@ multi-factor individual performance scaling (ADR, HS%, First Bloods, Nutshot Kil
 from __future__ import annotations
 
 import math
-import sqlite3
 import time
 from typing import Any
-from backend.modules.database.app_db import ensure_app_db_dir
 from backend.modules.hassault.results import get_db_conn
 
 # Glicko-2 System Constants
