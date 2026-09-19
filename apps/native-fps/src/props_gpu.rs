@@ -184,11 +184,7 @@ impl Props {
         let fallback = upload_texture(
             device,
             queue,
-            &TextureImage {
-                width: 1,
-                height: 1,
-                rgba: vec![255, 255, 255, 255],
-            },
+            &TextureImage::single_pixel(255, 255, 255, 255),
         );
 
         let materials = prop
@@ -318,14 +314,21 @@ fn upload_texture(
         height: image.height.max(1),
         depth_or_array_layers: 1,
     };
-    // `Space::Srgb` to match the format below — averaging these bytes raw comes
-    // out darker than the surface they represent, worst in the mid-tones.
-    let levels = crate::mipmap::chain(
-        image.rgba.clone(),
-        size.width,
-        size.height,
-        crate::mipmap::Space::Srgb,
-    );
+    // Use precomputed mip levels when available (computed on the background
+    // preloader thread). Fall back to computing here only for textures that
+    // arrive without them — the 1×1 fallback, for instance.
+    let computed;
+    let levels: &[(u32, u32, Vec<u8>)] = if !image.levels.is_empty() {
+        &image.levels
+    } else {
+        computed = crate::mipmap::chain(
+            image.rgba.clone(),
+            size.width,
+            size.height,
+            crate::mipmap::Space::Srgb,
+        );
+        &computed
+    };
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("prop-texture"),
         size,

@@ -56,10 +56,19 @@ pub enum Space {
 /// independently and stops at 1, which is exactly what `mip_level_count` counts,
 /// and an odd parent edge samples its last row or column twice rather than
 /// reading past the end.
+static SRGB_TO_LINEAR_LUT: std::sync::LazyLock<[f32; 256]> = std::sync::LazyLock::new(|| {
+    let mut lut = [0.0f32; 256];
+    for i in 0..256 {
+        lut[i] = srgb_to_linear(i as f32 / 255.0);
+    }
+    lut
+});
+
 pub fn chain(base: Vec<u8>, width: u32, height: u32, space: Space) -> Vec<(u32, u32, Vec<u8>)> {
     let (width, height) = (width.max(1), height.max(1));
     let mut levels = vec![(width, height, base)];
     let (mut w, mut h) = (width, height);
+    let srgb_lut = &*SRGB_TO_LINEAR_LUT;
     while w > 1 || h > 1 {
         let (pw, ph, prev) = levels.last().expect("a base level");
         let (pw, ph) = (*pw, *ph);
@@ -74,25 +83,25 @@ pub fn chain(base: Vec<u8>, width: u32, height: u32, space: Space) -> Vec<(u32, 
                     let sx = (x * 2 + dx).min(pw - 1);
                     let i = ((sy * pw + sx) * 4) as usize;
                     for c in 0..3 {
-                        let v = prev[i + c] as f32 / 255.0;
+                        let b = prev[i + c];
                         acc[c] += match space {
-                            Space::Linear => v,
-                            Space::Srgb => srgb_to_linear(v),
+                            Space::Linear => b as f32 * (1.0 / 255.0),
+                            Space::Srgb => srgb_lut[b as usize],
                         };
                     }
                     // Alpha is coverage, never colour.
-                    acc[3] += prev[i + 3] as f32 / 255.0;
+                    acc[3] += prev[i + 3] as f32 * (1.0 / 255.0);
                 }
                 let o = ((y * w + x) * 4) as usize;
                 for c in 0..3 {
-                    let v = acc[c] / 4.0;
+                    let v = acc[c] * 0.25;
                     let v = match space {
                         Space::Linear => v,
                         Space::Srgb => linear_to_srgb(v),
                     };
                     next[o + c] = (v * 255.0).round().clamp(0.0, 255.0) as u8;
                 }
-                next[o + 3] = (acc[3] / 4.0 * 255.0).round().clamp(0.0, 255.0) as u8;
+                next[o + 3] = (acc[3] * 0.25 * 255.0).round().clamp(0.0, 255.0) as u8;
             }
         }
         levels.push((w, h, next));

@@ -202,11 +202,7 @@ impl Characters {
         let fallback = upload_texture(
             device,
             queue,
-            &crate::character::TextureImage {
-                width: 1,
-                height: 1,
-                rgba: vec![255, 255, 255, 255],
-            },
+            &crate::character::TextureImage::single_pixel(255, 255, 255, 255),
         );
 
         let materials = operator
@@ -383,16 +379,18 @@ fn upload_texture(
         height: image.height.max(1),
         depth_or_array_layers: 1,
     };
-    // `Space::Srgb`, and the opposite of the detail tile's choice: these bytes
-    // *are* sRGB-encoded (see the format below), so averaging them raw would
-    // come out darker than the surface it represents, worst in the mid-tones,
-    // and would read as a character who dims as they walk away from you.
-    let levels = crate::mipmap::chain(
-        image.rgba.clone(),
-        size.width,
-        size.height,
-        crate::mipmap::Space::Srgb,
-    );
+    let fallback;
+    let levels: &[(u32, u32, Vec<u8>)] = if !image.levels.is_empty() {
+        &image.levels
+    } else {
+        fallback = crate::mipmap::chain(
+            image.rgba.clone(),
+            size.width,
+            size.height,
+            crate::mipmap::Space::Srgb,
+        );
+        &fallback
+    };
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("operator-texture"),
         size,

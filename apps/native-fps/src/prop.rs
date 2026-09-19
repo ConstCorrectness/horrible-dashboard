@@ -167,14 +167,16 @@ impl Prop {
         let blob = gltf.blob.as_deref();
         let document = &gltf.document;
 
-        let mut textures = Vec::new();
-        for image in document.images() {
-            textures.push(decode_image(&image, blob)?);
-        }
-
+        // --- Collect materials first so we know which images are actually used ---
         let mut materials = Vec::new();
+        let mut used_images = std::collections::HashSet::new();
         for material in document.materials() {
             let pbr = material.pbr_metallic_roughness();
+            // Each GLTF texture has a source image index. We need the *image*
+            // index (not the texture index) to know which images to decode.
+            if let Some(info) = pbr.base_color_texture() {
+                used_images.insert(info.texture().source().index());
+            }
             materials.push(MaterialDef {
                 base_color_texture: pbr.base_color_texture().map(|t| t.texture().index()),
                 base_color_factor: Vec4::from_array(pbr.base_color_factor()),
@@ -184,6 +186,41 @@ impl Prop {
                 // to contain anything in — start discarding pixels.
                 alpha_cutoff: 0.0,
             });
+        }
+
+        // Build a map from texture index → source image index so we can tell
+        // which image indices are referenced by *any* texture object, not just
+        // the base-colour ones we track above. (GLTF separates "texture" and
+        // "image"; a texture references one source image.)
+        for tex in document.textures() {
+            // If this texture is referenced by any material's base_color_texture,
+            // the texture index was already recorded; we need the *image* index.
+            if materials.iter().any(|m| m.base_color_texture == Some(tex.index())) {
+                used_images.insert(tex.source().index());
+            }
+        }
+
+        // --- Decode only the images that are actually sampled (base colour) ---
+        // The assault rifle has 63 images but the shader only samples base
+        // colour; decoding + mipping the normal / roughness / AO maps is pure
+        // waste on the background thread and balloons memory.
+        let image_count = document.images().len();
+        let mut textures = Vec::with_capacity(image_count);
+        for image in document.images() {
+            if used_images.contains(&image.index()) {
+                let mut tex = decode_image(&image, blob)?;
+                // Mip chains are the expensive part of upload_texture (sRGB
+                // box-filter on every pixel of every level). Computing them
+                // here — on the background preloader thread — moves that cost
+                // off the frame thread entirely; the GPU upload then only pays
+                // for write_texture, which is a memcpy.
+                tex.compute_mips(crate::mipmap::Space::Srgb);
+                textures.push(tex);
+            } else {
+                // Placeholder so texture indices stay aligned with the GLTF
+                // image array. upload_texture handles 1×1 images efficiently.
+                textures.push(TextureImage::single_pixel(255, 255, 255, 255));
+            }
         }
 
         let mut vertices = Vec::new();

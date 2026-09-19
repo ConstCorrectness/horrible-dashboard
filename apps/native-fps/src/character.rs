@@ -104,10 +104,38 @@ pub struct Clip {
 }
 
 /// A decoded base-colour map, kept as RGBA8 ready for upload.
+#[derive(Clone)]
 pub struct TextureImage {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
+    pub levels: Vec<(u32, u32, Vec<u8>)>,
+}
+
+impl TextureImage {
+    pub fn new(width: u32, height: u32, rgba: Vec<u8>) -> Self {
+        Self {
+            width,
+            height,
+            rgba,
+            levels: Vec::new(),
+        }
+    }
+
+    pub fn single_pixel(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Self {
+            width: 1,
+            height: 1,
+            rgba: vec![r, g, b, a],
+            levels: vec![(1, 1, vec![r, g, b, a])],
+        }
+    }
+
+    pub fn compute_mips(&mut self, space: crate::mipmap::Space) {
+        if self.levels.is_empty() {
+            self.levels = crate::mipmap::chain(self.rgba.clone(), self.width, self.height, space);
+        }
+    }
 }
 
 /// What a primitive needs at draw time.
@@ -344,7 +372,9 @@ impl Operator {
         // --- materials and textures --------------------------------------
         let mut textures = Vec::new();
         for image in doc.images() {
-            textures.push(decode_image(&image, blob)?);
+            let mut tex = decode_image(&image, blob)?;
+            tex.compute_mips(crate::mipmap::Space::Srgb);
+            textures.push(tex);
         }
         let mut materials = Vec::new();
         for material in doc.materials() {
@@ -750,6 +780,7 @@ pub(crate) fn decode_image(image: &gltf::Image, blob: Option<&[u8]>) -> Result<T
         width: decoded.width(),
         height: decoded.height(),
         rgba: decoded.into_raw(),
+        levels: Vec::new(),
     })
 }
 
