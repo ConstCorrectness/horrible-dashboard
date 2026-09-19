@@ -258,8 +258,8 @@ function LobbyChat({ state, onSend }: { state: LobbyState; onSend: (text: string
                   ...mono,
                   color:
                     line.memberId === state.you
-                      ? 'var(--accent, #6ea8fe)'
-                      : 'var(--text-secondary, #94a3b8)',
+                      ? 'var(--accent)'
+                      : 'var(--text-secondary)',
                 }}
               >
                 {line.from}
@@ -374,10 +374,10 @@ function VoiceGlyph({
   const color = !inVoice
     ? 'transparent'
     : failed || muted
-      ? 'var(--danger, #f87171)'
+      ? 'var(--danger)'
       : speaking
-        ? 'var(--success, #4ade80)'
-        : 'var(--text-dim, #8b93a7)';
+        ? 'var(--success)'
+        : 'var(--text-dim)';
   return (
     <span
       style={{
@@ -385,7 +385,7 @@ function VoiceGlyph({
         width: 18,
         justifyContent: 'center',
         color,
-        filter: speaking ? 'drop-shadow(0 0 3px var(--success, #4ade80))' : undefined,
+        filter: speaking ? 'drop-shadow(0 0 3px var(--success))' : undefined,
         transition: 'color 120ms',
       }}
       title={
@@ -429,10 +429,10 @@ function MicIcon({ off }: { off: boolean }) {
 function Chip({ tone, children }: { tone: 'ok' | 'accent' | 'dim'; children: string }) {
   const color =
     tone === 'ok'
-      ? 'var(--success, #4ade80)'
+      ? 'var(--success)'
       : tone === 'accent'
-        ? 'var(--accent, #6ea8fe)'
-        : 'var(--text-dim, #8b93a7)';
+        ? 'var(--accent)'
+        : 'var(--text-dim)';
   return (
     <span
       style={{
@@ -471,7 +471,7 @@ const bar: CSSProperties = {
   alignItems: 'center',
   gap: '0.8rem',
   padding: '0.5rem 0.6rem',
-  borderTop: '2px solid var(--accent, #6ea8fe)',
+  borderTop: '2px solid var(--accent)',
   background: 'rgba(110,168,254,0.06)',
 };
 
@@ -486,14 +486,14 @@ const log: CSSProperties = {
 };
 
 const warn: CSSProperties = {
-  color: 'var(--danger, #f87171)',
-  borderColor: 'color-mix(in srgb, var(--danger, #f87171) 45%, transparent)',
+  color: 'var(--danger)',
+  borderColor: 'color-mix(in srgb, var(--danger) 45%, transparent)',
 };
 
 const primary: CSSProperties = {
-  background: 'var(--accent, #6ea8fe)',
+  background: 'var(--accent)',
   border: '1px solid transparent',
-  color: '#08111f',
+  color: 'var(--accent-contrast)',
   fontWeight: 600,
   borderRadius: 5,
   cursor: 'pointer',

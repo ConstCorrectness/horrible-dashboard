@@ -126,7 +126,7 @@ export function ChatBox(props: ChatBoxProps) {
               <bdi
                 style={{
                   ...name,
-                  color: props.teamColors[line.team] ?? 'var(--text-secondary, #94a3b8)',
+                  color: props.teamColors[line.team] ?? 'var(--text-secondary)',
                 }}
               >
                 {line.senderName || 'someone'}
@@ -178,8 +178,8 @@ export function ChatBox(props: ChatBoxProps) {
   );
 }
 
-const TEAM_TAG = 'var(--success, #4ade80)';
-const ALL_TAG = 'var(--text-secondary, #94a3b8)';
+const TEAM_TAG = 'var(--success)';
+const ALL_TAG = 'var(--text-secondary)';
 const MONO = 'var(--font-mono, "JetBrains Mono", Consolas, monospace)';
 
 const box: CSSProperties = {
@@ -190,7 +190,7 @@ const box: CSSProperties = {
   zIndex: 3,
   fontFamily: CHAT_FONT,
   fontSize: '12.5px',
-  color: 'var(--text, #e8eaf2)',
+  color: 'var(--text)',
   pointerEvents: 'none',
 };
 
@@ -209,7 +209,7 @@ const logOpen: CSSProperties = {
   pointerEvents: 'auto',
   padding: '0.4rem 0.5rem',
   background: 'rgba(5,6,9,.62)',
-  borderTop: '2px solid var(--accent, #6ea8fe)',
+  borderTop: '2px solid var(--accent)',
 };
 
 const row: CSSProperties = {
@@ -260,12 +260,12 @@ const input: CSSProperties = {
 const counter: CSSProperties = {
   fontFamily: MONO,
   fontSize: '10.5px',
-  color: 'var(--text-dim, #8b93a7)',
+  color: 'var(--text-dim)',
 };
 
 const noticeStyle: CSSProperties = {
   marginTop: 2,
   fontSize: '11px',
-  color: 'var(--danger, #f87171)',
+  color: 'var(--danger)',
   pointerEvents: 'none',
 };
