@@ -65,10 +65,35 @@ pub const WEAPON_GLBS: &[(&str, &[u8])] = &[
     ),
 ];
 
+/// Special rare knife archetype GLBs with custom geometry and baked rarity finishes.
+pub const KNIFE_ARCHETYPE_GLBS: &[(&str, &[u8])] = &[
+    (
+        "knife_karambit",
+        include_bytes!("../../web/public/hassault-weapon-knife-karambit.glb"),
+    ),
+    (
+        "knife_butterfly",
+        include_bytes!("../../web/public/hassault-weapon-knife-butterfly.glb"),
+    ),
+    (
+        "knife_bayonet",
+        include_bytes!("../../web/public/hassault-weapon-knife-bayonet.glb"),
+    ),
+    (
+        "knife_skeleton",
+        include_bytes!("../../web/public/hassault-weapon-knife-skeleton.glb"),
+    ),
+    (
+        "knife_huntsman",
+        include_bytes!("../../web/public/hassault-weapon-knife-huntsman.glb"),
+    ),
+];
+
 /// The compiled-in GLB for a weapon, if it has one.
 pub fn weapon_glb(id: &str) -> Option<&'static [u8]> {
     WEAPON_GLBS
         .iter()
+        .chain(KNIFE_ARCHETYPE_GLBS.iter())
         .find(|(name, _)| *name == id)
         .map(|(_, bytes)| *bytes)
 }
@@ -93,6 +118,11 @@ pub fn preload() -> Receiver<(String, Result<Prop, String>)> {
         for (id, bytes) in WEAPON_GLBS {
             // A closed receiver means the client is shutting down; there is no
             // point decoding the rest of the textures for nobody.
+            if tx.send((id.to_string(), Prop::from_slice(bytes))).is_err() {
+                return;
+            }
+        }
+        for (id, bytes) in KNIFE_ARCHETYPE_GLBS {
             if tx.send((id.to_string(), Prop::from_slice(bytes))).is_err() {
                 return;
             }
@@ -413,6 +443,19 @@ mod tests {
     }
 
     #[test]
+    fn all_knife_archetype_props_resolve_and_parse() {
+        for (id, _) in KNIFE_ARCHETYPE_GLBS {
+            let bytes = weapon_glb(id).expect("knife archetype GLB present");
+            let prop = Prop::from_slice(bytes).expect("parses");
+            assert!(!prop.vertices.is_empty(), "prop {id} has vertices");
+            assert!(
+                prop.materials.iter().any(|m| m.base_color_texture.is_some()),
+                "prop {id} has PBR texture map"
+            );
+        }
+    }
+
+    #[test]
     fn a_file_that_is_not_a_glb_is_refused_rather_than_guessed_at() {
         assert!(Prop::from_slice(b"not a glb at all").is_err());
     }
@@ -433,8 +476,11 @@ mod tests {
             })
             .collect();
         seen.sort();
-        let mut expected: Vec<String> =
-            WEAPON_GLBS.iter().map(|(id, _)| id.to_string()).collect();
+        let mut expected: Vec<String> = WEAPON_GLBS
+            .iter()
+            .chain(KNIFE_ARCHETYPE_GLBS.iter())
+            .map(|(id, _)| id.to_string())
+            .collect();
         expected.sort();
         assert_eq!(seen, expected);
     }

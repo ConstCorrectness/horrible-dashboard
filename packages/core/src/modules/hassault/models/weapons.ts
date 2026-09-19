@@ -60,8 +60,19 @@ const pending = new Map<string, Promise<WeaponModel>>();
  */
 import { getCachedAssetUrl } from './assetCache';
 
+export const KNIFE_ARCHETYPE_URLS: Readonly<Record<string, string>> = {
+  knife_karambit: '/hassault-weapon-knife-karambit.glb',
+  knife_butterfly: '/hassault-weapon-knife-butterfly.glb',
+  knife_bayonet: '/hassault-weapon-knife-bayonet.glb',
+  knife_skeleton: '/hassault-weapon-knife-skeleton.glb',
+  knife_huntsman: '/hassault-weapon-knife-huntsman.glb',
+};
+
 export function loadWeaponModel(id: string): Promise<WeaponModel | null> {
-  const url = id === 'fal' ? '/hassault-weapon-fal.glb' : WEAPON_MODEL_URLS[id];
+  const url =
+    id === 'fal'
+      ? '/hassault-weapon-fal.glb'
+      : (KNIFE_ARCHETYPE_URLS[id] ?? WEAPON_MODEL_URLS[id]);
   if (!url) return Promise.resolve(null);
   const cached = pending.get(id);
   if (cached) return cached;

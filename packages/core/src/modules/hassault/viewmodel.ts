@@ -703,7 +703,23 @@ export class WeaponViewModel {
   private requestProp(id: string, skinKey: string, skin: WeaponSkin | null): void {
     const token = `${id}|${skinKey}`;
     this.propToken = token;
-    void loadWeaponModel(id)
+    let propId = id;
+    if (id === 'knife' && skin) {
+      const skinId = skin.id ?? '';
+      const skinName = (skin.name ?? '').toLowerCase();
+      if (skinId.includes('karambit') || skinName.includes('karambit')) {
+        propId = 'knife_karambit';
+      } else if (skinId.includes('butterfly') || skinName.includes('butterfly')) {
+        propId = 'knife_butterfly';
+      } else if (skinId.includes('bayonet') || skinName.includes('bayonet') || skinId.includes('lore')) {
+        propId = 'knife_bayonet';
+      } else if (skinId.includes('skeleton') || skinName.includes('skeleton')) {
+        propId = 'knife_skeleton';
+      } else if (skinId.includes('huntsman') || skinName.includes('huntsman')) {
+        propId = 'knife_huntsman';
+      }
+    }
+    void loadWeaponModel(propId)
       .then((asset) => {
         // Three ways to be stale, and they are all the same check: the weapon
         // changed, the skin changed, or the view model was disposed while the
@@ -714,9 +730,9 @@ export class WeaponViewModel {
 
         // The skin tints the prop rather than repainting it: these materials
         // carry real texture maps, and `color` multiplies the base colour map.
-        // White is not a special case here — it is the identity, which is
-        // exactly what "no skin" should mean.
-        const tint = skin ? paletteFor(skin).body : 0xffffff;
+        // For special knife archetypes with baked rarity textures, white is identity.
+        const isArchetypeKnife = propId.startsWith('knife_');
+        const tint = skin && !isArchetypeKnife ? paletteFor(skin).body : 0xffffff;
         const materials: THREE.Material[] = [];
         const wear = skin ? Math.max(0, Math.min(1, skin.floatValue)) : 0.25;
         const isSpecial =

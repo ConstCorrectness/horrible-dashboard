@@ -890,9 +890,28 @@ impl App {
         } else {
             weapon.clone()
         };
+        let equipped_skin = self.skins.get(&display_weapon);
         self.viewmodel
-            .set_weapon(&display_weapon, self.skins.get(&display_weapon));
-        self.sync_prop(&display_weapon);
+            .set_weapon(&display_weapon, equipped_skin);
+        let prop_name = if display_weapon == "knife" {
+            let skin_id = equipped_skin.and_then(|s| s.id.as_deref()).unwrap_or("");
+            if skin_id.contains("karambit") {
+                "knife_karambit"
+            } else if skin_id.contains("butterfly") {
+                "knife_butterfly"
+            } else if skin_id.contains("bayonet") || skin_id.contains("lore") {
+                "knife_bayonet"
+            } else if skin_id.contains("skeleton") {
+                "knife_skeleton"
+            } else if skin_id.contains("huntsman") {
+                "knife_huntsman"
+            } else {
+                "knife"
+            }
+        } else {
+            display_weapon.as_str()
+        };
+        self.sync_prop(prop_name);
         // **The predicted arc.** Drawn from the *locally predicted* velocity,
         // not from the last snapshot's: the whole reason it exists is to make
         // `THROW_INHERIT` visible — running and jumping feed the throw — and a

@@ -520,7 +520,10 @@ fn every_prop_this_client_ships_actually_parses() {
     // `include_bytes!` proves the file existed at build time and nothing more.
     // A truncated or mis-converted GLB compiles in perfectly and fails on the
     // frame the weapon is first drawn, which is mid-match.
-    for (name, bytes) in hassault_native::prop::WEAPON_GLBS {
+    for (name, bytes) in hassault_native::prop::WEAPON_GLBS
+        .iter()
+        .chain(hassault_native::prop::KNIFE_ARCHETYPE_GLBS.iter())
+    {
         let prop = hassault_native::prop::Prop::from_slice(bytes)
             .unwrap_or_else(|e| panic!("the compiled-in '{name}' prop does not parse: {e}"));
         assert!(!prop.vertices.is_empty(), "{name} has no geometry");
