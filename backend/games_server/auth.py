@@ -345,11 +345,11 @@ def login_local(email: str, password: str) -> dict[str, Any]:
 
 
 def set_account_handle(account_id: str, handle: str) -> str:
-    """Claim or rename a username. Returns 'ok', 'invalid' or 'taken'.
+    """Claim a username. Returns 'ok', 'invalid', 'taken' or 'locked'.
 
-    Unlike `store.ensure_handle` — which auto-derives one and locks it — this is
-    the deliberate, user-chosen rename, so it applies whether or not a handle is
-    already set. Uniqueness is enforced by the DB index, not by a pre-read.
+    One-time and irreversible: once an account holds a handle, a different one is
+    refused ('locked') — see `store.set_handle`. Uniqueness is enforced by the DB
+    index, not by a pre-read.
     """
     return store.set_handle(account_id, handle)
 

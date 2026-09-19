@@ -14,7 +14,7 @@ import {
   subscribeProfileCards,
 } from '../people/profile-cards';
 import { openConversation } from '../people/conversation';
-import { addFriend, updateSelfProfile, type Friend } from './api';
+import { addFriend, type Friend } from './api';
 import {
   blockViaChannel,
   getSocialState,
@@ -190,8 +190,6 @@ export function FriendsPanel() {
   useCards();
   const { account } = useAccount();
   const [code, setCode] = useState('');
-  const [address, setAddress] = useState('');
-  const [name, setName] = useState('');
   const [filter, setFilter] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -236,17 +234,18 @@ export function FriendsPanel() {
     setBusy(true);
     setError(null);
     try {
-      const res = await addFriend(code.trim(), address.trim() || undefined);
+      // No address: a `@username` resolves to the machines enrolled in that
+      // account, and each is dialed through the relay by id wherever it is. The
+      // manual `ws://…/peer-ws` field this form used to carry was only a fallback
+      // for when that lookup found no machine, which an address rarely fixed.
+      const res = await addFriend(code.trim());
       if (!res.ok) setError(res.error ?? 'could not add that friend');
-      else {
-        setCode('');
-        setAddress('');
-      }
+      else setCode('');
     } finally {
       setBusy(false);
       requestRoster();
     }
-  }, [code, address]);
+  }, [code]);
 
   const copyCode = useCallback(() => {
     if (!me?.handle) return;
@@ -363,7 +362,7 @@ export function FriendsPanel() {
       )}
 
       <details className="people-fold">
-        <summary>Add a friend, rename yourself</summary>
+        <summary>Add a friend</summary>
         <div className="friends-admin">
           <form
             onSubmit={(e) => {
@@ -378,38 +377,12 @@ export function FriendsPanel() {
               spellCheck={false}
               onChange={(e) => setCode(e.target.value)}
             />
-            <input
-              value={address}
-              placeholder="optional: ws://their-host:8000/peer-ws (needed off your network)"
-              spellCheck={false}
-              onChange={(e) => setAddress(e.target.value)}
-            />
             <button type="submit" disabled={!code.trim() || busy}>
               {busy ? 'Sending…' : 'Send friend request'}
             </button>
           </form>
-
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (name.trim()) {
-                void updateSelfProfile(name.trim()).then(() => {
-                  setName('');
-                  requestRoster();
-                });
-              }
-            }}
-          >
-            <label className="people-label">Rename yourself</label>
-            <input
-              value={name}
-              placeholder={me ? `currently “${me.display_name}”` : ''}
-              onChange={(e) => setName(e.target.value)}
-            />
-            <button type="submit" disabled={!name.trim()}>
-              Rename
-            </button>
-          </form>
+          {/* No rename: your @username is claimed once and is permanent, because
+              it is what every friend holds to find you. */}
         </div>
       </details>
 

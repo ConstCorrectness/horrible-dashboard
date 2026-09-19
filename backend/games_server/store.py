@@ -602,7 +602,18 @@ HANDLE_RE = r"^[a-z0-9_-]{3,20}$"
 
 
 def set_handle(account_id: str, handle: str) -> str:
-    """Claim a unique player handle. Returns 'ok', 'invalid', or 'taken'."""
+    """Claim a unique player handle, once. Returns 'ok', 'invalid', 'taken' or
+    'locked'.
+
+    **A handle is permanent.** It is how friends find you, what every roster row
+    and ladder entry is keyed on for display, and what an invite says — so a
+    rename would leave every friend holding a name that now points at nobody, or
+    at whoever claims it next. Re-claiming the handle you already hold is 'ok'
+    (a retried claim is not an error); anything else is 'locked'.
+
+    The lock is in the `UPDATE`'s own `WHERE`, not a read beforehand, so two
+    claims racing for one account cannot both succeed.
+    """
     import re
 
     handle = handle.strip().lower()
@@ -620,11 +631,15 @@ def set_handle(account_id: str, handle: str) -> str:
             (account_id, account_id, account_id, time.time()),
         )
         try:
-            conn.execute(
-                "UPDATE accounts SET handle = ? WHERE id = ?", (handle, account_id)
+            cur = conn.execute(
+                "UPDATE accounts SET handle = ?"
+                " WHERE id = ? AND (handle IS NULL OR handle = ?)",
+                (handle, account_id, handle),
             )
         except sqlite3.IntegrityError:
             return "taken"
+        if cur.rowcount == 0:
+            return "locked"
     return "ok"
 
 

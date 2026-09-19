@@ -1674,11 +1674,16 @@ rated.
 
 Every account carries a **globally unique handle** — the ladder's display name, and
 what [HorribleAssault](hassault.mdx) plays you as. OAuth sign-ins derive one from the
-provider username and lock it; `POST /account/handle` (node: `/api/games/auth/username`)
-claims or renames it deliberately, and unlike the auto-derivation it applies whether or
-not one is already set. `store.set_handle` returns `ok` / `invalid` / `taken`, with
-uniqueness enforced by a partial unique index rather than a pre-read, so two
-simultaneous claims can't both pass a check and then both write.
+provider username and lock it. `POST /account/handle` (on a node,
+`/api/games/auth/username`) claims one **once**. A claimed handle is **permanent**,
+because it is what every friend holds to find you. A rename would leave their rosters
+pointing at a name that now means nobody, or at whoever claims it next.
+`store.set_handle` returns `ok` / `invalid` / `taken` / `locked`. Re-claiming the handle
+you already hold is `ok`, since a retried claim is not an error. The lock sits in the
+`UPDATE`'s own `WHERE`. Uniqueness is enforced by a partial unique index rather than a
+pre-read, so two simultaneous claims can't both pass a check and then both write. The
+node refuses a second claim before sending it too, so the rule holds even against a
+game server that predates it.
 
 `GET /me` on the game server returns the account fresh — how a node learns a handle its
 stored token predates, or one changed on another machine. It rides on every sign-in
@@ -1813,7 +1818,7 @@ its node — so a secret parked there would be readable by any page the node ser
   node captures the JWT; the browser gets only the account). Declared **above** the
   `/auth/{provider}/web/*` routes — that `provider` is a path parameter, FastAPI
   matches in declaration order, and `local` would otherwise be swallowed by it.
-- `/api/games/auth/username` — claim or rename the account's unique handle.
+- `/api/games/auth/username` — claim the account's unique handle (one-time; permanent).
 - `/api/games/auth/providers` — which sign-in flows the game server supports
   (`{provider: {device, web}}` plus `local: {password}`; `{}` = unknown), for
   disabling lobby buttons up front.

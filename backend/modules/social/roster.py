@@ -655,9 +655,18 @@ async def add_friend(
         # The row is kept: they may simply be offline, and the request will be
         # retried the next time one of their machines connects.
         broadcast_roster()
+        # Say which of the two it is. The old message ended "add them with an
+        # address to be sure", which read as if some usernames needed one; an
+        # address almost never helps, since a username is dialed through the
+        # relay by node id wherever the machine is.
+        if not store.list_devices(person_id):
+            return None, (
+                "that account has no machine signed in yet — ask them to sign in "
+                "on this app, then send the request again"
+            )
         return None, (
-            "could not reach anyone at that friend code — they may be offline, or "
-            "not published to the directory. Add them with an address to be sure."
+            "none of their machines is online right now — the request is saved "
+            "and goes through the next time one connects"
         )
     try:
         await peer_hub.send_to(node_id, SOCIAL_FRIEND_REQUEST, _hello_payload())

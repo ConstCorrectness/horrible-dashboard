@@ -463,11 +463,20 @@ def _merge_account(account: dict[str, Any]) -> None:
 
 
 async def set_username(handle: str) -> dict[str, Any]:
-    """Claim or rename the username, then cache the updated account locally."""
+    """Claim the username (once), then cache the updated account locally.
+
+    A claimed username is permanent — the game server refuses a different one
+    (`store.set_handle`). Refused here too, before any request, so the rule holds
+    against a server that predates it rather than only against one that has it.
+    """
     import httpx
 
-    if signed_in_account() is None:
+    account = signed_in_account()
+    if account is None:
         return {"error": "sign in first"}
+    held = str(account.get("handle") or "")
+    if held and held != handle.strip().lower():
+        return {"error": "your username is permanent once claimed"}
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             res = await client.post(

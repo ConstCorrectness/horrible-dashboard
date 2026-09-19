@@ -201,18 +201,27 @@ def test_oauth_account_has_no_password_and_cannot_be_logged_into_locally() -> No
         assert "wrong email or password" in str(exc)
 
 
-def test_set_account_handle_renames_and_enforces_uniqueness() -> None:
+def test_a_claimed_handle_is_permanent_and_unique() -> None:
     a = auth.signup_local("one@example.com", "longenoughpw", "alpha")["account"]["id"]
     b = auth.signup_local("two@example.com", "longenoughpw", "bravo")["account"]["id"]
 
-    # Unlike ensure_handle, a deliberate rename applies even though one is set.
-    assert auth.set_account_handle(a, "alpha-prime") == "ok"
-    assert auth.account_payload(a)["handle"] == "alpha-prime"
+    # A username is one-time: friends hold it, so a rename would strand them.
+    assert auth.set_account_handle(a, "alpha-prime") == "locked"
+    assert auth.account_payload(a)["handle"] == "alpha"
+    # Re-claiming the one you hold is a retry, not an error.
+    assert auth.set_account_handle(a, "alpha") == "ok"
 
-    assert auth.set_account_handle(b, "alpha-prime") == "taken"
     assert auth.set_account_handle(b, "no") == "invalid"
     assert auth.set_account_handle(b, "Has Spaces") == "invalid"
     assert auth.account_payload(b)["handle"] == "bravo"
+
+
+def test_an_unclaimed_account_claims_once_and_cannot_take_a_held_name() -> None:
+    first = auth._finish_github({"id": 700, "login": "someone"})["account"]["id"]
+    second = auth._finish_github({"id": 701, "login": "other"})["account"]["id"]
+    assert auth.set_account_handle(first, "chosen") == "ok"
+    assert auth.set_account_handle(second, "chosen") == "taken"
+    assert auth.set_account_handle(first, "changed") == "locked"
 
 
 def test_local_signup_rejects_a_taken_username_without_stranding_the_account() -> None:
@@ -257,14 +266,15 @@ def test_local_signup_and_login_over_http(monkeypatch) -> None:
     ).json()
     assert "token" not in wrong and wrong["error"]
 
-    # /me and the username rename, both bearer-authenticated.
+    # /me and the username claim, both bearer-authenticated. The username was
+    # claimed at signup, so a different one is refused — it is permanent.
     headers = {"Authorization": f"Bearer {created['token']}"}
     assert client.get("/me", headers=headers).json()["account"]["handle"] == "httpuser"
     renamed = client.post(
         "/account/handle", json={"handle": "renamed"}, headers=headers
     ).json()
-    assert renamed["ok"] and renamed["account"]["handle"] == "renamed"
-    assert client.get("/me", headers=headers).json()["account"]["handle"] == "renamed"
+    assert "permanent" in renamed["error"]
+    assert client.get("/me", headers=headers).json()["account"]["handle"] == "httpuser"
 
     # Both are refused without a token.
     assert client.get("/me").json()["error"]

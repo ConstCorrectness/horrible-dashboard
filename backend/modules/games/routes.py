@@ -516,8 +516,8 @@ async def local_login_route(body: LocalLoginRequest) -> dict[str, Any]:
 
 @router.post("/auth/username")
 async def set_username_route(body: SetUsernameRequest) -> dict[str, Any]:
-    """Claim or rename the username — the globally unique handle the ladder and
-    HorribleAssault both play you as.
+    """Claim the username — the globally unique handle the ladder and
+    HorribleAssault both play you as. One-time: once claimed it cannot change.
 
     The username leads to this machine because the machine is enrolled in the
     account; the account, not the name, is the identity. Enrollment runs on sign-in,

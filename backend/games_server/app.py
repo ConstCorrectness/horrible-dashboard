@@ -260,12 +260,14 @@ async def me(authorization: str | None = Header(default=None)) -> dict[str, Any]
 async def set_handle_route(
     body: _SetHandle, authorization: str | None = Header(default=None)
 ) -> dict[str, Any]:
-    """Claim or rename the caller's username — the globally unique `handle` the
-    ladder and HorribleAssault both display."""
+    """Claim the caller's username — the globally unique `handle` the ladder and
+    HorribleAssault both display. One-time: a claimed username cannot change."""
     viewer = _viewer(authorization)
     if viewer is None:
         return {"error": "sign in required"}
     outcome = auth.set_account_handle(viewer, body.handle)
+    if outcome == "locked":
+        return {"error": "your username is permanent once claimed"}
     if outcome == "taken":
         return {"error": "that username is taken"}
     if outcome == "invalid":
