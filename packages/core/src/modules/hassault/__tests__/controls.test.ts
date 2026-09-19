@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ACTIONS,
+  CONTROL_GROUPS,
   DEFAULT_CONTROLS,
   RESERVED_CODES,
   SLOTS,
@@ -19,6 +20,31 @@ import {
   serializeControls,
   setBinding,
 } from '../controls';
+
+describe('the Controls screen', () => {
+  it('shows every action: each group is listed, and each listed group has rows', () => {
+    // The screen once listed its own groups and left out Utility, so every
+    // grenade key was rebindable in code and on no screen.
+    for (const doc of ACTIONS) expect(CONTROL_GROUPS).toContain(doc.group);
+    for (const group of CONTROL_GROUPS) {
+      expect(ACTIONS.some((a) => a.group === group)).toBe(true);
+    }
+  });
+
+  it('offers grenades, push-to-talk and both chats', () => {
+    const listed = new Set(ACTIONS.map((a) => a.action));
+    for (const action of [
+      'nadeFlash',
+      'nadeSmoke',
+      'nadeMolotov',
+      'voice',
+      'chatAll',
+      'chatTeam',
+    ]) {
+      expect(listed.has(action as never)).toBe(true);
+    }
+  });
+});
 
 describe('defaults', () => {
   it('binds every declared action', () => {

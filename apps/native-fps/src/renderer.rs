@@ -285,6 +285,8 @@ pub struct Renderer {
     overlay_pipeline: wgpu::RenderPipeline,
     overlay_buffer: wgpu::Buffer,
     overlay_verts: u32,
+    /// Chat in real fonts, drawn after the HUD — see `textquad.rs`.
+    text: crate::textquad::TextQuad,
     pub backend: String,
     pub adapter_name: String,
     /// Kept for one reason: switching vsync re-reads the surface's present
@@ -738,6 +740,8 @@ impl Renderer {
             cache: None,
         });
 
+        let text = crate::textquad::TextQuad::new(&device, format);
+
         Ok(Renderer {
             surface,
             device,
@@ -767,6 +771,7 @@ impl Renderer {
             overlay_pipeline,
             overlay_buffer,
             overlay_verts: 0,
+            text,
             backend: format!("{:?}", info.backend),
             adapter_name: info.name.clone(),
             adapter,
@@ -998,6 +1003,12 @@ impl Renderer {
                 bytemuck::cast_slice(&vertices[..count]),
             );
         }
+    }
+
+    /// This frame's chat panel, or `None` for none. Uploads only on change.
+    pub fn set_text_layer(&mut self, image: Option<(&crate::textlayer::ChatImage, bool)>) {
+        let screen = (self.config.width, self.config.height);
+        self.text.set(&self.device, &self.queue, image, screen);
     }
 
     /// Replace the HUD geometry for this frame.
@@ -1335,6 +1346,28 @@ impl Renderer {
             pass.set_pipeline(&self.overlay_pipeline);
             pass.set_vertex_buffer(0, self.overlay_buffer.slice(..));
             pass.draw(0..self.overlay_verts, 0..1);
+        }
+
+        if self.text.visible() {
+            // Its own pass, after the HUD's: chat is over the HUD, and the HUD
+            // pass is skipped outright on a frame with no overlay geometry.
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("text"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            self.text.draw(&mut pass);
         }
 
         self.queue.submit(Some(encoder.finish()));

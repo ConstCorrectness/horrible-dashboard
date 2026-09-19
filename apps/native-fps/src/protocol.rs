@@ -1268,6 +1268,8 @@ pub enum Event {
     /// Bots were fielded or kicked.
     Roster(Roster),
     Chat(ChatBroadcast),
+    /// Our last chat line was not sent, and why ("slow down").
+    ChatRefused(String),
     Voice(VoiceBroadcast),
     /// A `hassault` event this build has no variant for (`invite`, `matches`,
     /// `roster`, …).
@@ -1281,6 +1283,12 @@ pub enum Event {
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct ChatBroadcast {
+    /// The server's message id (`chat.message`), used to drop a repeat.
+    #[serde(default)]
+    pub id: String,
+    /// Server clock, milliseconds.
+    #[serde(default)]
+    pub ts: i64,
     #[serde(rename = "senderId", default)]
     pub sender_id: String,
     #[serde(rename = "senderName", default)]
@@ -1352,6 +1360,13 @@ pub fn classify(line: &str) -> Option<Event> {
             Event::Roster(r)
         }
         "chat" => Event::Chat(serde_json::from_value(env.data).unwrap_or_default()),
+        "chat_refused" => Event::ChatRefused(
+            env.data
+                .get("reason")
+                .and_then(|r| r.as_str())
+                .unwrap_or("not sent")
+                .to_string(),
+        ),
         "voice" => Event::Voice(serde_json::from_value(env.data).unwrap_or_default()),
         other => {
             divergence::note_event(other);

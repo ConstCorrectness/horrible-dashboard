@@ -51,6 +51,10 @@ HASSAULT_INPUT = "hassault_input"
 HASSAULT_LEAVE = "hassault_leave"
 HASSAULT_FRAME = "hassault_frame"
 HASSAULT_BROWSE = "hassault_browse"
+# In-match chat from a guest's browser to the host's room. Its own type rather
+# than a field on `HASSAULT_INPUT`: input is sent ~30 times a second and chat a
+# few times a minute, and the chat rules (`chat.post`) are not the input rules.
+HASSAULT_CHAT = "hassault_chat"
 # Lobbies: a guest's backend relaying its browser's lobby actions to the host
 # (`HASSAULT_LOBBY`, carrying an `op`), and the host pushing lobby state back
 # (`HASSAULT_LOBBY_FRAME`). See `lobby.py`.
@@ -223,6 +227,42 @@ async def handle_input(hub: PeerHub, session: PeerSession, env: PeerEnvelope) ->
     rtt = data.get("rtt")
     if isinstance(rtt, (int, float)):
         player.rtt_ms = max(0.0, min(60_000.0, float(rtt)))
+
+
+async def handle_chat(hub: PeerHub, session: PeerSession, env: PeerEnvelope) -> None:
+    """A chat line from a remote player. Through `chat.post`, exactly as a local
+    browser's — the same cleaning, limits and rate limit; the sender is the
+    player bound to this node and client, never a name from the frame."""
+    if not session.info.trusted:
+        return
+    from backend.modules.hassault import chat
+
+    data = env.data or {}
+    conn = _hosted.get((session.info.node_id, str(data.get("client") or "")))
+    if conn is None:
+        return
+    entry = match_server.player_for(conn)  # type: ignore[arg-type]
+    if entry is None:
+        return
+    room, player = entry
+    refused = await chat.post(room, player, data.get("text"), bool(data.get("team")))
+    if refused and refused != "empty":
+        await conn.send_json(
+            {"channel": CHANNEL, "event": "chat_refused", "data": {"reason": refused}}
+        )
+
+
+async def send_remote_chat(binding: RemoteMatch, text: Any, team: bool) -> None:
+    from backend.modules.network.hub import peer_hub
+
+    try:
+        await peer_hub.send_to(
+            binding.host_node,
+            HASSAULT_CHAT,
+            {"client": binding.client, "text": text, "team": team},
+        )
+    except KeyError:
+        pass
 
 
 async def handle_leave(hub: PeerHub, session: PeerSession, env: PeerEnvelope) -> None:
@@ -500,6 +540,14 @@ async def handle_lobby(hub: PeerHub, session: PeerSession, env: PeerEnvelope) ->
             await lobby_server.chat(conn, str(data.get("text") or ""))
         elif op == "ready":
             await lobby_server.set_ready(conn, bool(data.get("ready")))
+        elif op == "voice":
+            await lobby_server.set_voice(
+                conn, bool(data.get("on")), bool(data.get("muted"))
+            )
+        elif op == "signal":
+            await lobby_server.signal(
+                conn, str(data.get("to") or ""), data.get("signal")
+            )
     except LobbyError as exc:
         if op == "join":
             _lobby_hosted.pop(key, None)
@@ -910,6 +958,7 @@ def register(hub: PeerHub) -> None:
     hub.register_handler(HASSAULT_INPUT, handle_input)
     hub.register_handler(HASSAULT_LEAVE, handle_leave)
     hub.register_handler(HASSAULT_FRAME, handle_frame)
+    hub.register_handler(HASSAULT_CHAT, handle_chat)
     hub.register_handler(HASSAULT_LOBBY, handle_lobby)
     hub.register_handler(HASSAULT_LOBBY_FRAME, handle_lobby_frame)
     # Detached to close a latent deadlock by construction: `browse_peers` fans out

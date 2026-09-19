@@ -673,3 +673,42 @@ fn both_clients_build_a_ladder_to_the_same_dimensions() {
         );
     }
 }
+
+// ---- key map ---------------------------------------------------------------
+
+const CONTROLS_TS: &str = include_str!("../../../packages/core/src/modules/hassault/controls.ts");
+
+/// The browser's `DEFAULT_CONTROLS`, parsed out of the TypeScript: each
+/// `name: ['Code', 'Code'],` line of the object literal.
+fn ts_default_controls() -> Vec<(String, Vec<String>)> {
+    let body = between(CONTROLS_TS, "export const DEFAULT_CONTROLS: Bindings = {", "\n};");
+    body.lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with("//") && l.contains(": ["))
+        .map(|l| {
+            let (name, rest) = l.split_once(':').expect("name: [..]");
+            let codes = rest
+                .split('\'')
+                .enumerate()
+                .filter(|(i, _)| i % 2 == 1)
+                .map(|(_, s)| s.to_string())
+                .collect();
+            (name.trim().to_string(), codes)
+        })
+        .collect()
+}
+
+/// One key map, two clients. The native client used to hard-code its keys and
+/// ignore the Controls screen entirely; now it reads the same stored table, and
+/// that only works if the *defaults* it merges over are the browser's too — a
+/// stored diff is relative to them.
+#[test]
+fn the_default_key_map_is_the_browsers() {
+    let ts = ts_default_controls();
+    assert!(ts.len() >= 30, "parsed only {} actions from controls.ts", ts.len());
+    let rust: Vec<(String, Vec<String>)> = hassault_native::controls::DEFAULTS
+        .iter()
+        .map(|(_, name, keys)| (name.to_string(), keys.iter().map(|k| k.to_string()).collect()))
+        .collect();
+    assert_eq!(rust, ts, "controls.rs DEFAULTS drifted from DEFAULT_CONTROLS");
+}

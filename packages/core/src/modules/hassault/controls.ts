@@ -48,15 +48,26 @@ export type GameAction =
   | 'lob'
   | 'use'
   | 'buy'
-  | 'drop';
+  | 'drop'
+  | 'voice'
+  | 'chatAll'
+  | 'chatTeam';
 
 /** Two keys per action: the one you expect, and the one somebody else expects. */
 export type Bindings = Record<GameAction, string[]>;
 
+/**
+ * The Controls screen's sections, in order. The screen iterates this rather than
+ * a list of its own — its own list once left out Utility, hiding every grenade
+ * key — and a test checks every action's group is in it.
+ */
+export const CONTROL_GROUPS = ['Movement', 'Combat', 'Utility', 'Communication', 'View'] as const;
+export type ControlGroup = (typeof CONTROL_GROUPS)[number];
+
 export interface ActionDoc {
   action: GameAction;
   label: string;
-  group: 'Movement' | 'Combat' | 'Utility' | 'View';
+  group: ControlGroup;
   /** Shown where an action needs a caveat the label can't carry. */
   note?: string;
 }
@@ -119,11 +130,11 @@ export const ACTIONS: readonly ActionDoc[] = [
     action: 'nadeHe',
     label: 'Select HE Grenade',
     group: 'Utility',
-    note: 'Selecting only readies it. Throw is a separate key, so you can pick one and choose the moment.',
+    note: 'Selecting equips it: left click throws, right click tosses underhand. A weapon key puts it away.',
   },
   { action: 'nadeFlash', label: 'Select Flashbang', group: 'Utility' },
   { action: 'nadeSmoke', label: 'Select Smoke', group: 'Utility' },
-  { action: 'nadeMolotov', label: 'Select Incendiary', group: 'Utility' },
+  { action: 'nadeMolotov', label: 'Select Incendiary (fire)', group: 'Utility' },
   {
     action: 'buy',
     label: 'Buy menu',
@@ -154,6 +165,14 @@ export const ACTIONS: readonly ActionDoc[] = [
     group: 'Utility',
     note: 'Short. This is how a smoke goes down at your own feet rather than across the room.',
   },
+  {
+    action: 'voice',
+    label: 'Push to talk',
+    group: 'Communication',
+    note: 'Held. Opens your mic in lobby voice while Push-to-talk is on, and shows your team you are on the radio.',
+  },
+  { action: 'chatAll', label: 'Chat (everyone)', group: 'Communication' },
+  { action: 'chatTeam', label: 'Chat (team only)', group: 'Communication' },
   { action: 'scores', label: 'Scoreboard (hold)', group: 'View' },
   {
     action: 'noclip',
@@ -176,7 +195,8 @@ export const DEFAULT_CONTROLS: Bindings = {
   inspect: ['KeyF'],
   ping: ['KeyZ'],
   scores: ['Tab'],
-  noclip: ['KeyV'],
+  // N, not V: V is push-to-talk, where the native client has always had it.
+  noclip: ['KeyN'],
   weapon1: ['Digit1'],
   weapon2: ['Digit2'],
   weapon3: ['Digit3'],
@@ -200,6 +220,11 @@ export const DEFAULT_CONTROLS: Bindings = {
   buy: ['KeyB'],
   // X rather than CS's G, which throws here — see the grenade note above.
   drop: ['KeyX'],
+  // V to talk and Y/U to type — the native client's keys since it had them,
+  // now shared defaults rather than hard-coded there.
+  voice: ['KeyV'],
+  chatAll: ['KeyY'],
+  chatTeam: ['KeyU'],
 };
 
 /**

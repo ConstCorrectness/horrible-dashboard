@@ -301,3 +301,100 @@ def test_a_lobby_invite_is_received_as_a_lobby_invite(monkeypatch):
         assert invite["kind"] == "lobby" and invite["room"] == "L1"
 
     asyncio.run(go())
+
+
+def test_voice_state_is_published_to_every_member():
+    async def go():
+        host, guest = FakeConn(), FakeConn()
+        lobby = await lobby_server.create(host, "rob", "hd_assault")
+        await lobby_server.join(guest, lobby.id, "kim")
+        await lobby_server.set_voice(guest, True, True)
+        kim = host.state()["members"][1]
+        assert kim["voice"] is True and kim["muted"] is True
+        # Leaving voice clears the mute too: "muted" means nothing out of voice.
+        await lobby_server.set_voice(guest, False, True)
+        kim = host.state()["members"][1]
+        assert kim["voice"] is False and kim["muted"] is False
+
+    asyncio.run(go())
+
+
+def test_signals_reach_only_the_named_member_stamped_with_the_real_sender():
+    async def go():
+        host, guest, third = FakeConn(), FakeConn(), FakeConn()
+        lobby = await lobby_server.create(host, "rob", "hd_assault")
+        await lobby_server.join(guest, lobby.id, "kim")
+        await lobby_server.join(third, lobby.id, "sam")
+        kim_id = guest.state()["you"]
+        rob_id = host.state()["you"]
+        revision = lobby.revision
+
+        await lobby_server.signal(
+            host, kim_id, {"kind": "offer", "sdp": "v=0", "from": "forged"}
+        )
+        [frame] = guest.events("lobby_signal")
+        # The sender comes from the socket, never from the frame.
+        assert frame["from"] == rob_id
+        assert frame["signal"]["sdp"] == "v=0"
+        assert third.events("lobby_signal") == []
+        # A handshake is not a state change; nobody gets a re-render for it.
+        assert lobby.revision == revision
+
+    asyncio.run(go())
+
+
+def test_malformed_or_oversized_signals_are_dropped():
+    async def go():
+        host, guest = FakeConn(), FakeConn()
+        lobby = await lobby_server.create(host, "rob", "hd_assault")
+        await lobby_server.join(guest, lobby.id, "kim")
+        kim_id = guest.state()["you"]
+        await lobby_server.signal(host, kim_id, {"kind": "exec", "cmd": "x"})
+        await lobby_server.signal(host, kim_id, "not a dict")
+        await lobby_server.signal(host, kim_id, {"kind": "offer", "sdp": "x" * 40_000})
+        await lobby_server.signal(host, "nobody", {"kind": "ice"})
+        assert guest.events("lobby_signal") == []
+
+    asyncio.run(go())
+
+
+def test_a_remote_member_signals_through_the_fabric():
+    async def go():
+        host = FakeConn()
+        lobby = await lobby_server.create(host, "rob", "hd_assault")
+        hub = FakeHub()
+        session = FakeSession("nodeA")
+        await fabric.handle_lobby(
+            hub,
+            session,
+            env({"op": "join", "client": "c1", "lobby": lobby.id, "name": "kim"}),
+        )
+        rob_id = host.state()["you"]
+        kim_id = host.state()["members"][1]["id"]
+
+        await fabric.handle_lobby(
+            hub,
+            session,
+            env({"op": "voice", "client": "c1", "on": True, "muted": False}),
+        )
+        assert host.state()["members"][1]["voice"] is True
+
+        await fabric.handle_lobby(
+            hub,
+            session,
+            env(
+                {
+                    "op": "signal",
+                    "client": "c1",
+                    "to": rob_id,
+                    "signal": {"kind": "answer", "sdp": "v=0"},
+                }
+            ),
+        )
+        assert host.events("lobby_signal")[-1]["from"] == kim_id
+
+        # And back the other way, addressed to the peer's browser.
+        await lobby_server.signal(host, kim_id, {"kind": "ice", "candidate": {}})
+        assert hub.messages("nodeA")[-1]["event"] == "lobby_signal"
+
+    asyncio.run(go())

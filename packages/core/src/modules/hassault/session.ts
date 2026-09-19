@@ -134,6 +134,47 @@ export interface SessionState {
   lobby: LobbyState | null;
   /** The last thing the lobby refused, shown in the lobby rather than the match. */
   lobbyError: string;
+  /** This match's chat, oldest first, as the *server* sent it — never a local echo. */
+  chat: ChatLine[];
+  /** Why the last message was refused ("slow down"), cleared by the next accepted one. */
+  chatNotice: string;
+}
+
+/** One chat message, exactly as `backend/modules/hassault/chat.py` stamps it. */
+export interface ChatLine {
+  id: string;
+  /** Server clock, ms — the only clock every recipient shares. */
+  ts: number;
+  senderId: string;
+  senderName: string;
+  team: number;
+  isTeam: boolean;
+  text: string;
+  /** Local receipt time (`performance.now()`), for fading only. */
+  at: number;
+}
+
+/** How many lines the chat box keeps; the server sends no history. */
+export const CHAT_KEEP = 100;
+
+/**
+ * Read one `chat` event. An older server sends no `id`/`ts`; those lines get a
+ * local stand-in id so they still render, and cannot be deduplicated.
+ */
+export function parseChatLine(data: Record<string, unknown>): ChatLine | null {
+  const text = typeof data.text === 'string' ? data.text : '';
+  if (!text.trim()) return null;
+  const at = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  return {
+    id: typeof data.id === 'string' && data.id ? data.id : `local-${at}-${Math.random()}`,
+    ts: typeof data.ts === 'number' ? data.ts : Date.now(),
+    senderId: String(data.senderId ?? ''),
+    senderName: String(data.senderName ?? ''),
+    team: typeof data.team === 'number' ? data.team : 0,
+    isTeam: Boolean(data.isTeam),
+    text,
+    at,
+  };
 }
 
 export interface LobbyMember {
@@ -142,6 +183,10 @@ export interface LobbyMember {
   ready: boolean;
   host: boolean;
   remote: boolean;
+  /** In the lobby's voice channel. */
+  voice: boolean;
+  /** Their mic is muted (only meaningful while `voice`). */
+  muted: boolean;
 }
 
 export interface LobbyChatLine {
@@ -298,6 +343,8 @@ export class MatchSession {
     objective: null,
     lobby: null,
     lobbyError: '',
+    chat: [],
+    chatNotice: '',
   };
 
   /** Fires on any change worth re-rendering the surrounding UI for. */
@@ -307,6 +354,12 @@ export class MatchSession {
    * instruction to act once — joining the match — not something to render.
    */
   onLobbyStart: (start: LobbyStart) => void = () => {};
+  /**
+   * A WebRTC handshake frame from another lobby member, for `LobbyVoice`. `from`
+   * is stamped by the lobby host from the socket it arrived on, so it is the
+   * member it says it is.
+   */
+  onLobbySignal: (from: string, signal: Record<string, unknown>) => void = () => {};
   /**
    * The most recent authoritative word on us, consumed by the render loop.
    *
@@ -416,6 +469,23 @@ export class MatchSession {
     this.emit();
   }
 
+  // ---- chat ------------------------------------------------------------------
+
+  /**
+   * Send a chat line to everyone, or to our team. Nothing is added locally: the
+   * server echoes it back to us too, cleaned and ordered, and that echo is the
+   * line we show — so what we see is what everyone else saw.
+   */
+  sendChat(text: string, team: boolean): void {
+    if (this.state.status !== 'joined' || !text.trim()) return;
+    sendChannel('hassault', 'chat', { text, team });
+  }
+
+  /** Tell teammates we are on the radio (the indicator, not the audio). */
+  sendVoice(transmitting: boolean): void {
+    if (this.state.status === 'joined') sendChannel('hassault', 'voice', { transmitting });
+  }
+
   // ---- lobby -----------------------------------------------------------------
 
   /** Open a lobby on this node, hosted by us. */
@@ -455,6 +525,16 @@ export class MatchSession {
 
   lobbyReady(ready: boolean): void {
     sendChannel('hassault', 'lobby_ready', { ready });
+  }
+
+  /** Tell the lobby we joined or left voice, and whether our mic is muted. */
+  lobbyVoice(on: boolean, muted: boolean): void {
+    sendChannel('hassault', 'lobby_voice', { on, muted });
+  }
+
+  /** Send one WebRTC handshake frame to another lobby member. */
+  lobbySignal(to: string, signal: Record<string, unknown>): void {
+    sendChannel('hassault', 'lobby_signal', { to, signal });
   }
 
   lobbyMap(map: string): void {
@@ -621,6 +701,30 @@ export class MatchSession {
       case 'lobby_error': {
         this.state.lobbyError = String(data.message ?? data.error ?? 'the lobby refused that');
         this.emit();
+        break;
+      }
+      case 'chat': {
+        const line = parseChatLine(data);
+        if (!line) return;
+        // Dropped by id, so a frame delivered twice (a reconnect, a relay retry)
+        // is one line rather than two.
+        if (this.state.chat.some((l) => l.id === line.id)) return;
+        this.state.chat = [...this.state.chat, line].slice(-CHAT_KEEP);
+        this.state.chatNotice = '';
+        this.emit();
+        break;
+      }
+      case 'chat_refused': {
+        this.state.chatNotice = String(data.reason ?? 'not sent');
+        this.emit();
+        break;
+      }
+      case 'lobby_signal': {
+        const from = String(data.from ?? '');
+        const signal = data.signal;
+        if (from && signal && typeof signal === 'object') {
+          this.onLobbySignal(from, signal as Record<string, unknown>);
+        }
         break;
       }
       case 'lobby_start': {
@@ -905,6 +1009,9 @@ export class MatchSession {
       // A lobby is not a room: leaving the match leaves you in the party.
       lobby: this.state.lobby,
       lobbyError: this.state.lobbyError,
+      // A match's chat belongs to that match; the lobby has its own.
+      chat: [],
+      chatNotice: '',
     };
     this.predictor.reset();
     this.snapshots.clear();

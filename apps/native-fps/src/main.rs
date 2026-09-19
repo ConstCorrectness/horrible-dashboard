@@ -33,6 +33,7 @@ use std::time::{Duration, Instant};
 use winit::event_loop::EventLoop;
 
 use hassault_native::api::NodeApi;
+use hassault_native::controls::Controls;
 use hassault_native::geometry;
 use hassault_native::net::{Incoming, MatchSocket};
 use hassault_native::protocol::{Command, Event};
@@ -299,11 +300,16 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     // hold one set of preferences rather than two. A node that only served the
     // map still gets a playable client — the defaults are the game's, not an
     // error state — so this warns and carries on.
-    let mut settings = match node.settings() {
-        Ok(values) => Settings::from_values(&values),
+    let (mut settings, controls) = match node.settings() {
+        Ok(values) => (
+            Settings::from_values(&values),
+            // The pane's Controls screen writes this; the native client used to
+            // ignore it and hard-code every key.
+            Controls::from_values(&values),
+        ),
         Err(e) => {
             eprintln!("hassault: warning — no saved settings ({e}); using defaults");
-            Settings::default()
+            (Settings::default(), Controls::default())
         }
     };
     // An explicit `--sensitivity` outranks the stored one: it is the launcher
@@ -489,6 +495,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             definitions,
             plan,
         );
+        app.controls = controls.clone();
         app.enter_edit_mode(&args.server, opened, owners);
         event_loop.run_app(&mut app)?;
         return Ok(());
@@ -522,6 +529,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             definitions,
             plan,
         );
+        app.controls = controls.clone();
         if let Some(sp) = args.spawn {
             app.spawn_at_index(sp);
         }
@@ -570,6 +578,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         definitions,
         plan,
     );
+    app.controls = controls;
     if args.mode == Mode::Host {
         // Queued, not sent: `add_bot` needs the room the welcome names, and it is
         // host-only on the channel — which is why the launcher only ever sends a
@@ -643,8 +652,14 @@ fn run_headless(socket: &mut MatchSocket) -> Result<(), Box<dyn std::error::Erro
                 Incoming::Event(Event::Chat(c)) => {
                     eprintln!("hassault: chat [{}]: {}", c.sender_name, c.text);
                 }
+                Incoming::Event(Event::ChatRefused(reason)) => {
+                    eprintln!("hassault: chat not sent: {reason}");
+                }
                 Incoming::Event(Event::Voice(v)) => {
-                    eprintln!("hassault: voice [{}]: transmitting={}", v.player_name, v.transmitting);
+                    eprintln!(
+                        "hassault: voice [{}]: transmitting={}",
+                        v.player_name, v.transmitting
+                    );
                 }
                 Incoming::Closed(why) => {
                     eprintln!("hassault: connection closed: {why}");

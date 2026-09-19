@@ -16,8 +16,10 @@
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 
 import type { Invitee, MapSummary, MatchInvite } from './api';
-import { styles } from './menu-panels';
-import type { LobbyState } from './session';
+import { setSetting } from '../../settings';
+import { PUSH_TO_TALK_KEY, styles } from './menu-panels';
+import type { VoiceView } from './lobby-voice';
+import type { LobbyMember, LobbyState } from './session';
 
 export interface LobbyControls {
   state: LobbyState | null;
@@ -30,6 +32,12 @@ export interface LobbyControls {
   start: () => void;
   /** Join the match this lobby started, while it is still running. */
   rejoin: () => void;
+  /** Voice: our side of it. Who else is in voice comes from `state.members`. */
+  voice: VoiceView;
+  joinVoice: () => void;
+  leaveVoice: () => void;
+  setMuted: (muted: boolean) => void;
+  setDeafened: (deafened: boolean) => void;
 }
 
 export interface LobbyPanelProps {
@@ -136,6 +144,7 @@ export function LobbyPanel(props: LobbyPanelProps) {
               animation: `hd-lobby-in 180ms ease-out ${Math.min(i, 6) * 40}ms both`,
             }}
           >
+            <VoiceGlyph member={m} voice={lobby.voice} self={m.id === state.you} />
             <div style={styles.rowMain}>
               <span style={mono}>
                 {m.name}
@@ -180,6 +189,9 @@ export function LobbyPanel(props: LobbyPanelProps) {
           </span>
         )}
       </div>
+
+      <h4 style={styles.heading}>Voice</h4>
+      <VoiceBar lobby={lobby} state={state} />
 
       <h4 style={styles.heading}>Chat</h4>
       <LobbyChat state={state} onSend={lobby.chat} />
@@ -280,6 +292,140 @@ function LobbyChat({ state, onSend }: { state: LobbyState; onSend: (text: string
   );
 }
 
+/**
+ * Join/leave, mute and deafen. Open mic while joined — a lobby is a
+ * conversation, and push-to-talk would need a key the menu does not own.
+ */
+function VoiceBar({ lobby, state }: { lobby: LobbyControls; state: LobbyState }) {
+  const v = lobby.voice;
+  const inVoice = state.members.filter((m) => m.voice);
+  const others = inVoice.filter((m) => m.id !== state.you);
+  const connected = others.filter((m) => v.links[m.id] === 'connected').length;
+
+  if (!v.active) {
+    return (
+      <div>
+        <div style={{ ...styles.toolbar, marginBottom: 0 }}>
+          <button onClick={lobby.joinVoice} disabled={v.starting}>
+            {v.starting ? 'Opening mic…' : 'Join voice'}
+          </button>
+          <span style={{ ...styles.dim, ...mono }}>
+            {inVoice.length === 0 ? 'nobody in voice' : `${inVoice.length} in voice`}
+          </span>
+        </div>
+        {v.error && <div style={styles.error}>{v.error}</div>}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ ...styles.toolbar, marginBottom: 0, flexWrap: 'wrap' }}>
+      <button
+        onClick={() => lobby.setMuted(!v.muted)}
+        aria-pressed={v.muted}
+        style={v.muted ? warn : undefined}
+      >
+        <MicIcon off={v.muted} /> {v.muted ? 'Unmute' : 'Mute'}
+      </button>
+      <button
+        onClick={() => lobby.setDeafened(!v.deafened)}
+        aria-pressed={v.deafened}
+        style={v.deafened ? warn : undefined}
+      >
+        {v.deafened ? 'Undeafen' : 'Deafen'}
+      </button>
+      <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+        <input
+          type="checkbox"
+          checked={v.pushToTalk}
+          onChange={(e) => void setSetting(PUSH_TO_TALK_KEY, e.target.checked)}
+        />
+        <span>Push to talk</span>
+      </label>
+      <button onClick={lobby.leaveVoice}>Leave voice</button>
+      <span style={{ ...styles.dim, ...mono }}>
+        {others.length === 0
+          ? 'waiting for others to join voice'
+          : `${connected}/${others.length} connected`}
+        {v.pushToTalk && !v.muted
+          ? v.talking
+            ? ' · transmitting'
+            : ' · hold Push to talk to speak'
+          : ''}
+      </span>
+    </div>
+  );
+}
+
+/** Mic state beside a member: speaking, muted, in voice, or nothing. */
+function VoiceGlyph({
+  member,
+  voice,
+  self,
+}: {
+  member: LobbyMember;
+  voice: VoiceView;
+  self: boolean;
+}) {
+  const inVoice = self ? voice.active : member.voice;
+  const muted = self ? voice.muted : member.muted;
+  const speaking = voice.speaking.includes(member.id);
+  const failed = !self && voice.links[member.id] === 'failed';
+  const color = !inVoice
+    ? 'transparent'
+    : failed || muted
+      ? 'var(--danger, #f87171)'
+      : speaking
+        ? 'var(--success, #4ade80)'
+        : 'var(--text-dim, #8b93a7)';
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        width: 18,
+        justifyContent: 'center',
+        color,
+        filter: speaking ? 'drop-shadow(0 0 3px var(--success, #4ade80))' : undefined,
+        transition: 'color 120ms',
+      }}
+      title={
+        !inVoice
+          ? undefined
+          : failed
+            ? 'Could not connect audio'
+            : muted
+              ? 'Muted'
+              : speaking
+                ? 'Speaking'
+                : 'In voice'
+      }
+      aria-hidden={!inVoice}
+    >
+      {inVoice && <MicIcon off={muted} />}
+    </span>
+  );
+}
+
+function MicIcon({ off }: { off: boolean }) {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      style={{ verticalAlign: '-1px' }}
+    >
+      <rect x="9" y="2" width="6" height="12" rx="3" />
+      <path d="M5 11a7 7 0 0 0 14 0M12 18v4" />
+      {off && <path d="M3 3l18 18" />}
+    </svg>
+  );
+}
+
 function Chip({ tone, children }: { tone: 'ok' | 'accent' | 'dim'; children: string }) {
   const color =
     tone === 'ok'
@@ -337,6 +483,11 @@ const log: CSSProperties = {
   borderRadius: 4,
   background: 'rgba(0,0,0,0.25)',
   fontSize: '0.78rem',
+};
+
+const warn: CSSProperties = {
+  color: 'var(--danger, #f87171)',
+  borderColor: 'color-mix(in srgb, var(--danger, #f87171) 45%, transparent)',
 };
 
 const primary: CSSProperties = {

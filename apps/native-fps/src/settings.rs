@@ -49,6 +49,8 @@ pub const KEY_CROSSHAIR_DOT: &str = "hassault.crosshair.dot";
 pub const KEY_CROSSHAIR_ALPHA: &str = "hassault.crosshair.alpha";
 pub const KEY_HUD_SCALE: &str = "hassault.video.hudScale";
 pub const KEY_SHOW_HITBOXES: &str = "hassault.debug.hitboxes";
+/// `CONTROLS_KEY` in the pane's `menu-panels.tsx`.
+pub const KEY_CONTROLS: &str = "hassault.controls";
 
 /// How much the renderer is allowed to spend on looking good.
 ///

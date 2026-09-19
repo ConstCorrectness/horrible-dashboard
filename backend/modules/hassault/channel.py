@@ -268,23 +268,26 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
         )
 
     elif event == "chat":
-        text = str(data.get("text") or "").strip()
+        # One path for every sender — see `chat.post`. The text is cleaned and
+        # limited there, never here: a second, laxer copy of the rules is how a
+        # message that one path refuses gets in through another.
+        from backend.modules.hassault import chat
+
+        raw = data.get("text")
         is_team = bool(data.get("team", False))
-        if text:
-            entry = match_server.player_for(conn)
-            if entry is not None:
-                room, player = entry
-                payload = {
-                    "senderId": player.id,
-                    "senderName": player.name,
-                    "team": player.team,
-                    "isTeam": is_team,
-                    "text": text[:200],
-                }
-                target_team = player.team if is_team else None
-                await match_server.broadcast_event(
-                    room, "chat", payload, team=target_team
-                )
+        binding = fabric.remote_for(conn)
+        if binding is not None:
+            # A match on a friend's node: their server is the one that decides,
+            # and the echo comes back over the fabric like any other event.
+            await fabric.send_remote_chat(binding, raw, is_team)
+            return
+        entry = match_server.player_for(conn)
+        if entry is None:
+            return
+        room, player = entry
+        refused = await chat.post(room, player, raw, is_team)
+        if refused and refused != "empty":
+            await conn.send_json(_evt("chat_refused", {"reason": refused}))
 
     elif event == "voice":
         transmitting = bool(data.get("transmitting", False))
@@ -431,15 +434,21 @@ async def _handle_lobby(conn: WsConnection, event: str, data: dict[str, Any]) ->
             return
 
         if remote is not None:
-            if event in ("lobby_chat", "lobby_ready"):
+            if event in ("lobby_chat", "lobby_ready", "lobby_voice", "lobby_signal"):
                 try:
                     await fabric.send_lobby_op(
                         remote,
                         event.removeprefix("lobby_"),
                         text=str(data.get("text") or ""),
                         ready=bool(data.get("ready")),
+                        on=bool(data.get("on")),
+                        muted=bool(data.get("muted")),
+                        to=str(data.get("to") or ""),
+                        signal=data.get("signal"),
                     )
                 except KeyError:
+                    if event == "lobby_signal":
+                        return  # ICE tolerates a lost frame; no need to shout
                     raise LobbyError("the host's machine is not connected") from None
                 return
             raise LobbyError("only the host can do that")
@@ -448,6 +457,14 @@ async def _handle_lobby(conn: WsConnection, event: str, data: dict[str, Any]) ->
             await lobby_server.chat(conn, str(data.get("text") or ""))
         elif event == "lobby_ready":
             await lobby_server.set_ready(conn, bool(data.get("ready")))
+        elif event == "lobby_voice":
+            await lobby_server.set_voice(
+                conn, bool(data.get("on")), bool(data.get("muted"))
+            )
+        elif event == "lobby_signal":
+            await lobby_server.signal(
+                conn, str(data.get("to") or ""), data.get("signal")
+            )
         elif event == "lobby_config":
             mode = data.get("mode")
             await lobby_server.configure(

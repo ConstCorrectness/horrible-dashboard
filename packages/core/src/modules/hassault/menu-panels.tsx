@@ -20,6 +20,7 @@ import { addFriend, searchDirectory, type DirectoryEntry } from '../social/api';
 import { browseServers, type BrowseMatch, type MapSummary } from './api';
 import {
   ACTIONS,
+  CONTROL_GROUPS,
   SLOTS,
   boundTo,
   defaultControls,
@@ -51,6 +52,8 @@ export const CONTROLS_KEY = 'hassault.controls';
 export const VOLUME_KEY = 'hassault.volume';
 export const FOV_KEY = 'hassault.fov';
 export const CROUCH_TOGGLE_KEY = 'hassault.crouchToggle';
+/** Lobby voice: closed mic except while the Push to talk key is held. */
+export const PUSH_TO_TALK_KEY = 'hassault.voice.pushToTalk';
 
 /**
  * Whether Play, Train and Host open the native window instead of playing here.
@@ -653,14 +656,19 @@ export function ControlsPanel({
     setRecording(null);
   };
 
-  const groups = ['Movement', 'Combat', 'View'] as const;
+  // Every group, from the one list. This used to be a hand-written
+  // `['Movement', 'Combat', 'View']`, which silently left out Utility — so the
+  // grenade, throw, buy, use and drop keys were rebindable in code and on no
+  // screen at all. `CONTROL_GROUPS` is checked against `ACTIONS` by a test.
+  const groups = CONTROL_GROUPS;
 
   return (
     <div>
       <div style={styles.toolbar}>
         <span style={styles.dim}>
-          These keys work only while this pane has the pointer — they never fire anywhere else in
-          the app, and the app's own shortcuts are suppressed while you play.
+          These keys work only while you are playing — they never fire anywhere else in the app, and
+          the app's own shortcuts are suppressed while you play. The native client reads the same
+          table when it starts.
         </span>
         <button
           onClick={() => {

@@ -44,9 +44,9 @@ use hassault_native::api::{
 };
 use hassault_native::arc::{self, ThrowArc};
 use hassault_native::audio::GameAudio;
-use hassault_native::chat::{ChatChannel, ChatState};
 use hassault_native::bodies;
 use hassault_native::camera::{blast_trauma, damage_trauma, fire_trauma, Camera, Shake};
+use hassault_native::chat::{ChatChannel, ChatState};
 use hassault_native::console::{self, ClientCvars, Console, Definitions, Dispatch};
 use hassault_native::damage::{DamageNumbers, Placed};
 use hassault_native::decals::DecalPool;
@@ -63,6 +63,7 @@ use hassault_native::menu::{self, Action, Menu, Page};
 use hassault_native::nades::{self, NadePool};
 use hassault_native::net::{Incoming, MatchSocket};
 use hassault_native::physics::{self, eye_height, MoveInput, JUMP_SPEED, MOVE_SPEED};
+use hassault_native::physics_rapier::RapierPhysicsWorld;
 use hassault_native::prediction::Prediction;
 use hassault_native::prop;
 use hassault_native::protocol::{
@@ -73,7 +74,6 @@ use hassault_native::renderer::{Renderer, Vertex, VolumeVertex, MODE_FLAT};
 use hassault_native::reveal::Reveal;
 use hassault_native::settings::{Crosshair, CrosshairStyle, Settings, SettingsWriter, FOV_RANGE};
 use hassault_native::summary::{MatchTally, Summary, SummaryScreen};
-use hassault_native::physics_rapier::RapierPhysicsWorld;
 use hassault_native::trace::kick_vector;
 use hassault_native::training::TrainingRange;
 use hassault_native::utility::GrenadeController;
@@ -401,6 +401,12 @@ pub struct App {
     weapon_verts: Vec<Vertex>,
     chat: ChatState,
     voice_transmitting: bool,
+    /// The shared key map (`controls.rs`). Defaults until `main` sets the one
+    /// read from the node, so a client with no node still has every key.
+    pub controls: hassault_native::controls::Controls,
+    /// Chat drawn in real fonts (colour emoji included), when the OS fonts
+    /// have loaded. `None` falls back to the HUD's bitmap font.
+    text: hassault_native::textlayer::TextLayer,
     voice_speakers: HashMap<String, (String, i32, Instant)>,
 }
 
@@ -606,6 +612,8 @@ impl App {
             pointer: (0.0, 0.0),
             chat: ChatState::new(),
             voice_transmitting: false,
+            controls: hassault_native::controls::Controls::default(),
+            text: hassault_native::textlayer::TextLayer::spawn(),
             voice_speakers: HashMap::new(),
         };
         if app.audio.is_none() {
@@ -828,7 +836,8 @@ impl App {
         self.hud.update(dt, self.keys.scores);
         self.chat.step(dt);
         let now = Instant::now();
-        self.voice_speakers.retain(|_, (_, _, seen)| now.duration_since(*seen).as_secs_f32() < 3.0);
+        self.voice_speakers
+            .retain(|_, (_, _, seen)| now.duration_since(*seen).as_secs_f32() < 3.0);
         // Drawn-position easing only. Nothing here simulates a grenade — the
         // arc, the bounce and the fuse are all the server's, and a second
         // implementation of the bounce would exist only to disagree with the
@@ -881,7 +890,8 @@ impl App {
         } else {
             weapon.clone()
         };
-        self.viewmodel.set_weapon(&display_weapon, self.skins.get(&display_weapon));
+        self.viewmodel
+            .set_weapon(&display_weapon, self.skins.get(&display_weapon));
         self.sync_prop(&display_weapon);
         // **The predicted arc.** Drawn from the *locally predicted* velocity,
         // not from the last snapshot's: the whole reason it exists is to make
@@ -1429,33 +1439,35 @@ impl App {
     /// scatters up to twenty-two cubes above the floor.
     fn place_offline(&mut self) {
         let mut override_pitch = 0.0;
-        let spawn_3d = std::env::var("SPAWN_OVERRIDE").ok().and_then(|v| {
-            let parts: Vec<f32> = v.split(',').filter_map(|s| s.trim().parse().ok()).collect();
-            if parts.len() >= 4 {
-                if parts.len() >= 5 {
-                    override_pitch = parts[4];
+        let spawn_3d = std::env::var("SPAWN_OVERRIDE")
+            .ok()
+            .and_then(|v| {
+                let parts: Vec<f32> = v.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+                if parts.len() >= 4 {
+                    if parts.len() >= 5 {
+                        override_pitch = parts[4];
+                    }
+                    Some(hassault_native::world3d::SpawnPoint {
+                        x: parts[0],
+                        y: parts[1],
+                        z: parts[2],
+                        yaw: parts[3],
+                        team: 0,
+                    })
+                } else {
+                    None
                 }
-                Some(hassault_native::world3d::SpawnPoint {
-                    x: parts[0],
-                    y: parts[1],
-                    z: parts[2],
-                    yaw: parts[3],
-                    team: 0,
-                })
-            } else {
-                None
-            }
-        }).or_else(|| self.world3d.as_ref().and_then(|w| w.spawns.first().copied()));
+            })
+            .or_else(|| {
+                self.world3d
+                    .as_ref()
+                    .and_then(|w| w.spawns.first().copied())
+            });
         if let Some(sp) = spawn_3d {
             self.camera.yaw = sp.yaw;
             self.camera.pitch = override_pitch;
-            self.prediction.reset(
-                sp.x,
-                sp.y,
-                sp.z,
-                sp.yaw.to_radians(),
-                0.0,
-            );
+            self.prediction
+                .reset(sp.x, sp.y, sp.z, sp.yaw.to_radians(), 0.0);
             if let Some(rapier) = &mut self.rapier_physics {
                 rapier.set_position(sp.x, sp.y, sp.z);
             }
@@ -1482,7 +1494,8 @@ impl App {
             all_spawns.get(idx).or_else(|| all_spawns.first())
         } else {
             all_spawns.first()
-        }.map(|e| physics::Spawn {
+        }
+        .map(|e| physics::Spawn {
             x: e.x,
             y: e.y,
             z: e.z,
@@ -1550,7 +1563,12 @@ impl App {
             return;
         }
         if self.auto_director_active {
-            if let Some(target) = self.drawn.iter().filter(|p| p.alive && p.hp > 0.0).min_by(|a, b| a.hp.partial_cmp(&b.hp).unwrap_or(std::cmp::Ordering::Equal)) {
+            if let Some(target) = self
+                .drawn
+                .iter()
+                .filter(|p| p.alive && p.hp > 0.0)
+                .min_by(|a, b| a.hp.partial_cmp(&b.hp).unwrap_or(std::cmp::Ordering::Equal))
+            {
                 self.camera.x = target.x;
                 self.camera.y = target.y;
                 self.camera.z = target.z + 1.6;
@@ -1570,9 +1588,13 @@ impl App {
         if self.freecam_active {
             self.auto_director_active = false;
             self.freecam_pos = [self.camera.x, self.camera.y, self.camera.z];
-            self.console.push("spectator: freecam active (fly with WASD + Space/Ctrl)", console::Tone::Note);
+            self.console.push(
+                "spectator: freecam active (fly with WASD + Space/Ctrl)",
+                console::Tone::Note,
+            );
         } else {
-            self.console.push("spectator: freecam disabled", console::Tone::Note);
+            self.console
+                .push("spectator: freecam disabled", console::Tone::Note);
         }
     }
 
@@ -1580,9 +1602,11 @@ impl App {
         self.auto_director_active = !self.auto_director_active;
         if self.auto_director_active {
             self.freecam_active = false;
-            self.console.push("spectator: auto-director active", console::Tone::Note);
+            self.console
+                .push("spectator: auto-director active", console::Tone::Note);
         } else {
-            self.console.push("spectator: auto-director disabled", console::Tone::Note);
+            self.console
+                .push("spectator: auto-director disabled", console::Tone::Note);
         }
     }
 
@@ -1594,7 +1618,11 @@ impl App {
         let pitch = self.camera.pitch.to_radians();
         let speed = if self.keys.sprint { 30.0 } else { 14.0 };
 
-        let forward = [yaw.cos() * pitch.cos(), yaw.sin() * pitch.cos(), pitch.sin()];
+        let forward = [
+            yaw.cos() * pitch.cos(),
+            yaw.sin() * pitch.cos(),
+            pitch.sin(),
+        ];
         let right = [-yaw.sin(), yaw.cos(), 0.0];
 
         let mut mx = 0.0;
@@ -1775,7 +1803,9 @@ impl App {
                             if !is_knife {
                                 let is_mine = id == &self.self_id;
                                 let draw_beam = if is_mine {
-                                    self.cvars.boolean("draw.tracers_firstperson").unwrap_or(false)
+                                    self.cvars
+                                        .boolean("draw.tracers_firstperson")
+                                        .unwrap_or(false)
                                 } else {
                                     true
                                 };
@@ -1783,17 +1813,27 @@ impl App {
                                     .shot_ex(*origin, ends, faces, is_mine, *hit, draw_beam);
                                 self.decals.shot(ends, faces);
                                 if !ends.is_empty() {
-                                    let dir = [ends[0][0] - origin[0], ends[0][1] - origin[1], ends[0][2] - origin[2]];
-                                    let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+                                    let dir = [
+                                        ends[0][0] - origin[0],
+                                        ends[0][1] - origin[1],
+                                        ends[0][2] - origin[2],
+                                    ];
+                                    let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2])
+                                        .sqrt();
                                     if len > 1e-4 {
                                         let f = [dir[0] / len, dir[1] / len, dir[2] / len];
-                                        let h = if f[2].abs() < 0.9 { [0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0] };
+                                        let h = if f[2].abs() < 0.9 {
+                                            [0.0, 0.0, 1.0]
+                                        } else {
+                                            [1.0, 0.0, 0.0]
+                                        };
                                         let r = [
                                             f[1] * h[2] - f[2] * h[1],
                                             f[2] * h[0] - f[0] * h[2],
                                             f[0] * h[1] - f[1] * h[0],
                                         ];
-                                        let r_len = (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt();
+                                        let r_len =
+                                            (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt();
                                         if r_len > 1e-4 {
                                             let r = [r[0] / r_len, r[1] / r_len, r[2] / r_len];
                                             let u = [
@@ -2004,8 +2044,19 @@ impl App {
                     self.console.on_response(&res, &mut self.cvars);
                 }
                 Incoming::Event(Event::Chat(c)) => {
+                    self.chat.receive(
+                        &c.id,
+                        &c.sender_id,
+                        &c.sender_name,
+                        c.team,
+                        c.is_team,
+                        &c.text,
+                    );
+                }
+                Incoming::Event(Event::ChatRefused(reason)) => {
+                    // A local system line: an empty sender draws as a notice.
                     self.chat
-                        .receive(&c.sender_id, &c.sender_name, c.team, c.is_team, &c.text);
+                        .receive("", "", "", -1, false, format!("Not sent: {reason}"));
                 }
                 Incoming::Event(Event::Voice(v)) => {
                     if v.transmitting {
@@ -2068,8 +2119,8 @@ impl App {
         // next second of honest movement paying it back.
         let dt = self.input_accum.min(MAX_DT);
         self.input_accum = 0.0;
-        let is_knife = self.held().map(|w| w.id.as_str()) == Some("knife")
-            && !self.utility.equipped();
+        let is_knife =
+            self.held().map(|w| w.id.as_str()) == Some("knife") && !self.utility.equipped();
         let input = MoveInput {
             forward: axis(self.keys.forward, self.keys.back),
             strafe: axis(self.keys.right, self.keys.left),
@@ -2334,16 +2385,27 @@ impl App {
         // is where a spray pattern is learnt, and it is not learnable without
         // seeing where the rounds went.
         if weapon.id != "knife" {
-            let draw_beam = self.cvars.boolean("draw.tracers_firstperson").unwrap_or(false);
+            let draw_beam = self
+                .cvars
+                .boolean("draw.tracers_firstperson")
+                .unwrap_or(false);
             self.effects
                 .shot_ex(shot.origin, &shot.ends, &shot.faces, true, false, draw_beam);
             self.decals.shot(&shot.ends, &shot.faces);
             if !shot.ends.is_empty() {
-                let dir = [shot.ends[0][0] - shot.origin[0], shot.ends[0][1] - shot.origin[1], shot.ends[0][2] - shot.origin[2]];
+                let dir = [
+                    shot.ends[0][0] - shot.origin[0],
+                    shot.ends[0][1] - shot.origin[1],
+                    shot.ends[0][2] - shot.origin[2],
+                ];
                 let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
                 if len > 1e-4 {
                     let f = [dir[0] / len, dir[1] / len, dir[2] / len];
-                    let h = if f[2].abs() < 0.9 { [0.0, 0.0, 1.0] } else { [1.0, 0.0, 0.0] };
+                    let h = if f[2].abs() < 0.9 {
+                        [0.0, 0.0, 1.0]
+                    } else {
+                        [1.0, 0.0, 0.0]
+                    };
                     let r = [
                         f[1] * h[2] - f[2] * h[1],
                         f[2] * h[0] - f[0] * h[2],
@@ -2500,6 +2562,132 @@ impl App {
     /// settings page would come back to a body that had been shot at for a
     /// minute. Train runs on for the same reason rather than growing a second
     /// rule nobody could see.
+    /// A game key, resolved through the shared key map (`controls.rs`).
+    ///
+    /// Everything a player can rebind goes through `self.controls`; the keys
+    /// that stay fixed are the ones the Controls screen does not offer — the
+    /// console, the menu, and the debug F-keys — plus the buy menu's number row,
+    /// which is a menu's own keys and not a game action.
+    fn game_key(&mut self, code: KeyCode, down: bool) {
+        use hassault_native::controls::Action;
+
+        let action = self.controls.action(code);
+        match code {
+            // F3 steps the *fallback*, and clears any override so the key the
+            // player is pressing is the thing they see. Stepping a private field
+            // while `net.graph` sat unread beside it is the exact divergence this
+            // work is about.
+            KeyCode::F3 if down => {
+                self.net_graph_default = (self.net_graph() + 1) % 4;
+                self.cvars
+                    .set("net.graph", serde_json::json!(self.net_graph_default));
+                return;
+            }
+            KeyCode::F6 if down => return self.toggle_freecam(),
+            KeyCode::F7 if down => return self.toggle_auto_director(),
+            KeyCode::Backquote if down => return self.toggle_console(),
+            // Escape opens the menu — and releases the pointer on the way,
+            // because the reflex it has to serve first is still "give me my
+            // mouse back". Never rebindable (`RESERVED`): it is the way back.
+            KeyCode::Escape if down => return self.toggle_menu(),
+            // The arrows looked around before the key map existed. They still
+            // do, but only while nothing is bound to them — the shared defaults
+            // put strafing there, and a key cannot mean both.
+            KeyCode::ArrowLeft if down && action.is_none() => return self.look(-25.0, 0.0),
+            KeyCode::ArrowRight if down && action.is_none() => return self.look(25.0, 0.0),
+            KeyCode::ArrowUp if down && action.is_none() => return self.look(0.0, -15.0),
+            KeyCode::ArrowDown if down && action.is_none() => return self.look(0.0, 15.0),
+            _ => {}
+        }
+        // While the buy menu is held, the number row buys instead of doing what
+        // it is bound to. Two jobs for one row rather than a second set of keys:
+        // the menu is *held*, so which job is which is never ambiguous.
+        if down && self.buy_open {
+            if let Some(slot) = BUY_ROW.iter().position(|k| *k == code) {
+                self.buy(slot);
+                return;
+            }
+        }
+        let Some(action) = action else {
+            return;
+        };
+        match action {
+            Action::Forward => self.keys.forward = down,
+            Action::Back => self.keys.back = down,
+            Action::Left => self.keys.left = down,
+            Action::Right => self.keys.right = down,
+            Action::Jump => self.keys.jump = down,
+            Action::Sprint => self.keys.sprint = down,
+            Action::Crouch => self.keys.crouch = down,
+            Action::Scores => self.keys.scores = down,
+            Action::Use => self.keys.use_key = down,
+            // Held rather than toggled, like the scoreboard: a menu you can
+            // leave up by accident is one you die behind.
+            Action::Buy => self.buy_open = down,
+            Action::Quickswitch if down => self.quick_switch_weapon(),
+            Action::Reload if down => self.reload(),
+            // Purely local — see `WeaponViewModel::inspect`.
+            Action::Inspect if down => self.viewmodel.inspect(),
+            Action::Weapon1 if down => self.select_weapon(0),
+            Action::Weapon2 if down => self.select_weapon(1),
+            Action::Weapon3 if down => self.select_weapon(2),
+            Action::Weapon4 if down => self.select_weapon(3),
+            Action::Weapon5 if down => self.select_weapon(4),
+            // **Selecting equips.** The weapon goes down and the two mouse
+            // buttons become throw and toss. The slot order is the served
+            // `/tacticals` order, the same as `NADE_ACTIONS` in the pane.
+            Action::NadeHe if down => self.utility.equip(0),
+            Action::NadeFlash if down => self.utility.equip(1),
+            Action::NadeSmoke if down => self.utility.equip(2),
+            Action::NadeMolotov if down => self.utility.equip(3),
+            Action::Throw if down => self.utility.press(false),
+            Action::Lob if down => self.utility.press(true),
+            Action::ChatAll if down && !self.editing() => self.open_chat(ChatChannel::All),
+            Action::ChatTeam if down && !self.editing() => self.open_chat(ChatChannel::Team),
+            Action::Voice => {
+                if down && !self.voice_transmitting {
+                    self.voice_transmitting = true;
+                    if let Some(audio) = &self.audio {
+                        audio.own("radio_on", 1.0, None);
+                    }
+                    if let Some(socket) = &self.socket {
+                        let _ = socket.send_voice(true);
+                    }
+                } else if !down && self.voice_transmitting {
+                    self.voice_transmitting = false;
+                    if let Some(audio) = &self.audio {
+                        audio.own("radio_off", 1.0, None);
+                    }
+                    if let Some(socket) = &self.socket {
+                        let _ = socket.send_voice(false);
+                    }
+                }
+            }
+            // Ping, drop and noclip exist in the pane only; bound here, they do
+            // nothing rather than something else.
+            _ => {}
+        }
+    }
+
+    /// Open the chat prompt, and let the OS input method in while it is up —
+    /// that is the only way the Windows emoji panel (Win+.), and any CJK input
+    /// method, can deliver text: as an `Ime::Commit`, never as a key.
+    fn open_chat(&mut self, channel: ChatChannel) {
+        self.chat.open_prompt(channel);
+        // Movement held when the prompt opened would otherwise keep walking.
+        self.keys = Default::default();
+        if let Some(window) = &self.window {
+            window.set_ime_allowed(true);
+        }
+    }
+
+    fn close_chat(&mut self) {
+        self.chat.close_prompt();
+        if let Some(window) = &self.window {
+            window.set_ime_allowed(false);
+        }
+    }
+
     fn toggle_menu(&mut self) {
         self.menu.toggle();
         let open = self.menu.open;
@@ -3154,6 +3342,19 @@ fn name_or_id(name: &str, id: &str) -> String {
     }
 }
 
+/// The number row, as the buy menu reads it: slot `i` is `BUY_ROW[i]`.
+const BUY_ROW: [KeyCode; 9] = [
+    KeyCode::Digit1,
+    KeyCode::Digit2,
+    KeyCode::Digit3,
+    KeyCode::Digit4,
+    KeyCode::Digit5,
+    KeyCode::Digit6,
+    KeyCode::Digit7,
+    KeyCode::Digit8,
+    KeyCode::Digit9,
+];
+
 fn key_name(code: KeyCode) -> String {
     let raw = format!("{code:?}");
     let trimmed = raw
@@ -3404,6 +3605,24 @@ impl ApplicationHandler for App {
             // Tracked rather than read off the key event, because winit reports
             // modifier state on its own event and a `KeyboardInput` carries no
             // modifiers at all. The only consumer is the console's `^F`.
+            // Text from the OS input method: the Windows emoji panel (Win+.),
+            // and every CJK input method, deliver through here and never as a
+            // key. Only listened to while the chat prompt is up — IME is
+            // switched on for exactly that span (`open_chat`).
+            WindowEvent::Ime(ime) => {
+                if !self.chat.open {
+                    return;
+                }
+                match ime {
+                    winit::event::Ime::Preedit(text, _) => self.chat.preedit = text,
+                    winit::event::Ime::Commit(text) => {
+                        self.chat.preedit.clear();
+                        self.chat.type_text(&text);
+                    }
+                    winit::event::Ime::Disabled => self.chat.preedit.clear(),
+                    winit::event::Ime::Enabled => {}
+                }
+            }
             WindowEvent::ModifiersChanged(modifiers) => {
                 self.modifiers = modifiers.state();
             }
@@ -3455,34 +3674,26 @@ impl ApplicationHandler for App {
                     if self.chat.open {
                         if down {
                             match code {
-                                KeyCode::Escape => self.chat.close_prompt(),
-                                KeyCode::Enter | KeyCode::NumpadEnter => {
-                                    if let Some((text, is_team)) = self.chat.submit() {
+                                KeyCode::Escape => self.close_chat(),
+                                // Not while an input method is composing: the
+                                // Enter that picks a CJK candidate is not a send.
+                                KeyCode::Enter | KeyCode::NumpadEnter
+                                    if self.chat.preedit.is_empty() =>
+                                {
+                                    let submitted = self.chat.submit();
+                                    self.close_chat();
+                                    if let Some((text, is_team)) = submitted {
+                                        // No local echo. The server sends every
+                                        // line back to its sender too — cleaned
+                                        // and stamped — and that copy is the one
+                                        // shown. Echoing here as well is what
+                                        // put every message on screen twice.
                                         if let Some(socket) = &self.socket {
                                             let _ = socket.send_chat(&text, is_team);
                                         }
-                                        let my_name = self
-                                            .players
-                                            .iter()
-                                            .find(|p| p.id == self.self_id)
-                                            .map(|p| {
-                                                if p.name.is_empty() {
-                                                    "You".to_string()
-                                                } else {
-                                                    p.name.clone()
-                                                }
-                                            })
-                                            .unwrap_or_else(|| "You".to_string());
-                                        let my_team = self.my_team();
-                                        self.chat.receive(
-                                            &self.self_id,
-                                            &my_name,
-                                            my_team,
-                                            is_team,
-                                            &text,
-                                        );
                                     }
                                 }
+                                KeyCode::Tab => self.chat.toggle_channel(),
                                 KeyCode::Backspace => self.chat.backspace(),
                                 KeyCode::Delete => self.chat.delete(),
                                 KeyCode::ArrowLeft => self.chat.move_cursor_left(),
@@ -3531,124 +3742,7 @@ impl ApplicationHandler for App {
                             _ => {}
                         }
                     }
-                    match code {
-                        KeyCode::KeyW => self.keys.forward = down,
-                        KeyCode::KeyS => self.keys.back = down,
-                        KeyCode::KeyA => self.keys.left = down,
-                        KeyCode::KeyD => self.keys.right = down,
-                        KeyCode::Space => self.keys.jump = down,
-                        KeyCode::ShiftLeft | KeyCode::ShiftRight => self.keys.sprint = down,
-                        KeyCode::ControlLeft | KeyCode::KeyC => self.keys.crouch = down,
-                        KeyCode::KeyQ if down => self.quick_switch_weapon(),
-                        KeyCode::Tab => self.keys.scores = down,
-                        // E for the objective, which is where every shooter puts
-                        // it and where `DEFAULT_CONTROLS` in the browser's
-                        // `controls.ts` puts it too: one game, one set of keys.
-                        KeyCode::KeyE => self.keys.use_key = down,
-                        // B holds the buy menu open. Held rather than toggled,
-                        // like the scoreboard and for the same reason: it is
-                        // read *during* the freeze while the round is being
-                        // decided around you, and a menu you can leave up by
-                        // accident is one you die behind.
-                        KeyCode::KeyB => self.buy_open = down,
-                        KeyCode::KeyR if down => self.reload(),
-                        // Inspect. Purely local — see `WeaponViewModel::inspect`
-                        // — so it is not a command and never touches the wire.
-                        KeyCode::KeyF if down => self.viewmodel.inspect(),
-                        // The number row picks a weapon. `Digit1` is the knife,
-                        // matching the server's slot order — which is the order
-                        // `GET /api/hassault/weapons` serves them in, so the two
-                        // cannot drift.
-                        // While the buy menu is held, the number row buys
-                        // instead of selecting. Two jobs for one row rather than
-                        // a second set of keys somewhere else on the keyboard:
-                        // the menu is *held*, so which job is which is never
-                        // ambiguous to the player — their other hand is on B.
-                        KeyCode::Digit1 if down && self.buy_open => self.buy(0),
-                        KeyCode::Digit2 if down && self.buy_open => self.buy(1),
-                        KeyCode::Digit3 if down && self.buy_open => self.buy(2),
-                        KeyCode::Digit4 if down && self.buy_open => self.buy(3),
-                        KeyCode::Digit5 if down && self.buy_open => self.buy(4),
-                        KeyCode::Digit6 if down && self.buy_open => self.buy(5),
-                        KeyCode::Digit7 if down && self.buy_open => self.buy(6),
-                        KeyCode::Digit8 if down && self.buy_open => self.buy(7),
-                        KeyCode::Digit9 if down && self.buy_open => self.buy(8),
-                        KeyCode::Digit1 if down => self.select_weapon(0),
-                        KeyCode::Digit2 if down => self.select_weapon(1),
-                        KeyCode::Digit3 if down => self.select_weapon(2),
-                        KeyCode::Digit4 if down => self.select_weapon(3),
-                        KeyCode::Digit5 if down => self.select_weapon(4),
-                        // The four grenades sit on the number row after the
-                        // weapons, where a hand already is, and match
-                        // `DEFAULT_CONTROLS` in the browser's `controls.ts`:
-                        // one game, one set of keys.
-                        //
-                        // **Selecting equips.** The weapon goes down and the two
-                        // mouse buttons become throw and toss. Picking a grenade
-                        // and choosing the moment are still two decisions — the
-                        // second one is now a click rather than a second key on
-                        // the other side of the keyboard.
-                        KeyCode::Digit6 if down => self.utility.equip(0),
-                        KeyCode::Digit7 if down => self.utility.equip(1),
-                        KeyCode::Digit8 if down => self.utility.equip(2),
-                        KeyCode::Digit9 if down => self.utility.equip(3),
-                        KeyCode::ArrowLeft if down => self.look(-25.0, 0.0),
-                        KeyCode::ArrowRight if down => self.look(25.0, 0.0),
-                        KeyCode::ArrowUp if down => self.look(0.0, -15.0),
-                        KeyCode::ArrowDown if down => self.look(0.0, 15.0),
-                        // Still bound, and still working: a player who has
-                        // learned these should not lose them because the default
-                        // moved. `KeyG` is where every shooter since Half-Life
-                        // has put it, and the underhand gets a modifier-free key
-                        // of its own rather than being Shift+G — a throw you have
-                        // to hold two keys for is one you will fumble under fire.
-                        KeyCode::KeyG if down => self.utility.press(false),
-                        KeyCode::KeyH if down => self.utility.press(true),
-                        // F3 steps the *fallback*, and clears any override so
-                        // the key the player is pressing is the thing they see.
-                        // Stepping a private field while `net.graph` sat unread
-                        // beside it is the exact divergence this work is about.
-                        KeyCode::F3 if down => {
-                            self.net_graph_default = (self.net_graph() + 1) % 4;
-                            self.cvars
-                                .set("net.graph", serde_json::json!(self.net_graph_default));
-                        }
-                        KeyCode::F6 if down => self.toggle_freecam(),
-                        KeyCode::F7 if down => self.toggle_auto_director(),
-                        KeyCode::KeyY if down && !self.editing() => {
-                            self.chat.open_prompt(ChatChannel::All);
-                        }
-                        KeyCode::KeyU if down => {
-                            self.chat.open_prompt(ChatChannel::Team);
-                        }
-                        KeyCode::KeyV => {
-                            if down && !self.voice_transmitting {
-                                self.voice_transmitting = true;
-                                if let Some(audio) = &self.audio {
-                                    audio.own("radio_on", 1.0, None);
-                                }
-                                if let Some(socket) = &self.socket {
-                                    let _ = socket.send_voice(true);
-                                }
-                            } else if !down && self.voice_transmitting {
-                                self.voice_transmitting = false;
-                                if let Some(audio) = &self.audio {
-                                    audio.own("radio_off", 1.0, None);
-                                }
-                                if let Some(socket) = &self.socket {
-                                    let _ = socket.send_voice(false);
-                                }
-                            }
-                        }
-                        KeyCode::Backquote if down => self.toggle_console(),
-                        // Escape opens the menu — and releases the pointer on
-                        // the way, because the reflex it has to serve first is
-                        // still "give me my mouse back". A client that exited
-                        // the match instead is one nobody presses Escape in
-                        // twice.
-                        KeyCode::Escape if down => self.toggle_menu(),
-                        _ => {}
-                    }
+                    self.game_key(code, down);
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -3881,6 +3975,8 @@ impl ApplicationHandler for App {
                     .values()
                     .map(|(name, _, _)| name.clone())
                     .collect();
+                // Whether the OS fonts have loaded (picked up off their thread).
+                let rich_chat = self.text.ready();
                 let view = HudView {
                     hud_scale: self.settings.video.hud_scale,
                     team: self
@@ -3943,7 +4039,8 @@ impl ApplicationHandler for App {
                     // and reading it a tick late would tint the screen after the
                     // jump had already stopped working.
                     underwater: if let Some(w3d) = &self.world3d {
-                        (self.prediction.state.z + physics::eye_offset(&self.prediction.state)) < w3d.waterlevel
+                        (self.prediction.state.z + physics::eye_offset(&self.prediction.state))
+                            < w3d.waterlevel
                     } else {
                         physics::submerged(&self.world, &self.prediction.state)
                     },
@@ -3954,7 +4051,9 @@ impl ApplicationHandler for App {
                     scoreboard: scoreboard.as_deref(),
                     scores: &self.scores,
                     damage: &self.damage_placed,
-                    chat: Some(&self.chat),
+                    // The bitmap font draws chat only until the OS fonts have
+                    // loaded; after that `textlayer` does, in real glyphs.
+                    chat: (!rich_chat).then_some(&self.chat),
                     voice_transmitting: self.voice_transmitting,
                     voice_speakers: &active_speakers,
                 };
@@ -3984,9 +4083,23 @@ impl ApplicationHandler for App {
                 }
                 self.overlay = overlay;
 
+                // Chat in real fonts, over the HUD — but not over the menu, the
+                // summary card or the console, which are drawn *on* the HUD and
+                // would otherwise have chat floating on top of them.
+                let hud_unit = ((height as f32 / 360.0).round()
+                    * self.settings.video.hud_scale.clamp(0.75, 1.5))
+                .max(2.0);
+                let chat_image =
+                    if rich_chat && !self.menu.open && !self.summary.open && !self.console.open {
+                        self.text.chat(&self.chat, width, height, hud_unit)
+                    } else {
+                        None
+                    };
+
                 let Some(renderer) = &mut self.renderer else {
                     return;
                 };
+                renderer.set_text_layer(chat_image);
                 renderer.set_bodies(&verts);
                 renderer.set_volumes(&self.volume_verts);
                 renderer.set_reveal(self.reveal);

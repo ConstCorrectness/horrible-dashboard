@@ -950,6 +950,42 @@ lock is requested with `unadjustedMovement: true`, which is the real "raw input"
 a shooter's settings menu — movement before the OS applies pointer acceleration —
 falling back to a plain lock where that is unsupported.
 
+### One table, both clients
+
+The native client used to hard-code every key in a `match` in `app.rs`, so the
+Controls screen rebound keys for the pane only. The native window is where the game
+is played by default, and it ignored every change. It now reads the same
+`hassault.controls` setting at launch (`apps/native-fps/src/controls.rs`) and
+dispatches through `game_key`:
+
+- **Codes need no translation.** winit's `KeyCode` variants are named after the
+  W3C `KeyboardEvent.code` values, so a key's `Debug` name *is* its code, and
+  there is no translation table to drift.
+- **The defaults are pinned.** A stored diff is relative to the defaults, so both
+  clients must agree on them. `tests/browser_parity.rs` parses `DEFAULT_CONTROLS`
+  out of the TypeScript at test time and compares it with `controls::DEFAULTS`.
+- **A few keys stay fixed** because the Controls screen does not offer them: the
+  console (backquote), the menu (Escape), F3/F6/F7, and the buy menu's number
+  row. The arrow keys still turn the view natively, but only when nothing is
+  bound to them. The shared defaults put strafing there, and a key cannot mean
+  both.
+- **Pane-only actions do nothing natively.** Ping, drop and noclip have no native
+  implementation, so bound there they do nothing rather than something else.
+
+The screen once listed its groups by hand as `['Movement', 'Combat', 'View']`,
+which silently left out **Utility**. So the grenade, throw, buy, use and drop keys
+were rebindable in code and on no screen at all. It now iterates `CONTROL_GROUPS`,
+and a test fails if any action's group is missing from that list. The
+**Communication** group adds:
+
+- **Push to talk (`voice`, V).** Held, it tells your team you are on the radio
+  (the `voice` indicator event). In lobby voice with the
+  `hassault.voice.pushToTalk` setting on, it also opens your mic, which is
+  otherwise closed. The native client has the radio indicator only, since lobby
+  voice lives in the pane.
+- **Chat, everyone (`chatAll`, Y) and team (`chatTeam`, U).** Noclip moved from V
+  to N to make room.
+
 ### The mouse is not in the table, and the grenade keys changed
 
 `controls.ts` binds keyboard codes; the two mouse buttons are handled directly in
@@ -3383,6 +3419,119 @@ than splitting the party. It follows karaoke's shape:
   `lobby_start`, which is how a remote member's pane knows where to join.
 - **Trust gates every inbound peer op**, the same as a match join. Remote
   names are tagged `name@node`.
+
+#### Lobby voice
+
+Voice (`lobby-voice.ts`) is a **mesh of browser-to-browser `RTCPeerConnection`s**:
+one audio link per pair of people in voice. The audio rides DTLS-SRTP directly
+between the browsers, the same shape as `share/rtc.ts`, and never touches a
+backend. The lobby is only the postman:
+
+- **Signalling.** `lobby_signal` carries SDP and ICE to one named member. It
+  travels over the fabric as the `signal` op, like chat does. The host stamps
+  `from` with the member the socket belongs to, never with what the frame
+  claims.
+- **Frame limits.** Only `offer`/`answer`/`ice`/`bye` frames are passed, each
+  under 32 KB. A handshake is not a state change, so it does not bump
+  `revision`.
+- **Who is in voice.** Each member carries `voice` and `muted` (`lobby_voice`),
+  which is how every pane knows whom to connect to.
+
+Four rules that fail silently if broken:
+
+- **Exactly one side of each pair offers:** the smaller member id. If both
+  offered at once (glare), each would reject the other's offer and nobody would
+  connect. An offer from the wrong direction is ignored.
+- **ICE candidates are queued until the remote description is set.** Adding one
+  earlier throws, and dropping it can cost the only route that works.
+- **Playback goes through the mixer's `lobby-voice` strip.** It also needs a
+  muted `<audio>` element on the stream, because Chrome feeds a remote WebRTC
+  track into Web Audio only while a media element is consuming it. Without
+  that, the voice is silent.
+- **Speaking is metered on a 100 ms timer, not rAF.** rAF stops in a background
+  tab, and a lobby is the thing you leave in the background.
+
+By default the mic is open while you are in voice, with Mute and Deafen. With
+`hassault.voice.pushToTalk` on (a checkbox in the voice bar, or Settings) it is
+closed except while the Push to talk key is held. That works in a match, where the
+game owns the keyboard, but not in the menu, where the keyboard is the shell's.
+Push-to-talk toggles `track.enabled` rather than renegotiating, so each press is
+free and cannot drop a link. A window blur releases it, because a key released
+elsewhere never sends its key-up. The pane hangs up when it unmounts, since it is the only path handshakes arrive on. A
+mesh is right for a party and wrong for sixteen people, which is a known
+limit rather than a bug. ICE uses the `network.stunServer`/`network.turn*`
+settings, with the same semantics as `share`. Two networks with symmetric NAT
+need TURN.
+
+### Match chat
+
+One chat box holds everyone's messages (`ALL`) and your team's (`TEAM`). Every
+message goes through **`chat.post`** (`backend/modules/hassault/chat.py`), whether
+it comes from a browser on this node, a friend's node over the fabric
+(`hassault_chat`, a message type of its own because the rules are not the input
+rules), or the native client. So no path can be the lax one. A remote player's
+chat used to be dropped outright. The server's copy is the only copy:
+
+- **Stamped and echoed.** Each line gets an `id` and a server `ts` and is echoed
+  to its sender too. Both clients render only that echo and drop a repeated
+  `id`. The native client used to echo locally *and* receive the server's copy,
+  so every message it sent appeared twice.
+- **Grapheme limits.** A message is at most 200 grapheme clusters and 1024 UTF-8
+  bytes, cut only between clusters (`regex`'s `\X`, UAX #29). `text[:200]` used
+  to split a ZWJ family or a flag into garbage. The byte ceiling exists because
+  one cluster can be arbitrarily long ("Zalgo" text).
+- **Normalisation.** Text is NFC-normalised, and newlines and runs of
+  whitespace collapse to one space.
+- **Format characters.** Bidi overrides and isolates (U+202A–202E, U+2066–2069)
+  are removed, since in a chat box they reorder somebody else's name. ZWJ,
+  ZWNJ, variation selectors and tag characters stay, because emoji sequences,
+  Persian and subdivision flags are built from them.
+- **Rate limit.** Five messages per four seconds per player. A refusal comes
+  back as `chat_refused`, and the box says "not sent — slow down".
+
+**The pane** (`ChatBox.tsx`, `chat-text.ts`):
+
+- **Counts graphemes** with `Intl.Segmenter` rather than `maxLength`, which
+  counts UTF-16 units and would cut an emoji in half.
+- **Ignores the IME's Enter.** An Enter that arrives with `isComposing` set is
+  choosing a CJK candidate, not sending.
+- **Isolates names and messages** in `<bdi>`.
+- **Names every platform's colour emoji font** in its font stack.
+
+While the box is open it owns the keyboard, ahead of even the console's
+backquote. Tab switches between everyone and team, and a line fades nine
+seconds after it arrives.
+
+**The native client** draws chat in real fonts (`textlayer.rs` and
+`textquad.rs`). The HUD's 5×7 bitmap font turned every emoji and non-Latin
+character into blank space. Chat is laid out with `cosmic-text` and rasterised
+with `swash`, which draws COLR and bitmap emoji in colour, using the **OS's own
+fonts**: Segoe UI and Segoe UI Emoji on Windows, Apple Color Emoji on macOS, Noto
+on Linux. Nothing is bundled.
+
+- **Fonts load on a thread.** Discovery takes a few hundred milliseconds, and the
+  bitmap font covers chat until it lands.
+- **Each line is its own buffer, faded while compositing.** `swash` ignores the
+  alpha of a glyph's colour, so one old line could not fade inside a shared
+  layout.
+- **Re-rasterised only on change.** The panel is re-rasterised only when the
+  chat's `revision` or a line's eight-step fade changes, then uploaded to one
+  sRGB texture and drawn as one pixel-snapped quad after the HUD, but never over
+  the menu or the console.
+- **Grapheme editing.** Caret, backspace and delete step by grapheme cluster
+  (`unicode-segmentation`), so one backspace removes a whole family emoji, and
+  the prompt enforces the server's limits.
+- **IME input.** Input-method text arrives as `Ime::Commit`, which is the only
+  way the Windows emoji panel (Win+.) and CJK input reach a winit window. IME is
+  enabled exactly while the prompt is open, and composition text is drawn at the
+  caret.
+
+Two platform limits, not bugs: Windows' emoji font has no flag glyphs, so 🇺🇸
+reads as "us" (Chrome on Windows does the same), and a machine with no colour
+emoji font shows the text font's monochrome glyph. `textlayer`'s tests rasterise
+with the real system fonts and assert that an emoji comes out *in colour* and that
+Japanese, Cyrillic and Arabic produce ink. The colour check is skipped on a
+machine with no colour emoji font.
 
 #### An invite names a person, and the two authorities it has to cross
 

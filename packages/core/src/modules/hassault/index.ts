@@ -344,6 +344,14 @@ export const hassaultModule: ModuleManifest = {
       default: false,
     },
     {
+      key: 'hassault.voice.pushToTalk',
+      title: 'Lobby voice: push to talk',
+      description:
+        'Off (the default) keeps your mic open while you are in lobby voice, muted only by the Mute button. On keeps it closed except while the Push to talk key is held (V unless rebound in Controls). Either way the audio goes browser to browser, never through a server.',
+      type: 'boolean',
+      default: false,
+    },
+    {
       key: 'hassault.nativeClient',
       title: 'Play in the native client',
       description:

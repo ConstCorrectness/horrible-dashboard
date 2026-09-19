@@ -34,6 +34,15 @@ gltf = { version = "1.4", default-features = false, features = ["utils", "names"
 image = { version = "0.25", default-features = false, features = ["webp", "png"] }
 # Fast, deterministic 3D physics for character controllers, raycasts, and colliders.
 rapier3d = "0.22"
+# Chat text in real fonts: shaping, line breaking, and colour emoji (COLR /
+# bitmap glyphs, via swash). It loads the **OS's own fonts** — Segoe UI and
+# Segoe UI Emoji on Windows, Apple Color Emoji on macOS, Noto on Linux — so no
+# font file is bundled, the same rule as the maps and the sounds. The HUD keeps
+# its 5x7 bitmap font; only chat, the one place people type, needs every script.
+cosmic-text = "0.19"
+# Grapheme clusters for the chat prompt's caret, backspace and length limit, so
+# a ZWJ emoji is edited as the one character a person sees.
+unicode-segmentation = "1.13"
 
 
 [dev-dependencies]

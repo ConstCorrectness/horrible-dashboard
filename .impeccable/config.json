@@ -173,6 +173,24 @@
         "value": "#08111f",
         "createdAt": "2026-09-19T05:02:53.891Z",
         "reason": "claude: same primary-button text color MainMenu.tsx uses in the hassault menu"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "#f87171",
+        "createdAt": "2026-09-19T05:51:17.816Z",
+        "reason": "claude: fallback inside var(--danger, #f87171), the same danger-token fallback MainMenu.tsx already uses"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "#94a3b8",
+        "createdAt": "2026-09-19T06:00:27.577Z",
+        "reason": "claude: fallback inside var(--text-secondary, #94a3b8), used across the hassault menus"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "#8b93a7",
+        "createdAt": "2026-09-19T06:00:27.633Z",
+        "reason": "claude: fallback inside var(--text-dim, #8b93a7), used across the hassault menus"
       }
     ]
   }

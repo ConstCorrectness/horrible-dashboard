@@ -25,6 +25,7 @@ See docs/modules/hassault.mdx.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 import uuid
@@ -41,6 +42,10 @@ logger = logging.getLogger(__name__)
 CHAT_HISTORY = 50
 MAX_CHAT_LEN = 200
 MAX_NAME_LEN = 24
+#: WebRTC handshake frames the lobby will pass between members, and the most one
+#: may weigh. An audio-only SDP is a few KB; anything far larger is not a handshake.
+SIGNAL_KINDS = frozenset({"offer", "answer", "ice", "bye"})
+MAX_SIGNAL_BYTES = 32_768
 
 
 class Sink(Protocol):
@@ -56,6 +61,11 @@ class LobbyMember:
     #: state can say who is remote, and so a dropped peer takes its members with it.
     node: str = ""
     ready: bool = False
+    #: In the lobby's voice channel, and whether their mic is muted. Published so
+    #: every member's pane knows whom to connect audio to — the audio itself is
+    #: browser to browser, never through here (see `signal`).
+    voice: bool = False
+    muted: bool = False
     joined_at: float = field(default_factory=time.time)
 
     def public(self, host_id: str) -> dict[str, Any]:
@@ -65,6 +75,8 @@ class LobbyMember:
             "ready": self.ready,
             "host": self.id == host_id,
             "remote": bool(self.node),
+            "voice": self.voice,
+            "muted": self.muted,
         }
 
 
@@ -224,6 +236,34 @@ class LobbyServer:
         if member.ready != ready:
             member.ready = ready
             await self.broadcast(lobby)
+
+    async def set_voice(self, conn: Sink, on: bool, muted: bool) -> None:
+        lobby, member = self._require(conn)
+        if (member.voice, member.muted) != (on, muted and on):
+            member.voice = on
+            member.muted = muted and on
+            await self.broadcast(lobby)
+
+    async def signal(self, conn: Sink, to: str, payload: Any) -> None:
+        """Pass one WebRTC handshake frame (SDP or ICE) to another member.
+
+        The lobby is only the *postman*: voice is a mesh of browser-to-browser
+        connections, and this carries their offers, answers and candidates. The
+        sender is stamped from the socket it arrived on — never from the frame —
+        so nobody can make a frame look like it came from someone else, and both
+        ends must be members of this lobby.
+        """
+        lobby, member = self._require(conn)
+        target = lobby.members.get(to)
+        if target is None or target.id == member.id:
+            return
+        if not isinstance(payload, dict) or payload.get("kind") not in SIGNAL_KINDS:
+            return
+        if len(json.dumps(payload)) > MAX_SIGNAL_BYTES:
+            return
+        await self._send(
+            target, _evt("lobby_signal", {"from": member.id, "signal": payload})
+        )
 
     async def configure(self, conn: Sink, map_name: str, mode: str | None) -> None:
         """Host only. Changing the map un-readies everyone: a "ready" given for

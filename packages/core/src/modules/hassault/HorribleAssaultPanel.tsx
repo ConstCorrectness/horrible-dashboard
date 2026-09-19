@@ -100,11 +100,14 @@ import { GameMenu } from './GameMenu';
 import { buildWorldMesh } from './geometry';
 import { MainMenu } from './MainMenu';
 import type { LobbyControls } from './LobbyPanel';
+import { lobbyVoice, type VoiceView } from './lobby-voice';
+import { ChatBox, type ChatChannel } from './ChatBox';
 import {
   CONTROLS_KEY,
   CROUCH_TOGGLE_KEY,
   FOV_KEY,
   NATIVE_CLIENT_KEY,
+  PUSH_TO_TALK_KEY,
   SHOW_HITBOXES_KEY,
   SENSITIVITY_KEY,
   VOLUME_KEY,
@@ -285,6 +288,8 @@ function describePickup(item: PickedItem): string {
 }
 /** Team tint used for tracers and the scoreboard: CLA sand, RVSF blue. */
 const TEAM_COLORS = [0xd9a441, 0x4c8fd4];
+/** The same two, as CSS, for the chat box's names. */
+const TEAM_CSS = TEAM_COLORS.map((c) => `#${c.toString(16).padStart(6, '0')}`);
 
 const EMPTY_SESSION: SessionState = {
   status: 'idle',
@@ -308,6 +313,8 @@ const EMPTY_SESSION: SessionState = {
   itemsOut: [],
   lobby: null,
   lobbyError: '',
+  chat: [],
+  chatNotice: '',
 };
 
 interface SceneHandle {
@@ -525,6 +532,15 @@ export function HorribleAssaultPanel() {
   const [consoleOpen, setConsoleOpen] = useState(false);
   const consoleOpenRef = useRef(false);
   consoleOpenRef.current = consoleOpen;
+  /** The chat input: which channel it is typing to, or `null` when closed. By
+   * ref too, because the key handler is built once and must see it open. */
+  const [chatChannel, setChatChannel] = useState<ChatChannel | null>(null);
+  const chatOpenRef = useRef(false);
+  chatOpenRef.current = chatChannel !== null;
+  const pushToTalk = useSetting<boolean>(PUSH_TO_TALK_KEY) ?? false;
+  useEffect(() => {
+    lobbyVoice.setPushToTalk(pushToTalk);
+  }, [pushToTalk]);
   const sensitivity = useSetting<number>(SENSITIVITY_KEY) ?? 1;
   const fov = useSetting<number>(FOV_KEY) ?? 75;
   const volume = useSetting<number>(VOLUME_KEY) ?? 0.7;
@@ -2611,6 +2627,18 @@ export function HorribleAssaultPanel() {
       shotsRef.current?.cycle(e.deltaY > 0 ? 1 : -1);
     };
     const onKeyDown = (e: KeyboardEvent) => {
+      // The chat input owns the keyboard while it is open — first, before even
+      // the console's backquote, or typing ` would open the console and W would
+      // walk. Escape closes it here because this listener sees the key before
+      // the input does.
+      if (chatOpenRef.current) {
+        if (e.code === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          setChatChannel(null);
+        }
+        return;
+      }
       // Backquote (`) or Tilde (~) opens/closes the developer console
       if (e.code === 'Backquote' || (e.key === '`' && !e.ctrlKey && !e.altKey)) {
         e.preventDefault();
@@ -2664,6 +2692,22 @@ export function HorribleAssaultPanel() {
       if (!action) return;
       e.preventDefault();
       if (e.repeat) return;
+      if (action === 'chatAll' || action === 'chatTeam') {
+        // Only in a match: there is nobody to talk to in Train. Movement held at
+        // the moment the box opens is released, or you would keep walking while
+        // you type.
+        if (sessionRef.current?.state.status === 'joined') {
+          keysRef.current.clear();
+          if (!crouchToggleRef.current) crouchRef.current = false;
+          shotsRef.current?.release();
+          setChatChannel(action === 'chatTeam' ? 'team' : 'all');
+        }
+        return;
+      }
+      if (action === 'voice') {
+        lobbyVoice.setTalking(true);
+        sessionRef.current?.sendVoice(true);
+      }
       if (action === 'noclip') noclipRef.current = !noclipRef.current;
       if (action === 'reload') shotsRef.current?.requestReload();
       // An edge, drained by the frame loop onto exactly one command.
@@ -2733,6 +2777,10 @@ export function HorribleAssaultPanel() {
       // release — which `clear()` on unlock and on blur already covers.
       const action = codesRef.current.get(e.code);
       if (!action) return;
+      if (action === 'voice') {
+        lobbyVoice.setTalking(false);
+        sessionRef.current?.sendVoice(false);
+      }
       if (action === 'scores') setShowScores(false);
       if (action === 'buy') setShowBuy(false);
       if (action === 'crouch' && !crouchToggleRef.current) crouchRef.current = false;
@@ -2766,6 +2814,12 @@ export function HorribleAssaultPanel() {
     };
     const onBlur = () => {
       keysRef.current.clear();
+      // A push-to-talk key released while the window was elsewhere never sends
+      // its key-up; without this the mic stays open.
+      if (lobbyVoice.current.talking) {
+        lobbyVoice.setTalking(false);
+        sessionRef.current?.sendVoice(false);
+      }
       shotsRef.current?.release();
       if (pingHoldTimerRef.current) {
         clearTimeout(pingHoldTimerRef.current);
@@ -3060,6 +3114,30 @@ export function HorribleAssaultPanel() {
     [nativeClient, launchNative, joinRoom],
   );
 
+  // Lobby voice: the engine is a module singleton (voice belongs to the lobby,
+  // not to a render), and this pane is its only line to the lobby host.
+  const [voice, setVoice] = useState<VoiceView>(lobbyVoice.current);
+  useEffect(() => {
+    const session = sessionRef.current;
+    if (!session) return;
+    lobbyVoice.sendSignal = (to, signal) => session.lobbySignal(to, signal);
+    lobbyVoice.announce = (on, muted) => session.lobbyVoice(on, muted);
+    session.onLobbySignal = (from, signal) => void lobbyVoice.accept(from, signal);
+    const unsubscribe = lobbyVoice.subscribe(setVoice);
+    return () => {
+      unsubscribe();
+      // Hang up with the pane: without it there is no path for handshakes to
+      // arrive, so a mesh left running would decay one failed link at a time.
+      lobbyVoice.stop();
+      session.onLobbySignal = () => {};
+      lobbyVoice.sendSignal = () => {};
+      lobbyVoice.announce = () => {};
+    };
+  }, []);
+  useEffect(() => {
+    lobbyVoice.sync(net.lobby);
+  }, [net.lobby]);
+
   // The host pressed Start: everyone in the lobby — us included — joins the
   // match it opened. Re-bound when the handler changes, never queued.
   useEffect(() => {
@@ -3085,8 +3163,13 @@ export function HorribleAssaultPanel() {
         const lobby = net.lobby;
         if (lobby?.room) enterLobbyMatch(lobby.room, lobby.map, lobby.host);
       },
+      voice,
+      joinVoice: () => void lobbyVoice.start(),
+      leaveVoice: () => lobbyVoice.stop(),
+      setMuted: (muted) => lobbyVoice.setMuted(muted),
+      setDeafened: (deafened) => lobbyVoice.setDeafened(deafened),
     }),
-    [net.lobby, net.lobbyError, mapName, enterLobbyMatch],
+    [net.lobby, net.lobbyError, mapName, enterLobbyMatch, voice],
   );
 
   /**
@@ -3516,6 +3599,19 @@ export function HorribleAssaultPanel() {
               </div>
             ))}
           </div>
+        )}
+
+        {net.status === 'joined' && !cleanView && (
+          <ChatBox
+            lines={net.chat}
+            channel={chatChannel}
+            selfId={net.playerId}
+            teamColors={TEAM_CSS}
+            notice={net.chatNotice}
+            onSend={(text, team) => sessionRef.current?.sendChat(text, team)}
+            onClose={() => setChatChannel(null)}
+            onChannel={setChatChannel}
+          />
         )}
 
         {online && (
