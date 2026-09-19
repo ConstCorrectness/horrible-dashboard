@@ -220,6 +220,9 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
     elif event == "invites":
         await conn.send_json(_evt("invites", {"invites": fabric.live_invites()}))
 
+    elif isinstance(event, str) and event.startswith("lobby_"):
+        await _handle_lobby(conn, event, data)
+
     elif event == "ping":
         # Echo the client's own clock reading back untouched: it measures the
         # round trip against it, and reinterpreting it here would only add error.
@@ -279,7 +282,9 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
                     "text": text[:200],
                 }
                 target_team = player.team if is_team else None
-                await match_server.broadcast_event(room, "chat", payload, team=target_team)
+                await match_server.broadcast_event(
+                    room, "chat", payload, team=target_team
+                )
 
     elif event == "voice":
         transmitting = bool(data.get("transmitting", False))
@@ -363,19 +368,141 @@ def _record_result(result: dict[str, Any]) -> None:
     try:
         results.record(account_id, result)
         from backend.modules.hassault import rating
+
         rating.update_player_rating(account_id, result)
     except Exception:
         logger.exception("hassault: could not record the match result")
 
 
-async def invite_friend(who: str, room_id: str) -> dict[str, Any]:
-    """Invite a person to a match hosted here, resolving them to a live machine.
+async def _handle_lobby(conn: WsConnection, event: str, data: dict[str, Any]) -> None:
+    """Lobby actions: local ones go to `lobby_server`, and a browser sitting in a
+    friend's lobby has its actions relayed to their node instead.
+
+    Host-only actions (map, start, invite) are refused for a remote seat here,
+    and refused again by `LobbyServer` on the host — the host's check is the one
+    with authority, this one just answers without a round trip.
+    """
+    from backend.modules.hassault.lobby import LobbyError, lobby_server
+
+    remote = fabric.remote_lobby_for(conn)
+    try:
+        if event == "lobby_state":
+            if remote is not None:
+                await fabric.send_lobby_op(
+                    remote, "join", name=_signed_in_username() or ""
+                )
+                return
+            entry = lobby_server.lobby_for(conn)
+            if entry is None:
+                await conn.send_json(_evt("lobby_none", {}))
+            else:
+                await lobby_server.send_state(*entry)
+            return
+
+        if event in ("lobby_create", "lobby_join"):
+            name = _signed_in_username()
+            if name is None:
+                raise LobbyError("sign in and choose a username to play")
+            await _leave_lobby(conn)
+            if event == "lobby_create":
+                await lobby_server.create(
+                    conn,
+                    name,
+                    str(data.get("map") or ""),
+                    str(data.get("mode") or "") or None,
+                )
+                return
+            lobby_id = str(data.get("lobby") or "")
+            host = str(data.get("host") or "")
+            if not host:
+                await lobby_server.join(conn, lobby_id, name)
+                return
+            binding = fabric.bind_remote_lobby(conn, host, lobby_id)
+            try:
+                await fabric.send_lobby_op(binding, "join", name=name)
+            except KeyError:
+                fabric.unbind_remote_lobby(conn)
+                raise LobbyError("that friend's machine is not connected") from None
+            return
+
+        if event == "lobby_leave":
+            await _leave_lobby(conn)
+            await conn.send_json(_evt("lobby_none", {}))
+            return
+
+        if remote is not None:
+            if event in ("lobby_chat", "lobby_ready"):
+                try:
+                    await fabric.send_lobby_op(
+                        remote,
+                        event.removeprefix("lobby_"),
+                        text=str(data.get("text") or ""),
+                        ready=bool(data.get("ready")),
+                    )
+                except KeyError:
+                    raise LobbyError("the host's machine is not connected") from None
+                return
+            raise LobbyError("only the host can do that")
+
+        if event == "lobby_chat":
+            await lobby_server.chat(conn, str(data.get("text") or ""))
+        elif event == "lobby_ready":
+            await lobby_server.set_ready(conn, bool(data.get("ready")))
+        elif event == "lobby_config":
+            mode = data.get("mode")
+            await lobby_server.configure(
+                conn,
+                str(data.get("map") or ""),
+                str(mode) if isinstance(mode, str) else None,
+            )
+        elif event == "lobby_start":
+            await lobby_server.start(conn)
+        elif event == "lobby_invite":
+            # Opens a lobby first when there is none, in the same message: sending
+            # "create" and then "invite" from the browser is the race that used to
+            # drop every invite — the second arrived before the first had a room.
+            name = _signed_in_username()
+            if name is None:
+                raise LobbyError("sign in and choose a username to play")
+            lobby = await lobby_server.ensure(
+                conn,
+                name,
+                str(data.get("map") or ""),
+                str(data.get("mode") or "") or None,
+            )
+            entry = lobby_server.lobby_for(conn)
+            if entry is None or entry[1].id != lobby.host_id:
+                raise LobbyError("only the host can invite")
+            result = await invite_friend(str(data.get("who") or ""), lobby.id, "lobby")
+            await conn.send_json(
+                _evt("invite_sent" if result.get("ok") else "lobby_error", result)
+            )
+    except LobbyError as exc:
+        await conn.send_json(_evt("lobby_error", {"message": str(exc)}))
+
+
+async def _leave_lobby(conn: WsConnection) -> None:
+    from backend.modules.hassault.lobby import lobby_server
+
+    remote = fabric.unbind_remote_lobby(conn)
+    if remote is not None:
+        try:
+            await fabric.send_lobby_op(remote, "leave")
+        except KeyError:
+            pass
+    await lobby_server.leave(conn)
+
+
+async def invite_friend(who: str, room_id: str, kind: str = "match") -> dict[str, Any]:
+    """Invite a person to a match — or, with `kind="lobby"`, a lobby — hosted
+    here, resolving them to a live machine.
 
     Reaches into the social roster deliberately: "invite Rob" has to become "send
     to this node id", and the roster is the only thing that knows the mapping.
     The dependency is one-way and backend-side, so the frontend module boundary
     is untouched — the pane only ever talks to `/api/hassault`.
     """
+    from backend.modules.hassault.lobby import lobby_server
     from backend.modules.social import roster, store
     from backend.modules.social.agent_tools import resolve_row
 
@@ -383,9 +510,16 @@ async def invite_friend(who: str, room_id: str) -> dict[str, Any]:
     # is reachable from an agent tool, which can run before the peer fabric has
     # started and created these tables.
     store.init_social_db()
-    room = match_server.get(room_id)
-    if room is None:
-        return {"error": f"no match {room_id!r}"}
+    if kind == "lobby":
+        lobby = lobby_server.get(room_id)
+        if lobby is None:
+            return {"error": f"no lobby {room_id!r}"}
+        target_id, map_name = lobby.id, lobby.map_name
+    else:
+        room = match_server.get(room_id)
+        if room is None:
+            return {"error": f"no match {room_id!r}"}
+        target_id, map_name = room.id, room.map_name
     row = await resolve_row(who)
     if row is None:
         return {"error": f"no friend matching {who!r}"}
@@ -400,13 +534,19 @@ async def invite_friend(who: str, room_id: str) -> dict[str, Any]:
     # which machine to answer on.
     for node_id in nodes:
         try:
-            await fabric.send_invite(node_id, room.id, room.map_name)
+            await fabric.send_invite(node_id, target_id, map_name, kind)
             sent.append(node_id)
         except KeyError:
             continue
     if not sent:
         return {"error": f"could not reach {row['display_name']}"}
-    return {"ok": True, "invited": row["display_name"], "room": room.id, "nodes": sent}
+    return {
+        "ok": True,
+        "invited": row["display_name"],
+        "room": target_id,
+        "kind": kind,
+        "nodes": sent,
+    }
 
 
 async def on_disconnect(conn: WsConnection) -> None:
@@ -416,3 +556,7 @@ async def on_disconnect(conn: WsConnection) -> None:
         await _leave_any(conn)
     except Exception:
         logger.exception("hassault leave on disconnect failed")
+    try:
+        await _leave_lobby(conn)
+    except Exception:
+        logger.exception("hassault lobby leave on disconnect failed")

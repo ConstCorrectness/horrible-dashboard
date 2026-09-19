@@ -39,10 +39,18 @@ import {
   SettingsPanel,
   styles as panel,
 } from './menu-panels';
+import { LobbyPanel, type LobbyControls } from './LobbyPanel';
 import { ArmoryMarketplace } from './panels/ArmoryMarketplace';
 import type { MatchPeer } from './session';
 
-export type MenuSection = 'play' | 'armory' | 'servers' | 'friends' | 'settings' | 'controls';
+export type MenuSection =
+  | 'play'
+  | 'lobby'
+  | 'armory'
+  | 'servers'
+  | 'friends'
+  | 'settings'
+  | 'controls';
 
 /**
  * Labels only — deliberately no descriptions.
@@ -54,6 +62,7 @@ export type MenuSection = 'play' | 'armory' | 'servers' | 'friends' | 'settings'
  */
 const SECTIONS: { id: MenuSection; label: string }[] = [
   { id: 'play', label: 'Play' },
+  { id: 'lobby', label: 'Lobby' },
   { id: 'armory', label: 'Armor & Skins' },
   { id: 'servers', label: 'Servers' },
   { id: 'friends', label: 'Friends' },
@@ -101,6 +110,10 @@ export interface MainMenuProps {
   onJoin: (room: string, map: string, host: string) => void;
   onInvite: (friendCode: string) => void;
   onDismissInvite: (room: string) => void;
+  /** Answer an invite: a lobby invite takes a seat, a match invite joins it. */
+  onAcceptInvite: (invite: MatchInvite) => void;
+  /** The party gathered before a match — see `LobbyPanel`. */
+  lobby: LobbyControls;
   /** Whether a map is loaded and playable at all. */
   ready: boolean;
   error: string | null;
@@ -127,7 +140,13 @@ export interface MainMenuProps {
 }
 
 export function MainMenu(props: MainMenuProps) {
-  const [section, setSection] = useState<MenuSection>('play');
+  const lobbyId = props.lobby.state?.id ?? '';
+  const [section, setSection] = useState<MenuSection>(lobbyId ? 'lobby' : 'play');
+  // Taking a seat in a lobby — accepting an invite, or opening one — shows it.
+  // Keyed on the id, so it does not yank you back every time the state updates.
+  useEffect(() => {
+    if (lobbyId) setSection('lobby');
+  }, [lobbyId]);
 
   return (
     <div style={sheet}>
@@ -164,6 +183,18 @@ export function MainMenu(props: MainMenuProps) {
             </div>
           )}
           {section === 'play' && <PlaySection {...props} />}
+          {section === 'lobby' && (
+            <LobbyPanel
+              lobby={props.lobby}
+              maps={props.maps}
+              mapName={props.mapName}
+              invitees={props.invitees}
+              invites={props.invites}
+              onInvite={props.onInvite}
+              onAcceptInvite={props.onAcceptInvite}
+              canStart={props.ready && props.loadoutError === ''}
+            />
+          )}
           {section === 'armory' && <ArmoryMarketplace />}
           {section === 'servers' && (
             <ServerBrowserPanel
@@ -182,7 +213,7 @@ export function MainMenu(props: MainMenuProps) {
               invites={props.invites}
               hosting={props.hosting}
               onInvite={props.onInvite}
-              onAccept={(invite) => props.onJoin(invite.room, invite.map, invite.host)}
+              onAccept={props.onAcceptInvite}
               onDismiss={props.onDismissInvite}
             />
           )}
@@ -601,13 +632,12 @@ function PlaySection(props: MainMenuProps) {
             <div key={invite.room} style={panel.row}>
               <div style={panel.rowMain}>
                 <span>
-                  <strong>{invite.hostName}</strong> invited you to <code>{invite.map}</code>
+                  <strong>{invite.hostName}</strong> invited you to{' '}
+                  {invite.kind === 'lobby' ? 'their lobby on ' : ''}
+                  <code>{invite.map}</code>
                 </span>
               </div>
-              <button
-                onClick={() => props.onJoin(invite.room, invite.map, invite.host)}
-                style={primary}
-              >
+              <button onClick={() => props.onAcceptInvite(invite)} style={primary}>
                 Join
               </button>
             </div>

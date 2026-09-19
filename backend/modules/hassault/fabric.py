@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from typing import TYPE_CHECKING, Any
 
 from backend.modules.hassault.match import CHANNEL, MAX_PLAYERS, match_server
@@ -50,6 +51,11 @@ HASSAULT_INPUT = "hassault_input"
 HASSAULT_LEAVE = "hassault_leave"
 HASSAULT_FRAME = "hassault_frame"
 HASSAULT_BROWSE = "hassault_browse"
+# Lobbies: a guest's backend relaying its browser's lobby actions to the host
+# (`HASSAULT_LOBBY`, carrying an `op`), and the host pushing lobby state back
+# (`HASSAULT_LOBBY_FRAME`). See `lobby.py`.
+HASSAULT_LOBBY = "hassault_lobby"
+HASSAULT_LOBBY_FRAME = "hassault_lobby_frame"
 
 # The capability a node advertises when it can host or join matches. Used to
 # offer only friends who could actually accept.
@@ -233,6 +239,7 @@ async def drop_peer(node_id: str) -> None:
     """
     for key in [k for k in _hosted if k[0] == node_id]:
         await _drop_hosted(key)
+    await drop_lobby_peer(node_id)
 
 
 async def _drop_hosted(key: tuple[str, str]) -> None:
@@ -377,6 +384,205 @@ async def send_remote_leave(binding: RemoteMatch) -> None:
         )
     except KeyError:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Lobbies across the fabric
+# ---------------------------------------------------------------------------
+
+
+class PeerLobbyConn:
+    """A friend's browser in a lobby hosted here — `PeerPlayerConn`'s twin.
+
+    `LobbyServer` keys membership by `id(conn)` and only calls `send_json`, so
+    this is all a remote member needs to be."""
+
+    def __init__(self, hub: PeerHub, node_id: str, client: str) -> None:
+        self.hub = hub
+        self.node_id = node_id
+        self.client = client
+
+    async def send_json(self, data: dict[str, Any]) -> None:
+        try:
+            await self.hub.send_to(
+                self.node_id,
+                HASSAULT_LOBBY_FRAME,
+                {"client": self.client, "message": data},
+            )
+        except KeyError:
+            pass
+
+
+#: Remote lobby members hosted here, keyed by (node_id, client).
+_lobby_hosted: dict[tuple[str, str], PeerLobbyConn] = {}
+
+
+class RemoteLobby:
+    """One local browser's seat in a lobby hosted on another node."""
+
+    def __init__(
+        self, conn: WsConnection, host_node: str, lobby: str, client: str
+    ) -> None:
+        self.conn = conn
+        self.host_node = host_node
+        self.lobby = lobby
+        self.client = client
+        #: Set by the first state push. Until then a `lobby_error` is the join
+        #: being refused; afterwards it is one action failing.
+        self.joined = False
+
+
+#: Local browsers sitting in a remote lobby, keyed by connection id.
+_lobby_remote: dict[int, RemoteLobby] = {}
+
+
+def remote_lobby_for(conn: WsConnection) -> RemoteLobby | None:
+    return _lobby_remote.get(id(conn))
+
+
+def bind_remote_lobby(conn: WsConnection, host_node: str, lobby: str) -> RemoteLobby:
+    binding = RemoteLobby(conn, host_node, lobby, uuid.uuid4().hex[:12])
+    _lobby_remote[id(conn)] = binding
+    return binding
+
+
+def unbind_remote_lobby(conn: WsConnection) -> RemoteLobby | None:
+    return _lobby_remote.pop(id(conn), None)
+
+
+async def send_lobby_op(binding: RemoteLobby, op: str, **fields: Any) -> None:
+    """Relay one lobby action to the host. Raises `KeyError` when the host's
+    machine is not connected — only a `join` has anyone to tell about that."""
+    from backend.modules.network.hub import peer_hub
+
+    await peer_hub.send_to(
+        binding.host_node,
+        HASSAULT_LOBBY,
+        {"op": op, "client": binding.client, "lobby": binding.lobby, **fields},
+    )
+
+
+async def handle_lobby(hub: PeerHub, session: PeerSession, env: PeerEnvelope) -> None:
+    """A friend's node acting in a lobby hosted here, on behalf of one browser."""
+    if not session.info.trusted:
+        return
+    from backend.modules.hassault.lobby import LobbyError, lobby_server
+
+    data = env.data or {}
+    client = str(data.get("client") or "")
+    if not client:
+        return
+    op = str(data.get("op") or "")
+    key = (session.info.node_id, client)
+    try:
+        if op == "join":
+            conn = _lobby_hosted.get(key) or PeerLobbyConn(
+                hub, session.info.node_id, client
+            )
+            _lobby_hosted[key] = conn
+            # A claimed name is a label, tagged with the authenticated node it
+            # came from — the same rule `handle_join` applies to a nameplate.
+            label = str(data.get("name") or "guest")[:16]
+            await lobby_server.join(
+                conn,
+                str(data.get("lobby") or ""),
+                f"{label}@{session.info.node_id[:6]}",
+                node=session.info.node_id,
+            )
+            return
+        conn = _lobby_hosted.get(key)
+        if conn is None:
+            return
+        if op == "leave":
+            _lobby_hosted.pop(key, None)
+            await lobby_server.leave(conn)
+        elif op == "chat":
+            await lobby_server.chat(conn, str(data.get("text") or ""))
+        elif op == "ready":
+            await lobby_server.set_ready(conn, bool(data.get("ready")))
+    except LobbyError as exc:
+        if op == "join":
+            _lobby_hosted.pop(key, None)
+        try:
+            await hub.send_to(
+                session.info.node_id,
+                HASSAULT_LOBBY_FRAME,
+                {
+                    "client": client,
+                    "message": {
+                        "channel": CHANNEL,
+                        "event": "lobby_error",
+                        "data": {"message": str(exc)},
+                    },
+                },
+            )
+        except KeyError:
+            pass
+
+
+async def handle_lobby_frame(
+    hub: PeerHub, session: PeerSession, env: PeerEnvelope
+) -> None:
+    """Lobby state from a host, relayed to the browser sitting in that lobby."""
+    if not session.info.trusted:
+        return
+    data = env.data or {}
+    client = str(data.get("client") or "")
+    binding = next(
+        (
+            b
+            for b in _lobby_remote.values()
+            if b.client == client and b.host_node == session.info.node_id
+        ),
+        None,
+    )
+    message = data.get("message")
+    if binding is None or not isinstance(message, dict):
+        return
+    event = str(message.get("event") or "")
+    payload = dict(message.get("data") or {})
+    if event in ("lobby", "lobby_start"):
+        # Which node the lobby — and the match it starts — lives on. The host
+        # cannot say this about itself in a way the browser could trust, and it
+        # is the one thing a guest's pane needs to join the match over the fabric.
+        payload["host"] = session.info.node_id
+    if event == "lobby":
+        binding.joined = True
+    elif event == "lobby_closed" or (event == "lobby_error" and not binding.joined):
+        # Closed, or the join itself was refused: either way this browser is not
+        # in that lobby, and a binding left behind would swallow its next action.
+        unbind_remote_lobby(binding.conn)
+    try:
+        await binding.conn.send_json(
+            {"channel": CHANNEL, "event": event, "data": payload}
+        )
+    except Exception:
+        pass
+
+
+async def drop_lobby_peer(node_id: str) -> None:
+    """A peer went away: drop the members it proxied here, and close any lobby it
+    was hosting for our browsers — nothing else would ever tell them."""
+    from backend.modules.hassault.lobby import lobby_server
+
+    for key in [k for k in _lobby_hosted if k[0] == node_id]:
+        _lobby_hosted.pop(key, None)
+    await lobby_server.drop_node(node_id)
+    for binding in [b for b in _lobby_remote.values() if b.host_node == node_id]:
+        unbind_remote_lobby(binding.conn)
+        try:
+            await binding.conn.send_json(
+                {
+                    "channel": CHANNEL,
+                    "event": "lobby_closed",
+                    "data": {
+                        "id": binding.lobby,
+                        "reason": "the host's machine disconnected",
+                    },
+                }
+            )
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -540,8 +746,12 @@ async def handle_invite(hub: PeerHub, session: PeerSession, env: PeerEnvelope) -
     claimed = str(data.get("fromUsername") or "")[:20]
     name, person_id = _invite_display_name(session, claimed)
     device = str(data.get("fromDeviceName") or session.info.node_name or "")[:32]
+    # A lobby invite names a lobby id in `room`; an older sender sends no `kind`
+    # and only ever invited to matches.
+    kind = "lobby" if data.get("kind") == "lobby" else "match"
     now = time.time()
     invite = {
+        "kind": kind,
         "room": room,
         "map": str(data.get("map") or ""),
         "host": session.info.node_id,
@@ -581,7 +791,8 @@ async def _notify_invite(invite: dict[str, Any]) -> None:
 
     await service.notify(
         "invite",
-        f"{invite['hostName']} invited you to a match",
+        f"{invite['hostName']} invited you to "
+        + ("their lobby" if invite.get("kind") == "lobby" else "a match"),
         (
             f"{invite['map']} · HorribleAssault"
             + (f" · on {invite['hostDevice']}" if invite["hostDevice"] else "")
@@ -597,7 +808,7 @@ async def _notify_invite(invite: dict[str, Any]) -> None:
     )
 
 
-def _invite_payload(room: str, map_name: str) -> dict[str, Any]:
+def _invite_payload(room: str, map_name: str, kind: str = "match") -> dict[str, Any]:
     """What we put on the wire, stamped with **our username** rather than only our
     machine name.
 
@@ -610,6 +821,7 @@ def _invite_payload(room: str, map_name: str) -> dict[str, Any]:
     from backend.modules.network import identity as node_identity
 
     return {
+        "kind": kind,
         "room": room,
         "map": map_name,
         "fromUsername": server_auth.signed_in_username() or "",
@@ -621,14 +833,18 @@ def _invite_payload(room: str, map_name: str) -> dict[str, Any]:
     }
 
 
-async def send_invite(node_id: str, room: str, map_name: str) -> None:
+async def send_invite(
+    node_id: str, room: str, map_name: str, kind: str = "match"
+) -> None:
     """Invite one machine. Raises `KeyError` when that node is not connected."""
     from backend.modules.network.hub import peer_hub
 
-    await peer_hub.send_to(node_id, HASSAULT_INVITE, _invite_payload(room, map_name))
+    await peer_hub.send_to(
+        node_id, HASSAULT_INVITE, _invite_payload(room, map_name, kind)
+    )
 
 
-def queue_invite(node_id: str, room: str, map_name: str) -> None:
+def queue_invite(node_id: str, room: str, map_name: str, kind: str = "match") -> None:
     """Hold an invite for a machine that is not connected, to send when it is.
 
     Not a durable queue and not meant to be one: it lives as long as the process
@@ -643,7 +859,7 @@ def queue_invite(node_id: str, room: str, map_name: str) -> None:
     # Keyed by room, so inviting the same person to the same match twice while
     # they are offline queues one invite, not two.
     pending = [item for item in pending if item["room"] != room]
-    pending.append({"room": room, "map": map_name, "ts": now})
+    pending.append({"room": room, "map": map_name, "kind": kind, "ts": now})
     _pending[node_id] = pending
 
 
@@ -654,12 +870,13 @@ async def flush_pending(node_id: str) -> None:
     for item in pending:
         if now - item["ts"] > INVITE_TTL:
             continue
+        kind = item.get("kind", "match")
         try:
-            await send_invite(node_id, item["room"], item["map"])
+            await send_invite(node_id, item["room"], item["map"], kind)
         except KeyError:
             # Gone again between the event and this send. Put it back rather than
             # dropping it — it has not expired yet.
-            queue_invite(node_id, item["room"], item["map"])
+            queue_invite(node_id, item["room"], item["map"], kind)
         except Exception:
             logger.exception("could not flush a queued invite to %s", node_id)
 
@@ -693,6 +910,8 @@ def register(hub: PeerHub) -> None:
     hub.register_handler(HASSAULT_INPUT, handle_input)
     hub.register_handler(HASSAULT_LEAVE, handle_leave)
     hub.register_handler(HASSAULT_FRAME, handle_frame)
+    hub.register_handler(HASSAULT_LOBBY, handle_lobby)
+    hub.register_handler(HASSAULT_LOBBY_FRAME, handle_lobby_frame)
     # Detached to close a latent deadlock by construction: `browse_peers` fans out
     # with `hub.request`, and those replies arrive on this very pump. Today it is
     # only ever called from a route, so the deadlock is unreachable -- but nothing

@@ -124,6 +124,58 @@ export interface SessionState {
    * the same argument the kill feed makes for living here.
    */
   objective: ObjectiveNote | null;
+  /**
+   * The lobby we are sitting in, or `null`.
+   *
+   * Independent of the match: a lobby outlives the match it starts, so leaving
+   * the match (or `reset`) keeps it — that is what puts you back with the same
+   * party afterwards. See `backend/modules/hassault/lobby.py`.
+   */
+  lobby: LobbyState | null;
+  /** The last thing the lobby refused, shown in the lobby rather than the match. */
+  lobbyError: string;
+}
+
+export interface LobbyMember {
+  id: string;
+  name: string;
+  ready: boolean;
+  host: boolean;
+  remote: boolean;
+}
+
+export interface LobbyChatLine {
+  /** Empty for a system line ("kim joined"). */
+  from: string;
+  memberId: string;
+  text: string;
+  ts: number;
+}
+
+/** The whole lobby, pushed on every change — never patched. */
+export interface LobbyState {
+  id: string;
+  map: string;
+  mode: string;
+  /** The match this lobby started, while it is still running. */
+  room: string;
+  revision: number;
+  maxPlayers: number;
+  members: LobbyMember[];
+  chat: LobbyChatLine[];
+  /** Which member is us. */
+  you: string;
+  isHost: boolean;
+  /** The node hosting the lobby; empty when it is ours. */
+  host: string;
+}
+
+/** The host pressed Start: the match to join, and where it runs. */
+export interface LobbyStart {
+  room: string;
+  map: string;
+  mode: string;
+  host: string;
 }
 
 /** One objective banner, already phrased. */
@@ -244,10 +296,17 @@ export class MatchSession {
     mode: null,
     modeState: null,
     objective: null,
+    lobby: null,
+    lobbyError: '',
   };
 
   /** Fires on any change worth re-rendering the surrounding UI for. */
   onChange: (state: SessionState) => void = () => {};
+  /**
+   * The lobby host pressed Start. A callback rather than state because it is an
+   * instruction to act once — joining the match — not something to render.
+   */
+  onLobbyStart: (start: LobbyStart) => void = () => {};
   /**
    * The most recent authoritative word on us, consumed by the render loop.
    *
@@ -355,6 +414,65 @@ export class MatchSession {
     this.state.invites = this.state.invites.filter((i) => i.room !== room);
     if (invite) clearInviteNotification(invite.host, invite.room);
     this.emit();
+  }
+
+  // ---- lobby -----------------------------------------------------------------
+
+  /** Open a lobby on this node, hosted by us. */
+  createLobby(map: string): void {
+    this.connect();
+    sendChannel('hassault', 'lobby_create', { map });
+  }
+
+  /** Take a seat in a lobby — ours when `host` is empty, else on that node. */
+  joinLobby(lobby: string, host: string): void {
+    this.connect();
+    const invite = this.state.invites.find((i) => i.room === lobby);
+    if (invite) {
+      this.state.invites = this.state.invites.filter((i) => i.room !== lobby);
+      clearInviteNotification(invite.host, invite.room);
+    }
+    this.state.lobbyError = '';
+    this.emit();
+    sendChannel('hassault', 'lobby_join', { lobby, host });
+  }
+
+  leaveLobby(): void {
+    sendChannel('hassault', 'lobby_leave');
+    this.state.lobby = null;
+    this.emit();
+  }
+
+  /** Ask for the lobby we are in — the pane may have mounted after it formed. */
+  refreshLobby(): void {
+    this.connect();
+    sendChannel('hassault', 'lobby_state');
+  }
+
+  lobbyChat(text: string): void {
+    if (text.trim()) sendChannel('hassault', 'lobby_chat', { text });
+  }
+
+  lobbyReady(ready: boolean): void {
+    sendChannel('hassault', 'lobby_ready', { ready });
+  }
+
+  lobbyMap(map: string): void {
+    sendChannel('hassault', 'lobby_config', { map });
+  }
+
+  lobbyStart(): void {
+    sendChannel('hassault', 'lobby_start');
+  }
+
+  /**
+   * Invite a friend to our lobby, opening one on `map` if we are in none. One
+   * message on purpose — see `lobby_invite` in `channel.py`.
+   */
+  lobbyInvite(who: string, map: string): void {
+    this.connect();
+    this.state.lobbyError = '';
+    sendChannel('hassault', 'lobby_invite', { who, map });
   }
 
   leave(): void {
@@ -475,7 +593,45 @@ export class MatchSession {
       }
       case 'invite_sent': {
         this.state.error = '';
+        this.state.lobbyError = '';
         this.emit();
+        break;
+      }
+      case 'lobby': {
+        const next = data as unknown as LobbyState;
+        if (!next.id || !Array.isArray(next.members)) return;
+        const prev = this.state.lobby;
+        // Out-of-order pushes are dropped, not shown: a member list that jumps
+        // backwards is worse than one that is a moment late.
+        if (prev && prev.id === next.id && next.revision < prev.revision) return;
+        this.state.lobby = { ...next, host: String(next.host ?? '') };
+        this.state.lobbyError = '';
+        this.emit();
+        break;
+      }
+      case 'lobby_none':
+      case 'lobby_closed': {
+        const closing = String(data.id ?? '');
+        if (msg.event === 'lobby_closed' && closing && this.state.lobby?.id !== closing) return;
+        this.state.lobby = null;
+        if (msg.event === 'lobby_closed') this.state.lobbyError = String(data.reason ?? '');
+        this.emit();
+        break;
+      }
+      case 'lobby_error': {
+        this.state.lobbyError = String(data.message ?? data.error ?? 'the lobby refused that');
+        this.emit();
+        break;
+      }
+      case 'lobby_start': {
+        const room = String(data.room ?? '');
+        if (!room) return;
+        this.onLobbyStart({
+          room,
+          map: String(data.map ?? ''),
+          mode: String(data.mode ?? ''),
+          host: String(data.host ?? ''),
+        });
         break;
       }
       case 'snapshot': {
@@ -746,6 +902,9 @@ export class MatchSession {
       mode: null,
       modeState: null,
       objective: null,
+      // A lobby is not a room: leaving the match leaves you in the party.
+      lobby: this.state.lobby,
+      lobbyError: this.state.lobbyError,
     };
     this.predictor.reset();
     this.snapshots.clear();

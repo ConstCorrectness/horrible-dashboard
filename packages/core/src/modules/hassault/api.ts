@@ -254,6 +254,12 @@ export interface Invitee {
 }
 
 export interface MatchInvite {
+  /**
+   * `lobby`: `room` is a lobby on the host's node, to gather in before a match.
+   * `match`: `room` is a match already running there. Absent from older senders,
+   * which only ever invited to matches.
+   */
+  kind?: 'lobby' | 'match';
   room: string;
   map: string;
   /** The inviting node id — authenticated by the fabric, unlike `hostName`. */

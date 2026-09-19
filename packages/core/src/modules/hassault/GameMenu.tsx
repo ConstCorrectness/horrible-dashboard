@@ -56,6 +56,8 @@ export interface GameMenuProps {
   onLeave: () => void;
   onInvite: (friendCode: string) => void;
   onDismissInvite: (room: string) => void;
+  /** Answer an invite: a lobby invite takes a seat, a match invite joins it. */
+  onAcceptInvite: (invite: MatchInvite) => void;
   onResume: () => void;
   /** Back to the main menu — leaves the match on the way out. */
   onExitToMenu: () => void;
@@ -139,7 +141,7 @@ export function GameMenu(props: GameMenuProps) {
               invites={props.invites}
               hosting={props.hosting}
               onInvite={props.onInvite}
-              onAccept={(invite) => props.onJoin(invite.room, invite.map, invite.host)}
+              onAccept={props.onAcceptInvite}
               onDismiss={props.onDismissInvite}
             />
           )}

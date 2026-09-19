@@ -99,6 +99,7 @@ import { EffectsPool } from './effects';
 import { GameMenu } from './GameMenu';
 import { buildWorldMesh } from './geometry';
 import { MainMenu } from './MainMenu';
+import type { LobbyControls } from './LobbyPanel';
 import {
   CONTROLS_KEY,
   CROUCH_TOGGLE_KEY,
@@ -305,6 +306,8 @@ const EMPTY_SESSION: SessionState = {
   objective: null,
   items: [],
   itemsOut: [],
+  lobby: null,
+  lobbyError: '',
 };
 
 interface SceneHandle {
@@ -839,6 +842,8 @@ export function HorribleAssaultPanel() {
     // Invitations may have arrived while this pane was closed, so ask rather
     // than only listening.
     session.refreshInvites();
+    // Same for a lobby: it lives on the server and outlives this pane.
+    session.refreshLobby();
     return () => {
       session.disconnect();
     };
@@ -2982,16 +2987,15 @@ export function HorribleAssaultPanel() {
   );
 
   /**
-   * Invite somebody, starting a match first if there isn't one.
+   * Invite somebody: into the match we are hosting, or else into our **lobby**,
+   * opening one if we are in none.
    *
-   * The Invite button used to be disabled unless you were already hosting, with a
-   * tooltip explaining that an invite is to a room you are running. True, and
-   * beside the point: "invite Rob" is a complete intent, and making the person
-   * infer the missing precondition, go and satisfy it, then come back is why the
-   * Friends panel read as broken to anyone who opened it first.
-   *
-   * The bots count is deliberately zero here. You are inviting a human; filling
-   * the room with three bots on their behalf is a decision nobody made.
+   * This used to host a match and then invite, which failed twice over. It
+   * dropped the inviter into a live map alone, and the invite itself never left
+   * the node: `session.invite` refuses unless the status is `joined`, and it was
+   * called while still `joining`, so every invite from the menu was silently
+   * discarded. A lobby is what "invite Rob" actually wants, and `lobby_invite`
+   * opens it and invites in one message, so there is no second step to race.
    */
   const inviteFriend = useCallback(
     (friendCode: string) => {
@@ -3001,14 +3005,11 @@ export function HorribleAssaultPanel() {
       // somebody else's node — inviting people to *their* room is not ours to do.
       // Read off `net` directly because the `online` binding is declared further
       // down, with the render.
-      const hosting = net.status === 'joined' && !net.host;
-      if (!hosting) host(0);
-      // Sent after the join is requested rather than awaited on the welcome:
-      // `invite` reads `this.state.room`, which the welcome fills in, so the
-      // session queues this the same way `add_bot` is queued.
-      session.invite(friendCode);
+      const hosting = net.status === 'joined' && !net.host && !net.ranked;
+      if (hosting && !net.lobby) session.invite(friendCode);
+      else session.lobbyInvite(friendCode, net.lobby?.map || mapName);
     },
-    [net.status, net.host, host],
+    [net.status, net.host, net.ranked, net.lobby, mapName],
   );
 
   /**
@@ -3030,6 +3031,62 @@ export function HorribleAssaultPanel() {
       deploy();
     },
     [playerName, deploy],
+  );
+
+  /**
+   * Answer an invite. A lobby invite takes a seat and stays in the menu — the
+   * host decides when the match starts; a match invite joins the match.
+   */
+  const acceptInvite = useCallback(
+    (invite: { room: string; map: string; host: string; kind?: 'lobby' | 'match' }) => {
+      if (invite.kind === 'lobby') sessionRef.current?.joinLobby(invite.room, invite.host);
+      else joinRoom(invite.room, invite.map, invite.host);
+    },
+    [joinRoom],
+  );
+
+  /**
+   * Enter a match the lobby started, in whichever client this node plays in —
+   * the same branch `quickPlay` makes.
+   */
+  const enterLobbyMatch = useCallback(
+    (room: string, map: string, matchHost: string) => {
+      if (nativeClient) {
+        void launchNative({ mode: 'join', room_id: room, map_name: map, host: matchHost });
+      } else {
+        joinRoom(room, map, matchHost);
+      }
+    },
+    [nativeClient, launchNative, joinRoom],
+  );
+
+  // The host pressed Start: everyone in the lobby — us included — joins the
+  // match it opened. Re-bound when the handler changes, never queued.
+  useEffect(() => {
+    const session = sessionRef.current;
+    if (!session) return;
+    session.onLobbyStart = (start) => enterLobbyMatch(start.room, start.map, start.host);
+    return () => {
+      session.onLobbyStart = () => {};
+    };
+  }, [enterLobbyMatch]);
+
+  const lobbyControls = useMemo<LobbyControls>(
+    () => ({
+      state: net.lobby,
+      error: net.lobbyError,
+      create: () => sessionRef.current?.createLobby(mapName),
+      leave: () => sessionRef.current?.leaveLobby(),
+      chat: (text) => sessionRef.current?.lobbyChat(text),
+      ready: (value) => sessionRef.current?.lobbyReady(value),
+      setMap: (map) => sessionRef.current?.lobbyMap(map),
+      start: () => sessionRef.current?.lobbyStart(),
+      rejoin: () => {
+        const lobby = net.lobby;
+        if (lobby?.room) enterLobbyMatch(lobby.room, lobby.map, lobby.host);
+      },
+    }),
+    [net.lobby, net.lobbyError, mapName, enterLobbyMatch],
   );
 
   /**
@@ -3093,16 +3150,13 @@ export function HorribleAssaultPanel() {
    */
   useEffect(() => {
     if (info == null) return;
-    const act = (join: { room: string; map: string; host: string }) => {
-      joinRoom(join.room, join.map, join.host);
-    };
     const parked = takePendingJoin();
-    if (parked) act(parked);
+    if (parked) acceptInvite(parked);
     return onJoinRequested((join) => {
       takePendingJoin();
-      act(join);
+      acceptInvite(join);
     });
-  }, [info, joinRoom]);
+  }, [info, acceptInvite]);
 
   /**
    * Leave the world and go back to the main menu.
@@ -3383,11 +3437,11 @@ export function HorribleAssaultPanel() {
           <CrossfireHeaderHUD
             scoreGR={online ? net.scores[1] : 0}
             scoreBL={online ? net.scores[0] : 0}
-            roundTimerSeconds={online && net.modeState?.remain ? Math.round(net.modeState.remain) : 120}
+            roundTimerSeconds={
+              online && net.modeState?.remain ? Math.round(net.modeState.remain) : 120
+            }
             bombPlantedSite={
-              net.modeState?.bombPlanted
-                ? (net.modeState.site === 1 ? 'B' : 'A')
-                : null
+              net.modeState?.bombPlanted ? (net.modeState.site === 1 ? 'B' : 'A') : null
             }
             myTeam={myTeam}
           />
@@ -3442,7 +3496,9 @@ export function HorribleAssaultPanel() {
                 }}
               >
                 <span>
-                  <strong>{invite.hostName}</strong> invited you to <code>{invite.map}</code>
+                  <strong>{invite.hostName}</strong> invited you to{' '}
+                  {invite.kind === 'lobby' ? 'their lobby on ' : ''}
+                  <code>{invite.map}</code>
                   {invite.hostDevice && (
                     <span style={{ color: 'var(--text-dim)' }}> · on {invite.hostDevice}</span>
                   )}
@@ -3451,9 +3507,7 @@ export function HorribleAssaultPanel() {
                   <span style={{ color: 'var(--text-dim)' }}>Esc to answer</span>
                 ) : (
                   <>
-                    <button onClick={() => joinRoom(invite.room, invite.map, invite.host)}>
-                      Join
-                    </button>
+                    <button onClick={() => acceptInvite(invite)}>Join</button>
                     <button onClick={() => sessionRef.current?.dismissInvite(invite.room)}>
                       Dismiss
                     </button>
@@ -3671,6 +3725,10 @@ export function HorribleAssaultPanel() {
             onLeave={() => sessionRef.current?.leave()}
             onInvite={inviteFriend}
             onDismissInvite={(room) => sessionRef.current?.dismissInvite(room)}
+            onAcceptInvite={(invite) => {
+              acceptInvite(invite);
+              if (invite.kind !== 'lobby') resumeGame();
+            }}
             onResume={resumeGame}
             onExitToMenu={exitToMenu}
             onOpenStudio={() => {
@@ -3755,6 +3813,8 @@ export function HorribleAssaultPanel() {
                 onJoin={joinRoom}
                 onInvite={inviteFriend}
                 onDismissInvite={(room) => sessionRef.current?.dismissInvite(room)}
+                onAcceptInvite={acceptInvite}
+                lobby={lobbyControls}
                 ready={info != null}
                 error={error}
                 loadoutError={loadoutError}

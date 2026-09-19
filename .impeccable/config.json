@@ -161,6 +161,18 @@
         "value": "#3b82f6",
         "createdAt": "2026-09-14T14:49:42.546Z",
         "reason": "CLAUDE.md UI standards designate #3B82F6 as the accent; used as var(--accent, #3b82f6) fallback, matching existing usage in this file"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "rgba(150,160,190,.22)",
+        "createdAt": "2026-09-19T05:02:53.837Z",
+        "reason": "claude: same HAIR border token MainMenu.tsx uses for the hassault menu sheet"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "#08111f",
+        "createdAt": "2026-09-19T05:02:53.891Z",
+        "reason": "claude: same primary-button text color MainMenu.tsx uses in the hassault menu"
       }
     ]
   }

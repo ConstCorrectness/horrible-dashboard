@@ -32,10 +32,17 @@ import { VoiceCommsPanel } from './panels/VoiceCommsPanel';
 registerNotificationAction('hassault.joinInvite', {
   label: 'Join',
   run: (item) => {
-    const invite = item.data.invite as { room?: string; map?: string; host?: string } | undefined;
+    const invite = item.data.invite as
+      | { room?: string; map?: string; host?: string; kind?: 'lobby' | 'match' }
+      | undefined;
     if (!invite?.room) return;
     registry.openPanel('hassault.play');
-    requestJoin({ room: invite.room, map: invite.map ?? '', host: invite.host ?? '' });
+    requestJoin({
+      room: invite.room,
+      map: invite.map ?? '',
+      host: invite.host ?? '',
+      kind: invite.kind,
+    });
   },
 });
 

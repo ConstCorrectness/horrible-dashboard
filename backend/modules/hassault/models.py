@@ -371,6 +371,9 @@ class Invitee(BaseModel):
 class MatchInvite(BaseModel):
     """An invitation received from a friend."""
 
+    #: `lobby` — `room` names a lobby on the host's node, to gather in before a
+    #: match; `match` — `room` names a match already running there.
+    kind: str = "match"
     room: str
     map: str
     host: str  # the inviting node id — authenticated by the fabric

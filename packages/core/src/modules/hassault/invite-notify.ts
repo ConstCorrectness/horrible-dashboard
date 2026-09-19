@@ -64,6 +64,8 @@ export interface PendingJoin {
   room: string;
   map: string;
   host: string;
+  /** A lobby is joined as a seat, a match as a player — see `MatchInvite.kind`. */
+  kind?: 'lobby' | 'match';
 }
 
 let pending: PendingJoin | null = null;

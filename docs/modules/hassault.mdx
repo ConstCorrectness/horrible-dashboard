@@ -3346,12 +3346,43 @@ the pane must not import across a module boundary, so it only ever calls
 during the handshake are shown greyed out rather than hidden, since "your friend
 needs to update" is more useful than an absence.
 
-Inviting no longer requires that you already be hosting. "Invite Rob" is a
-complete intent; making somebody infer the missing precondition, go and satisfy
-it, and come back is why the Friends panel read as broken to anyone who opened it
-first. `inviteFriend` hosts on the selected map when there is nothing to invite
-into — with **zero bots**, because you are inviting a human and filling the room
-on their behalf is a decision nobody made.
+Inviting does not require that you already be hosting. "Invite Rob" is a complete
+intent, so when you are not hosting a match, `inviteFriend` invites them into your
+**lobby** (below) and opens one if you have none. It used to host a match and
+then invite, which failed twice over: it dropped the inviter into a live map
+alone, and the invite never left the node. `session.invite` refuses unless the
+status is `joined`, and it was called while still `joining`, so every invite
+from the menu was silently discarded. `lobby_invite` opens the lobby and sends
+the invite **in one message**, so there is no second step to race. Invites
+carry a `kind` (`lobby` | `match`). An older sender sends none, and its invites
+read as `match`.
+
+### Lobbies
+
+A lobby (`lobby.py`) is the room in front of a match: the host picks the map,
+friends join, chat and mark themselves ready, and **Start** opens a match and
+sends every member into it at once. The lobby **outlives the match**. Leaving
+the match returns you to the lobby with the same people, and pressing Start
+again while that match still runs sends latecomers into the same game rather
+than splitting the party. It follows karaoke's shape:
+
+- **Process-global on the host's node.** Every change pushes the whole
+  `LobbyState`, stamped with a `revision`, so the pane drops out-of-order
+  pushes.
+- **Members are renderers.** A member is a local socket or a `PeerLobbyConn`,
+  which is `PeerPlayerConn`'s twin (`hassault_lobby` guest to host, carrying an
+  `op`; `hassault_lobby_frame` host to guest). `LobbyServer` only calls
+  `send_json`.
+- **The host leaving closes it.** It is not handed over, because the match it
+  would start is simulated on the host's node.
+- **Changing the map clears every ready flag.** A ready given for one map is
+  not consent to another.
+- **Start creates the room empty.** Each member joins it themselves on
+  `lobby_start`, which is the only join path. An empty room survives
+  `EMPTY_GRACE`. The guest's backend stamps the host node id onto `lobby` and
+  `lobby_start`, which is how a remote member's pane knows where to join.
+- **Trust gates every inbound peer op**, the same as a match join. Remote
+  names are tagged `name@node`.
 
 #### An invite names a person, and the two authorities it has to cross
 
