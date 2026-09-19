@@ -64,14 +64,23 @@ export function useCanvasBackdrop(
     let height = 0;
 
     const resize = () => {
-      const dpr = window.devicePixelRatio || 1;
       const rect = canvas.getBoundingClientRect();
-      width = Math.max(1, Math.round(rect.width));
-      height = Math.max(1, Math.round(rect.height));
+      const nextW = Math.max(0, Math.round(rect.width));
+      const nextH = Math.max(0, Math.round(rect.height));
+      if (nextW === 0 || nextH === 0) {
+        width = 0;
+        height = 0;
+        stop();
+        return;
+      }
+      width = nextW;
+      height = nextH;
+      const dpr = window.devicePixelRatio || 1;
       canvas.width = Math.round(width * dpr);
       canvas.height = Math.round(height * dpr);
       // setTransform, not scale: this runs on every resize and `scale` compounds.
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      if (!document.hidden) start();
     };
     resize();
     const observer = new ResizeObserver(resize);
@@ -81,6 +90,10 @@ export function useCanvasBackdrop(
     let last = performance.now();
     let t = 0;
     const tick = (now: number) => {
+      if (width <= 0 || height <= 0) {
+        raf = 0;
+        return;
+      }
       const dt = Math.min(MAX_DT, Math.max(0, (now - last) / 1000));
       last = now;
       t += dt;
@@ -89,7 +102,7 @@ export function useCanvasBackdrop(
     };
 
     const start = () => {
-      if (raf) return;
+      if (raf || width <= 0 || height <= 0) return;
       // Reset the clock on resume, so the first frame back is an ordinary one
       // rather than a jump proportional to how long the tab was hidden.
       last = performance.now();
@@ -102,12 +115,22 @@ export function useCanvasBackdrop(
     };
     const onVisibility = () => (document.hidden ? stop() : start());
     document.addEventListener('visibilitychange', onVisibility);
-    if (!document.hidden) start();
+
+    const onContentVisibility = (e: Event) => {
+      if ((e as { skipped?: boolean }).skipped) {
+        stop();
+      } else {
+        start();
+      }
+    };
+    canvas.addEventListener('contentvisibilityautostatechange', onContentVisibility);
+    if (!document.hidden && width > 0 && height > 0) start();
 
     return () => {
       stop();
       observer.disconnect();
       document.removeEventListener('visibilitychange', onVisibility);
+      canvas.removeEventListener('contentvisibilityautostatechange', onContentVisibility);
     };
     // `themeId` is a real dependency: it is what re-reads the tokens.
   }, [themeId, tokenKey]);

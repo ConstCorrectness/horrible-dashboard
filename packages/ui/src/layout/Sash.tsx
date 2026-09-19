@@ -20,7 +20,13 @@ export function Sash({ split, index }: { split: SplitNode; index: number }) {
     const start = horizontal ? e.clientX : e.clientY;
     const startSizes = [...split.sizes];
 
-    const onMove = (me: PointerEvent) => {
+    let pendingEvent: PointerEvent | null = null;
+    let rafId = 0;
+
+    const processMove = () => {
+      rafId = 0;
+      const me = pendingEvent;
+      if (!me) return;
       const delta = ((horizontal ? me.clientX : me.clientY) - start) / extent;
       const sizes = [...startSizes];
       const grow = Math.max(
@@ -31,9 +37,24 @@ export function Sash({ split, index }: { split: SplitNode; index: number }) {
       sizes[index - 1] = grow;
       layoutStore.dispatch({ type: 'SET_SPLIT_SIZES', splitId: split.id, sizes });
     };
+
+    const onMove = (me: PointerEvent) => {
+      pendingEvent = me;
+      if (!rafId) {
+        rafId = requestAnimationFrame(processMove);
+      }
+    };
     const onUp = () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
+      if (rafId) {
+        cancelAnimationFrame(rafId);
+        rafId = 0;
+      }
+      if (pendingEvent) {
+        processMove();
+        pendingEvent = null;
+      }
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);

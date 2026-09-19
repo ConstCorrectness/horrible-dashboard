@@ -70,7 +70,13 @@ export function Region({ pane, position }: { pane: PaneState; position: RegionPo
     const startX = e.clientX;
     const startY = e.clientY;
     const startSize = region.size;
-    const onMove = (me: PointerEvent) => {
+    let pendingEvent: PointerEvent | null = null;
+    let rafId = 0;
+
+    const processMove = () => {
+      rafId = 0;
+      const me = pendingEvent;
+      if (!me) return;
       let next: number;
       if (position === 'right') next = startSize - (me.clientX - startX);
       else if (position === 'left') next = startSize + (me.clientX - startX);
@@ -85,9 +91,24 @@ export function Region({ pane, position }: { pane: PaneState; position: RegionPo
         region: { ...current, size: next },
       });
     };
+
+    const onMove = (me: PointerEvent) => {
+      pendingEvent = me;
+      if (!rafId) {
+        rafId = requestAnimationFrame(processMove);
+      }
+    };
     const onUp = () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
+      if (rafId) {
+        cancelAnimationFrame(rafId);
+        rafId = 0;
+      }
+      if (pendingEvent) {
+        processMove();
+        pendingEvent = null;
+      }
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);

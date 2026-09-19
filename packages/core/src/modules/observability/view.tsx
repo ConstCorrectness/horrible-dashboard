@@ -1,4 +1,5 @@
-import { useState, useSyncExternalStore } from 'react';
+import { useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 
 import type { AgentContextSnapshot } from '@horribledashboard/sdk';
 
@@ -127,10 +128,13 @@ export function ObservabilityPanel() {
   // source that never stops being noisy, and a mute that reset every time the
   // pane was reopened would have to be redone every time.
   const muted = parseMuted(useSetting<string>('observability.mutedSources'));
-  const filter: IoFilter = { query, muted, errorsOnly };
+  const filter: IoFilter = useMemo(
+    () => ({ query, muted, errorsOnly }),
+    [query, muted, errorsOnly]
+  );
   useAgentContext(() => ioSnapshot(events));
-  const filtered = applyFilter(events, filter);
-  const rows = [...filtered].reverse(); // newest first
+  const filtered = useMemo(() => applyFilter(events, filter), [events, filter]);
+  const rows = useMemo(() => [...filtered].reverse(), [filtered]); // newest first
   const filtering = query !== '' || muted.size > 0 || errorsOnly;
 
   const toggleSource = (source: IoSource) => {
@@ -139,7 +143,29 @@ export function ObservabilityPanel() {
     else next.add(source);
     void setSetting('observability.mutedSources', formatMuted(next));
   };
-  const selected = events.find((e) => ioEventKey(e) === selectedKey) ?? null;
+  const selected = useMemo(
+    () => (selectedKey ? events.find((e) => ioEventKey(e) === selectedKey) ?? null : null),
+    [events, selectedKey]
+  );
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const isLarge = rows.length > 40;
+
+  const rowVirtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 28,
+    overscan: 10,
+    enabled: isLarge,
+  });
+
+  const virtualRows = isLarge ? rowVirtualizer.getVirtualItems() : null;
+  const totalSize = isLarge ? rowVirtualizer.getTotalSize() : 0;
+  const paddingTop = virtualRows && virtualRows.length > 0 ? virtualRows[0]?.start ?? 0 : 0;
+  const paddingBottom =
+    virtualRows && virtualRows.length > 0
+      ? totalSize - (virtualRows[virtualRows.length - 1]?.end ?? 0)
+      : 0;
 
   return (
     <div className="obs-panel">
@@ -190,7 +216,7 @@ export function ObservabilityPanel() {
         <button onClick={() => telemetryStore.clear()}>Clear</button>
       </div>
       <div className={`obs-split${selected ? ' obs-split-open' : ''}`}>
-        <div className="obs-table-wrap">
+        <div className="obs-table-wrap" ref={scrollRef}>
           <table className="obs-table">
             <thead>
               <tr>
@@ -204,27 +230,74 @@ export function ObservabilityPanel() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((e) => (
-                <tr
-                  key={ioEventKey(e)}
-                  className={`io-row${ioEventKey(e) === selectedKey ? ' io-row-selected' : ''}`}
-                  onClick={() => setSelectedKey(ioEventKey(e))}
-                >
-                  <td className="io-dim">{fmtTime(e.ts)}</td>
-                  <td>
-                    <span className={`io-badge io-${e.source}`}>{e.source}</span>
-                  </td>
-                  <td>{e.method}</td>
-                  <td className="io-target" title={e.target}>
-                    {e.target}
-                  </td>
-                  <td className={ioStatusClass(e)}>{ioStatusLabel(e)}</td>
-                  <td className="io-dim">
-                    {e.duration_ms != null ? Math.round(e.duration_ms) : ''}
-                  </td>
-                  <td className="io-dim">{fmtBytes(ioEventBytes(e))}</td>
+              {paddingTop > 0 && (
+                <tr>
+                  <td
+                    style={{ height: `${paddingTop}px`, padding: 0, border: 0 }}
+                    colSpan={7}
+                  />
                 </tr>
-              ))}
+              )}
+              {virtualRows
+                ? virtualRows.map((vRow) => {
+                    const e = rows[vRow.index];
+                    const key = ioEventKey(e);
+                    return (
+                      <tr
+                        key={key}
+                        ref={rowVirtualizer.measureElement}
+                        data-index={vRow.index}
+                        className={`io-row${key === selectedKey ? ' io-row-selected' : ''}`}
+                        onClick={() => setSelectedKey(key)}
+                      >
+                        <td className="io-dim">{fmtTime(e.ts)}</td>
+                        <td>
+                          <span className={`io-badge io-${e.source}`}>{e.source}</span>
+                        </td>
+                        <td>{e.method}</td>
+                        <td className="io-target" title={e.target}>
+                          {e.target}
+                        </td>
+                        <td className={ioStatusClass(e)}>{ioStatusLabel(e)}</td>
+                        <td className="io-dim">
+                          {e.duration_ms != null ? Math.round(e.duration_ms) : ''}
+                        </td>
+                        <td className="io-dim">{fmtBytes(ioEventBytes(e))}</td>
+                      </tr>
+                    );
+                  })
+                : rows.map((e) => {
+                    const key = ioEventKey(e);
+                    return (
+                      <tr
+                        key={key}
+                        className={`io-row${key === selectedKey ? ' io-row-selected' : ''}`}
+                        onClick={() => setSelectedKey(key)}
+                      >
+                        <td className="io-dim">{fmtTime(e.ts)}</td>
+                        <td>
+                          <span className={`io-badge io-${e.source}`}>{e.source}</span>
+                        </td>
+                        <td>{e.method}</td>
+                        <td className="io-target" title={e.target}>
+                          {e.target}
+                        </td>
+                        <td className={ioStatusClass(e)}>{ioStatusLabel(e)}</td>
+                        <td className="io-dim">
+                          {e.duration_ms != null ? Math.round(e.duration_ms) : ''}
+                        </td>
+                        <td className="io-dim">{fmtBytes(ioEventBytes(e))}</td>
+                      </tr>
+                    );
+                  })}
+              {paddingBottom > 0 && (
+                <tr>
+                  <td
+                    style={{ height: `${paddingBottom}px`, padding: 0, border: 0 }}
+                    colSpan={7}
+                  />
+                </tr>
+              )}
               {rows.length === 0 && (
                 <tr>
                   <td colSpan={7} className="dashboard-hint">

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { useAgentContext } from '../../agent-context';
 import { ApiError } from '../../api';
 import { dialogs } from '../../dialogs';
@@ -82,6 +83,89 @@ function cellText(value: unknown): string {
   if (value === null || value === undefined) return '';
   if (typeof value === 'object') return JSON.stringify(value);
   return String(value);
+}
+
+function QueryResultTable({ result }: { result: QueryResult }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const isLarge = result.rows.length > 50;
+
+  const rowVirtualizer = useVirtualizer({
+    count: result.rows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 28,
+    overscan: 10,
+    enabled: isLarge,
+  });
+
+  const virtualRows = isLarge ? rowVirtualizer.getVirtualItems() : null;
+  const totalSize = isLarge ? rowVirtualizer.getTotalSize() : 0;
+  const paddingTop = virtualRows && virtualRows.length > 0 ? virtualRows[0]?.start ?? 0 : 0;
+  const paddingBottom =
+    virtualRows && virtualRows.length > 0
+      ? totalSize - (virtualRows[virtualRows.length - 1]?.end ?? 0)
+      : 0;
+
+  return (
+    <div className="dbc-result-scroll" ref={scrollRef}>
+      <table className="dbc-result-table">
+        <thead>
+          <tr>
+            <th className="dbc-rownum">#</th>
+            {result.columns.map((c) => (
+              <th key={c.name}>
+                {c.name}
+                {c.type ? <span className="dbc-col-type"> {c.type}</span> : null}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {paddingTop > 0 && (
+            <tr>
+              <td
+                style={{ height: `${paddingTop}px`, padding: 0, border: 0 }}
+                colSpan={result.columns.length + 1}
+              />
+            </tr>
+          )}
+          {virtualRows
+            ? virtualRows.map((vRow) => {
+                const row = result.rows[vRow.index];
+                const ri = vRow.index;
+                return (
+                  <tr key={ri} ref={rowVirtualizer.measureElement} data-index={ri}>
+                    <td className="dbc-rownum">{ri + 1}</td>
+                    {row.map((value, ci) => (
+                      <td key={ci} className={value === null ? 'dbc-null' : ''}>
+                        {value === null ? 'NULL' : cellText(value)}
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })
+            : result.rows.map((row, ri) => (
+                <tr key={ri}>
+                  <td className="dbc-rownum">{ri + 1}</td>
+                  {row.map((value, ci) => (
+                    <td key={ci} className={value === null ? 'dbc-null' : ''}>
+                      {value === null ? 'NULL' : cellText(value)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+          {paddingBottom > 0 && (
+            <tr>
+              <td
+                style={{ height: `${paddingBottom}px`, padding: 0, border: 0 }}
+                colSpan={result.columns.length + 1}
+              />
+            </tr>
+          )}
+        </tbody>
+      </table>
+      {result.rows.length === 0 && <div className="dbc-empty">Query returned no rows.</div>}
+    </div>
+  );
 }
 
 export function DatabaseConsole() {
@@ -302,36 +386,7 @@ export function DatabaseConsole() {
 
           {queryError && <div className="dbc-error">{queryError}</div>}
 
-          {result && result.columns.length > 0 && (
-            <div className="dbc-result-scroll">
-              <table className="dbc-result-table">
-                <thead>
-                  <tr>
-                    <th className="dbc-rownum">#</th>
-                    {result.columns.map((c) => (
-                      <th key={c.name}>
-                        {c.name}
-                        {c.type ? <span className="dbc-col-type"> {c.type}</span> : null}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {result.rows.map((row, ri) => (
-                    <tr key={ri}>
-                      <td className="dbc-rownum">{ri + 1}</td>
-                      {row.map((value, ci) => (
-                        <td key={ci} className={value === null ? 'dbc-null' : ''}>
-                          {value === null ? 'NULL' : cellText(value)}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {result.rows.length === 0 && <div className="dbc-empty">Query returned no rows.</div>}
-            </div>
-          )}
+          {result && result.columns.length > 0 && <QueryResultTable result={result} />}
 
           {!result && !queryError && <div className="dbc-empty">Results will appear here.</div>}
         </div>

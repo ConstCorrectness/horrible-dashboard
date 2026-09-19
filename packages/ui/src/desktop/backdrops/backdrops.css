@@ -31,6 +31,14 @@
   background: var(--bg);
 }
 
+/* When in tiling mode, the desktop backdrop is completely occluded by the frame.
+   Pause layout, paint, and animations via content-visibility. */
+.os-shell-view.is-tiling > .os-desktop {
+  visibility: hidden;
+  content-visibility: hidden;
+  pointer-events: none;
+}
+
 .os-desktop-backdrop {
   position: absolute;
   inset: 0;
@@ -75,31 +83,31 @@
   width: 60vmax;
   height: 60vmax;
   border-radius: 50%;
-  filter: blur(80px);
-  opacity: 0.35;
+  pointer-events: none;
   will-change: transform;
 }
 
 .os-aurora-blob--a {
-  background: var(--accent);
+  background: radial-gradient(circle, var(--accent) 0%, transparent 70%);
+  opacity: 0.45;
   top: -20vmax;
   left: -10vmax;
   animation: os-aurora-drift-a 44s ease-in-out infinite alternate;
 }
 
 .os-aurora-blob--b {
-  background: var(--accent-2, var(--accent));
+  background: radial-gradient(circle, var(--accent-2, var(--accent)) 0%, transparent 70%);
   bottom: -25vmax;
   right: -15vmax;
-  opacity: 0.28;
+  opacity: 0.38;
   animation: os-aurora-drift-b 61s ease-in-out infinite alternate;
 }
 
 .os-aurora-blob--c {
-  background: var(--bg-elevated);
+  background: radial-gradient(circle, var(--bg-elevated) 0%, transparent 70%);
   top: 20%;
   left: 35%;
-  opacity: 0.5;
+  opacity: 0.6;
   animation: os-aurora-drift-c 53s ease-in-out infinite alternate;
 }
 
