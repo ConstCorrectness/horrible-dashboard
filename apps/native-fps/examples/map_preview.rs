@@ -1,107 +1,68 @@
-//! Render both Counter-Terrorist (SWAT) and Terrorist (Phoenix/Yaku Ignite)
-//! operators side-by-side with weapons and tactical combat knives to a PNG.
+//! Render a 3D map with procedural PBR textures, planar UVs, and IBL reflections offscreen to a PNG.
+//!
+//! ```text
+//! cargo run --example map_preview -- [map_name] [output.png]
+//! ```
 
-use std::f32::consts::PI;
-
-use glam::{Mat4, Vec4};
-use hassault_native::animator::{model_matrix, ActorPose};
+use glam::Mat4;
+use hassault_native::api::MapInfo;
 use hassault_native::camera::Camera;
-use hassault_native::character::{Mask, Operator, Pose};
-use hassault_native::characters_gpu::Characters;
-use hassault_native::held;
-use hassault_native::protocol::PlayerRow;
-use hassault_native::renderer::{Vertex, DEPTH_FORMAT};
+use hassault_native::renderer::{mesh_vertices, Vertex, DEPTH_FORMAT};
+use hassault_native::world3d::{
+    create_procedural_assault_3d, create_procedural_bank_3d, create_procedural_facility_3d,
+};
 use wgpu::util::DeviceExt;
 
 const WIDTH: u32 = 1600;
 const HEIGHT: u32 = 900;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
-struct ShowcaseEntry {
-    team: usize, // 0 = CT, 1 = T
-    clip_name: &'static str,
-    time: f32,
-    weapon: i32, // 0 = knife, 1 = pistol, 2 = assault, 3 = shotgun, 4 = sniper
-    x: f32,
-    y: f32,
-    yaw: f32,
-}
-
-const LINEUP: [ShowcaseEntry; 4] = [
-    // CT - SWAT with Assault Rifle (M4A1)
-    ShowcaseEntry {
-        team: 0,
-        clip_name: "rifle_aiming_idle",
-        time: 0.35,
-        weapon: 2, // Assault
-        x: 0.0,
-        y: -4.8,
-        yaw: PI + 0.65,
-    },
-    // CT - SWAT with Tactical Knife
-    ShowcaseEntry {
-        team: 0,
-        clip_name: "standard_walk",
-        time: 0.55,
-        weapon: 0, // Knife
-        x: 0.0,
-        y: -1.6,
-        yaw: PI + 0.35,
-    },
-    // T - Phoenix with Tactical Knife
-    ShowcaseEntry {
-        team: 1,
-        clip_name: "crouch_walking",
-        time: 0.70,
-        weapon: 0, // Knife
-        x: 0.0,
-        y: 1.6,
-        yaw: PI - 0.35,
-    },
-    // T - Phoenix with Sniper Rifle
-    ShowcaseEntry {
-        team: 1,
-        clip_name: "firing_rifle",
-        time: 0.98,
-        weapon: 4, // Sniper
-        x: 0.0,
-        y: 4.8,
-        yaw: PI - 0.65,
-    },
-];
-
 fn main() {
-    let path = std::env::args().nth(1).unwrap_or("dual_operators.png".into());
-    pollster::block_on(run(&path));
+    let mut args = std::env::args().skip(1);
+    let mut map_name = "hd_assault".to_string();
+    let mut out_path = "map_preview.png".to_string();
+
+    while let Some(arg) = args.next() {
+        if arg.ends_with(".png") {
+            out_path = arg;
+        } else {
+            map_name = arg;
+        }
+    }
+
+    pollster::block_on(run(&map_name, &out_path));
 }
 
-async fn run(path: &str) {
-    let op_ct = Operator::load().expect("the CT operator GLB should parse");
-    let op_t = Operator::load_t().expect("the Terrorist operator GLB should parse");
-    println!(
-        "CT operator: {} bones, {} vertices, {} primitives, {} textures",
-        op_ct.bone_count(),
-        op_ct.vertices.len(),
-        op_ct.primitives.len(),
-        op_ct.textures.len(),
-    );
-    println!(
-        "T operator: {} bones, {} vertices, {} primitives, {} textures",
-        op_t.bone_count(),
-        op_t.vertices.len(),
-        op_t.primitives.len(),
-        op_t.textures.len(),
-    );
+async fn run(map_name: &str, path: &str) {
+    let info = MapInfo {
+        name: map_name.to_string(),
+        title: map_name.to_string(),
+        ssize: 64,
+        ..Default::default()
+    };
+
+    let world = match map_name {
+        "hd_bank" => create_procedural_bank_3d(info),
+        "hd_facility" => create_procedural_facility_3d(info),
+        _ => create_procedural_assault_3d(info),
+    };
+
+    let m3d = world.to_mesh_data();
+    println!("loaded map {}: {} collision vertices", map_name, world.col_vertices.len());
+
+    let verts = mesh_vertices(&m3d);
+    println!("generated {} render vertices with PBR attributes", verts.len());
 
     let instance = wgpu::Instance::default();
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions::default())
         .await
-        .expect("no GPU adapter");
+        .expect("GPU adapter");
     println!("adapter: {}", adapter.get_info().name);
+
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
-            label: Some("dual-operator-preview"),
+            label: Some("map-preview"),
             ..Default::default()
         })
         .await
@@ -121,27 +82,51 @@ async fn run(path: &str) {
         }],
     });
 
-    let camera = Camera {
-        x: -10.5,
-        y: 0.0,
-        z: 3.2,
-        yaw: 0.0,
-        pitch: -2.0,
-        roll: 0.0,
-        fov: 52.0,
+    // Scenic eye-level perspective looking along the street or interior
+    let camera = match map_name {
+        "hd_bank" => Camera {
+            // Standing inside the grand marble bank lobby looking toward tellers and vault
+            x: 32.0,
+            y: 21.0,
+            z: 2.2,
+            yaw: 0.0,
+            pitch: 6.0,
+            roll: 0.0,
+            fov: 75.0,
+        },
+        _ => Camera {
+            // Standing on the asphalt road looking down the double yellow lines and crosswalk toward SWAT van
+            x: 10.5,
+            y: 14.8,
+            z: 2.2,
+            yaw: 78.0,
+            pitch: 2.0,
+            roll: 0.0,
+            fov: 78.0,
+        },
     };
-    let mut uniform = [0f32; 40];
-    uniform[..16].copy_from_slice(&camera.view_projection(WIDTH, HEIGHT).to_cols_array());
-    uniform[16] = 0.0;
-    uniform[17] = 2.0;
-    uniform[24..40].copy_from_slice(&glam::Mat4::IDENTITY.to_cols_array());
-    let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+
+    let vp = camera.view_projection(WIDTH, HEIGHT);
+
+    let mut camera_uniform = [0.0f32; 40];
+    camera_uniform[0..16].copy_from_slice(vp.as_ref());
+    camera_uniform[16] = 0.0055; // fog density
+    camera_uniform[17] = 2.0;    // detail (sun + fill + hemisphere)
+    camera_uniform[18] = 0.0;    // height
+    camera_uniform[19] = 1.0;    // receives shadow
+    camera_uniform[20] = 1.0;    // reveal progress (1.0 = fully visible)
+    camera_uniform[21] = 0.0;
+    camera_uniform[22] = 0.0;
+    camera_uniform[23] = 1000.0; // reveal radius
+    let identity = Mat4::IDENTITY;
+    camera_uniform[24..40].copy_from_slice(identity.as_ref());
+
+    let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("camera"),
-        size: std::mem::size_of_val(&uniform) as u64,
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
+        contents: bytemuck::cast_slice(&camera_uniform),
+        usage: wgpu::BufferUsages::UNIFORM,
     });
-    queue.write_buffer(&camera_buffer, 0, bytemuck::cast_slice(&uniform));
+
     let camera_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("camera"),
         layout: &camera_layout,
@@ -151,23 +136,9 @@ async fn run(path: &str) {
         }],
     });
 
-    // Floor plane
-    let mut floor_verts = Vec::new();
-    let floor_half = 20.0f32;
-    let floor_color = [0.18f32, 0.20, 0.23];
-    let n = [0.0f32, 0.0, 1.0];
-    floor_verts.extend_from_slice(&[
-        Vertex::new([-floor_half, -floor_half, 0.0], n, floor_color),
-        Vertex::new([floor_half, -floor_half, 0.0], n, floor_color),
-        Vertex::new([floor_half, floor_half, 0.0], n, floor_color),
-        Vertex::new([-floor_half, -floor_half, 0.0], n, floor_color),
-        Vertex::new([floor_half, floor_half, 0.0], n, floor_color),
-        Vertex::new([-floor_half, floor_half, 0.0], n, floor_color),
-    ]);
-
     let world_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("floor"),
-        contents: bytemuck::cast_slice(&floor_verts),
+        label: Some("world-verts"),
+        contents: bytemuck::cast_slice(&verts),
         usage: wgpu::BufferUsages::VERTEX,
     });
 
@@ -175,100 +146,18 @@ async fn run(path: &str) {
         &device,
         &queue,
         &world_buffer,
-        floor_verts.len() as u32,
-        (glam::Vec3::new(-10.0, -10.0, -1.0), glam::Vec3::new(10.0, 10.0, 8.0)),
+        (verts.len() as u32).min(3000),
+        (glam::Vec3::new(-50.0, -50.0, -10.0), glam::Vec3::new(100.0, 100.0, 40.0)),
     );
 
-    let mut characters_ct = Characters::new(
-        &device,
-        &queue,
-        &op_ct,
-        &camera_layout,
-        &shadow.layout,
-        FORMAT,
-        1,
-    );
-    let mut characters_t = Characters::new(
-        &device,
-        &queue,
-        &op_t,
-        &camera_layout,
-        &shadow.layout,
-        FORMAT,
-        1,
-    );
+    let detail_layout = hassault_native::detail::bind_group_layout(&device);
+    let detail_group = hassault_native::detail::bind_group(&device, &queue, &detail_layout);
 
-    let mut ct_poses = Vec::new();
-    let mut t_poses = Vec::new();
-    let mut all_held_poses = Vec::new();
-
-    for entry in &LINEUP {
-        let is_ct = entry.team == 0;
-        let op = if is_ct { &op_ct } else { &op_t };
-        let clip = op.clip(entry.clip_name).expect("clip missing");
-
-        let mut pose = Pose::new(op);
-        pose.reset(op);
-        pose.blend(op, clip, entry.time, 1.0, Mask::All);
-
-        let model = model_matrix(&PlayerRow {
-            x: entry.x,
-            y: entry.y,
-            z: 0.0,
-            yaw: entry.yaw,
-            ..Default::default()
-        });
-
-        let mut bones = vec![Mat4::IDENTITY; op.bone_count()];
-        pose.skinning(op, model, &mut bones);
-
-        let grip = pose.bone_matrix(op, "RightHand", model);
-
-        all_held_poses.push(ActorPose {
-            bones: Vec::new(),
-            tint: Vec4::ZERO,
-            grip,
-            weapon: entry.weapon,
-            team: entry.team,
-        });
-
-        let actor_pose = ActorPose {
-            bones,
-            tint: if is_ct {
-                Vec4::new(0.12, 0.20, 0.32, 0.22) // CT blue tint
-            } else {
-                Vec4::new(0.32, 0.18, 0.12, 0.22) // T amber tint
-            },
-            grip,
-            weapon: entry.weapon,
-            team: entry.team,
-        };
-
-        if is_ct {
-            ct_poses.push(actor_pose);
-        } else {
-            t_poses.push(actor_pose);
-        }
-    }
-
-    if !ct_poses.is_empty() {
-        characters_ct.prepare(&queue, &ct_poses);
-    }
-    if !t_poses.is_empty() {
-        characters_t.prepare(&queue, &t_poses);
-    }
-
-    let held_verts = held::build(&all_held_poses);
-    println!("held weapon vertices: {}", held_verts.len());
-
-    let held_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("held"),
-        contents: bytemuck::cast_slice(&held_verts),
-        usage: wgpu::BufferUsages::VERTEX,
-    });
+    let pbr_layout = hassault_native::textures3d::bind_group_layout(&device);
+    let (pbr_group, _, _) = hassault_native::textures3d::bind_group(&device, &queue, &pbr_layout);
 
     let world_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("world"),
+        label: Some("world-pbr"),
         source: wgpu::ShaderSource::Wgsl(
             concat!(
                 include_str!("../src/lighting.wgsl.inc"),
@@ -278,12 +167,8 @@ async fn run(path: &str) {
         ),
     });
 
-    let detail_layout = hassault_native::detail::bind_group_layout(&device);
-    let detail_group = hassault_native::detail::bind_group(&device, &queue, &detail_layout);
-    let pbr_layout = hassault_native::textures3d::bind_group_layout(&device);
-    let (pbr_group, _, _) = hassault_native::textures3d::bind_group(&device, &queue, &pbr_layout);
     let world_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("world"),
+        label: Some("world-layout"),
         bind_group_layouts: &[
             Some(&camera_layout),
             Some(&detail_layout),
@@ -292,8 +177,9 @@ async fn run(path: &str) {
         ],
         immediate_size: 0,
     });
+
     let world_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("world"),
+        label: Some("world-pipeline"),
         layout: Some(&world_layout),
         vertex: wgpu::VertexState {
             module: &world_shader,
@@ -334,6 +220,7 @@ async fn run(path: &str) {
         height: HEIGHT,
         depth_or_array_layers: 1,
     };
+
     let color = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("color"),
         size,
@@ -345,6 +232,7 @@ async fn run(path: &str) {
         view_formats: &[],
     });
     let color_view = color.create_view(&wgpu::TextureViewDescriptor::default());
+
     let depth = device
         .create_texture(&wgpu::TextureDescriptor {
             label: Some("depth"),
@@ -370,16 +258,16 @@ async fn run(path: &str) {
     let mut encoder = device.create_command_encoder(&Default::default());
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("preview"),
+            label: Some("map-render"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &color_view,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.03,
-                        g: 0.035,
-                        b: 0.045,
+                        r: 0.067, // 0x11 / 255
+                        g: 0.086, // 0x16 / 255
+                        b: 0.121, // 0x1f / 255 - HORIZON sky blue/dark
                         a: 1.0,
                     }),
                     store: wgpu::StoreOp::Store,
@@ -398,31 +286,13 @@ async fn run(path: &str) {
             multiview_mask: None,
         });
 
-        // 1. Draw floor
         pass.set_pipeline(&world_pipeline);
         pass.set_bind_group(0, &camera_group, &[]);
         pass.set_bind_group(1, &detail_group, &[]);
         pass.set_bind_group(2, &shadow.bind_group, &[]);
         pass.set_bind_group(3, &pbr_group, &[]);
         pass.set_vertex_buffer(0, world_buffer.slice(..));
-        pass.draw(0..floor_verts.len() as u32, 0..1);
-
-        // 2. Draw CT Characters
-        characters_ct.draw(&mut pass, &camera_group, &shadow.bind_group);
-
-        // 3. Draw T Characters
-        characters_t.draw(&mut pass, &camera_group, &shadow.bind_group);
-
-        // 4. Draw Held Weapons
-        if !held_verts.is_empty() {
-            pass.set_pipeline(&world_pipeline);
-            pass.set_bind_group(0, &camera_group, &[]);
-            pass.set_bind_group(1, &detail_group, &[]);
-            pass.set_bind_group(2, &shadow.bind_group, &[]);
-            pass.set_bind_group(3, &pbr_group, &[]);
-            pass.set_vertex_buffer(0, held_buffer.slice(..));
-            pass.draw(0..held_verts.len() as u32, 0..1);
-        }
+        pass.draw(0..verts.len() as u32, 0..1);
     }
 
     encoder.copy_texture_to_buffer(
@@ -442,6 +312,7 @@ async fn run(path: &str) {
         },
         size,
     );
+
     queue.submit([encoder.finish()]);
 
     let slice = readback.slice(..);
@@ -452,6 +323,7 @@ async fn run(path: &str) {
             timeout: None,
         })
         .expect("poll");
+
     let mapped = slice.get_mapped_range().expect("map range");
     let mut pixels = Vec::with_capacity((unpadded * HEIGHT) as usize);
     for row in 0..HEIGHT {
@@ -469,6 +341,7 @@ async fn run(path: &str) {
         .write_header()
         .expect("png header")
         .write_image_data(&pixels)
-        .expect("png write");
-    println!("wrote {path} ({}x{})", WIDTH, HEIGHT);
+        .expect("png data");
+
+    println!("wrote rendered map to {path} ({}x{})", WIDTH, HEIGHT);
 }

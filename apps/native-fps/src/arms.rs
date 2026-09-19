@@ -257,11 +257,7 @@ fn segment(from: Vec3, to: Vec3, r0: f32, r1: f32, color: [f32; 3], out: &mut Ve
         ];
         let normal = ((quad[0] - from) + (quad[1] - from)).normalize_or(u);
         for i in [0usize, 1, 2, 0, 2, 3] {
-            out.push(Vertex {
-                position: quad[i].into(),
-                normal: normal.into(),
-                color,
-            });
+            out.push(Vertex::new(quad[i].into(), normal.into(), color));
         }
     }
 }
@@ -336,11 +332,7 @@ fn fist(at: Vec3, along: Vec3, out: &mut Vec<Vertex>) {
     ];
     for (normal, quad) in faces {
         for i in [0usize, 1, 2, 0, 2, 3] {
-            out.push(Vertex {
-                position: quad[i].into(),
-                normal,
-                color: GLOVE,
-            });
+            out.push(Vertex::new(quad[i].into(), normal, GLOVE));
         }
     }
 }

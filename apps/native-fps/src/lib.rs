@@ -62,3 +62,4 @@ pub mod world;
 pub mod world3d;
 pub mod textlayer;
 pub mod textquad;
+pub mod textures3d;

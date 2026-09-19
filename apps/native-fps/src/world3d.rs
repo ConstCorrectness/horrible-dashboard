@@ -5,6 +5,7 @@
 
 use crate::api::{ItemRow, MapInfo};
 use crate::geometry::MeshData;
+use crate::textures3d::MaterialKind;
 use glam::{Mat4, Quat, Vec3};
 use rapier3d::prelude::*;
 
@@ -25,6 +26,17 @@ pub struct WorldBounds {
     pub extent: f32,
 }
 
+pub fn compute_planar_uv(p: [f32; 3], norm: [f32; 3], scale: f32) -> [f32; 2] {
+    let s = if scale <= 0.0 { 4.0 } else { scale };
+    if norm[1].abs() > 0.6 {
+        [p[0] / s, p[1] / s]
+    } else if norm[0].abs() > 0.6 {
+        [p[1] / s, p[2] / s]
+    } else {
+        [p[0] / s, p[2] / s]
+    }
+}
+
 pub struct World3D {
     pub info: MapInfo,
     pub bounds: WorldBounds,
@@ -33,6 +45,7 @@ pub struct World3D {
     pub render_normals: Vec<f32>,
     pub render_colors: Vec<f32>,
     pub render_uvs: Vec<f32>,
+    pub render_materials: Vec<f32>,
     pub triangles: usize,
     /// Collision geometry in game space (x, y, z as height).
     pub col_vertices: Vec<Point<Real>>,
@@ -48,6 +61,8 @@ impl World3D {
             positions: self.render_positions.clone(),
             normals: self.render_normals.clone(),
             colors: self.render_colors.clone(),
+            uvs: self.render_uvs.clone(),
+            materials: self.render_materials.clone(),
             triangles: self.triangles,
         }
     }
@@ -58,6 +73,7 @@ struct FacilityBuilder {
     render_normals: Vec<f32>,
     render_colors: Vec<f32>,
     render_uvs: Vec<f32>,
+    render_materials: Vec<f32>,
     col_vertices: Vec<Point<Real>>,
     col_indices: Vec<[u32; 3]>,
 }
@@ -69,16 +85,18 @@ impl FacilityBuilder {
             render_normals: Vec::new(),
             render_colors: Vec::new(),
             render_uvs: Vec::new(),
+            render_materials: Vec::new(),
             col_vertices: Vec::new(),
             col_indices: Vec::new(),
         }
     }
 
-    fn add_triangle(
+    fn add_triangle_mat(
         &mut self,
         p0: [f32; 3],
         p1: [f32; 3],
         p2: [f32; 3],
+        material: MaterialKind,
         color: [f32; 3],
         is_collider: bool,
     ) {
@@ -108,8 +126,15 @@ impl FacilityBuilder {
         for _ in 0..3 {
             self.render_normals.extend_from_slice(&norm);
             self.render_colors.extend_from_slice(&color);
+            self.render_materials.push(material as u8 as f32);
         }
-        self.render_uvs.extend_from_slice(&[0.0, 0.0, 1.0, 0.0, 1.0, 1.0]);
+
+        let uv0 = compute_planar_uv(p0, norm, material.tile_scale());
+        let uv1 = compute_planar_uv(p1, norm, material.tile_scale());
+        let uv2 = compute_planar_uv(p2, norm, material.tile_scale());
+        self.render_uvs.extend_from_slice(&uv0);
+        self.render_uvs.extend_from_slice(&uv1);
+        self.render_uvs.extend_from_slice(&uv2);
 
         if is_collider {
             let base_idx = self.col_vertices.len() as u32;
@@ -118,6 +143,31 @@ impl FacilityBuilder {
             self.col_vertices.push(point![p2[0], p2[1], p2[2]]);
             self.col_indices.push([base_idx, base_idx + 1, base_idx + 2]);
         }
+    }
+
+    fn add_triangle(
+        &mut self,
+        p0: [f32; 3],
+        p1: [f32; 3],
+        p2: [f32; 3],
+        color: [f32; 3],
+        is_collider: bool,
+    ) {
+        self.add_triangle_mat(p0, p1, p2, MaterialKind::None, color, is_collider);
+    }
+
+    fn add_quad_mat(
+        &mut self,
+        p0: [f32; 3],
+        p1: [f32; 3],
+        p2: [f32; 3],
+        p3: [f32; 3],
+        material: MaterialKind,
+        color: [f32; 3],
+        is_collider: bool,
+    ) {
+        self.add_triangle_mat(p0, p1, p2, material, color, is_collider);
+        self.add_triangle_mat(p0, p2, p3, material, color, is_collider);
     }
 
     fn add_quad(
@@ -129,8 +179,30 @@ impl FacilityBuilder {
         color: [f32; 3],
         is_collider: bool,
     ) {
-        self.add_triangle(p0, p1, p2, color, is_collider);
-        self.add_triangle(p0, p2, p3, color, is_collider);
+        self.add_quad_mat(p0, p1, p2, p3, MaterialKind::None, color, is_collider);
+    }
+
+    fn add_floor_mat(
+        &mut self,
+        min_x: f32,
+        min_y: f32,
+        max_x: f32,
+        max_y: f32,
+        z: f32,
+        material: MaterialKind,
+        color: [f32; 3],
+        is_collider: bool,
+    ) {
+        // Top face pointing strictly UP (+y in render space, norm = [0, 1, 0])
+        self.add_quad_mat(
+            [min_x, max_y, z],
+            [max_x, max_y, z],
+            [max_x, min_y, z],
+            [min_x, min_y, z],
+            material,
+            color,
+            is_collider,
+        );
     }
 
     fn add_floor(
@@ -143,12 +215,78 @@ impl FacilityBuilder {
         color: [f32; 3],
         is_collider: bool,
     ) {
-        // Top face pointing strictly UP (+y in render space, norm = [0, 1, 0])
-        self.add_quad(
-            [min_x, max_y, z],
-            [max_x, max_y, z],
-            [max_x, min_y, z],
-            [min_x, min_y, z],
+        self.add_floor_mat(min_x, min_y, max_x, max_y, z, MaterialKind::None, color, is_collider);
+    }
+
+    fn add_box_ex_mat(
+        &mut self,
+        min_x: f32,
+        min_y: f32,
+        min_z: f32,
+        max_x: f32,
+        max_y: f32,
+        max_z: f32,
+        material: MaterialKind,
+        color: [f32; 3],
+        is_collider: bool,
+    ) {
+        // Floor
+        self.add_quad_mat(
+            [min_x, min_y, min_z],
+            [max_x, min_y, min_z],
+            [max_x, max_y, min_z],
+            [min_x, max_y, min_z],
+            material,
+            color,
+            is_collider,
+        );
+        // Ceiling / Top
+        self.add_quad_mat(
+            [min_x, max_y, max_z],
+            [max_x, max_y, max_z],
+            [max_x, min_y, max_z],
+            [min_x, min_y, max_z],
+            material,
+            color,
+            is_collider,
+        );
+        // North
+        self.add_quad_mat(
+            [max_x, max_y, min_z],
+            [max_x, max_y, max_z],
+            [min_x, max_y, max_z],
+            [min_x, max_y, min_z],
+            material,
+            color,
+            is_collider,
+        );
+        // South
+        self.add_quad_mat(
+            [min_x, min_y, min_z],
+            [min_x, min_y, max_z],
+            [max_x, min_y, max_z],
+            [max_x, min_y, min_z],
+            material,
+            color,
+            is_collider,
+        );
+        // East
+        self.add_quad_mat(
+            [max_x, min_y, min_z],
+            [max_x, min_y, max_z],
+            [max_x, max_y, max_z],
+            [max_x, max_y, min_z],
+            material,
+            color,
+            is_collider,
+        );
+        // West
+        self.add_quad_mat(
+            [min_x, max_y, min_z],
+            [min_x, max_y, max_z],
+            [min_x, min_y, max_z],
+            [min_x, min_y, min_z],
+            material,
             color,
             is_collider,
         );
@@ -165,60 +303,7 @@ impl FacilityBuilder {
         color: [f32; 3],
         is_collider: bool,
     ) {
-        // Floor
-        self.add_quad(
-            [min_x, min_y, min_z],
-            [max_x, min_y, min_z],
-            [max_x, max_y, min_z],
-            [min_x, max_y, min_z],
-            color,
-            is_collider,
-        );
-        // Ceiling / Top
-        self.add_quad(
-            [min_x, max_y, max_z],
-            [max_x, max_y, max_z],
-            [max_x, min_y, max_z],
-            [min_x, min_y, max_z],
-            color,
-            is_collider,
-        );
-        // North
-        self.add_quad(
-            [max_x, max_y, min_z],
-            [max_x, max_y, max_z],
-            [min_x, max_y, max_z],
-            [min_x, max_y, min_z],
-            color,
-            is_collider,
-        );
-        // South
-        self.add_quad(
-            [min_x, min_y, min_z],
-            [min_x, min_y, max_z],
-            [max_x, min_y, max_z],
-            [max_x, min_y, min_z],
-            color,
-            is_collider,
-        );
-        // East
-        self.add_quad(
-            [max_x, min_y, min_z],
-            [max_x, min_y, max_z],
-            [max_x, max_y, max_z],
-            [max_x, max_y, min_z],
-            color,
-            is_collider,
-        );
-        // West
-        self.add_quad(
-            [min_x, max_y, min_z],
-            [min_x, max_y, max_z],
-            [min_x, min_y, max_z],
-            [min_x, min_y, min_z],
-            color,
-            is_collider,
-        );
+        self.add_box_ex_mat(min_x, min_y, min_z, max_x, max_y, max_z, MaterialKind::None, color, is_collider);
     }
 
     fn add_box(
@@ -450,6 +535,7 @@ pub fn create_procedural_facility_3d(info: MapInfo) -> World3D {
         render_normals: b.render_normals,
         render_colors: b.render_colors,
         render_uvs: b.render_uvs,
+        render_materials: b.render_materials,
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -560,6 +646,7 @@ pub fn create_procedural_junk_flea_3d(info: MapInfo) -> World3D {
         render_normals: b.render_normals,
         render_colors: b.render_colors,
         render_uvs: b.render_uvs,
+        render_materials: b.render_materials,
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -911,6 +998,7 @@ pub fn create_procedural_bank_3d(info: MapInfo) -> World3D {
         render_normals: b.render_normals,
         render_colors: b.render_colors,
         render_uvs: b.render_uvs,
+        render_materials: b.render_materials,
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -1360,6 +1448,7 @@ pub fn create_procedural_assault_3d(info: MapInfo) -> World3D {
         render_normals: b.render_normals,
         render_colors: b.render_colors,
         render_uvs: b.render_uvs,
+        render_materials: b.render_materials,
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -1502,6 +1591,7 @@ pub fn create_procedural_office_3d(info: MapInfo) -> World3D {
         render_normals: b.render_normals,
         render_colors: b.render_colors,
         render_uvs: b.render_uvs,
+        render_materials: b.render_materials,
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -1650,6 +1740,7 @@ pub fn create_procedural_dust2_3d(info: MapInfo) -> World3D {
         render_normals: b.render_normals,
         render_colors: b.render_colors,
         render_uvs: b.render_uvs,
+        render_materials: b.render_materials,
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -1805,6 +1896,7 @@ pub fn create_procedural_inferno_3d(info: MapInfo) -> World3D {
         render_normals: b.render_normals,
         render_colors: b.render_colors,
         render_uvs: b.render_uvs,
+        render_materials: b.render_materials,
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -1961,6 +2053,7 @@ pub fn create_procedural_mirage_3d(info: MapInfo) -> World3D {
         render_normals: b.render_normals,
         render_colors: b.render_colors,
         render_uvs: b.render_uvs,
+        render_materials: b.render_materials,
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -2099,6 +2192,7 @@ pub fn create_procedural_nuke_3d(info: MapInfo) -> World3D {
         render_normals: b.render_normals,
         render_colors: b.render_colors,
         render_uvs: b.render_uvs,
+        render_materials: b.render_materials,
         triangles,
         col_vertices: b.col_vertices,
         col_indices: b.col_indices,
@@ -2141,6 +2235,7 @@ fn walk_glb_node(
     render_normals: &mut Vec<f32>,
     render_colors: &mut Vec<f32>,
     render_uvs: &mut Vec<f32>,
+    render_materials: &mut Vec<f32>,
     col_vertices: &mut Vec<Point<Real>>,
     col_indices: &mut Vec<[u32; 3]>,
 ) {
@@ -2345,6 +2440,10 @@ fn walk_glb_node(
                     render_uvs.extend_from_slice(&uv0);
                     render_uvs.extend_from_slice(&uv2);
                     render_uvs.extend_from_slice(&uv1);
+
+                    let mat_kind = MaterialKind::from_name(mat_name);
+                    let mat_id = mat_kind as u8 as f32;
+                    render_materials.extend_from_slice(&[mat_id, mat_id, mat_id]);
                 }
 
                 if is_collider {
@@ -2372,6 +2471,7 @@ fn walk_glb_node(
             render_normals,
             render_colors,
             render_uvs,
+            render_materials,
             col_vertices,
             col_indices,
         );
@@ -2388,6 +2488,7 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
     let mut render_normals = Vec::new();
     let mut render_colors = Vec::new();
     let mut render_uvs = Vec::new();
+    let mut render_materials = Vec::new();
     let mut col_vertices = Vec::new();
     let mut col_indices = Vec::new();
 
@@ -2401,6 +2502,7 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
                 &mut render_normals,
                 &mut render_colors,
                 &mut render_uvs,
+                &mut render_materials,
                 &mut col_vertices,
                 &mut col_indices,
             );
@@ -2676,6 +2778,7 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
         render_normals,
         render_colors,
         render_uvs,
+        render_materials,
         triangles,
         col_vertices,
         col_indices,

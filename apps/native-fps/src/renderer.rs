@@ -46,6 +46,8 @@ pub struct Vertex {
     pub position: [f32; 3],
     pub normal: [f32; 3],
     pub color: [f32; 3],
+    pub uv: [f32; 2],
+    pub material: f32,
 }
 
 /// A vertex of a translucent volume: smoke, fire.
@@ -105,10 +107,41 @@ impl VolumeVertex {
 const MAX_VOLUME_VERTS: usize = 65536;
 
 impl Vertex {
-    const ATTRS: [wgpu::VertexAttribute; 3] =
-        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3];
+    pub fn new(position: [f32; 3], normal: [f32; 3], color: [f32; 3]) -> Self {
+        Self {
+            position,
+            normal,
+            color,
+            uv: [0.0, 0.0],
+            material: 0.0,
+        }
+    }
 
-    fn layout() -> wgpu::VertexBufferLayout<'static> {
+    pub fn textured(
+        position: [f32; 3],
+        normal: [f32; 3],
+        color: [f32; 3],
+        uv: [f32; 2],
+        material: f32,
+    ) -> Self {
+        Self {
+            position,
+            normal,
+            color,
+            uv,
+            material,
+        }
+    }
+
+    pub const ATTRS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
+        0 => Float32x3,
+        1 => Float32x3,
+        2 => Float32x3,
+        3 => Float32x2,
+        4 => Float32,
+    ];
+
+    pub fn layout() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
@@ -314,6 +347,7 @@ pub struct Renderer {
     detail_bind_group: wgpu::BindGroup,
     detail_bind_group_3d: wgpu::BindGroup,
     shadow: crate::shadow::ShadowMap,
+    pbr: crate::textures3d::PbrResources,
     video: Video,
     /// Where the world is drawn: a texture at `render_scale` of the window, and
     /// multisampled at the quality level's count. The swapchain never sees the
@@ -513,6 +547,8 @@ impl Renderer {
             crate::shadow::bounds_of(&vertices),
         );
 
+        let pbr = crate::textures3d::PbrResources::new(&device, &queue);
+
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("hassault-layout"),
             // wgpu 30 takes optional slots, so an unused group can be a hole
@@ -521,6 +557,7 @@ impl Renderer {
                 Some(&camera_layout),
                 Some(&detail_layout),
                 Some(&shadow.layout),
+                Some(&pbr.layout),
             ],
             immediate_size: 0,
         });
@@ -782,6 +819,7 @@ impl Renderer {
             detail_bind_group,
             detail_bind_group_3d,
             shadow,
+            pbr,
             video,
             scene,
             blit_pipeline,
@@ -1200,6 +1238,7 @@ impl Renderer {
             };
             pass.set_bind_group(1, detail_bg, &[]);
             pass.set_bind_group(2, &self.shadow.bind_group, &[]);
+            pass.set_bind_group(3, &self.pbr.bind_group, &[]);
             pass.set_vertex_buffer(0, self.world_buffer.slice(..));
             pass.draw(0..self.world_verts, 0..1);
             if self.body_verts > 0 {
@@ -1287,6 +1326,7 @@ impl Renderer {
                 // face and the grain on it is invisible at that scale.
                 pass.set_bind_group(1, &self.detail_bind_group, &[]);
                 pass.set_bind_group(2, &self.shadow.bind_group, &[]);
+                pass.set_bind_group(3, &self.pbr.bind_group, &[]);
                 pass.set_vertex_buffer(0, self.viewmodel_buffer.slice(..));
                 pass.draw(0..self.viewmodel_verts, 0..1);
             }
@@ -1794,6 +1834,16 @@ pub fn mesh_vertices(mesh: &MeshData) -> Vec<Vertex> {
     let count = mesh.positions.len() / 3;
     let mut out = Vec::with_capacity(count);
     for i in 0..count {
+        let uv = if i * 2 + 1 < mesh.uvs.len() {
+            [mesh.uvs[i * 2], mesh.uvs[i * 2 + 1]]
+        } else {
+            [0.0, 0.0]
+        };
+        let material = if i < mesh.materials.len() {
+            mesh.materials[i]
+        } else {
+            0.0
+        };
         out.push(Vertex {
             position: [
                 mesh.positions[i * 3],
@@ -1810,6 +1860,8 @@ pub fn mesh_vertices(mesh: &MeshData) -> Vec<Vertex> {
                 mesh.colors[i * 3 + 1],
                 mesh.colors[i * 3 + 2],
             ],
+            uv,
+            material,
         });
     }
     out
@@ -1867,14 +1919,19 @@ mod tests {
         // The shader indexes by byte offset. If `repr(C)` were ever dropped,
         // Rust would be free to reorder these and the colours would arrive in
         // the normal's slot with no error anywhere.
-        assert_eq!(std::mem::size_of::<Vertex>(), 9 * 4);
+        assert_eq!(std::mem::size_of::<Vertex>(), 12 * 4);
         let v = Vertex {
             position: [1.0, 2.0, 3.0],
             normal: [4.0, 5.0, 6.0],
             color: [7.0, 8.0, 9.0],
+            uv: [10.0, 11.0],
+            material: 12.0,
         };
         let bytes: &[f32] = bytemuck::cast_slice(std::slice::from_ref(&v));
-        assert_eq!(bytes, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]);
+        assert_eq!(
+            bytes,
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0]
+        );
     }
 
     #[test]
@@ -1907,12 +1964,16 @@ mod tests {
             positions: vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
             normals: vec![0.0, 1.0, 0.0, 0.0, 1.0, 0.0],
             colors: vec![0.5, 0.5, 0.5, 0.25, 0.25, 0.25],
+            uvs: vec![0.0, 0.0, 1.0, 1.0],
+            materials: vec![0.0, 1.0],
             triangles: 0,
         };
         let verts = mesh_vertices(&mesh);
         assert_eq!(verts.len(), 2);
         assert_eq!(verts[1].position, [3.0, 4.0, 5.0]);
         assert_eq!(verts[1].color, [0.25, 0.25, 0.25]);
+        assert_eq!(verts[1].uv, [1.0, 1.0]);
+        assert_eq!(verts[1].material, 1.0);
     }
 }
 #[cfg(test)]

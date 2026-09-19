@@ -1310,6 +1310,8 @@ fn transform_vertex(m: &Mat4, v: &Vertex) -> Vertex {
         position: p.to_array(),
         normal: n.to_array(),
         color: v.color,
+        uv: v.uv,
+        material: v.material,
     }
 }
 
@@ -1414,13 +1416,7 @@ fn flash_fan(radius: f32, segments: usize, color: [f32; 3]) -> Vec<Vertex> {
             (rim(a0), [0.0, 0.0, 0.0]),
             (rim(a1), [0.0, 0.0, 0.0]),
         ] {
-            out.push(Vertex {
-                position: p,
-                // See the module header: the shader's own light direction, so the
-                // flare lands at full brightness without a second pipeline.
-                normal: LIGHT_DIR,
-                color: c,
-            });
+            out.push(Vertex::new(p, LIGHT_DIR, c));
         }
     }
     out
@@ -1967,11 +1963,7 @@ fn box_verts(size: [f32; 3], color: [f32; 3]) -> Vec<Vertex> {
     let mut out = Vec::with_capacity(36);
     for (normal, corners) in faces {
         for idx in [0usize, 1, 2, 0, 2, 3] {
-            out.push(Vertex {
-                position: corners[idx],
-                normal,
-                color,
-            });
+            out.push(Vertex::new(corners[idx], normal, color));
         }
     }
     out
@@ -1998,44 +1990,16 @@ fn cylinder(radius: f32, length: f32, color: [f32; 3]) -> Vec<Vertex> {
             ([x0, y0, hz], [nx0, ny0, 0.0]),
         ];
         for idx in [0usize, 1, 2, 0, 2, 3] {
-            out.push(Vertex {
-                position: quad[idx].0,
-                normal: quad[idx].1,
-                color,
-            });
+            out.push(Vertex::new(quad[idx].0, quad[idx].1, color));
         }
         // Caps. The far one is what you see down the barrel of a weapon lying
         // across the screen, so neither is optional.
-        out.push(Vertex {
-            position: [0.0, 0.0, hz],
-            normal: [0.0, 0.0, 1.0],
-            color,
-        });
-        out.push(Vertex {
-            position: [x0, y0, hz],
-            normal: [0.0, 0.0, 1.0],
-            color,
-        });
-        out.push(Vertex {
-            position: [x1, y1, hz],
-            normal: [0.0, 0.0, 1.0],
-            color,
-        });
-        out.push(Vertex {
-            position: [0.0, 0.0, -hz],
-            normal: [0.0, 0.0, -1.0],
-            color,
-        });
-        out.push(Vertex {
-            position: [x1, y1, -hz],
-            normal: [0.0, 0.0, -1.0],
-            color,
-        });
-        out.push(Vertex {
-            position: [x0, y0, -hz],
-            normal: [0.0, 0.0, -1.0],
-            color,
-        });
+        out.push(Vertex::new([0.0, 0.0, hz], [0.0, 0.0, 1.0], color));
+        out.push(Vertex::new([x0, y0, hz], [0.0, 0.0, 1.0], color));
+        out.push(Vertex::new([x1, y1, hz], [0.0, 0.0, 1.0], color));
+        out.push(Vertex::new([0.0, 0.0, -hz], [0.0, 0.0, -1.0], color));
+        out.push(Vertex::new([x1, y1, -hz], [0.0, 0.0, -1.0], color));
+        out.push(Vertex::new([x0, y0, -hz], [0.0, 0.0, -1.0], color));
     }
     out
 }
@@ -2849,11 +2813,7 @@ mod tests {
         // with the weapon's position — which shows up as a gun that changes
         // brightness when you walk, and nowhere near the cause.
         let m = Mat4::from_translation(Vec3::new(10.0, -5.0, 3.0));
-        let v = Vertex {
-            position: [0.0, 0.0, 0.0],
-            normal: [0.0, 1.0, 0.0],
-            color: METAL,
-        };
+        let v = Vertex::new([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], METAL);
         let out = transform_vertex(&m, &v);
         assert_eq!(out.normal, [0.0, 1.0, 0.0]);
         assert_eq!(out.position, [10.0, -5.0, 3.0]);

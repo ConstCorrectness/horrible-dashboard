@@ -53,6 +53,8 @@ fn main() {
         .unwrap_or((1600u32, 900u32));
     let rest: Vec<String> = args.collect();
     let summary = rest.iter().any(|a| a == "summary");
+    let live = rest.iter().any(|a| a == "live");
+    let nobuy = rest.iter().any(|a| a == "nobuy");
     // Which objective layer to draw, if any. A parameter because there is no
     // other way to see it: the mode HUD is the part of this client with no unit
     // test that could catch a banner printing through the round clock, which is
@@ -61,7 +63,7 @@ fn main() {
         .iter()
         .find(|a| matches!(a.as_str(), "defuse" | "ctf"))
         .cloned();
-    pollster::block_on(run(&path, width, height, summary, mode.as_deref()));
+    pollster::block_on(run(&path, width, height, summary, live, nobuy, mode.as_deref()));
 }
 
 /// A player mid-firefight: hurt, part way through a magazine, reloading, with
@@ -264,7 +266,7 @@ fn mode_fixture(which: &str) -> (ModeInfo, ModeShared, ModeSelf) {
     }
 }
 
-async fn run(path: &str, width: u32, height: u32, summary: bool, mode_name: Option<&str>) {
+async fn run(path: &str, width: u32, height: u32, summary: bool, live: bool, nobuy: bool, mode_name: Option<&str>) {
     let instance = wgpu::Instance::default();
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions::default())
@@ -420,9 +422,8 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, mode_name: Opti
     let view = HudView {
         hud_scale: 1.0,
         team: 0,
-        // Held open when a mode fixture is drawn, since the menu is the half
-        // of an economy that has to be looked at rather than asserted on.
-        buy_open: fixture.is_some(),
+        // Held open when a mode fixture is drawn, unless live/nobuy requested.
+        buy_open: fixture.is_some() && !live && !nobuy,
         mode: fixture.as_ref().map(|f| &f.0),
         mode_state: fixture.as_ref().map(|f| &f.1),
         mode_self: fixture.as_ref().map(|f| &f.2),
@@ -440,12 +441,8 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, mode_name: Opti
         crouching: false,
         underwater: false,
         playing: true,
-        // Withheld when the card is being previewed, because that is what the
-        // client does: a modal suppresses the scoreboard rather than covering it
-        // with a 0.96-alpha panel. Left `Some` here it would keep showing a bug
-        // the client no longer has — and this example is the only place anybody
-        // looks at either.
-        scoreboard: if summary { None } else { Some(&board) },
+        // Withheld when the card or live gameplay is being previewed.
+        scoreboard: if summary || live { None } else { Some(&board) },
         damage: &numbers,
         scores: &[14, 11],
         rtt: Some(38.0),
@@ -460,6 +457,11 @@ async fn run(path: &str, width: u32, height: u32, summary: bool, mode_name: Opti
         voice_transmitting: false,
         voice_speakers: &[],
     };
+
+    // Spatial noise bearings for the crosshair NoiseRing overlay
+    hud.push_noise("shot", 0.95, 0.45, 0); // urgent amber gunshot to the right
+    hud.push_noise("step", 0.65, -1.15, 1); // soft blue footstep to the left, elevated above
+    hud.push_noise("step", 0.35, 2.75, -1); // subtle footstep behind and below
 
     let mut verts: Vec<OverlayVertex> = Vec::new();
     hud.build(&view, &mut verts);

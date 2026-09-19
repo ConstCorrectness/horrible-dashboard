@@ -26,6 +26,8 @@ pub struct MeshData {
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
     pub colors: Vec<f32>,
+    pub uvs: Vec<f32>,
+    pub materials: Vec<f32>,
     pub triangles: usize,
 }
 
@@ -128,6 +130,8 @@ impl MeshBuilder {
             positions: self.positions,
             normals: self.normals,
             colors: self.colors,
+            uvs: Vec::new(),
+            materials: Vec::new(),
             triangles,
         }
     }

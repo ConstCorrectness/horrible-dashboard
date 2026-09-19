@@ -228,11 +228,7 @@ fn push_box(out: &mut Vec<Vertex>, transform: Mat4, part: &Box) {
             .collect();
         for &[a, b, c] in &[[0usize, 1, 2], [0, 2, 3]] {
             for index in [a, b, c] {
-                out.push(Vertex {
-                    position: world[index].into(),
-                    normal: n.into(),
-                    color: part.color,
-                });
+                out.push(Vertex::new(world[index].into(), n.into(), part.color));
             }
         }
     }

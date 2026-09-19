@@ -370,11 +370,7 @@ fn push_box(out: &mut Vec<Vertex>, centre: [f32; 3], size: [f32; 3], spin: f32, 
     for (normal, corners) in faces {
         let n = rotate_n(normal);
         for idx in [0usize, 1, 2, 0, 2, 3] {
-            out.push(Vertex {
-                position: place(corners[idx]),
-                normal: n,
-                color: colour,
-            });
+            out.push(Vertex::new(place(corners[idx]), n, colour));
         }
     }
 }
@@ -403,11 +399,7 @@ fn push_ring(out: &mut Vec<Vertex>, centre: [f32; 3], colour: [f32; 3]) {
             at(a0, RING_OUTER),
         ];
         for idx in [0usize, 2, 1, 0, 3, 2] {
-            out.push(Vertex {
-                position: quad[idx],
-                normal: up,
-                color: colour,
-            });
+            out.push(Vertex::new(quad[idx], up, colour));
         }
     }
 }

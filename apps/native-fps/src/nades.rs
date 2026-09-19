@@ -303,11 +303,7 @@ pub fn push_sphere(
             let (c, nc) = point(ring + 1, next);
             let (d, nd) = point(ring, next);
             for (position, normal) in [(a, na), (b, nb), (c, nc), (a, na), (c, nc), (d, nd)] {
-                out.push(Vertex {
-                    position,
-                    normal,
-                    color,
-                });
+                out.push(Vertex::new(position, normal, color));
             }
         }
     }

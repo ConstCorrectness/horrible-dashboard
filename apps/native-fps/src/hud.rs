@@ -68,6 +68,25 @@ const MAX_FEED: usize = 5;
 const ARROW_LIFE: f32 = 1.2;
 const MAX_DAMAGE_ARROWS: usize = 6;
 
+/// How long a spatial noise bearing indicator stays up on the crosshair ring.
+///
+/// Exactly 900 ms, matching the browser pane (`NOISE_TTL_MS = 900`).
+pub const NOISE_TTL: f32 = 0.9;
+pub const MAX_HEARD_NOISES: usize = 16;
+
+/// One noise heard from an external source (footstep, gunshot, land, etc.).
+///
+/// The wire deliberately carries no position, only bearing and loudness.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HeardNoise {
+    pub kind: String,
+    pub volume: f32,
+    pub bearing: f32,
+    pub up: i32,
+    pub age: f32,
+}
+
+
 /// How long the centre kill notice stays up.
 ///
 /// Longer than a hitmarker, shorter than a damage arrow. It is a *reward*, not
@@ -101,6 +120,29 @@ fn streak_name(kills: u32) -> Option<&'static str> {
         .rev()
         .find(|(at, _)| *at == kills)
         .map(|(_, name)| *name)
+}
+
+/// Tactical kill badge category for flashy combat popups.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KillBadgeKind {
+    Headshot,
+    Nutshot,
+    Knife,
+    Wallbang,
+    Double,
+    Triple,
+    Quad,
+    Unstoppable,
+    Standard,
+}
+
+#[derive(Debug, Clone)]
+pub struct KillBadgeData {
+    pub kind: KillBadgeKind,
+    pub title: &'static str,
+    pub victim_name: String,
+    pub streak: u32,
+    pub is_gold: bool,
 }
 
 // The palette, as a **ramp rather than six independent choices**. Everything
@@ -457,6 +499,10 @@ pub struct Hud {
     /// Where damage came from, as world bearings in radians, newest last, with
     /// the age of each. Drawn as arcs around the crosshair.
     damage_from: VecDeque<(f32, f32)>,
+    /// Recent noises heard from external sources, for the directional noise ring.
+    heard_noises: VecDeque<HeardNoise>,
+    /// Whether directional noise ring indicators are enabled around the crosshair.
+    pub noise_rings: bool,
     /// Fall damage from the most recent landing, and how long ago.
     fell: f32,
     fell_age: f32,
@@ -470,6 +516,7 @@ pub struct Hud {
     /// in the same tick and only the named form is ever drawn.
     kill_notice: String,
     kill_age: f32,
+    kill_badge: Option<KillBadgeData>,
     /// Kills since we last died, and the milestone notice it earned.
     ///
     /// Counted from **our own hitmarkers** rather than from `Fx::Kill`, which is
@@ -497,10 +544,13 @@ impl Default for Hud {
             ghost_hp: 0.0,
             ghost_hold: 0.0,
             damage_from: VecDeque::new(),
+            heard_noises: VecDeque::new(),
+            noise_rings: true,
             fell: 0.0,
             fell_age: f32::MAX,
             kill_notice: String::new(),
             kill_age: f32::MAX,
+            kill_badge: None,
             streak: 0,
             streak_notice: String::new(),
             board_age: 0.0,
@@ -578,6 +628,46 @@ impl Hud {
             }
             .to_uppercase();
             self.kill_age = 0.0;
+
+            let badge_kind = if *head {
+                KillBadgeKind::Headshot
+            } else if *nutshot {
+                KillBadgeKind::Nutshot
+            } else if weapon == "knife" {
+                KillBadgeKind::Knife
+            } else if *wallbang {
+                KillBadgeKind::Wallbang
+            } else if self.streak >= 10 {
+                KillBadgeKind::Unstoppable
+            } else if self.streak == 4 {
+                KillBadgeKind::Quad
+            } else if self.streak == 3 {
+                KillBadgeKind::Triple
+            } else if self.streak == 2 {
+                KillBadgeKind::Double
+            } else {
+                KillBadgeKind::Standard
+            };
+
+            let title = match badge_kind {
+                KillBadgeKind::Headshot => "HEADSHOT!",
+                KillBadgeKind::Nutshot => "NUTSHOT!",
+                KillBadgeKind::Knife => "KNIFE KILL",
+                KillBadgeKind::Wallbang => "WALLBANG!",
+                KillBadgeKind::Unstoppable => "UNSTOPPABLE!",
+                KillBadgeKind::Quad => "ULTRA KILL",
+                KillBadgeKind::Triple => "MULTI KILL",
+                KillBadgeKind::Double => "DOUBLE KILL",
+                KillBadgeKind::Standard => "KILL",
+            };
+
+            self.kill_badge = Some(KillBadgeData {
+                kind: badge_kind,
+                title,
+                victim_name: v_name.clone(),
+                streak: self.streak,
+                is_gold: badge_kind != KillBadgeKind::Standard,
+            });
         }
         self.feed.push_front(KillNote {
             text,
@@ -619,6 +709,38 @@ impl Hud {
             self.kill_notice = "ELIMINATED".to_string();
             self.kill_age = 0.0;
             self.streak += hits.iter().filter(|h| h.killed).count() as u32;
+            let is_head = hits.iter().any(|h| h.killed && h.head);
+            let badge_kind = if is_head {
+                KillBadgeKind::Headshot
+            } else if self.streak >= 10 {
+                KillBadgeKind::Unstoppable
+            } else if self.streak == 4 {
+                KillBadgeKind::Quad
+            } else if self.streak == 3 {
+                KillBadgeKind::Triple
+            } else if self.streak == 2 {
+                KillBadgeKind::Double
+            } else {
+                KillBadgeKind::Standard
+            };
+            let title = match badge_kind {
+                KillBadgeKind::Headshot => "HEADSHOT!",
+                KillBadgeKind::Nutshot => "NUTSHOT!",
+                KillBadgeKind::Knife => "KNIFE KILL",
+                KillBadgeKind::Wallbang => "WALLBANG!",
+                KillBadgeKind::Unstoppable => "UNSTOPPABLE!",
+                KillBadgeKind::Quad => "ULTRA KILL",
+                KillBadgeKind::Triple => "MULTI KILL",
+                KillBadgeKind::Double => "DOUBLE KILL",
+                KillBadgeKind::Standard => "KILL",
+            };
+            self.kill_badge = Some(KillBadgeData {
+                kind: badge_kind,
+                title,
+                victim_name: String::new(),
+                streak: self.streak,
+                is_gold: badge_kind != KillBadgeKind::Standard,
+            });
             // Cleared unless this kill *earned* a milestone, so the previous
             // one does not ride along under every kill until you die.
             self.streak_notice = match streak_name(self.streak) {
@@ -655,6 +777,7 @@ impl Hud {
         if !you.alive {
             self.streak = 0;
             self.streak_notice.clear();
+            self.kill_badge = None;
         }
         for h in &you.hurt {
             self.damage_from.push_back((h.bearing, 0.0));
@@ -662,9 +785,33 @@ impl Hud {
         while self.damage_from.len() > MAX_DAMAGE_ARROWS {
             self.damage_from.pop_front();
         }
+        for n in &you.noise {
+            self.push_noise(&n.kind, n.volume, n.bearing, n.up);
+        }
         if you.fell > 0.0 {
             self.fell = you.fell;
             self.fell_age = 0.0;
+        }
+    }
+
+    /// Feed externally heard spatial noises into the crosshair noise ring.
+    pub fn on_noise(&mut self, events: &[crate::protocol::NoiseEvent]) {
+        for n in events {
+            self.push_noise(&n.kind, n.volume, n.bearing, n.up);
+        }
+    }
+
+    /// Push one heard noise indicator with bearing and volume.
+    pub fn push_noise(&mut self, kind: &str, volume: f32, bearing: f32, up: i32) {
+        self.heard_noises.push_back(HeardNoise {
+            kind: kind.to_string(),
+            volume,
+            bearing,
+            up,
+            age: 0.0,
+        });
+        while self.heard_noises.len() > MAX_HEARD_NOISES {
+            self.heard_noises.pop_front();
         }
     }
 
@@ -716,12 +863,14 @@ impl Hud {
         // HUD that was simply wrong.
         self.streak = 0;
         self.streak_notice.clear();
+        self.kill_badge = None;
         // Neither the trail nor the arrows survive a death: they describe the
         // fight that killed you, and drawing them over a fresh body would send
         // a player who has just spawned to look somewhere across the map.
         self.ghost_hp = 0.0;
         self.ghost_hold = 0.0;
         self.damage_from.clear();
+        self.heard_noises.clear();
     }
 
     /// `board_open` is the scoreboard key, held. It drives the entrance
@@ -762,6 +911,12 @@ impl Hud {
         }
         while self.damage_from.front().is_some_and(|a| a.1 > ARROW_LIFE) {
             self.damage_from.pop_front();
+        }
+        for noise in &mut self.heard_noises {
+            noise.age += dt;
+        }
+        while self.heard_noises.front().is_some_and(|n| n.age > NOISE_TTL) {
+            self.heard_noises.pop_front();
         }
         for note in &mut self.feed {
             note.age += dt;
@@ -821,6 +976,7 @@ impl Hud {
             // the centre of the screen, where the player is already looking.
             if !dead {
                 self.paint_damage_arrows(&mut p, view.yaw, u);
+                self.paint_noise_ring(&mut p, view.yaw, u);
             }
             self.paint_health(&mut p, view, u);
             paint_weapon(&mut p, view, u);
@@ -1117,17 +1273,33 @@ impl Hud {
             bar_w + u * 3.0,
             armour_y + armour_h - number_y + u * 1.8,
             u * 1.2,
-            Some(if low { RED } else { FAINT }),
+            Some(if low { RED } else { [0.35, 0.55, 0.78, 0.75] }),
         );
 
-        p.text(left, number_y, big, color, &label);
+        let cross_size = u * 4.2;
+        let cross_y = number_y + (7.0 * big - cross_size) * 0.5;
+        draw_medical_cross(p, left, cross_y, cross_size, if low { RED } else { [0.85, 0.22, 0.22, 0.95] });
+
+        let num_x = left + cross_size + u * 2.0;
+        p.text(num_x, number_y, big, color, &label);
         p.text(
-            left + text_width(&label, big) + small * 2.0,
+            num_x + text_width(&label, big) + small * 1.5,
             number_y + 7.0 * big - 7.0 * small,
             small,
             DIM,
             "HP",
         );
+
+        if low {
+            let crit_w = text_width("CRITICAL", small);
+            p.text(
+                left + bar_w - crit_w,
+                number_y + 7.0 * big - 7.0 * small,
+                small,
+                [0.99, 0.32, 0.28, 0.95],
+                "CRITICAL",
+            );
+        }
 
         // A bar as well as a number: a number is exact and a bar is instant, and
         // in a firefight only one of those gets read.
@@ -1156,13 +1328,23 @@ impl Hud {
             p.rect(x, bar_y, (u * 0.2).max(1.0), bar_h, TROUGH);
         }
 
+        // Shield icon beside the armour bar
+        let shield_size = (armour_h * 1.5).min(u * 2.4);
+        draw_shield_icon(p, left, armour_y + (armour_h - shield_size) * 0.5, shield_size, ARMOUR);
+        let ar_left = left + shield_size + u * 1.5;
+        let ar_w = bar_w - (shield_size + u * 1.5);
+
         // The trough is drawn whether or not there is armour: an empty trough
         // says "you could be wearing some and are not", which is a different
         // statement from the blank space that says nothing at all.
-        p.rect(left, armour_y, bar_w, armour_h, TROUGH);
+        p.rect(ar_left, armour_y, ar_w, armour_h, TROUGH);
         if you.armour > 0.0 {
             let af = (you.armour / 100.0).clamp(0.0, 1.0);
-            p.rect(left, armour_y, bar_w * af, armour_h, ARMOUR);
+            p.rect(ar_left, armour_y, ar_w * af, armour_h, ARMOUR);
+            for i in 1..4 {
+                let x = ar_left + ar_w * (i as f32 / 4.0);
+                p.rect(x, armour_y, (u * 0.2).max(1.0), armour_h, TROUGH);
+            }
         }
 
         if you.protected {
@@ -1214,6 +1396,85 @@ impl Hud {
         }
     }
 
+    /// A ring of indicators around the crosshair, one per noise heard, at the bearing the
+    /// server reported and the opacity of its volume.
+    ///
+    /// Mirrors `NoiseRing` from the browser pane (`HorribleAssaultPanel.tsx`).
+    fn paint_noise_ring(&self, p: &mut Painter, yaw: f32, u: f32) {
+        if !self.noise_rings || self.heard_noises.is_empty() {
+            return;
+        }
+        let cx = p.width * 0.5;
+        let cy = p.height * 0.5;
+        // Positioned radially outside the damage arrows, roughly a tenth of the screen height.
+        let radius = u * 34.0;
+
+        for noise in &self.heard_noises {
+            if noise.age >= NOISE_TTL {
+                continue;
+            }
+            let age_frac = (noise.age / NOISE_TTL).clamp(0.0, 1.0);
+            let fade = 1.0 - age_frac;
+            let alpha = (fade * (noise.volume * 1.6).clamp(0.1, 1.0)).clamp(0.0, 1.0);
+            if alpha <= 0.01 {
+                continue;
+            }
+
+            // Bearing relative to view yaw: sound dead ahead is at screen top (-y)
+            let rel = noise.bearing - yaw;
+            let (s, c) = rel.sin_cos();
+            let (dx, dy) = (s, -c);
+
+            let nx = cx + dx * radius;
+            let ny = cy + dy * radius;
+
+            let is_shot = noise.kind == "shot";
+            // Color: shots are bright urgent amber (#ffb86b), other noises are soft pale blue (#cfd8ff)
+            let col = if is_shot {
+                [1.0, 0.72, 0.42, 0.95 * alpha]
+            } else {
+                [0.81, 0.85, 1.0, 0.85 * alpha]
+            };
+
+            let size = if is_shot { (u * 2.2).max(4.0) } else { (u * 1.6).max(3.0) };
+
+            // Dark backing / drop-shadow for contrast against bright surfaces
+            let shadow_col = [0.05, 0.07, 0.10, 0.85 * alpha];
+            p.rect(
+                nx - (size * 0.5 + 1.0),
+                ny - (size * 0.5 + 1.0),
+                size + 2.0,
+                size + 2.0,
+                shadow_col,
+            );
+
+            // Colored indicator core
+            p.rect(nx - size * 0.5, ny - size * 0.5, size, size, col);
+
+            // Elevation cues (up != 0): vertical chevron above or below the indicator
+            if noise.up != 0 {
+                let mark_col = [1.0, 1.0, 1.0, 0.75 * alpha];
+                if noise.up > 0 {
+                    let tip_y = ny - size * 0.5 - u * 2.0;
+                    p.tri(
+                        (nx - u * 1.2, ny - size * 0.5 - 0.5),
+                        (nx + u * 1.2, ny - size * 0.5 - 0.5),
+                        (nx, tip_y),
+                        mark_col,
+                    );
+                } else {
+                    let tip_y = ny + size * 0.5 + u * 2.0;
+                    p.tri(
+                        (nx - u * 1.2, ny + size * 0.5 + 0.5),
+                        (nx + u * 1.2, ny + size * 0.5 + 0.5),
+                        (nx, tip_y),
+                        mark_col,
+                    );
+                }
+            }
+        }
+    }
+
     /// The banner for whatever just happened to the objective.
     ///
     /// Deliberately one line in one place rather than a variant per event: what
@@ -1257,50 +1518,68 @@ impl Hud {
             p.center_text(p.height * 0.58, scale, [0.98, 0.62, 0.58, 0.9], &line);
         }
         if self.kill_age < KILL_NOTICE_LIFE && !self.kill_notice.is_empty() {
-            // **Below the crosshair, and below the fall notice.** The obvious
-            // place for a kill confirmation is above the aim, and this was there
-            // first — until `examples/hud_preview` drew it: the scoreboard is a
-            // centred panel spanning roughly 0.28..0.47 of the height, so a
-            // notice at 0.36 printed straight through it every time somebody
-            // opened the board. That collision is intermittent in play — the
-            // board is a held key — which is exactly the kind of fault that
-            // ships. No unit test would have caught it; the picture did.
-            //
-            // Faded out over its last third rather than cut, so a notice on its
-            // way out cannot be mistaken for one that has just arrived.
             let fade =
                 ((KILL_NOTICE_LIFE - self.kill_age) / (KILL_NOTICE_LIFE * 0.33)).clamp(0.0, 1.0);
-            let colour = [AMBER[0], AMBER[1], AMBER[2], AMBER[3] * fade];
-            let big = scale * 1.15;
-            let y = p.height * 0.65;
-            p.center_text(y, big, colour, &self.kill_notice);
-            // A rule under it, the width of the text, growing out of nothing as
-            // the notice fades. The one piece of structure the tactical
-            // direction asks for and the cheapest thing on screen to draw: an
-            // underline reads as a stamp where a box would read as a dialog.
-            let w = text_width(&self.kill_notice, big);
-            p.rect(
-                (p.width - w * fade) * 0.5,
-                y + 8.0 * big,
-                w * fade,
-                (big * 0.4).max(2.0),
-                colour,
+            // Elastic pop-in punch
+            let pop_t = (self.kill_age / 0.16).clamp(0.0, 1.0);
+            let pop_scale = 1.0 + 0.28 * (1.0 - pop_t) * (1.0 - pop_t);
+
+            let (badge_kind, is_gold, title, victim) = if let Some(badge) = &self.kill_badge {
+                (badge.kind, badge.is_gold, badge.title, badge.victim_name.as_str())
+            } else if self.kill_notice.starts_with("HEADSHOT") {
+                (KillBadgeKind::Headshot, true, "HEADSHOT!", "")
+            } else if self.kill_notice.starts_with("NUTSHOT") {
+                (KillBadgeKind::Nutshot, true, "NUTSHOT!", "")
+            } else if self.streak >= 10 {
+                (KillBadgeKind::Unstoppable, true, "UNSTOPPABLE!", "")
+            } else if self.streak == 4 {
+                (KillBadgeKind::Quad, true, "ULTRA KILL", "")
+            } else if self.streak == 3 {
+                (KillBadgeKind::Triple, true, "MULTI KILL", "")
+            } else if self.streak == 2 {
+                (KillBadgeKind::Double, true, "DOUBLE KILL", "")
+            } else {
+                (KillBadgeKind::Standard, false, "KILL", "")
+            };
+
+            let badge_s = scale * pop_scale;
+            let cx = p.width * 0.5;
+            let cy = p.height * 0.64;
+
+            // Background pulsing aura disc
+            let aura_col = if is_gold {
+                [1.0, 0.72, 0.15, 0.18 * fade]
+            } else {
+                [0.45, 0.70, 0.95, 0.15 * fade]
+            };
+            p.disc(cx, cy, badge_s * 28.0, 24, aura_col);
+
+            // Layered feathered wings
+            draw_badge_wings(p, cx, cy, badge_s * 0.65, is_gold, fade);
+
+            // Central skull / emblem
+            draw_badge_skull(p, cx, cy, badge_s * 0.75, badge_kind, is_gold, fade);
+
+            // Metallic plaque banner with bold title and subtitle/streak
+            let v_display = if !victim.is_empty() {
+                victim
+            } else if self.kill_notice.contains(' ') {
+                self.kill_notice.split_once(' ').map(|(_, v)| v).unwrap_or("")
+            } else {
+                ""
+            };
+
+            draw_badge_banner(
+                p,
+                cx,
+                cy + badge_s * 12.0,
+                title,
+                v_display,
+                &self.streak_notice,
+                is_gold,
+                fade,
+                badge_s * 0.85,
             );
-            // The milestone, beneath the kill that earned it.
-            //
-            // **On the kill notice's clock, not one of its own.** A streak is
-            // only ever announced at the instant of a kill, so a second timer
-            // would be a second thing to age, cap and reset that could only ever
-            // disagree with this one. Empty at a count between milestones, which
-            // is most kills.
-            if !self.streak_notice.is_empty() {
-                p.center_text(
-                    y + 11.0 * big,
-                    scale * 0.9,
-                    [WHITE[0], WHITE[1], WHITE[2], WHITE[3] * fade],
-                    &self.streak_notice,
-                );
-            }
         }
     }
 }
@@ -1444,6 +1723,253 @@ fn draw_weapon_badge(p: &mut Painter, x: f32, y: f32, name: &str, scale: f32, fa
     );
     p.text(x + pad, y, scale * 0.85, [0.94, 0.96, 0.98, 0.95 * fade], name);
     badge_w
+}
+
+fn draw_badge_wings(p: &mut Painter, cx: f32, cy: f32, s: f32, is_gold: bool, fade: f32) {
+    let (primary, highlight, shadow) = if is_gold {
+        (
+            [0.96, 0.74, 0.20, 0.95 * fade],
+            [1.0, 0.92, 0.60, 0.95 * fade],
+            [0.55, 0.35, 0.08, 0.90 * fade],
+        )
+    } else {
+        (
+            [0.72, 0.78, 0.84, 0.95 * fade],
+            [0.94, 0.96, 1.0, 0.95 * fade],
+            [0.32, 0.36, 0.42, 0.90 * fade],
+        )
+    };
+
+    // Left wing: 3 layered feathered sweeps
+    p.tri((cx - 8.0 * s, cy - 2.0 * s), (cx - 44.0 * s, cy - 18.0 * s), (cx - 20.0 * s, cy + 4.0 * s), primary);
+    p.tri((cx - 10.0 * s, cy - 2.0 * s), (cx - 44.0 * s, cy - 18.0 * s), (cx - 30.0 * s, cy - 10.0 * s), highlight);
+    p.line(cx - 8.0 * s, cy - 2.0 * s, cx - 44.0 * s, cy - 18.0 * s, 1.2 * s, shadow);
+
+    p.tri((cx - 10.0 * s, cy + 2.0 * s), (cx - 48.0 * s, cy - 4.0 * s), (cx - 18.0 * s, cy + 12.0 * s), primary);
+    p.tri((cx - 12.0 * s, cy + 2.0 * s), (cx - 48.0 * s, cy - 4.0 * s), (cx - 32.0 * s, cy + 3.0 * s), highlight);
+    p.line(cx - 10.0 * s, cy + 2.0 * s, cx - 48.0 * s, cy - 4.0 * s, 1.2 * s, shadow);
+
+    p.tri((cx - 10.0 * s, cy + 8.0 * s), (cx - 38.0 * s, cy + 8.0 * s), (cx - 14.0 * s, cy + 16.0 * s), primary);
+    p.tri((cx - 12.0 * s, cy + 8.0 * s), (cx - 38.0 * s, cy + 8.0 * s), (cx - 26.0 * s, cy + 12.0 * s), highlight);
+    p.line(cx - 10.0 * s, cy + 8.0 * s, cx - 38.0 * s, cy + 8.0 * s, 1.2 * s, shadow);
+
+    // Right wing: mirrored sweeps
+    p.tri((cx + 8.0 * s, cy - 2.0 * s), (cx + 44.0 * s, cy - 18.0 * s), (cx + 20.0 * s, cy + 4.0 * s), primary);
+    p.tri((cx + 10.0 * s, cy - 2.0 * s), (cx + 44.0 * s, cy - 18.0 * s), (cx + 30.0 * s, cy - 10.0 * s), highlight);
+    p.line(cx + 8.0 * s, cy - 2.0 * s, cx + 44.0 * s, cy - 18.0 * s, 1.2 * s, shadow);
+
+    p.tri((cx + 10.0 * s, cy + 2.0 * s), (cx + 48.0 * s, cy - 4.0 * s), (cx + 18.0 * s, cy + 12.0 * s), primary);
+    p.tri((cx + 12.0 * s, cy + 2.0 * s), (cx + 48.0 * s, cy - 4.0 * s), (cx + 32.0 * s, cy + 3.0 * s), highlight);
+    p.line(cx + 10.0 * s, cy + 2.0 * s, cx + 48.0 * s, cy - 4.0 * s, 1.2 * s, shadow);
+
+    p.tri((cx + 10.0 * s, cy + 8.0 * s), (cx + 38.0 * s, cy + 8.0 * s), (cx + 14.0 * s, cy + 16.0 * s), primary);
+    p.tri((cx + 12.0 * s, cy + 8.0 * s), (cx + 38.0 * s, cy + 8.0 * s), (cx + 26.0 * s, cy + 12.0 * s), highlight);
+    p.line(cx + 10.0 * s, cy + 8.0 * s, cx + 38.0 * s, cy + 8.0 * s, 1.2 * s, shadow);
+}
+
+fn draw_badge_skull(p: &mut Painter, cx: f32, cy: f32, s: f32, kind: KillBadgeKind, is_gold: bool, fade: f32) {
+    let (primary, highlight, shadow) = if is_gold {
+        (
+            [0.96, 0.74, 0.20, 0.95 * fade],
+            [1.0, 0.92, 0.60, 0.95 * fade],
+            [0.55, 0.35, 0.08, 0.90 * fade],
+        )
+    } else {
+        (
+            [0.72, 0.78, 0.84, 0.95 * fade],
+            [0.94, 0.96, 1.0, 0.95 * fade],
+            [0.32, 0.36, 0.42, 0.90 * fade],
+        )
+    };
+    let dark = [0.08, 0.08, 0.10, 0.95 * fade];
+
+    // Crossed blades for Knife Kill
+    if kind == KillBadgeKind::Knife {
+        let blade_col = [0.95, 0.97, 1.0, 0.95 * fade];
+        p.line(cx - 24.0 * s, cy - 16.0 * s, cx + 24.0 * s, cy + 16.0 * s, 2.5 * s, blade_col);
+        p.line(cx + 24.0 * s, cy - 16.0 * s, cx - 24.0 * s, cy + 16.0 * s, 2.5 * s, blade_col);
+    }
+
+    // Flame Crown for Headshot
+    if kind == KillBadgeKind::Headshot {
+        let flame_red = [0.98, 0.22, 0.10, 0.95 * fade];
+        let flame_amber = [1.0, 0.65, 0.15, 0.95 * fade];
+        let flame_yellow = [1.0, 0.95, 0.35, 0.98 * fade];
+
+        // Center flame tongue
+        p.tri((cx, cy - 26.0 * s), (cx - 5.0 * s, cy - 12.0 * s), (cx + 5.0 * s, cy - 12.0 * s), flame_red);
+        p.tri((cx, cy - 24.0 * s), (cx - 3.0 * s, cy - 12.0 * s), (cx + 3.0 * s, cy - 12.0 * s), flame_amber);
+        p.tri((cx, cy - 20.0 * s), (cx - 1.5 * s, cy - 12.0 * s), (cx + 1.5 * s, cy - 12.0 * s), flame_yellow);
+
+        // Left flame tongue
+        p.tri((cx - 7.0 * s, cy - 21.0 * s), (cx - 11.0 * s, cy - 11.0 * s), (cx - 3.0 * s, cy - 11.0 * s), flame_red);
+        p.tri((cx - 7.0 * s, cy - 19.0 * s), (cx - 9.0 * s, cy - 11.0 * s), (cx - 4.5 * s, cy - 11.0 * s), flame_amber);
+
+        // Right flame tongue
+        p.tri((cx + 7.0 * s, cy - 21.0 * s), (cx + 3.0 * s, cy - 11.0 * s), (cx + 11.0 * s, cy - 11.0 * s), flame_red);
+        p.tri((cx + 7.0 * s, cy - 19.0 * s), (cx + 4.5 * s, cy - 11.0 * s), (cx + 9.0 * s, cy - 11.0 * s), flame_amber);
+    }
+
+    // Skull Dome / Cranium
+    p.tri((cx, cy - 15.0 * s), (cx - 12.0 * s, cy - 7.0 * s), (cx + 12.0 * s, cy - 7.0 * s), primary);
+    p.rect(cx - 12.0 * s, cy - 7.0 * s, 24.0 * s, 10.0 * s, primary);
+    p.rect(cx - 10.0 * s, cy - 6.0 * s, 20.0 * s, 2.0 * s, highlight);
+
+    // Cheekbones
+    p.tri((cx - 12.0 * s, cy + 3.0 * s), (cx - 7.0 * s, cy + 3.0 * s), (cx - 6.0 * s, cy + 8.0 * s), primary);
+    p.tri((cx + 12.0 * s, cy + 3.0 * s), (cx + 7.0 * s, cy + 3.0 * s), (cx + 6.0 * s, cy + 8.0 * s), primary);
+
+    // Jaw box
+    p.rect(cx - 6.0 * s, cy + 3.0 * s, 12.0 * s, 7.0 * s, primary);
+    p.rect(cx - 5.0 * s, cy + 4.0 * s, 10.0 * s, 1.5 * s, highlight);
+    p.rect(cx - 6.0 * s, cy + 9.5 * s, 12.0 * s, 1.0 * s, shadow);
+
+    // Eye sockets
+    let (eye_bg, eye_core) = if kind == KillBadgeKind::Headshot {
+        ([1.0, 0.15, 0.15, 0.98 * fade], Some([1.0, 0.95, 0.35, 1.0 * fade]))
+    } else {
+        (dark, None)
+    };
+    p.rect(cx - 8.5 * s, cy - 3.5 * s, 5.0 * s, 5.5 * s, eye_bg);
+    p.rect(cx + 3.5 * s, cy - 3.5 * s, 5.0 * s, 5.5 * s, eye_bg);
+    if let Some(core) = eye_core {
+        p.rect(cx - 7.0 * s, cy - 2.0 * s, 2.0 * s, 2.5 * s, core);
+        p.rect(cx + 5.0 * s, cy - 2.0 * s, 2.0 * s, 2.5 * s, core);
+    }
+
+    // Inverted triangular nasal cavity
+    p.tri((cx, cy + 0.5 * s), (cx - 2.0 * s, cy + 4.0 * s), (cx + 2.0 * s, cy + 4.0 * s), dark);
+
+    // Teeth slots
+    p.rect(cx - 3.5 * s, cy + 6.5 * s, 1.5 * s, 3.5 * s, dark);
+    p.rect(cx - 0.75 * s, cy + 6.5 * s, 1.5 * s, 3.5 * s, dark);
+    p.rect(cx + 2.0 * s, cy + 6.5 * s, 1.5 * s, 3.5 * s, dark);
+}
+
+fn draw_badge_banner(
+    p: &mut Painter,
+    cx: f32,
+    cy: f32,
+    title: &str,
+    victim: &str,
+    streak: &str,
+    is_gold: bool,
+    fade: f32,
+    s: f32,
+) {
+    let font_scale = s * 1.0;
+    let title_w = text_width(title, font_scale);
+    let pad_x = s * 8.0;
+    let pad_y = s * 3.5;
+    let banner_w = (title_w + pad_x * 2.0).max(s * 70.0);
+    let banner_h = 7.0 * font_scale + pad_y * 2.0;
+    let bx = cx - banner_w * 0.5;
+    let by = cy;
+
+    // Metallic frame colors
+    let (border_col, bg_col, text_col) = if is_gold {
+        (
+            [1.0, 0.88, 0.35, 0.98 * fade],
+            [0.16, 0.12, 0.05, 0.92 * fade],
+            [1.0, 0.94, 0.65, 0.98 * fade],
+        )
+    } else {
+        (
+            [0.85, 0.90, 0.96, 0.98 * fade],
+            [0.10, 0.12, 0.16, 0.92 * fade],
+            [0.92, 0.95, 0.98, 0.98 * fade],
+        )
+    };
+
+    // Outer drop shadow
+    p.rect(bx - 1.5 * s, by - 1.0 * s, banner_w + 3.0 * s, banner_h + 2.0 * s, [0.0, 0.0, 0.0, 0.65 * fade]);
+
+    // Chamfered / beveled panel body
+    p.panel(bx, by, banner_w, banner_h, s * 2.0, Some(border_col));
+    p.rect(bx + s * 1.5, by + s * 1.5, banner_w - s * 3.0, banner_h - s * 3.0, bg_col);
+
+    // Accent edge lines
+    p.rect(bx + s * 2.0, by + s * 1.5, banner_w - s * 4.0, 1.5 * s, border_col);
+    p.rect(bx + s * 2.0, by + banner_h - s * 2.5, banner_w - s * 4.0, 1.2 * s, border_col);
+
+    // Title text centered
+    p.center_text(by + pad_y, font_scale, text_col, title);
+
+    // Victim tag underneath
+    let mut next_y = by + banner_h + s * 2.5;
+    if !victim.is_empty() {
+        let sub_scale = s * 0.75;
+        let v_line = format!("[ {victim} ]");
+        let vw = text_width(&v_line, sub_scale);
+        p.rect(cx - vw * 0.5 - s * 3.0, next_y - s * 1.0, vw + s * 6.0, 7.0 * sub_scale + s * 2.0, [0.05, 0.07, 0.10, 0.80 * fade]);
+        p.center_text(next_y, sub_scale, [0.85, 0.88, 0.92, 0.90 * fade], &v_line);
+        next_y += 7.0 * sub_scale + s * 3.5;
+    }
+
+    // Streak milestone pill if active
+    if !streak.is_empty() {
+        let st_scale = s * 0.75;
+        let st_w = text_width(streak, st_scale);
+        p.rect(cx - st_w * 0.5 - s * 4.0, next_y - s * 1.0, st_w + s * 8.0, 7.0 * st_scale + s * 2.0, [0.22, 0.15, 0.04, 0.88 * fade]);
+        p.rect(cx - st_w * 0.5 - s * 4.0, next_y - s * 1.0, st_w + s * 8.0, 1.2 * s, [1.0, 0.80, 0.25, 0.95 * fade]);
+        p.center_text(next_y, st_scale, [1.0, 0.88, 0.45, 0.95 * fade], streak);
+    }
+}
+
+fn draw_weapon_silhouette(p: &mut Painter, x: f32, y: f32, w: f32, h: f32, name: &str, color: [f32; 4]) {
+    let upper = name.to_uppercase();
+    let s = (w / 36.0).min(h / 14.0);
+    if upper.contains("SNIPER") {
+        p.rect(x, y + 5.0 * s, 36.0 * s, 2.0 * s, color);
+        p.rect(x + 12.0 * s, y + 2.0 * s, 10.0 * s, 2.0 * s, color);
+        p.rect(x + 14.0 * s, y + 4.0 * s, 2.0 * s, 1.5 * s, color);
+        p.rect(x + 20.0 * s, y + 4.0 * s, 2.0 * s, 1.5 * s, color);
+        p.tri((x + 24.0 * s, y + 7.0 * s), (x + 29.0 * s, y + 13.0 * s), (x + 26.0 * s, y + 13.0 * s), color);
+        p.rect(x + 27.0 * s, y + 7.0 * s, 8.0 * s, 4.0 * s, color);
+    } else if upper.contains("SHOTGUN") {
+        p.rect(x + 2.0 * s, y + 4.0 * s, 32.0 * s, 3.0 * s, color);
+        p.rect(x + 10.0 * s, y + 7.0 * s, 8.0 * s, 2.5 * s, color);
+        p.rect(x + 22.0 * s, y + 5.0 * s, 6.0 * s, 4.0 * s, color);
+        p.tri((x + 24.0 * s, y + 9.0 * s), (x + 27.0 * s, y + 13.0 * s), (x + 25.0 * s, y + 13.0 * s), color);
+        p.rect(x + 27.0 * s, y + 6.0 * s, 8.0 * s, 4.5 * s, color);
+    } else if upper.contains("KNIFE") {
+        p.tri((x + 6.0 * s, y + 6.0 * s), (x + 20.0 * s, y + 4.0 * s), (x + 20.0 * s, y + 8.0 * s), color);
+        p.rect(x + 20.0 * s, y + 3.0 * s, 2.0 * s, 8.0 * s, color);
+        p.rect(x + 22.0 * s, y + 5.0 * s, 10.0 * s, 4.0 * s, color);
+    } else if upper.contains("PISTOL") || upper.contains("DEAGLE") || upper.contains("GLOCK") || upper.contains("SIDEARM") {
+        p.rect(x + 10.0 * s, y + 4.0 * s, 16.0 * s, 4.0 * s, color);
+        p.tri((x + 18.0 * s, y + 8.0 * s), (x + 22.0 * s, y + 13.0 * s), (x + 19.0 * s, y + 13.0 * s), color);
+        p.rect(x + 14.0 * s, y + 8.0 * s, 4.0 * s, 1.5 * s, color);
+    } else {
+        // Assault rifle
+        p.rect(x + 2.0 * s, y + 4.5 * s, 32.0 * s, 2.0 * s, color);
+        p.rect(x + 8.0 * s, y + 3.5 * s, 10.0 * s, 3.5 * s, color);
+        p.rect(x + 18.0 * s, y + 3.0 * s, 8.0 * s, 4.5 * s, color);
+        p.tri((x + 19.0 * s, y + 7.5 * s), (x + 16.0 * s, y + 13.5 * s), (x + 19.0 * s, y + 13.5 * s), color);
+        p.tri((x + 24.0 * s, y + 7.5 * s), (x + 27.0 * s, y + 13.0 * s), (x + 25.0 * s, y + 13.0 * s), color);
+        p.rect(x + 26.0 * s, y + 4.5 * s, 8.0 * s, 4.5 * s, color);
+    }
+}
+
+fn draw_medical_cross(p: &mut Painter, x: f32, y: f32, size: f32, color: [f32; 4]) {
+    p.rect(x, y, size, size, [0.75, 0.15, 0.15, color[3]]);
+    let cross_col = [1.0, 1.0, 1.0, color[3]];
+    let inner_pad = size * 0.18;
+    let inner_len = size - inner_pad * 2.0;
+    let inner_thick = (inner_len * 0.35).max(1.0);
+    let inner_off = (inner_len - inner_thick) * 0.5;
+    p.rect(x + inner_pad, y + inner_pad + inner_off, inner_len, inner_thick, cross_col);
+    p.rect(x + inner_pad + inner_off, y + inner_pad, inner_thick, inner_len, cross_col);
+}
+
+fn draw_shield_icon(p: &mut Painter, x: f32, y: f32, size: f32, color: [f32; 4]) {
+    let w = size;
+    let h = size * 1.1;
+    let half_w = w * 0.5;
+    p.rect(x, y, w, h * 0.5, color);
+    p.tri((x, y + h * 0.5), (x + w, y + h * 0.5), (x + half_w, y + h), color);
+    let inner_col = [1.0, 1.0, 1.0, color[3] * 0.6];
+    p.line(x + half_w, y + h * 0.2, x + half_w, y + h * 0.8, 1.2, inner_col);
 }
 
 fn paint_chat(p: &mut Painter, chat: &crate::chat::ChatState, u: f32) {
@@ -1703,15 +2229,11 @@ fn paint_weapon(p: &mut Painter, view: &HudView, u: f32) {
 
     // The panel spans from the weapon name down past the strip, so the whole
     // block reads as one object the way the health side does.
-    //
-    // **Measured from what is written in it**, never a constant — the same rule
-    // `tray_metrics` exists to enforce two blocks up. A weapon called "ASSAULT
-    // RIFLE" is far wider than one called "KNIFE", and a fixed width picked
-    // against the short one leaves the long one hanging outside its own panel.
     let name = view.weapon_name.to_uppercase();
-    let content = text_width(&name, small)
-        .max(text_width(&ammo, big) + tail_w)
-        .max(u * 26.0);
+    let sil_w = u * 15.0;
+    let content = (text_width(&name, small) + sil_w + u * 3.0)
+        .max(text_width(&ammo, big) + tail_w + sil_w + u * 3.0)
+        .max(u * 38.0);
     let panel_left = right - content - u * 1.5;
     p.panel(
         panel_left,
@@ -1724,6 +2246,17 @@ fn paint_weapon(p: &mut Painter, view: &HudView, u: f32) {
         } else {
             FAINT
         }),
+    );
+
+    // Weapon silhouette on the left side of the weapon card
+    draw_weapon_silhouette(
+        p,
+        panel_left + u * 1.5,
+        ammo_y + u * 1.0,
+        sil_w,
+        7.0 * big,
+        &name,
+        [0.68, 0.75, 0.85, 0.75],
     );
 
     p.text_right(right, name_y, small, DIM, &name);
@@ -1747,7 +2280,22 @@ fn paint_weapon(p: &mut Painter, view: &HudView, u: f32) {
         // round number.
         let gap = (u * 0.25).max(1.0);
         let tick = (full - gap * (you.mag - 1) as f32) / you.mag as f32;
-        if tick >= 1.5 {
+        if tick >= 2.0 {
+            for i in 0..you.mag {
+                let x = panel_left + u * 0.75 + (tick + gap) * i as f32;
+                let loaded = i < you.ammo;
+                if loaded {
+                    let casing_col = if you.ammo <= 5 { [0.98, 0.35, 0.25, 0.95] } else { [0.88, 0.72, 0.26, 0.95] };
+                    let tip_col = if you.ammo <= 5 { [1.0, 0.55, 0.40, 0.95] } else { [0.94, 0.48, 0.20, 0.95] };
+                    // Pointed bullet tip
+                    p.tri((x, strip_y + strip_h * 0.35), (x + tick, strip_y + strip_h * 0.35), (x + tick * 0.5, strip_y), tip_col);
+                    // Brass casing
+                    p.rect(x, strip_y + strip_h * 0.35, tick, strip_h * 0.65, casing_col);
+                } else {
+                    p.rect(x, strip_y, tick, strip_h, TROUGH);
+                }
+            }
+        } else if tick >= 1.2 {
             for i in 0..you.mag {
                 let x = panel_left + u * 0.75 + (tick + gap) * i as f32;
                 let loaded = i < you.ammo;
@@ -1769,6 +2317,10 @@ fn paint_weapon(p: &mut Painter, view: &HudView, u: f32) {
                 strip_h,
                 ammo_color,
             );
+            for i in 1..5 {
+                let x = panel_left + u * 0.75 + (full / 5.0) * i as f32;
+                p.rect(x, strip_y, 1.0, strip_h, TROUGH);
+            }
         }
     }
 
@@ -1980,70 +2532,105 @@ fn paint_mode(p: &mut Painter, view: &HudView, u: f32) {
         return;
     };
     let scale = u * 0.85;
-    // No `cx`: every line here is drawn with `center_text`, which centres
-    // itself. One was held for an earlier layout that positioned by hand.
+
+    let label = if info.score_label.is_empty() {
+        "ROUNDS"
+    } else {
+        &info.score_label
+    };
+
     let mut y = u * 2.0;
 
-    // The score, as two numbers either side of its own label. Two numbers and a
-    // word rather than "3 - 1": which side is yours is the thing you actually
-    // read, and the label is what stops "3" meaning kills to somebody who joined
-    // a defuse match expecting deathmatch.
+    // Top tactical match header card
     if view.scores.len() >= 2 {
         let (mine, theirs) = if view.team == 0 {
             (view.scores[0], view.scores[1])
         } else {
             (view.scores[1], view.scores[0])
         };
-        let label = if info.score_label.is_empty() {
-            "SCORE"
-        } else {
-            &info.score_label
-        };
-        let big = scale * 1.5;
-        let line = format!("{mine}   {}   {theirs}", label.to_uppercase());
-        p.center_text(y, big, [0.92, 0.94, 0.98, 0.95], &line);
-        y += 9.0 * big;
-    }
 
-    // The phase clock. Absent for a mode with no phases, which is how deathmatch
-    // and capture the flag arrive — an empty string rather than a phase called
-    // "none", so there is nothing to draw and no branch to forget.
-    if !state.phase.is_empty() {
-        // A planted bomb's fuse replaces the round clock, because once it is
-        // down the round clock is not what anybody is counting.
-        let (text, colour) = if state.bomb.state == "planted" {
-            (
-                format!("BOMB  {:.1}", state.bomb.fuse_in.max(0.0)),
-                // Reddening over the last five seconds. The one colour change in
-                // this block, and it is the one number worth panicking about.
-                if state.bomb.fuse_in < 5.0 {
-                    [0.99, 0.35, 0.30, 0.98]
+        let hw = u * 138.0;
+        let hh = u * 13.5;
+        let hx = (p.width - hw) * 0.5;
+        let hy = u * 2.0;
+
+        // Header glass panel
+        p.panel(hx, hy, hw, hh, u * 2.0, Some([0.42, 0.52, 0.68, 0.55]));
+
+        // Left team (Our Side)
+        let our_col = team_color(view.team);
+        p.rect(hx + u * 3.5, hy + u * 2.5, u * 12.0, u * 4.2, [our_col[0] * 0.35, our_col[1] * 0.35, our_col[2] * 0.35, 0.90]);
+        p.rect(hx + u * 3.5, hy + u * 2.5, u * 12.0, 1.5, our_col);
+        p.text(hx + u * 4.8, hy + u * 3.0, scale * 0.82, our_col, if view.team == 0 { "CLA" } else { "RVSF" });
+        let mine_str = mine.to_string();
+        p.text(hx + u * 18.0, hy + u * 2.0, scale * 1.55, our_col, &mine_str);
+        for i in 0..5 {
+            p.rect(hx + u * 3.5 + i as f32 * u * 4.8, hy + u * 8.5, u * 3.8, u * 2.0, our_col);
+        }
+
+        // Right team (Their Side)
+        let enemy_team = if view.team == 0 { 1 } else { 0 };
+        let their_col = team_color(enemy_team);
+        p.rect(hx + hw - u * 15.5, hy + u * 2.5, u * 12.0, u * 4.2, [their_col[0] * 0.35, their_col[1] * 0.35, their_col[2] * 0.35, 0.90]);
+        p.rect(hx + hw - u * 15.5, hy + u * 2.5, u * 12.0, 1.5, their_col);
+        p.text(hx + hw - u * 14.2, hy + u * 3.0, scale * 0.82, their_col, if enemy_team == 0 { "CLA" } else { "RVSF" });
+        let th_str = theirs.to_string();
+        p.text_right(hx + hw - u * 18.0, hy + u * 2.0, scale * 1.55, their_col, &th_str);
+        for i in 0..5 {
+            p.rect(hx + hw - u * 3.5 - (i + 1) as f32 * u * 4.8 + u * 1.0, hy + u * 8.5, u * 3.8, u * 2.0, their_col);
+        }
+
+        // Center Clock / Bomb Pill (only drawn if phase or bomb is present)
+        if !state.phase.is_empty() {
+            let pw = u * 44.0;
+            let ph = u * 7.5;
+            let px = (p.width - pw) * 0.5;
+            let py = hy + u * 2.0;
+            p.rect(px, py, pw, ph, [0.03, 0.04, 0.07, 0.92]);
+
+            if state.bomb.state == "planted" {
+                let pulse = if state.bomb.fuse_in < 5.0 { (state.bomb.fuse_in * 8.0).sin().abs() } else { 0.4 };
+                let bomb_col = [0.99, 0.30 + 0.35 * pulse, 0.22, 0.95];
+                p.rect(px, py, pw, 1.5, bomb_col);
+                let bomb_text = if !state.bomb.site.is_empty() {
+                    format!("BOMB {:.1} · {}", state.bomb.fuse_in.max(0.0), state.bomb.site)
                 } else {
-                    [0.98, 0.68, 0.32, 0.95]
-                },
-            )
-        } else {
-            let phase = state.phase.to_uppercase();
-            let secs = state.phase_in.max(0.0);
-            (
-                if state.round > 0 {
-                    format!("R{}  {phase}  {secs:.0}", state.round)
+                    format!("BOMB {:.1}", state.bomb.fuse_in.max(0.0))
+                };
+                p.center_text(py + u * 1.5, scale * 0.82, bomb_col, &bomb_text);
+            } else if state.bomb.state == "defused" {
+                p.rect(px, py, pw, 1.5, [0.22, 0.74, 0.98, 0.95]);
+                p.center_text(py + u * 1.5, scale * 0.82, [0.22, 0.74, 0.98, 0.95], "BOMB DEFUSED");
+            } else {
+                let phase = state.phase.to_uppercase();
+                let secs = state.phase_in.max(0.0);
+                let clock_text = if state.round > 0 {
+                    format!("R{} · {phase} {secs:.0}", state.round)
                 } else {
-                    format!("{phase}  {secs:.0}")
-                },
-                if state.phase == "freeze" {
-                    [0.55, 0.78, 0.99, 0.9]
+                    format!("{phase} {secs:.0}")
+                };
+                let clock_col = if state.phase == "freeze" {
+                    [0.55, 0.78, 0.99, 0.95]
                 } else {
-                    [0.80, 0.84, 0.90, 0.85]
-                },
-            )
-        };
-        p.center_text(y, scale, colour, &text);
+                    [0.90, 0.92, 0.96, 0.90]
+                };
+                p.rect(px, py, pw, 1.2, clock_col);
+                p.center_text(py + u * 1.5, scale * 0.82, clock_col, &clock_text);
+            }
+        }
+
+        // Score label line
+        p.center_text(hy + hh - u * 3.0, scale * 0.65, DIM, &label.to_uppercase());
+        y = hy + hh + u * 2.5;
+    } else if !state.phase.is_empty() {
+        let phase = state.phase.to_uppercase();
+        let secs = state.phase_in.max(0.0);
+        let text = format!("{phase}  {secs:.0}");
+        p.center_text(y, scale, [0.80, 0.84, 0.90, 0.85], &text);
         y += 9.0 * scale;
     }
 
-    // Which side we are on this round. Only worth saying in a mode that has
-    // sides *and swaps them* — in one that does not, it is a constant.
+    // Which side we are on this round.
     if let Some(mine) = view.mode_self {
         if !state.phase.is_empty() {
             let (word, colour) = if mine.attacking {
@@ -2089,39 +2676,48 @@ fn paint_mode(p: &mut Painter, view: &HudView, u: f32) {
     paint_action_progress(p, view, u);
 }
 
-/// The bar for a held plant or defuse.
-///
-/// Under the crosshair rather than over it: what you are looking at while you
-/// plant is the doorway somebody is about to come through, and a bar across the
-/// aim would be the interface taking the one thing that matters away at the one
-/// moment it matters.
-///
-/// The fill is `progress` from the server and not a local timer. A local one
-/// would keep running through a stall, through the interruption that resets it
-/// server-side, and through dying — every one of which is a bar that finishes
-/// while nothing happens.
+/// The radial progress ring for a held plant or defuse.
 fn paint_action_progress(p: &mut Painter, view: &HudView, u: f32) {
     let Some(mine) = view.mode_self else { return };
     if mine.progress <= 0.0 || mine.progress_kind.is_empty() {
         return;
     }
-    let width = u * 52.0;
-    let height = u * 2.4;
-    let x = (p.width - width) * 0.5;
-    let y = p.height * 0.62;
+    let cx = p.width * 0.5;
+    let cy = p.height * 0.54;
+    let r_outer = u * 8.0;
+    let r_inner = u * 6.5;
     let colour = if mine.progress_kind == "defuse" {
-        [0.42, 0.78, 0.99, 0.95]
+        [0.22, 0.74, 0.98, 0.95]
     } else {
-        [0.99, 0.66, 0.32, 0.95]
+        [0.98, 0.30, 0.25, 0.95]
     };
-    p.rect(x, y, width, height, [0.05, 0.06, 0.09, 0.75]);
-    p.rect(x, y, width * mine.progress.clamp(0.0, 1.0), height, colour);
-    // A glyph is seven units of its own scale tall and `center_text` places its
-    // *top*, so a label at `y - 3.2u` at scale `0.8u` ran from `y - 3.2u` down
-    // to `y + 2.4u` — straight through the bar it was labelling. Caught by
-    // rendering it, which is the whole reason `hud_preview` exists.
-    let label = mine.progress_kind.to_uppercase();
-    p.center_text(y - u * 8.0, u * 0.9, colour, &label);
+
+    // Dark circular trough
+    p.ring(cx, cy, r_inner - u * 0.3, r_outer + u * 0.3, [0.05, 0.07, 0.10, 0.85]);
+
+    // Clockwise radial progress arc
+    let frac = mine.progress.clamp(0.0, 1.0);
+    p.arc(cx, cy, r_inner, r_outer, frac, colour);
+
+    // Wire cutting milestone notches at 25%, 50%, 75%
+    for i in 1..=3 {
+        let angle = (i as f32 / 4.0) * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
+        let nx0 = cx + angle.cos() * (r_inner - u * 0.5);
+        let ny0 = cy + angle.sin() * (r_inner - u * 0.5);
+        let nx1 = cx + angle.cos() * (r_outer + u * 0.5);
+        let ny1 = cy + angle.sin() * (r_outer + u * 0.5);
+        p.line(nx0, ny0, nx1, ny1, (u * 0.3).max(1.2), [0.02, 0.03, 0.04, 0.95]);
+    }
+
+    // Time remaining inside the ring
+    let total_time = if mine.progress_kind == "defuse" { 5.0 } else { 3.0 };
+    let time_left = (total_time * (1.0 - frac)).max(0.0);
+    let time_str = format!("{time_left:.1}S");
+    p.center_text(cy - u * 2.0, u * 0.95, [0.95, 0.97, 1.0, 0.98], &time_str);
+
+    // Action tag beneath the ring
+    let label = format!("[ {} ]", mine.progress_kind.to_uppercase());
+    p.center_text(cy + r_outer + u * 2.0, u * 0.8, colour, &label);
 }
 
 /// The buy menu.
@@ -4458,6 +5054,85 @@ mod tests {
         hud.on_respawn();
         assert_eq!(hud.ghost_hp, 0.0);
         assert!(hud.damage_from.is_empty());
+    }
+
+    #[test]
+    fn noise_ring_arrives_expires_and_is_capped() {
+        let mut hud = Hud::default();
+        let mut you = alive();
+        hud.on_self(&you);
+
+        // Feed two noises
+        you.noise = vec![
+            crate::protocol::NoiseEvent {
+                kind: "shot".into(),
+                volume: 0.9,
+                bearing: 1.2,
+                up: 0,
+                weapon: "rifle".into(),
+            },
+            crate::protocol::NoiseEvent {
+                kind: "step".into(),
+                volume: 0.4,
+                bearing: -0.8,
+                up: 1,
+                weapon: String::new(),
+            },
+        ];
+        hud.on_self(&you);
+        assert_eq!(hud.heard_noises.len(), 2);
+        assert_eq!(hud.heard_noises[0].kind, "shot");
+        assert_eq!(hud.heard_noises[1].kind, "step");
+
+        // Partial update: noises still live
+        hud.update(NOISE_TTL * 0.5, false);
+        assert_eq!(hud.heard_noises.len(), 2);
+
+        // Expiration update: noises drop
+        hud.update(NOISE_TTL * 0.6, false);
+        assert!(
+            hud.heard_noises.is_empty(),
+            "a noise indicator that outlived its TTL would linger as stale spatial cues"
+        );
+
+        // Capped at MAX_HEARD_NOISES
+        for i in 0..(MAX_HEARD_NOISES + 6) {
+            hud.push_noise("step", 0.5, i as f32 * 0.2, 0);
+        }
+        assert_eq!(hud.heard_noises.len(), MAX_HEARD_NOISES);
+
+        // Respawn clears noise ring
+        hud.on_respawn();
+        assert!(hud.heard_noises.is_empty());
+    }
+
+    #[test]
+    fn noise_ring_emits_overlay_vertices_with_elevation_and_respects_toggle() {
+        let mut hud = Hud::default();
+        let you = alive();
+        let mut v = view(Some(&you));
+        v.playing = true;
+
+        // With no noises, 0 noise ring vertices
+        let mut base_out = Vec::new();
+        hud.build(&v, &mut base_out);
+
+        // Add a shot and an elevated step
+        hud.push_noise("shot", 0.95, 0.0, 0); // straight ahead
+        hud.push_noise("step", 0.5, std::f32::consts::PI * 0.5, 1); // 90 deg right, above
+
+        let mut noise_out = Vec::new();
+        hud.build(&v, &mut noise_out);
+        assert!(
+            noise_out.len() > base_out.len(),
+            "noise ring indicators must emit overlay vertices when noises are present"
+        );
+
+        // Toggling noise_rings off suppresses rendering
+        hud.noise_rings = false;
+        let mut suppressed_out = Vec::new();
+        hud.build(&v, &mut suppressed_out);
+        assert_eq!(suppressed_out.len(), base_out.len());
     }
 
     #[test]

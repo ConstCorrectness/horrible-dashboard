@@ -39,10 +39,18 @@ struct Shadow {
 @group(2) @binding(1) var shadow_map: texture_depth_2d;
 @group(2) @binding(2) var shadow_sampler: sampler_comparison;
 
+// Procedural PBR materials & IBL environment reflection map
+@group(3) @binding(0) var pbr_textures: texture_2d_array<f32>;
+@group(3) @binding(1) var pbr_sampler: sampler;
+@group(3) @binding(2) var env_map: texture_2d<f32>;
+@group(3) @binding(3) var env_sampler: sampler;
+
 struct VertexIn {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) color: vec3<f32>,
+    @location(3) uv: vec2<f32>,
+    @location(4) material: f32,
 };
 
 struct VertexOut {
@@ -56,6 +64,8 @@ struct VertexOut {
     @location(2) view_depth: f32,
     // World space, for the detail UV. See `detail_uv`.
     @location(3) world_position: vec3<f32>,
+    @location(5) uv: vec2<f32>,
+    @location(6) material: f32,
 };
 
 // How wide the moving front is, in units of overall progress. `reveal::BAND`.
@@ -126,6 +136,8 @@ fn vs_main(in: VertexIn) -> VertexOut {
     // `0.0` in w, so this rotates without translating. The matrix is rigid, so
     // no inverse-transpose is needed and the normal stays unit length.
     out.normal = (camera.light_transform * vec4<f32>(in.normal, 0.0)).xyz;
+    out.uv = in.uv;
+    out.material = in.material;
     return out;
 }
 
@@ -157,6 +169,22 @@ fn detail_uv(world_position: vec3<f32>, normal: vec3<f32>) -> vec2<f32> {
     return world_position.xy;
 }
 
+fn get_pbr_properties(mat_id: u32) -> vec2<f32> {
+    switch (mat_id) {
+        case 1u: { return vec2<f32>(0.88, 0.05); } // Asphalt
+        case 2u: { return vec2<f32>(0.16, 0.06); } // Marble
+        case 3u: { return vec2<f32>(0.75, 0.02); } // Concrete
+        case 4u: { return vec2<f32>(0.32, 0.88); } // VaultSteel
+        case 5u: { return vec2<f32>(0.45, 0.10); } // Hazard
+        case 6u: { return vec2<f32>(0.32, 0.04); } // Wood
+        case 7u: { return vec2<f32>(0.65, 0.05); } // Crate
+        case 8u: { return vec2<f32>(0.58, 0.55); } // Container
+        case 9u: { return vec2<f32>(0.06, 0.15); } // Glass
+        case 10u: { return vec2<f32>(0.20, 0.95); } // Gold
+        default: { return vec2<f32>(0.70, 0.04); }
+    }
+}
+
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // A vertex that has not arrived is not drawn at all, so the world *builds*
@@ -168,28 +196,58 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         discard;
     }
     let detail = camera.params.y;
-
-    // **Not** sRGB-decoded, and that is a deliberate match rather than an
-    // oversight. The browser hands these same floats to three as a raw
-    // `BufferAttribute`, which three uses directly as linear working-space
-    // values — it only converts a colour that arrives through `Color`. Decoding
-    // here would make the native client render every map darker and more
-    // saturated than the browser renders the same map, which is the divergence
-    // this whole change exists to remove.
     var albedo = in.color;
 
-    // The grain, as a multiplier. Sampled linearly — it is not a colour, and an
-    // sRGB decode here would darken every surface in the game by a third.
-    var grain_uv = detail_uv(in.world_position, in.normal);
-    if (camera.params.x <= 0.0001) {
-        grain_uv = grain_uv * 0.25;
+    let mat_id = u32(round(in.material));
+    if (mat_id > 0u) {
+        let layer_idx = mat_id - 1u;
+        let pbr_sample = textureSample(pbr_textures, pbr_sampler, in.uv, i32(layer_idx));
+
+        var roughness = 0.70;
+        var metalness = 0.04;
+
+        if (layer_idx == 10u || layer_idx == 11u) {
+            albedo = mix(albedo, pbr_sample.rgb, pbr_sample.a);
+            roughness = 0.70;
+            metalness = 0.04;
+        } else if (layer_idx == 8u) {
+            albedo = mix(albedo, pbr_sample.rgb, 0.45);
+            roughness = 0.06;
+            metalness = 0.15;
+        } else {
+            albedo = albedo * pbr_sample.rgb * 1.5;
+            let props = get_pbr_properties(mat_id);
+            roughness = props.x;
+            metalness = props.y;
+        }
+
+        let N = normalize(in.normal);
+        let V = normalize(vec3<f32>(camera.reveal.y, 1.8, camera.reveal.z) - in.world_position);
+        let R = reflect(-V, N);
+
+        let pi = 3.14159265359;
+        let env_u = atan2(R.z, R.x) / (2.0 * pi) + 0.5;
+        let env_v = clamp(0.5 - asin(clamp(R.y, -1.0, 1.0)) / pi, 0.0, 1.0);
+        let env_refl = textureSample(env_map, env_sampler, vec2<f32>(env_u, env_v)).rgb;
+
+        let f0 = mix(vec3<f32>(0.04), albedo, metalness);
+        let fresnel = f0 + (vec3<f32>(1.0) - f0) * pow(clamp(1.0 - max(dot(N, V), 0.0), 0.0, 1.0), 5.0);
+        let env_lighting = env_refl * fresnel * (1.0 - roughness * 0.7) * 1.55;
+
+        albedo = mix(albedo, env_lighting, metalness * 0.8 + (1.0 - roughness) * 0.25);
+    } else {
+        // Fallback grain multiplier for legacy/untextured geometry
+        var grain_uv = detail_uv(in.world_position, in.normal);
+        if (camera.params.x <= 0.0001) {
+            grain_uv = grain_uv * 0.25;
+        }
+        let grain = textureSample(
+            detail_texture,
+            detail_sampler,
+            grain_uv,
+        ).r;
+        albedo = albedo * grain * DETAIL_GAIN;
     }
-    let grain = textureSample(
-        detail_texture,
-        detail_sampler,
-        grain_uv,
-    ).r;
-    albedo = albedo * grain * DETAIL_GAIN;
 
     // A pass that does not receive the shadow is fully lit, not fully dark —
     // and it skips the nine compares rather than throwing them away.

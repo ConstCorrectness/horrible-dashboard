@@ -348,11 +348,7 @@ mod tests {
     use super::*;
 
     fn vertex(position: [f32; 3]) -> Vertex {
-        Vertex {
-            position,
-            normal: [0.0, 1.0, 0.0],
-            color: [1.0, 1.0, 1.0],
-        }
+        Vertex::new(position, [0.0, 1.0, 0.0], [1.0, 1.0, 1.0])
     }
 
     #[test]

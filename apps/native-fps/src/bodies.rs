@@ -537,11 +537,7 @@ fn push_oriented_box(
 
     for (normal, idxs) in faces {
         for tri in [0usize, 1, 2, 0, 2, 3] {
-            out.push(Vertex {
-                position: corners[idxs[tri]],
-                normal,
-                color: c,
-            });
+            out.push(Vertex::new(corners[idxs[tri]], normal, c));
         }
     }
 }
@@ -597,11 +593,7 @@ fn push_extents(
 
     for (normal, corners) in faces {
         for idx in [0usize, 1, 2, 0, 2, 3] {
-            out.push(Vertex {
-                position: corners[idx],
-                normal,
-                color: c,
-            });
+            out.push(Vertex::new(corners[idx], normal, c));
         }
     }
 }

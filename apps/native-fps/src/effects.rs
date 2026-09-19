@@ -349,13 +349,22 @@ impl EffectsPool {
         }
     }
 
+    /// Muzzle flash smoke wisp lingering after a shot, matching Three.js FLASH_SMOKE_LIFE
+    pub fn muzzle_smoke(&mut self, at: [f32; 3]) {
+        self.push(Live {
+            shape: Shape::Puff {
+                at,
+                radius: 0.14,
+            },
+            color: [0.55, 0.51, 0.47], // FLASH_SMOKE 0x8d8377
+            base: 0.28,
+            age: 0.0,
+            life: 0.35, // FLASH_SMOKE_LIFE
+        });
+    }
+
     /// A grenade going off: a shell at the blast's real radius, and a brighter
     /// core inside it.
-    ///
-    /// The shell is drawn at **the radius the server used**, for the same reason
-    /// a smoke is drawn at the radius it tests against: it is the one chance a
-    /// player gets to learn how far an HE reaches, and a shell scaled for looks
-    /// would teach the wrong number.
     pub fn detonate(&mut self, kind: &str, at: [f32; 3], radius: f32) {
         if kind == "smoke" {
             self.detonate_smoke(at, radius);

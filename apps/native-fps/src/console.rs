@@ -89,6 +89,7 @@ pub const HONORED: &[&str] = &[
     "draw.crosshair.thickness",
     "draw.fov",
     "draw.hitboxes",
+    "draw.noise_rings",
     "draw.tracers_firstperson",
     "net.graph",
     "player.god",

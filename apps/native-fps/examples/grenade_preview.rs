@@ -1,6 +1,5 @@
 //! Render the tactical utility grenades offscreen and write a PNG.
 
-use glam::Vec3;
 use hassault_native::camera::Camera;
 use hassault_native::prop::Prop;
 use hassault_native::props_gpu::Props;

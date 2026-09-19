@@ -132,11 +132,11 @@ async fn run(path: &str) {
     // "what does this character's surroundings cast?" when there are none.
     let empty_world = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("no-world"),
-        contents: bytemuck::cast_slice(&[Vertex {
-            position: [0.0; 3],
-            normal: [0.0, 1.0, 0.0],
-            color: [0.0; 3],
-        }]),
+        contents: bytemuck::cast_slice(&[Vertex::new(
+            [0.0; 3],
+            [0.0, 1.0, 0.0],
+            [0.0; 3],
+        )]),
         usage: wgpu::BufferUsages::VERTEX,
     });
     let shadow = hassault_native::shadow::ShadowMap::new(
@@ -240,16 +240,17 @@ async fn run(path: &str) {
             .into(),
         ),
     });
-    // The world shader samples the surface grain, so its layout needs that group
-    // too — built through the client's own helper rather than a copy here.
     let detail_layout = hassault_native::detail::bind_group_layout(&device);
     let detail_group = hassault_native::detail::bind_group(&device, &queue, &detail_layout);
+    let pbr_layout = hassault_native::textures3d::bind_group_layout(&device);
+    let (pbr_group, _, _) = hassault_native::textures3d::bind_group(&device, &queue, &pbr_layout);
     let world_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("world"),
         bind_group_layouts: &[
             Some(&camera_layout),
             Some(&detail_layout),
             Some(&shadow.layout),
+            Some(&pbr_layout),
         ],
         immediate_size: 0,
     });
@@ -259,11 +260,7 @@ async fn run(path: &str) {
         vertex: wgpu::VertexState {
             module: &world_shader,
             entry_point: Some("vs_main"),
-            buffers: &[Some(wgpu::VertexBufferLayout {
-                array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3],
-            })],
+            buffers: &[Some(Vertex::layout())],
             compilation_options: Default::default(),
         },
         fragment: Some(wgpu::FragmentState {
@@ -373,6 +370,7 @@ async fn run(path: &str) {
             pass.set_bind_group(0, &camera_group, &[]);
             pass.set_bind_group(1, &detail_group, &[]);
             pass.set_bind_group(2, &shadow.bind_group, &[]);
+            pass.set_bind_group(3, &pbr_group, &[]);
             pass.set_vertex_buffer(0, held_buffer.slice(..));
             pass.draw(0..held_verts.len() as u32, 0..1);
         }

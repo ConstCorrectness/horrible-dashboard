@@ -1842,6 +1842,12 @@ impl App {
                                                 r[0] * f[1] - r[1] * f[0],
                                             ];
                                             self.effects.eject_casing(*origin, f, r, u);
+                                            let muzzle = [
+                                                origin[0] + f[0] * 0.45,
+                                                origin[1] + f[1] * 0.45,
+                                                origin[2] + f[2] * 0.45,
+                                            ];
+                                            self.effects.muzzle_smoke(muzzle);
                                         }
                                     }
                                 }
@@ -2420,6 +2426,12 @@ impl App {
                             r[0] * f[1] - r[1] * f[0],
                         ];
                         self.effects.eject_casing(shot.origin, f, r, u);
+                        let muzzle = [
+                            shot.origin[0] + f[0] * 0.45,
+                            shot.origin[1] + f[1] * 0.45,
+                            shot.origin[2] + f[2] * 0.45,
+                        ];
+                        self.effects.muzzle_smoke(muzzle);
                     }
                 }
             }
@@ -4057,6 +4069,7 @@ impl ApplicationHandler for App {
                     voice_transmitting: self.voice_transmitting,
                     voice_speakers: &active_speakers,
                 };
+                self.hud.noise_rings = self.cvars.boolean("draw.noise_rings").unwrap_or(true);
                 self.hud.build(&view, &mut overlay);
                 // After the HUD, so the scrim covers it: the menu is *over* the
                 // game, and a crosshair drawn on top of a settings panel reads as
