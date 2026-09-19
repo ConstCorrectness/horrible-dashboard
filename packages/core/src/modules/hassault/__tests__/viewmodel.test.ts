@@ -390,14 +390,39 @@ describe('Knife archetypes and PBR skin materials', () => {
     });
     const bayonetColors = colors(bayonet.vm, bayonet.camera);
 
+    const skeleton = stand();
+    skeleton.vm.setWeapon('knife', {
+      id: 'knife_skeleton_crimson',
+      name: 'Skeleton Knife | Crimson Web',
+      baseColor: '#dc2626',
+      accentColor: '#18181b',
+      patternType: 'custom_art',
+      floatValue: 0.02,
+    });
+    const skeletonColors = colors(skeleton.vm, skeleton.camera);
+
+    const huntsman = stand();
+    huntsman.vm.setWeapon('knife', {
+      id: 'knife_huntsman_case_hardened',
+      name: 'Huntsman Knife | Case Hardened',
+      baseColor: '#ca8a04',
+      accentColor: '#2563eb',
+      patternType: 'patina',
+      floatValue: 0.04,
+    });
+    const huntsmanColors = colors(huntsman.vm, huntsman.camera);
+
     expect(karambitColors.length).toBeGreaterThan(0);
     expect(butterflyColors.length).toBeGreaterThan(0);
     expect(bayonetColors.length).toBeGreaterThan(0);
+    expect(skeletonColors.length).toBeGreaterThan(0);
+    expect(huntsmanColors.length).toBeGreaterThan(0);
     expect(defaultColors.length).toBeGreaterThan(0);
 
     // Each knife archetype has a distinct part count reflecting its specific model
     expect(karambitColors.length).not.toEqual(butterflyColors.length);
     expect(butterflyColors.length).not.toEqual(bayonetColors.length);
+    expect(skeletonColors.length).not.toEqual(huntsmanColors.length);
   });
 
   it('allows continuous knife flourish looping when inspect is pressed repeatedly', () => {

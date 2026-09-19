@@ -883,7 +883,10 @@ impl WeaponViewModel {
         let is_karambit = is_knife && skin_id.contains("karambit");
         let is_butterfly = is_knife && skin_id.contains("butterfly");
         let is_bayonet = is_knife && (skin_id.contains("bayonet") || skin_id.contains("lore"));
-        let is_tactical_knife = is_knife && !is_karambit && !is_butterfly && !is_bayonet;
+        let is_skeleton = is_knife && skin_id.contains("skeleton");
+        let is_huntsman = is_knife && skin_id.contains("huntsman");
+        let is_tactical_knife =
+            is_knife && !is_karambit && !is_butterfly && !is_bayonet && !is_skeleton && !is_huntsman;
 
         let is_pistol = self.weapon == "pistol";
         let is_shotgun = self.weapon == "shotgun";
@@ -927,6 +930,42 @@ impl WeaponViewModel {
                 lift * 0.15,
                 lift * 0.26 + if turn < 0.45 { ((turn / 0.45) * std::f32::consts::PI).sin() * 0.22 } else { 0.0 },
                 lift * 0.25,
+            )
+        } else if is_skeleton {
+            // Skeleton knife rapid center-hole finger twirl & reverse snap
+            let ring_twirl = if turn < 0.36 {
+                (turn / 0.36) * std::f32::consts::TAU * 2.0
+            } else {
+                0.0
+            };
+            let snap_flick = if turn > 0.72 {
+                ((turn - 0.72) / 0.28 * std::f32::consts::PI).sin() * 0.45
+            } else {
+                0.0
+            };
+            (
+                inspect * (0.24 + 0.18 * (turn * std::f32::consts::PI).sin() + snap_flick),
+                -inspect * 0.35 + (turn * std::f32::consts::PI).sin() * 0.25,
+                inspect * (1.30 + ring_twirl + (turn * std::f32::consts::PI).sin() * 0.35),
+                lift * 0.17,
+                lift * 0.21,
+                lift * 0.25,
+            )
+        } else if is_huntsman {
+            // Heavy Huntsman forward wrist-flip over knuckles and sawback angle check
+            let heavy_tilt = (turn * std::f32::consts::PI).sin();
+            let forward_snap = if turn < 0.40 {
+                ((turn / 0.40) * std::f32::consts::PI).sin() * 0.48
+            } else {
+                0.0
+            };
+            (
+                inspect * (0.38 + forward_snap + 0.15 * heavy_tilt),
+                -inspect * (0.60 - 0.25 * turn),
+                inspect * (1.55 + 0.35 * heavy_tilt),
+                lift * 0.19,
+                lift * 0.24,
+                lift * 0.28,
             )
         } else if is_tactical_knife {
             // Tactical knife tanto bevel and spine serration inspection
@@ -1565,6 +1604,64 @@ fn build_tactical_knife(
     (parts, Vec3::new(0.0, 0.03, -1.5), Vec3::new(0.06, -0.32, 0.22))
 }
 
+fn build_skeleton_knife(
+    metal: [f32; 3],
+    dark: [f32; 3],
+    grip: [f32; 3],
+    accent: [f32; 3],
+) -> (Vec<Part>, Vec3, Vec3) {
+    let mut parts = vec![
+        part([0.042, 0.16, 0.82], [0.0, 0.04, -0.74], metal),
+        part([0.030, 0.12, 0.78], [0.0, -0.05, -0.74], accent),
+        part([0.035, 0.14, 0.26], [0.0, 0.01, -1.22], accent),
+        tube(0.08, 0.06, [0.0, 0.0, -0.22], accent),
+        part([0.14, 0.14, 0.05], [0.0, 0.0, -0.22], dark),
+        part([0.045, 0.06, 0.62], [0.0, 0.05, 0.18], metal),
+        part([0.045, 0.06, 0.62], [0.0, -0.05, 0.18], metal),
+        part([0.05, 0.12, 0.08], [0.0, 0.0, 0.48], dark),
+    ];
+    for i in 0..6 {
+        parts.push(part(
+            [0.062, 0.145, 0.05],
+            [0.0, 0.0, -0.06 + (i as f32) * 0.09],
+            grip,
+        ));
+    }
+    (parts, Vec3::new(0.0, 0.01, -1.35), Vec3::new(0.06, -0.28, 0.20))
+}
+
+fn build_huntsman(
+    metal: [f32; 3],
+    dark: [f32; 3],
+    grip: [f32; 3],
+    accent: [f32; 3],
+) -> (Vec<Part>, Vec3, Vec3) {
+    let mut parts = vec![
+        part([0.14, 0.18, 0.58], [0.0, 0.0, 0.15], grip),
+        part([0.16, 0.20, 0.12], [0.0, 0.0, 0.45], dark),
+        part([0.08, 0.08, 0.06], [0.0, 0.0, 0.52], accent),
+        part([0.15, 0.05, 0.05], [0.0, -0.08, 0.02], dark),
+        part([0.15, 0.05, 0.05], [0.0, -0.08, 0.16], dark),
+        part([0.15, 0.05, 0.05], [0.0, -0.08, 0.30], dark),
+        part([0.22, 0.22, 0.08], [0.0, 0.02, -0.18], dark),
+        tube(0.06, 0.05, [0.0, -0.10, -0.22], accent),
+        part([0.065, 0.22, 0.98], [0.0, 0.06, -0.80], metal),
+        part([0.040, 0.16, 0.95], [0.0, -0.06, -0.80], accent),
+        part([0.048, 0.18, 0.34], [0.0, 0.02, -1.38], accent),
+        // Pommel striker cap and lanyard ring loop
+        part([0.12, 0.16, 0.08], [0.0, 0.0, 0.52], dark),
+        tube(0.04, 0.05, [0.0, 0.04, 0.54], accent),
+    ];
+    for i in 0..6 {
+        parts.push(part(
+            [0.068, 0.06, 0.06],
+            [0.0, 0.18, -0.42 - (i as f32) * 0.10],
+            metal,
+        ));
+    }
+    (parts, Vec3::new(0.0, 0.02, -1.52), Vec3::new(0.07, -0.34, 0.24))
+}
+
 fn build_tactical_pistol(
     metal: [f32; 3],
     dark: [f32; 3],
@@ -1808,12 +1905,18 @@ fn build(id: &str, skin: Option<&Skin>) -> Shape {
             let is_karambit = skin_id.contains("karambit");
             let is_butterfly = skin_id.contains("butterfly");
             let is_bayonet = skin_id.contains("bayonet") || skin_id.contains("lore");
+            let is_skeleton = skin_id.contains("skeleton");
+            let is_huntsman = skin_id.contains("huntsman");
             if is_karambit {
                 build_karambit(metal, dark, grip, accent)
             } else if is_butterfly {
                 build_butterfly(metal, dark, grip, accent)
             } else if is_bayonet {
                 build_bayonet(metal, dark, grip, accent)
+            } else if is_skeleton {
+                build_skeleton_knife(metal, dark, grip, accent)
+            } else if is_huntsman {
+                build_huntsman(metal, dark, grip, accent)
             } else {
                 build_tactical_knife(metal, dark, grip, accent)
             }
@@ -2893,5 +2996,50 @@ mod tests {
             seat_y > drop_y,
             "seat should push weapon up higher than drop: seat={seat_y}, drop={drop_y}"
         );
+    }
+
+    #[test]
+    fn all_knife_archetypes_build_and_inspect_uniquely() {
+        let metal = [0.2, 0.2, 0.2];
+        let dark = [0.1, 0.1, 0.1];
+        let grip = [0.08, 0.08, 0.08];
+        let accent = [0.4, 0.4, 0.4];
+
+        let (karambit, _, _) = build_karambit(metal, dark, grip, accent);
+        let (butterfly, _, _) = build_butterfly(metal, dark, grip, accent);
+        let (bayonet, _, _) = build_bayonet(metal, dark, grip, accent);
+        let (skeleton, _, _) = build_skeleton_knife(metal, dark, grip, accent);
+        let (huntsman, _, _) = build_huntsman(metal, dark, grip, accent);
+        let (tactical, _, _) = build_tactical_knife(metal, dark, grip, accent);
+
+        assert!(karambit.len() >= 15);
+        assert!(butterfly.len() >= 18);
+        assert!(bayonet.len() >= 18);
+        assert!(skeleton.len() >= 12);
+        assert!(huntsman.len() >= 18);
+        assert!(tactical.len() >= 12);
+
+        for skin_id in &[
+            "knife_karambit_fade",
+            "knife_butterfly_marble",
+            "knife_bayonet_lore",
+            "knife_skeleton_crimson",
+            "knife_huntsman_case_hardened",
+        ] {
+            let mut vm = WeaponViewModel::default();
+            let skin = Skin {
+                id: Some(skin_id.to_string()),
+                base_color: "#ffffff".to_string(),
+                accent_color: "#000000".to_string(),
+                pattern_type: "fade".to_string(),
+                float_value: 0.01,
+            };
+            vm.set_weapon("knife", Some(&skin));
+            settle(&mut vm);
+            vm.inspect();
+            assert!(vm.inspecting(), "inspect failed for {}", skin_id);
+            vm.update(0.5, &frame(true));
+            assert!(vm.inspecting());
+        }
     }
 }

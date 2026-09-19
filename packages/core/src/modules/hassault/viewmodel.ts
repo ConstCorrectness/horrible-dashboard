@@ -1111,7 +1111,10 @@ export class WeaponViewModel {
     const isBayonet =
       isKnife &&
       (skinId.includes('bayonet') || skinName.includes('bayonet') || skinId.includes('lore'));
-    const isTacticalKnife = isKnife && !isKarambit && !isButterfly && !isBayonet;
+    const isSkeleton = isKnife && (skinId.includes('skeleton') || skinName.includes('skeleton'));
+    const isHuntsman = isKnife && (skinId.includes('huntsman') || skinName.includes('huntsman'));
+    const isTacticalKnife =
+      isKnife && !isKarambit && !isButterfly && !isBayonet && !isSkeleton && !isHuntsman;
 
     const isPistol = this.weaponId === 'pistol';
     const isShotgun = this.weaponId === 'shotgun';
@@ -1153,6 +1156,26 @@ export class WeaponViewModel {
       inspectLiftX = lift * 0.15;
       inspectLiftY = lift * 0.26 + (turn < 0.45 ? Math.sin((turn / 0.45) * Math.PI) * 0.22 : 0);
       inspectLiftZ = lift * 0.25;
+    } else if (isSkeleton) {
+      // Skeleton knife rapid center-hole finger twirl & reverse snap
+      const ringTwirl = turn < 0.36 ? (turn / 0.36) * Math.PI * 4.0 : 0;
+      const snapFlick = turn > 0.72 ? Math.sin(((turn - 0.72) / 0.28) * Math.PI) * 0.45 : 0;
+      inspectPitch = inspect * (0.24 + 0.18 * Math.sin(turn * Math.PI) + snapFlick);
+      inspectYaw = -inspect * 0.35 + Math.sin(turn * Math.PI) * 0.25;
+      inspectRoll = inspect * (1.30 + ringTwirl + Math.sin(turn * Math.PI) * 0.35);
+      inspectLiftX = lift * 0.17;
+      inspectLiftY = lift * 0.21;
+      inspectLiftZ = lift * 0.25;
+    } else if (isHuntsman) {
+      // Heavy Huntsman forward wrist-flip over knuckles and sawback angle check
+      const heavyTilt = Math.sin(turn * Math.PI);
+      const forwardSnap = turn < 0.40 ? Math.sin((turn / 0.40) * Math.PI) * 0.48 : 0;
+      inspectPitch = inspect * (0.38 + forwardSnap + 0.15 * heavyTilt);
+      inspectYaw = -inspect * (0.60 - 0.25 * turn);
+      inspectRoll = inspect * (1.55 + 0.35 * heavyTilt);
+      inspectLiftX = lift * 0.19;
+      inspectLiftY = lift * 0.24;
+      inspectLiftZ = lift * 0.28;
     } else if (isTacticalKnife) {
       // Tactical knife tanto bevel and spine serration inspection
       inspectPitch = inspect * (0.28 + 0.25 * Math.sin(turn * Math.PI));
@@ -1826,6 +1849,59 @@ export class WeaponViewModel {
     return { group, muzzle: [0, 0.03, -1.5], rest: [0.06, -0.32, 0.22] };
   }
 
+  private buildSkeletonKnife(): Shape {
+    const group = new this.three.Group();
+    // Drop-point blade with recurve belly and razor edge
+    group.add(this.box([0.042, 0.16, 0.82], [0, 0.04, -0.74], this.metal));
+    group.add(this.box([0.030, 0.12, 0.78], [0, -0.05, -0.74], this.accent));
+    group.add(this.box([0.035, 0.14, 0.26], [0, 0.01, -1.22], this.accent));
+
+    // Large center finger hole at ricasso transition for twirling
+    group.add(this.tube(0.08, 0.06, [0, 0, -0.22], this.accent));
+    group.add(this.box([0.14, 0.14, 0.05], [0, 0, -0.22], this.dark));
+
+    // Skeletal handle frame
+    group.add(this.box([0.045, 0.06, 0.62], [0, 0.05, 0.18], this.metal));
+    group.add(this.box([0.045, 0.06, 0.62], [0, -0.05, 0.18], this.metal));
+    group.add(this.box([0.05, 0.12, 0.08], [0, 0, 0.48], this.dark));
+
+    // Woven paracord grip lashing
+    for (let i = 0; i < 6; i += 1) {
+      group.add(this.box([0.062, 0.145, 0.05], [0, 0, -0.06 + i * 0.09], this.grip));
+    }
+
+    return { group, muzzle: [0, 0.01, -1.35], rest: [0.06, -0.28, 0.20] };
+  }
+
+  private buildHuntsman(): Shape {
+    const group = new this.three.Group();
+    // Heavy textured G10 contoured grip
+    group.add(this.box([0.14, 0.18, 0.58], [0, 0, 0.15], this.grip));
+    group.add(this.box([0.16, 0.20, 0.12], [0, 0, 0.45], this.dark));
+    group.add(this.box([0.08, 0.08, 0.06], [0, 0, 0.52], this.accent));
+
+    // Ergonomic finger grooves
+    for (let i = 0; i < 3; i += 1) {
+      group.add(this.box([0.15, 0.05, 0.05], [0, -0.08, 0.02 + i * 0.14], this.dark));
+    }
+
+    // Heavy crossguard and gut choil
+    group.add(this.box([0.22, 0.22, 0.08], [0, 0.02, -0.18], this.dark));
+    group.add(this.tube(0.06, 0.05, [0, -0.10, -0.22], this.accent));
+
+    // Heavy recurve tanto blade
+    group.add(this.box([0.065, 0.22, 0.98], [0, 0.06, -0.80], this.metal));
+    group.add(this.box([0.040, 0.16, 0.95], [0, -0.06, -0.80], this.accent));
+    group.add(this.box([0.048, 0.18, 0.34], [0, 0.02, -1.38], this.accent));
+
+    // Double row sawback spine teeth
+    for (let i = 0; i < 6; i += 1) {
+      group.add(this.box([0.068, 0.06, 0.06], [0, 0.18, -0.42 - i * 0.10], this.metal));
+    }
+
+    return { group, muzzle: [0, 0.02, -1.52], rest: [0.07, -0.34, 0.24] };
+  }
+
   private buildTacticalPistol(): Shape {
     const group = new this.three.Group();
     // Slide assembly with chamfered profile
@@ -2026,10 +2102,14 @@ export class WeaponViewModel {
         const isButterfly = skinId.includes('butterfly') || skinName.includes('butterfly');
         const isBayonet =
           skinId.includes('bayonet') || skinName.includes('bayonet') || skinId.includes('lore');
+        const isSkeleton = skinId.includes('skeleton') || skinName.includes('skeleton');
+        const isHuntsman = skinId.includes('huntsman') || skinName.includes('huntsman');
 
         if (isKarambit) return this.buildKarambit();
         if (isButterfly) return this.buildButterfly();
         if (isBayonet) return this.buildBayonet();
+        if (isSkeleton) return this.buildSkeletonKnife();
+        if (isHuntsman) return this.buildHuntsman();
         return this.buildTacticalKnife();
       }
 
