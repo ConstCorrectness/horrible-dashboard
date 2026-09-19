@@ -224,6 +224,27 @@ def test_input_is_forwarded_untouched(fake_server: FakeServerSocket):
     asyncio.run(go())
 
 
+def test_chat_in_a_ranked_match_goes_to_the_server(fake_server: FakeServerSocket):
+    """It used to be dropped: the room is not on this node, so the local path
+    found no player and said nothing. The server cleans it and echoes it back."""
+    client = FakeClient()
+
+    async def go():
+        await channel.handle(client, join_msg(ranked=True))
+        await channel.handle(
+            client, {"event": "chat", "data": {"text": "gl hf 🎯", "team": True}}
+        )
+        await asyncio.sleep(0.01)
+        relayed = [m for m in fake_server.sent if m["event"] == "chat"]
+        assert relayed and relayed[0]["data"] == {"text": "gl hf 🎯", "team": True}
+        # Not answered locally: no refusal, no echo from a room that isn't here.
+        assert "chat" not in client.events()
+        assert "chat_refused" not in client.events()
+        await ranked.leave(client)
+
+    asyncio.run(go())
+
+
 def test_bots_are_refused_in_a_ranked_room(fake_server: FakeServerSocket):
     """A match whose roster a player can reshape is not one their result should
     count for."""

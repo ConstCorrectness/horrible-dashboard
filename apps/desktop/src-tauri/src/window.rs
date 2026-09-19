@@ -227,7 +227,7 @@ pub async fn window_open_workspace(app: AppHandle, workspace_id: String) -> Resu
         "window.__HORRIBLE_WORKSPACE__ = {};",
         serde_json::to_string(&workspace_id).map_err(|e| e.to_string())?
     );
-    WebviewWindowBuilder::new(&app, &label, target)
+    let window = WebviewWindowBuilder::new(&app, &label, target)
         .title("horrible-dashboard")
         .inner_size(1280.0, 800.0)
         .min_inner_size(640.0, 480.0)
@@ -235,6 +235,7 @@ pub async fn window_open_workspace(app: AppHandle, workspace_id: String) -> Resu
         .initialization_script(&init)
         .build()
         .map_err(|e| e.to_string())?;
+    crate::media::allow_user_media(&window);
     Ok(())
 }
 

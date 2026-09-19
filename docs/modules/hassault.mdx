@@ -3450,6 +3450,13 @@ Four rules that fail silently if broken:
   that, the voice is silent.
 - **Speaking is metered on a 100 ms timer, not rAF.** rAF stops in a background
   tab, and a lobby is the thing you leave in the background.
+- **On Linux the desktop shell has to answer the permission request itself.**
+  WebKitGTK sends each `getUserMedia` call to the embedder, and denies any
+  request nobody answers. wry does not answer, so the voice bar showed
+  "Microphone permission was denied" on Ubuntu while Windows worked.
+  `apps/desktop/src-tauri/src/media.rs` grants microphone and device-list
+  requests. It does so only on the app's own windows (`main`, `ws-*`), never on
+  the embedded browser's webviews.
 
 By default the mic is open while you are in voice, with Mute and Deafen. With
 `hassault.voice.pushToTalk` on (a checkbox in the voice bar, or Settings) it is
@@ -3470,7 +3477,12 @@ message goes through **`chat.post`** (`backend/modules/hassault/chat.py`), wheth
 it comes from a browser on this node, a friend's node over the fabric
 (`hassault_chat`, a message type of its own because the rules are not the input
 rules), or the native client. So no path can be the lax one. A remote player's
-chat used to be dropped outright. The server's copy is the only copy:
+chat used to be dropped outright, and so did chat in a **ranked** match, whose
+room is on the game server rather than the node. The node now relays it
+(`ranked.relay_chat`) and the game server runs the same `chat.post` against the
+referee's rooms (`HassaultReferee.chat`, which passes `server=`). The echo comes
+back through the ranked pump like any other event. The server's copy is the only
+copy:
 
 - **Stamped and echoed.** Each line gets an `id` and a server `ts` and is echoed
   to its sender too. Both clients render only that echo and drop a repeated

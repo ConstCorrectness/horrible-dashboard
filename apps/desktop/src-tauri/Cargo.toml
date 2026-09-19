@@ -31,3 +31,10 @@ open = "5"
 # constant. Desktop-only — there is nothing to update on a mobile target.
 [target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
 tauri-plugin-updater = "2"
+
+# WebKitGTK refuses every microphone/camera request that nobody answers, so on
+# Linux getUserMedia fails with NotAllowedError until the shell handles the
+# `permission-request` signal — see src/media.rs. Pinned to the exact version wry
+# uses, so this is the same crate rather than a second copy of the bindings.
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }

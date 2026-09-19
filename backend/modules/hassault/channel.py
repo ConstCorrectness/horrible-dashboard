@@ -281,6 +281,10 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
             # and the echo comes back over the fabric like any other event.
             await fabric.send_remote_chat(binding, raw, is_team)
             return
+        if ranked.session_for(conn) is not None:
+            # A ranked room lives on the game server; it decides the same way.
+            await ranked.relay_chat(conn, raw, is_team)
+            return
         entry = match_server.player_for(conn)
         if entry is None:
             return

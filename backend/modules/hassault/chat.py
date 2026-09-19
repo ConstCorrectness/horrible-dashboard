@@ -135,14 +135,19 @@ def message(
     }
 
 
-async def post(room: Any, player: Any, raw: Any, is_team: bool) -> str | None:
+async def post(
+    room: Any, player: Any, raw: Any, is_team: bool, server: Any = None
+) -> str | None:
     """Clean, rate-limit and broadcast one message from `player` in `room`.
 
     Returns why it was refused, or None when it was sent. One entry point for
     every way a message arrives — a browser on this node, a friend's node over
-    the fabric, the native client — so none of them can be the lax one.
+    the fabric, the native client, a ranked room on the game server — so none of
+    them can be the lax one. `server` is the `MatchServer` holding `room`: the
+    node's own by default, the referee's on the game server.
     """
-    from backend.modules.hassault.match import match_server
+    if server is None:
+        from backend.modules.hassault.match import match_server as server
 
     text = clean(raw)
     if not text:
@@ -156,7 +161,7 @@ async def post(room: Any, player: Any, raw: Any, is_team: bool) -> str | None:
         is_team=is_team,
         text=text,
     )
-    await match_server.broadcast_event(
+    await server.broadcast_event(
         room, "chat", payload, team=player.team if is_team else None
     )
     return None

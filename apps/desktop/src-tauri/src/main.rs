@@ -3,6 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod backend;
+mod media;
 mod shortcuts;
 mod updater;
 mod webview;
@@ -50,6 +51,9 @@ fn main() {
             move |app| {
                 let resource_dir = app.path().resource_dir().ok();
                 backend::start(Arc::clone(&supervisor), resource_dir);
+                if let Some(main) = app.get_webview_window("main") {
+                    media::allow_user_media(&main);
+                }
                 Ok(())
             }
         })

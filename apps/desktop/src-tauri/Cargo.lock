@@ -1297,6 +1297,7 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-updater",
  "tauri-runtime",
+ "webkit2gtk",
 ]
 
 [[package]]

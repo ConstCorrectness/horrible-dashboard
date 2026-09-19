@@ -175,6 +175,27 @@ class HassaultReferee:
         if isinstance(rtt, (int, float)):
             player.rtt_ms = max(0.0, min(60_000.0, float(rtt)))
 
+    async def chat(self, conn: SeatConn, data: dict[str, Any]) -> str | None:
+        """One chat line from a seated player; why it was refused, or None.
+
+        Through **`chat.post`**, the node's own path, handed this server's rooms:
+        a ranked match is the last place the cleaning and rate limit should be a
+        second, drifting copy.
+        """
+        from backend.modules.hassault import chat
+
+        entry = self.server.player_for(conn)
+        if entry is None:
+            return None
+        room, player = entry
+        return await chat.post(
+            room,
+            player,
+            data.get("text"),
+            bool(data.get("team", False)),
+            server=self.server,
+        )
+
     async def leave(self, conn: SeatConn) -> dict[str, Any] | None:
         """Take a player out and **write down what they did**.
 

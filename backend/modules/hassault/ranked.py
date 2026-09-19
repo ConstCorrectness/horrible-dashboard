@@ -263,3 +263,11 @@ async def relay_input(conn: WsConnection, data: dict[str, Any]) -> None:
     session = _sessions.get(id(conn))
     if session is not None:
         await session.send("input", data)
+
+
+async def relay_chat(conn: WsConnection, raw: Any, is_team: bool) -> None:
+    """Forward one chat line. The server cleans and limits it — `chat.post`
+    runs there, and its echo comes back through `_pump` like any other event."""
+    session = _sessions.get(id(conn))
+    if session is not None:
+        await session.send("chat", {"text": raw, "team": is_team})

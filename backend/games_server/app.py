@@ -750,6 +750,16 @@ async def hassault_ws(websocket: WebSocket) -> None:
                 )
             elif event == "input":
                 referee.apply_input(conn, data)
+            elif event == "chat":
+                refused = await referee.chat(conn, data)
+                if refused and refused != "empty":
+                    await conn.send_json(
+                        {
+                            "channel": "hassault",
+                            "event": "chat_refused",
+                            "data": {"reason": refused},
+                        }
+                    )
             elif event == "respawn":
                 entry = referee.server.player_for(conn)
                 if entry is not None:

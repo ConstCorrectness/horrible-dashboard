@@ -92,8 +92,13 @@ def test_only_bundled_maps_can_be_adjudicated(referee: HassaultReferee):
         "hd_atrium",
         "hd_bank",
         "hd_crossing",
+        "hd_dust2",
         "hd_facility",
+        "hd_inferno",
         "hd_junkflea",
+        "hd_mirage",
+        "hd_nuke",
+        "hd_office",
         "hd_pit",
     }
 
@@ -227,6 +232,31 @@ def test_a_shot_is_resolved_by_the_server(referee: HassaultReferee):
 # ---------------------------------------------------------------------------
 
 
+def test_chat_in_a_rated_room_goes_through_the_shared_rules(referee: HassaultReferee):
+    """Ranked chat used to be dropped on the node, since the room is not there.
+    It now runs `chat.post` here, the node's own path, against this server's
+    rooms. So the text is cleaned, and every seat, the sender included, gets
+    the one stamped copy."""
+
+    async def go():
+        a, b = seat("alice"), seat("bob")
+        await referee.join(a, "hd_pit")
+        await referee.join(b, "hd_pit")
+        refused = await referee.chat(a, {"text": "  gg ‮👍🏽  ", "team": False})
+        assert refused is None
+        for conn in (a, b):
+            lines = [m for m in conn.websocket.sent if m.get("event") == "chat"]
+            assert len(lines) == 1, conn.display_name
+            line = lines[0]["data"]
+            assert line["text"] == "gg 👍🏽"
+            assert line["id"] and line["senderName"] == "alice"
+        assert await referee.chat(a, {"text": "   "}) == "empty"
+        # Not seated: nothing to say it in, and nothing is sent.
+        assert await referee.chat(seat("carol"), {"text": "hi"}) is None
+
+    asyncio.run(go())
+
+
 def test_leaving_records_the_session_as_the_servers_own_word(
     referee: HassaultReferee, recorded: list[dict]
 ):
@@ -317,8 +347,13 @@ def test_the_map_list_is_served(server):
         "hd_atrium",
         "hd_bank",
         "hd_crossing",
+        "hd_dust2",
         "hd_facility",
+        "hd_inferno",
         "hd_junkflea",
+        "hd_mirage",
+        "hd_nuke",
+        "hd_office",
         "hd_pit",
     ]
 
@@ -406,3 +441,25 @@ def test_a_rated_room_is_deathmatch_and_the_absence_of_a_choice_is_the_point():
     # the default that made ranked round-based would fail here instead of showing
     # up as a ladder of unfinished rounds.
     assert modes.build(modes.DEFAULT_MODE).id == "dm"
+
+
+def test_chat_over_the_wire_is_echoed_by_the_server(server):
+    with server.websocket_connect("/hassault-ws?token=acct-rob") as ws:
+        ws.send_text(
+            json.dumps(
+                {"channel": "hassault", "event": "join", "data": {"map": "hd_pit"}}
+            )
+        )
+        assert json.loads(ws.receive_text())["event"] == "welcome"
+        ws.send_text(
+            json.dumps(
+                {"channel": "hassault", "event": "chat", "data": {"text": "héllo 🎯"}}
+            )
+        )
+        for _ in range(200):
+            msg = json.loads(ws.receive_text())
+            if msg["event"] == "chat":
+                assert msg["data"]["text"] == "héllo 🎯"
+                break
+        else:
+            pytest.fail("the chat line never came back")
