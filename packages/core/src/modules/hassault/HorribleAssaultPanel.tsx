@@ -2108,7 +2108,14 @@ export function HorribleAssaultPanel() {
             const eyeZ = eyeHeight(player);
             const arc = simulateThrow(
               world,
-              throwOrigin(player.x, player.y, eyeZ, player.yaw, player.pitch, throwPhysics),
+              throwOrigin(
+                player.x + c.x,
+                player.y + c.y,
+                eyeZ + c.z,
+                player.yaw,
+                player.pitch,
+                throwPhysics,
+              ),
               throwVelocity(
                 player.yaw,
                 player.pitch,

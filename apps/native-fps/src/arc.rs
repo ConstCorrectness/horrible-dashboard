@@ -209,6 +209,8 @@ pub const ARC_THICKNESS: f32 = 0.045;
 /// ribbon built against a stale view direction is a line that vanishes when you
 /// look along it. Two perpendicular strips are always visible from somewhere.
 pub fn arc_vertices(arc: &ThrowArc, push: &mut impl FnMut([f32; 3], [f32; 3], f32)) {
+    // Cube (x, y, z-up) → render (x, height, y), matching push_sphere and geometry.
+    let place = |p: [f32; 3]| [p[0], p[2], p[1]];
     let r = ARC_THICKNESS;
     for pair in arc.points.windows(2) {
         let (a, b) = (pair[0], pair[1]);
@@ -229,10 +231,10 @@ pub fn arc_vertices(arc: &ThrowArc, push: &mut impl FnMut([f32; 3], [f32; 3], f3
         let v = normalize(cross(dir, u));
         for axis in [u, v] {
             let quad = [
-                offset(a, axis, -r),
-                offset(a, axis, r),
-                offset(b, axis, r),
-                offset(b, axis, -r),
+                place(offset(a, axis, -r)),
+                place(offset(a, axis, r)),
+                place(offset(b, axis, r)),
+                place(offset(b, axis, -r)),
             ];
             for i in [0, 1, 2, 0, 2, 3] {
                 push(quad[i], ARC_COLOR, 0.75);
@@ -252,11 +254,11 @@ pub fn arc_vertices(arc: &ThrowArc, push: &mut impl FnMut([f32; 3], [f32; 3], f3
             let a0 = (i as f32 / segments as f32) * std::f32::consts::TAU;
             let a1 = ((i + 1) as f32 / segments as f32) * std::f32::consts::TAU;
             let ring = |angle: f32, radius: f32| {
-                [
+                place([
                     at[0] + angle.cos() * radius,
                     at[1] + angle.sin() * radius,
                     z,
-                ]
+                ])
             };
             let quad = [
                 ring(a0, inner),
@@ -442,5 +444,43 @@ mod tests {
         let mut without_mark = 0usize;
         arc_vertices(&wall, &mut |_, _, _| without_mark += 1);
         assert!(with_mark > without_mark);
+    }
+
+    #[test]
+    fn arc_vertices_emits_in_render_space() {
+        let p = physics();
+        let w = field();
+        // Player at (x=8, y=32, eye=4.5) throwing along +x
+        let origin = throw_origin(8.0, 32.0, 4.5, 0.0, 0.0, &p);
+        let landed = simulate_throw(
+            &w,
+            origin,
+            throw_velocity(0.0, 0.0, false, [0.0; 3], &p),
+            &p,
+            ARC_PREVIEW_SECONDS,
+        );
+        assert!(landed.landed);
+        let mut verts: Vec<[f32; 3]> = Vec::new();
+        arc_vertices(&landed, &mut |pos, _, _| verts.push(pos));
+
+        // In render space [x, z, y]:
+        // Render X is Cube X (~9.3)
+        // Render Y is Cube Z / height (starts near 4.15 and drops to 0.0)
+        // Render Z is Cube Y (near 32.0)
+        let first = verts[0];
+        assert!((first[0] - 9.3).abs() < 0.2, "first render X should be ~9.3, got {}", first[0]);
+        assert!((first[1] - 4.15).abs() < 0.2, "first render Y (height) should be ~4.15, got {}", first[1]);
+        assert!((first[2] - 32.0).abs() < 0.2, "first render Z should be ~32.0, got {}", first[2]);
+
+        // The landing ring marker is placed at contact[2] + 0.02 in render-y (height),
+        // not at contact[1] (32.0).
+        let contact = landed.contact.unwrap();
+        let last = *verts.last().unwrap();
+        assert!(
+            (last[1] - (contact[2] + 0.02)).abs() < 0.01,
+            "landing ring marker render Y should be floor height {:.2}, got {:.2}",
+            contact[2] + 0.02,
+            last[1]
+        );
     }
 }
