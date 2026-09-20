@@ -802,6 +802,62 @@ def is_meta_reply(text: str) -> bool:
     return bool(_META_OPENING.search(text or "") and _META_SUBJECT.search(text or ""))
 
 
+#: A tool call the model wrote as prose instead of emitting as a call.
+#:
+#: Measured on llama-3.2-3b: offered `look_up`, it answered "lookup query=\"coffee\""
+#: as ordinary content, which the pane then read aloud into the room in a synthesized
+#: voice. Small models do this whenever the template's call syntax and the tool list
+#: disagree, and it is worse than saying nothing -- it sounds like the agent has
+#: started reciting its own source. Matched against the whole reply (after stripping),
+#: never as a substring: "I'll look up the weather for you" is a real sentence.
+_TOOL_CALL_JSON = re.compile(
+    r"""^\s*(?:```[a-z]*\s*)?\{\s*"(?:name|function|tool|tool_name)"\s*:.*\}\s*(?:```)?\s*$""",
+    re.I | re.X | re.S,
+)
+
+_TOOL_CALL_TEXT = re.compile(
+    r"""^\s*
+    (?:```[a-z]*\s*)?                                   # a fenced block, sometimes
+    (?:<\s*)?(?:tool_call|function_call|call)?\s*[:>]?\s*
+    (?P<name>look_?up|search|play_?music|music_control|invite_speaker)
+    \s*(?:\(|\s)\s*
+    (?:query|action|q|args?|arguments|value)?\s*[=:]\s*
+    .{0,200}?
+    \s*\)?\s*(?:```)?\s*$""",
+    re.I | re.X | re.S,
+)
+
+
+#: The same failure without the syntax: the reply *is* the tool's name and its
+#: argument, in words. Measured on llama-3.2-3b, asked what it thought about coffee:
+#: "look up coffee".
+#:
+#: Narrow on purpose, because the phrases are ordinary English. All three must hold:
+#: the reply **begins** with the tool's name (a real sentence that mentions looking
+#: something up says something first -- "I'll look up the weather"), it is short, and
+#: it contains no sentence punctuation (a fumbled call is a fragment, not a sentence).
+#: "Play music now" is the cost of this rule; it is also not an answer worth speaking.
+_TOOL_CALL_PHRASE = re.compile(
+    r"^(?:look\s?up|looking\s?up|lookup|search(?:\s+for)?|play\s?music"
+    r"|playing\s?music|music\s?control)\b[^.!?\n]{0,80}$",
+    re.I,
+)
+
+
+def is_tool_call_text(text: str) -> bool:
+    """Whether the model wrote a tool call out as its spoken reply.
+
+    Matched against the whole reply, never as a substring: the point is to catch a
+    reply that *is* a call, not one that mentions searching.
+    """
+    stripped = (text or "").strip()
+    return bool(
+        _TOOL_CALL_TEXT.match(stripped)
+        or _TOOL_CALL_JSON.match(stripped)
+        or _TOOL_CALL_PHRASE.match(stripped)
+    )
+
+
 _SPEAKER_PREFIX = re.compile(r"^\s*(?:agent|assistant|bot|you)\s*[:\-—]\s*", re.I)
 _STAGE_DIRECTION = re.compile(r"^\s*[\(\[\*].{0,80}?[\)\]\*]\s*")
 

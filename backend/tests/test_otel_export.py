@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from backend.modules.otel import export, tracing
+from backend.modules.otel import decode, export, ids, tracing
 
 
 @pytest.fixture(autouse=True)
@@ -110,3 +110,76 @@ async def test_forward_received_relays_the_original_bytes(monkeypatch) -> None:
     assert body == b"\x01\x02"
     assert headers["x-api-key"] == "k"
     assert headers["content-encoding"] == "gzip"
+
+
+def _collector():
+    """A real OTLP/HTTP collector on a free port, in a thread.
+
+    The exporter wiring — provider slot, batch processor, endpoint suffix, headers —
+    is the half a unit test cannot reach: everything up to `BatchSpanProcessor` can be
+    right while nothing ever leaves the process.
+    """
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    received: list[tuple[str, dict[str, str], bytes]] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            length = int(self.headers.get("content-length") or 0)
+            received.append(
+                (
+                    self.path,
+                    {k.lower(): v for k, v in self.headers.items()},
+                    self.rfile.read(length),
+                )
+            )
+            self.send_response(200)
+            self.send_header("content-type", "application/x-protobuf")
+            self.end_headers()
+            self.wfile.write(b"")
+
+        def log_message(self, *args):  # keep the suite's output clean
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, received
+
+
+def test_the_nodes_spans_actually_reach_a_collector(monkeypatch) -> None:
+    server, received = _collector()
+    host, port = server.server_address[0], server.server_address[1]
+    try:
+        monkeypatch.setattr(tracing, "enabled", lambda: True)
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", f"http://{host}:{port}")
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_HEADERS", "x-api-key=k3y")
+        assert export.configure() is True
+
+        with tracing.agent_span(
+            turn_id="exported",
+            agent_id="main",
+            agent_name="Main",
+            model="m",
+            provider="ollama",
+        ):
+            pass
+        tracing.force_flush()
+
+        assert received, "the exporter never sent anything"
+        path, headers, body = received[-1]
+        # The endpoint is a base URL; the exporter appends the signal's path itself.
+        assert path == "/v1/traces"
+        assert headers["x-api-key"] == "k3y"
+        spans = decode.decode(
+            decode.inflate(body, headers.get("content-encoding")),
+            "application/x-protobuf",
+        )
+        assert [s.name for s in spans] == ["invoke_agent Main"]
+        assert spans[0].attrs["horrible.turn_id"] == "exported"
+        assert spans[0].trace_id == ids.trace_id_for_turn("exported")
+    finally:
+        tracing.export_slot().inner = None
+        server.shutdown()
+        server.server_close()

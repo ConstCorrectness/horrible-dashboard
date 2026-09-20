@@ -14,7 +14,15 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from backend import server_port
-from backend.modules.otel import auth, decode, export, ids, materialize, store
+from backend.modules.otel import (
+    auth,
+    decode,
+    export,
+    grpc_server,
+    ids,
+    materialize,
+    store,
+)
 from backend.modules.otel.models import IngestInfo, Span, TraceSummary
 
 router = APIRouter(prefix="/otel", tags=["otel"])
@@ -27,6 +35,16 @@ _background: set[asyncio.Task[None]] = set()
 
 def local_endpoint() -> str:
     return f"http://127.0.0.1:{server_port.port()}/api/otel"
+
+
+def _grpc_endpoint() -> str | None:
+    """Reported from the **bound** port, never from the setting: a configured port
+    that was already taken must not be advertised as an endpoint."""
+    port = grpc_server.bound_port()
+    if port is None:
+        return None
+    host, _ = grpc_server.configured()
+    return f"{host}:{port}"
 
 
 def _is_json(content_type: str | None) -> bool:
@@ -86,6 +104,7 @@ def ingest_info(request: Request) -> IngestInfo:
         token=auth.get_token() if loopback else None,
         last_received_at=last,
         received_traces=count,
+        grpc_endpoint=_grpc_endpoint(),
     )
 
 
@@ -101,6 +120,7 @@ def rotate_ingest_token() -> IngestInfo:
         token=auth.rotate_token(),
         last_received_at=last,
         received_traces=count,
+        grpc_endpoint=_grpc_endpoint(),
     )
 
 

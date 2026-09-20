@@ -101,6 +101,30 @@ export const trajectoriesModule: ModuleManifest = {
       default: true,
     },
     {
+      key: 'otel.grpcPort',
+      title: 'OTLP/gRPC receiver port',
+      description:
+        '0 keeps it off. 4317 is the OTel default, which is what an exporter uses when nobody set OTEL_EXPORTER_OTLP_PROTOCOL. It binds a second listening port, so it is opt-in — and it is read at startup, so changing it needs a backend restart.',
+      type: 'number',
+      default: 0,
+    },
+    {
+      key: 'otel.grpcHost',
+      title: 'OTLP/gRPC bind address',
+      description:
+        'Which address the gRPC receiver listens on. Loopback by default: the node itself may be loopback-only, and this setting must not widen that silently. Non-loopback senders still need the ingest token.',
+      type: 'string',
+      default: '127.0.0.1',
+    },
+    {
+      key: 'otel.propagateHttp',
+      title: 'Send trace context to local services',
+      description:
+        "Add a W3C traceparent header to outbound requests aimed at loopback or LAN addresses, so a service you run yourself continues the agent's trace. Never sent to a public address.",
+      type: 'boolean',
+      default: false,
+    },
+    {
       key: 'otel.forwardReceived',
       title: 'Forward received traces to the export connector',
       description:

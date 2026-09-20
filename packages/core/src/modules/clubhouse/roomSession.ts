@@ -125,6 +125,22 @@ export class ClubhouseRoomSession {
   pingInterval: ReturnType<typeof setInterval> | null = null;
   volumeInterval: ReturnType<typeof setInterval> | null = null;
   vadInterval: ReturnType<typeof setInterval> | null = null;
+  /**
+   * The ears watchdog (see `useClubhouseVoice`). Separate from `vadInterval`
+   * deliberately: the VAD loop is what *stops* working, so it cannot be the thing
+   * that notices.
+   */
+  earsInterval: ReturnType<typeof setInterval> | null = null;
+  /**
+   * Build a fresh `MediaRecorder` on the current `sttDest`, closed over by the join
+   * that set it up. Held on the session because the watchdog runs outside that
+   * closure and a room can outlive any one mount.
+   */
+  restartEars: (() => void) | null = null;
+  /** Restarts the watchdog has performed this room, for the pane's health chip. */
+  earsRestarts = 0;
+  /** When a transcript chunk was last accepted by the server, for the same chip. */
+  lastHeardAt = 0;
 
   // --- agent audio ---
   agentAudioSource: AudioBufferSourceNode | null = null;
@@ -311,7 +327,12 @@ export class ClubhouseRoomSession {
   async #teardown(): Promise<void> {
     const channel = this.state.activeChannel;
 
-    for (const key of ['pingInterval', 'volumeInterval', 'vadInterval'] as const) {
+    for (const key of [
+      'pingInterval',
+      'volumeInterval',
+      'vadInterval',
+      'earsInterval',
+    ] as const) {
       const handle = this[key];
       if (handle) clearInterval(handle);
       this[key] = null;
@@ -326,6 +347,12 @@ export class ClubhouseRoomSession {
       this.sttRecorder = null;
     }
     this.sttChunk = null;
+    // Cleared with the recorder it rebuilds: left set, the next room's watchdog
+    // would call a closure holding the *previous* room's `sttDest` -- the orphaned-
+    // loop bug this teardown exists to prevent, wearing a different hat.
+    this.restartEars = null;
+    this.earsRestarts = 0;
+    this.lastHeardAt = 0;
     // A song must not keep playing into a room you left, or into the next one.
     this.stopMusic();
     if (this.localAudioTrack) {

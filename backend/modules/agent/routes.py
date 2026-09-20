@@ -445,7 +445,17 @@ async def stt(file: UploadFile, language: str | None = None) -> dict[str, str]:
     """Transcribe an uploaded audio chunk (WebM/Opus) to text.
 
     Same optionality as :func:`tts` — Whisper pulls in torch, which is far too
-    heavy to make every install pay for."""
+    heavy to make every install pay for.
+
+    A transcription that *fails* answers 200 with an empty ``text`` and an ``error``
+    saying why, rather than the bare ``{"text": ""}`` it used to. Both shapes are the
+    same 200 to the caller, and callers transcribe silence constantly — the Clubhouse
+    room agent posts a chunk every few seconds whether or not anyone spoke — so a
+    failure must not be an error status, but it must not be *indistinguishable from
+    silence* either. It was: a machine with a broken decoder (no ffmpeg on PATH, a
+    corrupt chunk, a model that would not load) produced an agent that sat in a room
+    hearing nothing and never said why, which is the single most common report of
+    "the voice agent doesn't work"."""
     from backend.modules.network import borrow
 
     audio_bytes = await file.read()
@@ -461,7 +471,11 @@ async def stt(file: UploadFile, language: str | None = None) -> dict[str, str]:
             }
         except Exception as exc:
             logger.warning("STT transcription error: %s", exc)
-            return {"text": "", "ranOn": "local"}
+            return {
+                "text": "",
+                "ranOn": "local",
+                "error": str(exc) or type(exc).__name__,
+            }
 
     if decision.where == "peer":
         endpoint, decision = await borrow.acquire("voice")

@@ -20,8 +20,10 @@ from __future__ import annotations
 import json
 import logging
 import random
+import uuid
 from typing import Any, Awaitable, Callable, Protocol
 
+from backend.modules.otel import tracing as otel_tracing
 from backend.modules.games.loadout import (
     CodedHarness,
     HarnessRuntime,
@@ -155,6 +157,36 @@ class AgentPolicy:
         loadout = self._load_harness(key)
         runtime = HarnessRuntime(loadout)
         agent_code = (getattr(loadout, "agent_code", "") or "").strip()
+
+        # One OTel trace per *move*, not per match: a move is a whole agent drive with
+        # its own model calls, and the moves of one match are independent runs of the
+        # same harness. The `chat` spans the drive makes nest under this one, which is
+        # what turns "the provider was called nine times" into "this move cost nine
+        # calls". A coded agent gets the span too — the code is the agent.
+        with otel_tracing.agent_span(
+            turn_id=f"game.{key}.{uuid.uuid4().hex[:8]}",
+            agent_id=f"games:{key}",
+            agent_name=str(getattr(loadout, "name", "") or key),
+            model=str(getattr(loadout, "model", "") or ""),
+            provider="games",
+        ) as move_span:
+            move_span.set("horrible.game", key)
+            move_span.set("horrible.legal_actions", len(ids))
+            move_span.set("horrible.agent_code", bool(agent_code))
+            return await self._run_inner(
+                key, loadout, runtime, agent_code, observation, legal_actions, ids
+            )
+
+    async def _run_inner(
+        self,
+        key: str,
+        loadout: Any,
+        runtime: HarnessRuntime,
+        agent_code: str,
+        observation: dict[str, Any],
+        legal_actions: list[dict[str, Any]],
+        ids: list[str],
+    ) -> str | None:
 
         if self._chat_fn is not None:
             return await self._decide(

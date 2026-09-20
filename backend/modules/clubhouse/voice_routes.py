@@ -62,6 +62,38 @@ class TurnResponse(BaseModel):
     actions: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class LegHealth(BaseModel):
+    """One leg of the pipeline, in the hardware module's three states.
+
+    `ok` is only meaningful when `certain` is True: "we asked and it is not there"
+    and "we could not ask" are different facts, and rendering the second as the first
+    is how a working node gets told to reinstall something it already has.
+    """
+
+    ok: bool
+    certain: bool = True
+    detail: str = ""
+    fix: str = ""
+
+
+class VoiceHealth(BaseModel):
+    """Whether a turn would work *right now*, without taking one.
+
+    The room agent fails by going quiet, and every cause looks identical from a
+    chair: the ears, the model and the mouth are three separate processes that stop
+    for three unrelated reasons. This answers which one, cheaply enough to poll.
+    """
+
+    ok: bool
+    ears: LegHealth
+    model: LegHealth
+    mouth: LegHealth
+    #: Echoed back so a pane polling this can show what it would be talking to.
+    provider: str = ""
+    endpoint: str = ""
+    model_name: str = ""
+
+
 class MusicStatus(BaseModel):
     song_id: str
     status: str
@@ -171,6 +203,103 @@ async def turn(req: TurnRequest) -> TurnResponse:
         retrieved=bool(result.get("retrieved")),
         filler=result.get("filler"),
         actions=result.get("actions") or [],
+    )
+
+
+@router.get("/health", response_model=VoiceHealth)
+async def health(channel: str | None = None) -> VoiceHealth:
+    """Probe the three legs of a voice turn without taking one.
+
+    Deliberately **not** `/api/agent/status`: that probes every provider in the table,
+    which is far too much work to run on a timer, and it answers a question about the
+    agent's configuration rather than about this room's next sentence.
+
+    The model leg is the configured provider's own catalog, so it costs one request to
+    a server that is usually loopback. Note what it can and cannot see: a server that
+    is down, or a model name that is no longer served, both show up here — a model the
+    server has merely *unloaded* does not, because it is still listed. That is why the
+    turn's own `reason` stays the authority on a failure that already happened; this
+    says whether the next one has a chance.
+    """
+    import httpx
+
+    from backend import extras
+    from backend.modules.agent import providers as P
+    from backend.modules.agent.routes import _endpoint_for, _load_config
+
+    voice_extra = extras.probe("voice")
+    # The same extra backs both routes, but they fail for different reasons once it is
+    # present (a decoder missing from PATH is an ear problem, not a mouth one), so they
+    # are reported separately rather than as one "speech" row.
+    ears = LegHealth(
+        ok=voice_extra.available,
+        certain=voice_extra.certain,
+        detail=voice_extra.reason
+        or ("speech-to-text ready" if voice_extra.available else ""),
+        fix=voice_extra.install if not voice_extra.available else "",
+    )
+    ffmpeg = extras.probe("ffmpeg")
+    if ears.ok and ffmpeg.certain and not ffmpeg.available:
+        # Whisper is handed WebM/Opus from the browser and cannot decode it alone, so
+        # this is a deaf agent with a perfectly installed extra.
+        ears = LegHealth(
+            ok=False,
+            certain=True,
+            detail="ffmpeg is not on PATH, so room audio cannot be decoded",
+            fix=ffmpeg.install,
+        )
+    mouth = LegHealth(
+        ok=voice_extra.available,
+        certain=voice_extra.certain,
+        detail=voice_extra.reason
+        or ("text-to-speech ready" if voice_extra.available else ""),
+        fix=voice_extra.install if not voice_extra.available else "",
+    )
+
+    config = _load_config()
+    if config is None:
+        model = LegHealth(
+            ok=False,
+            detail="no model is configured — finish agent onboarding",
+            fix="Open the agent settings and pick a provider",
+        )
+        return VoiceHealth(ok=False, ears=ears, model=model, mouth=mouth)
+
+    info = P.provider_for(config.provider)
+    endpoint = _endpoint_for(info, config)
+    # The room's own override wins, exactly as it does on a turn: reporting the
+    # orchestrator's model healthy while the room is pointed at a different one is a
+    # green light for a turn that cannot happen.
+    wanted = config.model
+    if channel:
+        wanted = (V.session_for(channel).config.model or "").strip() or config.model
+
+    try:
+        async with httpx.AsyncClient(timeout=4) as client:
+            served = await P.list_models(client, info, endpoint)
+        if served and wanted and wanted not in served:
+            model = LegHealth(
+                ok=False,
+                detail=f"{info.label} is up but is not serving “{wanted}”",
+                fix="Pick a model this server has, or load it there",
+            )
+        else:
+            model = LegHealth(ok=True, detail=f"{info.label} is reachable")
+    except Exception as exc:  # noqa: BLE001 — every failure here is "cannot reach it"
+        model = LegHealth(
+            ok=False,
+            detail=f"cannot reach {info.label} at {endpoint}: {exc}",
+            fix=info.install_url or "",
+        )
+
+    return VoiceHealth(
+        ok=ears.ok and model.ok and mouth.ok,
+        ears=ears,
+        model=model,
+        mouth=mouth,
+        provider=info.kind,
+        endpoint=endpoint,
+        model_name=wanted,
     )
 
 

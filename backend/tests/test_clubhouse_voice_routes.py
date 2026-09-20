@@ -454,3 +454,125 @@ def test_an_acknowledgement_of_the_prompt_is_neither_spoken_nor_remembered(
     assert "acknowledged the prompt" in body["reason"]
     turns = client.get("/api/clubhouse/voice/state?channel=c1").json()["turns"]
     assert [t["role"] for t in turns] == ["room"]
+
+
+# --- health ------------------------------------------------------------------------
+#
+# The room agent fails by going quiet, and the three legs of a turn — the ears, the
+# model, the mouth — are separate processes that stop for unrelated reasons while
+# looking identical from a chair. `GET /voice/health` is what makes them separable
+# without taking a turn.
+
+
+def _stub_health(
+    monkeypatch,
+    *,
+    voice=(True, True),
+    ffmpeg=(True, True),
+    served: list[str] | None = None,
+    raises: Exception | None = None,
+    model: str = "m",
+):
+    """Pin every probe the health route makes. `(available, certain)` per extra."""
+    from backend import extras
+    from backend.modules.agent import routes as AR
+    from backend.modules.agent.models import AgentConfig
+
+    def fake_probe(name, *, refresh=False):
+        avail, certain = {"voice": voice, "ffmpeg": ffmpeg}.get(name, (True, True))
+        return extras.Availability(
+            extra=name,
+            available=avail,
+            certain=certain,
+            reason="" if avail else f"{name} is not installed",
+            install=f"uv sync --extra {name}",
+        )
+
+    monkeypatch.setattr(extras, "probe", fake_probe)
+    monkeypatch.setattr(
+        AR,
+        "_load_config",
+        lambda: AgentConfig(model=model, provider="lmstudio", endpoint="http://x:1234"),
+    )
+
+    async def fake_list_models(client, info, endpoint):
+        if raises is not None:
+            raise raises
+        return served if served is not None else [model]
+
+    monkeypatch.setattr(P, "list_models", fake_list_models)
+
+
+def test_health_is_green_when_every_leg_answers(
+    client: TestClient, monkeypatch
+) -> None:
+    _stub_health(monkeypatch)
+    body = client.get("/api/clubhouse/voice/health").json()
+    assert body["ok"] is True
+    assert body["ears"]["ok"] and body["model"]["ok"] and body["mouth"]["ok"]
+
+
+def test_health_names_the_model_the_server_is_not_serving(
+    client: TestClient, monkeypatch
+) -> None:
+    """The failure a person actually hits: the server is up, so nothing looks wrong,
+    and every turn comes back `model error`."""
+    _stub_health(monkeypatch, model="gemma-4-e2b", served=["something-else"])
+    body = client.get("/api/clubhouse/voice/health").json()
+    assert body["ok"] is False
+    assert body["model"]["ok"] is False
+    assert "gemma-4-e2b" in body["model"]["detail"]
+    assert body["ears"]["ok"] and body["mouth"]["ok"]
+
+
+def test_health_reports_a_provider_it_cannot_reach(
+    client: TestClient, monkeypatch
+) -> None:
+    import httpx
+
+    _stub_health(monkeypatch, raises=httpx.ConnectError("refused"))
+    body = client.get("/api/clubhouse/voice/health").json()
+    assert body["ok"] is False
+    assert "cannot reach" in body["model"]["detail"]
+
+
+def test_health_checks_the_rooms_own_model_not_the_orchestrators(
+    client: TestClient, monkeypatch
+) -> None:
+    """`config.model` is a per-room override. Reporting the orchestrator's model
+    healthy while the room points at one the server lacks is a green light for a
+    turn that cannot happen."""
+    _stub_health(monkeypatch, model="orchestrator-model", served=["orchestrator-model"])
+    client.post(
+        "/api/clubhouse/voice/config",
+        json={"channel": "r1", "config": {"enabled": True, "model": "room-model"}},
+    )
+    assert client.get("/api/clubhouse/voice/health").json()["model"]["ok"] is True
+    scoped = client.get("/api/clubhouse/voice/health?channel=r1").json()
+    assert scoped["model"]["ok"] is False
+    assert "room-model" in scoped["model"]["detail"]
+
+
+def test_a_deaf_agent_with_the_extra_installed_blames_ffmpeg(
+    client: TestClient, monkeypatch
+) -> None:
+    """Whisper is handed WebM/Opus from the browser and cannot decode it alone, so
+    this is a perfectly installed extra that still hears nothing."""
+    _stub_health(monkeypatch, ffmpeg=(False, True))
+    body = client.get("/api/clubhouse/voice/health").json()
+    assert body["ears"]["ok"] is False
+    assert "ffmpeg" in body["ears"]["detail"]
+    # The mouth does not need a decoder; only the ears are down.
+    assert body["mouth"]["ok"] is True
+
+
+def test_a_probe_that_could_not_ask_is_unknown_not_broken(
+    client: TestClient, monkeypatch
+) -> None:
+    """The hardware module's rule: "we asked and it is absent" and "we could not
+    ask" are different facts, and rendering the second as the first tells a working
+    node to reinstall what it already has."""
+    _stub_health(monkeypatch, voice=(False, False))
+    body = client.get("/api/clubhouse/voice/health").json()
+    assert body["ears"]["certain"] is False
+    assert body["mouth"]["certain"] is False

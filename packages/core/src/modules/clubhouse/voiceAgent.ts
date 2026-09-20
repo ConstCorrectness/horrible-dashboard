@@ -244,3 +244,37 @@ export async function getVoiceState(
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
+
+/** One leg of the voice pipeline, as `GET /voice/health` reports it. */
+export interface VoiceLegHealth {
+  ok: boolean;
+  /** `ok` means nothing when this is false — the honest rendering is "unknown". */
+  certain: boolean;
+  detail: string;
+  fix: string;
+}
+
+export interface VoiceHealth {
+  ok: boolean;
+  ears: VoiceLegHealth;
+  model: VoiceLegHealth;
+  mouth: VoiceLegHealth;
+  provider: string;
+  endpoint: string;
+  model_name: string;
+}
+
+/**
+ * Whether a turn would work right now, without taking one.
+ *
+ * Polled while a room is open: the three legs are separate processes that stop for
+ * unrelated reasons, and from a chair every one of them looks like an agent that has
+ * gone quiet. The room's own model override is honoured, so `channel` is passed.
+ */
+export async function getVoiceHealth(channel: string): Promise<VoiceHealth> {
+  const res = await fetch(
+    apiUrl(`/api/clubhouse/voice/health?channel=${encodeURIComponent(channel)}`),
+  );
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}

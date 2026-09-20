@@ -44,6 +44,7 @@ import {
   chatSpeakerLabel,
   DEFAULT_VOICE_CONFIG,
   getMusicStatus,
+  getVoiceHealth,
   getVoiceState,
   musicUrl,
   type VoiceAction,
@@ -51,6 +52,8 @@ import {
   resetVoiceMemory,
   takeVoiceTurn,
   type VoiceAgentConfig,
+  type VoiceHealth,
+  type VoiceLegHealth,
   type VoiceRoom,
   type VoiceStateTurn,
 } from './voiceAgent';
@@ -69,6 +72,84 @@ const agentLabelStyle: React.CSSProperties = {
   color: '#94a3b8',
   fontWeight: 600,
 };
+
+/**
+ * The three legs of a voice turn, as pills beside the last turn's reason.
+ *
+ * Quiet when everything works — one green "READY", because a row of three green
+ * badges in a pane that is already dense is noise, and noise is what gets ignored
+ * on the day one of them turns red. A leg that is down names itself and carries its
+ * own fix in the tooltip.
+ *
+ * A leg whose probe is `certain: false` renders as **unknown**, never as broken:
+ * "we asked and it is absent" and "we could not ask" are different facts, and the
+ * hardware module exists because conflating them tells a working machine to
+ * reinstall what it already has.
+ */
+function VoiceHealthChips({ health }: { health: VoiceHealth }) {
+  const legs: [string, VoiceLegHealth][] = [
+    ['HEARS', health.ears],
+    ['THINKS', health.model],
+    ['SPEAKS', health.mouth],
+  ];
+  const bad = legs.filter(([, leg]) => !leg.ok);
+
+  const pill = (label: string, tone: 'ok' | 'bad' | 'unknown', title: string) => {
+    const colors = {
+      ok: { fg: '#4ade80', bg: 'rgba(74,222,128,0.12)', dot: '#4ade80' },
+      bad: { fg: '#f87171', bg: 'rgba(248,113,113,0.12)', dot: '#f87171' },
+      unknown: { fg: '#94a3b8', bg: 'rgba(148,163,184,0.12)', dot: '#94a3b8' },
+    }[tone];
+    return (
+      <span
+        key={label}
+        title={title}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '0.35rem',
+          padding: '0.1rem 0.5rem',
+          borderRadius: '999px',
+          background: colors.bg,
+          color: colors.fg,
+          fontSize: '0.65rem',
+          fontWeight: 700,
+          letterSpacing: '0.08em',
+          fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+        }}
+      >
+        <span
+          style={{
+            width: '6px',
+            height: '6px',
+            borderRadius: '50%',
+            background: colors.dot,
+          }}
+        />
+        {label}
+      </span>
+    );
+  };
+
+  if (bad.length === 0) {
+    return pill(
+      'READY',
+      'ok',
+      `${health.provider || 'model'} · ${health.model_name || 'default'} @ ${health.endpoint}`,
+    );
+  }
+  return (
+    <span style={{ display: 'inline-flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+      {bad.map(([label, leg]) =>
+        pill(
+          `NO ${label}`,
+          leg.certain ? 'bad' : 'unknown',
+          [leg.detail, leg.fix && `Fix: ${leg.fix}`].filter(Boolean).join(' — '),
+        ),
+      )}
+    </span>
+  );
+}
 /**
  * **Horizontal padding only.** `controls.css` gives every `<input>`/`<select>` a
  * fixed `height: var(--control-h)` (30px) with its vertical padding removed —
@@ -152,6 +233,7 @@ export function RoomsPanel() {
   // Why the agent stayed quiet on the last turn. Rendered in the Agent tab, because
   // a deliberate silence and a broken pipeline are indistinguishable without it.
   const [agentReason, setAgentReason] = useState<string | null>(null);
+  const [voiceHealth, setVoiceHealth] = useState<VoiceHealth | null>(null);
   const [agentMemory, setAgentMemory] = useState<VoiceStateTurn[]>([]);
   const [sttChunkMs] = useState(5000);
 
@@ -1298,6 +1380,40 @@ export function RoomsPanel() {
       console.warn('Failed to sync voice agent config:', e),
     );
   }, [activeChannel, agentConfig]);
+
+  /**
+   * Poll whether a turn would work at all.
+   *
+   * The three legs — the ears, the model, the mouth — are separate processes that
+   * stop for unrelated reasons, and from a chair every one of them looks the same:
+   * an agent that has gone quiet. The per-turn `reason` explains a turn that
+   * happened; this explains the ones that are not going to.
+   *
+   * Twenty seconds, and only while a room is open with the agent on: the model leg
+   * costs one request to the provider, which is usually loopback but need not be.
+   */
+  useEffect(() => {
+    if (!activeChannel || !agentEnabled) {
+      setVoiceHealth(null);
+      return;
+    }
+    let cancelled = false;
+    const tick = () =>
+      void getVoiceHealth(activeChannel)
+        .then((h) => {
+          if (!cancelled) setVoiceHealth(h);
+        })
+        // A failed poll is not a failed pipeline — it is one failed request, and
+        // blanking the chip on it would flicker the one indicator meant to be
+        // trustworthy. The previous answer stands until a poll succeeds.
+        .catch(() => {});
+    tick();
+    const interval = setInterval(tick, 20000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [activeChannel, agentEnabled]);
 
   // Mirror what the agent remembers into the Agent tab.
   useEffect(() => {
@@ -4151,6 +4267,7 @@ export function RoomsPanel() {
                               {agentReason ?? '—'}
                             </strong>
                           </span>
+                          {voiceHealth && <VoiceHealthChips health={voiceHealth} />}
                           {isAgentThinking && (
                             <span
                               style={{

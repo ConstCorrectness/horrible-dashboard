@@ -96,7 +96,15 @@ def _from_protobuf(body: bytes) -> list[Span]:
         request.ParseFromString(body)
     except PbDecodeError as exc:
         raise DecodeError(f"bad protobuf body: {exc}") from exc
+    return spans_from_request(request)
 
+
+def spans_from_request(request: Any) -> list[Span]:
+    """An already-parsed `ExportTraceServiceRequest` → spans.
+
+    Split out from `_from_protobuf` because the gRPC receiver is handed the parsed
+    message by the generated servicer and never sees the bytes — one walk of the
+    shape, so the two transports cannot drift in what they record."""
     spans: list[Span] = []
     for rs in request.resource_spans:
         resource = _pb_attrs(rs.resource.attributes)

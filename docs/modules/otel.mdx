@@ -75,7 +75,23 @@ append `/v1/traces` themselves. The endpoint takes:
 - `application/x-protobuf` (the Python default) and `application/json`;
 - `Content-Encoding: gzip`, with a 64 MB inflation ceiling and a 32 MB raw ceiling.
 
-It is **HTTP only**. There is no gRPC on :4317.
+### gRPC
+
+The OTel spec's **default** protocol is gRPC, so an exporter whose owner never set
+`OTEL_EXPORTER_OTLP_PROTOCOL` talks to :4317. The node can serve that too, but it is
+**off unless `otel.grpcPort` is set** — it binds a *second* listening port, and a
+module that opens one on every node is not something to find out about from
+`netstat`. `otel.grpcHost` defaults to loopback for the same reason: the node's own
+HTTP port may be loopback-only, and an unrelated setting must not widen that.
+
+Auth is the HTTP rule unchanged — loopback needs nothing, anything else needs the
+ingest token, here as the `authorization` **metadata** entry, which is where a gRPC
+exporter puts `OTEL_EXPORTER_OTLP_HEADERS`.
+
+The port is read once, at startup, so changing it needs a backend restart. The
+Connect section advertises the endpoint only when a port is actually **bound**: a
+configured port that was already taken is not an endpoint, and
+`add_insecure_port` reports that by returning 0 rather than raising.
 
 OTLP/JSON is walked by hand rather than through protobuf's `json_format`. OTLP/JSON
 encodes ids as **hex**, while protobuf's JSON mapping would read the `bytes` fields
@@ -160,6 +176,27 @@ Spans are written to `otel_spans` (`origin='local'`) by the SDK's own
   `execute_tool` span.
 - **Peers**: `agent.ask_peer` carries an optional `traceparent`. The callee continues
   the trace, and a malformed or absent value just starts a fresh one.
+- **Outbound HTTP** (`otel.propagateHttp`, default off): requests made through
+  `instrumented_client` carry `traceparent` **only to loopback and private
+  addresses**, so a service you run yourself can continue the agent's trace. A hosted
+  provider has no use for our trace id, and a header is sent whether or not the far
+  side reads it. A hostname that is not a literal address counts as public — resolving
+  it would put a DNS lookup on every outbound request.
+
+## Games
+
+A games agent's **move** is one span (`policy.AgentPolicy._run`): one drive of the
+harness, with the model calls it makes nested inside it. That is what turns "the
+provider was called nine times" into "this move cost nine calls". A coded agent gets
+the span too — the code is the agent.
+
+Each move is its **own trace**, because the moves of a match are independent runs of
+the same harness. Their ids are `game.<key>.<rand>`, with dots: `:` is the delegate
+separator in a turn id (`ids.root_turn` splits on it), so a colon here would hand
+every move of the game the same derived trace id.
+
+`games/model_client.py`'s **anthropic** branch is the one model call in the app that
+does not pass through `providers.chat`, so it opens the `chat` span itself.
 
 ## Exporting: the `otel` connector
 
@@ -187,7 +224,7 @@ exporter's auth header.
 | Route | |
 | --- | --- |
 | `POST /api/otel/v1/traces` | OTLP/HTTP receiver (auth above) |
-| `GET /api/otel/ingest` | endpoint, received-trace count, last-received time; the token for loopback only |
+| `GET /api/otel/ingest` | endpoint, received-trace count, last-received time, the bound gRPC endpoint; the token for loopback only |
 | `POST /api/otel/ingest/rotate` | new ingest token (loopback only) |
 | `GET /api/otel/traces?origin=&limit=` | trace summaries |
 | `GET /api/otel/traces/{trace_id}` | a trace's spans |
@@ -206,12 +243,15 @@ silently absent.
 | `otel.captureContent` | `false` | Include prompts / tool data in spans (redacted) |
 | `otel.injectEnv` | `true` | Set `OTEL_*` for notebook and training kernels |
 | `otel.forwardReceived` | `false` | Relay received traces to the export connector |
+| `otel.grpcPort` | `0` | OTLP/gRPC receiver port (`0` = off; `4317` is the OTel default). Read at startup |
+| `otel.grpcHost` | `127.0.0.1` | Which address that receiver binds |
+| `otel.propagateHttp` | `false` | Send `traceparent` on outbound requests to loopback/LAN targets |
 
 ## Still outstanding
 
-- **gRPC (`:4317`)**: only OTLP/HTTP is received.
-- **`traceparent` on outbound HTTP**: this was planned as opt-in for LAN targets, and
-  is not implemented.
-- **Games agents**: `agent_code` runs in-process and is not wrapped in spans yet. Only
-  the `chat` calls it makes through `providers` are traced.
-- **Metrics and logs** signals: traces only.
+- **Metrics and logs** signals: traces only. `OTEL_METRICS_EXPORTER` and
+  `OTEL_LOGS_EXPORTER` are set to `none` for spawned kernels so their SDKs do not
+  retry into a 404 every few seconds.
+- **Live rebind of the gRPC port**: the setting is read at startup only.
+- **Frontend spans**: the browser layout emits none; a turn's trace starts at the
+  backend.

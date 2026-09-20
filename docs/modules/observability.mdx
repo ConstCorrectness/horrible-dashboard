@@ -111,6 +111,9 @@ paths the inbound capture also **blanks credential-shaped request headers**
 node's ingest token, and on a LAN-bound node this ring is readable by the same network
 the token exists to keep out. See [OpenTelemetry](otel.mdx).
 
+The outbound request hook is also where `traceparent` is added when
+`otel.propagateHttp` is on — loopback and LAN targets only, never a hosted provider.
+
 Response bodies are captured on `client` events and on all `outbound` calls — so
 the request↔response pair to the LLM reads end to end — truncated like request
 bodies:

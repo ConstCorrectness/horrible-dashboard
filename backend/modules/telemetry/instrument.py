@@ -234,6 +234,12 @@ _stream_events: dict[int, int] = {}
 
 async def _on_request(request: httpx.Request) -> None:
     _starts[id(request)] = time.perf_counter()
+    # W3C trace context for a loopback/LAN target, when `otel.propagateHttp` is on:
+    # this hook is the one seam every instrumented client passes, so a service you
+    # run yourself can continue the agent's trace. No-op by default.
+    from backend.modules.otel.tracing import inject_traceparent
+
+    inject_traceparent(request)
 
 
 async def _on_response(response: httpx.Response) -> None:

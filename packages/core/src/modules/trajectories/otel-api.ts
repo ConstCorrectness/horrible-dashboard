@@ -42,6 +42,8 @@ export interface IngestInfo {
   token_required_remote: boolean;
   last_received_at: number | null;
   received_traces: number;
+  /** `host:port` when the opt-in gRPC receiver is listening; null when it is not. */
+  grpc_endpoint: string | null;
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {

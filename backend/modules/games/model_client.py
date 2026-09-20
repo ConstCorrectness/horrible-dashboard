@@ -15,6 +15,7 @@ from typing import Any
 
 import httpx
 
+from backend.modules.otel import tracing as otel_tracing
 from backend.modules.agent import providers as P
 from backend.modules.games.model_config import ModelConfig, get_key
 
@@ -44,7 +45,18 @@ async def chat(
 ) -> P.ChatResult:
     """One non-streaming tool-calling round against the loadout's model."""
     if config.provider == "anthropic":
-        return await _anthropic_chat(client, config, messages, tools)
+        # The one model call in the app that does not pass through
+        # `providers.chat`, so it needs the `chat` span the decorator gives the rest.
+        with otel_tracing.chat_span(
+            provider_kind="anthropic",
+            model=config.model,
+            endpoint=config.resolved_endpoint(),
+            messages=messages,
+            params={},
+        ) as span:
+            result = await _anthropic_chat(client, config, messages, tools)
+            span.finish(result, provider_kind="anthropic", model=config.model)
+            return result
     # `lmstudio` carries the OpenAI dialect in the provider table; ollama is native.
     info = P.provider_for("ollama" if config.provider == "ollama" else "lmstudio")
     return await P.chat(

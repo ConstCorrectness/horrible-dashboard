@@ -93,6 +93,7 @@ from backend.modules.interpretability import (
 from backend.modules.interpretability import router as interpretability_router
 from backend.modules.evals import register_agent_tools as register_evals_tools
 from backend.modules.evals import router as evals_router
+from backend.modules.otel import grpc_server as otel_grpc
 from backend.modules.otel import materialize as otel_materialize
 from backend.modules.otel import tracing as otel_tracing
 from backend.modules.otel.export import configure as configure_otel_export
@@ -246,6 +247,9 @@ async def lifespan(app: FastAPI):
     otel_materialize.start()
     # Attach the external exporter if one is configured (connector or OTEL_* env).
     await asyncio.to_thread(configure_otel_export)
+    # The OTLP/gRPC receiver, only when `otel.grpcPort` asks for one: it binds a
+    # second listening port, so it is opt-in rather than discovered in netstat.
+    await otel_grpc.start()
     # Persist the turn-stamped slice of the I/O ring. A batched subscriber rather
     # than a write inside `record()`, which is on the hot path of every instrumented
     # request -- a postmortem feature must not put sqlite in the middle of a turn.
@@ -276,6 +280,7 @@ async def lifespan(app: FastAPI):
         # Project any trace whose batch arrived just before shutdown, and flush the
         # node's own spans (local store + external exporter) before the loop goes.
         await otel_materialize.stop()
+        await otel_grpc.stop()
         otel_tracing.shutdown()
         queue.stop()
         # MCP servers are child processes (stdio transport); leaving them behind on

@@ -546,6 +546,16 @@ is its turn, and speaks. The speech pipeline is two routes on the agent module:
   is forwarded to the transcriber (and on to a remote node's `/api/agent/stt`
   when the work is delegated); it is ignored by the English-only default model,
   which is why it is a hint rather than a setting.
+  A transcription that **fails** answers `200` with an empty `text` **and an
+  `error`** saying why, which the pane reports (deduplicated — the same message
+  toasts once, however many chunks hit it). It must not be an error _status_: the
+  pane posts a chunk every few seconds whether or not anyone spoke, so a failure
+  cannot be signalled the same way a room full of silence is. But it must not be
+  indistinguishable from silence either, and it was — a node with a broken decoder
+  (no `ffmpeg` on `PATH`, a corrupt chunk, a model that would not load) ran an agent
+  that sat in a room hearing nothing and never said why. That is the single most
+  common report of the voice agent "not working".
+
 - **`GET /api/agent/tts?text=`** — MP3 audio, via Edge TTS. `voice`, `rate`,
   `pitch` and `volume` are all passed through to the synthesizer, so the agent's
   loudness is tuned alongside its speed and pitch rather than left to the mixer.
@@ -705,6 +715,132 @@ about?" has no answer.
 small models emit both regardless of the prompt, and TTS reads them aloud — flattens
 markdown, and truncates on a **sentence boundary**, since a reply cut mid-word sounds
 like the connection dropped.
+
+### A tool call is not speech, and neither is a tool's name
+
+Offered tools, a small model regularly writes the call out as its _answer_ instead of
+emitting one. Measured on llama-3.2-3b asked what it thought about coffee: once
+`lookup query="coffee"`, and once, with the syntax abandoned entirely, `look up
+coffee`. Both were spoken into the room in a synthesized voice — which does not read
+as a bad answer, it reads as the agent reciting its own source.
+
+`is_tool_call_text` catches all three shapes: the call with arguments, a JSON call
+object, and the bare **phrase**. The phrase rule is the delicate one, since those
+words are ordinary English, so three things must hold at once — the reply _begins_
+with the tool's name (a real sentence that mentions searching says something first:
+"I'll look up the weather"), it is short, and it carries no sentence punctuation (a
+fumbled call is a fragment, not a sentence). "Play music now" is the cost of that
+rule, and is also not an answer worth speaking.
+
+What happens next depends on when it is caught:
+
+- **After the first generation**, the turn is regenerated **with no tools offered** —
+  it cannot reach for syntax it has just fumbled, so it has to use words. That costs
+  a second generation only on the turns a small model gets wrong.
+- **After that**, the reply is dropped with
+  `reason: "dropped a reply that was a tool call, not speech"`. Silence is the right
+  answer here, and the reason says which of the two happened.
+
+### Retrieved is not relevant
+
+`_library_snippets` requires a cosine similarity of **0.6** (`LIBRARY_RELEVANCE_FLOOR`)
+before a library chunk is quoted into a turn. A vector search always returns its
+nearest neighbours, and nearest is not the same as relevant: with two documents
+indexed, "coffee" retrieved the Python standard library at 0.484, and since the turn
+prompt says these were looked up _for this question_, the agent answered a question
+about coffee with `xml.sax.saxutils`. Measured on this embedder an unrelated query
+scores 0.46–0.51 and a genuinely relevant one 0.69–0.83, so the floor sits in the gap.
+If nothing clears it `gather_context` returns `None` and the model is told nothing,
+which is the honest input for "your library has nothing on this".
+
+The floor is meaningful only because the score really is a cosine similarity here —
+the library's `search_documents` pins `.metric("cosine")`. It would mean nothing over
+a squared-L2 table, where `1 - distance` is negative.
+
+### A transient provider failure is retried once, and every failure is legible
+
+A local model server drops a request while it swaps weights. LM Studio does it with a
+500 whose body is **Express's HTML error page**, and with
+`{"error": "Model is unloaded."}` — both observed mid-room, both fatal to the turn,
+and the same turn sent again a moment later answered normally. So:
+
+- `_is_transient` retries **once** after `RETRY_BACKOFF_S`, and only for a failure the
+  server owns — a 5xx, a dropped connection. A 4xx is ours (a model that isn't loaded,
+  a bad payload) and retrying it only doubles the wait before the pane can say so; the
+  turn's own `asyncio.TimeoutError` is not retried either, because the room has moved
+  on.
+- `_plain_text` strips the HTML, and a page left holding nothing but the words a status
+  line is made of ("Error Internal Server Error") yields `""` so the status code is
+  reported instead. A JSON body the response refused to parse is mined for its `error`
+  first — `error` is a **string** on some servers and an object on others, and reading
+  `.get("message")` off the string threw, which is how "Model is unloaded." — the most
+  actionable message this route gets — was reported as raw JSON source.
+
+### It stops working, and nothing says so — the ears watchdog
+
+Everything upstream of the agent is a live browser resource that can die quietly and
+stay dead:
+
+- a `MediaRecorder` that errored (its `onerror` was never handled),
+- one whose `start()` threw because its track ended under it — a device change, or
+  Agora tearing a track down,
+- an `AudioContext` the OS suspended (autoplay policy, a device change, a
+  backgrounded tab, or Safari's `interrupted` during a phone call).
+
+None of them raise anything a person can see, and — this is the part that makes it
+permanent — **`flushChunk` returns early on an inactive recorder and nothing else
+ever calls `startRecordingChunk`**. So the 50 ms VAD loop goes on ticking over an
+analyser full of zeros, the pane goes on saying "listening", and the agent is deaf
+until the room is rejoined. That is what "it worked for ten minutes and then stopped"
+is.
+
+`session.earsInterval` checks every **2 seconds** and rebuilds. The decision is a
+pure function, `earsActions` in `earsWatchdog.ts`, so it can be tested without a real
+`AudioContext` or `MediaRecorder` (jsdom has neither):
+
+- A suspended context and a dead recorder are **independent** failures and both flags
+  can come back true, because a device change causes both. Resuming without
+  rebuilding leaves a recorder that never fires again; rebuilding without resuming
+  feeds it silence.
+- A **paused** recorder is left alone — nothing here pauses one, so that state
+  belongs to something else and stopping it would race whatever set it.
+- The watchdog is deliberately **not** folded into the VAD loop. That loop is one of
+  the things being watched, and a watchdog that dies with its subject is decoration.
+
+It warns on the **second** restart, not the first: one is routine (a chunk boundary
+racing a device change), and a toast for every one is a toast people learn to ignore
+before the day it matters.
+
+### `GET /voice/health` — whether a turn would work, without taking one
+
+The room agent fails by going quiet, and the three legs of a turn are separate
+processes that stop for unrelated reasons while looking identical from a chair. The
+health route separates them, cheaply enough to poll — the pane does, every 20s while
+a room is open with the agent on, and renders a single green `READY` pill or a red
+one per broken leg with its fix in the tooltip.
+
+- **ears** / **mouth** — the `voice` extra, reported separately because they fail
+  differently once it is installed: **`ffmpeg` missing from `PATH` is an ear
+  problem**, since Whisper is handed WebM/Opus from the browser and cannot decode it
+  alone. A perfectly installed extra that still hears nothing is otherwise
+  unexplainable.
+- **model** — the configured provider's own catalog, one request to a usually-loopback
+  server. It honours the **room's `model` override**, since reporting the
+  orchestrator's model healthy while the room points at one the server lacks is a
+  green light for a turn that cannot happen.
+
+Every leg carries `certain`, and a leg whose probe could not run renders as
+**unknown**, never as broken — the hardware module's three states, for the same
+reason: telling a working node to reinstall what it already has is the failure that
+rule exists to prevent.
+
+What it deliberately cannot see: a model the server has merely **unloaded** is still
+listed in the catalog, so it shows green. The turn's own `reason` stays the authority
+on a failure that already happened; health says whether the next one has a chance.
+
+It is deliberately not `/api/agent/status`, which probes every provider in the table
+— far too much work for a timer, and it answers a question about the agent's
+configuration rather than about this room's next sentence.
 
 ### The system message is the persona, then the speech rules
 

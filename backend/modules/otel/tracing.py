@@ -246,6 +246,46 @@ def current_traceparent() -> str | None:
         return None
 
 
+def _is_private_host(host: str | None) -> bool:
+    """Whether a target is somewhere trace context is welcome: this machine, or a
+    private network. A hostname that is not a literal address is treated as public —
+    resolving it here would put a DNS lookup on every outbound request."""
+    if not host:
+        return False
+    if host in ("localhost", "localhost.localdomain"):
+        return True
+    import ipaddress
+
+    try:
+        addr = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return False
+    mapped = getattr(addr, "ipv4_mapped", None) or addr
+    return bool(mapped.is_loopback or mapped.is_private or mapped.is_link_local)
+
+
+def inject_traceparent(request: Any) -> None:
+    """Stamp an outbound httpx request with W3C trace context, when asked.
+
+    Off by default, and **never sent off the machine or off the LAN**: a hosted
+    provider has no use for our trace id, and a header is a thing you have sent
+    whether or not the far side reads it. Called from `telemetry/instrument.py`'s
+    request hook, which is the one seam every instrumented client already passes.
+    """
+    try:
+        if not enabled() or not _setting("otel.propagateHttp", False):
+            return
+        if "traceparent" in request.headers:
+            return
+        if not _is_private_host(request.url.host):
+            return
+        header = current_traceparent()
+        if header:
+            request.headers["traceparent"] = header
+    except Exception:  # noqa: BLE001 — never fail a request over a debug header
+        logger.debug("otel: traceparent injection failed", exc_info=True)
+
+
 @contextlib.contextmanager
 def remote_parent(traceparent: str | None) -> Iterator[None]:
     """Make a received `traceparent` the parent of spans started inside."""

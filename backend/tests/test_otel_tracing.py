@@ -250,3 +250,99 @@ def test_traceparent_round_trips(spans):
     # Continues the caller's trace rather than deriving one from its own turn.
     assert format(remote.context.trace_id, "032x") == trace_hex
     assert format(remote.parent.span_id, "016x") == span_hex
+
+
+# --- outbound propagation ------------------------------------------------------
+
+
+class _FakeUrl:
+    def __init__(self, host: str) -> None:
+        self.host = host
+
+
+class _FakeRequest:
+    def __init__(self, host: str) -> None:
+        self.url = _FakeUrl(host)
+        self.headers: dict[str, str] = {}
+
+
+def test_traceparent_goes_to_local_targets_only(spans, monkeypatch) -> None:
+    settings: dict[str, object] = {"otel.propagateHttp": True}
+    monkeypatch.setattr(
+        tracing, "_setting", lambda key, default: settings.get(key, default)
+    )
+    with tracing.agent_span(
+        turn_id="prop", agent_id="main", agent_name="", model="m", provider="x"
+    ):
+        local, lan, public = (
+            _FakeRequest("127.0.0.1"),
+            _FakeRequest("192.168.1.20"),
+            _FakeRequest("api.openai.com"),
+        )
+        for request in (local, lan, public):
+            tracing.inject_traceparent(request)
+        # A hosted provider has no use for our trace id, and a header is sent
+        # whether or not the far side reads it.
+        assert "traceparent" in local.headers and "traceparent" in lan.headers
+        assert "traceparent" not in public.headers
+        assert local.headers["traceparent"].split("-")[1] == ids.trace_id_for_turn(
+            "prop"
+        )
+
+        # Off by default, and an existing header is never overwritten.
+        settings["otel.propagateHttp"] = False
+        off = _FakeRequest("127.0.0.1")
+        tracing.inject_traceparent(off)
+        assert off.headers == {}
+        settings["otel.propagateHttp"] = True
+        theirs = _FakeRequest("127.0.0.1")
+        theirs.headers["traceparent"] = "00-" + "a" * 32 + "-" + "b" * 16 + "-01"
+        tracing.inject_traceparent(theirs)
+        assert theirs.headers["traceparent"].endswith("-01")
+
+
+# --- games ---------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_a_games_move_is_its_own_trace(spans) -> None:
+    """Each move is one drive of the harness, so each is its own trace — and the
+    move's model calls nest inside it."""
+    from backend.modules.games.loadout import LlmHarness
+    from backend.modules.games.policy import AgentPolicy
+
+    calls = [
+        {"tool_calls": [("game.chooseAction", {"action_id": "4"})]},
+    ]
+
+    async def chat(messages, tools):
+        from backend.modules.agent.providers import ChatResult, ToolCall
+
+        turn = calls.pop(0)
+        return ChatResult(
+            assistant_message={"role": "assistant", "content": ""},
+            tool_calls=[
+                ToolCall(id=f"c{i}", name=name, arguments=args)
+                for i, (name, args) in enumerate(turn["tool_calls"])
+            ],
+            content="",
+        )
+
+    policy = AgentPolicy(
+        chat_fn=chat,
+        load_harness=lambda _g: LlmHarness("tictactoe", context="play well", tools=[]),
+    )
+    chosen = await policy.run_once(
+        {"game": "tictactoe", "board": [None] * 9},
+        [{"id": "4", "label": "centre"}],
+        "tictactoe",
+    )
+    assert chosen == "4"
+    (move,) = _by_name(spans.get_finished_spans())["invoke_agent"]
+    assert move.attributes["horrible.game"] == "tictactoe"
+    assert move.attributes["gen_ai.provider.name"] == "games"
+    assert move.attributes["horrible.legal_actions"] == 1
+    # Not one trace for the whole match: `:` is the delegate separator, so a move id
+    # using it would hand every move of the game the same derived trace.
+    assert move.attributes["horrible.turn_id"].startswith("game.tictactoe.")
+    assert move.parent is None

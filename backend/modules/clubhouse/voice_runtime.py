@@ -24,6 +24,8 @@ a file) and *played* by the pane, the only place the room's published track exis
 from __future__ import annotations
 
 import asyncio
+import html
+import json
 import logging
 import re
 import time
@@ -41,6 +43,7 @@ from backend.modules.clubhouse.voice import (
     clean_reply,
     detect_intent,
     is_meta_reply,
+    is_tool_call_text,
     parse_command,
 )
 
@@ -53,6 +56,28 @@ GENERATION_TIMEOUT_S = 45.0
 # Retrieval is on the critical path of a live conversation, so it gets a tighter
 # budget than the generation it feeds.
 RETRIEVAL_TIMEOUT_S = 10.0
+
+#: Pause before the single retry of a generation that failed for a reason the model
+#: server owns. Long enough for a weight swap to finish, short enough that the room
+#: has not moved on: the whole turn still fits inside `GENERATION_TIMEOUT_S` twice.
+RETRY_BACKOFF_S = 0.75
+
+#: Cosine similarity a library chunk must reach before it is quoted into a turn.
+#:
+#: A vector search always returns its nearest neighbours, and nearest is not the same
+#: as relevant: with two documents indexed, "coffee" retrieved the Python standard
+#: library at 0.484 and the agent dutifully answered a question about coffee with
+#: ``xml.sax.saxutils``, because the turn prompt tells it these were looked up *for
+#: this question*. Measured on this embedder, an unrelated query scores 0.46-0.51 and
+#: a genuinely relevant one 0.69-0.83, so the floor sits in the gap. Below it the
+#: snippet is dropped and the agent answers from the room instead -- and if nothing
+#: clears the floor, ``gather_context`` returns None and the model is told nothing,
+#: which is the honest input for "your library has nothing on this".
+#:
+#: Safe because the score really is a cosine similarity here: the library's
+#: `search_documents` pins `.metric("cosine")`. It would be meaningless over a
+#: squared-L2 table (see the vector-store notes on `1 - distance`).
+LIBRARY_RELEVANCE_FLOOR = 0.6
 
 _QUESTION_HINTS = (
     "who is",
@@ -127,6 +152,11 @@ async def _library_snippets(query: str, library: str, limit: int = 3) -> list[st
         return []
     lines = []
     for group in res.groups[:limit]:
+        # `continue`, not `break`: the groups come back ordered by rank fusion, so
+        # `top_score` is not monotonic down the list and a low one does not mean the
+        # rest are lower.
+        if group.top_score < LIBRARY_RELEVANCE_FLOOR:
+            continue
         chunk = group.chunks[0].text if group.chunks else ""
         text = " ".join(chunk[:300].split())
         if text:
@@ -383,6 +413,64 @@ def _resolve_member(room: RoomSnapshot, needle: str) -> RoomMember | None:
     return partial[0] if len(partial) == 1 else None
 
 
+def _is_transient(exc: Exception) -> bool:
+    """Whether this failure is worth sending the same request into again.
+
+    A 5xx, a timeout or a dropped connection is the server's problem and may well not
+    recur. A 4xx is ours -- a model that isn't loaded, a malformed payload -- and
+    retrying it only doubles the wait before the pane can say so.
+    """
+    import httpx
+
+    if isinstance(exc, asyncio.TimeoutError):
+        return False  # the turn's own deadline; the room has already moved on
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code >= 500
+    return isinstance(exc, (httpx.TransportError, httpx.TimeoutException))
+
+
+#: Words an HTTP status line is already made of. A body containing only these is the
+#: status code spelled out, not a reason.
+_STATUS_BOILERPLATE = frozenset(
+    """
+    doctype html head body title pre error errors internal server service
+    bad gateway request unavailable timeout timed out not found forbidden
+    unauthorized failure failed unknown occurred an the a
+    """.split()
+)
+
+
+def _plain_text(body: str) -> str:
+    """The readable part of an error body, or "" if there isn't one.
+
+    A provider that fails inside its own web layer answers with an HTML page rather
+    than JSON (LM Studio returns Express's ``<pre>Internal Server Error</pre>``), and
+    reporting that verbatim put a DOCTYPE in a toast in the room pane. Tags are
+    stripped; a body with nothing left but boilerplate yields "", which the caller
+    renders as the bare status code.
+    """
+    # A JSON body that `response.json()` refused (the wrong content-type, usually)
+    # still holds the reason in plain sight; reported raw it reads as source code.
+    stripped = (body or "").strip()
+    if stripped.startswith("{"):
+        try:
+            err = json.loads(stripped).get("error")
+            if isinstance(err, str) and err.strip():
+                return err.strip()[:200]
+        except Exception:  # noqa: BLE001 — it was a guess; fall through to stripping
+            pass
+    text = re.sub(r"(?is)<(script|style).*?</>", " ", body or "")
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    text = html.unescape(text)
+    text = " ".join(text.split())[:200]
+    # "Error Internal Server Error" is the page's title plus its body -- true, and it
+    # says nothing the status code doesn't. A body made of nothing but the words a
+    # status line is already built from is dropped, so the caller falls back to
+    # reporting the code itself.
+    words = re.findall(r"[a-z]+", text.lower())
+    return "" if words and set(words) <= _STATUS_BOILERPLATE else text
+
+
 def _explain_provider_error(exc: Exception) -> str:
     """Turn a provider failure into something a person in a room can act on.
 
@@ -396,11 +484,18 @@ def _explain_provider_error(exc: Exception) -> str:
         detail = ""
         try:
             body = exc.response.json()
-            detail = (
-                (body.get("error") or {}).get("message") or body.get("detail") or ""
-            )
+            err = body.get("error")
+            # `error` is a string on some servers and an object on others. LM Studio
+            # answers `{"error": "Model is unloaded."}` -- the most actionable message
+            # this route ever gets -- and reading `.get("message")` off it threw, so
+            # it fell through to the raw-body branch and was reported as JSON source.
+            if isinstance(err, str):
+                detail = err
+            elif isinstance(err, dict):
+                detail = str(err.get("message") or "")
+            detail = detail or str(body.get("detail") or "")
         except Exception:  # noqa: BLE001
-            detail = exc.response.text[:200]
+            detail = _plain_text(exc.response.text)
         return f"The model rejected the request: {detail or exc.response.status_code}"
     if isinstance(exc, httpx.HTTPError):
         return f"Couldn't reach the model server: {exc}"
@@ -437,24 +532,40 @@ async def generate_reply(
         or GENERATION_TIMEOUT_S
     )
 
-    async with instrumented_client(timeout=timeout_val) as client:
-        result = await asyncio.wait_for(
-            P.chat(
-                client,
-                info,
-                endpoint,
-                model,
-                messages,
-                tools or [],
-                temperature=config.temperature,
-                max_tokens=config.max_tokens,
-                # A spoken reply is two or three sentences under a ~160-token cap.
-                # A thinking model left at its default spends that entire cap
-                # reasoning and answers with nothing (Gemma 4 does this by default).
-                think=False,
-            ),
-            timeout=timeout_val,
-        )
+    async def once() -> Any:
+        async with instrumented_client(timeout=timeout_val) as client:
+            return await asyncio.wait_for(
+                P.chat(
+                    client,
+                    info,
+                    endpoint,
+                    model,
+                    messages,
+                    tools or [],
+                    temperature=config.temperature,
+                    max_tokens=config.max_tokens,
+                    # A spoken reply is two or three sentences under a ~160-token
+                    # cap. A thinking model left at its default spends that entire
+                    # cap reasoning and answers with nothing (Gemma 4 does this by
+                    # default).
+                    think=False,
+                ),
+                timeout=timeout_val,
+            )
+
+    try:
+        result = await once()
+    except Exception as exc:  # noqa: BLE001
+        if not _is_transient(exc):
+            raise
+        # One retry, and only for a failure the server owns. A local provider that
+        # JIT-loads models drops a request while it swaps weights -- a 500 with an
+        # HTML body, or a refused connection -- and the same turn sent again a moment
+        # later answers normally. Without this the room hears nothing at all and the
+        # pane blames the model, which is the shape of "it just never works".
+        logger.info("voice generation retrying after transient failure: %s", exc)
+        await asyncio.sleep(RETRY_BACKOFF_S)
+        result = await once()
     if (
         not (result.content or "").strip()
         and not result.tool_calls
@@ -606,6 +717,15 @@ async def run_turn(
                 # The only path that costs a second generation, and only because
                 # the model asked for a tool.
                 result = await generate_reply(await run_calls(calls), config)
+            elif is_tool_call_text(result.content or ""):
+                # The model meant to call a tool and wrote the call out as speech
+                # instead. Offering it none forces words: it cannot reach for the
+                # syntax it just fumbled. Costs a second generation on the turns a
+                # small model gets wrong, and nothing on the turns it gets right.
+                logger.info(
+                    "voice: model emitted a tool call as text; regenerating without tools"
+                )
+                result = await generate_reply(messages, config)
         raw = result.content or ""
     except asyncio.TimeoutError:
         return {
@@ -630,6 +750,16 @@ async def run_turn(
             "actions": actions,
         }
     reply = clean_reply(raw)
+    if reply and is_tool_call_text(reply):
+        # It fumbled the syntax twice. Silence is the right answer -- a synthesized
+        # voice reading `lookup query="coffee"` into a live room is worse than a
+        # turn the agent sat out -- and the reason says which of the two happened.
+        return {
+            "spoke": False,
+            "reason": "dropped a reply that was a tool call, not speech",
+            "reply": "",
+            "actions": actions,
+        }
     if reply and is_meta_reply(reply):
         # Neither spoken nor remembered: said aloud it is nonsense to the room, and
         # remembered it becomes an example the model copies on every later turn.

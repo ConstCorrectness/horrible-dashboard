@@ -7,6 +7,7 @@ import PubNub from 'pubnub';
 import { usePaneSession } from '../../layout/use-pane-session';
 import { mixer } from '../audio/engine';
 import { inputConstraints } from '../audio/store';
+import { earsActions, type ObservedContextState } from './earsWatchdog';
 import { splitForSpeech } from './speechChunks';
 import {
   ClubhouseRoomSession,
@@ -428,8 +429,18 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
                   reportVoiceError(`Speech-to-text unavailable: ${detail}`);
                   return;
                 }
-                session.clearVoiceError();
                 const json = await res.json();
+                // A 200 is not a success: transcription failures answer 200 with an
+                // empty `text` and an `error`, because a caller that posts a chunk
+                // every few seconds cannot treat "nobody spoke" as an error status.
+                // Reported, or a deaf agent is indistinguishable from a quiet room —
+                // which is exactly how this failed for months.
+                if (json.error) {
+                  reportVoiceError(`Speech-to-text failed: ${json.error}`);
+                  return;
+                }
+                session.clearVoiceError();
+                session.lastHeardAt = Date.now();
                 const piece = json.text && json.text.trim();
                 if (session.handlers.onTranscribe && piece) {
                   runText = runText ? `${runText} ${piece}` : piece;
@@ -448,8 +459,35 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
             }
           };
 
-          recorder.start();
+          // A recorder that errors is a **silently deaf agent**: `flushChunk` returns
+          // early on an inactive recorder and nothing else ever calls
+          // `startRecordingChunk`, so the VAD loop goes on ticking over a recorder
+          // that will never produce another chunk. Left to itself this is the whole
+          // of "it worked for ten minutes and then stopped". The watchdog below
+          // rebuilds it; this just makes sure it is *left* in the state the watchdog
+          // recognises, and says so once.
+          recorder.onerror = (event) => {
+            console.error('STT recorder error:', event);
+            try {
+              if (recorder.state !== 'inactive') recorder.stop();
+            } catch {
+              /* it is already gone; the watchdog rebuilds either way */
+            }
+            if (session.sttRecorder === recorder) session.sttRecorder = null;
+          };
+
+          try {
+            recorder.start();
+          } catch (err) {
+            // Throws when the stream's track has ended — a device change, or Agora
+            // tearing a track down under us. Same contract as `onerror`.
+            console.error('Failed to start STT recorder:', err);
+            if (session.sttRecorder === recorder) session.sttRecorder = null;
+          }
         };
+
+        // Reachable from the watchdog, which runs outside this closure.
+        session.restartEars = () => startRecordingChunk();
 
         /**
          * End the current chunk and start the next. `partial` marks the flushed chunk
@@ -575,6 +613,52 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
             }
           }
         }, 50);
+
+        /**
+         * The ears watchdog.
+         *
+         * Everything upstream of the agent is a live browser resource that can die
+         * quietly and stay dead: a `MediaRecorder` that errored, a recorder whose
+         * `start()` threw because its track ended, an `AudioContext` the OS suspended
+         * on a device change or a backgrounded tab. None of them raise anything a
+         * person can see. The VAD loop keeps ticking over an analyser reading zeros,
+         * the pane keeps saying "listening", and the agent is simply deaf from then
+         * on — which is what "it stops working" means in practice.
+         *
+         * So the ears are checked on a timer and rebuilt, rather than being assumed
+         * to survive the room. Two seconds is comfortably under the shortest silence
+         * anyone waits through, and the check is three field reads when all is well.
+         *
+         * It is *not* folded into the 50 ms VAD loop: that loop is one of the things
+         * being watched, and a watchdog that dies with its subject is decoration.
+         */
+        session.earsInterval = setInterval(() => {
+          const ctx = session.audioCtx;
+          if (!session.sttDest) return;
+          const actions = earsActions({
+            contextState: (ctx?.state as ObservedContextState) ?? null,
+            recorderState: session.sttRecorder?.state ?? null,
+          });
+
+          if (actions.resumeContext) {
+            void ctx?.resume().catch(() => {
+              /* the restart below is what actually matters; a failed resume
+                 surfaces as the repeat-restart warning */
+            });
+          }
+          if (actions.restartRecorder) {
+            session.earsRestarts++;
+            // Said once, and only on the second restart: a single one is routine (a
+            // chunk boundary racing a device change) and toasting it would train
+            // people to ignore the warning on the day it means something.
+            if (session.earsRestarts === 2) {
+              reportVoiceError(
+                'The agent stopped hearing the room; restarting its microphone feed.',
+              );
+            }
+            startRecordingChunk();
+          }
+        }, 2000);
       } catch (err) {
         console.error('Failed to start VAD STT recorder:', err);
       }

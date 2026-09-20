@@ -648,6 +648,14 @@ seated. Because the table is unrated, testing against a bot never moves your rat
 (unlike the ranked queue, which also backfills with these bots — there by *rating*,
 scored — when no human shows). An unknown tier is ignored and the table stays open.
 
+## Tracing a move
+
+Each move an agent policy makes is one OTel trace: an `invoke_agent` span around the
+harness drive, with the model calls nested inside it (`otel.enabled`, on by default).
+It shows up as a Trace view in Trajectories, and exports with everything else — see
+[OpenTelemetry](otel.mdx). A move is its own trace rather than a match being one,
+because the moves of a match are independent drives of the same harness.
+
 ## Training — the no-stakes room
 
 **🎯 Train** (`TrainingSection`) is a peer of Play, not a corner of the builder.

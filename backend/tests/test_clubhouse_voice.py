@@ -626,3 +626,125 @@ def test_interject_after_s_survives_both_spellings():
     assert V.VoiceConfig.from_dict({"interjectAfterS": 3.5}).interject_after_s == 3.5
     assert V.VoiceConfig.from_dict({"interject_after_s": 2}).interject_after_s == 2.0
     assert V.VoiceConfig().to_dict()["interjectAfterS"] == V.DEFAULT_INTERJECT_AFTER_S
+
+
+# --- what must never reach a speech synthesizer ------------------------------------
+
+
+def test_a_tool_call_written_as_prose_is_not_speech():
+    """Measured on llama-3.2-3b, offered `look_up`: it answered in content, not as a
+    call, and the pane read it into the room in a synthesized voice."""
+    assert V.is_tool_call_text('lookup query="coffee"')
+    assert V.is_tool_call_text('look_up(query="best coffee in Rome")')
+    assert V.is_tool_call_text('{"name": "play_music", "arguments": {"query": "Toto"}}')
+    assert V.is_tool_call_text('```json\nmusic_control(action="stop")\n```')
+
+
+def test_the_same_fumble_without_the_syntax_is_caught_too():
+    """Measured on llama-3.2-3b, asked what it thought about coffee: "look up
+    coffee" — the tool's name and its argument, in words."""
+    assert V.is_tool_call_text("look up coffee")
+    assert V.is_tool_call_text("lookup best coffee in Rome")
+    assert V.is_tool_call_text("search for the weather in Berlin")
+
+
+def test_speech_that_merely_mentions_looking_something_up_survives():
+    """The check runs against the whole reply, never as a substring: the alternative
+    silences ordinary sentences about searching."""
+    assert not V.is_tool_call_text("I'll look up the weather for you in a second.")
+    assert not V.is_tool_call_text("Sure — playing music now.")
+    assert not V.is_tool_call_text("Search me. I have no idea who wrote it.")
+    # Begins with a word, not a tool: the phrase rule anchors at the start.
+    assert not V.is_tool_call_text("We could look up the answer if you want.")
+    # A real sentence, even though it opens on one: punctuation ends the fragment.
+    assert not V.is_tool_call_text("Look up when you get a chance. I'm curious too.")
+    assert not V.is_tool_call_text("")
+
+
+# --- retrieval relevance -----------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_a_library_hit_below_the_floor_is_not_quoted(monkeypatch):
+    """A vector search always returns its nearest neighbours, and nearest is not
+    relevant: "coffee" retrieved the Python standard library at 0.484, and the turn
+    prompt says these were looked up *for this question*, so the agent answered a
+    question about coffee with `xml.sax.saxutils`."""
+
+    class _Group:
+        def __init__(self, title, score, text):
+            self.title = title
+            self.top_score = score
+            self.chunks = [type("C", (), {"text": text})()]
+
+    async def fake_search(req):
+        return type(
+            "R",
+            (),
+            {
+                "groups": [
+                    _Group("The Python Standard Library", 0.484, "xml.sax.saxutils"),
+                    _Group("A Survey of Multi-Agent RL", 0.465, "decentralized"),
+                ]
+            },
+        )()
+
+    monkeypatch.setattr("backend.modules.library.routes.search", fake_search)
+    assert await R._library_snippets("coffee", "default") == []
+
+
+@pytest.mark.anyio
+async def test_a_library_hit_above_the_floor_is_quoted(monkeypatch):
+    class _Group:
+        def __init__(self, title, score, text):
+            self.title = title
+            self.top_score = score
+            self.chunks = [type("C", (), {"text": text})()]
+
+    async def fake_search(req):
+        return type(
+            "R", (), {"groups": [_Group("A Survey of Multi-Agent RL", 0.828, "MARL")]}
+        )()
+
+    monkeypatch.setattr("backend.modules.library.routes.search", fake_search)
+    lines = await R._library_snippets("multi-agent reinforcement learning", "default")
+    assert lines and "A Survey of Multi-Agent RL" in lines[0]
+
+
+# --- provider failures -------------------------------------------------------------
+
+
+def test_an_html_error_page_is_not_read_out_as_the_reason():
+    """LM Studio fails inside its own web layer with Express's HTML page. Reported
+    verbatim, a DOCTYPE landed in a toast in the room pane."""
+    page = (
+        '<!DOCTYPE html>\n<html lang="en">\n<head>\n<title>Error</title>\n'
+        "</head>\n<body>\n<pre>Internal Server Error</pre>\n</body>\n</html>\n"
+    )
+    assert R._plain_text(page) == ""
+    assert R._plain_text("<p>Failed to load model gemma-4-e2b</p>") == (
+        "Failed to load model gemma-4-e2b"
+    )
+
+
+def test_only_the_servers_own_failures_are_retried():
+    """A 4xx is ours — a model that isn't loaded, a bad payload — and retrying it
+    only doubles the wait before the pane can say so."""
+    import asyncio
+
+    import httpx
+
+    def _status(code: int) -> httpx.HTTPStatusError:
+        request = httpx.Request("POST", "http://localhost:1234/v1/chat/completions")
+        return httpx.HTTPStatusError(
+            "boom", request=request, response=httpx.Response(code, request=request)
+        )
+
+    assert R._is_transient(_status(500))
+    assert R._is_transient(_status(503))
+    assert not R._is_transient(_status(400))
+    assert not R._is_transient(_status(404))
+    assert R._is_transient(httpx.ConnectError("refused"))
+    # The turn's own deadline: the room has already moved on, so a second attempt
+    # answers a conversation that has ended.
+    assert not R._is_transient(asyncio.TimeoutError())

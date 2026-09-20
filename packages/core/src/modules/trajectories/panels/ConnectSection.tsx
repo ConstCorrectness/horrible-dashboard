@@ -214,6 +214,17 @@ export function ConnectSection() {
             <div style={{ marginTop: 'var(--space-4)' }}>
               <Snippet label="This machine" text={envLocal} />
             </div>
+            {/* Only when a gRPC receiver is actually bound — an exporter left on the
+                spec's default protocol needs this endpoint, and one that is merely
+                configured (port taken) must not be advertised. */}
+            {info?.grpc_endpoint ? (
+              <div style={{ marginTop: 'var(--space-3)' }}>
+                <Snippet
+                  label="gRPC (OTel's default protocol)"
+                  text={`OTEL_EXPORTER_OTLP_ENDPOINT=http://${info.grpc_endpoint}\nOTEL_EXPORTER_OTLP_PROTOCOL=grpc`}
+                />
+              </div>
+            ) : null}
           </div>
 
           <div style={card}>

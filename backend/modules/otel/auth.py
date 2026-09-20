@@ -37,7 +37,7 @@ from backend.modules.database import secrets_store
 TOKEN_SECRET = "otel:ingest_token"
 
 
-def _is_loopback_addr(host: str | None) -> bool:
+def is_loopback_addr(host: str | None) -> bool:
     if not host:
         return False
     if host == "localhost":
@@ -54,12 +54,12 @@ def _is_loopback_addr(host: str | None) -> bool:
 
 def client_is_loopback(request: Request) -> bool:
     peer = request.client.host if request.client else None
-    if not _is_loopback_addr(peer):
+    if not is_loopback_addr(peer):
         return False
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         last = forwarded.split(",")[-1].strip()
-        return _is_loopback_addr(last)
+        return is_loopback_addr(last)
     return True
 
 

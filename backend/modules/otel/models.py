@@ -65,3 +65,6 @@ class IngestInfo(BaseModel):
     token_required_remote: bool = True
     last_received_at: float | None = None
     received_traces: int = 0
+    #: `host:port` when the opt-in OTLP/gRPC receiver is actually listening. None
+    #: means "not serving", which includes "configured but the port was taken".
+    grpc_endpoint: str | None = None

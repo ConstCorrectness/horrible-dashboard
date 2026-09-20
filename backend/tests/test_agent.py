@@ -185,6 +185,35 @@ def test_stt_handles_empty_or_corrupt_audio(client: TestClient) -> None:
     assert res.json()["text"] == ""
 
 
+def test_a_failed_transcription_says_so_instead_of_returning_silence(
+    client: TestClient, monkeypatch
+) -> None:
+    """A caller that posts a chunk every few seconds cannot treat "nobody spoke" as
+    an error status — so a failure stays a 200, and carries an `error`.
+
+    Without it the two are the same response, and a node with a broken decoder runs
+    a room agent that hears nothing and never says why. That is the single most
+    common report of the voice agent "not working".
+    """
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+
+    from backend.modules.agent import stt_service as S
+
+    async def boom(*_a, **_kw):
+        raise RuntimeError("ffmpeg not found on PATH")
+
+    monkeypatch.setattr(S.stt_service, "transcribe", boom)
+
+    res = client.post(
+        "/api/agent/stt",
+        files={"file": ("chunk.webm", b"anything", "audio/webm")},
+    )
+    assert res.status_code == 200
+    assert res.json()["text"] == ""
+    assert "ffmpeg" in res.json()["error"]
+
+
 def test_provider_key_roundtrip(client: TestClient) -> None:
     """A stored key is what makes a hosted provider usable, and it is never read back."""
     status = {p["kind"]: p for p in client.get("/api/agent/status").json()["providers"]}
