@@ -31,7 +31,11 @@ is connected. A real client never changes device mid-session; Clubdeck sends the
 
 ### 1. Client-Version Headers
 
-Clubhouse validates two version headers — `CH-AppVersion` (`26.08.30`) and the **numeric** `CH-AppBuild` (`1038152`, also the `User-Agent`) — read off the 26.08.30 client's own interceptor (`defpackage/cb1.java`). A stale value earns "Please upgrade your app" on room actions and makes SMS codes come back `is_verified: false`. Update both constants in [routes.py](file:///C:/Users/Horrible/Code/horrible-dashboard/backend/modules/clubhouse/routes.py) `_headers` **and** `auth_helper/Program.cs`, then delete the compiled helper so it rebuilds; confirm with `check_for_update` (`has_update: false`).
+Clubhouse validates two version headers — `CH-AppVersion` (`26.09.16`) and the **numeric** `CH-AppBuild` (`1038456`, also the `User-Agent`). A stale pair earns "Please upgrade your app" on room actions and makes SMS codes come back `is_verified: false`. Update both constants in [routes.py](file:///C:/Users/Horrible/Code/horrible-dashboard/backend/modules/clubhouse/routes.py) `_headers` **and** `auth_helper/Program.cs`, then delete the compiled helper so it rebuilds.
+
+**Where to read the pair.** `aapt dump badging <apk>` gives `versionName` and `versionCode`, and those are the two values — established rather than assumed: run it on the 26.08.30 APK and it returns exactly `versionCode='1038152' versionName='26.08.30'`, the pair that had been read out of `defpackage/cb1.java` by hand. Cross-check in the dex before trusting a new one: the build literal should occupy the same slots the old one did (for 26.08.30 → 26.09.16, `classes3.dex` ×2 and `classes4.dex` ×1, in the dex that also holds `CH-AppBuild`), and the superseded build should appear nowhere.
+
+**`check_for_update` does not confirm a bump** — measured 2026-09-20, it answers `{"success": true, "has_update": false}` for the *stale* pair as readily as the current one, so it discriminates nothing. Neither does poking a gated route from outside a room: `/audience_reply` answers `Invalid channel ID` for both pairs, because the channel check runs first. **The gate is only observable from inside a room**, which is also the only place it does any harm.
 
 ### 2. The attestation gate — why SMS sign-in no longer works
 
@@ -59,10 +63,10 @@ To communicate with Clubhouse, the backend passes specific metadata headers to a
 - **Common Request Headers:**
   - `CH-Languages`: `en-US`
   - `CH-Locale`: `en_US`
-  - `CH-AppBuild`: `1038152` (numeric build)
-  - `CH-AppVersion`: `26.08.30` (app version)
+  - `CH-AppBuild`: `1038456` (numeric build)
+  - `CH-AppVersion`: `26.09.16` (app version)
   - `CH-DeviceId`: the connected session's `device_id`; otherwise the per-install uppercase UUID in `.data/clubhouse-device-id` (which token-connect overwrites with the device it was given).
-  - `User-Agent`: `clubhouse/android/1038152`
+  - `User-Agent`: `clubhouse/android/1038456`
 - **Authenticated Request Headers:**
   - `Authorization`: `Token <auth_token>`
   - `CH-UserID`: The numeric user ID linked to the session.
@@ -171,6 +175,37 @@ anti-bot gate and is not fixed by a version bump.
 > **Token-Connect (The Backup Path):** While the C# helper bypasses standard bot gating, users can still use **Token-Connect** to link their accounts directly. Users can supply an existing `auth_token` and `user_id` (captured from an active official app session).
 
 ---
+
+### The version gate is named, not relayed
+
+Clubhouse gates features on the client version **per feature**, not at sign-in. So an
+account connects, rooms open, chat works — and mute, hand-raise and join-stage all
+stop together, which reads as a broken pane rather than one stale constant. Measured
+in one day of a real session: `/mute_speaker` refused 161 times, `/become_speaker` 46,
+`/audience_reply` 21.
+
+Its own wording hides the cause. `/mute_speaker` answers **"Sorry, they need to update
+their app before this feature will work on them!"** — on a self-mute, "they" is us,
+and relayed verbatim it sends whoever reads it to look at the other user or at the UI.
+`/audience_reply` says "We're rolling out new room changes! Please upgrade your app on
+the App Store".
+
+`_raise_for_upstream` recognises both phrasings (`_UPGRADE_GATE`) and answers with the
+cause and the fix — bump `CH-AppVersion` and `CH-AppBuild` in `_headers` and in the
+auth helper's `Program.cs`, read off a current APK — while keeping Clubhouse's own
+sentence, which is how you recognise the gate again a year from now. The check runs on
+every upstream error, so it is deliberately narrow: "Less is more! Please wait a bit",
+"A moderator moved you to the audience" and "cannot send message" must pass through
+untouched, and a test pins that.
+
+### A mute the room never heard about
+
+`toggleMute` sets a local gain and *then* tells Clubhouse, and the second half used to
+fail into `console.error`. Both halves matter and they fail differently: the gain is
+ours and always takes effect, so your microphone really is gated either way — what
+breaks is the **badge the rest of the room sees**, which is why the message says that
+rather than "mute failed". Swallowed, this was 161 silent failures presenting as a
+button that does nothing.
 
 ## Authentication Flow Diagrams
 

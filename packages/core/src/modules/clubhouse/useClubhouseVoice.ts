@@ -964,12 +964,25 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       reportVoiceError('No microphone is connected to this room — nothing to unmute.');
       return;
     }
+    // The gain is ours and always takes effect; only telling Clubhouse can fail.
+    session.humanGain.gain.value = nextMuteState ? 0 : 1;
+    session.patch({ isMuted: nextMuteState });
     try {
-      session.humanGain.gain.value = nextMuteState ? 0 : 1;
-      session.patch({ isMuted: nextMuteState });
       await muteClubhouseChannel(activeChannel, nextMuteState);
     } catch (err) {
+      // Reported, not just logged. This call fails constantly against a stale
+      // client version (161 times in one day's log, answered "they need to update
+      // their app" — which on a *self*-mute means us), and swallowed into the
+      // console it looks like the button does nothing. It does do something: your
+      // microphone really is gated locally either way. What is out of sync is the
+      // badge the rest of the room sees, so that is what the message says.
       console.error('Failed to toggle mic state:', err);
+      reportVoiceError(
+        `Your microphone is ${nextMuteState ? 'muted' : 'live'} here, but Clubhouse ` +
+          `did not accept the change, so the room still shows you ` +
+          `${nextMuteState ? 'unmuted' : 'muted'}: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   };
 

@@ -264,12 +264,25 @@ def _api_base() -> str:
 
 
 def _headers(device_id: str | None = None) -> dict[str, str]:
-    # The 26.08.30 client's own values (decompiled ``defpackage/cb1.java``).
-    # ``CH-AppBuild`` is the numeric build, not the version string: sending
-    # "26.07.07" in both was tolerated until 2026-09-10, when Clubhouse began
-    # answering "Please upgrade your app".  Keep in sync with the auth helper's
-    # Program.cs, and read both values off the new APK when bumping.
-    app_version, app_build = "26.08.30", "1038152"
+    # The 26.09.16 client's own values. ``CH-AppBuild`` is the numeric build, not
+    # the version string: sending "26.07.07" in both was tolerated until
+    # 2026-09-10, when Clubhouse began answering "Please upgrade your app".  Keep
+    # in sync with the auth helper's Program.cs, and read both off the new APK when
+    # bumping.
+    #
+    # Bumped from 26.08.30/1038152 on 2026-09-20, which by then was refusing
+    # `/mute_speaker`, `/become_speaker` and `/audience_reply` outright (161, 46 and
+    # 21 times in one session) while leaving sign-in and chat working — the gate is
+    # per feature, so a stale pair reads as a pane with dead buttons.
+    #
+    # Read off `Clubhouse_26.09.16_APKPure.xapk`. `aapt dump badging` on the *old*
+    # APK returns exactly `versionCode='1038152' versionName='26.08.30'` — the pair
+    # already in use here — which is what establishes that the manifest is the same
+    # two values the interceptor sends, rather than an assumption about it. In the
+    # new APK the literal `1038456` occupies the same dex slots `1038152` did
+    # (classes3 ×2, classes4 ×1, beside `CH-AppBuild`) and the old build appears
+    # nowhere in it.
+    app_version, app_build = "26.09.16", "1038456"
     return {
         "Accept": "application/json",
         "Accept-Language": "en-US",
@@ -290,6 +303,27 @@ def _auth_headers(
         "Authorization": f"Token {token}",
         "CH-UserID": str(user_id),
     }
+
+
+#: Clubhouse's phrasings for "this client is too old", which it applies per feature
+#: rather than at sign-in — so an account works, rooms open, and only *some buttons*
+#: stop.
+#:
+#: The wording is actively misleading on the self-directed calls. `/mute_speaker`
+#: answers "**they** need to update **their** app", which reads as a problem with the
+#: person you are muting; on a self-mute "they" is us. Relayed verbatim it sends
+#: whoever debugs it to look at the other user, or at the UI, and the actual fix — two
+#: constants in `_headers` — is nowhere in view.
+_UPGRADE_GATE = re.compile(
+    r"(?:update|upgrade)\s+(?:your|their)\s+app|please\s+upgrade", re.I
+)
+
+#: Where the fix lives, said once so every gated button says the same thing.
+_UPGRADE_FIX = (
+    "this node's Clubhouse client-version headers are stale — bump CH-AppVersion "
+    "and CH-AppBuild in backend/modules/clubhouse/routes.py (_headers) and in the "
+    "auth helper's Program.cs, reading both off a current APK"
+)
 
 
 def _raise_for_upstream(res: httpx.Response, path: str) -> None:
@@ -331,6 +365,15 @@ def _raise_for_upstream(res: httpx.Response, path: str) -> None:
         pass
     status_code = res.status_code if 400 <= res.status_code < 500 else 502
     logger.warning("Clubhouse API error for %s: %s %s", path, status_code, message)
+    if _UPGRADE_GATE.search(message):
+        # Named rather than relayed. This gate is why a working account still has a
+        # dead mute button, a dead hand-raise and a dead join-stage all at once, and
+        # nothing in Clubhouse's own wording connects those three to one cause.
+        raise HTTPException(
+            status_code=status_code,
+            detail=f"Clubhouse rejected this as an out-of-date client: {_UPGRADE_FIX}. "
+            f"(Clubhouse said: {message})",
+        )
     if should_leave:
         raise HTTPException(
             status_code=409,

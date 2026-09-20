@@ -867,6 +867,59 @@ def test_upstream_error_keeps_status_and_message() -> None:
     )
 
 
+def test_the_version_gate_is_named_not_relayed() -> None:
+    """Clubhouse gates features on the client version *per feature*, so an account
+    works, rooms open, and only some buttons stop — mute, hand-raise, join-stage.
+
+    Its own wording hides that. `/mute_speaker` answers "**they** need to update
+    **their** app", which on a self-mute means us and reads like a problem with the
+    person being muted; relayed verbatim it sends whoever debugs it to the UI or to
+    the other user, and never to the two constants that are actually wrong.
+    """
+    res = httpx.Response(
+        400,
+        text="Sorry, they need to update their app before this feature will work on them!",
+    )
+    with pytest.raises(HTTPException) as err:
+        routes._raise_for_upstream(res, "/mute_speaker")
+    assert err.value.status_code == 400
+    assert "out-of-date client" in err.value.detail
+    assert "CH-AppVersion" in err.value.detail
+    # Clubhouse's own words are kept too — the gate's phrasing is how you recognise
+    # it in a bug report a year from now.
+    assert "update their app" in err.value.detail
+
+
+def test_the_gate_is_recognised_in_its_other_phrasing() -> None:
+    res = httpx.Response(
+        400,
+        json={
+            "success": False,
+            "error_message": (
+                "We're rolling out new room changes! Please upgrade your app on the "
+                "App Store"
+            ),
+        },
+    )
+    with pytest.raises(HTTPException) as err:
+        routes._raise_for_upstream(res, "/audience_reply")
+    assert "out-of-date client" in err.value.detail
+
+
+def test_an_ordinary_refusal_is_not_mistaken_for_the_version_gate() -> None:
+    """The gate check runs on every error, so it must not fire on the many
+    refusals that merely mention a room, an app or an update."""
+    for message in [
+        "cannot send message",
+        "A moderator moved you to the audience.",
+        "Less is more! Please wait a bit and try again.",
+    ]:
+        res = httpx.Response(400, json={"success": False, "error_message": message})
+        with pytest.raises(HTTPException) as err:
+            routes._raise_for_upstream(res, "/x")
+        assert err.value.detail == f"Clubhouse: {message}"
+
+
 def test_handraise_queue_for_a_listener_is_403(client, tmp_path, monkeypatch) -> None:
     _connect(tmp_path)
 
