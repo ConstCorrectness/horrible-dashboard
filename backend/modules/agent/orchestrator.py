@@ -32,8 +32,22 @@ from backend.sdk.types import AgentSpec
 
 logger = logging.getLogger(__name__)
 
-# Guard against a model that never stops calling tools.
-MAX_ROUNDS = 8
+# Guard against a model that never stops calling tools. A *default*, not a lid:
+# `agent.maxRounds` overrides it (the `research.maxRounds` precedent).
+#
+# 8 was too low and failed invisibly. Across recorded turns the round counts fell
+# away steadily to one turn at 7 — and then 32 sat at exactly 8, the shape of a
+# budget being hit rather than work finishing. Those turns ended with a canned
+# "(stopped after too many steps)" mid-task, which reads as the model giving up.
+MAX_ROUNDS = 24
+
+#: Rounds spent *only* on the meta tools (`load_tools`, `list_tool_groups`) that do
+#: not count against the budget. Progressive disclosure makes discovery cost rounds
+#: — a turn that loaded three groups had already spent three of its eight before
+#: touching the task — and charging the model for reading the menu is not what the
+#: guard is for. Bounded rather than free: a model that loops loading groups forever
+#: must still stop.
+META_ROUND_ALLOWANCE = 6
 TOOL_TIMEOUT_S = 30.0
 # A permission prompt waits on a human, so it gets a much longer leash.
 APPROVAL_TIMEOUT_S = 300.0
@@ -2064,6 +2078,88 @@ def _tokenizer_repo() -> str:
     return ""
 
 
+def _max_rounds() -> int:
+    """`agent.maxRounds` — how many working rounds one turn may spend.
+
+    An override, not a lid: 0 or unset means `MAX_ROUNDS`. Clamped to 1 at the
+    bottom, because a budget of zero is a turn that cannot call a tool at all and
+    would look exactly like a broken agent.
+    """
+    from backend.modules.settings.routes import get_value
+
+    try:
+        configured = int(get_value("agent.maxRounds", 0) or 0)
+    except (TypeError, ValueError):
+        return MAX_ROUNDS
+    return max(1, configured) if configured else MAX_ROUNDS
+
+
+async def _final_answer(
+    client: Any,
+    info: Any,
+    endpoint: str,
+    model: str,
+    messages: list[dict[str, Any]],
+    emit: Any,
+    *,
+    temperature: float | None,
+    context_size: int | None,
+    max_tokens: int | None,
+    top_p: float | None,
+    rounds: int,
+) -> str:
+    """One last **tool-less** round when the step budget runs out.
+
+    What this replaces: the loop used to return a canned "(stopped after too many
+    steps)", so a turn that had read six files and was ready to report ended with a
+    sentence about the machinery and none of the work. Offering no tools is what
+    makes this terminate — the model cannot spend another round calling one — and
+    the answer is the model's own, written from everything it gathered.
+
+    If the model returns nothing at all, the caller still gets a plain statement
+    that the turn stopped early. Saying "here is the answer" would be worse than
+    saying "I ran out of steps"; saying nothing would be worse than both.
+    """
+    messages.append(
+        {
+            "role": "system",
+            "content": (
+                f"You have used your budget of {rounds} tool-calling steps for this "
+                "turn. No further tool calls are possible. Answer the user now with "
+                "what you already have: say what you found, what you did, and name "
+                "anything you could not finish."
+            ),
+        }
+    )
+    try:
+        result = await P.chat_stream(
+            client,
+            info,
+            endpoint,
+            model,
+            messages,
+            [],
+            emit,
+            temperature=temperature,
+            context_size=context_size,
+            max_tokens=max_tokens,
+            top_p=top_p,
+        )
+    except Exception as exc:  # noqa: BLE001 — the turn is ending either way
+        logger.info("final-answer round failed after budget exhaustion: %s", exc)
+        return (
+            f"I stopped after {rounds} steps without finishing, and could not "
+            "summarize what I had. Ask me to continue and I'll pick up from here."
+        )
+    messages.append(result.assistant_message)
+    if result.content and result.content.strip():
+        return result.content
+    return (
+        f"I used all {rounds} steps for this turn without reaching an answer. "
+        "Ask me to continue and I'll pick up from here."
+    )
+
+
 async def run_agent_loop(
     conn: WsConnection,
     turn_id: str,
@@ -2137,7 +2233,11 @@ async def run_agent_loop(
             "mode": mode_override.value if mode_override else None,
         },
     )
-    answer = "(stopped after too many steps)"
+    max_rounds = _max_rounds()
+    # Set only if the budget runs out, and consumed after the loop: the model gets a
+    # last, tool-less turn to answer with what it has rather than being cut off.
+    exhausted = False
+    answer = ""
     # Stamp every request this turn makes with the turn it belongs to, so the wire
     # can be lined up against what the model was shown (telemetry/turn.py). Entered
     # outside the client so the provider calls, the tool calls they trigger, and any
@@ -2160,7 +2260,13 @@ async def run_agent_loop(
     )
     try:
         async with instrumented_client(timeout=120) as client:
-            for round_no in range(MAX_ROUNDS):
+            round_no = 0
+            spent = 0  # rounds that did real work; meta-only rounds are free
+            meta_rounds = 0
+            while True:
+                if spent >= max_rounds:
+                    exhausted = True
+                    break
                 telemetry_turn.mark_round(turn_id, round_no)
                 # Under progressive disclosure, inject the groups loaded last round.
                 tool_stats: dict[str, Any] = {}
@@ -2316,6 +2422,31 @@ async def run_agent_loop(
                             ts=started_wall,
                         )
                     messages.append(P.tool_result_message(info, call, tool_result))
+                # Discovery is not work: a round whose every call was a meta tool
+                # shaped the catalog and did nothing else, so it is free until the
+                # allowance runs out.
+                meta_only = all(c.name in META_TOOL_NAMES for c in result.tool_calls)
+                if meta_only and meta_rounds < META_ROUND_ALLOWANCE:
+                    meta_rounds += 1
+                else:
+                    spent += 1
+                round_no += 1
+            if exhausted:
+                answer = await _final_answer(
+                    client,
+                    info,
+                    endpoint,
+                    model,
+                    messages,
+                    emit,
+                    temperature=temperature,
+                    context_size=context_size,
+                    max_tokens=max_tokens,
+                    top_p=top_p,
+                    rounds=round_no,
+                )
+                if rec:
+                    rec.rounds = round_no
         return answer
     except BaseException as exc:
         if rec:

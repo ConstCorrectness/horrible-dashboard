@@ -129,6 +129,14 @@ export const agentModule: ModuleManifest = {
       default: 1500,
     },
     {
+      key: 'agent.maxRounds',
+      title: 'Max tool-calling steps per turn',
+      description:
+        'How many rounds of tool calls one turn may spend before the agent is asked to answer with what it has. Rounds spent only loading tool groups are free. 0 uses the default (24). Raise it for long multi-step tasks; lower it to cut off a model that will not stop calling tools.',
+      type: 'number',
+      default: 0,
+    },
+    {
       key: 'agent.activeBufferBudget',
       title: 'Focused buffer: characters',
       description:

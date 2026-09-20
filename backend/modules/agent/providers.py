@@ -946,9 +946,13 @@ async def _ollama_chat_stream(
     base: dict[str, Any] = {
         "model": model,
         "messages": messages,
-        "tools": tools,
         "stream": True,
     }
+    # Omitted when empty rather than sent as `[]`: a tool-less round is a real
+    # request (the orchestrator's final answer after its step budget runs out), and
+    # several OpenAI-compatible servers reject an empty array outright.
+    if tools:
+        base["tools"] = tools
     options: dict[str, Any] = {}
     if temperature is not None:
         options["temperature"] = temperature
@@ -1048,9 +1052,10 @@ async def _openai_chat_stream(
     payload: dict[str, Any] = {
         "model": model,
         "messages": messages,
-        "tools": tools,
         "stream": True,
     }
+    if tools:  # never `[]` — see `_ollama_chat_stream`
+        payload["tools"] = tools
     if temperature is not None:
         payload["temperature"] = temperature
     if tool_choice is not None:

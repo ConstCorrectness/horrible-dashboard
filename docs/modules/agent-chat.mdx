@@ -188,7 +188,7 @@ sequenceDiagram
     FE->>BE: ask {turnId, prompt, history, context}
     BE->>BE: detached run_agent_turn —<br/>build messages (system, history,<br/>editor ctx, user), resolve tools<br/>(LAYOUT_TOOLS + manifest), model + temperature
 
-    loop up to MAX_ROUNDS
+    loop up to agent.maxRounds
         BE->>M: chat_stream(messages, tools, temperature)
         M-->>BE: reasoning + content deltas
         BE-->>FE: reasoning / token events
@@ -244,12 +244,42 @@ context}` on the `agent` channel.
    the focused-buffer system message from `_active_editor_message` + the user prompt),
    resolves the tool list (`_tools_for`), the model (`_orchestrator_model` — the
    override or the configured model), and the sampling temperature (`_tool_temperature`).
-4. **The loop (≤ `MAX_ROUNDS`).** Each round streams the provider via
+4. **The loop (≤ `agent.maxRounds`).** Each round streams the provider via
    `providers.chat_stream`, which first flattens the system tier (see
    [below](#the-system-tier-is-several-messages-until-the-wire)); the model's reasoning (`thinking`/`reasoning_content`) and
    answer `content` token-deltas relay live as `reasoning`/`token` events the chat
    widget and home ask bar render as they arrive. A round ends with either
    `tool_calls` or a final answer.
+
+### The step budget, and how a turn that runs out ends
+
+A turn may spend `agent.maxRounds` rounds of tool calls (`MAX_ROUNDS`, 24, when the
+setting is 0). It is a **guard against a model that never stops calling tools**, not
+a work limit — but at its old value of 8 it was acting as one, invisibly. In the
+recorded turns the counts tapered off to a single turn at 7, then **32 sat at exactly
+8**: the shape of a budget being hit rather than of work finishing.
+
+Two things make that shape a bug rather than a threshold doing its job:
+
+- **Discovery used to be charged as work.** Under progressive disclosure the model
+  pays a round for each `load_tools` call before it can touch the task — one observed
+  turn spent rounds 3 and 5 loading groups — so a third of a short budget could go on
+  reading the menu. A round whose calls were *all* meta tools is now free, up to
+  `META_ROUND_ALLOWANCE` (6). Bounded rather than free, because a model that loops
+  loading groups for ever must still stop.
+- **Running out threw the work away.** The loop returned a literal
+  `"(stopped after too many steps)"`, so a turn that had read six files and was ready
+  to report ended with a sentence about the machinery. Exhaustion now spends one
+  last **tool-less** round (`_final_answer`): the model is told the budget is gone and
+  asked to answer with what it has. Offering no tools is what makes it terminate. If
+  that round returns nothing, or fails, the turn still says plainly that it stopped
+  early and how many steps it used — an honest stop beats an invented answer, and
+  both beat silence.
+
+Passing no tools is a real request, so `providers` now **omits `tools` entirely when
+the list is empty** rather than sending `[]`, which several OpenAI-compatible servers
+reject outright.
+
 5. **Tool execution + gating.** For each `tool_call`, `_gate` decides: read-only and
    layout verbs pass straight through; side-effecting tools are evaluated against the
    permission **mode + rules**, prompting the user via
@@ -311,8 +341,8 @@ share one gated tool-calling implementation.
 (`thinking`/`reasoning_content`) and answer `content` token-deltas are relayed live
 to the chat widget (`reasoning`/`token` events) as they arrive. If the model returns
 `tool_calls`, each is relayed to the browser and the loop awaits the result before
-continuing; otherwise it sends the final (authoritative) `answer`. Capped at
-`MAX_ROUNDS`. Ollama gets `think:true` best-effort — models without a thinking mode
+continuing; otherwise it sends the final (authoritative) `answer`. Capped by
+[the step budget](#the-step-budget-and-how-a-turn-that-runs-out-ends). Ollama gets `think:true` best-effort — models without a thinking mode
 reject it (400) and the round transparently retries without, still streaming content.
 
 **Tool-calling reliability.** Turns decode **greedily** (`temperature` 0, via
