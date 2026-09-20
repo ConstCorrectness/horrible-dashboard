@@ -129,7 +129,9 @@ def test_metrics_non_metric_events_pass_straight_through(monkeypatch) -> None:
 def test_the_helper_emits_a_finish_event_that_the_sentinel_maps():
     from backend.modules.training.sentinel import EVENT_NAMES, parse_line
 
-    event = parse_line('@@HORRIBLE@@{"type": "finish", "runId": "a", "status": "failed"}')
+    event = parse_line(
+        '@@HORRIBLE@@{"type": "finish", "runId": "a", "status": "failed"}'
+    )
     assert event["type"] == "finish"
     assert EVENT_NAMES["finish"] == "run_finished"
 
@@ -184,4 +186,62 @@ def test_a_run_started_event_records_the_name_for_the_config_lookup():
     metrics.declare_run_config("proj", "lr=0.001", {"learning_rate": 0.001})
     metrics.record_event("run_started", {"runId": "abc", "name": "lr=0.001"})
     assert metrics._names["abc"] == "lr=0.001"
+    metrics.reset()
+
+
+def test_a_notebook_run_is_tracked_with_the_recipe_it_ran(monkeypatch):
+    """A sweep point declares what it varies; a run started from the notebook
+    declared nothing and was tracked as `{source, projectId}` — so the runs you get
+    by pressing Run were the ones `compare_runs` could say nothing about."""
+    from backend.modules.training import metrics
+
+    metrics.reset()
+    monkeypatch.setattr(
+        metrics,
+        "_recipe_config",
+        lambda project_id: {"baseModel": "Qwen/Qwen3-0.6B", "learning_rate": 0.0002},
+    )
+    captured: dict = {}
+
+    class FakeMirror:
+        def __init__(self, project, name="", config=None, tags=()):
+            captured["config"] = dict(config or {})
+            captured["tags"] = list(tags)
+
+        def log(self, *a, **kw):
+            return None
+
+    monkeypatch.setattr(metrics, "RunMirror", FakeMirror)
+    metrics._mirror_for("r9", "proj")
+
+    assert captured["config"]["baseModel"] == "Qwen/Qwen3-0.6B"
+    assert captured["config"]["learning_rate"] == 0.0002
+    # Not a sweep point: the tag means "a sweep declared this", and the fallback
+    # must not claim it.
+    assert captured["tags"] == ["training"]
+    metrics.reset()
+
+
+def test_a_declared_config_still_marks_a_sweep_point(monkeypatch):
+    from backend.modules.training import metrics
+
+    metrics.reset()
+    monkeypatch.setattr(metrics, "_recipe_config", lambda project_id: {"lr": "recipe"})
+    captured: dict = {}
+
+    class FakeMirror:
+        def __init__(self, project, name="", config=None, tags=()):
+            captured["config"] = dict(config or {})
+            captured["tags"] = list(tags)
+
+        def log(self, *a, **kw):
+            return None
+
+    monkeypatch.setattr(metrics, "RunMirror", FakeMirror)
+    metrics.declare_run_config("proj", "point-1", {"lr": 0.001})
+    metrics._names["r10"] = "point-1"
+    metrics._mirror_for("r10", "proj")
+
+    assert captured["config"]["lr"] == 0.001  # the declaration wins
+    assert "sweep" in captured["tags"]
     metrics.reset()

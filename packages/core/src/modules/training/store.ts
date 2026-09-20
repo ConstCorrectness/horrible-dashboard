@@ -6,6 +6,7 @@
  */
 import { useSyncExternalStore } from 'react';
 
+import { collapseCarriageReturns } from '../../notebook/streamText';
 import type { Notebook, NotebookCell } from './api';
 import {
   onTrainingEvent,
@@ -105,7 +106,8 @@ export class SessionStore {
       ) {
         outputs[outputs.length - 1] = {
           ...last,
-          text: String(last.text ?? '') + String(output.text ?? ''),
+          // Same rule as the backend's merge — see `collapseCarriageReturns`.
+          text: collapseCarriageReturns(String(last.text ?? '') + String(output.text ?? '')),
         };
       } else {
         outputs.push(output);

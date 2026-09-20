@@ -91,6 +91,21 @@ def declare_run_config(project_id: str, run_name: str, config: dict[str, Any]) -
     _declared[(project_id, run_name)] = dict(config)
 
 
+def _recipe_config(project_id: str) -> dict[str, Any]:
+    """The project's recipe as a flat run config, or `{}`. Never raises: tracking
+    detail must not cost a run its metrics."""
+    if not project_id:
+        return {}
+    try:
+        from backend.modules.training import projects, recipes
+
+        project = projects.get_project(project_id)
+        return recipes.run_config(project) if project is not None else {}
+    except Exception:  # noqa: BLE001 — see the module docstring: storage is best-effort
+        logger.debug("training: no recipe config for %s", project_id, exc_info=True)
+        return {}
+
+
 def _mirror_for(run_id: str, project_id: str) -> RunMirror:
     """The localtrack run mirroring this training run, creating it if needed.
 
@@ -115,14 +130,23 @@ def _mirror_for(run_id: str, project_id: str) -> RunMirror:
             prior.finish()
 
     name = _names.get(run_id) or run_id
-    declared = _declared.get((project_id, name), {})
+    # A sweep point declares exactly what it varies. A run started from the
+    # notebook declares nothing, and used to be tracked as `{source, projectId}` —
+    # so the runs you get by pressing Run, the common case, were the ones
+    # `compare_runs` could say nothing about. Its recipe is the honest answer to
+    # "what did this train with", read at the moment the first metric lands.
+    declared = _declared.get((project_id, name))
+    # Kept apart from the value: the `sweep` tag means "a sweep declared this",
+    # and folding the fallback into the same variable would tag every notebook run
+    # as a sweep point.
+    config = declared if declared is not None else _recipe_config(project_id)
     mirror = RunMirror(
         project_id or "training",
         # The helper's name, not the hex id: a sweep names each point after what
         # varies (`learning_rate=0.0002`), and a sidebar of twelve hex ids is a
         # sidebar you cannot read.
         name=name,
-        config={"source": "training", "projectId": project_id, **declared},
+        config={"source": "training", "projectId": project_id, **config},
         tags=["training", "sweep"] if declared else ["training"],
     )
     _mirrors[run_id] = mirror

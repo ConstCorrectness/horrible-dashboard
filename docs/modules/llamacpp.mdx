@@ -357,6 +357,15 @@ served the same way. That is the loop closing: train it here, serve it here, loo
 inside it here. A LoRA result is labelled an adapter, because `llama-server` takes
 it with `--lora` beside a base model rather than serving it alone.
 
+**`GET /models` carries that provenance, not just the agent tool.** Each row gets
+`baseModel`, `projectId` and `isAdapter`, joined from `training.lineage` on the GGUF
+path. Without it the pane — which is where a person actually picks a model — listed a
+fine-tune by whatever `general.name` the converter wrote: the *adapter* of a Qwen
+fine-tune appeared as a servable model called "Qwen/Qwen3-0.6B", and the merged model
+beside it as "Merged". The row now says "fine-tune of &lt;base&gt;", the adapter is
+tagged in the list and in the start picker, and a missing row reads as **unknown
+provenance** rather than as a claim about a base.
+
 ### The disk budget is pre-flight
 
 A download is refused **before a byte is written**, against the size the server

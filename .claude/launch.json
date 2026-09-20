@@ -4,7 +4,18 @@
     {
       "name": "web",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["dev"],
+      "runtimeArgs": [
+        "dev"
+      ],
+      "port": 5173,
+      "autoPort": true
+    },
+    {
+      "name": "web-ui",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "dev:web"
+      ],
       "port": 5173,
       "autoPort": true
     },
@@ -30,7 +41,12 @@
     {
       "name": "docs",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "@horrible/docs", "start", "--no-open"],
+      "runtimeArgs": [
+        "--filter",
+        "@horrible/docs",
+        "start",
+        "--no-open"
+      ],
       "port": 3000
     },
     {
@@ -48,13 +64,25 @@
     {
       "name": "gameserver",
       "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "uvicorn", "backend.games_server.app:app", "--port", "9200"],
+      "runtimeArgs": [
+        "run",
+        "uvicorn",
+        "backend.games_server.app:app",
+        "--port",
+        "9200"
+      ],
       "port": 9200
     },
     {
       "name": "share-relay",
       "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "uvicorn", "backend.share_relay.app:app", "--port", "9100"],
+      "runtimeArgs": [
+        "run",
+        "uvicorn",
+        "backend.share_relay.app:app",
+        "--port",
+        "9100"
+      ],
       "port": 9100
     }
   ]

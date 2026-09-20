@@ -146,7 +146,24 @@ def remove_install(req: RemoveInstallRequest) -> dict[str, bool]:
 
 @router.get("/models", response_model=ModelsResponse)
 def models() -> ModelsResponse:
-    entries = [ModelEntry(**m.to_dict()) for m in catalog.list_models()]
+    # Joined on the GGUF path, the same key `llamacpp.list_models` uses — the agent
+    # tool has reported provenance since lineage landed while the pane, which is
+    # where a person actually picks a model, did not.
+    from backend.modules.training import lineage
+
+    provenance = lineage.by_path()
+    entries = []
+    for model in catalog.list_models():
+        data = model.to_dict()
+        origin = provenance.get(str(model.path)) or {}
+        entries.append(
+            ModelEntry(
+                **data,
+                baseModel=origin.get("baseModel") or None,
+                projectId=origin.get("projectId") or None,
+                isAdapter=bool(origin.get("isAdapter")),
+            )
+        )
     return ModelsResponse(
         models=entries, suggested=list(catalog.suggested_repos()), **catalog.usage()
     )

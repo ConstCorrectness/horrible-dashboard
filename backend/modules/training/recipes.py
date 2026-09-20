@@ -404,6 +404,12 @@ class Recipe:
     base_model: str = ""
     dataset: str = ""
     dataset_split: str = "train"
+    #: The split held out for evaluation, e.g. `test`. **Empty means no eval**,
+    #: which is the honest default: most Hub datasets have no held-out split, and a
+    #: recipe that invented one would fail at `load_dataset` after the download.
+    #: Without it a run reports only training loss, which falls whether the model
+    #: is learning or memorising — the one number that cannot tell you apart.
+    eval_split: str = ""
     #: A registered dataset (`backend.modules.datasets.registry`). When set it
     #: **wins** over the free-text `dataset` above, and carries the detected format
     #: and column map with it — which is the difference between "this run used
@@ -430,6 +436,7 @@ class Recipe:
             "dataset": self.dataset,
             "datasetId": self.dataset_id,
             "datasetSplit": self.dataset_split,
+            "evalSplit": self.eval_split,
             "columnMap": dict(self.column_map),
             "textField": self.text_field,
             "useLora": self.use_lora,
@@ -454,6 +461,7 @@ class Recipe:
                 str(k): str(v) for k, v in (data.get("columnMap") or {}).items()
             },
             dataset_split=str(data.get("datasetSplit") or "train"),
+            eval_split=str(data.get("evalSplit") or ""),
             text_field=str(data.get("textField") or "text"),
             use_lora=bool(data.get("useLora", True)),
             output_dir=str(data.get("outputDir") or "outputs/run1"),
@@ -786,6 +794,53 @@ def load_recipe(project: ProjectModel) -> Recipe:
     except (OSError, ValueError) as exc:
         logger.info("training: unreadable recipe for %s (%s)", project.id, exc)
         return default_recipe(project)
+
+
+def snapshot(project: ProjectModel) -> dict[str, Any]:
+    """The recipe as it stands now, for a record that must outlive it.
+
+    A snapshot rather than a pointer to `recipe.json`: that file keeps changing as
+    the next run is tuned, and a row saying "trained with lr=2e-4" must keep
+    meaning that after 1e-4 is tried. Best-effort — a project whose recipe was
+    never saved still converts, and still tracks.
+    """
+    try:
+        recipe = load_recipe(project)
+    except Exception:  # noqa: BLE001 — provenance detail, never a caller's failure
+        logger.debug("training: no recipe snapshot for %s", project.id, exc_info=True)
+        return {}
+    return {
+        "baseModel": recipe.base_model,
+        "dataset": recipe.dataset,
+        "datasetSplit": recipe.dataset_split,
+        "useLora": recipe.use_lora,
+        "values": dict(recipe.values),
+    }
+
+
+def run_config(project: ProjectModel) -> dict[str, Any]:
+    """The same recipe **flat**, as a tracked run's config.
+
+    Flat because that is what a comparison diffs: `localtrack.compare_runs` splits
+    varied keys from shared ones, and a nested `values` dict is one key that always
+    differs. A notebook run used to record `{source, projectId}` and nothing else,
+    so the runs you get by pressing Run — the common case — were the ones that
+    could not be compared by what they trained with.
+    """
+    try:
+        recipe = load_recipe(project)
+    except Exception:  # noqa: BLE001 — tracking detail, never a run's failure
+        logger.debug("training: no run config for %s", project.id, exc_info=True)
+        return {}
+    config: dict[str, Any] = {
+        "backend": recipe.backend,
+        "task": recipe.task,
+        "baseModel": recipe.base_model,
+        "dataset": recipe.dataset,
+        "useLora": recipe.use_lora,
+    }
+    config.update(recipe.values)
+    return {k: v for k, v in config.items() if v != ""}
 
 
 def save_recipe(project: ProjectModel, recipe: Recipe) -> None:

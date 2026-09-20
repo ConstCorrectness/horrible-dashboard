@@ -4,6 +4,7 @@
  * store is keyed by the *deterministic* backend session key so it can be
  * registered before `opened` arrives (and matched by error/opened events).
  */
+import { collapseCarriageReturns } from './streamText';
 import { useSyncExternalStore } from 'react';
 
 import {
@@ -162,7 +163,8 @@ export class SessionStore {
       ) {
         outputs[outputs.length - 1] = {
           ...last,
-          text: String(last.text ?? '') + String(output.text ?? ''),
+          // Same rule as the backend's merge — see `collapseCarriageReturns`.
+          text: collapseCarriageReturns(String(last.text ?? '') + String(output.text ?? '')),
         };
       } else {
         outputs.push(output);

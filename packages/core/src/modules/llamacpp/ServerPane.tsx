@@ -402,7 +402,11 @@ function ServerSection({
                 {!models.length && <option value="">No GGUF found</option>}
                 {models.map((m) => (
                   <option key={m.path} value={m.path}>
-                    {m.name} · {formatBytes(m.sizeBytes)} · {m.origin}
+                    {/* An adapter cannot be served alone, and carries its BASE
+                        model's name — so it read as a duplicate of the model it
+                        adapts, picked by mistake and failing at load. */}
+                    {m.isAdapter ? `${m.name} (LoRA adapter — needs its base)` : m.name} ·{' '}
+                    {formatBytes(m.sizeBytes)} · {m.origin}
                   </option>
                 ))}
               </select>
@@ -712,11 +716,27 @@ function ModelsSection({ data, refresh }: { data: ModelsResponse | null; refresh
                   <div className="llama-model-head">
                     <span className="llama-model-name">{m.name.split('/').pop() ?? m.name}</span>
                     <span className="llama-tag">{m.quantization || '—'}</span>
+                    {/* An adapter is not servable on its own, and the name in the
+                        file is the BASE model's — so an untagged row read as a
+                        second copy of the model it was trained from. */}
+                    {m.isAdapter && <span className="llama-tag">LoRA adapter</span>}
                     <span className="llama-meta">{formatBytes(m.sizeBytes)}</span>
                   </div>
                   <div className="llama-meta">
                     {m.architecture || 'unknown arch'} · {formatParams(m.parameters)} params
                   </div>
+                  {m.baseModel && (
+                    <div className="llama-meta">
+                      {m.isAdapter ? 'adapter for' : 'fine-tune of'} <code>{m.baseModel}</code>
+                      {m.projectId ? ` · trained in ${m.projectId}` : ''}
+                    </div>
+                  )}
+                  {m.isAdapter && (
+                    <div className="llama-meta">
+                      Served only with <code>--lora</code> beside its base model, which this pane
+                      does not launch yet — convert the merged checkpoint to serve the fine-tune.
+                    </div>
+                  )}
                   {/* The trained context, against the longest in the catalogue. The
                       Server tab warns you AFTER you type a number past it; this is
                       the same fact before you type anything. */}

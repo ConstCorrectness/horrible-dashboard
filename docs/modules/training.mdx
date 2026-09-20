@@ -36,9 +36,15 @@ Each project is one directory under `training.projectsRoot` (default
 
 Torch-sized dependencies live in the **project venv**, never the backend env. The venv
 is created with `uv venv --python <training.defaultPython>` and bootstrapped with
-`ipykernel` (kernel side of the Jupyter protocol) plus the local **`horrible-train`**
-helper package, then the provider's scaffold requirements (`pandas`,
-`gymnasium[box2d]`, …). All subprocess work (uv, kernels, renderers) uses blocking
+`ipykernel` and `ipywidgets` (`envs.KERNEL_PACKAGES`) plus the local
+**`horrible-train`** helper package, then the provider's scaffold requirements (`pandas`,
+`gymnasium[box2d]`, …). `ipywidgets` is there because the libraries a training
+notebook runs *look* for it: tqdm and the Hugging Face `Trainer` draw a widget
+progress bar when it is importable and otherwise print one frame per update — a worse
+bar, plus a warning telling the user to upgrade Jupyter, which was never the problem.
+The kernel packages are installed by **`install_stack` as well**, because a venv is
+bootstrapped once and never revisited, so a project made before that list changed
+would otherwise never catch up. All subprocess work (uv, kernels, renderers) uses blocking
 `Popen` pumped on daemon threads — the Windows-safe pattern shared with the LSP/terminal
 modules — with output lines streamed to the UI.
 
@@ -260,6 +266,76 @@ carrying the indexed version and the `installedMismatch` annotation, so the link
 is to docs for a version you can compare against rather than to whatever is
 current. An empty index yields no links rather than a guessed URL.
 
+### The base model is searched and checked, not just typed
+
+`basemodels.py` is the one field whose value is copied **verbatim** into
+`from_pretrained(...)`, so every way of being wrong about it used to surface minutes
+into a run, from inside `transformers`, after the dataset had downloaded.
+
+- `GET /training/models/search` lists Hugging Face **text-generation** models, most
+  downloaded first, and the pane's picker fills the field from it — the id is copied
+  rather than remembered. A `…-GGUF` repo is **cautioned, not hidden**: it is a real
+  model, just the served copy, and a row missing with no explanation is worse.
+- `basemodels.check` judges whatever is in the box and lands in the form's warnings.
+  It is **advisory and never blocks**: a recipe that refused to generate because the
+  Hub was unreachable would be worse than a cell that fails honestly.
+
+Four judgements it makes, each a failure seen for real:
+
+- **`qwen3:0.6b` is an Ollama tag, not a Hub id.** It is the name this app shows
+  everywhere else, so it is the obvious thing to type — and it reached
+  `from_pretrained` unchanged. The warning names the search term to look for.
+- **A bare name is not malformed.** `gpt2` and `bert-base-uncased` are canonical Hub
+  ids with no owner, so demanding `owner/name` would reject ids that work. The Hub
+  decides, not a regex.
+- **"Not found" is not a licence problem.** The Hub answers a missing repo and a
+  private one the same way, and its own 404 text mentions "private or gated" — so
+  matching on the word `gated` told every typo to go and accept a licence. The
+  not-found branch is checked first and worded to cover both.
+- **A GGUF repo, an encoder, or a repo with no loadable weights** gets the reason
+  rather than a stack trace: those are serving artifacts and non-causal models, and
+  `SFTTrainer` cannot start from any of them.
+
+Offline, every one of these yields **no warning at all**. Being unable to ask is not
+evidence that a model does not exist.
+
+### Holding a split out
+
+`evalSplit` names the split scored during training (`eval_strategy` /`eval_steps` /
+`per_device_eval_batch_size`), and **empty means no evaluation** — the honest
+default, because most Hub datasets have no held-out split and inventing one fails at
+`load_dataset` after the download. Without it a run reports only training loss, which
+falls whether the model is learning or memorising: the one number that cannot tell
+those apart.
+
+Two details:
+
+- The held-out split is loaded through the **same `dataset_call`** as the training
+  data — same ref, same loader, same local-file handling — so an eval set cannot be
+  read differently from the data it is held out of.
+- An `eval_strategy` with **no split is overridden to `no`**, not emitted: the
+  trainer rejects it on construction, which is exactly the "option that emits a
+  config the trainer refuses" this catalog exists to avoid. The generated cell says
+  `# no eval split is set` rather than carrying a setting that does not describe
+  the run.
+
+`eval_strategy` and `evaluation_strategy` **are** aliases (renamed in transformers
+4.46) — unlike `warmup_ratio`/`warmup_steps`, which carry different units — so the
+probe emits whichever spelling the installed version accepts.
+
+### Two knobs a first fine-tune needs
+
+`max_steps` and `dataset_num_proc`, both absent and both felt immediately:
+
+- **`max_steps`** stops a run after N optimizer steps whatever the epochs say (`-1`
+  runs the epochs). Without it, capping a trial run meant expressing "fifty steps" as
+  a *fraction of an epoch* and doing the arithmetic against the dataset's length.
+- **`dataset_num_proc`** is the tokenization pass before training starts — single-core
+  by default, which is two minutes of a 15,000-row chat dataset before a step runs.
+
+Both validate against the installed class like every other field, so a version that
+drops one drops it from the form rather than emitting a `TypeError`.
+
 ### `report_to` is first-class, and local metrics stay authoritative
 
 The tracker picker (`none` / `tensorboard` / `wandb` / `mlflow` / `trackio`) sets
@@ -426,6 +502,13 @@ from the project venv, with the stdout sentinel scan. The backend side runs one
   long blocking C call (one `time.sleep(600)`) defers it until that call returns;
   **Restart** is the hard stop.
 
+**A finished run still holds the GPU.** The kernel is process-global and outlives
+the pane by design (that is what lets a six-hour fine-tune survive closing the tab),
+so the model, optimizer states and cache stay resident until the kernel is restarted
+or shut down — around 10 GB after a small LoRA run. Restart is the button; there is
+deliberately no automatic teardown, because "the run finished" and "you are done with
+the session" are different facts and only one of them is knowable from here.
+
 Cells also get a **language server** — completion, hover and diagnostics, with names
 resolving across cells (see
 [Notebook cells get the same language server](editor.mdx#notebook-cells-get-the-same-language-server)).
@@ -473,6 +556,12 @@ run) drives them through the `horrible_train` helper's sentinel events:
   - **Every point, not the coalesced wire.** The wire drops intermediates at 20/s
     because a chart cannot draw faster; a store has no such excuse, and a loss curve
     missing 90% of its points is not the curve.
+
+  A run's tracked **config is its recipe** (`recipes.run_config`, flat because
+  `compare_runs` diffs keys): a sweep point declares exactly what it varies, and a run
+  started from the notebook — the common case — used to record `{source, projectId}`
+  and nothing else, so those were the runs a comparison could say nothing about. The
+  `sweep` tag still means "a sweep declared this" and is kept apart from the fallback.
 
   The localtrack project is the **training project's id**, so each project keeps its own
   run history — deliberately unlike the evals sweep, which files everything under one

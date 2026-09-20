@@ -214,6 +214,9 @@ export interface Recipe {
    * a rerun that provably eats the same rows the same way. */
   datasetId: string;
   datasetSplit: string;
+  /** Held-out split, e.g. `test`. Empty means no evaluation — most Hub datasets
+   *  have no held-out split, and inventing one fails at `load_dataset`. */
+  evalSplit: string;
   columnMap: Record<string, string>;
   textField: string;
   useLora: boolean;
@@ -317,6 +320,22 @@ export interface DocLink {
   installedMismatch: string | null;
 }
 
+export interface BaseModelHit {
+  id: string;
+  downloads: number;
+  likes: number;
+  url: string;
+  gated: boolean;
+  /** A `…-GGUF` repo: a serving artifact, not weights a fine-tune can start from. */
+  servingOnly: boolean;
+}
+
+/** Hugging Face text-generation models, so a base model is picked, not remembered. */
+export const searchBaseModels = (q: string, limit = 20) =>
+  apiGet<{ models: BaseModelHit[] }>(
+    `/training/models/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+  );
+
 export function getRecipe(projectId: string, refresh = false): Promise<RecipePayload> {
   return apiGet(`/training/projects/${projectId}/recipe${refresh ? '?refresh=true' : ''}`);
 }
@@ -355,7 +374,6 @@ export function convertCheckpoint(
     signal,
   );
 }
-
 
 // --- sweeps -----------------------------------------------------------------
 

@@ -6,6 +6,7 @@ import { startServer } from '../../llamacpp/api';
 import { usePaneParams } from '../../../panes';
 import { lastProjectId } from '../last-project';
 import { DatasetPicker } from '../../datasets/panels/DatasetPicker';
+import { BaseModelPicker } from './BaseModelPicker';
 import { ProjectsPane } from './ProjectsPane';
 import {
   applyRecipe,
@@ -253,7 +254,10 @@ function ConvertCard({ projectId }: { projectId: string }) {
    * still had to recognise their own checkpoint among every GGUF on the machine.
    */
   const score = () => {
-    registry.openPanel('evals.hub', produced ? { params: { modelPath: produced.path } } : undefined);
+    registry.openPanel(
+      'evals.hub',
+      produced ? { params: { modelPath: produced.path } } : undefined,
+    );
     void registry.runCommand('section.show:evals.hub:run');
   };
 
@@ -566,23 +570,15 @@ export function RecipePane() {
             </span>
           </div>
         )}
-        {installNote && (
-          <p style={{ ...dim, fontSize: 11, margin: 0 }}>{installNote}</p>
-        )}
+        {installNote && <p style={{ ...dim, fontSize: 11, margin: 0 }}>{installNote}</p>}
       </div>
 
       <div style={card}>
         <strong style={{ fontSize: 12 }}>Model &amp; data</strong>
-        <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-          <span style={{ ...dim, width: '7rem' }}>Base model</span>
-          <input
-            type="text"
-            value={recipe.baseModel}
-            onChange={(e) => setRecipe({ ...recipe, baseModel: e.target.value })}
-            placeholder="meta-llama/Llama-3.2-1B"
-            style={{ flex: 1 }}
-          />
-        </label>
+        <BaseModelPicker
+          value={recipe.baseModel}
+          onChange={(baseModel) => setRecipe({ ...recipe, baseModel })}
+        />
         <DatasetPicker
           task={recipe.task}
           selectedId={recipe.datasetId}
@@ -609,6 +605,16 @@ export function RecipePane() {
             }
             placeholder="trl-lib/Capybara"
             style={{ flex: 1 }}
+          />
+        </label>
+        <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+          <span style={{ ...dim, width: '7rem' }}>Eval split</span>
+          <input
+            type="text"
+            value={recipe.evalSplit}
+            onChange={(e) => setRecipe({ ...recipe, evalSplit: e.target.value })}
+            placeholder="test — blank for no evaluation"
+            style={{ flex: 1, padding: '0 0.6rem' }}
           />
         </label>
         <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>

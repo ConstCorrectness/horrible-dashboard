@@ -72,6 +72,18 @@ class ModelEntry(BaseModel):
     quantization: str = ""
     error: str = ""
     deletable: bool = False
+    #: Provenance for a file this node trained (`training.lineage`, joined on the
+    #: path). `None` is the normal case — anything downloaded — and must read as
+    #: "unknown", never as a claim about the base.
+    #:
+    #: Without it the pane listed a fine-tune by whatever `general.name` the
+    #: converter wrote: the adapter of a Qwen fine-tune appeared as a servable
+    #: model called "Qwen/Qwen3-0.6B", and the merged model beside it as "Merged".
+    baseModel: str | None = None
+    projectId: str | None = None
+    #: A LoRA adapter: `llama-server` loads it with `--lora` beside a base model
+    #: and cannot serve it alone, so the pane must not offer to.
+    isAdapter: bool = False
 
 
 class ModelsResponse(BaseModel):

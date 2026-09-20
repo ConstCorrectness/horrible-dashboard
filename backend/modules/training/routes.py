@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from backend.modules.settings.routes import get_value
 from backend.modules.training import (
+    basemodels,
     convert,
     envs,
     notebooks,
@@ -518,7 +519,11 @@ def _recipe_payload(project: ProjectModel, *, refresh: bool = False) -> dict:
                 intro, recipe.backend, recipe.task, recipe.use_lora
             )
         ],
+        # The base model is free text that goes straight into `from_pretrained`,
+        # so it is checked here rather than discovered minutes into a run — see
+        # `basemodels.check`. Advisory: it never blocks generating the cells.
         "warnings": recipes.warnings_for(recipe.values, recipe.trackers)
+        + basemodels.check(recipe.base_model)
         + backend.check(recipe.task, profile),
         "trackers": list(recipes.TRACKERS),
         "tasks": recipes.tasks(),
@@ -527,6 +532,21 @@ def _recipe_payload(project: ProjectModel, *, refresh: bool = False) -> dict:
         "sweep": sweeps.load_spec(project).to_dict(),
         "outputTypes": list(convert.OUTPUT_TYPES),
     }
+
+
+@router.get("/models/search")
+async def model_search(q: str = "", limit: int = 20) -> dict:
+    """Hugging Face text-generation models, for the recipe's base-model picker.
+
+    So the name is picked rather than remembered: it is the one recipe field that
+    is copied verbatim into `from_pretrained`, and a wrong one costs a download and
+    a stack trace to discover.
+    """
+    try:
+        results = await asyncio.to_thread(basemodels.search, q, limit)
+    except Exception as exc:  # noqa: BLE001 — an unreachable Hub is the user's to read
+        raise HTTPException(status_code=502, detail=f"model search failed: {exc}")
+    return {"models": results}
 
 
 @router.get("/projects/{project_id}/recipe")
@@ -553,9 +573,7 @@ async def recipe_apply(project_id: str, body: dict) -> dict:
 
     def work() -> int:
         recipes.save_recipe(project, recipe)
-        intro = recipes.introspect(
-            project, backend_id=recipe.backend, task=recipe.task
-        )
+        intro = recipes.introspect(project, backend_id=recipe.backend, task=recipe.task)
         return recipes.apply_to_notebook(project, recipe, intro)
 
     try:
@@ -588,9 +606,7 @@ async def recipe_install_stack(project_id: str) -> dict:
     packages = backend.requirements(recipe.task, profile)
 
     def progress(line: str) -> None:
-        broadcast_threadsafe(
-            "env_progress", {"projectId": project.id, "line": line}
-        )
+        broadcast_threadsafe("env_progress", {"projectId": project.id, "line": line})
 
     def work() -> str:
         reason = envs.install_stack(project, packages, profile, progress)

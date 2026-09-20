@@ -117,12 +117,21 @@ def install(project: ProjectModel, packages: list[str], progress: ProgressLine) 
         )
 
 
+#: Installed into every project venv beside the kernel. `ipywidgets` is here
+#: because the libraries a training notebook runs *look* for it: tqdm and the
+#: Hugging Face `Trainer` draw a widget progress bar when it is importable and
+#: fall back to printing a frame per update when it is not — which is both a
+#: worse bar and the thing that fills a notebook with carriage returns. It also
+#: prints a warning telling the user to update Jupyter, which is not the problem.
+KERNEL_PACKAGES = ("ipykernel", "ipywidgets")
+
+
 def bootstrap(
     project: ProjectModel, requirements: list[str], progress: ProgressLine
 ) -> None:
     """Create the venv and install the kernel + helper + provider requirements."""
     create(project, progress)
-    install(project, ["ipykernel", str(HELPER_DIR), *requirements], progress)
+    install(project, [*KERNEL_PACKAGES, str(HELPER_DIR), *requirements], progress)
 
 
 def torch_index_url(profile: Any, os_name: str = sys.platform) -> tuple[str, str]:
@@ -241,5 +250,13 @@ def install_stack(
             reason += " (replacing the CPU build that was installed before)"
     progress(f"resolving torch: {reason}")
     install(project, torch_cmd, progress)
-    install(project, [p for p in packages if p != "torch"], progress)
+    # The kernel packages go in here too, not only in `bootstrap`: a venv is
+    # bootstrapped once and never revisited, so a project created before
+    # `ipywidgets` joined the list would never get it. `uv pip install` on an
+    # already-satisfied package is a no-op that costs milliseconds.
+    install(
+        project,
+        [*KERNEL_PACKAGES, *[p for p in packages if p != "torch"]],
+        progress,
+    )
     return reason

@@ -91,7 +91,9 @@ def test_a_cpu_build_is_replaced_by_the_cuda_one(
         PYTORCH_CUDA_INDEX,
         "--reinstall-package=torch",
     ]
-    assert calls[1] == ["trl"]
+    # The kernel packages ride along, so a venv bootstrapped before `ipywidgets`
+    # joined the list picks it up here rather than never.
+    assert calls[1] == [*envs.KERNEL_PACKAGES, "trl"]
     assert "replacing the CPU build" in reason
 
 
@@ -100,3 +102,114 @@ def test_a_cuda_build_is_left_alone(tmp_path: Path, monkeypatch, calls) -> None:
     monkeypatch.setattr(envs.sys, "platform", "win32")
     envs.install_stack(_project(tmp_path), [], _profile("cuda"), lambda _: None)
     assert calls[0] == ["torch", "--index-url", PYTORCH_CUDA_INDEX]
+
+
+# --- what a fine-tune starts from --------------------------------------------
+
+
+def test_an_ollama_tag_is_named_as_the_wrong_kind_of_name() -> None:
+    """`qwen3:0.6b` is the name this app shows everywhere else, so it is what gets
+    typed — and it reached `from_pretrained` verbatim."""
+    from backend.modules.training import basemodels
+
+    (warning,) = basemodels.check("qwen3:0.6b")
+    assert "Ollama" in warning
+    assert "qwen3-0.6b" in warning  # the search term, offered as a guess
+
+
+def test_an_empty_base_model_is_not_silently_fine() -> None:
+    from backend.modules.training import basemodels
+
+    assert basemodels.check("")
+
+
+def test_a_canonical_hub_name_is_not_called_malformed(monkeypatch) -> None:
+    """`gpt2` and `bert-base-uncased` have no owner. Demanding `owner/name` would
+    be the form rejecting ids that work."""
+    from backend.modules.training import basemodels
+
+    asked: list[str] = []
+    monkeypatch.setattr(
+        basemodels, "_check_on_hub", lambda name: asked.append(name) or []
+    )
+    assert basemodels.check("gpt2") == []
+    assert asked == ["gpt2"]
+
+
+def test_an_unreachable_hub_is_not_evidence_of_a_missing_model(monkeypatch) -> None:
+    from backend.modules.training import basemodels
+
+    class Api:
+        def model_info(self, name):
+            raise OSError("connection refused")
+
+    monkeypatch.setattr(basemodels, "_api", Api)
+    assert basemodels.check("Qwen/Qwen3-0.6B") == []
+
+
+def test_a_missing_repo_is_not_reported_as_a_licence_problem(monkeypatch) -> None:
+    """The Hub's own 404 text says "private or gated", so matching on that word
+    told every typo to go and accept a licence."""
+    from backend.modules.training import basemodels
+
+    class RepositoryNotFoundError(Exception):
+        pass
+
+    class Api:
+        def model_info(self, name):
+            raise RepositoryNotFoundError(
+                "404 Client Error. Repository Not Found. If the repo is private or "
+                "gated, make sure you are authenticated."
+            )
+
+    monkeypatch.setattr(basemodels, "_api", Api)
+    (warning,) = basemodels.check("Nobody/nothing")
+    assert "not found" in warning
+    assert "Accept its licence" not in warning
+
+
+def test_a_gguf_repo_is_refused_as_a_base(monkeypatch) -> None:
+    from backend.modules.training import basemodels
+    from types import SimpleNamespace
+
+    info = SimpleNamespace(
+        gated=False,
+        config={"model_type": "qwen3"},
+        siblings=[SimpleNamespace(rfilename="model-q4.gguf")],
+    )
+    monkeypatch.setattr(
+        basemodels, "_api", lambda: SimpleNamespace(model_info=lambda name: info)
+    )
+    (warning,) = basemodels.check("Someone/Qwen3-0.6B-GGUF")
+    assert "GGUF" in warning
+
+
+def test_the_hub_is_asked_once_per_name_for_a_while(monkeypatch) -> None:
+    """The recipe form is fetched on every pane open, task change and save; each
+    one used to be a round-trip to the Hub — slow when reachable, a stall when not."""
+    from types import SimpleNamespace
+
+    from backend.modules.training import basemodels
+
+    basemodels._CACHE.clear()
+    calls: list[str] = []
+
+    def api():
+        return SimpleNamespace(
+            model_info=lambda name: (
+                calls.append(name)
+                or SimpleNamespace(gated=False, config={}, siblings=[])
+            )
+        )
+
+    monkeypatch.setattr(basemodels, "_api", api)
+    assert basemodels.check("Qwen/Qwen3-0.6B") == []
+    assert basemodels.check("Qwen/Qwen3-0.6B") == []
+    assert calls == ["Qwen/Qwen3-0.6B"]
+
+    # Not forever: accepting a licence must stop the gated warning without a
+    # backend restart.
+    basemodels._CACHE["Qwen/Qwen3-0.6B"] = (-basemodels._CACHE_TTL_S, [])
+    basemodels.check("Qwen/Qwen3-0.6B")
+    assert len(calls) == 2
+    basemodels._CACHE.clear()

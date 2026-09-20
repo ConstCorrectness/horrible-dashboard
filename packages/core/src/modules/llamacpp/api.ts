@@ -47,6 +47,12 @@ export interface ModelEntry {
   quantization: string;
   error: string;
   deletable: boolean;
+  /** Set only for a GGUF this node trained (joined from training lineage). Null is
+   *  the normal case and means unknown provenance, not "trained from nothing". */
+  baseModel: string | null;
+  projectId: string | null;
+  /** A LoRA adapter: loaded with `--lora` beside a base, never served alone. */
+  isAdapter: boolean;
 }
 
 export interface ModelsResponse {

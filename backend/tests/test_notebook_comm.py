@@ -198,3 +198,49 @@ def test_update_display_data_rewrites_the_output_in_place(tmp_path) -> None:
         assert len(conn.events("output_updated")) == 1
 
     asyncio.run(go())
+
+
+def test_progress_frames_do_not_accumulate(tmp_path) -> None:
+    """A progress bar writes one frame per update, each ending in a carriage
+    return. Kept verbatim, one fine-tune's notebook held 118 KB of tqdm frames for
+    three real lines — and the pane rendered every one."""
+
+    async def go() -> None:
+        sess = _session(tmp_path, asyncio.get_running_loop())
+        cell = sess.doc.cells[0]
+        sess.msg_to_cell["m1"] = cell["id"]
+        for percent in (10, 40, 100):
+            sess._route_iopub(
+                {
+                    "msg_type": "stream",
+                    "content": {"name": "stderr", "text": f"tokenizing {percent}%\r"},
+                    "parent_header": {"msg_id": "m1"},
+                }
+            )
+        await asyncio.sleep(0.05)
+
+        # The trailing carriage return survives: it is what makes the *next*
+        # frame overwrite this one rather than be appended to it.
+        assert cell["outputs"][0]["text"] == "tokenizing 100%\r"
+
+    asyncio.run(go())
+
+
+def test_real_lines_are_still_kept(tmp_path) -> None:
+    async def go() -> None:
+        sess = _session(tmp_path, asyncio.get_running_loop())
+        cell = sess.doc.cells[0]
+        sess.msg_to_cell["m1"] = cell["id"]
+        for text in ("first\n", "second\n"):
+            sess._route_iopub(
+                {
+                    "msg_type": "stream",
+                    "content": {"name": "stdout", "text": text},
+                    "parent_header": {"msg_id": "m1"},
+                }
+            )
+        await asyncio.sleep(0.05)
+
+        assert cell["outputs"][0]["text"] == "first\nsecond\n"
+
+    asyncio.run(go())

@@ -577,6 +577,39 @@ def test_status_and_models_routes(data_dir: Path) -> None:
     assert payload["suggested"]
 
 
+def test_the_models_route_carries_what_a_file_was_trained_from(data_dir: Path) -> None:
+    """The pane is where a person picks a model, and it listed a fine-tune by the
+    `general.name` in the file: the ADAPTER of a Qwen fine-tune appeared as a
+    servable model called "Qwen/Qwen3-0.6B", with the merged model beside it as
+    "Merged". The agent tool had reported provenance since lineage landed; this is
+    the same join, on the same key, for the UI.
+    """
+    from backend.modules.training import lineage
+
+    adapter = catalog.models_root() / "trained" / "proj-checkpoint-50-lora-f16.gguf"
+    plain = catalog.models_root() / "downloaded" / "tiny-Q4.gguf"
+    _write_gguf(adapter)
+    _write_gguf(plain)
+    lineage.record(
+        str(adapter),
+        project_id="proj",
+        checkpoint="checkpoint-50",
+        base_model="Qwen/Qwen3-0.6B",
+        out_type="f16",
+        is_adapter=True,
+        recipe={},
+    )
+
+    payload = TestClient(app).get("/api/llamacpp/models").json()
+    rows = {Path(m["path"]).name: m for m in payload["models"]}
+    assert rows[adapter.name]["baseModel"] == "Qwen/Qwen3-0.6B"
+    assert rows[adapter.name]["isAdapter"] is True
+    assert rows[adapter.name]["projectId"] == "proj"
+    # Absent provenance must read as unknown, never as a claim about a base.
+    assert rows[plain.name]["baseModel"] is None
+    assert rows[plain.name]["isAdapter"] is False
+
+
 def test_delete_route_refuses_an_unmanaged_path(data_dir: Path) -> None:
     outside = data_dir / "elsewhere" / "x.gguf"
     _write_gguf(outside)

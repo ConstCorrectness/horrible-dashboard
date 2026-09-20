@@ -129,6 +129,44 @@ def _b64_buffers(buffers: Any) -> list[str]:
     return out
 
 
+def collapse_carriage_returns(text: str) -> str:
+    r"""Apply `\r` to accumulated stream text the way a terminal does.
+
+    A progress bar writes one frame per update, each ending in a carriage return
+    rather than a newline, so keeping every chunk verbatim keeps hundreds of
+    copies of the same line. One fine-tune's `main.ipynb` held 118 KB of tqdm
+    frames for three real lines of output, and the pane rendered all of them.
+
+    Only the last write of each line survives, which is what a terminal shows.
+    The nuance a real terminal has and this does not is a short write leaving the
+    tail of a longer one visible; tqdm pads its frames to a fixed width, so that
+    case does not arise in the output this exists for.
+
+    The browser's stores apply the identical rule when they merge the same chunks
+    (`collapseCarriageReturns`), because the wire carries deltas: collapsing on
+    one side only would make the pane and the saved notebook disagree.
+    """
+    if "\r" not in text:
+        return text
+    kept: list[str] = []
+    for line in text.split("\n"):
+        if "\r" not in line:
+            kept.append(line)
+            continue
+        # A *trailing* carriage return parks the cursor at the start of the line;
+        # what was already written stays on screen until something overwrites it.
+        # So the frame before it is kept — dropping it would blank the final frame
+        # of every finished progress bar — and **the `\r` itself is kept too**: it
+        # is what makes the next chunk overwrite this frame instead of being
+        # appended to it, and collapsing it away turned three progress frames into
+        # one run-on line.
+        frames = [frame for frame in line.split("\r") if frame]
+        kept.append(
+            (frames[-1] if frames else "") + ("\r" if line.endswith("\r") else "")
+        )
+    return "\n".join(kept)
+
+
 def _make_kernel_manager(python_executable: str, display_name: str):
     """A jupyter_client KernelManager pinned to a specific python, with an
     in-memory kernelspec (no kernelspec files; `interrupt_mode='signal'` so the
@@ -819,7 +857,9 @@ class KernelSession:
                 and outputs[-1].get("output_type") == "stream"
                 and outputs[-1].get("name") == output["name"]
             ):
-                outputs[-1]["text"] += output["text"]
+                outputs[-1]["text"] = collapse_carriage_returns(
+                    outputs[-1]["text"] + output["text"]
+                )
                 stored = outputs[-1]
             else:
                 import nbformat

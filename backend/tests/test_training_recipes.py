@@ -124,6 +124,31 @@ def test_the_local_callback_is_always_installed() -> None:
         assert "callbacks=[ht.callback()]" in code
 
 
+def test_an_eval_split_is_loaded_and_passed_to_the_trainer() -> None:
+    """Training loss falls whether a model is learning or memorising, so a run with
+    no held-out split reports the one number that cannot tell them apart."""
+    recipe = recipes.Recipe(dataset="trl-lib/Capybara", eval_split="test")
+    recipe.values["eval_strategy"] = "steps"
+    code = code_of(recipes.materialize(recipe, intro(sft=all_names("sft"))))
+
+    assert "eval_dataset = load_dataset('trl-lib/Capybara', split='test')" in code
+    assert "eval_dataset=eval_dataset," in code
+    assert "eval_strategy='steps'," in code
+
+
+def test_an_eval_strategy_without_a_split_is_overridden_not_emitted() -> None:
+    """`eval_strategy='steps'` with nothing held out is a config the trainer
+    refuses on construction — the "option that emits a config the trainer rejects"
+    this catalog exists to avoid."""
+    recipe = recipes.Recipe(dataset="trl-lib/Capybara")
+    recipe.values["eval_strategy"] = "steps"
+    code = code_of(recipes.materialize(recipe, intro(sft=all_names("sft"))))
+
+    assert "eval_strategy='steps'," not in code
+    assert "eval_strategy='no',  # no eval split is set" in code
+    assert "eval_dataset" not in code
+
+
 def test_a_lora_recipe_also_saves_a_merged_servable_model() -> None:
     """An adapter GGUF needs `--lora` beside its base, which nothing here serves,
     so the default LoRA path used to end at a file that could not be served."""
@@ -297,6 +322,26 @@ def test_a_lora_adapter_is_not_mistaken_for_a_model(tmp_path, project) -> None:
     assert convert.checkpoint_kind(adapter) == "lora"
     kinds = {c["relPath"]: c["kind"] for c in convert.list_checkpoints(project)}
     assert kinds == {"outputs/full": "model", "outputs/adapter": "lora"}
+
+
+def test_a_checkpoints_size_excludes_the_checkpoints_inside_it(tmp_path, project) -> None:
+    """`outputs/run1` holds the adapter plus every `checkpoint-N/` and the merged
+    model, so the whole-tree size reported a 126 MB adapter as 2.5 GB — beside the
+    nested rows whose bytes it had just counted again."""
+    run = tmp_path / "outputs" / "run1"
+    (run / "checkpoint-50").mkdir(parents=True)
+    (run / "merged").mkdir()
+    (run / "adapter_config.json").write_text("{}")
+    (run / "adapter_model.safetensors").write_bytes(b"x" * 100)
+    (run / "checkpoint-50" / "adapter_config.json").write_text("{}")
+    (run / "checkpoint-50" / "adapter_model.safetensors").write_bytes(b"y" * 900)
+    (run / "merged" / "config.json").write_text("{}")
+    (run / "merged" / "model.safetensors").write_bytes(b"z" * 5000)
+
+    sizes = {c["relPath"]: c["sizeBytes"] for c in convert.list_checkpoints(project)}
+    assert sizes["outputs/run1"] == 102  # its own adapter + the 2-byte json
+    assert sizes["outputs/run1/checkpoint-50"] == 902
+    assert sizes["outputs/run1/merged"] == 5002
 
 
 def test_the_venv_and_caches_are_not_listed_as_checkpoints(tmp_path, project) -> None:

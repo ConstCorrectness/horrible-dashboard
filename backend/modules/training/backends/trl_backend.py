@@ -29,6 +29,7 @@ The tasks and the traps they carry:
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from backend.modules.training.backends.base import (
@@ -118,8 +119,64 @@ _COMMON: tuple[RecipeField, ...] = (
         "Epochs",
         "float",
         1.0,
-        "Passes over the dataset.",
+        "Passes over the dataset. Ignored when max steps is set.",
         "optimization",
+    ),
+    RecipeField(
+        "max_steps",
+        "config",
+        "Max steps",
+        "int",
+        -1,
+        "Stop after this many optimizer steps, whatever the epochs say. -1 runs "
+        "the epochs. The knob for a trial run: a first fine-tune wants fifty steps "
+        "to prove the pipeline, not a pass over 15,000 examples.",
+        "optimization",
+    ),
+    # Evaluation. `eval_strategy` was `evaluation_strategy` before transformers 4.46,
+    # and these ARE the same field under two spellings — unlike warmup_ratio/steps,
+    # which are different units — so the alias resolves whichever the venv accepts.
+    RecipeField(
+        "eval_strategy",
+        "config",
+        "Evaluate",
+        "select",
+        "no",
+        "When to score the held-out split. Needs an eval split; without one there "
+        "is nothing to evaluate and the trainer refuses to start.",
+        "evaluation",
+        options=("no", "steps", "epoch"),
+        aliases=("evaluation_strategy",),
+    ),
+    RecipeField(
+        "eval_steps",
+        "config",
+        "Evaluate every",
+        "int",
+        50,
+        "Steps between evaluations, when evaluating by steps.",
+        "evaluation",
+    ),
+    RecipeField(
+        "per_device_eval_batch_size",
+        "config",
+        "Eval batch size",
+        "int",
+        1,
+        "Examples per evaluation step per GPU. Evaluation has no backward pass, so "
+        "this can usually be larger than the training batch.",
+        "evaluation",
+    ),
+    RecipeField(
+        "dataset_num_proc",
+        "config",
+        "Dataset workers",
+        "int",
+        1,
+        "Processes that tokenize the dataset before training starts. 1 is a single "
+        "core — 15,000 short conversations took two minutes there, before a step "
+        "had run. Raise it to roughly your core count.",
+        "data",
     ),
     RecipeField(
         "per_device_train_batch_size",
@@ -540,7 +597,16 @@ class TrlBackend:
         ]
         if recipe.use_lora:
             imports.append("from peft import LoraConfig")
-        imports += ["", R.dataset_call(resolved), "dataset"]
+        imports += ["", R.dataset_call(resolved)]
+        # The held-out split is loaded the same way — same ref, same loader, same
+        # local-file handling — so an eval set cannot be read differently from the
+        # data it is held out of.
+        if recipe.eval_split:
+            held_out = replace(resolved, split=recipe.eval_split)
+            imports.append(
+                R.dataset_call(held_out).replace("dataset = ", "eval_dataset = ", 1)
+            )
+        imports.append("dataset")
         cells.append(code("\n".join(imports)))
 
         if reshape:
@@ -556,6 +622,20 @@ class TrlBackend:
             # and is left implicit. The preference trainers read `chosen`/
             # `rejected` by convention and take no text-field argument at all.
             config.append(f"    dataset_text_field={literal(field_name)},")
+        if not recipe.eval_split:
+            # A strategy with nothing held out is a config the trainer rejects on
+            # construction, which is precisely the "option that emits a config the
+            # trainer refuses" this catalog exists to avoid. Overridden rather than
+            # dropped, so the cell states there is no eval instead of carrying a
+            # setting that does not describe the run.
+            config = [
+                line
+                for line in config
+                if not line.strip().startswith(
+                    ("eval_strategy=", "evaluation_strategy=")
+                )
+            ]
+            config.append("    eval_strategy='no',  # no eval split is set")
         config.append(f"    report_to={literal(R.report_to(recipe))},")
         config.append(")")
         cells.append(code("\n".join(config)))
@@ -584,8 +664,10 @@ class TrlBackend:
             f"trainer = {trainer_class}(",
             f"    model={literal(recipe.base_model)},",
             "    train_dataset=dataset,",
-            "    args=config,",
         ]
+        if recipe.eval_split:
+            trainer.append("    eval_dataset=eval_dataset,")
+        trainer.append("    args=config,")
         if task == "grpo":
             trainer.append("    reward_funcs=[reward_length],")
         if recipe.use_lora:

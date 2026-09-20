@@ -126,12 +126,25 @@ def list_checkpoints(project: ProjectModel) -> list[dict[str, Any]]:
     return found
 
 
+def _is_checkpoint(path: Path) -> bool:
+    return (path / "config.json").is_file() or (path / "adapter_config.json").is_file()
+
+
 def _dir_size(path: Path) -> int:
+    """Bytes belonging to this checkpoint, **excluding nested checkpoints**.
+
+    `outputs/run1` holds the adapter plus every `checkpoint-N/` and (for a LoRA
+    recipe) the merged model, so counting the whole tree reported a 126 MB adapter
+    as 2.5 GB — a figure no single conversion would ever read, listed beside the
+    nested checkpoints whose bytes it had just counted again.
+    """
     total = 0
-    for item in path.rglob("*"):
-        if item.is_file():
+    for dirpath, dirnames, filenames in os.walk(path):
+        here = Path(dirpath)
+        dirnames[:] = [d for d in dirnames if not _is_checkpoint(here / d)]
+        for name in filenames:
             try:
-                total += item.stat().st_size
+                total += (here / name).stat().st_size
             except OSError:
                 pass
     return total
@@ -391,27 +404,11 @@ async def run_conversion(
 
 
 def _recipe_snapshot(project: ProjectModel) -> dict[str, Any]:
-    """The recipe as it stood at conversion time.
+    """The recipe at conversion time — `recipes.snapshot`, shared with the tracker
+    so a lineage row and a tracked run cannot disagree about what a recipe was."""
+    from backend.modules.training import recipes
 
-    A snapshot rather than a pointer to `recipe.json`: that file keeps changing as
-    the user tunes the next run, and a lineage row saying "trained with lr=2e-4"
-    must keep meaning that after they try 1e-4. Best-effort — a project whose
-    recipe was never saved converts perfectly well.
-    """
-    try:
-        from backend.modules.training.recipes import load_recipe
-
-        recipe = load_recipe(project)
-        return {
-            "baseModel": recipe.base_model,
-            "dataset": recipe.dataset,
-            "datasetSplit": recipe.dataset_split,
-            "useLora": recipe.use_lora,
-            "values": dict(recipe.values),
-        }
-    except Exception:  # noqa: BLE001 — provenance detail, never a conversion failure
-        logger.debug("training: no recipe snapshot for %s", project.id, exc_info=True)
-        return {}
+    return recipes.snapshot(project)
 
 
 #: What the converter imports beyond what a training venv already has. `gguf` is
