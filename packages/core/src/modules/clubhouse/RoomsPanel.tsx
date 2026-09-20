@@ -1547,6 +1547,30 @@ export function RoomsPanel() {
 
   const REACTIONS = ['❤️', '😂', '👍', '🙌', '👏', '🔥'];
 
+  /**
+   * The network inspector, built once and rendered in **both** views.
+   *
+   * This pane returns from two places — the room view below, and the lobby at the
+   * bottom — and the modal used to be mounted only in the lobby's tree, while both
+   * buttons that open it (📡 Network Insights in the room header, and Inspect in the
+   * Agent panel) live in the room view. So in a room the click set the flag, the
+   * button lit up as active, and nothing rendered: the state was true in a branch
+   * that had no modal in it. It is the room you actually want it in, since that is
+   * where there is a peer connection to inspect.
+   *
+   * Kept as one element rather than two copies of the JSX so the two mounts cannot
+   * drift; React unmounts and remounts it when the view switches, which costs
+   * nothing here — the modal holds no state but a poll of `getInsights`.
+   */
+  const networkModal = (
+    <MediaInsightsModal
+      isOpen={showNetworkModal}
+      onClose={() => setShowNetworkModal(false)}
+      getInsights={getNetworkInsights}
+      channelName={activeChannel}
+    />
+  );
+
   // Render the Dedicated Room View when joined
   if (joined && activeChannel) {
     const currentRoom = channels.find((ch) => ch.channel === activeChannel) || activeRoomInfo;
@@ -2991,7 +3015,14 @@ export function RoomsPanel() {
                   ? '1px solid rgba(56, 189, 248, 0.4)'
                   : '1px solid transparent',
               }}
-              onClick={() => setShowNetworkModal(true)}
+              // A toggle rather than a one-way latch, because the button renders an
+              // active state and a control that shows "on" must be able to go off.
+              // In practice the modal's own backdrop (z-index 9999, above everything
+              // else in this pane) takes the click first, so it is usually closed
+              // from the ✕ or the backdrop; this keeps the two in agreement instead
+              // of leaving a latch that can only ever set.
+              onClick={() => setShowNetworkModal((open) => !open)}
+              aria-pressed={showNetworkModal}
               title="Inspect WebRTC, Agora UDP, PubNub WSS, protocols and IP domains"
             >
               📡 Network Insights
@@ -3422,6 +3453,46 @@ export function RoomsPanel() {
                     </button>
                   </div>
                 )}
+
+                {/*
+                 * The transport inspector, outside both agent branches on purpose.
+                 *
+                 * It used to live deep inside `{agentEnabled && (…)}`, so with the
+                 * voice agent paused — the state this panel opens in — the row did
+                 * not exist and the button people were told to click was simply not
+                 * on the page. Nothing about UDP, PubNub or Agora depends on whether
+                 * the agent is running; gating a transport readout on an unrelated
+                 * feature being switched on is the same mistake as gating the lobby's
+                 * opener on `state === 'ready'`.
+                 */}
+                <div
+                  style={{
+                    background: 'rgba(0,0,0,0.2)',
+                    borderRadius: '8px',
+                    padding: '0.6rem 0.8rem',
+                    border: '1px solid rgba(255,255,255,0.05)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                  }}
+                >
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                    <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#38bdf8' }}>
+                      📡 Protocols & Media Telemetry
+                    </span>
+                    <span style={{ fontSize: '0.65rem', color: '#94a3b8' }}>
+                      UDP/Opus • PubNub WSS • Agora RTN
+                    </span>
+                  </div>
+                  <button
+                    className="ch-btn-action"
+                    style={{ padding: '0.25rem 0.6rem', fontSize: '0.68rem' }}
+                    onClick={() => setShowNetworkModal((open) => !open)}
+                    aria-pressed={showNetworkModal}
+                  >
+                    Inspect
+                  </button>
+                </div>
 
                 {agentEnabled && (
                   <div
@@ -4595,35 +4666,6 @@ export function RoomsPanel() {
                         </span>
                       </div>
 
-                      {/* Compact Media Telemetry & Protocol Summary Card */}
-                      <div
-                        style={{
-                          background: 'rgba(0,0,0,0.2)',
-                          borderRadius: '8px',
-                          padding: '0.6rem 0.8rem',
-                          border: '1px solid rgba(255,255,255,0.05)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          marginTop: '0.4rem',
-                        }}
-                      >
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                          <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#38bdf8' }}>
-                            📡 Protocols & Media Telemetry
-                          </span>
-                          <span style={{ fontSize: '0.65rem', color: '#94a3b8' }}>
-                            UDP/Opus • PubNub WSS • Agora RTN
-                          </span>
-                        </div>
-                        <button
-                          className="ch-btn-action"
-                          style={{ padding: '0.25rem 0.6rem', fontSize: '0.68rem' }}
-                          onClick={() => setShowNetworkModal(true)}
-                        >
-                          Inspect
-                        </button>
-                      </div>
                     </div>
 
                     <div
@@ -4949,6 +4991,7 @@ export function RoomsPanel() {
             </div>
           </div>
         )}
+        {networkModal}
       </div>
     );
   }
@@ -4980,6 +5023,42 @@ export function RoomsPanel() {
               <span>+ Start Room</span>
             </button>
           )}
+          {/*
+           * The inspector is reachable from the lobby too, not only from inside a
+           * room. It reports the signalling and transport state either way — with no
+           * room joined that reads DISCONNECTED with zeroed counters, which is a real
+           * answer and the one you want when a join is what failed. Without this the
+           * only two openers were in the room view, so the modal could not be summoned
+           * from the one place you end up when a room will not open.
+           *
+           * Deliberately **ungated** — not `state === 'ready'` like the controls
+           * around it. Verified in the pane: with Clubhouse's edge returning its
+           * intermittent 503 on the room feed, the lobby renders the error and the
+           * `ready` gate removed this button, so the inspector disappeared in the one
+           * state it exists to explain. A diagnostic that is only available when
+           * nothing is wrong is not a diagnostic.
+           */}
+          <button
+            className="ch-btn-action"
+            style={{
+              padding: '0.4rem 0.8rem',
+              borderRadius: '20px',
+              fontSize: '0.75rem',
+              fontWeight: 600,
+              background: showNetworkModal
+                ? 'rgba(56, 189, 248, 0.2)'
+                : 'rgba(255, 255, 255, 0.05)',
+              color: showNetworkModal ? '#38bdf8' : '#94a3b8',
+              border: showNetworkModal
+                ? '1px solid rgba(56, 189, 248, 0.4)'
+                : '1px solid transparent',
+            }}
+            onClick={() => setShowNetworkModal((open) => !open)}
+            aria-pressed={showNetworkModal}
+            title="Inspect WebRTC, Agora UDP, PubNub WSS, protocols and IP domains"
+          >
+            📡 Network
+          </button>
           {state === 'ready' && activeTab === 'rooms' && (
             <div className="ch-search-container">
               <span className="ch-search-icon">
@@ -5349,12 +5428,7 @@ export function RoomsPanel() {
         </div>
       )}
 
-      <MediaInsightsModal
-        isOpen={showNetworkModal}
-        onClose={() => setShowNetworkModal(false)}
-        getInsights={getNetworkInsights}
-        channelName={activeChannel}
-      />
+      {networkModal}
 
       {showStartRoomModal && (
         <div className="ch-modal-overlay" onClick={() => setShowStartRoomModal(false)}>

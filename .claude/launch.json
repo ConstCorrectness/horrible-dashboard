@@ -17,7 +17,10 @@
         "dev:web"
       ],
       "port": 5173,
-      "autoPort": true
+      "autoPort": true,
+      "env": {
+        "HORRIBLE_DEV_BACKEND_PORT": "8100"
+      }
     },
     {
       "name": "backend",

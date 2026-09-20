@@ -198,6 +198,43 @@ every upstream error, so it is deliberately narrow: "Less is more! Please wait a
 "A moderator moved you to the audience" and "cannot send message" must pass through
 untouched, and a test pins that.
 
+### The network inspector opens from anywhere
+
+The pane returns from **two places** — the room view (`if (joined && activeChannel)`)
+and the lobby below it — and `MediaInsightsModal` was mounted only in the lobby's
+tree, while both buttons that open it (📡 Network Insights in the room header, and
+Inspect in the Agent panel) live in the room view. So in a room the click set the
+flag, the button lit up as active, and nothing rendered: the state was true in a
+branch with no modal in it. It is also the branch you actually want it in, since that
+is where there is a peer connection to inspect.
+
+The element is now built **once** (`networkModal`) above the branch and rendered in
+both trees, so the two mounts cannot drift, and the openers **toggle** rather than
+latch — a control that renders an "on" state has to be able to go off.
+
+A third opener was added to the **lobby header**, deliberately outside the
+`state === 'ready'` gate that its neighbours sit behind. That gate was there at first
+and the pane disproved it within a minute: when Clubhouse's edge returned its
+intermittent 503 on the room feed, the lobby rendered the error with only Refresh
+beside it and the inspector vanished — in the one state it exists to explain. A
+diagnostic available only when nothing is wrong is not a diagnostic. With no room
+joined it reports `DISCONNECTED / IDLE`, `Channel: None`, which is a real answer and
+the one you want when a join is what failed.
+
+The **Agent panel's Inspect row** had the same shape of fault one level down: the
+"📡 Protocols & Media Telemetry" card sat deep inside `{agentEnabled && (…)}`, so with
+the voice agent paused — the state the panel opens in — the row did not exist and the
+button was simply not on the page. Nothing about UDP, PubNub or Agora depends on
+whether the agent is running, so it is hoisted out of both agent branches.
+
+Three source-level guards pin all of it (`networkModal-mounts.test.ts`): the element
+is built once, it is mounted in both trees, and neither opener sits behind an
+unrelated gate. They are asserted against the file rather than a render because this
+pane is ~5000 lines behind a live Clubhouse session, an Agora client and a PubNub
+socket — mounting it in jsdom would test the mocks, while what broke here was purely
+*where an element sits between two returns*. Each guard was checked by reintroducing
+the bug and watching it fail.
+
 ### A mute the room never heard about
 
 `toggleMute` sets a local gain and *then* tells Clubhouse, and the second half used to
