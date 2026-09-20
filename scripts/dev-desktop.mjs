@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import { existsSync } from 'fs';
 
 // Load .env if it exists so we inherit any local credentials/config, exactly as
@@ -34,6 +34,21 @@ const host =
 // pnpm is a `.cmd` shim on Windows, which `spawn` can't exec directly — go through
 // a shell there. (POSIX resolves it off PATH without one.)
 const useShell = process.platform === 'win32';
+
+// Keep backend dependencies up-to-date with pyproject.toml
+if (existsSync('pyproject.toml')) {
+  try {
+    const uvResult = spawnSync('uv', ['sync'], {
+      stdio: 'inherit',
+      shell: useShell,
+    });
+    if (uvResult.error && uvResult.error.code !== 'ENOENT') {
+      console.warn('⚠️ Failed to run uv sync:', uvResult.error);
+    }
+  } catch (e) {
+    console.warn('⚠️ Could not run uv sync:', e);
+  }
+}
 
 console.log(
   host === '127.0.0.1'

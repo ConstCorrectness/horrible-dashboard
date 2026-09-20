@@ -274,11 +274,27 @@ fn run(sup: Arc<BackendSupervisor>, resource_dir: Option<PathBuf>) {
         // Recycle whatever is left (a never-ready process is still running).
         sup.kill_child();
 
-        if started.elapsed() < FAST_FAILURE_WINDOW {
-            fast_failures += 1;
-        } else {
+        // Only reset the failure counter if the server was ACTUALLY ready and serving
+        // for longer than FAST_FAILURE_WINDOW. If it never became ready, or died quickly,
+        // it counts as a failure.
+        if ready && started.elapsed() >= FAST_FAILURE_WINDOW {
             fast_failures = 1;
+        } else {
+            fast_failures += 1;
         }
+
+        if !ready && fast_failures == 1 {
+            // If the first startup attempt failed in checkout mode, run `uv sync`
+            // to repair any missing or out-of-date dependencies in `.venv` before retrying.
+            if let Runtime::Checkout(root) = &runtime {
+                eprintln!("[desktop] backend failed to become ready, running `uv sync` to ensure dependencies are installed...");
+                let _ = Command::new("uv")
+                    .arg("sync")
+                    .current_dir(root)
+                    .status();
+            }
+        }
+
         if fast_failures >= MAX_FAST_FAILURES {
             let tail = stderr_tail
                 .lock()
@@ -288,10 +304,11 @@ fn run(sup: Arc<BackendSupervisor>, resource_dir: Option<PathBuf>) {
                 .collect::<Vec<_>>()
                 .join("\n");
             let error = if tail.is_empty() {
-                "backend exited repeatedly".to_string()
+                "backend exited repeatedly without becoming ready".to_string()
             } else {
                 tail
             };
+            eprintln!("[desktop] backend supervisor gave up after {MAX_FAST_FAILURES} failed attempts:\n{error}");
             sup.set_status("failed", None, Some(error));
             return;
         }
