@@ -70,11 +70,15 @@ export function GameMenu(props: GameMenuProps) {
   const [tab, setTab] = useState<MenuTab>('settings');
 
   return (
-    <div style={styles.backdrop} onClick={(e) => e.stopPropagation()}>
-      <div style={styles.sheet}>
+    <div
+      style={styles.backdrop}
+      onClick={props.onResume}
+      title="Click outside to resume game"
+    >
+      <div style={styles.sheet} onClick={(e) => e.stopPropagation()}>
         <div style={styles.header}>
           <strong style={{ letterSpacing: '0.14em', fontSize: '0.95rem' }}>PAUSED</strong>
-          <div style={{ display: 'flex', gap: '0.35rem', marginLeft: '0.6rem' }}>
+          <div style={{ display: 'flex', gap: '0.35rem', marginLeft: '0.6rem', flexWrap: 'wrap' }}>
             {props.onOpenStudio && (
               <button
                 type="button"
@@ -117,8 +121,13 @@ export function GameMenu(props: GameMenuProps) {
               </button>
             ))}
           </div>
-          <button onClick={props.onResume} style={styles.resume}>
-            Resume
+          <button
+            type="button"
+            onClick={props.onResume}
+            style={styles.resume}
+            title="Resume game (Esc or click outside)"
+          >
+            ▶ Resume
           </button>
         </div>
 
@@ -151,12 +160,17 @@ export function GameMenu(props: GameMenuProps) {
         </div>
 
         <div style={styles.footer}>
-          Esc resumes · hold Esc to give the mouse back to the app
-          <span style={{ marginLeft: 'auto', display: 'flex', gap: '0.4rem' }}>
+          <span>Esc or click outside to resume · hold Esc to give mouse back to app</span>
+          <span style={{ marginLeft: 'auto', display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+            <button
+              type="button"
+              onClick={props.onResume}
+              style={styles.resumeFooter}
+              title="Resume game"
+            >
+              ▶ Resume Game
+            </button>
             {props.online && <button onClick={props.onLeave}>Leave match</button>}
-            {/* The way out that is not "close the pane". Leaving the match is part
-                of it: the main menu is not a place you can be while a server is
-                still simulating you. */}
             <button onClick={props.onExitToMenu}>Exit to menu</button>
           </span>
         </div>
@@ -174,12 +188,13 @@ const styles: Record<string, React.CSSProperties> = {
   backdrop: {
     position: 'absolute',
     inset: 0,
-    zIndex: 5,
+    zIndex: 60,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     background: 'rgba(8,10,14,0.78)',
     backdropFilter: 'blur(2px)',
+    cursor: 'pointer',
   },
   sheet: {
     width: 'min(700px, 92%)',
@@ -192,15 +207,17 @@ const styles: Record<string, React.CSSProperties> = {
     color: 'var(--text)',
     fontSize: '0.82rem',
     boxShadow: '0 18px 50px rgba(0,0,0,0.5)',
+    cursor: 'default',
   },
   header: {
     display: 'flex',
     alignItems: 'center',
-    gap: '0.6rem',
+    flexWrap: 'wrap',
+    gap: '0.5rem',
     padding: '0.6rem 0.8rem',
     borderBottom: '1px solid var(--border, #2a2a2a)',
   },
-  tabs: { display: 'flex', gap: '0.25rem', marginLeft: 'auto' },
+  tabs: { display: 'flex', gap: '0.25rem', marginLeft: 'auto', flexWrap: 'wrap' },
   tab: {
     background: 'transparent',
     border: '1px solid transparent',
@@ -215,7 +232,35 @@ const styles: Record<string, React.CSSProperties> = {
     border: '1px solid var(--accent, #6ea8fe)',
     color: 'var(--text)',
   },
-  resume: { marginLeft: '0.4rem' },
+  resume: {
+    marginLeft: '0.4rem',
+    flexShrink: 0,
+    background: 'var(--accent, #6ea8fe)',
+    color: '#ffffff',
+    border: 'none',
+    padding: '0.3rem 0.85rem',
+    borderRadius: 5,
+    fontWeight: 700,
+    cursor: 'pointer',
+    fontSize: '0.82rem',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '0.35rem',
+    boxShadow: '0 2px 8px rgba(110, 168, 254, 0.35)',
+  },
+  resumeFooter: {
+    background: 'var(--accent, #6ea8fe)',
+    color: '#ffffff',
+    border: 'none',
+    padding: '0.3rem 0.85rem',
+    borderRadius: 5,
+    fontWeight: 700,
+    cursor: 'pointer',
+    fontSize: '0.78rem',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '0.35rem',
+  },
   body: { padding: '0.7rem 0.8rem', overflowY: 'auto', minHeight: 0 },
   footer: {
     display: 'flex',

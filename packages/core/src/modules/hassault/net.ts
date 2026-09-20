@@ -652,6 +652,9 @@ export interface ModeShared {
   drops?: ModeDrop[];
   flags?: ModeFlag[];
   over?: boolean;
+  remain?: number;
+  bombPlanted?: boolean;
+  site?: number;
 }
 
 /**

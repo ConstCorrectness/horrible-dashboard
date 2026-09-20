@@ -2484,16 +2484,26 @@ export function HorribleAssaultPanel() {
   const grabInput = useCallback(() => {
     if (!acceptsGameInput(phaseRef.current)) return;
     const canvas = mountRef.current?.querySelector('canvas');
-    // `unadjustedMovement` is the real "raw input" of the CS settings menu: it
-    // takes movement before the OS applies pointer acceleration, so aim is a
-    // function of how far the mouse moved and nothing else. Chromium returns a
-    // promise here and rejects where it is unsupported — the plain call is the
-    // fallback, because an accelerated pointer beats no pointer lock at all.
-    const locked = canvas?.requestPointerLock({ unadjustedMovement: true }) as
-      | Promise<void>
-      | undefined;
-    if (locked && typeof locked.catch === 'function') {
-      locked.catch(() => canvas?.requestPointerLock());
+    if (canvas) {
+      try {
+        const locked = canvas.requestPointerLock({ unadjustedMovement: true }) as
+          | Promise<void>
+          | undefined;
+        if (locked && typeof locked.catch === 'function') {
+          locked.catch(() => {
+            try {
+              canvas.requestPointerLock();
+            } catch {}
+          });
+        }
+      } catch {
+        try {
+          canvas.requestPointerLock();
+        } catch {}
+      }
+      try {
+        canvas.focus();
+      } catch {}
     }
     requestCapture();
     // Take as much of the keyboard as this host allows. Degrades to the
@@ -2502,12 +2512,18 @@ export function HorribleAssaultPanel() {
     void lockSystemKeys();
   }, [requestCapture]);
 
-  const onCanvasClick = useCallback(() => {
-    // A click while the menu is up is a click *on* the menu that fell through
-    // somewhere it shouldn't have; it must not silently re-grab the pointer.
-    if (menuOpenRef.current) return;
+  const resumeGame = useCallback(() => {
+    setMenuOpen(false);
     grabInput();
   }, [grabInput]);
+
+  const onCanvasClick = useCallback(() => {
+    if (menuOpenRef.current) {
+      resumeGame();
+      return;
+    }
+    grabInput();
+  }, [grabInput, resumeGame]);
 
   /**
    * Open the pause menu, giving the mouse and keyboard back so it can be used.
@@ -2529,11 +2545,6 @@ export function HorribleAssaultPanel() {
     if (document.pointerLockElement) document.exitPointerLock();
     releaseCapture();
   }, [releaseCapture]);
-
-  const resumeGame = useCallback(() => {
-    setMenuOpen(false);
-    grabInput();
-  }, [grabInput]);
 
   useEffect(() => {
     const el = mountRef.current;

@@ -502,7 +502,7 @@ export function inspectTurn(t: number): number {
 
 export class WeaponViewModel {
   /** The pivot everything hangs off: animation moves this, never the model. */
-  private readonly pivot: THREE.Group;
+  public readonly pivot: THREE.Group;
   private built: Built | null = null;
   private weaponId = '';
   /** The skin the current model was built with, so a change of skin rebuilds it
@@ -1702,7 +1702,7 @@ export class WeaponViewModel {
    * while one that narrows tells you which end the round leaves from before you
    * find the sights.
    */
-  private cone(
+  protected cone(
     radius: number,
     far: number,
     length: number,

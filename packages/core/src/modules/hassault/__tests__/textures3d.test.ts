@@ -3,12 +3,7 @@ import * as THREE from 'three';
 import {
   drawAsphaltTile,
   drawMarbleTile,
-  drawConcreteTile,
-  drawVaultSteelTile,
   drawHazardTile,
-  drawWoodTile,
-  drawTacticalCrateTile,
-  drawContainerTile,
   drawSiteDecalTile,
   createPBRMaterialLibrary,
 } from '../textures3d';
