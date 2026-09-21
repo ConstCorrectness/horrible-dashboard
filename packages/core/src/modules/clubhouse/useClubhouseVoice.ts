@@ -35,6 +35,18 @@ import {
 
 const CLUBCARD_AGORA_APP_ID = '938d7e95aeaa4f4ca1f416ab40a498d9';
 
+/**
+ * The level (mean of `getByteFrequencyData`, 0-255) above which the VAD calls it
+ * speech, and the higher one at which a human talking over the agent cuts it off.
+ *
+ * Named rather than inline because the pane now *draws* this line on its input
+ * meter: a threshold the operator cannot see is the difference between "the room is
+ * quiet" and "the room is loud enough for me but not for the switch", and those look
+ * identical from a transcript panel that never fills in.
+ */
+const SPEECH_LEVEL = 12;
+const BARGE_IN_LEVEL = 22;
+
 /** Mixer strip the agent's room music is monitored through. */
 const MUSIC_STRIP = 'clubhouse-music';
 /** Room music starts below full scale: it is background to a conversation. */
@@ -301,12 +313,31 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       session.rtcClient = client;
 
       // Helper to route remote audio stream track to agent's STT
+      /*
+       * Tracks already wired into `sttDest`, by track id.
+       *
+       * Two paths reach here for the same speaker — the join-time sweep above and the
+       * `user-published` event — and without this a track connected twice is summed
+       * twice into the destination. That inflates the level the VAD decides on *and*
+       * the track count the pane now reports, so the meter built to diagnose silence
+       * would itself start lying.
+       */
+      const wiredTracks = new Set<string>();
       const connectRemoteAudioTrackToStt = (track: MediaStreamTrack) => {
+        if (wiredTracks.has(track.id)) return;
+        wiredTracks.add(track.id);
         try {
           const stream = new MediaStream([track]);
           const source = audioCtx.createMediaStreamSource(stream);
           source.connect(sttDest);
+          // Counted so the pane can say "nobody's audio is reaching me" rather than
+          // "listening…". Zero here with people plainly talking is a different bug
+          // from a level that never crosses the threshold, and they are
+          // indistinguishable from the transcript panel alone.
+          session.earsTracks++;
         } catch (e) {
+          // Not wired after all, so let a later attempt try again.
+          wiredTracks.delete(track.id);
           console.warn('Failed to route remote audio track to STT destination:', e);
         }
       };
@@ -336,12 +367,37 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         chDetails.user_id ?? undefined,
       );
 
-      // Connect any remote audio tracks from users already in the room
-      for (const remoteUser of client.remoteUsers) {
-        if (remoteUser.hasAudio && remoteUser.audioTrack) {
-          connectRemoteAudioTrackToStt(remoteUser.audioTrack.getMediaStreamTrack());
-        }
-      }
+      /*
+       * Wire up everyone who was already talking when we walked in.
+       *
+       * This has to **subscribe** first. `remoteUser.audioTrack` is only populated
+       * by `client.subscribe()`, so straight after `join()` it is undefined for every
+       * user in the room — the old version of this loop tested `remoteUser.audioTrack`
+       * and therefore connected nothing, ever. It read like a safety net while being
+       * a no-op, which left the agent's hearing depending entirely on `user-published`
+       * firing after the join.
+       *
+       * That is the difference between joining an empty room (someone publishes later,
+       * the event fires, it works) and switching into a room where eight people are
+       * already mid-conversation. Symptom: a transcript panel that never fills in.
+       *
+       * Failures are per-user: one speaker we cannot subscribe to must not cost us
+       * the other seven.
+       */
+      await Promise.all(
+        client.remoteUsers.map(async (remoteUser) => {
+          if (!remoteUser.hasAudio) return;
+          try {
+            await client.subscribe(remoteUser, 'audio');
+            const track = remoteUser.audioTrack;
+            if (!track) return;
+            track.play();
+            connectRemoteAudioTrackToStt(track.getMediaStreamTrack());
+          } catch (err) {
+            console.warn(`Could not subscribe to ${remoteUser.uid}'s audio:`, err);
+          }
+        }),
+      );
 
       // Start STT Recorder with VAD
       try {
@@ -511,10 +567,13 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
           let sum = 0;
           for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
           const avgVolume = sum / dataArray.length;
+          // The VAD's own decision variable, exposed for the pane's meter. Written
+          // as a plain field at 50 Hz; the pane pulls it on its own timer.
+          session.earsLevel = avgVolume;
 
           // Barge-in: Stop agent if it's currently speaking and human is speaking loudly and clearly
           if (session.isAgentSpeaking) {
-            if (avgVolume > 22) {
+            if (avgVolume > BARGE_IN_LEVEL) {
               bargeInTicks++;
               if (bargeInTicks >= 3 && propsRef.current?.allowBargeIn !== false) {
                 console.log('BARGE-IN DETECTED! Stopping agent audio.');
@@ -542,7 +601,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
             bargeInTicks = 0;
           }
 
-          if (avgVolume > 12) {
+          if (avgVolume > SPEECH_LEVEL) {
             hasSpeechInChunk = true;
             idleSilenceTicks = 0;
 
@@ -1359,6 +1418,26 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     [session, reportVoiceError],
   );
 
+  /**
+   * What the agent's ears are doing *right now*.
+   *
+   * Pulled on the pane's own timer rather than pushed into React state: the VAD
+   * writes `earsLevel` fifty times a second, and putting that through `patch` would
+   * re-render the whole pane at 50 Hz. Same shape as `getNetworkInsights`.
+   */
+  const getEarsHealth = useCallback(
+    (): EarsHealth => ({
+      level: session.earsLevel,
+      speechLevel: SPEECH_LEVEL,
+      tracksConnected: session.earsTracks,
+      recorderState: session.sttRecorder?.state ?? null,
+      contextState: session.audioCtx?.state ?? null,
+      restarts: session.earsRestarts,
+      lastHeardAt: session.lastHeardAt,
+    }),
+    [session],
+  );
+
   const getNetworkInsights = useCallback((): MediaNetworkInsights => {
     let rtt = 0;
     let sendBps = 0;
@@ -1452,7 +1531,25 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     sendReaction,
     seedLiveUsers,
     getNetworkInsights,
+    getEarsHealth,
   };
+}
+
+/** A live read of the agent's hearing path, for the pane's STT card. */
+export interface EarsHealth {
+  /** The VAD's decision variable: mean frequency-bin energy, 0-255. */
+  level: number;
+  /** The line it must cross to count as speech. */
+  speechLevel: number;
+  /** Remote audio tracks wired into the agent's ears this room. */
+  tracksConnected: number;
+  /** `null` means no recorder exists — the watchdog rebuilds one within 2s. */
+  recorderState: RecordingState | null;
+  contextState: AudioContextState | null;
+  /** Times the watchdog has had to rebuild the recorder this room. */
+  restarts: number;
+  /** `Date.now()` of the last transcript the server accepted; 0 if never. */
+  lastHeardAt: number;
 }
 
 export interface MediaNetworkInsights {

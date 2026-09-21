@@ -141,6 +141,19 @@ export class ClubhouseRoomSession {
   earsRestarts = 0;
   /** When a transcript chunk was last accepted by the server, for the same chip. */
   lastHeardAt = 0;
+  /**
+   * The level the VAD is actually deciding on, and how many remote tracks are wired
+   * into the agent's ears. Plain fields, written by the 50 Hz VAD loop and *pulled*
+   * by the pane — never pushed through `patch`, which would re-render a 5000-line
+   * pane twenty times a second.
+   *
+   * These exist because "Microphone listening for room audio…" is unfalsifiable: it
+   * says the same thing when the room is quiet, when nobody's audio ever reached the
+   * agent, and when the threshold is simply never crossed. The level and the track
+   * count tell those three apart.
+   */
+  earsLevel = 0;
+  earsTracks = 0;
 
   // --- agent audio ---
   agentAudioSource: AudioBufferSourceNode | null = null;
@@ -353,6 +366,8 @@ export class ClubhouseRoomSession {
     this.restartEars = null;
     this.earsRestarts = 0;
     this.lastHeardAt = 0;
+    this.earsLevel = 0;
+    this.earsTracks = 0;
     // A song must not keep playing into a room you left, or into the next one.
     this.stopMusic();
     if (this.localAudioTrack) {

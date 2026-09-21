@@ -39,7 +39,7 @@ import {
 } from './api';
 import { bindClubhouse } from './actions';
 import { MediaInsightsModal } from './MediaInsightsModal';
-import { useClubhouseVoice } from './useClubhouseVoice';
+import { useClubhouseVoice, type EarsHealth } from './useClubhouseVoice';
 import {
   chatSpeakerLabel,
   DEFAULT_VOICE_CONFIG,
@@ -72,6 +72,112 @@ const agentLabelStyle: React.CSSProperties = {
   color: '#94a3b8',
   fontWeight: 600,
 };
+
+/**
+ * What the agent's ears are doing, under the transcript.
+ *
+ * The panel it replaces said "Microphone listening for room audio…" and meant three
+ * different things by it: the room is quiet, nobody's audio ever reached the agent,
+ * or the level is crossing no threshold. Those need different fixes and looked
+ * identical, which is why "it just stops hearing" was unactionable.
+ *
+ * So this shows the VAD's own decision variable with the line it has to cross drawn
+ * on it, plus the things that are either true or not: how many remote tracks are
+ * wired in, whether a recorder exists, whether the context is running. Polled at
+ * 4 Hz — the VAD writes its level fifty times a second, and pushing that through
+ * React would re-render this pane at 50 Hz.
+ */
+function EarsReadout({
+  getHealth,
+  hasHeard,
+}: {
+  getHealth: () => EarsHealth;
+  hasHeard: boolean;
+}) {
+  const [h, setH] = useState<EarsHealth>(getHealth);
+  useEffect(() => {
+    const interval = setInterval(() => setH(getHealth()), 250);
+    return () => clearInterval(interval);
+  }, [getHealth]);
+
+  // The one reading that is always wrong, in priority order. Nothing wired in beats
+  // a dead recorder beats a suspended context: each makes the next unknowable.
+  const fault =
+    h.tracksConnected === 0
+      ? 'No room audio is reaching the agent — nobody is publishing, or the subscribe failed.'
+      : h.recorderState === null
+        ? 'The recorder is down; rebuilding it.'
+        : h.contextState !== 'running'
+          ? `Audio is ${h.contextState ?? 'unavailable'} — the browser suspended it.`
+          : null;
+
+  const pct = Math.min(100, (h.level / 40) * 100);
+  const thresholdPct = Math.min(100, (h.speechLevel / 40) * 100);
+  const over = h.level > h.speechLevel;
+  const secsSinceHeard = h.lastHeardAt ? Math.round((Date.now() - h.lastHeardAt) / 1000) : null;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '2px' }}>
+      {!hasHeard && !fault && (
+        <span style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '0.7rem' }}>
+          {over ? 'Hearing the room — transcribing…' : 'Listening. Nothing above the speech line yet.'}
+        </span>
+      )}
+      {fault && (
+        <span style={{ color: '#f87171', fontSize: '0.7rem', fontWeight: 600 }}>{fault}</span>
+      )}
+
+      {/* Input level, with the threshold drawn on it. */}
+      <div
+        style={{
+          position: 'relative',
+          height: '6px',
+          borderRadius: '3px',
+          background: 'rgba(255,255,255,0.06)',
+          overflow: 'hidden',
+        }}
+        title={`Input level ${h.level.toFixed(1)} of the ${h.speechLevel} needed to count as speech`}
+      >
+        <div
+          style={{
+            width: `${pct}%`,
+            height: '100%',
+            background: over ? '#4ade80' : '#64748b',
+            transition: 'width 120ms linear',
+          }}
+        />
+        <div
+          style={{
+            position: 'absolute',
+            left: `${thresholdPct}%`,
+            top: 0,
+            bottom: 0,
+            width: '2px',
+            background: '#f8fafc',
+            opacity: 0.55,
+          }}
+        />
+      </div>
+
+      <div
+        style={{
+          display: 'flex',
+          gap: '0.6rem',
+          flexWrap: 'wrap',
+          fontSize: '0.62rem',
+          color: 'var(--text-dim)',
+          fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+        }}
+      >
+        <span>lvl {h.level.toFixed(1)}/{h.speechLevel}</span>
+        <span>{h.tracksConnected} track{h.tracksConnected === 1 ? '' : 's'}</span>
+        <span>rec {h.recorderState ?? 'down'}</span>
+        {h.restarts > 0 && <span title="Times the watchdog rebuilt the recorder">↻ {h.restarts}</span>}
+        <span>{secsSinceHeard === null ? 'no transcript yet' : `heard ${secsSinceHeard}s ago`}</span>
+      </div>
+    </div>
+  );
+}
 
 /**
  * The three legs of a voice turn, as pills beside the last turn's reason.
@@ -779,6 +885,7 @@ export function RoomsPanel() {
     sendComment,
     sendReaction,
     getNetworkInsights,
+    getEarsHealth,
   } = useClubhouseVoice({
     sttChunkIntervalMs: sttChunkMs,
     endpointingDelayMs: agentConfig.endpointingDelayMs || 750,
@@ -3963,11 +4070,15 @@ export function RoomsPanel() {
                             </strong>{' '}
                             <span style={{ fontStyle: 'italic' }}>"{lastHeardSpeech.text}"</span>
                           </div>
-                        ) : (
-                          <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                            Microphone listening for room audio...
-                          </span>
-                        )}
+                        ) : null}
+                        {/*
+                         * Always rendered, not only while waiting: a transcript that
+                         * arrived ten minutes ago is not evidence that the ears still
+                         * work, and the old placeholder said "listening…" whether the
+                         * room was quiet, nobody's audio had ever reached the agent,
+                         * or the level simply never crossed the threshold.
+                         */}
+                        <EarsReadout getHealth={getEarsHealth} hasHeard={!!lastHeardSpeech} />
                       </div>
 
                       {/* When to speak & Wake Words */}

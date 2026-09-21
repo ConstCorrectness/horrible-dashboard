@@ -198,6 +198,39 @@ every upstream error, so it is deliberately narrow: "Less is more! Please wait a
 "A moderator moved you to the audience" and "cannot send message" must pass through
 untouched, and a test pins that.
 
+### Why the agent stops hearing, and how the pane now says so
+
+Two faults in the hearing path, both of which present as the same thing — the LIVE
+STT card sitting on "Microphone listening for room audio…" forever.
+
+**Joining a room where people are already talking wired up nobody.** The sweep after
+`client.join()` tested `remoteUser.audioTrack`, which is only populated by
+`client.subscribe()` — so straight after a join it is `undefined` for every user and
+the loop connected nothing, ever. It read like a safety net while being a no-op,
+leaving the agent's hearing wholly dependent on `user-published` firing afterwards.
+That is exactly the difference between joining an empty room (someone publishes
+later, the event fires, it works) and **switching** into a room mid-conversation. The
+sweep now subscribes, plays and connects, per-user so one failure does not cost the
+rest — and tracks are deduplicated by id, because `user-published` reaches the same
+speaker and a track summed twice inflates both the level and the count.
+
+**The panel could not tell three different situations apart.** "Listening…" meant the
+room is quiet, *or* no audio ever reached the agent, *or* the level never crosses the
+threshold — three different fixes behind one sentence. `EarsReadout` replaces it with
+what is actually known, polled at 4 Hz (the VAD writes its level 50×/s; pushing that
+through React would re-render the pane at 50 Hz):
+
+- the **VAD's own decision variable** on a meter, with the speech threshold drawn on
+  it as a line, so "loud enough for me but not for the switch" is visible;
+- **tracks wired in** — zero with people plainly talking is a different bug from a
+  level that never crosses;
+- **recorder state**, **context state**, and the watchdog's **restart count**;
+- how long since a transcript was last accepted.
+
+The thresholds (`SPEECH_LEVEL`, `BARGE_IN_LEVEL`) are named constants now rather than
+inline numbers, because the meter draws the same line the VAD decides on and the two
+must not drift.
+
 ### The network inspector opens from anywhere
 
 The pane returns from **two places** — the room view (`if (joined && activeChannel)`)
