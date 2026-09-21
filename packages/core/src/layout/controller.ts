@@ -623,9 +623,41 @@ export function openDocument(
 // Regions
 // ---------------------------------------------------------------------------
 
-/** Current-or-declared state of one region strip on a pane instance. */
-function regionOf(pane: PaneState, position: RegionPosition): RegionState | null {
+/**
+ * Current-or-declared state of one region strip on a pane instance.
+ *
+ * The declaration fallback is not belt-and-braces: `regions` is written onto a
+ * pane when it is *opened*, so a pane persisted before its view declared a
+ * region has none, and a region added to an existing view would be invisible on
+ * every pane already in the saved layout.
+ */
+export function regionAt(pane: PaneState, position: RegionPosition): RegionState | null {
   return pane.regions?.[position] ?? regionsFor(pane.viewId)?.[position] ?? null;
+}
+
+/** How a region strip should be drawn: not at all, as a rail, or in full. */
+export type RegionDisplay = 'none' | 'rail' | 'strip';
+
+/**
+ * What the frame draws for one region position.
+ *
+ * The rule that changed: a region that is **closed** draws the *rail*, not
+ * nothing. A view's `regions` are declared without `defaultOpen` far more often
+ * than with it — the training notebook declares six that way — and a closed
+ * region used to render `null`, so a pane could declare Metrics, Architecture
+ * and Rollout and show no sign that any of them existed. They were reachable
+ * only from the command palette or a keychord you had to already know, which is
+ * indistinguishable from a feature that was never built.
+ *
+ * So `closed` and `collapsed` now look the same on screen — a thin rail of
+ * icons — and differ only in which flag a caller set. That is deliberate: the
+ * pane always shows what it *can* show, and putting a strip away never removes
+ * the way back.
+ */
+export function regionDisplay(pane: PaneState, position: RegionPosition): RegionDisplay {
+  const region = regionAt(pane, position);
+  if (!region || region.views.length === 0) return 'none';
+  return !region.open || region.collapsed ? 'rail' : 'strip';
 }
 
 export function toggleRegion(
@@ -635,7 +667,7 @@ export function toggleRegion(
 ): boolean {
   const located = findPaneAnywhere(frame(), instanceId);
   if (!located) return false;
-  const region = regionOf(located.pane, position);
+  const region = regionAt(located.pane, position);
   if (!region) return false;
   const next = open ?? !(region.open && !region.collapsed);
   layoutStore.dispatch({
@@ -650,7 +682,10 @@ export function toggleRegion(
 export function collapseRegion(instanceId: string, position: RegionPosition): boolean {
   const located = findPaneAnywhere(frame(), instanceId);
   if (!located) return false;
-  const region = located.pane.regions?.[position];
+  // Through `regionAt`, for the same reason `toggleRegion` does: a pane that was
+  // persisted before its view declared this region carries no `regions` of its
+  // own, and reading the instance alone made the control a silent no-op there.
+  const region = regionAt(located.pane, position);
   if (!region?.open) return false;
   layoutStore.dispatch({
     type: 'SET_REGION',
@@ -668,7 +703,7 @@ export function setRegionView(instanceId: string, viewId: string): boolean {
   const declared = resolveView(located.pane.viewId)?.regions?.find((r) => r.id === viewId);
   if (!declared) return false;
   const position = declared.position ?? 'right';
-  const region = regionOf(located.pane, position);
+  const region = regionAt(located.pane, position);
   if (!region || !region.views.includes(viewId)) return false;
   layoutStore.dispatch({
     type: 'SET_REGION',

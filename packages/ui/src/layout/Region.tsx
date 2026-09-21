@@ -9,10 +9,11 @@
 import {
   collapseRegion,
   layoutStore,
+  regionAt,
+  regionDisplay,
   paneDrag,
   resolveView,
   setRegionView,
-  toggleRegion,
   type PaneState,
   type RegionPosition,
   type RegionState,
@@ -25,7 +26,6 @@ const MIN_SIZE = 120;
 const MAX_SIZE: Record<RegionPosition, number> = { left: 700, right: 700, bottom: 480 };
 
 const COLLAPSE_ICON: Record<RegionPosition, string> = { right: '»', bottom: '⤓', left: '«' };
-const EXPAND_ICON: Record<RegionPosition, string> = { right: '«', bottom: '⤒', left: '»' };
 const POSITION_KEY: Record<RegionPosition, string> = { left: 't', right: 'n', bottom: 'b' };
 
 /** The host view's region declarations at one position (labels, icons, keys). */
@@ -36,27 +36,49 @@ function declsAt(hostViewId: string, position: RegionPosition): RegionViewDecl[]
 }
 
 export function Region({ pane, position }: { pane: PaneState; position: RegionPosition }) {
-  const region = pane.regions?.[position];
-  if (!region?.open) return null;
+  // Resolved rather than read straight off the instance: a pane persisted before
+  // its view declared this region has no `regions` of its own, and would show
+  // nothing for a region added later. See `regionAt`.
+  const region = regionAt(pane, position);
+  const display = regionDisplay(pane, position);
+  if (!region || display === 'none') return null;
   const vertical = position !== 'bottom';
   const decls = declsAt(pane.viewId, position);
   const declFor = (id: string): RegionViewDecl | undefined => decls.find((d) => d.id === id);
 
-  if (region.collapsed) {
+  // Closed *and* collapsed both draw the rail. A closed region used to draw
+  // nothing at all, which is why a notebook pane declaring Metrics,
+  // Architecture, Rollout, Manim and Peers showed no sign that any of them
+  // existed: none of them declares `defaultOpen`, so every one started closed
+  // and the only ways in were a command-palette entry and a keychord you had to
+  // already know. Putting a strip away must never remove the way back.
+  if (display === 'rail') {
     return (
-      <button
+      <div
         className={`frame-region-rail frame-region-rail--${position}`}
-        title={`Show ${position} region (${POSITION_KEY[position]})`}
-        aria-label={`Show ${position} region`}
-        onClick={() => collapseRegion(pane.instanceId, position)}
+        role="tablist"
+        aria-label={`${position} region`}
       >
-        <span className="frame-region-rail-glyph">{EXPAND_ICON[position]}</span>
-        {region.views.map((id) => (
-          <span key={id} className="frame-region-rail-tab">
-            {declFor(id)?.icon ?? (resolveView(id)?.title ?? id)[0]}
-          </span>
-        ))}
-      </button>
+        {region.views.map((id) => {
+          const title = declFor(id)?.label ?? resolveView(id)?.title ?? id;
+          const key = declFor(id)?.key;
+          return (
+            <button
+              key={id}
+              className="frame-region-rail-tab"
+              // Each view gets its own button rather than the whole rail being
+              // one: with five of them stacked, "expand to whichever was last
+              // active" is a coin flip, and the icons are the only thing telling
+              // you the pane has a Metrics chart at all.
+              title={`Show ${title}${key ? ` (${key})` : ''}`}
+              aria-label={`Show ${title}`}
+              onClick={() => setRegionView(pane.instanceId, id)}
+            >
+              {declFor(id)?.icon ?? title[0]}
+            </button>
+          );
+        })}
+      </div>
     );
   }
 
@@ -158,21 +180,20 @@ export function Region({ pane, position }: { pane: PaneState; position: RegionPo
                 <span className="frame-region-title" style={{ fontWeight: 800 }}>
                   {title}
                 </span>
-                <button
-                  className="frame-region-btn"
-                  title={`Collapse ${position} region (${POSITION_KEY[position]})`}
-                  style={{ marginLeft: 'auto' }}
-                  onClick={() => collapseRegion(pane.instanceId, position)}
-                >
-                  {COLLAPSE_ICON[position]}
-                </button>
-                <button
-                  className="frame-region-btn"
-                  title={`Close ${title}`}
-                  onClick={() => toggleRegion(pane.instanceId, position, false)}
-                >
-                  ✕
-                </button>
+                {/* Once only. Putting away is a *region* action — every copy of
+                    this button did the same thing, so a stack of five sections
+                    drew five identical controls down the edge and each one
+                    looked like it would hide the section beside it. */}
+                {index === 0 && (
+                  <button
+                    className="frame-region-btn"
+                    title={`Put away — reopen from the rail (${POSITION_KEY[position]})`}
+                    style={{ marginLeft: 'auto' }}
+                    onClick={() => collapseRegion(pane.instanceId, position)}
+                  >
+                    {COLLAPSE_ICON[position]}
+                  </button>
+                )}
               </div>
               <div
                 className="frame-region-body"
@@ -227,18 +248,11 @@ export function Region({ pane, position }: { pane: PaneState; position: RegionPo
           )}
           <button
             className="frame-region-btn"
-            title={`Collapse ${position} region (${POSITION_KEY[position]})`}
-            aria-label={`Collapse ${position} region`}
+            title={`Put away — reopen from the rail (${POSITION_KEY[position]})`}
+            aria-label={`Put away the ${position} region`}
             onClick={() => collapseRegion(pane.instanceId, position)}
           >
             {COLLAPSE_ICON[position]}
-          </button>
-          <button
-            className="frame-region-btn"
-            title={`Close ${activeTitle}`}
-            onClick={() => toggleRegion(pane.instanceId, position, false)}
-          >
-            ✕
           </button>
         </div>
         <div className="frame-region-body">

@@ -220,6 +220,8 @@ export {
   openToolInDock,
   paneDisplayTitle,
   readPaneAgentContext,
+  regionAt,
+  regionDisplay,
   regionsFor,
   resizeAreaPx,
   resolveView,
