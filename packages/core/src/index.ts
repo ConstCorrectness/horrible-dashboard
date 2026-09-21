@@ -105,6 +105,7 @@ export {
   onSocketClose,
   onSocketOpen,
   sendChannel,
+  setWsPath,
   subscribeChannel,
   type WsMessage,
 } from './ws';
@@ -480,7 +481,18 @@ export { observabilityModule } from './modules/observability';
 export { marketplaceModule } from './modules/marketplace';
 export { settingsModule } from './modules/settings';
 export { initKeymapPreset, keymapModule } from './modules/keymap';
-export { hassaultModule } from './modules/hassault';
+export {
+  hassaultModule,
+  HorribleAssaultPanel,
+  type HorribleAssaultPanelProps,
+  lobbyVoice,
+  listMaps,
+  getMapCubes,
+  getMapInfo,
+  formatBytes,
+  type MapSummary,
+  type MapInfo,
+} from './modules/hassault';
 export {
   shareModule,
   initShare,

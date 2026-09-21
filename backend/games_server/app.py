@@ -14,6 +14,7 @@ import logging
 import os
 import secrets
 import time
+import uuid
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
@@ -688,9 +689,17 @@ def hassault_maps() -> dict[str, Any]:
     return {"maps": hassault_rooms.referee.maps()}
 
 
+@app.get("/api/hassault/rooms")
+def hassault_rooms_list() -> dict[str, Any]:
+    """Active rooms ticking on this server, for the public server browser."""
+    from backend.games_server import hassault_rooms
+
+    return {"rooms": hassault_rooms.referee.active_rooms()}
+
+
 @app.websocket("/hassault-ws")
 async def hassault_ws(websocket: WebSocket) -> None:
-    """A rated HorribleAssault match, simulated **here**.
+    """A rated or casual HorribleAssault match, simulated **here**.
 
     The same `MatchServer` the node runs, on a machine no player controls — which
     is what makes the result worth recording. See `hassault_rooms` for why this is
@@ -698,24 +707,34 @@ async def hassault_ws(websocket: WebSocket) -> None:
 
     The wire is the node's own `hassault` channel envelope
     (`{channel, event, data}`), so a client speaks one protocol whether the room
-    is on its own node or here. **Identity is not on it**: the account comes from
-    the token in the query string, exactly as `/game-ws` takes it, and a `name`
-    in the join payload is ignored the same way `channel.py` ignores it.
+    is on its own node or here. Identity comes from the query string: either a
+    verified account token, or an anonymous guest session (?guest=1&name=...).
     """
     from backend.games_server import hassault_rooms
 
     token = websocket.query_params.get("token", "")
-    session = auth.resolve_token(token)
-    if session is None:
-        # Closed before `accept` where possible: an unauthenticated socket should
-        # never reach the room registry, and a 1008 is a reason rather than a
-        # silent drop.
+    is_guest = websocket.query_params.get("guest") in ("1", "true", "yes")
+    guest_name = websocket.query_params.get("name", "").strip()
+    session = auth.resolve_token(token) if token else None
+
+    if session is None and is_guest:
+        guest_id = f"guest_{uuid.uuid4().hex[:8]}"
+        clean_name = guest_name[:16] if guest_name else f"Guest-{guest_id[-4:]}"
+        session = {
+            "account_id": guest_id,
+            "display_name": clean_name,
+            "is_guest": True,
+        }
+    elif session is None:
         await websocket.close(code=1008, reason="sign in to play a rated match")
         return
 
     await websocket.accept()
     conn = hassault_rooms.SeatConn(
-        websocket, session["account_id"], session["display_name"]
+        websocket,
+        session["account_id"],
+        session["display_name"],
+        is_guest=session.get("is_guest", False),
     )
     referee = hassault_rooms.referee
     try:
@@ -760,6 +779,36 @@ async def hassault_ws(websocket: WebSocket) -> None:
                             "data": {"reason": refused},
                         }
                     )
+            elif event in ("lobby_voice", "lobby_signal"):
+                entry = referee.server.player_for(conn)
+                if entry is not None:
+                    room, player = entry
+                    if event == "lobby_signal":
+                        target_id = str(data.get("to") or "")
+                        for p in room.players.values():
+                            if p.id == target_id:
+                                await p.conn.send_json(
+                                    {
+                                        "channel": "hassault",
+                                        "event": "lobby_signal",
+                                        "data": {
+                                            "from": player.id,
+                                            "signal": data.get("signal"),
+                                        },
+                                    }
+                                )
+                                break
+                    elif event == "lobby_voice":
+                        await referee.server.broadcast_event(
+                            room,
+                            "lobby_voice",
+                            {
+                                "from": player.id,
+                                "on": bool(data.get("on")),
+                                "muted": bool(data.get("muted")),
+                            },
+                            player.id,
+                        )
             elif event == "respawn":
                 entry = referee.server.player_for(conn)
                 if entry is not None:

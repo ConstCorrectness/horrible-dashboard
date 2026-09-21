@@ -72,10 +72,17 @@ class SeatConn:
     here is what stops a player naming themselves into somebody else's row.
     """
 
-    def __init__(self, websocket: Any, account_id: str, display_name: str) -> None:
+    def __init__(
+        self,
+        websocket: Any,
+        account_id: str,
+        display_name: str,
+        is_guest: bool = False,
+    ) -> None:
         self.websocket = websocket
         self.account_id = account_id
         self.display_name = display_name[:MAX_NAME_LEN] or "player"
+        self.is_guest = is_guest
         #: Set once the socket is gone, so a broadcast mid-teardown is a no-op
         #: rather than an exception inside the tick loop.
         self.closed = False
@@ -112,6 +119,25 @@ class HassaultReferee:
     def maps(self) -> list[str]:
         return list(mapsource.bundled_names())
 
+    def active_rooms(self) -> list[dict[str, Any]]:
+        """Active rooms currently ticking on this game server."""
+        result = []
+        for room in self.server.rooms.values():
+            result.append(
+                {
+                    "id": room.id,
+                    "map": room.map_name,
+                    "playerCount": len(room.players),
+                    "maxPlayers": 16,
+                    "mode": room.mode.id if room.mode else "dm",
+                    "hasGuests": any(
+                        getattr(p.conn, "is_guest", False) for p in room.players.values()
+                    ),
+                    "rated": False,
+                }
+            )
+        return result
+
     # -- play ---------------------------------------------------------------
 
     async def join(
@@ -119,35 +145,24 @@ class HassaultReferee:
     ) -> dict[str, Any]:
         """Seat a player, opening a room if there is none on that map.
 
-        **Deathmatch only, and there is no `mode` parameter on purpose.** Rooms
-        here fall to `MatchServer`'s default, which is free-for-all deathmatch,
-        and that is the decision rather than an oversight left over from before
-        modes existed.
-
-        A rated round-based mode is a different project, not a flag. Defuse is
-        scored by *round*, and a round is settled between two full sides; a
-        server-hosted room people join and leave one at a time has no such thing
-        to report. The referee would have to hold a side together for the length
-        of a match, decide what a leaver does to the round in progress, and
-        report a per-round result the store has no shape for — none of which is
-        made true by accepting a string here.
-
-        So the absence is enforced by the signature: adding the parameter is the
-        moment somebody has to think about the paragraph above, rather than
-        discovering it from a ladder full of half-played rounds. `mode` is
-        recorded in the ruleset all the same, so the day it stops being one value
-        the rows already say which.
+        Deathmatch default. If joining by explicit room_id, uses the room's existing
+        map; otherwise verifies that map_name is a valid bundled map.
         """
-        if not self.playable(map_name):
-            raise ValueError(f"{map_name!r} is not a bundled map")
+        existing = self.server.get(room_id) if room_id else None
+        target_map = existing.map_name if existing else (map_name or "hd_assault")
+        if not self.playable(target_map):
+            raise ValueError(f"{target_map!r} is not a bundled map")
         room, player = await self.server.join(
-            conn, map_name, conn.display_name, room_id
+            conn, target_map, conn.display_name, room_id
+        )
+        has_guests = conn.is_guest or any(
+            getattr(p.conn, "is_guest", False) for p in room.players.values()
         )
         return {
             "room": room.id,
             "map": room.map_name,
             "playerId": player.id,
-            "rated": True,
+            "rated": not has_guests,
             "players": [p.snapshot(time.monotonic()) for p in room.players.values()],
         }
 
@@ -222,6 +237,8 @@ class HassaultReferee:
         server and XP granted by the server — both real, both the server's word.
         A 1v1 duel mode can be rated properly, and that is where ELO belongs.
         """
+        if conn.is_guest:
+            return
         from backend.games_server import store
 
         payoff = 1.0 if result.get("won") else -1.0

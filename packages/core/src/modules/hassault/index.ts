@@ -504,3 +504,10 @@ export const hassaultModule: ModuleManifest = {
     },
   ],
 };
+
+export { HorribleAssaultPanel, type HorribleAssaultPanelProps } from './HorribleAssaultPanel';
+export { lobbyVoice } from './lobby-voice';
+export { listMaps, getMapCubes, getMapInfo, type MapSummary, type MapInfo } from './api';
+export { formatBytes } from './boot';
+
+

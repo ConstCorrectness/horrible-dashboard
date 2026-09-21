@@ -15,6 +15,20 @@ const openListeners = new Set<() => void>();
 const closeListeners = new Set<() => void>();
 let socket: WebSocket | null = null;
 let backoff = 500;
+let wsPath = '/ws';
+
+/**
+ * Configure the WebSocket path/query string (default '/ws').
+ * Used by standalone clients like assault-web to connect to '/hassault-ws'.
+ */
+export function setWsPath(path: string): void {
+  if (wsPath === path) return;
+  wsPath = path;
+  if (socket) {
+    socket.close();
+    socket = null;
+  }
+}
 
 function connect(): void {
   if (
@@ -23,7 +37,7 @@ function connect(): void {
   ) {
     return;
   }
-  socket = new WebSocket(wsUrl('/ws'));
+  socket = new WebSocket(wsUrl(wsPath));
 
   socket.onopen = () => {
     backoff = 500;

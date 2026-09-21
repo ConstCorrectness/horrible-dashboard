@@ -463,3 +463,93 @@ def test_chat_over_the_wire_is_echoed_by_the_server(server):
                 break
         else:
             pytest.fail("the chat line never came back")
+
+
+def test_guest_can_connect_and_join_without_token(server):
+    """An anonymous web player can connect with ?guest=1&name=Rookie and play."""
+    with server.websocket_connect("/hassault-ws?guest=1&name=Rookie") as ws:
+        ws.send_text(
+            json.dumps(
+                {"channel": "hassault", "event": "join", "data": {"map": "hd_pit"}}
+            )
+        )
+        welcome = json.loads(ws.receive_text())
+        assert welcome["event"] == "welcome"
+        assert welcome["data"]["map"] == "hd_pit"
+        assert welcome["data"]["rated"] is False  # unrated/casual for guests
+
+
+def test_public_active_rooms_endpoint(server):
+    """GET /api/hassault/rooms returns the list of active rooms without auth."""
+    # Connect a player to open a room
+    with server.websocket_connect("/hassault-ws?guest=1&name=LobbyHost") as ws:
+        ws.send_text(
+            json.dumps(
+                {"channel": "hassault", "event": "join", "data": {"map": "hd_pit"}}
+            )
+        )
+        welcome = json.loads(ws.receive_text())
+        assert welcome["event"] == "welcome"
+
+        res = server.get("/api/hassault/rooms")
+        assert res.status_code == 200
+        data = res.json()
+        assert "rooms" in data
+        assert any(r["map"] == "hd_pit" for r in data["rooms"])
+
+
+def test_voice_signaling_routed_between_room_peers(server):
+    """Lobby voice and WebRTC signals route between players in the same match."""
+    with server.websocket_connect("/hassault-ws?guest=1&name=Alice") as ws1:
+        ws1.send_text(
+            json.dumps(
+                {"channel": "hassault", "event": "join", "data": {"map": "hd_pit"}}
+            )
+        )
+        w1 = json.loads(ws1.receive_text())
+        assert w1["event"] == "welcome"
+        room_id = w1["data"]["room"]
+        alice_id = w1["data"]["playerId"]
+
+        with server.websocket_connect("/hassault-ws?guest=1&name=Bob") as ws2:
+            ws2.send_text(
+                json.dumps(
+                    {
+                        "channel": "hassault",
+                        "event": "join",
+                        "data": {"map": "hd_pit", "room": room_id},
+                    }
+                )
+            )
+            w2 = json.loads(ws2.receive_text())
+            assert w2["event"] == "welcome"
+            bob_id = w2["data"]["playerId"]
+
+            # Alice should receive Bob's joined event amidst regular snapshots
+            for _ in range(50):
+                msg = json.loads(ws1.receive_text())
+                if msg["event"] == "joined":
+                    break
+            else:
+                pytest.fail("Alice never received Bob's joined event")
+
+            # Alice sends WebRTC signal to Bob
+            ws1.send_text(
+                json.dumps(
+                    {
+                        "channel": "hassault",
+                        "event": "lobby_signal",
+                        "data": {"to": bob_id, "signal": {"type": "offer", "sdp": "fake"}},
+                    }
+                )
+            )
+            for _ in range(50):
+                bob_msg = json.loads(ws2.receive_text())
+                if bob_msg["event"] == "lobby_signal":
+                    assert bob_msg["data"]["from"] == alice_id
+                    assert bob_msg["data"]["signal"]["sdp"] == "fake"
+                    break
+            else:
+                pytest.fail("Bob never received lobby_signal")
+
+

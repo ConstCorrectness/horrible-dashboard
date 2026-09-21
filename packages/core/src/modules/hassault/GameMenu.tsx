@@ -61,6 +61,8 @@ export interface GameMenuProps {
   onResume: () => void;
   /** Back to the main menu — leaves the match on the way out. */
   onExitToMenu: () => void;
+  /** Share match invite link */
+  onShare?: () => void;
   onOpenStudio?: () => void;
   onOpenArmory?: () => void;
   onOpenConsole?: () => void;
@@ -170,6 +172,16 @@ export function GameMenu(props: GameMenuProps) {
             >
               ▶ Resume Game
             </button>
+            {props.onShare && (
+              <button
+                type="button"
+                onClick={props.onShare}
+                style={{ ...styles.resumeFooter, background: 'rgba(255,255,255,0.12)', color: 'var(--text)' }}
+                title="Copy share link for friends/guests"
+              >
+                🔗 Share Match
+              </button>
+            )}
             {props.online && <button onClick={props.onLeave}>Leave match</button>}
             <button onClick={props.onExitToMenu}>Exit to menu</button>
           </span>

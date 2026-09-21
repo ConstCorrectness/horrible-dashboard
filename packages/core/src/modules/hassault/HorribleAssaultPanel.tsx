@@ -347,13 +347,31 @@ interface SceneHandle {
  *
  * See docs/modules/hassault.mdx.
  */
-export function HorribleAssaultPanel() {
+export interface HorribleAssaultPanelProps {
+  /** If set, runs as an anonymous guest under this callsign without requiring login */
+  guestCallsign?: string;
+  /** Initial map name to load */
+  initialMap?: string;
+  /** Initial room to join automatically once loaded */
+  initialRoom?: string;
+  /** Force running in WebGL canvas (bypassing native client setting) */
+  forceWebGl?: boolean;
+  /** Callback when user shares or copies invite link */
+  onShareRoom?: (room: string, map: string) => void;
+  /** Fullscreen toggle */
+  onToggleFullscreen?: () => void;
+  isFullscreen?: boolean;
+  /** Callback when user exits to main menu or external browser lobby */
+  onExit?: () => void;
+}
+
+export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const pendingSpawnRef = useRef<MapCoordinates | null>(null);
   const godModeRef = useRef<boolean>(consoleRegistry.getBool('player.god'));
   const [status, setStatus] = useState<InstallStatus | null>(null);
   const [maps, setMaps] = useState<MapSummary[]>([]);
-  const [mapName, setMapName] = useState<string>('');
+  const [mapName, setMapName] = useState<string>(props.initialMap || '');
   const [info, setInfo] = useState<MapInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [locked, setLocked] = useState(false);
@@ -371,11 +389,18 @@ export function HorribleAssaultPanel() {
   const [account, setAccount] = useState<SessionInfo | null>(null);
   const [deployed, setDeployed] = useState(false);
 
-  const phase = bootPhase(progress, account ?? SIGNED_OUT, deployed);
-  // Identity is the account's username. There is deliberately no name input any
-  // more: the backend ignores a client-supplied name outright (see
-  // `channel._signed_in_username`), so offering one would only be a lie.
-  const playerName = account?.username ?? '';
+  const effectiveAccount = props.guestCallsign
+    ? {
+        signed_in: true,
+        enlisted: true,
+        username: props.guestCallsign,
+        display_name: props.guestCallsign,
+        account_id: `guest_${props.guestCallsign.toLowerCase().replace(/[^a-z0-9]/g, '')}`,
+      }
+    : account;
+
+  const phase = bootPhase(progress, effectiveAccount ?? SIGNED_OUT, deployed);
+  const playerName = effectiveAccount?.username ?? '';
   const [hud, setHud] = useState<Hud>({
     fps: 0,
     triangles: 0,
@@ -546,7 +571,8 @@ export function HorribleAssaultPanel() {
   const volume = useSetting<number>(VOLUME_KEY) ?? 0.7;
   const crouchToggle = useSetting<boolean>(CROUCH_TOGGLE_KEY) ?? false;
   /** Whether Play, Train and Host open the native window rather than this pane. */
-  const nativeClient = useSetting<boolean>(NATIVE_CLIENT_KEY) ?? true;
+  const nativeSetting = useSetting<boolean>(NATIVE_CLIENT_KEY) ?? true;
+  const nativeClient = props.forceWebGl ? false : nativeSetting;
   const showHitboxes = useSetting<boolean>(SHOW_HITBOXES_KEY) ?? false;
   const storedControls = useSetting<string>(CONTROLS_KEY);
   const controls = useMemo(() => parseControls(storedControls), [storedControls]);
@@ -3326,7 +3352,18 @@ export function HorribleAssaultPanel() {
     setDeployed(false);
     if (document.pointerLockElement) document.exitPointerLock();
     releaseCapture();
-  }, [releaseCapture]);
+    props.onExit?.();
+  }, [releaseCapture, props.onExit]);
+
+  // If launched with an initial room (e.g. from an invite link in assault-web),
+  // join it automatically once the map geometry has loaded.
+  const initialJoinedRef = useRef(false);
+  useEffect(() => {
+    if (props.initialRoom && info && !initialJoinedRef.current) {
+      initialJoinedRef.current = true;
+      joinRoom(props.initialRoom, props.initialMap || mapName, '');
+    }
+  }, [props.initialRoom, props.initialMap, info, mapName, joinRoom]);
 
   // The control map, written straight through to settings so a rebind survives a
   // reload. The scalar preferences are edited by `SettingsPanel` directly; this one
@@ -3905,6 +3942,7 @@ export function HorribleAssaultPanel() {
             }}
             onResume={resumeGame}
             onExitToMenu={exitToMenu}
+            onShare={props.onShareRoom ? () => props.onShareRoom?.(net.room, mapName) : undefined}
             onOpenStudio={() => {
               if (playerRef.current) {
                 requestMapEditorInspect({
