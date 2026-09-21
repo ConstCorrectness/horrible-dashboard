@@ -637,7 +637,6 @@ export class WeaponViewModel {
     // shoulder that does not move with it, so they live one level up and the
     // pivot's transform reaches them through the grip anchor instead.
     this.arms = new ArmRig(three, this.pivot.parent ?? camera);
-    void this.arms.loadArmsModel('/hassault-arms.glb');
   }
 
   /**

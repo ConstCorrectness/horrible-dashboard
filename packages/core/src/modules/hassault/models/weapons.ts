@@ -107,6 +107,34 @@ export function resetWeaponModelCache(): void {
  * buttstock; the box models are built around roughly where a hand is. Matching
  * origins would hang every rifle a foot forward of the screen.
  */
+/**
+ * Compute the bounding box of an Object3D hierarchy in its own local coordinate space.
+ *
+ * `Box3.setFromObject(target)` evaluates against `matrixWorld`. When `target` is parented
+ * to a transformed ancestor (such as the player camera at world coordinates [16, 4.7, 7]),
+ * `setFromObject` returns the world-space bounding box rather than the local bounding box.
+ * Premultiplying each descendant mesh geometry's bounding box by the inverse of
+ * `target.matrixWorld` ensures the measurement is purely local to `target`, regardless
+ * of where the camera or scene hierarchy is located in the world.
+ */
+export function computeLocalBox(three: typeof THREE, target: THREE.Object3D): THREE.Box3 {
+  target.updateWorldMatrix(true, true);
+  const inv = target.matrixWorld.clone().invert();
+  const targetBox = new three.Box3();
+  target.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (mesh.isMesh && mesh.geometry) {
+      if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+      if (mesh.geometry.boundingBox) {
+        const b = mesh.geometry.boundingBox.clone();
+        b.applyMatrix4(mesh.matrixWorld.clone().premultiply(inv));
+        targetBox.union(b);
+      }
+    }
+  });
+  return targetBox;
+}
+
 export function fitWeaponModel(
   three: typeof THREE,
   prototype: THREE.Object3D,
@@ -126,8 +154,8 @@ export function fitWeaponModel(
       : mesh.material.clone();
   });
 
-  const targetBox = new three.Box3().setFromObject(target);
-  const modelBox = new three.Box3().setFromObject(model);
+  const targetBox = computeLocalBox(three, target);
+  const modelBox = computeLocalBox(three, model);
   // An empty target — a weapon whose boxes have not been added yet — would give
   // an inverted box whose centre is ±Infinity, and a model translated by
   // infinity vanishes with no error anywhere. Fall back to leaving it where the

@@ -71,6 +71,23 @@ describe('fitWeaponModel', () => {
     expect(a.z).toBeCloseTo(b.z, 5);
   });
 
+  it('measures target in local space even when target is parented to a transformed hierarchy', () => {
+    const prototype = prototypeAt(new THREE.Vector3(-0.1, 0, -2.9), new THREE.Vector3(0.1, 0.7, 0));
+    const target = prototypeAt(
+      new THREE.Vector3(-0.2, -0.2, -1.2),
+      new THREE.Vector3(0.2, 0.2, 0.6),
+    );
+    const parent = new THREE.Group();
+    parent.position.set(16.0, 4.7, 7.0);
+    parent.add(target);
+    parent.updateMatrixWorld(true);
+
+    const { model } = fitWeaponModel(THREE, prototype, target);
+    expect(model.position.x).toBeCloseTo(0, 4);
+    expect(model.position.y).toBeCloseTo(-0.35, 4);
+    expect(model.position.z).toBeCloseTo(1.15, 4);
+  });
+
   it('does not resize the prop', () => {
     // Scale is the converter's job (`--length`), decided against a real weapon's
     // real length. A fit that also scaled would silently make every weapon the

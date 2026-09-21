@@ -1442,6 +1442,10 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       // hands rendering as a black silhouette, not to relight the game.
       const propEnvironment = createPropEnvironment(THREE, renderer);
       viewmodel.setEnvironment(propEnvironment);
+      if (typeof window !== 'undefined') {
+        (window as any).__VM = viewmodel;
+        (window as any).__SHOTS = shotsRef.current;
+      }
 
       const setMesh = (world: World, world3d?: World3D | null): number => {
         if (mesh) {
@@ -2164,6 +2168,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           } else {
             arcLine.hide();
           }
+          if (shots) (window as any).__SHOTS = shots;
           const heldWeapon = shots?.weapon?.id ?? '';
           viewmodel.setWeapon(heldWeapon, skinsRef.current[heldWeapon] ?? null);
           // The reload's *progress*, from the two served numbers: how long it
