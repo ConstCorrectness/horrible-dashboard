@@ -817,6 +817,7 @@ export function HorribleAssaultPanel() {
   // read per-frame from React state has to arrive by ref.
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
+  const hadPointerLockRef = useRef(false);
   // Same for the input handlers, which are installed once: a rebind or a new
   // sensitivity has to reach them without tearing down pointer lock to do it.
   const sensitivityRef = useRef(sensitivity);
@@ -1307,7 +1308,10 @@ export function HorribleAssaultPanel() {
       scene.fog = new THREE.FogExp2(HORIZON, 0.0055);
 
       const camera = new THREE.PerspectiveCamera(75, 1, 0.1, 600);
-      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      const renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        powerPreference: 'high-performance',
+      });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       // ACES rather than the default clip: the sun plus a hemisphere light puts
       // lit floors above 1.0, and `NoToneMapping` flattens everything past that
@@ -2548,6 +2552,7 @@ export function HorribleAssaultPanel() {
    * its own. Both end here, so the menu opens either way — see `keymap/dispatch`.
    */
   const openMenu = useCallback(() => {
+    hadPointerLockRef.current = false;
     setMenuOpen(true);
     menuOpenRef.current = true;
     setLocked(false);
@@ -2575,10 +2580,12 @@ export function HorribleAssaultPanel() {
     const onPointerLockChange = () => {
       const isDocLocked = document.pointerLockElement === el.querySelector('canvas');
       if (isDocLocked) {
+        hadPointerLockRef.current = true;
         setLocked(true);
         lockedRef.current = true;
       } else if (!isDocLocked && !document.pointerLockElement) {
-        if (lockedRef.current && !menuOpenRef.current) {
+        if (hadPointerLockRef.current && lockedRef.current && !menuOpenRef.current) {
+          hadPointerLockRef.current = false;
           openMenu();
         }
       }
@@ -2860,6 +2867,7 @@ export function HorribleAssaultPanel() {
       keysRef.current.delete(action);
     };
     const onBlur = () => {
+      hadPointerLockRef.current = false;
       setLocked(false);
       lockedRef.current = false;
       lastMousePosRef.current = null;
@@ -2945,6 +2953,7 @@ export function HorribleAssaultPanel() {
   /** Enter the world. The one path from any menu to actually playing. */
   const deploy = useCallback(() => {
     setDeployed(true);
+    phaseRef.current = 'playing';
     setMenuOpen(false);
     menuOpenRef.current = false;
     // The armoury is another pane; this is the last moment before the gun is in
