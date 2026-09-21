@@ -48,7 +48,7 @@ export default defineConfig({
         ws: true,
       },
       '/hassault-ws': {
-        target: `ws://127.0.0.1:${process.env.HORRIBLE_GAME_SERVER_PORT || '9200'}`,
+        target: `ws://127.0.0.1:${process.env.HORRIBLE_GAME_SERVER_PORT || '9090'}`,
         ws: true,
       },
     },

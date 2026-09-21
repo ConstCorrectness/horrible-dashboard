@@ -45,7 +45,7 @@ const backendPort = process.env.HORRIBLE_DEV_BACKEND_PORT || '8000';
 // The ports this run owns. Used to self-heal a prior interrupted run and to backstop
 // our own shutdown. 9090 is only ours when we start the bundled game server — never
 // kill a game server the user runs themselves.
-const ownedPorts = [5173, Number(backendPort), ...(startGameServer ? [9090] : [])];
+const ownedPorts = [5173, 5180, Number(backendPort), ...(startGameServer ? [9090] : [])];
 
 // On Windows, `uv run`/pnpm wrap uvicorn/vite in a shell and `uvicorn --reload`
 // respawns workers, so an interrupted run can orphan a worker that keeps a port
@@ -183,12 +183,13 @@ const gameserver = startGameServer
   : null;
 
 let frontend;
+let assaultWeb;
 let cleanedUp = false;
 function cleanup() {
   if (cleanedUp) return;
   cleanedUp = true;
   console.log('\nStopping dev servers...');
-  for (const child of [backend, frontend, gameserver]) {
+  for (const child of [backend, frontend, gameserver, assaultWeb]) {
     if (child == null || child.exitCode !== null || child.pid == null) continue;
     if (process.platform === 'win32') {
       // `uv run` / pnpm wrap the real server in a shell, so a plain kill orphans
@@ -228,6 +229,26 @@ frontend = spawn('pnpm', ['--filter', '@horrible/web', 'dev'], {
   env: { ...process.env, HORRIBLE_DEV_HOST: host, HORRIBLE_DEV_BACKEND_PORT: backendPort },
 });
 frontend.on('exit', cleanup);
+
+// Start HorribleAssault standalone browser client (:5180) unless opted out
+if (!process.argv.includes('--no-assault')) {
+  assaultWeb = spawn('pnpm', ['--filter', '@horrible/assault-web', 'dev'], {
+    stdio: 'inherit',
+    shell: useShell,
+    env: {
+      ...process.env,
+      HORRIBLE_DEV_HOST: host,
+      HORRIBLE_DEV_BACKEND_PORT: backendPort,
+      HORRIBLE_GAME_SERVER_PORT: '9090',
+    },
+  });
+  assaultWeb.on('exit', (code) => {
+    if (!cleanedUp && code !== 0 && code !== null) {
+      console.warn(`⚠️  assault-web (:5180) exited (code ${code}).`);
+    }
+  });
+}
+
 // The game server is non-core: if it dies (commonly because :9090 is already in use
 // from a game server you started yourself), warn but keep the rest of the stack up.
 gameserver?.on('exit', (code) => {

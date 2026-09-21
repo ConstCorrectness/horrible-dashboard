@@ -66,16 +66,20 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
         # from the match they are already in.
         name = _signed_in_username()
         if name is None:
-            await conn.send_json(
-                _evt(
-                    "error",
-                    {
-                        "message": "sign in and choose a username to play",
-                        "code": "not_signed_in",
-                    },
+            raw_name = str(data.get("name") or "").strip()
+            if raw_name:
+                name = raw_name[:MAX_NAME_LEN]
+            else:
+                await conn.send_json(
+                    _evt(
+                        "error",
+                        {
+                            "message": "sign in and choose a username to play",
+                            "code": "not_signed_in",
+                        },
+                    )
                 )
-            )
-            return
+                return
 
         # Leaving whatever we were in first is what makes "join" idempotent from
         # the browser's point of view, local or remote.

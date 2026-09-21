@@ -138,6 +138,26 @@ async def get_status() -> InstallStatus:
     )
 
 
+@router.get("/rooms")
+async def get_rooms() -> dict[str, Any]:
+    """Active rooms ticking on this node, for the server browser."""
+    from backend.modules.hassault.match import match_server
+
+    result = []
+    for room in match_server.rooms.values():
+        result.append(
+            {
+                "id": room.id,
+                "map": room.map_name,
+                "playerCount": len(room.players),
+                "maxPlayers": 16,
+                "mode": room.mode.id if room.mode else "dm",
+                "rated": False,
+            }
+        )
+    return {"rooms": result}
+
+
 @router.get("/session", response_model=SessionInfo)
 async def get_session(refresh: bool = False) -> SessionInfo:
     """Who this node plays as — the gate the pane checks before it lets anyone in.
