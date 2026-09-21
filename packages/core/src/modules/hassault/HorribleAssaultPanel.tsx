@@ -838,6 +838,7 @@ export function HorribleAssaultPanel() {
   const lockedRef = useRef(false);
   const menuOpenRef = useRef(false);
   menuOpenRef.current = menuOpen;
+  const lastMousePosRef = useRef<{ x: number; y: number } | null>(null);
 
   // Resolved when the scene exists. Replaces polling for `sceneRef.current`: the
   // map load and the renderer load are genuinely concurrent, and awaiting is both
@@ -2473,7 +2474,10 @@ export function HorribleAssaultPanel() {
     viewId: 'hassault.play',
     onRelease: () => {
       unlockEscape();
-      if (document.pointerLockElement) document.exitPointerLock();
+      if (document.pointerLockElement) document.exitPointerLock?.();
+      setLocked(false);
+      lockedRef.current = false;
+      lastMousePosRef.current = null;
     },
   });
   const requestCapture = capture.request;
@@ -2483,6 +2487,9 @@ export function HorribleAssaultPanel() {
    * the canvas and from the pause menu's Resume alike. */
   const grabInput = useCallback(() => {
     if (!acceptsGameInput(phaseRef.current)) return;
+    setLocked(true);
+    lockedRef.current = true;
+    lastMousePosRef.current = null;
     const canvas = mountRef.current?.querySelector('canvas');
     if (canvas) {
       try {
@@ -2520,6 +2527,7 @@ export function HorribleAssaultPanel() {
 
   const resumeGame = useCallback(() => {
     setMenuOpen(false);
+    menuOpenRef.current = false;
     grabInput();
   }, [grabInput]);
 
@@ -2541,6 +2549,10 @@ export function HorribleAssaultPanel() {
    */
   const openMenu = useCallback(() => {
     setMenuOpen(true);
+    menuOpenRef.current = true;
+    setLocked(false);
+    lockedRef.current = false;
+    lastMousePosRef.current = null;
     keysRef.current.clear();
     shotsRef.current?.release();
     // Coming back from the menu at 4× with no memory of having scoped is a
@@ -2548,34 +2560,27 @@ export function HorribleAssaultPanel() {
     // whose cause is invisible.
     shotsRef.current?.unscope();
     setShowScores(false);
-    if (document.pointerLockElement) document.exitPointerLock();
+    if (document.pointerLockElement) document.exitPointerLock?.();
     releaseCapture();
   }, [releaseCapture]);
 
   useEffect(() => {
     const el = mountRef.current;
     if (!el) return;
-    const isLocked = () => document.pointerLockElement === el.querySelector('canvas');
+    const isLocked = () =>
+      (document.pointerLockElement === el.querySelector('canvas') || lockedRef.current) &&
+      !menuOpenRef.current &&
+      phaseRef.current === 'playing';
 
     const onPointerLockChange = () => {
-      const held = isLocked();
-      setLocked(held);
-      lockedRef.current = held;
-      // Releasing the pointer must release the trigger too, or a weapon left
-      // firing keeps firing into whatever you tabbed away to.
-      if (!held) {
-        shotsRef.current?.release();
-        keysRef.current.clear();
-        if (!crouchToggleRef.current) crouchRef.current = false;
-        setShowScores(false);
-        if (pingHoldTimerRef.current) {
-          clearTimeout(pingHoldTimerRef.current);
-          pingHoldTimerRef.current = null;
+      const isDocLocked = document.pointerLockElement === el.querySelector('canvas');
+      if (isDocLocked) {
+        setLocked(true);
+        lockedRef.current = true;
+      } else if (!isDocLocked && !document.pointerLockElement) {
+        if (lockedRef.current && !menuOpenRef.current) {
+          openMenu();
         }
-        setShowCalloutWheel(false);
-        // The browser can drop pointer lock on its own (alt-tab, Escape where
-        // Keyboard Lock is unavailable); keep the shell's capture in step.
-        releaseCapture();
       }
     };
     const onMouseMove = (e: MouseEvent) => {
@@ -2588,19 +2593,38 @@ export function HorribleAssaultPanel() {
       }
       if (demoPlayerRef.current.freecam.active) {
         demoPlayerRef.current.freecam.update(0.016, {
-          yawDelta: e.movementX * sensitivityRef.current * 0.1,
-          pitchDelta: -e.movementY * sensitivityRef.current * 0.1,
+          yawDelta: (e.movementX || 0) * sensitivityRef.current * 0.1,
+          pitchDelta: -(e.movementY || 0) * sensitivityRef.current * 0.1,
         });
         return;
       }
+      let dx = e.movementX;
+      let dy = e.movementY;
+      // Fall back to client coordinate deltas if movementX/Y is zero or unavailable (e.g. WebKitGTK without native pointer lock)
+      if ((!dx && !dy) || (dx === 0 && dy === 0)) {
+        if (lastMousePosRef.current) {
+          dx = e.clientX - lastMousePosRef.current.x;
+          dy = e.clientY - lastMousePosRef.current.y;
+        } else {
+          dx = 0;
+          dy = 0;
+        }
+      }
+      lastMousePosRef.current = { x: e.clientX, y: e.clientY };
+      dx = Math.max(-120, Math.min(120, dx));
+      dy = Math.max(-120, Math.min(120, dy));
+
       // Mouse right turns right. The sign lives in `applyLook` with the reasoning
       // for it and a test — it was inverted here, which is subtle enough to have
       // shipped: the camera's yaw is about cube +x, but the renderer maps cube y
       // onto three's z, and that reflection is exactly one sign.
-      applyLook(playerRef.current, e.movementX, e.movementY, sensitivityRef.current);
+      applyLook(playerRef.current, dx, dy, sensitivityRef.current);
     };
     const onMouseDown = (e: MouseEvent) => {
-      if (!isLocked()) return;
+      if (!isLocked()) {
+        grabInput();
+        return;
+      }
       // **With a grenade in hand the mouse means throw and toss.** Left is the
       // full overhand throw, right is the short underhand lob — the two the
       // server has always known about, now on the two buttons a hand is already
@@ -2836,6 +2860,9 @@ export function HorribleAssaultPanel() {
       keysRef.current.delete(action);
     };
     const onBlur = () => {
+      setLocked(false);
+      lockedRef.current = false;
+      lastMousePosRef.current = null;
       keysRef.current.clear();
       // A push-to-talk key released while the window was elsewhere never sends
       // its key-up; without this the mic stays open.
@@ -2881,6 +2908,13 @@ export function HorribleAssaultPanel() {
     };
   }, [releaseCapture, openMenu, resumeGame]);
 
+  useEffect(() => {
+    const canvas = mountRef.current?.querySelector('canvas');
+    if (canvas) {
+      canvas.style.cursor = locked ? 'none' : 'pointer';
+    }
+  }, [locked]);
+
   const respawn = useCallback(() => {
     const session = sessionRef.current;
     // In a match the server owns spawn points; asking it keeps everyone's idea
@@ -2912,10 +2946,12 @@ export function HorribleAssaultPanel() {
   const deploy = useCallback(() => {
     setDeployed(true);
     setMenuOpen(false);
+    menuOpenRef.current = false;
     // The armoury is another pane; this is the last moment before the gun is in
     // your hands, so it is the right one to ask what you are carrying.
     void refreshSkins();
-  }, [refreshSkins]);
+    grabInput();
+  }, [refreshSkins, grabInput]);
 
   /**
    * Enter the world alone, on the loaded map.
@@ -3536,7 +3572,15 @@ export function HorribleAssaultPanel() {
       </div>
 
       <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
-        <div ref={mountRef} onClick={onCanvasClick} style={{ position: 'absolute', inset: 0 }} />
+        <div
+          ref={mountRef}
+          onClick={onCanvasClick}
+          style={{
+            position: 'absolute',
+            inset: 0,
+            cursor: locked ? 'none' : 'pointer',
+          }}
+        />
 
         {/* Crossfire Tactical Match Header */}
         {phase === 'playing' && !cleanView && (
@@ -3759,6 +3803,7 @@ export function HorribleAssaultPanel() {
             while still dimming them. */}
         {phase === 'playing' && !locked && !menuOpen && (
           <div
+            onClick={onCanvasClick}
             style={{
               position: 'absolute',
               inset: 0,
@@ -3768,10 +3813,11 @@ export function HorribleAssaultPanel() {
               justifyContent: 'center',
               gap: '0.4rem',
               background: 'rgba(13,17,23,0.72)',
-              pointerEvents: 'none',
+              cursor: 'pointer',
               color: 'var(--text)',
               fontSize: '0.85rem',
               textAlign: 'center',
+              zIndex: 10,
             }}
           >
             {error ? (
