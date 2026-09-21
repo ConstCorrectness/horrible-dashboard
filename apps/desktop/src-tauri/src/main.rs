@@ -16,10 +16,18 @@ use tauri::Manager;
 fn main() {
     #[cfg(target_os = "linux")]
     {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-        std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1");
-        std::env::set_var("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS", "1");
-        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+        // WebKitGTK DMABUF renderer can crash or produce blank surfaces with certain
+        // graphics drivers (e.g. NVIDIA proprietary or Wayland/Mesa edge-cases).
+        // Disabling it falls back to shared memory compositing, which works reliably
+        // while preserving accelerated compositing (which WebGL requires).
+        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+        // WebKit sandbox frequently causes crashes on Ubuntu 24.04+ due to restricted
+        // unprivileged user namespaces.
+        if std::env::var_os("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS").is_none() {
+            std::env::set_var("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS", "1");
+        }
     }
 
     let supervisor = Arc::new(backend::BackendSupervisor::new());

@@ -2492,13 +2492,19 @@ export function HorribleAssaultPanel() {
         if (locked && typeof locked.catch === 'function') {
           locked.catch(() => {
             try {
-              canvas.requestPointerLock();
+              const fallback = canvas.requestPointerLock() as Promise<void> | undefined;
+              if (fallback && typeof fallback.catch === 'function') {
+                fallback.catch(() => {});
+              }
             } catch {}
           });
         }
       } catch {
         try {
-          canvas.requestPointerLock();
+          const fallback = canvas.requestPointerLock() as Promise<void> | undefined;
+          if (fallback && typeof fallback.catch === 'function') {
+            fallback.catch(() => {});
+          }
         } catch {}
       }
       try {
@@ -2695,11 +2701,10 @@ export function HorribleAssaultPanel() {
 
       // Escape is the pause menu, and it is the one key handled while *not*
       // locked — because by the time it reaches us the shell's ladder may already
-      // have released the lock (see `openMenu`). `lockedRef` is the state before
-      // that release, which is why it exists.
+      // have released the lock (see `openMenu`), or pointer lock was not held.
       if (e.code === 'Escape') {
         if (menuOpenRef.current) resumeGame();
-        else if (lockedRef.current) openMenu();
+        else if (phaseRef.current === 'playing') openMenu();
         return;
       }
       if (!isLocked()) return;
