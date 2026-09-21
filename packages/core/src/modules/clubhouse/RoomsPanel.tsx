@@ -124,7 +124,7 @@ function EarsReadout({
         </span>
       )}
       {fault && (
-        <span style={{ color: '#f87171', fontSize: '0.7rem', fontWeight: 600 }}>{fault}</span>
+        <span style={{ color: 'var(--danger)', fontSize: '0.7rem', fontWeight: 600 }}>{fault}</span>
       )}
 
       {/* Input level, with the threshold drawn on it. */}
@@ -142,7 +142,7 @@ function EarsReadout({
           style={{
             width: `${pct}%`,
             height: '100%',
-            background: over ? '#4ade80' : '#64748b',
+            background: over ? 'var(--success)' : 'var(--text-dim)',
             transition: 'width 120ms linear',
           }}
         />
@@ -153,7 +153,7 @@ function EarsReadout({
             top: 0,
             bottom: 0,
             width: '2px',
-            background: '#f8fafc',
+            background: 'var(--text)',
             opacity: 0.55,
           }}
         />
