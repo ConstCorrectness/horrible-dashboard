@@ -131,12 +131,13 @@ describe('fine-tuning frame preset', () => {
     expect(views[2]).toEqual(['training.metrics', 'localtrack.workspace']);
   });
 
-  it('docks the projects pane first — it is the entry point to the empty area', () => {
+  it('docks one browser, not the same list twice', () => {
     const frame = seedFromPreset(preset, { knownViews: FINETUNE_VIEWS });
-    expect(frame.docks.left.tools.map((t) => t.viewId)).toEqual([
-      'training.projects',
-      'explorer.home',
-    ]);
+    // Explorer alone. `training.projects` used to be docked above it, and
+    // Explorer's **Projects section is that same pane** — so the dock opened the
+    // identical list twice, one over the other, in 280px. It is still reachable:
+    // as that Explorer section, and as the notebook's own left region strip.
+    expect(frame.docks.left.tools.map((t) => t.viewId)).toEqual(['explorer.home']);
     expect(frame.docks.right.tools.map((t) => t.viewId)).toEqual(['agent.chat']);
     // Present but closed: wanted during a fine-tune, not tailing under the charts.
     expect(frame.docks.bottom.tools.map((t) => t.viewId)).toEqual(['observability.io']);

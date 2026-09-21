@@ -146,6 +146,7 @@ row that has moved is pointing at the wrong thing.
 | `area.tab`        | `areaId`, `instanceId`, `viewId`, `title`  | shell               |
 | `editor.selection`| `uri`, `text`, `empty`                     | **llamacpp**        |
 | `library.chunk`   | `text`, `title`, `sourceId`, `chunkIndex`  | **llamacpp**        |
+| `training.project`| `projectId`, `name`, `owner`               | training            |
 
 `files.background` is the empty space below the last row of the tree, which the
 tree used to swallow. It is a **separate kind** rather than `files.node` with a
@@ -155,6 +156,17 @@ the first writable root instead of the clicked directory. Reusing the node kind
 would have produced a menu whose every second item was permanently grey — exactly
 what *absent, not disabled* exists to prevent. The tree's row handler runs first
 and this one checks `defaultPrevented`, so a row click never opens both.
+
+`training.project` is a row in the training projects list, and is the clearest case
+of the menu paying for itself. That row used to carry five inline buttons — open,
+recipe, two pushes and delete — on one flex line in a 280px dock; the row is the
+open action now and the rest live here, with `Kaggle`/`Colab` folded into a
+`Push a copy to ▸` submenu. A project another module owns keeps every item but
+**disabled with a `detail`** saying why, rather than absent: the explanation is the
+point, and hiding them would make an inert project look identical to a healthy one.
+Delete stays enabled, because reclaiming the disk is exactly what still applies.
+The row also exposes a `⋯` button that opens this same menu — a menu nobody knows
+is there is the actions being gone.
 
 `area.tab` is a document tab in a centre area's strip. Its bulk-close items read
 the tab list from the store **when they run**, and close by instance id rather than

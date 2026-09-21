@@ -104,7 +104,14 @@ async def _probe(
 
 
 @router.get("/status", response_model=AgentStatus)
-async def status() -> AgentStatus:
+async def status(refresh: bool = False) -> AgentStatus:
+    # `refresh=true` drops the cached remote listings first, so a model enabled on
+    # the vendor's dashboard a minute ago shows up without waiting out the TTL or
+    # restarting the node. Off by default: the settings page and the home page both
+    # poll this, and making every poll re-download a few hundred KB is exactly what
+    # the cache exists to prevent.
+    if refresh:
+        P.invalidate_catalogs()
     config = _load_config()
     # `peer` is listed only while a lease is actually held. It is the one provider
     # nobody can install or fix: without a lease it has no endpoint by design, so
@@ -137,6 +144,62 @@ async def status() -> AgentStatus:
         providers=list(detected),
         vllm=vllm_manager.status(),
     )
+
+
+
+#: Held so the warm task is not garbage-collected mid-flight -- `asyncio` keeps only
+#: a weak reference to a running task, and a dropped one cancels silently.
+_warm_task: asyncio.Task[None] | None = None
+
+
+async def warm_model_lists() -> None:
+    """Fetch the remote providers' model listings once at startup, off the request
+    path, so the first time someone opens the model dropdown it is already filled.
+
+    Only the **remote** providers are warmed, and that is the whole point of the
+    distinction: a local server's listing is read fresh on every `/agent/status`
+    and is never cached, because `ollama pull` changes it and a stale list would be
+    a worse lie than a slow one. What can be slow, and what genuinely does not
+    change by the minute, is a listing from the other side of the internet --
+    OpenRouter's public catalog and NVIDIA NIM's `/v1/models`.
+
+    Fire-and-forget: it never blocks boot, and every failure is swallowed the same
+    way `_probe` swallows one. A provider that could not be reached at startup is
+    simply fetched on demand, as it was before this existed.
+    """
+    config = _load_config()
+    infos = [
+        info
+        for info in P.PROVIDERS.values()
+        if info.catalog_url
+        or (
+            not P.is_loopback_endpoint(_endpoint_for(info, config))
+            # NIM without a key is not a provider we could list anyway, and asking
+            # unauthenticated tells us what we already know.
+            and (info.kind != "nim" or P.auth_headers(info))
+        )
+    ]
+    if not infos:
+        return
+    try:
+        async with instrumented_client(timeout=P.REMOTE_TIMEOUT) as client:
+            await asyncio.gather(
+                *(_probe(client, info, _endpoint_for(info, config)) for info in infos),
+                return_exceptions=True,
+            )
+    except Exception:  # pragma: no cover - a warm is never worth failing boot over
+        logger.debug("model-list warm failed", exc_info=True)
+
+
+def start_warm_model_lists() -> None:
+    """Kick the warm off from the app lifespan."""
+    global _warm_task
+    _warm_task = asyncio.create_task(warm_model_lists())
+
+
+def stop_warm_model_lists() -> None:
+    if _warm_task is not None and not _warm_task.done():
+        _warm_task.cancel()
 
 
 class ProviderKeyRequest(BaseModel):

@@ -131,8 +131,18 @@ async def project_create(req: CreateProjectRequest) -> ProjectModel:
 
 @router.delete("/projects/{project_id}")
 async def project_delete(project_id: str) -> dict[str, bool]:
-    _project_or_404(project_id)
+    project = _project_or_404(project_id)
     deleted = await asyncio.to_thread(projects.delete_project, project_id)
+    if deleted:
+        # Announce it. Every other change to a project broadcasts, but a *delete*
+        # did not — so the only list that updated was the one belonging to whoever
+        # clicked, and a project removed through the agent or from a second window
+        # stayed on screen until something else happened to trigger a refresh.
+        # The doomed project's own body, so the event keeps its shape, plus the
+        # flag that says which way it changed.
+        broadcast_threadsafe(
+            "project_changed", {**project.model_dump(), "deleted": True}
+        )
     return {"deleted": deleted}
 
 
@@ -534,9 +544,7 @@ def _start_fetch(project: ProjectModel) -> None:
 # execution path everything else here uses.
 
 
-def _shape_warnings(
-    recipe: recipes.Recipe, shape: dict[str, Any] | None
-) -> list[str]:
+def _shape_warnings(recipe: recipes.Recipe, shape: dict[str, Any] | None) -> list[str]:
     """What a typed dataset's shape means for the run, before it is a stack trace.
 
     The failure being pre-empted is specific and was reachable from the default

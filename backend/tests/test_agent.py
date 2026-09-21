@@ -1,3 +1,5 @@
+import time
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -375,3 +377,22 @@ def test_status_lists_free_models_before_a_key(client: TestClient, monkeypatch) 
     assert providers["openrouter"]["reachable"] is False
     assert providers["openrouter"]["free_models"] == ["vendor/zero-priced"]
     assert providers["ollama"]["free_models"] == []
+
+
+def test_status_refresh_drops_the_cached_remote_listings(client: TestClient) -> None:
+    """The model picker's refresh button is this flag, and nothing else knows the
+    cache exists: a plain poll must keep it (both the home page and the settings
+    page hit this route on mount), and `?refresh=true` must clear it so a model
+    enabled on the vendor's dashboard shows up without waiting out the TTL."""
+    P._CATALOG_CACHE["openrouter"] = (time.monotonic(), P.CatalogListing((), ()))
+    P._REMOTE_MODELS_CACHE[("nim", "https://integrate.api.nvidia.com")] = (
+        time.monotonic(),
+        (),
+    )
+
+    assert client.get("/api/agent/status").status_code == 200
+    assert P._CATALOG_CACHE and P._REMOTE_MODELS_CACHE, "a poll must not clear it"
+
+    assert client.get("/api/agent/status?refresh=true").status_code == 200
+    assert not P._CATALOG_CACHE
+    assert not P._REMOTE_MODELS_CACHE

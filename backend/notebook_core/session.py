@@ -406,6 +406,17 @@ class KernelSession:
 
     # --- execution -----------------------------------------------------------
 
+    def cell_type(self, cell_id: str) -> str | None:
+        """This cell's `cell_type`, or None if the notebook has no such cell.
+
+        Public because the two facts `enqueue` collapses into `False` — "there is
+        no cell with that id" and "that cell is prose" — are different problems
+        with different fixes, and the caller reporting the failure is the one that
+        has to tell them apart. See `manager._handle_session_event`.
+        """
+        cell = self._cell(cell_id)
+        return None if cell is None else str(cell.get("cell_type") or "")
+
     def enqueue(self, cell_id: str) -> bool:
         cell = self._cell(cell_id)
         if cell is None or cell.get("cell_type") != "code":

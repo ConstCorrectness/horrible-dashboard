@@ -145,128 +145,88 @@ export function Region({ pane, position }: { pane: PaneState; position: RegionPo
     />
   );
 
-  const content =
-    position === 'right' && region.views.length > 1 ? (
+  // One renderer for all three positions. The right-hand strip used to have a
+  // second one that stacked every view at once, and on the training notebook —
+  // which declares five — that meant Metrics, Architecture, Rollout, Manim and
+  // Peers each got a fifth of a 300px column, about 60px, and none of them could
+  // draw anything legible. Stacking also quietly cost the two things this branch
+  // has: `activeView` meant nothing, and there was no way to drag a companion out
+  // into a real pane, which is the actual answer to "I want two of these at once".
+  const content = (
+    <div className="frame-region-content">
       <div
-        className="frame-region-content"
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          height: '100%',
-          minWidth: 0,
-          minHeight: 0,
+        className="frame-region-header"
+        draggable
+        title="Drag into the center to open in its own area"
+        onDragStart={(e) => {
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', activeTitle);
+          // A `view` payload, not `pane`: the strip's content is a synthetic
+          // per-host instance, not a pane the layout owns — so it opens a real
+          // one where it lands, and the strip stays put.
+          paneDrag.begin({ kind: 'view', viewId: region.activeView, title: activeTitle });
         }}
+        onDragEnd={() => paneDrag.end()}
       >
-        {region.views.map((id, index) => {
-          const decl = declFor(id);
-          const title = decl?.label ?? resolveView(id)?.title ?? id;
-          return (
-            <div
-              key={id}
-              className="frame-region-section"
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                flex: 1,
-                minHeight: 0,
-                borderBottom: index < region.views.length - 1 ? '1px solid var(--border)' : 'none',
-              }}
-            >
-              <div
-                className="frame-region-header"
-                style={{ flex: 'none', background: 'var(--bg-raised)' }}
-              >
-                {decl?.icon ? <span>{decl.icon}</span> : null}
-                <span className="frame-region-title" style={{ fontWeight: 800 }}>
-                  {title}
-                </span>
-                {/* Once only. Putting away is a *region* action — every copy of
-                    this button did the same thing, so a stack of five sections
-                    drew five identical controls down the edge and each one
-                    looked like it would hide the section beside it. */}
-                {index === 0 && (
-                  <button
-                    className="frame-region-btn"
-                    title={`Put away — reopen from the rail (${POSITION_KEY[position]})`}
-                    style={{ marginLeft: 'auto' }}
-                    onClick={() => collapseRegion(pane.instanceId, position)}
-                  >
-                    {COLLAPSE_ICON[position]}
-                  </button>
-                )}
-              </div>
-              <div
-                className="frame-region-body"
-                style={{ flex: 1, minHeight: 0, overflow: 'auto' }}
-              >
-                <PaneHost
-                  pane={{
-                    instanceId: `${pane.instanceId}:${position}:${id}`,
-                    viewId: id,
-                  }}
-                />
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    ) : (
-      <div className="frame-region-content">
-        <div
-          className="frame-region-header"
-          draggable
-          title="Drag into the center to open in its own area"
-          onDragStart={(e) => {
-            e.dataTransfer.effectAllowed = 'move';
-            e.dataTransfer.setData('text/plain', activeTitle);
-            // A `view` payload, not `pane`: the strip's content is a synthetic
-            // per-host instance, not a pane the layout owns — so it opens a real
-            // one where it lands, and the strip stays put.
-            paneDrag.begin({ kind: 'view', viewId: region.activeView, title: activeTitle });
-          }}
-          onDragEnd={() => paneDrag.end()}
-        >
-          {region.views.length > 1 ? (
-            <div className="frame-region-tabs">
-              {region.views.map((id) => (
+        {region.views.length > 1 ? (
+          <div className="frame-region-tabs">
+            {region.views.map((id) => {
+              const label = declFor(id)?.label ?? resolveView(id)?.title ?? id;
+              const icon = declFor(id)?.icon;
+              const active = id === region.activeView;
+              return (
                 <button
                   key={id}
-                  className={`frame-region-tab${id === region.activeView ? ' active' : ''}`}
-                  title={declFor(id)?.label ?? id}
+                  className={`frame-region-tab${active ? ' active' : ''}`}
+                  title={label}
+                  aria-label={label}
                   onClick={() => setRegionView(pane.instanceId, id)}
                 >
-                  {declFor(id)?.icon ? <span>{declFor(id)!.icon}</span> : null}
-                  <span>{declFor(id)?.label ?? resolveView(id)?.title ?? id}</span>
+                  {icon ? <span>{icon}</span> : null}
+                  {/* The label rides on the *active* tab only. Five icon+label
+                      tabs are ~375px, which overflows the header into a scroller
+                      you have to find before you can reach the last one; an
+                      icon-only tab keeps its name in `title` and `aria-label`. A
+                      view with no icon always shows its label — otherwise it
+                      would be a blank button. */}
+                  {(active || !icon) && <span>{label}</span>}
                 </button>
-              ))}
-            </div>
-          ) : (
-            <>
-              {activeDecl?.icon ? <span>{activeDecl.icon}</span> : null}
-              <span className="frame-region-title">{activeTitle}</span>
-            </>
-          )}
-          <button
-            className="frame-region-btn"
-            title={`Put away — reopen from the rail (${POSITION_KEY[position]})`}
-            aria-label={`Put away the ${position} region`}
-            onClick={() => collapseRegion(pane.instanceId, position)}
-          >
-            {COLLAPSE_ICON[position]}
-          </button>
-        </div>
-        <div className="frame-region-body">
-          <PaneHost
-            pane={{
-              // Region views get a synthetic per-host instance id, so e.g. each
-              // buffer's outline keeps a distinct agent-context key.
-              instanceId: `${pane.instanceId}:${position}:${region.activeView}`,
-              viewId: region.activeView,
-            }}
-          />
-        </div>
+              );
+            })}
+          </div>
+        ) : (
+          <>
+            {activeDecl?.icon ? <span>{activeDecl.icon}</span> : null}
+            <span className="frame-region-title">{activeTitle}</span>
+          </>
+        )}
+        <button
+          className="frame-region-btn"
+          title={`Put away — reopen from the rail (${POSITION_KEY[position]})`}
+          aria-label={`Put away the ${position} region`}
+          onClick={() => collapseRegion(pane.instanceId, position)}
+        >
+          {COLLAPSE_ICON[position]}
+        </button>
       </div>
-    );
+      <div className="frame-region-body">
+        <PaneHost
+          pane={{
+            // Region views get a synthetic per-host instance id, so e.g. each
+            // buffer's outline keeps a distinct agent-context key.
+            instanceId: `${pane.instanceId}:${position}:${region.activeView}`,
+            viewId: region.activeView,
+            // ...and the host's own params, because a companion strip is *about*
+            // the document it rides on. Without this every strip beside the
+            // training notebook was blind to which project it sat next to and
+            // rendered whichever one last published on the channel — so two
+            // projects open side by side overwrote each other's charts.
+            params: pane.params,
+          }}
+        />
+      </div>
+    </div>
+  );
 
   return (
     <div

@@ -291,7 +291,7 @@ def _emit_stats(model: Any) -> None:
         pass  # stats must never break a training loop
 
 
-def callback(name=None, log_every=1):
+def callback(name=None, log_every=1, graph=True, weights=False):
     """A Hugging Face `TrainerCallback` that mirrors every logged metric here.
 
     This is what makes "local metrics are authoritative" true rather than a
@@ -303,6 +303,19 @@ def callback(name=None, log_every=1):
     zero dependencies by design — importing a trainer at module scope would make
     `import horrible_train` fail in a plain script or a gym rollout, which is
     most of what this package is used for.
+
+    **`graph=True` publishes the architecture too.** The Trainer hands `model=` to
+    every callback hook, and this one used to drop it on the floor — so running a
+    generated recipe to completion left the Architecture pane saying "no model
+    yet, call `horrible_train.watch(model)`", naming a call the recipe does not
+    make and, for the trl path, could not make (the trainer is given the model's
+    *name*, so there is no model object in the notebook namespace until it is
+    constructed). It is on by default because it is nearly free: `_extract_graph`
+    falls back from `torch.fx` — which will not trace an HF decoder — to a walk of
+    `named_modules()`.
+
+    `weights` is the one that costs, and stays off: it norms every parameter on
+    every `log()`, per step, for the life of the run.
     """
     from transformers import TrainerCallback  # noqa: PLC0415 — see the docstring
 
@@ -315,6 +328,12 @@ def callback(name=None, log_every=1):
             if not self.started:
                 run(name or "train")
                 self.started = True
+            model = kwargs.get("model")
+            if graph and model is not None:
+                try:
+                    watch(model, weights=weights)
+                except Exception:
+                    pass  # a graph must never break a training loop — see _emit_stats
 
         def on_train_end(self, args, state, control, **kwargs):
             # The terminal signal. Without it the run stays `running` until some

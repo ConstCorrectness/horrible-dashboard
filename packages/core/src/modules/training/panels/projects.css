@@ -1,0 +1,97 @@
+/**
+ * The project row in the training projects list.
+ *
+ * It is a two-line target, not a line of buttons. The previous row packed the
+ * name, an owner badge, a venv/data chip and five buttons onto one flex line, and
+ * this list renders in a ~280px dock or a region strip beside the notebook — so
+ * every button was a few characters wide and the name was an ellipsis. The
+ * secondary actions live in the context menu now (see the module manifest), which
+ * leaves the row free to be legible.
+ *
+ * Classed throughout: `button:not([class])` in controls.css is the 30px action
+ * control, and stretching a two-line row to that height would clip it.
+ */
+
+.training-project-row {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: stretch;
+  text-align: left;
+  background: transparent;
+  border: none;
+  /* A 2px accent edge on hover rather than a full glowing perimeter — the
+     tactical treatment in CLAUDE.local.md. */
+  border-left: 2px solid transparent;
+  padding: 0.4rem 0.5rem;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+.training-project-row:hover:not(:disabled),
+.training-project-row:focus-visible {
+  background: var(--bg-hover);
+  border-left-color: var(--accent, #3b82f6);
+  outline: none;
+}
+.training-project-row:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+
+.training-project-line {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.training-project-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-body);
+  font-weight: 700;
+}
+
+.training-project-status {
+  flex: none;
+  font-size: var(--fs-meta);
+  font-family: var(--font-mono, monospace);
+  color: var(--text-dim);
+}
+
+/* Metadata and the live note are monospace and muted, per the typography rule:
+   ids, paths and stats read differently from names. */
+.training-project-meta,
+.training-project-note {
+  font-size: var(--fs-meta);
+  font-family: var(--font-mono, monospace);
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.training-project-more {
+  flex: none;
+  align-self: stretch;
+  width: 24px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--fs-body);
+  line-height: 1;
+  cursor: pointer;
+}
+.training-project-more:hover,
+.training-project-more:focus-visible {
+  background: var(--bg-hover);
+  color: var(--text);
+  outline: none;
+}

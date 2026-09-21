@@ -2,19 +2,20 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   createProject,
-  deleteProject,
   fetchProjectData,
   listProjects,
   listProviders,
-  pushProject,
   resolveEnvironment,
   searchEnvironments,
   type EnvironmentRef,
   type Project,
   type ProviderInfo,
 } from '../api';
+import { ownedReason, projectNote, subscribeProjectNotes } from '../activity';
 import { onTrainingEvent } from '../client';
-import { openTrainingNotebook, openTrainingRecipe } from '../open';
+import { openTrainingNotebook } from '../open';
+import { openContextMenu } from '../../../overlay/context-menu';
+import './projects.css';
 
 const dim = { color: 'var(--text-dim)' } as const;
 
@@ -72,7 +73,7 @@ function compact(n: number): string {
 
 /** The marker on a project another module owns. Same treatment as a read-only
  * bundled eval suite: uppercase, bordered, muted — it explains why the authoring
- * buttons beside it are off. */
+ * actions in its menu are off. */
 const ownedBadge = {
   fontSize: 10,
   fontWeight: 700,
@@ -80,24 +81,9 @@ const ownedBadge = {
   textTransform: 'uppercase' as const,
   color: 'var(--text-dim)',
   border: '1px solid var(--border)',
-  borderRadius: 3,
+  borderRadius: 'var(--radius-sm)',
   padding: '1px 5px',
 };
-
-/**
- * Why a project's authoring actions are disabled.
- *
- * These projects are working storage — `evals` builds one per suite to run Hugging
- * Face benchmarks in — created straight through `create_project`, so they have no
- * scaffolded `main.ipynb` and their venv holds only the benchmark's requirements
- * (no `ipykernel`). Every authoring button was a button that could only fail.
- */
-function ownedReason(owner: string): string {
-  return (
-    `Working storage for the ${owner} module — it has no notebook of its own ` +
-    `and its venv cannot run one. Delete it here if you want the disk back.`
-  );
-}
 
 /**
  * The training hub: search an environment provider (Kaggle / HF / Gymnasium /
@@ -116,6 +102,9 @@ export function ProjectsPane() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [creating, setCreating] = useState<string | null>(null);
   const [progress, setProgress] = useState<Record<string, string>>({});
+  /** Repaint when a menu action writes a note; the notes themselves live in
+   *  `activity.ts`, which is module state rather than component state. */
+  const [, setNoteTick] = useState(0);
   const logRef = useRef<Record<string, string[]>>({});
 
   const refresh = useCallback(() => {
@@ -141,6 +130,10 @@ export function ProjectsPane() {
       onTrainingEvent('env_progress', record),
       onTrainingEvent('fetch_progress', record),
       onTrainingEvent('project_changed', refresh),
+      // The project actions live in a context menu now, declared in the module
+      // manifest, so their progress lines arrive through the note store rather
+      // than through this component's own state. See `activity.ts`.
+      subscribeProjectNotes(() => setNoteTick((n) => n + 1)),
     ];
     return () => unsubs.forEach((u) => u());
   }, [refresh]);
@@ -264,108 +257,68 @@ export function ProjectsPane() {
           </div>
         )}
         <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-          {projects.map((p) => (
-            <li key={p.id} style={{ padding: '0.4rem 0', borderBottom: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <strong style={{ flex: 1, minWidth: 0, fontSize: '0.85rem' }}>{p.name}</strong>
-                {/* Marked, not hidden — the same call the bundled eval suites make.
-                    A project missing from this list is a directory eating disk that
-                    you can neither see nor delete; what it must not do is offer a
-                    notebook button that cannot work. */}
-                {p.owner && (
-                  <span style={ownedBadge} title={ownedReason(p.owner)}>
-                    {p.owner}
-                  </span>
-                )}
-                <span style={{ fontSize: '0.7rem', ...dim }}>
-                  {p.venv_ready ? 'venv ✓' : 'venv…'} · {p.data_ready ? 'data ✓' : 'data…'}
-                </span>
-                <button
-                  disabled={!!p.owner}
-                  title={p.owner ? ownedReason(p.owner) : undefined}
-                  onClick={() => openTrainingNotebook(p.id, 'main.ipynb')}
-                >
-                  Open notebook
-                </button>
-                <button
-                  disabled={!!p.owner}
-                  title={
-                    p.owner
-                      ? ownedReason(p.owner)
-                      : "Fine-tuning recipe: a typed form that writes cells into this project's notebook"
-                  }
-                  onClick={() => openTrainingRecipe(p.id)}
-                >
-                  🧪 Recipe
-                </button>
-                <button
-                  disabled={!!p.owner}
-                  title={p.owner ? ownedReason(p.owner) : 'Push notebook to Kaggle kernels'}
-                  onClick={() => {
-                    setProgress((prog) => ({ ...prog, [p.id]: 'pushing to Kaggle…' }));
-                    pushProject(p.id, 'kaggle')
-                      .then((r) =>
-                        setProgress((prog) => ({
-                          ...prog,
-                          [p.id]: r.url ? `pushed → ${r.url}` : `push: ${r.status}`,
-                        })),
-                      )
-                      .catch((e: Error) =>
-                        setProgress((prog) => ({ ...prog, [p.id]: `push failed: ${e.message}` })),
-                      );
-                  }}
-                >
-                  ⇪ Kaggle
-                </button>
-                <button
-                  disabled={!!p.owner}
-                  title={
-                    p.owner ? ownedReason(p.owner) : 'Push notebook to Google Colab (via Drive)'
-                  }
-                  onClick={() => {
-                    setProgress((prog) => ({ ...prog, [p.id]: 'pushing to Colab…' }));
-                    pushProject(p.id, 'colab')
-                      .then((r) =>
-                        setProgress((prog) => ({
-                          ...prog,
-                          [p.id]: r.url ? `pushed → ${r.url}` : `push: ${r.status}`,
-                        })),
-                      )
-                      .catch((e: Error) =>
-                        setProgress((prog) => ({ ...prog, [p.id]: `push failed: ${e.message}` })),
-                      );
-                  }}
-                >
-                  ⇪ Colab
-                </button>
-                <button
-                  title="Delete project (removes venv and data)"
-                  onClick={() => {
-                    void deleteProject(p.id).then(refresh);
-                  }}
-                >
-                  ✕
-                </button>
-              </div>
-              <div style={{ fontSize: '0.7rem', ...dim }}>
-                {p.refs.map((r) => `${r.provider}:${r.id}`).join(', ')}
-              </div>
-              {progress[p.id] && (
-                <div
-                  style={{
-                    fontSize: '0.7rem',
-                    fontFamily: 'var(--font-mono, monospace)',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    ...dim,
-                  }}
-                >
-                  {progress[p.id]}
+          {projects.map((p) => {
+            const note = progress[p.id] || projectNote(p.id);
+            const menu = (e: { clientX: number; clientY: number }): void => {
+              openContextMenu(e, {
+                kind: 'training.project',
+                projectId: p.id,
+                name: p.name,
+                owner: p.owner ?? null,
+              });
+            };
+            return (
+              <li key={p.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                <div style={{ display: 'flex', alignItems: 'stretch' }}>
+                  {/* The row *is* the primary action. Classed, because a classless
+                      <button> is the 30px action control and this is a two-line
+                      row; see the One Height Rule in CLAUDE.md. */}
+                  <button
+                    className="training-project-row"
+                    disabled={!!p.owner}
+                    title={p.owner ? ownedReason(p.owner) : `Open ${p.name} · right-click for more`}
+                    onClick={() => openTrainingNotebook(p.id, 'main.ipynb')}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      menu(e);
+                    }}
+                  >
+                    <span className="training-project-line">
+                      <strong className="training-project-name">{p.name}</strong>
+                      {/* Marked, not hidden — the same call the bundled eval suites
+                          make. A project missing from this list is a directory
+                          eating disk that you can neither see nor delete. */}
+                      {p.owner && (
+                        <span style={ownedBadge} title={ownedReason(p.owner)}>
+                          {p.owner}
+                        </span>
+                      )}
+                      <span className="training-project-status">
+                        {p.venv_ready ? 'venv ✓' : 'venv…'} · {p.data_ready ? 'data ✓' : 'data…'}
+                      </span>
+                    </span>
+                    <span className="training-project-meta">
+                      {p.refs.map((r) => `${r.provider}:${r.id}`).join(', ')}
+                    </span>
+                    {note && <span className="training-project-note">{note}</span>}
+                  </button>
+                  {/* The same menu, without a right-click. A context menu nobody
+                      knows is there is the actions being gone. */}
+                  <button
+                    className="training-project-more"
+                    title="Recipe, push, delete…"
+                    aria-label={`Actions for ${p.name}`}
+                    onClick={(e) => {
+                      const r = e.currentTarget.getBoundingClientRect();
+                      menu({ clientX: r.left, clientY: r.bottom });
+                    }}
+                  >
+                    ⋯
+                  </button>
                 </div>
-              )}
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       </div>
     </div>

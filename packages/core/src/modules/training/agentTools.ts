@@ -238,6 +238,19 @@ export const notebookAgentTools: AgentToolDecl[] = [
       const key = s.snapshot().sessionKey;
       if (!key) return { error: 'kernel not ready' };
       const cellId = String(args.cellId);
+      // A markdown cell never gets a run state, so this used to burn the whole
+      // 120s timeout and then answer `state: 'unknown'` — while the real reason
+      // ("not a code cell") went to the pane's error banner, which an agent
+      // cannot see. Answer it here instead.
+      const target = s.snapshot().cells.find((c) => c.id === cellId);
+      if (!target) return { error: `no cell ${cellId} in this notebook` };
+      if (target.cell_type !== 'code') {
+        return {
+          cellId,
+          state: 'skipped',
+          note: `cell is ${target.cell_type}, not code — there is nothing to run`,
+        };
+      }
       runCell(key, cellId);
       return waitForCell(s, cellId);
     },

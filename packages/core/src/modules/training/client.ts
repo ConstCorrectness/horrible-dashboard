@@ -21,7 +21,8 @@ export type NbOutput = Record<string, unknown>;
 export interface TrainingEventMap {
   env_progress: ProgressEvent;
   fetch_progress: ProgressEvent;
-  project_changed: Project;
+  /** A project was created, flagged ready, or (with `deleted`) removed. */
+  project_changed: Project & { deleted?: boolean };
   opened: { sessionKey: string; projectId: string; notebook: Notebook; kernel: KernelStatus };
   kernel_status: { sessionKey: string; status: KernelStatus };
   execution_state: {
@@ -118,4 +119,17 @@ export function shutdownKernel(sessionKey: string): void {
 
 export function watchRun(runId: string): void {
   sendChannel('training', 'watch_run', { runId });
+}
+
+/**
+ * Ask for this project's last architecture events, replayed to us alone.
+ *
+ * The chart pane's `watchRun` exists because a run emits points continuously and
+ * you can join late; this exists for the opposite reason. `model_graph` is emitted
+ * exactly **once**, when training begins, and the Architecture strip starts
+ * closed — so without a replay the only way to ever see a graph was to have had
+ * the strip open at the instant the trainer was constructed.
+ */
+export function watchGraph(projectId: string): void {
+  sendChannel('training', 'watch_graph', { projectId });
 }

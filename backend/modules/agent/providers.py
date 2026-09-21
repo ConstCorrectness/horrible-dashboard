@@ -21,6 +21,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 # Emits streamed deltas: (reasoning_text, content_text). Either may be empty.
 DeltaSink = Callable[[str, str], Awaitable[None]]
@@ -542,6 +543,42 @@ class CatalogListing:
 
 _CATALOG_CACHE: dict[str, tuple[float, CatalogListing]] = {}
 
+#: Remote openai-dialect listings (`/v1/models`), keyed by **(kind, endpoint)** --
+#: NVIDIA NIM today, a vLLM on another host tomorrow. Same TTL and same reason as
+#: `_CATALOG_CACHE`: the vendor's range does not change by the minute, and every
+#: home-page or settings visit calls `/agent/status`. Keyed by the endpoint too,
+#: because `vllm`/`peer` can be repointed at a different server, and a list cached
+#: under the bare kind would then describe a machine nobody is talking to.
+_REMOTE_MODELS_CACHE: dict[tuple[str, str], tuple[float, tuple[str, ...]]] = {}
+
+#: The probe client's budget is sized for a loopback port (2s, in `routes.status`).
+#: A listing fetched across the internet does not fit in it, and the timeout does
+#: not surface as a slow network -- `_probe` swallows `httpx.HTTPError`, so it
+#: surfaces as a provider with no models at all. Same reasoning as the explicit
+#: timeout in `_catalog_listing`.
+REMOTE_TIMEOUT = 10.0
+
+
+def is_loopback_endpoint(endpoint: str) -> bool:
+    """Whether this endpoint is a server on this machine.
+
+    Decides the timeout and whether the listing is worth caching. An empty endpoint
+    counts as loopback: the only provider with one is `peer` without a lease, which
+    is unreachable either way.
+    """
+    host = (urlsplit(endpoint).hostname or "").lower()
+    return host in {"", "localhost", "127.0.0.1", "::1"}
+
+
+def invalidate_catalogs() -> None:
+    """Drop every cached model listing, so the next `/agent/status` re-fetches.
+
+    The escape hatch for the TTL: a user who just enabled a model on the vendor's
+    dashboard should not have to wait ten minutes or restart the node to see it.
+    """
+    _CATALOG_CACHE.clear()
+    _REMOTE_MODELS_CACHE.clear()
+
 
 def _is_free(entry: dict[str, Any]) -> bool:
     """Whether a catalog entry costs nothing to call.
@@ -659,9 +696,28 @@ async def list_models(
         res = await client.get(f"{endpoint}/api/tags")
         res.raise_for_status()
         return [m["name"] for m in res.json().get("models", [])]
-    res = await client.get(f"{endpoint}/v1/models", headers=auth_headers(info))
+    if is_loopback_endpoint(endpoint):
+        res = await client.get(f"{endpoint}/v1/models", headers=auth_headers(info))
+        res.raise_for_status()
+        return [m["id"] for m in res.json().get("data", [])]
+
+    # Remote (NVIDIA NIM, or a vLLM on another host): cached and given its own
+    # timeout -- see `REMOTE_TIMEOUT`.
+    key = (info.kind, endpoint)
+    cached = _REMOTE_MODELS_CACHE.get(key)
+    if cached and time.monotonic() - cached[0] < _CATALOG_TTL:
+        return list(cached[1])
+    res = await client.get(
+        f"{endpoint}/v1/models",
+        headers=auth_headers(info),
+        timeout=REMOTE_TIMEOUT,
+    )
     res.raise_for_status()
-    return [m["id"] for m in res.json().get("data", [])]
+    models = tuple(
+        str(m["id"]) for m in res.json().get("data", []) if isinstance(m, dict) and m.get("id")
+    )
+    _REMOTE_MODELS_CACHE[key] = (time.monotonic(), models)
+    return list(models)
 
 
 @traced_chat

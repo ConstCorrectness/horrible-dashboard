@@ -69,8 +69,38 @@ carries only the benchmark's requirements: no `ipykernel`, no `horrible_train`.
 They are listed and **marked, not hidden** (the bundled-suite rule): a project
 missing from the pane is a directory eating disk you can neither see nor delete. What
 they do not get is authoring actions — open notebook, recipe, and both pushes are
-disabled with the reason in their tooltip, because every one of them could only fail.
-Delete stays enabled.
+disabled, each carrying the reason as its `detail`, because every one of them could
+only fail. Disabled-with-a-reason rather than absent: the reason is the whole value,
+and hiding them would make an inert project look identical to a healthy one. Delete
+stays enabled — it is exactly the one you might want the disk back from.
+
+### The project row is a target, not a toolbar
+
+A project used to render as one flex line holding its name, the owner badge, a
+venv/data chip and **five buttons** (`Open notebook`, `🧪 Recipe`, `⇪ Kaggle`,
+`⇪ Colab`, `✕`) — in a 280px dock or a region strip beside the notebook. Nothing
+read as primary, a push to somebody else's servers sat at the same weight as opening
+the notebook, and at that width each button was a couple of characters wide.
+
+Now the row is two lines (name + status; refs and the live progress note beneath)
+and **the row itself opens the notebook**. Everything else is a context menu — a
+declared `contextMenu` provider for the target kind `training.project`, the same
+extension point [file explorer](file-explorer.mdx) and [library](library.mdx) use — reached by
+right-click or by the row's `⋯` button, so the actions are discoverable without
+knowing to right-click. `Kaggle` and `Colab` became a **`Push a copy to ▸`**
+submenu: they are one verb with two destinations, and as sibling buttons they read
+as two unrelated features.
+
+Moving the actions out of the component took their progress lines with them — a
+provider declared in the module manifest is a plain function with no component
+state — so the `pushing… / pushed → url / push failed` line now lives in a small
+module-level note store (`training/activity.ts`), which the pane subscribes to and
+renders in the same slot as the `env_progress` / `fetch_progress` events.
+
+Deleting a project also **broadcasts** `project_changed` now (with `deleted: true`).
+Every other change to a project did; a delete did not, so the only list that updated
+was the one belonging to whoever clicked, and a project removed through the agent or
+from a second window stayed on screen.
 
 Two failures this closed, both of the silent kind:
 
@@ -555,6 +585,39 @@ Kernel slice of the `training` ws channel: client sends `open`, `run_cell`, `run
 server sends `opened`, `kernel_status`, `execution_state`, `output` (raw nbformat output
 dicts), `cells_changed`, `run_backfill`, and `error`.
 
+### Cells: the keyboard, and markdown
+
+Jupyter's contract, and both notebook panes share it (`notebook/CellEditor.tsx`,
+`notebook/advance.ts`):
+
+| key | code cell | markdown cell |
+| --- | --- | --- |
+| `Ctrl`/`Cmd`+`Enter` | run, stay put | render, stay put |
+| `Shift`+`Enter` | run, **focus the next cell** | render, **focus the next cell** |
+| `Shift`+`Enter` on the last cell | run, **append a code cell and land in it** | same |
+| double-click | — | edit |
+
+Three things this replaced. The two keys were bound to the **same** callback, so
+run-and-advance did not exist and there was no way to walk a notebook without the
+mouse. The training pane **never rendered markdown** — a prose cell was a raw
+editor — and its `Shift`+`Enter` sent that cell to the kernel, which refused it;
+the pane's error banner then read `no code cell <id>`, which sounds like the
+notebook lost the cell you were looking at. And the backend collapsed two failures
+into that one sentence, so it now says either `no cell <id> in this notebook` or
+`cell <id> is markdown, not code — nothing to run`. (`cells.run_cell` /
+`notebook.run_cell` answer the second case immediately too; a markdown cell never
+gets a run state, so the tool used to wait out its full 120s timeout and then
+report `unknown`.)
+
+Advancing *into* a markdown cell opens it for editing rather than leaving it
+rendered. A rendered cell has no editor to hold the caret, so the walk would stop
+there — and the alternative is Jupyter's command mode, which needs a cell-selection
+model the pane does not have.
+
+Focus requests are tracked **by position, not by cell id**: a cell appended at the
+end carries a temporary id until `cells_changed` answers with the real one, and
+that swap remounts the row.
+
 ## Visualizations
 
 All four visual panes feed off the same `training` channel; the notebook (or a script
@@ -610,11 +673,31 @@ commands (which reveal the strip rather than opening a pane). `training.metrics`
 deliberately **not** — it is seeded as the Training workspace's own center pane, so it
 is a destination in a way the others are not. See [Embedded views and sections](../architecture/windowing.mdx#embedded-views-and-sections).
 
-- **Architecture** (`training.modelgraph`, dagre SVG) — the layer graph from
-  `horrible_train.watch(model)`: `torch.fx` topology (with tensor shapes when an
-  `example=` input is given), or the `named_modules` tree when the model isn't
-  traceable. With `weights=True`, per-layer gradient norms color-map the nodes live
-  during training (`model_stats` events).
+- **Architecture** (`training.modelgraph`, dagre SVG) — the layer graph: `torch.fx`
+  topology (with tensor shapes when an `example=` input is given), or the
+  `named_modules` tree when the model isn't traceable. With `weights=True`,
+  per-layer gradient norms color-map the nodes live during training (`model_stats`
+  events). It is **scoped to one project**, taken from the host notebook's params,
+  because two notebooks open at once otherwise overwrite each other's graph.
+
+  Two things make it fill itself rather than sitting on an empty state:
+
+  **`ht.callback()` publishes the architecture it is handed.** The `Trainer` passes
+  `model=` to every callback hook and the callback used to drop it, so a generated
+  recipe could run to completion with the pane still reading "call
+  `horrible_train.watch(model)`" — naming a call the recipe does not make and, on
+  the trl path, could not make (the trainer is given the model's *name*, so no model
+  object exists in the notebook namespace before it is built). `graph=True` is the
+  default because the fallback is a walk of `named_modules()`; `weights=False` is,
+  because that one norms every parameter on every `log()`. Both are arguments:
+  `ht.callback(graph=False)`, `ht.callback(weights=True)`.
+
+  **The last graph is cached per project** (`metrics.graph_backfill`) and replayed
+  to a pane that asks (`watch_graph` on the `training` channel, the `watch_run`
+  pattern). `model_graph` is emitted exactly once, at the top of `trainer.train()`,
+  and the strip starts closed — so without this the only way to ever see a graph
+  was to have had the strip open at that instant. A run emits metrics continuously,
+  so the chart pane can join late; an architecture does not.
 - **Rollout** (`training.rollout`) — the latest `frame` event as an `<img>`,
   rAF-throttled with an fps readout; gym envs stream via `horrible_train.frame(env.render())`.
 - **Manim** (`training.manim`) — plays the mp4 a render produces (`manim_status`
@@ -850,8 +933,10 @@ nobody asked for this project, the value is not one they can see or clear, and
 without the self-heal the workspace would greet them with the same dead project on
 every open, forever.
 
-The projects pane stays *first* in the left dock: it is still the entry point for a
-**different** project, and what it opens retargets the seeded pane in place.
+Explorer stays in the left dock as the entry point for a **different** project, and
+what it opens retargets the seeded pane in place. `training.projects` used to be
+docked *above* Explorer — whose **Projects** section is that same pane — so the
+dock opened the identical list twice, one over the other, in 280px.
 
 A params-bound pane opened **cold** — from the start menu, the palette, or an empty
 area — renders the projects picker itself rather than a sentence. It used to say
@@ -891,7 +976,7 @@ is permitted but **not preloaded** — this flow already sits close to `TOOL_BUD
 
 | Contribution | Value |
 | --- | --- |
-| Panel `training.projects` | singleton hub, `embedded`: the **Projects** section of [Explorer](explorer.mdx) and the left region strip of `training.notebook`. Provider search → create project, project list with live venv/data status, open-notebook buttons |
+| Panel `training.projects` | singleton hub, `embedded`: the **Projects** section of [Explorer](explorer.mdx) and the left region strip of `training.notebook`. Provider search → create project, project list with live venv/data status; a row opens its notebook and carries the rest in a `training.project` context menu |
 | Panel `training.recipe` | non-singleton fine-tuning recipe form, params `{projectId}`, opened from a project row (`openTrainingRecipe`); typed schema + validation chips, tracker picker, checkpoint→GGUF card |
 | Panel `training.notebook` ("Training Notebook") | non-singleton notebook pane (center), params `{projectId, notebook}`, labelled with the notebook's file name via a `title` param, titled apart from the [notebook module](notebook.mdx)'s own "Notebook Editor", opened via `openTrainingNotebook()` so it focuses/reuses rather than splitting (see [windowing](../architecture/windowing.mdx)); CodeMirror cells, run/interrupt/restart toolbar, nbformat output renderers (stream+ANSI, results, images, HTML, tracebacks) |
 | Widget `training.metrics` | live metric charts (uPlot, one per metric of the selected run; ring-buffer backfill via `watch_run`, ≤20 wire events/s per run with every point kept server-side) |

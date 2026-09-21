@@ -92,13 +92,20 @@ class KernelSessionManager:
                 else session.enqueue(cell_id)
             )
             if not ran:
+                # Two different failures used to share one message ("no code cell
+                # <id>"), and the common one was the *other* one: a Shift+Enter in
+                # a markdown cell, which reads as though the notebook had lost the
+                # cell you were looking at. Name which it is.
+                kind = session.cell_type(cell_id)
+                message = (
+                    f"no cell {cell_id} in this notebook"
+                    if kind is None
+                    else f"cell {cell_id} is {kind}, not code — nothing to run"
+                )
                 await conn.send_json(
                     self._evt(
                         "error",
-                        {
-                            "sessionKey": session.key,
-                            "message": f"no code cell {data.get('cellId')}",
-                        },
+                        {"sessionKey": session.key, "message": message},
                     )
                 )
         elif event == "run_all":

@@ -16,10 +16,14 @@ import { forgetLastProject, lastProjectId } from '../last-project';
 import { OutputRenderer } from '../outputs/OutputRenderer';
 import { CellEditor } from './CellEditor';
 import { ProjectsPane } from './ProjectsPane';
+import { advanceFrom } from '../../../notebook/advance';
+import { renderMarkdown } from '../../../notebook/markdown';
 import { useNotebookLsp } from '../../../notebook/useNotebookLsp';
 import { PaneInstanceContext, useAgentContext } from '../../../agent-context';
+import { usePaneUiState } from '../../../layout/use-pane-ui-state';
 import { usePaneParams } from '../../../panes';
 import { registry } from '../../../registry';
+import '../../../notebook/notebook.css';
 
 const dim = { color: 'var(--text-dim)' } as const;
 
@@ -172,18 +176,89 @@ export function NotebookPane() {
     [store],
   );
 
+  /**
+   * Which markdown cell is open as an editor, if any. Pane-scoped rather than
+   * component state so glancing at another tab does not throw away a half-typed
+   * heading — the same treatment the notebook module's editor gives it.
+   */
+  const [editingMd, setEditingMd] = usePaneUiState<string | null>('editingMd', null);
+  /**
+   * A request to put the caret somewhere, by **position**. Not by cell id: a cell
+   * inserted at the end carries a `tmp-…` id until `cells_changed` answers with
+   * the real one, and that swap remounts the row — a request keyed by the temp id
+   * would be asking for a cell that no longer exists by the time it mounts.
+   */
+  const [focusReq, setFocusReq] = useState<{ index: number; n: number } | null>(null);
+  const focusAt = useCallback((index: number) => {
+    // Monotonic, because focus is an event: the same index can be asked for twice
+    // running (Shift+Enter at the bottom, then again in the cell it appended).
+    setFocusReq((prev) => ({ index, n: (prev?.n ?? 0) + 1 }));
+  }, []);
+
   const run = useCallback(
     (cellId: string) => {
-      if (!sessionKey) return;
+      const cell = store.snapshot().cells.find((c) => c.id === cellId);
+      if (!cell) return;
       flushEdits(cellId);
+      // Markdown is *rendered*, not run. Sending it to the kernel is what produced
+      // `no code cell <id>` in the error banner on every Shift+Enter in a prose
+      // cell: the backend rejects a non-code cell, and this pane never rendered
+      // markdown at all, so there was no other thing the key could have meant.
+      if (cell.cell_type !== 'code') {
+        if (editingMd === cellId) setEditingMd(null);
+        return;
+      }
+      if (!sessionKey) return;
       runCell(sessionKey, cellId);
     },
-    [sessionKey, flushEdits],
+    [sessionKey, flushEdits, store, editingMd, setEditingMd],
   );
 
   const mutate = useCallback(
     (ops: CellOp[], next: NotebookCell[]) => store.applyLocal(ops, next),
     [store],
+  );
+
+  /** Shift+Enter: run (or render) this cell, then land in the next one. */
+  const runNext = useCallback(
+    (cellId: string, index: number) => {
+      run(cellId);
+      const cells = store.snapshot().cells;
+      const next = advanceFrom(cells, index);
+      if (next.kind === 'focus') {
+        const target = cells[next.index];
+        // Landing on a *rendered* markdown cell would end the walk: there is no
+        // editor there to hold the caret, so the next Shift+Enter would go
+        // nowhere. Opening it keeps the contract simple — the cell you are on is
+        // the one you can edit, and Shift+Enter commits it and moves on. This is
+        // not Jupyter's command mode, which would need a selection model the
+        // notebook does not have.
+        if (target?.cell_type === 'markdown') setEditingMd(target.id);
+        focusAt(next.index);
+        return;
+      }
+      // Past the last cell: append one and write in it, as Jupyter does.
+      const temp: NotebookCell = {
+        id: `tmp-${Date.now()}`,
+        cell_type: 'code',
+        source: '',
+        outputs: [],
+        execution_count: null,
+      };
+      mutate(
+        [
+          {
+            op: 'insert',
+            ...(next.afterCellId ? { afterCellId: next.afterCellId } : {}),
+            cellType: 'code',
+            source: '',
+          },
+        ],
+        [...cells, temp],
+      );
+      focusAt(next.index);
+    },
+    [run, store, mutate, focusAt, setEditingMd],
   );
 
   // No project at all, and none remembered. It used to say so and point at the
@@ -306,8 +381,12 @@ export function NotebookPane() {
             cell={cell}
             lspExtensions={lsp.cellExtensions(cell)}
             runState={state.runStates[cell.id]}
+            editingMd={editingMd === cell.id}
+            onEditingMd={(on) => setEditingMd(on ? cell.id : null)}
+            focusToken={focusReq?.index === i ? focusReq.n : 0}
             onChange={(src) => syncEdit(cell.id, src)}
             onRun={() => run(cell.id)}
+            onRunNext={() => runNext(cell.id, i)}
             onDelete={() =>
               mutate(
                 [{ op: 'delete', cellId: cell.id }],
@@ -345,8 +424,12 @@ export function NotebookPane() {
 function Cell({
   cell,
   runState,
+  editingMd,
+  focusToken,
   onChange,
   onRun,
+  onRunNext,
+  onEditingMd,
   onDelete,
   onAddBelow,
   lspExtensions,
@@ -355,13 +438,21 @@ function Cell({
   runState?: CellRunState;
   /** This cell's slice of the notebook's language server (empty for markdown). */
   lspExtensions?: Extension[];
+  /** Markdown only: show the editor rather than the rendered prose. */
+  editingMd: boolean;
+  focusToken: number;
   onChange: (source: string) => void;
   onRun: () => void;
+  onRunNext: () => void;
+  onEditingMd: (editing: boolean) => void;
   onDelete: () => void;
   onAddBelow: (type: 'code' | 'markdown') => void;
 }) {
   const [hover, setHover] = useState(false);
   const isCode = cell.cell_type === 'code';
+  // An empty markdown cell opens straight into the editor: rendering nothing
+  // would leave a row you have to know to double-click.
+  const showEditor = isCode || editingMd || cell.source.trim() === '';
   return (
     <div
       onMouseEnter={() => setHover(true)}
@@ -393,13 +484,29 @@ function Cell({
         )}
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <CellEditor
-          value={cell.source}
-          language={isCode ? 'python' : 'markdown'}
-          onChange={onChange}
-          onRun={onRun}
-          extraExtensions={lspExtensions}
-        />
+        {showEditor ? (
+          <CellEditor
+            value={cell.source}
+            language={isCode ? 'python' : 'markdown'}
+            onChange={onChange}
+            // For markdown, "run" means render — the editor closes and the prose
+            // takes its place. Both keys go through the pane so the two meanings
+            // live in one function rather than being re-decided here.
+            onRun={onRun}
+            onRunNext={onRunNext}
+            focusToken={focusToken}
+            extraExtensions={lspExtensions}
+          />
+        ) : (
+          <div
+            className="nb-markdown"
+            title="Double-click to edit"
+            onDoubleClick={() => onEditingMd(true)}
+            // Same renderer the notebook module uses; it escapes its input before
+            // doing anything else (see notebook/markdown.ts).
+            dangerouslySetInnerHTML={{ __html: renderMarkdown(cell.source) }}
+          />
+        )}
         {cell.outputs.length > 0 && (
           <div
             style={{
@@ -422,9 +529,17 @@ function Cell({
           visibility: hover ? 'visible' : 'hidden',
         }}
       >
-        {isCode && (
-          <button title="Run cell (Ctrl+Enter)" onClick={onRun}>
+        {isCode ? (
+          <button title="Run cell (Ctrl+Enter) — Shift+Enter runs and moves on" onClick={onRun}>
             ▶
+          </button>
+        ) : showEditor ? (
+          <button title="Render (Ctrl+Enter) — Shift+Enter renders and moves on" onClick={onRun}>
+            ▶
+          </button>
+        ) : (
+          <button title="Edit this markdown (or double-click it)" onClick={() => onEditingMd(true)}>
+            ✎
           </button>
         )}
         <button title="Add code cell below" onClick={() => onAddBelow('code')}>

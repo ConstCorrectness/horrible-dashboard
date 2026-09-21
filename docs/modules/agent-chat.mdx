@@ -820,6 +820,37 @@ commits on pick, Enter or blur rather than per keystroke, because on the setting
 each commit is a settings write and a half-typed id is a broken agent until the typing
 stops.
 
+**A remote listing is cached and warmed; a local one never is.** NVIDIA NIM's
+`/v1/models` (and any `vllm`/`peer` pointed at another host) is fetched across the
+internet, so `list_models` gives it its own `REMOTE_TIMEOUT` (10s) rather than the
+probe client's 2s budget — that budget is sized for a loopback port, and `_probe`
+swallows `httpx.HTTPError`, so inheriting it made a slow network indistinguishable
+from a provider with no models. The answer is cached under **(kind, endpoint)** for
+the same 10 minutes as the OpenRouter catalog, keyed by the endpoint too because a
+vLLM can be repointed and a list cached under the bare kind would then describe a
+machine nobody is talking to. A **local** server's list is deliberately never cached:
+`ollama pull` changes it, and a stale list is a worse lie than a slow one — loopback
+is decided by `is_loopback_endpoint`, for which an empty endpoint (a `peer` with no
+lease) counts as local because it is unreachable either way.
+
+Those remote listings are **warmed at startup**: the app lifespan calls
+`agent.routes.start_warm_model_lists()`, which probes only the remote providers in
+the background so the first model dropdown opens filled instead of waiting on a round
+trip. It is never awaited and every failure is swallowed — a warm is not worth a
+second of boot, and an unwarmed provider is simply fetched on demand as before.
+`GET /agent/status?refresh=true` drops both caches first, and the **refresh button**
+in the model picker's panel — beside the filter field — is its only caller. It is a
+button rather than a fetch-on-open because a refresh on open would put that download
+in front of every use of the dropdown to serve the one time in a hundred the list
+actually changed, and the TTL is otherwise invisible from the UI: enabling a model on
+the vendor's dashboard and not finding it here reads as the model not existing. While
+it is in flight the button spins and the count line says so; a failure says
+`Refresh failed — showing the last list` rather than being swallowed, because a
+refresh that silently did nothing is indistinguishable from a vendor with no new
+models. A refreshed status **outranks** the one the pane handed the picker (`own ??
+status`), until the pane itself refetches — a new object from the pane is in turn
+newer than our copy, so the effect drops ours and defers to it again.
+
 `orjson` is a hard dependency because litellm's OpenRouter transformation imports it;
 without it every OpenRouter call fails as an `APIConnectionError` naming a missing
 module, which reads as a network fault.

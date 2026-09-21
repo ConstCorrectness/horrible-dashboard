@@ -63,6 +63,9 @@ class _RunBuffer:
 
 
 _buffers: dict[str, _RunBuffer] = {}
+#: project id -> {ws event name: last payload} for the architecture events. See
+#: `graph_backfill`; guarded by `_lock` alongside `_buffers`.
+_graphs: dict[str, dict[str, dict[str, Any]]] = {}
 _lock = threading.Lock()
 
 #: One localtrack run per training run id, opened on the first metric that names it.
@@ -248,6 +251,19 @@ def record_event(ws_event: str, data: dict[str, Any]) -> None:
         )
         broadcast_threadsafe(ws_event, data)
         return
+    if ws_event in ("model_graph", "model_stats"):
+        # Kept, not just forwarded. A `model_graph` is emitted **once**, at the top
+        # of `trainer.train()`, and the Architecture strip is closed by default —
+        # so the normal sequence was: training starts, the graph is broadcast to
+        # nobody, the user opens the strip, and it says "no model yet" for the rest
+        # of the run. One entry per project rather than a ring buffer, because
+        # unlike a curve there is only ever a latest.
+        project_id = str(data.get("projectId") or "")
+        if project_id:
+            with _lock:
+                _graphs.setdefault(project_id, {})[ws_event] = data
+        broadcast_threadsafe(ws_event, data)
+        return
     if ws_event != "metrics":
         broadcast_threadsafe(ws_event, data)
         return
@@ -302,10 +318,23 @@ def known_runs() -> list[str]:
         return list(_buffers)
 
 
+def graph_backfill(project_id: str) -> dict[str, dict[str, Any]]:
+    """The last architecture events for a project (strip opened mid-run).
+
+    Keyed by ws event name (`model_graph`, `model_stats`) so the caller replays
+    them under the same names the live channel uses and the pane needs exactly one
+    code path. Empty when nothing has been watched — which is a real answer, and
+    the one the pane turns into "no training has started here yet".
+    """
+    with _lock:
+        return dict(_graphs.get(project_id) or {})
+
+
 def reset() -> None:
     """Test hook."""
     with _lock:
         _buffers.clear()
+        _graphs.clear()
     _mirrors.clear()
     _latest_by_project.clear()
     _names.clear()

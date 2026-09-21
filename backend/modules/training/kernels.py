@@ -17,6 +17,7 @@ Channel protocol additions on top of the core's kernel slice:
 | ------------- | ---------- | ---------------------------------------- |
 | client→server | `open`     | `{projectId, notebook?}`                 |
 | client→server | `watch_run`| `{runId}`                                |
+| client→server | `watch_graph` | `{projectId}` — replays the last `model_graph`/`model_stats` |
 | server→client | `opened`   | `{sessionKey, projectId, notebook, kernel}` |
 
 Sentinel events inside stream output are stripped and re-emitted app-wide
@@ -107,6 +108,21 @@ class TrainingKernelManager(KernelSessionManager):
                     },
                 )
             )
+            return True
+        if event == "watch_graph":
+            from backend.modules.training.metrics import graph_backfill
+
+            project_id = str(data.get("projectId", ""))
+            cached = graph_backfill(project_id)
+            # Replayed under the **live event names**, to this one connection: the
+            # pane then has a single code path for "the graph arrived" whether it
+            # was watching when `watch()` ran or opened the strip an hour later.
+            # An empty cache sends nothing — the pane's empty state is already the
+            # right rendering of "nothing has been watched here".
+            for ws_event in ("model_graph", "model_stats"):
+                payload = cached.get(ws_event)
+                if payload is not None:
+                    await conn.send_json(self._evt(ws_event, payload))
             return True
         return False
 
@@ -210,7 +226,9 @@ class TrainingKernelManager(KernelSessionManager):
 def _otlp_env(project: ProjectModel) -> dict[str, str]:
     from backend.modules.otel.env import otlp_env
 
-    return otlp_env(service=f"training:{project.name}", dataset=f"training-{project.id}")
+    return otlp_env(
+        service=f"training:{project.name}", dataset=f"training-{project.id}"
+    )
 
 
 def _tracker_env(project: ProjectModel) -> dict[str, str]:

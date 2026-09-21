@@ -54,8 +54,16 @@ export const DEFAULT_AGENT_MODEL = 'gemma4:e2b';
 /** A small Gemma served well by vLLM; a sensible default for the spawn flow. */
 export const DEFAULT_VLLM_MODEL = 'google/gemma-2-2b-it';
 
-export function getAgentStatus(): Promise<AgentStatus> {
-  return apiGet<AgentStatus>('/agent/status');
+/**
+ * `refresh` drops the backend's cached *remote* model listings (NVIDIA NIM's
+ * `/v1/models`, OpenRouter's catalog) before probing, so a model enabled on the
+ * vendor's dashboard a minute ago appears without waiting out the 10-minute TTL.
+ * Only ever passed from an explicit user action — every other caller polls, and
+ * making a poll re-download a few hundred KB is what the cache exists to prevent.
+ * Local providers are unaffected: their lists were never cached.
+ */
+export function getAgentStatus(opts?: { refresh?: boolean }): Promise<AgentStatus> {
+  return apiGet<AgentStatus>(`/agent/status${opts?.refresh ? '?refresh=true' : ''}`);
 }
 
 /** One roster agent (a fully separate loop: own prompt, tool scope, settings,

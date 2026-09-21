@@ -42,6 +42,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.modules.agent import router as agent_router
+from backend.modules.agent import routes as agent_routes
 from backend.modules.agent.orchestrator import handle_agent_message
 from backend.modules.browser import router as browser_router
 from backend.modules.chat import router as chat_router
@@ -257,6 +258,12 @@ async def lifespan(app: FastAPI):
     # Deep-research runner: resumes any run that was in flight when the process
     # last died (steps stuck `running` reset to `pending`), then works the queue.
     research_runner.start()
+    # Fill the remote providers' model listings (OpenRouter's catalog, NVIDIA NIM's
+    # `/v1/models`) in the background, so the first model dropdown opens filled
+    # rather than waiting on a round trip to the other side of the internet. Never
+    # awaited: a warm is not worth a second of boot, and the lists are fetched on
+    # demand anyway if it fails.
+    agent_routes.start_warm_model_lists()
     # Connect enabled MCP servers and bridge their tools into the agent. Failures
     # are recorded as per-server status, so a broken server never blocks boot.
     await mcp_manager.start_enabled()
@@ -274,6 +281,7 @@ async def lifespan(app: FastAPI):
 
         _finish_training()
         research_runner.stop()
+        agent_routes.stop_warm_model_lists()
         # Flushes the batch in hand on the way out: those are the events of the turn
         # that was most likely still running, which is the one somebody will want.
         await telemetry_drain.stop()

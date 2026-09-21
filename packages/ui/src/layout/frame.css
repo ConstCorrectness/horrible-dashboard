@@ -1070,34 +1070,34 @@
 }
 .frame-region-rail--left {
   border-right: 1px solid var(--border);
-  width: 22px;
+  width: 26px;
 }
 .frame-region-rail--right {
   border-left: 1px solid var(--border);
-  width: 22px;
+  width: 26px;
 }
 .frame-region-rail--bottom {
   flex-direction: row;
   border-top: 1px solid var(--border);
-  height: 22px;
+  height: 26px;
   width: 100%;
   padding: 1px 4px;
 }
 /* Classed, so the 30px control height in controls.css does not apply — these are
-   icon targets in a 22px rail, not action buttons. */
+   icon targets in a 26px rail, not action buttons. */
 .frame-region-rail-tab {
   display: flex;
   align-items: center;
   justify-content: center;
   flex: none;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: none;
   border-radius: var(--radius-sm);
   background: none;
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1;
   cursor: pointer;
 }

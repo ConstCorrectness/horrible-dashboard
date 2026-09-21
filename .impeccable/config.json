@@ -191,6 +191,12 @@
         "value": "#8b93a7",
         "createdAt": "2026-09-19T06:00:27.633Z",
         "reason": "claude: fallback inside var(--text-dim, #8b93a7), used across the hassault menus"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "#e5534b",
+        "createdAt": "2026-09-21T12:26:18.939Z",
+        "reason": "Dead var() fallback, not a palette value: --danger is defined in every theme in packages/ui/src/themes.css (#e06c75 / #e4676b / #ff7b83), so this literal never renders. Pre-existing repo idiom, 8 occurrences across 5 files, none introduced by this change."
       }
     ]
   }

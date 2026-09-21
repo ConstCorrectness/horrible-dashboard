@@ -4150,11 +4150,67 @@ kbd {
   box-shadow: var(--shadow-overlay);
 }
 
-.agent-model-search {
+/* The filter and the refresh button share a row, so the button costs no vertical
+   space in a panel whose height is already clamped to the viewport. */
+.agent-model-searchrow {
+  display: flex;
   flex: none;
+  gap: 0.3rem;
+  margin-bottom: 0.3rem;
+}
+
+.agent-model-refresh {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.agent-model-refresh svg {
+  width: 13px;
+  height: 13px;
+}
+
+.agent-model-refresh:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.agent-model-refresh:disabled {
+  cursor: default;
+}
+
+/* Turns while the fetch is in flight. `linear infinite` rather than a transition,
+   because the duration is the network's, not ours. */
+.agent-model-refresh.is-busy svg {
+  animation: agent-model-spin 0.9s linear infinite;
+}
+
+@keyframes agent-model-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-model-refresh.is-busy svg {
+    animation: none;
+  }
+}
+
+.agent-model-search {
+  flex: 1;
+  min-width: 0;
   height: 30px;
   padding: 0 0.45rem;
-  margin-bottom: 0.3rem;
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--border);

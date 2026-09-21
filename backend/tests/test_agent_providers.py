@@ -372,3 +372,85 @@ def test_thinking_extractor() -> None:
         ("split the pane. ", ""),
         ("", "I will split the pane."),
     ]
+
+
+# --- remote model listings -------------------------------------------------------
+
+
+def test_remote_listing_is_cached_and_gets_its_own_timeout() -> None:
+    """NVIDIA NIM's `/v1/models` is fetched across the internet, but the probe
+    client's budget is sized for a loopback port (2s). Inheriting it made a slow
+    network indistinguishable from a provider with no models, because `_probe`
+    swallows the timeout — so the request carries `REMOTE_TIMEOUT`, and the answer
+    is cached so every `/agent/status` poll does not pay for it again."""
+    P.invalidate_catalogs()
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"data": [{"id": "meta/llama-3.3-70b"}]})
+
+    info = P.PROVIDERS["nim"]
+    client = _client(handler)
+
+    async def run() -> list[str]:
+        first = await P.list_models(client, info, info.default_endpoint)
+        second = await P.list_models(client, info, info.default_endpoint)
+        assert first == second
+        await client.aclose()
+        return first
+
+    assert asyncio.run(run()) == ["meta/llama-3.3-70b"]
+    assert len(calls) == 1, "the second call must come from the cache"
+    assert calls[0].extensions["timeout"]["read"] == P.REMOTE_TIMEOUT
+
+
+def test_a_local_listing_is_never_cached() -> None:
+    """`ollama pull` changes a local server's list, so a stale one is a worse lie
+    than a slow one — only the remote providers are cached."""
+    P.invalidate_catalogs()
+    seen = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen
+        seen += 1
+        return httpx.Response(200, json={"data": [{"id": f"model-{seen}"}]})
+
+    info = P.PROVIDERS["lmstudio"]
+    client = _client(handler)
+
+    async def run() -> None:
+        assert await P.list_models(client, info, info.default_endpoint) == ["model-1"]
+        assert await P.list_models(client, info, info.default_endpoint) == ["model-2"]
+        await client.aclose()
+
+    asyncio.run(run())
+    assert seen == 2
+
+
+def test_a_repointed_remote_provider_is_not_served_a_stale_list() -> None:
+    """The cache is keyed by (kind, endpoint): a vLLM moved to another host must
+    not be described by the list its predecessor returned."""
+    P.invalidate_catalogs()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"id": request.url.host}]})
+
+    info = P.PROVIDERS["vllm"]
+    client = _client(handler)
+
+    async def run() -> None:
+        assert await P.list_models(client, info, "http://box-a:8001") == ["box-a"]
+        assert await P.list_models(client, info, "http://box-b:8001") == ["box-b"]
+        await client.aclose()
+
+    asyncio.run(run())
+
+
+def test_loopback_detection_covers_the_empty_endpoint() -> None:
+    """`peer` without a lease has no endpoint by design; it must not be treated as
+    a remote provider worth caching or warming."""
+    assert P.is_loopback_endpoint("")
+    assert P.is_loopback_endpoint("http://127.0.0.1:8080")
+    assert P.is_loopback_endpoint("http://localhost:1234/v1")
+    assert not P.is_loopback_endpoint("https://integrate.api.nvidia.com")

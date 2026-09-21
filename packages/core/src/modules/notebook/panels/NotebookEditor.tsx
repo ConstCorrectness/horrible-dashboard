@@ -3,6 +3,7 @@ import type { Extension } from '@codemirror/state';
 
 import { useAgentContext } from '../../../agent-context';
 import { usePaneScroll, usePaneUiState } from '../../../layout/use-pane-ui-state';
+import { advanceFrom } from '../../../notebook/advance';
 import { usePaneParams } from '../../../panes';
 import { CellEditor } from '../../../notebook/CellEditor';
 import { ExecutionTimeline } from '../../../notebook/ExecutionTimeline';
@@ -172,6 +173,57 @@ export function NotebookEditor() {
     [store],
   );
 
+  /**
+   * A request to put the caret somewhere, by **position** rather than by cell id
+   * — see the same field on the training pane. Focus is an event, so the counter
+   * lets the same index be asked for twice in a row.
+   */
+  const [focusReq, setFocusReq] = useState<{ index: number; n: number } | null>(null);
+  const focusAt = useCallback((index: number) => {
+    setFocusReq((prev) => ({ index, n: (prev?.n ?? 0) + 1 }));
+  }, []);
+
+  /** Shift+Enter: run (or render) this cell, then land in the next one. */
+  const runNext = useCallback(
+    (cellId: string, index: number) => {
+      const cells = store.snapshot().cells;
+      const cell = cells.find((c) => c.id === cellId);
+      if (cell?.cell_type === 'code') run(cellId);
+      else if (editingMd === cellId) setEditingMd(null);
+      const next = advanceFrom(cells, index);
+      if (next.kind === 'focus') {
+        const target = cells[next.index];
+        // A rendered markdown cell has no editor to hold the caret, so the walk
+        // would stop there. Opening it keeps Shift+Enter meaning one thing.
+        if (target?.cell_type === 'markdown') setEditingMd(target.id);
+        focusAt(next.index);
+        return;
+      }
+      const id = crypto.randomUUID();
+      const temp: NotebookCell = {
+        id,
+        cell_type: 'code',
+        source: '',
+        outputs: [],
+        execution_count: null,
+      };
+      mutate(
+        [
+          {
+            op: 'insert',
+            cellId: id,
+            ...(next.afterCellId ? { afterCellId: next.afterCellId } : {}),
+            cellType: 'code',
+            source: '',
+          },
+        ],
+        [...cells, temp],
+      );
+      focusAt(next.index);
+    },
+    [run, store, mutate, focusAt, editingMd, setEditingMd],
+  );
+
   const toggleMode = useCallback(() => {
     // Optimistic + live ws set_mode (the backend persists it and rebuilds the graph).
     store.setMode(state.mode === 'reactive' ? 'classic' : 'reactive');
@@ -325,8 +377,10 @@ export function NotebookEditor() {
               else cellRefs.current.delete(cell.id);
             }}
             widgetManager={widgetManager}
+            focusToken={focusReq?.index === i ? focusReq.n : 0}
             onChange={(src) => syncEdit(cell.id, src)}
             onRun={() => run(cell.id)}
+            onRunNext={() => runNext(cell.id, i)}
             onDelete={() =>
               mutate(
                 [{ op: 'delete', cellId: cell.id }],
@@ -383,6 +437,8 @@ function Cell({
   onEditing,
   onChange,
   onRun,
+  onRunNext,
+  focusToken,
   onDelete,
   onAddBelow,
   notebookPath,
@@ -403,6 +459,9 @@ function Cell({
   onEditing: (editing: boolean) => void;
   onChange: (source: string) => void;
   onRun: () => void;
+  /** Shift+Enter: run (or render) and move to the next cell. */
+  onRunNext: () => void;
+  focusToken: number;
   onDelete: () => void;
   onAddBelow: (type: 'code' | 'markdown') => void;
   /** Threaded down so a cell's docs popup can ask this notebook's own kernel. */
@@ -451,6 +510,8 @@ function Cell({
             language={isCode ? 'python' : 'markdown'}
             onChange={onChange}
             onRun={isCode ? onRun : () => onEditing(false)}
+            onRunNext={onRunNext}
+            focusToken={focusToken}
             notebookPath={notebookPath}
             extraExtensions={lspExtensions}
           />
@@ -481,7 +542,11 @@ function Cell({
       </div>
       <div className="nb-actions">
         {isCode && (
-          <button type="button" title="Run cell (Ctrl+Enter)" onClick={onRun}>
+          <button
+            type="button"
+            title="Run cell (Ctrl+Enter) — Shift+Enter runs and moves on"
+            onClick={onRun}
+          >
             <PlayIcon />
           </button>
         )}

@@ -118,6 +118,56 @@ def test_metrics_non_metric_events_pass_straight_through(monkeypatch) -> None:
     metrics.reset()
 
 
+# --- the architecture cache ---------------------------------------------------
+#
+# `model_graph` is emitted **once**, at the top of `trainer.train()`, and the
+# Architecture strip starts closed. Forwarding it and keeping nothing meant the
+# normal sequence was: training starts, the graph goes to nobody, the user opens
+# the strip, and it says "no model yet" for the rest of the run.
+
+
+def test_the_last_architecture_is_kept_per_project(monkeypatch) -> None:
+    metrics.reset()
+    monkeypatch.setattr(metrics, "broadcast_threadsafe", lambda ev, data: None)
+    metrics.record_event(
+        "model_graph", {"projectId": "a", "graph": {"kind": "modules"}}
+    )
+    metrics.record_event("model_stats", {"projectId": "a", "stats": {"x": {}}})
+    metrics.record_event("model_graph", {"projectId": "b", "graph": {"kind": "fx"}})
+
+    cached = metrics.graph_backfill("a")
+    assert cached["model_graph"]["graph"] == {"kind": "modules"}
+    assert cached["model_stats"]["stats"] == {"x": {}}
+    # A second project does not clobber the first: two notebooks side by side is
+    # exactly when a strip showing the wrong model is hardest to notice.
+    assert metrics.graph_backfill("b")["model_graph"]["graph"] == {"kind": "fx"}
+    assert "model_stats" not in metrics.graph_backfill("b")
+    metrics.reset()
+
+
+def test_a_later_graph_replaces_the_earlier_one(monkeypatch) -> None:
+    # Unlike a metric curve there is only ever a latest — a re-run publishes a new
+    # architecture and the old one is not history, it is wrong.
+    metrics.reset()
+    monkeypatch.setattr(metrics, "broadcast_threadsafe", lambda ev, data: None)
+    metrics.record_event(
+        "model_graph", {"projectId": "a", "graph": {"kind": "modules"}}
+    )
+    metrics.record_event("model_graph", {"projectId": "a", "graph": {"kind": "fx"}})
+    assert metrics.graph_backfill("a")["model_graph"]["graph"] == {"kind": "fx"}
+    metrics.reset()
+
+
+def test_an_unwatched_project_backfills_nothing(monkeypatch) -> None:
+    metrics.reset()
+    monkeypatch.setattr(metrics, "broadcast_threadsafe", lambda ev, data: None)
+    assert metrics.graph_backfill("never-trained") == {}
+    # And `reset` clears it, or a test suite would leak graphs between cases.
+    metrics.record_event("model_graph", {"projectId": "a", "graph": {}})
+    metrics.reset()
+    assert metrics.graph_backfill("a") == {}
+
+
 # --- the terminal status ------------------------------------------------------
 #
 # A run had no end. `_mirror_for` closed the previous run when a *new* one started,
@@ -244,4 +294,42 @@ def test_a_declared_config_still_marks_a_sweep_point(monkeypatch):
 
     assert captured["config"]["lr"] == 0.001  # the declaration wins
     assert "sweep" in captured["tags"]
+    metrics.reset()
+
+
+def test_watch_graph_replays_the_cache_to_one_connection(monkeypatch) -> None:
+    """The seam the Architecture strip depends on: a pane that opens after
+    training began asks for what it missed, and gets it under the **live** event
+    names so it needs one code path rather than two."""
+    import asyncio
+
+    from backend.modules.training.kernels import TrainingKernelManager
+
+    metrics.reset()
+    monkeypatch.setattr(metrics, "broadcast_threadsafe", lambda ev, data: None)
+    metrics.record_event("model_graph", {"projectId": "p", "graph": {"kind": "fx"}})
+    metrics.record_event("model_stats", {"projectId": "p", "stats": {"a": {}}})
+
+    class _Conn:
+        def __init__(self) -> None:
+            self.sent: list[dict] = []
+
+        async def send_json(self, payload: dict) -> None:
+            self.sent.append(payload)
+
+    conn = _Conn()
+    handled = asyncio.run(
+        TrainingKernelManager()._handle_extra(conn, "watch_graph", {"projectId": "p"})
+    )
+    assert handled is True
+    assert [m["event"] for m in conn.sent] == ["model_graph", "model_stats"]
+    assert conn.sent[0]["data"]["graph"] == {"kind": "fx"}
+
+    # A project nothing has published for sends nothing at all — the pane's empty
+    # state is already the right rendering of "nothing has trained here".
+    quiet = _Conn()
+    asyncio.run(
+        TrainingKernelManager()._handle_extra(quiet, "watch_graph", {"projectId": "q"})
+    )
+    assert quiet.sent == []
     metrics.reset()

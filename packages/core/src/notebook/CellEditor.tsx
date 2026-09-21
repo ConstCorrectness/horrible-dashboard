@@ -13,8 +13,20 @@ interface CellEditorProps {
   value: string;
   language: 'python' | 'markdown';
   onChange: (source: string) => void;
-  /** Ctrl/Cmd+Enter and Shift+Enter both run the cell. */
+  /** Ctrl/Cmd+Enter: run (or, for markdown, render) and stay in this cell. */
   onRun: () => void;
+  /**
+   * Shift+Enter: run and **move on**. Falls back to `onRun` when a host has not
+   * adopted the split yet, so the key never becomes dead.
+   */
+  onRunNext?: () => void;
+  /**
+   * Bump to put the caret in this editor. A number rather than a boolean because
+   * focus is an *event*, and the same cell can be asked for it twice in a row
+   * (Shift+Enter at the end of a notebook, then again in the cell it appended).
+   * `0` means "never asked", so a freshly mounted cell does not steal focus.
+   */
+  focusToken?: number;
   /** Notebook path — lets the docs popup ask this cell's own kernel. */
   notebookPath?: string;
   /**
@@ -57,14 +69,16 @@ export function CellEditor({
   language,
   onChange,
   onRun,
+  onRunNext,
+  focusToken = 0,
   notebookPath,
   extraExtensions,
 }: CellEditorProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
-  const callbacks = useRef({ onChange, onRun });
-  callbacks.current = { onChange, onRun };
+  const callbacks = useRef({ onChange, onRun, onRunNext });
+  callbacks.current = { onChange, onRun, onRunNext };
   // Read through a ref: the view is built once per cell mount, so a path captured
   // in the closure would go stale if the pane were ever rebound to another file.
   const pathRef = useRef(notebookPath);
@@ -98,7 +112,10 @@ export function CellEditor({
               {
                 key: 'Shift-Enter',
                 run: () => {
-                  callbacks.current.onRun();
+                  // The two keys were bound to the same callback, which made
+                  // "run and advance" unexpressible and left Shift+Enter as a
+                  // second name for Ctrl+Enter.
+                  (callbacks.current.onRunNext ?? callbacks.current.onRun)();
                   return true;
                 },
               },
@@ -165,6 +182,12 @@ export function CellEditor({
       effects: langCompartment.current.reconfigure(language === 'markdown' ? markdown() : python()),
     });
   }, [language]);
+
+  // Focus on request. The view is built once per mount and held in `viewRef`, so
+  // this costs no remount and keeps the cell's undo history and cursor.
+  useEffect(() => {
+    if (focusToken > 0) viewRef.current?.focus();
+  }, [focusToken]);
 
   useEffect(() => {
     viewRef.current?.dispatch({

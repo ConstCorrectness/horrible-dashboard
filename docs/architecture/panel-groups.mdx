@@ -25,7 +25,9 @@ A view declares the region views it hosts in its manifest (`regions` on a
 ```
 
 - Each **position** (`left`/`right`/`bottom`) is one strip; multiple views at
-  the same position **stack as tabs** within it.
+  the same position **stack as tabs** within it — one visible at a time, at the
+  strip's full extent. The right-hand strip used to be a special case that showed
+  every view at once; see *One view at a time* below.
 - A region view is any registered panel/widget id — cross-module is fine (the
   editor hosts views from the `code` and `git` modules).
 - Region state is **per pane instance**: every editor buffer keeps its own
@@ -69,11 +71,39 @@ a coin flip once a pane stacks five of them, and the icons are the only thing
 telling you the pane has a metrics chart at all.
 
 That also collapsed two header controls into one. The chevron and the `✕` now
-produce the same visible result, so only the chevron remains; in the stacked
-right-hand layout it is drawn **once**, because putting away is a property of the
-region and five identical buttons down the edge each looked like it would hide
-the section beside it. `toggleRegion(id, position, false)` still exists for the
-agent and for `games`' drawer — it now lands on a rail instead of on nothing.
+produce the same visible result, so only the chevron remains. `toggleRegion(id,
+position, false)` still exists for the agent and for `games`' drawer — it now
+lands on a rail instead of on nothing.
+
+## One view at a time
+
+The right-hand strip used to render **every** view at once, stacked vertically,
+while left and bottom were tabbed. On `training.notebook`, which declares five,
+that meant Metrics, Architecture, Rollout, Manim and Peers each received a fifth
+of a 300px column — about 60px — and none of them could draw anything legible.
+
+Stacking also silently cost the two properties the tabbed branch has:
+`RegionState.activeView` meant nothing (so a rail button could not open a
+*particular* view, only the whole stack), and there was no draggable header —
+which is the real answer to wanting two companions at once. **Drag a strip's
+header into the centre** and it opens as a full pane of its own, while the strip
+stays where it is.
+
+So there is now one renderer for all three positions:
+
+- Tabs when the position holds more than one view, with the **label on the active
+  tab only** — five icon+label tabs are about 375px, which overflows the header
+  into a horizontal scroller you have to discover before you can reach the last
+  one. An inactive tab is its icon, with the label in `title`/`aria-label`.
+- A plain title when it holds exactly one.
+- `defaultSize` on any decl at that position sets the strip's width; the engine's
+  fallback is 300px, and `training.notebook` declares 420 because a loss curve and
+  a dagre graph are both wider than that.
+
+A strip's `PaneHost` also inherits its **host's params**. A companion is about the
+document it rides on, and without this every strip beside the training notebook
+was blind to which project it sat next to — two notebooks open side by side
+overwrote each other's charts.
 
 One consequence worth knowing: `regionAt` resolves the instance's state *or* the
 view's declaration. `regions` is written onto a pane when it is **opened**, so a

@@ -1,6 +1,9 @@
 import { revealRegionView, revealSection } from '../../layout/controller';
 import { registry, type ModuleManifest } from '../../registry';
+import { ownedReason, setProjectNote } from './activity';
 import { notebookAgentTools } from './agentTools';
+import { deleteProject, pushProject } from './api';
+import { openTrainingNotebook, openTrainingRecipe } from './open';
 import { ManimPane } from './panels/ManimPane';
 import { MetricsPane } from './panels/MetricsPane';
 import { ModelGraphPane } from './panels/ModelGraphPane';
@@ -124,9 +127,20 @@ export const trainingModule: ModuleManifest = {
       role: 'document',
       editor: true,
       icon: '🧠',
-      // The training workbench as regions on the notebook itself.
+      // The training workbench as regions on the notebook itself. One strip, one
+      // view at a time — `defaultSize` is declared once for the position (the
+      // first decl carrying one wins) because a loss curve and a dagre graph are
+      // both wider than the engine's 300px default, and a companion you cannot
+      // read is one you open, squint at, and close again.
       regions: [
-        { id: 'training.metrics', label: 'Metrics', icon: '📈', key: 'm', position: 'right' },
+        {
+          id: 'training.metrics',
+          label: 'Metrics',
+          icon: '📈',
+          key: 'm',
+          position: 'right',
+          defaultSize: 420,
+        },
         {
           id: 'training.modelgraph',
           label: 'Architecture',
@@ -171,6 +185,85 @@ export const trainingModule: ModuleManifest = {
   ],
   explorerSources: [
     { id: 'projects', label: 'Projects', icon: '🗂', view: 'training.projects', key: 'j' },
+  ],
+  /**
+   * What you can do to a project.
+   *
+   * The row in the projects list used to carry all of this inline: `Open notebook`,
+   * `🧪 Recipe`, `⇪ Kaggle`, `⇪ Colab` and `✕`, five peer buttons squeezed onto one
+   * flex line beside the name, the status and the owner badge — in a 280px dock.
+   * Nothing read as primary, a push to somebody else's servers sat at the same
+   * weight as opening the notebook, and at that width each button was a couple of
+   * characters wide. The row is one target now (it opens the notebook) and
+   * everything else is here, where a menu can afford verbs and an explanation.
+   */
+  contextMenu: [
+    {
+      kind: 'training.project',
+      items: (target) => {
+        const projectId = String(target.projectId ?? '');
+        const owner = target.owner ? String(target.owner) : '';
+        // An owned project is working storage for another module: no scaffolded
+        // notebook, and a venv without ipykernel. Disabled *with the reason*
+        // rather than absent — the reason is the whole value, and hiding the
+        // items would make an inert project look identical to a healthy one.
+        const blocked = owner ? { disabled: true, detail: ownedReason(owner) } : {};
+        const push = (provider: 'kaggle' | 'colab', label: string) => ({
+          id: `training.push.${provider}`,
+          label,
+          ...blocked,
+          run: () => {
+            setProjectNote(projectId, `pushing to ${label}…`);
+            void pushProject(projectId, provider)
+              .then((r) =>
+                setProjectNote(projectId, r.url ? `pushed → ${r.url}` : `push: ${r.status}`),
+              )
+              .catch((e: Error) => setProjectNote(projectId, `push failed: ${e.message}`));
+          },
+        });
+        return [
+          {
+            id: 'training.open',
+            label: 'Open notebook',
+            hint: 'Click',
+            ...blocked,
+            run: () => openTrainingNotebook(projectId, 'main.ipynb'),
+          },
+          {
+            id: 'training.recipe',
+            label: 'Fine-tuning recipe',
+            detail: owner
+              ? ownedReason(owner)
+              : "A typed form that writes cells into this project's notebook.",
+            disabled: Boolean(owner),
+            run: () => openTrainingRecipe(projectId),
+          },
+          {
+            id: 'training.push',
+            label: 'Push a copy to',
+            ...blocked,
+            // One verb, two destinations. They were two sibling buttons, which
+            // read as two unrelated features rather than one choice of target.
+            submenu: [push('kaggle', 'Kaggle'), push('colab', 'Colab')],
+            run: () => undefined,
+          },
+          {
+            id: 'training.delete',
+            label: 'Delete project',
+            detail: 'Removes its venv and downloaded data from disk.',
+            danger: true,
+            // Never blocked: an owned project is exactly the one you might want
+            // the disk back from, and it is the only action that still applies.
+            run: () => {
+              setProjectNote(projectId, 'deleting…');
+              void deleteProject(projectId)
+                .then(() => setProjectNote(projectId, ''))
+                .catch((e: Error) => setProjectNote(projectId, `delete failed: ${e.message}`));
+            },
+          },
+        ];
+      },
+    },
   ],
   widgets: [
     {
@@ -284,7 +377,8 @@ export const trainingModule: ModuleManifest = {
       // paper-reading frame, and two frames with one id collide in the tab strip.
       id: 'ai-research',
       name: 'AI Research',
-      description: 'The loop from material to answer: browse a dataset, sweep the knob you are unsure of, and read which point moved the metric.',
+      description:
+        'The loop from material to answer: browse a dataset, sweep the knob you are unsure of, and read which point moved the metric.',
       icon: '🔬',
       // `datasets` preloaded alongside `training`: the first thing asked of the
       // agent in this frame is almost always about data.
@@ -331,14 +425,15 @@ export const trainingModule: ModuleManifest = {
      * The pane resolves its own default now (`last-project.ts`: the project you were
      * last in, falling back to the project picker), so opening this workspace lands
      * on the notebook you left rather than on an empty area with a dock to go
-     * hunting in. `training.projects` stays first in the left dock: it is still the
-     * entry point for a *different* project, and what it opens retargets this pane
-     * in place.
+     * hunting in. Explorer's Projects section stays in the left dock: it is still
+     * the entry point for a *different* project, and what it opens retargets this
+     * pane in place.
      */
     {
       id: 'training',
       name: 'Training',
-      description: 'The whole fine-tune in one frame — write the recipe, run it, watch the curves, convert the checkpoint and score it.',
+      description:
+        'The whole fine-tune in one frame — write the recipe, run it, watch the curves, convert the checkpoint and score it.',
       icon: '🧠',
       // Scoped to the work: `training` + `evals` + `localtrack`, preloading only
       // the first. Deliberately *not* `llamacpp` or `hardware` — those namespaces
@@ -364,7 +459,13 @@ export const trainingModule: ModuleManifest = {
           ],
         },
         docks: {
-          left: { tools: ['training.projects', 'explorer.home'], size: 280 },
+          // Explorer only. `training.projects` used to be docked beside it, and
+          // Explorer's **Projects section is that same pane** — so the dock
+          // opened the identical list twice, one above the other, and the second
+          // copy was the one the workspace description called the entry point.
+          // The notebook's left region strip still points at `training.projects`
+          // directly, which is what `embedded: true` on it is for.
+          left: { tools: ['explorer.home'], size: 280 },
           right: { tools: ['agent.chat'], size: 360 },
           // Present but closed: a fine-tune is exactly when you want to see what
           // the node is talking to, and exactly when you do not want a log tailing

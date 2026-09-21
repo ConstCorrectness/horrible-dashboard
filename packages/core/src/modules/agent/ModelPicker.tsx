@@ -27,6 +27,15 @@
  * The panel is `position: fixed` and measured off the trigger: the session bar is
  * a narrow flex row inside a pane that clips its overflow, so an absolutely
  * positioned list would be cut off after two rows.
+ *
+ * **Refresh is a button, not a poll.** A remote provider's listing is cached
+ * backend-side for ten minutes (a hosted catalog is a few hundred KB from the other
+ * side of the internet, and both the home page and the settings page hit
+ * `/agent/status` on mount). That TTL is invisible from here, so enabling a model on
+ * the vendor's dashboard and not finding it in this list reads as the model not
+ * existing. The button is the escape hatch — and it is *only* the button, because a
+ * refresh on open would put that download in front of every single use of the
+ * dropdown to serve the one time in a hundred that the list actually changed.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
@@ -67,10 +76,19 @@ export function ModelPicker({
   const provider = useSetting<string>(PROVIDER_KEY) ?? '';
   const model = useSetting<string>(MODEL_KEY) ?? '';
 
-  // Falls back to its own fetch only when the pane could not hand one over, so the
-  // picker still works in a pane that mounted while the backend was restarting.
+  // Our own copy of the status, for two cases: the pane could not hand one over
+  // (it mounted while the backend was restarting), and the user hit refresh — a
+  // refreshed list is strictly newer than whatever the pane is holding, so it wins.
   const [own, setOwn] = useState<AgentStatus | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshFailed, setRefreshFailed] = useState(false);
   useEffect(() => {
+    // A *new* object from the pane means the pane itself refetched, which is in
+    // turn newer than our copy — so drop ours and defer to it again. Keyed on the
+    // object's identity, so a re-render with the same status never clobbers a
+    // refresh the user just asked for.
+    setOwn(null);
+    setRefreshFailed(false);
     if (status) return;
     void getAgentStatus()
       .then(setOwn)
@@ -78,6 +96,19 @@ export function ModelPicker({
         /* backend down — the picker renders nothing rather than an empty list */
       });
   }, [status]);
+
+  const refresh = (): void => {
+    if (refreshing) return;
+    setRefreshing(true);
+    setRefreshFailed(false);
+    getAgentStatus({ refresh: true })
+      .then((next) => setOwn(next))
+      // Surfaced rather than swallowed: a refresh that silently did nothing is
+      // indistinguishable from a vendor that genuinely has no new models, which is
+      // the exact confusion this button exists to end.
+      .catch(() => setRefreshFailed(true))
+      .finally(() => setRefreshing(false));
+  };
 
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -92,7 +123,7 @@ export function ModelPicker({
     maxHeight: number;
   } | null>(null);
 
-  const live = status ?? own;
+  const live = own ?? status;
   const providers = useMemo(() => live?.providers ?? [], [live]);
 
   const effective = provider && model ? encode(provider, model) : '';
@@ -248,15 +279,45 @@ export function ModelPicker({
           }}
           role="dialog"
         >
-          <input
-            ref={searchRef}
-            className="agent-model-search"
-            value={query}
-            placeholder="Filter models…"
-            aria-label="Filter models"
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={onKeyDown}
-          />
+          <div className="agent-model-searchrow">
+            <input
+              ref={searchRef}
+              type="text"
+              className="agent-model-search"
+              value={query}
+              placeholder="Filter models…"
+              aria-label="Filter models"
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={onKeyDown}
+            />
+            <button
+              type="button"
+              className={`agent-model-refresh${refreshing ? ' is-busy' : ''}`}
+              aria-label="Refresh model list"
+              title="Re-fetch the hosted providers' model lists, ignoring the cache"
+              disabled={refreshing}
+              onClick={refresh}
+              onKeyDown={onKeyDown}
+            >
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path
+                  d="M13 8a5 5 0 1 1-1.46-3.54"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                />
+                <path
+                  d="M13 2v3.2h-3.2"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+          </div>
           <ul className="agent-model-list" role="listbox" aria-label="Model">
             {filtered.length === 0 && <li className="agent-model-empty">No model matches</li>}
             {filtered.map((c, i) => (
@@ -279,7 +340,11 @@ export function ModelPicker({
             ))}
           </ul>
           <p className="agent-model-count">
-            {filtered.length} of {choices.length}
+            {refreshing
+              ? 'Refreshing…'
+              : refreshFailed
+                ? 'Refresh failed — showing the last list'
+                : `${filtered.length} of ${choices.length}`}
           </p>
         </div>
       )}
