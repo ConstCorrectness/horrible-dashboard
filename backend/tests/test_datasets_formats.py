@@ -194,3 +194,110 @@ def test_stats_on_an_unknown_shape_say_they_are_a_rough_bound():
     assert stats.over_limit == 1.0
     assert "not recognised" in stats.note
     assert not stats.exact
+
+
+# --- prompt/completion: the shape every reasoning dataset is spelled in --------
+
+
+def _limo_rows(n: int = 5) -> list[dict]:
+    """`GAIR/LIMO`'s real columns: a question, a long chain of thought, and the
+    bare final answer."""
+    return [
+        {
+            "question": "Find the last three digits of the product of the roots.",
+            "solution": "Okay, so I need to " + "x" * 3000,
+            "answer": "25",
+        }
+        for _ in range(n)
+    ]
+
+
+def test_question_solution_is_prompt_completion_not_unknown():
+    """The hole this closes reached all the way to a stack trace.
+
+    Alpaca demands the literal column `instruction`, so a dataset spelled
+    `question`/`solution` — LIMO, OpenR1-Math, and most of the reasoning sets
+    anyone post-trains on — matched nothing, reported `unknown`, inferred no
+    column map, and the emitted `SFTConfig` fell back to trl's default `text`
+    column. The run died on `KeyError: 'text'` after the base model had loaded.
+    """
+    from backend.modules.datasets import formats
+
+    detection = formats.detect(["question", "solution", "answer"], _limo_rows())
+    assert detection.format == "prompt_completion"
+    assert detection.certain
+    assert detection.columns == {"prompt": "question", "completion": "solution"}
+
+
+def test_the_completion_column_is_measured_not_ranked():
+    """`solution` and `answer` are both completion-shaped names, and LIMO has
+    both: one is the entire chain of thought, the other is the string `25`.
+
+    Taking the first off a fixed list would train the model to emit the final
+    number and drop the reasoning — the exact opposite of post-training on a
+    reasoning dataset, with no error anywhere and a loss curve that looks fine.
+    So the choice is made by measuring the rows, and the measurement is in the
+    reason where it can be overruled on sight.
+    """
+    from backend.modules.datasets import formats
+
+    detection = formats.detect(["question", "solution", "answer"], _limo_rows())
+    assert detection.columns["completion"] == "solution"
+    assert "averages" in detection.reason
+    assert "`answer`" in detection.reason, "the rejected candidate must be named"
+
+
+def test_prompt_completion_is_renamed_never_concatenated():
+    """trl trains `{prompt, completion}` natively and masks the prompt out of the
+    loss. Flattening both into one `text` column would train the model to predict
+    the question as well, so the reshape is a rename and nothing else."""
+    from backend.modules.datasets import formats
+
+    detection = formats.detect(["question", "solution", "answer"], _limo_rows())
+    adaptation = formats.adapt(detection, "sft")
+    assert adaptation.ok and adaptation.needs_formatting
+    source = formats.formatting_source(detection.format, adaptation.columns)
+    assert "rename_columns" in source
+    assert "'question': 'prompt'" in source
+    assert "'solution': 'completion'" in source
+    # No text field: naming one would point trl at a single column and throw the
+    # prompt masking away.
+    assert formats.text_field_for(detection.format, adaptation.columns) == ""
+
+
+def test_already_canonical_columns_emit_no_reshape():
+    """A dataset that already says `prompt`/`completion` needs no code — a
+    generated cell renaming a column to itself is noise that reads as a bug."""
+    from backend.modules.datasets import formats
+
+    rows = [{"prompt": "q", "completion": "a"} for _ in range(3)]
+    detection = formats.detect(["prompt", "completion"], rows)
+    adaptation = formats.adapt(detection, "sft")
+    assert detection.format == "prompt_completion"
+    assert not adaptation.needs_formatting
+    assert formats.formatting_source(detection.format, adaptation.columns) == ""
+
+
+def test_prompt_completion_still_cannot_train_dpo():
+    """Widening the detector must not widen what the tasks accept: the refusal is
+    the feature."""
+    from backend.modules.datasets import formats
+
+    detection = formats.detect(["question", "solution", "answer"], _limo_rows())
+    adaptation = formats.adapt(detection, "dpo")
+    assert not adaptation.ok
+    assert "preference" in adaptation.problem
+
+
+def test_alpaca_still_wins_over_prompt_completion():
+    """Order matters: a real Alpaca set has `instruction` AND `output`, and both
+    branches can claim it. Alpaca is checked first and keeps it, because its
+    reshape carries `input` as context and the rename would drop that column."""
+    from backend.modules.datasets import formats
+
+    rows = [
+        {"instruction": "Translate", "input": "hola", "output": "hello"}
+        for _ in range(3)
+    ]
+    detection = formats.detect(["instruction", "input", "output"], rows)
+    assert detection.format == "alpaca"

@@ -39,6 +39,7 @@ from typing import Any
 
 from backend.modules.training import notebooks
 from backend.modules.training.backends.base import (
+    UNSET,
     RecipeField,
     all_backends,
     get_backend,
@@ -372,6 +373,22 @@ def warnings_for(values: dict[str, Any], trackers: list[str]) -> list[str]:
             "bf16 and fp16 are both on — they are alternatives, and enabling both "
             "is a configuration error rather than a stronger version of one."
         )
+    # A saved `1` is not migrated away — a stored value is the user's statement
+    # and rewriting it silently is worse than the bug. But it was chosen from a
+    # form that described it as "a single core", and it is not: `datasets` starts
+    # a pool for any value >= 1, and each worker is a fresh interpreter with no
+    # accelerate state, which takes the run down inside `SFTTrainer.__init__` on
+    # every spawn platform. So the form says what the number means instead.
+    workers = values.get("dataset_num_proc")
+    if isinstance(workers, int) and workers >= 1:
+        out.append(
+            f"`dataset_num_proc={workers}` starts {workers} worker "
+            f"{'process' if workers == 1 else 'processes'}, not "
+            "in-process tokenizing — `datasets` pools for any value of 1 or more. "
+            "Each worker is a fresh interpreter with no accelerate state, which "
+            "fails inside the trainer's constructor on Windows and macOS. Set it "
+            "to 0 unless tokenizing is genuinely your bottleneck."
+        )
     if "wandb" in trackers:
         from backend.modules.training import trackers as tracker_creds
 
@@ -416,9 +433,14 @@ class Recipe:
     #: Capybara" and a rerun that provably eats the same rows in the same shape.
     #: The free-text field stays supported: typing a Hub id has to keep working.
     dataset_id: str = ""
-    #: Role -> column, from the registered dataset or a hand correction. Empty
-    #: means "detect at materialize time".
+    #: Role -> column, from the registered dataset, a hand correction, or
+    #: `ensure_shape`'s detection on a typed ref. Empty means nothing has looked.
     column_map: dict[str, str] = field(default_factory=dict)
+    #: The detected shape of a **typed** ref (`chatml`, `prompt_completion`, ...).
+    #: A registered dataset carries its own and never consults this. Written by
+    #: `ensure_shape`, which is why a hand-typed Hub id now emits the same reshape
+    #: a picked one does instead of falling through to trl's `text` default.
+    dataset_format: str = ""
     #: The column holding the text to train on. `messages` is the chat format trl
     #: applies the model's own template to. Derived from the format when a
     #: registered dataset is used, rather than typed from memory.
@@ -438,6 +460,7 @@ class Recipe:
             "datasetSplit": self.dataset_split,
             "evalSplit": self.eval_split,
             "columnMap": dict(self.column_map),
+            "datasetFormat": self.dataset_format,
             "textField": self.text_field,
             "useLora": self.use_lora,
             "outputDir": self.output_dir,
@@ -460,6 +483,7 @@ class Recipe:
             column_map={
                 str(k): str(v) for k, v in (data.get("columnMap") or {}).items()
             },
+            dataset_format=str(data.get("datasetFormat") or ""),
             dataset_split=str(data.get("datasetSplit") or "train"),
             eval_split=str(data.get("evalSplit") or ""),
             text_field=str(data.get("textField") or "text"),
@@ -497,6 +521,15 @@ def kwargs_for(recipe: Recipe, target: str, intro: Introspection) -> list[str]:
             )
             continue
         value = recipe.values.get(recipe_field.name, recipe_field.default)
+        if recipe_field.omit_when is not UNSET and value == recipe_field.omit_when:
+            # Absent, not zero. A form field cannot be empty but an argument can
+            # be missing, and for some knobs those are different runs — see
+            # `RecipeField.omit_when`. Commented rather than silently skipped, so
+            # the cell still shows that the knob exists and what was chosen.
+            lines.append(
+                f"    # {resolved.emit}: left unset — the library's own default applies"
+            )
+            continue
         comment = f"  # {resolved.note}" if resolved.status == "renamed" else ""
         lines.append(f"    {resolved.emit}={_literal(value)},{comment}")
     return lines
@@ -532,6 +565,12 @@ def resolve_dataset(recipe: Recipe) -> ResolvedDataset:
         return ResolvedDataset(
             ref=recipe.dataset,
             split=recipe.dataset_split,
+            # A typed ref used to resolve with no format at all, so `_reshape_cell`
+            # returned nothing and the emitted config fell back to trl's default
+            # `text` column. For the shapes that do not have one — every
+            # `question`/`solution` reasoning set — that is `KeyError: 'text'`
+            # minutes into the run. `ensure_shape` fills this in.
+            fmt=recipe.dataset_format,
             column_map=dict(recipe.column_map),
         )
     from backend.modules.datasets import registry as dataset_registry
@@ -688,10 +727,19 @@ def header_source(
             if resolved.column_map
             else ""
         )
+        # Not "reshapes it into chat turns" for every shape: `prompt_completion`
+        # is renamed to trl's own column names precisely *so that* no chat turns
+        # are built, and a header claiming otherwise describes a different run
+        # than the cell three lines below it.
+        reshape_note = (
+            " A cell below renames its columns to trl's own `prompt`/`completion`."
+            if resolved.fmt == "prompt_completion"
+            else " A cell below reshapes it into chat turns."
+        )
         header += [
             "",
-            f"Dataset shape: **{resolved.fmt}**{mapped}"
-            + (". A cell below reshapes it into chat turns." if reshaped else "."),
+            f"Dataset shape: **{resolved.fmt}**{mapped}."
+            + (reshape_note if reshaped else ""),
         ]
     return "\n".join(header)
 
@@ -734,7 +782,32 @@ def materialize_script(
 
     Markdown cells become comments; the notebook's bare `dataset` display
     expression is dropped (harmless in a script, but it reads as a mistake).
+
+    **The body goes inside `main()` under an `if __name__ == "__main__"` guard**,
+    which is the one thing a script needs that a notebook cell does not. The same
+    code runs identically in a kernel, because a kernel's `__main__` is not a file
+    anything can re-import. A script's is — and on Windows (and macOS `spawn`)
+    every child process `datasets.map` starts re-imports it, re-runs the whole
+    fine-tune from the top, and hits the same `map` again. Python catches the
+    recursion and raises:
+
+        RuntimeError: An attempt has been made to start a new process before the
+        current process has finished its bootstrapping phase.
+
+    …which names neither the dataset nor the recipe, and lands *after* the base
+    model has downloaded and loaded. Sweep points have always been scripts, so
+    this made the whole sweep feature Windows-only-broken in a way that read as a
+    `datasets` problem. `freeze_support()` is the second half of the same idiom
+    and costs nothing on an unfrozen interpreter.
     """
+    body: list[str] = []
+    for cell in materialize(recipe, intro, run_name):
+        source = cell["source"]
+        if cell["cell_type"] == "markdown":
+            body += [f"# {line}".rstrip() for line in source.splitlines()]
+        else:
+            body += [line for line in source.splitlines() if line.strip() != "dataset"]
+        body.append("")
     out = [
         '"""Generated by the recipe form — regenerating this file overwrites it.',
         "",
@@ -742,14 +815,18 @@ def materialize_script(
         "to the dashboard through the same sentinel protocol a notebook cell uses.",
         '"""',
         "",
+        "import multiprocessing",
+        "",
+        "",
+        "def main() -> None:",
     ]
-    for cell in materialize(recipe, intro, run_name):
-        source = cell["source"]
-        if cell["cell_type"] == "markdown":
-            out += [f"# {line}".rstrip() for line in source.splitlines()]
-        else:
-            out += [line for line in source.splitlines() if line.strip() != "dataset"]
-        out.append("")
+    out += [f"    {line}".rstrip() for line in body]
+    out += [
+        "",
+        'if __name__ == "__main__":',
+        "    multiprocessing.freeze_support()",
+        "    main()",
+    ]
     return "\n".join(out).rstrip() + "\n"
 
 
@@ -783,6 +860,108 @@ def default_recipe(project: ProjectModel) -> Recipe:
         None,
     )
     return Recipe(dataset=ref.id) if ref is not None else Recipe()
+
+
+#: `(ref, split)` -> (checked at, shape dict or None). Peeking a Hub dataset is a
+#: network round-trip, and the recipe payload is fetched on every pane open, every
+#: task change and every save. Short TTL for the same reason the base-model check
+#: has one: registering a corrected column map should take effect without a
+#: restart.
+_SHAPE_CACHE: dict[tuple[str, str], tuple[float, dict[str, Any] | None]] = {}
+_SHAPE_TTL_S = 300.0
+
+
+def _peek_shape(ref: str, split: str) -> dict[str, Any] | None:
+    """What shape `ref` is in, as far as a handful of real rows can say.
+
+    Best-effort by construction: an unreachable Hub, a gated repo or a dataset
+    whose viewer is down must leave the form working, so every failure returns
+    `None` and the caller simply learns nothing. It must never raise — this runs
+    inside the route that renders the whole recipe.
+    """
+    import time
+
+    key = (ref, split)
+    cached = _SHAPE_CACHE.get(key)
+    if cached is not None and time.monotonic() - cached[0] < _SHAPE_TTL_S:
+        return cached[1]
+    result: dict[str, Any] | None = None
+    try:
+        from backend.modules.datasets import formats as dataset_formats
+        from backend.modules.datasets import sources as dataset_sources
+
+        columns, rows = dataset_sources.get_source("hub").peek(ref, "", split, 5)
+        result = dataset_formats.detect(columns, rows).to_dict()
+    except Exception as exc:  # noqa: BLE001 — advisory; never a caller's failure
+        logger.info("training: no shape for %s/%s (%s)", ref, split, exc)
+    _SHAPE_CACHE[key] = (time.monotonic(), result)
+    return result
+
+
+def _registered(dataset_id: str) -> bool:
+    """Does this id name a dataset in the registry? False on any failure — the
+    caller treats "cannot tell" the same as "no", which only ever costs a peek."""
+    try:
+        from backend.modules.datasets import registry as dataset_registry
+
+        return dataset_registry.get(dataset_id) is not None
+    except Exception:  # noqa: BLE001 — advisory
+        logger.debug("training: registry lookup failed for %s", dataset_id)
+        return False
+
+
+def ensure_shape(recipe: Recipe) -> dict[str, Any] | None:
+    """Detect a **typed** dataset ref's shape, and adopt it if nothing else has.
+
+    The hole this closes: shape detection only ever ran through the dataset
+    *picker*, so it covered registered datasets and nothing else — while the
+    default path put the id in the free-text field. A project created from
+    `GAIR/LIMO` opened a recipe pointing at `GAIR/LIMO` that had never been
+    looked at, emitted a config with no `dataset_text_field`, and died on trl's
+    `text` default. The agent hit it too, from the other side: `recipe.set` takes
+    a dataset id and there was nothing for it to call.
+
+    Two rules, both the same one the picker follows:
+
+    - **A registered id is never second-guessed.** It carries the user's own
+      column map, and re-deriving one from five rows could only disagree.
+    - **An existing map is never overwritten.** A hand correction is the whole
+      reason `column_map` is editable; detection fills a blank, it does not
+      argue.
+
+    Returns the verdict for the payload (with `adaptation` against the recipe's
+    task) whether or not it was adopted, so the pane can show what was seen.
+    """
+    if not recipe.dataset.strip():
+        return None
+    # A *dangling* `dataset_id` is not a registered dataset — it is a mistake that
+    # has already cost this recipe its `resolve_dataset`, which marks the dataset
+    # missing. Declining to look at the free-text ref as well would turn one wrong
+    # field into two failures, so only a *resolvable* id suppresses detection.
+    if recipe.dataset_id and _registered(recipe.dataset_id):
+        return None
+    shape = _peek_shape(recipe.dataset.strip(), recipe.dataset_split or "train")
+    if shape is None:
+        return None
+    from backend.modules.datasets import formats as dataset_formats
+
+    detection = dataset_formats.Detection(
+        str(shape.get("format") or "unknown"),
+        float(shape.get("confidence") or 0.0),
+        str(shape.get("reason") or ""),
+        {str(k): str(v) for k, v in (shape.get("columns") or {}).items()},
+    )
+    adaptation = dataset_formats.adapt(detection, recipe.task)
+    shape = {**shape, "adaptation": adaptation.to_dict()}
+    if adaptation.ok and not recipe.column_map and not recipe.dataset_format:
+        recipe.column_map = dict(adaptation.columns)
+        recipe.dataset_format = detection.format
+        recipe.text_field = (
+            dataset_formats.text_field_for(detection.format, adaptation.columns)
+            or recipe.text_field
+        )
+        shape["adopted"] = True
+    return shape
 
 
 def load_recipe(project: ProjectModel) -> Recipe:

@@ -7,7 +7,7 @@
 import { readActiveAgentContext, type ActiveAgentContext } from '../../agent-context';
 import { readVisibleAgentContexts } from '../../layout/controller';
 import { getSetting } from '../../settings';
-import { sendChannel, subscribeChannel } from '../../ws';
+import { onSocketClose, sendChannel, subscribeChannel } from '../../ws';
 import { executeTool, paneTitle } from './tool-exec';
 
 /** Ambient-context budget. Small on purpose: this rides on EVERY turn, so it is
@@ -162,6 +162,24 @@ export function askAgent(
 ): Promise<void> {
   return new Promise<void>((resolve) => {
     const turnId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    // The turn ends on `done`, on `error`, or — this one — when the socket that
+    // was going to deliver them goes away. A backend restart takes the turn with
+    // it and can no longer send anything, so without this the chat sits on its
+    // typing indicator forever and will not accept the next message either: the
+    // one failure mode where the app looks like it is still working.
+    let unsubClose = () => {};
+    const finish = () => {
+      unsub();
+      unsubClose();
+      resolve();
+    };
+    unsubClose = onSocketClose(() => {
+      cb.onError?.(
+        'The connection to the backend dropped, so this turn was lost. ' +
+          'Reconnecting — send it again once the status reads online.',
+      );
+      finish();
+    });
     const unsub = subscribeChannel('agent', (msg) => {
       const data = (msg.data ?? {}) as Record<string, unknown>;
       if (data.turnId !== turnId) return;
@@ -188,12 +206,10 @@ export function askAgent(
             break;
           case 'error':
             cb.onError?.(String(data.message ?? 'agent error'));
-            unsub();
-            resolve();
+            finish();
             break;
           case 'done':
-            unsub();
-            resolve();
+            finish();
             break;
         }
       })();

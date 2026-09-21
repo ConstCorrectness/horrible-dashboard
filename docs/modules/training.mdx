@@ -155,7 +155,37 @@ Kaggle and Colab push already send. The recipe itself lives in `recipe.json` so
 the *form* round-trips; the cells are yours the moment they land and are never
 read back. A project with no `recipe.json` yet starts on **its own dataset**: the
 Hugging Face dataset it was created from fills the dataset field, rather than
-asking again for the one thing the project already knew. A regenerate **replaces** the previous block (found by a
+asking again for the one thing the project already knew.
+
+### The typed dataset ref is looked at too
+
+Shape detection ([datasets](datasets.mdx#format-detection)) used to run only
+through the dataset *picker* — which covers registered datasets, while the default
+path puts the id in the free-text field. So the most ordinary flow there is —
+create a project from a Hub dataset, open its recipe, write cells — reached the
+generated code with nothing having ever looked at the data: `columnMap` empty,
+`textField` still `text`, no reshape emitted. On a `question`/`solution` reasoning
+set that is `KeyError: 'text'` inside `trl`, minutes in, after the base model has
+downloaded.
+
+It also means `dataset_id` is checked rather than trusted. It names a dataset in
+the [datasets registry](datasets.mdx), not a Hub ref — but `recipe.set` offers a
+model two parameters that both look like "the dataset", so a Hub id lands in the
+wrong one. A *dangling* id is worse than none: `resolve_dataset` marks the dataset
+missing, and detection used to skip a recipe that had one (a registered set
+carries its own map, so nothing re-derives it). One wrong field became a run that
+died on `KeyError: 'text'`. Now `recipe.set` rejects an id that resolves to
+nothing, naming the difference, and only a *resolvable* id suppresses detection.
+
+`recipes.ensure_shape(recipe)` peeks five real rows of a typed ref (cached, 5-minute
+TTL, best-effort — an unreachable Hub leaves the recipe untouched, because being
+offline is not evidence about a dataset's shape), and runs at **both** seams that
+matter: rendering the form, and writing the cells. The second is not redundant —
+`recipe.apply` and `recipe.run` are agent tools that may be the first thing ever to
+touch a recipe. It returns the verdict either way, so `GET .../recipe` carries a
+`datasetShape` the pane renders under the dataset field, and adopts it **only into
+a blank** column map: a hand correction is the whole reason the map is editable and
+must never be re-guessed over. A registered id is not second-guessed at all. A regenerate **replaces** the previous block (found by a
 `horrible_recipe` cell-metadata flag, with the header line as a fallback) rather
 than appending — two `SFTConfig` definitions in one notebook is a bug where the
 second silently wins, discovered after a wasted run.
@@ -597,7 +627,18 @@ process-global so they survive pane/tab closes):
 
 - **Script runner** (`runners/script_runner.py`) — `python -u <script>` in the project
   venv; `ht.log()`/`ht.frame()` in the script are indistinguishable from notebook cells.
-  Driven by `POST/GET/DELETE /projects/{id}/runs`.
+  Driven by `POST/GET/DELETE /projects/{id}/runs` and by `POST /projects/{id}/recipe/run`.
+
+  **Every run also writes its output to `runs/logs/<script>-<runId>.log`** under the
+  project. Until it did, that output existed only as `run_output` broadcasts: whoever
+  had a pane open saw it and nobody else ever could — so a headless run, which is the
+  only kind an agent can start, was observable as `state: running` and then, at best,
+  `returncode: 1`. A crash was a number. And because the registry lives in memory, a
+  backend restart (a `--reload` on *any* file under `backend/`, tests included) erased
+  even that: the run list came back **empty**, which is indistinguishable from a run
+  that finished cleanly. `GET /projects/{id}/runs/logs` reads the directory, so it
+  answers for runs this backend has no memory of, and `GET /runs?tail=N` carries the
+  last N lines inline. The agent tool is `training.run_output`.
 - **Manim runner** (`runners/manim_runner.py`) — `python -m manim render` against a
   scene file under `media/scenes/`; auto-installs manim into the venv on first use;
   locates the newest mp4 and serves it via the traversal-guarded media route.

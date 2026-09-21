@@ -172,11 +172,17 @@ _COMMON: tuple[RecipeField, ...] = (
         "config",
         "Dataset workers",
         "int",
-        1,
-        "Processes that tokenize the dataset before training starts. 1 is a single "
-        "core — 15,000 short conversations took two minutes there, before a step "
-        "had run. Raise it to roughly your core count.",
+        0,
+        "Worker PROCESSES that tokenize the dataset before training starts. 0 "
+        "means none — tokenizing happens in this process, which is the right "
+        "answer until it is slow (15,000 short conversations took two minutes "
+        "there, before a step had run). Raise it to roughly your core count. "
+        "1 is NOT 'no parallelism': `datasets` starts a pool for any value >= 1, "
+        "and each worker is a fresh interpreter that re-imports the script and "
+        "has no accelerate state of its own — which on Windows and macOS is how "
+        "a run dies inside `SFTTrainer.__init__`, long before a step.",
         "data",
+        omit_when=0,
     ),
     RecipeField(
         "per_device_train_batch_size",

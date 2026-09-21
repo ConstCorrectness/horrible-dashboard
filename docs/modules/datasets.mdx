@@ -114,6 +114,7 @@ distance and are incompatible up close:
 | `chatml` | `{messages: [{role, content}]}` |
 | `sharegpt` | `{conversations: [{from, value}]}` |
 | `alpaca` | `{instruction, input?, output}` |
+| `prompt_completion` | a prompt column and a completion column — trl's own standard pair, and how nearly every reasoning dataset is spelled |
 | `preference` | `{prompt, chosen, rejected}` — the only thing DPO/KTO/reward can train |
 | `raw_text` | `{text}` |
 
@@ -131,6 +132,28 @@ with nothing anywhere saying so.
 **ChatML and ShareGPT are told apart by the keys *inside* the list**, which no
 column-name check can see. Get it wrong and `apply_chat_template` silently produces
 empty turns.
+
+**Which completion column is chosen is measured, not ranked.** `prompt_completion`
+covers `question`/`solution` (LIMO), `problem`/`solution` (OpenR1-Math) and
+`prompt`/`completion` alike — but a reasoning dataset routinely carries *two*
+completion-shaped columns, and they mean very different things. `GAIR/LIMO` has
+`solution`, the entire chain of thought, and `answer`, which is the string `"25"`.
+Taking the first name off a fixed list would train the model to emit the final
+number and drop the reasoning: the exact opposite of what post-training on a
+reasoning dataset is for, with no error anywhere and a loss curve that looks fine.
+So when several candidates are present the choice comes from measuring the sampled
+rows, and the measurement goes in the reason — "`solution` averages 17121
+characters against `answer` at 3" — where it can be overruled on sight.
+
+Its reshape is a **rename, never a concatenation**: `trl` trains a prompt/completion
+pair natively and masks the prompt out of the loss, and flattening both into one
+`text` column would teach the model to predict the question as well.
+
+Until this shape existed, a `question`/`solution` dataset matched nothing — Alpaca
+demands the literal column `instruction` — so it reported `unknown`, no column map
+was inferred, and the recipe emitted a config with no `dataset_text_field`. The run
+died on `KeyError: 'text'` minutes in, after the base model had loaded, naming
+neither the dataset nor the column.
 
 `adapt(detection, task)` then answers whether a task can eat a shape, and **the
 refusal is the feature**: `trl` will happily accept a dataset with the wrong

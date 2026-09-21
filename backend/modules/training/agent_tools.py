@@ -207,6 +207,29 @@ async def _start_run(args: dict[str, Any]) -> Any:
     return {"runId": run.id, "state": "running"}
 
 
+async def _run_output(args: dict[str, Any]) -> Any:
+    """What a run actually printed — the half of `start_run` that was missing.
+
+    Starting a run was a tool; seeing what it did was not. `project_status`
+    reported `state` and a `returncode`, so a crash was the number 1 and a
+    traceback was unreachable from here. Reads the on-disk log, so it also
+    answers for a run this backend has no memory of.
+    """
+    from backend.modules.training import routes as training_routes
+
+    project = projects.get_project(str(args.get("projectId", "")))
+    if project is None:
+        return {"error": "unknown project"}
+    try:
+        return await training_routes.run_logs(
+            project.id,
+            name=str(args.get("name") or ""),
+            tail=int(args.get("tail") or 80),
+        )
+    except Exception as exc:  # noqa: BLE001 — the agent reads the reason
+        return {"error": str(exc)}
+
+
 async def _stop_run(args: dict[str, Any]) -> Any:
     from backend.modules.training.runners.script_runner import script_runner
 
@@ -428,6 +451,30 @@ _TOOLS = [
         side_effect=True,
         specifier_template="{checkpoint}",
         handler=_convert,
+        group="training",
+    ),
+    AgentTool(
+        name="training.run_output",
+        description=(
+            "Read what a training run printed — progress, warnings, the traceback "
+            "if it crashed. Call this after recipe.run or training.start_run: a "
+            "run's state and exit code do not say what went wrong, and an empty "
+            "run list means the backend restarted, not that the run succeeded. "
+            "Omit `name` for the newest run's log."
+        ),
+        parameters={
+            **_PROJECT,
+            "name": {
+                "type": "string",
+                "description": "Log file name; omit for the most recent run.",
+            },
+            "tail": {
+                "type": "integer",
+                "description": "Last N lines (default 80).",
+            },
+        },
+        required=["projectId"],
+        handler=_run_output,
         group="training",
     ),
     AgentTool(

@@ -101,7 +101,13 @@ export {
   type Workspace,
   type WorkspacesState,
 } from './workspace';
-export { onSocketOpen, sendChannel, subscribeChannel, type WsMessage } from './ws';
+export {
+  onSocketClose,
+  onSocketOpen,
+  sendChannel,
+  subscribeChannel,
+  type WsMessage,
+} from './ws';
 // The frame layout engine (packages/ui renders it; modules go through the
 // registry / controller, never the store directly).
 export { layoutStore } from './layout/store';

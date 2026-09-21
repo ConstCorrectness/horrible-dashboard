@@ -17,6 +17,7 @@ import {
   recipeDocs,
   saveRecipe,
   type Checkpoint,
+  type DatasetShape,
   type DocLink,
   type Recipe,
   type RecipeField,
@@ -341,6 +342,39 @@ function ConvertCard({ projectId }: { projectId: string }) {
   );
 }
 
+/** What the rows said, and whether the selected task can eat them. */
+function ShapeVerdict({ shape }: { shape: DatasetShape }) {
+  const ok = shape.adaptation.ok;
+  const mapped = Object.entries(shape.adaptation.columns);
+  return (
+    <div
+      style={{
+        marginLeft: '7.4rem',
+        borderLeft: `2px solid ${ok ? 'var(--ok, #3fb950)' : 'var(--warn, #d29922)'}`,
+        paddingLeft: '0.5rem',
+        fontSize: 11,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 2,
+      }}
+    >
+      <div>
+        <strong style={{ letterSpacing: '0.08em', textTransform: 'uppercase', fontSize: 10 }}>
+          {shape.certain ? shape.format : `${shape.format}?`}
+        </strong>
+        {shape.adopted && <span style={{ ...dim, marginLeft: '0.4rem' }}>mapped automatically</span>}
+      </div>
+      <div style={dim}>{shape.reason}</div>
+      {ok && mapped.length > 0 && (
+        <div style={{ fontFamily: 'var(--font-mono, ui-monospace, monospace)', ...dim }}>
+          {mapped.map(([role, column]) => `${column} → ${role}`).join(' · ')}
+        </div>
+      )}
+      {!ok && <div style={{ color: 'var(--warn, #d29922)' }}>{shape.adaptation.problem}</div>}
+    </div>
+  );
+}
+
 export function RecipePane() {
   const params = usePaneParams();
   // Falls back to the project you were last in, same as the notebook pane — see
@@ -607,6 +641,14 @@ export function RecipePane() {
             style={{ flex: 1 }}
           />
         </label>
+        {/* The verdict on a *typed* ref. It used to exist only for a picked one,
+            which is how the default path — a project created from a Hub dataset,
+            whose id lands in the box above — reached "Write cells" with nothing
+            having looked at the data. The reason is rendered verbatim: it names
+            the columns and, where two were plausible, the measurement that chose
+            between them, so a wrong pick is visible rather than inferred from a
+            model that answers in one word. */}
+        {payload.datasetShape && <ShapeVerdict shape={payload.datasetShape} />}
         <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
           <span style={{ ...dim, width: '7rem' }}>Eval split</span>
           <input

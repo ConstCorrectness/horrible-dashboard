@@ -19,7 +19,6 @@ import weakref
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-import httpx
 
 from backend.modules.agent import permission_store, permissions
 from backend.modules.agent import providers as P
@@ -1507,6 +1506,44 @@ def _select_tools(
     return selected
 
 
+#: Marks the system note `_note_dropped_tools` writes, so a round that is still
+#: over budget replaces the previous note instead of stacking a new one per round.
+_DROPPED_NOTE = "[tool budget]"
+
+
+def _note_dropped_tools(messages: list[dict[str, Any]], stats: dict[str, Any]) -> None:
+    """Tell the model, in its own context, which tools were cut to fit the budget.
+
+    Names the **groups**, not the 40 individual tools: the model's lever is
+    `load_tools`, which operates on groups, so a list of tool names would be
+    information it cannot act on. Replaced rather than appended each round —
+    the note describes the round about to run, and three stale copies of it are
+    three different claims about what is available.
+    """
+    for message in list(messages):
+        if message.get("role") == "system" and str(message.get("content", "")).startswith(
+            _DROPPED_NOTE
+        ):
+            messages.remove(message)
+    dropped = stats.get("dropped") or []
+    if not dropped:
+        return
+    groups = sorted({_group_of(name) for name in dropped})
+    messages.append(
+        {
+            "role": "system",
+            "content": (
+                f"{_DROPPED_NOTE} You have loaded more tool groups than fit in one "
+                f"request, so {len(dropped)} tool(s) are NOT available to you this "
+                f"round — the groups affected are: {', '.join(groups)}. Do not "
+                "conclude those capabilities are missing. Unload a group you are "
+                "finished with, or work in a smaller set of groups, and they come "
+                "back."
+            ),
+        }
+    )
+
+
 def _tools_for(
     conn: WsConnection, prompt: str = "", history: list[Any] | None = None
 ) -> list[dict[str, Any]]:
@@ -1544,16 +1581,27 @@ async def handle_agent_message(conn: WsConnection, msg: dict[str, Any]) -> None:
         # arrive on that same loop. Run it detached.
         history = data.get("history")
         context = data.get("context")
-        asyncio.create_task(
+        turn_id = str(data.get("turnId", ""))
+        agent_id = str(data.get("agentId") or "main")
+        task = asyncio.create_task(
             run_agent_turn(
                 conn,
-                str(data.get("turnId", "")),
+                turn_id,
                 str(data.get("prompt", "")),
                 history if isinstance(history, list) else None,
                 context if isinstance(context, dict) else None,
-                agent_id=str(data.get("agentId") or "main"),
+                agent_id=agent_id,
             )
         )
+        # A detached task that raises is a chat that never answers and never says
+        # why: nothing awaits it, so the exception surfaces only as asyncio's
+        # "Task exception was never retrieved" in the log. `run_agent_turn` now
+        # handles its own failures, but the setup before its try block — roster
+        # lookup, provider resolution, a missing key — is outside that guard, and
+        # this is the backstop for it. Keep a reference: `create_task` alone does
+        # not, and a garbage-collected task is a turn that stops for no reason.
+        _turns.add(task)
+        task.add_done_callback(lambda t: _turn_finished(conn, turn_id, agent_id, t))
     elif event == "tool_result":
         call_id = str(data.get("callId", ""))
         fut = conn.pending.pop(call_id, None)
@@ -1564,6 +1612,42 @@ async def handle_agent_message(conn: WsConnection, msg: dict[str, Any]) -> None:
         fut = conn.pending_approvals.pop(approval_id, None)
         if fut is not None and not fut.done():
             fut.set_result(data)
+
+
+#: Live `ask` turns. `asyncio.create_task` keeps only a weak reference, so a task
+#: nobody holds can be collected mid-flight — a turn that simply stops.
+_turns: set[asyncio.Task[None]] = set()
+
+
+def _turn_finished(
+    conn: WsConnection, turn_id: str, agent_id: str, task: asyncio.Task[None]
+) -> None:
+    """Retire a finished turn, and make sure a crashed one still ends the chat."""
+    _turns.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is None:
+        return
+    logger.exception("agent turn %s crashed outside its guard", turn_id, exc_info=exc)
+    fail = _evt(
+        "error",
+        {
+            "turnId": turn_id,
+            "agentId": agent_id,
+            "message": f"{type(exc).__name__}: {exc}",
+        },
+    )
+    done = _evt("done", {"turnId": turn_id, "agentId": agent_id})
+
+    async def tell() -> None:
+        try:
+            await conn.send_json(fail)
+            await conn.send_json(done)
+        except Exception:  # noqa: BLE001 — the socket may be the thing that broke
+            logger.debug("could not report turn %s failure", turn_id, exc_info=True)
+
+    asyncio.get_running_loop().create_task(tell())
 
 
 async def _call_frontend_tool(
@@ -2276,6 +2360,16 @@ async def run_agent_loop(
                         tools = [
                             t for t in tools if t["function"]["name"] not in denied
                         ]
+                    # A truncated tool list used to be invisible to the model.
+                    # It loads a dozen groups, the tail of the catalog is cut to
+                    # fit the budget, and what it sees is simply a catalog with
+                    # no `notebook.insert_cell` in it — indistinguishable from a
+                    # dashboard that cannot edit notebooks. So it improvises, or
+                    # reports that the capability does not exist, and the only
+                    # trace is an ERROR in a log the person asking never reads.
+                    # Telling it is also the only way it can *fix* the problem:
+                    # unloading a group it is done with brings the tools back.
+                    _note_dropped_tools(messages, tool_stats)
                 # Snapshot the exact context this round before it goes out, for the
                 # interpretability pane. Read-only and self-swallowing — a failed
                 # capture must never cost the user their turn (see recorder.py).
@@ -2609,7 +2703,24 @@ async def run_agent_turn(
             _evt("answer", {"turnId": turn_id, "agentId": agent_id, "text": text})
         )
         await conn.send_json(_evt("done", {"turnId": turn_id, "agentId": agent_id}))
-    except httpx.HTTPError as exc:
+    except Exception as exc:  # noqa: BLE001 — see below: the turn owns its errors
+        # **Every** exception, not just `httpx.HTTPError`.
+        #
+        # The provider path runs through litellm, which raises its own hierarchy —
+        # `MidStreamFallbackError`, `APIError`, `RateLimitError`,
+        # `AuthenticationError` — and none of them are `httpx.HTTPError`. So a
+        # hosted model dropping the stream mid-turn (`OpenrouterException:
+        # Network connection lost`, routine on a free tier) escaped this handler,
+        # killed the detached task, and emitted neither `error` nor `done`. The
+        # chat widget had nothing to leave its pending state on and sat on the
+        # typing indicator indefinitely; the only record was an asyncio
+        # "Task exception was never retrieved" in the backend log, which is the
+        # one place the person waiting is not looking.
+        #
+        # `done` matters as much as `error`: the widget clears its pending turn on
+        # `done`, so an error without one is a chat that shows the failure and
+        # still cannot accept the next message.
+        logger.exception("agent turn %s failed (%s)", turn_id, agent_id)
         await conn.send_json(
             _evt(
                 "error",
@@ -2620,3 +2731,4 @@ async def run_agent_turn(
                 },
             )
         )
+        await conn.send_json(_evt("done", {"turnId": turn_id, "agentId": agent_id}))

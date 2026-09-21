@@ -155,3 +155,72 @@ def test_runner_instances_exist() -> None:
 
     assert isinstance(script_runner, ScriptRunner)
     assert isinstance(manim_runner, ManimRunner)
+
+
+def test_a_run_does_not_depend_on_this_backend_to_survive(
+    project, use_this_python, monkeypatch
+) -> None:
+    """A fine-tune is the longest-lived thing this app starts, and it used to die
+    with its supervisor — twice over.
+
+    Its output went through a pipe the backend owned, so the moment the backend
+    restarted (`uvicorn --reload` on any file under `backend/`, a crash, a desktop
+    update restarting the Tauri supervisor) the read end was gone and the next
+    `print` was a broken pipe. And the restart was a *signal* to the whole process
+    group, so the run took a `KeyboardInterrupt` mid-step first — a traceback with
+    no explanation in it anywhere.
+
+    Both properties are asserted here rather than described, because neither is
+    visible in normal operation: they only show up on a restart, which is exactly
+    when nobody is watching.
+    """
+    from backend.modules.training.runners import script_runner as sr
+
+    monkeypatch.setattr(sr, "broadcast_threadsafe", lambda ev, d: None)
+    monkeypatch.setattr(sr, "record_event", lambda ev, d: None)
+
+    script = Path(project.root) / "train.py"
+    script.write_text("print('hello from the run')\n", encoding="utf-8")
+    runner = ScriptRunner()
+    run = runner.start(project, "train.py")
+
+    # 1. Its own process group: a group signal aimed at us stops at us.
+    assert sr._detached() in (
+        {"creationflags": sr.subprocess.CREATE_NEW_PROCESS_GROUP},
+        {"start_new_session": True},
+    )
+
+    # 2. The child writes the log itself. Nothing this backend does afterwards is
+    #    load-bearing for the output existing.
+    assert run.proc is not None
+    assert run.proc.stdout is None, "stdout must be the file, never a pipe"
+
+    _wait(lambda: not run.running)
+    _wait(lambda: run.log_path.is_file() and run.log_path.stat().st_size > 0)
+    assert "hello from the run" in run.log_path.read_text(encoding="utf-8")
+
+
+def test_output_is_split_into_lines_not_chunks(
+    project, use_this_python, monkeypatch
+) -> None:
+    """Reading a file is not iterating a pipe: a read returns whatever has been
+    flushed, so a whole run could arrive as one `run_output` event holding every
+    line at once, with the tail buffer showing a single entry."""
+    from backend.modules.training.runners import script_runner as sr
+
+    lines: list[str] = []
+    monkeypatch.setattr(
+        sr,
+        "broadcast_threadsafe",
+        lambda ev, d: lines.append(d["line"]) if ev == "run_output" else None,
+    )
+    monkeypatch.setattr(sr, "record_event", lambda ev, d: None)
+
+    script = Path(project.root) / "train.py"
+    script.write_text("print('one')\nprint('two')\nprint('three')\n", encoding="utf-8")
+    runner = ScriptRunner()
+    run = runner.start(project, "train.py")
+    _wait(lambda: not run.running)
+    _wait(lambda: "three" in "".join(lines))
+
+    assert "one" in lines and "two" in lines and "three" in lines

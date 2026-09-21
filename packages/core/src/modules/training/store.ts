@@ -6,6 +6,7 @@
  */
 import { useSyncExternalStore } from 'react';
 
+import { onSocketClose, onSocketOpen } from '../../ws';
 import { collapseCarriageReturns } from '../../notebook/streamText';
 import type { Notebook, NotebookCell } from './api';
 import {
@@ -27,6 +28,10 @@ export interface SessionState {
   runStates: Record<string, CellRunState>;
   error: string | null;
   errorCode: string | null; // e.g. 'unknown_project' — lets the pane self-heal
+  /** False while the shared `/ws` socket is down. Every field above is pushed,
+   *  so with the socket gone they are a *last known* state, not a current one —
+   *  and the pane has to say which it is showing. */
+  connected: boolean;
 }
 
 const EMPTY = (projectId: string, notebookPath: string): SessionState => ({
@@ -38,6 +43,7 @@ const EMPTY = (projectId: string, notebookPath: string): SessionState => ({
   runStates: {},
   error: null,
   errorCode: null,
+  connected: true,
 });
 
 export class SessionStore {
@@ -71,7 +77,24 @@ export class SessionStore {
       kernel,
       error: null,
       errorCode: null,
+      connected: true,
     });
+  }
+
+  /**
+   * The socket dropped: stop presenting stale pushed state as live.
+   *
+   * The run pips are cleared rather than kept, because `queued` and `running`
+   * are promises that something will advance them and nothing will — a backend
+   * that restarted under `--reload` takes its kernel with it, and the pane sat
+   * on "● busy" plus a column of ⏳ for as long as you left it, which reads
+   * exactly like a cell that is taking a while. The kernel badge goes with them:
+   * whatever it said a moment ago is now a claim about a process we can no
+   * longer see.
+   */
+  onDisconnected(): void {
+    if (!this.state.connected) return;
+    this.set({ connected: false, runStates: {} });
   }
 
   onKernelStatus(status: KernelStatus): void {
@@ -180,6 +203,17 @@ function wireChannel(): void {
   onTrainingEvent('error', (d) => {
     if (d.sessionKey) stores.get(d.sessionKey)?.onError(d.message, d.code);
   });
+  onSocketClose(() => stores.forEach((s) => s.onDisconnected()));
+  // Re-open on every reconnect: the backend holds sessions in memory, so a
+  // restart has forgotten this one entirely and nothing else would ask again.
+  // `openNotebook` is idempotent — a surviving session replies with `opened`
+  // carrying its real kernel status, which is also what clears `connected`.
+  onSocketOpen(() =>
+    stores.forEach((s) => {
+      const { projectId, notebookPath } = s.snapshot();
+      if (projectId) openNotebook(projectId, notebookPath);
+    }),
+  );
 }
 
 /** Get (or create) the store for a notebook session and ask the backend to open it. */

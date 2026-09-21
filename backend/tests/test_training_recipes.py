@@ -470,3 +470,197 @@ def test_warmup_ratio_and_warmup_steps_are_not_aliases() -> None:
     code = code_of(recipes.materialize(recipes.Recipe(), modern))
     assert "warmup_steps=" in code
     assert "warmup_ratio=" not in code
+
+
+# --- the typed dataset ref gets looked at too ---------------------------------
+#
+# Detection used to run only through the dataset *picker*, which covers registered
+# datasets — while the default path puts the id in the free-text field. A project
+# created from `GAIR/LIMO` opened a recipe pointing at `GAIR/LIMO` that nothing had
+# ever looked at, and emitted a config that trained on trl's `text` default.
+
+
+def _limo_peek(monkeypatch) -> None:
+    """Stand in for the Hub peek with LIMO's real columns."""
+    monkeypatch.setattr(
+        recipes,
+        "_peek_shape",
+        lambda ref, split: {
+            "format": "prompt_completion",
+            "confidence": 1.0,
+            "reason": "`question` and `solution` are both populated in 5 of 5 rows.",
+            "columns": {"prompt": "question", "completion": "solution"},
+            "certain": True,
+        },
+    )
+
+
+def test_a_typed_dataset_ref_is_detected_and_adopted(monkeypatch) -> None:
+    _limo_peek(monkeypatch)
+    recipe = recipes.Recipe(dataset="GAIR/LIMO")
+    shape = recipes.ensure_shape(recipe)
+
+    assert shape is not None and shape["adopted"] is True
+    assert recipe.dataset_format == "prompt_completion"
+    assert recipe.column_map == {"prompt": "question", "completion": "solution"}
+
+
+def test_a_hand_written_column_map_is_never_overwritten(monkeypatch) -> None:
+    """Detection fills a blank; it does not argue. An editable column map whose
+    whole purpose is correcting a wrong guess cannot be re-guessed over."""
+    _limo_peek(monkeypatch)
+    recipe = recipes.Recipe(
+        dataset="GAIR/LIMO", column_map={"prompt": "question", "completion": "answer"}
+    )
+    shape = recipes.ensure_shape(recipe)
+
+    assert shape is not None and "adopted" not in shape
+    assert recipe.column_map["completion"] == "answer"
+
+
+def test_a_registered_dataset_is_not_second_guessed(monkeypatch) -> None:
+    """A registered id already carries the user's own shape and column map, and a
+    verdict derived from five rows could only disagree with it."""
+    called: list[str] = []
+    monkeypatch.setattr(
+        recipes, "_peek_shape", lambda ref, split: called.append(ref) or None
+    )
+    monkeypatch.setattr(recipes, "_registered", lambda _id: True)
+    assert recipes.ensure_shape(recipes.Recipe(dataset="d", dataset_id="ds-1")) is None
+    assert called == []
+
+
+def test_a_dangling_dataset_id_does_not_also_block_detection(monkeypatch) -> None:
+    """`dataset_id` means a *registered* dataset, and a model given two parameters
+    that both look like "the dataset" puts the Hub ref in the wrong one.
+
+    That mistake already costs the recipe its `resolve_dataset`, which marks the
+    dataset missing. Letting it suppress shape detection too turned one wrong
+    field into a run that died on `KeyError: 'text'` — so only an id that actually
+    resolves is treated as authoritative.
+    """
+    _limo_peek(monkeypatch)
+    monkeypatch.setattr(recipes, "_registered", lambda _id: False)
+    recipe = recipes.Recipe(dataset="GAIR/LIMO", dataset_id="GAIR/LIMO")
+    shape = recipes.ensure_shape(recipe)
+    assert shape is not None and shape.get("adopted")
+    assert recipe.column_map == {"prompt": "question", "completion": "solution"}
+
+
+def test_an_unreachable_hub_leaves_the_recipe_alone(monkeypatch) -> None:
+    """Being offline is not evidence about a dataset's shape. The form must still
+    render, and nothing may be adopted on a guess."""
+    monkeypatch.setattr(recipes, "_peek_shape", lambda ref, split: None)
+    recipe = recipes.Recipe(dataset="GAIR/LIMO")
+    assert recipes.ensure_shape(recipe) is None
+    assert recipe.column_map == {} and recipe.dataset_format == ""
+
+
+def test_a_detected_typed_ref_emits_the_reshape(monkeypatch) -> None:
+    """End to end: the detection has to reach the generated code, or it is a
+    verdict nobody acts on. Without it the config carried no `dataset_text_field`
+    and trl looked for a `text` column LIMO does not have."""
+    _limo_peek(monkeypatch)
+    recipe = recipes.Recipe(dataset="GAIR/LIMO", base_model="Qwen/Qwen3-0.6B-Base")
+    recipes.ensure_shape(recipe)
+    code = "\n".join(
+        cell["source"]
+        for cell in recipes.materialize(recipe, intro(sft=["max_length"]), None)
+    )
+    assert "rename_columns({'question': 'prompt', 'solution': 'completion'})" in code
+    assert "dataset_text_field" not in code
+
+
+def test_the_header_names_the_reshape_that_was_actually_emitted(monkeypatch) -> None:
+    """It used to say "reshapes it into chat turns" for every shape — while the
+    cell three lines below renamed two columns and built no turns at all."""
+    _limo_peek(monkeypatch)
+    recipe = recipes.Recipe(dataset="GAIR/LIMO")
+    recipes.ensure_shape(recipe)
+    header = recipes.materialize(recipe, intro(sft=["max_length"]), None)[0]["source"]
+    assert "prompt`/`completion" in header
+    assert "chat turns" not in header
+
+
+def test_the_generated_script_is_safe_to_re_import() -> None:
+    """A script, unlike a notebook cell, is a file a child process re-imports.
+
+    `datasets.map` starts processes with `spawn` on Windows and macOS; each child
+    re-imports `__main__`, which without a guard re-runs the whole fine-tune from
+    the top and hits the same `map`. Python catches it and raises a `RuntimeError`
+    about bootstrapping that names neither the recipe nor the dataset — after the
+    base model has downloaded. Sweep points have always been scripts.
+    """
+    import ast
+
+    recipe = recipes.Recipe(dataset="d", base_model="m")
+    source = recipes.materialize_script(recipe, intro(sft=["max_length"]), None)
+
+    ast.parse(source)  # it still has to be Python
+    assert 'if __name__ == "__main__":' in source
+    assert "multiprocessing.freeze_support()" in source
+
+    tree = ast.parse(source)
+    top_level = [n for n in tree.body if not isinstance(n, (ast.Import, ast.ImportFrom))]
+    # Everything that *does* something lives in `main()`; the only other top-level
+    # statement is the guard itself. A stray call out here is a call every child
+    # process makes too.
+    assert [type(n).__name__ for n in top_level] == ["Expr", "FunctionDef", "If"], (
+        "only the docstring, main(), and the __main__ guard may be top level"
+    )
+
+
+def test_one_dataset_worker_is_one_process_not_none() -> None:
+    """`dataset_num_proc=1` reads as "no parallelism" and is not.
+
+    `datasets` starts a pool for any value >= 1, and each worker is a fresh
+    interpreter with no accelerate state — which takes the run down inside
+    `SFTTrainer.__init__` on every spawn platform, after the base model has
+    loaded. The default is now 0, which is **omitted** rather than emitted as a
+    zero, so the library's own sequential default applies.
+    """
+    fields = {f.name: f for f in recipes.catalog("trl", "sft")}
+    assert fields["dataset_num_proc"].default == 0
+    assert fields["dataset_num_proc"].omit_when == 0
+
+    lines = recipes.kwargs_for(
+        recipes.Recipe(), "config", intro(sft=["dataset_num_proc"])
+    )
+    emitted = [line for line in lines if "dataset_num_proc" in line]
+    assert emitted == ["    # dataset_num_proc: left unset — the library's own default applies"]
+
+
+def test_a_saved_worker_count_is_explained_not_rewritten() -> None:
+    """A stored value is the user's statement, so it still emits. What changes is
+    that the form now says what the number actually does."""
+    lines = recipes.kwargs_for(
+        recipes.Recipe(values={**recipes.defaults(), "dataset_num_proc": 4}),
+        "config",
+        intro(sft=["dataset_num_proc"]),
+    )
+    assert "    dataset_num_proc=4," in lines
+
+    warnings = recipes.warnings_for({"dataset_num_proc": 1}, ["none"])
+    assert any("worker process" in w and "accelerate state" in w for w in warnings)
+    assert recipes.warnings_for({"dataset_num_proc": 0}, ["none"]) == []
+
+
+def test_recipe_set_rejects_a_hub_ref_in_dataset_id(tmp_path, monkeypatch) -> None:
+    """The tool answer names the mistake instead of the run doing it eight minutes
+    later. Both parameters look like "the dataset" to a model, and `dataset_id`
+    used to be documented as the preferred one."""
+    import asyncio
+
+    from backend.modules.training import recipe_tools
+    from backend.modules.training.models import ProjectModel
+
+    project = ProjectModel(id="p", name="p", root=str(tmp_path))
+    monkeypatch.setattr(recipe_tools.projects, "get_project", lambda _id: project)
+
+    result = asyncio.run(
+        recipe_tools._set_recipe({"projectId": "p", "dataset_id": "GAIR/LIMO"})
+    )
+    assert "error" in result
+    assert "datasets.list" in result["error"] and "`dataset`" in result["error"]
+    # And it did not save: a rejected call must not half-apply.
+    assert recipes.load_recipe(project).dataset_id == ""

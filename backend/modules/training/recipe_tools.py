@@ -43,11 +43,16 @@ async def _get_recipe(args: dict[str, Any]) -> Any:
     if project is None:
         return _missing(args)
     recipe = await asyncio.to_thread(recipes.load_recipe, project)
+    # The same look the form takes. Without it the agent read a recipe whose
+    # column map was empty and had no way to learn that its `question`/`solution`
+    # dataset needed one — `datasets.peek` exists, but nothing said to call it.
+    shape = await asyncio.to_thread(recipes.ensure_shape, recipe)
     intro = await asyncio.to_thread(
         recipes.introspect, project, backend_id=recipe.backend, task=recipe.task
     )
     return {
         "recipe": recipe.to_dict(),
+        "datasetShape": shape,
         "fields": [
             f.to_dict()
             for f in recipes.catalog(recipe.backend, recipe.task, recipe.use_lora)
@@ -95,11 +100,42 @@ async def _set_recipe(args: dict[str, Any]) -> Any:
         data["values"] = {**data.get("values", {}), **values}
 
     updated = recipes.Recipe.from_dict(data)
+    # `dataset_id` means a **registered** dataset, and an id that resolves to
+    # nothing is worse than no id at all: it suppresses shape detection (a
+    # registered set carries its own map, so nothing re-derives one), and
+    # `resolve_dataset` marks the dataset missing. The recipe then generates a
+    # config with no reshape and trl looks for its default `text` column.
+    #
+    # A model reads two parameters that both look like "the dataset", one of them
+    # marked preferred, and puts the Hub id in that one. It is the obvious
+    # reading. So this is checked here rather than described harder: the answer
+    # names the difference and the fix, instead of appearing eight minutes later
+    # as `KeyError: 'text'`.
+    if updated.dataset_id:
+        from backend.modules.datasets import registry as dataset_registry
+
+        found = await asyncio.to_thread(dataset_registry.get, updated.dataset_id)
+        if found is None:
+            return {
+                "error": (
+                    f"no registered dataset {updated.dataset_id!r}. `dataset_id` "
+                    "takes an id from `datasets.list` — a handle for a dataset "
+                    "someone registered, with its shape and column map already "
+                    "worked out. A Hugging Face ref like 'GAIR/LIMO' goes in "
+                    "`dataset` instead, and its shape is detected for you."
+                ),
+                "recipe": (
+                    await asyncio.to_thread(recipes.load_recipe, project)
+                ).to_dict(),
+            }
     known = {f.name for f in recipes.catalog(updated.backend, updated.task, True)}
     ignored = sorted(set(values) - known)
+    # Detect the shape of a typed ref now, so the answer this tool returns already
+    # says what the run will train on rather than deferring it to `recipe.run`.
+    shape = await asyncio.to_thread(recipes.ensure_shape, updated)
     await asyncio.to_thread(recipes.save_recipe, project, updated)
 
-    result: dict[str, Any] = {"recipe": updated.to_dict()}
+    result: dict[str, Any] = {"recipe": updated.to_dict(), "datasetShape": shape}
     if ignored:
         # Named rather than dropped silently. A value the catalog does not carry is
         # never emitted, and an agent that set it would otherwise report success
@@ -119,6 +155,8 @@ async def _apply_recipe(args: dict[str, Any]) -> Any:
     recipe = await asyncio.to_thread(recipes.load_recipe, project)
 
     def work() -> int:
+        recipes.ensure_shape(recipe)
+        recipes.save_recipe(project, recipe)
         intro = recipes.introspect(project, backend_id=recipe.backend, task=recipe.task)
         return recipes.apply_to_notebook(project, recipe, intro)
 
@@ -127,6 +165,28 @@ async def _apply_recipe(args: dict[str, Any]) -> Any:
     except (OSError, ValueError) as exc:
         return {"error": str(exc)}
     return {"cells": written, "notebook": "main.ipynb"}
+
+
+async def _run_recipe(args: dict[str, Any]) -> Any:
+    """Train, headlessly — the step the tool surface was missing.
+
+    `recipe.apply` writes cells and the only thing that runs cells is the
+    notebook pane, whose `cells.*` tools resolve an *open session*. So an agent
+    with no pane open could get everything right and still not train. This starts
+    the same recipe as a script through the same runner a sweep point uses, so
+    metrics reach the panes identically and `training.stop_run` already stops it.
+    """
+    project = _project(args)
+    if project is None:
+        return _missing(args)
+    from backend.modules.training import routes as training_routes
+
+    try:
+        return await training_routes.recipe_run(
+            project.id, {"runName": str(args.get("runName") or "")}
+        )
+    except Exception as exc:  # noqa: BLE001 — the agent reads the reason
+        return {"error": str(exc)}
 
 
 async def _install_stack(args: dict[str, Any]) -> Any:
@@ -218,7 +278,6 @@ async def _sweep_stop(args: dict[str, Any]) -> Any:
     return {"stopped": sweeps.stop(str(args.get("sweepId") or ""))}
 
 
-
 # --- Weights & Biases, read back ---------------------------------------------
 #
 # These are `training.*` and not `trackers.*` on purpose. The `trackers` connector
@@ -302,11 +361,18 @@ TOOLS: list[AgentTool] = [
             "base_model": {"type": "string", "description": "Hub id to fine-tune"},
             "dataset_id": {
                 "type": "string",
-                "description": "A registered dataset's id. Preferred over `dataset`: "
-                "it carries the detected shape and column map, so the generated code "
-                "reshapes correctly instead of guessing a text column.",
+                "description": "ONLY an id from `datasets.list` (a dataset someone "
+                "registered here, e.g. 'ds-7f3a'). NOT a Hugging Face ref — put "
+                "'GAIR/LIMO' in `dataset`. An id that resolves to nothing is "
+                "rejected, because it would suppress shape detection and the run "
+                "would fail on a missing text column.",
             },
-            "dataset": {"type": "string", "description": "Hub id or path, free text"},
+            "dataset": {
+                "type": "string",
+                "description": "A Hugging Face ref ('GAIR/LIMO') or a local path. "
+                "This is the normal field. Its shape is detected for you and "
+                "returned as `datasetShape`.",
+            },
             "dataset_split": {"type": "string", "description": "Split, default train"},
             "use_lora": {"type": "boolean", "description": "Train a LoRA adapter"},
             "output_dir": {"type": "string", "description": "Where checkpoints land"},
@@ -337,6 +403,28 @@ TOOLS: list[AgentTool] = [
         side_effect=True,
         specifier_template="{projectId}",
         handler=_apply_recipe,
+        group="recipe",
+    ),
+    AgentTool(
+        name="recipe.run",
+        description=(
+            "Train the project's recipe now, as a background script in the project "
+            "venv — no notebook pane needed. Metrics stream to the training panes "
+            "and `training.stop_run` stops it. Call recipe.install_stack first; "
+            "check recipe.get's `datasetShape` says the dataset suits the task, "
+            "because a run that starts is not a run that trains the right thing."
+        ),
+        parameters={
+            **_PROJECT,
+            "runName": {
+                "type": "string",
+                "description": "Label for this run in the metrics pane.",
+            },
+        },
+        required=["projectId"],
+        side_effect=True,
+        specifier_template="{projectId}",
+        handler=_run_recipe,
         group="recipe",
     ),
     AgentTool(

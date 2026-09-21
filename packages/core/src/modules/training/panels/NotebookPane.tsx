@@ -246,26 +246,46 @@ export function NotebookPane() {
         <strong>{projectId}</strong>
         <span style={dim}>{notebookPath}</span>
         <span style={{ flex: 1 }} />
+        {/* With the socket down every status here is a *last known* one, so the
+            badge says so rather than repeating it. The failure this replaces:
+            a backend restart takes its kernel with it, no event can arrive to
+            say so, and the pane held "● busy" over a column of queued cells
+            indefinitely — which looks exactly like a cell that is taking a
+            while, for as long as you are willing to wait. */}
         <span
-          title="Kernel status"
+          title={
+            state.connected
+              ? 'Kernel status'
+              : 'The connection to the backend dropped — this is the last status it sent, not a current one. Reconnecting.'
+          }
           style={{
-            color:
-              state.kernel === 'idle'
+            color: !state.connected
+              ? 'var(--warn, #d29922)'
+              : state.kernel === 'idle'
                 ? 'var(--ok, #57ab5a)'
                 : state.kernel === 'dead'
                   ? 'var(--danger, #e5534b)'
                   : 'var(--text-dim)',
           }}
         >
-          ● {state.kernel}
+          {state.connected ? `● ${state.kernel}` : '◌ reconnecting…'}
         </span>
-        <button disabled={!sessionKey} onClick={() => sessionKey && runAll(sessionKey)}>
+        <button
+          disabled={!sessionKey || !state.connected}
+          onClick={() => sessionKey && runAll(sessionKey)}
+        >
           Run all
         </button>
-        <button disabled={!sessionKey} onClick={() => sessionKey && interruptKernel(sessionKey)}>
+        <button
+          disabled={!sessionKey || !state.connected}
+          onClick={() => sessionKey && interruptKernel(sessionKey)}
+        >
           Interrupt
         </button>
-        <button disabled={!sessionKey} onClick={() => sessionKey && restartKernel(sessionKey)}>
+        <button
+          disabled={!sessionKey || !state.connected}
+          onClick={() => sessionKey && restartKernel(sessionKey)}
+        >
           Restart
         </button>
       </div>

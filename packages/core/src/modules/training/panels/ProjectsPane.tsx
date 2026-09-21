@@ -7,6 +7,7 @@ import {
   listProjects,
   listProviders,
   pushProject,
+  resolveEnvironment,
   searchEnvironments,
   type EnvironmentRef,
   type Project,
@@ -16,6 +17,58 @@ import { onTrainingEvent } from '../client';
 import { openTrainingNotebook, openTrainingRecipe } from '../open';
 
 const dim = { color: 'var(--text-dim)' } as const;
+
+/**
+ * The one-line "is this the dataset everyone uses, or someone's 5k dump?" signal.
+ *
+ * Every provider already returns it — HF sends `downloads`/`likes`, Kaggle sends
+ * `size` on a dataset and `deadline`/`reward` on a competition — and the pane used
+ * to drop the whole `meta` bag on the floor, rendering `id (kind)` and nothing
+ * else. A search for "reasoning" then lists twenty plausible-looking ids in an
+ * order that is not popularity, with no way to tell them apart short of opening
+ * huggingface.co in another window.
+ *
+ * Deliberately generic rather than a switch on `provider`: a plugin provider's
+ * `meta` is whatever it chose, and showing its keys beats showing nothing. Only
+ * keys with a value are rendered, so a missing count is absent rather than "0".
+ */
+const signalStyle = {
+  marginLeft: '0.45rem',
+  fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+  fontSize: 10,
+  color: 'var(--text-dim)',
+} as const;
+
+const exactBadge = {
+  marginLeft: '0.4rem',
+  fontSize: 9,
+  fontWeight: 700,
+  letterSpacing: '0.1em',
+  textTransform: 'uppercase' as const,
+  color: 'var(--accent, #3b82f6)',
+  border: '1px solid var(--accent, #3b82f6)',
+  borderRadius: 3,
+  padding: '0 4px',
+};
+
+const SIGNAL_KEYS = ['downloads', 'likes', 'size', 'rows', 'deadline', 'reward', 'namespace'];
+
+function refSignal(ref: EnvironmentRef): string {
+  const parts: string[] = [];
+  for (const key of SIGNAL_KEYS) {
+    const value = ref.meta?.[key];
+    if (value === undefined || value === null || value === '' || value === 0) continue;
+    const shown = typeof value === 'number' ? compact(value) : String(value);
+    parts.push(key === 'downloads' ? `↓${shown}` : key === 'likes' ? `♥${shown}` : shown);
+  }
+  return parts.join(' · ');
+}
+
+function compact(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
 
 /** The marker on a project another module owns. Same treatment as a read-only
  * bundled eval suite: uppercase, bordered, muted — it explains why the authoring
@@ -57,6 +110,8 @@ export function ProjectsPane() {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<EnvironmentRef[]>([]);
   const [searching, setSearching] = useState(false);
+  /** The id `resolve` matched exactly, so the row can say why it is first. */
+  const [exactId, setExactId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [creating, setCreating] = useState<string | null>(null);
@@ -90,12 +145,35 @@ export function ProjectsPane() {
     return () => unsubs.forEach((u) => u());
   }, [refresh]);
 
+  /**
+   * Search, plus an **exact-id lookup running beside it**.
+   *
+   * Provider search is a fuzzy name match ranked by the provider, not by you:
+   * `GAIR/LIMO` does not appear in a search for `LIMO` (HF returns `Limorgu/…`,
+   * `Limour/…`), so a person who arrives already knowing which dataset they want —
+   * the normal case for a paper's dataset — had no way to say so. The `resolve`
+   * route has always existed and the agent has always used it (`training.
+   * resolve_environment`); this pane simply never called it, which made the agent
+   * strictly more capable than the UI at the very first step.
+   *
+   * Both requests go out together and the exact hit is prepended and marked, so a
+   * typo still shows the fuzzy list rather than only an error. A resolve failure
+   * is swallowed: for a free-text query ("reasoning") it is the expected answer,
+   * and surfacing it would mean an error banner on every successful search.
+   */
   const search = useCallback(() => {
-    if (!query.trim()) return;
+    const q = query.trim();
+    if (!q) return;
     setSearching(true);
     setError(null);
-    searchEnvironments(provider, query)
-      .then((r) => setResults(r.results))
+    const fuzzy = searchEnvironments(provider, q).then((r) => r.results);
+    const exact = resolveEnvironment(provider, q).catch(() => null);
+    Promise.all([fuzzy, exact])
+      .then(([found, hit]) => {
+        if (!hit) return setResults(found);
+        setResults([hit, ...found.filter((r) => r.id !== hit.id)]);
+        setExactId(hit.id);
+      })
       .catch((e: Error) => setError(e.message))
       .finally(() => setSearching(false));
   }, [provider, query]);
@@ -162,6 +240,12 @@ export function ProjectsPane() {
                   style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}
                 >
                   {r.title || r.id} <span style={dim}>({r.kind})</span>
+                  {r.id === exactId && <span style={exactBadge}>exact</span>}
+                  {refSignal(r) && (
+                    <span style={signalStyle} title="Reported by the provider">
+                      {refSignal(r)}
+                    </span>
+                  )}
                 </span>
                 <button onClick={() => create(r)} disabled={creating !== null}>
                   {creating === r.id ? 'Creating…' : 'Create project'}

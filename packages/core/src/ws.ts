@@ -12,6 +12,7 @@ type Handler = (msg: WsMessage) => void;
 
 const handlers = new Map<string, Set<Handler>>();
 const openListeners = new Set<() => void>();
+const closeListeners = new Set<() => void>();
 let socket: WebSocket | null = null;
 let backoff = 500;
 
@@ -39,6 +40,7 @@ function connect(): void {
   };
   socket.onclose = () => {
     socket = null;
+    closeListeners.forEach((l) => l());
     setTimeout(connect, backoff);
     backoff = Math.min(backoff * 2, 10_000);
   };
@@ -55,6 +57,26 @@ export function onSocketOpen(listener: () => void): () => void {
   if (socket && socket.readyState === WebSocket.OPEN) listener();
   return () => {
     openListeners.delete(listener);
+  };
+}
+
+/**
+ * Run `listener` every time the socket drops. The counterpart of `onSocketOpen`,
+ * and the thing whose absence made every live pane lie: a module could learn that
+ * the backend had come back but never that it had gone, so anything driven by
+ * pushed events — a notebook mid-run, a download's progress — simply held its
+ * last frame. The notebook kept reading "● busy" with queued cells beneath it
+ * while no kernel existed at all, which is indistinguishable from a slow cell and
+ * is the state a `--reload` backend restart leaves behind every time.
+ *
+ * Fires on the drop only. Reconnection is `onSocketOpen`, which already runs on
+ * every (re)connect, so the two together are the whole lifecycle.
+ */
+export function onSocketClose(listener: () => void): () => void {
+  connect();
+  closeListeners.add(listener);
+  return () => {
+    closeListeners.delete(listener);
   };
 }
 

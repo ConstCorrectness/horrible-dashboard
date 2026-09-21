@@ -1046,3 +1046,32 @@ def test_turn_stamps_its_io_and_closes_the_capture(monkeypatch) -> None:
     [turn] = [t for t in interp.recent_turns() if t.turnId == "t-stamp"]
     assert turn.modelContextLength == 8192
     assert telemetry_turn.current() is None
+
+
+def test_a_truncated_tool_list_is_declared_to_the_model() -> None:
+    """A tool cut to fit the budget looks, from the model's side, exactly like a
+    capability the dashboard does not have.
+
+    It loads a dozen groups, the tail of the catalog is dropped, and what arrives
+    is a list with no `notebook.insert_cell` in it — so the model improvises or
+    reports the feature missing, and the only trace is an ERROR in a log the
+    person who asked never reads. The note names *groups*, because `load_tools`
+    is the only lever the model has and it operates on groups.
+    """
+    messages: list[dict] = [{"role": "user", "content": "hi"}]
+    orchestrator._note_dropped_tools(
+        messages, {"dropped": ["notebook.run_all", "notebook.edit_cell", "ide.stage"]}
+    )
+    note = messages[-1]
+    assert note["role"] == "system"
+    assert "notebook" in note["content"] and "ide" in note["content"]
+    assert "3 tool(s)" in note["content"]
+
+    # One note, not one per round: three stale copies are three different claims
+    # about what is available right now.
+    orchestrator._note_dropped_tools(messages, {"dropped": ["ide.stage"]})
+    assert sum(1 for m in messages if "[tool budget]" in str(m.get("content"))) == 1
+
+    # And it is removed once everything fits again.
+    orchestrator._note_dropped_tools(messages, {})
+    assert not any("[tool budget]" in str(m.get("content")) for m in messages)

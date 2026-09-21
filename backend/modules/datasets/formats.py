@@ -37,18 +37,26 @@ from typing import Any
 
 #: Every shape we can recognise. `unknown` is a real member, not an error state —
 #: a dataset we cannot classify is still usable with a hand-written column map.
-FORMATS = ("chatml", "sharegpt", "alpaca", "preference", "raw_text", "unknown")
+FORMATS = (
+    "chatml",
+    "sharegpt",
+    "alpaca",
+    "prompt_completion",
+    "preference",
+    "raw_text",
+    "unknown",
+)
 
 #: What each task can actually train on, in preference order. The whole point of
 #: the module: this table is why picking DPO with an Alpaca dataset is a question
 #: the form can answer instead of a run that quietly optimises nothing.
 TASK_FORMATS: dict[str, tuple[str, ...]] = {
-    "sft": ("chatml", "sharegpt", "alpaca", "raw_text"),
+    "sft": ("chatml", "sharegpt", "alpaca", "prompt_completion", "raw_text"),
     "cpt": ("raw_text",),
     "dpo": ("preference",),
     "kto": ("preference",),
     "reward": ("preference",),
-    "grpo": ("chatml", "sharegpt", "alpaca"),
+    "grpo": ("chatml", "sharegpt", "alpaca", "prompt_completion"),
     "pretrain": ("raw_text",),
 }
 
@@ -57,6 +65,18 @@ TASK_FORMATS: dict[str, tuple[str, ...]] = {
 _CHAT_COLUMNS = ("messages", "conversation", "conversations", "chat")
 _TEXT_COLUMNS = ("text", "content", "document", "raw", "completion")
 _PROMPT_COLUMNS = ("prompt", "question", "instruction", "query", "input")
+#: Columns a completion is usually spelled with. Order is *not* how the choice
+#: is made when several are present — see `_pick_completion`, which measures the
+#: rows instead, because `solution` and `answer` are both on this list and a
+#: reasoning dataset carries both meaning very different things.
+_COMPLETION_COLUMNS = (
+    "completion",
+    "solution",
+    "output",
+    "response",
+    "answer",
+    "rationale",
+)
 _CHOSEN_COLUMNS = ("chosen", "response_a", "preferred", "chosen_response")
 _REJECTED_COLUMNS = ("rejected", "response_b", "dispreferred", "rejected_response")
 
@@ -115,6 +135,39 @@ def _first_present(columns: list[str], candidates: tuple[str, ...]) -> str:
         if candidate in lowered:
             return lowered[candidate]
     return ""
+
+
+def _mean_len(rows: list[dict[str, Any]], column: str) -> float:
+    lengths = [len(str(r.get(column) or "")) for r in rows]
+    return sum(lengths) / len(lengths) if lengths else 0.0
+
+
+def _pick_completion(
+    rows: list[dict[str, Any]], candidates: list[str]
+) -> tuple[str, str]:
+    """Which of several completion-shaped columns actually holds the answer.
+
+    `GAIR/LIMO` carries both `solution` — the entire chain of thought — and
+    `answer`, which is the string `"25"`. Taking the first name off a fixed list
+    would have trained the model to emit the final number and drop the reasoning:
+    the exact opposite of what post-training on a reasoning dataset is for, with
+    nothing anywhere reporting it, and a loss curve that looks fine.
+
+    So when more than one candidate is present the choice is **measured** rather
+    than ranked, and the measurement goes into the reason — which is what lets it
+    be overruled on sight instead of discovered in the samples.
+    """
+    if len(candidates) == 1:
+        return candidates[0], ""
+    means = {c: _mean_len(rows, c) for c in candidates}
+    best = max(candidates, key=lambda c: means[c])
+    others = ", ".join(
+        f"`{c}` at {round(means[c])}" for c in candidates if c != best
+    )
+    return best, (
+        f" — `{best}` averages {round(means[best])} characters against {others}, "
+        f"so it is the one holding the full answer"
+    )
 
 
 def _messages_dialect(rows: list[dict[str, Any]], column: str) -> tuple[str, int]:
@@ -220,6 +273,34 @@ def detect(columns: list[str], rows: list[dict[str, Any]]) -> Detection:
             cols,
         )
 
+    # --- prompt/completion ---
+    #
+    # trl's own "standard" shape, and how nearly every reasoning dataset is
+    # spelled: `question`/`solution` (LIMO), `problem`/`solution` (OpenR1-Math),
+    # `prompt`/`completion`. It sat in the gap between Alpaca — which demands the
+    # literal column `instruction` — and raw text, so the whole family reported
+    # `unknown`, no column map was inferred, and the emitted cell fell back to
+    # trl's default `text` column that these datasets do not have. The run died
+    # with `KeyError: 'text'` several minutes in, after the model had loaded.
+    prompt = _first_present(columns, _PROMPT_COLUMNS)
+    candidates = [
+        c for c in columns if c.lower() in _COMPLETION_COLUMNS and c != prompt
+    ]
+    if prompt and candidates:
+        completion, evidence = _pick_completion(rows, candidates)
+        hits = sum(
+            1
+            for r in rows
+            if str(r.get(prompt) or "").strip() and str(r.get(completion) or "").strip()
+        )
+        return Detection(
+            "prompt_completion",
+            hits / total,
+            f"`{prompt}` and `{completion}` are both populated in {hits} of "
+            f"{total} rows{evidence}.",
+            {"prompt": prompt, "completion": completion},
+        )
+
     # --- raw text ---
     text = _first_present(columns, _TEXT_COLUMNS)
     if text:
@@ -284,7 +365,18 @@ def adapt(detection: Detection, task: str) -> Adaptation:
     # In range. `raw_text` and `preference` map straight through; the chat and
     # instruction shapes need the generated code to build the text, which is why
     # `needs_formatting` exists rather than a silent rename.
-    needs = detection.format in ("sharegpt", "alpaca")
+    #
+    # `prompt_completion` needs it only when the columns are spelled something
+    # other than trl's own names: `{prompt, completion}` is already a shape trl
+    # trains natively, so emitting a reshape for it would be code that renames a
+    # column to itself.
+    needs = detection.format in ("sharegpt", "alpaca") or (
+        detection.format == "prompt_completion"
+        and (
+            detection.columns.get("prompt") != "prompt"
+            or detection.columns.get("completion") != "completion"
+        )
+    )
     return Adaptation(True, columns=dict(detection.columns), needs_formatting=needs)
 
 
@@ -311,6 +403,24 @@ def formatting_source(fmt: str, columns: dict[str, str]) -> str:
             "    ]}\n"
             "\n"
             "dataset = dataset.map(to_messages)"
+        )
+    if fmt == "prompt_completion":
+        prompt = columns.get("prompt", "prompt")
+        completion = columns.get("completion", "completion")
+        renames = {
+            k: v
+            for k, v in ((prompt, "prompt"), (completion, "completion"))
+            if k != v
+        }
+        if not renames:
+            return ""
+        return (
+            "# trl trains prompt/completion pairs natively and masks the prompt\n"
+            "# out of the loss, so these columns only need their standard names.\n"
+            "# Renaming rather than concatenating into one `text` column is what\n"
+            "# keeps that masking: the model learns to write the answer, not to\n"
+            "# predict the question it was given.\n"
+            f"dataset = dataset.rename_columns({renames!r})"
         )
     if fmt == "alpaca":
         instruction = columns.get("instruction", "instruction")
@@ -342,6 +452,10 @@ def text_field_for(fmt: str, columns: dict[str, str]) -> str:
     `messages` for everything chat-shaped, because both reshapers above emit that
     key; the mapped text column for raw corpora. This replaces the free-text
     `text_field` the form used to ask for.
+
+    `prompt_completion` returns **empty on purpose**: trl recognises that pair
+    itself and takes no text-field argument for it, so naming one would point the
+    trainer at a single column and throw away the prompt masking.
     """
     if fmt in ("chatml", "sharegpt", "alpaca"):
         return columns.get("messages", "messages") if fmt == "chatml" else "messages"

@@ -218,6 +218,9 @@ export interface Recipe {
    *  have no held-out split, and inventing one fails at `load_dataset`. */
   evalSplit: string;
   columnMap: Record<string, string>;
+  /** The shape detected for a typed `dataset` ref (`prompt_completion`, `chatml`,
+   *  ...). A registered dataset carries its own and leaves this empty. */
+  datasetFormat: string;
   textField: string;
   useLora: boolean;
   outputDir: string;
@@ -301,6 +304,20 @@ export interface RecipePayload {
   requirements: string[];
   sweep: SweepSpec;
   outputTypes: string[];
+  /** What five real rows said about the typed dataset ref, or null when there is
+   *  nothing to say — a picked dataset, an empty field, or a Hub that could not
+   *  be reached. `adopted` means the column map below came from here. */
+  datasetShape: DatasetShape | null;
+}
+
+export interface DatasetShape {
+  format: string;
+  confidence: number;
+  reason: string;
+  columns: Record<string, string>;
+  certain: boolean;
+  adaptation: { ok: boolean; columns: Record<string, string>; problem: string; needsFormatting: boolean };
+  adopted?: boolean;
 }
 
 export interface Checkpoint {

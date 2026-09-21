@@ -15,6 +15,7 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
@@ -51,6 +52,10 @@ from backend.modules.training.providers import (
 from backend.modules.training.stream import broadcast_threadsafe
 
 logger = logging.getLogger(__name__)
+
+#: Where `recipe/run` writes the scripts it generates, beside the sweep's own
+#: `sweeps/` folder and under the project root so it travels with the project.
+RECIPE_SCRIPT_DIR = "runs"
 
 router = APIRouter(prefix="/training", tags=["training"])
 
@@ -193,10 +198,49 @@ async def run_start(project_id: str, body: dict) -> dict:
 
 
 @router.get("/runs")
-async def run_list() -> dict:
+async def run_list(tail: int = 0) -> dict:
     from backend.modules.training.runners.script_runner import script_runner
 
-    return {"runs": script_runner.status()}
+    return {"runs": script_runner.status(tail=max(0, min(tail, 200)))}
+
+
+@router.get("/projects/{project_id}/runs/logs")
+async def run_logs(project_id: str, name: str = "", tail: int = 200) -> dict:
+    """A run's output read from disk, newest run first when `name` is omitted.
+
+    Deliberately keyed by **file**, not by run id. The run registry is in memory,
+    so a backend restart forgets every id it ever handed out while the logs are
+    still sitting in the project — and "the run list is empty" is exactly what a
+    caller must not read as "nothing went wrong". This answers from the directory.
+    """
+    project = _project_or_404(project_id)
+    from backend.modules.training.runners.script_runner import LOG_DIR
+
+    folder = Path(project.root) / LOG_DIR
+
+    def work() -> dict:
+        if not folder.is_dir():
+            return {"logs": [], "name": "", "lines": []}
+        files = sorted(
+            folder.glob("*.log"), key=lambda f: f.stat().st_mtime, reverse=True
+        )
+        names = [f.name for f in files]
+        if not files:
+            return {"logs": [], "name": "", "lines": []}
+        chosen = next((f for f in files if f.name == name), files[0])
+        try:
+            text = chosen.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            return {"logs": names, "name": chosen.name, "error": str(exc), "lines": []}
+        lines = text.splitlines()
+        return {
+            "logs": names,
+            "name": chosen.name,
+            "lines": lines[-max(1, min(tail, 2000)) :],
+            "truncated": len(lines) > tail,
+        }
+
+    return await asyncio.to_thread(work)
 
 
 @router.delete("/runs/{run_id}")
@@ -490,8 +534,41 @@ def _start_fetch(project: ProjectModel) -> None:
 # execution path everything else here uses.
 
 
+def _shape_warnings(
+    recipe: recipes.Recipe, shape: dict[str, Any] | None
+) -> list[str]:
+    """What a typed dataset's shape means for the run, before it is a stack trace.
+
+    The failure being pre-empted is specific and was reachable from the default
+    path: a reasoning dataset spelled `question`/`solution` has no `text` column,
+    trl's `SFTConfig` defaults to one, and the run raises `KeyError: 'text'`
+    minutes in, after the base model has downloaded and loaded — a message that
+    names neither the dataset nor the column that is missing.
+
+    Silent when there is nothing to say. A dataset that could not be reached is
+    **not** warned about: being offline is not evidence about a dataset's shape,
+    the same posture as `basemodels.check`.
+    """
+    if not shape:
+        return []
+    adaptation = shape.get("adaptation") or {}
+    if adaptation.get("ok"):
+        return []
+    detected = str(shape.get("format") or "unknown")
+    problem = str(adaptation.get("problem") or "")
+    return [
+        f"`{recipe.dataset}` reads as **{detected}** data "
+        f"({shape.get('reason', '')}) — {problem} Until it is mapped, the "
+        f"generated cell trains on trl's default `text` column, which this "
+        f"dataset does not have."
+    ]
+
+
 def _recipe_payload(project: ProjectModel, *, refresh: bool = False) -> dict:
     recipe = recipes.load_recipe(project)
+    # Look at the dataset the recipe actually names, not only at a picked one.
+    # Advisory and cached; it fills a blank column map and never argues with one.
+    shape = recipes.ensure_shape(recipe)
     intro = recipes.introspect(
         project, refresh=refresh, backend_id=recipe.backend, task=recipe.task
     )
@@ -524,7 +601,13 @@ def _recipe_payload(project: ProjectModel, *, refresh: bool = False) -> dict:
         # `basemodels.check`. Advisory: it never blocks generating the cells.
         "warnings": recipes.warnings_for(recipe.values, recipe.trackers)
         + basemodels.check(recipe.base_model)
+        + _shape_warnings(recipe, shape)
         + backend.check(recipe.task, profile),
+        # What five real rows said about the typed ref, so the pane can show the
+        # verdict and its evidence rather than a column map that appeared by
+        # itself. `None` when there is nothing to say (a picked dataset, an empty
+        # field, or a Hub that could not be asked).
+        "datasetShape": shape,
         "trackers": list(recipes.TRACKERS),
         "tasks": recipes.tasks(),
         "backends": recipes.backends(),
@@ -572,6 +655,11 @@ async def recipe_apply(project_id: str, body: dict) -> dict:
     recipe = recipes.Recipe.from_dict(body) if body else recipes.load_recipe(project)
 
     def work() -> int:
+        # The same detection the form runs, at the moment the cells are written.
+        # Both seams need it: the human clicks "Write cells" after the form has
+        # already adopted a map, but `recipe.apply` is an agent tool that can be
+        # the first thing to touch this recipe at all.
+        recipes.ensure_shape(recipe)
         recipes.save_recipe(project, recipe)
         intro = recipes.introspect(project, backend_id=recipe.backend, task=recipe.task)
         return recipes.apply_to_notebook(project, recipe, intro)
@@ -581,6 +669,61 @@ async def recipe_apply(project_id: str, body: dict) -> dict:
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"cells": written, "notebook": "main.ipynb"}
+
+
+@router.post("/projects/{project_id}/recipe/run", status_code=202)
+async def recipe_run(project_id: str, body: dict | None = None) -> dict:
+    """Run the recipe as a script, outside the kernel — the headless half.
+
+    The gap this fills: `recipe/apply` writes cells into `main.ipynb`, and the
+    only thing that can execute those cells is the notebook *pane* — the
+    `cells.run_all` tool lives on the frontend and resolves an open session. So
+    with no pane open there was no way to train at all: an agent could pick a
+    model, pick a dataset, install the stack, generate correct code, and then
+    stop, one step short. `training.start_run` was not that step either — it
+    takes a script path and nothing in the product wrote one.
+
+    Reuses the sweep's machinery exactly (`materialize_script` -> a `.py` in the
+    project -> `script_runner`), because a sweep of one point is already what
+    "run this recipe once, headlessly" means, and a second execution path would
+    be the place the notebook and the script start disagreeing about what a
+    recipe says.
+
+    The script is written to a **timestamped** file rather than one fixed name:
+    a run that is still going must stay readable while the next one is generated,
+    and the path is what the run reports.
+    """
+    project = _project_or_404(project_id)
+    recipe = recipes.load_recipe(project)
+    run_name = str((body or {}).get("runName") or "") or None
+
+    def work() -> tuple[str, str]:
+        recipes.ensure_shape(recipe)
+        recipes.save_recipe(project, recipe)
+        intro = recipes.introspect(project, backend_id=recipe.backend, task=recipe.task)
+        folder = Path(project.root) / RECIPE_SCRIPT_DIR
+        folder.mkdir(parents=True, exist_ok=True)
+        name = f"run-{time.strftime('%Y%m%d-%H%M%S')}.py"
+        source = recipes.materialize_script(recipe, intro, run_name)
+        (folder / name).write_text(source, encoding="utf-8")
+        return f"{RECIPE_SCRIPT_DIR}/{name}", source
+
+    script, source = await asyncio.to_thread(work)
+    from backend.modules.training.runners.script_runner import script_runner
+
+    try:
+        run = await asyncio.to_thread(script_runner.start, project, script)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "runId": run.id,
+        "script": script,
+        "state": "running",
+        # Returned so the caller can read what it is about to be judged on
+        # without a second round-trip — an agent that starts a run it cannot see
+        # is the thing this route exists to stop being.
+        "source": source,
+    }
 
 
 @router.post("/projects/{project_id}/recipe/install-stack")

@@ -33,6 +33,16 @@ from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 
+class _Unset:
+    """Distinct from every value a knob could legitimately hold."""
+
+    def __repr__(self) -> str:  # pragma: no cover — debugging aid
+        return "UNSET"
+
+
+UNSET = _Unset()
+
+
 @dataclass(frozen=True)
 class RecipeField:
     """One knob, as it is rendered and as it is emitted.
@@ -53,6 +63,16 @@ class RecipeField:
     options: tuple[str, ...] = ()
     #: Older names for the same idea. The library renames these; we don't get to.
     aliases: tuple[str, ...] = ()
+    #: A value meaning "leave this out and let the library's own default stand".
+    #:
+    #: Needed because a form field cannot be empty but an argument can be absent,
+    #: and for some knobs those are genuinely different runs. `dataset_num_proc`
+    #: is the case that forced it: in `datasets` >= 5 the sequential path is
+    #: `None`, and **1 means one worker process** — so the obvious "no
+    #: parallelism" value still starts a pool. Emitting `0` instead would be a
+    #: different lie. `UNSET` rather than `None` as the off switch, because
+    #: `None` is a legitimate thing to want omitted.
+    omit_when: Any = UNSET
 
     def to_dict(self) -> dict[str, Any]:
         return {
