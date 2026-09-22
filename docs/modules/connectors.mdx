@@ -551,9 +551,44 @@ gated on `info.dialect == "openai"` — the same reasoning the llama.cpp integra
 records. It is the first openai-dialect provider that is *remote*, so `auth_headers`
 was added to the shared request path: empty for every local server, a `Bearer` for NIM.
 
-It is listed in `GET /api/agent/status` **only while a key is connected**, following
-the `peer` precedent plus one more reason: probing it unconditionally would mean an
-unauthenticated request to NVIDIA on every status poll, to be told what we already knew.
+It is an ordinary **hosted** provider in `GET /api/agent/status`: listed with or
+without a key, unreachable until one exists, pointing at build.nvidia.com. It used to
+be filtered out until the connector held a key, following the `peer` precedent — but
+`peer` is a provider nobody can obtain on purpose, whereas anyone can get an NVIDIA
+key, so hiding it meant nothing anywhere in the agent settings said this node can talk
+to NVIDIA at all. The request that filter was avoiding — an unauthenticated call on
+every status poll — is instead prevented by the `MissingApiKey` check in
+`list_models`, which now fires **before** the dialect branch rather than inside the
+`litellm` one, because "a hosted provider without a key is not reachable" was never a
+litellm-only rule.
+
+`ProviderInfo.key_connector` is how the provider borrows the credential: non-empty
+means `api_key_for` reads that connector's store, and means the key-write routes
+(`PUT/DELETE /api/agent/providers/<kind>/key`) **refuse** this provider with a 400
+naming the connector. One home — NVIDIA's key reaches NIM inference *and* the NGC
+catalog, so a second copy under the provider kind would be a second thing to rotate,
+a second thing to leak, and would skip the connector's own verification, which is what
+proves a pasted key actually works. The API-keys settings section renders such a
+provider as a status row saying where the credential lives, rather than a field the
+backend would reject.
+
+**`store.save` takes a `Credential` dataclass, not a dict.** This connector was
+written against a dict-shaped store that does not exist, so pasting a key raised
+`TypeError: asdict() should be called on dataclass instances` before anything was
+written — the connector had never worked, and nothing caught it because nothing
+tested it (`backend/tests/test_connectors_nvidia.py` now does).
+
+**NVIDIA publishes no per-model price signal.** `/v1/models` is the plain OpenAI
+shape (`id`, `owned_by`, `root`) with no pricing, and the *Free Endpoint* badge on
+build.nvidia.com is rendered server-side with no JSON API behind it — NGC's catalog
+search is a different universe (downloadable registry artifacts). So unlike
+OpenRouter, whose `pricing.prompt`/`pricing.completion` decide `free_models`, a free
+tag for NIM cannot be derived, and one is not invented. What it gets instead is
+`ProviderInfo.tier_note` — one sentence about the tier, rendered **once beneath the
+model list** in the picker (for the providers whose rows are actually in view) rather
+than on each row. The distinction is the point: the note is true of the provider, and
+repeating it per model would read as a claim about that model in particular, which is
+exactly the claim nothing supports. `free_models` stays empty for NIM.
 
 Connecting NVIDIA has nothing to do with the [hardware](./hardware.mdx) probe. That
 reads the card in this machine with `nvidia-smi`; this is an account.

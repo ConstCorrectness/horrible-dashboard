@@ -377,7 +377,7 @@ def test_thinking_extractor() -> None:
 # --- remote model listings -------------------------------------------------------
 
 
-def test_remote_listing_is_cached_and_gets_its_own_timeout() -> None:
+def test_remote_listing_is_cached_and_gets_its_own_timeout(monkeypatch) -> None:
     """NVIDIA NIM's `/v1/models` is fetched across the internet, but the probe
     client's budget is sized for a loopback port (2s). Inheriting it made a slow
     network indistinguishable from a provider with no models, because `_probe`
@@ -391,6 +391,9 @@ def test_remote_listing_is_cached_and_gets_its_own_timeout() -> None:
         return httpx.Response(200, json={"data": [{"id": "meta/llama-3.3-70b"}]})
 
     info = P.PROVIDERS["nim"]
+    # NIM is hosted, so a listing is refused outright without a key — that check is
+    # what stops the probe calling NVIDIA unauthenticated on every status poll.
+    monkeypatch.setattr(P, "api_key_for", lambda i: "nvapi-test" if i is info else None)
     client = _client(handler)
 
     async def run() -> list[str]:
@@ -454,3 +457,167 @@ def test_loopback_detection_covers_the_empty_endpoint() -> None:
     assert P.is_loopback_endpoint("http://127.0.0.1:8080")
     assert P.is_loopback_endpoint("http://localhost:1234/v1")
     assert not P.is_loopback_endpoint("https://integrate.api.nvidia.com")
+
+
+# --- strict tool names (NVIDIA NIM) ----------------------------------------------
+
+
+def test_dotted_tool_names_are_translated_for_a_strict_provider() -> None:
+    """NVIDIA validates function names against `a-zA-Z0-9_-` and rejects the whole
+    request — `400 Validation: Function at index 7 has an invalid name:
+    "agent.ask_peer"`, in 281ms, before any inference. Every tool here is dotted, so
+    without this every turn on NIM failed identically."""
+    sent: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "c1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "library_search",
+                                        "arguments": '{"q":"x"}',
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            },
+        )
+
+    tools = [
+        {"type": "function", "function": {"name": "library.search", "parameters": {}}},
+        {"type": "function", "function": {"name": "agent.ask_peer", "parameters": {}}},
+    ]
+    client = _client(handler)
+
+    async def run() -> Any:
+        out = await P.chat(
+            client, P.PROVIDERS["nim"], "https://nim.test", "m", [], tools
+        )
+        await client.aclose()
+        return out
+
+    result = asyncio.run(run())
+
+    names = [t["function"]["name"] for t in sent[0]["tools"]]
+    assert names == ["library_search", "agent_ask_peer"], "the wire must carry no dots"
+    # ...and what comes back is handed on under the name the registry knows, or the
+    # orchestrator reports a tool it never offered.
+    assert [c.name for c in result.tool_calls] == ["library.search"]
+
+
+def test_a_local_provider_keeps_its_dotted_names() -> None:
+    """Only the strict providers are translated. LM Studio and llama.cpp accept dots,
+    and rewriting for them would be a difference between what the model is told and
+    what every other provider is told, for no reason."""
+    sent: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "hi"}}]})
+
+    tools = [{"type": "function", "function": {"name": "library.search"}}]
+    client = _client(handler)
+
+    async def run() -> None:
+        await P.chat(
+            client, P.PROVIDERS["lmstudio"], "http://localhost:1234", "m", [], tools
+        )
+        await client.aclose()
+
+    asyncio.run(run())
+    assert sent[0]["tools"][0]["function"]["name"] == "library.search"
+
+
+def test_history_tool_call_names_are_translated_too() -> None:
+    """The `tools` array is not the only place a name appears. An assistant turn
+    already in the transcript carries `tool_calls[].function.name`, and leaving a
+    dotted one there is how this fix would half-work: the first round passes and the
+    second, once a tool has been called, fails on the same validation."""
+    sent: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    messages = [
+        {"role": "user", "content": "search"},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {"name": "library.search", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "content": "[]"},
+    ]
+    tools = [{"type": "function", "function": {"name": "library.search"}}]
+    client = _client(handler)
+
+    async def run() -> None:
+        await P.chat(
+            client, P.PROVIDERS["nim"], "https://nim.test", "m", messages, tools
+        )
+        await client.aclose()
+
+    asyncio.run(run())
+    assert (
+        sent[0]["messages"][1]["tool_calls"][0]["function"]["name"] == "library_search"
+    )
+    # The caller's list is not mutated — it is the live transcript.
+    assert messages[1]["tool_calls"][0]["function"]["name"] == "library.search"
+
+
+def test_a_name_collision_is_disambiguated_not_merged() -> None:
+    """`library.search` and `library_search` both sanitize to `library_search`.
+    Merging them would route one tool's call to the other — a wrong action taken
+    confidently, which is worse than an error."""
+    tools = [
+        {"type": "function", "function": {"name": "library.search"}},
+        {"type": "function", "function": {"name": "library_search"}},
+    ]
+    out, _msgs, restore = P.sanitize_tool_names(tools, [])
+    names = [t["function"]["name"] for t in out]
+    assert len(set(names)) == 2, names
+    assert {restore[n] for n in names} == {"library.search", "library_search"}
+
+
+def test_a_provider_error_body_reaches_the_message() -> None:
+    """httpx's own message is the status line and a link to MDN, so a provider that
+    said exactly what was wrong is reported as an unexplained 400 — which is what
+    made the NIM failure take a dig through the telemetry ring to diagnose."""
+    body = (
+        '{"error":{"message":"Validation: Function at index 7 has an invalid name: '
+        '\\"agent.ask_peer\\".","type":"Bad Request","code":400}}'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, text=body)
+
+    client = _client(handler)
+
+    async def run() -> str:
+        try:
+            await P.chat(client, P.PROVIDERS["nim"], "https://nim.test", "m", [], [])
+        except httpx.HTTPStatusError as exc:
+            return str(exc)
+        finally:
+            await client.aclose()
+        return ""
+
+    message = asyncio.run(run())
+    assert "agent.ask_peer" in message
+    assert "400" in message

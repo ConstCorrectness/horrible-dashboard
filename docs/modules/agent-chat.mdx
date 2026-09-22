@@ -851,6 +851,30 @@ models. A refreshed status **outranks** the one the pane handed the picker (`own
 status`), until the pane itself refetches — a new object from the pane is in turn
 newer than our copy, so the effect drops ours and defers to it again.
 
+**A strict provider's tool names are translated at the wire, not renamed at the
+source.** NVIDIA NIM validates function names against OpenAI's documented grammar
+(`a-zA-Z0-9_-`) and rejects the *whole request* if one fails — `400 Validation:
+Function at index 7 has an invalid name: "agent.ask_peer"`, returned in 281ms before
+any inference, so every turn failed identically. Every tool in this codebase is
+namespaced with a dot, and the orchestrator groups tools by that prefix (a connector's
+`id` must equal its tool prefix), so the names cannot be changed at the source.
+`sanitize_tool_names` rewrites them for `ProviderInfo.strict_tool_names` providers and
+`restore_tool_names` undoes it on the way back. Three things it must do or it
+half-works: rewrite the **history** too (an assistant turn already in the transcript
+carries `tool_calls[].function.name`, so round two fails where round one passed);
+restore the name on what the model called (otherwise the orchestrator is handed
+`library_search`, matches no registered tool, and reports the model hallucinating a
+tool it was in fact given); and **disambiguate collisions rather than merge them** —
+`library.search` and `library_search` both sanitize to the same string, and merging
+would route one tool's call to the other, a wrong action taken confidently.
+
+**A provider's error body survives to the message.** `raise_for_status` produces the
+status line and a link to MDN, so a provider that said exactly what was wrong is
+reported as an unexplained 400 — diagnosing the NIM failure above meant digging the
+response body out of the telemetry ring, which is not something a user can do.
+`raise_for_status_with_body` puts the (truncated — some providers echo the whole
+request back) body in the exception message instead.
+
 `orjson` is a hard dependency because litellm's OpenRouter transformation imports it;
 without it every OpenRouter call fails as an `APIConnectionError` naming a missing
 module, which reads as a network fault.

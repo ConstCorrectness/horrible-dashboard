@@ -19,7 +19,8 @@ import json
 import os
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -67,6 +68,30 @@ class ProviderInfo:
     #: dropdown. OpenRouter serves one without authentication; the others do not,
     #: so they fall back to `static_models`.
     catalog_url: str = ""
+    #: The connector that holds this provider's key, when the credential belongs to
+    #: one rather than to `secrets.db` under the provider kind. NVIDIA's key is one
+    #: credential with two uses (NIM inference *and* the NGC catalog), so it lives in
+    #: the `nvidia` connector and the provider borrows it -- a second copy under the
+    #: provider kind would be a second thing to rotate and a second thing to leak.
+    #: Non-empty also means the key-write routes refuse this provider: one home.
+    key_connector: str = ""
+    #: This provider validates function names against OpenAI's documented pattern
+    #: (`a-zA-Z0-9_-`) and **rejects the whole request** if one does not match.
+    #: Every tool in this codebase is namespaced with a dot (`library.search`), and
+    #: the orchestrator groups tools by that prefix, so the names cannot simply be
+    #: renamed at the source -- they are translated at this seam instead. NVIDIA NIM
+    #: is the first provider strict about it: it answers
+    #: `400 Validation: Function at index 7 has an invalid name: "agent.ask_peer"`
+    #: in 281ms, before any inference, so *every* turn fails identically.
+    strict_tool_names: bool = False
+    #: One line about what this provider's models cost, shown once beneath the model
+    #: list rather than as a per-model tag. Deliberately **group-level**: NVIDIA
+    #: publishes no per-model price signal -- `/v1/models` is the plain OpenAI shape
+    #: with no pricing, and the "Free Endpoint" badge on build.nvidia.com is
+    #: server-rendered with no API behind it -- so tagging individual ids `free` the
+    #: way `free_models` does for OpenRouter would assert a fact nothing states. A
+    #: sentence about the tier is true of the whole group and needs no such claim.
+    tier_note: str = ""
     #: Last-resort model list when there is no catalog to fetch. Deliberately short
     #: — the field is a starting point for a dropdown, never a claim to be the
     #: provider's full range, and the model field stays free-text everywhere.
@@ -142,6 +167,20 @@ PROVIDERS: dict[str, ProviderInfo] = {
         # `nvidia` connector rather than a setting, because it is a credential.
         can_pull=False,
         can_spawn=False,
+        # `hosted` is what makes it *discoverable*. It used to be false, which read
+        # as "a server on this machine" and, combined with the filter in
+        # `routes.status`, meant a keyless NIM was not reported at all -- so nothing
+        # anywhere in the agent settings said NVIDIA was a provider this node could
+        # use. A hosted provider without a key is listed, unreachable, with somewhere
+        # to go; that is the whole point of the flag.
+        hosted=True,
+        api_key_url="https://build.nvidia.com",
+        key_connector="nvidia",
+        strict_tool_names=True,
+        tier_note=(
+            "NVIDIA's hosted endpoints run on your build.nvidia.com credits — no "
+            "card, and no per-model price is published, so none is shown per model."
+        ),
     ),
     "vllm": ProviderInfo(
         kind="vllm",
@@ -246,6 +285,13 @@ def api_key_for(info: ProviderInfo) -> str | None:
     """
     if not info.hosted:
         return None
+    if info.key_connector:
+        from backend.modules.connectors import store as connector_store
+
+        cred = connector_store.load(info.key_connector)
+        # A `Credential` dataclass, never a dict -- see the note in the nvidia
+        # connector's `api_key`, where reading it as one made it unusable.
+        return (cred.access_token.strip() or None) if cred else None
     from backend.modules.database.secrets_store import get_secret_or_none
 
     stored = (get_secret_or_none(info.kind) or "").strip()
@@ -265,11 +311,9 @@ def auth_headers(info: ProviderInfo) -> dict[str, str]:
     key lives in the `nvidia` connector rather than a setting, because it is a
     credential and `GET /api/settings` hands the whole settings bag to the browser.
     """
-    if info.kind != "nim":
+    if not info.hosted or info.dialect != "openai":
         return {}
-    from backend.modules.connectors.providers.nvidia import api_key
-
-    key = api_key()
+    key = api_key_for(info)
     return {"Authorization": f"Bearer {key}"} if key else {}
 
 
@@ -290,6 +334,115 @@ def litellm_call_kwargs(info: ProviderInfo) -> dict[str, Any]:
     if not key:
         raise MissingApiKey(f"No API key configured for {info.label}")
     return {"api_key": key}
+
+
+def raise_for_status_with_body(res: httpx.Response, body: str) -> None:
+    """`raise_for_status`, but the provider's explanation survives.
+
+    httpx's own message is the status line and a link to MDN, so a provider that
+    said exactly what was wrong — NVIDIA answers
+    `Validation: Function at index 7 has an invalid name: "agent.ask_peer"` — is
+    reported to the user as an unexplained 400. Diagnosing one of those meant
+    digging the response body out of the telemetry ring, which is not a thing a
+    user can do.
+
+    The body is truncated: a provider echoing the whole request back (some do) would
+    otherwise put the entire tool catalog in a chat bubble.
+    """
+    if res.status_code < 400:
+        return
+    detail = " ".join((body or "").split())[:400]
+    message = f"{res.status_code} from {res.request.url}"
+    if detail:
+        message = f"{message}: {detail}"
+    raise httpx.HTTPStatusError(message, request=res.request, response=res)
+
+
+#: Everything OpenAI's function-name grammar disallows. Replaced with `_`.
+_UNSAFE_TOOL_CHARS = re.compile(r"[^a-zA-Z0-9_-]")
+
+
+def sanitize_tool_names(
+    tools: list[dict[str, Any]], messages: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+    """Rewrite dotted tool names to the `a-zA-Z0-9_-` grammar a strict provider
+    accepts, returning the rewritten tools, the rewritten messages, and the map
+    back.
+
+    **The history has to be rewritten too, not just the `tools` array.** An
+    assistant turn already in the transcript carries `tool_calls[].function.name`,
+    and a name there that no longer matches any declared tool is how this fix would
+    half-work: the first round succeeds and the second, once a tool has been called,
+    fails or quietly confuses the model about what it just did.
+
+    Collisions are resolved rather than ignored. `library.search` and
+    `library_search` both map to `library_search`, and silently merging them would
+    route one tool's call to the other -- a wrong action taken confidently, which is
+    worse than an error. The second one to appear gets a `_2` suffix.
+    """
+    forward: dict[str, str] = {}
+    restore: dict[str, str] = {}
+    for tool in tools:
+        name = str((tool.get("function") or {}).get("name") or "")
+        if not name or name in forward:
+            continue
+        safe = _UNSAFE_TOOL_CHARS.sub("_", name)
+        if safe != name or safe in restore:
+            candidate, n = safe, 1
+            while candidate in restore:
+                n += 1
+                candidate = f"{safe}_{n}"
+            safe = candidate
+        forward[name] = safe
+        restore[safe] = name
+
+    if all(k == v for k, v in forward.items()):
+        return tools, messages, {}
+
+    def _rename(tool_calls: list[Any]) -> list[Any]:
+        out = []
+        for call in tool_calls:
+            fn = (call or {}).get("function") or {}
+            name = fn.get("name")
+            if name in forward:
+                call = {**call, "function": {**fn, "name": forward[name]}}
+            out.append(call)
+        return out
+
+    new_tools = [
+        {
+            **t,
+            "function": {
+                **(t.get("function") or {}),
+                "name": forward.get(
+                    str((t.get("function") or {}).get("name") or ""),
+                    (t.get("function") or {}).get("name"),
+                ),
+            },
+        }
+        for t in tools
+    ]
+    new_messages = [
+        {**m, "tool_calls": _rename(m["tool_calls"])}
+        if isinstance(m.get("tool_calls"), list)
+        else m
+        for m in messages
+    ]
+    return new_tools, new_messages, restore
+
+
+def restore_tool_names(
+    calls: list[ToolCall], restore: dict[str, str]
+) -> list[ToolCall]:
+    """Undo `sanitize_tool_names` on what the model called.
+
+    Without this the orchestrator is handed `library_search`, which matches no
+    registered tool -- so the turn reports the model hallucinated a tool it was in
+    fact handed, and the real failure (our own rewrite) is invisible.
+    """
+    if not restore:
+        return calls
+    return [replace(c, name=restore[c.name]) if c.name in restore else c for c in calls]
 
 
 @dataclass(frozen=True)
@@ -682,12 +835,16 @@ async def list_models(
 ) -> list[str]:
     """Reachability probe doubling as a model list. Raises httpx.HTTPError when
     the provider is down."""
+    # A hosted provider is "reachable" when we hold a key for it, not when a port
+    # answers. Raising here is what keeps a keyless provider out of the onboarding
+    # picker's reachable set -- and, for an openai-dialect hosted provider (NIM), it
+    # is also what stops the probe making an unauthenticated request across the
+    # internet on every status poll to be told what we already knew. Checked before
+    # the dialect branch precisely because it is not a litellm-only rule.
+    if info.hosted and not api_key_for(info):
+        raise MissingApiKey(f"No API key configured for {info.label}")
+
     if info.dialect == "litellm":
-        # A hosted provider is "reachable" when we hold a key for it, not when a
-        # port answers. Raising here is what keeps a keyless provider out of the
-        # onboarding picker's reachable set.
-        if info.hosted and not api_key_for(info):
-            raise MissingApiKey(f"No API key configured for {info.label}")
         if info.catalog_url:
             return await _catalog_models(client, info)
         return list(info.static_models)
@@ -714,7 +871,9 @@ async def list_models(
     )
     res.raise_for_status()
     models = tuple(
-        str(m["id"]) for m in res.json().get("data", []) if isinstance(m, dict) and m.get("id")
+        str(m["id"])
+        for m in res.json().get("data", [])
+        if isinstance(m, dict) and m.get("id")
     )
     _REMOTE_MODELS_CACHE[key] = (time.monotonic(), models)
     return list(models)
@@ -763,6 +922,8 @@ async def chat(
             usage=_litellm_usage(response),
         )
 
+    # Empty for every provider but a strict one; the shared return below undoes it.
+    restore: dict[str, str] = {}
     if info.dialect == "ollama":
         payload: dict[str, Any] = {
             "model": model,
@@ -788,10 +949,13 @@ async def chat(
         msg = body.get("message", {})
         usage = _usage_from_ollama(body)
     else:
+        sent_tools, sent_messages = tools, messages
+        if info.strict_tool_names:
+            sent_tools, sent_messages, restore = sanitize_tool_names(tools, messages)
         payload = {
             "model": model,
-            "messages": messages,
-            "tools": tools,
+            "messages": sent_messages,
+            "tools": sent_tools,
             "stream": False,
         }
         if temperature is not None:
@@ -812,14 +976,16 @@ async def chat(
             json=payload,
             headers=auth_headers(info),
         )
-        res.raise_for_status()
+        raise_for_status_with_body(res, res.text)
         body = res.json()
         choices = body.get("choices") or [{}]
         msg = choices[0].get("message", {})
         usage = _usage_from_openai(body.get("usage"))
     return ChatResult(
         assistant_message=msg,
-        tool_calls=_parse_tool_calls(msg.get("tool_calls") or []),
+        tool_calls=restore_tool_names(
+            _parse_tool_calls(msg.get("tool_calls") or []), restore
+        ),
         content=msg.get("content") or "",
         usage=usage,
     )
@@ -887,6 +1053,7 @@ async def chat_stream(
         max_tokens,
         top_p,
         auth_headers(info),
+        info.strict_tool_names,
     )
 
 
@@ -1103,15 +1270,23 @@ async def _openai_chat_stream(
     #: Empty for every local server; a Bearer token for a hosted openai-dialect
     #: provider (NIM). See `auth_headers`.
     headers: dict[str, str] | None = None,
+    #: Translate dotted tool names for a provider that rejects them outright. See
+    #: `sanitize_tool_names`.
+    strict_tool_names: bool = False,
 ) -> ChatResult:
     url = f"{endpoint}/v1/chat/completions"
+    sent_tools, sent_messages, restore = (
+        sanitize_tool_names(tools, messages)
+        if strict_tool_names
+        else (tools, messages, {})
+    )
     payload: dict[str, Any] = {
         "model": model,
-        "messages": messages,
+        "messages": sent_messages,
         "stream": True,
     }
-    if tools:  # never `[]` — see `_ollama_chat_stream`
-        payload["tools"] = tools
+    if sent_tools:  # never `[]` — see `_ollama_chat_stream`
+        payload["tools"] = sent_tools
     if temperature is not None:
         payload["temperature"] = temperature
     if tool_choice is not None:
@@ -1151,8 +1326,14 @@ async def _openai_chat_stream(
                 max_tokens,
                 top_p,
                 headers,
+                strict_tool_names,
             )
-        res.raise_for_status()
+        if res.status_code >= 400:
+            # The body has not been streamed yet — read it before it is discarded,
+            # or the error is a bare status line.
+            raise_for_status_with_body(
+                res, (await res.aread()).decode(errors="replace")
+            )
         async for line in tee_stream(res, res.aiter_lines()):
             if not line or not line.startswith("data:"):
                 continue
@@ -1205,19 +1386,30 @@ async def _openai_chat_stream(
                     slot["args"] += fn["arguments"]
     reasoning, full = await extractor.flush()
     ordered = [tool_acc[i] for i in sorted(tool_acc)]
-    tool_calls = [
-        _tool_call(str(s["id"] or i), s["name"], s["args"])
-        for i, s in enumerate(ordered)
-    ]
+    tool_calls = restore_tool_names(
+        [
+            _tool_call(str(s["id"] or i), s["name"], s["args"])
+            for i, s in enumerate(ordered)
+        ],
+        restore,
+    )
     assistant: dict[str, Any] = {"role": "assistant", "content": full}
     if reasoning:
         assistant["reasoning_content"] = reasoning
     if ordered:
+        # Restored here too, so the transcript is kept in the app's own vocabulary
+        # and the rewrite stays a property of the wire, reapplied per round. Leaving
+        # the sanitized name in the history would make the next round's rewrite a
+        # no-op on an already-rewritten name, and would show the user a tool called
+        # `library_search` that appears in no registry.
         assistant["tool_calls"] = [
             {
                 "id": str(s["id"] or i),
                 "type": "function",
-                "function": {"name": s["name"], "arguments": s["args"]},
+                "function": {
+                    "name": restore.get(s["name"], s["name"]),
+                    "arguments": s["args"],
+                },
             }
             for i, s in enumerate(ordered)
         ]

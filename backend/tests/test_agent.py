@@ -60,6 +60,10 @@ def test_status_unconfigured_and_unreachable(client: TestClient) -> None:
         "lmstudio",
         "llamacpp",
         "vllm",
+        # `nim` is listed without a key, like any other hosted provider. It used to
+        # be filtered out until the NVIDIA connector held one, which meant nothing
+        # in the agent settings ever said this node can talk to NVIDIA at all.
+        "nim",
         "openai",
         "anthropic",
         "gemini",
@@ -69,7 +73,7 @@ def test_status_unconfigured_and_unreachable(client: TestClient) -> None:
     # A hosted provider's readiness is whether we hold a key, not whether a port
     # answers — with no key configured it must not report itself usable.
     hosted = {p["kind"]: p for p in body["providers"] if p["hosted"]}
-    assert set(hosted) == {"openai", "anthropic", "gemini", "openrouter"}
+    assert set(hosted) == {"nim", "openai", "anthropic", "gemini", "openrouter"}
     assert all(not p["has_api_key"] and not p["reachable"] for p in hosted.values())
     assert hosted["openrouter"]["api_key_url"]
 
@@ -396,3 +400,55 @@ def test_status_refresh_drops_the_cached_remote_listings(client: TestClient) -> 
     assert client.get("/api/agent/status?refresh=true").status_code == 200
     assert not P._CATALOG_CACHE
     assert not P._REMOTE_MODELS_CACHE
+
+
+def test_keyless_nim_is_listed_but_never_called(
+    client: TestClient, monkeypatch
+) -> None:
+    """NIM is discoverable without a key, and probing it costs no request.
+
+    Two failures this pins at once. It used to be filtered out of the response
+    entirely, so nothing in the agent settings said NVIDIA was a provider this node
+    could use — the only way to find out was to read `providers.py`. And it is the
+    one hosted provider on the `openai` dialect, so the keyless check has to fire
+    *before* the dialect branch, or the probe makes an unauthenticated request
+    across the internet on every status poll to be told what it already knew.
+    """
+    called: list[str] = []
+
+    async def _explode(client_, info, endpoint):  # pragma: no cover - must not run
+        called.append(info.kind)
+        raise AssertionError("a keyless hosted provider must not be called")
+
+    monkeypatch.setattr(P, "_catalog_models", _explode)
+
+    nim = {p["kind"]: p for p in client.get("/api/agent/status").json()["providers"]}[
+        "nim"
+    ]
+    assert nim["hosted"] is True
+    assert nim["reachable"] is False
+    assert nim["has_api_key"] is False
+    assert nim["models"] == []
+    # And it says where to go: the key belongs to the connector, not to this route.
+    assert nim["key_connector"] == "nvidia"
+    assert nim["api_key_url"]
+    # Asserted on the HTTP response, not the dataclass: a field missing from the
+    # `response_model` is dropped silently, so the picker would render nothing and
+    # nothing would say why.
+    assert "credits" in nim["tier_note"]
+    # And it is a *group* note, never a per-model claim — NVIDIA publishes no
+    # per-model price signal, so `free_models` stays empty rather than guessing.
+    assert nim["free_models"] == []
+    assert called == []
+
+
+def test_nim_key_cannot_be_written_through_the_provider_route(
+    client: TestClient,
+) -> None:
+    """One home for the credential. NVIDIA's key reaches NIM inference *and* NGC's
+    catalog, so a copy under the provider kind would be a second thing to rotate,
+    a second thing to leak, and would skip the connector's own verification."""
+    res = client.put("/api/agent/providers/nim/key", json={"key": "nvapi-test"})
+    assert res.status_code == 400
+    assert "nvidia" in res.json()["detail"]
+    assert P.api_key_for(P.PROVIDERS["nim"]) is None

@@ -100,6 +100,8 @@ async def _probe(
         hosted=info.hosted,
         has_api_key=P.api_key_for(info) is not None,
         api_key_url=info.api_key_url,
+        key_connector=info.key_connector,
+        tier_note=info.tier_note,
     )
 
 
@@ -118,15 +120,17 @@ async def status(refresh: bool = False) -> AgentStatus:
     # probing it would put a permanently-unreachable row in a list whose whole
     # purpose is telling the user what they could switch to.
     #
-    # `nim` is listed only while the NVIDIA connector holds a key, for the same
-    # reason plus one more: it is the only openai-dialect provider that is remote,
-    # so probing it unconditionally would mean an unauthenticated request to
-    # NVIDIA on every status poll, to be told what we already knew.
+    # `nim` used to be filtered out the same way, and that was wrong for a
+    # different reason: unlike `peer` it is a provider anyone can obtain, so hiding
+    # it until a key existed meant nothing in the agent settings ever mentioned that
+    # this node can talk to NVIDIA at all. It is now an ordinary hosted provider --
+    # listed, unreachable, pointing at where to get a key -- and the unauthenticated
+    # request the filter was avoiding is prevented by the `MissingApiKey` check in
+    # `list_models`, which fires before any dialect branch reaches the network.
     infos = [
         info
         for info in P.PROVIDERS.values()
-        if (info.kind != "peer" or _endpoint_for(info, config))
-        and (info.kind != "nim" or P.auth_headers(info))
+        if info.kind != "peer" or _endpoint_for(info, config)
     ]
     async with instrumented_client(timeout=2) as client:
         detected = await asyncio.gather(
@@ -144,7 +148,6 @@ async def status(refresh: bool = False) -> AgentStatus:
         providers=list(detected),
         vllm=vllm_manager.status(),
     )
-
 
 
 #: Held so the warm task is not garbage-collected mid-flight -- `asyncio` keeps only
@@ -174,9 +177,9 @@ async def warm_model_lists() -> None:
         if info.catalog_url
         or (
             not P.is_loopback_endpoint(_endpoint_for(info, config))
-            # NIM without a key is not a provider we could list anyway, and asking
-            # unauthenticated tells us what we already know.
-            and (info.kind != "nim" or P.auth_headers(info))
+            # A keyless hosted provider has nothing to warm: `list_models` refuses
+            # it before the network, so this would only queue a certain failure.
+            and (not info.hosted or P.api_key_for(info))
         )
     ]
     if not infos:
@@ -211,6 +214,18 @@ def _hosted_provider(kind: str) -> P.ProviderInfo:
     if info is None or not info.hosted:
         raise HTTPException(
             status_code=404, detail=f"{kind} is not a hosted provider with an API key"
+        )
+    if info.key_connector:
+        # One home for the credential. NVIDIA's key reaches NIM inference *and* the
+        # NGC catalog, so letting it also be written here would leave two copies to
+        # rotate and two to leak, and the connector's own verification -- which is
+        # what proves a pasted key actually works -- would be skipped.
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{info.label}'s key is held by the {info.key_connector} connector; "
+                f"connect it there instead."
+            ),
         )
     return info
 

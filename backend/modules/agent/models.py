@@ -43,6 +43,13 @@ class DetectedProvider(BaseModel):
     has_api_key: bool = False
     #: Where to create a key, for the link in the API-keys settings section.
     api_key_url: str = ""
+    #: The connector that holds this provider's key, when it is not written through
+    #: the key route. Non-empty means the settings section shows where the
+    #: credential lives instead of a field that would be refused.
+    key_connector: str = ""
+    #: One line about what this provider's models cost, shown once beneath the model
+    #: list. Group-level on purpose — see `ProviderInfo.tier_note`.
+    tier_note: str = ""
     #: Models this provider serves at no cost, read from its public catalog. Filled
     #: even without a key — onboarding shows them before one is saved — so it says
     #: nothing about whether the provider is usable yet; `reachable` does.

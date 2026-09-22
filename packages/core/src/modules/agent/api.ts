@@ -22,6 +22,14 @@ export interface DetectedProvider {
   /** Models served at no cost, from the provider's public catalog. Listed even
    * without a key, so it says nothing about `reachable`. */
   free_models: string[];
+  /** One line about what this provider's models cost, shown once beneath the model
+   * list rather than per model. Group-level because NVIDIA publishes no per-model
+   * price signal, so a `free` tag on individual ids would assert what nothing states. */
+  tier_note: string;
+  /** The connector holding this provider's key, when it is not written through the
+   * key route — `'nvidia'` for NIM, whose key also reaches the NGC catalog. Empty
+   * for the providers whose key is this section's to write. */
+  key_connector: string;
 }
 
 /** Lifecycle of an optional backend-spawned vLLM server. */

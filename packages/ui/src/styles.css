@@ -4278,6 +4278,25 @@ button.agent-model-option.is-selected .agent-model-option-name {
 }
 
 .agent-model-empty,
+/* A provider's cost note, beneath the list and above the count. Wraps, unlike the
+   count, because it is a sentence. */
+.agent-model-note {
+  flex: none;
+  margin: 0;
+  padding: 0.35rem 0.4rem 0;
+  border-top: 1px solid var(--border);
+  font-size: 0.7rem;
+  line-height: 1.35;
+  color: var(--text-dim);
+}
+
+/* The count draws its own top border; with a note above it, the note owns that
+   edge and a second line would read as a stray rule. */
+.agent-model-note + .agent-model-count {
+  border-top: none;
+  margin-top: 0;
+}
+
 .agent-model-count {
   margin: 0;
   padding: 0.35rem 0.4rem 0.15rem;

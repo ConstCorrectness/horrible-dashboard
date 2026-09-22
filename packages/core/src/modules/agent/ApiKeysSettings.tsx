@@ -41,9 +41,50 @@ export function ApiKeysSettings() {
         shows as saved rather than as its own value. A provider with a key appears in the provider
         and model dropdowns above.
       </p>
-      {providers.map((p) => (
-        <KeyRow key={p.kind} provider={p} onChanged={refresh} />
-      ))}
+      {providers.map((p) =>
+        p.key_connector ? (
+          <ConnectorKeyRow key={p.kind} provider={p} />
+        ) : (
+          <KeyRow key={p.kind} provider={p} onChanged={refresh} />
+        ),
+      )}
+    </div>
+  );
+}
+
+/**
+ * A provider whose key belongs to a connector (NVIDIA NIM — the same key reaches
+ * NGC's catalog, so a second copy here would be a second thing to rotate and leak).
+ * Shown rather than hidden: before this, a keyless NIM was not reported at all, so
+ * nothing anywhere said NVIDIA was a provider this node can use. The row states
+ * where the credential lives instead of offering a field the backend would refuse.
+ */
+function ConnectorKeyRow({ provider }: { provider: DetectedProvider }) {
+  return (
+    <div className="setting-row">
+      <div className="setting-label">
+        <label>{provider.label}</label>
+        <p className="setting-desc">
+          {provider.has_api_key ? (
+            <>
+              Connected.{' '}
+              {provider.models.length > 0 && `${provider.models.length} models offered. `}
+            </>
+          ) : (
+            <>Not connected — this provider is not selectable yet. </>
+          )}
+          Its key is held by the <code>{provider.key_connector}</code> connector, on the home page,
+          because the same key also reaches NVIDIA&rsquo;s model catalog.{' '}
+          {provider.api_key_url && (
+            <a href={provider.api_key_url} target="_blank" rel="noreferrer">
+              Get a key
+            </a>
+          )}
+        </p>
+      </div>
+      <div className="setting-control">
+        <span className={`api-key-dot${provider.has_api_key ? ' on' : ''}`} />
+      </div>
     </div>
   );
 }

@@ -55,6 +55,10 @@ interface Choice {
   label: string;
   /** The provider it belongs to, shown beside the id and searched with it. */
   group: string;
+  /** The provider's cost note, if it has one. Carried per choice only so the
+   * footer can show the notes for the providers actually in view; it is a fact
+   * about the group, never about this model — see `ProviderInfo.tier_note`. */
+  note?: string;
 }
 
 export function ModelPicker({
@@ -142,7 +146,7 @@ export function ModelPicker({
     if (effective && !known) out.push({ value: effective, label: model, group: provider });
     for (const p of providers) {
       for (const m of new Set(p.models)) {
-        out.push({ value: encode(p.kind, m), label: m, group: p.label });
+        out.push({ value: encode(p.kind, m), label: m, group: p.label, note: p.tier_note });
       }
     }
     return out;
@@ -152,6 +156,14 @@ export function ModelPicker({
   const filtered = useMemo(
     () => choices.filter((c) => matchesModelQuery(`${c.group} ${c.label}`, query)),
     [choices, query],
+  );
+
+  // The cost notes for the providers actually in view, deduplicated. Shown beneath
+  // the list rather than on each row: the note is true of the provider, and
+  // repeating it per model would read as a claim about that model in particular.
+  const notes = useMemo(
+    () => [...new Set(filtered.map((c) => c.note).filter((n): n is string => !!n))],
+    [filtered],
   );
 
   // Keep the highlight on a row that exists as the query narrows the list.
@@ -339,6 +351,11 @@ export function ModelPicker({
               </li>
             ))}
           </ul>
+          {notes.map((n) => (
+            <p key={n} className="agent-model-note">
+              {n}
+            </p>
+          ))}
           <p className="agent-model-count">
             {refreshing
               ? 'Refreshing…'

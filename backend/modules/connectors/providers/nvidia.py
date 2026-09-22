@@ -27,6 +27,7 @@ from typing import Any
 import httpx
 
 from backend.modules.connectors import store
+from backend.modules.connectors.store import Credential
 from backend.modules.connectors.guides import guide_loader
 from backend.sdk.types import (
     Connector,
@@ -54,9 +55,15 @@ class NvidiaError(RuntimeError):
 
 
 def api_key() -> str:
-    """The stored NGC key, or ''. Never reaches the browser."""
+    """The stored NGC key, or ''. Never reaches the browser.
+
+    `store.load` returns a `Credential` **dataclass**, not a dict. This module was
+    written against a dict-shaped store that does not exist, which made the whole
+    connector unusable: saving raised `TypeError: asdict() should be called on
+    dataclass instances` before anything was written, so a pasted key never landed.
+    """
     cred = store.load(CONNECTOR_ID)
-    return (cred or {}).get("access_token", "") if cred else ""
+    return cred.access_token.strip() if cred else ""
 
 
 def _headers() -> dict[str, str]:
@@ -130,9 +137,9 @@ def _status() -> ConnectorStatus:
     cred, error = store.load_or_error(CONNECTOR_ID)
     if error:
         return ConnectorStatus(connected=False, error=error)
-    if not cred or not cred.get("access_token"):
+    if not cred or not cred.access_token:
         return ConnectorStatus(connected=False)
-    account = cred.get("account") or {}
+    account = cred.account or {}
     return ConnectorStatus(
         connected=True,
         account=ConnectorAccount(
@@ -175,7 +182,9 @@ async def _submit(values: dict[str, str]) -> dict[str, Any]:
             }
         return {"error": "an NGC API key is required"}
 
-    store.save(CONNECTOR_ID, {"access_token": key, "scopes": ["nim", "ngc"]})
+    # Saved before it is verified, because `list_models` reads the key back out of
+    # the store -- and cleared again below if NVIDIA rejects it.
+    store.save(CONNECTOR_ID, Credential(access_token=key, scopes=["nim", "ngc"]))
     try:
         models = await list_models(limit=1)
     except NvidiaError as exc:
@@ -187,11 +196,11 @@ async def _submit(values: dict[str, str]) -> dict[str, Any]:
     label = f"NVIDIA ({models[0]['id']}…)" if models else "NVIDIA"
     store.save(
         CONNECTOR_ID,
-        {
-            "access_token": key,
-            "scopes": ["nim", "ngc"],
-            "account": {"id": CONNECTOR_ID, "label": label},
-        },
+        Credential(
+            access_token=key,
+            scopes=["nim", "ngc"],
+            account={"id": CONNECTOR_ID, "label": label},
+        ),
     )
     return {"connected": True, "account": {"id": CONNECTOR_ID, "label": label}}
 
