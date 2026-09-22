@@ -58,47 +58,19 @@ BOOT_ID = uuid.uuid4().hex[:12]
 #: Cap on a persisted body, when bodies are persisted at all.
 BODY_MAX = 4096
 
-#: Substrings that make a header name credential-bearing. Matched anywhere in the
-#: name, case-insensitively.
-#:
-#: A substring match rather than an exact list because header names are not a closed
-#: vocabulary: `x-api-key`, `api-key`, `x-goog-api-key` and `x-amz-security-token`
-#: are all the same idea spelled four ways, and an allowlist of exact names is one
-#: vendor away from being wrong. Over-blanking a header costs a line of debugging
-#: detail; under-blanking writes a live credential to disk, so the asymmetry decides
-#: the design.
-#:
-#: `trajectories.store.redact` cannot do this job: it matches `SECRET_KEY_SUFFIXES`,
-#: which is a *settings-key* vocabulary (`github.token`, `foo.apiKey`). Those suffixes
-#: are dotted, so `x-api-key` does not match `.key` and `Authorization` matches
-#: nothing at all — every credential header would have gone to disk in full, silently.
-SENSITIVE_HEADER_PARTS = (
-    "authorization",
-    "auth",
-    "token",
-    "key",
-    "secret",
-    "password",
-    "cookie",
-    "credential",
+# `SENSITIVE_HEADER_PARTS` and friends moved to `redact.py` so the in-memory ring
+# can apply the same rule without importing this module -- see that module's
+# docstring for why the direction matters.
+# `HEADER_REDACTED` is re-exported: this module's docstring names it, and callers
+# (and tests) reach for it here.
+from backend.modules.telemetry.redact import (  # noqa: E402, F401
+    HEADER_REDACTED,
+    redact_headers,
 )
-
-#: What a blanked value is replaced with. Blanked rather than dropped, for the reason
-#: the settings route gives: an absent key is indistinguishable from one that was
-#: never sent, and "this request was authenticated" is itself worth knowing.
-HEADER_REDACTED = "***"
-
-
-def is_sensitive_header(name: str) -> bool:
-    lower = str(name).lower()
-    return any(part in lower for part in SENSITIVE_HEADER_PARTS)
 
 
 def _clean_headers(headers: dict[str, str]) -> dict[str, Any]:
-    return {
-        k: (HEADER_REDACTED if is_sensitive_header(k) else v)
-        for k, v in dict(headers).items()
-    }
+    return dict(redact_headers(dict(headers)) or {})
 
 
 _initialized: set[str] = set()

@@ -75,17 +75,44 @@ flowchart LR
 
 The panel is the app's built-in protocol analyzer, so it deliberately hides
 nothing at the application layer: every event carries metadata (method, target,
-status, duration, byte counts) plus the **full headers and bodies, unredacted**,
-for the inspector. Almost nothing is masked or suppressed — credential headers
-(`authorization`, `cookie`, tokens) and sensitive bodies (Clubhouse phone
-numbers, SMS codes) are shown verbatim. The only general limit is **size**: bodies
+status, duration, byte counts) plus the **full bodies**, unredacted, for the
+inspector. Sensitive bodies (Clubhouse phone numbers, SMS codes) are shown
+verbatim. The only general limit is **size**: bodies
 are truncated to a configurable cap (`observability.maxBodyChars`, default 16 KB)
 and never read past a 1 MB hard ceiling. Outbound URLs are recorded
 scheme+host+path only (query/fragment stripped). Treat the in-memory buffer as
 sensitive — it is a local introspection tool, and the data never leaves the
 machine.
 
-### The one exception: password bodies
+### Credential headers are the exception to "raw"
+
+**Header values matching `SENSITIVE_HEADER_PARTS` are blanked to `***`, everywhere,
+before the event enters the ring** (`Recorder.record`, and `amend` for the streamed
+case). The header **name is kept** — "this request was authenticated" is the
+difference between a 401 you misconfigured and a 401 you were refused, and that is
+the part worth debugging; the value never is.
+
+This is deliberately *not* symmetric with bodies, and it was learned the hard way. A
+provider API key was found sitting in `GET /api/telemetry/recent` in full: the
+outbound hook captured `auth_headers()`' bearer on every chat round, the panel
+fetches that route, so the credential reached the browser — and on a LAN-bound node
+(`pnpm dev:lan`, which the peer fabric needs) it reached the same network the token
+exists to keep out. "It's only local" is not an argument for a buffer an inspector
+reads over HTTP. Inbound headers had a partial version of this already, scoped to the
+OTLP paths; the argument was never specific to those paths, and outbound is where the
+real credentials are.
+
+Redaction happens at the **recorder**, not the route, because the ring is read three
+ways — `recent()`, the live `/ws` subscribers, and the drain that persists it — and a
+route-level filter would leave the value in the other two. It is also why
+`capture_headers` does *not* redact: doing it at every capture site means the one site
+somebody adds next year is the one that leaks. The durable copy was already clean
+(`store._clean_headers` blanks on write), so this closed the gap between the two
+copies rather than opening a new mechanism — both now call the same
+`telemetry/redact.py`, which is its own import-free module so the ring can use it
+without importing the store.
+
+### The other exception: password bodies
 
 Paths matching `_REDACT_BODY_PREFIXES` (`instrument.py`) — currently the
 HorribleAssault/games **native email+password** sign-in, `/api/games/auth/local/*`
@@ -105,11 +132,10 @@ instead of by someone remembering to annotate it. See
 [the games module](games.mdx) for the flow itself.
 
 The list also carries the **OTLP receiver** (`/api/otel/v1/`). Its bodies are protobuf
-batches of other programs' spans, already stored in full in `otel_spans`. On these
-paths the inbound capture also **blanks credential-shaped request headers**
-(`telemetry.store.is_sensitive_header`). A remote exporter authenticates with the
-node's ingest token, and on a LAN-bound node this ring is readable by the same network
-the token exists to keep out. See [OpenTelemetry](otel.mdx).
+batches of other programs' spans, already stored in full in `otel_spans`. Its
+credential headers used to be blanked here specifically — that is now unconditional
+and lives in the recorder, as described above, so `_redacts_body` governs only bodies.
+See [OpenTelemetry](otel.mdx).
 
 The outbound request hook is also where `traceparent` is added when
 `otel.propagateHttp` is on — loopback and LAN targets only, never a hosted provider.

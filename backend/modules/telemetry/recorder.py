@@ -6,6 +6,7 @@ from typing import Any
 
 from backend.modules.telemetry import turn
 from backend.modules.telemetry.models import IoEvent
+from backend.modules.telemetry.redact import redact_headers
 
 _MAXLEN = 500
 
@@ -15,6 +16,15 @@ class Recorder:
 
     Records *metadata only*. Append and notify run on the event loop, so a plain
     set of asyncio.Queues is safe without locking.
+
+    **Credential headers are blanked on the way in**, not on the way out. The ring is
+    served raw by `GET /api/telemetry/recent` and pushed to every `/ws` subscriber,
+    so redacting at the route would still leave the value in the buffer, in the live
+    stream, and in anything else that reads `recent()`. Blanking here is the one
+    place that covers all three. The durable copy was already clean — `store`
+    blanks on write — so this closes the gap between the two, in the direction where
+    the secrets actually are: an **outbound** provider API key (NVIDIA NIM, OpenAI)
+    was previously recorded and served in full.
     """
 
     def __init__(self, maxlen: int = _MAXLEN) -> None:
@@ -29,6 +39,9 @@ class Recorder:
             # replayed or forked one, say — must win over the ambient stamp.
             fields.setdefault("turn_id", mark[0])
             fields.setdefault("round", mark[1])
+        for key in ("request_headers", "response_headers"):
+            if key in fields:
+                fields[key] = redact_headers(fields[key])
         event = IoEvent(id=next(self._ids), ts=time.time(), **fields)
         self._buffer.append(event)
         self._notify(event)
@@ -39,6 +52,9 @@ class Recorder:
         id, so subscribers replace the existing row. Used to fill in a streaming
         response body once the stream finishes (the body isn't known when the
         event is first recorded). No-op if the event has aged out of the buffer."""
+        for key in ("request_headers", "response_headers"):
+            if key in fields:
+                fields[key] = redact_headers(fields[key])
         for i, event in enumerate(self._buffer):
             if event.id == event_id:
                 updated = event.model_copy(update=fields)

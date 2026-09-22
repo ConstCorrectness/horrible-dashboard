@@ -48,15 +48,83 @@ def test_inbound_detail_is_captured(client: TestClient) -> None:
     assert "content-type" in put["response_headers"]
 
 
-def test_credential_headers_are_not_redacted(client: TestClient) -> None:
+def test_credential_headers_are_blanked_but_still_listed(client: TestClient) -> None:
+    """The name stays, the value goes.
+
+    This test asserted the opposite until an NVIDIA key was found sitting in
+    `GET /api/telemetry/recent` in full — the panel fetches that route, so the
+    credential reached the browser, and on a LAN-bound node (`pnpm dev:lan`, the peer
+    fabric) it reached the same network the token exists to keep out. Bodies are
+    still captured raw; this is about headers, whose value is never the thing you are
+    debugging, while *whether one was sent* often is.
+    """
     client.get(
         "/api/health", headers={"Authorization": "Bearer hunter2", "X-Api-Key": "k"}
     )
     events = client.get("/api/telemetry/recent").json()
     health = [e for e in events if e["target"] == "/api/health"][-1]
-    assert health["request_headers"]["authorization"] == "Bearer hunter2"
-    assert health["request_headers"]["x-api-key"] == "k"
-    assert "hunter2" in str(events)
+    assert health["request_headers"]["authorization"] == "***"
+    assert health["request_headers"]["x-api-key"] == "***"
+    # The header is still *listed* — "this request was authenticated" is the
+    # difference between a 401 you misconfigured and a 401 you were refused.
+    assert "authorization" in health["request_headers"]
+    assert "content-type" not in str(health["request_headers"].get("authorization", ""))
+    assert "hunter2" not in str(events)
+
+
+def test_an_outbound_provider_key_never_reaches_the_ring(monkeypatch) -> None:
+    """The case this was found in: a provider API key on an outbound request.
+
+    Inbound headers had a partial redaction already (auth paths only); outbound had
+    none, and outbound is where the real credentials are — `auth_headers()` attaches
+    the NVIDIA/OpenAI bearer on every chat round.
+    """
+    recorder.clear()
+    recorder.record(
+        source="outbound",
+        method="POST",
+        target="https://integrate.api.nvidia.com/v1/chat/completions",
+        status=400,
+        request_headers={
+            "authorization": "Bearer nvapi-REALKEY",
+            "content-type": "application/json",
+        },
+        response_headers={"set-cookie": "sid=REALSESSION", "date": "now"},
+    )
+    event = recorder.recent()[-1]
+    assert event.request_headers == {
+        "authorization": "***",
+        "content-type": "application/json",
+    }
+    assert event.response_headers == {"set-cookie": "***", "date": "now"}
+    assert "nvapi-REALKEY" not in str(recorder.recent())
+    assert "REALSESSION" not in str(recorder.recent())
+
+
+def test_an_amended_event_is_redacted_too() -> None:
+    """`amend` fills in a streamed response once it finishes, and it takes the same
+    `**fields`. A redaction applied only in `record` would be bypassed by exactly the
+    path that carries a provider's streamed answer."""
+    recorder.clear()
+    event = recorder.record(source="outbound", method="POST", target="https://x.test")
+    recorder.amend(event.id, response_headers={"x-api-key": "leaked"})
+    assert recorder.recent()[-1].response_headers == {"x-api-key": "***"}
+
+
+def test_redaction_matches_the_header_name_case_insensitively() -> None:
+    """httpx lowercases, but nothing guarantees a caller elsewhere does — and a
+    redaction that depends on the caller having lowercased first is one that fails
+    silently on the caller that did not."""
+    from backend.modules.telemetry.redact import redact_headers
+
+    out = redact_headers(
+        {"Authorization": "x", "Proxy-Authorization": "y", "Set-Cookie": "z"}
+    )
+    assert out == {
+        "Authorization": "***",
+        "Proxy-Authorization": "***",
+        "Set-Cookie": "***",
+    }
 
 
 def test_sensitive_route_bodies_are_captured(client: TestClient) -> None:
@@ -189,7 +257,9 @@ def test_outbound_call_is_recorded() -> None:
     assert last.duration_ms is not None
     # Detail is captured: no redaction.
     assert last.request_headers is not None
-    assert last.request_headers["authorization"] == "Bearer ch-token"
+    # Blanked at the recorder — the header is listed, its value is not. This is an
+    # *outbound* call, which is where the credentials actually are.
+    assert last.request_headers["authorization"] == "***"
     assert last.request_body == '{"phone_number":"+15551234567"}'
     assert "+15551234567" in last.model_dump_json()
 

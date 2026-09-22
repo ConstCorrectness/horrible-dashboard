@@ -2,9 +2,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-# Detail fields (headers/bodies) are captured **raw**, only size-capped — see
-# instrument.py. This is a local introspection tool; the buffer can hold
-# credentials and personal data. `inbound`/`outbound` are HTTP; `ws` is one frame
+# Bodies are captured **raw**, only size-capped — see instrument.py. Header *values*
+# matching `redact.SENSITIVE_HEADER_PARTS` are blanked at `Recorder.record` (the name
+# is kept); everything else is verbatim, so the buffer still holds personal data.
+# This is a local introspection tool, but `GET /api/telemetry/recent` serves it over
+# HTTP, which is why credentials are the one thing it will not hand back. `inbound`/`outbound` are HTTP; `ws` is one frame
 # of the multiplexed `/ws` socket (payload in request_body, direction in method);
 # `browser` is one request made by the embedded Chromium (see modules/browser).
 IoSource = Literal["inbound", "outbound", "ws", "browser"]

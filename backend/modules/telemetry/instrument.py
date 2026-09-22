@@ -108,7 +108,9 @@ def observes_ws_frame(channel: str, event: str) -> bool:
 
 
 def capture_headers(headers: object) -> dict[str, str]:
-    """Lowercased header map, values captured raw (no redaction)."""
+    """Lowercased header map. Credential values are blanked later, once, in
+    `Recorder.record` — doing it at every capture site means the one site somebody
+    adds next year is the one that leaks."""
     out: dict[str, str] = {}
     for name, value in dict(headers).items():  # type: ignore[call-overload]
         out[str(name).lower()] = str(value)
@@ -116,19 +118,18 @@ def capture_headers(headers: object) -> dict[str, str]:
 
 
 def _inbound_headers(path: str, headers: object) -> dict[str, str]:
-    """Raw, except on a redacted path, where credential-shaped headers are blanked
-    too. The OTLP receiver is the case: a remote exporter authenticates with a
-    bearer token, and on a LAN-bound node the I/O ring is readable by the same
-    network the token exists to keep out — capture would hand it back."""
-    captured = capture_headers(headers)
-    if not _redacts_body(path):
-        return captured
-    from backend.modules.telemetry.store import HEADER_REDACTED, is_sensitive_header
+    """Just the captured headers now.
 
-    return {
-        k: (HEADER_REDACTED if is_sensitive_header(k) else v)
-        for k, v in captured.items()
-    }
+    This used to blank credential-shaped headers on a *redacted path* only (the OTLP
+    receiver, whose exporters authenticate with a bearer token). That argument —
+    "on a LAN-bound node the I/O ring is readable by the same network the token
+    exists to keep out" — was never specific to that path, and every other request's
+    `Authorization` was captured in full. The blanking is now unconditional and lives
+    in `Recorder.record`, so it also covers outbound requests, which is where the
+    real credentials are: a provider API key on its way to NVIDIA or OpenAI.
+    `_redacts_body` still governs bodies on that path.
+    """
+    return capture_headers(headers)
 
 
 def safe_body(raw: bytes | None, *, max_chars: int = _MAX_BODY_CHARS) -> str | None:
