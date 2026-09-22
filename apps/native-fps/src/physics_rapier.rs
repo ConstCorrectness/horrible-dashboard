@@ -9,8 +9,10 @@
 //! - Verticality (catwalks, multi-tier platforms, ramps).
 //! - Continuous collision detection (CCD) and fast raycasting.
 
+use crate::world3d::BreakableWindow;
 use rapier3d::control::{CharacterAutostep, CharacterLength, KinematicCharacterController};
 use rapier3d::prelude::*;
+use std::collections::HashMap;
 
 pub const CAPSULE_RADIUS: f32 = 0.45;
 pub const STANDING_HALF_HEIGHT: f32 = 0.45; // Total standing height = 1.8
@@ -27,6 +29,69 @@ pub const STAMINA_RECOVERY: f32 = 30.0;
 pub const MAX_STAMINA: f32 = 100.0;
 pub const JUMP_VELOCITY: f32 = 7.2;
 pub const GRAVITY: f32 = -22.0;
+
+pub const MATERIAL_PENETRATION: &[(&str, f32)] = &[
+    ("wood", 0.85),
+    ("drywall", 0.90),
+    ("metal", 0.45),
+    ("stone", 0.30),
+    ("glass", 0.95),
+];
+
+pub fn get_material_penetration_factor(material: &str) -> f32 {
+    let m = material.to_lowercase();
+    for (name, factor) in MATERIAL_PENETRATION {
+        if m.contains(name) {
+            return *factor;
+        }
+    }
+    0.5
+}
+
+pub fn calculate_material_penetration(
+    weapon_id: &str,
+    material: &str,
+    thickness: f32,
+) -> (bool, f32) {
+    let mat_factor = get_material_penetration_factor(material);
+    let max_thickness;
+    let base_falloff;
+
+    if weapon_id == "sniper" {
+        max_thickness = 1.8 * mat_factor;
+        base_falloff = 0.75;
+    } else if weapon_id == "assault" || weapon_id == "carbine" {
+        max_thickness = 1.0 * mat_factor;
+        base_falloff = 0.55;
+    } else if weapon_id == "subgun" || weapon_id == "pistol" {
+        max_thickness = 0.45 * mat_factor;
+        base_falloff = 0.35;
+    } else if weapon_id == "shotgun" {
+        max_thickness = 0.30 * mat_factor;
+        base_falloff = 0.25;
+    } else {
+        return (false, 0.0);
+    }
+
+    if thickness > max_thickness {
+        return (false, 0.0);
+    }
+
+    let penetration_ratio = 1.0 - (thickness / max_thickness) * 0.4;
+    let damage_factor = (base_falloff * mat_factor * penetration_ratio).clamp(0.1, 0.9);
+    (true, (damage_factor * 1000.0).round() / 1000.0)
+}
+
+#[derive(Debug, Clone)]
+pub struct RayPenetrationHit {
+    pub hit: bool,
+    pub dist: f32,
+    pub point: [f32; 3],
+    pub normal: [f32; 3],
+    pub wallbang: bool,
+    pub damage_factor: f32,
+    pub shattered_windows: Vec<String>,
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RapierMoveInput {
@@ -69,10 +134,20 @@ pub struct RapierPhysicsWorld {
     pub player_sliding: bool,
     pub player_slide_time: f32,
     pub player_sprinting: bool,
+    pub window_colliders: HashMap<String, ColliderHandle>,
+    pub collider_to_window_id: HashMap<ColliderHandle, String>,
 }
 
 impl RapierPhysicsWorld {
     pub fn new(vertices: &[Point<Real>], indices: &[[u32; 3]]) -> Self {
+        Self::new_with_windows(vertices, indices, None)
+    }
+
+    pub fn new_with_windows(
+        vertices: &[Point<Real>],
+        indices: &[[u32; 3]],
+        windows: Option<&HashMap<String, BreakableWindow>>,
+    ) -> Self {
         let mut bodies = RigidBodySet::new();
         let mut colliders = ColliderSet::new();
 
@@ -81,6 +156,21 @@ impl RapierPhysicsWorld {
             let trimesh = SharedShape::trimesh(vertices.to_vec(), indices.to_vec());
             let collider = ColliderBuilder::new(trimesh).build();
             colliders.insert(collider);
+        }
+
+        let mut window_colliders = HashMap::new();
+        let mut collider_to_window_id = HashMap::new();
+
+        if let Some(wins) = windows {
+            for (id, win) in wins {
+                if !win.shattered && !win.col_vertices.is_empty() && !win.col_indices.is_empty() {
+                    let trimesh = SharedShape::trimesh(win.col_vertices.clone(), win.col_indices.clone());
+                    let collider = ColliderBuilder::new(trimesh).build();
+                    let handle = colliders.insert(collider);
+                    window_colliders.insert(id.clone(), handle);
+                    collider_to_window_id.insert(handle, id.clone());
+                }
+            }
         }
 
         // Configure Kinematic Character Controller
@@ -137,6 +227,8 @@ impl RapierPhysicsWorld {
             player_sliding: false,
             player_slide_time: 0.0,
             player_sprinting: false,
+            window_colliders,
+            collider_to_window_id,
         }
     }
 
@@ -581,6 +673,17 @@ impl RapierPhysicsWorld {
             .is_none()
     }
 
+    pub fn shatter_window(&mut self, window_id: &str) -> bool {
+        if let Some(&handle) = self.window_colliders.get(window_id) {
+            if let Some(col) = self.colliders.get_mut(handle) {
+                col.set_enabled(false);
+                self.query_pipeline.update(&self.colliders);
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn cast_ray(
         &self,
         origin: [f32; 3],
@@ -613,6 +716,147 @@ impl RapierPhysicsWorld {
                     origin[2] + dir[2] * max_dist,
                 ],
             )
+        }
+    }
+
+    pub fn cast_ray_penetrating(
+        &mut self,
+        origin: [f32; 3],
+        dir: [f32; 3],
+        max_dist: f32,
+        weapon_id: &str,
+    ) -> RayPenetrationHit {
+        let mut cur_origin = origin;
+        let mut remaining_dist = max_dist;
+        let mut total_dist = 0.0;
+        let mut penetrations = 0;
+        let max_penetrations = 4;
+        let mut wallbang = false;
+        let mut accum_damage_factor = 1.0f32;
+        let mut shattered_windows = Vec::new();
+
+        let dir_len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+        let norm_dir = if dir_len > 1e-6 {
+            [dir[0] / dir_len, dir[1] / dir_len, dir[2] / dir_len]
+        } else {
+            [1.0, 0.0, 0.0]
+        };
+
+        while remaining_dist > 0.05 && penetrations < max_penetrations {
+            let ray = Ray::new(
+                point![cur_origin[0], cur_origin[1], cur_origin[2]],
+                vector![norm_dir[0], norm_dir[1], norm_dir[2]],
+            );
+            let filter = QueryFilter::default().exclude_rigid_body(self.player_body_handle);
+
+            let hit = self.query_pipeline.cast_ray_and_get_normal(
+                &self.bodies,
+                &self.colliders,
+                &ray,
+                remaining_dist,
+                true,
+                filter,
+            );
+
+            let Some((hit_collider, hit_info)) = hit else {
+                return RayPenetrationHit {
+                    hit: false,
+                    dist: total_dist + remaining_dist,
+                    point: [
+                        cur_origin[0] + norm_dir[0] * remaining_dist,
+                        cur_origin[1] + norm_dir[1] * remaining_dist,
+                        cur_origin[2] + norm_dir[2] * remaining_dist,
+                    ],
+                    normal: [0.0, 0.0, 1.0],
+                    wallbang,
+                    damage_factor: accum_damage_factor,
+                    shattered_windows,
+                };
+            };
+
+            let hit_dist = hit_info.time_of_impact;
+            total_dist += hit_dist;
+            let hit_point = [
+                cur_origin[0] + norm_dir[0] * hit_dist,
+                cur_origin[1] + norm_dir[1] * hit_dist,
+                cur_origin[2] + norm_dir[2] * hit_dist,
+            ];
+            let hit_normal = [hit_info.normal.x, hit_info.normal.y, hit_info.normal.z];
+
+            // Check if struck collider is a breakable window
+            if let Some(win_id) = self.collider_to_window_id.get(&hit_collider).cloned() {
+                self.shatter_window(&win_id);
+                shattered_windows.push(win_id);
+                accum_damage_factor *= 0.95;
+                wallbang = true;
+                penetrations += 1;
+                cur_origin = [
+                    hit_point[0] + norm_dir[0] * 0.08,
+                    hit_point[1] + norm_dir[1] * 0.08,
+                    hit_point[2] + norm_dir[2] * 0.08,
+                ];
+                remaining_dist = (remaining_dist - (hit_dist + 0.08)).max(0.0);
+                continue;
+            }
+
+            // Check material penetration through barrier
+            let max_probe = if weapon_id == "sniper" { 1.5 } else { 0.8 };
+            let probe_ray = Ray::new(
+                point![
+                    hit_point[0] + norm_dir[0] * max_probe,
+                    hit_point[1] + norm_dir[1] * max_probe,
+                    hit_point[2] + norm_dir[2] * max_probe,
+                ],
+                vector![-norm_dir[0], -norm_dir[1], -norm_dir[2]],
+            );
+            if let Some((_, back_hit)) = self.query_pipeline.cast_ray_and_get_normal(
+                &self.bodies,
+                &self.colliders,
+                &probe_ray,
+                max_probe,
+                true,
+                filter,
+            ) {
+                let thickness = max_probe - back_hit.time_of_impact;
+                if thickness > 0.02 && thickness <= max_probe {
+                    let mat = if thickness <= 0.4 { "wood" } else { "drywall" };
+                    let (can_pen, dmg) = calculate_material_penetration(weapon_id, mat, thickness);
+                    if can_pen && dmg > 0.1 {
+                        accum_damage_factor *= dmg;
+                        wallbang = true;
+                        penetrations += 1;
+                        let advance = thickness + 0.05;
+                        cur_origin = [
+                            hit_point[0] + norm_dir[0] * advance,
+                            hit_point[1] + norm_dir[1] * advance,
+                            hit_point[2] + norm_dir[2] * advance,
+                        ];
+                        remaining_dist = (remaining_dist - (hit_dist + advance)).max(0.0);
+                        continue;
+                    }
+                }
+            }
+
+            // Solid impassable barrier
+            return RayPenetrationHit {
+                hit: true,
+                dist: total_dist,
+                point: hit_point,
+                normal: hit_normal,
+                wallbang,
+                damage_factor: accum_damage_factor,
+                shattered_windows,
+            };
+        }
+
+        RayPenetrationHit {
+            hit: true,
+            dist: total_dist,
+            point: cur_origin,
+            normal: [-norm_dir[0], -norm_dir[1], -norm_dir[2]],
+            wallbang,
+            damage_factor: accum_damage_factor,
+            shattered_windows,
         }
     }
 }

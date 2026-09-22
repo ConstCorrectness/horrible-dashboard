@@ -277,8 +277,8 @@ fn test_office_glb_generation() {
     assert_eq!(world.items.len(), 10, "must have 10 pickups");
 
     let physics = RapierPhysicsWorld::new(&world.col_vertices, &world.col_indices);
-    // Ray down to floor
-    let (hit, dist, _) = physics.cast_ray([0.0, 0.0, 5.0], [0.0, 0.0, -1.0], 10.0);
+    // Ray down to floor at office center
+    let (hit, dist, _) = physics.cast_ray([32.0, 32.0, 5.0], [0.0, 0.0, -1.0], 10.0);
     assert!(hit, "ray downwards should hit office collision mesh");
     assert!(dist <= 6.0, "dist was {}", dist);
 }

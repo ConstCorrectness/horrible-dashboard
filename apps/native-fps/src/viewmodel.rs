@@ -42,10 +42,10 @@ use crate::renderer::Vertex;
 /// The sizes below are in cube units, which are worth a sanity check: the eye
 /// sits 4.5 cubes up and eyes are about 1.6 m off the ground, so a cube is
 /// roughly 36 cm and a 90 cm rifle is about two and a half cubes long.
-const HOME: Vec3 = Vec3::new(0.92, -0.86, -1.35);
+const HOME: Vec3 = Vec3::new(0.58, -0.46, -0.98);
 
 /// Centered ADS aim position aligned with sights line.
-const ADS_POS: Vec3 = Vec3::new(0.0, -0.44, -0.90);
+const ADS_POS: Vec3 = Vec3::new(0.0, -0.38, -0.85);
 
 /// How long the muzzle flash stays lit. Two frames at 60 fps.
 const FLASH_LIFE: f32 = 0.055;
@@ -342,6 +342,8 @@ pub struct Frame {
     pub ads: f32,
     /// Horizontal speed in cubes per second, for the walk cycle.
     pub speed: f32,
+    /// Whether player is actively sprinting.
+    pub sprint: bool,
     pub on_ground: bool,
     pub reloading: bool,
     /// View angles in **radians**, so the weapon can lag a turn slightly instead
@@ -567,6 +569,10 @@ pub struct WeaponViewModel {
     visible: bool,
     /// Current ADS interpolation state, 0.0 (hipfire) to 1.0 (full ADS).
     pub ads_t: f32,
+    /// Idle respiratory sway phase.
+    breath_phase: f32,
+    /// Sprint weapon tuck transition (0.0 idle/walk to 1.0 tucked sprint).
+    sprint_t: f32,
 }
 
 impl Default for WeaponViewModel {
@@ -600,6 +606,8 @@ impl Default for WeaponViewModel {
             prop: None,
             visible: false,
             ads_t: 0.0,
+            breath_phase: 0.0,
+            sprint_t: 0.0,
         }
     }
 }
@@ -1075,6 +1083,22 @@ impl WeaponViewModel {
             }
         }
 
+        // Idle respiratory breathing sway
+        self.breath_phase += dt * 2.2;
+        let breath_weight = (1.0 - walk * 0.7) * (1.0 - self.sprint_t) * ads_damp;
+        let breath_x = (self.breath_phase * 0.5).sin() * 0.0004 * breath_weight;
+        let breath_y = self.breath_phase.cos() * 0.0003 * breath_weight;
+        let breath_pitch = self.breath_phase.cos() * 0.006 * breath_weight;
+
+        // Sprint weapon tuck transition
+        let is_sprinting = frame.sprint || (frame.speed > frame.move_speed * 1.15 && frame.on_ground);
+        let target_sprint = if is_sprinting { 1.0 } else { 0.0 };
+        self.sprint_t += (target_sprint - self.sprint_t) * (dt * 8.0).min(1.0);
+        let sprint_dip = self.sprint_t * -0.06;
+        let sprint_pitch = self.sprint_t * -0.18;
+        let sprint_yaw = self.sprint_t * -0.22;
+        let sprint_roll = self.sprint_t * 0.15;
+
         // The swap, eased rather than applied raw: a linear `stow` moved
         // linearly reads as the gun being winched, and the arrival is the part
         // that has to land. Down and slightly back, muzzle tipping toward the
@@ -1082,18 +1106,19 @@ impl WeaponViewModel {
         // since a weapon that stops just short of gone reads as a bug.
         let stow = ease(self.stow);
         let position = Vec3::new(
-            cur_home_x + bob_x + self.sway_x * ads_damp - inspect_lift_x,
-            cur_home_y + bob_y + self.sway_y * ads_damp - self.reload_t * 0.55 + reload_impulse_y + inspect_lift_y - stow * 1.15,
+            cur_home_x + bob_x + self.sway_x * ads_damp - inspect_lift_x + breath_x,
+            cur_home_y + bob_y + self.sway_y * ads_damp - self.reload_t * 0.55 + reload_impulse_y + inspect_lift_y - stow * 1.15 + breath_y + sprint_dip,
             cur_home_z + self.kick * 0.28 + reload_impulse_z + inspect_lift_z + stow * 0.22,
         );
         let rotation = Vec3::new(
-            self.kick * -0.16 + self.reload_t * 0.7 + reload_impulse_pitch + bob_y * 0.4 + inspect_pitch + stow * 1.05,
-            self.sway_x * 0.7 * ads_damp + self.reload_t * 0.25 + inspect_yaw,
+            self.kick * -0.16 + self.reload_t * 0.7 + reload_impulse_pitch + bob_y * 0.4 + inspect_pitch + stow * 1.05 + breath_pitch + sprint_pitch,
+            self.sway_x * 0.7 * ads_damp + self.reload_t * 0.25 + inspect_yaw + sprint_yaw,
             self.sway_x * 0.5 * ads_damp
                 + bob_x * 0.6
                 + reload_impulse_roll
                 + inspect_roll
-                + stow * 0.35,
+                + stow * 0.35
+                + sprint_roll,
         );
         self.transform = Mat4::from_translation(position)
             * Mat4::from_euler(glam::EulerRot::XYZ, rotation.x, rotation.y, rotation.z);
@@ -2115,6 +2140,7 @@ mod tests {
         Frame {
             ads: 0.0,
             speed: 0.0,
+            sprint: false,
             on_ground: true,
             reloading: false,
             yaw: 0.0,

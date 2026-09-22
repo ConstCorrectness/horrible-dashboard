@@ -416,6 +416,107 @@ describe('RapierPhysicsWorld Character Controller', () => {
     physics.dispose();
     world.dispose();
   });
+
+  it('provides complete MAP_CONFIGS for all 9 tournament arenas', async () => {
+    const { MAP_CONFIGS } = await import('../world3d');
+    const expectedMaps = [
+      'hd_facility',
+      'hd_junkflea',
+      'hd_bank',
+      'hd_dust2',
+      'hd_mirage',
+      'hd_inferno',
+      'hd_office',
+      'hd_nuke',
+      'hd_assault',
+    ];
+
+    for (const mapName of expectedMaps) {
+      const cfg = MAP_CONFIGS[mapName];
+      expect(cfg, `Map config for ${mapName} must exist`).toBeDefined();
+      expect(cfg.spawns.all.length).toBe(8);
+      expect(cfg.spawns.cla.length).toBe(4);
+      expect(cfg.spawns.rvsf.length).toBe(4);
+      expect(cfg.items.length).toBeGreaterThanOrEqual(6);
+      expect(cfg.bounds.extent).toBeGreaterThan(0);
+    }
+  });
+
+  it('correctly tags non-colliders and invisible nodes', async () => {
+    const { isNonColliderNode, isInvisibleNode } = await import('../world3d');
+
+    expect(isNonColliderNode('Lamp_Sconce_NonCol')).toBe(true);
+    expect(isNonColliderNode('Tree_Foliage_Cluster')).toBe(true);
+    expect(isNonColliderNode('Gantry_Cable_Hoist')).toBe(true);
+    expect(isNonColliderNode('Curtain_Glass_Window')).toBe(true);
+    expect(isNonColliderNode('Wall_Solid_Concrete')).toBe(false);
+    expect(isNonColliderNode('Floor_Ground_Paving')).toBe(false);
+
+    expect(isInvisibleNode('Player_Clip_Invisible')).toBe(true);
+    expect(isInvisibleNode('Wall_ColOnly')).toBe(true);
+    expect(isInvisibleNode('Wall_Concrete')).toBe(false);
+  });
+
+  it('asynchronously loads or falls back gracefully via loadWorld3D', async () => {
+    const THREE = await import('three');
+    const { loadWorld3D } = await import('../world3d');
+
+    const world = await loadWorld3D(THREE, {
+      name: 'hd_dust2',
+      title: 'Dust II',
+      format: 'gltf',
+      ssize: 64,
+    } as any);
+
+    expect(world).toBeDefined();
+    expect(world.collision.triangles).toBeGreaterThan(0);
+    expect(world.spawns.all.length).toBe(8);
+    world.dispose();
+  });
+
+  it('builds world from glTF scene with Z-flip and Rapier collision', async () => {
+    const THREE = await import('three');
+    const { buildWorld3DFromGLTF } = await import('../world3d');
+
+    // Create a mock glTF scene with a box and a non-collider lamp
+    const scene = new THREE.Group();
+    const boxGeom = new THREE.BoxGeometry(4, 1, 4);
+    const boxMat = new THREE.MeshBasicMaterial({ name: 'mat_concrete' });
+    const boxMesh = new THREE.Mesh(boxGeom, boxMat);
+    boxMesh.name = 'Solid_Floor';
+    boxMesh.position.set(30, 0, -30); // In glTF: Z = -30 corresponds to North = +30
+    scene.add(boxMesh);
+
+    const lampGeom = new THREE.CylinderGeometry(0.2, 0.2, 1);
+    const lampMat = new THREE.MeshBasicMaterial({ name: 'mat_lamp' });
+    const lampMesh = new THREE.Mesh(lampGeom, lampMat);
+    lampMesh.name = 'Ceiling_Lamp_NonCol';
+    lampMesh.position.set(30, 4, -30);
+    scene.add(lampMesh);
+
+    const world = buildWorld3DFromGLTF(THREE, {
+      name: 'hd_dust2',
+      title: 'Dust II',
+      ssize: 64,
+    } as any, scene);
+
+    expect(world.scene.children.length).toBe(2);
+    // After Z-flip, the boxMesh in world.scene should be at Z = +30 (Three.js coordinates)
+    const worldBox = world.scene.getObjectByName('Solid_Floor') as import('three').Mesh;
+    expect(worldBox).toBeDefined();
+
+    // Collision should only contain the box, not the non-collider lamp
+    expect(world.collision.triangles).toBe(12); // A BoxGeometry has 12 triangles
+
+    const physics = new RapierPhysicsWorld(world.collision);
+    // Cast ray down onto the box at (30, 30, 5) -> game coordinates (X: 30, Y: 30)
+    const hit = physics.castRay({ x: 30, y: 30, z: 5 }, { x: 0, y: 0, z: -1 }, 10);
+    expect(hit.hit).toBe(true);
+    expect(hit.point.z).toBeCloseTo(0.5, 1);
+
+    physics.dispose();
+    world.dispose();
+  });
 });
 
 

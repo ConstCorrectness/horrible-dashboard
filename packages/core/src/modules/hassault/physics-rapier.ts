@@ -13,7 +13,7 @@
  * - Fast raycasting for bullet penetration and line-of-sight checks.
  */
 import RAPIER from '@dimforge/rapier3d-compat';
-import type { CollisionGeometry } from './world3d';
+import type { BreakableWindow, CollisionGeometry } from './world3d';
 import type { MoveInput, PlayerState } from './player';
 
 let rapierInitialized = false;
@@ -51,6 +51,58 @@ export interface RapierPlayerState {
   slideTime?: number;
 }
 
+export const MATERIAL_PENETRATION: Record<string, number> = {
+  wood: 0.85,
+  drywall: 0.90,
+  metal: 0.45,
+  stone: 0.30,
+  glass: 0.95,
+};
+
+export function calculateMaterialPenetration(
+  weaponId: string,
+  material: string = 'wood',
+  thickness: number = 0.5,
+): { canPenetrate: boolean; damageFactor: number } {
+  const matFactor = MATERIAL_PENETRATION[material.toLowerCase()] ?? 0.5;
+  let maxThickness = 0.5;
+  let baseFalloff = 0.5;
+
+  if (weaponId === 'sniper') {
+    maxThickness = 1.8 * matFactor;
+    baseFalloff = 0.75;
+  } else if (weaponId === 'assault' || weaponId === 'carbine') {
+    maxThickness = 1.0 * matFactor;
+    baseFalloff = 0.55;
+  } else if (weaponId === 'subgun' || weaponId === 'pistol') {
+    maxThickness = 0.45 * matFactor;
+    baseFalloff = 0.35;
+  } else if (weaponId === 'shotgun') {
+    maxThickness = 0.30 * matFactor;
+    baseFalloff = 0.25;
+  } else {
+    return { canPenetrate: false, damageFactor: 0 };
+  }
+
+  if (thickness > maxThickness) {
+    return { canPenetrate: false, damageFactor: 0 };
+  }
+
+  const penetrationRatio = 1.0 - (thickness / maxThickness) * 0.4;
+  const damageFactor = Math.max(0.1, Math.min(0.9, baseFalloff * matFactor * penetrationRatio));
+  return { canPenetrate: true, damageFactor: Math.round(damageFactor * 1000) / 1000 };
+}
+
+export interface RayPenetrationHit {
+  hit: boolean;
+  dist: number;
+  point: { x: number; y: number; z: number };
+  normal: { x: number; y: number; z: number };
+  wallbang: boolean;
+  damageFactor: number;
+  shatteredWindows: string[];
+}
+
 export class RapierPhysicsWorld {
   readonly world: RAPIER.World;
   readonly characterController: RAPIER.KinematicCharacterController;
@@ -59,6 +111,8 @@ export class RapierPhysicsWorld {
   private crouchingCollider: RAPIER.Collider;
   private activeCollider: RAPIER.Collider;
   private isCrouched = false;
+  private windowColliders = new Map<string, RAPIER.Collider>();
+  private colliderToWindowId = new Map<number, string>();
 
   // Constants
   static readonly CAPSULE_RADIUS = 0.45;
@@ -77,7 +131,7 @@ export class RapierPhysicsWorld {
   static readonly JUMP_VELOCITY = 7.2;
   static readonly GRAVITY = -22.0;
 
-  constructor(collision: CollisionGeometry) {
+  constructor(collision: CollisionGeometry, windows?: Map<string, BreakableWindow>) {
     // Gravity pointing down along Z in game coordinates
     const gravity = new RAPIER.Vector3(0.0, 0.0, RapierPhysicsWorld.GRAVITY);
     this.world = new RAPIER.World(gravity);
@@ -86,6 +140,17 @@ export class RapierPhysicsWorld {
     if (collision.vertices.length > 0 && collision.indices.length > 0) {
       const trimeshDesc = RAPIER.ColliderDesc.trimesh(collision.vertices, collision.indices);
       this.world.createCollider(trimeshDesc);
+    }
+
+    if (windows) {
+      for (const [id, win] of windows.entries()) {
+        if (win.vertices.length > 0 && win.indices.length > 0) {
+          const desc = RAPIER.ColliderDesc.trimesh(win.vertices, win.indices);
+          const col = this.world.createCollider(desc);
+          this.windowColliders.set(id, col);
+          this.colliderToWindowId.set(col.handle, id);
+        }
+      }
     }
 
     // Configure Kinematic Character Controller (Z-up)
@@ -565,6 +630,139 @@ export class RapierPhysicsWorld {
         y: origin.y + dir.y * hit.timeOfImpact,
         z: origin.z + dir.z * hit.timeOfImpact,
       },
+    };
+  }
+
+  public shatterWindow(id: string): boolean {
+    const col = this.windowColliders.get(id);
+    if (col && col.isEnabled()) {
+      col.setEnabled(false);
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Penetrating raycast for weapons: shoots through windows (shattering them)
+   * and penetrable barriers (wood, drywall, thin metal) with realistic damage attenuation.
+   */
+  public castRayPenetrating(
+    origin: { x: number; y: number; z: number },
+    dir: { x: number; y: number; z: number },
+    maxDist: number,
+    weaponId: string = 'assault',
+  ): RayPenetrationHit {
+    let curX = origin.x;
+    let curY = origin.y;
+    let curZ = origin.z;
+    let remainingDist = maxDist;
+    let totalDist = 0;
+    let accumDamageFactor = 1.0;
+    let wallbang = false;
+    const shatteredWindows: string[] = [];
+    const maxPenetrations = 3;
+    let penetrations = 0;
+
+    while (remainingDist > 0.05 && penetrations < maxPenetrations) {
+      const ray = new RAPIER.Ray(
+        new RAPIER.Vector3(curX, curY, curZ),
+        new RAPIER.Vector3(dir.x, dir.y, dir.z),
+      );
+      const hit = this.world.castRayAndGetNormal(ray, remainingDist, true);
+      if (!hit) {
+        return {
+          hit: false,
+          dist: maxDist,
+          point: {
+            x: origin.x + dir.x * maxDist,
+            y: origin.y + dir.y * maxDist,
+            z: origin.z + dir.z * maxDist,
+          },
+          normal: { x: 0, y: 0, z: 1 },
+          wallbang,
+          damageFactor: accumDamageFactor,
+          shatteredWindows,
+        };
+      }
+
+      const hitDist = hit.timeOfImpact;
+      totalDist += hitDist;
+      const hitPoint = {
+        x: curX + dir.x * hitDist,
+        y: curY + dir.y * hitDist,
+        z: curZ + dir.z * hitDist,
+      };
+      const hitNormal = {
+        x: hit.normal.x,
+        y: hit.normal.y,
+        z: hit.normal.z,
+      };
+
+      // Check if struck collider is a window
+      const winId = hit.collider ? this.colliderToWindowId.get(hit.collider.handle) : undefined;
+      if (winId) {
+        this.shatterWindow(winId);
+        shatteredWindows.push(winId);
+        accumDamageFactor *= 0.95;
+        wallbang = true;
+        penetrations++;
+        curX = hitPoint.x + dir.x * 0.08;
+        curY = hitPoint.y + dir.y * 0.08;
+        curZ = hitPoint.z + dir.z * 0.08;
+        remainingDist = Math.max(0, remainingDist - (hitDist + 0.08));
+        continue;
+      }
+
+      // Check material penetration through barrier
+      const maxProbe = weaponId === 'sniper' ? 1.5 : 0.8;
+      const probeRay = new RAPIER.Ray(
+        new RAPIER.Vector3(
+          hitPoint.x + dir.x * maxProbe,
+          hitPoint.y + dir.y * maxProbe,
+          hitPoint.z + dir.z * maxProbe,
+        ),
+        new RAPIER.Vector3(-dir.x, -dir.y, -dir.z),
+      );
+      const backHit = this.world.castRay(probeRay, maxProbe, true);
+      if (backHit !== null) {
+        const thickness = maxProbe - backHit.timeOfImpact;
+        if (thickness > 0.02 && thickness <= maxProbe) {
+          const mat = thickness <= 0.4 ? 'wood' : 'drywall';
+          const pen = calculateMaterialPenetration(weaponId, mat, thickness);
+          if (pen.canPenetrate && pen.damageFactor > 0.1) {
+            accumDamageFactor *= pen.damageFactor;
+            wallbang = true;
+            penetrations++;
+            const advance = thickness + 0.05;
+            curX = hitPoint.x + dir.x * advance;
+            curY = hitPoint.y + dir.y * advance;
+            curZ = hitPoint.z + dir.z * advance;
+            remainingDist = Math.max(0, remainingDist - (hitDist + advance));
+            continue;
+          }
+        }
+      }
+
+      // Solid impassable barrier
+      return {
+        hit: true,
+        dist: totalDist,
+        point: hitPoint,
+        normal: hitNormal,
+        wallbang,
+        damageFactor: accumDamageFactor,
+        shatteredWindows,
+      };
+    }
+
+    return {
+      hit: true,
+      dist: totalDist,
+      point: { x: curX, y: curY, z: curZ },
+      normal: { x: -dir.x, y: -dir.y, z: -dir.z },
+      wallbang,
+      damageFactor: accumDamageFactor,
+      shatteredWindows,
     };
   }
 

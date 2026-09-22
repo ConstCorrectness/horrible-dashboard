@@ -335,6 +335,73 @@ fn fist(at: Vec3, along: Vec3, out: &mut Vec<Vertex>) {
             out.push(Vertex::new(quad[i].into(), normal, GLOVE));
         }
     }
+
+    // Reinforced tactical knuckle guard
+    const KNUCKLE: [f32; 3] = [0.10, 0.11, 0.13];
+    let k_at = at + up * (h.y * 0.42);
+    let k_h = Vec3::new(h.x * 1.05, h.y * 0.35, h.z * 0.65);
+    let k_corner = |a: f32, b: f32, c: f32| k_at + u * (k_h.x * a) + v * (k_h.y * b) + along * (k_h.z * c);
+    let k_faces: [([f32; 3], [Vec3; 4]); 6] = [
+        (
+            u.into(),
+            [
+                k_corner(1.0, -1.0, -1.0),
+                k_corner(1.0, 1.0, -1.0),
+                k_corner(1.0, 1.0, 1.0),
+                k_corner(1.0, -1.0, 1.0),
+            ],
+        ),
+        (
+            (-u).into(),
+            [
+                k_corner(-1.0, -1.0, 1.0),
+                k_corner(-1.0, 1.0, 1.0),
+                k_corner(-1.0, 1.0, -1.0),
+                k_corner(-1.0, -1.0, -1.0),
+            ],
+        ),
+        (
+            v.into(),
+            [
+                k_corner(-1.0, 1.0, -1.0),
+                k_corner(-1.0, 1.0, 1.0),
+                k_corner(1.0, 1.0, 1.0),
+                k_corner(1.0, 1.0, -1.0),
+            ],
+        ),
+        (
+            (-v).into(),
+            [
+                k_corner(-1.0, -1.0, 1.0),
+                k_corner(-1.0, -1.0, -1.0),
+                k_corner(1.0, -1.0, -1.0),
+                k_corner(1.0, -1.0, 1.0),
+            ],
+        ),
+        (
+            along.into(),
+            [
+                k_corner(-1.0, -1.0, 1.0),
+                k_corner(1.0, -1.0, 1.0),
+                k_corner(1.0, 1.0, 1.0),
+                k_corner(-1.0, 1.0, 1.0),
+            ],
+        ),
+        (
+            (-along).into(),
+            [
+                k_corner(-1.0, 1.0, -1.0),
+                k_corner(1.0, 1.0, -1.0),
+                k_corner(1.0, -1.0, -1.0),
+                k_corner(-1.0, -1.0, -1.0),
+            ],
+        ),
+    ];
+    for (normal, quad) in k_faces {
+        for i in [0usize, 1, 2, 0, 2, 3] {
+            out.push(Vertex::new(quad[i].into(), normal, KNUCKLE));
+        }
+    }
 }
 
 #[cfg(test)]

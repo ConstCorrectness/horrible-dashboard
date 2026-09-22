@@ -152,7 +152,7 @@ import { TrainingRange } from './training';
 import { equippedSkins, WeaponViewModel, type WeaponSkin } from './viewmodel';
 import { createPropEnvironment } from './models/weapons';
 import { World } from './world';
-import { createWorld3D, type World3D } from './world3d';
+import { loadWorld3D, type World3D } from './world3d';
 import { ensureRapierInitialized, RapierPhysicsWorld } from './physics-rapier';
 import { DemoRecorder, DemoPlayer, type DemoBookmark, type DemoData } from './demo';
 import { KillFeed } from './panels/KillFeed';
@@ -1760,8 +1760,23 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
                 player.yaw,
                 player.pitch,
                 intent.scoped,
+                Math.random,
+                rapierRef.current ?? undefined,
+                world3dRef.current ?? undefined,
               );
               if (shot) {
+                if (shot.shatteredWindows && shot.shatteredWindows.length > 0) {
+                  for (const wid of shot.shatteredWindows) {
+                    const win = world3dRef.current?.windows?.get(wid);
+                    if (win) {
+                      effects.glassShatter(win.center, win.normal);
+                      const dx = win.center[0] - player.x;
+                      const dy = win.center[1] - player.y;
+                      const bearing = Math.atan2(dx, dy);
+                      audioRef.current?.glassShatter(bearing, player.yaw);
+                    }
+                  }
+                }
                 const isKnife = shots.isKnife || shots.slot === 0;
                 if (!isKnife) {
                   effects.shot(shot.origin, shot.ends, TEAM_COLORS[0] ?? 0xffffff, true);
@@ -1786,12 +1801,15 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
                 if (shot.hits.length > 0) {
                   const killed = shot.hits.some((h) => h.killed);
                   const headHit = shot.hits.find((h) => h.head);
+                  const wallbangHit = shot.hits.some((h) => h.wallbang);
                   headHitRef.current = Boolean(headHit);
                   if (headHit) {
                     audioRef.current?.own('helmet_dink', 0.95);
                     if (effects && shot.ends[0]) {
                       effects.helmetDink(shot.ends[0]);
                     }
+                  } else if (wallbangHit) {
+                    audioRef.current?.own('impact_wallbang', 0.9);
                   }
                   if (killed) {
                     const isHead = Boolean(headHit);
@@ -2406,8 +2424,8 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         if (is3D) {
           const THREE = await loadThree();
           await ensureRapierInitialized();
-          world3d = createWorld3D(THREE, mapInfo);
-          rapierPhysics = new RapierPhysicsWorld(world3d.collision);
+          world3d = await loadWorld3D(THREE, mapInfo);
+          rapierPhysics = new RapierPhysicsWorld(world3d.collision, world3d.windows);
         }
         world3dRef.current = world3d;
         rapierRef.current = rapierPhysics;

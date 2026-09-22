@@ -68,6 +68,7 @@ export interface TargetHit {
   damage: number;
   head: boolean;
   killed: boolean;
+  wallbang?: boolean;
 }
 
 export interface RangeShot {
@@ -83,6 +84,8 @@ export interface RangeShot {
    */
   faces: number[];
   hits: TargetHit[];
+  wallbang?: boolean;
+  shatteredWindows?: string[];
 }
 
 interface Target {
@@ -335,6 +338,8 @@ export class TrainingRange {
     pitch: number,
     scoped: number,
     rand: () => number = Math.random,
+    physics3d?: import('./physics-rapier').RapierPhysicsWorld,
+    world3d?: import('./world3d').World3D,
   ): RangeShot | null {
     const weapon = this.weapons[this.slot];
     if (!weapon) return null;
@@ -368,23 +373,50 @@ export class TrainingRange {
     const ends: Vec[] = [];
     const faces: number[] = [];
     const hits: TargetHit[] = [];
+    const allShattered: string[] = [];
+    let hadWallbang = false;
 
     for (let pellet = 0; pellet < Math.max(1, weapon.pellets); pellet++) {
       const [pdx, pdy, pdz] = spreadVector(direction, cone, rand);
-      const { distance: wall, face } = raycastWorldFace(
-        world,
-        origin,
-        [pdx, pdy, pdz],
-        weapon.range,
-      );
+      let wall = weapon.range;
+      let face = 0;
+      let penFactor = 1.0;
+      let pelletWallbang = false;
+
+      if (physics3d) {
+        const rayResult = physics3d.castRayPenetrating(
+          { x: origin[0], y: origin[1], z: origin[2] },
+          { x: pdx, y: pdy, z: pdz },
+          weapon.range,
+          weapon.id,
+        );
+        wall = rayResult.dist;
+        penFactor = rayResult.damageFactor;
+        pelletWallbang = rayResult.wallbang;
+        if (rayResult.shatteredWindows.length > 0) {
+          for (const wid of rayResult.shatteredWindows) {
+            allShattered.push(wid);
+            world3d?.shatterWindow?.(wid);
+          }
+        }
+      } else {
+        const res = raycastWorldFace(
+          world,
+          origin,
+          [pdx, pdy, pdz],
+          weapon.range,
+        );
+        wall = res.distance;
+        face = res.face;
+      }
 
       let best: { distance: number; target: Target } | null = null;
       for (const target of this.targets) {
         if (!target.alive) continue;
         const distance = rayHitsBody(origin, [pdx, pdy, pdz], [target.x, target.y, target.z]);
-        // A body behind a wall is not a target; the wall is nearer, and this
-        // comparison is the whole of cover.
-        if (distance === null || distance >= wall) continue;
+        // A body behind an impenetrable wall is not a target. If penetrated, damage carries through!
+        if (distance === null) continue;
+        if (distance >= wall && penFactor <= 0.05) continue;
         if (best === null || distance < best.distance) best = { distance, target };
       }
 
@@ -401,31 +433,35 @@ export class TrainingRange {
         origin[2] + pdz * distance,
       ];
       // Relative to the top of the body, so the head is where the head is.
-      // The live spec, so a head band tuned in the lab moves where a headshot
-      // starts in Train too — practising against a different body than the one
-      // the match server resolves against is worse than not practising.
       const spec = currentHitbox();
       const head = point[2] >= target.z + (spec.standingHeight - spec.headBand);
       const nutshot = !head && point[2] >= target.z + spec.standingHeight * 0.38 && point[2] <= target.z + spec.standingHeight * 0.55;
       const limbs = !head && !nutshot && point[2] < target.z + spec.standingHeight * 0.38;
       const mult = head ? weapon.headMultiplier : nutshot ? 1.5 : limbs ? 0.75 : 1.0;
-      const amount = damageAt(weapon, distance, falloffStart(weapon)) * mult;
+      const wallbangHit = pelletWallbang || distance > wall;
+      if (wallbangHit) hadWallbang = true;
+      const finalDamageFactor = distance > wall ? penFactor : 1.0;
+      const amount = Math.round(damageAt(weapon, distance, falloffStart(weapon)) * mult * finalDamageFactor);
       target.hp -= amount;
       const killed = target.hp <= 0;
       if (killed) {
         target.alive = false;
         target.downFor = TARGET_RESPAWN;
       }
-      hits.push({ id: target.id, damage: amount, head, killed });
+      hits.push({ id: target.id, damage: amount, head, killed, wallbang: wallbangHit });
       ends.push(point);
-      // A body is not a surface — the wall behind it was never reached, and a
-      // mark on it would be a lie about where the shot went. `resolve_shot`
-      // makes the same call.
       faces.push(FACE_NONE);
     }
 
     if (hits.length > 0) this.pendingHits.push(...hits);
-    return { origin, ends, faces, hits };
+    return {
+      origin,
+      ends,
+      faces,
+      hits,
+      wallbang: hadWallbang,
+      shatteredWindows: allShattered.length > 0 ? allShattered : undefined,
+    };
   }
 
   /**

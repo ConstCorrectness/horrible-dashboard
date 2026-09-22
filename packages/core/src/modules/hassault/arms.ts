@@ -217,7 +217,7 @@ export function solveTwoBone(
 interface Limb {
   upper: THREE.Mesh;
   lower: THREE.Mesh;
-  hand: THREE.Mesh;
+  hand: THREE.Object3D;
 }
 
 /**
@@ -264,11 +264,26 @@ export class ArmRig {
     const upperGeo = new three.CylinderGeometry(UPPER_RADIUS, LOWER_RADIUS, 1, 8);
     const lowerGeo = new three.CylinderGeometry(LOWER_RADIUS, LOWER_RADIUS * 0.85, 1, 8);
     const handGeo = new three.BoxGeometry(HAND_SIZE[0], HAND_SIZE[1], HAND_SIZE[2]);
-    this.geometries.push(upperGeo, lowerGeo, handGeo);
+    const cuffGeo = new three.CylinderGeometry(LOWER_RADIUS * 0.88, LOWER_RADIUS * 0.84, 0.08, 8);
+    const knuckleGeo = new three.BoxGeometry(HAND_SIZE[0] * 1.04, HAND_SIZE[1] * 0.28, HAND_SIZE[2] * 0.65);
+    this.geometries.push(upperGeo, lowerGeo, handGeo, cuffGeo, knuckleGeo);
 
     const upper = new three.Mesh(upperGeo, this.material(ARM_PALETTE.sleeve, 8));
     const lower = new three.Mesh(lowerGeo, this.material(ARM_PALETTE.sleeve, 8));
-    const hand = new three.Mesh(handGeo, this.material(ARM_PALETTE.glove, 14));
+
+    const hand = new three.Group();
+    const palm = new three.Mesh(handGeo, this.material(ARM_PALETTE.glove, 14));
+    const knuckle = new three.Mesh(knuckleGeo, this.material(0x181a1f, 32));
+    knuckle.position.set(0, HAND_SIZE[1] * 0.38, 0);
+    const cuff = new three.Mesh(cuffGeo, this.material(0x222428, 10));
+    cuff.position.set(0, -HAND_SIZE[1] * 0.46, 0);
+
+    for (const m of [palm, knuckle, cuff]) {
+      m.frustumCulled = false;
+      m.renderOrder = 2;
+      hand.add(m);
+    }
+
     for (const mesh of [upper, lower, hand]) {
       // Arms originate from the shoulders near/behind the camera near plane;
       // disable frustum culling so segment bounding spheres crossing the near plane

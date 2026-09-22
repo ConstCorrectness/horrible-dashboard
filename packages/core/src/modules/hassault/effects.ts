@@ -298,6 +298,43 @@ export class EffectsPool {
     }
   }
 
+  /**
+   * Dramatic crystalline glass shatter burst when a breakable window is breached.
+   */
+  glassShatter(at: [number, number, number], normal?: [number, number, number]): void {
+    const three = this.three;
+    const pos = new three.Vector3(at[0], at[2], at[1]);
+    const norm = normal
+      ? new three.Vector3(normal[0], normal[2], normal[1]).normalize()
+      : new three.Vector3(0, 0, 1);
+
+    const helper = Math.abs(norm.y) < 0.9 ? new three.Vector3(0, 1, 0) : new three.Vector3(1, 0, 0);
+    const tangent = new three.Vector3().crossVectors(norm, helper).normalize();
+    const bitangent = new three.Vector3().crossVectors(norm, tangent).normalize();
+
+    const shardCount = 28;
+    for (let i = 0; i < shardCount; i++) {
+      const outDir = Math.random() > 0.4 ? 1 : -1;
+      const speed = 4.0 + Math.random() * 8.5;
+      const vel = norm
+        .clone()
+        .multiplyScalar(outDir * (2.0 + Math.random() * 5.0))
+        .addScaledVector(tangent, (Math.random() - 0.5) * speed)
+        .addScaledVector(bitangent, (Math.random() - 0.5) * speed + 2.5);
+
+      const glassColor = Math.random() > 0.5 ? 0xeaf7ff : 0xd2edfc;
+      const glassMat = new three.MeshBasicMaterial({
+        color: glassColor,
+        transparent: true,
+        opacity: 0.92,
+      });
+      const shard = new three.Mesh(this.particleGeo, glassMat);
+      shard.position.copy(pos).addScaledVector(vel, 0.02);
+      const scale = 0.8 + Math.random() * 1.6;
+      this.add(shard, glassMat, 0.35 + Math.random() * 0.25, scale, vel, 2.5, 24.0);
+    }
+  }
+
   private add(
     object: THREE.Object3D,
     material: THREE.Material & { opacity: number },

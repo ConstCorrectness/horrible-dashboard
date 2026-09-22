@@ -7,7 +7,10 @@ const BUNDLED_MAPS = [
   { id: 'hd_dust2', name: 'Dust II (Desert Arena)', mode: 'Deathmatch' },
   { id: 'hd_facility', name: 'Research Facility', mode: 'Deathmatch' },
   { id: 'hd_inferno', name: 'Inferno Village', mode: 'Deathmatch' },
+  { id: 'hd_junkflea', name: 'Junk Flea (Industrial CQC)', mode: 'Deathmatch' },
+  { id: 'hd_mirage', name: 'Desert Courtyard (Mirage)', mode: 'Deathmatch' },
   { id: 'hd_nuke', name: 'Nuclear Station', mode: 'Deathmatch' },
+  { id: 'hd_office', name: 'Corporate Office (High-Rise)', mode: 'Deathmatch' },
 ];
 
 export interface ServerBrowserProps {

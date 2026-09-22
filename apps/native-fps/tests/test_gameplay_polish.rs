@@ -77,6 +77,7 @@ fn test_grenade_viewmodels_generate_vertices() {
     let frame = Frame {
         ads: 0.0,
         speed: 0.0,
+        sprint: false,
         on_ground: true,
         reloading: false,
         yaw: 0.0,

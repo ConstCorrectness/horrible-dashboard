@@ -37,6 +37,31 @@ pub fn compute_planar_uv(p: [f32; 3], norm: [f32; 3], scale: f32) -> [f32; 2] {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct BreakableWindow {
+    pub id: String,
+    pub name: String,
+    pub center: [f32; 3],
+    pub normal: [f32; 3],
+    pub shattered: bool,
+    pub col_vertices: Vec<Point<Real>>,
+    pub col_indices: Vec<[u32; 3]>,
+}
+
+impl BreakableWindow {
+    pub fn shatter(&mut self) {
+        self.shattered = true;
+    }
+}
+
+pub fn is_breakable_window_node(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    (lower.contains("window") && lower.contains("glass"))
+        || (lower.contains("breakable") && lower.contains("glass"))
+        || (lower.contains("curtain") && lower.contains("glass"))
+        || lower.contains("window_glass")
+}
+
 pub struct World3D {
     pub info: MapInfo,
     pub bounds: WorldBounds,
@@ -53,6 +78,7 @@ pub struct World3D {
     pub spawns: Vec<SpawnPoint>,
     pub items: Vec<ItemRow>,
     pub waterlevel: f32,
+    pub windows: std::collections::HashMap<String, BreakableWindow>,
 }
 
 impl World3D {
@@ -542,6 +568,7 @@ pub fn create_procedural_facility_3d(info: MapInfo) -> World3D {
         spawns,
         items,
         waterlevel: -3.5,
+        windows: std::collections::HashMap::new(),
     }
 }
 
@@ -653,6 +680,7 @@ pub fn create_procedural_junk_flea_3d(info: MapInfo) -> World3D {
         spawns,
         items,
         waterlevel: -5.0,
+        windows: std::collections::HashMap::new(),
     }
 }
 
@@ -1005,6 +1033,7 @@ pub fn create_procedural_bank_3d(info: MapInfo) -> World3D {
         spawns,
         items,
         waterlevel: -100.0,
+        windows: std::collections::HashMap::new(),
     }
 }
 
@@ -1455,6 +1484,7 @@ pub fn create_procedural_assault_3d(info: MapInfo) -> World3D {
         spawns,
         items,
         waterlevel: -100.0,
+        windows: std::collections::HashMap::new(),
     }
 }
 
@@ -1598,6 +1628,7 @@ pub fn create_procedural_office_3d(info: MapInfo) -> World3D {
         spawns,
         items,
         waterlevel: -100.0,
+        windows: std::collections::HashMap::new(),
     }
 }
 
@@ -1747,6 +1778,7 @@ pub fn create_procedural_dust2_3d(info: MapInfo) -> World3D {
         spawns,
         items,
         waterlevel: -100.0,
+        windows: std::collections::HashMap::new(),
     }
 }
 
@@ -1903,6 +1935,7 @@ pub fn create_procedural_inferno_3d(info: MapInfo) -> World3D {
         spawns,
         items,
         waterlevel: -100.0,
+        windows: std::collections::HashMap::new(),
     }
 }
 
@@ -2060,6 +2093,7 @@ pub fn create_procedural_mirage_3d(info: MapInfo) -> World3D {
         spawns,
         items,
         waterlevel: -100.0,
+        windows: std::collections::HashMap::new(),
     }
 }
 
@@ -2199,6 +2233,7 @@ pub fn create_procedural_nuke_3d(info: MapInfo) -> World3D {
         spawns,
         items,
         waterlevel: -100.0,
+        windows: std::collections::HashMap::new(),
     }
 }
 
@@ -2238,13 +2273,15 @@ fn walk_glb_node(
     render_materials: &mut Vec<f32>,
     col_vertices: &mut Vec<Point<Real>>,
     col_indices: &mut Vec<[u32; 3]>,
+    windows: &mut std::collections::HashMap<String, BreakableWindow>,
 ) {
     let world = parent * local_node_matrix(node);
     let normal_matrix = world.inverse().transpose();
 
     if let Some(mesh) = node.mesh() {
         let node_name = node.name().unwrap_or("");
-        let is_non_collider = node_name.contains("Glass")
+        let is_win = is_breakable_window_node(node_name);
+        let is_non_collider = !is_win && (node_name.contains("Glass")
             || node_name.contains("Window")
             || node_name.contains("Lamp")
             || node_name.contains("Glow")
@@ -2347,9 +2384,11 @@ fn walk_glb_node(
             || node_name.contains("Handwheel")
             || node_name.contains("Bushing")
             || node_name.contains("Bolt")
-            || node_name.contains("Cart_");
+            || node_name.contains("Cart_"));
 
         let is_invisible = node_name.contains("Invisible") || node_name.contains("ColOnly");
+        let mut win_col_vertices = Vec::new();
+        let mut win_col_indices = Vec::new();
 
         for prim in mesh.primitives() {
             let mat_name = prim.material().name().unwrap_or("");
@@ -2446,7 +2485,17 @@ fn walk_glb_node(
                     render_materials.extend_from_slice(&[mat_id, mat_id, mat_id]);
                 }
 
-                if is_collider {
+                if is_win {
+                    let g_p0 = [p0.x, -p0.z, p0.y];
+                    let g_p1 = [p1.x, -p1.z, p1.y];
+                    let g_p2 = [p2.x, -p2.z, p2.y];
+
+                    let base_idx = win_col_vertices.len() as u32;
+                    win_col_vertices.push(Point::new(g_p0[0], g_p0[1], g_p0[2]));
+                    win_col_vertices.push(Point::new(g_p2[0], g_p2[1], g_p2[2]));
+                    win_col_vertices.push(Point::new(g_p1[0], g_p1[1], g_p1[2]));
+                    win_col_indices.push([base_idx, base_idx + 1, base_idx + 2]);
+                } else if is_collider {
                     // Game/Rapier physics coordinates: x = gltf_x, y = -gltf_z (North), z = gltf_y (Elevation)
                     let g_p0 = [p0.x, -p0.z, p0.y];
                     let g_p1 = [p1.x, -p1.z, p1.y];
@@ -2459,6 +2508,32 @@ fn walk_glb_node(
                     col_indices.push([base_idx, base_idx + 1, base_idx + 2]);
                 }
             }
+        }
+
+        if is_win && !win_col_vertices.is_empty() {
+            let mut center = [0.0, 0.0, 0.0];
+            for v in &win_col_vertices {
+                center[0] += v.x;
+                center[1] += v.y;
+                center[2] += v.z;
+            }
+            let count = win_col_vertices.len() as f32;
+            center[0] /= count;
+            center[1] /= count;
+            center[2] /= count;
+
+            windows.insert(
+                node_name.to_string(),
+                BreakableWindow {
+                    id: node_name.to_string(),
+                    name: node_name.to_string(),
+                    center,
+                    normal: [0.0, 1.0, 0.0],
+                    shattered: false,
+                    col_vertices: win_col_vertices,
+                    col_indices: win_col_indices,
+                },
+            );
         }
     }
 
@@ -2474,6 +2549,7 @@ fn walk_glb_node(
             render_materials,
             col_vertices,
             col_indices,
+            windows,
         );
     }
 }
@@ -2491,6 +2567,7 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
     let mut render_materials = Vec::new();
     let mut col_vertices = Vec::new();
     let mut col_indices = Vec::new();
+    let mut windows = std::collections::HashMap::new();
 
     for scene in document.scenes() {
         for node in scene.nodes() {
@@ -2505,6 +2582,7 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
                 &mut render_materials,
                 &mut col_vertices,
                 &mut col_indices,
+                &mut windows,
             );
         }
     }
@@ -2785,6 +2863,7 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
         spawns,
         items,
         waterlevel: if info.name == "hd_facility" { -3.5 } else if info.name == "hd_junkflea" { -5.0 } else { -100.0 },
+        windows,
     })
 }
 

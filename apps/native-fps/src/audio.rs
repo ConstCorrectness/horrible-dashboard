@@ -268,6 +268,15 @@ pub fn timbre(kind: &str) -> Timbre {
             body: 620.0,
             thump: 0.0,
         },
+        // Shattering glass impact and crystalline fracture cascade
+        "glass_shatter" => Timbre {
+            frequency: 5400.0,
+            q: 3.5,
+            decay: 0.48,
+            gain: 0.95,
+            body: 220.0,
+            thump: 0.0,
+        },
         // Surface-aware material footsteps:
         // High-pitch electronic C4 detonator countdown chirp
         "bomb_beep" => Timbre {

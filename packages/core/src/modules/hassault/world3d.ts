@@ -18,6 +18,7 @@ import type { MapInfo } from './api';
 import type { Ladder } from './world';
 import type { ItemRow } from './net';
 import { createPBRMaterialLibrary, type MaterialKind, type PBRMaterialLibrary } from './textures3d';
+import { getCachedAssetUrl } from './models/assetCache';
 
 export interface SpawnPoint {
   x: number;
@@ -40,6 +41,18 @@ export interface CollisionGeometry {
   triangles: number;
 }
 
+export interface BreakableWindow {
+  id: string;
+  name: string;
+  mesh: THREE.Mesh;
+  center: [number, number, number];
+  normal: [number, number, number];
+  shattered: boolean;
+  vertices: Float32Array;
+  indices: Uint32Array;
+  shatter(): void;
+}
+
 export interface World3D {
   readonly info: MapInfo;
   readonly scene: THREE.Group;
@@ -54,6 +67,8 @@ export interface World3D {
   readonly ladders: Ladder[];
   readonly waterlevel: number;
   readonly materials?: THREE.Material[];
+  readonly windows?: Map<string, BreakableWindow>;
+  shatterWindow?(id: string): boolean;
   dispose(): void;
 }
 
@@ -1316,6 +1331,656 @@ export function createProceduralAssault3D(
   };
 }
 
+export function isBreakableWindowNode(name: string): boolean {
+  return /Window.*Glass|Glass.*Window|Breakable.*Glass|Glass.*Breakable|Curtain.*Glass|Window_Glass/i.test(
+    name,
+  );
+}
+
+export function isNonColliderNode(name: string): boolean {
+  if (isBreakableWindowNode(name)) return false;
+  return /NonCol|Glass|Window|Lamp|Glow|Decal|Stripe|Sign|Text|Turn|Siren|Taillight|Headlight|Arm|Vent|Rim|Hub|Latch|Divide|Cap|Hood|Mullion|Camera|Light|Truss|Detail|Pipe|Conduit|Wire|Debris|Stain|Crack|Drain|Manhole|Cable|Joint|Rung|Flange|Web|Rail_|Tie_|Gusset|Purlin|Louver|Hose|Vise|Blind|Antenna|Blade|Propane|Spool|Cushion|Skylight|Foliage|Plant|Chandelier|Stanchion|Flute|Globe|Clock|Plaque|Urn|Hatch|Ingot|Rope|Lug|Dial|Spoke|Caster|Cart_|Trophy|Frame|Painting|Sconce|Screen|Keyhole|Dunnage|Stringer|Slat|Strap|Buckle|Rosette|Medallion|Inlay|Blotter|Keyboard|Mouse|Speaker|Mic|Nameplate|Wicket|Spindle|Winch|Lightbar|Cup|Mug|Spigot|Shade|Bulb|Chain|Handwheel|Bushing|Bolt/i.test(
+    name,
+  );
+}
+
+export function isInvisibleNode(name: string): boolean {
+  return /Invisible|ColOnly/i.test(name);
+}
+
+export interface MapConfig {
+  bounds: WorldBounds;
+  spawns: {
+    cla: SpawnPoint[];
+    rvsf: SpawnPoint[];
+    all: SpawnPoint[];
+  };
+  items: ItemRow[];
+  ladders: Ladder[];
+}
+
+export const MAP_CONFIGS: Record<string, MapConfig> = {
+  hd_facility: {
+    bounds: {
+      min: [0, 0, -5],
+      max: [64, 64, 14],
+      center: [32, 32, 4.5],
+      extent: 42,
+    },
+    spawns: {
+      cla: [
+        { x: 10, y: 8, z: 0, yaw: 0, team: 0 },
+        { x: 32, y: 4, z: 6, yaw: 0, team: 0 },
+        { x: 54, y: 8, z: 0, yaw: 315, team: 0 },
+        { x: 32, y: 10, z: 0, yaw: 0, team: 0 },
+      ],
+      rvsf: [
+        { x: 10, y: 56, z: 0, yaw: 180, team: 1 },
+        { x: 32, y: 60, z: 6, yaw: 180, team: 1 },
+        { x: 54, y: 56, z: 0, yaw: 225, team: 1 },
+        { x: 32, y: 54, z: 0, yaw: 180, team: 1 },
+      ],
+      all: [
+        { x: 10, y: 8, z: 0, yaw: 0, team: 0 },
+        { x: 32, y: 4, z: 6, yaw: 0, team: 0 },
+        { x: 54, y: 8, z: 0, yaw: 315, team: 0 },
+        { x: 32, y: 10, z: 0, yaw: 0, team: 0 },
+        { x: 10, y: 56, z: 0, yaw: 180, team: 1 },
+        { x: 32, y: 60, z: 6, yaw: 180, team: 1 },
+        { x: 54, y: 56, z: 0, yaw: 225, team: 1 },
+        { x: 32, y: 54, z: 0, yaw: 180, team: 1 },
+      ],
+    },
+    items: [
+      { id: 1, kind: 'ammo_assault', x: 32, y: 32, z: 6 },
+      { id: 2, kind: 'armour', x: 32, y: 32, z: -5 },
+      { id: 3, kind: 'health', x: 8, y: 32, z: 0 },
+      { id: 4, kind: 'health', x: 56, y: 32, z: 0 },
+      { id: 5, kind: 'ammo_sniper', x: 4, y: 4, z: 6 },
+      { id: 6, kind: 'ammo_sniper', x: 60, y: 60, z: 6 },
+    ],
+    ladders: [
+      { x: 32, y: 16, base: -5, top: 0 },
+      { x: 32, y: 48, base: -5, top: 0 },
+    ],
+  },
+  hd_junkflea: {
+    bounds: {
+      min: [4, 4, -2.5],
+      max: [60, 60, 14],
+      center: [32, 32, 5.75],
+      extent: 38,
+    },
+    spawns: {
+      cla: [
+        { x: 16, y: 12, z: 0, yaw: 0, team: 0 },
+        { x: 48, y: 12, z: 0, yaw: 0, team: 0 },
+        { x: 32, y: 10, z: 0, yaw: 0, team: 0 },
+        { x: 32, y: 15, z: 0, yaw: 0, team: 0 },
+      ],
+      rvsf: [
+        { x: 16, y: 52, z: 0, yaw: 180, team: 1 },
+        { x: 48, y: 52, z: 0, yaw: 180, team: 1 },
+        { x: 32, y: 54, z: 0, yaw: 180, team: 1 },
+        { x: 32, y: 49, z: 0, yaw: 180, team: 1 },
+      ],
+      all: [
+        { x: 16, y: 12, z: 0, yaw: 0, team: 0 },
+        { x: 48, y: 12, z: 0, yaw: 0, team: 0 },
+        { x: 32, y: 10, z: 0, yaw: 0, team: 0 },
+        { x: 32, y: 15, z: 0, yaw: 0, team: 0 },
+        { x: 16, y: 52, z: 0, yaw: 180, team: 1 },
+        { x: 48, y: 52, z: 0, yaw: 180, team: 1 },
+        { x: 32, y: 54, z: 0, yaw: 180, team: 1 },
+        { x: 32, y: 49, z: 0, yaw: 180, team: 1 },
+      ],
+    },
+    items: [
+      { id: 1, kind: 'armour', x: 32, y: 32, z: 0 },
+      { id: 2, kind: 'health', x: 19, y: 32, z: -2 },
+      { id: 3, kind: 'health', x: 45, y: 32, z: -2 },
+      { id: 4, kind: 'ammo_assault', x: 22, y: 12, z: 0 },
+      { id: 5, kind: 'ammo_assault', x: 42, y: 12, z: 0 },
+      { id: 6, kind: 'ammo_sniper', x: 22, y: 52, z: 0 },
+      { id: 7, kind: 'ammo_sniper', x: 42, y: 52, z: 0 },
+      { id: 8, kind: 'grenade', x: 12, y: 32, z: 0 },
+      { id: 9, kind: 'clips', x: 52, y: 32, z: 0 },
+      { id: 10, kind: 'armour', x: 32, y: 20, z: 0 },
+    ],
+    ladders: [{ x: 32, y: 32, base: -2.5, top: 4.5 }],
+  },
+  hd_bank: {
+    bounds: {
+      min: [4, 4, 0],
+      max: [60, 60, 14],
+      center: [32, 32, 7],
+      extent: 56,
+    },
+    spawns: {
+      cla: [
+        { x: 12, y: 8, z: 0, yaw: 0, team: 0 },
+        { x: 24, y: 8, z: 0, yaw: 0, team: 0 },
+        { x: 36, y: 8, z: 0, yaw: 0, team: 0 },
+        { x: 48, y: 8, z: 0, yaw: 0, team: 0 },
+      ],
+      rvsf: [
+        { x: 10, y: 55, z: 0, yaw: 180, team: 1 },
+        { x: 20, y: 55, z: 0, yaw: 180, team: 1 },
+        { x: 32, y: 55, z: 0, yaw: 180, team: 1 },
+        { x: 36, y: 51, z: 0, yaw: 180, team: 1 },
+      ],
+      all: [
+        { x: 12, y: 8, z: 0, yaw: 0, team: 0 },
+        { x: 24, y: 8, z: 0, yaw: 0, team: 0 },
+        { x: 36, y: 8, z: 0, yaw: 0, team: 0 },
+        { x: 48, y: 8, z: 0, yaw: 0, team: 0 },
+        { x: 10, y: 55, z: 0, yaw: 180, team: 1 },
+        { x: 20, y: 55, z: 0, yaw: 180, team: 1 },
+        { x: 32, y: 55, z: 0, yaw: 180, team: 1 },
+        { x: 36, y: 51, z: 0, yaw: 180, team: 1 },
+      ],
+    },
+    items: [
+      { id: 1, kind: 'health', x: 10, y: 14, z: 0 },
+      { id: 2, kind: 'health', x: 54, y: 14, z: 0 },
+      { id: 3, kind: 'health', x: 10, y: 51, z: 0 },
+      { id: 4, kind: 'armour', x: 32, y: 28, z: 0 },
+      { id: 5, kind: 'armour', x: 52, y: 53, z: 0 },
+      { id: 6, kind: 'ammo_assault', x: 20, y: 11, z: 0 },
+      { id: 7, kind: 'ammo_assault', x: 44, y: 12, z: 0 },
+      { id: 8, kind: 'ammo_sniper', x: 16, y: 40, z: 5 },
+      { id: 9, kind: 'clips', x: 32, y: 22, z: 0 },
+      { id: 10, kind: 'grenade', x: 52, y: 28, z: 0 },
+    ],
+    ladders: [{ x: 46.4, y: 36, base: 0, top: 9 }],
+  },
+  hd_dust2: {
+    bounds: {
+      min: [4, 4, 0],
+      max: [66, 66, 14],
+      center: [35, 35, 7],
+      extent: 60,
+    },
+    spawns: {
+      cla: [
+        { x: 34, y: 60, z: 0, yaw: 270, team: 0 },
+        { x: 38, y: 60, z: 0, yaw: 270, team: 0 },
+        { x: 34, y: 56, z: 0, yaw: 270, team: 0 },
+        { x: 38, y: 56, z: 0, yaw: 270, team: 0 },
+      ],
+      rvsf: [
+        { x: 30, y: 10, z: 0, yaw: 90, team: 1 },
+        { x: 34, y: 10, z: 0, yaw: 90, team: 1 },
+        { x: 30, y: 14, z: 0, yaw: 90, team: 1 },
+        { x: 34, y: 14, z: 0, yaw: 90, team: 1 },
+      ],
+      all: [
+        { x: 34, y: 60, z: 0, yaw: 270, team: 0 },
+        { x: 38, y: 60, z: 0, yaw: 270, team: 0 },
+        { x: 34, y: 56, z: 0, yaw: 270, team: 0 },
+        { x: 38, y: 56, z: 0, yaw: 270, team: 0 },
+        { x: 30, y: 10, z: 0, yaw: 90, team: 1 },
+        { x: 34, y: 10, z: 0, yaw: 90, team: 1 },
+        { x: 30, y: 14, z: 0, yaw: 90, team: 1 },
+        { x: 34, y: 14, z: 0, yaw: 90, team: 1 },
+      ],
+    },
+    items: [
+      { id: 1, kind: 'health', x: 58, y: 12, z: 0 },
+      { id: 2, kind: 'health', x: 20, y: 34, z: 0 },
+      { id: 3, kind: 'health', x: 36, y: 58, z: 0 },
+      { id: 4, kind: 'armour', x: 54, y: 36, z: 0 },
+      { id: 5, kind: 'armour', x: 10, y: 56, z: 0 },
+      { id: 6, kind: 'ammo_assault', x: 30, y: 30, z: 0 },
+      { id: 7, kind: 'ammo_assault', x: 48, y: 52, z: 1.2 },
+      { id: 8, kind: 'ammo_sniper', x: 16, y: 32, z: 0 },
+      { id: 9, kind: 'clips', x: 38, y: 44, z: 2.4 },
+      { id: 10, kind: 'grenade', x: 28, y: 12, z: 0 },
+    ],
+    ladders: [{ x: 42, y: 48, base: 0, top: 4.5 }],
+  },
+  hd_mirage: {
+    bounds: {
+      min: [4, 4, 0],
+      max: [66, 66, 14],
+      center: [35, 35, 7],
+      extent: 60,
+    },
+    spawns: {
+      cla: [
+        { x: 32, y: 58, z: 0, yaw: 270, team: 0 },
+        { x: 36, y: 58, z: 0, yaw: 270, team: 0 },
+        { x: 32, y: 54, z: 0, yaw: 270, team: 0 },
+        { x: 36, y: 54, z: 0, yaw: 270, team: 0 },
+      ],
+      rvsf: [
+        { x: 32, y: 10, z: 0, yaw: 90, team: 1 },
+        { x: 36, y: 10, z: 0, yaw: 90, team: 1 },
+        { x: 32, y: 14, z: 0, yaw: 90, team: 1 },
+        { x: 36, y: 14, z: 0, yaw: 90, team: 1 },
+      ],
+      all: [
+        { x: 32, y: 58, z: 0, yaw: 270, team: 0 },
+        { x: 36, y: 58, z: 0, yaw: 270, team: 0 },
+        { x: 32, y: 54, z: 0, yaw: 270, team: 0 },
+        { x: 36, y: 54, z: 0, yaw: 270, team: 0 },
+        { x: 32, y: 10, z: 0, yaw: 90, team: 1 },
+        { x: 36, y: 10, z: 0, yaw: 90, team: 1 },
+        { x: 32, y: 14, z: 0, yaw: 90, team: 1 },
+        { x: 36, y: 14, z: 0, yaw: 90, team: 1 },
+      ],
+    },
+    items: [
+      { id: 1, kind: 'health', x: 18, y: 14, z: 0 },
+      { id: 2, kind: 'health', x: 50, y: 14, z: 0 },
+      { id: 3, kind: 'health', x: 34, y: 34, z: 0 },
+      { id: 4, kind: 'armour', x: 16, y: 48, z: 0.8 },
+      { id: 5, kind: 'armour', x: 50, y: 48, z: 2.8 },
+      { id: 6, kind: 'ammo_assault', x: 14, y: 32, z: 2.8 },
+      { id: 7, kind: 'ammo_assault', x: 48, y: 32, z: 0 },
+      { id: 8, kind: 'ammo_sniper', x: 34, y: 50, z: 2.4 },
+      { id: 9, kind: 'clips', x: 34, y: 18, z: 0 },
+      { id: 10, kind: 'grenade', x: 26, y: 36, z: 1.8 },
+    ],
+    ladders: [{ x: 34, y: 32, base: -1.5, top: 2.4 }],
+  },
+  hd_inferno: {
+    bounds: {
+      min: [4, 4, 0],
+      max: [66, 66, 14],
+      center: [35, 35, 7],
+      extent: 60,
+    },
+    spawns: {
+      cla: [
+        { x: 30, y: 56, z: 0, yaw: 270, team: 0 },
+        { x: 34, y: 56, z: 0, yaw: 270, team: 0 },
+        { x: 30, y: 52, z: 0, yaw: 270, team: 0 },
+        { x: 34, y: 52, z: 0, yaw: 270, team: 0 },
+      ],
+      rvsf: [
+        { x: 30, y: 10, z: 0, yaw: 90, team: 1 },
+        { x: 34, y: 10, z: 0, yaw: 90, team: 1 },
+        { x: 30, y: 14, z: 0, yaw: 90, team: 1 },
+        { x: 34, y: 14, z: 0, yaw: 90, team: 1 },
+      ],
+      all: [
+        { x: 30, y: 56, z: 0, yaw: 270, team: 0 },
+        { x: 34, y: 56, z: 0, yaw: 270, team: 0 },
+        { x: 30, y: 52, z: 0, yaw: 270, team: 0 },
+        { x: 34, y: 52, z: 0, yaw: 270, team: 0 },
+        { x: 30, y: 10, z: 0, yaw: 90, team: 1 },
+        { x: 34, y: 10, z: 0, yaw: 90, team: 1 },
+        { x: 30, y: 14, z: 0, yaw: 90, team: 1 },
+        { x: 34, y: 14, z: 0, yaw: 90, team: 1 },
+      ],
+    },
+    items: [
+      { id: 1, kind: 'health', x: 16, y: 14, z: 0 },
+      { id: 2, kind: 'health', x: 48, y: 14, z: 0 },
+      { id: 3, kind: 'health', x: 32, y: 32, z: 0 },
+      { id: 4, kind: 'armour', x: 18, y: 48, z: 0 },
+      { id: 5, kind: 'armour', x: 50, y: 48, z: 0 },
+      { id: 6, kind: 'ammo_assault', x: 14, y: 30, z: 0 },
+      { id: 7, kind: 'ammo_assault', x: 50, y: 30, z: 0 },
+      { id: 8, kind: 'ammo_sniper', x: 32, y: 54, z: 0 },
+      { id: 9, kind: 'clips', x: 32, y: 18, z: 0 },
+      { id: 10, kind: 'grenade', x: 20, y: 24, z: 0 },
+    ],
+    ladders: [{ x: 46, y: 42, base: 0, top: 2.8 }],
+  },
+  hd_office: {
+    bounds: {
+      min: [2, 2, 0],
+      max: [62, 62, 14],
+      center: [32, 32, 7],
+      extent: 58,
+    },
+    spawns: {
+      cla: [
+        { x: 50, y: 32, z: 0, yaw: 270, team: 0 },
+        { x: 52, y: 28, z: 0, yaw: 270, team: 0 },
+        { x: 52, y: 36, z: 0, yaw: 270, team: 0 },
+        { x: 48, y: 24, z: 0, yaw: 270, team: 0 },
+      ],
+      rvsf: [
+        { x: 28, y: 10, z: 0, yaw: 90, team: 1 },
+        { x: 32, y: 10, z: 0, yaw: 90, team: 1 },
+        { x: 28, y: 14, z: 0, yaw: 90, team: 1 },
+        { x: 32, y: 14, z: 0, yaw: 90, team: 1 },
+      ],
+      all: [
+        { x: 50, y: 32, z: 0, yaw: 270, team: 0 },
+        { x: 52, y: 28, z: 0, yaw: 270, team: 0 },
+        { x: 52, y: 36, z: 0, yaw: 270, team: 0 },
+        { x: 48, y: 24, z: 0, yaw: 270, team: 0 },
+        { x: 28, y: 10, z: 0, yaw: 90, team: 1 },
+        { x: 32, y: 10, z: 0, yaw: 90, team: 1 },
+        { x: 28, y: 14, z: 0, yaw: 90, team: 1 },
+        { x: 32, y: 14, z: 0, yaw: 90, team: 1 },
+      ],
+    },
+    items: [
+      { id: 1, kind: 'health', x: 10, y: 48, z: 0 },
+      { id: 2, kind: 'health', x: 10, y: 12, z: 0 },
+      { id: 3, kind: 'health', x: 54, y: 32, z: 0 },
+      { id: 4, kind: 'armour', x: 16, y: 46, z: 0 },
+      { id: 5, kind: 'armour', x: 16, y: 16, z: 0 },
+      { id: 6, kind: 'ammo_assault', x: 22, y: 32, z: 0 },
+      { id: 7, kind: 'ammo_assault', x: 44, y: 18, z: 0 },
+      { id: 8, kind: 'ammo_sniper', x: 44, y: 44, z: 0 },
+      { id: 9, kind: 'clips', x: 30, y: 28, z: 0 },
+      { id: 10, kind: 'grenade', x: 30, y: 36, z: 0 },
+    ],
+    ladders: [],
+  },
+  hd_nuke: {
+    bounds: {
+      min: [4, 4, -5],
+      max: [66, 66, 14],
+      center: [35, 35, 4.5],
+      extent: 60,
+    },
+    spawns: {
+      cla: [
+        { x: 26, y: 56, z: 0, yaw: 270, team: 0 },
+        { x: 30, y: 56, z: 0, yaw: 270, team: 0 },
+        { x: 26, y: 52, z: 0, yaw: 270, team: 0 },
+        { x: 30, y: 52, z: 0, yaw: 270, team: 0 },
+      ],
+      rvsf: [
+        { x: 34, y: 12, z: 0, yaw: 90, team: 1 },
+        { x: 38, y: 12, z: 0, yaw: 90, team: 1 },
+        { x: 34, y: 15, z: 0, yaw: 90, team: 1 },
+        { x: 38, y: 15, z: 0, yaw: 90, team: 1 },
+      ],
+      all: [
+        { x: 26, y: 56, z: 0, yaw: 270, team: 0 },
+        { x: 30, y: 56, z: 0, yaw: 270, team: 0 },
+        { x: 26, y: 52, z: 0, yaw: 270, team: 0 },
+        { x: 30, y: 52, z: 0, yaw: 270, team: 0 },
+        { x: 34, y: 12, z: 0, yaw: 90, team: 1 },
+        { x: 38, y: 12, z: 0, yaw: 90, team: 1 },
+        { x: 34, y: 15, z: 0, yaw: 90, team: 1 },
+        { x: 38, y: 15, z: 0, yaw: 90, team: 1 },
+      ],
+    },
+    items: [
+      { id: 1, kind: 'health', x: 30, y: 35, z: 0 },
+      { id: 2, kind: 'health', x: 30, y: 35, z: -4.5 },
+      { id: 3, kind: 'health', x: 12, y: 30, z: 0 },
+      { id: 4, kind: 'armour', x: 32, y: 37, z: 0 },
+      { id: 5, kind: 'armour', x: 32, y: 37, z: -4.5 },
+      { id: 6, kind: 'ammo_assault', x: 24, y: 20, z: 0 },
+      { id: 7, kind: 'ammo_assault', x: 36, y: 48, z: 0 },
+      { id: 8, kind: 'ammo_sniper', x: 20, y: 35, z: 3.8 },
+      { id: 9, kind: 'clips', x: 48, y: 35, z: 0 },
+      { id: 10, kind: 'grenade', x: 30, y: 25, z: 0 },
+    ],
+    ladders: [
+      { x: 31, y: 36, base: -4.5, top: 0 },
+      { x: 18.9, y: 20, base: 0, top: 6 },
+    ],
+  },
+  hd_assault: {
+    bounds: {
+      min: [4, 4, 0],
+      max: [60, 60, 14],
+      center: [32, 32, 7],
+      extent: 56,
+    },
+    spawns: {
+      cla: [
+        { x: 16, y: 7, z: 0.18, yaw: 90, team: 0 },
+        { x: 20, y: 7, z: 0.18, yaw: 90, team: 0 },
+        { x: 24, y: 7, z: 0.18, yaw: 90, team: 0 },
+        { x: 28, y: 7, z: 0.18, yaw: 90, team: 0 },
+      ],
+      rvsf: [
+        { x: 32, y: 48, z: 4.2, yaw: 270, team: 1 },
+        { x: 36, y: 48, z: 4.2, yaw: 270, team: 1 },
+        { x: 40, y: 48, z: 4.2, yaw: 270, team: 1 },
+        { x: 34, y: 52, z: 4.2, yaw: 270, team: 1 },
+      ],
+      all: [
+        { x: 16, y: 7, z: 0.18, yaw: 90, team: 0 },
+        { x: 20, y: 7, z: 0.18, yaw: 90, team: 0 },
+        { x: 24, y: 7, z: 0.18, yaw: 90, team: 0 },
+        { x: 28, y: 7, z: 0.18, yaw: 90, team: 0 },
+        { x: 32, y: 48, z: 4.2, yaw: 270, team: 1 },
+        { x: 36, y: 48, z: 4.2, yaw: 270, team: 1 },
+        { x: 40, y: 48, z: 4.2, yaw: 270, team: 1 },
+        { x: 34, y: 52, z: 4.2, yaw: 270, team: 1 },
+      ],
+    },
+    items: [
+      { id: 1, kind: 'health', x: 14, y: 6, z: 0.18 },
+      { id: 2, kind: 'health', x: 55, y: 16, z: 0 },
+      { id: 3, kind: 'health', x: 38, y: 52, z: 4.2 },
+      { id: 4, kind: 'armour', x: 20, y: 36, z: 0 },
+      { id: 5, kind: 'armour', x: 32, y: 44, z: 4.2 },
+      { id: 6, kind: 'ammo_assault', x: 21, y: 15.5, z: 0 },
+      { id: 7, kind: 'ammo_assault', x: 54, y: 30, z: 0 },
+      { id: 8, kind: 'ammo_sniper', x: 24, y: 7, z: 7.5 },
+      { id: 9, kind: 'clips', x: 10.5, y: 40, z: 4.2 },
+      { id: 10, kind: 'grenade', x: 16, y: 30, z: 9 },
+    ],
+    ladders: [{ x: 46.4, y: 36, base: 0, top: 9 }],
+  },
+};
+
+export function buildWorld3DFromGLTF(
+  THREE: typeof import('three'),
+  info: MapInfo,
+  gltfScene: THREE.Group,
+): World3D {
+  const root = new THREE.Group();
+  root.name = `World3D_${info.name}`;
+
+  const colVertices: number[] = [];
+  const colIndices: number[] = [];
+  const materials: THREE.Material[] = [];
+  const geometries: THREE.BufferGeometry[] = [];
+  const windowsMap = new Map<string, BreakableWindow>();
+
+  // Matrix to flip Z: glTF -Z is North, Three.js +Z is North
+  const zFlip = new THREE.Matrix4().makeScale(1, 1, -1);
+
+  gltfScene.updateMatrixWorld(true);
+
+  gltfScene.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh) || !obj.geometry) return;
+
+    const nodeName = obj.name || '';
+    const isWin = isBreakableWindowNode(nodeName);
+    const isNonCol = isNonColliderNode(nodeName);
+    const isInv = isInvisibleNode(nodeName);
+
+    // Clone geometry and apply world transform + Z flip
+    const geom = obj.geometry.clone();
+    geom.applyMatrix4(obj.matrixWorld);
+    geom.applyMatrix4(zFlip);
+
+    // Invert triangle index winding because Z reflection flips surface orientation
+    if (geom.index) {
+      const indices = geom.index.array;
+      for (let i = 0; i < indices.length; i += 3) {
+        const tmp = indices[i + 1];
+        indices[i + 1] = indices[i + 2];
+        indices[i + 2] = tmp;
+      }
+      geom.index.needsUpdate = true;
+    }
+    geom.computeVertexNormals();
+    geometries.push(geom);
+
+    let isMatCollider = true;
+    const matList = Array.isArray(obj.material) ? obj.material : [obj.material];
+    for (const m of matList) {
+      if (m) {
+        m.side = THREE.FrontSide;
+        materials.push(m);
+        const mName = m.name || '';
+        if (/Glass|Glow|Lamp|Indicator|Taillight/i.test(mName)) {
+          isMatCollider = false;
+        }
+      }
+    }
+
+    const worldMesh = new THREE.Mesh(geom, obj.material);
+    worldMesh.name = nodeName;
+    worldMesh.visible = !isInv;
+    worldMesh.castShadow = true;
+    worldMesh.receiveShadow = true;
+    root.add(worldMesh);
+
+    if (isWin) {
+      const winVertices: number[] = [];
+      const winIndices: number[] = [];
+      const posAttr = geom.attributes.position;
+      if (posAttr) {
+        if (geom.index) {
+          const idx = geom.index.array;
+          for (let i = 0; i < idx.length; i += 3) {
+            const i0 = idx[i];
+            const i1 = idx[i + 1];
+            const i2 = idx[i + 2];
+            const base = winVertices.length / 3;
+            winVertices.push(posAttr.getX(i0), posAttr.getZ(i0), posAttr.getY(i0));
+            winVertices.push(posAttr.getX(i2), posAttr.getZ(i2), posAttr.getY(i2));
+            winVertices.push(posAttr.getX(i1), posAttr.getZ(i1), posAttr.getY(i1));
+            winIndices.push(base, base + 1, base + 2);
+          }
+        } else {
+          const count = posAttr.count;
+          for (let i = 0; i < count; i += 3) {
+            const base = winVertices.length / 3;
+            winVertices.push(posAttr.getX(i), posAttr.getZ(i), posAttr.getY(i));
+            winVertices.push(posAttr.getX(i + 2), posAttr.getZ(i + 2), posAttr.getY(i + 2));
+            winVertices.push(posAttr.getX(i + 1), posAttr.getZ(i + 1), posAttr.getY(i + 1));
+            winIndices.push(base, base + 1, base + 2);
+          }
+        }
+      }
+
+      let cx = 0, cy = 0, cz = 0;
+      const numV = winVertices.length / 3;
+      if (numV > 0) {
+        for (let i = 0; i < winVertices.length; i += 3) {
+          cx += winVertices[i];
+          cy += winVertices[i + 1];
+          cz += winVertices[i + 2];
+        }
+        cx /= numV;
+        cy /= numV;
+        cz /= numV;
+      }
+
+      const normAttr = geom.attributes.normal;
+      let nx = 0, ny = 1, nz = 0;
+      if (normAttr && normAttr.count > 0) {
+        nx = normAttr.getX(0);
+        ny = normAttr.getZ(0);
+        nz = normAttr.getY(0);
+      }
+
+      windowsMap.set(nodeName, {
+        id: nodeName,
+        name: nodeName,
+        mesh: worldMesh,
+        center: [cx, cy, cz],
+        normal: [nx, ny, nz],
+        shattered: false,
+        vertices: new Float32Array(winVertices),
+        indices: new Uint32Array(winIndices),
+        shatter() {
+          if (this.shattered) return;
+          this.shattered = true;
+          this.mesh.visible = false;
+        },
+      });
+    } else if (!isNonCol && !isInv && isMatCollider) {
+      // Extract collision geometry for Rapier (game coords: x=East, y=North, z=Elevation)
+      const posAttr = geom.attributes.position;
+      if (posAttr) {
+        if (geom.index) {
+          const idx = geom.index.array;
+          for (let i = 0; i < idx.length; i += 3) {
+            const i0 = idx[i];
+            const i1 = idx[i + 1];
+            const i2 = idx[i + 2];
+
+            // Three.js coords: x = East, y = Elevation, z = North
+            // Rapier coords: x = East, y = North, z = Elevation
+            // Swapping y and z inverts winding, so (v0, v2, v1) keeps normals pointing outwards
+            const base = colVertices.length / 3;
+            colVertices.push(posAttr.getX(i0), posAttr.getZ(i0), posAttr.getY(i0));
+            colVertices.push(posAttr.getX(i2), posAttr.getZ(i2), posAttr.getY(i2));
+            colVertices.push(posAttr.getX(i1), posAttr.getZ(i1), posAttr.getY(i1));
+            colIndices.push(base, base + 1, base + 2);
+          }
+        } else {
+          const count = posAttr.count;
+          for (let i = 0; i < count; i += 3) {
+            const base = colVertices.length / 3;
+            colVertices.push(posAttr.getX(i), posAttr.getZ(i), posAttr.getY(i));
+            colVertices.push(posAttr.getX(i + 2), posAttr.getZ(i + 2), posAttr.getY(i + 2));
+            colVertices.push(posAttr.getX(i + 1), posAttr.getZ(i + 1), posAttr.getY(i + 1));
+            colIndices.push(base, base + 1, base + 2);
+          }
+        }
+      }
+    }
+  });
+
+  const cfg = MAP_CONFIGS[info.name] ?? MAP_CONFIGS.hd_facility;
+
+  const collision: CollisionGeometry = {
+    vertices: new Float32Array(colVertices),
+    indices: new Uint32Array(colIndices),
+    triangles: colIndices.length / 3,
+  };
+
+  return {
+    info,
+    scene: root,
+    bounds: cfg.bounds,
+    collision,
+    spawns: cfg.spawns,
+    items: cfg.items,
+    ladders: cfg.ladders,
+    waterlevel: info.waterlevel ?? -100.0,
+    materials,
+    windows: windowsMap,
+    shatterWindow(id: string): boolean {
+      const win = windowsMap.get(id);
+      if (!win || win.shattered) return false;
+      win.shatter();
+      return true;
+    },
+    dispose() {
+      for (const g of geometries) g.dispose();
+    },
+  };
+}
+
+export async function loadWorld3D(
+  THREE: typeof import('three'),
+  info: MapInfo,
+): Promise<World3D> {
+  const glbFilename = `${info.name}.glb`;
+  try {
+    const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
+    const assetUrl = await getCachedAssetUrl(`/${glbFilename}`);
+    const loader = new GLTFLoader();
+    const gltf = await loader.loadAsync(assetUrl);
+    return buildWorld3DFromGLTF(THREE, info, gltf.scene);
+  } catch (err) {
+    console.warn(`[world3d] Could not load GLB asset ${glbFilename}, falling back to procedural generation:`, err);
+    return createWorld3D(THREE, info);
+  }
+}
+
 export function createWorld3D(
   THREE: typeof import('three'),
   info: MapInfo,
@@ -1331,3 +1996,4 @@ export function createWorld3D(
   }
   return createProceduralFacility3D(THREE, info);
 }
+

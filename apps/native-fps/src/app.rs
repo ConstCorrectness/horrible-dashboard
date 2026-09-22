@@ -481,7 +481,7 @@ impl App {
             || map_name == "hd_assault";
         let (world3d, rapier_physics, mesh) = if is_gltf {
             let w3d = world3d::create_world_3d(world.info.clone());
-            let rapier = RapierPhysicsWorld::new(&w3d.col_vertices, &w3d.col_indices);
+            let rapier = RapierPhysicsWorld::new_with_windows(&w3d.col_vertices, &w3d.col_indices, Some(&w3d.windows));
             let m3d = w3d.to_mesh_data();
             (Some(w3d), Some(rapier), m3d)
         } else {
@@ -956,6 +956,7 @@ impl App {
         let frame = viewmodel::Frame {
             ads: if self.scoped > 0 { 1.0 } else { 0.0 },
             speed: self.ground_speed(),
+            sprint: self.keys.sprint,
             on_ground: self.prediction.state.on_ground,
             reloading: self.you.as_ref().is_some_and(|y| y.reloading),
             yaw: self.camera.yaw.to_radians(),

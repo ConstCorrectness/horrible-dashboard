@@ -63,9 +63,9 @@ import { createDetailTexture } from './surfaces';
  * 36 cm and a 90 cm rifle is about two and a half cubes long. That is why the
  * models are the length they are rather than whatever looked right on one screen.
  */
-const HOME = { x: 0.92, y: -0.86, z: -1.35 };
+const HOME = { x: 0.58, y: -0.46, z: -0.98 };
 /** Centered ADS aim position aligned with sights line */
-const ADS_POS = { x: 0.0, y: -0.44, z: -0.90 };
+const ADS_POS = { x: 0.0, y: -0.38, z: -0.85 };
 
 /** Recoil decay and reload-dip rates, per second. */
 const KICK_DECAY = 11;
@@ -159,6 +159,8 @@ export interface ViewModelFrame {
   pitch: number;
   /** Lateral strafe input (-1 to 1) for physics-based strafe inertia. */
   strafe?: number;
+  /** Whether player is actively sprinting */
+  sprint?: boolean;
   /** False while dead, spectating, or before deploying. */
   visible: boolean;
   /**
@@ -597,6 +599,10 @@ export class WeaponViewModel {
   /** Active knife melee animation and elapsed seconds */
   private knifeAction: 'slash' | 'stab' | null = null;
   private knifeActionT = 0;
+  /** Idle respiratory sway phase */
+  private breathPhase = 0;
+  /** Sprint weapon tuck transition (0 = idle/walk, 1 = tucked sprint) */
+  private sprintT = 0;
 
   // Built with the model rather than shared, because they now carry the skin:
   // two weapons in one match are two different guns, and a material shared
@@ -1321,26 +1327,43 @@ export class WeaponViewModel {
       }
     }
 
+    // Idle respiratory breathing sway
+    this.breathPhase += dt * 2.2;
+    const breathWeight = (1.0 - walk * 0.7) * (1.0 - this.sprintT) * adsDamp;
+    const breathX = Math.sin(this.breathPhase * 0.5) * 0.0004 * breathWeight;
+    const breathY = Math.cos(this.breathPhase) * 0.0003 * breathWeight;
+    const breathPitch = Math.cos(this.breathPhase) * 0.006 * breathWeight;
+
+    // Sprint weapon tuck transition
+    const isSprinting = Boolean(frame.sprint || (frame.speed > MOVE_SPEED * 1.15 && frame.onGround));
+    const targetSprint = isSprinting ? 1.0 : 0.0;
+    this.sprintT += (targetSprint - this.sprintT) * Math.min(1.0, dt * 8.0);
+    const sprintDip = this.sprintT * -0.06;
+    const sprintPitch = this.sprintT * -0.18;
+    const sprintYaw = this.sprintT * -0.22;
+    const sprintRoll = this.sprintT * 0.15;
+
     this.pivot.position.set(
-      curHomeX + (bobX + (this.swayX + this.strafeSway) * adsDamp) - inspectLiftX + knifeX,
+      curHomeX + (bobX + (this.swayX + this.strafeSway) * adsDamp) - inspectLiftX + knifeX + breathX,
       // The stow drops the weapon out of frame entirely. Applied to the same
       // axis as the reload dip and *added* rather than blended, so a switch
       // asked for mid-reload takes the gun the rest of the way down instead of
       // fighting the dip for the pivot.
-      curHomeY + (bobY + this.swayY * adsDamp + landDip) - this.reloadT * 0.55 + reloadImpulseY + inspectLiftY - stow * 1.15 + knifeY,
+      curHomeY + (bobY + this.swayY * adsDamp + landDip) - this.reloadT * 0.55 + reloadImpulseY + inspectLiftY - stow * 1.15 + knifeY + breathY + sprintDip,
       // Recoil is mostly backwards: a gun that only rotates looks hinged.
       curHomeZ + this.kick * 0.28 + boltPullZ + reloadImpulseZ + inspectLiftZ + knifeZ,
     );
     this.pivot.rotation.set(
-      this.kick * -0.16 + this.reloadT * 0.7 + boltPullPitch + reloadImpulsePitch + bobY * 0.4 + inspectPitch + stow * 0.9 + knifePitch,
-      (this.swayX * 0.7 + this.strafeSway * 0.5) * adsDamp + this.reloadT * 0.25 + inspectYaw + knifeYaw,
+      this.kick * -0.16 + this.reloadT * 0.7 + boltPullPitch + reloadImpulsePitch + bobY * 0.4 + inspectPitch + stow * 0.9 + knifePitch + breathPitch + sprintPitch,
+      (this.swayX * 0.7 + this.strafeSway * 0.5) * adsDamp + this.reloadT * 0.25 + inspectYaw + knifeYaw + sprintYaw,
       (this.swayX * 0.5 + this.swayRoll) * adsDamp +
         bobX * 0.6 +
         boltPullRoll +
         reloadImpulseRoll +
         inspectRoll +
         stow * 0.35 +
-        knifeRoll,
+        knifeRoll +
+        sprintRoll,
     );
 
     this.flashAge += dt;

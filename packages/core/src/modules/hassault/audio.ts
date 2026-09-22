@@ -116,6 +116,7 @@ const TIMBRES: Record<string, Timbre> = {
   impact_wood: { frequency: 580, q: 3.0, decay: 0.10, gain: 0.60, body: 120 },
   impact_glass: { frequency: 4200, q: 4.5, decay: 0.12, gain: 0.70, body: 300 },
   impact_wallbang: { frequency: 280, q: 2.0, decay: 0.18, gain: 0.85, body: 80 },
+  glass_shatter: { frequency: 5400, q: 3.5, decay: 0.48, gain: 0.95, body: 220 },
 };
 
 const FALLBACK: Timbre = TIMBRES.step;
@@ -439,6 +440,14 @@ export class GameAudio {
             ? 'impact_glass'
             : 'impact_concrete';
     this.play(sound, volume, bearing, listenerYaw);
+  }
+
+  /**
+   * Play crystal glass shattering burst sound.
+   */
+  glassShatter(bearing: number, listenerYaw: number): void {
+    this.play('glass_shatter', 0.95, bearing, listenerYaw);
+    this.surfaceImpact('glass', bearing, listenerYaw, 0.7);
   }
 
   dispose(): void {

@@ -4,7 +4,7 @@ High-Fidelity Procedural Generator for Desert Courtyard (hd_mirage).
 Authentic competitive tournament arena on a 70m x 70m footprint:
 - Bomb Site A: Palace interior colonnade (z=2.8m), Tetris boxes, Triple boxes, Ticket booth, and CT ramp.
 - Middle & Underpass: Central street, Sniper's Nest (Window Room z=2.4m), Connector steps, Catwalk, and Underpass.
-- Bomb Site B: B Apartments (z=2.8m) with arched jump window, Market/Kitchen room with service window, Van/truck barricade, and Site B pillar.
+- Bomb Site B: B Apartments (z=2.8m) with arched jump window, Market/Kitchen room with service window, delivery Van barricade, and Site B pillar.
 - T & CT Spawns: Moorish courtyards with date palm trees, fabric sun canopies, terracotta urns, and blue mosaic tile trims.
 
 Outputs:
@@ -41,7 +41,7 @@ def get_or_create_collection(name):
     return col
 
 
-def create_pbr_material(name, base_color, metallic=0.0, roughness=0.7, emission_color=None, emission_strength=0.0, alpha=1.0):
+def create_pbr_material(name, base_color, metallic=0.0, roughness=0.7, emission_color=None, emission_strength=0.0, alpha=1.0, bump_strength=0.0, bump_scale=24.0):
     mat = bpy.data.materials.get(name)
     if mat:
         return mat
@@ -69,6 +69,21 @@ def create_pbr_material(name, base_color, metallic=0.0, roughness=0.7, emission_
             bsdf.inputs["Transmission Weight"].default_value = 1.0 - alpha
         elif "Transmission" in bsdf.inputs:
             bsdf.inputs["Transmission"].default_value = 1.0 - alpha
+        mat.blend_method = 'BLEND'
+
+    if bump_strength > 0.0:
+        tex_coord = nodes.new(type="ShaderNodeTexCoord")
+        tex_coord.location = (-600, -200)
+        noise = nodes.new(type="ShaderNodeTexNoise")
+        noise.location = (-400, -200)
+        noise.inputs["Scale"].default_value = bump_scale
+        noise.inputs["Detail"].default_value = 4.0
+        bump = nodes.new(type="ShaderNodeBump")
+        bump.location = (-200, -200)
+        bump.inputs["Strength"].default_value = bump_strength
+        mat.node_tree.links.new(tex_coord.outputs["Generated"], noise.inputs["Vector"])
+        mat.node_tree.links.new(noise.outputs["Fac"], bump.inputs["Height"])
+        mat.node_tree.links.new(bump.outputs["Normal"], bsdf.inputs["Normal"])
 
     out = nodes.new(type="ShaderNodeOutputMaterial")
     out.location = (300, 0)
@@ -78,24 +93,28 @@ def create_pbr_material(name, base_color, metallic=0.0, roughness=0.7, emission_
 
 def setup_materials():
     mats = {}
-    # Sandstone & Moorish Plaster
-    mats["sandstone_paving"] = create_pbr_material("mat_sandstone_paving", (0.76, 0.70, 0.58), metallic=0.01, roughness=0.85)
-    mats["sandstone_light"] = create_pbr_material("mat_sandstone_light", (0.84, 0.76, 0.62), metallic=0.01, roughness=0.82)
-    mats["sandstone_ochre"] = create_pbr_material("mat_sandstone_ochre", (0.78, 0.58, 0.38), metallic=0.01, roughness=0.88)
-    mats["moorish_plaster_warm"] = create_pbr_material("mat_moorish_plaster_warm", (0.88, 0.82, 0.72), metallic=0.01, roughness=0.90)
-    mats["mosaic_tile_blue"] = create_pbr_material("mat_mosaic_tile_blue", (0.10, 0.38, 0.68), metallic=0.08, roughness=0.35)
+    # Sandstone & Moorish Plaster with rich surface roughness
+    mats["sandstone_paving"] = create_pbr_material("mat_sandstone_paving", (0.76, 0.70, 0.58), metallic=0.01, roughness=0.85, bump_strength=0.18, bump_scale=20.0)
+    mats["sandstone_light"] = create_pbr_material("mat_sandstone_light", (0.84, 0.76, 0.62), metallic=0.01, roughness=0.82, bump_strength=0.16, bump_scale=18.0)
+    mats["sandstone_ochre"] = create_pbr_material("mat_sandstone_ochre", (0.78, 0.58, 0.38), metallic=0.01, roughness=0.88, bump_strength=0.20, bump_scale=18.0)
+    mats["moorish_plaster_warm"] = create_pbr_material("mat_moorish_plaster_warm", (0.88, 0.82, 0.72), metallic=0.01, roughness=0.90, bump_strength=0.15, bump_scale=25.0)
+    mats["mosaic_tile_blue"] = create_pbr_material("mat_mosaic_tile_blue", (0.10, 0.38, 0.68), metallic=0.08, roughness=0.35, bump_strength=0.06, bump_scale=35.0)
 
     # Woods & Metals
-    mats["cedar_wood"] = create_pbr_material("mat_cedar_wood", (0.36, 0.24, 0.16), metallic=0.0, roughness=0.75)
-    mats["wood_crate"] = create_pbr_material("mat_wood_crate", (0.54, 0.40, 0.26), metallic=0.0, roughness=0.65)
-    mats["wrought_iron"] = create_pbr_material("mat_wrought_iron", (0.18, 0.18, 0.20), metallic=0.85, roughness=0.45)
-    mats["van_metal_olive"] = create_pbr_material("mat_van_metal_olive", (0.32, 0.38, 0.28), metallic=0.45, roughness=0.55)
+    mats["cedar_wood"] = create_pbr_material("mat_cedar_wood", (0.36, 0.24, 0.16), metallic=0.0, roughness=0.75, bump_strength=0.28, bump_scale=12.0)
+    mats["wood_crate"] = create_pbr_material("mat_wood_crate", (0.54, 0.40, 0.26), metallic=0.0, roughness=0.65, bump_strength=0.25, bump_scale=14.0)
+    mats["wrought_iron"] = create_pbr_material("mat_wrought_iron", (0.18, 0.18, 0.20), metallic=0.85, roughness=0.45, bump_strength=0.10, bump_scale=32.0)
+    mats["van_metal_olive"] = create_pbr_material("mat_van_metal_olive", (0.32, 0.38, 0.28), metallic=0.45, roughness=0.55, bump_strength=0.10, bump_scale=25.0)
 
     # Fabrics & foliage
-    mats["canopy_crimson"] = create_pbr_material("mat_canopy_crimson", (0.65, 0.15, 0.18), metallic=0.0, roughness=0.92)
-    mats["palm_bark"] = create_pbr_material("mat_palm_bark", (0.32, 0.24, 0.18), metallic=0.0, roughness=0.95)
+    mats["canopy_crimson"] = create_pbr_material("mat_canopy_crimson", (0.65, 0.15, 0.18), metallic=0.0, roughness=0.92, bump_strength=0.14, bump_scale=30.0)
+    mats["canopy_indigo"] = create_pbr_material("mat_canopy_indigo", (0.15, 0.25, 0.60), metallic=0.0, roughness=0.92, bump_strength=0.14, bump_scale=30.0)
+    mats["palm_bark"] = create_pbr_material("mat_palm_bark", (0.32, 0.24, 0.18), metallic=0.0, roughness=0.95, bump_strength=0.32, bump_scale=10.0)
     mats["palm_fronds"] = create_pbr_material("mat_palm_fronds", (0.16, 0.38, 0.12), metallic=0.0, roughness=0.80)
-    mats["terracotta_urn"] = create_pbr_material("mat_terracotta_urn", (0.72, 0.34, 0.20), metallic=0.0, roughness=0.78)
+    mats["terracotta_urn"] = create_pbr_material("mat_terracotta_urn", (0.72, 0.34, 0.20), metallic=0.0, roughness=0.78, bump_strength=0.22, bump_scale=16.0)
+
+    # Breakable glass windows
+    mats["glass_window"] = create_pbr_material("mat_glass_window", (0.82, 0.92, 0.98), metallic=0.05, roughness=0.06, alpha=0.35)
     return mats
 
 
@@ -140,36 +159,49 @@ def add_cylinder(collection, name, center, radius, height, material, segments=16
     return obj
 
 
-def add_arch(collection, name, center, span, height, depth, material):
+def add_arch(collection, name, center, span, height, depth, material, segments=8):
+    """Moorish horseshoe arch with column plinths and carved capitals."""
     mesh = bpy.data.meshes.new(name)
     obj = bpy.data.objects.new(name, mesh)
     collection.objects.link(obj)
 
     bm = bmesh.new()
     pillar_w = 0.8
-    pillar_h = height - span * 0.4
+    pillar_h = height - span * 0.45
     # Left pillar
     bmesh.ops.create_cube(bm, size=1.0)
     bmesh.ops.scale(bm, vec=Vector((pillar_w, depth, pillar_h)), verts=bm.verts)
-    bmesh.ops.translate(bm, vec=Vector((-span * 0.5 + pillar_w * 0.5, 0.0, pillar_h * 0.5)), verts=bm.verts)
+    bmesh.ops.translate(bm, vec=Vector((-span * 0.5 - pillar_w * 0.5, 0.0, pillar_h * 0.5)), verts=bm.verts)
 
     # Right pillar
     r_bm = bmesh.new()
     bmesh.ops.create_cube(r_bm, size=1.0)
     bmesh.ops.scale(r_bm, vec=Vector((pillar_w, depth, pillar_h)), verts=r_bm.verts)
-    bmesh.ops.translate(r_bm, vec=Vector((span * 0.5 - pillar_w * 0.5, 0.0, pillar_h * 0.5)), verts=r_bm.verts)
+    bmesh.ops.translate(r_bm, vec=Vector((span * 0.5 + pillar_w * 0.5, 0.0, pillar_h * 0.5)), verts=r_bm.verts)
     for v in r_bm.verts:
         bm.verts.new(v.co)
     r_bm.free()
 
-    # Top lintel arch
-    t_bm = bmesh.new()
-    bmesh.ops.create_cube(t_bm, size=1.0)
-    bmesh.ops.scale(t_bm, vec=Vector((span + pillar_w * 2.0, depth, 0.9)), verts=t_bm.verts)
-    bmesh.ops.translate(t_bm, vec=Vector((0.0, 0.0, height + 0.45)), verts=t_bm.verts)
-    for v in t_bm.verts:
-        bm.verts.new(v.co)
-    t_bm.free()
+    # Curved arch
+    radius = span * 0.5
+    for i in range(segments):
+        a0 = math.pi * i / segments
+        a1 = math.pi * (i + 1) / segments
+        x0 = math.cos(a0) * radius
+        z0 = math.sin(a0) * radius + pillar_h
+        x1 = math.cos(a1) * radius
+        z1 = math.sin(a1) * radius + pillar_h
+
+        seg_bm = bmesh.new()
+        bmesh.ops.create_cube(seg_bm, size=1.0)
+        seg_len = math.hypot(x1 - x0, z1 - z0)
+        bmesh.ops.scale(seg_bm, vec=Vector((seg_len * 1.05, depth * 1.05, 0.55)), verts=seg_bm.verts)
+        ang = math.atan2(z1 - z0, x1 - x0)
+        bmesh.ops.rotate(seg_bm, matrix=Euler((0.0, -ang, 0.0)).to_matrix(), verts=seg_bm.verts)
+        bmesh.ops.translate(seg_bm, vec=Vector(((x0 + x1) * 0.5, 0.0, (z0 + z1) * 0.5)), verts=seg_bm.verts)
+        for v in seg_bm.verts:
+            bm.verts.new(v.co)
+        seg_bm.free()
 
     bmesh.ops.translate(bm, vec=Vector(center), verts=bm.verts)
     bm.to_mesh(mesh)
@@ -180,122 +212,162 @@ def add_arch(collection, name, center, span, height, depth, material):
     return obj
 
 
-def add_palm_tree(collection, name, pos, mats):
-    px, py, pz = pos
-    # Trunk
-    add_cylinder(collection, f"{name}_trunk", (px, py, pz + 3.0), radius=0.25, height=6.0, material=mats["palm_bark"], segments=8)
-    # Crown fronds
-    add_cylinder(collection, f"{name}_fronds_b", (px, py, pz + 6.2), radius=2.2, height=0.6, material=mats["palm_fronds"], segments=10)
-    add_cylinder(collection, f"{name}_fronds_t", (px, py, pz + 6.8), radius=1.4, height=0.5, material=mats["palm_fronds"], segments=8)
+def add_detailed_palm(collection, name_prefix, base_pos, mats, trunk_height=7.0):
+    """Palm tree with segmented trunk rings and curved fronds (NonCol)."""
+    bx, by, bz = base_pos
+    num_segs = 6
+    seg_h = trunk_height / num_segs
+    for i in range(num_segs):
+        sz = bz + i * seg_h + seg_h * 0.5
+        rad = 0.36 - (i / num_segs) * 0.10
+        add_cylinder(collection, f"{name_prefix}_trunk_{i}", (bx, by, sz), radius=rad, height=seg_h * 1.02, material=mats["palm_bark"], segments=10)
+        add_cylinder(collection, f"{name_prefix}_ring_{i}_NonCol", (bx, by, sz + seg_h * 0.5), radius=rad * 1.15, height=0.08, material=mats["palm_bark"], segments=10)
+
+    # Fronds
+    top_z = bz + trunk_height
+    for tier, (num_f, f_len, droop_deg) in enumerate([(10, 3.4, 25), (10, 2.6, 50)]):
+        for f in range(num_f):
+            ang = (2.0 * math.pi * f) / num_f + (tier * 0.3)
+            fx = bx + math.cos(ang) * (f_len * 0.45)
+            fy = by + math.sin(ang) * (f_len * 0.45)
+            fz = top_z - math.sin(math.radians(droop_deg)) * (f_len * 0.3)
+            mesh = bpy.data.meshes.new(f"{name_prefix}_frond_{tier}_{f}_NonCol")
+            obj = bpy.data.objects.new(f"{name_prefix}_frond_{tier}_{f}_NonCol", mesh)
+            collection.objects.link(obj)
+            bm = bmesh.new()
+            bmesh.ops.create_cube(bm, size=1.0)
+            bmesh.ops.scale(bm, vec=Vector((0.55, f_len, 0.05)), verts=bm.verts)
+            bmesh.ops.rotate(bm, matrix=Euler((math.radians(droop_deg), 0.0, -ang + math.pi*0.5)).to_matrix(), verts=bm.verts)
+            bmesh.ops.translate(bm, vec=Vector((fx, fy, fz)), verts=bm.verts)
+            bm.to_mesh(mesh)
+            bm.free()
+            obj.data.materials.append(mats["palm_fronds"])
 
 
-def build_mirage_perimeter_and_ground(col, mats):
-    # Main Sandstone ground terrain (70m x 70m)
-    add_box(col, "Terrain_Sandstone", (35.0, 35.0, -0.5), (70.0, 70.0, 1.0), mats["sandstone_paving"])
-
-    # High Perimeter Sandstone Walls (Height 10m)
-    add_box(col, "Wall_Perimeter_S", (35.0, 4.0, 5.0), (62.0, 1.2, 10.0), mats["sandstone_ochre"])
-    add_box(col, "Wall_Perimeter_N", (35.0, 66.0, 5.0), (62.0, 1.2, 10.0), mats["sandstone_ochre"])
-    add_box(col, "Wall_Perimeter_E", (66.0, 35.0, 5.0), (1.2, 62.0, 10.0), mats["moorish_plaster_warm"])
-    add_box(col, "Wall_Perimeter_W", (4.0, 35.0, 5.0), (1.2, 62.0, 10.0), mats["moorish_plaster_warm"])
-
-    # Blue Mosaic Tile Decorative Frieze
-    add_box(col, "Mosaic_Frieze_S", (35.0, 4.6, 9.6), (62.0, 0.4, 0.5), mats["mosaic_tile_blue"])
-    add_box(col, "Mosaic_Frieze_N", (35.0, 65.4, 9.6), (62.0, 0.4, 0.5), mats["mosaic_tile_blue"])
-
-
-def build_site_a_and_palace(col, mats):
-    """Bomb Site A with Palace interior colonnade, Tetris, Triple, and Ticket."""
-    # Palace Building Outer Walls (X: 48..64, Y: 18..36, Z: 0..7.0)
-    add_box(col, "Palace_Wall_W", (48.0, 27.0, 3.5), (1.2, 18.0, 7.0), mats["moorish_plaster_warm"])
-    add_box(col, "Palace_Wall_S", (56.0, 18.0, 3.5), (16.0, 1.2, 7.0), mats["sandstone_light"])
-
-    # Palace Balcony Floor overlooking Site A at Z = 2.8m (X: 46..52, Y: 36..40)
-    add_box(col, "Palace_Balcony_Floor", (49.0, 38.0, 2.8), (6.0, 4.0, 0.3), mats["cedar_wood"])
-    add_box(col, "Palace_Balcony_Railing", (46.0, 38.0, 3.4), (0.2, 4.0, 1.0), mats["wrought_iron"])
-
-    # Palace Pillars
-    for py in (22.0, 28.0, 34.0):
-        add_cylinder(col, f"Palace_Pillar_{int(py)}", (52.0, py, 1.4), radius=0.45, height=2.8, material=mats["sandstone_light"], segments=12)
-
-    # Tetris Wooden Boxes at (46.0, 46.0)
-    add_box(col, "Tetris_Box_Base", (46.0, 46.0, 0.6), (2.4, 1.2, 1.2), mats["wood_crate"])
-    add_box(col, "Tetris_Box_Top", (46.0, 46.0, 1.7), (1.2, 1.2, 1.0), mats["wood_crate"])
-
-    # Triple Box Stack at (54.0, 52.0)
-    add_box(col, "Triple_Box_1", (54.0, 52.0, 0.6), (1.2, 1.2, 1.2), mats["wood_crate"])
-    add_box(col, "Triple_Box_2", (55.3, 52.0, 0.6), (1.2, 1.2, 1.2), mats["wood_crate"])
-    add_box(col, "Triple_Box_Top", (54.0, 52.0, 1.7), (1.1, 1.1, 1.0), mats["wood_crate"])
-
-    # Ticket Booth & CT Ramp at (54.0, 60.0)
-    add_box(col, "Ticket_Booth", (54.0, 60.0, 1.4), (3.0, 3.0, 2.8), mats["sandstone_light"])
-    add_box(col, "Ticket_Ramp", (50.0, 60.0, 0.5), (4.0, 2.8, 1.0), mats["sandstone_paving"])
-
-    # A Site Default Plant Marker (50.0, 50.0)
-    add_cylinder(col, "SiteA_Plant_Marker", (50.0, 50.0, 0.05), radius=3.8, height=0.1, material=mats["sandstone_ochre"], segments=16)
+def add_delivery_van(collection, mats):
+    """Detailed market delivery van at Site B (X: 18, Y: 46)."""
+    cx, cy, cz = 18.0, 46.0, 0.0
+    L, W, H = 4.8, 2.0, 2.2
+    # Chassis frame
+    add_box(collection, "Van_Chassis", (cx, cy, cz + 0.4), (L, W, 0.4), mats["wrought_iron"])
+    # Cabin
+    add_box(collection, "Van_Cabin", (cx - 1.2, cy, cz + 1.2), (1.6, W * 0.95, 1.2), mats["van_metal_olive"])
+    # Rear Cargo Box
+    add_box(collection, "Van_Cargo_Box", (cx + 0.8, cy, cz + 1.4), (3.0, W, 1.6), mats["moorish_plaster_warm"])
+    # Wheels (NonCol)
+    for wx in [cx - 1.4, cx + 1.4]:
+        for wy in [cy - W * 0.5, cy + W * 0.5]:
+            add_cylinder(collection, f"Van_Wheel_{int(wx*10)}_{int(wy*10)}_NonCol", (wx, wy, cz + 0.4), radius=0.4, height=0.3, material=mats["wrought_iron"], segments=12)
+    # Headlights (NonCol)
+    for hy in [cy - 0.6, cy + 0.6]:
+        add_cylinder(collection, f"Van_Headlight_{int(hy*10)}_NonCol", (cx - 2.05, hy, cz + 0.9), radius=0.15, height=0.1, material=mats["mosaic_tile_blue"], segments=8)
 
 
-def build_middle_and_window(col, mats):
-    """Middle Courtyard, Sniper Window Room, Connector, and Catwalk."""
-    # Mid Dividing East Wall (separating Mid from A)
-    add_box(col, "Wall_Mid_East", (42.0, 32.0, 4.5), (1.2, 28.0, 9.0), mats["sandstone_light"])
+def build_mirage_perimeter_and_terrain(col, mats):
+    """Paving slabs, perimeter desert masonry, and mosaic trims."""
+    add_box(col, "Terrain_Paving", (35.0, 35.0, -0.5), (70.0, 70.0, 1.0), mats["sandstone_paving"])
 
-    # Sniper's Nest / Window Room (X: 30..38, Y: 48..56, Floor Z = 2.4m)
-    add_box(col, "Sniper_Nest_Floor", (34.0, 52.0, 2.4), (8.0, 8.0, 0.3), mats["cedar_wood"])
-    add_box(col, "Sniper_Nest_Front_Wall", (34.0, 48.0, 4.5), (8.0, 1.0, 4.2), mats["moorish_plaster_warm"])
-    # Sniper Window cutout sill overlooking Mid at (34.0, 48.0, 2.4)
-    add_box(col, "Sniper_Window_Sill", (34.0, 48.0, 3.1), (2.8, 1.2, 0.4), mats["cedar_wood"])
+    # High Perimeter Desert Stucco Walls (10.0m)
+    add_box(col, "Wall_Perimeter_S", (35.0, 4.0, 5.0), (62.0, 1.2, 10.0), mats["sandstone_light"])
+    add_box(col, "Wall_Perimeter_N", (35.0, 66.0, 5.0), (62.0, 1.2, 10.0), mats["sandstone_light"])
+    add_box(col, "Wall_Perimeter_E", (66.0, 35.0, 5.0), (1.2, 62.0, 10.0), mats["sandstone_ochre"])
+    add_box(col, "Wall_Perimeter_W", (4.0, 35.0, 5.0), (1.2, 62.0, 10.0), mats["sandstone_ochre"])
 
-    # Connector stone staircase and arch connecting Mid to A at (40.0, 44.0)
-    add_arch(col, "Arch_Connector", (40.0, 44.0, 0.0), span=3.2, height=4.2, depth=1.4, material=mats["sandstone_light"])
-    add_box(col, "Connector_Stairs", (39.0, 44.0, 0.6), (3.0, 3.0, 1.2), mats["sandstone_paving"])
-
-    # Catwalk / Short B walkway at (26.0, 44.0, Z=2.2m)
-    add_box(col, "Catwalk_Walkway", (26.0, 44.0, 2.2), (3.0, 10.0, 0.3), mats["sandstone_light"])
-    add_box(col, "Catwalk_Railing", (24.4, 44.0, 2.8), (0.2, 10.0, 1.0), mats["wrought_iron"])
-
-    # Underpass subterranean floor at (30.0, 34.0, Z=-1.4m)
-    add_box(col, "Underpass_Floor", (30.0, 34.0, -0.7), (4.0, 12.0, 1.4), mats["sandstone_ochre"])
+    # Blue mosaic tile decorative trim band
+    add_box(col, "Mosaic_Trim_S", (35.0, 4.6, 9.8), (62.0, 0.4, 0.4), mats["mosaic_tile_blue"])
+    add_box(col, "Mosaic_Trim_N", (35.0, 65.4, 9.8), (62.0, 0.4, 0.4), mats["mosaic_tile_blue"])
 
 
-def build_site_b_and_apartments(col, mats):
-    """Bomb Site B, B Apartments (z=2.8m), Market/Kitchen, and Van barricade."""
-    # B Apartments Building (X: 10..24, Y: 22..40, Floor Z = 2.8m)
-    add_box(col, "Apts_Outer_Wall_W", (10.0, 31.0, 4.5), (1.2, 18.0, 9.0), mats["sandstone_ochre"])
-    add_box(col, "Apts_Outer_Wall_E", (24.0, 31.0, 4.5), (1.2, 18.0, 9.0), mats["moorish_plaster_warm"])
-    add_box(col, "Apts_Second_Floor_Slab", (17.0, 31.0, 2.8), (14.0, 18.0, 0.3), mats["cedar_wood"])
+def build_site_a(col, mats):
+    """Site A Palace interior colonnade, Tetris, Triple, Ticket booth."""
+    # Palace interior raised floor at Z = 2.8m (X: 48..62, Y: 18..36)
+    add_box(col, "Palace_Floor_Raised", (55.0, 27.0, 1.4), (14.0, 18.0, 2.8), mats["sandstone_paving"])
+    # Palace interior outer wall
+    add_box(col, "Palace_Outer_Wall_E", (62.0, 27.0, 6.0), (1.2, 18.0, 6.4), mats["moorish_plaster_warm"])
 
-    # B Apartments Arched Jump Window overlooking B Site at (18.0, 40.0, Z=2.8m)
-    add_arch(col, "Arch_B_Apts_Window", (18.0, 40.0, 2.8), span=2.6, height=3.4, depth=1.2, material=mats["sandstone_light"])
+    # Palace Colonnade Columns along Palace entrance (X: 48.0)
+    for col_y in [20.0, 24.0, 28.0, 32.0]:
+        add_cylinder(col, f"Palace_Column_{int(col_y)}", (48.0, col_y, 4.2), radius=0.45, height=2.8, material=mats["sandstone_light"], segments=16)
 
-    # Delivery Van / Truck Cover on Site B at (14.0, 48.0)
-    add_box(col, "SiteB_Van_Chassis", (14.0, 48.0, 0.5), (4.2, 2.2, 1.0), mats["wrought_iron"])
-    add_box(col, "SiteB_Van_Body", (14.0, 48.0, 1.5), (4.0, 2.0, 1.2), mats["van_metal_olive"])
-    add_box(col, "SiteB_Van_Cabin", (15.2, 48.0, 2.3), (1.6, 1.8, 0.8), mats["van_metal_olive"])
+    # Tetris Box Stack (48.0, 40.0)
+    add_box(col, "Tetris_Box_1", (48.0, 40.0, 0.6), (1.4, 1.4, 1.2), mats["wood_crate"])
+    add_box(col, "Tetris_Box_2", (48.0, 41.5, 0.6), (1.4, 1.4, 1.2), mats["wood_crate"])
+    add_box(col, "Tetris_Box_Top", (48.0, 40.0, 1.7), (1.2, 1.2, 1.0), mats["wood_crate"])
 
-    # Site B Default Pillar and Elevated Platform at (18.0, 52.0)
-    add_box(col, "SiteB_Platform", (18.0, 52.0, 0.4), (5.0, 5.0, 0.8), mats["sandstone_light"])
-    add_cylinder(col, "SiteB_Central_Pillar", (18.0, 52.0, 2.2), radius=0.6, height=3.6, material=mats["sandstone_ochre"], segments=12)
+    # Triple Box Stack (52.0, 48.0)
+    add_box(col, "Triple_Box_1", (52.0, 48.0, 0.6), (1.3, 1.3, 1.2), mats["wood_crate"])
+    add_box(col, "Triple_Box_2", (52.0, 49.4, 0.6), (1.3, 1.3, 1.2), mats["wood_crate"])
+    add_box(col, "Triple_Box_3", (53.4, 48.0, 0.6), (1.3, 1.3, 1.2), mats["wood_crate"])
 
-    # Market / Kitchen Room (X: 18..28, Y: 56..64) with service window
-    add_box(col, "Market_Wall_S", (23.0, 56.0, 2.5), (10.0, 1.0, 5.0), mats["moorish_plaster_warm"])
-    add_box(col, "Market_Counter_Window", (23.0, 56.0, 1.2), (2.8, 1.2, 0.4), mats["cedar_wood"])
+    # Ticket Booth at CT ramp entrance (58.0, 56.0)
+    add_box(col, "Ticket_Booth_Body", (58.0, 56.0, 1.2), (3.0, 3.0, 2.4), mats["sandstone_ochre"])
+    add_box(col, "Ticket_Booth_Window", (56.4, 56.0, 1.4), (0.2, 1.6, 0.8), mats["cedar_wood"])
+
+    # CT Ramp ascending to Ticket booth
+    add_box(col, "CT_Ramp_Slope", (58.0, 50.0, 0.5), (3.0, 6.0, 1.0), mats["sandstone_paving"])
 
 
-def build_spawns_and_props(col, mats):
-    """T & CT Spawns, Date Palm Trees, Crimson Canopies, and Terracotta Urns."""
-    # T Spawn Palm trees & Sun Canopy
-    add_palm_tree(col, "T_Palm_1", (26.0, 10.0, 0.0), mats)
-    add_palm_tree(col, "T_Palm_2", (38.0, 10.0, 0.0), mats)
-    add_box(col, "T_Sun_Canopy", (32.0, 12.0, 4.2), (10.0, 6.0, 0.1), mats["canopy_crimson"])
+def build_middle_and_underpass(col, mats):
+    """Mid street, Sniper's Nest (Window Room z=2.4m), Catwalk, Connector, Underpass."""
+    # Sniper's Nest / Window Room (X: 34..44, Y: 46..54, Z: 0..4.8)
+    add_box(col, "Window_Room_Floor", (39.0, 50.0, 1.2), (10.0, 8.0, 2.4), mats["sandstone_paving"])
+    add_box(col, "Window_Room_Wall_S", (39.0, 46.0, 3.6), (10.0, 0.8, 2.4), mats["sandstone_light"])
+    # Sniper Window cutout at (39.0, 46.0, Z=2.4m)
+    add_box(col, "Sniper_Window_Sill", (39.0, 46.0, 2.8), (2.4, 0.8, 0.2), mats["cedar_wood"])
 
-    # CT Spawn Palm trees & Blue Frieze Colonnade
-    add_palm_tree(col, "CT_Palm_1", (32.0, 62.0, 0.0), mats)
-    add_palm_tree(col, "CT_Palm_2", (46.0, 62.0, 0.0), mats)
+    # Connector stairs connecting Mid to Site A
+    add_box(col, "Connector_Ramp", (44.0, 40.0, 0.8), (4.0, 6.0, 1.6), mats["sandstone_paving"])
 
-    # Terracotta Wine / Water Urns
-    for ux, uy in [(30.0, 14.0), (34.0, 14.0), (48.0, 44.0), (14.0, 44.0), (54.0, 56.0)]:
-        add_cylinder(col, f"Urn_{int(ux)}_{int(uy)}", (ux, uy, 0.45), radius=0.35, height=0.9, material=mats["terracotta_urn"], segments=10)
+    # Underpass tunnel beneath Mid (X: 30..36, Y: 28..38, Z: -1.5m)
+    add_box(col, "Underpass_Trench_Floor", (33.0, 33.0, -0.75), (5.0, 10.0, 1.5), mats["sandstone_ochre"])
+
+    # Mid Catwalk wooden planks (Z = 1.6m)
+    add_box(col, "Catwalk_Deck", (26.0, 36.0, 1.6), (3.0, 12.0, 0.3), mats["cedar_wood"])
+    add_box(col, "Catwalk_Railing_NonCol", (27.4, 36.0, 2.2), (0.1, 12.0, 0.9), mats["wrought_iron"])
+
+
+def build_site_b(col, mats):
+    """Site B Apartments, Kitchen/Market, delivery Van barricade, Site B Pillar."""
+    # B Apartments (X: 12..24, Y: 18..32, Z: 0..5.6)
+    add_box(col, "B_Apts_Floor_2nd", (18.0, 25.0, 2.8), (12.0, 14.0, 0.3), mats["cedar_wood"])
+    add_box(col, "B_Apts_Wall_E", (24.0, 25.0, 4.2), (0.8, 14.0, 2.8), mats["moorish_plaster_warm"])
+
+    # B jump window overlooking Site B at (24.0, 28.0, Z=2.8m)
+    add_arch(col, "B_Apts_Jump_Window", (24.0, 28.0, 2.8), span=2.2, height=2.4, depth=0.8, material=mats["sandstone_light"])
+
+    # Central massive Site B stone pillar at (22.0, 52.0)
+    add_box(col, "SiteB_Central_Pillar", (22.0, 52.0, 2.5), (2.8, 2.8, 5.0), mats["sandstone_ochre"])
+
+    # Delivery Van barricade
+    add_delivery_van(col, mats)
+
+    # Market / Kitchen room at North side of B (X: 28..36, Y: 52..62)
+    add_box(col, "Market_Wall_W", (28.0, 57.0, 2.5), (0.8, 10.0, 5.0), mats["moorish_plaster_warm"])
+    add_box(col, "Market_Service_Counter", (30.0, 54.0, 0.55), (3.6, 1.0, 1.1), mats["cedar_wood"])
+
+
+def build_props_and_foliage(col, mats):
+    """Palms, sun canopies, and urns."""
+    # Date Palm in T Courtyard
+    add_detailed_palm(col, "T_Palm_1", (20.0, 10.0, 0.0), mats, trunk_height=7.5)
+    add_detailed_palm(col, "T_Palm_2", (36.0, 10.0, 0.0), mats, trunk_height=6.8)
+
+    # Date Palm in CT Courtyard
+    add_detailed_palm(col, "CT_Palm_1", (48.0, 60.0, 0.0), mats, trunk_height=7.2)
+
+    # Sun Canopies over market alleys (NonCol)
+    add_box(col, "Canopy_Market_Crimson_NonCol", (28.0, 46.0, 4.2), (6.0, 4.0, 0.1), mats["canopy_crimson"])
+    add_box(col, "Canopy_Palace_Indigo_NonCol", (52.0, 36.0, 4.5), (5.0, 6.0, 0.1), mats["canopy_indigo"])
+
+    # Terracotta urns
+    for ux, uy in [(22.0, 12.0), (34.0, 12.0), (54.0, 54.0), (20.0, 56.0)]:
+        add_cylinder(col, f"Urn_{int(ux)}_{int(uy)}_NonCol", (ux, uy, 0.45), radius=0.35, height=0.9, material=mats["terracotta_urn"], segments=12)
+
+    # Breakable windows overlooking key sniper corridors (tactical glass penetration)
+    add_box(col, "Window_Glass_SniperNest_1", (36.0, 48.0, 3.8), (2.2, 0.12, 1.4), mats["glass_window"])
+    add_box(col, "Window_Glass_SniperNest_2", (42.0, 48.0, 3.8), (2.2, 0.12, 1.4), mats["glass_window"])
+    add_box(col, "Window_Glass_Palace_Balcony", (54.0, 24.0, 3.8), (0.12, 2.4, 1.4), mats["glass_window"])
+    add_box(col, "Window_Glass_B_Apts", (24.0, 28.0, 3.6), (0.12, 2.0, 1.4), mats["glass_window"])
 
 
 def build_mirage_scene():
@@ -308,37 +380,42 @@ def build_mirage_scene():
     c_site_b = get_or_create_collection("SiteB")
     c_props = get_or_create_collection("Props")
 
-    build_mirage_perimeter_and_ground(c_terrain, mats)
-    build_site_a_and_palace(c_site_a, mats)
-    build_middle_and_window(c_mid, mats)
-    build_site_b_and_apartments(c_site_b, mats)
-    build_spawns_and_props(c_props, mats)
+    build_mirage_perimeter_and_terrain(c_terrain, mats)
+    build_site_a(c_site_a, mats)
+    build_middle_and_underpass(c_mid, mats)
+    build_site_b(c_site_b, mats)
+    build_props_and_foliage(c_props, mats)
+
+    print("=== Desert Courtyard (hd_mirage) Built Successfully! ===")
 
 
-def export_glb(filepath):
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+def export_glb():
+    backend_map_dir = "/home/horrible/horrible-dashboard/backend/modules/hassault/maps"
+    web_public_dir = "/home/horrible/horrible-dashboard/apps/web/public"
+
+    os.makedirs(backend_map_dir, exist_ok=True)
+    os.makedirs(web_public_dir, exist_ok=True)
+
+    backend_glb_path = os.path.join(backend_map_dir, "hd_mirage.glb")
+    web_glb_path = os.path.join(web_public_dir, "hd_mirage.glb")
+
+    print(f"Exporting GLB to: {backend_glb_path} ...")
     bpy.ops.export_scene.gltf(
-        filepath=filepath,
-        export_format="GLB",
+        filepath=backend_glb_path,
+        export_format='GLB',
         use_selection=False,
         export_apply=True,
         export_yup=True,
+        export_materials='EXPORT',
+        export_lights=False,
+        export_cameras=False
     )
-    print(f"Exported GLB to {filepath} ({os.path.getsize(filepath):,} bytes)")
 
-
-def main():
-    print("Building Desert Courtyard (hd_mirage)...")
-    build_mirage_scene()
-
-    backend_glb = os.path.abspath("backend/modules/hassault/maps/hd_mirage.glb")
-    export_glb(backend_glb)
-
-    web_glb = os.path.abspath("apps/web/public/hd_mirage.glb")
-    shutil.copyfile(backend_glb, web_glb)
-    print(f"Mirrored GLB to {web_glb}")
-    print("=== hd_mirage 3D Generation Complete! ===")
+    print(f"Copying GLB to Web: {web_glb_path} ...")
+    shutil.copyfile(backend_glb_path, web_glb_path)
+    print("=== Mirage Generation & Export Complete! ===")
 
 
 if __name__ == "__main__":
-    main()
+    build_mirage_scene()
+    export_glb()
