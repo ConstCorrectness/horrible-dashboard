@@ -214,6 +214,16 @@ def init_trajectories_db() -> None:
             )
             """
         )
+        # One-shot node-level facts. Today only `default_capture_seeded`, which is
+        # what lets a user's "turn capture off" survive the restart that seeded it.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS traj_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
         # Added after the table shipped, so it needs an explicit ALTER: a
         # `CREATE TABLE IF NOT EXISTS` does nothing to a table that already
         # exists, and skipping this is how a new column reaches nobody's machine
@@ -564,6 +574,53 @@ def capture_dataset_id() -> str | None:
             return row["id"] if row else None
     except Exception as exc:  # pragma: no cover - observation must not break the app
         logger.debug("trajectories: capture lookup failed: %s", exc)
+        return None
+
+
+#: The dataset a node captures into when nobody has chosen one.
+DEFAULT_CAPTURE_DATASET = "dashboard-agent"
+
+_SEEDED_KEY = "default_capture_seeded"
+
+
+def seed_default_capture() -> str | None:
+    """Turn capture on once per node, so the agent's runs are kept with no setup.
+
+    Returns the dataset id it switched on, or None when it did nothing.
+
+    **Once**, recorded in `traj_meta`, not "whenever no dataset captures": the
+    second rule would re-enable capture on every restart after the user turned it
+    off, and resurrect a dataset they deleted. A dataset that already captures is
+    left alone — the user has already picked where runs go, and only one may
+    capture at a time.
+
+    Called from the app lifespan, never from `init_trajectories_db`: that runs
+    lazily against every test's fresh database, which all assume capture is off.
+    """
+    try:
+        with get_db_conn() as conn:
+            if conn.execute(
+                "SELECT 1 FROM traj_meta WHERE key = ?", (_SEEDED_KEY,)
+            ).fetchone():
+                return None
+            conn.execute(
+                "INSERT OR REPLACE INTO traj_meta (key, value) VALUES (?, ?)",
+                (_SEEDED_KEY, str(_now())),
+            )
+        if capture_dataset_id() is not None:
+            return None
+        if get_dataset(DEFAULT_CAPTURE_DATASET) is None:
+            create_dataset(
+                DEFAULT_CAPTURE_DATASET,
+                "Dashboard agent",
+                description="Every turn of this node's own agents, captured by default.",
+                capture=True,
+            )
+        else:
+            update_dataset(DEFAULT_CAPTURE_DATASET, capture=True)
+        return DEFAULT_CAPTURE_DATASET
+    except Exception as exc:  # pragma: no cover - observation must not break the app
+        logger.warning("trajectories: could not seed default capture: %s", exc)
         return None
 
 

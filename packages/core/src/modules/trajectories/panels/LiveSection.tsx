@@ -105,19 +105,14 @@ export function LiveSection() {
           <div style={{ marginBottom: 'var(--space-6)' }}>
             <div style={{ ...heading, marginBottom: 'var(--space-3)' }}>Watching</div>
             {watching.map((entry) => (
-              <RunCard
-                key={`${entry.host}:${entry.run.id}`}
-                entry={entry}
-                from={entry.hostName}
-              />
+              <RunCard key={`${entry.host}:${entry.run.id}`} entry={entry} from={entry.hostName} />
             ))}
           </div>
         ) : null}
         {running.length === 0 && watching.length ? null : running.length === 0 ? (
           <EmptyState title="Nothing running">
-            A run appears here the moment an agent starts acting — but only for
-            datasets with capture switched on, which is off by default. Turn it on in
-            Datasets.
+            A run appears here the moment an agent starts acting — but only for datasets with
+            capture switched on. If you turned it off, turn it back on in Datasets.
           </EmptyState>
         ) : (
           <>

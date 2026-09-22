@@ -204,8 +204,8 @@ export function RunsSection({
               <Loading what="runs" />
             ) : runs.length === 0 ? (
               <EmptyState title="No trajectories yet">
-                Capture is off by default — turn it on for a dataset in the Datasets section, or
-                push runs in with the Python SDK.
+                Runs appear here once an agent acts while this dataset captures — check its toggle
+                in the Datasets section, or push runs in with the Python SDK.
               </EmptyState>
             ) : (
               <DataList label="Runs">

@@ -106,6 +106,7 @@ from backend.modules.trajectories import (
     register_agent_tools as register_trajectories_tools,
 )
 from backend.modules.trajectories import router as trajectories_router
+from backend.modules.trajectories import store as trajectories_store
 from backend.modules.trajectories import stream as trajectories_stream
 from backend.modules.agentpedia import (
     register_agent_tools as register_agentpedia_tools,
@@ -228,6 +229,9 @@ async def lifespan(app: FastAPI):
     # shows up in the database console's built-in `app` connection on a fresh
     # install, before anyone has opened the pane that would create them lazily.
     init_trajectories_db()
+    # Capture is on by default: switch it on once per node, then leave the choice
+    # to the user (see `store.seed_default_capture`).
+    trajectories_store.seed_default_capture()
     # Reconcile the activation-trace catalog with the trace directory. Eager for
     # the same reason as the line above, plus one of its own: a node that traced
     # before this table existed has directories and no rows, and an empty catalog

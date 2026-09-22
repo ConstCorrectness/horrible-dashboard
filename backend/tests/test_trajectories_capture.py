@@ -459,3 +459,49 @@ async def test_a_turns_wire_traffic_is_persisted_against_its_run(scripted, captu
     # And deleting the run takes it with it, rather than orphaning it.
     capture_on.delete_run(run.id)
     assert telemetry_store.for_turn(run.turn_id) == []
+
+
+# --- capture on by default -----------------------------------------------------
+
+
+@pytest.fixture()
+def fresh():
+    store._initialized.clear()
+    store.init_trajectories_db()
+    return store
+
+
+def test_seed_turns_capture_on_for_a_fresh_node(fresh):
+    assert fresh.capture_dataset_id() is None
+    assert fresh.seed_default_capture() == fresh.DEFAULT_CAPTURE_DATASET
+    assert fresh.capture_dataset_id() == fresh.DEFAULT_CAPTURE_DATASET
+
+
+def test_turning_capture_off_survives_the_next_seed(fresh):
+    fresh.seed_default_capture()
+    fresh.update_dataset(fresh.DEFAULT_CAPTURE_DATASET, capture=False)
+    assert fresh.seed_default_capture() is None
+    assert fresh.capture_dataset_id() is None
+
+
+def test_a_deleted_default_dataset_is_not_resurrected(fresh):
+    fresh.seed_default_capture()
+    fresh.delete_dataset(fresh.DEFAULT_CAPTURE_DATASET)
+    fresh.seed_default_capture()
+    assert fresh.get_dataset(fresh.DEFAULT_CAPTURE_DATASET) is None
+
+
+def test_seed_leaves_a_users_capturing_dataset_alone(capture_on):
+    assert capture_on.seed_default_capture() is None
+    assert capture_on.capture_dataset_id() == "cap"
+    assert capture_on.get_dataset(capture_on.DEFAULT_CAPTURE_DATASET) is None
+    # And the marker was written, so a later "turn it off" still sticks.
+    capture_on.update_dataset("cap", capture=False)
+    assert capture_on.seed_default_capture() is None
+    assert capture_on.capture_dataset_id() is None
+
+
+def test_seed_switches_capture_on_for_an_upgraded_node(capture_off):
+    assert capture_off.seed_default_capture() == capture_off.DEFAULT_CAPTURE_DATASET
+    assert capture_off.capture_dataset_id() == capture_off.DEFAULT_CAPTURE_DATASET
+    assert capture_off.get_dataset("cap").capture is False

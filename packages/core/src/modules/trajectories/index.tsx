@@ -14,7 +14,8 @@ import { TrajectoriesHub } from './TrajectoriesHub';
  * now, the runs it becomes, the collections they land in, and the harness that
  * produced them are four views of one object.
  *
- * Capture is **off by default** and dataset-scoped — see the Datasets section.
+ * Capture is **on by default** (a `dashboard-agent` dataset, seeded once) and
+ * dataset-scoped — see the Datasets section.
  * Runs are stored raw, including tool arguments, and redacted only on the way out
  * (export, peer share, MCP). That is a deliberate local-introspection stance and
  * it is documented in docs/modules/trajectories.mdx.

@@ -96,11 +96,33 @@ The schema follows from these; they are stated in full in
    read as a bare list of calls with no account of why any of them happened, which is
    the half a postmortem is usually looking for.
 
-## Capture is off by default
+## Capture is on by default
 
-Nothing from the local orchestrator is recorded until a dataset has `capture = 1`,
-set from the pane's **Datasets** section. At most one dataset captures at a time.
-With capture off, the recorder is one indexed `SELECT` per agent turn.
+:::warning
+Capture is on out of the box, so `app.db` holds whatever your agent passed to a
+tool — API keys, file contents, tokens — **without you having opted in**. The
+database is local and unencrypted. Turn capture off in the **Datasets** section if
+you do not want that.
+:::
+
+Trajectories live in `app.db` (SQLite, the same transactional store as the rest of
+the node), not in a separate database: a run joins `agent_turns` and
+`eval_results` on `turn_id`, and the `database` console's `app` connection queries
+them with no new API.
+
+The recorder only writes while some dataset has `capture = 1`. On first start the
+app lifespan calls `store.seed_default_capture()`, which creates a
+`dashboard-agent` dataset with capture on — unless a dataset is already capturing,
+in which case it is left alone. It runs **once per node**, recorded as
+`default_capture_seeded` in `traj_meta`, so turning capture off or deleting the
+dataset sticks across restarts; "seed whenever nothing captures" would silently
+re-enable it every boot. An upgraded node whose datasets all have capture off is
+switched on once, by the same rule.
+
+At most one dataset captures at a time. With capture off, the recorder is one
+indexed `SELECT` per agent turn. Every caller of `run_agent_loop` is captured —
+including evals runs and `agentpedia.fork` replays, which land in the capturing
+dataset alongside chat turns; `trajectories.retentionRuns` bounds its size.
 
 The seam is **`run_agent_loop`** — all four internal callers (chat, `delegate`, the
 flow executor's Agent node, the evals runner) go through it, so hooking it once
