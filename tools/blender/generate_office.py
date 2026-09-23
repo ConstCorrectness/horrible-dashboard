@@ -28,6 +28,24 @@ except ImportError:
     sys.exit(1)
 
 
+# The layout below is authored in metres: a 4 m storey, 0.75 m desks. The game
+# is not. One world unit is one cube, and the player is 5.2 of them tall
+# (eye 4.5 + 0.7 above it, `world.rs` PLAYER_EYE_HEIGHT/PLAYER_ABOVE_EYE) — so
+# a metre-scale office had a 4-unit ceiling the body could not fit under, and
+# every spawn resolved onto the roof. The footprint was already in cube units;
+# only heights are metres, so only Z is scaled, here, in the two primitives
+# everything is built from. 3.0 puts the ceiling at 12, what `hd_office.json`
+# declares and what the other GLB maps (10–17 tall) are proportioned for.
+VERTICAL_SCALE = 3.0
+
+# Repo-relative, so the generator runs from any checkout on any OS.
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+
+
+def _vscale(v):
+    return (v[0], v[1], v[2] * VERTICAL_SCALE)
+
+
 def clear_scene():
     """Remove all default objects, meshes, materials, and collections."""
     bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -118,8 +136,8 @@ def add_box(collection, name, center, size, material):
 
     bm = bmesh.new()
     bmesh.ops.create_cube(bm, size=1.0)
-    bmesh.ops.scale(bm, vec=Vector(size), verts=bm.verts)
-    bmesh.ops.translate(bm, vec=Vector(center), verts=bm.verts)
+    bmesh.ops.scale(bm, vec=Vector(_vscale(size)), verts=bm.verts)
+    bmesh.ops.translate(bm, vec=Vector(_vscale(center)), verts=bm.verts)
     bm.to_mesh(mesh)
     bm.free()
 
@@ -141,9 +159,9 @@ def add_cylinder(collection, name, center, radius, height, material, segments=16
         segments=segments,
         radius1=radius,
         radius2=radius,
-        depth=height
+        depth=height * VERTICAL_SCALE
     )
-    bmesh.ops.translate(bm, vec=Vector(center), verts=bm.verts)
+    bmesh.ops.translate(bm, vec=Vector(_vscale(center)), verts=bm.verts)
     bm.to_mesh(mesh)
     bm.free()
 
@@ -304,8 +322,8 @@ def build_office_scene():
 
 
 def export_glb():
-    backend_map_dir = "/home/horrible/horrible-dashboard/backend/modules/hassault/maps"
-    web_public_dir = "/home/horrible/horrible-dashboard/apps/web/public"
+    backend_map_dir = os.path.join(REPO_ROOT, "backend", "modules", "hassault", "maps")
+    web_public_dir = os.path.join(REPO_ROOT, "apps", "web", "public")
 
     os.makedirs(backend_map_dir, exist_ok=True)
     os.makedirs(web_public_dir, exist_ok=True)

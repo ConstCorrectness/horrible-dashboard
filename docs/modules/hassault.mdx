@@ -644,6 +644,30 @@ written by `glb-surfaces.test.ts` (`UPDATE_GLB_SURFACE_VECTORS=1`) and replayed 
 `textures3d.rs`. A new generator material that falls through to the `concrete`
 default is caught by a count in the same suite.
 
+### GLB maps are in cube units, and a spawn needs room for a body
+
+One world unit is one cube and a standing player is **5.2** of them (eye 4.5 +
+0.7 above). `generate_office.py` was authored in metres — a 4-unit storey — so the
+body could not fit under the ceiling and every spawn resolved onto the roof, with
+no error anywhere. Its footprint was already in cube units, so the fix scales
+**only Z** (`VERTICAL_SCALE = 3.0`, ceiling at 12, what `hd_office.json` declares),
+inside the two primitives everything is built from. Five of its eight client
+spawns and six of its ten items were also inside desks, a pillar or cubicle
+partitions; they were moved to the nearest clear floor.
+
+`tests/test_spawn_clearance.rs` probes every GLB map's spawns against the collision
+mesh with rays (floor below, headroom over the footprint, nothing within the
+radius at chest height). Maps that already failed when it was written — bank,
+assault, inferno, mirage, nuke — are listed in `KNOWN_BAD_SPAWNS`, and the test
+fails if one of them starts passing, so the list only shrinks. Items are checked
+on office only: elsewhere they sit in crouch-height spaces a standing probe
+rejects.
+
+Note the **two spawn sources** for a GLB map: Train and the GLB render use the
+tables in `world3d.ts`/`world3d.rs`, while a hosted match simulates on the cube
+world built from the map's JSON brushes, with the JSON's `spawns`. For hd_office
+the two describe different layouts; that divergence is not resolved here.
+
 ### The heightfield rule, which is easy to get backwards
 
 For a heightfield cell, the **base height comes from the cell** while the
