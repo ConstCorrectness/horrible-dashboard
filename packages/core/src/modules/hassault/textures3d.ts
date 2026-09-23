@@ -97,17 +97,17 @@ export function drawAsphaltTile(width = SIZE, height = SIZE): Uint8Array {
       let b = baseGray + 2;
 
       // Road markings: center yellow dashed stripe (u in 0.46..0.54, dashed in v)
-      if (u >= 0.47 && u <= 0.53 && (v >= 0.15 && v <= 0.85)) {
+      if (u >= 0.47 && u <= 0.53 && v >= 0.15 && v <= 0.85) {
         const edge = Math.min(Math.abs(u - 0.47), Math.abs(0.53 - u)) / 0.03;
         const wear = 0.75 + 0.25 * nGravel;
-        r = Math.floor(r * (1 - edge) + (220 * wear) * edge);
-        g = Math.floor(g * (1 - edge) + (180 * wear) * edge);
-        b = Math.floor(b * (1 - edge) + (25 * wear) * edge);
+        r = Math.floor(r * (1 - edge) + 220 * wear * edge);
+        g = Math.floor(g * (1 - edge) + 180 * wear * edge);
+        b = Math.floor(b * (1 - edge) + 25 * wear * edge);
       }
 
       // Edge white border stripes (u near 0.04 or 0.96)
       if ((u >= 0.04 && u <= 0.08) || (u >= 0.92 && u <= 0.96)) {
-        const wear = 0.70 + 0.30 * nGravel;
+        const wear = 0.7 + 0.3 * nGravel;
         r = Math.floor(Math.max(r, 190 * wear));
         g = Math.floor(Math.max(g, 190 * wear));
         b = Math.floor(Math.max(b, 195 * wear));
@@ -216,7 +216,7 @@ export function drawConcreteTile(width = SIZE, height = SIZE): Uint8Array {
 
       const idx = (y * width + x) * 4;
       out[idx] = Math.min(255, Math.max(0, Math.floor(val * 0.98)));
-      out[idx + 1] = Math.min(255, Math.max(0, Math.floor(val * 1.00)));
+      out[idx + 1] = Math.min(255, Math.max(0, Math.floor(val * 1.0)));
       out[idx + 2] = Math.min(255, Math.max(0, Math.floor(val * 1.02)));
       out[idx + 3] = 255;
     }
@@ -256,7 +256,7 @@ export function drawVaultSteelTile(width = SIZE, height = SIZE): Uint8Array {
 
       const idx = (y * width + x) * 4;
       out[idx] = Math.min(255, Math.max(0, Math.floor(val * 0.95)));
-      out[idx + 1] = Math.min(255, Math.max(0, Math.floor(val * 1.00)));
+      out[idx + 1] = Math.min(255, Math.max(0, Math.floor(val * 1.0)));
       out[idx + 2] = Math.min(255, Math.max(0, Math.floor(val * 1.08)));
       out[idx + 3] = 255;
     }
@@ -474,8 +474,12 @@ export function drawSiteDecalTile(site: 'A' | 'B', width = SIZE, height = SIZE):
         } else {
           // 'B' shape
           const inStem = nx <= 0.25;
-          const inTopLoop = Math.abs(Math.sqrt(Math.pow(nx - 0.4, 2) + Math.pow(ny - 0.3, 2)) - 0.25) < 0.09 && nx >= 0.25;
-          const inBotLoop = Math.abs(Math.sqrt(Math.pow(nx - 0.45, 2) + Math.pow(ny - 0.7, 2)) - 0.28) < 0.09 && nx >= 0.25;
+          const inTopLoop =
+            Math.abs(Math.sqrt(Math.pow(nx - 0.4, 2) + Math.pow(ny - 0.3, 2)) - 0.25) < 0.09 &&
+            nx >= 0.25;
+          const inBotLoop =
+            Math.abs(Math.sqrt(Math.pow(nx - 0.45, 2) + Math.pow(ny - 0.7, 2)) - 0.28) < 0.09 &&
+            nx >= 0.25;
           isLetter = inStem || inTopLoop || inBotLoop;
         }
       }
@@ -498,6 +502,326 @@ export function drawSiteDecalTile(site: 'A' | 'B', width = SIZE, height = SIZE):
     }
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// GLB map surfaces
+//
+// The modelled maps (`hd_*.glb`) carry an authored base colour per material and
+// no textures and no UVs. The tiles below are *detail*, not colour: each is
+// normalised to a grey whose mean is `detailMean` (linear) by
+// `normalizeDetailTile`, and the renderer multiplies it by the material's own
+// colour times `detailGain`, so the average of a textured surface is the colour
+// the mapper chose and the texture only adds the joints, grain and wear.
+// `apps/native-fps/src/textures3d.rs` ports every function here.
+// ---------------------------------------------------------------------------
+
+/** fBm that tiles: every octave's lattice period divides the tile exactly. */
+function fbmTiled(u: number, v: number, cells: number, octaves = 3): number {
+  let val = 0;
+  let amp = 0.5;
+  let freq = cells;
+  let max = 0;
+  for (let i = 0; i < octaves; i++) {
+    val += noise2D(u * freq, v * freq, freq) * amp;
+    max += amp;
+    amp *= 0.5;
+    freq *= 2;
+  }
+  return val / max;
+}
+
+function wrap(n: number, period: number): number {
+  return ((n % period) + period) % period;
+}
+
+function writeGrey(out: Uint8Array, idx: number, val: number): void {
+  const g = Math.min(255, Math.max(0, Math.floor(val)));
+  out[idx] = g;
+  out[idx + 1] = g;
+  out[idx + 2] = g;
+  out[idx + 3] = 255;
+}
+
+/** Brushed gold bullion (the native client's layer 10). */
+export function drawGoldTile(width = SIZE, height = SIZE): Uint8Array {
+  const out = new Uint8Array(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const u = x / width;
+      const v = y / height;
+      const grain = noise2D(u * 64, v * 2) * 20;
+      const idx = (y * width + x) * 4;
+      out[idx] = 255;
+      out[idx + 1] = Math.min(255, Math.floor(215 + grain));
+      out[idx + 2] = Math.max(0, Math.floor(grain));
+      out[idx + 3] = 255;
+    }
+  }
+  return out;
+}
+
+/**
+ * Coursed ashlar: four courses of two blocks in running bond, per-block tone,
+ * recessed mortar and worn arrises. Sandstone, limestone, paving, curbs.
+ */
+export function drawMasonryTile(width = SIZE, height = SIZE): Uint8Array {
+  const out = new Uint8Array(width * height * 4);
+  const rows = 4;
+  const cols = 2;
+  const mortar = 0.012;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const u = x / width;
+      const v = y / height;
+      const row = Math.floor(v * rows);
+      const fv = v * rows - row;
+      const cu = u * cols + (row % 2) * 0.5;
+      const col = Math.floor(cu);
+      const fu = cu - col;
+      const d = Math.min(Math.min(fu, 1 - fu) / cols, Math.min(fv, 1 - fv) / rows);
+      const grain = (fbmTiled(u, v, 32) - 0.5) * 22 + (fbmTiled(u, v, 4) - 0.5) * 16;
+      let val = 205 + (hash(wrap(col, cols), row, 3) - 0.5) * 26 + grain;
+      if (d < mortar) {
+        val = 150 + grain * 0.5;
+      } else if (d < mortar * 2.5) {
+        val *= 0.88 + 0.12 * ((d - mortar) / (mortar * 1.5));
+      }
+      writeGrey(out, (y * width + x) * 4, val);
+    }
+  }
+  return out;
+}
+
+/**
+ * Trowelled stucco / plaster / drywall: soft cloud and fine grit. No cracks — a
+ * contour of low-frequency noise reads as a topographic map line at wall scale.
+ */
+export function drawPlasterTile(width = SIZE, height = SIZE): Uint8Array {
+  const out = new Uint8Array(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const u = x / width;
+      const v = y / height;
+      const val = 210 + (fbmTiled(u, v, 3, 4) - 0.5) * 26 + (fbmTiled(u, v, 48) - 0.5) * 14;
+      writeGrey(out, (y * width + x) * 4, val);
+    }
+  }
+  return out;
+}
+
+/** Cobbles: a jittered 6×6 Voronoi of domed stones with dark sand joints. */
+export function drawCobblestoneTile(width = SIZE, height = SIZE): Uint8Array {
+  const out = new Uint8Array(width * height * 4);
+  const n = 6;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const u = x / width;
+      const v = y / height;
+      const px = u * n;
+      const py = v * n;
+      const ix = Math.floor(px);
+      const iy = Math.floor(py);
+      let d1 = 9;
+      let d2 = 9;
+      let idX = 0;
+      let idY = 0;
+      for (let oy = -1; oy <= 1; oy++) {
+        for (let ox = -1; ox <= 1; ox++) {
+          const wx = wrap(ix + ox, n);
+          const wy = wrap(iy + oy, n);
+          const fx = ix + ox + 0.15 + 0.7 * hash(wx, wy, 1);
+          const fy = iy + oy + 0.15 + 0.7 * hash(wx, wy, 2);
+          const d = Math.hypot(px - fx, py - fy);
+          if (d < d1) {
+            d2 = d1;
+            d1 = d;
+            idX = wx;
+            idY = wy;
+          } else if (d < d2) {
+            d2 = d;
+          }
+        }
+      }
+      const gap = d2 - d1;
+      const grit = (fbmTiled(u, v, 48) - 0.5) * 18;
+      const dome = 1 - Math.min(1, d1 / 0.75) * 0.25;
+      let val = (200 + (hash(idX, idY, 5) - 0.5) * 30) * dome + grit;
+      if (gap < 0.08) val = 100 + (gap / 0.08) * 60 + grit;
+      writeGrey(out, (y * width + x) * 4, val);
+    }
+  }
+  return out;
+}
+
+/** Barrel roof tiles: six staggered rows, each tile a half-cylinder with a shadowed lip. */
+export function drawRoofTileTile(width = SIZE, height = SIZE): Uint8Array {
+  const out = new Uint8Array(width * height * 4);
+  const rows = 6;
+  const cols = 5;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const u = x / width;
+      const v = y / height;
+      const row = Math.floor(v * rows);
+      const fv = v * rows - row;
+      const cu = u * cols + (row % 2) * 0.5;
+      const col = Math.floor(cu);
+      const fu = cu - col;
+      let shade = 0.72 + 0.33 * Math.sin(Math.PI * fu);
+      if (fv > 0.86) shade *= 0.55 + ((1 - fv) / 0.14) * 0.3;
+      const tone = (hash(wrap(col, cols), row, 7) - 0.5) * 20;
+      writeGrey(out, (y * width + x) * 4, (200 + tone) * shade + (fbmTiled(u, v, 40) - 0.5) * 14);
+    }
+  }
+  return out;
+}
+
+/** Loop-pile carpet tiles (2×2 per texture): per-fibre speckle and a faint seam. */
+export function drawCarpetTile(width = SIZE, height = SIZE): Uint8Array {
+  const out = new Uint8Array(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const u = x / width;
+      const v = y / height;
+      let val = 200 + (hash(x, y, 9) - 0.5) * 26 + (fbmTiled(u, v, 8) - 0.5) * 14;
+      const tu = (u * 2) % 1;
+      const tv = (v * 2) % 1;
+      if (Math.min(Math.min(tu, 1 - tu), Math.min(tv, 1 - tv)) < 0.006) val *= 0.86;
+      writeGrey(out, (y * width + x) * 4, val);
+    }
+  }
+  return out;
+}
+
+/** Stretcher-bond brick: eight courses of four, per-brick tone, lighter mortar. */
+export function drawBrickTile(width = SIZE, height = SIZE): Uint8Array {
+  const out = new Uint8Array(width * height * 4);
+  const rows = 8;
+  const cols = 4;
+  const mortar = 0.01;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const u = x / width;
+      const v = y / height;
+      const row = Math.floor(v * rows);
+      const fv = v * rows - row;
+      const cu = u * cols + (row % 2) * 0.5;
+      const col = Math.floor(cu);
+      const fu = cu - col;
+      const d = Math.min(Math.min(fu, 1 - fu) / cols, Math.min(fv, 1 - fv) / rows);
+      const val =
+        d < mortar
+          ? 230 + (fbmTiled(u, v, 64, 2) - 0.5) * 16
+          : 185 + (hash(wrap(col, cols), row, 11) - 0.5) * 40 + (fbmTiled(u, v, 64) - 0.5) * 20;
+      writeGrey(out, (y * width + x) * 4, val);
+    }
+  }
+  return out;
+}
+
+function srgbToLinear(c: number): number {
+  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+}
+
+function linearToSrgb(c: number): number {
+  return c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;
+}
+
+/**
+ * Turn a tile into pure detail: its luminance, rescaled so the mean in linear
+ * space is `mean`. Colour is discarded on purpose — a GLB material already says
+ * what colour the surface is, and a brown wood tile multiplied by a mapper's
+ * cedar brown is a surface darker and muddier than either of them meant.
+ */
+export function normalizeDetailTile(data: Uint8Array, mean: number): Uint8Array {
+  const count = data.length / 4;
+  const luma = new Float64Array(count);
+  let sum = 0;
+  for (let i = 0; i < count; i++) {
+    const r = srgbToLinear(data[i * 4] / 255);
+    const g = srgbToLinear(data[i * 4 + 1] / 255);
+    const b = srgbToLinear(data[i * 4 + 2] / 255);
+    luma[i] = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    sum += luma[i];
+  }
+  const scale = sum > 0 ? (mean * count) / sum : 0;
+  // A high-contrast tile (hazard's black stripes) scaled to the mean would push
+  // its highlights past 1 and clip, dragging the mean back down. Compress the
+  // contrast about the mean instead, which keeps the mean exact.
+  let peak = 0;
+  for (let i = 0; i < count; i++) peak = Math.max(peak, luma[i] * scale);
+  const squeeze = peak > 1 ? (1 - mean) / (peak - mean) : 1;
+  const out = new Uint8Array(data.length);
+  for (let i = 0; i < count; i++) {
+    const l = mean + (luma[i] * scale - mean) * squeeze;
+    const g = Math.round(linearToSrgb(Math.min(1, Math.max(0, l))) * 255);
+    out[i * 4] = g;
+    out[i * 4 + 1] = g;
+    out[i * 4 + 2] = g;
+    out[i * 4 + 3] = 255;
+  }
+  return out;
+}
+
+/** The generator behind every textured GLB surface kind, `null` for the rest. */
+export function drawGlbSurfaceTile(kind: string, width = SIZE, height = SIZE): Uint8Array | null {
+  switch (kind) {
+    case 'asphalt':
+      return drawAsphaltTile(width, height);
+    case 'marble':
+      return drawMarbleTile(width, height);
+    case 'concrete':
+      return drawConcreteTile(width, height);
+    case 'vault_steel':
+      return drawVaultSteelTile(width, height);
+    case 'hazard':
+      return drawHazardTile(width, height);
+    case 'wood':
+      return drawWoodTile(width, height);
+    case 'crate':
+      return drawTacticalCrateTile(width, height);
+    case 'container':
+      return drawContainerTile(width, height);
+    case 'gold':
+      return drawGoldTile(width, height);
+    case 'masonry':
+      return drawMasonryTile(width, height);
+    case 'plaster':
+      return drawPlasterTile(width, height);
+    case 'cobblestone':
+      return drawCobblestoneTile(width, height);
+    case 'roof_tile':
+      return drawRoofTileTile(width, height);
+    case 'carpet':
+      return drawCarpetTile(width, height);
+    case 'brick':
+      return drawBrickTile(width, height);
+    default:
+      // glass and the site decals are blended, not multiplied, and a GLB's own
+      // glass material is already what it should be; 'none' is untextured.
+      return null;
+  }
+}
+
+const glbTextureCache = new WeakMap<typeof THREE, Map<string, THREE.DataTexture | null>>();
+
+/** A normalised detail texture for a GLB surface kind, built once per three instance. */
+export function glbSurfaceTexture(
+  three: typeof THREE,
+  kind: string,
+  mean: number,
+): THREE.DataTexture | null {
+  let cache = glbTextureCache.get(three);
+  if (!cache) {
+    cache = new Map();
+    glbTextureCache.set(three, cache);
+  }
+  if (cache.has(kind)) return cache.get(kind) ?? null;
+  const tile = drawGlbSurfaceTile(kind);
+  const tex = tile ? makeDataTexture(three, normalizeDetailTile(tile, mean)) : null;
+  cache.set(kind, tex);
+  return tex;
 }
 
 /** Supported surface types for 3D worlds */
@@ -595,7 +919,7 @@ export function createPBRMaterialLibrary(three: typeof THREE): PBRMaterialLibrar
     crate: new three.MeshStandardMaterial({
       map: crateTex,
       roughness: 0.65,
-      metalness: 0.20,
+      metalness: 0.2,
       side: three.DoubleSide,
       name: 'mat_crate',
     }),
@@ -618,14 +942,14 @@ export function createPBRMaterialLibrary(three: typeof THREE): PBRMaterialLibrar
     }),
     gold: new three.MeshStandardMaterial({
       color: 0xffd700,
-      roughness: 0.20,
+      roughness: 0.2,
       metalness: 0.95,
       side: three.DoubleSide,
       name: 'mat_gold',
     }),
     vehicle: new three.MeshStandardMaterial({
       color: 0x182438,
-      roughness: 0.30,
+      roughness: 0.3,
       metalness: 0.75,
       side: three.DoubleSide,
       name: 'mat_vehicle',

@@ -26,6 +26,28 @@ pub struct WorldBounds {
     pub extent: f32,
 }
 
+/// Unnormalised normal of a triangle; only its dominant axis is used.
+pub fn face_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
+    let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]
+}
+
+/// Planar UV for a GLB vertex in *render* space (x east, y up, z north),
+/// projected along the face normal's dominant axis with ties broken like the
+/// shader's `detail_uv`. A port of `glb-surfaces.ts` `planarUv`, pinned by
+/// `glb-surface-vectors.json`.
+pub fn glb_planar_uv(p: [f32; 3], n: [f32; 3], scale: f32) -> [f32; 2] {
+    let (ax, ay, az) = (n[0].abs(), n[1].abs(), n[2].abs());
+    if ay >= ax && ay >= az {
+        [p[0] / scale, p[2] / scale]
+    } else if ax >= az {
+        [p[2] / scale, p[1] / scale]
+    } else {
+        [p[0] / scale, p[1] / scale]
+    }
+}
+
 pub fn compute_planar_uv(p: [f32; 3], norm: [f32; 3], scale: f32) -> [f32; 2] {
     let s = if scale <= 0.0 { 4.0 } else { scale };
     if norm[1].abs() > 0.6 {
@@ -2419,10 +2441,14 @@ fn walk_glb_node(
                 .read_normals()
                 .map(|n| n.collect())
                 .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; positions.len()]);
-            let uvs: Vec<[f32; 2]> = reader
-                .read_tex_coords(0)
-                .map(|t| t.into_f32().collect())
-                .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
+            // The generated GLBs carry no TEXCOORD_0. Falling back to (0, 0) sampled
+            // one texel for every triangle in the map — each surface one flat colour,
+            // and that colour the corner of its tile (a concrete seam: dust2's
+            // sandstone drew near black). Absent UVs are projected from the world
+            // instead, `glb-surfaces.ts` `planarUv` on the browser side.
+            let uvs: Option<Vec<[f32; 2]>> = reader.read_tex_coords(0).map(|t| t.into_f32().collect());
+            let mat_kind = MaterialKind::from_name(mat_name);
+            let mat_id = mat_kind as u8 as f32;
             let indices: Vec<u32> = match reader.read_indices() {
                 Some(read) => read.into_u32().collect(),
                 None => (0..positions.len() as u32).collect(),
@@ -2449,9 +2475,23 @@ fn walk_glb_node(
                     .transform_vector3(Vec3::from_array(normals.get(i2).copied().unwrap_or([0.0, 1.0, 0.0])))
                     .normalize_or_zero();
 
-                let uv0 = uvs.get(i0).copied().unwrap_or([0.0, 0.0]);
-                let uv1 = uvs.get(i1).copied().unwrap_or([0.0, 0.0]);
-                let uv2 = uvs.get(i2).copied().unwrap_or([0.0, 0.0]);
+                let [uv0, uv1, uv2] = match &uvs {
+                    Some(uvs) => [
+                        uvs.get(i0).copied().unwrap_or([0.0, 0.0]),
+                        uvs.get(i1).copied().unwrap_or([0.0, 0.0]),
+                        uvs.get(i2).copied().unwrap_or([0.0, 0.0]),
+                    ],
+                    None => {
+                        let r = [
+                            [p0.x, p0.y, -p0.z],
+                            [p1.x, p1.y, -p1.z],
+                            [p2.x, p2.y, -p2.z],
+                        ];
+                        let face = face_normal(r[0], r[1], r[2]);
+                        let scale = mat_kind.tile_scale();
+                        r.map(|p| glb_planar_uv(p, face, scale))
+                    }
+                };
 
                 if !is_invisible {
                     // Render space: x = gltf_x, y = gltf_y (elevation), z = -gltf_z (North)
@@ -2480,8 +2520,6 @@ fn walk_glb_node(
                     render_uvs.extend_from_slice(&uv2);
                     render_uvs.extend_from_slice(&uv1);
 
-                    let mat_kind = MaterialKind::from_name(mat_name);
-                    let mat_id = mat_kind as u8 as f32;
                     render_materials.extend_from_slice(&[mat_id, mat_id, mat_id]);
                 }
 

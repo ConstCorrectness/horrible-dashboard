@@ -248,9 +248,12 @@ points at. Adding or rebuilding a GLB therefore means bumping `version`, moving
 changed ones, since a client pulls everything from one URL. Neither `assets:pull` nor
 `asset_cache.sync_assets` refuses a hash mismatch (both warn and install), so a stale
 `baseUrl` silently serves the previous release; `assets-manifest.test.ts` pins the tag
-to the version. The browser's CacheStorage name is derived from the same `version`
-(`models/assetCache.ts`), which is what invalidates GLBs cached under an unchanged
-filename. **v2** added `hassault-operator-t`, `hassault-weapon-knife` and the three
+to the version. The browser's CacheStorage (`models/assetCache.ts`) keys each entry by
+the asset's own **`sha256`**, and caches **only manifest assets** — CacheStorage never
+revalidates, and keying by `version` alone let the `hd_*.glb` maps (committed files,
+not release assets, so they have no manifest entry) be rebuilt under v3 while every
+browser that had opened one kept drawing the old geometry. The maps now ride the
+ordinary HTTP cache, which revalidates. **v2** added `hassault-operator-t`, `hassault-weapon-knife` and the three
 `hassault-grenade-*` props. **v3** introduced the procedural PBR tactical knife redesign
 and 5 rare knife archetypes (`karambit`, `butterfly`, `bayonet`, `skeleton`, `huntsman`).
 
@@ -600,6 +603,46 @@ is the same scene a human plays in.
 Coordinates: the engine's grid is `(x, y)` with `z` as height, and three.js is
 y-up, so world space maps as `three.x = cube.x`, `three.y = height`,
 `three.z = cube.y`. One cube is one world unit.
+
+### GLB map surfaces: UVs are derived, colour is authored
+
+The modelled maps (`hd_*.glb`, written by `tools/blender/generate_*.py`) carry a
+base colour per material and **no textures and no `TEXCOORD_0`**. The second was a
+silent bug: the native loader read UVs off the mesh and fell back to `(0, 0)`, so
+every triangle in a map sampled one texel — each surface one flat colour, and that
+colour the corner of its tile (a concrete seam, which is why dust2's sandstone drew
+near black). The browser drew the bare base colour with no texture at all.
+
+Both clients now do the same three things:
+
+- **Classify** the material by name against `glb-surfaces.json` — ordered
+  lowercase-substring rules, first match wins, read by `glb-surfaces.ts` and by
+  `textures3d.rs` via `include_str!`, so there is one table, not two. `none`
+  (emissive, liquid, foliage, printed surfaces) gets no tile. Rule order is
+  load-bearing: `mat_ceiling_tile` must hit plaster before marble's `tile`, and
+  `mat_wood_crate` crate before wood.
+- **Project UVs** from the world position along the dominant axis of the **face**
+  normal (a box with shared corners has diagonal vertex normals, which smear every
+  face), ties broken like the shader's `detail_uv`, scaled by the kind's
+  `tileScale`. The browser de-indexes the geometry to do it.
+- **Treat the tile as detail, not colour.** Every multiplied layer is normalised to
+  grey luminance with a linear mean of `detailMean` (0.667), and the albedo is
+  multiplied by `detailGain` (1.5 — the native shader's literal), so a surface
+  averages out to the mapper's colour. A high-contrast tile (hazard) is
+  *compressed* about the mean rather than scaled into clipping, which would drag the
+  mean back down. Glass and the site decals are blended, not multiplied, and stay as
+  drawn.
+
+Six tiles exist for these maps: masonry (running-bond ashlar), plaster, cobblestone
+(jittered Voronoi), barrel roof tile, carpet and brick. They are ported in both
+languages and use a *tiling* fBm (`fbmTiled`, each octave's period dividing the
+tile) — the older tiles' `fbm` does not tile and seams at every repeat.
+
+`glb-surface-vectors.json` pins agreement: the classification of every material in
+every bundled GLB (read out of the files at generation time) and a set of UV cases,
+written by `glb-surfaces.test.ts` (`UPDATE_GLB_SURFACE_VECTORS=1`) and replayed by
+`textures3d.rs`. A new generator material that falls through to the `concrete`
+default is caught by a count in the same suite.
 
 ### The heightfield rule, which is easy to get backwards
 

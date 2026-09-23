@@ -17,7 +17,19 @@ import type * as THREE from 'three';
 import type { MapInfo } from './api';
 import type { Ladder } from './world';
 import type { ItemRow } from './net';
-import { createPBRMaterialLibrary, type MaterialKind, type PBRMaterialLibrary } from './textures3d';
+import {
+  createPBRMaterialLibrary,
+  glbSurfaceTexture,
+  type MaterialKind,
+  type PBRMaterialLibrary,
+} from './textures3d';
+import {
+  classifySurface,
+  DETAIL_GAIN,
+  DETAIL_MEAN,
+  planarUv,
+  surfaceTileScale,
+} from './glb-surfaces';
 import { getCachedAssetUrl } from './models/assetCache';
 
 export interface SpawnPoint {
@@ -95,7 +107,10 @@ function computePlanarUV(
 }
 
 class World3DBuilder {
-  private batches = new Map<MaterialKind, { positions: number[]; normals: number[]; uvs: number[] }>();
+  private batches = new Map<
+    MaterialKind,
+    { positions: number[]; normals: number[]; uvs: number[] }
+  >();
   public colVertices: number[] = [];
   public colIndices: number[] = [];
   private colIndexOffset = 0;
@@ -167,14 +182,20 @@ class World3DBuilder {
   ) {
     if (customUVs) {
       this.addTriangle(p0, p1, p2, material, isCollider, [
-        customUVs[0], customUVs[1],
-        customUVs[2], customUVs[3],
-        customUVs[4], customUVs[5],
+        customUVs[0],
+        customUVs[1],
+        customUVs[2],
+        customUVs[3],
+        customUVs[4],
+        customUVs[5],
       ]);
       this.addTriangle(p0, p2, p3, material, isCollider, [
-        customUVs[0], customUVs[1],
-        customUVs[4], customUVs[5],
-        customUVs[6], customUVs[7],
+        customUVs[0],
+        customUVs[1],
+        customUVs[4],
+        customUVs[5],
+        customUVs[6],
+        customUVs[7],
       ]);
     } else {
       this.addTriangle(p0, p1, p2, material, isCollider);
@@ -183,8 +204,10 @@ class World3DBuilder {
   }
 
   addFloor(
-    minX: number, minY: number,
-    maxX: number, maxY: number,
+    minX: number,
+    minY: number,
+    maxX: number,
+    maxY: number,
     z: number,
     material: MaterialKind = 'concrete',
     isCollider = true,
@@ -204,17 +227,63 @@ class World3DBuilder {
   }
 
   addBox(
-    minX: number, minY: number, minZ: number,
-    maxX: number, maxY: number, maxZ: number,
+    minX: number,
+    minY: number,
+    minZ: number,
+    maxX: number,
+    maxY: number,
+    maxZ: number,
     material: MaterialKind = 'concrete',
     isCollider = true,
   ) {
-    this.addQuad([minX, minY, minZ], [maxX, minY, minZ], [maxX, maxY, minZ], [minX, maxY, minZ], material, isCollider);
-    this.addQuad([minX, maxY, maxZ], [maxX, maxY, maxZ], [maxX, minY, maxZ], [minX, minY, maxZ], material, isCollider);
-    this.addQuad([maxX, maxY, minZ], [maxX, maxY, maxZ], [minX, maxY, maxZ], [minX, maxY, minZ], material, isCollider);
-    this.addQuad([minX, minY, minZ], [minX, minY, maxZ], [maxX, minY, maxZ], [maxX, minY, minZ], material, isCollider);
-    this.addQuad([maxX, minY, minZ], [maxX, minY, maxZ], [maxX, maxY, maxZ], [maxX, maxY, minZ], material, isCollider);
-    this.addQuad([minX, maxY, minZ], [minX, maxY, maxZ], [minX, minY, maxZ], [minX, minY, minZ], material, isCollider);
+    this.addQuad(
+      [minX, minY, minZ],
+      [maxX, minY, minZ],
+      [maxX, maxY, minZ],
+      [minX, maxY, minZ],
+      material,
+      isCollider,
+    );
+    this.addQuad(
+      [minX, maxY, maxZ],
+      [maxX, maxY, maxZ],
+      [maxX, minY, maxZ],
+      [minX, minY, maxZ],
+      material,
+      isCollider,
+    );
+    this.addQuad(
+      [maxX, maxY, minZ],
+      [maxX, maxY, maxZ],
+      [minX, maxY, maxZ],
+      [minX, maxY, minZ],
+      material,
+      isCollider,
+    );
+    this.addQuad(
+      [minX, minY, minZ],
+      [minX, minY, maxZ],
+      [maxX, minY, maxZ],
+      [maxX, minY, minZ],
+      material,
+      isCollider,
+    );
+    this.addQuad(
+      [maxX, minY, minZ],
+      [maxX, minY, maxZ],
+      [maxX, maxY, maxZ],
+      [maxX, maxY, minZ],
+      material,
+      isCollider,
+    );
+    this.addQuad(
+      [minX, maxY, minZ],
+      [minX, maxY, maxZ],
+      [minX, minY, maxZ],
+      [minX, minY, minZ],
+      material,
+      isCollider,
+    );
   }
 
   addCylinder(
@@ -248,28 +317,20 @@ class World3DBuilder {
       );
 
       // Top disc (facing +z up)
-      this.addTriangle(
-        [cx, cy, maxZ],
-        [x1, y1, maxZ],
-        [x0, y0, maxZ],
-        material,
-        isCollider,
-      );
+      this.addTriangle([cx, cy, maxZ], [x1, y1, maxZ], [x0, y0, maxZ], material, isCollider);
 
       // Bottom disc (facing -z down)
-      this.addTriangle(
-        [cx, cy, minZ],
-        [x0, y0, minZ],
-        [x1, y1, minZ],
-        material,
-        isCollider,
-      );
+      this.addTriangle([cx, cy, minZ], [x0, y0, minZ], [x1, y1, minZ], material, isCollider);
     }
   }
 
   addRamp(
-    minX: number, minY: number, z0: number,
-    maxX: number, maxY: number, z1: number,
+    minX: number,
+    minY: number,
+    z0: number,
+    maxX: number,
+    maxY: number,
+    z1: number,
     material: MaterialKind = 'concrete',
     isCollider = true,
   ) {
@@ -287,13 +348,7 @@ class World3DBuilder {
     );
 
     // 2. West side wall (x = minX, outward normal norm.x < 0)
-    this.addTriangle(
-      [minX, minY, z0],
-      [minX, minY, minZ],
-      [minX, maxY, z1],
-      material,
-      isCollider,
-    );
+    this.addTriangle([minX, minY, z0], [minX, minY, minZ], [minX, maxY, z1], material, isCollider);
     this.addTriangle(
       [minX, minY, minZ],
       [minX, maxY, minZ],
@@ -303,13 +358,7 @@ class World3DBuilder {
     );
 
     // 3. East side wall (x = maxX, outward normal norm.x > 0)
-    this.addTriangle(
-      [maxX, minY, minZ],
-      [maxX, minY, z0],
-      [maxX, maxY, z1],
-      material,
-      isCollider,
-    );
+    this.addTriangle([maxX, minY, minZ], [maxX, minY, z0], [maxX, maxY, z1], material, isCollider);
     this.addTriangle(
       [maxX, maxY, minZ],
       [maxX, minY, minZ],
@@ -342,7 +391,11 @@ class World3DBuilder {
     }
   }
 
-  build(root: THREE.Group): { geometries: THREE.BufferGeometry[]; materials: THREE.Material[]; lib: PBRMaterialLibrary } {
+  build(root: THREE.Group): {
+    geometries: THREE.BufferGeometry[];
+    materials: THREE.Material[];
+    lib: PBRMaterialLibrary;
+  } {
     const lib = createPBRMaterialLibrary(this.THREE);
     const geometries: THREE.BufferGeometry[] = [];
     const materials: THREE.Material[] = [];
@@ -378,10 +431,7 @@ class World3DBuilder {
  * 3. Upper Mezzanine & Catwalks (z = 6) with elevated perimeter firing positions.
  * 4. Staircases connecting all three vertical tiers.
  */
-export function createProceduralFacility3D(
-  THREE: typeof import('three'),
-  info: MapInfo,
-): World3D {
+export function createProceduralFacility3D(THREE: typeof import('three'), info: MapInfo): World3D {
   const root = new THREE.Group();
   root.name = 'World3D_Facility';
   const builder = new World3DBuilder(THREE);
@@ -495,10 +545,7 @@ export function createProceduralFacility3D(
  * Procedural 3D Junk Flea:
  * Inspired by high-intensity CQB junkyard arenas with shipping containers.
  */
-export function createProceduralJunkFlea3D(
-  THREE: typeof import('three'),
-  info: MapInfo,
-): World3D {
+export function createProceduralJunkFlea3D(THREE: typeof import('three'), info: MapInfo): World3D {
   const root = new THREE.Group();
   root.name = 'World3D_JunkFlea';
   const builder = new World3DBuilder(THREE);
@@ -621,10 +668,7 @@ export function createProceduralJunkFlea3D(
  * 4. Reinforced Vault (Site A) with hazard-striped archway, steel blast door, and gold bullion pallets.
  * 5. Authentic Bomb Site A & Site B spray stencils on floors.
  */
-export function createProceduralBank3D(
-  THREE: typeof import('three'),
-  info: MapInfo,
-): World3D {
+export function createProceduralBank3D(THREE: typeof import('three'), info: MapInfo): World3D {
   const root = new THREE.Group();
   root.name = 'World3D_Bank';
   const builder = new World3DBuilder(THREE);
@@ -734,7 +778,12 @@ export function createProceduralBank3D(
   builder.addBox(30, 8, 1.15, 34, 10, 1.25, 'hazard', false);
 
   // 5. Grand Banking Hall (Site B) - Neoclassical Pillars, Coffered Ceiling, Teller Island
-  for (const [px, py] of [[22, 24], [40, 24], [22, 40], [40, 40]]) {
+  for (const [px, py] of [
+    [22, 24],
+    [40, 24],
+    [22, 40],
+    [40, 40],
+  ]) {
     builder.addBox(px, py, 0, px + 2, py + 2, 0.8, 'marble');
     builder.addCylinder(px + 1, py + 1, 0.8, 12.5, 0.88, 12, 'marble', true);
     builder.addBox(px - 0.2, py - 0.2, 12.5, px + 2.2, py + 2.2, 14, 'marble');
@@ -792,7 +841,11 @@ export function createProceduralBank3D(
   builder.addBox(54.5, 28.5, 0, 56.2, 31.5, 0.5, 'glass');
 
   // Potted Trees in Lobby Corners
-  for (const [px, py] of [[6, 20], [58, 20], [6, 44]]) {
+  for (const [px, py] of [
+    [6, 20],
+    [58, 20],
+    [6, 44],
+  ]) {
     builder.addCylinder(px, py, 0, 0.7, 0.55, 8, 'marble', false);
     builder.addCylinder(px, py, 0.7, 2.4, 0.9, 8, 'wood', false);
   }
@@ -859,19 +912,9 @@ export function createProceduralBank3D(
   builder.addCylinder(31, 53, 1.0, 1.7, 0.26, 8, 'glass', false);
 
   // 10. Tactical Bomb Site Spray Decals ("A" and "B")
-  builder.addFloor(
-    44, 50.5, 48, 53.5, 0.02,
-    'site_a',
-    false,
-    [0, 1, 1, 1, 1, 0, 0, 0],
-  );
+  builder.addFloor(44, 50.5, 48, 53.5, 0.02, 'site_a', false, [0, 1, 1, 1, 1, 0, 0, 0]);
 
-  builder.addFloor(
-    30, 24.5, 34, 27.5, 0.02,
-    'site_b',
-    false,
-    [0, 1, 1, 1, 1, 0, 0, 0],
-  );
+  builder.addFloor(30, 24.5, 34, 27.5, 0.02, 'site_b', false, [0, 1, 1, 1, 1, 0, 0, 0]);
 
   const { geometries, materials, lib } = builder.build(root);
 
@@ -950,12 +993,9 @@ export function createProceduralBank3D(
  * 4. Main Warehouse Interior: High trusses, elevated catwalks (z = 4.0m), semi-truck & trailer, forklift.
  * 5. Back Office / Hostage Room: 2-story office with panoramic glass observation windows overlooking the floor, CCTV monitors, desks.
  */
-export function createProceduralAssault3D(
-  THREE: typeof import("three"),
-  info: MapInfo,
-): World3D {
+export function createProceduralAssault3D(THREE: typeof import('three'), info: MapInfo): World3D {
   const root = new THREE.Group();
-  root.name = "World3D_Assault";
+  root.name = 'World3D_Assault';
   const builder = new World3DBuilder(THREE);
 
   // 1. Perimeter Boundary Walls (56x56 bounds: 4.0..60.0, height = 14.0m)
@@ -1070,7 +1110,7 @@ export function createProceduralAssault3D(
   builder.addBox(19.2, 12.9, 0.5, 22.7, 15.1, 2.5, 'container');
   // Rear doors details
   builder.addBox(19.18, 13.98, 0.6, 19.21, 14.02, 2.3, 'vault_steel', false);
-  builder.addBox(19.15, 13.85, 1.2, 19.20, 13.95, 1.3, 'vault_steel', false);
+  builder.addBox(19.15, 13.85, 1.2, 19.2, 13.95, 1.3, 'vault_steel', false);
   builder.addBox(19.18, 13.2, 1.5, 19.21, 13.8, 1.9, 'glass', false);
   builder.addBox(19.18, 14.2, 1.5, 19.21, 14.8, 1.9, 'glass', false);
   builder.addBox(18.8, 12.8, 0.25, 19.2, 15.2, 0.52, 'vault_steel');
@@ -1131,10 +1171,14 @@ export function createProceduralAssault3D(
   builder.addBox(7.6, 21.3, 8.9, 46.4, 22.1, 9.2, 'vault_steel');
 
   // Clerestory Transom Windows
-  for (const [wx0, wx1] of [[9, 13], [23, 29], [39, 45]]) {
+  for (const [wx0, wx1] of [
+    [9, 13],
+    [23, 29],
+    [39, 45],
+  ]) {
     builder.addBox(wx0, 21.52, 7.2, wx1, 21.58, 8.2, 'glass', false);
     for (let i = 1; i < 4; i++) {
-      const mx = wx0 + (wx1 - wx0) * i / 4;
+      const mx = wx0 + ((wx1 - wx0) * i) / 4;
       builder.addBox(mx - 0.06, 21.5, 7.2, mx + 0.06, 21.6, 8.2, 'vault_steel', false);
     }
     builder.addBox(wx0, 21.5, 7.68, wx1, 21.6, 7.74, 'vault_steel', false);
@@ -1143,8 +1187,8 @@ export function createProceduralAssault3D(
   // Loading Bay 1 Details
   // Overhead Roll-up Shutter Drum Profile (z: 3.6..4.1m, across x: 13.8..22.2)
   builder.addBox(13.9, 21.35, 3.65, 22.1, 21.75, 4.05, 'vault_steel', false);
-  builder.addBox(13.9, 21.30, 3.75, 22.1, 21.80, 3.95, 'vault_steel', false);
-  builder.addBox(13.9, 21.40, 3.60, 22.1, 21.70, 4.10, 'vault_steel', false);
+  builder.addBox(13.9, 21.3, 3.75, 22.1, 21.8, 3.95, 'vault_steel', false);
+  builder.addBox(13.9, 21.4, 3.6, 22.1, 21.7, 4.1, 'vault_steel', false);
   builder.addBox(14, 21.54, 3.4, 22, 21.58, 3.8, 'vault_steel', false);
   builder.addBox(13.8, 21.5, 0, 14, 22, 3.8, 'hazard', false);
   builder.addBox(22, 21.5, 0, 22.2, 22, 3.8, 'hazard', false);
@@ -1235,7 +1279,7 @@ export function createProceduralAssault3D(
   builder.addBox(28, 39.8, 4.2, 45.5, 40, 5.0, 'concrete');
   builder.addBox(29, 39.85, 5.0, 44.5, 39.95, 7.2, 'glass', false);
   for (let i = 1; i < 5; i++) {
-    const mx = 29.0 + 15.5 * i / 5.0;
+    const mx = 29.0 + (15.5 * i) / 5.0;
     builder.addBox(mx - 0.08, 39.82, 5.0, mx + 0.08, 39.98, 7.2, 'vault_steel', false);
   }
   builder.addBox(29.0, 39.82, 6.05, 44.5, 39.98, 6.15, 'vault_steel', false);
@@ -1289,16 +1333,16 @@ export function createProceduralAssault3D(
   const allSpawns = [...ctSpawns, ...tSpawns];
 
   const items: ItemRow[] = [
-    { id: 1, kind: "health", x: 14, y: 6, z: 0.18 },
-    { id: 2, kind: "health", x: 55, y: 16, z: 0 },
-    { id: 3, kind: "health", x: 38, y: 52, z: 4.2 },
-    { id: 4, kind: "armour", x: 20, y: 36, z: 0 },
-    { id: 5, kind: "armour", x: 32, y: 44, z: 4.2 },
-    { id: 6, kind: "ammo_assault", x: 21, y: 15.5, z: 0 },
-    { id: 7, kind: "ammo_assault", x: 54, y: 30, z: 0 },
-    { id: 8, kind: "ammo_sniper", x: 24, y: 7, z: 7.5 },
-    { id: 9, kind: "clips", x: 10.5, y: 40, z: 4.2 },
-    { id: 10, kind: "grenade", x: 16, y: 30, z: 9.0 },
+    { id: 1, kind: 'health', x: 14, y: 6, z: 0.18 },
+    { id: 2, kind: 'health', x: 55, y: 16, z: 0 },
+    { id: 3, kind: 'health', x: 38, y: 52, z: 4.2 },
+    { id: 4, kind: 'armour', x: 20, y: 36, z: 0 },
+    { id: 5, kind: 'armour', x: 32, y: 44, z: 4.2 },
+    { id: 6, kind: 'ammo_assault', x: 21, y: 15.5, z: 0 },
+    { id: 7, kind: 'ammo_assault', x: 54, y: 30, z: 0 },
+    { id: 8, kind: 'ammo_sniper', x: 24, y: 7, z: 7.5 },
+    { id: 9, kind: 'clips', x: 10.5, y: 40, z: 4.2 },
+    { id: 10, kind: 'grenade', x: 16, y: 30, z: 9.0 },
   ];
 
   const bounds: WorldBounds = {
@@ -1769,6 +1813,61 @@ export const MAP_CONFIGS: Record<string, MapConfig> = {
   },
 };
 
+const surfacedMaterials = new WeakSet<THREE.Material>();
+
+/**
+ * Give a GLB material its detail tile. The GLB's colour stays the colour: the
+ * tile is normalised grey, and `DETAIL_GAIN` undoes its mean, which is what the
+ * native shader's `* 1.5` does on the other side. Once per material, because
+ * materials are shared across meshes and scaling the colour twice would not be.
+ */
+function applyGlbSurface(three: typeof import('three'), m: THREE.Material): void {
+  if (surfacedMaterials.has(m) || !(m instanceof three.MeshStandardMaterial)) return;
+  surfacedMaterials.add(m);
+  const tex = glbSurfaceTexture(three, classifySurface(m.name || ''), DETAIL_MEAN);
+  if (!tex) return;
+  m.map = tex;
+  m.color.multiplyScalar(DETAIL_GAIN);
+  m.needsUpdate = true;
+}
+
+/**
+ * Planar UVs for a mesh that has none (every generated GLB). De-indexed first,
+ * and projected along each *face's* normal rather than each vertex's: a box
+ * whose corners are shared has diagonal vertex normals, and projecting along
+ * those smears every face. The shading normals are kept as they were.
+ */
+function withPlanarUvs(
+  three: typeof import('three'),
+  geom: THREE.BufferGeometry,
+  scale: number,
+): THREE.BufferGeometry {
+  if (geom.attributes.uv) return geom;
+  const flat = geom.index ? geom.toNonIndexed() : geom;
+  if (flat !== geom) geom.dispose();
+  const pos = flat.attributes.position;
+  if (!pos) return flat;
+  const uv = new Float32Array(pos.count * 2);
+  for (let i = 0; i + 2 < pos.count; i += 3) {
+    const ax = pos.getX(i + 1) - pos.getX(i);
+    const ay = pos.getY(i + 1) - pos.getY(i);
+    const az = pos.getZ(i + 1) - pos.getZ(i);
+    const bx = pos.getX(i + 2) - pos.getX(i);
+    const by = pos.getY(i + 2) - pos.getY(i);
+    const bz = pos.getZ(i + 2) - pos.getZ(i);
+    const nx = ay * bz - az * by;
+    const ny = az * bx - ax * bz;
+    const nz = ax * by - ay * bx;
+    for (let k = 0; k < 3; k++) {
+      const [u, v] = planarUv(pos.getX(i + k), pos.getY(i + k), pos.getZ(i + k), nx, ny, nz, scale);
+      uv[(i + k) * 2] = u;
+      uv[(i + k) * 2 + 1] = v;
+    }
+  }
+  flat.setAttribute('uv', new three.BufferAttribute(uv, 2));
+  return flat;
+}
+
 export function buildWorld3DFromGLTF(
   THREE: typeof import('three'),
   info: MapInfo,
@@ -1797,7 +1896,7 @@ export function buildWorld3DFromGLTF(
     const isInv = isInvisibleNode(nodeName);
 
     // Clone geometry and apply world transform + Z flip
-    const geom = obj.geometry.clone();
+    let geom = obj.geometry.clone();
     geom.applyMatrix4(obj.matrixWorld);
     geom.applyMatrix4(zFlip);
 
@@ -1812,7 +1911,6 @@ export function buildWorld3DFromGLTF(
       geom.index.needsUpdate = true;
     }
     geom.computeVertexNormals();
-    geometries.push(geom);
 
     let isMatCollider = true;
     const matList = Array.isArray(obj.material) ? obj.material : [obj.material];
@@ -1824,8 +1922,12 @@ export function buildWorld3DFromGLTF(
         if (/Glass|Glow|Lamp|Indicator|Taillight/i.test(mName)) {
           isMatCollider = false;
         }
+        applyGlbSurface(THREE, m);
       }
     }
+
+    geom = withPlanarUvs(THREE, geom, surfaceTileScale(classifySurface(matList[0]?.name ?? '')));
+    geometries.push(geom);
 
     const worldMesh = new THREE.Mesh(geom, obj.material);
     worldMesh.name = nodeName;
@@ -1863,7 +1965,9 @@ export function buildWorld3DFromGLTF(
         }
       }
 
-      let cx = 0, cy = 0, cz = 0;
+      let cx = 0,
+        cy = 0,
+        cz = 0;
       const numV = winVertices.length / 3;
       if (numV > 0) {
         for (let i = 0; i < winVertices.length; i += 3) {
@@ -1877,7 +1981,9 @@ export function buildWorld3DFromGLTF(
       }
 
       const normAttr = geom.attributes.normal;
-      let nx = 0, ny = 1, nz = 0;
+      let nx = 0,
+        ny = 1,
+        nz = 0;
       if (normAttr && normAttr.count > 0) {
         nx = normAttr.getX(0);
         ny = normAttr.getZ(0);
@@ -1964,10 +2070,7 @@ export function buildWorld3DFromGLTF(
   };
 }
 
-export async function loadWorld3D(
-  THREE: typeof import('three'),
-  info: MapInfo,
-): Promise<World3D> {
+export async function loadWorld3D(THREE: typeof import('three'), info: MapInfo): Promise<World3D> {
   const glbFilename = `${info.name}.glb`;
   try {
     const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
@@ -1976,15 +2079,15 @@ export async function loadWorld3D(
     const gltf = await loader.loadAsync(assetUrl);
     return buildWorld3DFromGLTF(THREE, info, gltf.scene);
   } catch (err) {
-    console.warn(`[world3d] Could not load GLB asset ${glbFilename}, falling back to procedural generation:`, err);
+    console.warn(
+      `[world3d] Could not load GLB asset ${glbFilename}, falling back to procedural generation:`,
+      err,
+    );
     return createWorld3D(THREE, info);
   }
 }
 
-export function createWorld3D(
-  THREE: typeof import('three'),
-  info: MapInfo,
-): World3D {
+export function createWorld3D(THREE: typeof import('three'), info: MapInfo): World3D {
   if (info.name === 'hd_junkflea') {
     return createProceduralJunkFlea3D(THREE, info);
   }
@@ -1996,4 +2099,3 @@ export function createWorld3D(
   }
   return createProceduralFacility3D(THREE, info);
 }
-

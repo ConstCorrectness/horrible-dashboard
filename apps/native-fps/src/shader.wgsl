@@ -181,6 +181,12 @@ fn get_pbr_properties(mat_id: u32) -> vec2<f32> {
         case 8u: { return vec2<f32>(0.58, 0.55); } // Container
         case 9u: { return vec2<f32>(0.06, 0.15); } // Glass
         case 10u: { return vec2<f32>(0.20, 0.95); } // Gold
+        case 13u: { return vec2<f32>(0.85, 0.02); } // Masonry
+        case 14u: { return vec2<f32>(0.90, 0.02); } // Plaster
+        case 15u: { return vec2<f32>(0.80, 0.02); } // Cobblestone
+        case 16u: { return vec2<f32>(0.70, 0.02); } // RoofTile
+        case 17u: { return vec2<f32>(0.95, 0.00); } // Carpet
+        case 18u: { return vec2<f32>(0.85, 0.02); } // Brick
         default: { return vec2<f32>(0.70, 0.04); }
     }
 }

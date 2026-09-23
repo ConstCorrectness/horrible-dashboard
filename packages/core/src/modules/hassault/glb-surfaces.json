@@ -1,0 +1,171 @@
+{
+  "why": "Which procedural surface a GLB map material gets, read by both clients (glb-surfaces.ts, apps/native-fps/src/textures3d.rs). Rules are lowercase substrings of the material name, tried in order, first match wins. 'none' means no detail texture: emissive, liquid, foliage and printed surfaces keep their authored colour and only get the world-space grain.",
+  "default": "concrete",
+  "rules": [
+    {
+      "kind": "none",
+      "match": [
+        "glow",
+        "flame",
+        "lamp",
+        "_led",
+        "fluor",
+        "troffer",
+        "screen",
+        "display",
+        "phosphor",
+        "crt",
+        "water",
+        "frond",
+        "leaves",
+        "foliage",
+        "coolant",
+        "siren",
+        "headlight",
+        "reflector",
+        "stripe",
+        "canvas",
+        "painting",
+        "sign",
+        "leather",
+        "tire",
+        "rubber",
+        "plastic",
+        "paper",
+        "currency",
+        "book",
+        "shrinkwrap"
+      ]
+    },
+    {
+      "kind": "site_a",
+      "match": ["site_a"]
+    },
+    {
+      "kind": "site_b",
+      "match": ["site_b"]
+    },
+    {
+      "kind": "glass",
+      "match": ["glass", "window"]
+    },
+    {
+      "kind": "cobblestone",
+      "match": ["cobble"]
+    },
+    {
+      "kind": "asphalt",
+      "match": ["asphalt", "road", "street"]
+    },
+    {
+      "kind": "hazard",
+      "match": ["hazard"]
+    },
+    {
+      "kind": "carpet",
+      "match": ["carpet", "felt", "velvet", "burlap", "canopy", "cushion", "awning"]
+    },
+    {
+      "kind": "brick",
+      "match": ["brick"]
+    },
+    {
+      "kind": "roof_tile",
+      "match": ["terracotta_roof", "roof_tile"]
+    },
+    {
+      "kind": "masonry",
+      "match": ["sandstone", "limestone", "granite", "paving", "sidewalk", "curb", "stone"]
+    },
+    {
+      "kind": "plaster",
+      "match": [
+        "stucco",
+        "plaster",
+        "drywall",
+        "ceiling",
+        "sand",
+        "terracotta",
+        "office_wall",
+        "wall_accent"
+      ]
+    },
+    {
+      "kind": "marble",
+      "match": ["marble", "tile", "mosaic"]
+    },
+    {
+      "kind": "gold",
+      "match": ["gold", "bullion"]
+    },
+    {
+      "kind": "container",
+      "match": ["container", "corrugated"]
+    },
+    {
+      "kind": "crate",
+      "match": ["crate"]
+    },
+    {
+      "kind": "vault_steel",
+      "match": [
+        "steel",
+        "vault",
+        "metal",
+        "iron",
+        "chrome",
+        "stainless",
+        "aluminum",
+        "galv",
+        "brass",
+        "bronze",
+        "grate",
+        "plate",
+        "pipe",
+        "drum",
+        "scrap",
+        "truck",
+        "swat",
+        "cruiser",
+        "rack_",
+        "toolbox",
+        "valve",
+        "duct",
+        "_rail",
+        "chassis",
+        "server_cabinet",
+        "forklift",
+        "extinguisher",
+        "sheet_pile",
+        "garage",
+        "atm_"
+      ]
+    },
+    {
+      "kind": "wood",
+      "match": ["wood", "plank", "mahogany", "cedar", "oak", "pallet", "bark", "trunk", "cork"]
+    }
+  ],
+  "tileScale": {
+    "asphalt": 4,
+    "marble": 4,
+    "concrete": 4,
+    "vault_steel": 4,
+    "hazard": 2,
+    "wood": 4,
+    "crate": 2,
+    "container": 4,
+    "glass": 4,
+    "gold": 4,
+    "site_a": 4,
+    "site_b": 4,
+    "masonry": 4,
+    "plaster": 6,
+    "cobblestone": 3,
+    "roof_tile": 3,
+    "carpet": 4,
+    "brick": 2
+  },
+  "detailMean": 0.6667,
+  "detailGain": 1.5
+}

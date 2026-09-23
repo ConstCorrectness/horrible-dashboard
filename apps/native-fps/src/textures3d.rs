@@ -3,7 +3,9 @@
 //! Generates high-fidelity, deterministic procedural PBR surface textures and materials
 //! matching `packages/core/src/modules/hassault/textures3d.ts`.
 //!
-//! Provides 12 distinct surface materials packed into a 2D Texture Array on the GPU:
+//! Provides 18 distinct surface materials packed into a 2D Texture Array on the GPU
+//! (the six after the site decals — masonry, plaster, cobblestone, roof tile,
+//! carpet, brick — exist for the GLB maps' materials; see `glb-surfaces.json`):
 //! 1. Asphalt Road with road stripes and aggregate gravel.
 //! 2. Polished Bank Marble Floor with elegant veining and grout lines.
 //! 3. Weathered Architectural Concrete with formwork seams and tie-rod holes.
@@ -18,7 +20,7 @@
 //! 12. Tactical Bomb Site Spray Stencils ("B").
 
 pub const TEXTURE_SIZE: u32 = 256;
-pub const LAYER_COUNT: u32 = 12;
+pub const LAYER_COUNT: u32 = 18;
 
 /// Fast deterministic pseudo-random hash.
 fn hash(x: f32, y: f32, seed: f32) -> f32 {
@@ -464,8 +466,12 @@ pub fn draw_site_decal_tile(site: char, width: u32, height: u32) -> Vec<u8> {
                     is_letter = in_leg1 || in_leg2 || in_cross;
                 } else {
                     let in_stem = nx <= 0.25;
-                    let in_top_loop = (((nx - 0.4).powi(2) + (ny - 0.3).powi(2)).sqrt() - 0.25).abs() < 0.09 && nx >= 0.25;
-                    let in_bot_loop = (((nx - 0.45).powi(2) + (ny - 0.7).powi(2)).sqrt() - 0.28).abs() < 0.09 && nx >= 0.25;
+                    let in_top_loop =
+                        (((nx - 0.4).powi(2) + (ny - 0.3).powi(2)).sqrt() - 0.25).abs() < 0.09
+                            && nx >= 0.25;
+                    let in_bot_loop =
+                        (((nx - 0.45).powi(2) + (ny - 0.7).powi(2)).sqrt() - 0.28).abs() < 0.09
+                            && nx >= 0.25;
                     is_letter = in_stem || in_top_loop || in_bot_loop;
                 }
             }
@@ -488,6 +494,324 @@ pub fn draw_site_decal_tile(site: char, width: u32, height: u32) -> Vec<u8> {
     out
 }
 
+// ---------------------------------------------------------------------------
+// GLB map surfaces — a port of the "GLB map surfaces" block in
+// `packages/core/src/modules/hassault/textures3d.ts`.
+//
+// The modelled maps carry an authored base colour per material and nothing
+// else, so the tiles are *detail*: `normalize_detail_tile` turns each into grey
+// luminance with a linear mean of `detailMean`, the shader multiplies it by the
+// vertex colour times 1.5 (`detailGain`), and a surface averages out to the
+// colour the mapper chose.
+// ---------------------------------------------------------------------------
+
+/// fBm that tiles: every octave's lattice period divides the tile exactly.
+fn fbm_tiled(u: f32, v: f32, cells: f32, octaves: usize) -> f32 {
+    let mut val = 0.0;
+    let mut amp = 0.5;
+    let mut freq = cells;
+    let mut max = 0.0;
+    for _ in 0..octaves {
+        val += noise2d(u * freq, v * freq, freq) * amp;
+        max += amp;
+        amp *= 0.5;
+        freq *= 2.0;
+    }
+    val / max
+}
+
+fn wrap(n: f32, period: f32) -> f32 {
+    ((n % period) + period) % period
+}
+
+fn write_grey(out: &mut [u8], idx: usize, val: f32) {
+    let g = val.floor().clamp(0.0, 255.0) as u8;
+    out[idx] = g;
+    out[idx + 1] = g;
+    out[idx + 2] = g;
+    out[idx + 3] = 255;
+}
+
+/// Coursed ashlar: four courses of two blocks in running bond, per-block tone,
+/// recessed mortar and worn arrises. Sandstone, limestone, paving, curbs.
+pub fn draw_masonry_tile(width: u32, height: u32) -> Vec<u8> {
+    let mut out = vec![0u8; (width * height * 4) as usize];
+    let (rows, cols, mortar) = (4.0f32, 2.0f32, 0.012f32);
+    for y in 0..height {
+        for x in 0..width {
+            let u = x as f32 / width as f32;
+            let v = y as f32 / height as f32;
+            let row = (v * rows).floor();
+            let fv = v * rows - row;
+            let cu = u * cols + (row % 2.0) * 0.5;
+            let col = cu.floor();
+            let fu = cu - col;
+            let d = (fu.min(1.0 - fu) / cols).min(fv.min(1.0 - fv) / rows);
+            let grain =
+                (fbm_tiled(u, v, 32.0, 3) - 0.5) * 22.0 + (fbm_tiled(u, v, 4.0, 3) - 0.5) * 16.0;
+            let mut val = 205.0 + (hash(wrap(col, cols), row, 3.0) - 0.5) * 26.0 + grain;
+            if d < mortar {
+                val = 150.0 + grain * 0.5;
+            } else if d < mortar * 2.5 {
+                val *= 0.88 + 0.12 * ((d - mortar) / (mortar * 1.5));
+            }
+            write_grey(&mut out, ((y * width + x) * 4) as usize, val);
+        }
+    }
+    out
+}
+
+/// Trowelled stucco / plaster / drywall: soft cloud and fine grit. No cracks — a
+/// contour of low-frequency noise reads as a topographic map line at wall scale.
+pub fn draw_plaster_tile(width: u32, height: u32) -> Vec<u8> {
+    let mut out = vec![0u8; (width * height * 4) as usize];
+    for y in 0..height {
+        for x in 0..width {
+            let u = x as f32 / width as f32;
+            let v = y as f32 / height as f32;
+            let val = 210.0
+                + (fbm_tiled(u, v, 3.0, 4) - 0.5) * 26.0
+                + (fbm_tiled(u, v, 48.0, 3) - 0.5) * 14.0;
+            write_grey(&mut out, ((y * width + x) * 4) as usize, val);
+        }
+    }
+    out
+}
+
+/// Cobbles: a jittered 6×6 Voronoi of domed stones with dark sand joints.
+pub fn draw_cobblestone_tile(width: u32, height: u32) -> Vec<u8> {
+    let mut out = vec![0u8; (width * height * 4) as usize];
+    let n = 6.0f32;
+    for y in 0..height {
+        for x in 0..width {
+            let u = x as f32 / width as f32;
+            let v = y as f32 / height as f32;
+            let (px, py) = (u * n, v * n);
+            let (ix, iy) = (px.floor(), py.floor());
+            let (mut d1, mut d2) = (9.0f32, 9.0f32);
+            let (mut id_x, mut id_y) = (0.0f32, 0.0f32);
+            for oy in -1..=1 {
+                for ox in -1..=1 {
+                    let (ox, oy) = (ox as f32, oy as f32);
+                    let wx = wrap(ix + ox, n);
+                    let wy = wrap(iy + oy, n);
+                    let fx = ix + ox + 0.15 + 0.7 * hash(wx, wy, 1.0);
+                    let fy = iy + oy + 0.15 + 0.7 * hash(wx, wy, 2.0);
+                    let d = (px - fx).hypot(py - fy);
+                    if d < d1 {
+                        d2 = d1;
+                        d1 = d;
+                        id_x = wx;
+                        id_y = wy;
+                    } else if d < d2 {
+                        d2 = d;
+                    }
+                }
+            }
+            let gap = d2 - d1;
+            let grit = (fbm_tiled(u, v, 48.0, 3) - 0.5) * 18.0;
+            let dome = 1.0 - (d1 / 0.75).min(1.0) * 0.25;
+            let mut val = (200.0 + (hash(id_x, id_y, 5.0) - 0.5) * 30.0) * dome + grit;
+            if gap < 0.08 {
+                val = 100.0 + (gap / 0.08) * 60.0 + grit;
+            }
+            write_grey(&mut out, ((y * width + x) * 4) as usize, val);
+        }
+    }
+    out
+}
+
+/// Barrel roof tiles: six staggered rows, each tile a half-cylinder with a shadowed lip.
+pub fn draw_roof_tile_tile(width: u32, height: u32) -> Vec<u8> {
+    let mut out = vec![0u8; (width * height * 4) as usize];
+    let (rows, cols) = (6.0f32, 5.0f32);
+    for y in 0..height {
+        for x in 0..width {
+            let u = x as f32 / width as f32;
+            let v = y as f32 / height as f32;
+            let row = (v * rows).floor();
+            let fv = v * rows - row;
+            let cu = u * cols + (row % 2.0) * 0.5;
+            let col = cu.floor();
+            let fu = cu - col;
+            let mut shade = 0.72 + 0.33 * (std::f32::consts::PI * fu).sin();
+            if fv > 0.86 {
+                shade *= 0.55 + ((1.0 - fv) / 0.14) * 0.3;
+            }
+            let tone = (hash(wrap(col, cols), row, 7.0) - 0.5) * 20.0;
+            let val = (200.0 + tone) * shade + (fbm_tiled(u, v, 40.0, 3) - 0.5) * 14.0;
+            write_grey(&mut out, ((y * width + x) * 4) as usize, val);
+        }
+    }
+    out
+}
+
+/// Loop-pile carpet tiles (2×2 per texture): per-fibre speckle and a faint seam.
+pub fn draw_carpet_tile(width: u32, height: u32) -> Vec<u8> {
+    let mut out = vec![0u8; (width * height * 4) as usize];
+    for y in 0..height {
+        for x in 0..width {
+            let u = x as f32 / width as f32;
+            let v = y as f32 / height as f32;
+            let mut val = 200.0
+                + (hash(x as f32, y as f32, 9.0) - 0.5) * 26.0
+                + (fbm_tiled(u, v, 8.0, 3) - 0.5) * 14.0;
+            let tu = (u * 2.0) % 1.0;
+            let tv = (v * 2.0) % 1.0;
+            if tu.min(1.0 - tu).min(tv.min(1.0 - tv)) < 0.006 {
+                val *= 0.86;
+            }
+            write_grey(&mut out, ((y * width + x) * 4) as usize, val);
+        }
+    }
+    out
+}
+
+/// Stretcher-bond brick: eight courses of four, per-brick tone, lighter mortar.
+pub fn draw_brick_tile(width: u32, height: u32) -> Vec<u8> {
+    let mut out = vec![0u8; (width * height * 4) as usize];
+    let (rows, cols, mortar) = (8.0f32, 4.0f32, 0.01f32);
+    for y in 0..height {
+        for x in 0..width {
+            let u = x as f32 / width as f32;
+            let v = y as f32 / height as f32;
+            let row = (v * rows).floor();
+            let fv = v * rows - row;
+            let cu = u * cols + (row % 2.0) * 0.5;
+            let col = cu.floor();
+            let fu = cu - col;
+            let d = (fu.min(1.0 - fu) / cols).min(fv.min(1.0 - fv) / rows);
+            let val = if d < mortar {
+                230.0 + (fbm_tiled(u, v, 64.0, 2) - 0.5) * 16.0
+            } else {
+                185.0
+                    + (hash(wrap(col, cols), row, 11.0) - 0.5) * 40.0
+                    + (fbm_tiled(u, v, 64.0, 3) - 0.5) * 20.0
+            };
+            write_grey(&mut out, ((y * width + x) * 4) as usize, val);
+        }
+    }
+    out
+}
+
+fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_to_srgb(c: f32) -> f32 {
+    if c <= 0.0031308 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+/// Turn a tile into pure detail: its luminance, rescaled so the linear mean is
+/// `mean`. Colour is discarded on purpose — the GLB material already says what
+/// colour the surface is, and a brown wood tile times a mapper's cedar brown is
+/// darker and muddier than either meant.
+pub fn normalize_detail_tile(data: &[u8], mean: f32) -> Vec<u8> {
+    let count = data.len() / 4;
+    let luma: Vec<f32> = (0..count)
+        .map(|i| {
+            let r = srgb_to_linear(data[i * 4] as f32 / 255.0);
+            let g = srgb_to_linear(data[i * 4 + 1] as f32 / 255.0);
+            let b = srgb_to_linear(data[i * 4 + 2] as f32 / 255.0);
+            0.2126 * r + 0.7152 * g + 0.0722 * b
+        })
+        .collect();
+    let sum: f64 = luma.iter().map(|&l| l as f64).sum();
+    let scale = if sum > 0.0 {
+        (mean as f64 * count as f64 / sum) as f32
+    } else {
+        0.0
+    };
+    // A high-contrast tile (hazard's black stripes) scaled to the mean would push
+    // its highlights past 1 and clip, dragging the mean back down. Compress the
+    // contrast about the mean instead, which keeps the mean exact.
+    let peak = luma.iter().fold(0.0f32, |m, &l| m.max(l * scale));
+    let squeeze = if peak > 1.0 {
+        (1.0 - mean) / (peak - mean)
+    } else {
+        1.0
+    };
+    let mut out = vec![0u8; data.len()];
+    for (i, l) in luma.iter().enumerate() {
+        let l = mean + (l * scale - mean) * squeeze;
+        let g = (linear_to_srgb(l.clamp(0.0, 1.0)) * 255.0).round() as u8;
+        out[i * 4] = g;
+        out[i * 4 + 1] = g;
+        out[i * 4 + 2] = g;
+        out[i * 4 + 3] = 255;
+    }
+    out
+}
+
+/// The rules both clients classify GLB materials by.
+const GLB_SURFACES_JSON: &str =
+    include_str!("../../../packages/core/src/modules/hassault/glb-surfaces.json");
+
+struct SurfaceTable {
+    default: MaterialKind,
+    rules: Vec<(MaterialKind, Vec<String>)>,
+    tile_scale: std::collections::HashMap<MaterialKind, f32>,
+    detail_mean: f32,
+}
+
+fn surface_table() -> &'static SurfaceTable {
+    static TABLE: std::sync::OnceLock<SurfaceTable> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let json: serde_json::Value =
+            serde_json::from_str(GLB_SURFACES_JSON).expect("glb-surfaces.json should parse");
+        let kind = |v: &serde_json::Value| {
+            let name = v.as_str().expect("surface kind should be a string");
+            MaterialKind::from_key(name)
+                .unwrap_or_else(|| panic!("glb-surfaces.json names unknown kind {name}"))
+        };
+        let rules = json["rules"]
+            .as_array()
+            .expect("rules")
+            .iter()
+            .map(|r| {
+                let m = r["match"]
+                    .as_array()
+                    .expect("match")
+                    .iter()
+                    .map(|s| s.as_str().expect("match entry").to_string())
+                    .collect();
+                (kind(&r["kind"]), m)
+            })
+            .collect();
+        let tile_scale = json["tileScale"]
+            .as_object()
+            .expect("tileScale")
+            .iter()
+            .map(|(k, v)| {
+                (
+                    MaterialKind::from_key(k)
+                        .unwrap_or_else(|| panic!("tileScale names unknown kind {k}")),
+                    v.as_f64().expect("tile scale") as f32,
+                )
+            })
+            .collect();
+        SurfaceTable {
+            default: kind(&json["default"]),
+            rules,
+            tile_scale,
+            detail_mean: json["detailMean"].as_f64().expect("detailMean") as f32,
+        }
+    })
+}
+
+/// Linear mean every multiplied layer is normalised to (`detailMean`).
+pub fn detail_mean() -> f32 {
+    surface_table().detail_mean
+}
+
 /// Tactical PBR surface material types matching the Three.js material library.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
@@ -505,24 +829,45 @@ pub enum MaterialKind {
     Gold = 10,
     SiteA = 11,
     SiteB = 12,
+    Masonry = 13,
+    Plaster = 14,
+    Cobblestone = 15,
+    RoofTile = 16,
+    Carpet = 17,
+    Brick = 18,
 }
 
 impl MaterialKind {
+    /// The kind's key in `glb-surfaces.json` (the browser's `SurfaceKind`).
+    pub fn from_key(key: &str) -> Option<Self> {
+        Some(match key {
+            "none" => MaterialKind::None,
+            "asphalt" => MaterialKind::Asphalt,
+            "marble" => MaterialKind::Marble,
+            "concrete" => MaterialKind::Concrete,
+            "vault_steel" => MaterialKind::VaultSteel,
+            "hazard" => MaterialKind::Hazard,
+            "wood" => MaterialKind::Wood,
+            "crate" => MaterialKind::Crate,
+            "container" => MaterialKind::Container,
+            "glass" => MaterialKind::Glass,
+            "gold" => MaterialKind::Gold,
+            "site_a" => MaterialKind::SiteA,
+            "site_b" => MaterialKind::SiteB,
+            "masonry" => MaterialKind::Masonry,
+            "plaster" => MaterialKind::Plaster,
+            "cobblestone" => MaterialKind::Cobblestone,
+            "roof_tile" => MaterialKind::RoofTile,
+            "carpet" => MaterialKind::Carpet,
+            "brick" => MaterialKind::Brick,
+            _ => return None,
+        })
+    }
+
     pub fn layer_index(&self) -> u32 {
         match self {
             MaterialKind::None => 0,
-            MaterialKind::Asphalt => 0,
-            MaterialKind::Marble => 1,
-            MaterialKind::Concrete => 2,
-            MaterialKind::VaultSteel => 3,
-            MaterialKind::Hazard => 4,
-            MaterialKind::Wood => 5,
-            MaterialKind::Crate => 6,
-            MaterialKind::Container => 7,
-            MaterialKind::Glass => 8,
-            MaterialKind::Gold => 9,
-            MaterialKind::SiteA => 10,
-            MaterialKind::SiteB => 11,
+            other => *other as u32 - 1,
         }
     }
 
@@ -540,6 +885,12 @@ impl MaterialKind {
             MaterialKind::Glass => 0.06,
             MaterialKind::Gold => 0.20,
             MaterialKind::SiteA | MaterialKind::SiteB => 0.70,
+            MaterialKind::Masonry => 0.85,
+            MaterialKind::Plaster => 0.90,
+            MaterialKind::Cobblestone => 0.80,
+            MaterialKind::RoofTile => 0.70,
+            MaterialKind::Carpet => 0.95,
+            MaterialKind::Brick => 0.85,
         }
     }
 
@@ -557,47 +908,66 @@ impl MaterialKind {
             MaterialKind::Glass => 0.12,
             MaterialKind::Gold => 0.95,
             MaterialKind::SiteA | MaterialKind::SiteB => 0.0,
+            MaterialKind::Masonry
+            | MaterialKind::Plaster
+            | MaterialKind::Cobblestone
+            | MaterialKind::RoofTile
+            | MaterialKind::Brick => 0.02,
+            MaterialKind::Carpet => 0.0,
         }
     }
 
+    /// World units per repeat of the kind's tile (`tileScale`).
     pub fn tile_scale(&self) -> f32 {
-        match self {
-            MaterialKind::Hazard | MaterialKind::Crate => 2.0,
-            _ => 4.0,
-        }
+        surface_table().tile_scale.get(self).copied().unwrap_or(4.0)
     }
 
+    /// First `glb-surfaces.json` rule whose substring is in the lowercased name.
     pub fn from_name(name: &str) -> Self {
         let lower = name.to_ascii_lowercase();
-        if lower.contains("asphalt") || lower.contains("road") || lower.contains("street") {
-            MaterialKind::Asphalt
-        } else if lower.contains("marble") || lower.contains("tile") {
-            MaterialKind::Marble
-        } else if lower.contains("steel") || lower.contains("vault") || lower.contains("metal") {
-            MaterialKind::VaultSteel
-        } else if lower.contains("hazard") || lower.contains("stripe") {
-            MaterialKind::Hazard
-        } else if lower.contains("wood") || lower.contains("plank") {
-            MaterialKind::Wood
-        } else if lower.contains("crate") {
-            MaterialKind::Crate
-        } else if lower.contains("container") {
-            MaterialKind::Container
-        } else if lower.contains("glass") || lower.contains("window") {
-            MaterialKind::Glass
-        } else if lower.contains("gold") {
-            MaterialKind::Gold
-        } else if lower.contains("site_a") {
-            MaterialKind::SiteA
-        } else if lower.contains("site_b") {
-            MaterialKind::SiteB
-        } else {
-            MaterialKind::Concrete
-        }
+        let table = surface_table();
+        table
+            .rules
+            .iter()
+            .find(|(_, matches)| matches.iter().any(|m| lower.contains(m.as_str())))
+            .map(|(kind, _)| *kind)
+            .unwrap_or(table.default)
     }
 }
 
-/// Helper to construct the complete 12-layer 2D Texture Array for wgpu.
+/// Every layer of the texture array, in `MaterialKind::layer_index` order.
+///
+/// The layers the shader *multiplies* the albedo by are normalised to grey detail
+/// (`normalize_detail_tile`): every map on this client is a GLB whose materials
+/// carry their own colour, and the tile's job is the joints and grain, not a
+/// second opinion about the hue. Glass (8) and the site decals (10, 11) are
+/// blended by their own colour and alpha instead, so they stay as drawn.
+pub fn texture_layers(size: u32) -> Vec<Vec<u8>> {
+    let mean = detail_mean();
+    let detail = |tile: Vec<u8>| normalize_detail_tile(&tile, mean);
+    vec![
+        detail(draw_asphalt_tile(size, size)),
+        detail(draw_marble_tile(size, size)),
+        detail(draw_concrete_tile(size, size)),
+        detail(draw_vault_steel_tile(size, size)),
+        detail(draw_hazard_tile(size, size)),
+        detail(draw_wood_tile(size, size)),
+        detail(draw_tactical_crate_tile(size, size)),
+        detail(draw_container_tile(size, size)),
+        draw_glass_tile(size, size),
+        detail(draw_gold_tile(size, size)),
+        draw_site_decal_tile('A', size, size),
+        draw_site_decal_tile('B', size, size),
+        detail(draw_masonry_tile(size, size)),
+        detail(draw_plaster_tile(size, size)),
+        detail(draw_cobblestone_tile(size, size)),
+        detail(draw_roof_tile_tile(size, size)),
+        detail(draw_carpet_tile(size, size)),
+        detail(draw_brick_tile(size, size)),
+    ]
+}
+
+/// Helper to construct the complete 2D Texture Array for wgpu.
 pub fn build_pbr_texture_array(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -617,20 +987,7 @@ pub fn build_pbr_texture_array(
         view_formats: &[],
     });
 
-    let layers: [Vec<u8>; LAYER_COUNT as usize] = [
-        draw_asphalt_tile(TEXTURE_SIZE, TEXTURE_SIZE),
-        draw_marble_tile(TEXTURE_SIZE, TEXTURE_SIZE),
-        draw_concrete_tile(TEXTURE_SIZE, TEXTURE_SIZE),
-        draw_vault_steel_tile(TEXTURE_SIZE, TEXTURE_SIZE),
-        draw_hazard_tile(TEXTURE_SIZE, TEXTURE_SIZE),
-        draw_wood_tile(TEXTURE_SIZE, TEXTURE_SIZE),
-        draw_tactical_crate_tile(TEXTURE_SIZE, TEXTURE_SIZE),
-        draw_container_tile(TEXTURE_SIZE, TEXTURE_SIZE),
-        draw_glass_tile(TEXTURE_SIZE, TEXTURE_SIZE),
-        draw_gold_tile(TEXTURE_SIZE, TEXTURE_SIZE),
-        draw_site_decal_tile('A', TEXTURE_SIZE, TEXTURE_SIZE),
-        draw_site_decal_tile('B', TEXTURE_SIZE, TEXTURE_SIZE),
-    ];
+    let layers = texture_layers(TEXTURE_SIZE);
 
     for (layer_idx, data) in layers.iter().enumerate() {
         queue.write_texture(
@@ -880,11 +1237,119 @@ mod tests {
         }
     }
 
+    const GLB_VECTORS: &str = include_str!(
+        "../../../packages/core/src/modules/hassault/__tests__/glb-surface-vectors.json"
+    );
+
+    fn glb_vectors() -> serde_json::Value {
+        serde_json::from_str(GLB_VECTORS).expect("glb-surface-vectors.json should parse")
+    }
+
+    #[test]
+    fn glb_materials_classify_as_the_browser_does() {
+        let v = glb_vectors();
+        let cases = v["classify"].as_array().expect("classify");
+        assert!(
+            cases.len() > 100,
+            "the fixture should carry every bundled map material"
+        );
+        for case in cases {
+            let name = case["name"].as_str().unwrap();
+            let want = MaterialKind::from_key(case["kind"].as_str().unwrap()).unwrap();
+            assert_eq!(MaterialKind::from_name(name), want, "{name}");
+        }
+    }
+
+    #[test]
+    fn glb_planar_uvs_match_the_browser() {
+        for case in glb_vectors()["uvs"].as_array().expect("uvs") {
+            let f = |k: &str| -> Vec<f32> {
+                case[k]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|x| x.as_f64().unwrap() as f32)
+                    .collect()
+            };
+            let (p, n, uv) = (f("p"), f("n"), f("uv"));
+            let got = crate::world3d::glb_planar_uv(
+                [p[0], p[1], p[2]],
+                [n[0], n[1], n[2]],
+                case["scale"].as_f64().unwrap() as f32,
+            );
+            assert!(
+                (got[0] - uv[0]).abs() < 1e-5 && (got[1] - uv[1]).abs() < 1e-5,
+                "{case}"
+            );
+        }
+    }
+
+    fn linear_mean(tile: &[u8]) -> f32 {
+        let n = tile.len() / 4;
+        (0..n)
+            .map(|i| srgb_to_linear(tile[i * 4] as f32 / 255.0))
+            .sum::<f32>()
+            / n as f32
+    }
+
+    #[test]
+    fn multiplied_layers_are_grey_detail_at_the_shared_mean() {
+        let layers = texture_layers(64);
+        assert_eq!(layers.len(), LAYER_COUNT as usize);
+        for (i, layer) in layers.iter().enumerate() {
+            // Glass and the site decals are blended by their own colour, not multiplied.
+            if matches!(i, 8 | 10 | 11) {
+                continue;
+            }
+            let mean = linear_mean(layer);
+            assert!((mean - detail_mean()).abs() < 0.03, "layer {i} mean {mean}");
+            assert!(
+                layer.chunks(4).all(|p| p[0] == p[1] && p[1] == p[2]),
+                "layer {i} should be grey"
+            );
+        }
+    }
+
+    #[test]
+    fn every_kind_has_a_layer_and_a_tile_scale() {
+        for key in [
+            "asphalt",
+            "marble",
+            "concrete",
+            "vault_steel",
+            "hazard",
+            "wood",
+            "crate",
+            "container",
+            "glass",
+            "gold",
+            "site_a",
+            "site_b",
+            "masonry",
+            "plaster",
+            "cobblestone",
+            "roof_tile",
+            "carpet",
+            "brick",
+        ] {
+            let kind = MaterialKind::from_key(key).unwrap();
+            assert!(kind.layer_index() < LAYER_COUNT, "{key}");
+            assert!(kind.tile_scale() > 0.0, "{key}");
+        }
+        assert_eq!(MaterialKind::Brick.tile_scale(), 2.0);
+    }
+
     #[test]
     fn test_material_kind_properties() {
         assert_eq!(MaterialKind::Asphalt.roughness(), 0.88);
         assert_eq!(MaterialKind::VaultSteel.metalness(), 0.88);
-        assert_eq!(MaterialKind::from_name("street_ground"), MaterialKind::Asphalt);
-        assert_eq!(MaterialKind::from_name("warehouse_steel"), MaterialKind::VaultSteel);
+        assert_eq!(
+            MaterialKind::from_name("street_ground"),
+            MaterialKind::Asphalt
+        );
+        assert_eq!(
+            MaterialKind::from_name("warehouse_steel"),
+            MaterialKind::VaultSteel
+        );
     }
 }
