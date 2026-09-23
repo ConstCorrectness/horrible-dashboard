@@ -334,8 +334,91 @@ async def _focus(args: dict[str, Any]) -> Any:
         "layer": None if args.get("layer") is None else int(args["layer"]),
         "position": None if args.get("position") is None else int(args["position"]),
         "tokenId": None if args.get("tokenId") is None else int(args["tokenId"]),
+        # Moves the layer stepper's cursor to that sub-block of `layer` (and lights
+        # it in the model explorer) — "look at block 17's attention".
+        "stage": str(args["stage"]) if args.get("stage") else None,
+        "passIndex": None if args.get("passIndex") is None else int(args["passIndex"]),
     }
     return {"locus": lens_locus.set_locus(locus, source="agent")}
+
+
+async def _layer(args: dict[str, Any]) -> Any:
+    """What one block did, in numbers an explanation can quote.
+
+    Reuses the stepper's reads (`stepper.py`), so the agent and the pane can never
+    disagree about a block. Each part is independent: a trace without attention
+    capture still reports the residual delta, and says what it lacks.
+    """
+    from backend.modules.llamacpp import stepper
+
+    trace = _require_trace(str(args.get("traceId", "")).strip())
+    if trace is None:
+        return {"error": "no such trace; call llamacpp.list_traces first"}
+    layer = int(args.get("layer", 0))
+    pass_index = int(args.get("passIndex", 0))
+    out: dict[str, Any] = {
+        "traceId": trace.trace_id,
+        "layer": layer,
+        "passIndex": pass_index,
+    }
+
+    def delta() -> Any:
+        d = stepper.residual_delta(trace, layer, pass_index)
+        return {
+            "positions": d["positions"],
+            "relativeChange": [round(v, 4) for v in d["relative"]],
+            "cosine": [round(v, 4) for v in d["cosine"]],
+        }
+
+    def heads() -> Any:
+        record = next(
+            (
+                r
+                for r in trace.records
+                if r.pass_index == pass_index
+                and r.layer == layer
+                and r.name.startswith("kq_soft_max")
+            ),
+            None,
+        )
+        if record is None:
+            return {
+                "note": "no attention captured for this block (trace with attention on)"
+            }
+        summary = stepper.head_summaries(trace, record)
+        # A head parked on the first token is low-entropy too, so ranking by entropy
+        # alone just re-lists the sinks. "Sharpest" means focused on *content*.
+        content = [h for h in summary if h["firstWeight"] < 0.5]
+        sharp = sorted(content, key=lambda h: h["entropy"])[:3]
+        sinks = sorted(summary, key=lambda h: -h["firstWeight"])[:3]
+        return {
+            "heads": len(summary),
+            "sinkDominated": len(summary) - len(content),
+            "sharpest": [{k: round(v, 3) for k, v in h.items()} for h in sharp],
+            "strongestSinks": [{k: round(v, 3) for k, v in h.items()} for h in sinks],
+        }
+
+    def experts() -> Any:
+        routing = stepper.experts(trace, pass_index)
+        if not routing["moe"]:
+            return {"moe": False}
+        row = next((r for r in routing["layers"] if r["layer"] == layer), None)
+        if row is None:
+            return {"moe": True, "note": "no routing captured at this layer"}
+        busiest = sorted(range(len(row["counts"])), key=lambda e: -row["counts"][e])[:5]
+        return {
+            "moe": True,
+            "nExpert": routing["nExpert"],
+            "busiest": [{"expert": e, "tokens": row["counts"][e]} for e in busiest],
+            "selections": row["selections"],
+        }
+
+    for key, read in (("residual", delta), ("attention", heads), ("experts", experts)):
+        try:
+            out[key] = await asyncio.to_thread(read)
+        except stepper.StepperError as exc:
+            out[key] = {"note": str(exc)}
+    return out
 
 
 async def _save_finding(args: dict[str, Any]) -> Any:
@@ -475,8 +558,41 @@ LENS_TOOLS: list[AgentTool] = [
             },
             "position": {"type": "integer", "description": "Token position."},
             "tokenId": {"type": "integer", "description": "Vocabulary token to pin."},
+            "stage": {
+                "type": "string",
+                "enum": ["attention", "ffn", "moe", "residual", "norm"],
+                "description": (
+                    "Sub-block of `layer` to move the layer stepper's cursor to; the "
+                    "model explorer lights it."
+                ),
+            },
+            "passIndex": {
+                "type": "integer",
+                "description": "Forward pass (0 = the prompt).",
+            },
         },
         handler=_focus,
+        group="lens",
+    ),
+    AgentTool(
+        name="lens.layer",
+        description=(
+            "What one decoder block did in a traced forward pass: how much of each "
+            "token's residual vector it rewrote (and how far the direction turned), "
+            "its sharpest attention heads and attention sinks, and — on a mixture-"
+            "of-experts model — which experts it routed tokens to. Pair with "
+            "lens.focus(stage=...) to show the user the block you are describing."
+        ),
+        parameters={
+            "traceId": _TRACE_ID,
+            "layer": {"type": "integer", "description": "Decoder block."},
+            "passIndex": {
+                "type": "integer",
+                "description": "Forward pass (0 = the prompt).",
+            },
+        },
+        required=["traceId", "layer"],
+        handler=_layer,
         group="lens",
     ),
     AgentTool(

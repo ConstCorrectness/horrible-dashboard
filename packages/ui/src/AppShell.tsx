@@ -14,6 +14,7 @@ import {
   startAutoUpdateChecks,
   toggleAppFullscreen,
   registry,
+  workspacesEnabled,
   setBackdrop,
   setDesktopMode,
   setSetting,
@@ -263,6 +264,7 @@ export function AppShell({
     // dance in the Frame used to be for.
     registry.setPanelOpener(openPaneWhenReady);
     registry.setWorkspaceSwitcher(switchWorkspaceWhenReady);
+    registry.setWorkspaceGate(workspacesEnabled);
     if (initialWorkspaceId) switchWorkspaceWhenReady(initialWorkspaceId);
   }, []);
 

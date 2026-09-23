@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 
 import { SplitPane } from '../../SplitPane';
-import { useModelLocus } from '../../model-locus';
+import { revealSection } from '../../layout/controller';
+import { setModelLocus, useModelLocus } from '../../model-locus';
 import { ModelDesigner } from './designer/ModelDesigner';
 import { buildInspectGraph, inspectGraphKey } from './inspect/graph';
 import { HeadGrouping } from './inspect/HeadGrouping';
 import { InspectCanvas } from './inspect/InspectCanvas';
+import { explorerStage, stepperStage } from './inspect/stepper-stage';
 
 import {
   interpretabilityStore,
@@ -183,6 +185,15 @@ function ModelInspector() {
   const locus = useModelLocus();
   const locusLayer = locus.layer;
   /**
+   * The layer stepper's program counter, when it is the one driving. `stage` is
+   * which sub-block of `layer` is executing; mapping it onto this diagram's own
+   * stage names is what turns "the explorer shows block 12" into "the explorer
+   * shows *attention* in block 12 lit up" — the architecture as the map, the trace
+   * as the position on it.
+   */
+  const stepping = locus.source === 'stepper' && locus.traceId ? locus : null;
+  const locusStage = explorerStage(locus.stage, Boolean(arch?.moe));
+  /**
    * Bumped only when the selection arrived from OUTSIDE, so the canvas can bring
    * that node into view. A counter and not the layer itself: clicking layer 15 in
    * the lens twice must re-centre, and a value-keyed effect would treat the second
@@ -196,10 +207,16 @@ function ModelInspector() {
       setFocusNonce((n) => n + 1);
       return;
     }
-    setSelection({ stage: 'block', layer: locusLayer });
+    setSelection({ stage: locusStage ?? 'block', layer: locusLayer });
     // Opening the block is the point: a selected block whose tensor list is
     // still collapsed looks like nothing happened.
     setLayerOpen(true);
+  }, [locusLayer, locusStage]);
+  // Re-centre only when the *block* changes. Stepping attention -> ffn inside one
+  // block moves the highlight; re-fitting the canvas on every node would make the
+  // diagram jump under a reader stepping through it.
+  useEffect(() => {
+    if (locusLayer == null) return;
     setFocusNonce((n) => n + 1);
   }, [locusLayer]);
 
@@ -320,6 +337,19 @@ function ModelInspector() {
 
   return (
     <div className="mx-root">
+      {stepping && (
+        <div className="mx-pc" role="status">
+          <span className="mx-pc-dot" aria-hidden="true" />
+          <span>
+            Following the stepper · {stepping.layer === -1 ? 'embedding' : `block ${stepping.layer ?? '—'}`}
+            {stepping.stage ? ` · ${stepping.stage}` : ''}
+            {typeof stepping.step === 'number' ? ` · step ${stepping.step + 1}` : ''}
+          </span>
+          <button className="btn-mini" onClick={() => revealSection('stepper', 'llamacpp.server')}>
+            Open stepper
+          </button>
+        </div>
+      )}
       <div className="mx-head">
         <span className="interp-model">{arch.model}</span>
         {arch.family && <span className="interp-dim">{arch.family}</span>}
@@ -351,6 +381,16 @@ function ModelInspector() {
           selection={selection}
           onSelect={(next) => {
             setSelection(next);
+            if (stepping && next.layer !== null && next.stage !== 'model') {
+              setModelLocus(
+                {
+                  layer: next.layer,
+                  stage: stepperStage(next.stage),
+                  step: undefined,
+                },
+                'explorer',
+              );
+            }
             // Clicking the stack means "show me inside this block". The old UI had
             // a separate disclosure triangle for that; the canvas has the node
             // itself, and a click that selected the stack without opening it would
@@ -360,6 +400,9 @@ function ModelInspector() {
           onPickLayer={(layer) => {
             setSelection({ stage: 'block', layer });
             setLayerOpen(true);
+            // While a trace is being stepped, picking a block on the map moves the
+            // stepper there — the other half of the two-way link.
+            if (stepping) setModelLocus({ layer, stage: undefined, step: undefined }, 'explorer');
           }}
           focusNonce={focusNonce}
         />

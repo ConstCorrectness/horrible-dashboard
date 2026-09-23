@@ -47,6 +47,10 @@ class FakeSession:
                 outer.sent.append((code, cursor_pos, detail_level))
                 return f"msg-{len(outer.sent)}"
 
+            def complete(self, code: str, cursor_pos: int) -> str:
+                outer.sent.append((f"complete:{code}", cursor_pos, -1))
+                return f"msg-{len(outer.sent)}"
+
         self.kc = KC()
 
 
@@ -153,3 +157,40 @@ def test_the_waiter_blocks_until_the_worker_answers() -> None:
     s._route_shell({"parent_header": {"msg_id": "msg-1"}, "content": {"status": "ok"}})
     t.join(timeout=2)
     assert got == [{"status": "ok"}]
+
+
+def test_a_completion_rides_the_same_queue_and_routes_by_msg_id() -> None:
+    """`complete_request` reuses the inspect side-queue: same socket, same owner
+    thread, same msg_id routing — so it also works while a cell is running."""
+    s = FakeSession()
+    item = _Inspect("model.", 6, 0, kind="complete")
+    s.inspect_q.put(item)
+    s._service_inspects()
+    assert s.sent == [("complete:model.", 6, -1)]
+    reply = {
+        "parent_header": {"msg_id": "msg-1"},
+        "content": {"status": "ok", "matches": ["model.lm_head"], "cursor_start": 0},
+    }
+    assert s._route_shell(reply) is True
+    assert item.result.get_nowait()["matches"] == ["model.lm_head"]
+
+
+def test_complete_route_reports_unavailable_without_a_kernel() -> None:
+    """No running kernel is `unavailable`, never an empty `kernel` answer — which
+    would read as "this object has no attributes"."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from backend.modules.docs.routes import router
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api")
+    body = (
+        TestClient(app)
+        .post(
+            "/api/docs/complete",
+            json={"notebook_path": "nope.ipynb", "code": "x.", "cursor_pos": 2},
+        )
+        .json()
+    )
+    assert body["source"] == "unavailable" and body["matches"] == []

@@ -26,6 +26,7 @@ import {
   type Completion,
   type CompletionContext,
   type CompletionResult,
+  type CompletionSource,
 } from '@codemirror/autocomplete';
 
 import { dialogs } from '../../dialogs';
@@ -844,6 +845,8 @@ export interface LspOptions {
   /** Whether the popup opens as you type or only on Tab/Ctrl-Space
    * (`editor.completionTrigger`). Defaults to 'auto'. */
   trigger?: CompletionTrigger;
+  /** Extra completion sources (a notebook cell's live kernel). */
+  extraSources?: CompletionSource[];
 }
 
 /**
@@ -1468,6 +1471,7 @@ export function lspExtension(opts: LspOptions): Extension {
     frameworkImports: opts.frameworkImports,
     importCompletions: opts.importCompletions,
     trigger: opts.trigger,
+    extraSources: opts.extraSources,
   });
 
   return [

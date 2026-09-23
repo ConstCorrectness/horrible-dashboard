@@ -6,12 +6,13 @@ preloaded by the [coder and dba agents](agent-chat.mdx#specialized-agents--deleg
 and the [editor](editor.mdx)'s completion layer (doc snippets on suggestions,
 with no embedding lookup on the keystroke path).
 
-## The corpus (four kinds)
+## The corpus (five kinds)
 
 | kind | id prefix | source | one document per |
 | --- | --- | --- | --- |
 | `packages` | `pkg:` | installed curated framework packages (`lsp/pyenv.py` `FRAMEWORK_PACKAGES`) in the resolved interpreter's site-packages | public module/class/function/method — `ast.unparse`d signature + first docstring paragraph |
 | `stdlib` | `std:` | the resolved interpreter's **standard library** (`extract_stdlib.py`) | same, one `PackageHarvest` per top-level module |
+| `sdk` | `sdk:` | the dashboard's own Python APIs (`extract_sdk.py`): the `dash` REPL handle and every `dash.<facade>`, `backend.sdk`, `horrible_train` | public function/method. `dash` rows carry **no import path** — it is a REPL global, and completion must never offer `from dash.lens import grid` |
 | `schema` | `schema:` | every saved [database](database.mdx) connection via `driver.introspect` | table (qualified name + column list) |
 | `docs` | `doc:` | this repo's `docs/**/*.mdx` | chunk (`library/chunking.chunk_text`) |
 
@@ -24,6 +25,48 @@ asyncio subprocesses — see `lsp/manager.py`). That probe reports **`site.getsi
 plus the user site-packages**, not just the `sysconfig` prefix scheme — on a
 `pip install --user` layout (the Windows default for a non-venv interpreter) the prefix
 directory is nearly empty and every installed package would otherwise be invisible.
+
+### The walk is a budget, spent in priority order
+
+The per-package caps are a **budget**, and the order it is spent in decides what gets
+indexed. The walk used to be alphabetical. On torch, that meant 123 of the 200 files it
+was allowed were `torch.ao` (quantization), and **`torch.nn`, `torch.optim` and
+`torch.utils.data` were never reached at all**. `walk_rank` now orders every file:
+
+1. the package's own `__init__`;
+2. the `PRIORITY_SUBTREES` for that package, in their listed order (`nn/modules`,
+   `nn/functional`, `optim`, `utils/data`, `autograd`, … for torch; `trainer`,
+   `training_args`, `modeling_utils`, `generation`, … for transformers). A specific
+   entry precedes its parent (`utils/data` before `utils`), and the first match wins;
+3. everything else, **shallow before deep**, since the top of a package is its API and
+   the bottom is its implementation;
+4. the `DEFERRED_SUBTREES` last (`ao`, `distributed`, `onnx`, the quantized `nn`
+   variants, and `transformers/models`, which is ~400 model directories).
+
+torch and transformers also get larger caps (`PACKAGE_FILE_CAPS` and
+`PACKAGE_SYMBOL_CAPS`).
+
+### Docs that live outside the definition
+
+A parse-only walk reads `ast.get_docstring` on a `def` or a `class`. torch documents most
+of its API some other way, and each way is harvested explicitly:
+
+- **`add_docstr(torch.matmul, r"""…""")`**: every C-implemented function. These are ~970
+  calls in `_torch_docs.py` and `_tensor_docs.py` (`add_docstr_all("view", …)` is
+  `Tensor.view`), files the walk skips because they are private. `DOCSTR_FILES` names
+  them, and the symbol is taken from the call's *target*, not from the file. The
+  docstring's first line restates the call, and that line is the signature; the
+  function is C, so there is nothing else to unparse.
+- **`conv1d = _add_docstr(torch.conv1d, …)`**: the same thing as an assignment, in
+  `torch.nn.functional`, `torch.linalg`, `torch.fft` and `torch.special`. This is handled
+  in every walked file.
+- **`AdamW.__doc__ = (…)`** after the class body: how every `torch.optim` optimizer is
+  documented.
+
+`.format(**common_args)` placeholders cannot be evaluated statically. They render as the
+argument's bare name (`{input}` becomes `input`) rather than as something invented. A
+harvested row replaces the doc-less `__all__` stub for the same id instead of being
+added next to it.
 
 ### `__all__` re-exports
 
@@ -43,7 +86,7 @@ The stdlib is harvested into **both** projections but at different breadth:
 
 - The **relational** projection (`code_symbols`) covers the *whole* stdlib — it's a
   cheap SQLite prefix scan and editor completion has to be exhaustive.
-- The **embedding** projection covers only `STDLIB_EMBED`, a curated set of ~36 modules
+- The **embedding** projection covers only `STDLIB_EMBED`, a curated set of ~58 modules (the data-structure, concurrency and serialization modules a notebook reaches for among them)
   worth spending vectors on for agent retrieval. Embedding every stdlib symbol would be
   tens of thousands of vectors against a local embedder for very little retrieval gain.
 
@@ -140,10 +183,26 @@ changing the model on its own when the provider's catalog changes.
 ## Backend surface
 
 `backend/modules/symdex/`: `models.py` (Pydantic), `extract_packages.py` /
-`extract_schema.py` / `extract_docs.py` (sync extractors, run on threads),
+`extract_stdlib.py` / `extract_sdk.py` / `extract_schema.py` / `extract_docs.py`
+(sync extractors, run on threads), `reference.py` (whole docstrings and upstream
+links for the reference pane), `gen_reference_docs.py` (writes
+`docs/reference/python-*.mdx` from the `sdk` harvest; a test fails when they are
+stale),
 `index.py` (`SymdexIndex` singleton + the `symdex` broadcaster), `routes.py`
 (`/api/symdex/*`), `tools.py` (registered from `app.py` like the training/games
 tools). Modeled on `code/semantic.py`'s `SemanticIndex`.
+
+### The reference routes
+
+The [Python reference pane](./docs-popup.mdx) browses `code_symbols` directly:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/symdex/reference/sources` | Every browsable source (`std:json`, `pkg:torch`, `sdk:dash`) with its installed version and the interpreter's Python version |
+| `GET` | `/api/symdex/reference/modules?source=` | The modules a source defines symbols in, shallow first |
+| `GET` | `/api/symdex/reference/members?source=&module=` | What a module defines, each class carrying its methods (joined by `(source, class)`, so two packages' `Linear` never pool) |
+| `GET` | `/api/symdex/reference/search?q=` | Prefix search; a dotted query scopes by module |
+| `GET` | `/api/symdex/reference/doc?source=&module=&name=` | The whole docstring by AST (never importing), following a re-export to its definition (`definedIn`), plus the import line and a version-pinned upstream link |
 
 ## Browser vs desktop
 

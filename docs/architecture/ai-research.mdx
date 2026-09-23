@@ -137,11 +137,43 @@ box would be worse than the honest limitation.
 
 ## The workspace
 
-The `ai-research` frame (`packages/core/src/modules/training/index.ts`) lays the loop
-out left to right: datasets, then the recipe over its sweep, then localtrack and
-evals. Deliberately **not** called `research` — the `layouts` module already owns
-that frame id for reading papers, and two frames with one id collide in the tab
-strip.
+The `ai-research` frame (`packages/core/src/modules/training/index.ts`, 🧪) lays
+the loop out left to right: datasets — tabbed with the **Python reference**, the two
+things you look up before writing a cell — then the notebook, then a column that
+answers the three questions a run leaves you with:
+
+- **did it help?** — `localtrack.workspace` and `evals.hub`;
+- **what did the model do inside?** — `llamacpp.server` (whose **Stepper** walks a
+  traced forward pass node by node, like a debugger) and
+  `interpretability.architecture` (the model explorer, which follows the stepper's
+  cursor);
+- **what did the agent do?** — `trajectories.hub`.
+
+Preset seeding skips a view whose module is disabled, so the column degrades rather
+than breaks. Deliberately **not** called `research` — the `layouts` module already
+owns that frame id for reading papers, and two frames with one id collide in the tab
+strip. It no longer shares that preset's 🔬 either (the llama.cpp Traces section
+uses it too): three identical glyphs in one strip is no glyph.
+
+Every preset is also a palette command by name — `Workspace: AI Research` — see
+[the desktop shell](./desktop-shell.mdx).
+
+## Learning your way around the stack
+
+Three surfaces make the stack *readable* rather than only runnable:
+
+- the **Python reference** pane (`/pydoc`) browses the standard library, every
+  installed package at its installed version, and the dashboard's own SDKs, with the
+  whole docstring of any symbol and a version-pinned upstream link. torch is covered
+  properly now — `torch.nn`, `torch.optim` and `torch.utils.data` were never reached
+  by the old alphabetical harvest, and the ~970 C functions documented with
+  `add_docstr` were never read at all (see [symdex](../modules/symdex.mdx));
+- **kernel completion** in notebook cells: `model.` lists the real submodules of
+  the model you loaded, which no static index can know
+  (see [the documentation popup](../modules/docs-popup.mdx));
+- the **layer stepper** in [llama.cpp](../modules/llamacpp.mdx): a recorded forward
+  pass stepped like source, with breakpoints such as "stop where the lens first says
+  ' Paris'".
 
 ## Related
 
@@ -149,4 +181,6 @@ strip.
 - [training](../modules/training.mdx)
 - [evals](../modules/evals.mdx)
 - [localtrack](../modules/localtrack.mdx)
+- [llama.cpp — the stepper](../modules/llamacpp.mdx)
+- [symdex](../modules/symdex.mdx)
 - [backend plugin SDK](./backend-plugin-sdk.mdx)

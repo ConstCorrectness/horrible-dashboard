@@ -116,6 +116,34 @@ def _int(value: Any) -> int | None:
         return None
 
 
+def _int_list(value: Any) -> list[int] | None:
+    """A per-block array (`attention.head_count` as `[32, 32, 0, 32, …]`), or None.
+
+    `_int` returns None for a list, which used to mean a model that stores its head
+    counts per block silently lost them — and the diagram then showed no attention
+    at all rather than a varying one."""
+    if not isinstance(value, (list, tuple)) or not value:
+        return None
+    out: list[int] = []
+    for item in value:
+        number = _int(item)
+        if number is None:
+            return None
+        out.append(number)
+    return out
+
+
+def _scalar_or_max(value: Any) -> tuple[int | None, list[int] | None]:
+    """(representative count, per-block list). A uniform list collapses to its
+    scalar; a varying one keeps the list and reports its maximum."""
+    per_layer = _int_list(value)
+    if per_layer is None:
+        return _int(value), None
+    if len(set(per_layer)) == 1:
+        return per_layer[0], None
+    return max(per_layer), per_layer
+
+
 def _float(value: Any) -> float | None:
     if value is None:
         return None
@@ -152,6 +180,8 @@ def _build(
     heads: int | None,
     kv_heads: int | None,
     head_dim: int | None,
+    heads_per_layer: list[int] | None = None,
+    kv_heads_per_layer: list[int] | None = None,
     ffn_dim: int | None,
     activation: str | None,
     vocab: int | None,
@@ -188,6 +218,8 @@ def _build(
             ),
             slidingWindow=sliding_window,
             ropeTheta=rope_theta,
+            headsPerLayer=heads_per_layer,
+            kvHeadsPerLayer=kv_heads_per_layer,
         )
         if heads or kv_heads
         else None
@@ -258,6 +290,16 @@ def from_ollama_show(
         # so the diagram is still accurate but the weights are not full precision.
         notes.append(f"Quantized ({quant}) — structure unchanged, precision reduced.")
 
+    heads, heads_per_layer = _scalar_or_max(_first_suffix(info, "attention.head_count"))
+    kv_heads, kv_heads_per_layer = _scalar_or_max(
+        _first_suffix(info, "attention.head_count_kv")
+    )
+    if heads_per_layer or kv_heads_per_layer:
+        notes.append(
+            "Head counts vary by block (the GGUF stores them per layer); the headline "
+            "figure is the maximum — select a block to see its own."
+        )
+
     return _build(
         source="ollama",
         source_detail=endpoint,
@@ -265,8 +307,10 @@ def from_ollama_show(
         family=family,
         layers=_int(_first_suffix(info, "block_count")),
         hidden=_int(_first_suffix(info, "embedding_length")),
-        heads=_int(_first_suffix(info, "attention.head_count")),
-        kv_heads=_int(_first_suffix(info, "attention.head_count_kv")),
+        heads=heads,
+        kv_heads=kv_heads,
+        heads_per_layer=heads_per_layer,
+        kv_heads_per_layer=kv_heads_per_layer,
         head_dim=_int(_first_suffix(info, "attention.key_length")),
         ffn_dim=_int(_first_suffix(info, "feed_forward_length")),
         activation=None,  # GGUF doesn't record the activation function.

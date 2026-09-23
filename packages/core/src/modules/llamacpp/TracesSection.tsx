@@ -25,6 +25,7 @@ import { Sparkline } from '../../viz/Sparkline';
 import { ValueStrip } from '../../viz/ValueStrip';
 import { KIND_LABELS, kindsPresent, nodeKind, type NodeKind } from './node-kind';
 import { addPin, addPins, clearPins, getPins, MAX_PINS, removePin } from './pins';
+import { openInStepper } from './stepper/target';
 import { TraceProfile } from './TraceProfile';
 import { STAT_LABELS, TRACE_STATS, type TraceStat } from './trace-profile';
 import { subscribeTracePrompt, takePendingPrompt } from './trace-prompt';
@@ -527,7 +528,16 @@ function TraceView({ traceId }: { traceId: string }) {
   return (
     <div className="llama-section">
       <div className="llama-card">
-        <h3>{trace.modelName}</h3>
+        <h3>
+          {trace.modelName}
+          <button
+            className="llama-linkbtn"
+            onClick={() => openInStepper({ traceId })}
+            title="Walk this forward pass node by node in the layer debugger"
+          >
+            Step through
+          </button>
+        </h3>
         <div className="llama-row">
           <span className="llama-tag">{trace.recordCount} nodes</span>
           <span className="llama-tag">{formatBytes(trace.diskBytes)}</span>

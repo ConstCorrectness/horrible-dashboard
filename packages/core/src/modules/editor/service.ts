@@ -11,6 +11,7 @@ import { getRoots, loadRoots } from '../files/store';
 import { getBuffer, listBufferUris } from './buffers';
 import { getActiveBufferSource, openBuffer } from './index';
 import { buildCompletion, completionKeymap } from './completion';
+import { kernelCompletionSource } from './kernelCompletion';
 import { NotebookLspDoc, type LspCell } from './notebook-lsp';
 import { createNote, loadSource, saveSource } from './sources';
 
@@ -82,7 +83,7 @@ export interface EditorService {
    * Exposed here rather than deep-imported because the notebook kit is
    * domain-neutral; it knows this contract and nothing else about the editor.
    */
-  bareCompletion(languageId: string | null): Extension;
+  bareCompletion(languageId: string | null, opts?: { notebookPath?: string }): Extension;
 }
 
 /** A notebook's language-server session, as the notebook panes see it. */
@@ -167,11 +168,19 @@ const editorService: EditorService = {
 
   listBuffers: listBufferUris,
 
-  bareCompletion(languageId) {
+  bareCompletion(languageId, opts) {
     // Mutually exclusive with the LSP stack by construction — `autocompletion()`'s
     // `override` is a replacing field, so two live instances mean one silently wins
     // and the other's sources vanish. Callers pick one or the other, never both.
-    return [buildCompletion({ languageId }), completionKeymap];
+    return [
+      buildCompletion({
+        languageId,
+        // A notebook cell with no language server still has a kernel — and that is
+        // the source that knows the most about a live object anyway.
+        extraSources: opts?.notebookPath ? [kernelCompletionSource(opts.notebookPath)] : [],
+      }),
+      completionKeymap,
+    ];
   },
 
   openNotebookLsp(path) {

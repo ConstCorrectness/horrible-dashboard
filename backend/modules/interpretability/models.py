@@ -152,6 +152,11 @@ class AttentionSpec(BaseModel):
     groupRatio: int | None = None
     slidingWindow: int | None = None
     ropeTheta: float | None = None
+    #: Per-block head counts, when the GGUF stores an array rather than a scalar
+    #: (hybrid and alternating-attention models do). `heads`/`kvHeads` are then the
+    #: **maximum**, and a note says so — the per-block list is the fact.
+    headsPerLayer: list[int] | None = None
+    kvHeadsPerLayer: list[int] | None = None
 
 
 class FfnSpec(BaseModel):

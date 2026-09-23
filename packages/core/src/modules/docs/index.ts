@@ -2,17 +2,48 @@
  * Documentation popup module: the settings and the shared renderer behind the
  * hover/Shift-Tab docs in the editor and in notebook cells.
  *
- * It contributes no pane of its own — the popup belongs to whatever is being
- * hovered — but it is a module rather than loose helpers because the source chain
- * is user-configurable, and a setting has to be declared by someone. See
- * docs/modules/docs-popup.mdx.
+ * The popup belongs to whatever is being hovered, so it is not a pane. The one
+ * pane is the **Python reference** — the stdlib, every installed package and the
+ * dashboard's own SDKs, browsable at the installed versions — because hovering is
+ * how you read about a symbol you already have, never how you find one you don't.
+ * See docs/modules/docs-popup.mdx.
  */
-import type { ModuleManifest } from '../../registry';
+import { registry, type ModuleManifest } from '../../registry';
 import { DEFAULT_DOC_SOURCES } from '../../docs/chain';
+import { sendReferenceQuery } from './reference-api';
+import { ReferencePane } from './ReferencePane';
 
 export const docsModule: ModuleManifest = {
   id: 'docs',
   title: 'Documentation',
+  panels: [
+    {
+      id: 'docs.reference',
+      title: 'Python reference',
+      component: ReferencePane,
+      // Read and worked in, and tabbed beside notebooks in the AI Research preset.
+      role: 'document',
+      icon: '📚',
+      singleton: true,
+    },
+  ],
+  commands: [
+    {
+      id: 'docs.openReference',
+      title: 'Python reference: Browse the stdlib, packages and SDKs',
+      run: () => registry.openPanel('docs.reference'),
+      slash: 'pydoc',
+    },
+    {
+      id: 'docs.searchReference',
+      title: 'Python reference: Search for the symbol under the cursor',
+      run: () => {
+        const selection = window.getSelection()?.toString().trim();
+        if (selection) sendReferenceQuery(selection);
+        registry.openPanel('docs.reference');
+      },
+    },
+  ],
   settings: [
     {
       key: 'docs.sources',

@@ -56,3 +56,28 @@ class DocLookupResponse(BaseModel):
     #: from "found nothing" is the difference between a bug and an answer.
     tried: list[DocSourceId] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
+
+
+class CompleteRequest(BaseModel):
+    """A completion against the notebook's live kernel (`complete_request`)."""
+
+    notebook_path: str
+    code: str
+    cursor_pos: int
+
+
+class CompleteMatch(BaseModel):
+    text: str
+    #: IPython's experimental type (`function`, `instance`, `module`, …), when sent.
+    type: str = ""
+    signature: str = ""
+
+
+class CompleteResponse(BaseModel):
+    #: `kernel` when the live kernel answered; `unavailable` when there is no
+    #: running kernel for this notebook or it did not answer in time. The
+    #: distinction lets the editor say "no kernel" rather than "no completions".
+    source: Literal["kernel", "unavailable"] = "unavailable"
+    matches: list[CompleteMatch] = Field(default_factory=list)
+    cursor_start: int = 0
+    cursor_end: int = 0

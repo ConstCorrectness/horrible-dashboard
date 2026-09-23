@@ -55,6 +55,15 @@ DEFAULT_CAPTURE = (
     "l_out",
     "result_norm",
     "result_output",
+) + (
+    # Mixture-of-experts routing: the router's distribution, the experts each
+    # token was sent to (i32 indices), and how much each counted. On a dense
+    # model these match nothing and cost nothing. Verified against the literals
+    # in the installed llama.dll (b10362) — a name that matches nothing fails
+    # silently, which is the failure the SSM set below was written to fix.
+    "ffn_moe_probs",
+    "ffn_moe_topk",
+    "ffn_moe_weights",
 )
 
 #: Named capture sets the pane offers. Served rather than duplicated in TS —
@@ -300,7 +309,7 @@ class Tracer:
 
         # A quantized tensor is a weight, not an activation, and dequantizing it
         # here would mean reimplementing ggml's block formats in Python.
-        if bool(api.is_quantized(tensor.type)) or dtype not in ("f32", "f16"):
+        if bool(api.is_quantized(tensor.type)) or dtype not in ("f32", "f16", "i32"):
             meta_only({"bytes": float(nbytes)})
             return
         if self.byte_budget and self.written >= self.byte_budget:
@@ -315,6 +324,21 @@ class Tracer:
             return
 
         raw = api.read(ptr, nbytes)
+        if dtype == "i32":
+            # Router indices, not magnitudes: a summary of them is meaningless and a
+            # downcast to f16 is lossy past 2048, so they are always kept whole.
+            writer.append(
+                name=name,
+                op=op,
+                dtype=dtype,
+                ne=ne,
+                nb=nb,
+                pass_index=self.pass_index,
+                fidelity="full",
+                payload=raw,
+            )
+            self.written += len(raw)
+            return
         if self.fidelity == "summary":
             meta_only(traces.summarize(traces.decode(raw, dtype)))
             return

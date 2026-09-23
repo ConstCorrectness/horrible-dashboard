@@ -329,3 +329,131 @@ def query_import_members(
             ]
 
     return run(exact=True) or run(exact=False)
+
+
+# --- the reference browser --------------------------------------------------
+#
+# The Python reference pane (docs module) browses the same table completion reads,
+# so it needs no index of its own. Three corpora are browsable — `std:`, `pkg:` and
+# `sdk:` — and a buffer's own symbols (`workspace-file:`, `note:`) are not: they
+# are yours already, and would bury the library you came to read.
+
+_REFERENCE_SOURCES = (
+    "(source LIKE 'std:%' OR source LIKE 'pkg:%' OR source LIKE 'sdk:%')"
+)
+
+#: A row's *module* for browsing: its import path, or for a `dash.*` REPL handle
+#: (which has none, being a global) the module column that names the handle.
+_BROWSE_MODULE = "CASE WHEN imp != '' THEN imp WHEN module LIKE 'dash%' THEN module END"
+
+
+def reference_sources() -> list[dict[str, object]]:
+    """Every browsable source (`std:json`, `pkg:torch`, `sdk:dash`) with a row count."""
+    init()
+    sql = (
+        "SELECT source, COUNT(*) AS n FROM code_symbols "
+        f"WHERE lang = 'python' AND {_REFERENCE_SOURCES} GROUP BY source ORDER BY source"
+    )
+    with _conn() as conn:
+        return [
+            {"source": r["source"], "count": int(r["n"])} for r in conn.execute(sql)
+        ]
+
+
+def reference_modules(source: str) -> list[dict[str, object]]:
+    """The modules one source defines symbols in, shallow first."""
+    init()
+    sql = (
+        f"SELECT {_BROWSE_MODULE} AS m, COUNT(*) AS n FROM code_symbols "
+        "WHERE lang = 'python' AND source = ? GROUP BY m HAVING m IS NOT NULL "
+        "ORDER BY (length(m) - length(replace(m, '.', ''))), m"
+    )
+    with _conn() as conn:
+        return [
+            {"module": r["m"], "count": int(r["n"])}
+            for r in conn.execute(sql, [source])
+        ]
+
+
+def reference_members(source: str, module: str) -> list[dict[str, object]]:
+    """What `module` defines, each class carrying its methods.
+
+    A method's row stores its **class** in `module` (the member-scoping key
+    completion needs) and no import path, so methods are joined back to a class by
+    `(source, class name)` — which is why the source is part of every call: two
+    packages' `Linear` classes must not pool their methods.
+    """
+    init()
+    top_sql = (
+        "SELECT symbol, kind, detail, doc, imp, module FROM code_symbols "
+        f"WHERE lang = 'python' AND source = ? AND {_BROWSE_MODULE} = ? "
+        "ORDER BY CASE kind WHEN 'class' THEN 0 WHEN 'function' THEN 1 ELSE 2 END, symbol"
+    )
+    method_sql = (
+        "SELECT symbol, kind, detail, doc FROM code_symbols "
+        "WHERE lang = 'python' AND source = ? AND imp = '' AND module = ? "
+        "AND kind = 'method' ORDER BY symbol"
+    )
+    out: list[dict[str, object]] = []
+    with _conn() as conn:
+        for r in conn.execute(top_sql, [source, module]).fetchall():
+            row: dict[str, object] = {
+                "name": r["symbol"],
+                "kind": r["kind"],
+                "signature": r["detail"] if r["detail"] not in (r["kind"], "") else "",
+                "doc": r["doc"] or "",
+            }
+            # `variable` too: a class re-exported through `__all__` from a private
+            # file (torch's `Tensor`, defined in `torch/_tensor.py`) is only a name
+            # here, but its methods are still indexed under it.
+            if r["kind"] in ("class", "variable"):
+                members = [
+                    {
+                        "name": m["symbol"],
+                        "kind": m["kind"],
+                        "signature": m["detail"] if m["detail"] != m["kind"] else "",
+                        "doc": m["doc"] or "",
+                    }
+                    for m in conn.execute(method_sql, [source, r["symbol"]]).fetchall()
+                ]
+                if members:
+                    row["members"] = members
+            out.append(row)
+    return out
+
+
+def reference_search(query: str, limit: int = 40) -> list[dict[str, object]]:
+    """Prefix search across the browsable corpora. A dotted query narrows by module:
+    `torch.nn.Lin` asks for `Lin…` in modules under `torch.nn`."""
+    init()
+    parts = query.strip().split(".")
+    leaf = parts[-1]
+    scope = ".".join(parts[:-1])
+    if not leaf and not scope:
+        return []
+    sql = (
+        f"SELECT symbol, kind, detail, doc, source, {_BROWSE_MODULE} AS m "
+        f"FROM code_symbols WHERE lang = 'python' AND {_REFERENCE_SOURCES} "
+        "AND symbol LIKE ? ESCAPE '\\' "
+    )
+    params: list[object] = [_like(leaf)]
+    if scope:
+        sql += f"AND {_BROWSE_MODULE} LIKE ? ESCAPE '\\' "
+        params.append(_like(scope))
+    sql += (
+        "AND m IS NOT NULL ORDER BY (symbol = ?) DESC, "
+        "(length(m) - length(replace(m, '.', ''))), length(symbol), symbol LIMIT ?"
+    )
+    params.extend([leaf, max(1, limit)])
+    with _conn() as conn:
+        return [
+            {
+                "name": r["symbol"],
+                "kind": r["kind"],
+                "signature": r["detail"] if r["detail"] != r["kind"] else "",
+                "doc": r["doc"] or "",
+                "source": r["source"],
+                "module": r["m"],
+            }
+            for r in conn.execute(sql, params).fetchall()
+        ]

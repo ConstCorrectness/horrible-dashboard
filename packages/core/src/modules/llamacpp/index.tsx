@@ -4,6 +4,7 @@ import type { ContextMenuItem, ContextTarget } from '../../overlay/context-menu'
 import { registry, type ModuleManifest } from '../../registry';
 import type { EditorService } from '../editor/service';
 import { LlamaCppPane } from './ServerPane';
+import { layerStepperAction } from './stepper/actions';
 import { sendTracePrompt } from './trace-prompt';
 
 /** Enough of the buffer to name it in the traces section. */
@@ -121,6 +122,8 @@ export const llamacppModule: ModuleManifest = {
         { id: 'models', label: 'Models', icon: '🧠', key: 'm' },
         { id: 'traces', label: 'Traces', icon: '🔬', key: 't' },
         { id: 'lens', label: 'Lens', icon: '🔭', key: 'l' },
+        // The layer debugger: a trace in execution order, stepped like source.
+        { id: 'stepper', label: 'Stepper', icon: '⏯️', key: 'd' },
       ],
     },
   ],
@@ -131,12 +134,63 @@ export const llamacppModule: ModuleManifest = {
       run: () => registry.openPanel('llamacpp.server'),
     },
     {
+      id: 'llamacpp.openStepper',
+      title: 'llama.cpp: Step through a trace (layer debugger)',
+      run: () => revealSection('stepper', 'llamacpp.server'),
+      slash: 'stepper',
+    },
+    // The stepper's verbs. Commands so the palette lists them and the keymap can
+    // bind them; each is a no-op unless the Stepper section is mounted (the
+    // `bindLayerStepper` handle), which is correct — nothing else has a cursor.
+    ...(
+      [
+        ['stepInto', 'Step into (next node)'],
+        ['stepBack', 'Step back'],
+        ['stepOver', 'Step over (next block)'],
+        ['reverseStepOver', 'Reverse step over (previous block)'],
+        ['stepOut', 'Step out (next pass)'],
+        ['continueForward', 'Continue to next breakpoint'],
+        ['continueBack', 'Reverse continue'],
+        ['toggleBreakpoint', 'Toggle breakpoint on this block'],
+        ['togglePlay', 'Play / pause'],
+        ['restart', 'Restart'],
+      ] as const
+    ).map(([verb, title]) => ({
+      id: `llamacpp.stepper.${verb}`,
+      title: `Stepper: ${title}`,
+      run: () => layerStepperAction(verb),
+    })),
+    {
       id: 'llamacpp.traceSelection',
       title: 'llama.cpp: Trace editor selection',
       run: traceSelection,
       slash: 'trace-selection',
     },
   ],
+  // Pane-scoped and `!textInput`-guarded, agentpedia's precedent: arrows typed in
+  // the trace picker or a threshold box must not scrub the cursor. `f5`/`f11` are
+  // browser-reserved (keymap/reserved.ts), so VS Code's debugger keys only partly
+  // carry over — `f10` does, and the arrows are the primary spelling.
+  keybindings: (
+    [
+      ['right', 'stepInto'],
+      ['left', 'stepBack'],
+      ['down', 'stepOver'],
+      ['f10', 'stepOver'],
+      ['up', 'reverseStepOver'],
+      ['shift+f10', 'reverseStepOver'],
+      ['shift+right', 'stepOut'],
+      ['c', 'continueForward'],
+      ['shift+c', 'continueBack'],
+      ['b', 'toggleBreakpoint'],
+      ['space', 'togglePlay'],
+      ['home', 'restart'],
+    ] as const
+  ).map(([key, verb]) => ({
+    key,
+    command: `llamacpp.stepper.${verb}`,
+    when: "paneFocus == 'llamacpp.server' && !textInput",
+  })),
   contextMenu: [
     {
       kind: ['editor.selection', 'library.chunk'],

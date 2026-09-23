@@ -437,3 +437,74 @@ class StatusResponse(BaseModel):
     #: True when the agent's active provider is this one — the pane says so, since
     #: a running server nothing is pointed at is a common and confusing state.
     isAgentProvider: bool = False
+
+
+# --- the stepper ------------------------------------------------------------
+
+
+class MatrixResponse(BaseModel):
+    """One 2-D plane of a record (`stepper.matrix`), row-major.
+
+    `rowNorms` are taken at full resolution, before any pooling. `rowOffset` is
+    the token position of row 0 — non-zero when llama.cpp pruned the node to the
+    tail of the sequence.
+    """
+
+    record: dict[str, Any] = Field(default_factory=dict)
+    rows: int
+    cols: int
+    values: list[float] = Field(default_factory=list)
+    rowNorms: list[float] = Field(default_factory=list)
+    heads: int = 1
+    head: int = 0
+    sourceCols: int = 0
+    pooled: bool = False
+    kvCropped: bool = False
+    rowAxis: str = "token"
+    colAxis: str = "feature"
+    rowOffset: int = 0
+
+
+class HeadSummary(BaseModel):
+    head: int
+    entropy: float
+    selfWeight: float
+    firstWeight: float
+
+
+class HeadSummaryResponse(BaseModel):
+    record: dict[str, Any] = Field(default_factory=dict)
+    heads: list[HeadSummary] = Field(default_factory=list)
+
+
+class ResidualDeltaResponse(BaseModel):
+    """What one block wrote into the residual stream (`stepper.residual_delta`)."""
+
+    layer: int
+    passIndex: int
+    positions: list[int] = Field(default_factory=list)
+    deltaNorm: list[float] = Field(default_factory=list)
+    beforeNorm: list[float] = Field(default_factory=list)
+    afterNorm: list[float] = Field(default_factory=list)
+    relative: list[float] = Field(default_factory=list)
+    cosine: list[float] = Field(default_factory=list)
+
+
+class ExpertLayer(BaseModel):
+    layer: int
+    #: `selections[token][k]` — the expert ids each token was routed to.
+    selections: list[list[int]] = Field(default_factory=list)
+    #: The matching router weights, or None when the trace kept no weights node.
+    weights: list[list[float]] | None = None
+    #: How many tokens each expert received at this layer.
+    counts: list[int] = Field(default_factory=list)
+
+
+class ExpertsResponse(BaseModel):
+    """Mixture-of-experts routing for one pass. `moe: false` is a dense model (or
+    a capture set without the router), stated rather than drawn as an empty atlas."""
+
+    moe: bool
+    passIndex: int
+    nExpert: int = 0
+    layers: list[ExpertLayer] = Field(default_factory=list)

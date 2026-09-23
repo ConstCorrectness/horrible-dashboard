@@ -109,6 +109,43 @@ async def lookup_kernel(
     ]
 
 
+async def complete_kernel(notebook_path: str, code: str, cursor_pos: int) -> Any:
+    """Jupyter `complete_request` against the notebook's live kernel.
+
+    Returns `source="unavailable"` with no matches when there is no running kernel
+    for that notebook or it did not answer in time — never an empty `kernel` answer,
+    which would read as "this object has no attributes".
+    """
+    from backend.modules.docs.models import CompleteMatch, CompleteResponse
+    from backend.modules.notebook.manager import notebook_manager
+
+    session = notebook_manager.session_for(f"nb:{notebook_path}")
+    if session is None or not code:
+        return CompleteResponse()
+    cursor = max(0, min(cursor_pos, len(code)))
+    reply: dict[str, Any] = await asyncio.to_thread(session.complete, code, cursor)
+    if reply.get("status") != "ok":
+        return CompleteResponse()
+    typed = (reply.get("metadata") or {}).get("_jupyter_types_experimental") or []
+    by_text = {str(t.get("text")): t for t in typed if isinstance(t, dict)}
+    matches = []
+    for text in reply.get("matches") or []:
+        meta = by_text.get(str(text), {})
+        matches.append(
+            CompleteMatch(
+                text=str(text),
+                type=str(meta.get("type") or ""),
+                signature=str(meta.get("signature") or ""),
+            )
+        )
+    return CompleteResponse(
+        source="kernel",
+        matches=matches,
+        cursor_start=int(reply.get("cursor_start") or 0),
+        cursor_end=int(reply.get("cursor_end") or cursor),
+    )
+
+
 # --- index ------------------------------------------------------------------
 
 

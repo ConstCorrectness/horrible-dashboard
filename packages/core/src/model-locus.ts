@@ -36,6 +36,16 @@ export interface ModelLocus {
   position?: number;
   /** A vocabulary token being tracked across the grid. */
   tokenId?: number;
+  /**
+   * The stepper's program counter: which sub-block of `layer` is executing
+   * (`attention`, `ffn`, `residual`, … — `node-kind.ts`'s vocabulary) and which
+   * program step. The model explorer follows `stage` to highlight the node inside
+   * the expanded block; `step` lets `dash.lens.focus(step=…)` move the cursor.
+   */
+  stage?: string;
+  step?: number;
+  /** Which forward pass the stepper is in (0 = the prompt). */
+  passIndex?: number;
   /** Who drove this ('lens' | 'explorer' | 'dash' | 'agent'). */
   source?: string;
 }

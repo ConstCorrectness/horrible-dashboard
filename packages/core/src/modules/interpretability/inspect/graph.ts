@@ -312,9 +312,18 @@ export function buildInspectGraph(
         id: 'attention',
         kind: 'attn',
         label: ATTENTION_LABEL[attn.kind] ?? 'Attention',
-        sub:
-          `${attn.heads ?? '—'} heads` +
-          (attn.kvHeads != null && attn.kvHeads !== attn.heads ? ` / ${attn.kvHeads} KV` : ''),
+        sub: (() => {
+          // A model that stores head counts per block is described by the selected
+          // block's own numbers, not by the headline maximum.
+          const at = (list: number[] | null | undefined, fallback: number | null) =>
+            list && selection.layer !== null && selection.layer < list.length
+              ? list[selection.layer]
+              : fallback;
+          const heads = at(attn.headsPerLayer, attn.heads);
+          const kv = at(attn.kvHeadsPerLayer, attn.kvHeads);
+          if (heads === 0) return 'no attention in this block';
+          return `${heads ?? '—'} heads` + (kv != null && kv !== heads ? ` / ${kv} KV` : '');
+        })(),
         facts: [
           attn.headDim ? `dim ${attn.headDimDerived ? '~' : ''}${attn.headDim}` : '',
           attn.slidingWindow ? `window ${attn.slidingWindow}` : '',

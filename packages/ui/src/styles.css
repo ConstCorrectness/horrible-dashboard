@@ -6299,6 +6299,33 @@ button.agent-model-option.is-selected .agent-model-option-name {
   flex: 0 0 auto;
 }
 
+/* The layer stepper's program counter, drawn on the map it is walking. */
+.mx-pc {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 0 0 auto;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--ok);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--ok) 8%, transparent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.mx-pc > span:nth-child(2) {
+  flex: 1;
+}
+
+.mx-pc-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
 /* Where the metadata came from. The strong variant means "read off the weights
    you are running"; the quiet one means "read off a repo", which is a weaker
    claim and is styled as one. */
@@ -8498,7 +8525,9 @@ button.agent-model-option.is-selected .agent-model-option-name {
   font-weight: 500;
   padding: 0.35rem 0.6rem;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
   text-align: center;
 }
 
@@ -8518,4 +8547,3 @@ button.agent-model-option.is-selected .agent-model-option-name {
   color: var(--text-dim);
   line-height: 1.3;
 }
-

@@ -1,0 +1,5 @@
+{
+  "label": "Python API reference",
+  "position": 4,
+  "link": { "type": "generated-index", "description": "Generated from the source — the dashboard's own Python APIs." }
+}

@@ -142,18 +142,69 @@ user who disagrees with the answer needs to know which source to reorder.
 
 - **Settings:** `docs.sources`, `docs.hover`, `docs.webOnHover`,
   `docs.hoverDelayMs`.
-- **Backend route:** `POST /api/docs/lookup`.
+- **Backend routes:** `POST /api/docs/lookup`, `POST /api/docs/complete`.
 - **Keybinding:** <kbd>Shift</kbd>+<kbd>Tab</kbd> in a notebook cell, registered
   at `Prec.high` so it beats `indentLess` — and it only claims the key when there
   is a symbol under the cursor, so dedent still works everywhere else.
-- **No pane.** The popup belongs to whatever is being hovered; the module exists
-  because the chain is user-configurable and a setting has to be declared by
-  someone.
+- **Pane:** `docs.reference` ("Python reference", 📚; singleton, role `document`)
+  — see below. The popup itself is not a pane: it belongs to whatever is being
+  hovered.
+- **Commands:** `docs.openReference` (`/pydoc`), `docs.searchReference` (opens the
+  reference on the selected text).
+
+## Kernel completion in notebook cells
+
+`POST /api/docs/complete` sends Jupyter's `complete_request` to the notebook's live
+kernel. It rides the **same side-queue** as `inspect_request` (`_Inspect` grew a
+`kind`): one shell socket, one owner thread, replies routed by msg_id — so it also
+answers while a cell is running. Its timeout is shorter (1.5 s) because it sits on
+the keystroke path.
+
+`editor/kernelCompletion.ts` is an **extra source** in `buildCompletion`, merged
+after the language server's: the server wins any label it offers (it carries types
+and docs), and the kernel adds what only runtime knows — `model.` on a loaded
+`AutoModelForCausalLM` lists its real submodules, `df.` a real frame's columns.
+It is wired into both cell paths: the LSP-backed `cellExtension` and the bare stack
+a cell gets when no language server is running.
+
+Two details are load-bearing:
+
+- **No kernel is `unavailable`, never an empty answer.** An empty `kernel` reply
+  would read as "this object has no attributes".
+- **The kernel's anchor is re-expressed.** The merged list has one `from` (the
+  identifier start every source uses), while the kernel reports its own
+  `cursor_start` — jedi anchors after the dot, IPython's fallback at the start of
+  the dotted expression. `anchorMatches` peels the typed prefix off each match and
+  drops any whose typed part disagrees with the document, rather than inserting it
+  at the wrong offset.
+
+## The Python reference pane
+
+Hover answers "what is this" and never "what is there": nobody hovers their way to
+`torch.nn.utils.clip_grad_norm_` without knowing it exists. `docs.reference` is the
+way in — the **standard library**, every **installed package** at its installed
+version, and the **dashboard SDKs** (`dash`, `backend.sdk`, `horrible_train`),
+browsed as corpus → package → module → member, with search across everything
+(`torch.nn.Lin` scopes by module).
+
+It reads the same `code_symbols` rows completion reads, so it needs no index of its
+own — see [symdex](./symdex.mdx) for the routes. The page shows:
+
+- the **whole docstring**, read on demand from the defining file by AST, because the
+  index keeps only the first paragraph. Docstrings are RST or numpy-style, so they
+  are kept as written (pre-wrapped), not run through the markdown renderer;
+- a re-exported name **followed to its definition** — the most common search hit is
+  a package's `__all__` re-export, which has no docstring of its own;
+- an **import line** to copy (none for a `dash` handle, which is a REPL global);
+- an **upstream link pinned to the installed version**, labelled with what kind of
+  link it is: an exact anchor (docs.python.org), a versioned search (PyTorch, NumPy,
+  pandas) or the release's docs (Hugging Face, PyPI). A link to "latest" would show
+  arguments the installed version does not have.
+
+The hover popup gains **Open in reference**, through a seam in core
+`docs/reference-query.ts` so core infrastructure never imports a module.
 
 ## Not done yet
-
-- **Completion in notebook cells.** This is the docs half only; `complete_request`
-  is the same plumbing and is not wired.
 - **Non-Python languages.** `lang` is threaded through and defaults to `python`;
   the index is queried per language, but nothing else has been exercised.
 - **No cache across lookups.** The LSP client caches hover per document version;

@@ -74,6 +74,9 @@ export interface AttentionSpec {
   groupRatio: number | null;
   slidingWindow: number | null;
   ropeTheta: number | null;
+  /** Per-block counts when the GGUF stores an array; `heads` is then the max. */
+  headsPerLayer?: number[] | null;
+  kvHeadsPerLayer?: number[] | null;
 }
 
 export interface FfnSpec {

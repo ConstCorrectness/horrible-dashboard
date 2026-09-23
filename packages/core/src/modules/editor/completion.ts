@@ -49,6 +49,11 @@ export interface CompletionOptions {
   importCompletions?: boolean;
   /** `editor.completionTrigger`. */
   trigger?: CompletionTrigger;
+  /**
+   * Sources only some buffers have — a notebook cell's live kernel. Merged after
+   * the server's like every other extra, so the server wins any label it offers.
+   */
+  extraSources?: CompletionSource[];
 }
 
 /**
@@ -100,6 +105,7 @@ export function buildCompletion(opts: CompletionOptions): Extension {
       sources.push(frameworkImportSource(opts.getPackages ?? (() => undefined)));
     }
   }
+  sources.push(...(opts.extraSources ?? []));
   if (!opts.lspSource && !sources.length) return [];
   return autocompletion({
     override: [mergeSources(opts.lspSource, sources)],

@@ -291,7 +291,30 @@ class ModuleRegistry {
 
   get commands(): CommandDecl[] {
     const declared = [...this.modules.values()].flatMap((m) => m.commands ?? []);
-    return [...declared, ...this.frameSynthesizedCommands()];
+    return [...declared, ...this.frameSynthesizedCommands(), ...this.workspaceCommands()];
+  }
+
+  /**
+   * `Workspace: AI Research` — one palette entry per preset, by **name**.
+   *
+   * `workspace.switch:1..9` switch by position, which nobody can type from memory,
+   * and the launcher tiles only render on the home surface with workspaces on. A
+   * preset is the product's table of contents; its entries belong in the palette
+   * under the names the launcher shows. Synthesized, so a plugin's frames get one
+   * too, and routed through `switchWorkspace` — the same call the launcher makes,
+   * which seeds the preset when the workspace does not exist yet.
+   */
+  private workspaceCommands(): CommandDecl[] {
+    // Workspaces are opt-in (`desktop.workspaces`, off by default), and with them off
+    // the launcher, the tab strip and `workspace.switch:N` all stand down. A palette
+    // entry that still switched would be the one way into a tiled preset with no UI
+    // left to get back out by — so these are *absent*, not disabled.
+    if (!this.workspaceGate()) return [];
+    return this.framePresets.map((preset) => ({
+      id: `workspace.open:${preset.id}`,
+      title: `Workspace: ${preset.name}`,
+      run: () => this.switchWorkspace(preset.id),
+    }));
   }
 
   /** Every view (panel or widget) declaration, panels first. */
@@ -560,6 +583,17 @@ class ModuleRegistry {
     // no shell yet, and remembering a pane the user never saw would be a lie.
     if (this.panelOpener) noteViewOpened(panelId);
     this.panelOpener?.(panelId, opts);
+  }
+
+  private workspaceGate: () => boolean = () => true;
+
+  /**
+   * Whether workspaces are available — installed by the shell from the
+   * `desktop.workspaces` setting. Injected rather than imported because
+   * `settings.ts` already imports this module.
+   */
+  setWorkspaceGate(gate: () => boolean): void {
+    this.workspaceGate = gate;
   }
 
   /** The workspace installs the switcher; commands call switchWorkspace. */

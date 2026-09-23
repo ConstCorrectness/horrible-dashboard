@@ -17,6 +17,13 @@ The surface splits in two: **UI facades** (`panes`, `workspaces`, `layout`,
 facades** (`io`, `settings`) read/write backend state directly, with no browser
 round-trip, so they work even with no tab attached.
 
+This page explains the SDK; the generated
+[`dash` API reference](../reference/python-dash.mdx) lists every method with its
+full docstring, and the **Python reference** pane (`/pydoc`) browses the same list
+in-app. `dash.lens` also exposes the layer stepper's reads as numpy —
+`program`, `tensor`, `attention`, `delta`, `experts` — see
+[llama.cpp](../modules/llamacpp.mdx).
+
 This page is the **canonical reference** for the SDK surface. For the REPL pane,
 the kernel, and the `/ws` channel protocol, see the
 [repl module](../modules/repl.mdx).

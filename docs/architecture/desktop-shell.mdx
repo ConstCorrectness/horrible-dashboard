@@ -140,7 +140,13 @@ than going inert:
   slim titlebar);
 - the home screen's `WorkspaceLauncher` and the Start menu's **Desktops** group render
   nothing, and the Desktops submenus leave the app and desktop menus;
-- `workspace.switch:N` (`mod+1..9` / `alt+1..9`) does nothing.
+- `workspace.switch:N` (`mod+1..9` / `alt+1..9`) does nothing;
+- the per-preset palette commands (`Workspace: AI Research`, id
+  `workspace.open:<preset>`) are **absent** rather than inert. The registry
+  synthesizes one per `FramePreset` — a plugin's frames included — behind a gate the
+  shell installs from this setting (`registry.setWorkspaceGate`), injected because
+  `settings.ts` already imports the registry. A palette entry that still switched
+  would be the one way into a tiled preset with no UI left to get back out by.
 
 Switching the setting off while standing in a workspace moves you to the floating
 desktop (`followWorkspacesToggle` in `layout/install.ts`). The key is read through

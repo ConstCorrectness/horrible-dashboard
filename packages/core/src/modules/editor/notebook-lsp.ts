@@ -30,6 +30,7 @@
 import type { Extension } from '@codemirror/state';
 
 import { completionKeymap } from './completion';
+import { kernelCompletionSource } from './kernelCompletion';
 import {
   acquireSession,
   dirOf,
@@ -249,6 +250,9 @@ export class NotebookLspDoc {
         // A notebook is the place people reach for a framework they haven't imported
         // yet, so the curated import source earns its keep here more than anywhere.
         frameworkImports: true,
+        // What only the running kernel knows — the real attributes of a loaded
+        // object. See kernelCompletion.ts.
+        extraSources: [kernelCompletionSource(this.path)],
       }),
       // `lspExtension` configures the sources but not the keys — `BufferView` adds
       // this itself, and a cell had nobody to add it. Without it Tab is unbound in a

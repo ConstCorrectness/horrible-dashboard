@@ -570,14 +570,18 @@ model than the one its settings show.
 | Section | `llamacpp.server` → `models` | Key <kbd>m</kbd> — catalog + downloads |
 | Section | `llamacpp.server` → `traces` | Key <kbd>t</kbd> — the activation scrubber |
 | Section | `llamacpp.server` → `lens` | Key <kbd>l</kbd> — a trace read as words |
+| Section | `llamacpp.server` → `stepper` | Key <kbd>d</kbd> — the layer debugger: a trace in execution order (see "The stepper" below) |
 | Command | `llamacpp.open` | llama.cpp: Server and models |
+| Command | `llamacpp.openStepper` | llama.cpp: Step through a trace (`/stepper`) |
+| Command | `llamacpp.stepper.*` | Step into/back/over/out, continue (both ways), toggle breakpoint, play, restart — no-ops unless the Stepper section is mounted |
+| Keybinding | stepper verbs | <kbd>→</kbd>/<kbd>←</kbd> step, <kbd>↓</kbd>/<kbd>F10</kbd> over, <kbd>↑</kbd>/<kbd>Shift+F10</kbd> back over, <kbd>Shift+→</kbd> out, <kbd>C</kbd>/<kbd>Shift+C</kbd> continue, <kbd>B</kbd> breakpoint, <kbd>Space</kbd> play, <kbd>Home</kbd> restart — scoped `paneFocus == 'llamacpp.server' && !textInput` |
 | Command | `llamacpp.traceSelection` | llama.cpp: Trace editor selection (`/trace-selection`) |
 | Setting | `llamacpp.modelDirs` | Extra GGUF directories to scan |
 | Setting | `llamacpp.diskBudgetGb` | Ceiling for the managed directory |
 | Setting | `llamacpp.traceBudgetGb` | Ceiling for stored traces (default 2 GB) |
 | Setting | `llamacpp.lensCacheGb` | Ceiling for the dequantized output-head cache (default 4 GB) |
 
-One pane, four sections — the build, the weights, the traces and the lens are one
+One pane, five sections — the build, the weights, the traces and the lens are one
 workflow in a strict order (no build, no server; no weights, nothing to serve;
 nothing served, nothing to look inside; nothing traced, nothing to read), so
 splitting them would give panes of which most are usually an instruction to open
@@ -643,6 +647,10 @@ does not resurrect an old selection over what you were typing.
 | `GET` | `/api/llamacpp/traces/{id}/record/{i}` | One record's values, decoded server-side (capped at `_VALUE_CAP`) |
 | `GET` | `/api/llamacpp/traces/{id}/series` | One node's statistic per forward pass, **by name**. Summarizes the whole record, unlike `/record/{i}` |
 | `GET` | `/api/llamacpp/traces/{id}/tensors` | The raw blob, honouring `Range` |
+| `GET` | `/api/llamacpp/traces/{id}/record/{i}/matrix?head=&cols=` | One 2-D plane read **through the record's strides**: tokens × features (max-abs pooled, full-resolution row norms) or one attention head's query × key matrix cropped to the KV in use |
+| `GET` | `/api/llamacpp/traces/{id}/record/{i}/heads` | Per-head entropy / self-weight / first-token weight for an attention record |
+| `GET` | `/api/llamacpp/traces/{id}/layer/{L}/delta?passIndex=` | What block `L` wrote into the residual stream, per token (relative change, cosine) |
+| `GET` | `/api/llamacpp/traces/{id}/experts?passIndex=` | Mixture-of-experts routing: per-token expert choices and weights, per-layer counts. `moe: false` on a dense model |
 | `POST` | `/api/llamacpp/traces/{id}/fork` | Re-run with some tokens replaced (NDJSON progress) |
 | `GET` | `/api/llamacpp/traces/capture-sets` | The named capture sets and their real ggml node patterns |
 | `GET` | `/api/llamacpp/traces/{id}/lens` | The layer × position readout |
@@ -1199,7 +1207,17 @@ whole mechanism; `attention` needs `full`, since the score matrix is the largest
 thing a trace can hold.
 
 `lens` is the readout: `lens.grid`, `lens.cell`, `lens.track_token`, `lens.fork`,
-`lens.focus` and `lens.save_finding`. The group name equals the tool prefix because
+`lens.focus`, `lens.layer` and `lens.save_finding`. `lens.layer` is what one block
+did, in numbers an explanation can quote — the share of each token's residual it
+rewrote and the angle it turned, its sharpest *content* heads and its attention
+sinks (ranked separately: a head parked on the first token is low-entropy too, so
+ranking by entropy alone just re-lists the sinks), and on a mixture-of-experts model
+which experts it routed tokens to. It reuses the stepper's reads, so the agent and
+the pane cannot disagree about a block. `lens.focus` takes a `stage` and a
+`passIndex`, which move the stepper's cursor — "look at block 17's attention" puts
+the user's screen there. Two tools rather than a new group: the group already sits
+under the per-turn tool budget, and a separate `stepper.*` group would be one more
+`load_tools` round for the same question. The group name equals the tool prefix because
 `_group_of` splits on the dot and `AgentTool.group` does _not_ name the group —
 the connectors rule, and the trap `llamacpp` itself inverted.
 
@@ -1256,6 +1274,122 @@ library learns this module exists, which is the point of the context-menu regist
 selection from the **live view** rather than the persisted bytes, for the same
 reason `llamacpp.traceSelection` does: tracing something other than what is on
 screen is worse than declining.
+
+## The stepper — a forward pass stepped like source
+
+The Traces section is a record list you pin and scrub; the Lens is a grid of words.
+The **Stepper** is the third reading: **execution order**. It needs nothing new on
+disk, because a trace already *is* an instruction stream — the tracer appends
+records in the order ggml computed them, each tagged with its pass and its block.
+`stepper/program.ts` turns the record list into a program and gives every debugger
+verb a meaning:
+
+| verb | lands on |
+| --- | --- |
+| step into / back | the next / previous graph node |
+| step over | the first node of the next **frame** (a block of one pass; the embedding and output head are frames of their own, so stepping over the last block lands on the head rather than skipping it) |
+| reverse step over | the start of this frame, then of the previous one |
+| step out | the first node of the next forward pass |
+| continue / reverse continue | the next node a breakpoint stops on |
+| play | step over on a timer, stopping at any breakpoint crossed inside a frame |
+
+Reverse execution is free — a snapshot has no side effects to undo — which is the
+one way this debugger is better than the real kind.
+
+**One classifier.** A step's stage (`attention`, `ffn`, `moe`, `residual`, …) comes
+from `node-kind.ts`, the same function the Traces filter uses. The program is built
+in the browser from the record list `GET /traces/{id}` already returns, precisely so
+no second list of ggml node names exists to drift from the first.
+
+### Breakpoints, including ones no source debugger has
+
+- **block** — stops on *entry* to the block only, so Continue does not stop six
+  times inside it;
+- **stage** ("every attention node") and **node** (one name);
+- **threshold** — a stage's `rms` above a value, evaluated against the per-pass
+  profile. A node whose statistic was not measured **never** fires: stopping on a
+  guess is worse than not stopping;
+- **lens** — "stop where the lens first says ' Paris'". The stepper reads the
+  identity lens at the selected position for every layer of the pass (one
+  `/lens?positions=&passIndex=&k=1` call) and offers each token that is ever top-1,
+  with the block it first appears at. Verified on Llama-3.2-3B with the prompt
+  *"The capital of France is"*: ' Paris' first wins at block 19, Continue stops on
+  `l_out-19`, and the timeline marks blocks 19–27.
+
+Breakpoint marks on the timeline are drawn with the **same** `HitContext` Continue
+evaluates, so a mark is exactly where Continue would stop.
+
+### What each stage shows
+
+`stepper/StageView.tsx` picks the view that answers the question you stepped there
+to ask. Every read goes through the stride-aware routes; a `summary` record has no
+values and says so.
+
+- **Attention** (`kq_soft_max`, `kq`) — a strip of heads (the fill is each head's
+  weight on position 0, the attention sink), then the selected head's query × key
+  matrix on `HeatCanvas`, with the selected position's row outlined and its top keys
+  listed. `kq` is labelled as **raw pre-softmax scores**, where a query may score
+  keys after it — causality is applied by the next node.
+- **Residual** (`l_out`) — what the block *wrote*: the share of each token's vector
+  it rewrote and the angle the vector turned, and what the stream now says through
+  the lens at this layer.
+- **MoE** (`ffn_moe_*`) — the layer × expert atlas and the experts the selected
+  token was routed to, with their weights.
+- Anything else — the tokens × features plane and each token's norm.
+
+Watch pins are shared with the Traces section, and a pinned node **later in the pass
+than the cursor** shows "not yet run" rather than its value: reading it would be
+reading the future.
+
+### The reads, and the stride trap they fix
+
+`stepper.py` owns them. `get_record` ships a flat prefix, which is right for a value
+strip and wrong for anything with two axes — the first 8192 values of a
+`[256, 6, 24]` attention record are a few rows of head 0. `record_array` rebuilds
+the 4-D tensor through its strides, and there is a trap in that:
+
+**`nb` is recorded in the *source* dtype.** The tracer copies strides off the live
+tensor and then downcasts f32 to f16, so an `fp16` record's bytes are half as wide
+as its strides claim. Element strides are `nb / 4` for `fp16` and `nb / itemsize`
+for `full`; dividing by the stored width doubles every stride and reads a different,
+plausible-looking tensor. Pinned by `test_llamacpp_stepper.py`, alongside a permuted
+view, KV cropping (`kq_soft_max` is as wide as the **allocated** cache — 256 on a
+six-token prompt — and its masked columns are exact zeros), and the pruned tail (the
+last block's output on a prompt pass is one column, compared against the *last*
+column of the block before, never the first).
+
+Two things were found on real traces rather than assumed:
+
+- `inp_embd` is in the capture set and **still absent** on b10362 — the embedding
+  lookup happens before the callback sees the graph. Block 0's delta therefore
+  reports that its input was not recorded instead of subtracting zero.
+- Every attention row sums to 1 and the upper triangle is exactly 0, which is the
+  check that the stride reading is right.
+
+### Mixture-of-experts routing is now captured
+
+`ffn_moe_probs`, `ffn_moe_topk` and `ffn_moe_weights` joined `DEFAULT_CAPTURE` — the
+literals were checked in the installed `llama.dll` (b10362), the SSM set's lesson.
+On a dense model they match nothing and cost nothing. `ffn_moe_topk` is **i32**
+indices, so the tracer now keeps `i32` tensors whole (a summary of indices is
+meaningless, and an f16 downcast is lossy past 2048), and `traces.decode` reads
+`i32`. Traces recorded before this change have no router nodes and the atlas says so.
+
+### The explorer follows the cursor
+
+The cursor publishes `traceId`, `modelSha`, `layer`, `stage`, `step`, `passIndex`
+and `position` to the model locus. The [model explorer](./interpretability.mdx)
+selects that block, lights the sub-block the stage names, and shows a *following the
+stepper* strip; clicking a block or sub-block on its diagram publishes back, and the
+stepper jumps there. An echo of the block the cursor is already in is ignored, so the
+explorer re-selecting what it was just shown cannot yank the cursor to the block's
+start.
+
+Other surfaces open a trace in the stepper through `stepper/target.ts`
+(`openInStepper` with a trace id and a step or a layer) — the `trace-prompt.ts` seam,
+for the same two-directional mount race. `dash.lens` gained `program`, `tensor`,
+`attention`, `delta` and `experts` (numpy, the same functions the routes call), and
+`focus(stage=..., step=...)` moves the cursor from the REPL.
 
 ## Not done here
 

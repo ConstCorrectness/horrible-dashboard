@@ -80,10 +80,15 @@ export function useNotebookLsp(path: string, cells: NotebookCell[]): NotebookLsp
    * absolute path resolves, and every cell during the seconds a cold server takes to
    * come up.
    */
-  const bare = useRef<Extension[] | null>(null);
-  if (!bare.current) {
+  const bare = useRef<{ path: string; ext: Extension[] } | null>(null);
+  if (!bare.current || bare.current.path !== path) {
     const editor = registry.getService<EditorService>('editor');
-    bare.current = editor ? [editor.bareCompletion('python')] : NONE;
+    bare.current = {
+      path,
+      ext: editor
+        ? [editor.bareCompletion('python', enabled ? { notebookPath: path } : undefined)]
+        : NONE,
+    };
   }
 
   return {
@@ -93,7 +98,7 @@ export function useNotebookLsp(path: string, cells: NotebookCell[]): NotebookLsp
       // and never both: a second instance's `override` silently replaces the first's
       // sources. Swapping between them reconfigures the cell's compartment, which is
       // exactly what the compartment is for.
-      if (!handle) return bare.current!;
+      if (!handle) return bare.current!.ext;
       const cached = byCell.current.get(cell.id);
       if (cached) return cached;
       const ext = [handle.cellExtension(cell.id)];

@@ -378,8 +378,10 @@ export const trainingModule: ModuleManifest = {
       id: 'ai-research',
       name: 'AI Research',
       description:
-        'The loop from material to answer: browse a dataset, sweep the knob you are unsure of, and read which point moved the metric.',
-      icon: '🔬',
+        'The loop from material to answer: browse a dataset, sweep the knob you are unsure of, read which point moved the metric — then step through the model layer by layer.',
+      // Not 🔬: the paper-reading `research` preset and the llama.cpp Traces
+      // section both use it, and three identical glyphs in one strip is no glyph.
+      icon: '🧪',
       // `datasets` preloaded alongside `training`: the first thing asked of the
       // agent in this frame is almost always about data.
       agent: 'trainer',
@@ -388,13 +390,28 @@ export const trainingModule: ModuleManifest = {
           split: 'row',
           sizes: [0.34, 0.66],
           children: [
-            { tabs: ['datasets.browser'], active: 0 },
+            // The Python reference tabs with the data: the two things you look
+            // things up in before writing a cell.
+            { tabs: ['datasets.browser', 'docs.reference'], active: 0 },
             {
               split: 'row',
               sizes: [0.55, 0.45],
               children: [
                 { pane: 'training.notebook' },
-                { tabs: ['localtrack.workspace', 'evals.hub'], active: 0 },
+                {
+                  // Did it help (localtrack, evals), what did the model do inside
+                  // (the layer stepper and the architecture it walks), and what did
+                  // the agent do (trajectories). Seeding skips any id whose module
+                  // is disabled, so this degrades rather than breaks.
+                  tabs: [
+                    'localtrack.workspace',
+                    'evals.hub',
+                    'llamacpp.server',
+                    'interpretability.architecture',
+                    'trajectories.hub',
+                  ],
+                  active: 0,
+                },
               ],
             },
           ],

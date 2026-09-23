@@ -34,6 +34,7 @@ from backend.modules.database.vectorstore import (
 from backend.modules.lsp import symbol_store
 from backend.modules.symdex.extract_docs import extract_docs
 from backend.modules.symdex.extract_packages import extract_packages
+from backend.modules.symdex.extract_sdk import extract_sdk
 from backend.modules.symdex.extract_schema import extract_schemas
 from backend.modules.symdex.extract_stdlib import STDLIB_EMBED, extract_stdlib
 from backend.modules.symdex.models import KIND_PREFIXES
@@ -160,7 +161,7 @@ class SymdexIndex:
                 # anyway, so intellisense works offline; only semantic search waits.
                 built = 0
                 for kind in kinds:
-                    if kind in ("packages", "stdlib"):
+                    if kind in ("packages", "stdlib", "sdk"):
                         built += len(await self._collect(kind, interpreter))
                 self._publish("offline", ",".join(kinds), 0, 0)
                 return {
@@ -279,6 +280,21 @@ class SymdexIndex:
                 # vector space with near-duplicate name-only rows.
                 jobs.extend((d.id, d.text, d.metadata) for d in harvest.docs if d.doc)
             return jobs
+        if kind == "sdk":
+            # No interpreter needed: these are files in this repo, not in a venv.
+            sdk_harvests = await asyncio.to_thread(extract_sdk)
+            sdk_jobs: list[tuple[str, str, dict[str, Any]]] = []
+            for sdk_harvest in sdk_harvests:
+                await asyncio.to_thread(
+                    symbol_store.replace_source,
+                    f"sdk:{sdk_harvest.dist}",
+                    "python",
+                    [d.store_row() for d in sdk_harvest.docs],
+                )
+                sdk_jobs.extend(
+                    (d.id, d.text, d.metadata) for d in sdk_harvest.docs if d.doc
+                )
+            return sdk_jobs
         if kind == "schema":
             schemas = await asyncio.to_thread(extract_schemas)
             return [(d.id, d.text, d.metadata) for d in schemas]

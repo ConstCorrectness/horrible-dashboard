@@ -389,3 +389,37 @@ def test_fill_gaps_reports_nothing_when_there_are_no_gaps():
     secondary = arch.from_hf_config("m", "r", _hf(vocab_size=999))
     assert arch.fill_gaps(primary, secondary) == []
     assert primary.vocabSize == 128256  # untouched
+
+
+def test_per_layer_head_counts_are_kept_not_dropped():
+    """A GGUF may store `head_count` per block (hybrids zero it on SSM blocks).
+    `_int` used to turn the array into None, and the diagram then drew no attention
+    at all rather than attention that varies."""
+    a = arch.from_ollama_show(
+        "hybrid",
+        "http://x",
+        _gguf(
+            {
+                "general.architecture": "jamba",
+                "jamba.block_count": 4,
+                "jamba.embedding_length": 4096,
+                "jamba.attention.head_count": [32, 0, 32, 0],
+                "jamba.attention.head_count_kv": [8, 8, 8, 8],
+            }
+        ),
+    )
+    assert a.attention is not None
+    assert a.attention.heads == 32
+    assert a.attention.headsPerLayer == [32, 0, 32, 0]
+    # A uniform array collapses to its scalar rather than carrying a redundant list.
+    assert a.attention.kvHeads == 8 and a.attention.kvHeadsPerLayer is None
+    assert any("vary by block" in note for note in a.notes)
+
+
+def test_uniform_scalar_head_counts_carry_no_per_layer_list():
+    a = arch.from_ollama_show(
+        "m",
+        "http://x",
+        _gguf({"general.architecture": "llama", "llama.attention.head_count": 32}),
+    )
+    assert a.attention is not None and a.attention.headsPerLayer is None

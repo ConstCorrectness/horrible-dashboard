@@ -29,6 +29,7 @@ from backend.modules.llamacpp import (
     findings,
     lens as lens_module,
     offload,
+    stepper,
     trace_catalog,
     trace_runner,
     traces,
@@ -40,18 +41,22 @@ from backend.modules.llamacpp.models import (
     CaptureSetsResponse,
     EstimateRequest,
     EstimateResponse,
+    ExpertsResponse,
     ForkRequest,
+    HeadSummaryResponse,
     InstallRequest,
     LayerPlanResponse,
     LensGridResponse,
     LensListResponse,
     LensSpecModel,
     LensTrackResponse,
+    MatrixResponse,
     ModelEntry,
     ModelsResponse,
     RecordValues,
     RemoveInstallRequest,
     RepoFilesResponse,
+    ResidualDeltaResponse,
     SaveFindingRequest,
     SaveFindingResponse,
     ProfilePoint,
@@ -518,6 +523,71 @@ def get_record(trace_id: str, index: int, limit: int = _VALUE_CAP) -> RecordValu
         truncated=wanted < record.length,
         summary=traces.summarize(values),
     )
+
+
+def _record_at(trace: traces.Trace, index: int) -> traces.TraceRecord:
+    records = trace.records
+    if not 0 <= index < len(records):
+        raise HTTPException(status_code=404, detail=f"no record {index}")
+    return records[index]
+
+
+@router.get("/traces/{trace_id}/record/{index}/matrix", response_model=MatrixResponse)
+def get_record_matrix(
+    trace_id: str, index: int, head: int = 0, cols: int = 256
+) -> MatrixResponse:
+    """One 2-D plane of a record, read through its strides — the stepper's view.
+
+    `get_record` above ships a flat prefix, which is right for a value strip and
+    wrong for anything with two axes: the first 8192 values of an attention record
+    are a few rows of head 0. This one returns tokens x features (pooled to `cols`,
+    max-|x|, with full-resolution row norms), or for attention one head's
+    query x key matrix cropped to the KV positions actually in use.
+    """
+    trace = _require(trace_id)
+    record = _record_at(trace, index)
+    try:
+        data = stepper.matrix(trace, record, head=head, max_cols=max(8, min(cols, 1024)))
+    except stepper.StepperError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return MatrixResponse(record=record.to_dict(), **data.to_dict())
+
+
+@router.get("/traces/{trace_id}/record/{index}/heads", response_model=HeadSummaryResponse)
+def get_record_heads(trace_id: str, index: int) -> HeadSummaryResponse:
+    """Per-head entropy / self / first-token weight for one attention record."""
+    trace = _require(trace_id)
+    record = _record_at(trace, index)
+    try:
+        heads = stepper.head_summaries(trace, record)
+    except stepper.StepperError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return HeadSummaryResponse(
+        record=record.to_dict(),
+        heads=[{**h, "head": int(h["head"])} for h in heads],
+    )
+
+
+@router.get("/traces/{trace_id}/layer/{layer}/delta", response_model=ResidualDeltaResponse)
+def get_residual_delta(
+    trace_id: str, layer: int, passIndex: int = 0
+) -> ResidualDeltaResponse:
+    """What block `layer` wrote into the residual stream, per token."""
+    trace = _require(trace_id)
+    try:
+        return ResidualDeltaResponse(**stepper.residual_delta(trace, layer, passIndex))
+    except stepper.StepperError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/traces/{trace_id}/experts", response_model=ExpertsResponse)
+def get_experts(trace_id: str, passIndex: int = 0) -> ExpertsResponse:
+    """Mixture-of-experts routing for one pass — the expert atlas, from a real run."""
+    trace = _require(trace_id)
+    try:
+        return ExpertsResponse(**stepper.experts(trace, passIndex))
+    except stepper.StepperError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/traces/{trace_id}/series", response_model=TraceSeriesResponse)

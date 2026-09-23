@@ -75,6 +75,9 @@ PUMP_JOIN_TIMEOUT_S = 5.0
 #: How long a docs lookup waits for its `inspect_reply`. Short on purpose: it backs
 #: a tooltip, and its caller has other documentation sources to fall through to.
 INSPECT_TIMEOUT_S = 3.0
+#: Completion sits on the keystroke path, so it waits less than a tooltip does. A
+#: kernel busy running a cell answers late; the indexed symbols answer instead.
+COMPLETE_TIMEOUT_S = 1.5
 _STOP = object()  # worker-queue poison pill
 
 
@@ -100,10 +103,16 @@ class _Inspect:
     cannot read while debugging, which is when you want it.
     """
 
-    def __init__(self, code: str, cursor_pos: int, detail_level: int) -> None:
+    def __init__(
+        self, code: str, cursor_pos: int, detail_level: int, kind: str = "inspect"
+    ) -> None:
         self.code = code
         self.cursor_pos = cursor_pos
         self.detail_level = detail_level
+        #: `inspect` or `complete`. A `complete_request` is the same shape — code,
+        #: a cursor, one reply matched by msg_id on the shell socket — so it rides
+        #: this queue rather than growing a second one with a second drain.
+        self.kind = kind
         self.result: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
 
 
@@ -583,11 +592,14 @@ class KernelSession:
             except queue.Empty:
                 return
             try:
-                msg_id = self.kc.inspect(
-                    item.code,
-                    cursor_pos=item.cursor_pos,
-                    detail_level=item.detail_level,
-                )
+                if item.kind == "complete":
+                    msg_id = self.kc.complete(item.code, cursor_pos=item.cursor_pos)
+                else:
+                    msg_id = self.kc.inspect(
+                        item.code,
+                        cursor_pos=item.cursor_pos,
+                        detail_level=item.detail_level,
+                    )
                 self.inspect_pending[msg_id] = item
             except Exception:  # noqa: BLE001 — a doc lookup must not kill the worker
                 logger.exception("inspect_request failed (%s)", self.key)
@@ -671,6 +683,26 @@ class KernelSession:
             # A bound, unlike `_await_reply`: nobody waits ten seconds for a
             # tooltip, and the caller has other sources to try.
             return item.result.get(timeout=INSPECT_TIMEOUT_S)
+        except queue.Empty:
+            self.inspect_pending = {
+                k: v for k, v in self.inspect_pending.items() if v is not item
+            }
+            return {"status": "error"}
+
+    def complete(self, code: str, cursor_pos: int) -> dict[str, Any]:
+        """Ask the live kernel what can follow the cursor (Jupyter's Tab).
+
+        This is what static completion cannot know: `model.` on a loaded
+        `AutoModelForCausalLM` lists its real submodules, and `df.` a real frame's
+        columns. Same blocking contract and same failure shape as `inspect` — the
+        caller falls back to the indexed symbols on `{"status": "error"}`.
+        """
+        if self.kc is None or self.closing or self.status == "dead":
+            return {"status": "error"}
+        item = _Inspect(code, cursor_pos, 0, kind="complete")
+        self.inspect_q.put(item)
+        try:
+            return item.result.get(timeout=COMPLETE_TIMEOUT_S)
         except queue.Empty:
             self.inspect_pending = {
                 k: v for k, v in self.inspect_pending.items() if v is not item

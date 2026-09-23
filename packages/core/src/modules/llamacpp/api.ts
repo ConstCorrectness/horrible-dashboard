@@ -487,10 +487,19 @@ export interface CaptureSet {
 
 export function getLensGrid(
   traceId: string,
-  options: { lens?: string; k?: number; layers?: number[]; positions?: number[] } = {},
+  options: {
+    lens?: string;
+    k?: number;
+    layers?: number[];
+    positions?: number[];
+    /** Which forward pass; the backend always accepted it, the client never sent
+     * it, so every generated token's pass read back as the prompt's. */
+    passIndex?: number;
+  } = {},
 ): Promise<LensGrid> {
   const query = new URLSearchParams();
   if (options.lens) query.set('lens', options.lens);
+  if (options.passIndex) query.set('passIndex', String(options.passIndex));
   if (options.k) query.set('k', String(options.k));
   if (options.layers?.length) query.set('layers', options.layers.join(','));
   if (options.positions?.length) query.set('positions', options.positions.join(','));
@@ -498,10 +507,115 @@ export function getLensGrid(
   return apiGet<LensGrid>(`/llamacpp/traces/${encodeURIComponent(traceId)}/lens${suffix}`);
 }
 
-export function getLensTrack(traceId: string, tokenId: number, lens = 'identity'): Promise<LensTrack> {
+export function getLensTrack(
+  traceId: string,
+  tokenId: number,
+  lens = 'identity',
+  passIndex = 0,
+): Promise<LensTrack> {
   return apiGet<LensTrack>(
     `/llamacpp/traces/${encodeURIComponent(traceId)}/lens/track` +
-      `?tokenId=${tokenId}&lens=${encodeURIComponent(lens)}`,
+      `?tokenId=${tokenId}&lens=${encodeURIComponent(lens)}&passIndex=${passIndex}`,
+  );
+}
+
+// ── the stepper ─────────────────────────────────────────────────────────────
+
+/** One 2-D plane of a record, row-major, read through its strides.
+ *
+ * Rows are tokens. Columns are features (max-|x| pooled to fit, with `pooled`
+ * saying so) or, for attention, the KV positions actually in use — `kvCropped`
+ * says the allocated cache was wider. `rowNorms` are full-resolution. */
+export interface RecordMatrix {
+  record: TraceRecord;
+  rows: number;
+  cols: number;
+  values: number[];
+  rowNorms: number[];
+  heads: number;
+  head: number;
+  sourceCols: number;
+  pooled: boolean;
+  kvCropped: boolean;
+  rowAxis: string;
+  colAxis: string;
+  /** Token position of row 0 — non-zero when llama.cpp pruned the node. */
+  rowOffset: number;
+}
+
+export function getRecordMatrix(
+  traceId: string,
+  index: number,
+  options: { head?: number; cols?: number } = {},
+): Promise<RecordMatrix> {
+  const query = new URLSearchParams({
+    head: String(options.head ?? 0),
+    cols: String(options.cols ?? 192),
+  });
+  return apiGet<RecordMatrix>(
+    `/llamacpp/traces/${encodeURIComponent(traceId)}/record/${index}/matrix?${query}`,
+  );
+}
+
+export interface HeadSummary {
+  head: number;
+  /** Mean over query rows, in nats. Low = the head looks at one place. */
+  entropy: number;
+  /** Mean weight on the query's own position. */
+  selfWeight: number;
+  /** Mean weight on position 0 — the attention sink. */
+  firstWeight: number;
+}
+
+export function getRecordHeads(
+  traceId: string,
+  index: number,
+): Promise<{ record: TraceRecord; heads: HeadSummary[] }> {
+  return apiGet(`/llamacpp/traces/${encodeURIComponent(traceId)}/record/${index}/heads`);
+}
+
+export interface ResidualDelta {
+  layer: number;
+  passIndex: number;
+  positions: number[];
+  deltaNorm: number[];
+  beforeNorm: number[];
+  afterNorm: number[];
+  /** ‖Δ‖ / ‖before‖ — how much of the token this block rewrote. */
+  relative: number[];
+  /** How far the direction turned (1 = not at all). */
+  cosine: number[];
+}
+
+export function getResidualDelta(
+  traceId: string,
+  layer: number,
+  passIndex = 0,
+): Promise<ResidualDelta> {
+  return apiGet<ResidualDelta>(
+    `/llamacpp/traces/${encodeURIComponent(traceId)}/layer/${layer}/delta?passIndex=${passIndex}`,
+  );
+}
+
+export interface ExpertLayer {
+  layer: number;
+  selections: number[][];
+  weights: number[][] | null;
+  counts: number[];
+}
+
+/** `moe: false` is a dense model (or a trace without the router nodes) — stated,
+ * never drawn as an empty atlas. */
+export interface ExpertRouting {
+  moe: boolean;
+  passIndex: number;
+  nExpert: number;
+  layers: ExpertLayer[];
+}
+
+export function getExperts(traceId: string, passIndex = 0): Promise<ExpertRouting> {
+  return apiGet<ExpertRouting>(
+    `/llamacpp/traces/${encodeURIComponent(traceId)}/experts?passIndex=${passIndex}`,
   );
 }
 

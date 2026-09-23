@@ -59,6 +59,28 @@
   color: inherit;
 }
 
+.cm-docs-source {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+/* "Open in reference": the way from "what is this" to "what else is there". */
+.cm-docs-more {
+  height: auto;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.cm-docs-more:hover {
+  text-decoration: underline;
+}
+
 /* The notebook cell's Shift-Tab panel: inline under the cell rather than floating,
  * because it is meant to stay put while you edit against what it says. */
 .cell-docs-panel {

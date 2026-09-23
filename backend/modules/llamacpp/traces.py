@@ -286,8 +286,11 @@ def summarize(values: list[float]) -> dict[str, float]:
     return summarize_array(values)
 
 
-#: The two dtypes this module ever *writes*, as numpy descriptors. Little-endian,
-#: matching the manifest's `byteOrder`. A quantized weight is recorded as metadata
+#: The dtypes this module ever *writes*, as numpy descriptors. Little-endian,
+#: matching the manifest's `byteOrder`. `i32` is not an activation: it is the
+#: mixture-of-experts router's choice (`ffn_moe_topk`), which is indices, and the
+#: one integer tensor worth keeping — it decodes to float32 exactly (expert ids
+#: are far below 2^24). A quantized weight is recorded as metadata
 #: and never as bytes, so there is deliberately no dequantizer here to go subtly
 #: wrong — reading GGUF weight data is `lens.py`'s job and its own budget.
 _NUMPY_DTYPES: dict[str, str] = {
@@ -295,6 +298,8 @@ _NUMPY_DTYPES: dict[str, str] = {
     "F32": "<f4",
     "f16": "<f2",
     "F16": "<f2",
+    "i32": "<i4",
+    "I32": "<i4",
 }
 
 

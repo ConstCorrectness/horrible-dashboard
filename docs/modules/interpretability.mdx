@@ -303,6 +303,28 @@ actively misleads. The explorer compares tensor shapes across blocks and, when t
 differ, marks the block frame `varies` and names the roles that change. Only the
 inventory can see this.
 
+A GGUF can also store its head counts **per block** — a hybrid (Jamba, Falcon-H1)
+writes `attention.head_count` as an array with zeros on its state-space blocks.
+`architecture._int` used to turn that array into `None`, so such a model drew no
+attention at all. `_scalar_or_max` keeps the array as `headsPerLayer` /
+`kvHeadsPerLayer`, reports the maximum as the headline with a note saying so, and
+the attention node's subtitle uses the **selected block's** own count ("no attention
+in this block" where it is zero). A uniform array collapses to its scalar.
+
+### Following the layer stepper
+
+The explorer is the map; the [llama.cpp stepper](./llamacpp.mdx) is a position on
+it. While a trace is being stepped, the model locus carries the stepper's `stage`
+and `step` as well as the layer, and the explorer selects that block, **lights the
+sub-block executing** (attention, FFN, experts, norm — mapped in
+`inspect/stepper-stage.ts`, because the two panes share the bus and nothing else),
+and shows a *following the stepper* strip with a way back to it. The canvas
+re-centres only when the *block* changes, so stepping from attention to FFN moves a
+highlight rather than refitting the diagram under the reader.
+
+It works in reverse too: while the stepper is driving, clicking a block or a
+sub-block on the diagram publishes a locus and the stepper's cursor jumps there.
+
 It also reports the **mixed quantization** a K-quant build actually uses (a Gemma 4
 12B QAT build is 338 F32 tensors, 328 Q4_0, and exactly one Q6_K — the embedding),
 and where the bytes sit: select Attention and the pane says what share of the file

@@ -303,3 +303,100 @@ def test_symbols_without_docstrings_are_not_embedded(tmp_path, monkeypatch):
     assert [h["symbol"] for h in symbol_store.query("python", "undocument", 5)] == [
         "undocumented"
     ]
+
+
+def test_priority_walk_reaches_core_subpackages_under_the_cap(tmp_path, monkeypatch):
+    """The cap is a budget. Spent alphabetically, torch's 123 files of `torch.ao`
+    came first and `torch.nn` / `torch.optim` were never reached at all."""
+    pkg = tmp_path / "torch"
+    for i in range(30):
+        f = pkg / "ao" / f"q{i:02}.py"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(f"def quant_{i}():\n    '''Quantize.'''\n")
+    (pkg / "__init__.py").write_text("")
+    (pkg / "nn" / "modules").mkdir(parents=True)
+    (pkg / "nn" / "__init__.py").write_text("")
+    (pkg / "nn" / "modules" / "linear.py").write_text(
+        "class Linear:\n    '''Applies an affine linear transformation.'''\n"
+    )
+    (pkg / "optim").mkdir()
+    (pkg / "optim" / "adamw.py").write_text(
+        "class AdamW:\n    pass\n\n"
+        "AdamW.__doc__ = (\n    r'''Implements AdamW.\n\n    More.'''\n    + 'tail'\n)\n"
+    )
+    monkeypatch.setitem(ep.PACKAGE_FILE_CAPS, "torch", 5)
+
+    docs = {d.id: d for d in ep.harvest_package_dir(pkg, "torch", "torch")}
+    assert "pkg:torch:torch.nn.modules.linear.Linear" in docs
+    adamw = docs["pkg:torch:torch.optim.adamw.AdamW"]
+    # The doc assigned after the class body is what the class is documented by.
+    assert adamw.doc == "Implements AdamW."
+    # Deferred subtrees only get what is left: 5 files - __init__ x2 - linear - adamw.
+    assert sum(1 for i in docs if ".ao." in i) == 1
+
+
+def test_walk_rank_orders_specific_before_parent_and_defers_last():
+    rank = ep.walk_rank
+    assert rank("utils/data/dataloader", "torch") < rank("utils/hooks", "torch")
+    assert rank("nn/modules/linear", "torch") < rank("optim/sgd", "torch")
+    assert rank("nn/quantized/modules", "torch") > rank("zzz_unlisted", "torch")
+    # Unlisted packages: shallow before deep.
+    assert rank("a/b/c", "pkg") > rank("z", "pkg")
+
+
+def test_add_docstr_calls_become_documented_symbols(tmp_path):
+    """torch documents every C function with `add_docstr(...)` — ~970 of them, in
+    private files the walk skips. They are the core API: `torch.matmul`."""
+    pkg = tmp_path / "torch"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("__all__ = ['matmul']\n")
+    (pkg / "_torch_docs.py").write_text(
+        textwrap.dedent(
+            '''
+            add_docstr(
+                torch.matmul,
+                r"""
+            matmul(input, other, *, out=None) -> Tensor
+
+            Matrix product of two tensors.
+
+            More detail.
+            """,
+            )
+            add_docstr(torch._C._private, "nope")
+            add_docstr(
+                torch.abs,
+                """
+            abs(input) -> Tensor
+
+            Absolute value of {input}.
+            """.format(**common_args),
+            )
+            '''
+        )
+    )
+    (pkg / "_tensor_docs.py").write_text(
+        'add_docstr_all("view", r"""\nview(*shape) -> Tensor\n\nSame data, new shape.\n""")\n'
+    )
+    (pkg / "nn").mkdir()
+    (pkg / "nn" / "functional.py").write_text(
+        'conv1d = _add_docstr(torch.conv1d, r"""\n'
+        "conv1d(input, weight) -> Tensor\n\nApplies a 1D convolution.\n"
+        '""")\n'
+    )
+
+    docs = {d.id: d for d in ep.harvest_package_dir(pkg, "torch", "torch")}
+    matmul = docs["pkg:torch:torch.matmul"]
+    # The restated call is the signature (the function is C — nothing to unparse),
+    # and it is not repeated as the doc; the __all__ stub was replaced, not doubled.
+    assert matmul.detail == "(input, other, *, out=None) -> Tensor"
+    assert matmul.doc == "Matrix product of two tensors."
+    assert matmul.imp == "torch"
+    assert sum(1 for i in docs if i.endswith("torch.matmul")) == 1
+    # `.format` fields render as the argument's name; private targets stay out.
+    assert docs["pkg:torch:torch.abs"].doc == "Absolute value of input."
+    assert not any("_private" in i for i in docs)
+    view = docs["pkg:torch:torch.Tensor.view"]
+    assert view.module == "Tensor" and view.kind == "method" and view.imp == ""
+    conv = docs["pkg:torch:torch.nn.functional.conv1d"]
+    assert conv.doc == "Applies a 1D convolution." and conv.imp == "torch.nn.functional"

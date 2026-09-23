@@ -19,6 +19,7 @@ import {
   type DocSourceId,
 } from './chain';
 import { renderMarkdown } from './markdown';
+import { openReference } from './reference-query';
 import { getSetting } from '../settings';
 
 /** Word characters for symbol extraction: identifiers plus the dots that join them. */
@@ -83,6 +84,17 @@ export function renderDocEntry(entry: DocEntry): HTMLElement {
     foot.appendChild(link);
   } else {
     foot.textContent = entry.source;
+  }
+  // The popup answers "what is this"; the reference answers "what else is there"
+  // — the rest of the module, the class's other methods, the whole docstring.
+  if (entry.title) {
+    const more = document.createElement('button');
+    more.className = 'cm-docs-more';
+    more.type = 'button';
+    more.textContent = 'Open in reference';
+    more.addEventListener('mousedown', (event) => event.preventDefault());
+    more.addEventListener('click', () => openReference(entry.title));
+    foot.appendChild(more);
   }
   dom.appendChild(foot);
   return dom;
