@@ -6,7 +6,9 @@
 //! does not fit is simply pushed somewhere it does. This probes the collision
 //! mesh the way the character controller will meet it, with rays, so a map
 //! that is too short or a spawn placed in furniture is a test failure rather
-//! than a player standing on a ceiling.
+//! than a player standing on a ceiling. When it was written, bank, assault,
+//! inferno, mirage and nuke failed it too (spawns off the floor, on a mezzanine
+//! with 4.6 of headroom, under overhangs); they were moved in the same change.
 
 use hassault_native::api::MapInfo;
 use hassault_native::physics::STANDING_HEIGHT;
@@ -59,18 +61,6 @@ fn obstruction(physics: &RapierPhysicsWorld, x: f32, y: f32, z: f32) -> Option<S
     None
 }
 
-/// Maps whose spawns were already failing this check when it was written, each
-/// with a real obstruction (a spawn off the floor, under a mezzanine, inside a
-/// wall), left for their own fix. The test fails if one of these starts
-/// passing, so the list can only shrink.
-const KNOWN_BAD_SPAWNS: &[&str] = &[
-    "hd_bank",
-    "hd_assault",
-    "hd_inferno",
-    "hd_mirage",
-    "hd_nuke",
-];
-
 fn spawn_failures(name: &str) -> Vec<String> {
     let world = create_world_3d(MapInfo {
         name: name.into(),
@@ -92,27 +82,8 @@ fn spawn_failures(name: &str) -> Vec<String> {
 
 #[test]
 fn every_glb_spawn_has_room_for_a_standing_body() {
-    let mut failures = Vec::new();
-    for &name in GLB_MAPS {
-        let bad = spawn_failures(name);
-        if KNOWN_BAD_SPAWNS.contains(&name) {
-            assert!(
-                !bad.is_empty(),
-                "{name} now passes: remove it from KNOWN_BAD_SPAWNS"
-            );
-        } else {
-            failures.extend(bad);
-        }
-    }
-    assert!(
-        failures.is_empty(),
-        "spawns without room:
-  {}",
-        failures.join(
-            "
-  "
-        )
-    );
+    let failures: Vec<String> = GLB_MAPS.iter().flat_map(|name| spawn_failures(name)).collect();
+    assert!(failures.is_empty(), "spawns without room:\n  {}", failures.join("\n  "));
 }
 
 /// Office only: its items were moved out of the furniture with this check.
@@ -130,21 +101,9 @@ fn office_items_are_reachable_on_foot() {
         .items
         .iter()
         .filter_map(|item| {
-            obstruction(&physics, item.x, item.y, item.z).map(|why| {
-                format!(
-                    "item {} {} ({}, {}): {why}",
-                    item.id, item.kind, item.x, item.y
-                )
-            })
+            obstruction(&physics, item.x, item.y, item.z)
+                .map(|why| format!("item {} {} ({}, {}): {why}", item.id, item.kind, item.x, item.y))
         })
         .collect();
-    assert!(
-        failures.is_empty(),
-        "office items without room:
-  {}",
-        failures.join(
-            "
-  "
-        )
-    );
+    assert!(failures.is_empty(), "office items without room:\n  {}", failures.join("\n  "));
 }

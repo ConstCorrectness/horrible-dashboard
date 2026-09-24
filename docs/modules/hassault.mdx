@@ -657,11 +657,14 @@ partitions; they were moved to the nearest clear floor.
 
 `tests/test_spawn_clearance.rs` probes every GLB map's spawns against the collision
 mesh with rays (floor below, headroom over the footprint, nothing within the
-radius at chest height). Maps that already failed when it was written — bank,
-assault, inferno, mirage, nuke — are listed in `KNOWN_BAD_SPAWNS`, and the test
-fails if one of them starts passing, so the list only shrinks. Items are checked
-on office only: elsewhere they sit in crouch-height spaces a standing probe
-rejects.
+radius at chest height), and every map passes it. When it was written, five more
+failed: bank's south spawns stood where there is no floor at `z = 0` (the slab is
+at ~0.85), assault's RVSF spawns were on a mezzanine with 4.6 units of headroom
+(moved to the ground floor below — there is nowhere on that level a body fits),
+and inferno, mirage and nuke each had spawns under an overhang or on a crate.
+Each was moved to the nearest clear point on its own level, `z` set to the floor
+it actually stands on, both tables at once. Items are checked on office only:
+elsewhere they sit in crouch-height spaces a standing probe rejects.
 
 Note the **two spawn sources** for a GLB map: Train and the GLB render use the
 tables in `world3d.ts`/`world3d.rs`, while a hosted match simulates on the cube
