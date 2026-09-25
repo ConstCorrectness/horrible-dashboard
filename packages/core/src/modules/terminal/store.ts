@@ -11,6 +11,10 @@ export interface TerminalHandle {
   write: (data: string) => void;
   /** Recent scrollback as text (for the agent's `terminal.read`). */
   read: () => string;
+  /** `performance.now()` of the PTY's last output; 0 before any. */
+  lastOutputAt: () => number;
+  /** Settles once the pane's `initialCommand` (if any) has been typed. */
+  commandSent: Promise<void>;
 }
 
 const terminals: TerminalHandle[] = [];

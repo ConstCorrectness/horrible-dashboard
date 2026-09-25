@@ -87,6 +87,42 @@ interface LiveTerminal {
   onData: { dispose: () => void };
   /** What the backend said it actually spawned. Null until `started` arrives. */
   shell: string | null;
+  /** `performance.now()` of the last PTY output; 0 until the shell prints. */
+  lastOutputAt: number;
+  /** Settles once the `initialCommand` (if any) has been typed into the shell. */
+  commandSent: Promise<void>;
+}
+
+/** A shell is taken as ready once it has printed and then gone quiet this long. */
+const SETTLE_MS = 400;
+/** Type the command anyway after this, so a shell that never prints can't hang it. */
+const READY_CAP_MS = 8000;
+
+/**
+ * Type `command` once the shell has finished starting.
+ *
+ * This replaced a fixed 250 ms delay, which lost the command outright under
+ * Windows PowerShell: its startup (banner, profile, PSReadLine) takes longer than
+ * that, and input typed before PSReadLine is up is discarded. The agent's
+ * `terminal.exec` then reported success for a command that never ran, leaving a
+ * bare prompt. Output that has gone quiet is what "the prompt is up" looks like
+ * from outside the PTY, on every shell.
+ */
+function typeWhenReady(live: LiveTerminal, command: string): Promise<void> {
+  const started = performance.now();
+  return new Promise((resolve) => {
+    const tick = () => {
+      const now = performance.now();
+      const settled = live.lastOutputAt > 0 && now - live.lastOutputAt >= SETTLE_MS;
+      if (settled || now - started >= READY_CAP_MS) {
+        live.session.input(`${command}\r`);
+        resolve();
+        return;
+      }
+      setTimeout(tick, 100);
+    };
+    setTimeout(tick, 100);
+  });
 }
 
 function createTerminal(
@@ -122,13 +158,18 @@ function createTerminal(
     fit,
     el,
     shell: null,
+    lastOutputAt: 0,
+    commandSent: Promise.resolve(),
     session: null as unknown as TerminalSession,
     onData: { dispose: () => {} },
   };
 
   live.session = new TerminalSession(
     id,
-    (data) => term.write(data),
+    (data) => {
+      live.lastOutputAt = performance.now();
+      term.write(data);
+    },
     () => term.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n'),
     (message) => term.write(`\r\n\x1b[31m[terminal error] ${message}\x1b[0m\r\n`),
     (actual, requested) => {
@@ -150,7 +191,7 @@ function createTerminal(
   // Let the shell print its first prompt before typing the command. Runs once per
   // pane, so returning to this workspace never retypes it.
   const initial = typeof params.initialCommand === 'string' ? params.initialCommand : null;
-  if (initial) setTimeout(() => live.session.input(`${initial}\r`), 250);
+  if (initial) live.commandSent = typeWhenReady(live, initial);
 
   return live;
 }
@@ -237,6 +278,8 @@ export function TerminalPane() {
       focus: () => live.term.focus(),
       write: (data) => live.session.input(data),
       read: () => scrollback(live.term),
+      lastOutputAt: () => live.lastOutputAt,
+      commandSent: live.commandSent,
     });
     const onFocus = () => setActiveTerminal(live.id);
     live.term.textarea?.addEventListener('focus', onFocus);
