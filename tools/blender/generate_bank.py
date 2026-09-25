@@ -48,8 +48,6 @@ Hyper-Realistic Architectural & Prop Engineering:
 import sys
 import os
 import math
-import shutil
-from pathlib import Path
 
 try:
     import bpy
@@ -58,6 +56,9 @@ try:
 except ImportError:
     print("Error: This script must be run inside Blender: blender -b -P generate_bank.py")
     sys.exit(1)
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import maplib  # noqa: E402  (a sibling, found via the path above)
 
 
 def clear_scene():
@@ -1850,28 +1851,8 @@ def build_bank_scene():
 
 
 def export_scene_glb():
-    """Export the active Blender scene as GLB for backend and web public."""
-    repo_root = Path(__file__).resolve().parent.parent.parent
-    glb_backend_path = repo_root / "backend/modules/hassault/maps/hd_bank.glb"
-    glb_web_path = repo_root / "apps/web/public/hd_bank.glb"
-
-    glb_backend_path.parent.mkdir(parents=True, exist_ok=True)
-    glb_web_path.parent.mkdir(parents=True, exist_ok=True)
-
-    print(f"Exporting GLB to: {glb_backend_path}")
-    bpy.ops.export_scene.gltf(
-        filepath=str(glb_backend_path),
-        export_format='GLB',
-        use_selection=False,
-        export_apply=True,
-        export_yup=True,
-        export_materials='EXPORT',
-        export_lights=False,
-        export_cameras=False
-    )
-
-    shutil.copyfile(glb_backend_path, glb_web_path)
-    print(f"Copied GLB to Web: {glb_web_path}")
+    """Scale the metre-authored scene to cubes and export it (see maplib)."""
+    maplib.export_map_glb("hd_bank")
 
 
 if __name__ == "__main__":

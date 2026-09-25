@@ -2284,6 +2284,67 @@ fn local_node_matrix(node: &gltf::Node) -> Mat4 {
     }
 }
 
+/// Which GLB nodes the character collides with — the rules both clients read.
+const GLB_COLLIDERS_JSON: &str =
+    include_str!("../../../packages/core/src/modules/hassault/glb-colliders.json");
+
+struct ColliderTable {
+    explicit: Vec<String>,
+    decor_names: Vec<String>,
+    decor_materials: Vec<String>,
+    block_height: f32,
+    block_width: f32,
+    stand_width: f32,
+}
+
+fn collider_table() -> &'static ColliderTable {
+    static TABLE: std::sync::OnceLock<ColliderTable> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let json: serde_json::Value =
+            serde_json::from_str(GLB_COLLIDERS_JSON).expect("glb-colliders.json should parse");
+        let strings = |key: &str| -> Vec<String> {
+            json[key]
+                .as_array()
+                .unwrap_or_else(|| panic!("glb-colliders.json: {key}"))
+                .iter()
+                .map(|v| v.as_str().expect("keyword").to_string())
+                .collect()
+        };
+        let num = |key: &str| json[key].as_f64().unwrap_or_else(|| panic!("glb-colliders.json: {key}")) as f32;
+        ColliderTable {
+            explicit: strings("explicitNonCollider"),
+            decor_names: strings("decorNameKeywords"),
+            decor_materials: strings("decorMaterialKeywords"),
+            block_height: num("blockHeight"),
+            block_width: num("blockWidth"),
+            stand_width: num("standWidth"),
+        }
+    })
+}
+
+/// Whether a GLB node is part of the collision mesh. `size` is its world
+/// bounding box in game axes `[x, y, height]`. Mirrors `glbNodeCollides` in
+/// `glb-colliders.ts`: decoration is skipped only when it is too small to stand
+/// on or be stopped by, and `NonCol` always opts out.
+pub fn glb_node_collides(name: &str, materials: &[&str], size: [f32; 3]) -> bool {
+    let t = collider_table();
+    if t.explicit.iter().any(|k| name.contains(k.as_str())) {
+        return false;
+    }
+    let decor = t.decor_names.iter().any(|k| name.contains(k.as_str()))
+        || materials.iter().any(|m| {
+            let lower = m.to_lowercase();
+            t.decor_materials.iter().any(|k| lower.contains(k.as_str()))
+        });
+    if !decor {
+        return true;
+    }
+    let [sx, sy, sz] = size;
+    let standable = sx.min(sy) >= t.stand_width;
+    let blocking = sz >= t.block_height && sx.max(sy) >= t.block_width;
+    standable || blocking
+}
+
 fn walk_glb_node(
     node: &gltf::Node,
     parent: Mat4,
@@ -2303,110 +2364,28 @@ fn walk_glb_node(
     if let Some(mesh) = node.mesh() {
         let node_name = node.name().unwrap_or("");
         let is_win = is_breakable_window_node(node_name);
-        let is_non_collider = !is_win && (node_name.contains("Glass")
-            || node_name.contains("Window")
-            || node_name.contains("Lamp")
-            || node_name.contains("Glow")
-            || node_name.contains("Decal")
-            || node_name.contains("Stripe")
-            || node_name.contains("Sign")
-            || node_name.contains("Text")
-            || node_name.contains("Turn")
-            || node_name.contains("Siren")
-            || node_name.contains("Taillight")
-            || node_name.contains("Headlight")
-            || node_name.contains("Arm")
-            || node_name.contains("Vent")
-            || node_name.contains("Rim")
-            || node_name.contains("Hub")
-            || node_name.contains("Latch")
-            || node_name.contains("Divide")
-            || node_name.contains("Cap")
-            || node_name.contains("Hood")
-            || node_name.contains("Mullion")
-            || node_name.contains("Camera")
-            || node_name.contains("Light")
-            || node_name.contains("Truss")
-            || node_name.contains("Detail")
-            || node_name.contains("Pipe")
-            || node_name.contains("Conduit")
-            || node_name.contains("Wire")
-            || node_name.contains("Debris")
-            || node_name.contains("Stain")
-            || node_name.contains("Crack")
-            || node_name.contains("Drain")
-            || node_name.contains("Manhole")
-            || node_name.contains("Cable")
-            || node_name.contains("Joint")
-            || node_name.contains("Rung")
-            || node_name.contains("Flange")
-            || node_name.contains("Web")
-            || node_name.contains("Rail_")
-            || node_name.contains("Tie_")
-            || node_name.contains("Gusset")
-            || node_name.contains("Purlin")
-            || node_name.contains("Louver")
-            || node_name.contains("Hose")
-            || node_name.contains("Vise")
-            || node_name.contains("Blind")
-            || node_name.contains("Antenna")
-            || node_name.contains("Blade")
-            || node_name.contains("Propane")
-            || node_name.contains("Spool")
-            || node_name.contains("Cushion")
-            || node_name.contains("Skylight")
-            || node_name.contains("Foliage")
-            || node_name.contains("Plant")
-            || node_name.contains("Chandelier")
-            || node_name.contains("Stanchion")
-            || node_name.contains("Flute")
-            || node_name.contains("Globe")
-            || node_name.contains("Clock")
-            || node_name.contains("Plaque")
-            || node_name.contains("Urn")
-            || node_name.contains("Hatch")
-            || node_name.contains("Ingot")
-            || node_name.contains("NonCol")
-            || node_name.contains("Rope")
-            || node_name.contains("Lug")
-            || node_name.contains("Dial")
-            || node_name.contains("Spoke")
-            || node_name.contains("Caster")
-            || node_name.contains("Cart_Rail")
-            || node_name.contains("Trophy")
-            || node_name.contains("Frame")
-            || node_name.contains("Painting")
-            || node_name.contains("Sconce")
-            || node_name.contains("Screen")
-            || node_name.contains("Keyhole")
-            || node_name.contains("Dunnage")
-            || node_name.contains("Stringer")
-            || node_name.contains("Slat")
-            || node_name.contains("Strap")
-            || node_name.contains("Buckle")
-            || node_name.contains("Rosette")
-            || node_name.contains("Medallion")
-            || node_name.contains("Inlay")
-            || node_name.contains("Blotter")
-            || node_name.contains("Keyboard")
-            || node_name.contains("Mouse")
-            || node_name.contains("Speaker")
-            || node_name.contains("Mic")
-            || node_name.contains("Nameplate")
-            || node_name.contains("Wicket")
-            || node_name.contains("Spindle")
-            || node_name.contains("Winch")
-            || node_name.contains("Lightbar")
-            || node_name.contains("Cup")
-            || node_name.contains("Mug")
-            || node_name.contains("Spigot")
-            || node_name.contains("Shade")
-            || node_name.contains("Bulb")
-            || node_name.contains("Chain")
-            || node_name.contains("Handwheel")
-            || node_name.contains("Bushing")
-            || node_name.contains("Bolt")
-            || node_name.contains("Cart_"));
+        // Size and materials first: a node named like decoration still collides
+        // when it is big enough to stand on or be stopped by (`glb-colliders.json`).
+        let mut lo = Vec3::splat(f32::INFINITY);
+        let mut hi = Vec3::splat(f32::NEG_INFINITY);
+        let mut mat_names: Vec<&str> = Vec::new();
+        for prim in mesh.primitives() {
+            mat_names.push(prim.material().name().unwrap_or(""));
+            let reader = prim.reader(|b| match b.source() {
+                gltf::buffer::Source::Bin => blob,
+                gltf::buffer::Source::Uri(_) => None,
+            });
+            if let Some(positions) = reader.read_positions() {
+                for p in positions {
+                    let w = world.transform_point3(Vec3::from_array(p));
+                    lo = lo.min(w);
+                    hi = hi.max(w);
+                }
+            }
+        }
+        // glTF is y-up with -z north; the table wants game axes [x, y, height].
+        let extent = if lo.x.is_finite() { hi - lo } else { Vec3::ZERO };
+        let collides = !is_win && glb_node_collides(node_name, &mat_names, [extent.x, extent.z, extent.y]);
 
         let is_invisible = node_name.contains("Invisible") || node_name.contains("ColOnly");
         let mut win_col_vertices = Vec::new();
@@ -2423,12 +2402,7 @@ fn walk_glb_node(
                 [base_color[0], base_color[1], base_color[2]]
             };
 
-            let is_collider = !is_non_collider
-                && !mat_name.contains("Glass")
-                && !mat_name.contains("Glow")
-                && !mat_name.contains("Lamp")
-                && !mat_name.contains("Indicator")
-                && !mat_name.contains("Taillight");
+            let is_collider = collides;
 
             let reader = prim.reader(|b| match b.source() {
                 gltf::buffer::Source::Bin => blob,
@@ -2630,260 +2604,267 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
     let (spawns, items) = if info.name == "hd_facility" {
         (
             vec![
-                SpawnPoint { x: 10.0, y: 8.0, z: 0.0, yaw: 0.0, team: 0 },
-                SpawnPoint { x: 32.0, y: 4.0, z: 6.0, yaw: 0.0, team: 0 },
-                SpawnPoint { x: 54.0, y: 8.0, z: 0.0, yaw: 315.0, team: 0 },
-                SpawnPoint { x: 32.0, y: 10.0, z: 0.0, yaw: 0.0, team: 0 },
-                SpawnPoint { x: 10.0, y: 56.0, z: 0.0, yaw: 180.0, team: 1 },
-                SpawnPoint { x: 32.0, y: 60.0, z: 6.0, yaw: 180.0, team: 1 },
-                SpawnPoint { x: 54.0, y: 56.0, z: 0.0, yaw: 225.0, team: 1 },
-                SpawnPoint { x: 32.0, y: 54.0, z: 0.0, yaw: 180.0, team: 1 },
+                SpawnPoint { x: 30.0, y: 24.0, z: 0.0, yaw: 0.0, team: 0 },
+                SpawnPoint { x: 96.0, y: 12.0, z: 18.0, yaw: 0.0, team: 0 },
+                SpawnPoint { x: 162.0, y: 24.0, z: 0.0, yaw: 315.0, team: 0 },
+                SpawnPoint { x: 96.0, y: 30.0, z: 0.0, yaw: 0.0, team: 0 },
+                SpawnPoint { x: 30.0, y: 168.0, z: 0.0, yaw: 180.0, team: 1 },
+                SpawnPoint { x: 96.0, y: 180.0, z: 18.0, yaw: 180.0, team: 1 },
+                SpawnPoint { x: 162.0, y: 168.0, z: 0.0, yaw: 225.0, team: 1 },
+                SpawnPoint { x: 96.0, y: 162.0, z: 0.0, yaw: 180.0, team: 1 },
             ],
             vec![
-                ItemRow { id: 1, kind: "ammo_assault".into(), x: 32.0, y: 32.0, z: 6.0 },
-                ItemRow { id: 2, kind: "armour".into(), x: 32.0, y: 32.0, z: -5.0 },
-                ItemRow { id: 3, kind: "health".into(), x: 8.0, y: 32.0, z: 0.0 },
-                ItemRow { id: 4, kind: "health".into(), x: 56.0, y: 32.0, z: 0.0 },
-                ItemRow { id: 5, kind: "ammo_sniper".into(), x: 4.0, y: 4.0, z: 6.0 },
-                ItemRow { id: 6, kind: "ammo_sniper".into(), x: 60.0, y: 60.0, z: 6.0 },
+                ItemRow { id: 1, kind: "ammo_assault".into(), x: 96.0, y: 96.0, z: 18.0 },
+                ItemRow { id: 2, kind: "armour".into(), x: 96.0, y: 96.0, z: -15.0 },
+                ItemRow { id: 3, kind: "health".into(), x: 24.0, y: 96.0, z: 0.0 },
+                ItemRow { id: 4, kind: "health".into(), x: 168.0, y: 96.0, z: 0.0 },
+                ItemRow { id: 5, kind: "ammo_sniper".into(), x: 12.0, y: 12.0, z: 18.0 },
+                ItemRow { id: 6, kind: "ammo_sniper".into(), x: 180.0, y: 180.0, z: 18.0 },
             ],
         )
     } else if info.name == "hd_junkflea" {
         (
             vec![
-                SpawnPoint { x: 16.0, y: 12.0, z: 0.0, yaw: 0.0, team: 0 },
-                SpawnPoint { x: 48.0, y: 12.0, z: 0.0, yaw: 0.0, team: 0 },
-                SpawnPoint { x: 32.0, y: 10.0, z: 0.0, yaw: 0.0, team: 0 },
-                SpawnPoint { x: 32.0, y: 15.0, z: 0.0, yaw: 0.0, team: 0 },
-                SpawnPoint { x: 16.0, y: 52.0, z: 0.0, yaw: 180.0, team: 1 },
-                SpawnPoint { x: 48.0, y: 52.0, z: 0.0, yaw: 180.0, team: 1 },
-                SpawnPoint { x: 32.0, y: 54.0, z: 0.0, yaw: 180.0, team: 1 },
-                SpawnPoint { x: 32.0, y: 49.0, z: 0.0, yaw: 180.0, team: 1 },
+                SpawnPoint { x: 48.0, y: 36.0, z: 0.0, yaw: 0.0, team: 0 },
+                SpawnPoint { x: 144.0, y: 36.0, z: 0.0, yaw: 0.0, team: 0 },
+                SpawnPoint { x: 96.0, y: 30.0, z: 0.0, yaw: 0.0, team: 0 },
+                SpawnPoint { x: 96.0, y: 45.0, z: 0.0, yaw: 0.0, team: 0 },
+                SpawnPoint { x: 48.0, y: 156.0, z: 0.0, yaw: 180.0, team: 1 },
+                SpawnPoint { x: 144.0, y: 156.0, z: 0.0, yaw: 180.0, team: 1 },
+                SpawnPoint { x: 96.0, y: 162.0, z: 0.0, yaw: 180.0, team: 1 },
+                SpawnPoint { x: 96.0, y: 147.0, z: 0.0, yaw: 180.0, team: 1 },
             ],
             vec![
-                ItemRow { id: 1, kind: "armour".into(), x: 32.0, y: 32.0, z: 0.0 },
-                ItemRow { id: 2, kind: "health".into(), x: 19.0, y: 32.0, z: -2.0 },
-                ItemRow { id: 3, kind: "health".into(), x: 45.0, y: 32.0, z: -2.0 },
-                ItemRow { id: 4, kind: "ammo_assault".into(), x: 22.0, y: 12.0, z: 0.0 },
-                ItemRow { id: 5, kind: "ammo_assault".into(), x: 42.0, y: 12.0, z: 0.0 },
-                ItemRow { id: 6, kind: "ammo_sniper".into(), x: 22.0, y: 52.0, z: 0.0 },
-                ItemRow { id: 7, kind: "ammo_sniper".into(), x: 42.0, y: 52.0, z: 0.0 },
-                ItemRow { id: 8, kind: "grenade".into(), x: 12.0, y: 32.0, z: 0.0 },
-                ItemRow { id: 9, kind: "clips".into(), x: 52.0, y: 32.0, z: 0.0 },
-                ItemRow { id: 10, kind: "armour".into(), x: 32.0, y: 20.0, z: 0.0 },
+                ItemRow { id: 1, kind: "armour".into(), x: 96.0, y: 96.0, z: 0.0 },
+                ItemRow { id: 2, kind: "health".into(), x: 57.0, y: 96.0, z: -6.0 },
+                ItemRow { id: 3, kind: "health".into(), x: 135.0, y: 96.0, z: -6.0 },
+                ItemRow { id: 4, kind: "ammo_assault".into(), x: 66.0, y: 36.0, z: 0.0 },
+                ItemRow { id: 5, kind: "ammo_assault".into(), x: 126.0, y: 36.0, z: 0.0 },
+                ItemRow { id: 6, kind: "ammo_sniper".into(), x: 66.0, y: 156.0, z: 0.0 },
+                ItemRow { id: 7, kind: "ammo_sniper".into(), x: 126.0, y: 156.0, z: 0.0 },
+                ItemRow { id: 8, kind: "grenade".into(), x: 36.0, y: 96.0, z: 0.0 },
+                ItemRow { id: 9, kind: "clips".into(), x: 156.0, y: 96.0, z: 0.0 },
+                ItemRow { id: 10, kind: "armour".into(), x: 96.0, y: 60.0, z: 0.0 },
             ],
         )
     } else if info.name == "hd_bank" {
         (
             vec![
-                SpawnPoint { x: 12.0, y: 8.0, z: 0.0, yaw: 0.0, team: 0 },
-                SpawnPoint { x: 24.0, y: 8.0, z: 0.0, yaw: 0.0, team: 0 },
-                SpawnPoint { x: 36.0, y: 8.0, z: 0.0, yaw: 0.0, team: 0 },
-                SpawnPoint { x: 48.0, y: 8.0, z: 0.0, yaw: 0.0, team: 0 },
-                SpawnPoint { x: 10.5, y: 53.5, z: 0.85, yaw: 180.0, team: 1 },
-                SpawnPoint { x: 20.0, y: 53.0, z: 0.8, yaw: 180.0, team: 1 },
-                SpawnPoint { x: 36.0, y: 55.0, z: 0.94, yaw: 180.0, team: 1 },
-                SpawnPoint { x: 36.0, y: 51.0, z: 0.0, yaw: 180.0, team: 1 },
+                SpawnPoint { x: 36.0, y: 24.0, z: 0.0, yaw: 0.0, team: 0 },
+                SpawnPoint { x: 72.0, y: 24.0, z: 0.0, yaw: 0.0, team: 0 },
+                SpawnPoint { x: 108.0, y: 24.0, z: 0.0, yaw: 0.0, team: 0 },
+                SpawnPoint { x: 144.0, y: 24.0, z: 0.0, yaw: 0.0, team: 0 },
+                SpawnPoint { x: 31.5, y: 160.5, z: 2.55, yaw: 180.0, team: 1 },
+                SpawnPoint { x: 60.0, y: 159.0, z: 2.4, yaw: 180.0, team: 1 },
+                SpawnPoint { x: 132.0, y: 157.5, z: 0.0, yaw: 180.0, team: 1 },
+                SpawnPoint { x: 106.5, y: 135.5, z: 0.0, yaw: 180.0, team: 1 },
             ],
             vec![
-                ItemRow { id: 1, kind: "health".into(), x: 10.0, y: 14.0, z: 0.0 },
-                ItemRow { id: 2, kind: "health".into(), x: 54.0, y: 14.0, z: 0.0 },
-                ItemRow { id: 3, kind: "health".into(), x: 10.0, y: 51.0, z: 0.0 },
-                ItemRow { id: 4, kind: "armour".into(), x: 32.0, y: 28.0, z: 0.0 },
-                ItemRow { id: 5, kind: "armour".into(), x: 52.0, y: 53.0, z: 0.0 },
-                ItemRow { id: 6, kind: "ammo_assault".into(), x: 20.0, y: 11.0, z: 0.0 },
-                ItemRow { id: 7, kind: "ammo_assault".into(), x: 44.0, y: 12.0, z: 0.0 },
-                ItemRow { id: 8, kind: "ammo_sniper".into(), x: 16.0, y: 40.0, z: 5.0 },
-                ItemRow { id: 9, kind: "clips".into(), x: 32.0, y: 22.0, z: 0.0 },
-                ItemRow { id: 10, kind: "grenade".into(), x: 52.0, y: 28.0, z: 0.0 },
+                ItemRow { id: 1, kind: "health".into(), x: 30.0, y: 42.0, z: 0.0 },
+                ItemRow { id: 2, kind: "health".into(), x: 162.0, y: 42.0, z: 0.0 },
+                ItemRow { id: 3, kind: "health".into(), x: 30.0, y: 153.0, z: 0.0 },
+                ItemRow { id: 4, kind: "armour".into(), x: 96.0, y: 84.0, z: 0.0 },
+                ItemRow { id: 5, kind: "armour".into(), x: 156.0, y: 159.0, z: 0.0 },
+                ItemRow { id: 6, kind: "ammo_assault".into(), x: 60.0, y: 33.0, z: 0.0 },
+                ItemRow { id: 7, kind: "ammo_assault".into(), x: 132.0, y: 36.0, z: 0.0 },
+                ItemRow { id: 8, kind: "ammo_sniper".into(), x: 48.0, y: 120.0, z: 15.0 },
+                ItemRow { id: 9, kind: "clips".into(), x: 96.0, y: 66.0, z: 0.0 },
+                ItemRow { id: 10, kind: "grenade".into(), x: 156.0, y: 84.0, z: 0.0 },
             ],
         )
     } else if info.name == "hd_dust2" {
         (
             vec![
-                SpawnPoint { x: 30.0, y: 10.0, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 34.0, y: 10.0, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 30.0, y: 14.0, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 34.0, y: 14.0, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 34.0, y: 60.0, z: 0.0, yaw: 270.0, team: 0 },
-                SpawnPoint { x: 38.0, y: 60.0, z: 0.0, yaw: 270.0, team: 0 },
-                SpawnPoint { x: 34.0, y: 56.0, z: 0.0, yaw: 270.0, team: 0 },
-                SpawnPoint { x: 38.0, y: 56.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 90.0, y: 30.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 102.0, y: 30.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 90.0, y: 42.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 102.0, y: 42.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 102.0, y: 180.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 114.0, y: 180.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 102.0, y: 168.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 114.0, y: 168.0, z: 0.0, yaw: 270.0, team: 0 },
             ],
             vec![
-                ItemRow { id: 1, kind: "health".into(), x: 58.0, y: 12.0, z: 0.0 },
-                ItemRow { id: 2, kind: "health".into(), x: 20.0, y: 34.0, z: 0.0 },
-                ItemRow { id: 3, kind: "health".into(), x: 36.0, y: 58.0, z: 0.0 },
-                ItemRow { id: 4, kind: "armour".into(), x: 54.0, y: 36.0, z: 0.0 },
-                ItemRow { id: 5, kind: "armour".into(), x: 10.0, y: 56.0, z: 0.0 },
-                ItemRow { id: 6, kind: "ammo_assault".into(), x: 30.0, y: 30.0, z: 0.0 },
-                ItemRow { id: 7, kind: "ammo_assault".into(), x: 48.0, y: 52.0, z: 1.2 },
-                ItemRow { id: 8, kind: "ammo_sniper".into(), x: 16.0, y: 32.0, z: 0.0 },
-                ItemRow { id: 9, kind: "clips".into(), x: 38.0, y: 44.0, z: 2.4 },
-                ItemRow { id: 10, kind: "grenade".into(), x: 28.0, y: 12.0, z: 0.0 },
+                ItemRow { id: 1, kind: "health".into(), x: 174.0, y: 36.0, z: 0.0 },
+                ItemRow { id: 2, kind: "health".into(), x: 60.0, y: 102.0, z: 0.0 },
+                ItemRow { id: 3, kind: "health".into(), x: 108.0, y: 174.0, z: 0.0 },
+                ItemRow { id: 4, kind: "armour".into(), x: 162.0, y: 108.0, z: 0.0 },
+                ItemRow { id: 5, kind: "armour".into(), x: 30.0, y: 168.0, z: 0.0 },
+                ItemRow { id: 6, kind: "ammo_assault".into(), x: 90.0, y: 90.0, z: 0.0 },
+                ItemRow { id: 7, kind: "ammo_assault".into(), x: 144.0, y: 156.0, z: 3.6 },
+                ItemRow { id: 8, kind: "ammo_sniper".into(), x: 48.0, y: 96.0, z: 0.0 },
+                ItemRow { id: 9, kind: "clips".into(), x: 114.0, y: 132.0, z: 7.2 },
+                ItemRow { id: 10, kind: "grenade".into(), x: 84.0, y: 36.0, z: 0.0 },
             ],
         )
     } else if info.name == "hd_mirage" {
         (
             vec![
-                SpawnPoint { x: 32.0, y: 10.0, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 34.5, y: 9.5, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 32.0, y: 14.0, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 36.0, y: 14.0, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 32.0, y: 58.0, z: 0.0, yaw: 270.0, team: 0 },
-                SpawnPoint { x: 36.0, y: 58.0, z: 0.0, yaw: 270.0, team: 0 },
-                SpawnPoint { x: 33.0, y: 53.0, z: 0.0, yaw: 270.0, team: 0 },
-                SpawnPoint { x: 36.0, y: 54.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 96.0, y: 30.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 103.5, y: 28.5, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 96.0, y: 42.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 108.0, y: 42.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 96.0, y: 174.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 108.0, y: 174.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 99.0, y: 159.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 109.0, y: 163.5, z: 0.0, yaw: 270.0, team: 0 },
             ],
             vec![
-                ItemRow { id: 1, kind: "health".into(), x: 18.0, y: 14.0, z: 0.0 },
-                ItemRow { id: 2, kind: "health".into(), x: 50.0, y: 14.0, z: 0.0 },
-                ItemRow { id: 3, kind: "health".into(), x: 34.0, y: 34.0, z: 0.0 },
-                ItemRow { id: 4, kind: "armour".into(), x: 16.0, y: 48.0, z: 0.8 },
-                ItemRow { id: 5, kind: "armour".into(), x: 50.0, y: 48.0, z: 2.8 },
-                ItemRow { id: 6, kind: "ammo_assault".into(), x: 14.0, y: 32.0, z: 2.8 },
-                ItemRow { id: 7, kind: "ammo_assault".into(), x: 48.0, y: 32.0, z: 0.0 },
-                ItemRow { id: 8, kind: "ammo_sniper".into(), x: 34.0, y: 50.0, z: 2.4 },
-                ItemRow { id: 9, kind: "clips".into(), x: 34.0, y: 18.0, z: 0.0 },
-                ItemRow { id: 10, kind: "grenade".into(), x: 26.0, y: 36.0, z: 1.8 },
+                ItemRow { id: 1, kind: "health".into(), x: 54.0, y: 42.0, z: 0.0 },
+                ItemRow { id: 2, kind: "health".into(), x: 150.0, y: 42.0, z: 0.0 },
+                ItemRow { id: 3, kind: "health".into(), x: 102.0, y: 102.0, z: 0.0 },
+                ItemRow { id: 4, kind: "armour".into(), x: 48.0, y: 144.0, z: 2.4 },
+                ItemRow { id: 5, kind: "armour".into(), x: 150.0, y: 144.0, z: 8.4 },
+                ItemRow { id: 6, kind: "ammo_assault".into(), x: 42.0, y: 96.0, z: 8.4 },
+                ItemRow { id: 7, kind: "ammo_assault".into(), x: 144.0, y: 96.0, z: 0.0 },
+                ItemRow { id: 8, kind: "ammo_sniper".into(), x: 102.0, y: 150.0, z: 7.2 },
+                ItemRow { id: 9, kind: "clips".into(), x: 102.0, y: 54.0, z: 0.0 },
+                ItemRow { id: 10, kind: "grenade".into(), x: 78.0, y: 108.0, z: 5.4 },
             ],
         )
     } else if info.name == "hd_inferno" {
         (
             vec![
-                SpawnPoint { x: 30.0, y: 10.0, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 34.0, y: 10.0, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 29.5, y: 13.5, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 34.0, y: 14.0, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 30.0, y: 56.0, z: 0.0, yaw: 270.0, team: 0 },
-                SpawnPoint { x: 34.0, y: 56.0, z: 0.0, yaw: 270.0, team: 0 },
-                SpawnPoint { x: 30.0, y: 52.0, z: 0.0, yaw: 270.0, team: 0 },
-                SpawnPoint { x: 34.0, y: 52.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 90.0, y: 30.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 102.0, y: 30.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 88.5, y: 40.5, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 101.0, y: 40.5, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 90.0, y: 168.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 102.0, y: 168.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 90.0, y: 156.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 102.0, y: 156.0, z: 0.0, yaw: 270.0, team: 0 },
             ],
             vec![
-                ItemRow { id: 1, kind: "health".into(), x: 16.0, y: 14.0, z: 0.0 },
-                ItemRow { id: 2, kind: "health".into(), x: 48.0, y: 14.0, z: 0.0 },
-                ItemRow { id: 3, kind: "health".into(), x: 32.0, y: 32.0, z: 0.0 },
-                ItemRow { id: 4, kind: "armour".into(), x: 18.0, y: 48.0, z: 0.0 },
-                ItemRow { id: 5, kind: "armour".into(), x: 50.0, y: 48.0, z: 0.0 },
-                ItemRow { id: 6, kind: "ammo_assault".into(), x: 14.0, y: 30.0, z: 0.0 },
-                ItemRow { id: 7, kind: "ammo_assault".into(), x: 50.0, y: 30.0, z: 0.0 },
-                ItemRow { id: 8, kind: "ammo_sniper".into(), x: 32.0, y: 54.0, z: 0.0 },
-                ItemRow { id: 9, kind: "clips".into(), x: 32.0, y: 18.0, z: 0.0 },
-                ItemRow { id: 10, kind: "grenade".into(), x: 20.0, y: 24.0, z: 0.0 },
+                ItemRow { id: 1, kind: "health".into(), x: 48.0, y: 42.0, z: 0.0 },
+                ItemRow { id: 2, kind: "health".into(), x: 144.0, y: 42.0, z: 0.0 },
+                ItemRow { id: 3, kind: "health".into(), x: 96.0, y: 96.0, z: 0.0 },
+                ItemRow { id: 4, kind: "armour".into(), x: 54.0, y: 144.0, z: 0.0 },
+                ItemRow { id: 5, kind: "armour".into(), x: 150.0, y: 144.0, z: 0.0 },
+                ItemRow { id: 6, kind: "ammo_assault".into(), x: 42.0, y: 90.0, z: 0.0 },
+                ItemRow { id: 7, kind: "ammo_assault".into(), x: 150.0, y: 90.0, z: 0.0 },
+                ItemRow { id: 8, kind: "ammo_sniper".into(), x: 96.0, y: 162.0, z: 0.0 },
+                ItemRow { id: 9, kind: "clips".into(), x: 96.0, y: 54.0, z: 0.0 },
+                ItemRow { id: 10, kind: "grenade".into(), x: 60.0, y: 72.0, z: 0.0 },
             ],
         )
     } else if info.name == "hd_office" {
         (
             vec![
-                SpawnPoint { x: 28.0, y: 10.0, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 32.0, y: 10.0, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 29.5, y: 15.5, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 32.0, y: 13.5, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 51.5, y: 30.5, z: 0.0, yaw: 270.0, team: 0 },
-                SpawnPoint { x: 51.5, y: 27.5, z: 0.0, yaw: 270.0, team: 0 },
-                SpawnPoint { x: 52.5, y: 36.5, z: 0.0, yaw: 270.0, team: 0 },
-                SpawnPoint { x: 45.5, y: 21.5, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 84.0, y: 30.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 96.0, y: 30.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 88.5, y: 46.5, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 96.0, y: 40.5, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 154.5, y: 91.5, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 154.5, y: 82.5, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 157.5, y: 109.5, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 136.5, y: 64.5, z: 0.0, yaw: 270.0, team: 0 },
             ],
             vec![
-                ItemRow { id: 1, kind: "health".into(), x: 7.0, y: 45.0, z: 0.0 },
-                ItemRow { id: 2, kind: "health".into(), x: 9.0, y: 7.5, z: 0.0 },
-                ItemRow { id: 3, kind: "health".into(), x: 54.5, y: 29.5, z: 0.0 },
-                ItemRow { id: 4, kind: "armour".into(), x: 17.0, y: 45.0, z: 0.0 },
-                ItemRow { id: 5, kind: "armour".into(), x: 20.5, y: 16.0, z: 0.0 },
-                ItemRow { id: 6, kind: "ammo_assault".into(), x: 22.0, y: 32.0, z: 0.0 },
-                ItemRow { id: 7, kind: "ammo_assault".into(), x: 45.5, y: 18.5, z: 0.0 },
-                ItemRow { id: 8, kind: "ammo_sniper".into(), x: 44.5, y: 45.5, z: 0.0 },
-                ItemRow { id: 9, kind: "clips".into(), x: 30.0, y: 27.5, z: 0.0 },
-                ItemRow { id: 10, kind: "grenade".into(), x: 30.0, y: 36.5, z: 0.0 },
+                ItemRow { id: 1, kind: "health".into(), x: 21.0, y: 135.0, z: 0.0 },
+                ItemRow { id: 2, kind: "health".into(), x: 27.0, y: 22.5, z: 0.0 },
+                ItemRow { id: 3, kind: "health".into(), x: 163.5, y: 88.5, z: 0.0 },
+                ItemRow { id: 4, kind: "armour".into(), x: 51.0, y: 135.0, z: 0.0 },
+                ItemRow { id: 5, kind: "armour".into(), x: 61.5, y: 48.0, z: 0.0 },
+                ItemRow { id: 6, kind: "ammo_assault".into(), x: 66.0, y: 96.0, z: 0.0 },
+                ItemRow { id: 7, kind: "ammo_assault".into(), x: 136.5, y: 55.5, z: 0.0 },
+                ItemRow { id: 8, kind: "ammo_sniper".into(), x: 133.5, y: 136.5, z: 0.0 },
+                ItemRow { id: 9, kind: "clips".into(), x: 90.0, y: 82.5, z: 0.0 },
+                ItemRow { id: 10, kind: "grenade".into(), x: 90.0, y: 109.5, z: 0.0 },
             ],
         )
     } else if info.name == "hd_nuke" {
         (
             vec![
-                SpawnPoint { x: 34.0, y: 12.0, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 38.0, y: 12.0, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 34.0, y: 15.0, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 38.0, y: 15.0, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 26.0, y: 56.0, z: 0.0, yaw: 270.0, team: 0 },
-                SpawnPoint { x: 30.0, y: 56.0, z: 0.0, yaw: 270.0, team: 0 },
-                SpawnPoint { x: 24.0, y: 54.5, z: 0.0, yaw: 270.0, team: 0 },
-                SpawnPoint { x: 28.0, y: 54.5, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 102.0, y: 36.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 114.0, y: 36.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 102.0, y: 45.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 114.0, y: 45.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 78.0, y: 168.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 90.0, y: 168.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 72.0, y: 163.5, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 84.0, y: 163.5, z: 0.0, yaw: 270.0, team: 0 },
             ],
             vec![
-                ItemRow { id: 1, kind: "health".into(), x: 30.0, y: 35.0, z: 0.0 },
-                ItemRow { id: 2, kind: "health".into(), x: 30.0, y: 35.0, z: -4.5 },
-                ItemRow { id: 3, kind: "health".into(), x: 12.0, y: 30.0, z: 0.0 },
-                ItemRow { id: 4, kind: "armour".into(), x: 32.0, y: 37.0, z: 0.0 },
-                ItemRow { id: 5, kind: "armour".into(), x: 32.0, y: 37.0, z: -4.5 },
-                ItemRow { id: 6, kind: "ammo_assault".into(), x: 24.0, y: 20.0, z: 0.0 },
-                ItemRow { id: 7, kind: "ammo_assault".into(), x: 36.0, y: 48.0, z: 0.0 },
-                ItemRow { id: 8, kind: "ammo_sniper".into(), x: 20.0, y: 35.0, z: 3.8 },
-                ItemRow { id: 9, kind: "clips".into(), x: 48.0, y: 35.0, z: 0.0 },
-                ItemRow { id: 10, kind: "grenade".into(), x: 30.0, y: 25.0, z: 0.0 },
+                ItemRow { id: 1, kind: "health".into(), x: 90.0, y: 105.0, z: 0.0 },
+                ItemRow { id: 2, kind: "health".into(), x: 90.0, y: 105.0, z: -13.5 },
+                ItemRow { id: 3, kind: "health".into(), x: 36.0, y: 90.0, z: 0.0 },
+                ItemRow { id: 4, kind: "armour".into(), x: 96.0, y: 111.0, z: 0.0 },
+                ItemRow { id: 5, kind: "armour".into(), x: 96.0, y: 111.0, z: -13.5 },
+                ItemRow { id: 6, kind: "ammo_assault".into(), x: 72.0, y: 60.0, z: 0.0 },
+                ItemRow { id: 7, kind: "ammo_assault".into(), x: 108.0, y: 144.0, z: 0.0 },
+                ItemRow { id: 8, kind: "ammo_sniper".into(), x: 60.0, y: 105.0, z: 11.4 },
+                ItemRow { id: 9, kind: "clips".into(), x: 144.0, y: 105.0, z: 0.0 },
+                ItemRow { id: 10, kind: "grenade".into(), x: 90.0, y: 75.0, z: 0.0 },
             ],
         )
     } else {
         (
             vec![
-                SpawnPoint { x: 16.0, y: 7.0, z: 0.18, yaw: 90.0, team: 0 },
-                SpawnPoint { x: 19.0, y: 8.0, z: 0.2, yaw: 90.0, team: 0 },
-                SpawnPoint { x: 24.0, y: 7.0, z: 0.18, yaw: 90.0, team: 0 },
-                SpawnPoint { x: 28.0, y: 7.0, z: 0.18, yaw: 90.0, team: 0 },
-                SpawnPoint { x: 26.0, y: 48.0, z: 0.0, yaw: 270.0, team: 1 },
-                SpawnPoint { x: 36.0, y: 38.0, z: 0.4, yaw: 270.0, team: 1 },
-                SpawnPoint { x: 40.0, y: 38.0, z: 0.0, yaw: 270.0, team: 1 },
-                SpawnPoint { x: 26.0, y: 52.0, z: 0.0, yaw: 270.0, team: 1 },
+                SpawnPoint { x: 48.0, y: 21.0, z: 0.54, yaw: 90.0, team: 0 },
+                SpawnPoint { x: 57.0, y: 24.0, z: 0.6, yaw: 90.0, team: 0 },
+                SpawnPoint { x: 72.0, y: 21.0, z: 0.54, yaw: 90.0, team: 0 },
+                SpawnPoint { x: 84.0, y: 21.0, z: 0.54, yaw: 90.0, team: 0 },
+                SpawnPoint { x: 78.0, y: 144.0, z: 0.0, yaw: 270.0, team: 1 },
+                SpawnPoint { x: 111.0, y: 115.0, z: 0.0, yaw: 270.0, team: 1 },
+                SpawnPoint { x: 120.0, y: 114.0, z: 0.0, yaw: 270.0, team: 1 },
+                SpawnPoint { x: 78.0, y: 156.0, z: 0.0, yaw: 270.0, team: 1 },
             ],
             vec![
-                ItemRow { id: 1, kind: "health".into(), x: 14.0, y: 6.0, z: 0.18 },
-                ItemRow { id: 2, kind: "health".into(), x: 55.0, y: 16.0, z: 0.0 },
-                ItemRow { id: 3, kind: "health".into(), x: 38.0, y: 52.0, z: 4.2 },
-                ItemRow { id: 4, kind: "armour".into(), x: 20.0, y: 36.0, z: 0.0 },
-                ItemRow { id: 5, kind: "armour".into(), x: 32.0, y: 44.0, z: 4.2 },
-                ItemRow { id: 6, kind: "ammo_assault".into(), x: 21.0, y: 15.5, z: 0.0 },
-                ItemRow { id: 7, kind: "ammo_assault".into(), x: 54.0, y: 30.0, z: 0.0 },
-                ItemRow { id: 8, kind: "ammo_sniper".into(), x: 24.0, y: 7.0, z: 7.5 },
-                ItemRow { id: 9, kind: "clips".into(), x: 10.5, y: 40.0, z: 4.2 },
-                ItemRow { id: 10, kind: "grenade".into(), x: 16.0, y: 30.0, z: 9.0 },
+                ItemRow { id: 1, kind: "health".into(), x: 42.0, y: 18.0, z: 0.54 },
+                ItemRow { id: 2, kind: "health".into(), x: 165.0, y: 48.0, z: 0.0 },
+                ItemRow { id: 3, kind: "health".into(), x: 114.0, y: 156.0, z: 12.6 },
+                ItemRow { id: 4, kind: "armour".into(), x: 60.0, y: 108.0, z: 0.0 },
+                ItemRow { id: 5, kind: "armour".into(), x: 96.0, y: 132.0, z: 12.6 },
+                ItemRow { id: 6, kind: "ammo_assault".into(), x: 63.0, y: 46.5, z: 0.0 },
+                ItemRow { id: 7, kind: "ammo_assault".into(), x: 162.0, y: 90.0, z: 0.0 },
+                ItemRow { id: 8, kind: "ammo_sniper".into(), x: 72.0, y: 21.0, z: 22.5 },
+                ItemRow { id: 9, kind: "clips".into(), x: 31.5, y: 120.0, z: 12.6 },
+                ItemRow { id: 10, kind: "grenade".into(), x: 48.0, y: 90.0, z: 27.0 },
             ],
         )
     };
 
     let bounds = if info.name == "hd_facility" {
         WorldBounds {
-            min: [0.0, 0.0, -5.0],
-            max: [64.0, 64.0, 14.0],
-            center: [32.0, 32.0, 4.5],
-            extent: 42.0,
+            min: [0.0, 0.0, -15.0],
+            max: [192.0, 192.0, 42.0],
+            center: [96.0, 96.0, 13.5],
+            extent: 126.0,
         }
     } else if info.name == "hd_junkflea" {
         WorldBounds {
-            min: [4.0, 4.0, -2.5],
-            max: [60.0, 60.0, 14.0],
-            center: [32.0, 32.0, 5.75],
-            extent: 38.0,
+            min: [12.0, 12.0, -7.5],
+            max: [180.0, 180.0, 42.0],
+            center: [96.0, 96.0, 17.25],
+            extent: 114.0,
         }
     } else if info.name == "hd_nuke" {
         WorldBounds {
-            min: [4.0, 4.0, -5.5],
-            max: [66.0, 66.0, 14.0],
-            center: [35.0, 35.0, 4.0],
-            extent: 62.0,
+            min: [12.0, 12.0, -16.5],
+            max: [198.0, 198.0, 42.0],
+            center: [105.0, 105.0, 12.0],
+            extent: 186.0,
         }
     } else if info.name == "hd_dust2" || info.name == "hd_inferno" || info.name == "hd_mirage" {
         WorldBounds {
-            min: [4.0, 4.0, -2.0],
-            max: [66.0, 66.0, 14.0],
-            center: [35.0, 35.0, 6.0],
-            extent: 62.0,
+            min: [12.0, 12.0, -6.0],
+            max: [198.0, 198.0, 42.0],
+            center: [105.0, 105.0, 18.0],
+            extent: 186.0,
+        }
+    } else if info.name == "hd_office" {
+        WorldBounds {
+            min: [12.0, 12.0, 0.0],
+            max: [180.0, 180.0, 14.0],
+            center: [96.0, 96.0, 7.0],
+            extent: 168.0,
         }
     } else {
         WorldBounds {
-            min: [4.0, 4.0, 0.0],
-            max: [60.0, 60.0, 14.0],
-            center: [32.0, 32.0, 7.0],
-            extent: 56.0,
+            min: [12.0, 12.0, 0.0],
+            max: [180.0, 180.0, 42.0],
+            center: [96.0, 96.0, 21.0],
+            extent: 168.0,
         }
     };
 
@@ -2900,7 +2881,7 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
         col_indices,
         spawns,
         items,
-        waterlevel: if info.name == "hd_facility" { -3.5 } else if info.name == "hd_junkflea" { -5.0 } else { -100.0 },
+        waterlevel: if info.name == "hd_facility" { -10.5 } else if info.name == "hd_junkflea" { -15.0 } else { -100.0 },
         windows,
     })
 }
@@ -3031,6 +3012,53 @@ pub fn load_office_glb(info: MapInfo) -> Result<World3D, String> {
     load_world_3d_from_glb(HD_OFFICE_GLB_BYTES, info)
 }
 
+/// Cubes per metre. The modelled maps are authored in metres and exported at this
+/// scale (`tools/blender/maplib.py`), so every table above is already in cubes.
+pub const MAP_SCALE: f32 = 3.0;
+
+/// Scale a procedural fallback onto the GLB's footprint.
+///
+/// The `create_procedural_*` builders still lay out the metre-scale arena, so a
+/// fallback left as built would be a third the size of the map it stands in for
+/// — spawns, items and all. hd_office's heights were already in cubes, which is
+/// why its vertical factor is 1.
+pub fn scale_fallback(mut w: World3D) -> World3D {
+    let k = MAP_SCALE;
+    let kz = if w.info.name == "hd_office" { 1.0 } else { MAP_SCALE };
+    // Render space is (x, height, y); collision space is (x, y, height).
+    for v in w.render_positions.chunks_exact_mut(3) {
+        v[0] *= k;
+        v[1] *= kz;
+        v[2] *= k;
+    }
+    for p in w.col_vertices.iter_mut() {
+        p.x *= k;
+        p.y *= k;
+        p.z *= kz;
+    }
+    for s in w.spawns.iter_mut() {
+        s.x *= k;
+        s.y *= k;
+        s.z *= kz;
+    }
+    for i in w.items.iter_mut() {
+        i.x *= k;
+        i.y *= k;
+        i.z *= kz;
+    }
+    let b = &mut w.bounds;
+    for v in [&mut b.min, &mut b.max, &mut b.center] {
+        v[0] *= k;
+        v[1] *= k;
+        v[2] *= kz;
+    }
+    b.extent *= k;
+    if w.waterlevel > -100.0 {
+        w.waterlevel *= kz;
+    }
+    w
+}
+
 /// Universal 3D Arena Factory: selects appropriate procedural or modeled 3D map generator.
 pub fn create_world_3d(info: MapInfo) -> World3D {
     match info.name.as_str() {
@@ -3039,7 +3067,7 @@ pub fn create_world_3d(info: MapInfo) -> World3D {
                 Ok(w) => w,
                 Err(err) => {
                     eprintln!("hassault: failed to load GLB for hd_nuke ({err}), falling back to procedural");
-                    create_procedural_nuke_3d(info)
+                    scale_fallback(create_procedural_nuke_3d(info))
                 }
             }
         }
@@ -3048,7 +3076,7 @@ pub fn create_world_3d(info: MapInfo) -> World3D {
                 Ok(w) => w,
                 Err(err) => {
                     eprintln!("hassault: failed to load GLB for hd_mirage ({err}), falling back to procedural");
-                    create_procedural_mirage_3d(info)
+                    scale_fallback(create_procedural_mirage_3d(info))
                 }
             }
         }
@@ -3057,7 +3085,7 @@ pub fn create_world_3d(info: MapInfo) -> World3D {
                 Ok(w) => w,
                 Err(err) => {
                     eprintln!("hassault: failed to load GLB for hd_inferno ({err}), falling back to procedural");
-                    create_procedural_inferno_3d(info)
+                    scale_fallback(create_procedural_inferno_3d(info))
                 }
             }
         }
@@ -3066,7 +3094,7 @@ pub fn create_world_3d(info: MapInfo) -> World3D {
                 Ok(w) => w,
                 Err(err) => {
                     eprintln!("hassault: failed to load GLB for hd_dust2 ({err}), falling back to procedural");
-                    create_procedural_dust2_3d(info)
+                    scale_fallback(create_procedural_dust2_3d(info))
                 }
             }
         }
@@ -3075,7 +3103,7 @@ pub fn create_world_3d(info: MapInfo) -> World3D {
                 Ok(w) => w,
                 Err(err) => {
                     eprintln!("hassault: failed to load GLB for hd_facility ({err}), falling back to procedural");
-                    create_procedural_facility_3d(info)
+                    scale_fallback(create_procedural_facility_3d(info))
                 }
             }
         }
@@ -3084,7 +3112,7 @@ pub fn create_world_3d(info: MapInfo) -> World3D {
                 Ok(w) => w,
                 Err(err) => {
                     eprintln!("hassault: failed to load GLB for hd_junkflea ({err}), falling back to procedural");
-                    create_procedural_junk_flea_3d(info)
+                    scale_fallback(create_procedural_junk_flea_3d(info))
                 }
             }
         }
@@ -3093,7 +3121,7 @@ pub fn create_world_3d(info: MapInfo) -> World3D {
                 Ok(w) => w,
                 Err(err) => {
                     eprintln!("hassault: failed to load GLB for hd_bank ({err}), falling back to procedural");
-                    create_procedural_bank_3d(info)
+                    scale_fallback(create_procedural_bank_3d(info))
                 }
             }
         }
@@ -3102,7 +3130,7 @@ pub fn create_world_3d(info: MapInfo) -> World3D {
                 Ok(w) => w,
                 Err(err) => {
                     eprintln!("hassault: failed to load GLB for hd_assault ({err}), falling back to procedural");
-                    create_procedural_assault_3d(info)
+                    scale_fallback(create_procedural_assault_3d(info))
                 }
             }
         }
@@ -3111,11 +3139,11 @@ pub fn create_world_3d(info: MapInfo) -> World3D {
                 Ok(w) => w,
                 Err(err) => {
                     eprintln!("hassault: failed to load GLB for hd_office ({err}), falling back to procedural");
-                    create_procedural_office_3d(info)
+                    scale_fallback(create_procedural_office_3d(info))
                 }
             }
         }
-        _ => create_procedural_facility_3d(info),
+        _ => scale_fallback(create_procedural_facility_3d(info)),
     }
 }
 

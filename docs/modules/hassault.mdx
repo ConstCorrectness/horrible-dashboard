@@ -647,13 +647,46 @@ default is caught by a count in the same suite.
 ### GLB maps are in cube units, and a spawn needs room for a body
 
 One world unit is one cube and a standing player is **5.2** of them (eye 4.5 +
-0.7 above). `generate_office.py` was authored in metres — a 4-unit storey — so the
-body could not fit under the ceiling and every spawn resolved onto the roof, with
-no error anywhere. Its footprint was already in cube units, so the fix scales
-**only Z** (`VERTICAL_SCALE = 3.0`, ceiling at 12, what `hd_office.json` declares),
-inside the two primitives everything is built from. Five of its eight client
-spawns and six of its ten items were also inside desks, a pillar or cubicle
-partitions; they were moved to the nearest clear floor.
+0.7 above) — about a 1.75 m person, so roughly **three cubes to the metre**. Every
+`tools/blender/generate_*.py` is authored in **metres** (a 70 m Dust II, a 4 m
+office storey, a 2.6 m shipping container), and for a long time the result was
+exported as-is and read as cubes. That made every modelled map a third the size
+it was drawn at relative to the player: Dust II was thirty body-widths across,
+its 4.4-unit "grand" archways barely cleared a 5.2-unit body, and its 4.2-unit
+tunnel was shorter than the player standing in it.
+
+The conversion now lives in one place, **`tools/blender/maplib.py`**:
+`export_map_glb(name)` bakes modifiers (so a bevel's width scales with the mesh
+it rounds) and scales the finished scene by `MAP_SCALE = 3.0` about the origin
+before export. It is **uniform** — scaling only the footprint would turn every
+crate into a slab — and it keeps the node tree intact (for a uniform scale,
+multiplying each translation in the chain and each mesh once is exactly
+`D · world`), so every node name the clients classify by survives. The
+generators keep authoring in metres; everything that places something *on* a
+map is in cubes and was multiplied once: the JSON's brushes, spawns, items and
+sites (`sfactor` 6 → 8, since 210 cubes no longer fits a 64 grid), the
+`MAP_CONFIGS` table in `world3d.ts`, its twin in `world3d.rs`, and
+`bots.TACTICAL_COVER_NODES`. The procedural fallbacks (`createProcedural*`,
+`create_procedural_*`) still build the metre layout and are scaled on the way
+out (`scaleFallback` / `scale_fallback`), so a fallback lands where the GLB
+would have.
+
+`hd_office` was the one exception before this: it had been fixed by scaling
+**only Z** (`VERTICAL_SCALE = 3.0`) inside its primitives, which kept a metre
+footprint under a cube ceiling. It now authors plain metres like the rest; its
+heights come out identical and its footprint triples. Its tables' heights were
+already in cubes, so only their x/y were multiplied. In hd_bank's JSON, the
+knee-high cover blocks stay at floor 1 rather than 3 — the brush world is a
+rough stand-in for the GLB, and a three-cube block is a jump, which the on-foot
+reachability check rightly counts as sealing the cells on top off.
+
+`HASSAULT_MAP_SCALE=1 HASSAULT_MAP_OUT=<dir>` runs a generator unscaled into a
+scratch directory. At 1.0 every generator reproduces the committed pre-scale GLB
+(same node and material sets, same bounds), which is how the refactor onto
+`maplib` was checked.
+
+Five of office's eight client spawns and six of its ten items were once inside
+desks, a pillar or cubicle partitions; they were moved to the nearest clear floor.
 
 `tests/test_spawn_clearance.rs` probes every GLB map's spawns against the collision
 mesh with rays (floor below, headroom over the footprint, nothing within the
@@ -668,8 +701,83 @@ elsewhere they sit in crouch-height spaces a standing probe rejects.
 
 Note the **two spawn sources** for a GLB map: Train and the GLB render use the
 tables in `world3d.ts`/`world3d.rs`, while a hosted match simulates on the cube
-world built from the map's JSON brushes, with the JSON's `spawns`. For hd_office
-the two describe different layouts; that divergence is not resolved here.
+world built from the map's JSON brushes, with the JSON's `spawns`. The JSON's
+placements are now copied from those tables, then nudged by
+`tools/hassault_fit_placements.py` wherever the baked world disagrees (a spawn on
+a kitchen counter, an item under a crate); the few that moved are the only
+divergence left.
+
+### What is solid on a modelled map
+
+Solidity is decided in three places, and each was wrong in its own way.
+
+**Which GLB nodes collide** (`glb-colliders.json`, read by `glb-colliders.ts` and
+`world3d.rs`). Both clients used to skip any node whose name contained a
+decoration keyword — the browser case-insensitively, native case-sensitively — so
+`Perimeter` matched `rim` and every map's outer wall was walk-through in the
+browser, along with Mirage's Window Room floor (`Window`), Dust II's bomb-site
+crates (`Plant`), and the office's cubicle dividers (`Divide`). A keyword now
+only marks a node as decoration, and decoration is skipped **only when it is too
+small to matter**: it can neither be stood on (both horizontal sides ≥
+`standWidth`) nor block a body (taller than the step height and wider than
+`blockWidth`). `NonCol` in a name still always opts out. Name keywords match
+case-sensitively and material keywords case-insensitively, in both clients; the
+table's `cases` are replayed by `glb-colliders.test.ts` and
+`tests/test_glb_colliders.rs`, the second of which also casts rays outward from
+each map's centre so a map that can be walked out of fails. `ColOnly` nodes are
+hidden, not intangible — the browser used to drop them from collision too.
+
+Two model fixes came out of that test: the office's façade is floor-to-ceiling
+*breakable* glass over a drop, so each façade now has an invisible
+`Exterior_Barrier_*_ColOnly` behind it; and `maplib.add_safety_floor` puts an
+invisible `Safety_Floor_ColOnly` under every map at its lowest surface, because
+the bank lays one slab per room and the strip under each doorway had no floor at
+all — offline, walking through the west door dropped you out of the world.
+
+**The body that collides** (`physics-rapier.ts`, `physics_rapier.rs`). The Rapier
+controller was tuned in metres — a 1.8-tall, 0.45-radius capsule — and was never
+touched when the maps went to cubes, so it became a third of the avatar's size
+and slipped through gaps the avatar visibly could not. Every length, speed and
+acceleration is now multiplied by `UNITS_PER_METRE` (3), which keeps the tuned
+feel exactly; the material-penetration model stays in metres and is handed
+`thickness / U`.
+
+**What a hosted match simulates.** The server, and the client predicting against
+it, never see the GLB: they run the cube heightfield built from the JSON's
+`brushes`, which for these maps was a hand-drawn open box with a few dividing
+walls, so online every crate, van and building was walk-through.
+`tools/blender/bake_collision.py` now rasterises the GLB's colliders (the same
+`glb-colliders.json` rule) into that grid and writes the result back as merged
+`room` rects, marking the JSON `"collision": "baked"`:
+
+- 4×4 vertical rays per cell, counting solid by face orientation **per object**
+  (one tree for the scene steps past coincident faces and unbalances the count),
+  with a one-sided plane read as a thin slab, not as rock all the way down.
+- A column holds one opening, so the bake walks from the spawns over every
+  opening of every column — step, running jump, drop — and keeps the lowest
+  opening that was *reached*: the street under a catwalk, never the void under a
+  floor slab. An unreached column keeps its top only when it is open to the sky
+  (a crate or wall top you can shoot over); anything else closes.
+- Footprints are conservative (a cell is blocked if any sample is), floors round
+  to the nearest cube and ceilings round down.
+
+`maplint` holds a baked world to what these maps are built for: reachability
+allows a **running jump** (`JUMP_CLIMB = 4`, measured against `physics.step` by
+`test_maplint_jump_climb`), crossing the unstandable cell that hugs any ledge,
+and raised islands — standable tops beside ground someone does reach — are
+geometry, not a sealed room. Drawn maps keep the stricter on-foot rule.
+
+Rebuilding a modelled map is therefore three steps, in order: the generator
+(`blender --background --factory-startup --python tools/blender/generate_<map>.py`),
+the bake (`... --python tools/blender/bake_collision.py -- hd_<map>`), then
+`uv run python tools/hassault_fit_placements.py hd_<map>`.
+`test_modelled_maps_simulate_their_model` fails if a `gltf` map ships without
+baked brushes.
+
+Fixing solidity surfaced traversal the models never had: Dust II's Long A and CT
+"ramps" and Inferno's apartment stairs were boxes (cliffs), now wedges via
+`maplib.add_wedge`, and Nuke's reactor hall was four unbroken walls — Site A was
+unreachable by anyone — and now has three doorways (`maplib.add_wall_with_door`).
 
 ### The heightfield rule, which is easy to get backwards
 

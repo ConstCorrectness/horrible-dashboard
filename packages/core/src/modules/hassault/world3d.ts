@@ -30,6 +30,7 @@ import {
   planarUv,
   surfaceTileScale,
 } from './glb-surfaces';
+import { glbNodeCollides, isDecorNode } from './glb-colliders';
 import { getCachedAssetUrl } from './models/assetCache';
 
 export interface SpawnPoint {
@@ -1381,11 +1382,13 @@ export function isBreakableWindowNode(name: string): boolean {
   );
 }
 
+/**
+ * Named as decoration (or `NonCol`). Whether it actually collides also depends on
+ * its size — see `glbNodeCollides` in `glb-colliders.ts`.
+ */
 export function isNonColliderNode(name: string): boolean {
   if (isBreakableWindowNode(name)) return false;
-  return /NonCol|Glass|Window|Lamp|Glow|Decal|Stripe|Sign|Text|Turn|Siren|Taillight|Headlight|Arm|Vent|Rim|Hub|Latch|Divide|Cap|Hood|Mullion|Camera|Light|Truss|Detail|Pipe|Conduit|Wire|Debris|Stain|Crack|Drain|Manhole|Cable|Joint|Rung|Flange|Web|Rail_|Tie_|Gusset|Purlin|Louver|Hose|Vise|Blind|Antenna|Blade|Propane|Spool|Cushion|Skylight|Foliage|Plant|Chandelier|Stanchion|Flute|Globe|Clock|Plaque|Urn|Hatch|Ingot|Rope|Lug|Dial|Spoke|Caster|Cart_|Trophy|Frame|Painting|Sconce|Screen|Keyhole|Dunnage|Stringer|Slat|Strap|Buckle|Rosette|Medallion|Inlay|Blotter|Keyboard|Mouse|Speaker|Mic|Nameplate|Wicket|Spindle|Winch|Lightbar|Cup|Mug|Spigot|Shade|Bulb|Chain|Handwheel|Bushing|Bolt/i.test(
-    name,
-  );
+  return name.includes('NonCol') || isDecorNode(name);
 }
 
 export function isInvisibleNode(name: string): boolean {
@@ -1406,410 +1409,410 @@ export interface MapConfig {
 export const MAP_CONFIGS: Record<string, MapConfig> = {
   hd_facility: {
     bounds: {
-      min: [0, 0, -5],
-      max: [64, 64, 14],
-      center: [32, 32, 4.5],
-      extent: 42,
+      min: [0, 0, -15],
+      max: [192, 192, 42],
+      center: [96, 96, 13.5],
+      extent: 126,
     },
     spawns: {
       cla: [
-        { x: 10, y: 8, z: 0, yaw: 0, team: 0 },
-        { x: 32, y: 4, z: 6, yaw: 0, team: 0 },
-        { x: 54, y: 8, z: 0, yaw: 315, team: 0 },
-        { x: 32, y: 10, z: 0, yaw: 0, team: 0 },
+        { x: 30, y: 24, z: 0, yaw: 0, team: 0 },
+        { x: 96, y: 12, z: 18, yaw: 0, team: 0 },
+        { x: 162, y: 24, z: 0, yaw: 315, team: 0 },
+        { x: 96, y: 30, z: 0, yaw: 0, team: 0 },
       ],
       rvsf: [
-        { x: 10, y: 56, z: 0, yaw: 180, team: 1 },
-        { x: 32, y: 60, z: 6, yaw: 180, team: 1 },
-        { x: 54, y: 56, z: 0, yaw: 225, team: 1 },
-        { x: 32, y: 54, z: 0, yaw: 180, team: 1 },
+        { x: 30, y: 168, z: 0, yaw: 180, team: 1 },
+        { x: 96, y: 180, z: 18, yaw: 180, team: 1 },
+        { x: 162, y: 168, z: 0, yaw: 225, team: 1 },
+        { x: 96, y: 162, z: 0, yaw: 180, team: 1 },
       ],
       all: [
-        { x: 10, y: 8, z: 0, yaw: 0, team: 0 },
-        { x: 32, y: 4, z: 6, yaw: 0, team: 0 },
-        { x: 54, y: 8, z: 0, yaw: 315, team: 0 },
-        { x: 32, y: 10, z: 0, yaw: 0, team: 0 },
-        { x: 10, y: 56, z: 0, yaw: 180, team: 1 },
-        { x: 32, y: 60, z: 6, yaw: 180, team: 1 },
-        { x: 54, y: 56, z: 0, yaw: 225, team: 1 },
-        { x: 32, y: 54, z: 0, yaw: 180, team: 1 },
+        { x: 30, y: 24, z: 0, yaw: 0, team: 0 },
+        { x: 96, y: 12, z: 18, yaw: 0, team: 0 },
+        { x: 162, y: 24, z: 0, yaw: 315, team: 0 },
+        { x: 96, y: 30, z: 0, yaw: 0, team: 0 },
+        { x: 30, y: 168, z: 0, yaw: 180, team: 1 },
+        { x: 96, y: 180, z: 18, yaw: 180, team: 1 },
+        { x: 162, y: 168, z: 0, yaw: 225, team: 1 },
+        { x: 96, y: 162, z: 0, yaw: 180, team: 1 },
       ],
     },
     items: [
-      { id: 1, kind: 'ammo_assault', x: 32, y: 32, z: 6 },
-      { id: 2, kind: 'armour', x: 32, y: 32, z: -5 },
-      { id: 3, kind: 'health', x: 8, y: 32, z: 0 },
-      { id: 4, kind: 'health', x: 56, y: 32, z: 0 },
-      { id: 5, kind: 'ammo_sniper', x: 4, y: 4, z: 6 },
-      { id: 6, kind: 'ammo_sniper', x: 60, y: 60, z: 6 },
+      { id: 1, kind: 'ammo_assault', x: 96, y: 96, z: 18 },
+      { id: 2, kind: 'armour', x: 96, y: 96, z: -15 },
+      { id: 3, kind: 'health', x: 24, y: 96, z: 0 },
+      { id: 4, kind: 'health', x: 168, y: 96, z: 0 },
+      { id: 5, kind: 'ammo_sniper', x: 12, y: 12, z: 18 },
+      { id: 6, kind: 'ammo_sniper', x: 180, y: 180, z: 18 },
     ],
     ladders: [
-      { x: 32, y: 16, base: -5, top: 0 },
-      { x: 32, y: 48, base: -5, top: 0 },
+      { x: 96, y: 48, base: -15, top: 0 },
+      { x: 96, y: 144, base: -15, top: 0 },
     ],
   },
   hd_junkflea: {
     bounds: {
-      min: [4, 4, -2.5],
-      max: [60, 60, 14],
-      center: [32, 32, 5.75],
-      extent: 38,
+      min: [12, 12, -7.5],
+      max: [180, 180, 42],
+      center: [96, 96, 17.25],
+      extent: 114,
     },
     spawns: {
       cla: [
-        { x: 16, y: 12, z: 0, yaw: 0, team: 0 },
-        { x: 48, y: 12, z: 0, yaw: 0, team: 0 },
-        { x: 32, y: 10, z: 0, yaw: 0, team: 0 },
-        { x: 32, y: 15, z: 0, yaw: 0, team: 0 },
+        { x: 48, y: 36, z: 0, yaw: 0, team: 0 },
+        { x: 144, y: 36, z: 0, yaw: 0, team: 0 },
+        { x: 96, y: 30, z: 0, yaw: 0, team: 0 },
+        { x: 96, y: 45, z: 0, yaw: 0, team: 0 },
       ],
       rvsf: [
-        { x: 16, y: 52, z: 0, yaw: 180, team: 1 },
-        { x: 48, y: 52, z: 0, yaw: 180, team: 1 },
-        { x: 32, y: 54, z: 0, yaw: 180, team: 1 },
-        { x: 32, y: 49, z: 0, yaw: 180, team: 1 },
+        { x: 48, y: 156, z: 0, yaw: 180, team: 1 },
+        { x: 144, y: 156, z: 0, yaw: 180, team: 1 },
+        { x: 96, y: 162, z: 0, yaw: 180, team: 1 },
+        { x: 96, y: 147, z: 0, yaw: 180, team: 1 },
       ],
       all: [
-        { x: 16, y: 12, z: 0, yaw: 0, team: 0 },
-        { x: 48, y: 12, z: 0, yaw: 0, team: 0 },
-        { x: 32, y: 10, z: 0, yaw: 0, team: 0 },
-        { x: 32, y: 15, z: 0, yaw: 0, team: 0 },
-        { x: 16, y: 52, z: 0, yaw: 180, team: 1 },
-        { x: 48, y: 52, z: 0, yaw: 180, team: 1 },
-        { x: 32, y: 54, z: 0, yaw: 180, team: 1 },
-        { x: 32, y: 49, z: 0, yaw: 180, team: 1 },
+        { x: 48, y: 36, z: 0, yaw: 0, team: 0 },
+        { x: 144, y: 36, z: 0, yaw: 0, team: 0 },
+        { x: 96, y: 30, z: 0, yaw: 0, team: 0 },
+        { x: 96, y: 45, z: 0, yaw: 0, team: 0 },
+        { x: 48, y: 156, z: 0, yaw: 180, team: 1 },
+        { x: 144, y: 156, z: 0, yaw: 180, team: 1 },
+        { x: 96, y: 162, z: 0, yaw: 180, team: 1 },
+        { x: 96, y: 147, z: 0, yaw: 180, team: 1 },
       ],
     },
     items: [
-      { id: 1, kind: 'armour', x: 32, y: 32, z: 0 },
-      { id: 2, kind: 'health', x: 19, y: 32, z: -2 },
-      { id: 3, kind: 'health', x: 45, y: 32, z: -2 },
-      { id: 4, kind: 'ammo_assault', x: 22, y: 12, z: 0 },
-      { id: 5, kind: 'ammo_assault', x: 42, y: 12, z: 0 },
-      { id: 6, kind: 'ammo_sniper', x: 22, y: 52, z: 0 },
-      { id: 7, kind: 'ammo_sniper', x: 42, y: 52, z: 0 },
-      { id: 8, kind: 'grenade', x: 12, y: 32, z: 0 },
-      { id: 9, kind: 'clips', x: 52, y: 32, z: 0 },
-      { id: 10, kind: 'armour', x: 32, y: 20, z: 0 },
+      { id: 1, kind: 'armour', x: 96, y: 96, z: 0 },
+      { id: 2, kind: 'health', x: 57, y: 96, z: -6 },
+      { id: 3, kind: 'health', x: 135, y: 96, z: -6 },
+      { id: 4, kind: 'ammo_assault', x: 66, y: 36, z: 0 },
+      { id: 5, kind: 'ammo_assault', x: 126, y: 36, z: 0 },
+      { id: 6, kind: 'ammo_sniper', x: 66, y: 156, z: 0 },
+      { id: 7, kind: 'ammo_sniper', x: 126, y: 156, z: 0 },
+      { id: 8, kind: 'grenade', x: 36, y: 96, z: 0 },
+      { id: 9, kind: 'clips', x: 156, y: 96, z: 0 },
+      { id: 10, kind: 'armour', x: 96, y: 60, z: 0 },
     ],
-    ladders: [{ x: 32, y: 32, base: -2.5, top: 4.5 }],
+    ladders: [{ x: 96, y: 96, base: -7.5, top: 13.5 }],
   },
   hd_bank: {
     bounds: {
-      min: [4, 4, 0],
-      max: [60, 60, 14],
-      center: [32, 32, 7],
-      extent: 56,
+      min: [12, 12, 0],
+      max: [180, 180, 42],
+      center: [96, 96, 21],
+      extent: 168,
     },
     spawns: {
       cla: [
-        { x: 12, y: 8, z: 0, yaw: 0, team: 0 },
-        { x: 24, y: 8, z: 0, yaw: 0, team: 0 },
-        { x: 36, y: 8, z: 0, yaw: 0, team: 0 },
-        { x: 48, y: 8, z: 0, yaw: 0, team: 0 },
+        { x: 36, y: 24, z: 0, yaw: 0, team: 0 },
+        { x: 72, y: 24, z: 0, yaw: 0, team: 0 },
+        { x: 108, y: 24, z: 0, yaw: 0, team: 0 },
+        { x: 144, y: 24, z: 0, yaw: 0, team: 0 },
       ],
       rvsf: [
-        { x: 10.5, y: 53.5, z: 0.85, yaw: 180, team: 1 },
-        { x: 20, y: 53, z: 0.8, yaw: 180, team: 1 },
-        { x: 36, y: 55, z: 0.94, yaw: 180, team: 1 },
-        { x: 36, y: 51, z: 0, yaw: 180, team: 1 },
+        { x: 31.5, y: 160.5, z: 2.55, yaw: 180, team: 1 },
+        { x: 60, y: 159, z: 2.4, yaw: 180, team: 1 },
+        { x: 132, y: 157.5, z: 0, yaw: 180, team: 1 },
+        { x: 106.5, y: 135.5, z: 0, yaw: 180, team: 1 },
       ],
       all: [
-        { x: 12, y: 8, z: 0, yaw: 0, team: 0 },
-        { x: 24, y: 8, z: 0, yaw: 0, team: 0 },
-        { x: 36, y: 8, z: 0, yaw: 0, team: 0 },
-        { x: 48, y: 8, z: 0, yaw: 0, team: 0 },
-        { x: 10.5, y: 53.5, z: 0.85, yaw: 180, team: 1 },
-        { x: 20, y: 53, z: 0.8, yaw: 180, team: 1 },
-        { x: 36, y: 55, z: 0.94, yaw: 180, team: 1 },
-        { x: 36, y: 51, z: 0, yaw: 180, team: 1 },
+        { x: 36, y: 24, z: 0, yaw: 0, team: 0 },
+        { x: 72, y: 24, z: 0, yaw: 0, team: 0 },
+        { x: 108, y: 24, z: 0, yaw: 0, team: 0 },
+        { x: 144, y: 24, z: 0, yaw: 0, team: 0 },
+        { x: 31.5, y: 160.5, z: 2.55, yaw: 180, team: 1 },
+        { x: 60, y: 159, z: 2.4, yaw: 180, team: 1 },
+        { x: 132, y: 157.5, z: 0, yaw: 180, team: 1 },
+        { x: 106.5, y: 135.5, z: 0, yaw: 180, team: 1 },
       ],
     },
     items: [
-      { id: 1, kind: 'health', x: 10, y: 14, z: 0 },
-      { id: 2, kind: 'health', x: 54, y: 14, z: 0 },
-      { id: 3, kind: 'health', x: 10, y: 51, z: 0 },
-      { id: 4, kind: 'armour', x: 32, y: 28, z: 0 },
-      { id: 5, kind: 'armour', x: 52, y: 53, z: 0 },
-      { id: 6, kind: 'ammo_assault', x: 20, y: 11, z: 0 },
-      { id: 7, kind: 'ammo_assault', x: 44, y: 12, z: 0 },
-      { id: 8, kind: 'ammo_sniper', x: 16, y: 40, z: 5 },
-      { id: 9, kind: 'clips', x: 32, y: 22, z: 0 },
-      { id: 10, kind: 'grenade', x: 52, y: 28, z: 0 },
+      { id: 1, kind: 'health', x: 30, y: 42, z: 0 },
+      { id: 2, kind: 'health', x: 162, y: 42, z: 0 },
+      { id: 3, kind: 'health', x: 30, y: 153, z: 0 },
+      { id: 4, kind: 'armour', x: 96, y: 84, z: 0 },
+      { id: 5, kind: 'armour', x: 156, y: 159, z: 0 },
+      { id: 6, kind: 'ammo_assault', x: 60, y: 33, z: 0 },
+      { id: 7, kind: 'ammo_assault', x: 132, y: 36, z: 0 },
+      { id: 8, kind: 'ammo_sniper', x: 48, y: 120, z: 15 },
+      { id: 9, kind: 'clips', x: 96, y: 66, z: 0 },
+      { id: 10, kind: 'grenade', x: 156, y: 84, z: 0 },
     ],
-    ladders: [{ x: 46.4, y: 36, base: 0, top: 9 }],
+    ladders: [{ x: 139.2, y: 108, base: 0, top: 27 }],
   },
   hd_dust2: {
     bounds: {
-      min: [4, 4, 0],
-      max: [66, 66, 14],
-      center: [35, 35, 7],
-      extent: 60,
+      min: [12, 12, 0],
+      max: [198, 198, 42],
+      center: [105, 105, 21],
+      extent: 180,
     },
     spawns: {
       cla: [
-        { x: 34, y: 60, z: 0, yaw: 270, team: 0 },
-        { x: 38, y: 60, z: 0, yaw: 270, team: 0 },
-        { x: 34, y: 56, z: 0, yaw: 270, team: 0 },
-        { x: 38, y: 56, z: 0, yaw: 270, team: 0 },
+        { x: 102, y: 180, z: 0, yaw: 270, team: 0 },
+        { x: 114, y: 180, z: 0, yaw: 270, team: 0 },
+        { x: 102, y: 168, z: 0, yaw: 270, team: 0 },
+        { x: 114, y: 168, z: 0, yaw: 270, team: 0 },
       ],
       rvsf: [
-        { x: 30, y: 10, z: 0, yaw: 90, team: 1 },
-        { x: 34, y: 10, z: 0, yaw: 90, team: 1 },
-        { x: 30, y: 14, z: 0, yaw: 90, team: 1 },
-        { x: 34, y: 14, z: 0, yaw: 90, team: 1 },
+        { x: 90, y: 30, z: 0, yaw: 90, team: 1 },
+        { x: 102, y: 30, z: 0, yaw: 90, team: 1 },
+        { x: 90, y: 42, z: 0, yaw: 90, team: 1 },
+        { x: 102, y: 42, z: 0, yaw: 90, team: 1 },
       ],
       all: [
-        { x: 34, y: 60, z: 0, yaw: 270, team: 0 },
-        { x: 38, y: 60, z: 0, yaw: 270, team: 0 },
-        { x: 34, y: 56, z: 0, yaw: 270, team: 0 },
-        { x: 38, y: 56, z: 0, yaw: 270, team: 0 },
-        { x: 30, y: 10, z: 0, yaw: 90, team: 1 },
-        { x: 34, y: 10, z: 0, yaw: 90, team: 1 },
-        { x: 30, y: 14, z: 0, yaw: 90, team: 1 },
-        { x: 34, y: 14, z: 0, yaw: 90, team: 1 },
+        { x: 102, y: 180, z: 0, yaw: 270, team: 0 },
+        { x: 114, y: 180, z: 0, yaw: 270, team: 0 },
+        { x: 102, y: 168, z: 0, yaw: 270, team: 0 },
+        { x: 114, y: 168, z: 0, yaw: 270, team: 0 },
+        { x: 90, y: 30, z: 0, yaw: 90, team: 1 },
+        { x: 102, y: 30, z: 0, yaw: 90, team: 1 },
+        { x: 90, y: 42, z: 0, yaw: 90, team: 1 },
+        { x: 102, y: 42, z: 0, yaw: 90, team: 1 },
       ],
     },
     items: [
-      { id: 1, kind: 'health', x: 58, y: 12, z: 0 },
-      { id: 2, kind: 'health', x: 20, y: 34, z: 0 },
-      { id: 3, kind: 'health', x: 36, y: 58, z: 0 },
-      { id: 4, kind: 'armour', x: 54, y: 36, z: 0 },
-      { id: 5, kind: 'armour', x: 10, y: 56, z: 0 },
-      { id: 6, kind: 'ammo_assault', x: 30, y: 30, z: 0 },
-      { id: 7, kind: 'ammo_assault', x: 48, y: 52, z: 1.2 },
-      { id: 8, kind: 'ammo_sniper', x: 16, y: 32, z: 0 },
-      { id: 9, kind: 'clips', x: 38, y: 44, z: 2.4 },
-      { id: 10, kind: 'grenade', x: 28, y: 12, z: 0 },
+      { id: 1, kind: 'health', x: 174, y: 36, z: 0 },
+      { id: 2, kind: 'health', x: 60, y: 102, z: 0 },
+      { id: 3, kind: 'health', x: 108, y: 174, z: 0 },
+      { id: 4, kind: 'armour', x: 162, y: 108, z: 0 },
+      { id: 5, kind: 'armour', x: 30, y: 168, z: 0 },
+      { id: 6, kind: 'ammo_assault', x: 90, y: 90, z: 0 },
+      { id: 7, kind: 'ammo_assault', x: 144, y: 156, z: 3.6 },
+      { id: 8, kind: 'ammo_sniper', x: 48, y: 96, z: 0 },
+      { id: 9, kind: 'clips', x: 114, y: 132, z: 7.2 },
+      { id: 10, kind: 'grenade', x: 84, y: 36, z: 0 },
     ],
-    ladders: [{ x: 42, y: 48, base: 0, top: 4.5 }],
+    ladders: [{ x: 126, y: 144, base: 0, top: 13.5 }],
   },
   hd_mirage: {
     bounds: {
-      min: [4, 4, 0],
-      max: [66, 66, 14],
-      center: [35, 35, 7],
-      extent: 60,
+      min: [12, 12, 0],
+      max: [198, 198, 42],
+      center: [105, 105, 21],
+      extent: 180,
     },
     spawns: {
       cla: [
-        { x: 32, y: 58, z: 0, yaw: 270, team: 0 },
-        { x: 36, y: 58, z: 0, yaw: 270, team: 0 },
-        { x: 33, y: 53, z: 0, yaw: 270, team: 0 },
-        { x: 36, y: 54, z: 0, yaw: 270, team: 0 },
+        { x: 96, y: 174, z: 0, yaw: 270, team: 0 },
+        { x: 108, y: 174, z: 0, yaw: 270, team: 0 },
+        { x: 99, y: 159, z: 0, yaw: 270, team: 0 },
+        { x: 109, y: 163.5, z: 0, yaw: 270, team: 0 },
       ],
       rvsf: [
-        { x: 32, y: 10, z: 0, yaw: 90, team: 1 },
-        { x: 34.5, y: 9.5, z: 0, yaw: 90, team: 1 },
-        { x: 32, y: 14, z: 0, yaw: 90, team: 1 },
-        { x: 36, y: 14, z: 0, yaw: 90, team: 1 },
+        { x: 96, y: 30, z: 0, yaw: 90, team: 1 },
+        { x: 103.5, y: 28.5, z: 0, yaw: 90, team: 1 },
+        { x: 96, y: 42, z: 0, yaw: 90, team: 1 },
+        { x: 108, y: 42, z: 0, yaw: 90, team: 1 },
       ],
       all: [
-        { x: 32, y: 58, z: 0, yaw: 270, team: 0 },
-        { x: 36, y: 58, z: 0, yaw: 270, team: 0 },
-        { x: 33, y: 53, z: 0, yaw: 270, team: 0 },
-        { x: 36, y: 54, z: 0, yaw: 270, team: 0 },
-        { x: 32, y: 10, z: 0, yaw: 90, team: 1 },
-        { x: 34.5, y: 9.5, z: 0, yaw: 90, team: 1 },
-        { x: 32, y: 14, z: 0, yaw: 90, team: 1 },
-        { x: 36, y: 14, z: 0, yaw: 90, team: 1 },
+        { x: 96, y: 174, z: 0, yaw: 270, team: 0 },
+        { x: 108, y: 174, z: 0, yaw: 270, team: 0 },
+        { x: 99, y: 159, z: 0, yaw: 270, team: 0 },
+        { x: 109, y: 163.5, z: 0, yaw: 270, team: 0 },
+        { x: 96, y: 30, z: 0, yaw: 90, team: 1 },
+        { x: 103.5, y: 28.5, z: 0, yaw: 90, team: 1 },
+        { x: 96, y: 42, z: 0, yaw: 90, team: 1 },
+        { x: 108, y: 42, z: 0, yaw: 90, team: 1 },
       ],
     },
     items: [
-      { id: 1, kind: 'health', x: 18, y: 14, z: 0 },
-      { id: 2, kind: 'health', x: 50, y: 14, z: 0 },
-      { id: 3, kind: 'health', x: 34, y: 34, z: 0 },
-      { id: 4, kind: 'armour', x: 16, y: 48, z: 0.8 },
-      { id: 5, kind: 'armour', x: 50, y: 48, z: 2.8 },
-      { id: 6, kind: 'ammo_assault', x: 14, y: 32, z: 2.8 },
-      { id: 7, kind: 'ammo_assault', x: 48, y: 32, z: 0 },
-      { id: 8, kind: 'ammo_sniper', x: 34, y: 50, z: 2.4 },
-      { id: 9, kind: 'clips', x: 34, y: 18, z: 0 },
-      { id: 10, kind: 'grenade', x: 26, y: 36, z: 1.8 },
+      { id: 1, kind: 'health', x: 54, y: 42, z: 0 },
+      { id: 2, kind: 'health', x: 150, y: 42, z: 0 },
+      { id: 3, kind: 'health', x: 102, y: 102, z: 0 },
+      { id: 4, kind: 'armour', x: 48, y: 144, z: 2.4 },
+      { id: 5, kind: 'armour', x: 150, y: 144, z: 8.4 },
+      { id: 6, kind: 'ammo_assault', x: 42, y: 96, z: 8.4 },
+      { id: 7, kind: 'ammo_assault', x: 144, y: 96, z: 0 },
+      { id: 8, kind: 'ammo_sniper', x: 102, y: 150, z: 7.2 },
+      { id: 9, kind: 'clips', x: 102, y: 54, z: 0 },
+      { id: 10, kind: 'grenade', x: 78, y: 108, z: 5.4 },
     ],
-    ladders: [{ x: 34, y: 32, base: -1.5, top: 2.4 }],
+    ladders: [{ x: 102, y: 96, base: -4.5, top: 7.2 }],
   },
   hd_inferno: {
     bounds: {
-      min: [4, 4, 0],
-      max: [66, 66, 14],
-      center: [35, 35, 7],
-      extent: 60,
+      min: [12, 12, 0],
+      max: [198, 198, 42],
+      center: [105, 105, 21],
+      extent: 180,
     },
     spawns: {
       cla: [
-        { x: 30, y: 56, z: 0, yaw: 270, team: 0 },
-        { x: 34, y: 56, z: 0, yaw: 270, team: 0 },
-        { x: 30, y: 52, z: 0, yaw: 270, team: 0 },
-        { x: 34, y: 52, z: 0, yaw: 270, team: 0 },
+        { x: 90, y: 168, z: 0, yaw: 270, team: 0 },
+        { x: 102, y: 168, z: 0, yaw: 270, team: 0 },
+        { x: 90, y: 156, z: 0, yaw: 270, team: 0 },
+        { x: 102, y: 156, z: 0, yaw: 270, team: 0 },
       ],
       rvsf: [
-        { x: 30, y: 10, z: 0, yaw: 90, team: 1 },
-        { x: 34, y: 10, z: 0, yaw: 90, team: 1 },
-        { x: 29.5, y: 13.5, z: 0, yaw: 90, team: 1 },
-        { x: 34, y: 14, z: 0, yaw: 90, team: 1 },
+        { x: 90, y: 30, z: 0, yaw: 90, team: 1 },
+        { x: 102, y: 30, z: 0, yaw: 90, team: 1 },
+        { x: 88.5, y: 40.5, z: 0, yaw: 90, team: 1 },
+        { x: 101, y: 40.5, z: 0, yaw: 90, team: 1 },
       ],
       all: [
-        { x: 30, y: 56, z: 0, yaw: 270, team: 0 },
-        { x: 34, y: 56, z: 0, yaw: 270, team: 0 },
-        { x: 30, y: 52, z: 0, yaw: 270, team: 0 },
-        { x: 34, y: 52, z: 0, yaw: 270, team: 0 },
-        { x: 30, y: 10, z: 0, yaw: 90, team: 1 },
-        { x: 34, y: 10, z: 0, yaw: 90, team: 1 },
-        { x: 29.5, y: 13.5, z: 0, yaw: 90, team: 1 },
-        { x: 34, y: 14, z: 0, yaw: 90, team: 1 },
+        { x: 90, y: 168, z: 0, yaw: 270, team: 0 },
+        { x: 102, y: 168, z: 0, yaw: 270, team: 0 },
+        { x: 90, y: 156, z: 0, yaw: 270, team: 0 },
+        { x: 102, y: 156, z: 0, yaw: 270, team: 0 },
+        { x: 90, y: 30, z: 0, yaw: 90, team: 1 },
+        { x: 102, y: 30, z: 0, yaw: 90, team: 1 },
+        { x: 88.5, y: 40.5, z: 0, yaw: 90, team: 1 },
+        { x: 101, y: 40.5, z: 0, yaw: 90, team: 1 },
       ],
     },
     items: [
-      { id: 1, kind: 'health', x: 16, y: 14, z: 0 },
-      { id: 2, kind: 'health', x: 48, y: 14, z: 0 },
-      { id: 3, kind: 'health', x: 32, y: 32, z: 0 },
-      { id: 4, kind: 'armour', x: 18, y: 48, z: 0 },
-      { id: 5, kind: 'armour', x: 50, y: 48, z: 0 },
-      { id: 6, kind: 'ammo_assault', x: 14, y: 30, z: 0 },
-      { id: 7, kind: 'ammo_assault', x: 50, y: 30, z: 0 },
-      { id: 8, kind: 'ammo_sniper', x: 32, y: 54, z: 0 },
-      { id: 9, kind: 'clips', x: 32, y: 18, z: 0 },
-      { id: 10, kind: 'grenade', x: 20, y: 24, z: 0 },
+      { id: 1, kind: 'health', x: 48, y: 42, z: 0 },
+      { id: 2, kind: 'health', x: 144, y: 42, z: 0 },
+      { id: 3, kind: 'health', x: 96, y: 96, z: 0 },
+      { id: 4, kind: 'armour', x: 54, y: 144, z: 0 },
+      { id: 5, kind: 'armour', x: 150, y: 144, z: 0 },
+      { id: 6, kind: 'ammo_assault', x: 42, y: 90, z: 0 },
+      { id: 7, kind: 'ammo_assault', x: 150, y: 90, z: 0 },
+      { id: 8, kind: 'ammo_sniper', x: 96, y: 162, z: 0 },
+      { id: 9, kind: 'clips', x: 96, y: 54, z: 0 },
+      { id: 10, kind: 'grenade', x: 60, y: 72, z: 0 },
     ],
-    ladders: [{ x: 46, y: 42, base: 0, top: 2.8 }],
+    ladders: [{ x: 138, y: 126, base: 0, top: 8.4 }],
   },
   hd_office: {
     bounds: {
-      min: [2, 2, 0],
-      max: [62, 62, 14],
-      center: [32, 32, 7],
-      extent: 58,
+      min: [6, 6, 0],
+      max: [186, 186, 14],
+      center: [96, 96, 7],
+      extent: 174,
     },
     spawns: {
       cla: [
-        { x: 51.5, y: 30.5, z: 0, yaw: 270, team: 0 },
-        { x: 51.5, y: 27.5, z: 0, yaw: 270, team: 0 },
-        { x: 52.5, y: 36.5, z: 0, yaw: 270, team: 0 },
-        { x: 45.5, y: 21.5, z: 0, yaw: 270, team: 0 },
+        { x: 154.5, y: 91.5, z: 0, yaw: 270, team: 0 },
+        { x: 154.5, y: 82.5, z: 0, yaw: 270, team: 0 },
+        { x: 157.5, y: 109.5, z: 0, yaw: 270, team: 0 },
+        { x: 136.5, y: 64.5, z: 0, yaw: 270, team: 0 },
       ],
       rvsf: [
-        { x: 28, y: 10, z: 0, yaw: 90, team: 1 },
-        { x: 32, y: 10, z: 0, yaw: 90, team: 1 },
-        { x: 29.5, y: 15.5, z: 0, yaw: 90, team: 1 },
-        { x: 32, y: 13.5, z: 0, yaw: 90, team: 1 },
+        { x: 84, y: 30, z: 0, yaw: 90, team: 1 },
+        { x: 96, y: 30, z: 0, yaw: 90, team: 1 },
+        { x: 88.5, y: 46.5, z: 0, yaw: 90, team: 1 },
+        { x: 96, y: 40.5, z: 0, yaw: 90, team: 1 },
       ],
       all: [
-        { x: 51.5, y: 30.5, z: 0, yaw: 270, team: 0 },
-        { x: 51.5, y: 27.5, z: 0, yaw: 270, team: 0 },
-        { x: 52.5, y: 36.5, z: 0, yaw: 270, team: 0 },
-        { x: 45.5, y: 21.5, z: 0, yaw: 270, team: 0 },
-        { x: 28, y: 10, z: 0, yaw: 90, team: 1 },
-        { x: 32, y: 10, z: 0, yaw: 90, team: 1 },
-        { x: 29.5, y: 15.5, z: 0, yaw: 90, team: 1 },
-        { x: 32, y: 13.5, z: 0, yaw: 90, team: 1 },
+        { x: 154.5, y: 91.5, z: 0, yaw: 270, team: 0 },
+        { x: 154.5, y: 82.5, z: 0, yaw: 270, team: 0 },
+        { x: 157.5, y: 109.5, z: 0, yaw: 270, team: 0 },
+        { x: 136.5, y: 64.5, z: 0, yaw: 270, team: 0 },
+        { x: 84, y: 30, z: 0, yaw: 90, team: 1 },
+        { x: 96, y: 30, z: 0, yaw: 90, team: 1 },
+        { x: 88.5, y: 46.5, z: 0, yaw: 90, team: 1 },
+        { x: 96, y: 40.5, z: 0, yaw: 90, team: 1 },
       ],
     },
     items: [
-      { id: 1, kind: 'health', x: 7, y: 45, z: 0 },
-      { id: 2, kind: 'health', x: 9, y: 7.5, z: 0 },
-      { id: 3, kind: 'health', x: 54.5, y: 29.5, z: 0 },
-      { id: 4, kind: 'armour', x: 17, y: 45, z: 0 },
-      { id: 5, kind: 'armour', x: 20.5, y: 16, z: 0 },
-      { id: 6, kind: 'ammo_assault', x: 22, y: 32, z: 0 },
-      { id: 7, kind: 'ammo_assault', x: 45.5, y: 18.5, z: 0 },
-      { id: 8, kind: 'ammo_sniper', x: 44.5, y: 45.5, z: 0 },
-      { id: 9, kind: 'clips', x: 30, y: 27.5, z: 0 },
-      { id: 10, kind: 'grenade', x: 30, y: 36.5, z: 0 },
+      { id: 1, kind: 'health', x: 21, y: 135, z: 0 },
+      { id: 2, kind: 'health', x: 27, y: 22.5, z: 0 },
+      { id: 3, kind: 'health', x: 163.5, y: 88.5, z: 0 },
+      { id: 4, kind: 'armour', x: 51, y: 135, z: 0 },
+      { id: 5, kind: 'armour', x: 61.5, y: 48, z: 0 },
+      { id: 6, kind: 'ammo_assault', x: 66, y: 96, z: 0 },
+      { id: 7, kind: 'ammo_assault', x: 136.5, y: 55.5, z: 0 },
+      { id: 8, kind: 'ammo_sniper', x: 133.5, y: 136.5, z: 0 },
+      { id: 9, kind: 'clips', x: 90, y: 82.5, z: 0 },
+      { id: 10, kind: 'grenade', x: 90, y: 109.5, z: 0 },
     ],
     ladders: [],
   },
   hd_nuke: {
     bounds: {
-      min: [4, 4, -5],
-      max: [66, 66, 14],
-      center: [35, 35, 4.5],
-      extent: 60,
+      min: [12, 12, -15],
+      max: [198, 198, 42],
+      center: [105, 105, 13.5],
+      extent: 180,
     },
     spawns: {
       cla: [
-        { x: 26, y: 56, z: 0, yaw: 270, team: 0 },
-        { x: 30, y: 56, z: 0, yaw: 270, team: 0 },
-        { x: 24, y: 54.5, z: 0, yaw: 270, team: 0 },
-        { x: 28, y: 54.5, z: 0, yaw: 270, team: 0 },
+        { x: 78, y: 168, z: 0, yaw: 270, team: 0 },
+        { x: 90, y: 168, z: 0, yaw: 270, team: 0 },
+        { x: 72, y: 163.5, z: 0, yaw: 270, team: 0 },
+        { x: 84, y: 163.5, z: 0, yaw: 270, team: 0 },
       ],
       rvsf: [
-        { x: 34, y: 12, z: 0, yaw: 90, team: 1 },
-        { x: 38, y: 12, z: 0, yaw: 90, team: 1 },
-        { x: 34, y: 15, z: 0, yaw: 90, team: 1 },
-        { x: 38, y: 15, z: 0, yaw: 90, team: 1 },
+        { x: 102, y: 36, z: 0, yaw: 90, team: 1 },
+        { x: 114, y: 36, z: 0, yaw: 90, team: 1 },
+        { x: 102, y: 45, z: 0, yaw: 90, team: 1 },
+        { x: 114, y: 45, z: 0, yaw: 90, team: 1 },
       ],
       all: [
-        { x: 26, y: 56, z: 0, yaw: 270, team: 0 },
-        { x: 30, y: 56, z: 0, yaw: 270, team: 0 },
-        { x: 24, y: 54.5, z: 0, yaw: 270, team: 0 },
-        { x: 28, y: 54.5, z: 0, yaw: 270, team: 0 },
-        { x: 34, y: 12, z: 0, yaw: 90, team: 1 },
-        { x: 38, y: 12, z: 0, yaw: 90, team: 1 },
-        { x: 34, y: 15, z: 0, yaw: 90, team: 1 },
-        { x: 38, y: 15, z: 0, yaw: 90, team: 1 },
+        { x: 78, y: 168, z: 0, yaw: 270, team: 0 },
+        { x: 90, y: 168, z: 0, yaw: 270, team: 0 },
+        { x: 72, y: 163.5, z: 0, yaw: 270, team: 0 },
+        { x: 84, y: 163.5, z: 0, yaw: 270, team: 0 },
+        { x: 102, y: 36, z: 0, yaw: 90, team: 1 },
+        { x: 114, y: 36, z: 0, yaw: 90, team: 1 },
+        { x: 102, y: 45, z: 0, yaw: 90, team: 1 },
+        { x: 114, y: 45, z: 0, yaw: 90, team: 1 },
       ],
     },
     items: [
-      { id: 1, kind: 'health', x: 30, y: 35, z: 0 },
-      { id: 2, kind: 'health', x: 30, y: 35, z: -4.5 },
-      { id: 3, kind: 'health', x: 12, y: 30, z: 0 },
-      { id: 4, kind: 'armour', x: 32, y: 37, z: 0 },
-      { id: 5, kind: 'armour', x: 32, y: 37, z: -4.5 },
-      { id: 6, kind: 'ammo_assault', x: 24, y: 20, z: 0 },
-      { id: 7, kind: 'ammo_assault', x: 36, y: 48, z: 0 },
-      { id: 8, kind: 'ammo_sniper', x: 20, y: 35, z: 3.8 },
-      { id: 9, kind: 'clips', x: 48, y: 35, z: 0 },
-      { id: 10, kind: 'grenade', x: 30, y: 25, z: 0 },
+      { id: 1, kind: 'health', x: 90, y: 105, z: 0 },
+      { id: 2, kind: 'health', x: 90, y: 105, z: -13.5 },
+      { id: 3, kind: 'health', x: 36, y: 90, z: 0 },
+      { id: 4, kind: 'armour', x: 96, y: 111, z: 0 },
+      { id: 5, kind: 'armour', x: 96, y: 111, z: -13.5 },
+      { id: 6, kind: 'ammo_assault', x: 72, y: 60, z: 0 },
+      { id: 7, kind: 'ammo_assault', x: 108, y: 144, z: 0 },
+      { id: 8, kind: 'ammo_sniper', x: 60, y: 105, z: 11.4 },
+      { id: 9, kind: 'clips', x: 144, y: 105, z: 0 },
+      { id: 10, kind: 'grenade', x: 90, y: 75, z: 0 },
     ],
     ladders: [
-      { x: 31, y: 36, base: -4.5, top: 0 },
-      { x: 18.9, y: 20, base: 0, top: 6 },
+      { x: 93, y: 108, base: -13.5, top: 0 },
+      { x: 56.7, y: 60, base: 0, top: 18 },
     ],
   },
   hd_assault: {
     bounds: {
-      min: [4, 4, 0],
-      max: [60, 60, 14],
-      center: [32, 32, 7],
-      extent: 56,
+      min: [12, 12, 0],
+      max: [180, 180, 42],
+      center: [96, 96, 21],
+      extent: 168,
     },
     spawns: {
       cla: [
-        { x: 16, y: 7, z: 0.18, yaw: 90, team: 0 },
-        { x: 19, y: 8, z: 0.2, yaw: 90, team: 0 },
-        { x: 24, y: 7, z: 0.18, yaw: 90, team: 0 },
-        { x: 28, y: 7, z: 0.18, yaw: 90, team: 0 },
+        { x: 48, y: 21, z: 0.54, yaw: 90, team: 0 },
+        { x: 57, y: 24, z: 0.6, yaw: 90, team: 0 },
+        { x: 72, y: 21, z: 0.54, yaw: 90, team: 0 },
+        { x: 84, y: 21, z: 0.54, yaw: 90, team: 0 },
       ],
       rvsf: [
-        { x: 26, y: 48, z: 0, yaw: 270, team: 1 },
-        { x: 36, y: 38, z: 0.4, yaw: 270, team: 1 },
-        { x: 40, y: 38, z: 0, yaw: 270, team: 1 },
-        { x: 26, y: 52, z: 0, yaw: 270, team: 1 },
+        { x: 78, y: 144, z: 0, yaw: 270, team: 1 },
+        { x: 111, y: 115, z: 0, yaw: 270, team: 1 },
+        { x: 120, y: 114, z: 0, yaw: 270, team: 1 },
+        { x: 78, y: 156, z: 0, yaw: 270, team: 1 },
       ],
       all: [
-        { x: 16, y: 7, z: 0.18, yaw: 90, team: 0 },
-        { x: 19, y: 8, z: 0.2, yaw: 90, team: 0 },
-        { x: 24, y: 7, z: 0.18, yaw: 90, team: 0 },
-        { x: 28, y: 7, z: 0.18, yaw: 90, team: 0 },
-        { x: 26, y: 48, z: 0, yaw: 270, team: 1 },
-        { x: 36, y: 38, z: 0.4, yaw: 270, team: 1 },
-        { x: 40, y: 38, z: 0, yaw: 270, team: 1 },
-        { x: 26, y: 52, z: 0, yaw: 270, team: 1 },
+        { x: 48, y: 21, z: 0.54, yaw: 90, team: 0 },
+        { x: 57, y: 24, z: 0.6, yaw: 90, team: 0 },
+        { x: 72, y: 21, z: 0.54, yaw: 90, team: 0 },
+        { x: 84, y: 21, z: 0.54, yaw: 90, team: 0 },
+        { x: 78, y: 144, z: 0, yaw: 270, team: 1 },
+        { x: 111, y: 115, z: 0, yaw: 270, team: 1 },
+        { x: 120, y: 114, z: 0, yaw: 270, team: 1 },
+        { x: 78, y: 156, z: 0, yaw: 270, team: 1 },
       ],
     },
     items: [
-      { id: 1, kind: 'health', x: 14, y: 6, z: 0.18 },
-      { id: 2, kind: 'health', x: 55, y: 16, z: 0 },
-      { id: 3, kind: 'health', x: 38, y: 52, z: 4.2 },
-      { id: 4, kind: 'armour', x: 20, y: 36, z: 0 },
-      { id: 5, kind: 'armour', x: 32, y: 44, z: 4.2 },
-      { id: 6, kind: 'ammo_assault', x: 21, y: 15.5, z: 0 },
-      { id: 7, kind: 'ammo_assault', x: 54, y: 30, z: 0 },
-      { id: 8, kind: 'ammo_sniper', x: 24, y: 7, z: 7.5 },
-      { id: 9, kind: 'clips', x: 10.5, y: 40, z: 4.2 },
-      { id: 10, kind: 'grenade', x: 16, y: 30, z: 9 },
+      { id: 1, kind: 'health', x: 42, y: 18, z: 0.54 },
+      { id: 2, kind: 'health', x: 165, y: 48, z: 0 },
+      { id: 3, kind: 'health', x: 114, y: 156, z: 12.6 },
+      { id: 4, kind: 'armour', x: 60, y: 108, z: 0 },
+      { id: 5, kind: 'armour', x: 96, y: 132, z: 12.6 },
+      { id: 6, kind: 'ammo_assault', x: 63, y: 46.5, z: 0 },
+      { id: 7, kind: 'ammo_assault', x: 162, y: 90, z: 0 },
+      { id: 8, kind: 'ammo_sniper', x: 72, y: 21, z: 22.5 },
+      { id: 9, kind: 'clips', x: 31.5, y: 120, z: 12.6 },
+      { id: 10, kind: 'grenade', x: 48, y: 90, z: 27 },
     ],
-    ladders: [{ x: 46.4, y: 36, base: 0, top: 9 }],
+    ladders: [{ x: 139.2, y: 108, base: 0, top: 27 }],
   },
 };
 
@@ -1892,7 +1895,6 @@ export function buildWorld3DFromGLTF(
 
     const nodeName = obj.name || '';
     const isWin = isBreakableWindowNode(nodeName);
-    const isNonCol = isNonColliderNode(nodeName);
     const isInv = isInvisibleNode(nodeName);
 
     // Clone geometry and apply world transform + Z flip
@@ -1912,19 +1914,26 @@ export function buildWorld3DFromGLTF(
     }
     geom.computeVertexNormals();
 
-    let isMatCollider = true;
     const matList = Array.isArray(obj.material) ? obj.material : [obj.material];
+    const matNames: string[] = [];
     for (const m of matList) {
       if (m) {
         m.side = THREE.FrontSide;
         materials.push(m);
-        const mName = m.name || '';
-        if (/Glass|Glow|Lamp|Indicator|Taillight/i.test(mName)) {
-          isMatCollider = false;
-        }
+        matNames.push(m.name || '');
         applyGlbSurface(THREE, m);
       }
     }
+    // World-space extent in game axes (three is y-up), which is what decides
+    // whether a node named like decoration is still big enough to stop a body.
+    geom.computeBoundingBox();
+    const bb = geom.boundingBox;
+    const size: [number, number, number] = bb
+      ? [bb.max.x - bb.min.x, bb.max.z - bb.min.z, bb.max.y - bb.min.y]
+      : [0, 0, 0];
+    // `ColOnly`/`Invisible` nodes are hidden, not intangible: they exist to be
+    // collided with (the bank's balcony rails), so invisibility does not opt out.
+    const collides = glbNodeCollides(nodeName, matNames, size);
 
     geom = withPlanarUvs(THREE, geom, surfaceTileScale(classifySurface(matList[0]?.name ?? '')));
     geometries.push(geom);
@@ -2005,7 +2014,7 @@ export function buildWorld3DFromGLTF(
           this.mesh.visible = false;
         },
       });
-    } else if (!isNonCol && !isInv && isMatCollider) {
+    } else if (collides) {
       // Extract collision geometry for Rapier (game coords: x=East, y=North, z=Elevation)
       const posAttr = geom.attributes.position;
       if (posAttr) {
@@ -2083,8 +2092,63 @@ export async function loadWorld3D(THREE: typeof import('three'), info: MapInfo):
       `[world3d] Could not load GLB asset ${glbFilename}, falling back to procedural generation:`,
       err,
     );
-    return createWorld3D(THREE, info);
+    return scaleFallback(createWorld3D(THREE, info));
   }
+}
+
+/**
+ * Cubes per metre. The modelled maps are authored in metres and exported at this
+ * scale (`tools/blender/maplib.py`), so `MAP_CONFIGS` is already in cubes.
+ */
+export const MAP_SCALE = 3;
+
+/**
+ * Scale a procedural fallback onto the GLB's footprint. The `createProcedural*`
+ * builders still lay out the metre-scale arena (all four are metric in height as
+ * well, unlike the native office builder), so a fallback left as built would be a
+ * third the size of the map it stands in for.
+ */
+function scaleFallback(world: World3D): World3D {
+  const k = MAP_SCALE;
+  // three.js is y-up: (x, height, cube y).
+  world.scene.scale.set(k, k, k);
+  world.scene.updateMatrixWorld(true);
+  const v = world.collision.vertices;
+  for (let i = 0; i < v.length; i++) v[i] = (v[i] ?? 0) * k;
+  const point = <T extends { x: number; y: number; z: number }>(p: T): T => ({
+    ...p,
+    x: p.x * k,
+    y: p.y * k,
+    z: p.z * k,
+  });
+  const triple = (t: [number, number, number]): [number, number, number] => [
+    t[0] * k,
+    t[1] * k,
+    t[2] * k,
+  ];
+  return {
+    ...world,
+    bounds: {
+      min: triple(world.bounds.min),
+      max: triple(world.bounds.max),
+      center: triple(world.bounds.center),
+      extent: world.bounds.extent * k,
+    },
+    spawns: {
+      cla: world.spawns.cla.map(point),
+      rvsf: world.spawns.rvsf.map(point),
+      all: world.spawns.all.map(point),
+    },
+    items: world.items.map(point),
+    ladders: world.ladders.map((l) => ({
+      x: l.x * k,
+      y: l.y * k,
+      base: l.base * k,
+      top: l.top * k,
+    })),
+    waterlevel: world.waterlevel > -100 ? world.waterlevel * k : world.waterlevel,
+    dispose: () => world.dispose(),
+  };
 }
 
 export function createWorld3D(THREE: typeof import('three'), info: MapInfo): World3D {

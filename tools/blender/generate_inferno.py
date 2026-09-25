@@ -18,7 +18,6 @@ Outputs:
 import os
 import sys
 import math
-import shutil
 
 try:
     import bpy
@@ -27,6 +26,9 @@ try:
 except ImportError:
     print("Error: generate_inferno.py must be run from within Blender (e.g. `blender --background --python ...`)")
     sys.exit(1)
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import maplib  # noqa: E402  (a sibling, found via the path above)
 
 
 def clear_scene():
@@ -402,7 +404,7 @@ def build_apartments(col, mats):
         add_cylinder(col, f"Balcony_Baluster_{bi}_NonCol", (48.4, by, 3.35), radius=0.06, height=0.8, material=mats["limestone_carved"], segments=8)
 
     # Internal apartment stairs leading from ground to 2nd floor
-    add_box(col, "Apts_Interior_Stairs", (37.0, 34.0, 1.4), (3.0, 4.0, 2.8), mats["wood_chestnut_aged"])
+    maplib.add_wedge(col, "Apts_Interior_Stairs", (37.0, 34.0, 1.4), (3.0, 4.0, 2.8), mats["wood_chestnut_aged"], "+y")
 
 
 def build_site_a(col, mats):
@@ -481,30 +483,8 @@ def build_inferno_scene():
 
 
 def export_glb():
-    backend_map_dir = "/home/horrible/horrible-dashboard/backend/modules/hassault/maps"
-    web_public_dir = "/home/horrible/horrible-dashboard/apps/web/public"
-
-    os.makedirs(backend_map_dir, exist_ok=True)
-    os.makedirs(web_public_dir, exist_ok=True)
-
-    backend_glb_path = os.path.join(backend_map_dir, "hd_inferno.glb")
-    web_glb_path = os.path.join(web_public_dir, "hd_inferno.glb")
-
-    print(f"Exporting GLB to: {backend_glb_path} ...")
-    bpy.ops.export_scene.gltf(
-        filepath=backend_glb_path,
-        export_format='GLB',
-        use_selection=False,
-        export_apply=True,
-        export_yup=True,
-        export_materials='EXPORT',
-        export_lights=False,
-        export_cameras=False
-    )
-
-    print(f"Copying GLB to Web: {web_glb_path} ...")
-    shutil.copyfile(backend_glb_path, web_glb_path)
-    print("=== Inferno Generation & Export Complete! ===")
+    """Scale the metre-authored scene to cubes and export it (see maplib)."""
+    maplib.export_map_glb("hd_inferno")
 
 
 if __name__ == "__main__":

@@ -231,6 +231,12 @@ class CgzMap:
     #: `modes.objectives.place`.
     objectives: dict = field(default_factory=dict)
 
+    #: The brushes were rasterised from the map's GLB (`tools/blender/bake_collision.py`)
+    #: rather than drawn. Such a world carries raised surfaces — crate and wall
+    #: tops — that are standable but not walkable-to, by construction, and the
+    #: reachability lint treats those as geometry rather than as a sealed room.
+    baked_collision: bool = False
+
     @property
     def ssize(self) -> int:
         return 1 << self.sfactor

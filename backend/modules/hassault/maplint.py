@@ -115,24 +115,120 @@ def _standable(world: physics.World) -> set[tuple[int, int]]:
     }
 
 
+#: The highest ledge a running jump lands on, in cubes. Measured, not derived:
+#: `test_maplint_jump_climb` runs the real `physics.step` at a 4-cube ledge (it
+#: lands) and a 5-cube one (it does not), so a physics change that moves the
+#: answer fails there rather than quietly loosening this check.
+JUMP_CLIMB = 4.0
+
+
 def _reachable(
-    world: physics.World, start: tuple[int, int], cells: set[tuple[int, int]]
+    world: physics.World,
+    start: tuple[int, int],
+    cells: set[tuple[int, int]],
+    climb: float = physics.STEP_HEIGHT,
 ) -> set[tuple[int, int]]:
     """Flood fill on foot: a step up costs nothing below `STEP_HEIGHT`, and any
-    drop is free — which is what walking (and falling) can actually do."""
+    drop is free — which is what walking (and falling) can actually do.
+
+    With a `climb` above the step height (a jump), a ledge is also crossed *two*
+    cells at a time: a 2.2-wide body cannot stand in the cell hugging a ledge it
+    cannot step onto, so that cell is never standable and a one-cell fill would
+    never see the ledge at all — in either direction.
+    """
+    reach = (1, 2) if climb > physics.STEP_HEIGHT else (1,)
+    # With jumping on, a ladder is a way up too: its foot and its top are joined.
+    links: dict[tuple[int, int], list[tuple[int, int]]] = {}
+    if climb > physics.STEP_HEIGHT:
+        for ladder in world.ladders:
+            near = [
+                (int(ladder.x) + dx, int(ladder.y) + dy)
+                for dx in range(-3, 4)
+                for dy in range(-3, 4)
+                if (int(ladder.x) + dx, int(ladder.y) + dy) in cells
+            ]
+            feet = [c for c in near if abs(world.floor_at(*c) - ladder.base) <= physics.STEP_HEIGHT]
+            heads = [c for c in near if abs(world.floor_at(*c) - ladder.top) <= climb]
+            for a in feet:
+                links.setdefault(a, []).extend(heads)
+            for b in heads:
+                links.setdefault(b, []).extend(feet)
     seen = {start}
     queue = deque([start])
     while queue:
         cx, cy = queue.popleft()
+        for linked in links.get((cx, cy), ()):
+            if linked not in seen:
+                seen.add(linked)
+                queue.append(linked)
         here = world.floor_at(cx, cy)
-        for neighbour in ((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)):
-            if neighbour in seen or neighbour not in cells:
-                continue
-            if world.floor_at(*neighbour) - here > physics.STEP_HEIGHT:
-                continue
-            seen.add(neighbour)
-            queue.append(neighbour)
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            for k in reach:
+                neighbour = (cx + dx * k, cy + dy * k)
+                if k == 2 and world.is_solid(cx + dx, cy + dy):
+                    continue
+                if neighbour in seen or neighbour not in cells:
+                    continue
+                if world.floor_at(*neighbour) - here > climb:
+                    continue
+                seen.add(neighbour)
+                queue.append(neighbour)
     return seen
+
+
+def _raised_islands(
+    world: physics.World, unreached: set[tuple[int, int]], reached: set[tuple[int, int]]
+) -> set[tuple[int, int]]:
+    """Unreached cells that sit above ground someone does reach.
+
+    A baked world's crate tops and wall tops are standable — they have open sky —
+    but you only get there by jumping, if at all. They are what the model looks
+    like, not a gallery whose stairs were forgotten, so a map with baked collision
+    is not failed for them. A region with no reached ground below it (a sealed
+    room, the far side of the perimeter) is still reported.
+    """
+    components: list[list[tuple[int, int]]] = []
+    seen: set[tuple[int, int]] = set()
+    for start in unreached:
+        if start in seen:
+            continue
+        component, queue = [], deque([start])
+        seen.add(start)
+        while queue:
+            cx, cy = queue.popleft()
+            component.append((cx, cy))
+            here = world.floor_at(cx, cy)
+            for n in ((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)):
+                # Walkable connectivity: a wall top and the ground past the
+                # wall touch, but they are not one place.
+                if (
+                    n in unreached
+                    and n not in seen
+                    and abs(world.floor_at(*n) - here) <= physics.STEP_HEIGHT
+                ):
+                    seen.add(n)
+                    queue.append(n)
+        components.append(component)
+
+    # "Beside" reaches three cells: a body is 2.2 wide, so the cells hugging a
+    # crate are themselves unstandable and the nearest reached floor is one or
+    # two out. Repeated to a fixed point, so a pillar cap standing on a wall
+    # top counts as the wall top does.
+    islands: set[tuple[int, int]] = set()
+    grown = True
+    while grown:
+        grown = False
+        for component in components:
+            if component[0] in islands:
+                continue
+            if any(
+                (n in reached or n in islands) and world.floor_at(*n) < world.floor_at(cx, cy)
+                for cx, cy in component
+                for n in ((cx + dx, cy + dy) for dx in range(-3, 4) for dy in range(-3, 4))
+            ):
+                islands.update(component)
+                grown = True
+    return islands
 
 
 # ---- the checks -------------------------------------------------------------------
@@ -323,8 +419,16 @@ def _check_reachable(
         return cells
 
     first = physics.spawn_at(sim, spawns[0])
-    reached = _reachable(sim, (int(first.x), int(first.y)), cells)
-    cut = sorted(cells - reached)
+    # A baked world is the GLB's geometry, crates and all, built to AssaultCube's
+    # proportions: a crate is climbed by jumping onto it. A drawn world is held to
+    # the stricter on-foot rule, which is what catches a gallery whose stairs were
+    # forgotten.
+    climb = JUMP_CLIMB if cmap.baked_collision else physics.STEP_HEIGHT
+    reached = _reachable(sim, (int(first.x), int(first.y)), cells, climb)
+    unreached = cells - reached
+    if cmap.baked_collision:
+        unreached -= _raised_islands(sim, unreached, reached)
+    cut = sorted(unreached)
     if cut:
         capped, count = _cap(cut)
         out.append(

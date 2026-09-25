@@ -5,7 +5,7 @@
 //!
 //! Unlocks:
 //! - Arbitrary 3D slope climbing and slide deceleration.
-//! - Automatic stair stepping (up to `STEP_HEIGHT = 0.4`).
+//! - Automatic stair stepping (up to `STEP_HEIGHT`, 0.4 m).
 //! - Verticality (catwalks, multi-tier platforms, ramps).
 //! - Continuous collision detection (CCD) and fast raycasting.
 
@@ -14,21 +14,28 @@ use rapier3d::control::{CharacterAutostep, CharacterLength, KinematicCharacterCo
 use rapier3d::prelude::*;
 use std::collections::HashMap;
 
-pub const CAPSULE_RADIUS: f32 = 0.45;
-pub const STANDING_HALF_HEIGHT: f32 = 0.45; // Total standing height = 1.8
-pub const CROUCH_HALF_HEIGHT: f32 = 0.15;   // Total crouch height = 1.2
-pub const MAX_SLOPE_RAD: f32 = 0.7853982;   // 45 degrees
-pub const STEP_HEIGHT: f32 = 0.4;
-pub const RUN_SPEED: f32 = 8.5;
-pub const SPRINT_SPEED: f32 = 11.5;
-pub const CROUCH_SPEED: f32 = 3.8;
-pub const SLIDE_INITIAL_SPEED: f32 = 13.0;
+/// Cubes per metre. These constants were tuned in metres; the modelled maps are
+/// exported at this scale (`tools/blender/maplib.py`), and a controller left in
+/// metres was a 1.8-unit capsule in a world built for a 5.2-unit body — small
+/// enough to slip through gaps the avatar visibly cannot. Every length, speed
+/// and acceleration is multiplied by the same factor, which keeps the tuned feel
+/// exactly. Mirrors `physics-rapier.ts` (`UNITS_PER_METRE` in `glb-colliders.ts`).
+pub const U: f32 = 3.0;
+pub const CAPSULE_RADIUS: f32 = 0.45 * U;
+pub const STANDING_HALF_HEIGHT: f32 = 0.45 * U; // standing: 1.8 m
+pub const CROUCH_HALF_HEIGHT: f32 = 0.15 * U; // crouched: 1.2 m
+pub const MAX_SLOPE_RAD: f32 = 0.7853982; // 45 degrees
+pub const STEP_HEIGHT: f32 = 0.4 * U;
+pub const RUN_SPEED: f32 = 8.5 * U;
+pub const SPRINT_SPEED: f32 = 11.5 * U;
+pub const CROUCH_SPEED: f32 = 3.8 * U;
+pub const SLIDE_INITIAL_SPEED: f32 = 13.0 * U;
 pub const MAX_SLIDE_TIME: f32 = 0.8;
 pub const STAMINA_DRAIN: f32 = 25.0;
 pub const STAMINA_RECOVERY: f32 = 30.0;
 pub const MAX_STAMINA: f32 = 100.0;
-pub const JUMP_VELOCITY: f32 = 7.2;
-pub const GRAVITY: f32 = -22.0;
+pub const JUMP_VELOCITY: f32 = 7.2 * U;
+pub const GRAVITY: f32 = -22.0 * U;
 
 pub const MATERIAL_PENETRATION: &[(&str, f32)] = &[
     ("wood", 0.85),
@@ -175,15 +182,15 @@ impl RapierPhysicsWorld {
 
         // Configure Kinematic Character Controller
         let character_controller = KinematicCharacterController {
-            offset: CharacterLength::Absolute(0.04),
+            offset: CharacterLength::Absolute(0.04 * U),
             autostep: Some(CharacterAutostep {
                 max_height: CharacterLength::Absolute(STEP_HEIGHT),
-                min_width: CharacterLength::Absolute(0.2),
+                min_width: CharacterLength::Absolute(0.2 * U),
                 include_dynamic_bodies: true,
             }),
             max_slope_climb_angle: MAX_SLOPE_RAD,
             min_slope_slide_angle: MAX_SLOPE_RAD,
-            snap_to_ground: Some(CharacterLength::Absolute(0.35)),
+            snap_to_ground: Some(CharacterLength::Absolute(0.35 * U)),
             ..Default::default()
         };
 
@@ -268,11 +275,11 @@ impl RapierPhysicsWorld {
         let h_speed = (state.vx * state.vx + state.vy * state.vy).sqrt();
 
         // Crouch Power-Slide & Slide Cancel
-        if input.crouch && state.grounded && !state.sliding && (is_sprinting || h_speed > 6.0) {
+        if input.crouch && state.grounded && !state.sliding && (is_sprinting || h_speed > 6.0 * U) {
             state.sliding = true;
             state.slide_time = 0.0;
             let boost = (SLIDE_INITIAL_SPEED / h_speed.max(0.1)).max(1.15);
-            let target_speed = (h_speed * boost).min(14.0);
+            let target_speed = (h_speed * boost).min(14.0 * U);
             let scale = target_speed / h_speed.max(0.1);
             state.vx *= scale;
             state.vy *= scale;
@@ -289,7 +296,7 @@ impl RapierPhysicsWorld {
             } else {
                 want_crouch = true;
                 let cur_speed = (state.vx * state.vx + state.vy * state.vy).sqrt();
-                if state.slide_time >= MAX_SLIDE_TIME || cur_speed < 3.5 || !input.crouch {
+                if state.slide_time >= MAX_SLIDE_TIME || cur_speed < 3.5 * U || !input.crouch {
                     state.sliding = false;
                 }
             }
@@ -345,13 +352,13 @@ impl RapierPhysicsWorld {
         // Horizontal acceleration / friction / air strafe
         if !state.grounded {
             if input.strafe.abs() > 0.1 {
-                let air_strafe_accel = 18.0;
+                let air_strafe_accel = 18.0 * U;
                 state.vx += right_x * input.strafe * air_strafe_accel * dt;
                 state.vy += right_y * input.strafe * air_strafe_accel * dt;
                 let cur_air = (state.vx * state.vx + state.vy * state.vy).sqrt();
-                if cur_air > 15.0 {
-                    state.vx = (state.vx / cur_air) * 15.0;
-                    state.vy = (state.vy / cur_air) * 15.0;
+                if cur_air > 15.0 * U {
+                    state.vx = (state.vx / cur_air) * 15.0 * U;
+                    state.vy = (state.vy / cur_air) * 15.0 * U;
                 }
             } else {
                 state.vx += (wish_x * speed - state.vx) * (2.5 * dt).min(1.0);
@@ -471,11 +478,11 @@ impl RapierPhysicsWorld {
         let h_speed = (player.vel_x * player.vel_x + player.vel_y * player.vel_y).sqrt();
 
         // Crouch Power-Slide & Slide-Canceling
-        if input.crouch && player.on_ground && !self.player_sliding && (is_sprinting || h_speed > 6.0) {
+        if input.crouch && player.on_ground && !self.player_sliding && (is_sprinting || h_speed > 6.0 * U) {
             self.player_sliding = true;
             self.player_slide_time = 0.0;
             let boost = (SLIDE_INITIAL_SPEED / h_speed.max(0.1)).max(1.15);
-            let target_speed = (h_speed * boost).min(14.0);
+            let target_speed = (h_speed * boost).min(14.0 * U);
             let scale = target_speed / h_speed.max(0.1);
             player.vel_x *= scale;
             player.vel_y *= scale;
@@ -492,7 +499,7 @@ impl RapierPhysicsWorld {
             } else {
                 want_crouch = true;
                 let cur_speed = (player.vel_x * player.vel_x + player.vel_y * player.vel_y).sqrt();
-                if self.player_slide_time >= MAX_SLIDE_TIME || cur_speed < 3.5 || !input.crouch {
+                if self.player_slide_time >= MAX_SLIDE_TIME || cur_speed < 3.5 * U || !input.crouch {
                     self.player_sliding = false;
                 }
             }
@@ -544,14 +551,14 @@ impl RapierPhysicsWorld {
         // Horizontal acceleration / friction / air strafe
         if !player.on_ground {
             if input.strafe.abs() > 0.1 {
-                let air_strafe_accel = 18.0;
+                let air_strafe_accel = 18.0 * U;
                 // Right vector in world: (-sin(yaw), cos(yaw))
                 player.vel_x += -player.yaw.sin() * input.strafe * air_strafe_accel * dt;
                 player.vel_y += player.yaw.cos() * input.strafe * air_strafe_accel * dt;
                 let cur_air = (player.vel_x * player.vel_x + player.vel_y * player.vel_y).sqrt();
-                if cur_air > 15.0 {
-                    player.vel_x = (player.vel_x / cur_air) * 15.0;
-                    player.vel_y = (player.vel_y / cur_air) * 15.0;
+                if cur_air > 15.0 * U {
+                    player.vel_x = (player.vel_x / cur_air) * 15.0 * U;
+                    player.vel_y = (player.vel_y / cur_air) * 15.0 * U;
                 }
             } else {
                 player.vel_x += (wish_x * speed - player.vel_x) * (2.5 * dt).min(1.0);
@@ -578,7 +585,7 @@ impl RapierPhysicsWorld {
         }
 
         let desired_z = if player.on_ground && player.vel_z <= 0.0 {
-            -0.05
+            -0.05 * U
         } else {
             player.vel_z * dt
         };
@@ -669,7 +676,7 @@ impl RapierPhysicsWorld {
         );
         let filter = QueryFilter::default().exclude_rigid_body(self.player_body_handle);
         self.query_pipeline
-            .cast_ray(&self.bodies, &self.colliders, &ray, 0.7, true, filter)
+            .cast_ray(&self.bodies, &self.colliders, &ray, 0.7 * U, true, filter)
             .is_none()
     }
 
@@ -742,7 +749,7 @@ impl RapierPhysicsWorld {
             [1.0, 0.0, 0.0]
         };
 
-        while remaining_dist > 0.05 && penetrations < max_penetrations {
+        while remaining_dist > 0.05 * U && penetrations < max_penetrations {
             let ray = Ray::new(
                 point![cur_origin[0], cur_origin[1], cur_origin[2]],
                 vector![norm_dir[0], norm_dir[1], norm_dir[2]],
@@ -791,16 +798,16 @@ impl RapierPhysicsWorld {
                 wallbang = true;
                 penetrations += 1;
                 cur_origin = [
-                    hit_point[0] + norm_dir[0] * 0.08,
-                    hit_point[1] + norm_dir[1] * 0.08,
-                    hit_point[2] + norm_dir[2] * 0.08,
+                    hit_point[0] + norm_dir[0] * 0.08 * U,
+                    hit_point[1] + norm_dir[1] * 0.08 * U,
+                    hit_point[2] + norm_dir[2] * 0.08 * U,
                 ];
-                remaining_dist = (remaining_dist - (hit_dist + 0.08)).max(0.0);
+                remaining_dist = (remaining_dist - (hit_dist + 0.08 * U)).max(0.0);
                 continue;
             }
 
             // Check material penetration through barrier
-            let max_probe = if weapon_id == "sniper" { 1.5 } else { 0.8 };
+            let max_probe = if weapon_id == "sniper" { 1.5 * U } else { 0.8 * U };
             let probe_ray = Ray::new(
                 point![
                     hit_point[0] + norm_dir[0] * max_probe,
@@ -818,14 +825,16 @@ impl RapierPhysicsWorld {
                 filter,
             ) {
                 let thickness = max_probe - back_hit.time_of_impact;
-                if thickness > 0.02 && thickness <= max_probe {
-                    let mat = if thickness <= 0.4 { "wood" } else { "drywall" };
-                    let (can_pen, dmg) = calculate_material_penetration(weapon_id, mat, thickness);
+                // The material model is in metres; the world is in cubes.
+                let metres = thickness / U;
+                if metres > 0.02 && thickness <= max_probe {
+                    let mat = if metres <= 0.4 { "wood" } else { "drywall" };
+                    let (can_pen, dmg) = calculate_material_penetration(weapon_id, mat, metres);
                     if can_pen && dmg > 0.1 {
                         accum_damage_factor *= dmg;
                         wallbang = true;
                         penetrations += 1;
-                        let advance = thickness + 0.05;
+                        let advance = thickness + 0.05 * U;
                         cur_origin = [
                             hit_point[0] + norm_dir[0] * advance,
                             hit_point[1] + norm_dir[1] * advance,

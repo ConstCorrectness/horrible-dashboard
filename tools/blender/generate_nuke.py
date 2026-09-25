@@ -16,7 +16,6 @@ Outputs:
 import os
 import sys
 import math
-import shutil
 
 try:
     import bpy
@@ -25,6 +24,9 @@ try:
 except ImportError:
     print("Error: generate_nuke.py must be run from within Blender (e.g. `blender --background --python ...`)")
     sys.exit(1)
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import maplib  # noqa: E402  (a sibling, found via the path above)
 
 
 def clear_scene():
@@ -312,10 +314,12 @@ def build_nuke_perimeter_and_ground(col, mats):
 def build_site_a_upper_hall(col, mats):
     """Bomb Site A Upper Reactor Hall at Z=0.0m with Hut, Rafters, and Crane."""
     # Outer containment building walls (X: 22..50, Y: 28..52, Z: 0..8.0)
-    add_box(col, "SiteA_Wall_N", (36.0, 52.0, 4.0), (28.0, 1.2, 8.0), mats["concrete_wall"])
+    # Doorways on the T (south), CT (north) and west sides. The hall was once four
+    # unbroken 8 m walls: Site A was sealed, reachable by nobody.
+    maplib.add_wall_with_door(col, "SiteA_Wall_N", (36.0, 52.0, 4.0), (28.0, 1.2, 8.0), mats["concrete_wall"], 30.0, 3.5, 3.2)
     add_box(col, "SiteA_Wall_E", (50.0, 40.0, 4.0), (1.2, 24.0, 8.0), mats["concrete_wall"])
-    add_box(col, "SiteA_Wall_W", (22.0, 40.0, 4.0), (1.2, 24.0, 8.0), mats["concrete_wall"])
-    add_box(col, "SiteA_Wall_S", (36.0, 28.0, 4.0), (28.0, 1.2, 8.0), mats["concrete_wall"])
+    maplib.add_wall_with_door(col, "SiteA_Wall_W", (22.0, 40.0, 4.0), (1.2, 24.0, 8.0), mats["concrete_wall"], 44.0, 3.5, 3.2)
+    maplib.add_wall_with_door(col, "SiteA_Wall_S", (36.0, 28.0, 4.0), (28.0, 1.2, 8.0), mats["concrete_wall"], 40.0, 3.5, 3.2)
 
     # Hall ceiling at Z=8.0
     add_box(col, "SiteA_Roof_Deck", (36.0, 40.0, 8.2), (28.0, 24.0, 0.4), mats["concrete_dark"])
@@ -476,28 +480,16 @@ def build_nuke_scene():
     build_outside_yard(c_yard, mats)
 
 
-def export_glb(filepath):
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    bpy.ops.export_scene.gltf(
-        filepath=filepath,
-        export_format="GLB",
-        use_selection=False,
-        export_apply=True,
-        export_yup=True,
-    )
-    print(f"Exported GLB to {filepath} ({os.path.getsize(filepath):,} bytes)")
+def export_glb():
+    """Scale the metre-authored scene to cubes and export it (see maplib)."""
+    maplib.export_map_glb("hd_nuke")
 
 
 def main():
     print("Building High-Detail Nuclear Containment Facility (hd_nuke)...")
     build_nuke_scene()
 
-    backend_glb = os.path.abspath("backend/modules/hassault/maps/hd_nuke.glb")
-    export_glb(backend_glb)
-
-    web_glb = os.path.abspath("apps/web/public/hd_nuke.glb")
-    shutil.copyfile(backend_glb, web_glb)
-    print(f"Mirrored GLB to {web_glb}")
+    export_glb()
     print("=== hd_nuke 3D Generation Complete! ===")
 
 

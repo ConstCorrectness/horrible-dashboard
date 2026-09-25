@@ -18,7 +18,6 @@ Outputs:
 import os
 import sys
 import math
-import shutil
 
 try:
     import bpy
@@ -27,6 +26,9 @@ try:
 except ImportError:
     print("Error: generate_dust2.py must be run from within Blender (e.g. `blender --background --python ...`)")
     sys.exit(1)
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import maplib  # noqa: E402  (a sibling, found via the path above)
 
 
 def clear_scene():
@@ -427,7 +429,7 @@ def build_long_a_and_pit(col, mats):
     add_crate_stack(col, "LongA_Corner", (54.5, 38.0, 0.0), mats)
 
     # Long A Ramp ascending to Site A
-    add_box(col, "LongA_Ramp", (52.0, 46.0, 0.6), (8.5, 8.5, 1.2), mats["limestone_paving"])
+    maplib.add_wedge(col, "LongA_Ramp", (52.0, 46.0, 0.6), (8.5, 8.5, 1.2), mats["limestone_paving"], "+y")
 
 
 def build_site_a(col, mats):
@@ -454,7 +456,7 @@ def build_site_a(col, mats):
     add_crate_stack(col, "SiteA_Ramp_Stack2", (52.0, 57.4, 1.2), mats)
 
     # CT Spawn Ramp connection down from Site A to CT street level
-    add_box(col, "SiteA_CT_Ramp", (44.0, 58.0, 0.6), (6.0, 6.0, 1.2), mats["limestone_paving"])
+    maplib.add_wedge(col, "SiteA_CT_Ramp", (44.0, 58.0, 0.6), (6.0, 6.0, 1.2), mats["limestone_paving"], "+x")
 
 
 def build_catwalk_and_short_a(col, mats):
@@ -621,30 +623,8 @@ def build_dust2_scene():
 
 
 def export_glb():
-    backend_map_dir = "/home/horrible/horrible-dashboard/backend/modules/hassault/maps"
-    web_public_dir = "/home/horrible/horrible-dashboard/apps/web/public"
-
-    os.makedirs(backend_map_dir, exist_ok=True)
-    os.makedirs(web_public_dir, exist_ok=True)
-
-    backend_glb_path = os.path.join(backend_map_dir, "hd_dust2.glb")
-    web_glb_path = os.path.join(web_public_dir, "hd_dust2.glb")
-
-    print(f"Exporting GLB to: {backend_glb_path} ...")
-    bpy.ops.export_scene.gltf(
-        filepath=backend_glb_path,
-        export_format='GLB',
-        use_selection=False,
-        export_apply=True,
-        export_yup=True,
-        export_materials='EXPORT',
-        export_lights=False,
-        export_cameras=False
-    )
-
-    print(f"Copying GLB to Web: {web_glb_path} ...")
-    shutil.copyfile(backend_glb_path, web_glb_path)
-    print("=== Dust II Generation & Export Complete! ===")
+    """Scale the metre-authored scene to cubes and export it (see maplib)."""
+    maplib.export_map_glb("hd_dust2")
 
 
 if __name__ == "__main__":

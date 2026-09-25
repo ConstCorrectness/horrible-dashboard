@@ -23,8 +23,6 @@ Completely eliminates all flat "lego/roblox" block primitives and replaces them 
 import sys
 import os
 import math
-import shutil
-from pathlib import Path
 
 try:
     import bpy
@@ -33,6 +31,9 @@ try:
 except ImportError:
     print("Error: This script must be run inside Blender: blender -b -P generate_junkflea.py")
     sys.exit(1)
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import maplib  # noqa: E402  (a sibling, found via the path above)
 
 
 def clear_scene():
@@ -702,28 +703,8 @@ def build_junkflea_scene():
 
 
 def export_scene_glb():
-    """Export the active scene to GLB for backend and frontend web app."""
-    repo_root = Path(__file__).resolve().parent.parent.parent
-    glb_backend_path = repo_root / "backend/modules/hassault/maps/hd_junkflea.glb"
-    glb_web_path = repo_root / "apps/web/public/hd_junkflea.glb"
-
-    glb_backend_path.parent.mkdir(parents=True, exist_ok=True)
-    glb_web_path.parent.mkdir(parents=True, exist_ok=True)
-
-    print(f"Exporting GLB to: {glb_backend_path}")
-    bpy.ops.export_scene.gltf(
-        filepath=str(glb_backend_path),
-        export_format='GLB',
-        use_selection=False,
-        export_apply=True,
-        export_yup=True,
-        export_materials='EXPORT',
-        export_lights=False,
-        export_cameras=False
-    )
-
-    shutil.copyfile(glb_backend_path, glb_web_path)
-    print(f"Copied GLB to Web: {glb_web_path}")
+    """Scale the metre-authored scene to cubes and export it (see maplib)."""
+    maplib.export_map_glb("hd_junkflea")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,338 @@
+{
+  "_doc": "Which GLB map nodes the character collides with. Read by glb-colliders.ts and apps/native-fps/src/world3d.rs (include_str!), so both clients agree; `cases` are replayed by both suites. A node named NonCol never collides. A node whose name or material says decoration (case-sensitive name substrings, case-insensitive material substrings) is skipped ONLY when it is too small to matter: it can neither be stood on (both horizontal sides >= standWidth) nor block a body (taller than blockHeight, the step height, and wider than blockWidth). The keywords alone once made every `Perimeter` wall (`rim`) walk-through.",
+  "explicitNonCollider": [
+    "NonCol"
+  ],
+  "decorNameKeywords": [
+    "Glass",
+    "Window",
+    "Lamp",
+    "Glow",
+    "Decal",
+    "Stripe",
+    "Sign",
+    "Text",
+    "Turn",
+    "Siren",
+    "Taillight",
+    "Headlight",
+    "Arm",
+    "Vent",
+    "Rim",
+    "Hub",
+    "Latch",
+    "Divide",
+    "Cap",
+    "Hood",
+    "Mullion",
+    "Camera",
+    "Light",
+    "Truss",
+    "Detail",
+    "Pipe",
+    "Conduit",
+    "Wire",
+    "Debris",
+    "Stain",
+    "Crack",
+    "Drain",
+    "Manhole",
+    "Cable",
+    "Joint",
+    "Rung",
+    "Flange",
+    "Web",
+    "Rail_",
+    "Tie_",
+    "Gusset",
+    "Purlin",
+    "Louver",
+    "Hose",
+    "Vise",
+    "Blind",
+    "Antenna",
+    "Blade",
+    "Propane",
+    "Spool",
+    "Cushion",
+    "Skylight",
+    "Foliage",
+    "Plant",
+    "Chandelier",
+    "Stanchion",
+    "Flute",
+    "Globe",
+    "Clock",
+    "Plaque",
+    "Urn",
+    "Hatch",
+    "Ingot",
+    "Rope",
+    "Lug",
+    "Dial",
+    "Spoke",
+    "Caster",
+    "Cart_",
+    "Trophy",
+    "Frame",
+    "Painting",
+    "Sconce",
+    "Screen",
+    "Keyhole",
+    "Dunnage",
+    "Stringer",
+    "Slat",
+    "Strap",
+    "Buckle",
+    "Rosette",
+    "Medallion",
+    "Inlay",
+    "Blotter",
+    "Keyboard",
+    "Mouse",
+    "Speaker",
+    "Mic",
+    "Nameplate",
+    "Wicket",
+    "Spindle",
+    "Winch",
+    "Lightbar",
+    "Cup",
+    "Mug",
+    "Spigot",
+    "Shade",
+    "Bulb",
+    "Chain",
+    "Handwheel",
+    "Bushing",
+    "Bolt"
+  ],
+  "decorMaterialKeywords": [
+    "glass",
+    "glow",
+    "lamp",
+    "indicator",
+    "taillight"
+  ],
+  "blockHeight": 1.6,
+  "blockWidth": 1.0,
+  "standWidth": 2.0,
+  "cases": [
+    {
+      "name": "Wall_Perimeter_North",
+      "materials": [
+        "mat_sandstone_light"
+      ],
+      "size": [
+        186,
+        4.2,
+        30
+      ],
+      "collides": true
+    },
+    {
+      "name": "Perimeter_Corrugation_E_Detail",
+      "materials": [
+        "mat_steel"
+      ],
+      "size": [
+        0.9,
+        168,
+        27
+      ],
+      "collides": true
+    },
+    {
+      "name": "SiteA_Plant_Lower1_crate_base",
+      "materials": [
+        "mat_wood_crate"
+      ],
+      "size": [
+        3.6,
+        3.6,
+        3.6
+      ],
+      "collides": true
+    },
+    {
+      "name": "Window_Room_Floor",
+      "materials": [
+        "mat_limestone"
+      ],
+      "size": [
+        30,
+        24,
+        7.2
+      ],
+      "collides": true
+    },
+    {
+      "name": "Wood_Cubicle_Divider_1_42_16",
+      "materials": [
+        "Mat_Felt"
+      ],
+      "size": [
+        0.3,
+        7.8,
+        4.2
+      ],
+      "collides": true
+    },
+    {
+      "name": "Bus_Glass_Back_Detail",
+      "materials": [
+        "Mat_Bus_Shelter_Glass"
+      ],
+      "size": [
+        14.4,
+        0.3,
+        6.5
+      ],
+      "collides": true
+    },
+    {
+      "name": "Crash_Attenuator_19_0_Cushion",
+      "materials": [
+        "Mat_Yellow"
+      ],
+      "size": [
+        2.1,
+        2.1,
+        2.7
+      ],
+      "collides": true
+    },
+    {
+      "name": "Crate_Stack_A",
+      "materials": [
+        "mat_glass_window"
+      ],
+      "size": [
+        3.6,
+        3.6,
+        3.6
+      ],
+      "collides": true
+    },
+    {
+      "name": "Lantern_Mid_Doors_body_NonCol",
+      "materials": [
+        "mat_lantern_brass"
+      ],
+      "size": [
+        0.7,
+        0.7,
+        1.3
+      ],
+      "collides": false
+    },
+    {
+      "name": "Tree_Foliage_Cluster_NonCol",
+      "materials": [
+        "mat_palm_fronds"
+      ],
+      "size": [
+        9,
+        9,
+        6
+      ],
+      "collides": false
+    },
+    {
+      "name": "Crane_Chevron_F_11_Stripe",
+      "materials": [
+        "Mat_Hazard"
+      ],
+      "size": [
+        2.7,
+        0.1,
+        1.5
+      ],
+      "collides": false
+    },
+    {
+      "name": "Floor_Lamp_Pole",
+      "materials": [
+        "Mat_Brass"
+      ],
+      "size": [
+        0.4,
+        0.4,
+        5.4
+      ],
+      "collides": false
+    },
+    {
+      "name": "Wall_Pipe_Run",
+      "materials": [
+        "Mat_Copper"
+      ],
+      "size": [
+        20,
+        0.3,
+        0.3
+      ],
+      "collides": false
+    },
+    {
+      "name": "Troffer_Panel",
+      "materials": [
+        "Mat_Fluorescent_Troffer_Glow"
+      ],
+      "size": [
+        3.6,
+        1.8,
+        0.3
+      ],
+      "collides": false
+    },
+    {
+      "name": "Floor_Ground_Paving",
+      "materials": [
+        "mat_limestone_paving"
+      ],
+      "size": [
+        210,
+        210,
+        0.3
+      ],
+      "collides": true
+    },
+    {
+      "name": "Catwalk_Grate_Detail",
+      "materials": [
+        "Mat_Steel"
+      ],
+      "size": [
+        3,
+        24,
+        0.2
+      ],
+      "collides": true
+    },
+    {
+      "name": "Wall_Clock_Face",
+      "materials": [
+        "Mat_White"
+      ],
+      "size": [
+        1.4,
+        0.1,
+        1.4
+      ],
+      "collides": false
+    },
+    {
+      "name": "Light_Fixture_2_Detail",
+      "materials": [
+        "Mat_Steel"
+      ],
+      "size": [
+        7.2,
+        1.5,
+        0.45
+      ],
+      "collides": false
+    }
+  ]
+}

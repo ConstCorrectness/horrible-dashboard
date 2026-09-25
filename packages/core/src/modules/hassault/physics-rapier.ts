@@ -12,6 +12,7 @@
  * - High-speed momentum preservation (strafe jumping, slide hopping).
  * - Fast raycasting for bullet penetration and line-of-sight checks.
  */
+import { UNITS_PER_METRE } from './glb-colliders';
 import RAPIER from '@dimforge/rapier3d-compat';
 import type { BreakableWindow, CollisionGeometry } from './world3d';
 import type { MoveInput, PlayerState } from './player';
@@ -114,22 +115,28 @@ export class RapierPhysicsWorld {
   private windowColliders = new Map<string, RAPIER.Collider>();
   private colliderToWindowId = new Map<number, string>();
 
-  // Constants
-  static readonly CAPSULE_RADIUS = 0.45;
-  static readonly STANDING_HALF_HEIGHT = 0.45; // Total height = 2 * 0.45 + 2 * 0.45 = 1.8
-  static readonly CROUCH_HALF_HEIGHT = 0.15;   // Total height = 2 * 0.15 + 2 * 0.45 = 1.2
+  // Constants. Tuned in metres and multiplied by `U` (cubes per metre): the
+  // modelled maps are exported at that scale (`tools/blender/maplib.py`), and a
+  // controller left in metres was a 1.8-unit capsule in a world built for a
+  // 5.2-unit body — small enough to slip through gaps the avatar visibly cannot.
+  // Scaling every length (and speed, and acceleration) by the same factor keeps
+  // the tuned feel exactly: it is the same physics, measured in cubes.
+  static readonly U = UNITS_PER_METRE;
+  static readonly CAPSULE_RADIUS = 0.45 * UNITS_PER_METRE;
+  static readonly STANDING_HALF_HEIGHT = 0.45 * UNITS_PER_METRE; // standing: 1.8 m
+  static readonly CROUCH_HALF_HEIGHT = 0.15 * UNITS_PER_METRE; // crouched: 1.2 m
   static readonly MAX_SLOPE = (45 * Math.PI) / 180;
-  static readonly STEP_HEIGHT = 0.4;
-  static readonly RUN_SPEED = 8.5;
-  static readonly SPRINT_SPEED = 11.5;
-  static readonly CROUCH_SPEED = 3.8;
-  static readonly SLIDE_INITIAL_SPEED = 13.0;
+  static readonly STEP_HEIGHT = 0.4 * UNITS_PER_METRE;
+  static readonly RUN_SPEED = 8.5 * UNITS_PER_METRE;
+  static readonly SPRINT_SPEED = 11.5 * UNITS_PER_METRE;
+  static readonly CROUCH_SPEED = 3.8 * UNITS_PER_METRE;
+  static readonly SLIDE_INITIAL_SPEED = 13.0 * UNITS_PER_METRE;
   static readonly MAX_SLIDE_TIME = 0.8;
   static readonly STAMINA_DRAIN = 25.0;
   static readonly STAMINA_RECOVERY = 30.0;
   static readonly MAX_STAMINA = 100.0;
-  static readonly JUMP_VELOCITY = 7.2;
-  static readonly GRAVITY = -22.0;
+  static readonly JUMP_VELOCITY = 7.2 * UNITS_PER_METRE;
+  static readonly GRAVITY = -22.0 * UNITS_PER_METRE;
 
   constructor(collision: CollisionGeometry, windows?: Map<string, BreakableWindow>) {
     // Gravity pointing down along Z in game coordinates
@@ -154,13 +161,13 @@ export class RapierPhysicsWorld {
     }
 
     // Configure Kinematic Character Controller (Z-up)
-    const offset = 0.04;
+    const offset = 0.04 * RapierPhysicsWorld.U;
     this.characterController = this.world.createCharacterController(offset);
     this.characterController.setUp(new RAPIER.Vector3(0.0, 0.0, 1.0));
-    this.characterController.enableAutostep(RapierPhysicsWorld.STEP_HEIGHT, 0.2, true);
+    this.characterController.enableAutostep(RapierPhysicsWorld.STEP_HEIGHT, 0.2 * RapierPhysicsWorld.U, true);
     this.characterController.setMaxSlopeClimbAngle(RapierPhysicsWorld.MAX_SLOPE);
     this.characterController.setMinSlopeSlideAngle(RapierPhysicsWorld.MAX_SLOPE);
-    this.characterController.enableSnapToGround(0.35);
+    this.characterController.enableSnapToGround(0.35 * RapierPhysicsWorld.U);
 
     // Create Player Kinematic RigidBody
     const bodyDesc = RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(10.0, 10.0, 1.0);
@@ -217,11 +224,11 @@ export class RapierPhysicsWorld {
     const hSpeed = Math.hypot(state.vx, state.vy);
 
     // Crouch Power-Slide Trigger & Slide-Canceling
-    if (input.crouch && state.grounded && !state.sliding && (isSprinting || hSpeed > 6.0)) {
+    if (input.crouch && state.grounded && !state.sliding && (isSprinting || hSpeed > 6.0 * RapierPhysicsWorld.U)) {
       state.sliding = true;
       state.slideTime = 0;
       const boost = Math.max(1.15, RapierPhysicsWorld.SLIDE_INITIAL_SPEED / Math.max(0.1, hSpeed));
-      const targetSpeed = Math.min(14.0, hSpeed * boost);
+      const targetSpeed = Math.min(14.0 * RapierPhysicsWorld.U, hSpeed * boost);
       const scale = targetSpeed / Math.max(0.1, hSpeed);
       state.vx *= scale;
       state.vy *= scale;
@@ -255,7 +262,7 @@ export class RapierPhysicsWorld {
         }
         if (
           state.slideTime >= RapierPhysicsWorld.MAX_SLIDE_TIME ||
-          Math.hypot(state.vx, state.vy) < 3.5 ||
+          Math.hypot(state.vx, state.vy) < 3.5 * RapierPhysicsWorld.U ||
           !input.crouch
         ) {
           state.sliding = false;
@@ -309,13 +316,13 @@ export class RapierPhysicsWorld {
     if (!state.grounded) {
       // Air strafe momentum: lateral input adds tangential impulse up to 15 m/s
       if (Math.abs(input.strafe) > 0.1) {
-        const airStrafeAccel = 18.0;
+        const airStrafeAccel = 18.0 * RapierPhysicsWorld.U;
         state.vx += rightX * input.strafe * airStrafeAccel * dt;
         state.vy += rightY * input.strafe * airStrafeAccel * dt;
         const totalH = Math.hypot(state.vx, state.vy);
-        if (totalH > 15.0) {
-          state.vx = (state.vx / totalH) * 15.0;
-          state.vy = (state.vy / totalH) * 15.0;
+        if (totalH > 15.0 * RapierPhysicsWorld.U) {
+          state.vx = (state.vx / totalH) * 15.0 * RapierPhysicsWorld.U;
+          state.vy = (state.vy / totalH) * 15.0 * RapierPhysicsWorld.U;
         }
       } else {
         state.vx += (wishX * speed - state.vx) * Math.min(1.0, 2.5 * dt);
@@ -342,7 +349,7 @@ export class RapierPhysicsWorld {
 
     let desiredZ = state.vz * dt;
     if (state.grounded && desiredZ <= 0) {
-      desiredZ = -0.05;
+      desiredZ = -0.05 * RapierPhysicsWorld.U;
     }
 
     // Desired displacement this tick
@@ -422,11 +429,11 @@ export class RapierPhysicsWorld {
     const hSpeed = Math.hypot(player.velX, player.velY);
 
     // Crouch Power-Slide & Slide Cancel
-    if (input.crouch && player.onGround && !player.isSliding && (isSprinting || hSpeed > 6.0)) {
+    if (input.crouch && player.onGround && !player.isSliding && (isSprinting || hSpeed > 6.0 * RapierPhysicsWorld.U)) {
       player.isSliding = true;
       player.slideTime = 0;
       const boost = Math.max(1.15, RapierPhysicsWorld.SLIDE_INITIAL_SPEED / Math.max(0.1, hSpeed));
-      const targetSpeed = Math.min(14.0, hSpeed * boost);
+      const targetSpeed = Math.min(14.0 * RapierPhysicsWorld.U, hSpeed * boost);
       const scale = targetSpeed / Math.max(0.1, hSpeed);
       player.velX *= scale;
       player.velY *= scale;
@@ -459,7 +466,7 @@ export class RapierPhysicsWorld {
         }
         if (
           player.slideTime >= RapierPhysicsWorld.MAX_SLIDE_TIME ||
-          Math.hypot(player.velX, player.velY) < 3.5 ||
+          Math.hypot(player.velX, player.velY) < 3.5 * RapierPhysicsWorld.U ||
           !input.crouch
         ) {
           player.isSliding = false;
@@ -508,14 +515,14 @@ export class RapierPhysicsWorld {
     // Air-strafing or Ground Movement
     if (!player.onGround) {
       if (Math.abs(input.strafe) > 0.1) {
-        const airStrafeAccel = 18.0;
+        const airStrafeAccel = 18.0 * RapierPhysicsWorld.U;
         // Right vector in world: (-sin(yaw), cos(yaw))
         player.velX += -sin * input.strafe * airStrafeAccel * dt;
         player.velY += cos * input.strafe * airStrafeAccel * dt;
         const curAir = Math.hypot(player.velX, player.velY);
-        if (curAir > 15.0) {
-          player.velX = (player.velX / curAir) * 15.0;
-          player.velY = (player.velY / curAir) * 15.0;
+        if (curAir > 15.0 * RapierPhysicsWorld.U) {
+          player.velX = (player.velX / curAir) * 15.0 * RapierPhysicsWorld.U;
+          player.velY = (player.velY / curAir) * 15.0 * RapierPhysicsWorld.U;
         }
       } else {
         player.velX += (wishX * speed - player.velX) * Math.min(1.0, 2.5 * dt);
@@ -542,7 +549,7 @@ export class RapierPhysicsWorld {
 
     let desiredZ = player.velZ * dt;
     if (player.onGround && desiredZ <= 0) {
-      desiredZ = -0.05;
+      desiredZ = -0.05 * RapierPhysicsWorld.U;
     }
 
     const desired = new RAPIER.Vector3(
@@ -580,10 +587,10 @@ export class RapierPhysicsWorld {
   private getGroundHit(): { normal: { x: number; y: number; z: number } } | null {
     const pos = this.playerBody.translation();
     const ray = new RAPIER.Ray(
-      new RAPIER.Vector3(pos.x, pos.y, pos.z + 0.2),
+      new RAPIER.Vector3(pos.x, pos.y, pos.z + 0.2 * RapierPhysicsWorld.U),
       new RAPIER.Vector3(0, 0, -1),
     );
-    const hit = this.world.castRayAndGetNormal(ray, 0.6, true);
+    const hit = this.world.castRayAndGetNormal(ray, 0.6 * RapierPhysicsWorld.U, true);
     if (!hit) return null;
     return { normal: hit.normal };
   }
@@ -595,7 +602,7 @@ export class RapierPhysicsWorld {
       new RAPIER.Vector3(pos.x, pos.y, pos.z + RapierPhysicsWorld.CROUCH_HALF_HEIGHT),
       new RAPIER.Vector3(0, 0, 1),
     );
-    const hit = this.world.castRay(ray, 0.7, true);
+    const hit = this.world.castRay(ray, 0.7 * RapierPhysicsWorld.U, true);
     return hit === null;
   }
 
@@ -663,7 +670,7 @@ export class RapierPhysicsWorld {
     const maxPenetrations = 3;
     let penetrations = 0;
 
-    while (remainingDist > 0.05 && penetrations < maxPenetrations) {
+    while (remainingDist > 0.05 * RapierPhysicsWorld.U && penetrations < maxPenetrations) {
       const ray = new RAPIER.Ray(
         new RAPIER.Vector3(curX, curY, curZ),
         new RAPIER.Vector3(dir.x, dir.y, dir.z),
@@ -706,15 +713,15 @@ export class RapierPhysicsWorld {
         accumDamageFactor *= 0.95;
         wallbang = true;
         penetrations++;
-        curX = hitPoint.x + dir.x * 0.08;
-        curY = hitPoint.y + dir.y * 0.08;
-        curZ = hitPoint.z + dir.z * 0.08;
-        remainingDist = Math.max(0, remainingDist - (hitDist + 0.08));
+        curX = hitPoint.x + dir.x * 0.08 * RapierPhysicsWorld.U;
+        curY = hitPoint.y + dir.y * 0.08 * RapierPhysicsWorld.U;
+        curZ = hitPoint.z + dir.z * 0.08 * RapierPhysicsWorld.U;
+        remainingDist = Math.max(0, remainingDist - (hitDist + 0.08 * RapierPhysicsWorld.U));
         continue;
       }
 
       // Check material penetration through barrier
-      const maxProbe = weaponId === 'sniper' ? 1.5 : 0.8;
+      const maxProbe = (weaponId === 'sniper' ? 1.5 : 0.8) * RapierPhysicsWorld.U;
       const probeRay = new RAPIER.Ray(
         new RAPIER.Vector3(
           hitPoint.x + dir.x * maxProbe,
@@ -726,14 +733,16 @@ export class RapierPhysicsWorld {
       const backHit = this.world.castRay(probeRay, maxProbe, true);
       if (backHit !== null) {
         const thickness = maxProbe - backHit.timeOfImpact;
-        if (thickness > 0.02 && thickness <= maxProbe) {
-          const mat = thickness <= 0.4 ? 'wood' : 'drywall';
-          const pen = calculateMaterialPenetration(weaponId, mat, thickness);
+        // The material model is in metres; the world is in cubes.
+        const metres = thickness / RapierPhysicsWorld.U;
+        if (metres > 0.02 && thickness <= maxProbe) {
+          const mat = metres <= 0.4 ? 'wood' : 'drywall';
+          const pen = calculateMaterialPenetration(weaponId, mat, metres);
           if (pen.canPenetrate && pen.damageFactor > 0.1) {
             accumDamageFactor *= pen.damageFactor;
             wallbang = true;
             penetrations++;
-            const advance = thickness + 0.05;
+            const advance = thickness + 0.05 * RapierPhysicsWorld.U;
             curX = hitPoint.x + dir.x * advance;
             curY = hitPoint.y + dir.y * advance;
             curZ = hitPoint.z + dir.z * advance;

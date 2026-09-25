@@ -16,34 +16,23 @@ Outputs:
 
 import os
 import sys
-import math
-import shutil
 
 try:
     import bpy
     import bmesh
     from mathutils import Vector, Matrix, Euler
 except ImportError:
-    print("Error: generate_office.py must be run from within Blender 4.2+ (e.g. `blender --background --python ...`)")
+    print(
+        "Error: generate_office.py must be run from within Blender 4.2+ (e.g. `blender --background --python ...`)"
+    )
     sys.exit(1)
 
-
-# The layout below is authored in metres: a 4 m storey, 0.75 m desks. The game
-# is not. One world unit is one cube, and the player is 5.2 of them tall
-# (eye 4.5 + 0.7 above it, `world.rs` PLAYER_EYE_HEIGHT/PLAYER_ABOVE_EYE) — so
-# a metre-scale office had a 4-unit ceiling the body could not fit under, and
-# every spawn resolved onto the roof. The footprint was already in cube units;
-# only heights are metres, so only Z is scaled, here, in the two primitives
-# everything is built from. 3.0 puts the ceiling at 12, what `hd_office.json`
-# declares and what the other GLB maps (10–17 tall) are proportioned for.
-VERTICAL_SCALE = 3.0
-
-# Repo-relative, so the generator runs from any checkout on any OS.
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import maplib  # noqa: E402  (a sibling, found via the path above)
 
 
-def _vscale(v):
-    return (v[0], v[1], v[2] * VERTICAL_SCALE)
+# The layout below is authored in metres (a 4 m storey, 0.75 m desks), like
+# every generator here; `maplib` converts the finished scene to cubes on export.
 
 
 def clear_scene():
@@ -61,7 +50,17 @@ def get_or_create_collection(name):
     return col
 
 
-def create_pbr_material(name, base_color, metallic=0.0, roughness=0.5, emission_color=None, emission_strength=0.0, alpha=1.0, bump_strength=0.0, bump_scale=24.0):
+def create_pbr_material(
+    name,
+    base_color,
+    metallic=0.0,
+    roughness=0.5,
+    emission_color=None,
+    emission_strength=0.0,
+    alpha=1.0,
+    bump_strength=0.0,
+    bump_scale=24.0,
+):
     mat = bpy.data.materials.get(name)
     if mat:
         return mat
@@ -89,7 +88,7 @@ def create_pbr_material(name, base_color, metallic=0.0, roughness=0.5, emission_
             bsdf.inputs["Transmission Weight"].default_value = 1.0 - alpha
         elif "Transmission" in bsdf.inputs:
             bsdf.inputs["Transmission"].default_value = 1.0 - alpha
-        mat.blend_method = 'BLEND'
+        mat.blend_method = "BLEND"
 
     if bump_strength > 0.0:
         tex_coord = nodes.new(type="ShaderNodeTexCoord")
@@ -113,19 +112,105 @@ def create_pbr_material(name, base_color, metallic=0.0, roughness=0.5, emission_
 
 def setup_materials():
     mats = {}
-    mats["marble_floor"] = create_pbr_material("mat_marble_floor", (0.88, 0.88, 0.90), metallic=0.05, roughness=0.15, bump_strength=0.06, bump_scale=30.0)
-    mats["carpet_tile"] = create_pbr_material("mat_carpet_tile", (0.20, 0.22, 0.24), metallic=0.0, roughness=0.85, bump_strength=0.25, bump_scale=35.0)
-    mats["mahogany"] = create_pbr_material("mat_mahogany", (0.28, 0.12, 0.08), metallic=0.0, roughness=0.25, bump_strength=0.22, bump_scale=14.0)
-    mats["wall_drywall"] = create_pbr_material("mat_wall_drywall", (0.84, 0.85, 0.86), metallic=0.0, roughness=0.7, bump_strength=0.12, bump_scale=22.0)
-    mats["wall_accent"] = create_pbr_material("mat_wall_accent", (0.14, 0.24, 0.35), metallic=0.05, roughness=0.5, bump_strength=0.10, bump_scale=25.0)
-    mats["stainless"] = create_pbr_material("mat_stainless", (0.75, 0.76, 0.78), metallic=0.92, roughness=0.22, bump_strength=0.08, bump_scale=32.0)
-    mats["black_metal"] = create_pbr_material("mat_black_metal", (0.08, 0.08, 0.09), metallic=0.7, roughness=0.45, bump_strength=0.10, bump_scale=28.0)
-    mats["smoked_glass"] = create_pbr_material("mat_smoked_glass", (0.2, 0.25, 0.3), metallic=0.1, roughness=0.05, alpha=0.35)
-    mats["acoustic_felt"] = create_pbr_material("mat_acoustic_felt", (0.15, 0.35, 0.45), metallic=0.0, roughness=0.9, bump_strength=0.30, bump_scale=40.0)
-    mats["ceiling_tile"] = create_pbr_material("mat_ceiling_tile", (0.92, 0.92, 0.93), metallic=0.0, roughness=0.8, bump_strength=0.18, bump_scale=20.0)
-    mats["fluorescent"] = create_pbr_material("mat_fluorescent", (0.95, 0.97, 1.0), metallic=0.0, roughness=0.2, emission_color=(0.95, 0.97, 1.0), emission_strength=4.0)
-    mats["server_leds"] = create_pbr_material("mat_server_leds", (0.0, 1.0, 0.6), metallic=0.0, roughness=0.2, emission_color=(0.0, 1.0, 0.6), emission_strength=6.0)
-    mats["screen_display"] = create_pbr_material("mat_screen_display", (0.1, 0.4, 0.8), metallic=0.0, roughness=0.15, emission_color=(0.1, 0.5, 0.9), emission_strength=3.0)
+    mats["marble_floor"] = create_pbr_material(
+        "mat_marble_floor",
+        (0.88, 0.88, 0.90),
+        metallic=0.05,
+        roughness=0.15,
+        bump_strength=0.06,
+        bump_scale=30.0,
+    )
+    mats["carpet_tile"] = create_pbr_material(
+        "mat_carpet_tile",
+        (0.20, 0.22, 0.24),
+        metallic=0.0,
+        roughness=0.85,
+        bump_strength=0.25,
+        bump_scale=35.0,
+    )
+    mats["mahogany"] = create_pbr_material(
+        "mat_mahogany",
+        (0.28, 0.12, 0.08),
+        metallic=0.0,
+        roughness=0.25,
+        bump_strength=0.22,
+        bump_scale=14.0,
+    )
+    mats["wall_drywall"] = create_pbr_material(
+        "mat_wall_drywall",
+        (0.84, 0.85, 0.86),
+        metallic=0.0,
+        roughness=0.7,
+        bump_strength=0.12,
+        bump_scale=22.0,
+    )
+    mats["wall_accent"] = create_pbr_material(
+        "mat_wall_accent",
+        (0.14, 0.24, 0.35),
+        metallic=0.05,
+        roughness=0.5,
+        bump_strength=0.10,
+        bump_scale=25.0,
+    )
+    mats["stainless"] = create_pbr_material(
+        "mat_stainless",
+        (0.75, 0.76, 0.78),
+        metallic=0.92,
+        roughness=0.22,
+        bump_strength=0.08,
+        bump_scale=32.0,
+    )
+    mats["black_metal"] = create_pbr_material(
+        "mat_black_metal",
+        (0.08, 0.08, 0.09),
+        metallic=0.7,
+        roughness=0.45,
+        bump_strength=0.10,
+        bump_scale=28.0,
+    )
+    mats["smoked_glass"] = create_pbr_material(
+        "mat_smoked_glass", (0.2, 0.25, 0.3), metallic=0.1, roughness=0.05, alpha=0.35
+    )
+    mats["acoustic_felt"] = create_pbr_material(
+        "mat_acoustic_felt",
+        (0.15, 0.35, 0.45),
+        metallic=0.0,
+        roughness=0.9,
+        bump_strength=0.30,
+        bump_scale=40.0,
+    )
+    mats["ceiling_tile"] = create_pbr_material(
+        "mat_ceiling_tile",
+        (0.92, 0.92, 0.93),
+        metallic=0.0,
+        roughness=0.8,
+        bump_strength=0.18,
+        bump_scale=20.0,
+    )
+    mats["fluorescent"] = create_pbr_material(
+        "mat_fluorescent",
+        (0.95, 0.97, 1.0),
+        metallic=0.0,
+        roughness=0.2,
+        emission_color=(0.95, 0.97, 1.0),
+        emission_strength=4.0,
+    )
+    mats["server_leds"] = create_pbr_material(
+        "mat_server_leds",
+        (0.0, 1.0, 0.6),
+        metallic=0.0,
+        roughness=0.2,
+        emission_color=(0.0, 1.0, 0.6),
+        emission_strength=6.0,
+    )
+    mats["screen_display"] = create_pbr_material(
+        "mat_screen_display",
+        (0.1, 0.4, 0.8),
+        metallic=0.0,
+        roughness=0.15,
+        emission_color=(0.1, 0.5, 0.9),
+        emission_strength=3.0,
+    )
     return mats
 
 
@@ -136,8 +221,8 @@ def add_box(collection, name, center, size, material):
 
     bm = bmesh.new()
     bmesh.ops.create_cube(bm, size=1.0)
-    bmesh.ops.scale(bm, vec=Vector(_vscale(size)), verts=bm.verts)
-    bmesh.ops.translate(bm, vec=Vector(_vscale(center)), verts=bm.verts)
+    bmesh.ops.scale(bm, vec=Vector(size), verts=bm.verts)
+    bmesh.ops.translate(bm, vec=Vector(center), verts=bm.verts)
     bm.to_mesh(mesh)
     bm.free()
 
@@ -159,9 +244,9 @@ def add_cylinder(collection, name, center, radius, height, material, segments=16
         segments=segments,
         radius1=radius,
         radius2=radius,
-        depth=height * VERTICAL_SCALE
+        depth=height,
     )
-    bmesh.ops.translate(bm, vec=Vector(_vscale(center)), verts=bm.verts)
+    bmesh.ops.translate(bm, vec=Vector(center), verts=bm.verts)
     bm.to_mesh(mesh)
     bm.free()
 
@@ -173,62 +258,213 @@ def add_cylinder(collection, name, center, radius, height, material, segments=16
 def build_office_architecture(col, mats):
     """Floor slab, carpet zones, server raised floor, and perimeter curtain walls."""
     # Main marble floor slab (60m x 58m, centered at 32, 32, Z = 0.0)
-    add_box(col, "Floor_Main_Marble", (32.0, 32.0, -0.2), (60.0, 58.0, 0.4), mats["marble_floor"])
+    add_box(
+        col,
+        "Floor_Main_Marble",
+        (32.0, 32.0, -0.2),
+        (60.0, 58.0, 0.4),
+        mats["marble_floor"],
+    )
 
     # Boardroom and Server room floor offsets
-    add_box(col, "Floor_Boardroom_Carpet", (12.0, 48.0, -0.18), (18.0, 20.0, 0.4), mats["carpet_tile"])
-    add_box(col, "Floor_Server_Raised", (12.0, 16.0, -0.1), (18.0, 20.0, 0.4), mats["stainless"])
+    add_box(
+        col,
+        "Floor_Boardroom_Carpet",
+        (12.0, 48.0, -0.18),
+        (18.0, 20.0, 0.4),
+        mats["carpet_tile"],
+    )
+    add_box(
+        col,
+        "Floor_Server_Raised",
+        (12.0, 16.0, -0.1),
+        (18.0, 20.0, 0.4),
+        mats["stainless"],
+    )
 
     # High ceiling slab with acoustic drop tiles (z = 4.2m)
-    add_box(col, "Ceiling_Main", (32.0, 32.0, 4.2), (60.0, 58.0, 0.4), mats["ceiling_tile"])
+    add_box(
+        col, "Ceiling_Main", (32.0, 32.0, 4.2), (60.0, 58.0, 0.4), mats["ceiling_tile"]
+    )
 
     # North exterior wall with breakable curtain windows (Y = 60.0)
     for x in range(6, 60, 8):
-        add_box(col, f"Window_Glass_Curtain_N_{x}", (x, 60.0, 2.0), (7.4, 0.2, 4.0), mats["smoked_glass"])
-        add_box(col, f"Mullion_N_{x}_NonCol", (x + 3.8, 60.0, 2.0), (0.4, 0.4, 4.0), mats["black_metal"])
+        add_box(
+            col,
+            f"Window_Glass_Curtain_N_{x}",
+            (x, 60.0, 2.0),
+            (7.4, 0.2, 4.0),
+            mats["smoked_glass"],
+        )
+        add_box(
+            col,
+            f"Mullion_N_{x}_NonCol",
+            (x + 3.8, 60.0, 2.0),
+            (0.4, 0.4, 4.0),
+            mats["black_metal"],
+        )
 
     # South exterior wall with breakable curtain windows (Y = 4.0)
     for x in range(6, 60, 8):
-        add_box(col, f"Window_Glass_Curtain_S_{x}", (x, 4.0, 2.0), (7.4, 0.2, 4.0), mats["smoked_glass"])
-        add_box(col, f"Mullion_S_{x}_NonCol", (x + 3.8, 4.0, 2.0), (0.4, 0.4, 4.0), mats["black_metal"])
+        add_box(
+            col,
+            f"Window_Glass_Curtain_S_{x}",
+            (x, 4.0, 2.0),
+            (7.4, 0.2, 4.0),
+            mats["smoked_glass"],
+        )
+        add_box(
+            col,
+            f"Mullion_S_{x}_NonCol",
+            (x + 3.8, 4.0, 2.0),
+            (0.4, 0.4, 4.0),
+            mats["black_metal"],
+        )
+
+    # The curtain glass is breakable, and past it there is nothing but a drop off
+    # the slab edge. An invisible collision-only barrier just outside each façade
+    # keeps a shattered pane from being an exit from the map; the glass still
+    # breaks and the view stays open.
+    add_box(
+        col,
+        "Exterior_Barrier_N_ColOnly",
+        (32.0, 60.45, 2.0),
+        (60.0, 0.3, 4.0),
+        mats["smoked_glass"],
+    )
+    add_box(
+        col,
+        "Exterior_Barrier_S_ColOnly",
+        (32.0, 3.55, 2.0),
+        (60.0, 0.3, 4.0),
+        mats["smoked_glass"],
+    )
 
     # East/West solid perimeter walls
-    add_box(col, "Wall_West_Drywall", (3.0, 32.0, 2.0), (0.4, 56.0, 4.0), mats["wall_drywall"])
-    add_box(col, "Wall_East_Drywall", (61.0, 32.0, 2.0), (0.4, 56.0, 4.0), mats["wall_drywall"])
+    add_box(
+        col,
+        "Wall_West_Drywall",
+        (3.0, 32.0, 2.0),
+        (0.4, 56.0, 4.0),
+        mats["wall_drywall"],
+    )
+    add_box(
+        col,
+        "Wall_East_Drywall",
+        (61.0, 32.0, 2.0),
+        (0.4, 56.0, 4.0),
+        mats["wall_drywall"],
+    )
 
     # Heavy structural concrete pillars
     for px in [12.0, 27.0, 42.0, 56.0]:
         for py in [14.0, 32.0, 50.0]:
-            add_box(col, f"Pillar_{int(px)}_{int(py)}", (px, py, 2.0), (1.2, 1.2, 4.0), mats["wall_accent"])
+            add_box(
+                col,
+                f"Pillar_{int(px)}_{int(py)}",
+                (px, py, 2.0),
+                (1.2, 1.2, 4.0),
+                mats["wall_accent"],
+            )
 
 
 def build_executive_boardroom(col, mats):
     """Executive Boardroom (X: 4..22, Y: 38..58) with conference table, chairs, and AV screen."""
     # Partition walls dividing Boardroom
-    add_box(col, "Boardroom_Wall_E", (22.0, 48.0, 2.0), (0.3, 20.0, 4.0), mats["wall_drywall"])
-    add_box(col, "Boardroom_Wall_S", (12.0, 38.0, 2.0), (18.0, 0.3, 4.0), mats["wall_drywall"])
+    add_box(
+        col,
+        "Boardroom_Wall_E",
+        (22.0, 48.0, 2.0),
+        (0.3, 20.0, 4.0),
+        mats["wall_drywall"],
+    )
+    add_box(
+        col,
+        "Boardroom_Wall_S",
+        (12.0, 38.0, 2.0),
+        (18.0, 0.3, 4.0),
+        mats["wall_drywall"],
+    )
     # Boardroom entrance double breakable glass doors
-    add_box(col, "Window_Glass_Boardroom", (22.0, 48.0, 1.4), (0.1, 2.8, 2.8), mats["smoked_glass"])
+    add_box(
+        col,
+        "Window_Glass_Boardroom",
+        (22.0, 48.0, 1.4),
+        (0.1, 2.8, 2.8),
+        mats["smoked_glass"],
+    )
 
     # 8.0m x 2.4m Mahogany Conference Table at (12.0, 48.0, 0.75) (penetrable wood)
-    add_box(col, "Wood_Table_Top_Mahogany", (12.0, 48.0, 0.75), (8.0, 2.4, 0.1), mats["mahogany"])
-    add_box(col, "Table_Pedestal_W", (9.5, 48.0, 0.35), (0.8, 1.4, 0.7), mats["stainless"])
-    add_box(col, "Table_Pedestal_E", (14.5, 48.0, 0.35), (0.8, 1.4, 0.7), mats["stainless"])
-    add_box(col, "Table_Cable_Well_NonCol", (12.0, 48.0, 0.76), (2.0, 0.3, 0.02), mats["black_metal"])
+    add_box(
+        col,
+        "Wood_Table_Top_Mahogany",
+        (12.0, 48.0, 0.75),
+        (8.0, 2.4, 0.1),
+        mats["mahogany"],
+    )
+    add_box(
+        col, "Table_Pedestal_W", (9.5, 48.0, 0.35), (0.8, 1.4, 0.7), mats["stainless"]
+    )
+    add_box(
+        col, "Table_Pedestal_E", (14.5, 48.0, 0.35), (0.8, 1.4, 0.7), mats["stainless"]
+    )
+    add_box(
+        col,
+        "Table_Cable_Well_NonCol",
+        (12.0, 48.0, 0.76),
+        (2.0, 0.3, 0.02),
+        mats["black_metal"],
+    )
 
     # Executive Leather Chairs around conference table (NonCol)
     for i in range(5):
         cx = 9.0 + i * 1.5
         # North side
-        add_box(col, f"Chair_Seat_N_{i}_NonCol", (cx, 49.8, 0.48), (0.55, 0.55, 0.08), mats["black_metal"])
-        add_box(col, f"Chair_Back_N_{i}_NonCol", (cx, 50.05, 0.85), (0.55, 0.08, 0.7), mats["black_metal"])
+        add_box(
+            col,
+            f"Chair_Seat_N_{i}_NonCol",
+            (cx, 49.8, 0.48),
+            (0.55, 0.55, 0.08),
+            mats["black_metal"],
+        )
+        add_box(
+            col,
+            f"Chair_Back_N_{i}_NonCol",
+            (cx, 50.05, 0.85),
+            (0.55, 0.08, 0.7),
+            mats["black_metal"],
+        )
         # South side
-        add_box(col, f"Chair_Seat_S_{i}_NonCol", (cx, 46.2, 0.48), (0.55, 0.55, 0.08), mats["black_metal"])
-        add_box(col, f"Chair_Back_S_{i}_NonCol", (cx, 45.95, 0.85), (0.55, 0.08, 0.7), mats["black_metal"])
+        add_box(
+            col,
+            f"Chair_Seat_S_{i}_NonCol",
+            (cx, 46.2, 0.48),
+            (0.55, 0.55, 0.08),
+            mats["black_metal"],
+        )
+        add_box(
+            col,
+            f"Chair_Back_S_{i}_NonCol",
+            (cx, 45.95, 0.85),
+            (0.55, 0.08, 0.7),
+            mats["black_metal"],
+        )
 
     # 98-inch 4K Wall AV Presentation Screen on West Wall
-    add_box(col, "AV_Display_Frame_NonCol", (3.3, 48.0, 2.2), (0.1, 4.2, 2.2), mats["black_metal"])
-    add_box(col, "AV_Display_Screen_NonCol", (3.36, 48.0, 2.2), (0.02, 4.0, 2.0), mats["screen_display"])
+    add_box(
+        col,
+        "AV_Display_Frame_NonCol",
+        (3.3, 48.0, 2.2),
+        (0.1, 4.2, 2.2),
+        mats["black_metal"],
+    )
+    add_box(
+        col,
+        "AV_Display_Screen_NonCol",
+        (3.36, 48.0, 2.2),
+        (0.02, 4.0, 2.0),
+        mats["screen_display"],
+    )
 
 
 def build_cubicle_farm(col, mats):
@@ -236,68 +472,230 @@ def build_cubicle_farm(col, mats):
     for row_x in [42.0, 49.0, 56.0]:
         for pod_y in [16.0, 24.0, 34.0, 42.0, 50.0]:
             # Acoustic fabric center privacy divider (1.4m high) (penetrable)
-            add_box(col, f"Wood_Cubicle_Spine_{int(row_x)}_{int(pod_y)}", (row_x, pod_y, 0.7), (4.5, 0.1, 1.4), mats["acoustic_felt"])
-            add_box(col, f"Wood_Cubicle_Divider_1_{int(row_x)}_{int(pod_y)}", (row_x - 2.2, pod_y, 0.7), (0.1, 2.6, 1.4), mats["acoustic_felt"])
-            add_box(col, f"Wood_Cubicle_Divider_2_{int(row_x)}_{int(pod_y)}", (row_x + 2.2, pod_y, 0.7), (0.1, 2.6, 1.4), mats["acoustic_felt"])
+            add_box(
+                col,
+                f"Wood_Cubicle_Spine_{int(row_x)}_{int(pod_y)}",
+                (row_x, pod_y, 0.7),
+                (4.5, 0.1, 1.4),
+                mats["acoustic_felt"],
+            )
+            add_box(
+                col,
+                f"Wood_Cubicle_Divider_1_{int(row_x)}_{int(pod_y)}",
+                (row_x - 2.2, pod_y, 0.7),
+                (0.1, 2.6, 1.4),
+                mats["acoustic_felt"],
+            )
+            add_box(
+                col,
+                f"Wood_Cubicle_Divider_2_{int(row_x)}_{int(pod_y)}",
+                (row_x + 2.2, pod_y, 0.7),
+                (0.1, 2.6, 1.4),
+                mats["acoustic_felt"],
+            )
 
             # Desks North and South of the spine
-            add_box(col, f"Desk_N_{int(row_x)}_{int(pod_y)}", (row_x, pod_y + 0.65, 0.72), (4.0, 1.0, 0.06), mats["wall_drywall"])
-            add_box(col, f"Desk_S_{int(row_x)}_{int(pod_y)}", (row_x, pod_y - 0.65, 0.72), (4.0, 1.0, 0.06), mats["wall_drywall"])
+            add_box(
+                col,
+                f"Desk_N_{int(row_x)}_{int(pod_y)}",
+                (row_x, pod_y + 0.65, 0.72),
+                (4.0, 1.0, 0.06),
+                mats["wall_drywall"],
+            )
+            add_box(
+                col,
+                f"Desk_S_{int(row_x)}_{int(pod_y)}",
+                (row_x, pod_y - 0.65, 0.72),
+                (4.0, 1.0, 0.06),
+                mats["wall_drywall"],
+            )
 
             # Dual monitors (NonCol)
-            add_box(col, f"Monitor_N1_{int(row_x)}_{int(pod_y)}_NonCol", (row_x - 0.6, pod_y + 0.9, 1.05), (0.7, 0.05, 0.45), mats["black_metal"])
-            add_box(col, f"Screen_N1_{int(row_x)}_{int(pod_y)}_NonCol", (row_x - 0.6, pod_y + 0.88, 1.05), (0.66, 0.01, 0.41), mats["screen_display"])
+            add_box(
+                col,
+                f"Monitor_N1_{int(row_x)}_{int(pod_y)}_NonCol",
+                (row_x - 0.6, pod_y + 0.9, 1.05),
+                (0.7, 0.05, 0.45),
+                mats["black_metal"],
+            )
+            add_box(
+                col,
+                f"Screen_N1_{int(row_x)}_{int(pod_y)}_NonCol",
+                (row_x - 0.6, pod_y + 0.88, 1.05),
+                (0.66, 0.01, 0.41),
+                mats["screen_display"],
+            )
 
             # Filing cabinets
-            add_box(col, f"Cabinet_N_{int(row_x)}_{int(pod_y)}", (row_x - 1.8, pod_y + 0.65, 0.35), (0.5, 0.7, 0.7), mats["black_metal"])
-            add_box(col, f"Cabinet_S_{int(row_x)}_{int(pod_y)}", (row_x + 1.8, pod_y - 0.65, 0.35), (0.5, 0.7, 0.7), mats["black_metal"])
+            add_box(
+                col,
+                f"Cabinet_N_{int(row_x)}_{int(pod_y)}",
+                (row_x - 1.8, pod_y + 0.65, 0.35),
+                (0.5, 0.7, 0.7),
+                mats["black_metal"],
+            )
+            add_box(
+                col,
+                f"Cabinet_S_{int(row_x)}_{int(pod_y)}",
+                (row_x + 1.8, pod_y - 0.65, 0.35),
+                (0.5, 0.7, 0.7),
+                mats["black_metal"],
+            )
 
 
 def build_reception_and_elevators(col, mats):
     """Central reception lobby with curved marble desk and twin elevators (X: 24..38, Y: 24..40)."""
     # Reception counter at (27.0, 32.0, 0.55)
-    add_box(col, "Reception_Counter_Main", (27.0, 32.0, 0.55), (1.4, 5.0, 1.1), mats["marble_floor"])
-    add_box(col, "Reception_Counter_WingN", (27.8, 34.6, 0.55), (2.0, 0.8, 1.1), mats["marble_floor"])
-    add_box(col, "Reception_Counter_WingS", (27.8, 29.4, 0.55), (2.0, 0.8, 1.1), mats["marble_floor"])
-    add_box(col, "Reception_Top_Quartz", (27.0, 32.0, 1.12), (1.5, 5.2, 0.06), mats["stainless"])
+    add_box(
+        col,
+        "Reception_Counter_Main",
+        (27.0, 32.0, 0.55),
+        (1.4, 5.0, 1.1),
+        mats["marble_floor"],
+    )
+    add_box(
+        col,
+        "Reception_Counter_WingN",
+        (27.8, 34.6, 0.55),
+        (2.0, 0.8, 1.1),
+        mats["marble_floor"],
+    )
+    add_box(
+        col,
+        "Reception_Counter_WingS",
+        (27.8, 29.4, 0.55),
+        (2.0, 0.8, 1.1),
+        mats["marble_floor"],
+    )
+    add_box(
+        col,
+        "Reception_Top_Quartz",
+        (27.0, 32.0, 1.12),
+        (1.5, 5.2, 0.06),
+        mats["stainless"],
+    )
 
     # Twin Elevator Core at (17.0, 32.0, 2.0)
-    add_box(col, "Elevator_Shaft_Wall", (17.0, 32.0, 2.0), (3.0, 9.0, 4.0), mats["wall_accent"])
+    add_box(
+        col,
+        "Elevator_Shaft_Wall",
+        (17.0, 32.0, 2.0),
+        (3.0, 9.0, 4.0),
+        mats["wall_accent"],
+    )
 
     # Elevator A (North)
-    add_box(col, "Elevator_A_Frame_NonCol", (18.6, 34.5, 1.5), (0.2, 2.4, 3.0), mats["stainless"])
-    add_box(col, "Elevator_A_DoorL_NonCol", (18.62, 33.9, 1.5), (0.05, 1.1, 2.9), mats["stainless"])
-    add_box(col, "Elevator_A_DoorR_NonCol", (18.62, 35.1, 1.5), (0.05, 1.1, 2.9), mats["stainless"])
-    add_box(col, "Elevator_A_Indicator_NonCol", (18.65, 34.5, 3.2), (0.02, 0.8, 0.25), mats["screen_display"])
+    add_box(
+        col,
+        "Elevator_A_Frame_NonCol",
+        (18.6, 34.5, 1.5),
+        (0.2, 2.4, 3.0),
+        mats["stainless"],
+    )
+    add_box(
+        col,
+        "Elevator_A_DoorL_NonCol",
+        (18.62, 33.9, 1.5),
+        (0.05, 1.1, 2.9),
+        mats["stainless"],
+    )
+    add_box(
+        col,
+        "Elevator_A_DoorR_NonCol",
+        (18.62, 35.1, 1.5),
+        (0.05, 1.1, 2.9),
+        mats["stainless"],
+    )
+    add_box(
+        col,
+        "Elevator_A_Indicator_NonCol",
+        (18.65, 34.5, 3.2),
+        (0.02, 0.8, 0.25),
+        mats["screen_display"],
+    )
 
     # Elevator B (South)
-    add_box(col, "Elevator_B_Frame_NonCol", (18.6, 29.5, 1.5), (0.2, 2.4, 3.0), mats["stainless"])
-    add_box(col, "Elevator_B_DoorL_NonCol", (18.62, 28.9, 1.5), (0.05, 1.1, 2.9), mats["stainless"])
-    add_box(col, "Elevator_B_DoorR_NonCol", (18.62, 30.1, 1.5), (0.05, 1.1, 2.9), mats["stainless"])
-    add_box(col, "Elevator_B_Indicator_NonCol", (18.65, 29.5, 3.2), (0.02, 0.8, 0.25), mats["screen_display"])
+    add_box(
+        col,
+        "Elevator_B_Frame_NonCol",
+        (18.6, 29.5, 1.5),
+        (0.2, 2.4, 3.0),
+        mats["stainless"],
+    )
+    add_box(
+        col,
+        "Elevator_B_DoorL_NonCol",
+        (18.62, 28.9, 1.5),
+        (0.05, 1.1, 2.9),
+        mats["stainless"],
+    )
+    add_box(
+        col,
+        "Elevator_B_DoorR_NonCol",
+        (18.62, 30.1, 1.5),
+        (0.05, 1.1, 2.9),
+        mats["stainless"],
+    )
+    add_box(
+        col,
+        "Elevator_B_Indicator_NonCol",
+        (18.65, 29.5, 3.2),
+        (0.02, 0.8, 0.25),
+        mats["screen_display"],
+    )
 
 
 def build_server_vault(col, mats):
     """High-density IT server room with glass observation wall and server banks (X: 4..22, Y: 6..26)."""
     # Breakable glass observation partition walls
-    add_box(col, "Window_Glass_Server_N", (12.0, 26.0, 2.0), (18.0, 0.2, 4.0), mats["smoked_glass"])
-    add_box(col, "Window_Glass_Server_E", (22.0, 16.0, 2.0), (0.2, 20.0, 4.0), mats["smoked_glass"])
+    add_box(
+        col,
+        "Window_Glass_Server_N",
+        (12.0, 26.0, 2.0),
+        (18.0, 0.2, 4.0),
+        mats["smoked_glass"],
+    )
+    add_box(
+        col,
+        "Window_Glass_Server_E",
+        (22.0, 16.0, 2.0),
+        (0.2, 20.0, 4.0),
+        mats["smoked_glass"],
+    )
 
     # 4 rows of 42U server racks
     for r in range(4):
         rx = 7.0 + r * 3.5
         for s in range(5):
             sy = 10.0 + s * 2.4
-            add_box(col, f"Server_Rack_{r}_{s}", (rx, sy, 1.1), (0.9, 1.8, 2.2), mats["black_metal"])
+            add_box(
+                col,
+                f"Server_Rack_{r}_{s}",
+                (rx, sy, 1.1),
+                (0.9, 1.8, 2.2),
+                mats["black_metal"],
+            )
             # Status indicator LED strip (NonCol)
-            add_box(col, f"Server_LEDs_{r}_{s}_NonCol", (rx + 0.46, sy, 1.1), (0.02, 1.5, 1.8), mats["server_leds"])
+            add_box(
+                col,
+                f"Server_LEDs_{r}_{s}_NonCol",
+                (rx + 0.46, sy, 1.1),
+                (0.02, 1.5, 1.8),
+                mats["server_leds"],
+            )
 
 
 def build_lighting(col, mats):
     """Recessed fluorescent troffer panels (NonCol)."""
     for lx in range(8, 58, 8):
         for ly in range(8, 58, 8):
-            add_box(col, f"Light_Troffer_{lx}_{ly}_NonCol", (lx, ly, 4.0), (1.4, 2.4, 0.08), mats["fluorescent"])
+            add_box(
+                col,
+                f"Light_Troffer_{lx}_{ly}_NonCol",
+                (lx, ly, 4.0),
+                (1.4, 2.4, 0.08),
+                mats["fluorescent"],
+            )
 
 
 def build_office_scene():
@@ -322,30 +720,8 @@ def build_office_scene():
 
 
 def export_glb():
-    backend_map_dir = os.path.join(REPO_ROOT, "backend", "modules", "hassault", "maps")
-    web_public_dir = os.path.join(REPO_ROOT, "apps", "web", "public")
-
-    os.makedirs(backend_map_dir, exist_ok=True)
-    os.makedirs(web_public_dir, exist_ok=True)
-
-    backend_glb_path = os.path.join(backend_map_dir, "hd_office.glb")
-    web_glb_path = os.path.join(web_public_dir, "hd_office.glb")
-
-    print(f"Exporting GLB to: {backend_glb_path} ...")
-    bpy.ops.export_scene.gltf(
-        filepath=backend_glb_path,
-        export_format='GLB',
-        use_selection=False,
-        export_apply=True,
-        export_yup=True,
-        export_materials='EXPORT',
-        export_lights=False,
-        export_cameras=False
-    )
-
-    print(f"Copying GLB to Web: {web_glb_path} ...")
-    shutil.copyfile(backend_glb_path, web_glb_path)
-    print("=== Office Generation & Export Complete! ===")
+    """Scale the metre-authored scene to cubes and export it (see maplib)."""
+    maplib.export_map_glb("hd_office")
 
 
 if __name__ == "__main__":

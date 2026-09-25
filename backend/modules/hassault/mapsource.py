@@ -469,6 +469,7 @@ def _build(source: dict[str, Any], name: str) -> tuple[CgzMap, list[int]]:
         tag=bytes(grid.tag),
         modes=list(declared_modes),
         objectives=objectives,
+        baked_collision=source.get("collision") == "baked",
     )
     return built, grid.owners
 

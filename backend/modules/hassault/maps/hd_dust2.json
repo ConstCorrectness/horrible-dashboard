@@ -2,126 +2,2058 @@
   "title": "Desert Citadel II (Dust II)",
   "author": "horrible-dashboard",
   "license": "CC0-1.0",
-  "sfactor": 6,
+  "sfactor": 8,
   "waterlevel": -100,
   "ambient": 54,
   "format": "gltf",
-  "modes": [
-    "defuse",
-    "tdm",
-    "dm"
-  ],
+  "modes": ["defuse", "tdm", "dm"],
   "brushes": [
     {
       "op": "room",
-      "rect": [4, 4, 56, 56],
-      "floor": 0,
-      "ceil": 14,
-      "wtex": 47,
-      "ftex": 21,
-      "ctex": 33
-    },
-    {
-      "op": "solid",
-      "rect": [44, 16, 2, 34],
-      "wtex": 89
+      "rect": [12, 11, 6, 3],
+      "floor": 30,
+      "ceil": 42
     },
     {
       "op": "room",
-      "rect": [44, 20, 2, 6],
-      "floor": 0,
-      "ceil": 14,
-      "wtex": 47,
-      "ftex": 21,
-      "ctex": 33
-    },
-    {
-      "op": "solid",
-      "rect": [26, 16, 2, 30],
-      "wtex": 89
+      "rect": [18, 11, 5, 3],
+      "floor": 33,
+      "ceil": 42
     },
     {
       "op": "room",
-      "rect": [26, 30, 2, 4],
-      "floor": 0,
-      "ceil": 14,
-      "wtex": 47,
-      "ftex": 21,
-      "ctex": 33
-    },
-    {
-      "op": "solid",
-      "rect": [6, 44, 20, 2],
-      "wtex": 89
+      "rect": [23, 11, 4, 3],
+      "floor": 30,
+      "ceil": 42
     },
     {
       "op": "room",
-      "rect": [14, 44, 4, 2],
-      "floor": 0,
-      "ceil": 14,
-      "wtex": 47,
-      "ftex": 21,
-      "ctex": 33
-    },
-    {
-      "op": "solid",
-      "rect": [42, 46, 16, 2],
-      "wtex": 89
+      "rect": [27, 11, 6, 3],
+      "floor": 33,
+      "ceil": 42
     },
     {
       "op": "room",
-      "rect": [46, 46, 4, 2],
+      "rect": [33, 11, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [37, 11, 6, 3],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [43, 11, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [47, 11, 5, 3],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [52, 11, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [56, 11, 6, 3],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [62, 11, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [66, 11, 6, 3],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [72, 11, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [76, 11, 5, 3],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [81, 11, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [85, 11, 6, 3],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [91, 11, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [95, 11, 6, 3],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [101, 11, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [105, 11, 5, 3],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [110, 11, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [114, 11, 6, 3],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [120, 11, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [124, 11, 6, 3],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [130, 11, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [134, 11, 5, 3],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [139, 11, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [143, 11, 6, 3],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [149, 11, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [153, 11, 6, 3],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [159, 11, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [163, 11, 5, 3],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [168, 11, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [172, 11, 6, 3],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [178, 11, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [182, 11, 6, 3],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [188, 11, 10, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [11, 12, 1, 186],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [198, 12, 1, 186],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [12, 14, 2, 186],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [14, 14, 182, 4],
+      "floor": 6,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [196, 14, 2, 185],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [14, 18, 136, 5],
       "floor": 0,
-      "ceil": 14,
-      "wtex": 47,
-      "ftex": 21,
-      "ctex": 33
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [150, 18, 3, 36],
+      "floor": 2,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [153, 18, 39, 15],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [192, 18, 4, 88],
+      "floor": 6,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [14, 23, 51, 42],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [65, 23, 2, 1],
+      "floor": 10,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [67, 23, 52, 1],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [119, 23, 2, 1],
+      "floor": 10,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [121, 23, 29, 1],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [65, 24, 1, 1],
+      "floor": 16,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [66, 24, 1, 1],
+      "floor": 20,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [67, 24, 1, 2],
+      "floor": 0,
+      "ceil": 16
+    },
+    {
+      "op": "room",
+      "rect": [68, 24, 7, 41],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [75, 24, 2, 1],
+      "floor": 11,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [77, 24, 14, 1],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [91, 24, 1, 1],
+      "floor": 11,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [92, 24, 7, 23],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [99, 24, 2, 1],
+      "floor": 11,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [101, 24, 14, 1],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [115, 24, 1, 1],
+      "floor": 11,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [116, 24, 3, 103],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [119, 24, 1, 1],
+      "floor": 16,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [120, 24, 1, 1],
+      "floor": 20,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [121, 24, 1, 2],
+      "floor": 0,
+      "ceil": 16
+    },
+    {
+      "op": "room",
+      "rect": [122, 24, 8, 103],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [130, 24, 4, 109],
+      "floor": 27,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [134, 24, 16, 21],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [65, 25, 2, 1],
+      "floor": 0,
+      "ceil": 6
+    },
+    {
+      "op": "room",
+      "rect": [75, 25, 2, 10],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [77, 25, 14, 10],
+      "floor": 3,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [91, 25, 1, 10],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [99, 25, 2, 10],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [101, 25, 14, 10],
+      "floor": 3,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [115, 25, 1, 10],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [119, 25, 2, 1],
+      "floor": 0,
+      "ceil": 6
+    },
+    {
+      "op": "room",
+      "rect": [65, 26, 3, 39],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [119, 26, 3, 101],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [153, 33, 14, 66],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [167, 33, 2, 6],
+      "floor": 1,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [169, 33, 7, 6],
+      "floor": 3,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [176, 33, 5, 6],
+      "floor": 1,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [181, 33, 11, 50],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [75, 35, 2, 1],
+      "floor": 11,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [77, 35, 14, 12],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [91, 35, 1, 1],
+      "floor": 11,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [99, 35, 2, 1],
+      "floor": 11,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [101, 35, 14, 12],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [115, 35, 1, 1],
+      "floor": 11,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [75, 36, 2, 12],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [91, 36, 1, 11],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [99, 36, 2, 11],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [115, 36, 1, 91],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [167, 39, 14, 67],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [134, 45, 13, 83],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [147, 45, 3, 6],
+      "floor": 10,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [77, 47, 7, 1],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [84, 47, 18, 26],
+      "floor": 4,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [102, 47, 13, 80],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [75, 48, 1, 17],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [76, 48, 4, 96],
+      "floor": 27,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [80, 48, 4, 46],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [147, 51, 3, 77],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [150, 54, 3, 74],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [14, 65, 6, 61],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [20, 65, 56, 1],
+      "floor": 0,
+      "ceil": 12
+    },
+    {
+      "op": "room",
+      "rect": [20, 66, 2, 73],
+      "floor": 0,
+      "ceil": 12
+    },
+    {
+      "op": "room",
+      "rect": [22, 66, 4, 72],
+      "floor": 14,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [26, 66, 38, 10],
+      "floor": 0,
+      "ceil": 12
+    },
+    {
+      "op": "room",
+      "rect": [64, 66, 4, 48],
+      "floor": 14,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [68, 66, 8, 67],
+      "floor": 0,
+      "ceil": 12
+    },
+    {
+      "op": "room",
+      "rect": [84, 73, 18, 21],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [26, 76, 9, 63],
+      "floor": 0,
+      "ceil": 12
+    },
+    {
+      "op": "room",
+      "rect": [35, 76, 3, 4],
+      "floor": 14,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [38, 76, 26, 54],
+      "floor": 0,
+      "ceil": 12
+    },
+    {
+      "op": "room",
+      "rect": [35, 80, 3, 14],
+      "floor": 0,
+      "ceil": 12
+    },
+    {
+      "op": "room",
+      "rect": [181, 83, 4, 23],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [185, 83, 2, 1],
+      "floor": 10,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [187, 83, 5, 1],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [185, 84, 1, 1],
+      "floor": 17,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [186, 84, 1, 1],
+      "floor": 20,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [187, 84, 1, 2],
+      "floor": 0,
+      "ceil": 16
+    },
+    {
+      "op": "room",
+      "rect": [188, 84, 4, 22],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [185, 85, 2, 1],
+      "floor": 0,
+      "ceil": 6
+    },
+    {
+      "op": "room",
+      "rect": [185, 86, 3, 20],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [35, 94, 3, 4],
+      "floor": 14,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [80, 94, 2, 90],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [82, 94, 20, 1],
+      "floor": 0,
+      "ceil": 12
+    },
+    {
+      "op": "room",
+      "rect": [82, 95, 12, 1],
+      "floor": 0,
+      "ceil": 12
+    },
+    {
+      "op": "room",
+      "rect": [94, 95, 6, 1],
+      "floor": 17,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [100, 95, 2, 3],
+      "floor": 0,
+      "ceil": 12
+    },
+    {
+      "op": "room",
+      "rect": [82, 96, 2, 2],
+      "floor": 0,
+      "ceil": 12
+    },
+    {
+      "op": "room",
+      "rect": [84, 96, 7, 1],
+      "floor": 17,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [91, 96, 9, 2],
+      "floor": 0,
+      "ceil": 12
+    },
+    {
+      "op": "room",
+      "rect": [84, 97, 7, 1],
+      "floor": 0,
+      "ceil": 12
+    },
+    {
+      "op": "room",
+      "rect": [35, 98, 3, 14],
+      "floor": 0,
+      "ceil": 12
+    },
+    {
+      "op": "room",
+      "rect": [82, 98, 20, 13],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [153, 99, 8, 29],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [161, 99, 3, 3],
+      "floor": 4,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [164, 99, 3, 7],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [161, 102, 3, 1],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [161, 103, 3, 6],
+      "floor": 4,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [164, 106, 1, 6],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [165, 106, 30, 4],
+      "floor": 27,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [195, 106, 1, 90],
+      "floor": 6,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [161, 109, 1, 3],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [162, 109, 2, 1],
+      "floor": 4,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [162, 110, 2, 2],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [165, 110, 27, 2],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [192, 110, 3, 74],
+      "floor": 6,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [82, 111, 5, 10],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [87, 111, 6, 6],
+      "floor": 5,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [93, 111, 9, 10],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [35, 112, 3, 4],
+      "floor": 14,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [161, 112, 5, 4],
+      "floor": 4,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [166, 112, 26, 16],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [64, 114, 4, 17],
+      "floor": 0,
+      "ceil": 12
+    },
+    {
+      "op": "room",
+      "rect": [35, 116, 3, 23],
+      "floor": 0,
+      "ceil": 12
+    },
+    {
+      "op": "room",
+      "rect": [161, 116, 5, 12],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [87, 117, 6, 4],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [82, 121, 1, 75],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [83, 121, 14, 3],
+      "floor": 7,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [97, 121, 5, 6],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [83, 124, 3, 7],
+      "floor": 7,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [94, 124, 3, 7],
+      "floor": 7,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [14, 126, 2, 58],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [16, 126, 4, 58],
+      "floor": 25,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [97, 127, 4, 69],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [101, 127, 1, 16],
+      "floor": 0,
+      "ceil": 7
+    },
+    {
+      "op": "room",
+      "rect": [102, 127, 1, 16],
+      "floor": 10,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [103, 127, 27, 3],
+      "floor": 7,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [86, 128, 8, 3],
+      "floor": 7,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [134, 128, 9, 16],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [143, 128, 26, 7],
+      "floor": 1,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [169, 128, 23, 3],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [38, 130, 2, 9],
+      "floor": 0,
+      "ceil": 12
+    },
+    {
+      "op": "room",
+      "rect": [40, 130, 3, 4],
+      "floor": 14,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [43, 130, 21, 6],
+      "floor": 0,
+      "ceil": 12
+    },
+    {
+      "op": "room",
+      "rect": [103, 130, 2, 13],
+      "floor": 7,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [64, 131, 4, 14],
+      "floor": 19,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [83, 131, 14, 57],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [169, 131, 16, 13],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [185, 131, 2, 1],
+      "floor": 10,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [187, 131, 5, 1],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [185, 132, 1, 1],
+      "floor": 16,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [186, 132, 1, 1],
+      "floor": 20,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [187, 132, 1, 2],
+      "floor": 0,
+      "ceil": 16
+    },
+    {
+      "op": "room",
+      "rect": [188, 132, 4, 52],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [68, 133, 1, 6],
+      "floor": 0,
+      "ceil": 12
+    },
+    {
+      "op": "room",
+      "rect": [69, 133, 1, 10],
+      "floor": 0,
+      "ceil": 6
+    },
+    {
+      "op": "room",
+      "rect": [70, 133, 1, 1],
+      "floor": 15,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [71, 133, 1, 10],
+      "floor": 0,
+      "ceil": 6
+    },
+    {
+      "op": "room",
+      "rect": [72, 133, 4, 6],
+      "floor": 0,
+      "ceil": 12
+    },
+    {
+      "op": "room",
+      "rect": [131, 133, 3, 11],
+      "floor": 27,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [185, 133, 2, 1],
+      "floor": 0,
+      "ceil": 6
+    },
+    {
+      "op": "room",
+      "rect": [40, 134, 3, 5],
+      "floor": 0,
+      "ceil": 12
+    },
+    {
+      "op": "room",
+      "rect": [70, 134, 1, 8],
+      "floor": 0,
+      "ceil": 6
+    },
+    {
+      "op": "room",
+      "rect": [185, 134, 3, 50],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [143, 135, 26, 8],
+      "floor": 2,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [43, 136, 16, 3],
+      "floor": 0,
+      "ceil": 12
+    },
+    {
+      "op": "room",
+      "rect": [59, 136, 5, 3],
+      "floor": 4,
+      "ceil": 12
+    },
+    {
+      "op": "room",
+      "rect": [22, 138, 4, 1],
+      "floor": 0,
+      "ceil": 12
+    },
+    {
+      "op": "room",
+      "rect": [20, 139, 39, 10],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [59, 139, 5, 1],
+      "floor": 4,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [68, 139, 1, 45],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [72, 139, 4, 26],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [59, 140, 5, 9],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [105, 140, 25, 2],
+      "floor": 7,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [130, 140, 1, 4],
+      "floor": 27,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [70, 142, 1, 1],
+      "floor": 15,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [105, 142, 16, 1],
+      "floor": 7,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [121, 142, 3, 1],
+      "floor": 15,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [124, 142, 6, 1],
+      "floor": 7,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [69, 143, 3, 41],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [101, 143, 20, 42],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [121, 143, 3, 3],
+      "floor": 0,
+      "ceil": 7
+    },
+    {
+      "op": "room",
+      "rect": [124, 143, 6, 1],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [143, 143, 26, 1],
+      "floor": 3,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [76, 144, 4, 44],
+      "floor": 25,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [124, 144, 2, 21],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [126, 144, 48, 10],
+      "floor": 4,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [174, 144, 11, 40],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [64, 145, 4, 39],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [121, 146, 3, 50],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [20, 149, 15, 6],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [35, 149, 26, 8],
+      "floor": 2,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [61, 149, 3, 35],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [126, 154, 10, 32],
+      "floor": 4,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [136, 154, 4, 4],
+      "floor": 11,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [140, 154, 34, 12],
+      "floor": 4,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [20, 155, 14, 14],
+      "floor": 3,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [34, 155, 1, 29],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [35, 157, 8, 18],
+      "floor": 2,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [43, 157, 8, 4],
+      "floor": 5,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [51, 157, 10, 18],
+      "floor": 2,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [136, 158, 4, 4],
+      "floor": 7,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [43, 161, 8, 14],
+      "floor": 2,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [136, 162, 4, 24],
+      "floor": 4,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [72, 165, 1, 19],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [73, 165, 1, 12],
+      "floor": 11,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [74, 165, 2, 19],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [124, 165, 1, 31],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [125, 165, 1, 18],
+      "floor": 1,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [140, 166, 14, 18],
+      "floor": 4,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [154, 166, 4, 8],
+      "floor": 7,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [158, 166, 16, 18],
+      "floor": 4,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [20, 169, 5, 12],
+      "floor": 3,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [25, 169, 4, 4],
+      "floor": 7,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [29, 169, 5, 12],
+      "floor": 3,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [25, 173, 4, 8],
+      "floor": 3,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [154, 174, 4, 10],
+      "floor": 4,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [35, 175, 26, 9],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [73, 177, 1, 7],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [20, 181, 14, 3],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [125, 183, 1, 13],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [14, 184, 1, 12],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [15, 184, 3, 4],
+      "floor": 25,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [18, 184, 5, 4],
+      "floor": 28,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [23, 184, 5, 4],
+      "floor": 25,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [28, 184, 5, 4],
+      "floor": 28,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [33, 184, 5, 4],
+      "floor": 25,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [38, 184, 5, 4],
+      "floor": 28,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [43, 184, 5, 4],
+      "floor": 25,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [48, 184, 5, 4],
+      "floor": 28,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [53, 184, 5, 4],
+      "floor": 25,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [58, 184, 5, 4],
+      "floor": 28,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [63, 184, 5, 4],
+      "floor": 25,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [68, 184, 5, 4],
+      "floor": 28,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [73, 184, 3, 4],
+      "floor": 25,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [80, 184, 1, 4],
+      "floor": 25,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [81, 184, 1, 12],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [140, 184, 13, 2],
+      "floor": 4,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [153, 184, 42, 4],
+      "floor": 20,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [101, 185, 6, 11],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [107, 185, 2, 1],
+      "floor": 10,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [109, 185, 12, 1],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [107, 186, 1, 1],
+      "floor": 16,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [108, 186, 1, 1],
+      "floor": 20,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [109, 186, 1, 2],
+      "floor": 0,
+      "ceil": 16
+    },
+    {
+      "op": "room",
+      "rect": [110, 186, 11, 10],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [126, 186, 27, 10],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [107, 187, 2, 1],
+      "floor": 0,
+      "ceil": 6
+    },
+    {
+      "op": "room",
+      "rect": [15, 188, 66, 8],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [83, 188, 6, 8],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [89, 188, 2, 1],
+      "floor": 10,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [91, 188, 6, 1],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [107, 188, 3, 8],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [153, 188, 39, 8],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [192, 188, 3, 8],
+      "floor": 6,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [89, 189, 1, 1],
+      "floor": 16,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [90, 189, 1, 1],
+      "floor": 20,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [91, 189, 1, 2],
+      "floor": 0,
+      "ceil": 16
+    },
+    {
+      "op": "room",
+      "rect": [92, 189, 5, 7],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [89, 190, 2, 1],
+      "floor": 0,
+      "ceil": 6
+    },
+    {
+      "op": "room",
+      "rect": [89, 191, 3, 5],
+      "floor": 0,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [14, 196, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [18, 196, 5, 4],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [23, 196, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [27, 196, 6, 4],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [33, 196, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [37, 196, 6, 4],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [43, 196, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [47, 196, 5, 4],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [52, 196, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [56, 196, 6, 4],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [62, 196, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [66, 196, 6, 4],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [72, 196, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [76, 196, 5, 4],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [81, 196, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [85, 196, 6, 4],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [91, 196, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [95, 196, 6, 4],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [101, 196, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [105, 196, 5, 4],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [110, 196, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [114, 196, 6, 4],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [120, 196, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [124, 196, 6, 4],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [130, 196, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [134, 196, 5, 4],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [139, 196, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [143, 196, 6, 4],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [149, 196, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [153, 196, 6, 4],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [159, 196, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [163, 196, 5, 4],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [168, 196, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [172, 196, 6, 4],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [178, 196, 4, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [182, 196, 6, 4],
+      "floor": 33,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [188, 196, 8, 3],
+      "floor": 30,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [11, 198, 1, 1],
+      "floor": 6,
+      "ceil": 42
+    },
+    {
+      "op": "room",
+      "rect": [14, 199, 1, 1],
+      "floor": 30,
+      "ceil": 42
     }
   ],
   "spawns": [
-    { "x": 28, "y": 10, "z": 0, "yaw": 90, "team": 1 },
-    { "x": 34, "y": 10, "z": 0, "yaw": 90, "team": 1 },
-    { "x": 28, "y": 14, "z": 0, "yaw": 90, "team": 1 },
-    { "x": 34, "y": 14, "z": 0, "yaw": 90, "team": 1 },
-    { "x": 34, "y": 56, "z": 0, "yaw": 270, "team": 0 },
-    { "x": 38, "y": 56, "z": 0, "yaw": 270, "team": 0 },
-    { "x": 34, "y": 52, "z": 0, "yaw": 270, "team": 0 },
-    { "x": 38, "y": 52, "z": 0, "yaw": 270, "team": 0 }
+    {"x": 102, "y": 180, "z": 0, "yaw": 270, "team": 0},
+    {"x": 114, "y": 180, "z": 0, "yaw": 270, "team": 0},
+    {"x": 102, "y": 168, "z": 0, "yaw": 270, "team": 0},
+    {"x": 114, "y": 168, "z": 0, "yaw": 270, "team": 0},
+    {"x": 90, "y": 30, "z": 0, "yaw": 90, "team": 1},
+    {"x": 102, "y": 30, "z": 0, "yaw": 90, "team": 1},
+    {"x": 90, "y": 42, "z": 0, "yaw": 90, "team": 1},
+    {"x": 102, "y": 42, "z": 0, "yaw": 90, "team": 1}
   ],
   "entities": [
-    { "type": "playerstart", "x": 28, "y": 10, "z": 0, "yaw": 90, "team": 1 },
-    { "type": "playerstart", "x": 34, "y": 10, "z": 0, "yaw": 90, "team": 1 },
-    { "type": "playerstart", "x": 28, "y": 14, "z": 0, "yaw": 90, "team": 1 },
-    { "type": "playerstart", "x": 34, "y": 14, "z": 0, "yaw": 90, "team": 1 },
-    { "type": "playerstart", "x": 34, "y": 56, "z": 0, "yaw": 270, "team": 0 },
-    { "type": "playerstart", "x": 38, "y": 56, "z": 0, "yaw": 270, "team": 0 },
-    { "type": "playerstart", "x": 34, "y": 52, "z": 0, "yaw": 270, "team": 0 },
-    { "type": "playerstart", "x": 38, "y": 52, "z": 0, "yaw": 270, "team": 0 },
-    { "type": "health", "x": 56, "y": 12, "z": 0 },
-    { "type": "health", "x": 20, "y": 34, "z": 0 },
-    { "type": "health", "x": 36, "y": 58, "z": 0 },
-    { "type": "armour", "x": 54, "y": 36, "z": 0 },
-    { "type": "armour", "x": 10, "y": 54, "z": 0 },
-    { "type": "ammo", "x": 30, "y": 30, "z": 0 },
-    { "type": "ammo", "x": 48, "y": 52, "z": 0 },
-    { "type": "ammo", "x": 16, "y": 32, "z": 0 },
-    { "type": "clips", "x": 38, "y": 44, "z": 0 },
-    { "type": "grenade", "x": 28, "y": 12, "z": 0 }
+    {"type": "playerstart", "x": 102, "y": 180, "z": 0, "yaw": 270, "team": 0},
+    {"type": "playerstart", "x": 114, "y": 180, "z": 0, "yaw": 270, "team": 0},
+    {"type": "playerstart", "x": 102, "y": 168, "z": 0, "yaw": 270, "team": 0},
+    {"type": "playerstart", "x": 114, "y": 168, "z": 0, "yaw": 270, "team": 0},
+    {"type": "playerstart", "x": 90, "y": 30, "z": 0, "yaw": 90, "team": 1},
+    {"type": "playerstart", "x": 102, "y": 30, "z": 0, "yaw": 90, "team": 1},
+    {"type": "playerstart", "x": 90, "y": 42, "z": 0, "yaw": 90, "team": 1},
+    {"type": "playerstart", "x": 102, "y": 42, "z": 0, "yaw": 90, "team": 1},
+    {"type": "health", "x": 174, "y": 36, "z": 0},
+    {"type": "health", "x": 60, "y": 102, "z": 0},
+    {"type": "health", "x": 108, "y": 174, "z": 0},
+    {"type": "armour", "x": 162, "y": 108, "z": 0},
+    {"type": "armour", "x": 30, "y": 168, "z": 0},
+    {"type": "ammo", "x": 90, "y": 90, "z": 0},
+    {"type": "ammo", "x": 144, "y": 156, "z": 3.6},
+    {"type": "ammo", "x": 48, "y": 96, "z": 0},
+    {"type": "clips", "x": 114, "y": 125, "z": 0},
+    {"type": "grenade", "x": 84, "y": 36, "z": 0}
   ],
   "objectives": {
     "sites": [
-      {
-        "id": "A",
-        "x": 48,
-        "y": 52,
-        "radius": 4.0
-      },
-      {
-        "id": "B",
-        "x": 16,
-        "y": 54,
-        "radius": 4.0
-      }
+      {"id": "A", "x": 144, "y": 156, "radius": 12.0},
+      {"id": "B", "x": 48, "y": 162, "radius": 12.0}
     ]
-  }
+  },
+  "collision": "baked"
 }

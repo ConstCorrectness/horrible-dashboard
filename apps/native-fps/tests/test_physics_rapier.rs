@@ -1,5 +1,5 @@
 use hassault_native::physics_rapier::{
-    RapierMoveInput, RapierPhysicsWorld, RapierPlayerState,
+    RapierMoveInput, RapierPhysicsWorld, RapierPlayerState, RUN_SPEED, U,
 };
 use rapier3d::prelude::*;
 
@@ -160,7 +160,7 @@ fn test_rapier_power_slide_and_cancel() {
         x: 2.0,
         y: 2.0,
         z: 0.0,
-        vy: 8.5,
+        vy: RUN_SPEED,
         grounded: true,
         stamina: 100.0,
         ..Default::default()
@@ -175,7 +175,7 @@ fn test_rapier_power_slide_and_cancel() {
 
     physics.step(&mut state, slide_input);
     assert!(state.sliding, "player should enter slide");
-    assert!(state.vy >= 8.5, "velocity should be boosted/preserved");
+    assert!(state.vy >= RUN_SPEED, "velocity should be boosted/preserved");
 
     // Jump to cancel slide
     let cancel_input = RapierMoveInput {
@@ -188,6 +188,6 @@ fn test_rapier_power_slide_and_cancel() {
     physics.step(&mut state, cancel_input);
     assert!(!state.sliding, "slide should be canceled");
     assert!(state.vz > 0.0, "jump should launch upward");
-    assert!(state.vy > 8.0, "horizontal velocity should be preserved");
+    assert!(state.vy > 8.0 * U, "horizontal velocity should be preserved");
 }
 

@@ -69,7 +69,6 @@ Ultra-Realism Upgrades:
 import sys
 import os
 import math
-from pathlib import Path
 
 try:
     import bpy
@@ -78,6 +77,9 @@ try:
 except ImportError:
     print("Error: This script must be run inside Blender: blender -b -P generate_assault.py")
     sys.exit(1)
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import maplib  # noqa: E402  (a sibling, found via the path above)
 
 
 def clear_scene():
@@ -1446,34 +1448,8 @@ def build_assault_scene():
 
 
 def export_scene_glb():
-    """Export the constructed scene to GLB for backend and frontend."""
-    repo_root = Path(__file__).resolve().parent.parent.parent
-    glb_backend_path = repo_root / "backend/modules/hassault/maps/hd_assault.glb"
-    glb_web_path = repo_root / "apps/web/public/hd_assault.glb"
-
-    glb_backend_path.parent.mkdir(parents=True, exist_ok=True)
-    glb_web_path.parent.mkdir(parents=True, exist_ok=True)
-
-    try:
-        bpy.ops.wm.save_userpref()
-    except Exception:
-        pass
-
-    print(f"Exporting GLB to: {glb_backend_path}")
-    bpy.ops.export_scene.gltf(
-        filepath=str(glb_backend_path),
-        export_format='GLB',
-        use_selection=False,
-        export_apply=True,
-        export_yup=True,
-        export_materials='EXPORT',
-        export_lights=False,
-        export_cameras=False
-    )
-
-    import shutil
-    shutil.copyfile(glb_backend_path, glb_web_path)
-    print(f"Copied GLB to Web: {glb_web_path}")
+    """Scale the metre-authored scene to cubes and export it (see maplib)."""
+    maplib.export_map_glb("hd_assault")
 
 
 if __name__ == "__main__":

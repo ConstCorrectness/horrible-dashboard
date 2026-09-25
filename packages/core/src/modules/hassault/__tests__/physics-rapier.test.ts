@@ -229,7 +229,7 @@ describe('RapierPhysicsWorld Character Controller', () => {
       y: 2,
       z: 0.0,
       vx: 0,
-      vy: 8.5, // moving fast along y
+      vy: RapierPhysicsWorld.RUN_SPEED, // moving fast along y
       vz: 0,
       grounded: true,
       crouching: false,
@@ -247,7 +247,7 @@ describe('RapierPhysicsWorld Character Controller', () => {
 
     physics.step(state, slideInput);
     expect(state.sliding).toBe(true);
-    expect(state.vy).toBeGreaterThanOrEqual(8.5); // boosted/preserved velocity
+    expect(state.vy).toBeGreaterThanOrEqual(RapierPhysicsWorld.RUN_SPEED); // boosted/preserved velocity
 
     // Now press jump to slide-cancel
     const jumpCancelInput: RapierMoveInput = {
@@ -262,7 +262,7 @@ describe('RapierPhysicsWorld Character Controller', () => {
     physics.step(state, jumpCancelInput);
     expect(state.sliding).toBe(false); // slide canceled
     expect(state.vz).toBeGreaterThan(0); // jumped!
-    expect(state.vy).toBeGreaterThan(8.0); // forward speed preserved!
+    expect(state.vy).toBeGreaterThan(8.0 * RapierPhysicsWorld.U); // forward speed preserved!
 
     physics.dispose();
   });
@@ -448,7 +448,8 @@ describe('RapierPhysicsWorld Character Controller', () => {
     expect(isNonColliderNode('Lamp_Sconce_NonCol')).toBe(true);
     expect(isNonColliderNode('Tree_Foliage_Cluster')).toBe(true);
     expect(isNonColliderNode('Gantry_Cable_Hoist')).toBe(true);
-    expect(isNonColliderNode('Curtain_Glass_Window')).toBe(true);
+    // A breakable pane is its own kind of collider (it shatters), not decoration.
+    expect(isNonColliderNode('Curtain_Glass_Window')).toBe(false);
     expect(isNonColliderNode('Wall_Solid_Concrete')).toBe(false);
     expect(isNonColliderNode('Floor_Ground_Paving')).toBe(false);
 
