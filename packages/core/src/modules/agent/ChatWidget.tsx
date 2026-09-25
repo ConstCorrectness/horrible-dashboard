@@ -15,7 +15,7 @@ import { Fragment, useCallback, useEffect, useRef, useState, type FormEvent } fr
 
 import { Avatar3D, DEFAULT_AVATAR_MOOD, DEFAULT_AVATAR_MOODS } from '../../Avatar3D';
 import { dialogs } from '../../dialogs';
-import { IconPlus, IconSend, IconTrash } from '../../glyphs';
+import { IconPlus, IconSend, IconStop, IconTrash } from '../../glyphs';
 import { useSetting } from '../../settings';
 import { AgentReadiness } from './AgentReadiness';
 import { getAgentRoster, getAgentStatus, type AgentStatus, type RosterAgent } from './api';
@@ -41,6 +41,11 @@ import { agentForWorkspace, setWorkspaceAgent } from '../../layout/persistence';
 import { useWorkspaces } from '../../workspace-store';
 
 const AVATAR_MOODS = Object.keys(DEFAULT_AVATAR_MOODS);
+
+/** The in-flight turn's abort handle, per agent. Module-level for the same reason
+ *  the transcript is (chat-state.ts): a turn outlives the pane that started it, and
+ *  a remounted pane must still be able to stop it. */
+const inflight = new Map<string, AbortController>();
 
 /** Opening prompts for an empty transcript. Each one exercises a different half of
  *  what makes this agent unlike a chat box: layout control, pane reading, editing. */
@@ -566,6 +571,9 @@ export function ChatWidget() {
     // Delegated sub-agents stream under the parent turn: note the hand-off once,
     // then fold their deltas into the reasoning disclosure.
     const delegatesSeen = new Set<string>();
+    const turnAgent = agentIdRef.current;
+    const abort = new AbortController();
+    inflight.set(turnAgent, abort);
     try {
       await askAgent(
         text,
@@ -589,9 +597,11 @@ export function ChatWidget() {
           onError: (msg) => patch((t) => ({ ...t, text: `⚠ ${msg}` })),
         },
         history,
-        { agentId: agentIdRef.current },
+        { agentId: turnAgent, signal: abort.signal },
       );
+      if (abort.signal.aborted) patch((t) => ({ ...t, text: t.text || '(stopped)' }));
     } finally {
+      if (inflight.get(turnAgent) === abort) inflight.delete(turnAgent);
       setBusy(false);
       void persist();
     }
@@ -795,9 +805,22 @@ export function ChatWidget() {
           placeholder="Ask the agent…  (/ for commands)"
           disabled={busy}
         />
-        <button type="submit" disabled={!canSend} aria-label={busy ? 'Sending' : 'Send'}>
-          {busy ? '…' : <IconSend />}
-        </button>
+        {busy ? (
+          // A turn waiting on a slow (or never-answering) model used to leave only a
+          // disabled "…" here — the pane had no way out. Stop cancels it server-side.
+          <button
+            type="button"
+            title="Stop"
+            aria-label="Stop"
+            onClick={() => inflight.get(agentIdRef.current)?.abort()}
+          >
+            <IconStop />
+          </button>
+        ) : (
+          <button type="submit" disabled={!canSend} aria-label="Send">
+            <IconSend />
+          </button>
+        )}
       </form>
     </div>
   );

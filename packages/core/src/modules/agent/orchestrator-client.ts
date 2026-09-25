@@ -60,6 +60,9 @@ export interface AgentCallbacks {
 export interface AskOptions {
   /** Roster agent driving the turn; omitted = the main orchestrator. */
   agentId?: string;
+  /** Aborting stops the turn: the backend cancels it and the promise resolves at
+   *  once, so a model that never answers can't hold the chat hostage. */
+  signal?: AbortSignal;
 }
 
 /** A prior conversation turn replayed to the backend so a turn has context. */
@@ -168,11 +171,21 @@ export function askAgent(
     // typing indicator forever and will not accept the next message either: the
     // one failure mode where the app looks like it is still working.
     let unsubClose = () => {};
+    const onAbort = () => {
+      sendChannel('agent', 'cancel', { turnId });
+      finish();
+    };
     const finish = () => {
       unsub();
       unsubClose();
+      opts?.signal?.removeEventListener('abort', onAbort);
       resolve();
     };
+    if (opts?.signal?.aborted) {
+      resolve();
+      return;
+    }
+    opts?.signal?.addEventListener('abort', onAbort, { once: true });
     unsubClose = onSocketClose(() => {
       cb.onError?.(
         'The connection to the backend dropped, so this turn was lost. ' +

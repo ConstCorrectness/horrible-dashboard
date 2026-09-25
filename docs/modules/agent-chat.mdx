@@ -401,6 +401,7 @@ are stable, not creative.
 | server→client | `approval_request`  | `{turnId, approvalId, tool, specifier, mode}`    |
 | client→server | `approval_response` | `{approvalId, decision, rule?}`                  |
 | client→server | `list_tools`        | `{}` — request the live tool catalog             |
+| client→server | `cancel`            | `{turnId}` — Stop; only the asking socket may    |
 | server→client | `tools`             | `{tools: [{name, description, source}]}`         |
 | server→client | `reasoning`         | `{turnId, agentId, delta}` — streamed thinking   |
 | server→client | `token`             | `{turnId, agentId, delta}` — streamed answer     |
@@ -878,6 +879,24 @@ request back) body in the exception message instead.
 `orjson` is a hard dependency because litellm's OpenRouter transformation imports it;
 without it every OpenRouter call fails as an `APIConnectionError` naming a missing
 module, which reads as a network fault.
+
+**A hosted model that never answers ends the turn.** litellm's default request timeout
+is `litellm.request_timeout` = **6000 s**, and nothing passed a smaller one, so a free
+OpenRouter model sitting in its queue left the chat on its `…` bubble for up to 100
+minutes with the input disabled. Every litellm call now carries `timeout`
+(`HOSTED_FIRST_CHUNK_S`, 120 s), and the streamed paths run through `_watch_stream`, an
+explicit watchdog: no first chunk within 120 s (connect included) or a 90 s gap
+(`HOSTED_IDLE_S`) once streaming raises `StreamStalled` — a `TimeoutError`, so the
+turn's catch-all reports it as `error` + `done`. The transport's read timeout alone is
+not enough: OpenRouter keeps a queued request's connection warm with SSE comment lines,
+which reset a read deadline without ever yielding a chunk.
+
+**The chat can stop a turn.** While a turn is in flight the send button is a **Stop**
+button: it aborts `askAgent`'s `signal`, which sends `cancel` and resolves at once; the
+backend cancels the task (`_turns_by_id`, owner-checked — a turn id is not a secret on
+a shared socket hub) and still emits `done` for any other listener. The abort handle
+lives at module level beside the transcript, so a remounted pane can stop a turn it
+did not start.
 
 Keys are entered in two places, both writing the same route: the **Model provider API
 keys** section of the Settings page (`ApiKeysSettings`), and inline in onboarding —

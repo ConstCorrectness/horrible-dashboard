@@ -1521,9 +1521,9 @@ def _note_dropped_tools(messages: list[dict[str, Any]], stats: dict[str, Any]) -
     three different claims about what is available.
     """
     for message in list(messages):
-        if message.get("role") == "system" and str(message.get("content", "")).startswith(
-            _DROPPED_NOTE
-        ):
+        if message.get("role") == "system" and str(
+            message.get("content", "")
+        ).startswith(_DROPPED_NOTE):
             messages.remove(message)
     dropped = stats.get("dropped") or []
     if not dropped:
@@ -1601,7 +1601,14 @@ async def handle_agent_message(conn: WsConnection, msg: dict[str, Any]) -> None:
         # this is the backstop for it. Keep a reference: `create_task` alone does
         # not, and a garbage-collected task is a turn that stops for no reason.
         _turns.add(task)
+        _turns_by_id[turn_id] = (conn, task)
         task.add_done_callback(lambda t: _turn_finished(conn, turn_id, agent_id, t))
+    elif event == "cancel":
+        # The chat's Stop button. Only the connection that asked may stop a turn —
+        # a turn id is not a secret on a shared socket hub.
+        entry = _turns_by_id.get(str(data.get("turnId", "")))
+        if entry is not None and entry[0] is conn:
+            entry[1].cancel()
     elif event == "tool_result":
         call_id = str(data.get("callId", ""))
         fut = conn.pending.pop(call_id, None)
@@ -1617,6 +1624,8 @@ async def handle_agent_message(conn: WsConnection, msg: dict[str, Any]) -> None:
 #: Live `ask` turns. `asyncio.create_task` keeps only a weak reference, so a task
 #: nobody holds can be collected mid-flight — a turn that simply stops.
 _turns: set[asyncio.Task[None]] = set()
+#: The same turns by id, for `cancel`. Holds the owning connection alongside.
+_turns_by_id: dict[str, tuple[WsConnection, asyncio.Task[None]]] = {}
 
 
 def _turn_finished(
@@ -1624,7 +1633,20 @@ def _turn_finished(
 ) -> None:
     """Retire a finished turn, and make sure a crashed one still ends the chat."""
     _turns.discard(task)
+    if _turns_by_id.get(turn_id, (None, None))[1] is task:
+        del _turns_by_id[turn_id]
     if task.cancelled():
+        # Stopped from the chat, which has already left its pending state; the
+        # `done` is for any other listener (and harmless to the one that stopped).
+        async def tell_done() -> None:
+            try:
+                await conn.send_json(
+                    _evt("done", {"turnId": turn_id, "agentId": agent_id})
+                )
+            except Exception:  # noqa: BLE001 — the socket may be what went away
+                pass
+
+        asyncio.get_running_loop().create_task(tell_done())
         return
     exc = task.exception()
     if exc is None:

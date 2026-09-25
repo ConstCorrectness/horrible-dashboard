@@ -15,6 +15,7 @@ provider-agnostic. See docs/modules/agent-chat.md.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -326,14 +327,75 @@ def qualify_model(info: ProviderInfo, model: str) -> str:
     return prefix + model
 
 
+#: How long a hosted model may take to produce its first streamed chunk. Generous
+#: on purpose: a free OpenRouter model queues before it starts, and a reasoning
+#: model's prefill on a long prompt is slow. What it replaces is litellm's own
+#: default, `litellm.request_timeout` = **6000 s** — a hosted model that never
+#: answers left the chat on its typing indicator for 100 minutes.
+HOSTED_FIRST_CHUNK_S = 120.0
+#: How long a hosted stream may go silent between chunks once it has started.
+HOSTED_IDLE_S = 90.0
+
+
+class StreamStalled(TimeoutError):
+    """A provider stream produced nothing within its budget."""
+
+
 def litellm_call_kwargs(info: ProviderInfo) -> dict[str, Any]:
     """The auth kwargs for a litellm call. Raises when a hosted provider has no key,
     so the failure names the missing credential instead of surfacing as whatever the
-    vendor returns for an unauthenticated request."""
+    vendor returns for an unauthenticated request.
+
+    Carries an explicit `timeout` too, because litellm's default is 6000 s."""
     key = api_key_for(info)
     if not key:
         raise MissingApiKey(f"No API key configured for {info.label}")
-    return {"api_key": key}
+    return {"api_key": key, "timeout": HOSTED_FIRST_CHUNK_S}
+
+
+async def _watch_stream(
+    stream: Any,
+    label: str,
+    first_s: float,
+    idle_s: float,
+    *,
+    first_reported_s: float | None = None,
+) -> AsyncIterator[Any]:
+    """Re-yield `stream`, raising `StreamStalled` if the first chunk takes longer
+    than `first_s` or any later gap exceeds `idle_s`.
+
+    An explicit watchdog rather than trusting the transport's read timeout: whether
+    litellm maps `timeout` onto a per-read deadline differs by vendor, and OpenRouter
+    keeps the connection warm with SSE comment lines while a request sits in its
+    queue, which resets a read timeout without ever producing a chunk."""
+    it = stream.__aiter__()
+    started = False
+    while True:
+        budget = idle_s if started else first_s
+        try:
+            chunk = await asyncio.wait_for(it.__anext__(), timeout=budget)
+        except StopAsyncIteration:
+            return
+        except TimeoutError:
+            # Best effort: release the connection now rather than at GC.
+            aclose = getattr(stream, "aclose", None)
+            if aclose is not None:
+                try:
+                    await aclose()
+                except Exception:  # noqa: BLE001 — already failing; report the stall
+                    pass
+            reported = budget if started else (first_reported_s or budget)
+            raise _stalled(label, started, reported) from None
+        started = True
+        yield chunk
+
+
+def _stalled(label: str, started: bool, seconds: float) -> StreamStalled:
+    what = "stopped streaming" if started else "sent nothing"
+    return StreamStalled(
+        f"{label} {what} for {round(seconds)}s — the model is overloaded or queued "
+        "(common on free tiers). Try again or pick another model."
+    )
 
 
 def raise_for_status_with_body(res: httpx.Response, body: str) -> None:
@@ -1446,18 +1508,35 @@ async def _litellm_chat_stream(
     tool_acc: dict[int, dict[str, Any]] = {}
     usage = Usage()
 
-    response = await litellm.acompletion(
-        model=qualify_model(info, model),
-        messages=messages,
-        stream=True,
-        # Same requirement as the raw OpenAI path: no usage is emitted unless asked.
-        # litellm normalizes this across vendors, so there is no per-endpoint retry
-        # to do here.
-        stream_options={"include_usage": True},
-        **kwargs,
-    )
+    # One first-chunk budget covers the connect *and* the wait for the first chunk,
+    # so a queued request can't spend it twice.
+    t0 = time.monotonic()
+    label = f"{info.label} ({model})"
+    try:
+        response = await asyncio.wait_for(
+            litellm.acompletion(
+                model=qualify_model(info, model),
+                messages=messages,
+                stream=True,
+                # Same requirement as the raw OpenAI path: no usage is emitted unless
+                # asked. litellm normalizes this across vendors, so there is no
+                # per-endpoint retry to do here.
+                stream_options={"include_usage": True},
+                **kwargs,
+            ),
+            timeout=HOSTED_FIRST_CHUNK_S,
+        )
+    except TimeoutError:
+        raise _stalled(label, False, HOSTED_FIRST_CHUNK_S) from None
+    first_s = max(1.0, HOSTED_FIRST_CHUNK_S - (time.monotonic() - t0))
 
-    async for chunk in response:
+    async for chunk in _watch_stream(
+        response,
+        label,
+        first_s,
+        HOSTED_IDLE_S,
+        first_reported_s=HOSTED_FIRST_CHUNK_S,
+    ):
         # The final chunk carries usage and may have no choices at all.
         chunk_usage = getattr(chunk, "usage", None)
         if chunk_usage is not None:
@@ -1604,7 +1683,9 @@ async def generate_stream(
             stream=True,
             **litellm_call_kwargs(info),
         )
-        async for chunk in response:
+        async for chunk in _watch_stream(
+            response, f"{info.label} ({model})", HOSTED_FIRST_CHUNK_S, HOSTED_IDLE_S
+        ):
             token = chunk.choices[0].delta.content or ""
             if token:
                 yield json.dumps({"response": token}) + "\n"
