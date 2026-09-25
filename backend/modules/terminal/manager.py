@@ -33,6 +33,7 @@ from collections.abc import Callable
 from typing import Any
 
 from backend.modules.terminal import shells
+from backend.modules.terminal.env import shell_env
 from backend.modules.terminal.pty import PtyProcess, spawn_pty
 
 logger = logging.getLogger(__name__)
@@ -88,7 +89,8 @@ class TerminalManager:
         argv = shells.resolve(requested_id)
         honoured = shells.is_known(requested_id)
         try:
-            proc = self._spawn(argv, cwd=cwd, env=None, rows=rows, cols=cols)
+            # The user-code interpreter, not the backend's own venv — see terminal/env.py.
+            proc = self._spawn(argv, cwd=cwd, env=shell_env(), rows=rows, cols=cols)
         except Exception as exc:  # noqa: BLE001 — surface any spawn failure to the UI
             logger.warning("pty spawn failed: %s", exc)
             await self._conn.send_json(

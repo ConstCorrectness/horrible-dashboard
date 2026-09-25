@@ -145,6 +145,17 @@ def python_ready() -> bool:
     return _venv_python(managed_venv_dir()).is_file()
 
 
+def existing_python() -> Path | None:
+    """The user-code interpreter if one already exists — never bootstraps.
+
+    The terminal puts this on its shells' PATH so a script run there sees the same
+    libraries (torch, …) a notebook cell does, rather than the backend's own venv.
+    """
+    override = _override()
+    py = Path(override) if override else _venv_python(managed_venv_dir())
+    return py if py.is_file() else None
+
+
 def ensure_python(progress: ProgressLine | None = None) -> str:
     """Resolve the kernel interpreter, bootstrapping the managed venv on first use.
     Blocking — call from a daemon thread / `asyncio.to_thread`, never the loop.

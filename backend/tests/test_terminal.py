@@ -7,11 +7,15 @@ uses, with a blocking `read` (run in a thread by the pump) unblocked by EOF.
 """
 
 import asyncio
+import os
 import queue
+import sys
+from pathlib import Path
 from typing import Any
 
 from backend.modules.terminal import pty as pty_mod
 from backend.modules.terminal import shells as shells_mod
+from backend.modules.terminal.env import shell_env
 from backend.modules.terminal.manager import TerminalManager
 from backend.modules.terminal.pty import default_shell
 
@@ -362,3 +366,45 @@ def test_start_reports_a_fallback_rather_than_hiding_it(monkeypatch) -> None:  #
         await mgr.close_all()
 
     asyncio.run(go())
+
+
+# --- shell environment -------------------------------------------------------
+
+
+def _venv(root: Path) -> Path:
+    bin_dir = root / ("Scripts" if sys.platform == "win32" else "bin")
+    bin_dir.mkdir(parents=True)
+    (root / "pyvenv.cfg").write_text("home = x\n")
+    py = bin_dir / ("python.exe" if sys.platform == "win32" else "python")
+    py.write_text("")
+    return py
+
+
+def test_shell_env_swaps_backend_venv_for_user_python(tmp_path: Path) -> None:
+    backend_py = _venv(tmp_path / "backend-venv")
+    user_py = _venv(tmp_path / "notebook-venv")
+    system = str(tmp_path / "system-bin")
+    environ = {
+        "PATH": os.pathsep.join([str(backend_py.parent), system]),
+        "VIRTUAL_ENV": str(tmp_path / "backend-venv"),
+        "VIRTUAL_ENV_PROMPT": "horrible-dashboard",
+        "HOME": "h",
+    }
+    env = shell_env(environ, user_python=user_py, backend_venv=tmp_path / "backend-venv")
+    assert env["PATH"].split(os.pathsep) == [str(user_py.parent), system]
+    assert env["VIRTUAL_ENV"] == str(tmp_path / "notebook-venv")
+    assert "VIRTUAL_ENV_PROMPT" not in env
+    assert env["HOME"] == "h"
+
+
+def test_shell_env_without_user_python_still_drops_backend_venv(
+    tmp_path: Path,
+) -> None:
+    backend_py = _venv(tmp_path / "backend-venv")
+    environ = {
+        "PATH": os.pathsep.join([str(backend_py.parent), "sys"]),
+        "VIRTUAL_ENV": str(tmp_path / "backend-venv"),
+    }
+    env = shell_env(environ, user_python=None, backend_venv=tmp_path / "backend-venv")
+    assert env["PATH"] == "sys"
+    assert "VIRTUAL_ENV" not in env

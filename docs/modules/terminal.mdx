@@ -95,7 +95,7 @@ On Windows that is Git Bash, MSYS2 bash, PowerShell 7, Windows PowerShell, the
 Command Prompt, and one entry per installed WSL distribution. On POSIX it is
 `$SHELL` plus whichever of bash/zsh/fish/sh are on PATH.
 
-Three rules are load-bearing:
+Four rules are load-bearing:
 
 **The wire carries an id, never a path.** `shells.resolve()` matches an id against
 the discovered set and falls back to the platform default for anything else.
@@ -116,6 +116,16 @@ name with that difference stated. `backend/tests/test_terminal.py` pins this.
 installed but would not answer" is a different fact from "there is no WSL", so such
 an entry appears in the catalog with a `note` and no `path`, and the picker shows it
 as unlaunchable rather than omitting it.
+
+**A shell runs the user-code Python, not the backend's.** The backend lives in its
+own venv (`uv run` puts `<repo>/.venv` first on PATH and sets `VIRTUAL_ENV`), and a
+shell used to inherit it — so `python script.py`, which is how the agent runs code
+through `terminal.exec`, got an interpreter with no torch, and a `pip install` there
+modified the app itself. `backend/modules/terminal/env.py` removes the backend venv
+from the shell's PATH and puts the [notebook](notebook.mdx)'s interpreter first (the
+managed venv carrying the AI stack, or the `notebook.python` override), setting
+`VIRTUAL_ENV` when it is a venv. It never bootstraps one: until a notebook has been
+opened, `python` is whatever the machine has.
 
 Switching a pane's shell is a **respawn**: a PTY is bound to the process it started,
 so the old session is killed and a new one created. The picker says so before you
