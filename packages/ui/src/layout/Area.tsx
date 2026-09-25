@@ -21,7 +21,12 @@ import { PaneWithRegions } from './Region';
 function ViewPicker({ areaId }: { areaId: string }) {
   // Tools last: they open in a dock by default, but an area can host them, so
   // they belong in the picker — just not ahead of the center-native views.
-  const views = [...registry.panels, ...registry.widgets].sort(
+  // Embedded views are excluded, as the SDK contract says: they live in a host
+  // pane's strip or section, and opening one bare in an area strands it without
+  // the host that feeds it.
+  const views = [...registry.panels, ...registry.widgets]
+    .filter((v) => !v.embedded)
+    .sort(
     (a, b) => Number(roleOf(a.id) === 'tool') - Number(roleOf(b.id) === 'tool'),
   );
   return (

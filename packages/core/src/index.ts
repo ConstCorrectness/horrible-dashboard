@@ -339,7 +339,9 @@ export {
   type JSONSchema,
   type KeybindingDecl,
   type PaneCaptureDecl,
+  type PaneCategory,
   type PaneRole,
+  PANE_CATEGORY_LABELS,
   type RegionPosition,
   type RegionViewDecl,
   type SectionDecl,
@@ -398,7 +400,6 @@ export {
   nativeOverlaysSuppressed,
   subscribeNativeOverlaySuppression,
 } from './modules/browser/overlay';
-export { stubModule } from './modules/stub';
 export { databaseModule } from './modules/database';
 export { karaokeModule } from './modules/karaoke';
 export { audioModule, initAudio } from './modules/audio';

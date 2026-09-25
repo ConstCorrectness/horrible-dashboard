@@ -17,7 +17,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { dialogs } from '../../dialogs';
 import { usePaneParams } from '../../panes';
-import { registry } from '../../registry';
+import { usePaneSection } from '../../layout/use-sections';
 import { toastsStore } from '../../toasts';
 import type { FieldDecl, FieldType, RecordSchema } from './api';
 import {
@@ -26,6 +26,7 @@ import {
   getActiveSchema,
   getSchemas,
   removeSchema,
+  setActiveSchema,
   useRecords,
 } from './store';
 import './records.css';
@@ -74,12 +75,17 @@ function newSchema(): RecordSchema {
 export function TableSetup() {
   useRecords();
   const params = usePaneParams();
+  // Rendered as the Rows pane's Setup section: saving or deleting hands back to
+  // the rows, since the grid is what a table definition is *for*.
+  const { setSection } = usePaneSection();
   const schemas = getSchemas();
   const active = getActiveSchema();
 
-  // `params.schemaId === ''` (or 'new') means "create one"; otherwise edit the
-  // named table, falling back to whatever the rail has selected.
-  const requested = typeof params.schemaId === 'string' ? params.schemaId : null;
+  // `setupSchemaId` is what `openTableSetup` sets: '' or 'new' means "create
+  // one", otherwise edit the named table. Absent that, a grid pinned to a table
+  // (`schemaId`) sets up that table, and an unpinned one the rail's selection.
+  const requestedRaw = params.setupSchemaId ?? params.schemaId;
+  const requested = typeof requestedRaw === 'string' ? requestedRaw : null;
   const creating = requested === '' || requested === 'new';
   const target = creating ? null : (schemas.find((s) => s.id === requested) ?? active);
 
@@ -156,7 +162,11 @@ export function TableSetup() {
       isNew ? 'Table created' : 'Table updated',
       isNew ? `"${draft.name}" is ready to use.` : `"${draft.name}" was updated.`,
     );
-    if (isNew) setLoadedId(draft.id);
+    if (isNew) {
+      setLoadedId(draft.id);
+      setActiveSchema(draft.id);
+    }
+    setSection('rows');
   };
 
   const destroy = async () => {
@@ -185,7 +195,7 @@ export function TableSetup() {
         'Table deleted',
         dropData ? 'The table and its rows are gone.' : 'The rows were kept.',
       );
-      registry.openPanel('explorer.home');
+      setSection('rows');
     }
   };
 

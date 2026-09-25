@@ -28,6 +28,7 @@ const AgentpediaHub = lazyPane(() => import('./AgentpediaHub'), 'AgentpediaHub')
 export const agentpediaModule: ModuleManifest = {
   id: 'agentpedia',
   title: 'Agentpedia',
+  category: 'agents',
   panels: [
     {
       // `document`: you read one turn for a long stretch, usually beside the chat

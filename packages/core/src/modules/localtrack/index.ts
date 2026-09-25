@@ -4,6 +4,7 @@ import { LocalTrackWorkspacePane } from './LocalTrackWorkspacePane';
 export const localtrackModule: ModuleManifest = {
   id: 'localtrack',
   title: 'LocalTrack',
+  category: 'research',
   panels: [
     {
       id: 'localtrack.workspace',

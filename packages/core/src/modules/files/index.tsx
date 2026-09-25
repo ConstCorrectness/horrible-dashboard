@@ -192,6 +192,7 @@ function revealActiveBuffer(): void {
 export const filesModule: ModuleManifest = {
   id: 'files',
   title: 'Files',
+  category: 'build',
   panels: [
     {
       id: 'files.tree',

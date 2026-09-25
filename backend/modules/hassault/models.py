@@ -417,6 +417,40 @@ class CreateMatchRequest(BaseModel):
     mode: str = "dm"
 
 
+class RosterPlayer(BaseModel):
+    """One player in a room, as the Server pane lists it."""
+
+    name: str
+    team: str
+    alive: bool
+    kills: int
+    deaths: int
+    bot: bool
+    rtt_ms: int
+    remote: bool
+    """Joined through the peer fabric rather than a browser on this node."""
+
+
+class MatchRoster(BaseModel):
+    """Who is in one room, for the Server pane. REST and pollable, like
+    `/matches`: the per-tick view of a match you are *in* is `/ws` traffic."""
+
+    room: str
+    map: str
+    mode: str
+    scoreLabel: str  # noqa: N815 — the browser reads this verbatim
+    scores: dict[str, int]
+    players: list[RosterPlayer]
+    capacity: int
+
+
+class BotRequest(BaseModel):
+    count: int = 1
+    skill: str = "normal"
+    team: str | None = None
+    """`cla` or `rvsf`; omitted balances the teams."""
+
+
 class TacticalOut(BaseModel):
     """One thrown grenade's numbers, served rather than duplicated in TypeScript.
 

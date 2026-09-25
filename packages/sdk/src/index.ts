@@ -21,6 +21,7 @@ export type {
   JSONSchema,
   KeybindingDecl,
   PaneCaptureDecl,
+  PaneCategory,
   PaneRole,
   PanelDecl,
   RegionPosition,

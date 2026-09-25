@@ -144,10 +144,6 @@ async def start_network() -> None:
     from backend.modules.network import lease as lease_module
 
     lease_module.register(peer_hub)
-    # Training fabric: advertise/receive "GPU offered / help wanted" ads.
-    from backend.modules.training import fabric as training_fabric
-
-    training_fabric.register(peer_hub)
     # Social layer: person identity, friend requests, and roster presence.
     from backend.modules.social import register_social
 

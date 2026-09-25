@@ -47,6 +47,7 @@ export function initShare(): void {
 export const shareModule: ModuleManifest = {
   id: 'share',
   title: 'Share',
+  category: 'people',
   panels: [
     {
       id: 'share.session',

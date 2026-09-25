@@ -29,6 +29,7 @@ const AudioMixerPanel = lazyPane(() => import('./panels/MixerPanel'), 'AudioMixe
 export const audioModule: ModuleManifest = {
   id: 'audio',
   title: 'Audio',
+  category: 'play',
   panels: [
     {
       id: 'audio.mixer',

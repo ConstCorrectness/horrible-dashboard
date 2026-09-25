@@ -23,6 +23,7 @@ const EvalsHub = lazyPane(() => import('./EvalsHub'), 'EvalsHub');
 export const evalsModule: ModuleManifest = {
   id: 'evals',
   title: 'Evals',
+  category: 'research',
   panels: [
     {
       // `document`: you work in it for a long stretch, beside the suite file you

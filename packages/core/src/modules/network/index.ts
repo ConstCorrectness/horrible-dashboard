@@ -23,6 +23,7 @@ import { initNetwork } from './ws';
 export const networkModule: ModuleManifest = {
   id: 'network',
   title: 'Network',
+  category: 'people',
   // Ordered basics-first, then the `advanced: true` block. The settings page
   // filters rather than reading order, so this grouping is for whoever edits this
   // file — but it means the two lists read the same here as they render there.

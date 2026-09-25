@@ -166,7 +166,7 @@ row is read back and found to have chunks.
 
 | Kind | Id | Notes |
 | --- | --- | --- |
-| Pane | `docviewer.browse` | Non-singleton; params `{ setId?, pageId? }`. Sidebar (sets, page tree, in-set search) plus the archive frame. |
+| Pane | `docviewer.browse` ("Docs") | Non-singleton; params `{ setId?, pageId? }`. Two sections: **Python reference** (default — the [docs module](docs-popup.mdx)'s `docs.reference`, which works on a fresh install) and **Doc sets** (sidebar of sets, page tree, in-set search, plus the archive frame). `docviewer.open` / `mod+shift+d` lands on Doc sets. One Docs window rather than two launcher entries for "read the docs". |
 | Command | `docviewer.open` | Opens the pane. |
 | Keybinding | `mod+shift+d` | Bound to `docviewer.open`. |
 | Setting | `docviewer.crawlDelay` | Seconds between requests to one site. |

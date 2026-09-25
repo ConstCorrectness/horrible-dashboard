@@ -20,6 +20,7 @@ const LibraryPanel = lazyPane(() => import('./LibraryPanel'), 'LibraryPanel');
 export const libraryModule: ModuleManifest = {
   id: 'library',
   title: 'Library',
+  category: 'data',
   settings: [
     {
       key: 'library.defaultLibrary',

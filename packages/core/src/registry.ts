@@ -20,6 +20,7 @@ import type {
   JSONSchema,
   KeybindingDecl,
   PaneCaptureDecl,
+  PaneCategory,
   PaneRole,
   PanelDecl,
   RegionPosition,
@@ -44,6 +45,7 @@ export type {
   JSONSchema,
   KeybindingDecl,
   PaneCaptureDecl,
+  PaneCategory,
   PaneRole,
   PanelDecl,
   RegionPosition,
@@ -66,6 +68,21 @@ export interface SettingsSectionDecl {
   component: ComponentType;
 }
 
+/**
+ * Launcher headings for `PaneCategory`, in the order the Start menu lists them.
+ * `plugins` is not a category anyone declares — it is where a view with none lands.
+ */
+export const PANE_CATEGORY_LABELS: Record<PaneCategory | 'plugins', string> = {
+  research: 'AI Research',
+  agents: 'Agents',
+  build: 'Build',
+  data: 'Data & Knowledge',
+  play: 'Play & Media',
+  people: 'People',
+  system: 'System',
+  plugins: 'Plugins',
+};
+
 /** Where a pane is placed relative to a reference pane. */
 export type PaneDirection = 'left' | 'right' | 'above' | 'below' | 'within';
 
@@ -79,6 +96,12 @@ export type SplitDirection = 'left' | 'right' | 'above' | 'below';
 export interface ModuleManifest {
   id: string;
   title: string;
+  /**
+   * The Start-menu band this module's panes are filed under. Every built-in
+   * module with a launchable pane declares one (`start-menu-categories.test.ts`);
+   * a pane may override it with its own `category`.
+   */
+  category?: PaneCategory;
   commands?: CommandDecl[];
   panels?: PanelDecl[];
   widgets?: WidgetDecl[];
@@ -552,6 +575,20 @@ class ModuleRegistry {
       if (declared) return m.title;
     }
     return undefined;
+  }
+
+  /**
+   * The launcher category a view is filed under: its own `category`, else its
+   * module's, else `plugins` — a built-in module never lands there (a test pins
+   * that), so the band only ever holds third-party contributions.
+   */
+  viewCategory(viewId: string): PaneCategory | 'plugins' {
+    for (const m of this.modules.values()) {
+      const decl =
+        m.panels?.find((p) => p.id === viewId) ?? m.widgets?.find((w) => w.id === viewId);
+      if (decl) return decl.category ?? m.category ?? 'plugins';
+    }
+    return 'plugins';
   }
 
   /**

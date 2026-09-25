@@ -13,6 +13,7 @@ import { MachineSection } from './MachineSection';
 export const hardwareModule: ModuleManifest = {
   id: 'hardware',
   title: 'Hardware',
+  category: 'system',
   settings: [
     {
       key: 'hardware.accelerator',

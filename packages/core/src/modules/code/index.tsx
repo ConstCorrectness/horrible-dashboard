@@ -18,6 +18,7 @@ const SymbolSearch = lazyPane(() => import('./SymbolSearch'), 'SymbolSearch');
 export const codeModule: ModuleManifest = {
   id: 'code',
   title: 'Code',
+  category: 'build',
   panels: [
     {
       id: 'code.outline',
@@ -41,6 +42,9 @@ export const codeModule: ModuleManifest = {
       icon: '⌕',
       defaultDock: 'right',
       singleton: true,
+      // Lives as the editor buffer's right strip (declared there), and `mod+p`
+      // opens the modal; a launcher entry was a third home for one search.
+      embedded: true,
     },
   ],
   commands: [

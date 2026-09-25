@@ -749,27 +749,47 @@ public and does not spend GPU quota) and `ColabPush.push(..., anyone_with_link=)
 "could a push authenticate" without importing the kaggle package, and
 `ColabPush.delete` removes the pushed Drive file and forgets it.
 
-## Peer fabric (advertise + manual handoff)
+## Learn: the notebook explains itself
 
-Training compute is shared across the distributed [network](network.mdx) fabric without
-any remote-execution engine in v1: a node **advertises** that it's offering GPU or
-seeking help, matches surface in the UI, and the actual handoff is a normal collab/agent
-chat.
+The notebook's right strip opens on **Learn** (`training.learn`, `LearnPane.tsx`),
+because the point of doing AI research *in* this app rather than in a bare notebook
+is that it teaches while you work. The other strips (Metrics, Architecture, Manim,
+Rollout) show what is happening; Learn says what it means. Three parts, each
+grounded in something real rather than generated:
 
-- `fabric.py` registers a `training_ad` handler on the `PeerHub` at network startup.
-  Received ads are validated into `TrainingAdModel`, **pinned to the sending session's
-  node id** (a peer can't advertise on another node's behalf), stored, and fanned to
-  every browser on the `training` channel (`training_ad` event). A `status: "none"` ad
-  retracts.
-- `specs.py` snapshots hardware for the ad — platform/CPU/RAM from the stdlib, GPU via
-  `nvidia-smi` (no torch in the backend env); a node with no NVIDIA GPU simply
-  advertises none.
-- Advertise mode is settings-driven (`training.fabric.advertise`: off | offering |
-  seeking, plus `training.fabric.note`). Changing it re-broadcasts to peers; a new peer
-  connecting (`peer_update`) triggers a re-send so late joiners see the ad.
-- The `training.peers` pane shows ads with **match highlighting** (their offering ×
-  my seeking, and vice versa) and an "Open chat" button that opens the network module's
-  peer-chat pane — module boundary respected via `registry.openPanel('network.chat')`.
+- **This cell.** The cell you are in (`learn/focus.ts`: the notebook reports focus
+  per `projectId:notebook`, the same key as `openSession`) is matched by
+  identifier against two sources. **Knobs** — `learning_rate`, `lora_r`,
+  `max_length` and their aliases — come from `GET /api/training/learn/glossary`,
+  which is `recipes.glossary()`: the recipe form's own `help` text, one entry per
+  knob across every backend. It is served, never copied into TypeScript, so the
+  strip and the form cannot explain a knob two ways. **Concepts** — the classes and
+  calls a knob is passed *to* (`SFTTrainer`, `get_peft_model`, `loss.backward()`,
+  mixed precision, cross-entropy) — have no form row, so they are written in
+  `learn/terms.ts`, each saying why it matters rather than restating the API.
+  Matching uses word boundaries: `Trainer` inside `SFTTrainer` is not the generic
+  training-loop concept.
+- **This run.** `learn/diagnose.ts` reads the live curves (the same `metrics`
+  events the Metrics strip draws) with plain rules: waiting for a curve, loss
+  falling, loss flat, a spike against the recent median, overfitting (eval loss
+  rising three evaluations running while train loss falls), an exploded gradient
+  norm, and NaN — which stops every other read, since nothing after it means
+  anything. **Every diagnosis states the rule that fired, with its numbers**, so the
+  strip teaches how to read a loss curve instead of issuing verdicts.
+- **Go deeper.** Reveal Curves or Architecture, open the Model explorer, or **Ask
+  the agent** — which opens the chat with an explanation request for this cell
+  *drafted, not sent* (`draftInChat` in the agent module), so the user reads and
+  edits the question before a turn is spent on it.
+
+### Peer fabric (removed)
+
+A `training.peers` strip once advertised a node as "offering GPU / seeking help"
+over the peer fabric (`fabric.py`, `specs.py`, `/training/fabric/*`,
+`training.fabric.*` settings). It was advertising with no remote execution behind
+it, its buttons did not reflect the saved mode after a reload, and a disconnected
+peer's ad lingered until restart — so it was removed rather than fixed. Collaboration
+on training still rides the ordinary paths: [shared panes](network.mdx) and
+`agent.ask_peer`.
 
 ## Agent integration (the flagship)
 
@@ -983,14 +1003,14 @@ is permitted but **not preloaded** — this flow already sits close to `TOOL_BUD
 | Widget `training.modelgraph` | model architecture graph (dagre SVG; fx/module-tree, grad-norm heatmap) |
 | Widget `training.rollout` | live gym/render frame stream with fps readout |
 | Widget `training.manim` | manim render viewer (progress log + mp4 player) |
-| Widget `training.peers` | peer training ads: advertise offer/seek, match-highlighted peer list, open-chat handoff |
-| Regions on `training.notebook` | metrics/architecture/rollout/manim/peers on the right strip, projects on the left |
+| Widget `training.learn` | the teaching strip: this cell's knobs and concepts, rule-based reads of the run, go-deeper links — see [Learn](#learn-the-notebook-explains-itself) |
+| Regions on `training.notebook` | learn (open by default)/metrics/architecture/manim/rollout on the right strip, projects on the left |
 | Layout preset `training` (🧠) | the fine-tuning workspace — see [The fine-tuning workspace](#the-fine-tuning-workspace) |
-| Commands | `training.open`, `training.openRecipe`, `training.openMetrics`, `training.openModelGraph`, `training.openRollout`, `training.openManim`, `training.openPeers` |
+| Commands | `training.open`, `training.openRecipe`, `training.openMetrics`, `training.openModelGraph`, `training.openRollout`, `training.openManim`, `training.openLearn` |
 | Recipe pane hand-off | after a conversion, **Serve this** starts a local llama-server on the new GGUF and **Score it** opens Evals on its Run section. The training frame already docked those panes together; nothing connected them |
 | Project row actions | open notebook, 🧪 recipe, ⇪ push to Kaggle, ⇪ push to Colab, delete |
 | Connector `trackers` | W&B API key + MLflow tracking URI, Fernet-encrypted. The one connector contributing **no agent tools**, so its id names no tool group |
-| Settings | `training.projectsRoot`, `training.defaultPython`, `training.kaggle.username`, `training.kaggle.key`, `training.hf.token`, `training.google.clientId`, `training.google.clientSecret`, `training.metrics.bufferPoints`, `training.manim.quality`, `training.fabric.advertise`, `training.fabric.note` |
+| Settings | `training.projectsRoot`, `training.defaultPython`, `training.kaggle.username`, `training.kaggle.key`, `training.hf.token`, `training.google.clientId`, `training.google.clientSecret`, `training.metrics.bufferPoints`, `training.manim.quality` |
 
 Credentials note: settings persist in the plaintext `.data/settings.json` store — same
 v1 posture as database connection credentials (encryption is a tracked follow-up).

@@ -23,6 +23,7 @@ async function describe(connectionId: string): Promise<string> {
 export const databaseModule: ModuleManifest = {
   id: 'database',
   title: 'Database',
+  category: 'data',
   settings: [
     {
       key: 'database.defaultConnection',

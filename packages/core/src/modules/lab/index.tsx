@@ -22,6 +22,7 @@ const LabHub = lazyPane(() => import('./HubPane'), 'LabHub');
 export const labModule: ModuleManifest = {
   id: 'lab',
   title: 'Lab',
+  category: 'research',
   panels: [
     {
       // `document`, not `widget`. Both live in a centre area, but a widget takes

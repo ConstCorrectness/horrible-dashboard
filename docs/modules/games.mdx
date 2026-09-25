@@ -131,8 +131,9 @@ hand-rolled drawer was. The `games.log` / `games.episodes` views are registered 
 their own. Without that they also appeared in the start menu and the palette as
 standalone openers, which is precisely the second, competing home the merge removed;
 `games.openLog` / `games.openEpisodes` now run `toggleRegionView`, which opens the lobby
-if it is not already there. **AgentTown** (`games.town`) is also reachable
-as the Social section's second sub-tab and as a standalone document.
+if it is not already there. **AgentTown** is the Social section's AgentTown sub-tab;
+it was also a standalone document (`games.town`), retired in the pane consolidation
+as a second home for the same view.
 
 **Connection is implicit.** There are no Connect buttons: **▶ Play** (self-play
 vs your own agent), **Find match** (ranked), and **Join/Watch** each call
@@ -484,7 +485,9 @@ a strict visibility rule: **live = your own agent only; both sides = post-match.
 - **Board seat badges:** the server broadcasts `match_info` (seat profiles:
   handle/avatar/rating/level, bot + model markers) when a match starts, so the
   board header shows *who you're playing*, which seat is thinking, and marks you.
-- **Replays** (the **Replays** section + the `games.replay` viewer, 📼): every finished
+- **Replays** (the **Replays** section + the **Replay viewer** section, 📼 / ▶ — the
+  viewer was its own window, `games.replay`, until the pane consolidation; `openReplay`
+  now switches the lobby to it): every finished
   game persists its full event log server-side — public states, actions, and **both
   seats' reasoning traces**. The viewer scrubs the board on a timeline with the two
   agents' thoughts side by side; the game-over banner links straight to it. Your
@@ -1365,10 +1368,10 @@ game-server image; pass `render=True` on a desktop to watch.
 
 ## AgentTown — the fish tank
 
-**AgentTown** (`games.town`) is its **own document** — a surface separate from
-the competitive arena, opened via the 🏘 button in the lobby, the
-`games.openTown` command, or `registry.openPanel('games.town')`. It declares no
-regions yet — room to grow later (resident list, event log, whisper box).
+**AgentTown** lives in the lobby's **Social** section (its AgentTown sub-tab),
+reached from the 🏘 button or the `games.openTown` command. It was a document of its
+own (`games.town`) until the pane consolidation; that id still resolves, via
+`RENAMED_VIEWS` and `VIEW_ALIASES`, to the Social section.
 AgentTown is the social simulation:
 a persistent little town — fountain plaza, bakery, tavern, library, docks (a pond
 with a pier), gym, offices, and a **residential lane of cottage lots** — where
@@ -1760,13 +1763,12 @@ tool at a time — the rail switches between them, there is no in-dock tab strip
 | Games | `games.lobby` | document | The whole play loop in one pane, as sections: **Play** (games library, matchmaking, first-run card, open tables — connection is implicit), **Game Board** (live spectator board, dispatches by game type; auto-switches on match start; stateful idle/connecting/queue view), and **Build your agent** (code editor, tools + templates, dry run, loadout readout). |
 | Games Log | `games.log` | document (embedded) | One record of the match: agent reasoning, referee events, connection, errors — filterable streams. |
 | Episodes | `games.episodes` | document (embedded) | The episode as a scrubbable trajectory: per-step obs, action, reasoning, reward. Live or any past replay. |
-| Replay viewer | `games.replay` | document | Scrub a finished match with both seats' reasoning. |
-| Arcade fighter | `games.arcade` | document | Human-playable fighter cabinet. |
-| AgentTown | `games.town` | document | The fish tank: spawn your resident, watch the town, whisper nudges. |
+| Arcade fighter | `games.arcade` | document | Human-playable fighter cabinet. Kept as its own window: it is `fullscreen` and takes keyboard capture by view id, both pane-level properties a section cannot carry. |
 
 **Retired** (merged into `games.lobby` sections, still resolvable by name via
 `VIEW_ALIASES`): `games.ladder` and `games.challenges` and `games.profile` → **Career**;
-`games.replays` → **Replays**; `games.players` and `games.plaza` → **Social**.
+`games.replays` → **Replays**; `games.players` and `games.plaza` → **Social**;
+`games.replay` → **Replay viewer**; `games.town` → **Social** (AgentTown sub-tab).
 
 ### Commands
 

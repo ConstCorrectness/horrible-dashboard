@@ -49,6 +49,7 @@ function focusSibling(step: number): void {
 export const terminalModule: ModuleManifest = {
   id: 'terminal',
   title: 'Terminal',
+  category: 'build',
   panels: [
     {
       id: 'terminal.instance',

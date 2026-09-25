@@ -244,7 +244,7 @@ affordance that would present it as a competing home:
 | Surface                                       | Effect                                                       |
 | --------------------------------------------- | ------------------------------------------------------------ |
 | `pane.open:<id>` command                      | not synthesized (`registry.ts`)                              |
-| area-header type switcher / empty-area picker | filtered (`AreaHeader.tsx`)                                  |
+| area-header type switcher / empty-area picker | filtered (`AreaHeader.tsx`, `Area.tsx` — the picker used not to, and listed all nineteen) |
 | activity rails                                | `dockSidesOf` returns `[]`, so **embedded ⇒ never dockable** |
 | `list_available_panes`                        | no top-level row — listed under its host instead             |
 
@@ -253,6 +253,13 @@ resolve an embedded view to _where it lives_: `show("Outline")` reveals it in it
 host's region strip or section rather than failing to open it standalone. An
 embedded view that **nothing hosts** is a declaration error, and fails loudly
 (`ok: false`) rather than quietly opening a pane the flag said shouldn't exist.
+
+`openPane` / `registry.openPanel` make the same resolution: opening an embedded id
+reveals it in its host's strip or section (`hostOfEmbedded`) instead of opening it
+bare in an area or dock. A button labelled "Radar" and the agent's `show("Radar")`
+must land in the same place — and the pane consolidation turned many former
+windows (hAssault's companions, karaoke's queue, arXiv, the Python reference) into
+embedded views, so every existing `openPanel('<old id>')` keeps working unchanged.
 
 ### A view that stops being dockable
 

@@ -68,10 +68,9 @@ correctly and SQLite has no date type), `select` (with `options`), `url`, `email
 
 | view id | title | role | what it is |
 | --- | --- | --- | --- |
-| `records.grid` | **Rows** | document | The rows as an editable table. Double-click a cell to edit. |
+| `records.grid` | **Rows** | document | The rows as an editable table. Double-click a cell to edit. Two sections: **Rows** and **Table setup**. |
 | `records.form` | **Review** | document | The **proposal review** surface, and one record field by field. |
 | `records.board` | **Board** | document | Kanban by the schema's `board_column`; drag a card to write that field. |
-| `records.schema` | **Table setup** | document | Define or reshape a table: name, icon, fields, row label, board column. |
 | `records.list` | **Tables** | tool (`embedded`) | Table switcher, search, "+ New table", and the review queue. The **left region strip** (`r`) of all three documents above — a per-document switcher, not an [Explorer](explorer.mdx) section, which is where it briefly lived. |
 
 The titles are deliberate. The module, the pane and the row were all called some
@@ -92,8 +91,15 @@ store only tracks the active schema.
 
 ## Defining a table
 
-`records.schema` ("Table setup") is reached from the **+ New table** button in the
-Tables rail, the ⚙ beside the active table, or the `records.newTable` command.
+**Table setup** is the `setup` section of the Rows pane (`records.grid`), reached
+from the **+ New table** button in the Tables rail, the ⚙ beside the active table,
+or the `records.newTable` command — all through `openTableSetup` (`open-setup.ts`).
+It was a window of its own (`records.schema`) until the pane consolidation: a
+one-off form in the launcher beside the views it configures, opening a fresh
+document for every column you added. Saving or deleting hands back to the Rows
+section. The designer's target rides `params.setupSchemaId`, deliberately not
+`schemaId`, which *pins* a grid (below) — and "new" would pin it to nothing.
+`records.schema` still resolves, via `RENAMED_VIEWS` and `VIEW_ALIASES`.
 
 It exists because `createSchema`/`updateSchema`/`deleteSchema` shipped in `api.ts`
 with **no caller at all**: a table could only be defined by the agent or by hand

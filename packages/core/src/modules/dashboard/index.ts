@@ -9,6 +9,7 @@ import { WelcomeWidget } from './widgets';
 export const dashboardModule: ModuleManifest = {
   id: 'dashboard',
   title: 'Dashboard',
+  category: 'system',
   commands: [
     {
       id: 'dashboard.open',

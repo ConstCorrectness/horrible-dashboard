@@ -6,7 +6,10 @@
  * companion-reveal bus). This keeps the git module off the ChatWidget's internals — it
  * calls only this public helper.
  */
+import { agentForWorkspace } from '../../layout/persistence';
 import { registry } from '../../registry';
+import { workspaceStore } from '../../workspace-store';
+import { updateChat } from './chat-state';
 
 let pending: string | null = null;
 const listeners = new Set<(id: string) => void>();
@@ -31,4 +34,16 @@ export function claimPendingChatSession(): string | null {
   const id = pending;
   pending = null;
   return id;
+}
+
+/**
+ * Open the chat with `prompt` typed into the box, for the agent this workspace
+ * talks to — **not sent**. A pane that offers "ask the agent about this" puts the
+ * question where the user can read and edit it first; sending on their behalf
+ * would spend a turn on wording they never saw.
+ */
+export function draftInChat(prompt: string): void {
+  const agentId = agentForWorkspace(workspaceStore.getSnapshot().activeId);
+  updateChat(agentId, { prompt });
+  registry.openPanel('agent.chat');
 }

@@ -579,15 +579,19 @@ The **start menu** lists `registry.panels` + `registry.widgets` minus `embedded`
 filtered exactly as the palette's openers are — an embedded view lives inside a host
 pane, and a launcher entry would present it as a second, competing home.
 
-It is **grouped by the owning module** (`registry.viewOwner`) — Browser, Library,
-Games — with headings alphabetical and an **All panes** bucket pinned last.
+It is **grouped into seven fixed categories** (`PaneCategory`, labelled by
+`PANE_CATEGORY_LABELS`): AI Research, Agents, Build, Data & Knowledge, Play & Media,
+People, System — plus **Plugins** for a third-party view that declares none. A
+module declares `category` once on its manifest; a pane may override it
+(`registry.viewCategory`). `start-menu-categories.test.ts` fails the build on a
+built-in module without one, since it would otherwise land under Plugins silently.
 
-That bucket holds two things: a view whose module declares no title, and **every
-module contributing only one pane**. A heading above a single row groups nothing
-while costing the same vertical space as a row that does — 22 of the 38 module
-headings owned exactly one pane, so over half the height of the launcher was spent
-on labels the reader could already see. Collapsing them takes the menu from 38
-headings to 10.
+Inside a category, a module with **more than one launchable pane folds into one
+row** (its title, a count, a chevron) that opens in place; single-pane modules list
+flat. This replaced grouping by owning module, which gave a heading per feature —
+most over a single row — and a catch-all "All panes" band that had become the
+longest list in the menu. Search still matches title, id, module and category, and
+flattens the groups.
 
 Above the groups sits a **Recent** band: the last six panes opened, most recent
 first, from `layout/recents.ts`. It is recorded in `registry.openPanel`, so every

@@ -28,6 +28,7 @@ import {
   useRecords,
 } from './store';
 import './records.css';
+import { openTableSetup } from './open-setup';
 
 export function RecordList() {
   useRecords();
@@ -59,7 +60,7 @@ export function RecordList() {
     registry.openPanel('records.form');
   };
 
-  const newTable = () => registry.openPanel('records.schema', { params: { schemaId: 'new' } });
+  const newTable = () => openTableSetup('new');
 
   return (
     <div className="rec-list">
@@ -106,9 +107,7 @@ export function RecordList() {
           <button
             className="rec-btn rec-btn-quiet"
             title={`Edit the fields of ${active.name}`}
-            onClick={() =>
-              registry.openPanel('records.schema', { params: { schemaId: active.id } })
-            }
+            onClick={() => openTableSetup(active.id)}
           >
             ⚙
           </button>

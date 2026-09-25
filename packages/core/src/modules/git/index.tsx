@@ -15,6 +15,7 @@ const ProvenancePane = lazyPane(() => import('./ProvenancePane'), 'ProvenancePan
 export const gitModule: ModuleManifest = {
   id: 'git',
   title: 'Git',
+  category: 'build',
   panels: [
     {
       id: 'git.provenance',

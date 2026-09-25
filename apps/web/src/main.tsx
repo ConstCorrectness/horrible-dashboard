@@ -78,7 +78,6 @@ import {
   skillsModule,
   setWindowControl,
   settingsModule,
-  stubModule,
   terminalModule,
   databaseModule,
   trainingModule,
@@ -241,8 +240,6 @@ async function boot(): Promise<void> {
     registry.register(commonsModule);
     registry.register(peopleModule);
     registry.register(hassaultModule);
-    // Dev-only agent-tool reference/validation stub (see agent-tools.md).
-    if (import.meta.env.DEV) registry.register(stubModule);
   });
 
   await bootStep('plugins', 'Loading plugins', loadPlugins);

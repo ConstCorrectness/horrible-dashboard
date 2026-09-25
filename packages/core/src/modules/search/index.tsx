@@ -22,6 +22,7 @@ const SearchPanel = lazyPane(() => import('./SearchPanel'), 'SearchPanel');
 export const searchModule: ModuleManifest = {
   id: 'search',
   title: 'Web Search',
+  category: 'data',
   widgets: [
     {
       id: 'search.panel',

@@ -153,6 +153,7 @@ async function visualizeActiveBuffer(): Promise<void> {
 export const editorModule: ModuleManifest = {
   id: 'editor',
   title: 'Editor',
+  category: 'build',
   panels: [
     {
       id: 'editor.buffer',

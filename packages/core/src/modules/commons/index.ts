@@ -14,6 +14,7 @@ import { type ModuleManifest } from '../../registry';
 export const commonsModule: ModuleManifest = {
   id: 'commons',
   title: 'Commons',
+  category: 'people',
   settings: [
     {
       key: 'commons.enabled',

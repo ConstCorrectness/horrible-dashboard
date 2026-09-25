@@ -6956,12 +6956,22 @@ out instead of failing at the socket after a map has loaded.
 Train produces no card at all, which is correct: there is no match, nobody to play
 against, and nothing to be MVP of.
 
-## The workspace: one game, several panes
+## The workspace: three windows and their strips
 
-The game is one pane, but almost everything you do *around* it is another one —
-the model studio, the armory, the tactical radar, the match companion, the
-developer console. `workspace-bus.ts` is the channel between them, and it exists
-because the obvious implementation does not survive contact with the frame engine.
+The game has **three windows**, one per job: **HorribleAssault** (`hassault.play`)
+to play, **hAssault Dev Tools** (`hassault.studio`) to build for it, and
+**hAssault Server** (`hassault.server`) to run rooms on this node. It used to have
+ten — the studio three more times on a different tab, an armory pane duplicating
+the main menu's armory section, and four narrow companions each claiming a dock of
+their own — and a launcher offering ten ways into one game told nobody which one
+they wanted. The companions (match stats, radar, voice, console) are now **region
+strips** on the window they accompany (`embedded: true`), so they open at its edge
+rather than somewhere else in the frame. Old ids still resolve: `RENAMED_VIEWS`
+migrates saved layouts and `VIEW_ALIASES` keeps the agent's vocabulary.
+
+Everything *around* the game still talks across panes and strips —
+`workspace-bus.ts` is the channel between them, and it exists because the obvious
+implementation does not survive contact with the frame engine.
 
 **The target pane is usually not open yet.** Clicking "inspect in the studio" from
 the armory has to open the studio, and the studio mounts a tick later — so an
@@ -7007,17 +7017,19 @@ survive its unmount, and the whole point here is to outlive one.
 `resetWorkspaceBusForTesting()` clears every parked intent and listener, which is
 what lets `workspace-bus.test.ts` run each channel in isolation.
 
-### The four workspaces
+### The two workspaces
 
-The panes are arranged by `frames:` presets rather than left to the user to
+The windows are arranged by `frames:` presets rather than left to the user to
 assemble, since the useful combinations are few and specific:
 
 | Preset | Layout |
 | --- | --- |
-| `hassault_dev` | Play beside the studio (55/45), console below, companion + radar right. |
-| `hassault_mapmaker` | Studio at 68% with a live match beside it to test what you just built, radar right. |
-| `hassault_armory_studio` | Armory and studio 50/50; console present but closed. |
-| `hassault_play` | Just the match, with companion + radar + voice stacked right. |
+| `hassault_dev` | The game beside the dev tools (55/45). Console and radar are strips on either. |
+| `hassault_play` | Just the game; its strips hold the match companion, radar, voice and console. |
+
+`hassault_mapmaker` and `hassault_armory_studio` were retired with the panes they
+arranged: the first was `hassault_dev` at different proportions, and the second
+paired a pane that no longer exists with the studio.
 
 Each carries a `description`, which is not optional decoration:
 `presets-described.test.ts` fails the build without one, because a preset with no
@@ -7030,35 +7042,40 @@ the two places a user is offered a way of working.
 
   | Id | Role | Singleton | What |
   | --- | --- | --- | --- |
-  | `hassault.play` | document | ✅ | The match. `fullscreen: true`. |
-  | `hassault.studio` | document | — | Model studio / level editor / scene outliner. |
-  | `hassault.modelViewer` | document | — | Asset inspector. |
-  | `hassault.modelEditor` | document | — | Mesh editing. |
-  | `hassault.animEditor` | document | — | Animation clips. |
-  | `hassault.armory` | document | — | Inventory, catalog, trade-up forge. |
-  | `hassault.console` | tool | — | The developer console. |
-  | `hassault.companion` | tool | — | Telemetry, vitals, team scoreboard. |
-  | `hassault.radar` | tool | — | 2D tactical minimap and callouts. |
-  | `hassault.voice` | tool | — | Voice comms. |
+  | `hassault.play` | document | ✅ | The game. `fullscreen: true`. Strips: companion, radar, voice (right), console (bottom). |
+  | `hassault.studio` | document | ✅ | Dev tools: asset viewer, map/scene, materials, animator, rig editor as its own tabs; `params.tab` selects one. Strips: console, radar. |
+  | `hassault.server` | document | ✅ | Host rooms, field bots, invite friends, watch the roster — without playing. |
+  | `hassault.console` | tool, embedded | — | The developer console. |
+  | `hassault.companion` | tool, embedded | — | Telemetry, vitals, team scoreboard. |
+  | `hassault.radar` | tool, embedded | — | 2D tactical minimap and callouts. |
+  | `hassault.voice` | tool, embedded | — | Voice comms. |
 
-  `hassault.play` is the only singleton, and the only `fullscreen: true`. It is a
-  `document` because it wants the centre area and a lot of pixels, and it grabs
-  pointer lock, which would be hostile in a narrow dock. The `fullscreen` opt-in
-  earns it the `⛶` titlebar control and Escape-able presentation over the taskbar
-  and the workspace strip — and on the desktop build that escalates to OS-window
+  `hassault.play` is the only `fullscreen: true`. It is a `document` because it
+  wants the centre area and a lot of pixels, and it grabs pointer lock, which
+  would be hostile in a narrow dock. The `fullscreen` opt-in earns it the `⛶`
+  titlebar control and Escape-able presentation over the taskbar and the
+  workspace strip — and on the desktop build that escalates to OS-window
   fullscreen, which is what makes pointer lock and the full field of view behave
   the way the game assumes. See
   [desktop-shell.mdx](../architecture/desktop-shell.mdx#presenting-a-pane).
 
-  The other nine are deliberately **not** singletons: two studio panes on two
-  monitors, or a radar beside a companion, is the arrangement the
-  [workspace presets](#the-four-workspaces) exist to set up. They talk to each
-  other over the [workspace bus](#the-workspace-one-game-several-panes), not by
-  reaching into one another.
-- **Workspace presets:** `hassault_dev`, `hassault_mapmaker`,
-  `hassault_armory_studio`, `hassault_play` — see
-  [The four workspaces](#the-four-workspaces).
-- **Commands:** `hassault.open` (HorribleAssault: Open).
+  All three windows are singletons: the studio's tabs are one window's state, so
+  opening "the rig editor" switches the open studio's tab rather than making a
+  second studio. `openPanel` on an embedded strip id (`hassault.radar`) reveals
+  it in its host rather than opening it bare — the same resolution `show` makes.
+
+  **The Server window** is the dedicated-server view of the rooms the main menu
+  can also host. It holds no socket: every verb is a REST call the agent tools
+  already make — `POST /matches` (host), `GET /matches/{room}` (roster),
+  `POST`/`DELETE /matches/{room}/bots`, `POST /matches/{room}/invite` — so the
+  window and the agent cannot describe one room two ways. "Join in game" opens
+  `hassault.play` and parks the join with `requestJoin`, the invite toast's path.
+- **Workspace presets:** `hassault_dev`, `hassault_play` — see
+  [The two workspaces](#the-two-workspaces).
+- **Commands:** `hassault.open`, `hassault.openServer`, `hassault.openStudio`; the
+  retired openers (`openModelViewer`/`openModelEditor`/`openAnimEditor`,
+  `openConsole`/`openCompanion`/`openRadar`/`openVoice`) now land on the studio tab
+  or strip that replaced each pane.
 - **Console commands** (namespace `edit`, served to both clients): `edit.new`,
   `.open`, `.close`, `.status`, `.save`, `.list`, `.select`, `.brush.add`,
   `.brush.set`, `.brush.remove`, `.ent.add`, `.ent.set`, `.ent.remove`, `.undo`,
@@ -8174,12 +8191,11 @@ The skin system provides distinct faction styling and collectible operator skins
 9. **A front door** — done: a main menu with map selection, training, hosting with
    bots, the server browser, LAN discovery and the friends roster, plus an Escape menu
    that shares its panels and can exit back to it.
-10. **A workspace, not a pane** — done: ten panes (play, studio, model viewer /
-    editor / animation editor, armory, console, companion, radar, voice) wired
-    together by a typed
-    [event bus](#the-workspace-one-game-several-panes) that parks an intent for a
-    pane that has not mounted yet, and four
-    [workspace presets](#the-four-workspaces) that arrange them.
+10. **A workspace, not a pane** — done, then consolidated: three windows (game,
+    dev tools, server) whose companions are strips, wired together by a typed
+    [event bus](#the-workspace-three-windows-and-their-strips) that parks an intent for a
+    pane that has not mounted yet, and two
+    [workspace presets](#the-two-workspaces) that arrange them.
 11. **Full 3D levels** — in progress: `gltf` maps run a Rapier capsule controller
     for slopes, stairs and a shrinking crouch capsule. The
     [conformance fixture does not yet cover that path](#the-heightfield-physics-does-not-run-on-a-gltf-map),

@@ -360,6 +360,29 @@
   color: var(--text-strong);
 }
 
+/* A module folded inside its category: a count and a chevron say "opens in
+   place", and the children indent under a hairline rather than re-heading. */
+.os-start-fold-count {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.os-start-fold-chevron {
+  color: var(--text-dim);
+  transition: transform 0.12s ease;
+}
+
+.os-start-fold-chevron.is-open {
+  transform: rotate(90deg);
+}
+
+.os-start-fold-body {
+  margin-left: 17px;
+  padding-left: 4px;
+  border-left: 1px solid var(--border);
+}
+
 .os-start-icon {
   width: 18px;
   text-align: center;

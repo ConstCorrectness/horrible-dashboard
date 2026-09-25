@@ -19,6 +19,7 @@ const ReferencePane = lazyPane(() => import('./ReferencePane'), 'ReferencePane')
 export const docsModule: ModuleManifest = {
   id: 'docs',
   title: 'Documentation',
+  category: 'data',
   panels: [
     {
       id: 'docs.reference',
@@ -28,6 +29,10 @@ export const docsModule: ModuleManifest = {
       role: 'document',
       icon: '📚',
       singleton: true,
+      // The Python reference is the default section of the Docs window
+      // (`docviewer.browse`), not a window of its own; `openPanel` on this id
+      // reveals it there.
+      embedded: true,
     },
   ],
   commands: [

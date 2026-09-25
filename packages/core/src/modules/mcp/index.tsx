@@ -19,6 +19,7 @@ const McpServersPane = lazyPane(() => import('./panels/McpServersPane'), 'McpSer
 export const mcpModule: ModuleManifest = {
   id: 'mcp',
   title: 'MCP',
+  category: 'agents',
   panels: [
     {
       id: 'mcp.servers',

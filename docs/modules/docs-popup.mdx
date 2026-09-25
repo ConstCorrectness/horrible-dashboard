@@ -146,8 +146,10 @@ user who disagrees with the answer needs to know which source to reorder.
 - **Keybinding:** <kbd>Shift</kbd>+<kbd>Tab</kbd> in a notebook cell, registered
   at `Prec.high` so it beats `indentLess` — and it only claims the key when there
   is a symbol under the cursor, so dedent still works everywhere else.
-- **Pane:** `docs.reference` ("Python reference", 📚; singleton, role `document`)
-  — see below. The popup itself is not a pane: it belongs to whatever is being
+- **Pane:** `docs.reference` ("Python reference", 📚; singleton, `embedded`) — the
+  default **Python reference** section of the Docs window (`docviewer.browse`, whose
+  other section is **Doc sets**). It was a launcher entry of its own until the pane
+  consolidation; `openPanel('docs.reference')` now reveals the section. See below. The popup itself is not a pane: it belongs to whatever is being
   hovered.
 - **Commands:** `docs.openReference` (`/pydoc`), `docs.searchReference` (opens the
   reference on the selected text).

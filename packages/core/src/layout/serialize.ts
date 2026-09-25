@@ -76,6 +76,20 @@ const RENAMED_VIEWS: Readonly<Record<string, string>> = {
   'games.loadout': 'games.lobby',
   'games.thoughts': 'games.log',
   'interpretability.budget': 'interpretability.context',
+  // hAssault's ten windows became three. The studio's per-tab openers were the
+  // studio; the armory pane was the main menu's armory section, so it lands on
+  // the game. (Console, companion, radar and voice still exist — as `embedded`
+  // strips — so they need no entry; a dock that held one simply drops it.)
+  'hassault.modelViewer': 'hassault.studio',
+  'hassault.modelEditor': 'hassault.studio',
+  'hassault.animEditor': 'hassault.studio',
+  'hassault.armory': 'hassault.play',
+  // Table setup is now the Setup section of the Rows pane it configures.
+  'records.schema': 'records.grid',
+  // Games: the replay viewer and AgentTown were windows beside the lobby that
+  // already had a tab for each. Research: arXiv is a section of the hub.
+  'games.replay': 'games.lobby',
+  'games.town': 'games.lobby',
 };
 
 export function serialize(frame: FrameState): SerializedLayout {

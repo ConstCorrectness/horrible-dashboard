@@ -455,6 +455,18 @@ function openPaneRouted(viewId: string, opts?: OpenPaneOptions): string | null {
     console.warn(`[layout] openPane: no view or alias named "${viewId}"`);
     return null;
   }
+  // An embedded view opens where it lives — its host's strip or section — not
+  // bare in an area or a dock, where it would sit stranded from the host that
+  // feeds it. The same resolution `show` already makes; buttons that say "Radar"
+  // must land where the agent's `show("Radar")` does.
+  const embeddedHost = hostOfEmbedded(viewId);
+  if (embeddedHost) {
+    if (embeddedHost.kind === 'section') {
+      return revealSection(embeddedHost.section, embeddedHost.hostViewId);
+    }
+    revealRegionView(viewId);
+    return hostInstanceOf(embeddedHost.hostViewId)?.pane.instanceId ?? null;
+  }
   const role = roleOf(viewId);
   if (role === 'tool') return openToolInDock(viewId, undefined, opts);
 
@@ -924,6 +936,32 @@ export const VIEW_ALIASES: Readonly<Record<string, ShowTarget>> = {
   // above — deliberately. Both are "the list of notebooks", and that preset seeds
   // `explorer.home` in its left dock, so the alias lands on the same content.
   Notebook: { kind: 'view', viewId: 'notebook.editor' },
+
+  // hAssault: ten windows became three (Game, Dev Tools, Server). The studio's
+  // per-tab panes are the studio; the armory is a section of the game's main
+  // menu; the four companions are strips on the game window.
+  'hassault.modelViewer': { kind: 'view', viewId: 'hassault.studio' },
+  'hAssault Model Viewer': { kind: 'view', viewId: 'hassault.studio' },
+  'hassault.modelEditor': { kind: 'view', viewId: 'hassault.studio' },
+  'hAssault Model Editor': { kind: 'view', viewId: 'hassault.studio' },
+  'hassault.animEditor': { kind: 'view', viewId: 'hassault.studio' },
+  'hAssault Animation Editor': { kind: 'view', viewId: 'hassault.studio' },
+  'hAssault Model Studio': { kind: 'view', viewId: 'hassault.studio' },
+  'hassault.armory': { kind: 'view', viewId: 'hassault.play' },
+  'hAssault Armory & Skins': { kind: 'view', viewId: 'hassault.play' },
+
+  // Records: the table designer became a section of the grid it configures.
+  'records.schema': { kind: 'view', viewId: 'records.grid', section: 'setup' },
+  'Table setup': { kind: 'view', viewId: 'records.grid', section: 'setup' },
+
+  // Games: the replay viewer is a lobby section; AgentTown a Social tab.
+  'games.replay': { kind: 'view', viewId: 'games.lobby', section: 'replay' },
+  Replay: { kind: 'view', viewId: 'games.lobby', section: 'replay' },
+  'games.town': { kind: 'view', viewId: 'games.lobby', section: 'social' },
+  AgentTown: { kind: 'view', viewId: 'games.lobby', section: 'social' },
+
+  // Research: one hub, two sections. The console was titled "Deep Research".
+  'Deep Research': { kind: 'view', viewId: 'research.console', section: 'deep' },
 };
 
 /** The candidate set `show` matches against, gathered from the live registry. */

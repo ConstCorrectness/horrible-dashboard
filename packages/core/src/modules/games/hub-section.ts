@@ -23,7 +23,15 @@ import { findPaneAnywhere, listPanes } from '../../layout/model';
 import { layoutStore } from '../../layout/store';
 import { usePaneSection } from '../../layout/use-sections';
 
-export type GamesSection = 'play' | 'board' | 'train' | 'build' | 'replays' | 'career' | 'social';
+export type GamesSection =
+  | 'play'
+  | 'board'
+  | 'train'
+  | 'build'
+  | 'replays'
+  | 'replay'
+  | 'career'
+  | 'social';
 
 export const GAMES_VIEW_ID = 'games.lobby';
 
@@ -33,6 +41,7 @@ export const SECTION_LABEL: Record<GamesSection, string> = {
   train: 'Train',
   build: 'Build',
   replays: 'Replays',
+  replay: 'Replay viewer',
   career: 'Career',
   social: 'Social',
 };
@@ -43,13 +52,26 @@ export const SECTION_ICON: Record<GamesSection, string> = {
   train: '🎯',
   build: '🛠',
   replays: '📼',
+  replay: '▶',
   career: '🪪',
   social: '🏛',
 };
 
 // Train sits between the board and the builder on purpose: it is where you go
 // after watching a match go wrong and before editing the harness.
-const SECTION_IDS = ['play', 'board', 'train', 'build', 'replays', 'career', 'social'] as const;
+// The viewer sits right after the browser that feeds it. It was a window of its
+// own (`games.replay`) that every "watch this replay" button opened beside the
+// lobby; as a section it replaces the list you picked it from, and Back is a tab.
+const SECTION_IDS = [
+  'play',
+  'board',
+  'train',
+  'build',
+  'replays',
+  'replay',
+  'career',
+  'social',
+] as const;
 
 /** Section declarations for the manifest — one source of truth for id/label/icon. */
 export const GAMES_SECTIONS = SECTION_IDS.map((id) => ({

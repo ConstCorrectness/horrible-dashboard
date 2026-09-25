@@ -443,17 +443,13 @@ reads/writes `agent.permissions.{mode,allow,ask,deny}` through `/api/settings`.
    per-module follow-ups remain (e.g. the editor's desktop `osfile:` source, live
    `files.*` watch events), but the foundation is fully in use.
 
-### Validation stub
+### Validation stub (retired)
 
-`packages/core/src/modules/stub/` is a dev-only reference module
-(`import.meta.env.DEV`) — the minimal exercise of the whole surface: a read tool
-(`stub.getValue`), a gated tool (`stub.setValue`, `specifierTemplate: "{command}"`
-style `"{value}"`), and a `getAgentContext` snapshot. It validated the full path
-live (gemma4:e2b) across all four modes: `default` prompts then relays on _allow
-once_; `plan` hard-denies with no prompt; `autonomous` relays with no prompt;
-`acceptEdits` still prompts (the tool isn't edit-safe) and _deny_ blocks the
-relay; and _always allow_ persists a rule (broadenable to `stub.setValue(*)`) that
-the next call honors without prompting. New real modules can copy its shape.
+A dev-only `stub` module once exercised the whole surface — a read tool, a gated
+tool with a `specifierTemplate`, and a `getAgentContext` snapshot — and validated
+all four permission modes live. It was removed once every real module carried
+`agentTools` of its own: it appeared in the dev build's launcher as "Agent stub",
+which is a pane nobody wanted, and any shipped module is now the shape to copy.
 
 ## `load_tools` reads whatever the model spelled
 

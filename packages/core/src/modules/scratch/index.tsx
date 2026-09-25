@@ -119,6 +119,7 @@ function ScratchPanel() {
 export const scratchModule: ModuleManifest = {
   id: 'scratch',
   title: 'Scratch',
+  category: 'build',
   panels: [
     {
       id: 'scratch.note',

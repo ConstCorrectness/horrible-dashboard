@@ -1,6 +1,7 @@
-import { Suspense, useCallback, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { GRAPHICS_QUALITY_SETTING_KEY } from '../../graphics';
+import { usePaneParams } from '../../panes';
 import { type SettingDecl } from '../../registry';
 import { registry } from '../../registry';
 import {
@@ -247,6 +248,19 @@ export function SettingsPanel() {
     setActive(id);
     groupRefs.current.get(id)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
   }, []);
+
+  // Deep link: `openPanel('settings.home', { params: { group: 'Keyboard' } })`
+  // lands on that group. Matched by title because that is what an opener knows —
+  // a group id embeds whether it came from settings or a contributed section.
+  const params = usePaneParams();
+  const wanted = typeof params.group === 'string' ? params.group : null;
+  useEffect(() => {
+    if (!wanted) return;
+    const group = groups.find((g) => g.title === wanted || g.id === wanted);
+    if (group) jumpTo(group.id);
+    // `groups` is deliberately not a dependency: re-jumping on every search
+    // keystroke would yank the page away from what the user is typing about.
+  }, [wanted, jumpTo]);
 
   // Scroll spy: the nav highlights whichever group's heading is nearest the top of
   // the body. Driven off scroll rather than IntersectionObserver because the groups

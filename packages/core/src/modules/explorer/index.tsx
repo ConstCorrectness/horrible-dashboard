@@ -61,6 +61,7 @@ function ExplorerEmpty(): ReactElement {
 export const explorerModule: ModuleManifest = {
   id: 'explorer',
   title: 'Explorer',
+  category: 'build',
   panels: [
     {
       id: 'explorer.home',

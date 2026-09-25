@@ -93,6 +93,27 @@ def catalog(
         return list(get_backend("trl").fields("sft", use_lora))
 
 
+def glossary() -> list[dict[str, Any]]:
+    """Every knob any backend renders, once each, for the Learn strip.
+
+    The recipe form's `help` text is the one place these knobs are explained, so
+    the glossary is *served from it* rather than written a second time in
+    TypeScript — two copies of "what warmup means" would drift, and the one the
+    form shows is the one somebody already checked against the library.
+    """
+    seen: dict[str, dict[str, Any]] = {}
+    for backend in all_backends().values():
+        for spec in backend.tasks():
+            for use_lora in (True, False):
+                for f in backend.fields(spec.id, use_lora):
+                    if f.name in seen or not f.help:
+                        continue
+                    entry = f.to_dict()
+                    entry["backend"] = backend.id
+                    seen[f.name] = entry
+    return list(seen.values())
+
+
 def fields_for(
     target: str, backend_id: str = "trl", task: str = "sft", use_lora: bool = True
 ) -> list[RecipeField]:

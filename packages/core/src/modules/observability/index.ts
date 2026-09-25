@@ -14,6 +14,7 @@ const ObservabilityWidget = lazyPane(() => import('./view'), 'ObservabilityWidge
 export const observabilityModule: ModuleManifest = {
   id: 'observability',
   title: 'Observability',
+  category: 'system',
   panels: [
     {
       id: 'observability.logs',

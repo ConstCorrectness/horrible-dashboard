@@ -31,12 +31,14 @@ describe('karaoke module manifest', () => {
     expect(stage?.capture?.mode).toBe('keyboard');
   });
 
-  it('docks the queue and the search panes on opposite sides', () => {
-    const queue = karaokeModule.panels?.find((p) => p.id === 'karaoke.queue');
-    const search = karaokeModule.panels?.find((p) => p.id === 'karaoke.search');
-    expect(queue?.role).toBe('tool');
-    expect(queue?.defaultDock).toBe('left');
-    expect(search?.defaultDock).toBe('right');
+  it('hosts the queue and search as strips on opposite sides of the stage', () => {
+    const stage = karaokeModule.panels?.find((p) => p.id === 'karaoke.stage');
+    const at = (id: string) => stage?.regions?.find((r) => r.id === id)?.position;
+    expect(at('karaoke.queue')).toBe('left');
+    expect(at('karaoke.search')).toBe('right');
+    for (const id of ['karaoke.queue', 'karaoke.search']) {
+      expect(karaokeModule.panels?.find((p) => p.id === id)?.embedded).toBe(true);
+    }
   });
 
   it('scopes every single-key binding to the stage', () => {
@@ -60,8 +62,6 @@ describe('karaoke module manifest', () => {
     const frame = karaokeModule.frames?.find((f) => f.id === 'karaoke');
     expect(frame).toBeDefined();
     expect(frame?.frame.center).toEqual({ pane: 'karaoke.stage' });
-    expect(frame?.frame.docks?.left?.tools).toContain('karaoke.queue');
-    expect(frame?.frame.docks?.right?.tools).toContain('karaoke.search');
   });
 });
 

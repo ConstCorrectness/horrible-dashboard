@@ -4,15 +4,15 @@
  * id is buffered (the viewer may not be mounted yet) and also broadcast live for
  * an already-open viewer — the challenge-focus pattern.
  */
-import { registry } from '../../registry';
+import { openGamesSection } from './hub-section';
 
 let pending: string | null = null;
 const listeners = new Set<(replayId: string) => void>();
 
-/** Open the replay viewer pane on `replayId`. */
+/** Open the Games pane's replay-viewer section on `replayId`. */
 export function openReplay(replayId: string): void {
   pending = replayId;
-  registry.openPanel('games.replay');
+  openGamesSection('replay');
   listeners.forEach((l) => l(replayId));
 }
 

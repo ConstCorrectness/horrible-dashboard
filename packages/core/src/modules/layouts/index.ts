@@ -42,6 +42,7 @@ async function newWorkspace(options: {
 export const layoutsModule: ModuleManifest = {
   id: 'layouts',
   title: 'Layouts',
+  category: 'system',
   frames: [
     /**
      * The one you land on: an empty floating desktop, like logging into a fresh
@@ -102,7 +103,7 @@ export const layoutsModule: ModuleManifest = {
     {
       id: 'research',
       name: 'Research',
-      description: 'Read papers: the deep-research console, arXiv and a browser tab feeding viewers stacked over your library.',
+      description: 'Read papers: the research hub (deep research and arXiv) and a browser tab feeding viewers stacked over your library.',
       icon: '🔬',
       // Discovery on the left (console/arxiv/browser tab together), reading on
       // the right (viewers above the library) — opening a paper never steals
@@ -118,7 +119,7 @@ export const layoutsModule: ModuleManifest = {
           sizes: [0.58, 0.42],
           children: [
             {
-              tabs: ['research.console', 'research.arxiv', 'browser.view'],
+              tabs: ['research.console', 'browser.view'],
               active: 0,
             },
             {

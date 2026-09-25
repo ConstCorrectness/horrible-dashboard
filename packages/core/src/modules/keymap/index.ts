@@ -18,6 +18,7 @@ const ShortcutsPanel = lazyPane(() => import('./ShortcutsPanel'), 'ShortcutsPane
 export const keymapModule: ModuleManifest = {
   id: 'keymap',
   title: 'Keyboard',
+  category: 'system',
   panels: [
     {
       id: 'keymap.shortcuts',
@@ -26,9 +27,10 @@ export const keymapModule: ModuleManifest = {
       role: 'tool',
       icon: '⌨',
       singleton: true,
-      dockable: ['right', 'left'],
-      defaultDock: 'right',
-      defaultDockSize: 460,
+      // Rendered on the Settings page (the `settingsSections` entry below), which
+      // is where anyone looks for "change a shortcut". The pane stays declared,
+      // embedded, because it carries the agent's keymap tools.
+      embedded: true,
       // Declared on the pane but not dependent on it being open — the manifest
       // collects `agentTools` from every registered view, so the agent can
       // rebind a key without the Shortcuts pane being on screen.
@@ -39,13 +41,16 @@ export const keymapModule: ModuleManifest = {
     {
       id: 'keymap.open',
       title: 'Keyboard: Open shortcuts',
-      run: () => registry.openPanel('keymap.shortcuts'),
+      run: () => registry.openPanel('settings.home', { params: { group: 'Keyboard' } }),
     },
   ],
   keybindings: [
     // A sequence, so it costs no single chord: the palette prefix then `k`.
     { key: 'mod+k mod+s', command: 'keymap.open' },
   ],
+  // Titled like the module, so the Settings page merges it into the Keyboard
+  // group with the declared rows rather than listing "Keyboard" twice.
+  settingsSections: [{ id: 'keymap.shortcuts', title: 'Keyboard', component: ShortcutsPanel }],
   settings: [
     {
       key: 'keymap.escapeHoldMs',

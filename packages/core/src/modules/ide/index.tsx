@@ -73,6 +73,7 @@ function cycleTab(delta: number): void {
 export const ideModule: ModuleManifest = {
   id: 'ide',
   title: 'IDE',
+  category: 'build',
   panels: [
     {
       id: WORKBENCH_VIEW,

@@ -17,8 +17,8 @@ against what is installed — still applies, because a TOML key is exactly as
 checkable as a dataclass field.
 
 **Single-node only in v1, and it says so.** The interesting case for these
-frameworks is many machines, and this node already advertises GPUs over the peer
-fabric (`training/fabric.py`) with no remote execution engine behind it. Shipping
+frameworks is many machines, and this node has no remote execution engine to
+spread a run across them. Shipping
 `--nnodes 1` and naming the gap is better than a launcher that appears to support a
 cluster and silently runs on one box.
 

@@ -283,36 +283,6 @@ async def media(project_id: str, file_path: str) -> FileResponse:
     return FileResponse(target)
 
 
-# --- peer fabric ---------------------------------------------------------------
-
-
-@router.get("/fabric/ads")
-async def fabric_ads() -> dict:
-    from backend.modules.training import fabric
-
-    return {"ads": [ad.model_dump() for ad in fabric.known_ads()]}
-
-
-@router.post("/fabric/advertise")
-async def fabric_advertise(body: dict) -> dict:
-    """Set this node's advertise mode (off|offering|seeking) + note, persist it to
-    settings, and re-broadcast the ad to peers."""
-    from backend.modules.network.hub import peer_hub
-    from backend.modules.settings.routes import set_value
-    from backend.modules.training import fabric
-
-    status = str(body.get("status", "off"))
-    if status not in ("off", "offering", "seeking"):
-        raise HTTPException(
-            status_code=400, detail="status must be off|offering|seeking"
-        )
-    set_value("training.fabric.advertise", status)
-    if "note" in body:
-        set_value("training.fabric.note", str(body.get("note", "")))
-    await fabric.broadcast_ad(peer_hub)
-    return {"status": status}
-
-
 # --- cloud push ----------------------------------------------------------------
 
 
@@ -623,6 +593,13 @@ def _recipe_payload(project: ProjectModel, *, refresh: bool = False) -> dict:
         "sweep": sweeps.load_spec(project).to_dict(),
         "outputTypes": list(convert.OUTPUT_TYPES),
     }
+
+
+@router.get("/learn/glossary")
+async def learn_glossary() -> dict:
+    """The recipe catalog's knobs with their help text — what the Learn strip
+    matches a notebook cell against. See `recipes.glossary`."""
+    return {"terms": recipes.glossary()}
 
 
 @router.get("/models/search")

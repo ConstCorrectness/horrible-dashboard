@@ -16,6 +16,7 @@ import { StorageSection } from './StorageSection';
 export const storageModule: ModuleManifest = {
   id: 'storage',
   title: 'Storage',
+  category: 'system',
   settingsSections: [{ id: 'storage.locations', title: 'Storage', component: StorageSection }],
 };
 

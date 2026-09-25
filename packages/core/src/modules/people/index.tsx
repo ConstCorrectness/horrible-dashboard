@@ -43,6 +43,7 @@ import './people.css';
 export const peopleModule: ModuleManifest = {
   id: 'people',
   title: 'People',
+  category: 'people',
   widgets: [
     {
       id: 'people.home',

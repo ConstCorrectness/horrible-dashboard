@@ -26,6 +26,7 @@ const TrajectoriesHub = lazyPane(() => import('./TrajectoriesHub'), 'Trajectorie
 export const trajectoriesModule: ModuleManifest = {
   id: 'trajectories',
   title: 'Trajectories',
+  category: 'research',
   panels: [
     {
       // `document`: you read a run for a long stretch, usually beside the code or

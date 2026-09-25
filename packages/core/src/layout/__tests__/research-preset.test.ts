@@ -33,7 +33,6 @@ describe('research frame preset', () => {
     const views = areasOf(frame.center).flatMap((a) => a.tabs.map((t) => t.viewId));
     expect(views).toEqual([
       'research.console',
-      'research.arxiv',
       'browser.view',
       'research.pdfViewer',
       'research.pageViewer',

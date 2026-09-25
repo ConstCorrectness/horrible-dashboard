@@ -15,6 +15,7 @@ import { openSession, useSession } from '../store';
 import { forgetLastProject, lastProjectId } from '../last-project';
 import { OutputRenderer } from '../outputs/OutputRenderer';
 import { CellEditor } from './CellEditor';
+import { focusKey, noteCellFocused } from '../learn/focus';
 import { ProjectsPane } from './ProjectsPane';
 import { advanceFrom } from '../../../notebook/advance';
 import { renderMarkdown } from '../../../notebook/markdown';
@@ -385,6 +386,7 @@ export function NotebookPane() {
             onEditingMd={(on) => setEditingMd(on ? cell.id : null)}
             focusToken={focusReq?.index === i ? focusReq.n : 0}
             onChange={(src) => syncEdit(cell.id, src)}
+            onFocus={() => noteCellFocused(focusKey(projectId, notebookPath), cell.id)}
             onRun={() => run(cell.id)}
             onRunNext={() => runNext(cell.id, i)}
             onDelete={() =>
@@ -427,6 +429,7 @@ function Cell({
   editingMd,
   focusToken,
   onChange,
+  onFocus,
   onRun,
   onRunNext,
   onEditingMd,
@@ -442,6 +445,8 @@ function Cell({
   editingMd: boolean;
   focusToken: number;
   onChange: (source: string) => void;
+  /** Focus entered this cell — the Learn strip explains the cell you are in. */
+  onFocus: () => void;
   onRun: () => void;
   onRunNext: () => void;
   onEditingMd: (editing: boolean) => void;
@@ -455,6 +460,7 @@ function Cell({
   const showEditor = isCode || editingMd || cell.source.trim() === '';
   return (
     <div
+      onFocusCapture={onFocus}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{

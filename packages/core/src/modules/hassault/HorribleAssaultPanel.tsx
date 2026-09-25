@@ -3981,7 +3981,6 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
               }
               registry.openPanel('hassault.studio');
             }}
-            onOpenArmory={() => registry.openPanel('hassault.armory')}
             onOpenConsole={() => registry.openPanel('hassault.console')}
           />
         )}

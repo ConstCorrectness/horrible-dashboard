@@ -12,6 +12,9 @@ describe('research module', () => {
     // One search surface / one run manager.
     expect(byId.get('research.arxiv')?.singleton).toBe(true);
     expect(byId.get('research.console')?.singleton).toBe(true);
+    // arXiv is a section of the Research window, not a launcher entry.
+    expect(byId.get('research.arxiv')?.embedded).toBe(true);
+    expect(byId.get('research.console')?.sections?.map((s) => s.id)).toEqual(['deep', 'arxiv']);
   });
 
   it('declares the capture/open/save/console commands', () => {

@@ -34,6 +34,7 @@ async function transposeBy(delta: number): Promise<void> {
 export const karaokeModule: ModuleManifest = {
   id: 'karaoke',
   title: 'Karaoke',
+  category: 'play',
   panels: [
     {
       id: 'karaoke.stage',
@@ -49,6 +50,13 @@ export const karaokeModule: ModuleManifest = {
       // shell's own single-letter bindings don't fire while the host is driving
       // the player. Same reasoning as the game and terminal panes.
       capture: { mode: 'keyboard' },
+      // The queue and search are the stage's own strips, not dock tools: they
+      // were two more launcher entries for one karaoke machine, and as docks they
+      // outlived the stage in whatever workspace you left them in.
+      regions: [
+        { id: 'karaoke.queue', label: 'Queue', icon: '≡', position: 'left', defaultOpen: true, defaultSize: 300 },
+        { id: 'karaoke.search', label: 'Find songs', icon: '⌕', position: 'right', defaultOpen: true, defaultSize: 340 },
+      ],
     },
     {
       id: 'karaoke.queue',
@@ -59,6 +67,7 @@ export const karaokeModule: ModuleManifest = {
       defaultDock: 'left',
       defaultDockSize: 300,
       singleton: true,
+      embedded: true,
     },
     {
       id: 'karaoke.search',
@@ -69,6 +78,7 @@ export const karaokeModule: ModuleManifest = {
       defaultDock: 'right',
       defaultDockSize: 340,
       singleton: true,
+      embedded: true,
     },
   ],
   commands: [
@@ -154,10 +164,6 @@ export const karaokeModule: ModuleManifest = {
       icon: '🎤',
       frame: {
         center: { pane: 'karaoke.stage' },
-        docks: {
-          left: { tools: ['karaoke.queue'], size: 300 },
-          right: { tools: ['karaoke.search'], size: 340 },
-        },
       },
     },
   ],

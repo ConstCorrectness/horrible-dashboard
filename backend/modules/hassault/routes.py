@@ -49,6 +49,8 @@ from backend.modules.hassault.match import MAX_PLAYERS, match_server
 from backend.modules.hassault.physics import World as SimWorld
 from backend.modules.hassault.modes import objectives
 from backend.modules.hassault.models import (
+    BotRequest,
+    MatchRoster,
     BrowseMatch,
     DraftCreateRequest,
     DraftInfo,
@@ -409,7 +411,11 @@ async def get_map(name: str) -> MapInfo:
         "rvsf": len(world.spawns(1)),
         "total": len(world.spawns()),
     }
-    map_format = "gltf" if name in ("hd_facility", "hd_junkflea", "hd_bank", "hd_assault", "hd_office") else "cube"
+    map_format = (
+        "gltf"
+        if name in ("hd_facility", "hd_junkflea", "hd_bank", "hd_assault", "hd_office")
+        else "cube"
+    )
     if map_format == "cube":
         json_path = mapsource.MAPS_DIR / f"{name}.json"
         if json_path.is_file():
@@ -468,7 +474,9 @@ async def get_map_mesh(name: str) -> FileResponse:
     """Returns the 3D GLTF/GLB model for a map if one exists."""
     glb_path = mapsource.MAPS_DIR / f"{name}.glb"
     if not glb_path.is_file():
-        raise HTTPException(status_code=404, detail=f"No 3D mesh model found for map '{name}'")
+        raise HTTPException(
+            status_code=404, detail=f"No 3D mesh model found for map '{name}'"
+        )
     return FileResponse(glb_path, media_type="model/gltf-binary")
 
 
@@ -506,6 +514,61 @@ async def post_match(body: CreateMatchRequest) -> MatchSummary:
         maxPlayers=MAX_PLAYERS,
         createdAt=room.created_at,
     )
+
+
+@router.get("/matches/{room_id}", response_model=MatchRoster)
+async def get_match_roster(room_id: str) -> MatchRoster:
+    """Who is in a room and the score, for the Server pane's room view.
+
+    The same read the agent's `hassault.status` tool makes, so the pane and the
+    agent can never describe one room two ways.
+    """
+    from backend.modules.hassault.agent_tools import match_status
+
+    result = await match_status({"room": room_id})
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return MatchRoster(**result)
+
+
+@router.post("/matches/{room_id}/bots")
+async def post_match_bots(room_id: str, body: BotRequest) -> dict[str, Any]:
+    """Field bots in a room. Host-only by construction — the room is local."""
+    from backend.modules.hassault.agent_tools import add_bot
+
+    result = await add_bot({"room": room_id, **body.model_dump(exclude_none=True)})
+    if "error" in result:
+        raise HTTPException(status_code=422, detail=result["error"])
+    return result
+
+
+@router.delete("/matches/{room_id}/bots")
+async def delete_match_bots(room_id: str, count: int | None = None) -> dict[str, Any]:
+    """Take bots out of a room, newest first; no `count` removes every bot."""
+    from backend.modules.hassault.agent_tools import remove_bot
+
+    args: dict[str, Any] = {"room": room_id}
+    if count is not None:
+        args["count"] = count
+    result = await remove_bot(args)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@router.post("/matches/{room_id}/invite")
+async def post_match_invite(room_id: str, body: dict[str, str] = Body(...)) -> dict[str, Any]:
+    """Invite a friend (name, `@username` or friend code) to a room hosted here —
+    every online device of theirs, as the agent's `hassault.invite` does."""
+    from backend.modules.hassault.channel import invite_friend
+
+    who = (body.get("who") or "").strip()
+    if not who:
+        raise HTTPException(status_code=422, detail="who should be invited?")
+    result = await invite_friend(who, room_id)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
 
 
 @router.get("/modes", response_model=list[ModeOut])
@@ -2274,7 +2337,9 @@ async def get_tournament_replay_frames(replay_id: str):
 
     data = get_replay_data(replay_id)
     if not data:
-        raise HTTPException(status_code=404, detail=f"Replay frames for '{replay_id}' not found")
+        raise HTTPException(
+            status_code=404, detail=f"Replay frames for '{replay_id}' not found"
+        )
     return data
 
 
@@ -2345,5 +2410,3 @@ async def complete_tournament_match(match_id: str, payload: MatchCompleteRequest
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-

@@ -8,14 +8,11 @@
  *
  * Two things beyond a flat list:
  *
- * - **It is grouped by the module a pane belongs to.** Eighty-odd entries in one
- *   alphabetical run told the user nothing, but the previous grouping — by
- *   `PaneRole`, as Documents / Tools / Widgets — answered a question nobody
- *   browsing a launcher is asking: the role decides where a pane *lands* by
- *   default, and everything here opens and tiles either way. The feature a pane
- *   belongs to is what someone is actually looking for, and it is the axis the
- *   search box already matched on. Searching flattens the groups, because a
- *   filtered list of four things does not need headings.
+ * - **It is grouped into a handful of fixed categories** (`PaneCategory`), and a
+ *   module with several panes folds into one row inside its category. Grouping by
+ *   `PaneRole` answered a question nobody browsing asks; grouping by module gave
+ *   fifty headings, most over a single row. Searching flattens the groups,
+ *   because a filtered list of four things does not need headings.
  * - **It has a settings footer.** The bottom-left corner is where people go for
  *   settings, and this menu previously offered it only as one row among eighty,
  *   sorted under S.
@@ -25,6 +22,7 @@ import {
   layoutStore,
   openContextMenu,
   recentViewIds,
+  PANE_CATEGORY_LABELS,
   registry,
   resolveViewIcon,
   subscribeRecents,
@@ -59,56 +57,54 @@ export function StartButton({ showLabels }: { showLabels: boolean }) {
 
 type View = PanelDecl | WidgetDecl;
 
-/**
- * The catch-all band, pinned last.
- *
- * It holds panes with no owning module *and* every module that contributes just
- * one pane — for that pane, the module name is a heading over a single row, which
- * tells the reader nothing they cannot see. Named for what it is to someone
- * browsing, not for the registry condition that fills it.
- */
-const UNGROUPED = 'All panes';
+/** A module with several launchable panes, folded under its own row. */
+interface ModuleFold {
+  kind: 'fold';
+  label: string;
+  views: View[];
+}
+type CategoryEntry = { kind: 'view'; view: View } | ModuleFold;
 
 /**
- * The views, bucketed by owning module and sorted for browsing.
+ * The views, bucketed into the fixed launcher categories (`PaneCategory`).
  *
- * Headings are alphabetical and `Other` is pinned last — a module that declares
- * no owner is a plugin gap, not a category anyone chose, so it should not sort
- * into the middle of real feature names.
+ * Grouping by module gave one heading per feature — fifty-odd modules, most of
+ * them owning a single pane — so the headings were either noise over one row or
+ * gathered into a catch-all "All panes" band that was itself the longest list in
+ * the menu. Seven categories answer the question someone browsing is asking
+ * ("where are the research tools?"); inside one, a module with several panes
+ * folds into a single row that opens in place, so a feature's panes stay together
+ * without each costing a line of the category.
  */
-function groupByOwner(views: View[]): { label: string; views: View[] }[] {
-  const buckets = new Map<string, View[]>();
+function groupByCategory(views: View[]): { label: string; entries: CategoryEntry[] }[] {
+  const byCategory = new Map<string, Map<string, View[]>>();
   for (const v of views) {
-    const owner = registry.viewOwner(v.id) ?? UNGROUPED;
-    const bucket = buckets.get(owner);
+    const cat = registry.viewCategory(v.id);
+    const owner = registry.viewOwner(v.id) ?? v.title;
+    const modules = byCategory.get(cat) ?? new Map<string, View[]>();
+    byCategory.set(cat, modules);
+    const bucket = modules.get(owner);
     if (bucket) bucket.push(v);
-    else buckets.set(owner, [v]);
+    else modules.set(owner, [v]);
   }
-
-  // A heading above a single row is not structure, it is noise that doubles the
-  // height of the list: most module headings own exactly one pane (34 of 47 at the
-  // last count), so
-  // more than half the vertical space in the launcher was spent on labels that
-  // grouped nothing. Those panes are gathered into one band instead, which is
-  // also where an unowned pane already went.
-  const grouped: { label: string; views: View[] }[] = [];
-  const singles: View[] = [];
-  for (const [label, group] of buckets) {
-    if (label !== UNGROUPED && group.length > 1) {
-      grouped.push({ label, views: [...group].sort((a, b) => a.title.localeCompare(b.title)) });
-    } else {
-      singles.push(...group);
+  const byTitle = (a: View, b: View) => a.title.localeCompare(b.title);
+  const out: { label: string; entries: CategoryEntry[] }[] = [];
+  // Declaration order of the labels, not alphabetical: it runs from what this app
+  // is for (research, agents) to its plumbing, with third-party plugins last.
+  for (const [cat, label] of Object.entries(PANE_CATEGORY_LABELS)) {
+    const modules = byCategory.get(cat);
+    if (!modules) continue;
+    const entries: CategoryEntry[] = [];
+    for (const [owner, group] of modules) {
+      if (group.length > 1)
+        entries.push({ kind: 'fold', label: owner, views: group.sort(byTitle) });
+      else entries.push({ kind: 'view', view: group[0] });
     }
+    const key = (e: CategoryEntry) => (e.kind === 'fold' ? e.label : e.view.title);
+    entries.sort((a, b) => key(a).localeCompare(key(b)));
+    out.push({ label, entries });
   }
-
-  grouped.sort((a, b) => a.label.localeCompare(b.label));
-  if (singles.length) {
-    grouped.push({
-      label: UNGROUPED,
-      views: singles.sort((a, b) => a.title.localeCompare(b.title)),
-    });
-  }
-  return grouped;
+  return out;
 }
 
 function StartMenu({ onClose }: { onClose: () => void }) {
@@ -133,14 +129,25 @@ function StartMenu({ onClose }: { onClose: () => void }) {
     // thing the user came looking for used to come back empty on a pane that
     // was right there. The id is matched too, but an id is not something anyone
     // types on purpose.
-    return views.filter(
-      (v) =>
-        v.title.toLowerCase().includes(q) ||
-        v.id.includes(q) ||
-        (registry.viewOwner(v.id)?.toLowerCase().includes(q) ?? false),
-    );
+    // Ranked, because Enter launches the first row: a search for "research" also
+    // matches every pane in the AI Research category, and alphabetical order put
+    // "Ablation sweep" ahead of the pane actually called Research.
+    const rank = (v: View): number => {
+      const title = v.title.toLowerCase();
+      if (title === q) return 0;
+      if (title.startsWith(q)) return 1;
+      if (title.includes(q) || v.id.includes(q)) return 2;
+      if (registry.viewOwner(v.id)?.toLowerCase().includes(q)) return 3;
+      if (PANE_CATEGORY_LABELS[registry.viewCategory(v.id)].toLowerCase().includes(q)) return 4;
+      return 5;
+    };
+    return views
+      .map((v) => ({ v, r: rank(v) }))
+      .filter(({ r }) => r < 5)
+      .sort((a, b) => a.r - b.r)
+      .map(({ v }) => v);
   }, [views, query]);
-  const groups = useMemo(() => (searching ? [] : groupByOwner(matches)), [matches, searching]);
+  const groups = useMemo(() => (searching ? [] : groupByCategory(matches)), [matches, searching]);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -191,12 +198,16 @@ function StartMenu({ onClose }: { onClose: () => void }) {
         {!searching && <RecentGroup views={views} onLaunch={launch} />}
         {searching
           ? matches.map((v) => <StartItem key={v.id} view={v} onLaunch={launch} />)
-          : groups.map(({ label, views: group }) => (
+          : groups.map(({ label, entries }) => (
               <div key={label} className="os-start-group">
                 <h3 className="os-start-group-head">{label}</h3>
-                {group.map((v) => (
-                  <StartItem key={v.id} view={v} onLaunch={launch} />
-                ))}
+                {entries.map((e) =>
+                  e.kind === 'view' ? (
+                    <StartItem key={e.view.id} view={e.view} onLaunch={launch} />
+                  ) : (
+                    <StartFold key={e.label} fold={e} onLaunch={launch} />
+                  ),
+                )}
               </div>
             ))}
         {!matches.length && <p className="os-start-empty">Nothing matches “{query}”.</p>}
@@ -513,5 +524,47 @@ function StartItem({ view, onLaunch }: { view: View; onLaunch: (id: string) => v
       </span>
       <span className="os-start-title">{view.title}</span>
     </button>
+  );
+}
+
+/**
+ * A module's panes behind one row. Closed by default: the category is for
+ * scanning, and a feature's four panes open in place when you reach for it.
+ */
+function StartFold({ fold, onLaunch }: { fold: ModuleFold; onLaunch: (id: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const icon = resolveViewIcon(fold.views[0].id, fold.views[0].icon, fold.views[0].title);
+  return (
+    <>
+      <button
+        type="button"
+        role="menuitem"
+        aria-expanded={open}
+        className="os-start-item os-start-fold"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="os-start-icon" aria-hidden="true">
+          {icon}
+        </span>
+        <span className="os-start-title">{fold.label}</span>
+        <span className="os-start-fold-count">{fold.views.length}</span>
+        <svg
+          className={`os-start-fold-chevron${open ? ' is-open' : ''}`}
+          width="10"
+          height="10"
+          viewBox="0 0 10 10"
+          aria-hidden="true"
+        >
+          <path d="M3.5 2 7 5 3.5 8" fill="none" stroke="currentColor" strokeWidth="1.3" />
+        </svg>
+      </button>
+      {open && (
+        <div className="os-start-fold-body">
+          {fold.views.map((v) => (
+            <StartItem key={v.id} view={v} onLaunch={onLaunch} />
+          ))}
+        </div>
+      )}
+    </>
   );
 }

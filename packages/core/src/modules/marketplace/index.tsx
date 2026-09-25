@@ -11,6 +11,7 @@ const MarketplacePanel = lazyPane(() => import('./MarketplacePanel'), 'Marketpla
 export const marketplaceModule: ModuleManifest = {
   id: 'marketplace',
   title: 'Marketplace',
+  category: 'system',
   panels: [
     {
       id: 'marketplace.home',

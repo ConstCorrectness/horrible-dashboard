@@ -18,6 +18,7 @@ const NotebookEditor = lazyPane(() => import('./panels/NotebookEditor'), 'Notebo
 export const notebookModule: ModuleManifest = {
   id: 'notebook',
   title: 'Notebook',
+  category: 'research',
   settings: [
     {
       key: 'notebook.root',

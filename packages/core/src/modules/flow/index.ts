@@ -21,6 +21,7 @@ const FlowEditorPanel = lazyPane(() => import('./panels/FlowEditorPanel'), 'Flow
 export const flowModule: ModuleManifest = {
   id: 'flow',
   title: 'Flow',
+  category: 'agents',
   panels: [
     {
       // The canvas is the document (inverted from the old flow.studio group,

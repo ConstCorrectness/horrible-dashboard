@@ -19,6 +19,7 @@ const NetworkStrip = lazyPane(() => import('./panels/NetworkStrip'), 'NetworkStr
 export const browserModule: ModuleManifest = {
   id: 'browser',
   title: 'Browser',
+  category: 'data',
   panels: [
     {
       id: 'browser.view',

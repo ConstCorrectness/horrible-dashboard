@@ -13,6 +13,7 @@ const ReplPane = lazyPane(() => import('./ReplPane'), 'ReplPane');
 export const replModule: ModuleManifest = {
   id: 'repl',
   title: 'Python REPL',
+  category: 'build',
   panels: [
     {
       id: 'repl.console',

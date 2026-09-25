@@ -13,8 +13,6 @@ const FighterArcadePanel = lazyPane(
 );
 const GamesLogPanel = lazyPane(() => import('./panels/GamesLogPanel'), 'GamesLogPanel');
 const GamesPanel = lazyPane(() => import('./panels/GamesPanel'), 'GamesPanel');
-const ReplayViewerPanel = lazyPane(() => import('./panels/ReplayViewerPanel'), 'ReplayViewerPanel');
-const TownPanel = lazyPane(() => import('./panels/TownPanel'), 'TownPanel');
 
 /**
  * Games module: watch your agent play turn-based games against another user's
@@ -34,6 +32,7 @@ const TownPanel = lazyPane(() => import('./panels/TownPanel'), 'TownPanel');
 export const gamesModule: ModuleManifest = {
   id: 'games',
   title: 'Games',
+  category: 'play',
   // DashArena: the game-tuned workspace. The Games client fills the whole window —
   // it is a single-window console (Play / Board / Build / Replays / Career / Social),
   // with the live spectator surfaces (Games Log, Episodes) folded into its own bottom
@@ -105,22 +104,6 @@ export const gamesModule: ModuleManifest = {
       icon: '🕹',
       singleton: true,
     },
-    {
-      id: 'games.replay',
-      title: 'Replay',
-      component: ReplayViewerPanel,
-      role: 'document',
-      icon: '📼',
-      singleton: true,
-    },
-    {
-      id: 'games.town',
-      title: 'AgentTown',
-      component: TownPanel,
-      role: 'document',
-      icon: '🏘',
-      singleton: true,
-    },
   ],
   commands: [
     {
@@ -188,7 +171,8 @@ export const gamesModule: ModuleManifest = {
     {
       id: 'games.openTown',
       title: 'Games: Visit AgentTown',
-      run: () => registry.openPanel('games.town'),
+      // AgentTown is a tab of the Social section; it was also a window of its own.
+      run: () => openGamesSection('social'),
     },
     {
       id: 'games.openPlaza',

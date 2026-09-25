@@ -15,6 +15,7 @@ const RepoViewer = lazyPane(() => import('./RepoViewer'), 'RepoViewer');
 export const githubModule: ModuleManifest = {
   id: 'github',
   title: 'GitHub',
+  category: 'build',
   panels: [
     {
       id: 'github.repo',

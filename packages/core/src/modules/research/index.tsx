@@ -91,6 +91,7 @@ function openPdfCommand(): void {
 export const researchModule: ModuleManifest = {
   id: 'research',
   title: 'Research',
+  category: 'research',
   panels: [
     {
       id: 'research.pdfViewer',
@@ -117,15 +118,22 @@ export const researchModule: ModuleManifest = {
       icon: '🎓',
       // One search surface; papers open as their own pdfViewer panes.
       singleton: true,
+      // A section of the Research window rather than a window of its own:
+      // finding papers and researching a question are one job with two tabs.
+      embedded: true,
     },
     {
       id: 'research.console',
-      title: 'Deep Research',
+      title: 'Research',
       component: ResearchConsole,
       role: 'document',
       icon: '🔬',
       // One console managing every run (runs live server-side, not per-pane).
       singleton: true,
+      sections: [
+        { id: 'deep', label: 'Deep research', icon: '◎', default: true },
+        { id: 'arxiv', label: 'arXiv', icon: '∂', view: 'research.arxiv' },
+      ],
       // UI-side tools only: run/capture tools are backend AgentTools (they must
       // work with no browser attached); these open viewers for the human.
       agentTools: [

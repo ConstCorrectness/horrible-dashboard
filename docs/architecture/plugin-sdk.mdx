@@ -103,6 +103,12 @@ center area), `widget` (a center area of its own), or `tool` (lives in a dock;
 ([per-pane strips](panel-groups.mdx)) and `sections` (in-pane tabs). There is no
 separate widget board — see [windowing.mdx](windowing.mdx).
 
+A view may also declare a **`category`** (`PaneCategory`: `research`, `agents`,
+`build`, `data`, `play`, `people`, `system`), the Start-menu band it is filed
+under. A plugin that declares none lands under **Plugins**; built-in modules set it
+once on their manifest. See
+[desktop-shell.mdx](desktop-shell.mdx#the-taskbar) for how the launcher groups.
+
 A view that only ever renders **inside** another pane — as a region strip or a
 section body — declares `embedded: true`. It stays registered and reachable, but
 stops being a destination: no opener command, no rail glyph, no type-switcher

@@ -11,6 +11,7 @@ import { resetSetting, setSetting, type SettingValue } from '../../settings';
 export const agentModule: ModuleManifest = {
   id: 'agent',
   title: 'Agent',
+  category: 'agents',
   widgets: [
     {
       id: 'agent.chat',

@@ -10,12 +10,8 @@ const HorribleAssaultPanel = lazyPane(
   'HorribleAssaultPanel',
 );
 const DeveloperConsole = lazyPane(() => import('./console'), 'DeveloperConsole');
-const loadStudio = () => import('./studio/ModelStudioPanel');
-const ModelStudioPanel = lazyPane(loadStudio, 'ModelStudioPanel');
-const ModelViewerPanel = lazyPane(loadStudio, 'ModelViewerPanel');
-const ModelEditorPanel = lazyPane(loadStudio, 'ModelEditorPanel');
-const AnimationEditorPanel = lazyPane(loadStudio, 'AnimationEditorPanel');
-const ArmoryPanel = lazyPane(() => import('./panels/ArmoryPanel'), 'ArmoryPanel');
+const ModelStudioPanel = lazyPane(() => import('./studio/ModelStudioPanel'), 'ModelStudioPanel');
+const ServerPanel = lazyPane(() => import('./panels/ServerPanel'), 'ServerPanel');
 const StandaloneMatchCompanionPanel = lazyPane(
   () => import('./panels/MatchCompanion'),
   'StandaloneMatchCompanionPanel',
@@ -70,6 +66,14 @@ registerNotificationAction('hassault.joinInvite', {
 export const hassaultModule: ModuleManifest = {
   id: 'hassault',
   title: 'HorribleAssault',
+  category: 'play',
+  // Three windows, one per job: **play** the game, **build** for it, **run a
+  // server** for it. It used to be ten — the studio three more times on a
+  // different tab, an armory pane duplicating the main menu's armory section, and
+  // four narrow companions each claiming a dock of their own. The companions are
+  // now strips on the window they accompany (`embedded`), so they open beside the
+  // game rather than somewhere else in the frame. Retired ids are migrated by
+  // `RENAMED_VIEWS` (saved layouts) and `VIEW_ALIASES` (the agent's vocabulary).
   panels: [
     {
       id: 'hassault.play',
@@ -83,6 +87,32 @@ export const hassaultModule: ModuleManifest = {
       fullscreen: true,
       icon: '⌖',
       singleton: true,
+      regions: [
+        { id: 'hassault.companion', label: 'Match', icon: '▤', position: 'right', defaultSize: 320 },
+        { id: 'hassault.radar', label: 'Radar', icon: '⦿', position: 'right' },
+        { id: 'hassault.voice', label: 'Voice', icon: '◖', position: 'right' },
+        { id: 'hassault.console', label: 'Console', icon: '⌨', position: 'bottom', defaultSize: 220 },
+      ],
+    },
+    {
+      id: 'hassault.studio',
+      title: 'hAssault Dev Tools',
+      component: ModelStudioPanel,
+      role: 'document',
+      icon: '◈',
+      singleton: true,
+      regions: [
+        { id: 'hassault.console', label: 'Console', icon: '⌨', position: 'bottom', defaultSize: 220 },
+        { id: 'hassault.radar', label: 'Radar', icon: '⦿', position: 'right', defaultSize: 300 },
+      ],
+    },
+    {
+      id: 'hassault.server',
+      title: 'hAssault Server',
+      component: ServerPanel,
+      role: 'document',
+      icon: '⌬',
+      singleton: true,
     },
     {
       id: 'hassault.console',
@@ -90,47 +120,7 @@ export const hassaultModule: ModuleManifest = {
       component: DeveloperConsole,
       role: 'tool',
       icon: '⌨',
-      singleton: false,
-    },
-    {
-      id: 'hassault.studio',
-      title: 'hAssault Model Studio',
-      component: ModelStudioPanel,
-      role: 'document',
-      icon: '◈',
-      singleton: false,
-    },
-    {
-      id: 'hassault.modelViewer',
-      title: 'hAssault Model Viewer',
-      component: ModelViewerPanel,
-      role: 'document',
-      icon: '◇',
-      singleton: false,
-    },
-    {
-      id: 'hassault.modelEditor',
-      title: 'hAssault Model Editor',
-      component: ModelEditorPanel,
-      role: 'document',
-      icon: '⚙',
-      singleton: false,
-    },
-    {
-      id: 'hassault.animEditor',
-      title: 'hAssault Animation Editor',
-      component: AnimationEditorPanel,
-      role: 'document',
-      icon: '▷',
-      singleton: false,
-    },
-    {
-      id: 'hassault.armory',
-      title: 'hAssault Armory & Skins',
-      component: ArmoryPanel,
-      role: 'document',
-      icon: '⚔',
-      singleton: false,
+      embedded: true,
     },
     {
       id: 'hassault.companion',
@@ -138,7 +128,7 @@ export const hassaultModule: ModuleManifest = {
       component: StandaloneMatchCompanionPanel,
       role: 'tool',
       icon: '⌖',
-      singleton: false,
+      embedded: true,
     },
     {
       id: 'hassault.radar',
@@ -146,7 +136,7 @@ export const hassaultModule: ModuleManifest = {
       component: StandaloneRadarPanel,
       role: 'tool',
       icon: '⦿',
-      singleton: false,
+      embedded: true,
     },
     {
       id: 'hassault.voice',
@@ -154,7 +144,7 @@ export const hassaultModule: ModuleManifest = {
       component: VoiceCommsPanel,
       role: 'tool',
       icon: '🎙',
-      singleton: false,
+      embedded: true,
     },
   ],
   frames: [
@@ -163,7 +153,7 @@ export const hassaultModule: ModuleManifest = {
       name: 'hAssault: Game Dev & Testing',
       icon: '⚒',
       description:
-        'The game beside its editor: a live match on the left, the model studio on the right, the console below and match telemetry alongside.',
+        'The game beside its dev tools: a live match on the left, the model and level studio on the right with the console strip below it.',
       frame: {
         center: {
           split: 'row',
@@ -173,103 +163,23 @@ export const hassaultModule: ModuleManifest = {
             { pane: 'hassault.studio', headerCollapsed: false },
           ],
         },
-        docks: {
-          bottom: {
-            tools: ['hassault.console'],
-            activeTool: 'hassault.console',
-            size: 240,
-            visible: true,
-          },
-          right: {
-            tools: ['hassault.companion', 'hassault.radar'],
-            activeTool: 'hassault.companion',
-            size: 320,
-            visible: true,
-          },
-        },
-      },
-    },
-    {
-      id: 'hassault_mapmaker',
-      name: 'hAssault: Level Designer',
-      icon: '◈',
-      description:
-        'Level design with a playable preview: the studio takes the width, a match sits beside it to test what you just built, and the radar shows the layout from above.',
-      frame: {
-        center: {
-          split: 'row',
-          sizes: [0.68, 0.32],
-          children: [
-            { pane: 'hassault.studio', headerCollapsed: false },
-            { pane: 'hassault.play', headerCollapsed: true },
-          ],
-        },
-        docks: {
-          bottom: {
-            tools: ['hassault.console'],
-            activeTool: 'hassault.console',
-            size: 220,
-            visible: true,
-          },
-          right: {
-            tools: ['hassault.radar', 'hassault.companion'],
-            activeTool: 'hassault.radar',
-            size: 300,
-            visible: true,
-          },
-        },
-      },
-    },
-    {
-      id: 'hassault_armory_studio',
-      name: 'hAssault: 3D Armory & Skins',
-      icon: '⚔',
-      description:
-        'Weapons and their finishes side by side: the armory marketplace next to the 3D studio that edits what it sells.',
-      frame: {
-        center: {
-          split: 'row',
-          sizes: [0.5, 0.5],
-          children: [
-            { pane: 'hassault.armory', headerCollapsed: false },
-            { pane: 'hassault.studio', headerCollapsed: false },
-          ],
-        },
-        docks: {
-          bottom: {
-            tools: ['hassault.console'],
-            activeTool: 'hassault.console',
-            size: 200,
-            visible: false,
-          },
-        },
+        docks: {},
       },
     },
     {
       id: 'hassault_play',
-      name: 'hAssault: Arena Match & Companion',
+      name: 'hAssault: Arena Match',
       icon: '🎮',
       description:
-        'Just the match: the arena at full width, with the companion, radar and voice comms stacked alongside it.',
+        'Just the match, at full width. The match companion, radar, voice and console are strips on the game window — open them from its edge.',
       frame: {
         center: { pane: 'hassault.play', headerCollapsed: true },
-        docks: {
-          right: {
-            tools: ['hassault.companion', 'hassault.radar', 'hassault.voice'],
-            activeTool: 'hassault.companion',
-            size: 320,
-            visible: true,
-          },
-          bottom: {
-            tools: ['hassault.console'],
-            activeTool: 'hassault.console',
-            size: 220,
-            visible: false,
-          },
-        },
+        docks: {},
       },
     },
   ],
+  // The retired openers stay as commands — keybindings and muscle memory point
+  // at them — and now land on the strip or studio tab that replaced each pane.
   commands: [
     {
       id: 'hassault.open',
@@ -277,48 +187,48 @@ export const hassaultModule: ModuleManifest = {
       run: () => registry.openPanel('hassault.play'),
     },
     {
-      id: 'hassault.openConsole',
-      title: 'HorribleAssault: Open Developer Console',
-      run: () => registry.openPanel('hassault.console'),
+      id: 'hassault.openServer',
+      title: 'HorribleAssault: Open Server',
+      run: () => registry.openPanel('hassault.server'),
     },
     {
       id: 'hassault.openStudio',
-      title: 'HorribleAssault: Open Model Studio',
+      title: 'HorribleAssault: Open Dev Tools',
       run: () => registry.openPanel('hassault.studio'),
     },
     {
       id: 'hassault.openModelViewer',
-      title: 'HorribleAssault: Open Model Viewer',
-      run: () => registry.openPanel('hassault.modelViewer'),
+      title: 'HorribleAssault: Dev Tools › Asset viewer',
+      run: () => registry.openPanel('hassault.studio', { params: { tab: 'viewer' } }),
     },
     {
       id: 'hassault.openModelEditor',
-      title: 'HorribleAssault: Open Model Editor',
-      run: () => registry.openPanel('hassault.modelEditor'),
+      title: 'HorribleAssault: Dev Tools › Rig editor',
+      run: () => registry.openPanel('hassault.studio', { params: { tab: 'editor' } }),
     },
     {
       id: 'hassault.openAnimEditor',
-      title: 'HorribleAssault: Open Animation Editor',
-      run: () => registry.openPanel('hassault.animEditor'),
+      title: 'HorribleAssault: Dev Tools › Animator',
+      run: () => registry.openPanel('hassault.studio', { params: { tab: 'animator' } }),
     },
     {
-      id: 'hassault.openArmory',
-      title: 'HorribleAssault: Open Armory & Skins',
-      run: () => registry.openPanel('hassault.armory'),
+      id: 'hassault.openConsole',
+      title: 'HorribleAssault: Show Developer Console',
+      run: () => registry.openPanel('hassault.console'),
     },
     {
       id: 'hassault.openCompanion',
-      title: 'HorribleAssault: Open Match Companion',
+      title: 'HorribleAssault: Show Match Companion',
       run: () => registry.openPanel('hassault.companion'),
     },
     {
       id: 'hassault.openRadar',
-      title: 'HorribleAssault: Open Tactical Radar',
+      title: 'HorribleAssault: Show Tactical Radar',
       run: () => registry.openPanel('hassault.radar'),
     },
     {
       id: 'hassault.openVoice',
-      title: 'HorribleAssault: Open Voice Comms',
+      title: 'HorribleAssault: Show Voice Comms',
       run: () => registry.openPanel('hassault.voice'),
     },
   ],

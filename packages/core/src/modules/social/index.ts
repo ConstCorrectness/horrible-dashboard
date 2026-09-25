@@ -14,6 +14,7 @@ import { initSocial } from './ws';
 export const socialModule: ModuleManifest = {
   id: 'social',
   title: 'Friends',
+  category: 'people',
   // No settings: your display name is part of your *identity*, not configuration —
   // it is persisted with the person key and edited from the panel, so it can't drift
   // from what the certificates you hand out actually say.

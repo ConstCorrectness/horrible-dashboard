@@ -15,7 +15,7 @@ const MetricsPane = lazyPane(() => import('./panels/MetricsPane'), 'MetricsPane'
 const ModelGraphPane = lazyPane(() => import('./panels/ModelGraphPane'), 'ModelGraphPane');
 const RolloutPane = lazyPane(() => import('./panels/RolloutPane'), 'RolloutPane');
 const ManimPane = lazyPane(() => import('./panels/ManimPane'), 'ManimPane');
-const TrainingPeersPane = lazyPane(() => import('./panels/TrainingPeersPane'), 'TrainingPeersPane');
+const LearnPane = lazyPane(() => import('./panels/LearnPane'), 'LearnPane');
 
 /**
  * Training module: notebook-driven neural-network training. Projects come from
@@ -28,6 +28,7 @@ const TrainingPeersPane = lazyPane(() => import('./panels/TrainingPeersPane'), '
 export const trainingModule: ModuleManifest = {
   id: 'training',
   title: 'Training',
+  category: 'research',
   settings: [
     {
       key: 'training.projectsRoot',
@@ -93,21 +94,6 @@ export const trainingModule: ModuleManifest = {
       type: 'number',
       default: 5000,
     },
-    {
-      key: 'training.fabric.advertise',
-      title: 'Advertise training compute',
-      description: 'Broadcast to peers that this node is offering GPU / seeking help.',
-      type: 'enum',
-      enumValues: ['off', 'offering', 'seeking'],
-      default: 'off',
-    },
-    {
-      key: 'training.fabric.note',
-      title: 'Training ad note',
-      description: 'Free-text note attached to your training ad (hardware, availability…).',
-      type: 'string',
-      default: '',
-    },
   ],
   panels: [
     {
@@ -135,15 +121,21 @@ export const trainingModule: ModuleManifest = {
       // first decl carrying one wins) because a loss curve and a dagre graph are
       // both wider than the engine's 300px default, and a companion you cannot
       // read is one you open, squint at, and close again.
+      //
+      // Learn comes first and opens by default: the other strips show what is
+      // happening, this one says what it means — which is the point of doing
+      // research *in* this app rather than in a bare notebook.
       regions: [
         {
-          id: 'training.metrics',
-          label: 'Metrics',
-          icon: '📈',
-          key: 'm',
+          id: 'training.learn',
+          label: 'Learn',
+          icon: '✦',
+          key: 'l',
           position: 'right',
-          defaultSize: 420,
+          defaultOpen: true,
+          defaultSize: 400,
         },
+        { id: 'training.metrics', label: 'Metrics', icon: '📈', key: 'm', position: 'right' },
         {
           id: 'training.modelgraph',
           label: 'Architecture',
@@ -151,9 +143,8 @@ export const trainingModule: ModuleManifest = {
           key: 'a',
           position: 'right',
         },
-        { id: 'training.rollout', label: 'Rollout', icon: '🎮', key: 'u', position: 'right' },
         { id: 'training.manim', label: 'Manim', icon: '🎬', position: 'right' },
-        { id: 'training.peers', label: 'Peers', icon: '🤝', position: 'right' },
+        { id: 'training.rollout', label: 'Rollout', icon: '🎮', key: 'u', position: 'right' },
         { id: 'training.projects', label: 'Projects', icon: '🗂', key: 'p', position: 'left' },
       ],
       // Full cell CRUD + execute for the agent (group `notebook`).
@@ -304,11 +295,11 @@ export const trainingModule: ModuleManifest = {
       embedded: true,
     },
     {
-      id: 'training.peers',
-      title: 'Training Peers',
-      component: TrainingPeersPane,
+      id: 'training.learn',
+      title: 'Learn',
+      component: LearnPane,
       role: 'widget',
-      icon: '🤝',
+      icon: '✦',
       embedded: true,
     },
   ],
@@ -354,9 +345,9 @@ export const trainingModule: ModuleManifest = {
       run: () => revealRegionView('training.manim'),
     },
     {
-      id: 'training.openPeers',
-      title: 'Training: Open training peers',
-      run: () => revealRegionView('training.peers'),
+      id: 'training.openLearn',
+      title: 'Training: Explain this cell and run',
+      run: () => revealRegionView('training.learn'),
     },
   ],
   frames: [
@@ -395,7 +386,7 @@ export const trainingModule: ModuleManifest = {
           children: [
             // The Python reference tabs with the data: the two things you look
             // things up in before writing a cell.
-            { tabs: ['datasets.browser', 'docs.reference'], active: 0 },
+            { tabs: ['datasets.browser', 'docviewer.browse'], active: 0 },
             {
               split: 'row',
               sizes: [0.55, 0.45],
@@ -420,7 +411,10 @@ export const trainingModule: ModuleManifest = {
           ],
         },
         docks: {
-          left: { tools: ['training.projects'], size: 260 },
+          // Explorer, not `training.projects`: that view is `embedded`, and a
+          // saved layout strips embedded views out of docks on load — so the
+          // Projects dock this used to seed vanished on the first reload.
+          left: { tools: ['explorer.home'], size: 260 },
           right: { tools: ['agent.chat'], size: 360 },
           bottom: { tools: ['observability.io'], size: 180, visible: false },
         },

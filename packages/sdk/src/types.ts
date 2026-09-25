@@ -175,6 +175,8 @@ export interface PaneShareDecl {
 export interface PanelDecl {
   id: string;
   title: string;
+  /** Overrides the owning module's launcher category. See `PaneCategory`. */
+  category?: PaneCategory;
   component: ComponentType;
   /**
    * Where this pane opens by *default*: `document` panes tab into center areas,
@@ -276,6 +278,8 @@ export interface PanelDecl {
 export interface WidgetDecl {
   id: string;
   title: string;
+  /** Overrides the owning module's launcher category. See `PaneCategory`. */
+  category?: PaneCategory;
   component: ComponentType;
   requiredCapabilities?: Capability[];
   /**
@@ -550,6 +554,14 @@ export interface WsMessage {
  * instruction puts it. See docs/architecture/windowing.mdx.
  */
 export type PaneRole = 'document' | 'tool' | 'widget';
+
+/**
+ * The launcher band a pane is filed under — a closed vocabulary, so the Start
+ * menu is seven headings rather than one per module. A module declares it once
+ * (`ModuleManifest.category`); a pane may override it. A plugin that declares
+ * none is filed under "Plugins".
+ */
+export type PaneCategory = 'research' | 'agents' | 'build' | 'data' | 'play' | 'people' | 'system';
 
 /** Positions a region strip can occupy inside its host pane's area. */
 export type RegionPosition = 'left' | 'right' | 'bottom';

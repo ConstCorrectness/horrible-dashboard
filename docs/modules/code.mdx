@@ -55,7 +55,7 @@ platform's `tree-sitter-language-pack` build is absorbed in `ts.py`.
 | Panel | Id | Role | What |
 | --- | --- | --- | --- |
 | Symbol Outline | `code.outline` | singleton, **embedded** | The current file's definitions; follows the cursor, drives the locus on click. Meaningless without a buffer, so it lives as the editor's right-hand region strip and has no home of its own — see [Embedded views and sections](../architecture/windowing.mdx#embedded-views-and-sections). `code.search` is deliberately **not** embedded: it *drives* the editor rather than following it. |
-| Symbol Search | `code.search` | singleton, right | Cross-repo search: Name (live fuzzy) ⇄ Semantic (`Tab`); each hit drives the locus. Same component the quick-open modal hosts. |
+| Symbol Search | `code.search` | singleton, **embedded** | Cross-repo search: Name (live fuzzy) ⇄ Semantic (`Tab`); each hit drives the locus. Same component the quick-open modal hosts. The editor buffer's right strip, and `mod+p` opens it as a modal — a launcher entry was a third home for one search. |
 
 ### Backend routes (`/api/code`)
 

@@ -207,6 +207,11 @@ pane is routinely half of a split, so the window's width says nothing about this
 page's. Search still reaches every setting, so nothing becomes unreachable when
 the list goes.
 
+**Deep link.** `openPanel('settings.home', { params: { group: 'Keyboard' } })`
+scrolls to that group (matched by title, or by group id). It exists for the
+Keyboard Shortcuts editor, which moved here from a pane of its own; it jumps when
+the param changes, not on every search keystroke.
+
 ## Contributions to the layout shell
 
 - **Panels:** `settings.home` (singleton, **`document`**) — the settings page,

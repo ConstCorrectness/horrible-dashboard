@@ -2,8 +2,7 @@
 
 Four message types ride the existing signed peer wire — declared here rather than
 in `network/protocol.py` so the social module extends the fabric without the
-fabric having to know it exists, the same way `training/fabric.py` contributes
-`training_ad`.
+fabric having to know it exists.
 
     social_hello            who I am: my device certificate + display name
     social_friend_request   please add me

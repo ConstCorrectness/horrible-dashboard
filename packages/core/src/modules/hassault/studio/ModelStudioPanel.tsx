@@ -9,6 +9,7 @@
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { apiUrl } from '../../../origin';
+import { usePaneParams } from '../../../panes';
 import {
   IconMesh,
   IconArmature,
@@ -262,8 +263,18 @@ export function getModelDisplayMeta(m: ArtModelItem): {
   };
 }
 
+const STUDIO_TABS: readonly StudioTab[] = ['viewer', 'scene', 'materials', 'animator', 'editor'];
+
 export function ModelStudioPanel({ initialTab = 'viewer' }: { initialTab?: StudioTab }) {
-  const [tab, setTab] = useState<StudioTab>(initialTab);
+  // `params.tab` is how the retired Viewer/Editor/Animator openers land here:
+  // the studio is one singleton window now, so opening "the rig editor" means
+  // switching this pane's tab rather than creating a second studio.
+  const params = usePaneParams();
+  const requested = STUDIO_TABS.find((t) => t === params.tab);
+  const [tab, setTab] = useState<StudioTab>(requested ?? initialTab);
+  useEffect(() => {
+    if (requested) setTab(requested);
+  }, [requested]);
   const [models, setModels] = useState<ArtModelItem[]>([]);
   const [selectedModel, setSelectedModel] = useState<ArtModelItem | null>(null);
   const [loading, setLoading] = useState(false);
@@ -2318,15 +2329,3 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: 'left',
   },
 };
-
-export function ModelViewerPanel() {
-  return <ModelStudioPanel initialTab="viewer" />;
-}
-
-export function ModelEditorPanel() {
-  return <ModelStudioPanel initialTab="editor" />;
-}
-
-export function AnimationEditorPanel() {
-  return <ModelStudioPanel initialTab="animator" />;
-}

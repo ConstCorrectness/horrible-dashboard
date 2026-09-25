@@ -10,6 +10,7 @@ const ClubhouseWidget = lazyPane(() => import('./ClubhouseWidget'), 'ClubhouseWi
 export const clubhouseModule: ModuleManifest = {
   id: 'clubhouse',
   title: 'Clubhouse',
+  category: 'play',
   panels: [
     {
       id: 'clubhouse.account',

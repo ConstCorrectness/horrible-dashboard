@@ -16,6 +16,7 @@ const SkillsPane = lazyPane(() => import('./panels/SkillsPane'), 'SkillsPane');
 export const skillsModule: ModuleManifest = {
   id: 'skills',
   title: 'Skills',
+  category: 'agents',
   panels: [
     {
       id: 'skills.library',

@@ -107,14 +107,3 @@ class ManimRequest(BaseModel):
     source: str | None = None  # scene source to write; None = use `file`
     file: str | None = None  # existing file relative to project root
     quality: str = "m"
-
-
-class TrainingAdModel(BaseModel):
-    """A peer-fabric advertisement: this node offers or seeks training compute."""
-
-    node_id: str
-    node_name: str = ""
-    status: Literal["offering", "seeking", "none"]
-    specs: dict[str, Any] = Field(default_factory=dict)
-    note: str = ""
-    ts: float = 0.0

@@ -8,6 +8,7 @@ const VisualizerWidget = lazyPane(() => import('./widgets'), 'VisualizerWidget')
 export const visualizerModule: ModuleManifest = {
   id: 'visualizer',
   title: 'Visualizer',
+  category: 'play',
   widgets: [
     {
       id: 'visualizer.pane',

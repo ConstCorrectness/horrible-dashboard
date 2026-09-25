@@ -18,6 +18,7 @@ import { initNotifications } from './ws';
 export const notificationsModule: ModuleManifest = {
   id: 'notifications',
   title: 'Notifications',
+  category: 'system',
   settings: [
     {
       key: 'notifications.desktop',

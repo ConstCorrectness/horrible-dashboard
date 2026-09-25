@@ -108,6 +108,7 @@ function traceTextItems(target: ContextTarget): ContextMenuItem[] {
 export const llamacppModule: ModuleManifest = {
   id: 'llamacpp',
   title: 'llama.cpp',
+  category: 'research',
   panels: [
     {
       id: 'llamacpp.server',

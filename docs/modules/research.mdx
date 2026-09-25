@@ -132,7 +132,9 @@ raise `ArxivRateLimited`, which the routes pass through as a real **429 with a
   artifact store, and file it as a `pdf` source with the paper's real title and
   authors, the **abstract page** as the citable URL, and an `arxiv` tag.
 
-The **`research.arxiv`** pane (singleton, document role) is the human surface:
+The **arXiv** section of the Research window (`research.console`, sections
+**Deep research** and **arXiv**; the view is `research.arxiv`, now `embedded`) is the
+human surface:
 search + category/sort filters, a results list, the abstract view, and
 **Open PDF** / **Save to library** buttons — Open PDF lands directly in the PDF
 viewer pane. Agent tools `arxiv.search` / `arxiv.get` (read-only) and

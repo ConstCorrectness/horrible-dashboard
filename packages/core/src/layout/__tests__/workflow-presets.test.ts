@@ -96,6 +96,7 @@ describe('preset agent bindings', () => {
 
 describe('fine-tuning frame preset', () => {
   const FINETUNE_VIEWS = new Set([
+    'training.notebook',
     'evals.hub',
     'llamacpp.server',
     'training.metrics',
@@ -121,10 +122,9 @@ describe('fine-tuning frame preset', () => {
     const areas = areasOf(frame.center);
     const views = areas.map((a) => a.tabs.map((t) => t.viewId));
 
-    // The document area is empty on purpose: `training.notebook`/`training.recipe`
-    // are params-bound and a preset's `tabs` carry none, so seeding them would open
-    // two panes reading "No project". They arrive from the Projects pane instead.
-    expect(views[0]).toEqual([]);
+    // The notebook is seeded with no params and falls back to the project you
+    // were last in (`lastProjectId`), which is what lets a preset seed it at all.
+    expect(views[0]).toEqual(['training.notebook']);
     // The pairing the whole layout exists for: a failing eval row names a case, and
     // the code that produced it is one pane up.
     expect(views[1]).toEqual(['evals.hub', 'llamacpp.server']);
@@ -150,7 +150,7 @@ describe('fine-tuning frame preset', () => {
     // against none at all must differ — if they matched, every id would be wrong.
     const real = seedFromPreset(preset, { knownViews: FINETUNE_VIEWS });
     const none = seedFromPreset(preset, { knownViews: new Set<string>() });
-    expect(areasOf(real.center).flatMap((a) => a.tabs).length).toBe(4);
+    expect(areasOf(real.center).flatMap((a) => a.tabs).length).toBe(5);
     expect(areasOf(none.center).flatMap((a) => a.tabs).length).toBe(0);
   });
 });

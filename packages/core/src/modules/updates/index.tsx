@@ -12,6 +12,7 @@ import { UpdatesSection } from './UpdatesSection';
 export const updatesModule: ModuleManifest = {
   id: 'updates',
   title: 'Updates',
+  category: 'system',
   settings: [
     {
       key: 'app.releaseChannel',

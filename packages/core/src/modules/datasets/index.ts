@@ -26,6 +26,7 @@ const DatasetPicker = lazyPane(() => import('./panels/DatasetPicker'), 'DatasetP
 export const datasetsModule: ModuleManifest = {
   id: 'datasets',
   title: 'Datasets',
+  category: 'research',
   settings: [
     {
       key: 'datasets.peekRows',

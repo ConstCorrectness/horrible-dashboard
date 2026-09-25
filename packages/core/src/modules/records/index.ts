@@ -13,6 +13,7 @@
 import { lazyPane } from '../../lazy-pane';
 import { registry, type ModuleManifest } from '../../registry';
 import { seedSchemas } from './api';
+import { openTableSetup } from './open-setup';
 import { refreshSchemas } from './store';
 
 // Loaded when the pane first renders, not at boot — see `lazyPane`.
@@ -51,6 +52,7 @@ async function ensureSeeded(): Promise<void> {
 export const recordsModule: ModuleManifest = {
   id: 'records',
   title: 'Records',
+  category: 'data',
   panels: [
     {
       id: 'records.grid',
@@ -61,6 +63,12 @@ export const recordsModule: ModuleManifest = {
       role: 'document',
       icon: '▤',
       regions: [TABLES_REGION],
+      // The table designer is a section of the grid it configures, not a window
+      // of its own: it opens where you are looking and hands back on save.
+      sections: [
+        { id: 'rows', label: 'Rows', icon: '▤', default: true },
+        { id: 'setup', label: 'Table setup', icon: '⚙', component: TableSetup },
+      ],
     },
     {
       id: 'records.form',
@@ -71,13 +79,6 @@ export const recordsModule: ModuleManifest = {
       role: 'document',
       icon: '📋',
       regions: [TABLES_REGION],
-    },
-    {
-      id: 'records.schema',
-      title: 'Table setup',
-      component: TableSetup,
-      role: 'document',
-      icon: '⚙',
     },
     {
       id: 'records.board',
@@ -156,7 +157,7 @@ export const recordsModule: ModuleManifest = {
     {
       id: 'records.newTable',
       title: 'Records: New table…',
-      run: () => registry.openPanel('records.schema', { params: { schemaId: 'new' } }),
+      run: () => openTableSetup('new'),
     },
     {
       id: 'records.seed',

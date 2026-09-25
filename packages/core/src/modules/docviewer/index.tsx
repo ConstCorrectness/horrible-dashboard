@@ -6,8 +6,9 @@
  * Distinct from the `docs` module, which despite the name is the symbol-hover popup
  * in the editor and contributes no pane.
  */
+import { revealSection } from '../../layout/controller';
 import { lazyPane } from '../../lazy-pane';
-import { registry, type ModuleManifest } from '../../registry';
+import type { ModuleManifest } from '../../registry';
 
 // Loaded when the pane first renders, not at boot — see `lazyPane`.
 const DocSetBrowser = lazyPane(() => import('./panels/DocSetBrowser'), 'DocSetBrowser');
@@ -15,6 +16,7 @@ const DocSetBrowser = lazyPane(() => import('./panels/DocSetBrowser'), 'DocSetBr
 export const docviewerModule: ModuleManifest = {
   id: 'docviewer',
   title: 'Doc viewer',
+  category: 'data',
   settings: [
     {
       key: 'docviewer.crawlDelay',
@@ -45,13 +47,22 @@ export const docviewerModule: ModuleManifest = {
       icon: '📖',
       // Non-singleton: reading two sets side by side is a normal thing to want.
       // Openers pass `{ setId?, pageId? }`.
+      //
+      // One Docs window, two kinds of documentation. The Python reference (the
+      // `docs` module's view, `embedded`) was a second launcher entry for the
+      // same verb — "read the docs" — so it is a section here. It is the default
+      // because it works on a fresh install; a doc set has to be captured first.
+      sections: [
+        { id: 'python', label: 'Python reference', icon: 'λ', view: 'docs.reference', default: true },
+        { id: 'sets', label: 'Doc sets', icon: '▤' },
+      ],
     },
   ],
   commands: [
     {
       id: 'docviewer.open',
       title: 'Docs: Open doc viewer',
-      run: () => registry.openPanel('docviewer.browse'),
+      run: () => void revealSection('sets', 'docviewer.browse'),
     },
   ],
   keybindings: [{ key: 'mod+shift+d', command: 'docviewer.open' }],

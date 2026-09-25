@@ -137,31 +137,18 @@ export function googleAuthComplete(code: string): Promise<{ ok: boolean }> {
   return apiPost('/training/google/auth/complete', { code });
 }
 
-export interface TrainingAd {
-  node_id: string;
-  node_name: string;
-  status: 'offering' | 'seeking' | 'none';
-  specs: {
-    platform?: string;
-    cpu?: string;
-    cpu_count?: number;
-    ram_gb?: number;
-    gpu?: string | null;
-    vram_gb?: number | null;
-  };
-  note: string;
-  ts: number;
+/** One recipe knob with its help text, as the Learn strip explains it. */
+export interface LearnTerm {
+  name: string;
+  label: string;
+  help: string;
+  aliases: string[];
+  group: string;
+  backend: string;
 }
 
-export function listAds(): Promise<{ ads: TrainingAd[] }> {
-  return apiGet('/training/fabric/ads');
-}
-
-export function advertise(
-  status: 'off' | 'offering' | 'seeking',
-  note?: string,
-): Promise<{ status: string }> {
-  return apiPost('/training/fabric/advertise', { status, note });
+export function getLearnGlossary(): Promise<{ terms: LearnTerm[] }> {
+  return apiGet('/training/learn/glossary');
 }
 
 // --- the recipe surface -------------------------------------------------------

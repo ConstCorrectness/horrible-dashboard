@@ -415,9 +415,9 @@ export function MatchCompanion({
             type="button"
             className="games-ghost-btn"
             style={{ fontSize: '0.72rem', padding: '0.35rem 0.5rem', textAlign: 'left' }}
-            onClick={() => registry.openPanel('hassault.armory')}
+            onClick={() => registry.openPanel('hassault.server')}
           >
-            ⚔ Armory & Skins
+            ⌬ Server
           </button>
           <button
             type="button"

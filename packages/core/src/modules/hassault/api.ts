@@ -2,7 +2,7 @@
  * REST client for the HorribleAssault map pipeline. Mirrors
  * `backend/modules/hassault/models.py`; the backend stays the source of truth.
  */
-import { apiGet, apiPost } from '../../api';
+import { apiDelete, apiGet, apiPost } from '../../api';
 import type { ItemRow } from './net';
 import { apiUrl } from '../../origin';
 
@@ -401,6 +401,64 @@ export interface LaunchNativeResult {
    * `hassault.autoBuildNative` off. Worth saying loudly: this is the failure
    * that reads as "my change did not work". */
   stale?: boolean;
+}
+
+/** One player in a room, as `GET /matches/{room}` lists it. */
+export interface RosterPlayer {
+  name: string;
+  team: string;
+  alive: boolean;
+  kills: number;
+  deaths: number;
+  bot: boolean;
+  rtt_ms: number;
+  remote: boolean;
+}
+
+export interface MatchRoster {
+  room: string;
+  map: string;
+  mode: string;
+  scoreLabel: string;
+  scores: Record<string, number>;
+  players: RosterPlayer[];
+  capacity: number;
+}
+
+export interface ModeSpec {
+  id: string;
+  name: string;
+  scoreLabel: string;
+  teams: boolean;
+}
+
+export type BotSkill = 'easy' | 'normal' | 'hard';
+
+/** Open a match without joining it — the Server pane's Host. */
+export function createMatch(map: string, mode = 'dm'): Promise<MatchSummary> {
+  return apiPost<MatchSummary>('/hassault/matches', { map, mode });
+}
+
+export function getMatchRoster(room: string): Promise<MatchRoster> {
+  return apiGet<MatchRoster>(`/hassault/matches/${encodeURIComponent(room)}`);
+}
+
+export function addBots(room: string, count: number, skill: BotSkill): Promise<unknown> {
+  return apiPost(`/hassault/matches/${encodeURIComponent(room)}/bots`, { count, skill });
+}
+
+/** Remove bots, newest first; no `count` removes them all. */
+export function removeBots(room: string, count?: number): Promise<unknown> {
+  const q = count === undefined ? '' : `?count=${count}`;
+  return apiDelete(`/hassault/matches/${encodeURIComponent(room)}/bots${q}`);
+}
+
+export function inviteToMatch(room: string, who: string): Promise<unknown> {
+  return apiPost(`/hassault/matches/${encodeURIComponent(room)}/invite`, { who });
+}
+
+export function listModes(): Promise<ModeSpec[]> {
+  return apiGet<ModeSpec[]>('/hassault/modes');
 }
 
 export function listMatches(): Promise<MatchSummary[]> {

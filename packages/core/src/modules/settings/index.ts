@@ -12,6 +12,7 @@ import { SettingsPanel } from './SettingsPanel';
 export const settingsModule: ModuleManifest = {
   id: 'settings',
   title: 'Settings',
+  category: 'system',
   panels: [
     {
       id: 'settings.home',

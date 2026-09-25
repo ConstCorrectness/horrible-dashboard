@@ -16,7 +16,7 @@ the user and the agent see.
 
 | Id | Role | Notes |
 | --- | --- | --- |
-| `keymap.shortcuts` | tool | Keyboard Shortcuts. Singleton, docks left or right. |
+| `keymap.shortcuts` | tool, `embedded` | Keyboard Shortcuts. Rendered on the **Settings** page (a `settingsSections` entry titled "Keyboard", so it merges with the module's declared rows into one group); `keymap.open` opens Settings on that group via `params: { group: 'Keyboard' }`. The pane stays declared because it carries the agent's keymap tools. |
 
 ## Commands and keybindings
 

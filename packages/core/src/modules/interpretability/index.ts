@@ -17,6 +17,7 @@ const InterpretabilityPanel = lazyPane(() => import('./view'), 'Interpretability
 export const interpretabilityModule: ModuleManifest = {
   id: 'interpretability',
   title: 'Interpretability',
+  category: 'research',
   panels: [
     {
       // `widget` rather than `tool`: this is the subject of its workspace, so it
