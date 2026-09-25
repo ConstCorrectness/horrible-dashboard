@@ -15,13 +15,16 @@
  *
  * See docs/modules/audio.mdx.
  */
+import { lazyPane } from '../../lazy-pane';
 import './audio.css';
 
 import { registry, type ModuleManifest } from '../../registry';
 import { getSetting } from '../../settings';
-import { AudioMixerPanel } from './panels/MixerPanel';
 import { AudioDevicesSection } from './settings/DevicesSection';
 import { connectAudio, ensureLoaded } from './store';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const AudioMixerPanel = lazyPane(() => import('./panels/MixerPanel'), 'AudioMixerPanel');
 
 export const audioModule: ModuleManifest = {
   id: 'audio',

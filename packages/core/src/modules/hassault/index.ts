@@ -1,18 +1,30 @@
 import { registry, type ModuleManifest } from '../../registry';
 import { registerNotificationAction } from '../notifications';
-import { DeveloperConsole } from './console';
-import { HorribleAssaultPanel } from './HorribleAssaultPanel';
-import {
-  ModelStudioPanel,
-  ModelViewerPanel,
-  ModelEditorPanel,
-  AnimationEditorPanel,
-} from './studio/ModelStudioPanel';
+import { lazyPane } from '../../lazy-pane';
 import { requestJoin } from './invite-notify';
-import { ArmoryPanel } from './panels/ArmoryPanel';
-import { StandaloneMatchCompanionPanel } from './panels/MatchCompanion';
-import { StandaloneRadarPanel } from './panels/StandaloneRadarPanel';
-import { VoiceCommsPanel } from './panels/VoiceCommsPanel';
+
+// Every pane here pulls three.js (and the play pane Rapier's WASM), so none of it
+// is imported until a pane opens. See `lazyPane`.
+const HorribleAssaultPanel = lazyPane(
+  () => import('./HorribleAssaultPanel'),
+  'HorribleAssaultPanel',
+);
+const DeveloperConsole = lazyPane(() => import('./console'), 'DeveloperConsole');
+const loadStudio = () => import('./studio/ModelStudioPanel');
+const ModelStudioPanel = lazyPane(loadStudio, 'ModelStudioPanel');
+const ModelViewerPanel = lazyPane(loadStudio, 'ModelViewerPanel');
+const ModelEditorPanel = lazyPane(loadStudio, 'ModelEditorPanel');
+const AnimationEditorPanel = lazyPane(loadStudio, 'AnimationEditorPanel');
+const ArmoryPanel = lazyPane(() => import('./panels/ArmoryPanel'), 'ArmoryPanel');
+const StandaloneMatchCompanionPanel = lazyPane(
+  () => import('./panels/MatchCompanion'),
+  'StandaloneMatchCompanionPanel',
+);
+const StandaloneRadarPanel = lazyPane(
+  () => import('./panels/StandaloneRadarPanel'),
+  'StandaloneRadarPanel',
+);
+const VoiceCommsPanel = lazyPane(() => import('./panels/VoiceCommsPanel'), 'VoiceCommsPanel');
 
 /**
  * What the **Join** button on an invite toast does.
@@ -505,9 +517,6 @@ export const hassaultModule: ModuleManifest = {
   ],
 };
 
-export { HorribleAssaultPanel, type HorribleAssaultPanelProps } from './HorribleAssaultPanel';
 export { lobbyVoice } from './lobby-voice';
 export { listMaps, getMapCubes, getMapInfo, type MapSummary, type MapInfo } from './api';
 export { formatBytes } from './boot';
-
-

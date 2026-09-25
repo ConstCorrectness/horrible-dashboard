@@ -1,18 +1,21 @@
+import { lazyPane } from '../../lazy-pane';
 import { revealRegionView, revealSection } from '../../layout/controller';
 import { registry, type ModuleManifest } from '../../registry';
 import { ownedReason, setProjectNote } from './activity';
 import { notebookAgentTools } from './agentTools';
 import { deleteProject, pushProject } from './api';
 import { openTrainingNotebook, openTrainingRecipe } from './open';
-import { ManimPane } from './panels/ManimPane';
-import { MetricsPane } from './panels/MetricsPane';
-import { ModelGraphPane } from './panels/ModelGraphPane';
-import { NotebookPane } from './panels/NotebookPane';
-import { ProjectsPane } from './panels/ProjectsPane';
-import { RecipePane } from './panels/RecipePane';
-import { SweepPane } from './panels/SweepPane';
-import { RolloutPane } from './panels/RolloutPane';
-import { TrainingPeersPane } from './panels/TrainingPeersPane';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const ProjectsPane = lazyPane(() => import('./panels/ProjectsPane'), 'ProjectsPane');
+const NotebookPane = lazyPane(() => import('./panels/NotebookPane'), 'NotebookPane');
+const RecipePane = lazyPane(() => import('./panels/RecipePane'), 'RecipePane');
+const SweepPane = lazyPane(() => import('./panels/SweepPane'), 'SweepPane');
+const MetricsPane = lazyPane(() => import('./panels/MetricsPane'), 'MetricsPane');
+const ModelGraphPane = lazyPane(() => import('./panels/ModelGraphPane'), 'ModelGraphPane');
+const RolloutPane = lazyPane(() => import('./panels/RolloutPane'), 'RolloutPane');
+const ManimPane = lazyPane(() => import('./panels/ManimPane'), 'ManimPane');
+const TrainingPeersPane = lazyPane(() => import('./panels/TrainingPeersPane'), 'TrainingPeersPane');
 
 /**
  * Training module: notebook-driven neural-network training. Projects come from

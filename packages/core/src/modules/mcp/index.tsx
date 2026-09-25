@@ -9,9 +9,12 @@
  * `./api`, so the palette command opens the pane and `/mcp` prints the same summary
  * inline without a model turn. Neither reimplements the other.
  */
+import { lazyPane } from '../../lazy-pane';
 import { registry, type ModuleManifest } from '../../registry';
 import { listServers, summarize } from './api';
-import { McpServersPane } from './panels/McpServersPane';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const McpServersPane = lazyPane(() => import('./panels/McpServersPane'), 'McpServersPane');
 
 export const mcpModule: ModuleManifest = {
   id: 'mcp',

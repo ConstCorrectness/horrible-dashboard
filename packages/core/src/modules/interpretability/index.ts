@@ -1,7 +1,10 @@
+import { lazyPane } from '../../lazy-pane';
 import { registry, type ModuleManifest } from '../../registry';
 import { designerAction } from './designer/actions';
-import { ModelExplorer } from './ModelExplorer';
-import { InterpretabilityPanel } from './view';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const ModelExplorer = lazyPane(() => import('./ModelExplorer'), 'ModelExplorer');
+const InterpretabilityPanel = lazyPane(() => import('./view'), 'InterpretabilityPanel');
 
 /**
  * See what the model is actually being handed.
@@ -52,7 +55,8 @@ export const interpretabilityModule: ModuleManifest = {
     {
       id: 'interpretability',
       name: 'Interpretability',
-      description: 'Look inside a running model — what it was shown, and what its architecture does with it.',
+      description:
+        'Look inside a running model — what it was shown, and what its architecture does with it.',
       icon: '🔍',
       frame: {
         center: {

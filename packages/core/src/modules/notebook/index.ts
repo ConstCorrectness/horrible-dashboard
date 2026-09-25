@@ -1,9 +1,12 @@
+import { lazyPane } from '../../lazy-pane';
 import { revealSection } from '../../layout/controller';
 import type { ModuleManifest } from '../../registry';
 import { notebookAgentTools } from './agentTools';
 import { openNotebook } from './open';
-import { NotebookBrowser } from './panels/NotebookBrowser';
-import { NotebookEditor } from './panels/NotebookEditor';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const NotebookBrowser = lazyPane(() => import('./panels/NotebookBrowser'), 'NotebookBrowser');
+const NotebookEditor = lazyPane(() => import('./panels/NotebookEditor'), 'NotebookEditor');
 
 /**
  * Notebook module: a domain-neutral reactive `.ipynb` notebook. JupyterLab-style

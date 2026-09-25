@@ -24,6 +24,7 @@ import { closePaneSession, paneSessionKey } from '../../layout/pane-lifetime';
 import { findPaneAnywhere } from '../../layout/model';
 import { layoutStore } from '../../layout/store';
 import { PaneParamsContext } from '../../panes';
+import { setWorkbenchInstanceId } from './workbench-host';
 import { BufferView } from '../editor/BufferView';
 import {
   forgetUnsaved,
@@ -51,15 +52,6 @@ export function tabInstanceId(hostInstanceId: string, uri: string): string {
   return `${hostInstanceId}:buffer:${uri}`;
 }
 
-/** The live workbench, if one is open — what `openInWorkbench` and the agent
- * tools resolve against. Set by the mounted component. */
-let liveHostId: string | null = null;
-
-/** The workbench instance currently rendering, or null when none is open. */
-export function workbenchInstanceId(): string | null {
-  return liveHostId;
-}
-
 export function IdeWorkbench() {
   const hostId = useContext(PaneInstanceContext);
   const { tabs, active } = useSyncExternalStore(
@@ -85,7 +77,7 @@ export function IdeWorkbench() {
   // under one source, where saving is last-writer-wins.
   useEffect(() => {
     if (!hostId) return;
-    liveHostId = hostId;
+    setWorkbenchInstanceId(hostId);
     const host: BufferHost = {
       open(source) {
         openTab(hostId, source);
@@ -99,7 +91,7 @@ export function IdeWorkbench() {
     setBufferHost(host);
     return () => {
       setBufferHost(null);
-      if (liveHostId === hostId) liveHostId = null;
+      setWorkbenchInstanceId(null, hostId);
     };
   }, [hostId]);
 

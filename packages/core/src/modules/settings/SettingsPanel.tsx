@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useMemo, useRef, useState } from 'react';
 
 import { GRAPHICS_QUALITY_SETTING_KEY } from '../../graphics';
 import { type SettingDecl } from '../../registry';
@@ -74,9 +74,12 @@ function SettingRow({ decl }: { decl: SettingDecl }) {
               ))}
             </div>
             <div className="quality-slider-hint">
-              {qualityVal === 'performance' && '⚡ Max speed: blurs disabled, static ambient effects, throttled loops'}
-              {qualityVal === 'balanced' && '⚖️ Balanced: subtle blurs, optimized animations, standard effects'}
-              {qualityVal === 'quality' && '✨ High fidelity: full glassmorphism, 60/120 FPS particles & lighting'}
+              {qualityVal === 'performance' &&
+                '⚡ Max speed: blurs disabled, static ambient effects, throttled loops'}
+              {qualityVal === 'balanced' &&
+                '⚖️ Balanced: subtle blurs, optimized animations, standard effects'}
+              {qualityVal === 'quality' &&
+                '✨ High fidelity: full glassmorphism, 60/120 FPS particles & lighting'}
             </div>
           </div>
         );
@@ -328,7 +331,10 @@ export function SettingsPanel() {
                     options without saying which one was actually detected. */}
                 {Section && (
                   <div className="settings-card settings-card--section">
-                    <Section />
+                    {/* A section may be a `lazyPane` (the editor's pulls in CodeMirror). */}
+                    <Suspense fallback={null}>
+                      <Section />
+                    </Suspense>
                   </div>
                 )}
                 {group.decls.length > 0 && (

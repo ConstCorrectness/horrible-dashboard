@@ -7,15 +7,18 @@
  * or fetch a PDF). Deep-research runs and the ArXiv browser land in later
  * phases of the same module. See docs/modules/research.mdx.
  */
+import { lazyPane } from '../../lazy-pane';
 import { dialogs } from '../../dialogs';
 import { registry, type ModuleManifest } from '../../registry';
 import { toastsStore } from '../../toasts';
 import { getSetting } from '../../settings';
 import { captureUrl, savePdfUrl, uploadPdf } from './api';
-import { ArxivPanel } from './panels/ArxivPanel';
-import { PageViewer } from './panels/PageViewer';
-import { PdfViewer } from './panels/PdfViewer';
-import { ResearchConsole } from './panels/ResearchConsole';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const ArxivPanel = lazyPane(() => import('./panels/ArxivPanel'), 'ArxivPanel');
+const PageViewer = lazyPane(() => import('./panels/PageViewer'), 'PageViewer');
+const PdfViewer = lazyPane(() => import('./panels/PdfViewer'), 'PdfViewer');
+const ResearchConsole = lazyPane(() => import('./panels/ResearchConsole'), 'ResearchConsole');
 
 function saveLibrary(): string {
   return getSetting<string>('browser.saveLibrary') || 'default';

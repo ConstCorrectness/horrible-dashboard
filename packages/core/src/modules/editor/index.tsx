@@ -7,6 +7,7 @@
  * + mod+s keybinding routed through the shell keybinding service (C3), agent
  * tools (C4), and the recent-notes dashboard widget (C5). See docs/modules/editor.md.
  */
+import { lazyPane } from '../../lazy-pane';
 import { areaHostingView, openPaneInArea, retargetPane } from '../../layout/controller';
 import { getLocus, subscribeLocus } from '../../locus';
 import { minibuffer } from '../../minibuffer';
@@ -14,14 +15,14 @@ import { registry, type ModuleManifest } from '../../registry';
 import { routeOpenToHost } from './host';
 import type { OpenBufferOptions } from './openOptions';
 import { editorAgentTools } from './agentTools';
-import { BufferView } from './BufferView';
-import { IndexedPackages } from './IndexedPackages';
 import { getBuffer, listBufferUris } from './buffers';
-import { focusedEditorView, toggleCompletionIn } from './completion';
-import { RecentNotesWidget } from './RecentNotes';
 import { registerEditorService } from './service';
 import { createNote, sourceTitle } from './sources';
 
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const IndexedPackages = lazyPane(() => import('./IndexedPackages'), 'IndexedPackages');
+const BufferView = lazyPane(() => import('./BufferView'), 'BufferView');
+const RecentNotesWidget = lazyPane(() => import('./RecentNotes'), 'RecentNotesWidget');
 
 /**
  * The pane holding the buffer the user is looking at, when that buffer is blank
@@ -214,7 +215,10 @@ export const editorModule: ModuleManifest = {
     {
       id: 'editor.toggleSuggestions',
       title: 'Editor: Toggle suggestions',
-      run: () => {
+      // Imported on use: `completion` is CodeMirror, and a static import here
+      // would load all of it at boot for a command no one runs without a buffer.
+      run: async () => {
+        const { focusedEditorView, toggleCompletionIn } = await import('./completion');
         const view = focusedEditorView();
         if (view) toggleCompletionIn(view);
       },

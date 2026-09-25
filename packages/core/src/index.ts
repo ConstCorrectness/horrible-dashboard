@@ -423,7 +423,6 @@ export {
   type DocLookupResult,
   type DocSourceId,
 } from './docs/chain';
-export { docsHover, docsKeymap, renderDocEntry, symbolAt } from './docs/cm-docs';
 export { renderMarkdown as renderDocMarkdown } from './docs/markdown';
 export { trainingModule } from './modules/training';
 export { datasetsModule } from './modules/datasets';
@@ -483,8 +482,6 @@ export { settingsModule } from './modules/settings';
 export { initKeymapPreset, keymapModule } from './modules/keymap';
 export {
   hassaultModule,
-  HorribleAssaultPanel,
-  type HorribleAssaultPanelProps,
   lobbyVoice,
   listMaps,
   getMapCubes,

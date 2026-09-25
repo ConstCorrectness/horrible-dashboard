@@ -1,7 +1,10 @@
+import { lazyPane } from '../../lazy-pane';
 import { registry, type ModuleManifest } from '../../registry';
 import { clubhouseAction } from './actions';
 import { clubhouseAgentTools } from './agentTools';
-import { ClubhouseWidget } from './ClubhouseWidget';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const ClubhouseWidget = lazyPane(() => import('./ClubhouseWidget'), 'ClubhouseWidget');
 
 /** See docs/modules/clubhouse.md. */
 export const clubhouseModule: ModuleManifest = {
@@ -47,4 +50,3 @@ export const clubhouseModule: ModuleManifest = {
 
 export * from './actions';
 export * from './api';
-export * from './useClubhouseVoice';

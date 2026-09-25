@@ -4,6 +4,7 @@
  * service; "open terminal here" / desktop reveal are B5/B6. See
  * docs/modules/file-explorer.md.
  */
+import { lazyPane } from '../../lazy-pane';
 import { dialogs } from '../../dialogs';
 import { revealSection } from '../../layout/controller';
 import { toastsStore } from '../../toasts';
@@ -14,7 +15,6 @@ import type { ContextMenuItem, ContextTarget } from '../../overlay/context-menu'
 import { deleteSelection, selectionPaths } from './actions';
 import { filesAgentTools } from './agentTools';
 import { bufferUriFor, createEntry, isVirtualPath, joinPath, listRoots, parentDir } from './api';
-import { FileTree } from './FileTree';
 import {
   collapseAll,
   getActivePath,
@@ -24,6 +24,9 @@ import {
   setSelection,
   startRename,
 } from './store';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const FileTree = lazyPane(() => import('./FileTree'), 'FileTree');
 
 const FILE_URI = 'workspace-file:';
 

@@ -21,6 +21,10 @@ manifest object:
   `title`, `component`, `defaultPlacement`). Set `singleton: true` if only one
   window of the panel should exist (opening again focuses it, e.g. the
   dashboard); omit it for panels you open many of (terminals, editor buffers).
+  Declare the component with `lazyPane(() => import('./panels/Foo'), 'Foo')`
+  (`packages/core/src/lazy-pane.ts`) rather than a static import, so the pane's
+  code — and any heavy library it pulls in — loads when the pane first opens, not at
+  boot. Don't also import or re-export that file from `index.ts`, or it stays eager.
   Panels render registry-side — they don't import the windowing engine. See
   [docs/architecture/windowing.md](../../docs/architecture/windowing.md);
   `scratch` is the reference panel.

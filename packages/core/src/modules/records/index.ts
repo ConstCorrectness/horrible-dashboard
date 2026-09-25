@@ -10,14 +10,17 @@
  * actually happens (Research, Web Ops, Data Entry) rather than living in a
  * records-only workspace of its own. See docs/modules/records.mdx.
  */
+import { lazyPane } from '../../lazy-pane';
 import { registry, type ModuleManifest } from '../../registry';
 import { seedSchemas } from './api';
-import { RecordBoard } from './RecordBoard';
-import { RecordForm } from './RecordForm';
-import { RecordGrid } from './RecordGrid';
-import { RecordList } from './RecordList';
 import { refreshSchemas } from './store';
-import { TableSetup } from './TableSetup';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const RecordGrid = lazyPane(() => import('./RecordGrid'), 'RecordGrid');
+const RecordForm = lazyPane(() => import('./RecordForm'), 'RecordForm');
+const TableSetup = lazyPane(() => import('./TableSetup'), 'TableSetup');
+const RecordBoard = lazyPane(() => import('./RecordBoard'), 'RecordBoard');
+const RecordList = lazyPane(() => import('./RecordList'), 'RecordList');
 
 /**
  * The table switcher, as a left strip on every record document. Declared once
@@ -111,7 +114,8 @@ export const recordsModule: ModuleManifest = {
     {
       id: 'intake',
       name: 'Data Entry',
-      description: 'Read a document on the left, fill its record on the right, and review every field the agent proposes.',
+      description:
+        'Read a document on the left, fill its record on the right, and review every field the agent proposes.',
       icon: '📥',
       // Source left, review right, half and half: the whole workflow is reading one
       // and confirming the other, and neither is secondary.

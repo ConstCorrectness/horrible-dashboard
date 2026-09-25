@@ -1,5 +1,6 @@
 import react from '@vitejs/plugin-react';
 import { existsSync } from 'node:fs';
+import { Agent } from 'node:http';
 import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
 
@@ -39,16 +40,20 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
+          // Vite's `__vitePreload` (and Rollup's CJS interop) are shared by every
+          // dynamic import. Left unassigned, Rollup hoists them into whichever
+          // manual chunk used them first — CodeMirror, via language-data — and the
+          // entry then has to load that whole 1.7 MB chunk to call a 1 KB helper.
+          if (id.includes('vite/preload-helper') || id.includes('commonjsHelpers')) {
+            return 'runtime';
+          }
           if (id.includes('node_modules/three') || id.includes('three/examples')) {
             return 'vendor-three';
           }
           if (id.includes('node_modules/@dimforge/rapier3d')) {
             return 'vendor-rapier';
           }
-          if (
-            id.includes('node_modules/@mui') ||
-            id.includes('node_modules/@emotion')
-          ) {
+          if (id.includes('node_modules/@mui') || id.includes('node_modules/@emotion')) {
             return 'vendor-mui';
           }
           if (
@@ -89,6 +94,14 @@ export default defineConfig({
       // Windows' Hyper-V port-exclusion ranges when they swallow 8000).
       '/api': {
         target: `http://127.0.0.1:${process.env.HORRIBLE_DEV_BACKEND_PORT || '8000'}`,
+        // Without an agent, http-proxy sends `Connection: close` upstream and relays
+        // the backend's `Connection: close` back, so every API call opened a fresh
+        // TCP connection to this server. On Windows a fresh connection to
+        // `localhost` costs ~250ms (the IPv6 attempt is refused before the IPv4 one
+        // is tried — we listen on 127.0.0.1 only), which put a quarter second of
+        // dead time on every API request in the browser layout. (The desktop shell
+        // calls the backend by absolute URL and never goes through this proxy.)
+        agent: new Agent({ keepAlive: true }),
         // X-Forwarded-For, so the backend can tell a request this proxy relayed
         // from a LAN client (`pnpm dev:lan`) from one made on this machine. Without
         // it every proxied request looks like loopback -- see otel/auth.py.

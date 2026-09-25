@@ -128,6 +128,24 @@ DOM directly — they **register panels** with the module registry
 (`packages/core`), and the workspace decides where panels live (default
 placement comes from the panel declaration; the user can rearrange freely).
 
+A pane body is **loaded when it first renders, not at boot.** Every manifest is
+registered before the shell paints, so a component a manifest imports statically is
+parsed on every launch whether or not its pane is ever opened — which is how three.js,
+Rapier, Agora, pdf.js, xterm, xyflow, MUI and CodeMirror all used to load up front.
+Manifests declare `component: lazyPane(() => import('./Panel'), 'Panel')` instead, and
+`PaneHost` (and a board tile, and a settings section) renders it under `<Suspense>`.
+The rule that makes it work: the file behind the `import()` must not *also* be
+imported statically from anything on the boot path — a barrel re-export counts —
+or the bundler has nothing to split and the pane quietly stays eager. The production
+entry is ~0.8 MB (from 3.0 MB, plus eight vendor chunks that are no longer preloaded),
+and `pnpm dev` loads ~430 modules at boot instead of ~1,500.
+
+The one bundler trap: Vite's `__vitePreload` helper is shared by every dynamic
+import, and Rollup hoists it into whichever `manualChunks` chunk used it first. It
+landed in `vendor-codemirror` (via language-data), so the entry preloaded all of
+CodeMirror to call a 1 KB helper. `apps/web/vite.config.ts` pins it to its own
+`runtime` chunk.
+
 Everything user-facing routes through two shell services:
 
 - **Spotlight** (`mod+k`) — every module capability is a registered command
@@ -273,7 +291,11 @@ origin switch (`packages/core/src/origin.ts`, set once at boot via
 `initBackendOrigin`):
 
 - **Browser:** origin stays `null` — paths are relative (`/api`, `/ws`) and the
-  Vite dev server proxies them to `localhost:8000`. Start the backend yourself
+  Vite dev server proxies them to `localhost:8000` over a **keep-alive** agent.
+  Without one, http-proxy sends `Connection: close` and relays it back, so every
+  API call opened a new TCP connection to the dev server — and on Windows a new
+  connection to `localhost` costs ~250ms, because the IPv6 attempt is refused
+  before IPv4 is tried (Vite listens on `127.0.0.1`). Start the backend yourself
   (`scripts/dev-backend.ps1` or `uv run uvicorn backend.app:app --port 8000`).
   Anything that executes on the backend (terminals, file access, agents) runs
   **where the backend runs**, not where the browser runs. Module docs call this

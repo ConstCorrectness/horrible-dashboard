@@ -6,9 +6,12 @@
  * a cheap description every turn, the instructions only when `use_skill` asks. See
  * docs/modules/skills.mdx.
  */
+import { lazyPane } from '../../lazy-pane';
 import { registry, type ModuleManifest } from '../../registry';
 import { listSkills, skillCost, summarize } from './api';
-import { SkillsPane } from './panels/SkillsPane';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const SkillsPane = lazyPane(() => import('./panels/SkillsPane'), 'SkillsPane');
 
 export const skillsModule: ModuleManifest = {
   id: 'skills',

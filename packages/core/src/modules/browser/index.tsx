@@ -1,7 +1,11 @@
+import { lazyPane } from '../../lazy-pane';
 import { registry, type ModuleManifest } from '../../registry';
 import { browserAgentTools } from './agentTools';
-import { BrowserPanel, focusActiveUrlBar } from './panels/BrowserPanel';
-import { NetworkStrip } from './panels/NetworkStrip';
+import { focusActiveUrlBar } from './panels/BrowserPanel';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const BrowserPanel = lazyPane(() => import('./panels/BrowserPanel'), 'BrowserPanel');
+const NetworkStrip = lazyPane(() => import('./panels/NetworkStrip'), 'NetworkStrip');
 
 /**
  * The **browser** module: a dockable pane that renders web pages inline via an

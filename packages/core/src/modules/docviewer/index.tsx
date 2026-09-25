@@ -6,8 +6,11 @@
  * Distinct from the `docs` module, which despite the name is the symbol-hover popup
  * in the editor and contributes no pane.
  */
+import { lazyPane } from '../../lazy-pane';
 import { registry, type ModuleManifest } from '../../registry';
-import { DocSetBrowser } from './panels/DocSetBrowser';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const DocSetBrowser = lazyPane(() => import('./panels/DocSetBrowser'), 'DocSetBrowser');
 
 export const docviewerModule: ModuleManifest = {
   id: 'docviewer',

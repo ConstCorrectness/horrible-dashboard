@@ -132,7 +132,14 @@ async def status(refresh: bool = False) -> AgentStatus:
         for info in P.PROVIDERS.values()
         if info.kind != "peer" or _endpoint_for(info, config)
     ]
-    async with instrumented_client(timeout=2) as client:
+    # The short *connect* timeout is the one that matters. On Windows a connect to a
+    # closed loopback port does not fail fast -- the OS retries the refused SYN for
+    # ~2s -- so every provider that simply is not running (Ollama, llama.cpp, vLLM
+    # on most machines) held this whole response for the full budget, and the
+    # home page polls it. A live local server accepts in about a millisecond, or
+    # ~250ms via `localhost` when the IPv6 attempt is refused first. Remote
+    # listings are unaffected: they pass their own explicit `timeout=`.
+    async with instrumented_client(timeout=httpx.Timeout(2, connect=0.75)) as client:
         detected = await asyncio.gather(
             *(_probe(client, info, _endpoint_for(info, config)) for info in infos)
         )

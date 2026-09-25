@@ -1,11 +1,14 @@
+import { lazyPane } from '../../lazy-pane';
 import { revealSection } from '../../layout/controller';
 import { minibuffer } from '../../minibuffer';
 import type { ContextMenuItem, ContextTarget } from '../../overlay/context-menu';
 import { registry, type ModuleManifest } from '../../registry';
 import type { EditorService } from '../editor/service';
-import { LlamaCppPane } from './ServerPane';
 import { layerStepperAction } from './stepper/actions';
 import { sendTracePrompt } from './trace-prompt';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const LlamaCppPane = lazyPane(() => import('./ServerPane'), 'LlamaCppPane');
 
 /** Enough of the buffer to name it in the traces section. */
 function bufferLabel(uri: string): string {

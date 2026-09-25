@@ -1,14 +1,20 @@
+import { lazyPane } from '../../lazy-pane';
 import { toggleRegionView } from '../../layout/controller';
 import { registry, type ModuleManifest } from '../../registry';
 import { setSetting } from '../../settings';
 import './games.css';
 import { GAMES_SECTIONS, openGamesHub, openGamesSection } from './hub-section';
-import { EpisodePanel } from './panels/EpisodePanel';
-import { FighterArcadePanel } from './panels/FighterArcadePanel';
-import { GamesLogPanel } from './panels/GamesLogPanel';
-import { GamesPanel } from './panels/GamesPanel';
-import { ReplayViewerPanel } from './panels/ReplayViewerPanel';
-import { TownPanel } from './panels/TownPanel';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const EpisodePanel = lazyPane(() => import('./panels/EpisodePanel'), 'EpisodePanel');
+const FighterArcadePanel = lazyPane(
+  () => import('./panels/FighterArcadePanel'),
+  'FighterArcadePanel',
+);
+const GamesLogPanel = lazyPane(() => import('./panels/GamesLogPanel'), 'GamesLogPanel');
+const GamesPanel = lazyPane(() => import('./panels/GamesPanel'), 'GamesPanel');
+const ReplayViewerPanel = lazyPane(() => import('./panels/ReplayViewerPanel'), 'ReplayViewerPanel');
+const TownPanel = lazyPane(() => import('./panels/TownPanel'), 'TownPanel');
 
 /**
  * Games module: watch your agent play turn-based games against another user's

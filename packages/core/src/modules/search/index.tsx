@@ -13,8 +13,11 @@
  * store instead. A provider's *name* is public, which is why `search.provider` is
  * an ordinary setting.
  */
+import { lazyPane } from '../../lazy-pane';
 import { registry, type ModuleManifest } from '../../registry';
-import { SearchPanel } from './SearchPanel';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const SearchPanel = lazyPane(() => import('./SearchPanel'), 'SearchPanel');
 
 export const searchModule: ModuleManifest = {
   id: 'search',

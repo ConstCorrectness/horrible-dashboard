@@ -4,10 +4,13 @@
  * agent-authored commits, plus the `git.commit`/`git.blame`/`git.log` agent tools.
  * See docs/modules/git.mdx.
  */
+import { lazyPane } from '../../lazy-pane';
 import { revealRegionView } from '../../layout/controller';
 import { type ModuleManifest } from '../../registry';
 import { gitAgentTools } from './agentTools';
-import { ProvenancePane } from './ProvenancePane';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const ProvenancePane = lazyPane(() => import('./ProvenancePane'), 'ProvenancePane');
 
 export const gitModule: ModuleManifest = {
   id: 'git',

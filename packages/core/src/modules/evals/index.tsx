@@ -1,5 +1,8 @@
+import { lazyPane } from '../../lazy-pane';
 import { registry, type ModuleManifest } from '../../registry';
-import { EvalsHub } from './EvalsHub';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const EvalsHub = lazyPane(() => import('./EvalsHub'), 'EvalsHub');
 
 /**
  * Evals: measuring what a model actually does with this app's tools.
@@ -42,7 +45,7 @@ export const evalsModule: ModuleManifest = {
   settings: [
     {
       key: 'evals.acceptRemoteSuites',
-      title: "Accept suites from friends",
+      title: 'Accept suites from friends',
       description:
         "Let a friend offer an eval suite to run on this node's agent. Each offer still needs your accept, which shows its size and estimated cost; no tool acts, but your tokens are spent and your model plus your skills' and MCP tools' names and hashes are reported back. Off: offers are refused with this reason.",
       type: 'boolean',
@@ -53,7 +56,8 @@ export const evalsModule: ModuleManifest = {
     {
       id: 'evals',
       name: 'Evals',
-      description: 'Score a model against a suite, read the failures beside their source, and compare runs.',
+      description:
+        'Score a model against a suite, read the failures beside their source, and compare runs.',
       icon: '🎯',
       // The `trainer` persona already covers eval sweeps, conversion and serving —
       // the whole flywheel this workspace sits in — so it is a capability the

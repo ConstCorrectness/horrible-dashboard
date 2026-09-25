@@ -5,9 +5,12 @@
  * `backend/modules/connectors/providers/github*`; this module is only the human
  * surface over it. See docs/modules/github.mdx.
  */
+import { lazyPane } from '../../lazy-pane';
 import { registry, type ModuleManifest } from '../../registry';
-import { RepoViewer } from './RepoViewer';
 import './github.css';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const RepoViewer = lazyPane(() => import('./RepoViewer'), 'RepoViewer');
 
 export const githubModule: ModuleManifest = {
   id: 'github',

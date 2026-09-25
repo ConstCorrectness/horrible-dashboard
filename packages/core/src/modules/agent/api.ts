@@ -62,6 +62,8 @@ export const DEFAULT_AGENT_MODEL = 'gemma4:e2b';
 /** A small Gemma served well by vLLM; a sensible default for the spawn flow. */
 export const DEFAULT_VLLM_MODEL = 'google/gemma-2-2b-it';
 
+let statusInFlight: Promise<AgentStatus> | null = null;
+
 /**
  * `refresh` drops the backend's cached *remote* model listings (NVIDIA NIM's
  * `/v1/models`, OpenRouter's catalog) before probing, so a model enabled on the
@@ -71,7 +73,15 @@ export const DEFAULT_VLLM_MODEL = 'google/gemma-2-2b-it';
  * Local providers are unaffected: their lists were never cached.
  */
 export function getAgentStatus(opts?: { refresh?: boolean }): Promise<AgentStatus> {
-  return apiGet<AgentStatus>(`/agent/status${opts?.refresh ? '?refresh=true' : ''}`);
+  if (opts?.refresh) return apiGet<AgentStatus>('/agent/status?refresh=true');
+  // Callers that ask at the same moment share one request. Each call probes every
+  // provider, and at boot four components mount and ask within a few ms of each
+  // other. Only the in-flight promise is shared — nothing is cached past it, so
+  // a later poll still sees a server that just came up.
+  statusInFlight ??= apiGet<AgentStatus>('/agent/status').finally(() => {
+    statusInFlight = null;
+  });
+  return statusInFlight;
 }
 
 /** One roster agent (a fully separate loop: own prompt, tool scope, settings,

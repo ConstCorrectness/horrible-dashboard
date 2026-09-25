@@ -3,6 +3,7 @@
  * search them semantically (the retrieval half of RAG — the agent generates answers
  * from the cited chunks these tools return). See docs/modules/library.mdx.
  */
+import { lazyPane } from '../../lazy-pane';
 import { registry, type ModuleManifest } from '../../registry';
 import {
   ingestSource,
@@ -11,8 +12,10 @@ import {
   type IngestRequest,
   type SourceType,
 } from './api';
-import { LibraryPanel } from './LibraryPanel';
 import { getCurrentLibrary } from './store';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const LibraryPanel = lazyPane(() => import('./LibraryPanel'), 'LibraryPanel');
 
 export const libraryModule: ModuleManifest = {
   id: 'library',

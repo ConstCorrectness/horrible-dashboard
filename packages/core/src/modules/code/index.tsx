@@ -5,12 +5,15 @@
  * editor cursor and drives it — so this module never reaches into the editor.
  * See docs/modules/code.mdx.
  */
+import { lazyPane } from '../../lazy-pane';
 import { revealRegionView } from '../../layout/controller';
 import { type ModuleManifest } from '../../registry';
 import { codeAgentTools } from './agentTools';
-import { OutlinePane } from './OutlinePane';
 import { symbolSearchModal } from './searchModal';
-import { SymbolSearch } from './SymbolSearch';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const OutlinePane = lazyPane(() => import('./OutlinePane'), 'OutlinePane');
+const SymbolSearch = lazyPane(() => import('./SymbolSearch'), 'SymbolSearch');
 
 export const codeModule: ModuleManifest = {
   id: 'code',

@@ -1,5 +1,8 @@
+import { lazyPane } from '../../lazy-pane';
 import { registry, type ModuleManifest } from '../../registry';
-import { TrajectoriesHub } from './TrajectoriesHub';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const TrajectoriesHub = lazyPane(() => import('./TrajectoriesHub'), 'TrajectoriesHub');
 
 /**
  * Trajectories: what this node's agents actually did, as queryable data.

@@ -12,14 +12,17 @@
  * a working remote for free, and what makes the agent's `karaoke.*` tools work
  * with no pane open at all. See docs/modules/karaoke.mdx.
  */
+import { lazyPane } from '../../lazy-pane';
 import './karaoke.css';
 
 import { registry, type ModuleManifest } from '../../registry';
-import { KaraokeQueuePanel } from './panels/QueuePanel';
-import { KaraokeSearchPanel } from './panels/SearchPanel';
-import { KaraokeStagePanel } from './panels/StagePanel';
 import { applyPlayerState, connectKaraoke, ensureLoaded, getPlayerState } from './store';
 import { nextSong, pause, play, restart, setTranspose } from './api';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const KaraokeStagePanel = lazyPane(() => import('./panels/StagePanel'), 'KaraokeStagePanel');
+const KaraokeQueuePanel = lazyPane(() => import('./panels/QueuePanel'), 'KaraokeQueuePanel');
+const KaraokeSearchPanel = lazyPane(() => import('./panels/SearchPanel'), 'KaraokeSearchPanel');
 
 /** Nudge the key, clamped to the ±6 the backend accepts. */
 async function transposeBy(delta: number): Promise<void> {
@@ -146,7 +149,8 @@ export const karaokeModule: ModuleManifest = {
     {
       id: 'karaoke',
       name: 'Karaoke',
-      description: 'A karaoke machine: the stage, the queue and search, with any phone on the LAN as a remote.',
+      description:
+        'A karaoke machine: the stage, the queue and search, with any phone on the LAN as a remote.',
       icon: '🎤',
       frame: {
         center: { pane: 'karaoke.stage' },

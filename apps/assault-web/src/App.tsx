@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { HorribleAssaultPanel } from '@horrible/core';
+import { HorribleAssaultPanel } from '@horrible/core/hassault-panel';
 import { useGuestSession } from './hooks/useGuestSession';
 import { ServerBrowser } from './components/ServerBrowser';
 import { InstantDeployModal } from './components/InstantDeployModal';
@@ -93,7 +93,15 @@ export default function App() {
   };
 
   return (
-    <div style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden', backgroundColor: '#070a10' }}>
+    <div
+      style={{
+        width: '100%',
+        height: '100%',
+        position: 'relative',
+        overflow: 'hidden',
+        backgroundColor: '#070a10',
+      }}
+    >
       <MobileWarningBanner />
 
       {view === 'browser' && (

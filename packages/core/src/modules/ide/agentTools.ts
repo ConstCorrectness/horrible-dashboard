@@ -25,7 +25,7 @@ import { closeTab, readTabs } from './openBuffers';
 // declarations are exactly the kind of thing that should be unit-tested. The
 // handlers only ever run in the app, where the dynamic import is already warm.
 const editor = () => import('../editor');
-const workbench = () => import('./IdeWorkbench');
+const workbench = () => import('./workbench-host');
 
 const FILE_URI = 'workspace-file:';
 

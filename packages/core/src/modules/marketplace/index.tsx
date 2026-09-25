@@ -1,5 +1,8 @@
+import { lazyPane } from '../../lazy-pane';
 import { registry, type ModuleManifest } from '../../registry';
-import { MarketplacePanel } from './MarketplacePanel';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const MarketplacePanel = lazyPane(() => import('./MarketplacePanel'), 'MarketplacePanel');
 
 /**
  * Browse, install, and manage plugins built against @horribledashboard/sdk.

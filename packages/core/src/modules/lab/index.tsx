@@ -1,5 +1,8 @@
+import { lazyPane } from '../../lazy-pane';
 import { registry, type ModuleManifest } from '../../registry';
-import { LabHub } from './HubPane';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const LabHub = lazyPane(() => import('./HubPane'), 'LabHub');
 
 /**
  * The Lab: the workspace for building, studying and fine-tuning models.
@@ -49,7 +52,8 @@ export const labModule: ModuleManifest = {
     {
       id: 'lab',
       name: 'Lab',
-      description: "Write a fine-tuning script with the model, the agent's context and the Hugging Face Hub all in reach.",
+      description:
+        "Write a fine-tuning script with the model, the agent's context and the Hugging Face Hub all in reach.",
       icon: '🧪',
       frame: {
         center: {

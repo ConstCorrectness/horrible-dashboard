@@ -1,6 +1,9 @@
+import { lazyPane } from '../../lazy-pane';
 import { registry, type ModuleManifest } from '../../registry';
-import { DatasetPicker } from './panels/DatasetPicker';
-import { DatasetsPane } from './panels/DatasetsPane';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const DatasetsPane = lazyPane(() => import('./panels/DatasetsPane'), 'DatasetsPane');
+const DatasetPicker = lazyPane(() => import('./panels/DatasetPicker'), 'DatasetPicker');
 
 /**
  * Datasets: the material a fine-tune is made of, as a first-class object.

@@ -303,8 +303,14 @@ export function AppShell({
 
   // Which paradigm THIS desktop runs. Not a shell view and not a setting: it is
   // a property of the workspace, so switching desktops can switch paradigm.
-  const { frame } = useSyncExternalStore(layoutStore.subscribe, layoutStore.getSnapshot);
-  const tiling = frame.mode === 'tiling';
+  // Selected down to the one boolean: this component is the root of everything,
+  // and subscribing to the whole snapshot re-rendered the entire shell — every
+  // open pane included — on each layout change, which is every click that moves
+  // focus between panes.
+  const tiling = useSyncExternalStore(
+    layoutStore.subscribe,
+    () => layoutStore.getSnapshot().frame.mode === 'tiling',
+  );
 
   // A per-workspace OS window is "detached": it drops the workspace-switcher
   // strip, showing only a slim titlebar over that one desktop.

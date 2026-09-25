@@ -46,9 +46,17 @@ export function useNotebookLsp(path: string, cells: NotebookCell[]): NotebookLsp
       return;
     }
     const editor = registry.getService<EditorService>('editor');
-    const opened = editor ? editor.openNotebookLsp(path) : null;
-    setHandle(opened);
+    // The service resolves asynchronously (it imports its CodeMirror half on first
+    // use), so a cleanup can land first — the late handle is then disposed unused.
+    let cancelled = false;
+    let opened: NotebookLspHandle | null = null;
+    void editor?.openNotebookLsp(path).then((h) => {
+      if (cancelled) return h.dispose();
+      opened = h;
+      setHandle(h);
+    });
     return () => {
+      cancelled = true;
       opened?.dispose();
       setHandle(null);
     };
@@ -80,16 +88,20 @@ export function useNotebookLsp(path: string, cells: NotebookCell[]): NotebookLsp
    * absolute path resolves, and every cell during the seconds a cold server takes to
    * come up.
    */
-  const bare = useRef<{ path: string; ext: Extension[] } | null>(null);
-  if (!bare.current || bare.current.path !== path) {
+  const [bare, setBare] = useState<Extension[]>(NONE);
+  useEffect(() => {
     const editor = registry.getService<EditorService>('editor');
-    bare.current = {
-      path,
-      ext: editor
-        ? [editor.bareCompletion('python', enabled ? { notebookPath: path } : undefined)]
-        : NONE,
+    if (!editor) return;
+    let cancelled = false;
+    void editor
+      .bareCompletion('python', enabled ? { notebookPath: path } : undefined)
+      .then((ext) => {
+        if (!cancelled) setBare([ext]);
+      });
+    return () => {
+      cancelled = true;
     };
-  }
+  }, [path, enabled]);
 
   return {
     cellExtensions(cell) {
@@ -98,7 +110,7 @@ export function useNotebookLsp(path: string, cells: NotebookCell[]): NotebookLsp
       // and never both: a second instance's `override` silently replaces the first's
       // sources. Swapping between them reconfigures the cell's compartment, which is
       // exactly what the compartment is for.
-      if (!handle) return bare.current!.ext;
+      if (!handle) return bare;
       const cached = byCell.current.get(cell.id);
       if (cached) return cached;
       const ext = [handle.cellExtension(cell.id)];

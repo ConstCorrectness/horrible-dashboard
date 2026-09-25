@@ -4,10 +4,13 @@
  * command (visibly — never hidden execution). The agent's gated `terminal.exec`
  * tool is D3. See docs/modules/terminal.md.
  */
+import { lazyPane } from '../../lazy-pane';
 import { registry, type ModuleManifest } from '../../registry';
 import { terminalAgentTools } from './agentTools';
-import { TerminalPane } from './TerminalPane';
 import { getActiveTerminal, siblingTerminal } from './store';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const TerminalPane = lazyPane(() => import('./TerminalPane'), 'TerminalPane');
 
 export interface RunCommandOpts {
   cwd?: string;

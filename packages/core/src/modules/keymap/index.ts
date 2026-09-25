@@ -3,6 +3,7 @@
  * the assistant read and edit bindings on the user's behalf ("I don't like this,
  * change Tab so it does X"). See docs/modules/keymap.mdx.
  */
+import { lazyPane } from '../../lazy-pane';
 import { getSetting, settingsStore } from '../../settings';
 import { CAPTURE_SYSTEM_KEYS_KEY } from '../../keymap/keyboard-lock';
 import { KEYMAP_PRESET_KEY, KEYMAP_PRESETS, presetBindings } from '../../keymap/presets';
@@ -10,7 +11,9 @@ import { setKeymapPreset } from '../../keymap/state';
 import type { ModuleManifest } from '../../registry';
 import { registry } from '../../registry';
 import { keymapAgentTools } from './tools';
-import { ShortcutsPanel } from './ShortcutsPanel';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const ShortcutsPanel = lazyPane(() => import('./ShortcutsPanel'), 'ShortcutsPanel');
 
 export const keymapModule: ModuleManifest = {
   id: 'keymap',

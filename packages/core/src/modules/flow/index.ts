@@ -4,13 +4,19 @@
  * permission surface; only the canvas and the graph executor are new. See
  * docs/modules/flow-canvas.md.
  */
+import { lazyPane } from '../../lazy-pane';
 import './canvas/flow.css';
 
 import { revealRegionView } from '../../layout/controller';
 import type { ModuleManifest } from '../../registry';
-import { FlowEditorPanel } from './panels/FlowEditorPanel';
-import { FlowLibraryPanel, openFlow } from './panels/FlowLibraryPanel';
+import { openFlow } from './panels/FlowLibraryPanel';
 import { createFlow } from './flows';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const FlowLibraryPanel = lazyPane(() => import('./panels/FlowLibraryPanel'), 'FlowLibraryPanel');
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const FlowEditorPanel = lazyPane(() => import('./panels/FlowEditorPanel'), 'FlowEditorPanel');
 
 export const flowModule: ModuleManifest = {
   id: 'flow',

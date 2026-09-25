@@ -1,6 +1,9 @@
+import { lazyPane } from '../../lazy-pane';
 import { registry, type ModuleManifest } from '../../registry';
 import { stepperAction } from './actions';
-import { AgentpediaHub } from './AgentpediaHub';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const AgentpediaHub = lazyPane(() => import('./AgentpediaHub'), 'AgentpediaHub');
 
 /**
  * Agentpedia: one agent turn, steppable.

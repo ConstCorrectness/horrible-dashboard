@@ -834,6 +834,17 @@ machine nobody is talking to. A **local** server's list is deliberately never ca
 is decided by `is_loopback_endpoint`, for which an empty endpoint (a `peer` with no
 lease) counts as local because it is unreachable either way.
 
+Every provider is probed in parallel, so the slowest one sets the response time, and
+the probe client's **connect** timeout is 0.75s (the overall budget stays 2s). That is
+the number that matters on Windows, where a connect to a *closed* loopback port does
+not fail fast — the OS retries the refused SYN for about two seconds — so each
+provider that simply is not running (Ollama, llama.cpp, vLLM on most machines) used
+to hold the whole response for the full budget. A live local server accepts in about
+a millisecond, or ~250ms through `localhost` when the IPv6 attempt is refused first.
+Remote listings are unaffected: they pass their own explicit `timeout=`. On the
+frontend, `getAgentStatus()` shares one in-flight request between callers (several
+components ask within a few ms of each other at boot); nothing is cached past it.
+
 Those remote listings are **warmed at startup**: the app lifespan calls
 `agent.routes.start_warm_model_lists()`, which probes only the remote providers in
 the background so the first model dropdown opens filled instead of waiting on a round

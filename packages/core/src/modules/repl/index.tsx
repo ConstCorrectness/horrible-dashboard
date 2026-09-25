@@ -4,8 +4,11 @@
  * them), bottom dock by default — mirroring the terminal. The backend kernel runs
  * per `/ws` connection (backend/modules/repl). See docs/modules/repl.md.
  */
+import { lazyPane } from '../../lazy-pane';
 import { registry, type ModuleManifest } from '../../registry';
-import { ReplPane } from './ReplPane';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const ReplPane = lazyPane(() => import('./ReplPane'), 'ReplPane');
 
 export const replModule: ModuleManifest = {
   id: 'repl',

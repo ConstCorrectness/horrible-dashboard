@@ -12,7 +12,7 @@
  * resolution would then be pointing at something that does not exist.
  */
 import { PaneInstanceContext, PaneParamsContext, registry, resolveView } from '@horrible/core';
-import { useMemo } from 'react';
+import { Suspense, useMemo } from 'react';
 
 /**
  * What an unconfigured board shows: every view that declares `role: 'widget'`.
@@ -108,7 +108,11 @@ function BoardTile({
       <div className="os-board-tile-body">
         <PaneInstanceContext.Provider value={instanceId}>
           <PaneParamsContext.Provider value={paneParams}>
-            <Body />
+            {/* Widget bodies are `lazyPane`s, so a tile needs its own boundary —
+                without one a loading widget suspends the whole desktop. */}
+            <Suspense fallback={null}>
+              <Body />
+            </Suspense>
           </PaneParamsContext.Provider>
         </PaneInstanceContext.Provider>
       </div>

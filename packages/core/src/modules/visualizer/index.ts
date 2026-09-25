@@ -1,6 +1,9 @@
+import { lazyPane } from '../../lazy-pane';
 import { registry, type ModuleManifest } from '../../registry';
 import { getActiveVisualizer } from './store';
-import { VisualizerWidget } from './widgets';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const VisualizerWidget = lazyPane(() => import('./widgets'), 'VisualizerWidget');
 
 export const visualizerModule: ModuleManifest = {
   id: 'visualizer',

@@ -18,17 +18,21 @@
  *
  * See docs/modules/ide.mdx.
  */
+import { lazyPane } from '../../lazy-pane';
 import { revealRegionView, toggleRegionView } from '../../layout/controller';
 import { registry, type ModuleManifest } from '../../registry';
 import { openBuffer } from '../editor';
 import { ideAgentTools } from './agentTools';
-import { IdeWorkbench, workbenchInstanceId } from './IdeWorkbench';
+import { workbenchInstanceId } from './workbench-host';
 import { IDE_KEYBINDINGS, IDE_PANE_META, IDE_REGIONS, WORKBENCH_VIEW } from './manifest';
 import { activateTab, closeTab, readTabs } from './openBuffers';
 import { focusSearchQuery } from './TextSearchPane';
-import { ProblemsPane } from './ProblemsPane';
-import { ScmPane } from './ScmPane';
-import { TextSearchPane } from './TextSearchPane';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const IdeWorkbench = lazyPane(() => import('./IdeWorkbench'), 'IdeWorkbench');
+const TextSearchPane = lazyPane(() => import('./TextSearchPane'), 'TextSearchPane');
+const ScmPane = lazyPane(() => import('./ScmPane'), 'ScmPane');
+const ProblemsPane = lazyPane(() => import('./ProblemsPane'), 'ProblemsPane');
 
 export { WORKBENCH_VIEW } from './manifest';
 
@@ -157,4 +161,4 @@ export const ideModule: ModuleManifest = {
   keybindings: IDE_KEYBINDINGS,
 };
 
-export { workbenchInstanceId } from './IdeWorkbench';
+export { workbenchInstanceId } from './workbench-host';

@@ -1,6 +1,9 @@
+import { lazyPane } from '../../lazy-pane';
 import { registry, type ModuleManifest } from '../../registry';
-import { DatabaseConsole } from './widgets';
 import { getSchema, listConnections, runQuery, semanticSearch, type SchemaResponse } from './api';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const DatabaseConsole = lazyPane(() => import('./widgets'), 'DatabaseConsole');
 
 /** Compact schema for the agent: "table(col type, col type PK, …)" lines. */
 async function describe(connectionId: string): Promise<string> {

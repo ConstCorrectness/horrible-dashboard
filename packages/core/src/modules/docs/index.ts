@@ -8,10 +8,13 @@
  * how you read about a symbol you already have, never how you find one you don't.
  * See docs/modules/docs-popup.mdx.
  */
+import { lazyPane } from '../../lazy-pane';
 import { registry, type ModuleManifest } from '../../registry';
 import { DEFAULT_DOC_SOURCES } from '../../docs/chain';
 import { sendReferenceQuery } from './reference-api';
-import { ReferencePane } from './ReferencePane';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const ReferencePane = lazyPane(() => import('./ReferencePane'), 'ReferencePane');
 
 export const docsModule: ModuleManifest = {
   id: 'docs',

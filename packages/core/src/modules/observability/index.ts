@@ -1,6 +1,10 @@
+import { lazyPane } from '../../lazy-pane';
 import { registry, type ModuleManifest } from '../../registry';
 import { telemetryStore } from '../../telemetry';
-import { ObservabilityPanel, ObservabilityWidget } from './view';
+
+// Loaded when the pane first renders, not at boot — see `lazyPane`.
+const ObservabilityPanel = lazyPane(() => import('./view'), 'ObservabilityPanel');
+const ObservabilityWidget = lazyPane(() => import('./view'), 'ObservabilityWidget');
 
 /**
  * Observe the app's data flow (frontend↔backend↔external), Docker-Desktop-style.

@@ -10,9 +10,7 @@ import { registry } from '../../registry';
 import { getRoots, loadRoots } from '../files/store';
 import { getBuffer, listBufferUris } from './buffers';
 import { getActiveBufferSource, openBuffer } from './index';
-import { buildCompletion, completionKeymap } from './completion';
-import { kernelCompletionSource } from './kernelCompletion';
-import { NotebookLspDoc, type LspCell } from './notebook-lsp';
+import type { LspCell } from './notebook-lsp';
 import { createNote, loadSource, saveSource } from './sources';
 
 /** Languages the editor can be told to highlight for a source with no extension. */
@@ -67,7 +65,7 @@ export interface EditorService {
    * LSP is this module's; the two notebook modules reach it through this contract
    * instead of deep-importing the client.
    */
-  openNotebookLsp(path: string): NotebookLspHandle;
+  openNotebookLsp(path: string): Promise<NotebookLspHandle>;
   /**
    * The completion stack for an editor surface with **no** language server —
    * indexed symbols, curated framework imports, import-statement modules and
@@ -82,8 +80,12 @@ export interface EditorService {
    *
    * Exposed here rather than deep-imported because the notebook kit is
    * domain-neutral; it knows this contract and nothing else about the editor.
+   *
+   * Both this and {@link openNotebookLsp} are async because their implementations
+   * are CodeMirror, imported on first use: the service is registered at boot, and
+   * a static import here put all of CodeMirror on the boot path.
    */
-  bareCompletion(languageId: string | null, opts?: { notebookPath?: string }): Extension;
+  bareCompletion(languageId: string | null, opts?: { notebookPath?: string }): Promise<Extension>;
 }
 
 /** A notebook's language-server session, as the notebook panes see it. */
@@ -168,7 +170,11 @@ const editorService: EditorService = {
 
   listBuffers: listBufferUris,
 
-  bareCompletion(languageId, opts) {
+  async bareCompletion(languageId, opts) {
+    const [{ buildCompletion, completionKeymap }, { kernelCompletionSource }] = await Promise.all([
+      import('./completion'),
+      import('./kernelCompletion'),
+    ]);
     // Mutually exclusive with the LSP stack by construction — `autocompletion()`'s
     // `override` is a replacing field, so two live instances mean one silently wins
     // and the other's sources vanish. Callers pick one or the other, never both.
@@ -183,7 +189,8 @@ const editorService: EditorService = {
     ];
   },
 
-  openNotebookLsp(path) {
+  async openNotebookLsp(path) {
+    const { NotebookLspDoc } = await import('./notebook-lsp');
     const doc = new NotebookLspDoc(path);
     // Detached: the pane gets a usable handle immediately and `sync` queues cells
     // until the environment resolves and the session comes up.

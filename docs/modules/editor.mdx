@@ -271,6 +271,13 @@ They are alternatives and never both, for the reason in the caution above: two l
 `bareCompletion` is on `EditorService` rather than deep-imported because the notebook
 kit is domain-neutral — it knows this contract and nothing else about this module.
 
+`bareCompletion` and `openNotebookLsp` both return a **promise**. Their
+implementations are CodeMirror, and the service is registered at boot, so a static
+import in `service.ts` put all of CodeMirror (1.7 MB) on the boot path of every
+session, notebook or not. They import it on first use instead; `useNotebookLsp` hands
+a cell `[]` for the few milliseconds that takes, and disposes a handle that resolves
+after its effect was cleaned up.
+
 ## Backend surface
 
 `backend/modules/notes/` — **note storage implemented**: CRUD + search over
