@@ -149,6 +149,13 @@ the backend's 30 s tool timeout; past that it returns `stillRunning: true` and t
 agent follows up with `terminal.read`. An unknown `id` is an error that lists the real
 ones rather than silently opening a new terminal.
 
+**A tool pane's params reach it.** The terminal is `role: 'tool'`, and `openPane`
+routes tools to `openToolInDock` — which used to take no options at all. So
+`initialCommand` and `cwd` were dropped before the pane existed, and with a terminal
+already docked, `runCommand` just focused it. `openToolInDock` now takes `openPane`'s
+`opts`: params on a non-singleton tool open a **new** instance carrying them, while a
+plain open (no params) still focuses the docked one.
+
 **The initial command waits for the shell.** It used to be typed on a fixed 250 ms
 timer, which Windows PowerShell's startup outlasts; input typed before PSReadLine is
 up is discarded, so the command simply never ran and the agent reported success over

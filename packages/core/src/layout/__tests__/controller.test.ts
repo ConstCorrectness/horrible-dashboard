@@ -52,6 +52,8 @@ beforeAll(() => {
         defaultDock: 'right',
         singleton: true,
       },
+      // The terminal's shape: a non-singleton tool, one instance per shell.
+      { id: 't.multiTool', title: 'Multi tool', component: Stub, role: 'tool', defaultDock: 'bottom' },
     ],
     widgets: [
       { id: 't.widget', title: 'Widget', component: Stub, role: 'widget' },
@@ -180,6 +182,29 @@ describe('openToolInDock', () => {
   it('refuses a side the view did not declare', () => {
     expect(openToolInDock('t.promoted', 'left')).toBeNull();
     expect(openToolInDock('t.multi', 'left')).not.toBeNull();
+  });
+  // `openPane` routes tools here, and this used to drop `opts`: the terminal's
+  // `initialCommand` never reached the pane, and a docked terminal was focused
+  // instead of a new one opening.
+  it('gives a tool its params, opening a new instance for a non-singleton', () => {
+    const first = openPane('t.multiTool', { params: { initialCommand: 'a' } })!;
+    const second = openPane('t.multiTool', { params: { initialCommand: 'b' } })!;
+    expect(second).not.toBe(first);
+    const f = layoutStore.getSnapshot().frame;
+    expect(findPaneAnywhere(f, first)?.pane.params).toEqual({ initialCommand: 'a' });
+    expect(findPaneAnywhere(f, second)?.pane.params).toEqual({ initialCommand: 'b' });
+  });
+
+  it('still focuses the docked instance on a plain open', () => {
+    const first = openPane('t.multiTool')!;
+    expect(openPane('t.multiTool')).toBe(first);
+  });
+
+  it('applies params to a singleton tool rather than duplicating it', () => {
+    const first = openPane('t.tool')!;
+    expect(openPane('t.tool', { params: { x: 1 } })).toBe(first);
+    const f = layoutStore.getSnapshot().frame;
+    expect(findPaneAnywhere(f, first)?.pane.params).toEqual({ x: 1 });
   });
 });
 

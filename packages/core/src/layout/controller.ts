@@ -307,24 +307,51 @@ export function focusInstance(located: LocatedPane): void {
 /**
  * Open (or focus) a dockable view in a dock. Returns the instance id, or null
  * when the view isn't dockable at all, or not on the side asked for.
+ *
+ * Takes the same `opts` as `openPane`, which routes every `role: 'tool'` view
+ * here. It used to take none, so a tool's params were dropped on the floor: the
+ * terminal's `initialCommand` never reached the pane, and `terminal.exec` opened
+ * a bare shell (or focused an existing one) and reported the command as sent.
+ *
+ * Identity follows `openPane`: an explicit `instanceId` is focus-or-create; a
+ * singleton, or a plain open with no params, focuses the docked instance; but
+ * params on a non-singleton are a request for a *new* thing (a terminal running
+ * this command), which focusing an existing one would silently not satisfy.
  */
-export function openToolInDock(viewId: string, dock?: DockSide): string | null {
+export function openToolInDock(
+  viewId: string,
+  dock?: DockSide,
+  opts?: OpenPaneOptions,
+): string | null {
   const decl = resolveView(viewId);
   const sides = dockSidesOf(viewId);
   if (!decl || sides.length === 0) return null;
   if (dock && !sides.includes(dock)) return null;
-  const existing = listPanes(frame()).find(
-    (p) => p.pane.viewId === viewId && p.location.kind === 'dock',
-  );
+  const f = frame();
+  const panel = registry.panels.find((p) => p.id === viewId);
+  const singleton = panel ? Boolean(panel.singleton) : true;
+  const existing = opts?.instanceId
+    ? findPaneAnywhere(f, opts.instanceId)
+    : singleton || !opts?.params
+      ? listPanes(f).find((p) => p.pane.viewId === viewId && p.location.kind === 'dock')
+      : undefined;
   if (existing) {
+    if (opts?.params) {
+      layoutStore.dispatch({
+        type: 'SET_PANE_PARAMS',
+        instanceId: existing.pane.instanceId,
+        params: opts.params,
+      });
+    }
     focusInstance(existing);
     return existing.pane.instanceId;
   }
   const side = dock ?? sides[0];
   const pane: PaneState = {
-    instanceId: makeInstanceId(viewId, frame().paneSeq),
+    instanceId: opts?.instanceId ?? makeInstanceId(viewId, f.paneSeq),
     viewId,
     regions: regionsFor(viewId),
+    ...(opts?.params ? { params: opts.params } : {}),
   };
   // Only a declared starting width is seeded here; without one the pane stays
   // `dockSize`-less and renders at the dock's own (last-used) size.
@@ -429,7 +456,7 @@ function openPaneRouted(viewId: string, opts?: OpenPaneOptions): string | null {
     return null;
   }
   const role = roleOf(viewId);
-  if (role === 'tool') return openToolInDock(viewId);
+  if (role === 'tool') return openToolInDock(viewId, undefined, opts);
 
   const f = frame();
   const isPanel = registry.panels.some((p) => p.id === viewId);
