@@ -53,6 +53,27 @@ const MUSIC_STRIP = 'clubhouse-music';
 const MUSIC_VOLUME = 0.6;
 /** Fraction of its level the music keeps while the agent is speaking over it. */
 const MUSIC_DUCK = 0.25;
+/**
+ * Upper bounds on the join's network steps. Agora retries a failing gateway or ICE
+ * negotiation internally for minutes, and a join awaiting it forever sat on
+ * "Connecting…" with no error at all — indistinguishable from a slow room.
+ */
+const AGORA_JOIN_TIMEOUT_MS = 20_000;
+const AGORA_PUBLISH_TIMEOUT_MS = 10_000;
+const AUDIO_RESUME_TIMEOUT_MS = 2_000;
+
+/** Reject with a message naming `step` if `promise` has not settled within `ms`. */
+function within<T>(promise: Promise<T>, ms: number, step: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${step} did not respond within ${Math.round(ms / 1000)}s`)),
+      ms,
+    );
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 const CLUBCARD_PUBNUB_SUB_KEY = 'sub-c-a4abea84-9ca3-11ea-8e71-f2b83ac9263d';
 const CLUBCARD_PUBNUB_PUB_KEY = 'pub-c-6878d382-5ae6-4494-9099-f930f938868b';
 
@@ -295,8 +316,10 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       // An AudioContext created without a user gesture starts `suspended` under every
       // autoplay policy. Resuming is a no-op when already running.
       if (audioCtx.state === 'suspended') {
+        // Bounded: under a strict autoplay policy `resume()` stays pending until a
+        // gesture rather than rejecting, and the room is still worth joining silent.
         try {
-          await audioCtx.resume();
+          await within(audioCtx.resume(), AUDIO_RESUME_TIMEOUT_MS, 'Resuming audio');
         } catch (err) {
           console.warn('AudioContext could not be resumed; audio will be silent:', err);
         }
@@ -360,11 +383,15 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       });
 
       // d. Join the Agora stream
-      await client.join(
-        CLUBCARD_AGORA_APP_ID,
-        channelName,
-        chDetails.token,
-        chDetails.user_id ?? undefined,
+      await within(
+        client.join(
+          CLUBCARD_AGORA_APP_ID,
+          channelName,
+          chDetails.token,
+          chDetails.user_id ?? undefined,
+        ),
+        AGORA_JOIN_TIMEOUT_MS,
+        'The Agora voice connection',
       );
 
       /*
@@ -765,7 +792,11 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         mediaStreamTrack: dest.stream.getAudioTracks()[0],
       });
       session.localAudioTrack = mixedTrack;
-      await client.publish(mixedTrack);
+      await within(
+        client.publish(mixedTrack),
+        AGORA_PUBLISH_TIMEOUT_MS,
+        'Publishing your microphone track',
+      );
       session.patch({ isMuted: true });
 
       // e2. Start Agora volume indicator — fires every 200ms with per-user volumes
@@ -978,11 +1009,18 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       }
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : String(e);
-      session.patch({ error: errMsg });
       console.error('Join room failed:', e);
-      if (session.rtcClient || session.localAudioTrack) {
-        await leaveRoom(channelName);
+      // `session.teardown()` directly, never `leaveRoom()`. This runs *inside* the
+      // join's `serialize` task, and `leaveRoom` queues behind that same task, so
+      // awaiting it here waited on itself: the join never settled, the pane sat on
+      // "Connecting…" with no error, and every later join and leave in the pane
+      // queued behind it. Teardown also resets the state, so the error goes after it.
+      // `activeChannel` is set once the upstream join succeeds, so this also tells
+      // Clubhouse we left instead of leaving the account half-joined.
+      if (session.state.activeChannel || session.rtcClient || session.localAudioTrack) {
+        await session.teardown();
       }
+      session.patch({ error: errMsg });
     } finally {
       session.patch({ loading: false });
     }

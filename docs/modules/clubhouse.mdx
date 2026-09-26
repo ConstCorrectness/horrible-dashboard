@@ -231,6 +231,26 @@ The thresholds (`SPEECH_LEVEL`, `BARGE_IN_LEVEL`) are named constants now rather
 inline numbers, because the meter draws the same line the VAD decides on and the two
 must not drift.
 
+### A failed join must fail visibly
+
+The symptom was **clicking Join Room and nothing happening**: `join_channel`
+returned 200 with its tokens, then the pane sent nothing more (no `active_ping`, no
+chat backlog) and sat on "Connecting…" with no error. Two causes, both fixed:
+
+- **The error handler waited on itself.** `joinRoom` runs inside
+  `session.serialize`, and its `catch` awaited `leaveRoom()`, which queues through the
+  same `serialize` — i.e. behind the join that was waiting for it. Any failure after
+  the Agora client existed therefore settled nothing, and every later join or leave in
+  that pane queued behind it. The `catch` now calls `session.teardown()` directly
+  (which also sends the upstream leave, since `activeChannel` is set once
+  `join_channel` succeeds), and sets `error` **after** teardown, because teardown
+  resets the state.
+- **Agora steps are bounded.** `client.join` (20s), `client.publish` (10s) and
+  `audioCtx.resume()` (2s, non-fatal — a strict autoplay policy leaves it pending
+  rather than rejecting) go through `within()`. Agora retries a failing gateway or ICE
+  negotiation internally for minutes, so an unbounded await was indistinguishable
+  from a slow room; the timeout turns it into a "Voice Error" naming the step.
+
 ### The network inspector opens from anywhere
 
 The pane returns from **two places** — the room view (`if (joined && activeChannel)`)
