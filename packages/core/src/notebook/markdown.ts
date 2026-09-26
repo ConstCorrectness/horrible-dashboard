@@ -75,7 +75,9 @@ function inline(text: string): string {
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
     .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, label, href) => {
-      const safe = /^(https?:|mailto:|#|\/)/i.test(href) ? href : '#';
+      let safe = /^(https?:|mailto:|#|\/)/i.test(href) ? href : '#';
+      // href comes from text where & < > are escaped, but quotes are not.
+      safe = safe.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
       return `<a href="${safe}" target="_blank" rel="noreferrer noopener">${label}</a>`;
     });
 }
