@@ -22,6 +22,10 @@ describe('markdown', () => {
   it('escapes HTML in prose', () => {
     expect(renderMarkdown('<script>x</script>')).not.toContain('<script>');
   });
+
+  it('escapes quotes in links', () => {
+    expect(renderMarkdown('[link](https://example.com"onload="alert(1))')).toContain('&quot;onload=&quot;');
+  });
 });
 
 describe('math in markdown cells', () => {
