@@ -85,20 +85,29 @@ def _client(config: dict[str, Any]):  # type: ignore[no-untyped-def]
         raise DriverError(f"chroma: cannot connect: {exc}") from exc
 
 
-def _collection_names(client: Any) -> list[str]:
-    """List collections across Chroma versions.
+def _collection_items(client: Any) -> list[tuple[str, Any]]:
+    """List collections across Chroma versions as ``(name, collection_or_None)``.
 
     Chroma 0.6 changed ``list_collections()`` from returning Collection objects to
-    returning bare names; both shapes are still in the wild.
+    returning bare names; both shapes are still in the wild. When the objects come
+    back they are kept, so a caller can ``count()`` or ``peek()`` them directly
+    instead of paying a ``get_collection`` round-trip per collection first.
     """
     try:
         items = client.list_collections()
     except Exception as exc:
         raise DriverError(f"chroma: list_collections failed: {exc}") from exc
-    return [
-        item if isinstance(item, str) else getattr(item, "name", str(item))
-        for item in items
-    ]
+    out: list[tuple[str, Any]] = []
+    for item in items:
+        if isinstance(item, str):
+            out.append((item, None))
+        else:
+            out.append((getattr(item, "name", str(item)), item))
+    return out
+
+
+def _collection_names(client: Any) -> list[str]:
+    return [name for name, _ in _collection_items(client)]
 
 
 def _get_collection(client: Any, name: str):  # type: ignore[no-untyped-def]
@@ -201,13 +210,14 @@ def run_query(
 
     if q.op == "collections":
         records = []
-        for name in _collection_names(client):
+        for name, coll in _collection_items(client):
             try:
-                records.append(
-                    {"collection": name, "count": _get_collection(client, name).count()}
-                )
-            except DriverError:
-                records.append({"collection": name, "count": None})
+                count = (
+                    coll if coll is not None else _get_collection(client, name)
+                ).count()
+            except Exception:  # noqa: BLE001 — an unreadable collection still lists
+                count = None
+            records.append({"collection": name, "count": count})
         return records_to_result(records, started=started, row_limit=row_limit)
 
     name = q.require_collection(provider)
@@ -351,13 +361,14 @@ def run_query(
     raise unsupported(provider, q.op)
 
 
-def _introspect_collection(client: Any, name: str) -> TableSchema:
+def _introspect_collection(client: Any, name: str, coll: Any = None) -> TableSchema:
     columns = [
         ColumnSchema(name="id", type="str", primary_key=True),
         ColumnSchema(name="text", type="str"),
     ]
     try:
-        peek = _get_collection(client, name).peek(limit=1)
+        target = coll if coll is not None else _get_collection(client, name)
+        peek = target.peek(limit=1)
         metas = peek.get("metadatas") or []
         for key in sorted((metas[0] if metas else {}) or {}):
             columns.append(ColumnSchema(name=key, type="metadata"))
@@ -373,11 +384,13 @@ def introspect(config: dict[str, Any]) -> DatabaseSchema:
     rather than declared — an approximation, and the sidebar is the only consumer.
     """
     client = _client(config)
-    names = _collection_names(client)
+    items = _collection_items(client)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         tables = list(
-            executor.map(lambda name: _introspect_collection(client, name), names)
+            executor.map(
+                lambda item: _introspect_collection(client, item[0], item[1]), items
+            )
         )
 
     return DatabaseSchema(tables=tables)
