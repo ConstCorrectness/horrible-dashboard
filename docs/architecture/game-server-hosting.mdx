@@ -53,6 +53,9 @@ present — except the client **secrets**, which have no settings fallback at al
 | `GAMES_ENABLE_CODE_EXEC` | For code games | Opt-in gate for **running untrusted code** — the verification runner (code golf, test duel, bug hunt) and the arena bot simulation. Unset, those games report grading as unavailable and never execute anything. Only enable on a host you're comfortable running player-submitted Python on (isolated subprocess, but *not* container-grade yet — see the [architecture note](game-server.mdx)). |
 | `GAMES_QUEUE_BOT_S` | Optional (default `45`) | Seconds the ranked queue waits for a human before backfilling with a practice bot (instant for placement matches). |
 | `HORRIBLE_DATA_DIR` | **Yes** | Where the SQLite db + JWT secret live. Point at the mounted persistent volume. |
+| `GAMES_WEB_ORIGINS` | For the web client | Comma-separated browser origins allowed to call the server's HTTP routes (CORS, `GET` only, no credentials), e.g. `https://play.example.com`. Empty by default — nodes are not browsers and need none. See [the standalone web client](#the-standalone-web-client). |
+| `GAMES_WEB_ORIGIN_REGEX` | Optional | A regex of extra allowed origins, for hosts that mint a URL per deploy (preview deployments). |
+| `HASSAULT_MAX_ROOMS` | Optional (default `12`) | Most hassault rooms the server runs at once. Guests need no account, so this is what bounds how much simulation strangers can start. Only *opening* a room is refused; joining one that exists never is. |
 
 ### Secrets are env-only {#secrets-are-env-only}
 
@@ -163,7 +166,43 @@ shape. Pick on ops appetite and budget.
 
 **Avoid for now:** Vercel/Netlify functions and other serverless/edge (no persistent
 WS server), anything that scales to zero, and multi-replica behind a load balancer
-(splits the in-memory game state).
+(splits the in-memory game state). A *static* host is fine for the web client's
+files — it is the server that cannot live there. See below.
+
+## The standalone web client
+
+`apps/assault-web` is HorribleAssault in a browser with **no node behind it**: a
+guest picks a callsign and plays on this server. It is a static Vite build, so it
+can be served from anywhere (a CDN such as Vercel suits it — the game's models are
+~44 MB), with `VITE_BACKEND_URL` set at build time to this server's URL.
+
+That makes this server the client's **entire** backend, which it was not built to
+be. In dev it looked as if it were, because Vite proxied `/api` to a node and only
+`/hassault-ws` here — a deployed build 404ed on its first map fetch. So the server
+now carries:
+
+- **The read-only half of `/api/hassault`** (`hassault_content.py`): maps, map
+  info, cube planes, meshes, modes, weapons, items, grenades, throw constants,
+  hitbox, lore, textures. These are **the node's own handler functions** registered
+  on a second router, not copies — the client predicts against these numbers and
+  the server simulates with them. **Bundled maps only** (no install maps, no
+  `draft:` documents) and **`GET` only**: hitbox tuning, drafts, the console and
+  the armoury stay on nodes, where "the account" means something.
+- **CORS**, closed unless `GAMES_WEB_ORIGINS` names the site. Without it a browser
+  `fetch` fails before reaching a route while the websocket connects fine, which
+  looks like a broken map loader rather than a config gap.
+- **A room cap** (`HASSAULT_MAX_ROOMS`), and **no replay recording** on server
+  rooms — a recorder held every tick in memory for the room's life, which on an
+  always-on public room is an out-of-memory crash on a timer.
+- On `/hassault-ws`: the welcome is the room's whole `state_payload` (items, what
+  is taken, mode, scores — it used to be five fields, so pickups never drew), `ping`
+  is answered (the HUD's RTT), and a share link to a room that has since closed
+  lands on **that map** instead of failing.
+
+The client side of the same contract is the panel's `standalone` prop: it skips
+everything that means "this node" (account, armoury, friends, native launcher,
+the debrief poll) and joins a match on load. See
+[hassault](../modules/hassault.mdx#the-standalone-web-client).
 
 ## Scaling path
 

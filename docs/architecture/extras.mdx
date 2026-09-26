@@ -15,6 +15,14 @@ to install: `voice` pulls torch (1–2 GB), `llamacpp` builds llama.cpp from an
 sdist and needs cmake plus a C++ compiler, `browser-engine` fetches ~150 MB of
 Chromium, `clip` downloads ~350 MB of weights on first use.
 
+**Nothing automatic may run a plain `uv sync`.** A plain sync makes the venv match
+the core dependency set *exactly*, uninstalling every extra. `pnpm dev:desktop`
+(`scripts/dev-desktop.mjs`) and the Tauri supervisor's startup repair
+(`backend.rs`) both did, so each desktop launch silently removed `voice`, `clip`,
+`llamacpp`… right after the user installed them. Both now run
+`uv sync --inexact`, which installs what is missing and removes nothing. By hand,
+name every extra you want in one command (`uv sync --extra voice --extra clip`).
+
 A laptop that lacks them should be able to borrow the desktop in the next room
 that has them — and that starts with being able to ask the question in one shape.
 Before this, every extra answered differently: `karaoke.downloader.available()`

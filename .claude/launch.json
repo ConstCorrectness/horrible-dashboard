@@ -4,18 +4,14 @@
     {
       "name": "web",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": [
-        "dev"
-      ],
+      "runtimeArgs": ["dev"],
       "port": 5173,
       "autoPort": true
     },
     {
       "name": "web-ui",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": [
-        "dev:web"
-      ],
+      "runtimeArgs": ["dev:web"],
       "port": 5173,
       "autoPort": true,
       "env": {
@@ -44,12 +40,7 @@
     {
       "name": "docs",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": [
-        "--filter",
-        "@horrible/docs",
-        "start",
-        "--no-open"
-      ],
+      "runtimeArgs": ["--filter", "@horrible/docs", "start", "--no-open"],
       "port": 3000
     },
     {
@@ -67,25 +58,46 @@
     {
       "name": "gameserver",
       "runtimeExecutable": "uv",
-      "runtimeArgs": [
-        "run",
-        "uvicorn",
-        "backend.games_server.app:app",
-        "--port",
-        "9200"
-      ],
+      "runtimeArgs": ["run", "uvicorn", "backend.games_server.app:app", "--port", "9200"],
       "port": 9200
+    },
+    {
+      "name": "gameserver-web",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "uvicorn", "backend.games_server.app:app", "--port", "9200"],
+      "port": 9200,
+      "env": {
+        "GAMES_WEB_ORIGINS": "http://localhost:5180,http://127.0.0.1:5180"
+      }
+    },
+    {
+      "name": "assault-web-prodlike",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@horrible/assault-web", "dev"],
+      "port": 5180,
+      "env": {
+        "VITE_BACKEND_URL": "http://127.0.0.1:9200"
+      }
+    },
+    {
+      "name": "assault-web-dist",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--filter",
+        "@horrible/assault-web",
+        "exec",
+        "vite",
+        "preview",
+        "--port",
+        "5180",
+        "--strictPort"
+      ],
+      "port": 5180
     },
     {
       "name": "share-relay",
       "runtimeExecutable": "uv",
-      "runtimeArgs": [
-        "run",
-        "uvicorn",
-        "backend.share_relay.app:app",
-        "--port",
-        "9100"
-      ],
+      "runtimeArgs": ["run", "uvicorn", "backend.share_relay.app:app", "--port", "9100"],
       "port": 9100
     }
   ]

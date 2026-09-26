@@ -43,12 +43,13 @@ from __future__ import annotations
 
 import json
 import logging
-import time
+import os
 from typing import Any
 
-from backend.modules.hassault import mapsource
+from backend.modules.hassault import mapsource, modes
 from backend.modules.hassault.match import (
     MAX_NAME_LEN,
+    MAX_PLAYERS,
     MatchServer,
     parse_command,
 )
@@ -61,6 +62,20 @@ logger = logging.getLogger(__name__)
 
 #: The id these matches are logged and rated under, in `results` and `ratings`.
 GAME_ID = "hassault"
+
+
+def max_rooms() -> int:
+    """How many rooms this server will run at once (`HASSAULT_MAX_ROOMS`).
+
+    The public web client connects as a guest with no account, so nothing else
+    bounds how many rooms strangers can open — and every room with a human in it
+    simulates at 20 Hz on a single shared CPU. Joining a room that already exists
+    is never refused by this; only opening one more is.
+    """
+    try:
+        return max(1, int(os.environ.get("HASSAULT_MAX_ROOMS", "12")))
+    except ValueError:
+        return 12
 
 
 class SeatConn:
@@ -102,7 +117,10 @@ class HassaultReferee:
     """The rooms this server is running, and the results it stands behind."""
 
     def __init__(self) -> None:
-        self.server = MatchServer()
+        # No replays here: a replay is a file on this machine that no player can
+        # reach, and on a server that never restarts its rooms it is a file per
+        # room forever.
+        self.server = MatchServer(record_replays=False)
 
     # -- maps ---------------------------------------------------------------
 
@@ -128,10 +146,11 @@ class HassaultReferee:
                     "id": room.id,
                     "map": room.map_name,
                     "playerCount": len(room.players),
-                    "maxPlayers": 16,
+                    "maxPlayers": MAX_PLAYERS,
                     "mode": room.mode.id if room.mode else "dm",
                     "hasGuests": any(
-                        getattr(p.conn, "is_guest", False) for p in room.players.values()
+                        getattr(p.conn, "is_guest", False)
+                        for p in room.players.values()
                     ),
                     "rated": False,
                 }
@@ -147,24 +166,47 @@ class HassaultReferee:
 
         Deathmatch default. If joining by explicit room_id, uses the room's existing
         map; otherwise verifies that map_name is a valid bundled map.
+
+        The welcome is the room's whole `state_payload` — items, what has been
+        taken, the mode, the scores — exactly what a node sends its own browser.
+        It used to be five fields, so a client joining here drew no pickups and
+        no mode until something happened to mention them.
         """
         existing = self.server.get(room_id) if room_id else None
+        if room_id and existing is None:
+            # A share link outlives its room — rooms close a minute after the
+            # last human leaves. The only joins that name a room here are those
+            # links (a ranked join names a map), and what the person following
+            # one wanted was to play on that map, not to be told the room is gone.
+            room_id = None
         target_map = existing.map_name if existing else (map_name or "hd_assault")
         if not self.playable(target_map):
             raise ValueError(f"{target_map!r} is not a bundled map")
+        if existing is None and not room_id and not self._has_space(target_map):
+            if len(self.server.rooms) >= max_rooms():
+                raise ValueError(
+                    "this server is full; try a room that is already running"
+                )
         room, player = await self.server.join(
             conn, target_map, conn.display_name, room_id
         )
         has_guests = conn.is_guest or any(
             getattr(p.conn, "is_guest", False) for p in room.players.values()
         )
-        return {
-            "room": room.id,
-            "map": room.map_name,
-            "playerId": player.id,
-            "rated": not has_guests,
-            "players": [p.snapshot(time.monotonic()) for p in room.players.values()],
-        }
+        welcome = room.state_payload()
+        welcome["playerId"] = player.id
+        welcome["rated"] = not has_guests
+        return welcome
+
+    def _has_space(self, map_name: str) -> bool:
+        """Whether a join on `map_name` would land in a room that already exists —
+        the same test `MatchServer.find_or_create` makes before it opens one."""
+        return any(
+            room.map_name == map_name
+            and room.mode.id == modes.DEFAULT_MODE
+            and len(room.players) < MAX_PLAYERS
+            for room in self.server.rooms.values()
+        )
 
     def apply_input(self, conn: SeatConn, data: dict[str, Any]) -> None:
         """One input message from a seated player.

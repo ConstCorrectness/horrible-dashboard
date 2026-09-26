@@ -233,6 +233,7 @@ pub async fn window_open_workspace(app: AppHandle, workspace_id: String) -> Resu
         .min_inner_size(640.0, 480.0)
         .decorations(false)
         .initialization_script(&init)
+        .additional_browser_args(crate::media::WEBVIEW2_ARGS)
         .build()
         .map_err(|e| e.to_string())?;
     crate::media::allow_user_media(&window);
@@ -296,6 +297,9 @@ pub async fn browser_open_url(app: AppHandle, url: String) -> Result<(), String>
     WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))
         .title(&url)
         .inner_size(1024.0, 768.0)
+        // Same arguments as every other webview: WebView2 shares one user-data
+        // folder and refuses a second webview created with different ones.
+        .additional_browser_args(crate::media::WEBVIEW2_ARGS)
         .build()
         .map_err(|e| e.to_string())?;
     Ok(())

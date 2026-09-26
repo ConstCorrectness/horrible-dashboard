@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import time
-from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from backend.app import app
-from backend.modules.hassault.match import Command, MatchPlayer, MatchRoom
+from backend.modules.hassault.match import Command, MatchRoom
 from backend.modules.hassault.physics import flat_world
 from backend.modules.hassault.replay import (
     ReplayRecorder,
@@ -69,7 +67,9 @@ def test_replay_recorder_lifecycle(tmp_path):
                 },
             ],
             shared={
-                "fx": [{"kind": "shot", "x": 18.0, "y": 28.0, "z": 1.6}] if i == 2 else [],
+                "fx": [{"kind": "shot", "x": 18.0, "y": 28.0, "z": 1.6}]
+                if i == 2
+                else [],
                 "nades": [],
                 "zones": [],
                 "mode": {"planted": False},
@@ -173,3 +173,38 @@ async def test_replay_rest_api():
         # 404 after deletion
         resp_404 = await client.get(f"/api/hassault/replays/{rep_id}")
         assert resp_404.status_code == 404
+
+
+def test_replays_live_in_the_data_dir(tmp_path):
+    """Through `paths`, not `<repo>/.data`: pinned to the checkout, the file
+    landed on a container's ephemeral disk rather than its volume — and every test
+    in this file wrote into the developer's real data directory."""
+    from backend.modules.hassault import replay
+
+    rec = ReplayRecorder("where", "hd_pit", "dm")
+    rec.record_tick(1, time.time(), [], {}, [0, 0])
+    rec.finish()
+    assert replay.replay_dir() == tmp_path / "hassault" / "replays"
+    assert (tmp_path / "hassault" / "replays" / f"{rec.replay_id}.hrec").is_file()
+
+
+def test_a_long_room_keeps_only_its_most_recent_ticks(monkeypatch):
+    """Every tick used to be held in memory until the room closed — ~1 GB an
+    hour for a full room nobody closes."""
+    from backend.modules.hassault import replay
+
+    monkeypatch.setattr(replay, "MAX_FRAMES", 10)
+    rec = ReplayRecorder("long", "hd_pit", "dm")
+    for i in range(25):
+        rec.record_tick(i, float(i), [], {}, [0, 0])
+    rec.finish()
+    data = get_replay_data(rec.replay_id)
+    assert data is not None
+    assert [f["tick"] for f in data["frames"]] == list(range(15, 25))
+
+
+def test_a_room_can_be_told_not_to_record():
+    room = MatchRoom("quiet", "hd_pit", flat_world(48), [], record=False)
+    assert room.recorder is None
+    # Adding a player is one of the places that reads the recorder.
+    room.add("Nobody", None, team=0)

@@ -5,6 +5,7 @@
  * and provides rich autocomplete and search capabilities.
  */
 
+import { apiUrl } from '../../../origin';
 import type {
   AutocompleteItem,
   CVarDefinition,
@@ -41,7 +42,8 @@ class ClientConsoleRegistry {
         current_value: 0,
         min_value: 0,
         max_value: 3,
-        description: 'Draw in-game network graph (0: off, 1: fps/ping, 2: jitter/interp, 3: full breakdown)',
+        description:
+          'Draw in-game network graph (0: off, 1: fps/ping, 2: jitter/interp, 3: full breakdown)',
         flags: ['client'],
       },
       {
@@ -187,7 +189,7 @@ class ClientConsoleRegistry {
 
   async syncDefinitions(): Promise<void> {
     try {
-      const res = await fetch('/api/hassault/console/definitions');
+      const res = await fetch(apiUrl('/api/hassault/console/definitions'));
       if (!res.ok) return;
       const data = (await res.json()) as {
         cvars: CVarDefinition[];
@@ -243,7 +245,10 @@ class ClientConsoleRegistry {
     if (!cvar) return false;
     let coerced: CVarValue = value;
     if (cvar.type === 'boolean') {
-      coerced = typeof value === 'string' ? ['1', 'true', 'yes', 'on'].includes(value.toLowerCase()) : Boolean(value);
+      coerced =
+        typeof value === 'string'
+          ? ['1', 'true', 'yes', 'on'].includes(value.toLowerCase())
+          : Boolean(value);
     } else if (cvar.type === 'number') {
       let num = typeof value === 'string' ? parseFloat(value) : Number(value);
       // A number CVar's default is a number, but the type is the union — fall to 0
@@ -316,7 +321,12 @@ class ClientConsoleRegistry {
     // Search Macros
     for (const m of this.macros.values()) {
       const macroCmd = `macro.run("${m.name}")`;
-      if (!q || m.name.toLowerCase().includes(q) || macroCmd.toLowerCase().includes(q) || m.description.toLowerCase().includes(q)) {
+      if (
+        !q ||
+        m.name.toLowerCase().includes(q) ||
+        macroCmd.toLowerCase().includes(q) ||
+        m.description.toLowerCase().includes(q)
+      ) {
         results.push({
           name: macroCmd,
           kind: 'macro',

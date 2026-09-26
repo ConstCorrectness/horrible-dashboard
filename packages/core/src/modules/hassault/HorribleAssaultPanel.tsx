@@ -356,6 +356,14 @@ export interface HorribleAssaultPanelProps {
   initialRoom?: string;
   /** Force running in WebGL canvas (bypassing native client setting) */
   forceWebGl?: boolean;
+  /**
+   * No node behind this pane: its origin is the game server itself (the
+   * standalone web client, `apps/assault-web`). Everything that means "this
+   * node" — the account, the armoury, the friends roster, the native process,
+   * the debrief a node files — is skipped rather than asked for and 404ed, and
+   * the pane joins a match on load instead of opening the node's main menu.
+   */
+  standalone?: boolean;
   /** Callback when user shares or copies invite link */
   onShareRoom?: (room: string, map: string) => void;
   /** Fullscreen toggle */
@@ -366,6 +374,7 @@ export interface HorribleAssaultPanelProps {
 }
 
 export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
+  const standalone = props.standalone === true;
   const mountRef = useRef<HTMLDivElement | null>(null);
   const pendingSpawnRef = useRef<MapCoordinates | null>(null);
   const godModeRef = useRef<boolean>(consoleRegistry.getBool('player.god'));
@@ -596,7 +605,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
    * launch's error message would be wiped by the very next poll. */
   const wasRunning = useRef(false);
   /** The node's launch job — see `native-launch.ts`. Survives this pane. */
-  const launcher = useNativeLaunch();
+  const launcher = useNativeLaunch(!standalone);
   const [postMatchSummary, setPostMatchSummary] = useState<PostMatchSummary | null>(null);
 
   /**
@@ -617,6 +626,8 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
    * between opening it and pressing Play.
    */
   const refreshSkins = useCallback(async () => {
+    // No armoury without a node: default colours.
+    if (standalone) return;
     try {
       const inventory = await getSkinInventory();
       skinsRef.current = equippedSkins(inventory);
@@ -624,7 +635,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       // A missing armoury is a weapon in its default colours, not a broken
       // match: skins are cosmetic, and failing to play over one would not be.
     }
-  }, []);
+  }, [standalone]);
 
   useEffect(() => {
     void refreshSkins();
@@ -671,6 +682,8 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   }, []);
 
   useEffect(() => {
+    // Ranked is a node relaying its account's token; a guest has neither.
+    if (standalone) return undefined;
     let active = true;
     // Once, not on a poll: the server's bundled map list changes on a deploy, and
     // a menu that re-asked every few seconds would be spending a round trip to
@@ -686,7 +699,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     return () => {
       active = false;
     };
-  }, []);
+  }, [standalone]);
 
   /**
    * Park the pane's render loop for the duration of a native match.
@@ -713,6 +726,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   }, [nativeRunning]);
 
   useEffect(() => {
+    // Both halves of this poll are a node's: the native process it spawned and
+    // the debrief it filed. Without one it is a pair of 404s every 1.5s, forever.
+    if (standalone) return undefined;
     let active = true;
     // Everything the server is already holding counts as seen — see
     // `dismissedSummaryAt`. A failure leaves the pane unbaselined and the poll
@@ -760,7 +776,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       active = false;
       clearInterval(interval);
     };
-  }, []);
+  }, [standalone]);
 
   // Mutable simulation state, kept out of React: this updates every frame and
   // re-rendering the component 60 times a second would be absurd.
@@ -903,8 +919,11 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   useEffect(() => {
     // A failure here is signed-out, not an error banner: the sign-in screen is
     // already the right answer, and a backend that can't say is not signed in.
+    // Standalone, identity is the guest callsign (`effectiveAccount`); there is
+    // no node account to read.
+    if (standalone) return;
     void refreshAccount().catch(() => setAccount(SIGNED_OUT_ACCOUNT));
-  }, [refreshAccount]);
+  }, [refreshAccount, standalone]);
 
   // Volume reaches the synth without touching the render loop; at zero it never
   // even builds an AudioContext.
@@ -1019,6 +1038,8 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   // anything in this pane happening — a friend closing their laptop is not an
   // event we would otherwise hear about.
   useEffect(() => {
+    // The roster is the node's; a standalone guest shares a link instead.
+    if (standalone) return undefined;
     let cancelled = false;
     const load = () => {
       void listInvitees()
@@ -1035,7 +1056,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [standalone]);
 
   // Bots the menu asked for, sent once the room is actually ours. Keyed off the
   // room id rather than the status, so a *new* room gets its own bots and rejoining
@@ -1233,7 +1254,15 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           list.find((m) => m.name === 'hd_atrium') ??
           list.find((m) => m.source === 'bundled') ??
           list[0];
-        if (preferred) setMapName(preferred.name);
+        // Only a *default*: a map already chosen — `initialMap`, or one a join
+        // set while this list was in flight — is kept if it exists. Overwriting
+        // it unconditionally raced the join, and the loser was the client: it
+        // rendered hd_assault while the server simulated the map it had joined.
+        if (preferred) {
+          setMapName((current) =>
+            list.some((m) => m.name === current) ? current : preferred.name,
+          );
+        }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       }
@@ -3381,12 +3410,16 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   // If launched with an initial room (e.g. from an invite link in assault-web),
   // join it automatically once the map geometry has loaded.
   const initialJoinedRef = useRef(false);
+  // Standalone, a map alone is enough: the page's own buttons already chose to
+  // play, and the node's main menu (ranked, the designer, friends) offers
+  // nothing a guest can use. An empty room id means "any room on this map with
+  // space, else a new one", which is the server's `find_or_create`.
   useEffect(() => {
-    if (props.initialRoom && info && !initialJoinedRef.current) {
-      initialJoinedRef.current = true;
-      joinRoom(props.initialRoom, props.initialMap || mapName, '');
-    }
-  }, [props.initialRoom, props.initialMap, info, mapName, joinRoom]);
+    if (!info || initialJoinedRef.current) return;
+    if (!props.initialRoom && !standalone) return;
+    initialJoinedRef.current = true;
+    joinRoom(props.initialRoom ?? '', props.initialMap || mapName, '');
+  }, [props.initialRoom, props.initialMap, info, mapName, joinRoom, standalone]);
 
   // The control map, written straight through to settings so a rebind survives a
   // reload. The scalar preferences are edited by `SettingsPanel` directly; this one

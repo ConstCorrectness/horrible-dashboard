@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, Header, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
@@ -43,6 +44,32 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="horrible-dashboard game server", lifespan=_lifespan)
+
+
+def _web_origins() -> list[str]:
+    """Browser origins allowed to call this server's HTTP routes
+    (`GAMES_WEB_ORIGINS`, comma-separated).
+
+    Empty by default: every existing client is a node's backend, which is not a
+    browser and needs no CORS. The standalone web client is a browser on some
+    other origin (Vercel, say), and without an entry here every `fetch` it makes
+    fails before reaching a route — while a websocket, which CORS does not
+    govern, would connect fine, so the failure looks like a broken map loader.
+    """
+    raw = os.environ.get("GAMES_WEB_ORIGINS", "")
+    return [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
+
+
+# GET only, no credentials: the web client reads public game data, and its only
+# identity is a guest name on the websocket. Nothing a browser could be tricked
+# into doing here with somebody else's cookies — there are no cookies.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_web_origins(),
+    allow_origin_regex=os.environ.get("GAMES_WEB_ORIGIN_REGEX") or None,
+    allow_methods=["GET"],
+    allow_credentials=False,
+)
 
 # One lobby shared by every connection to this process. (AgentTown's tick cadence
 # is env-tunable via TOWN_TICK_SECONDS — see town.py.)
@@ -689,6 +716,17 @@ def hassault_maps() -> dict[str, Any]:
     return {"maps": hassault_rooms.referee.maps()}
 
 
+def _mount_hassault_content() -> None:
+    # Imported here rather than at the top: it loads the hassault package, and
+    # the relay and the games hub should not depend on it importing cleanly.
+    from backend.games_server.hassault_content import router
+
+    app.include_router(router)
+
+
+_mount_hassault_content()
+
+
 @app.get("/api/hassault/rooms")
 def hassault_rooms_list() -> dict[str, Any]:
     """Active rooms ticking on this server, for the public server browser."""
@@ -769,6 +807,24 @@ async def hassault_ws(websocket: WebSocket) -> None:
                 )
             elif event == "input":
                 referee.apply_input(conn, data)
+            elif event == "ping":
+                # Answered here, not by whoever sits in front: the round trip a
+                # player feels is to the machine simulating them. The client's
+                # clock comes back untouched, as the node's channel does.
+                await conn.send_json(
+                    {
+                        "channel": "hassault",
+                        "event": "pong",
+                        "data": {
+                            # A number or nothing: a public socket should not
+                            # echo an arbitrary object back at whoever sent it.
+                            "t": t
+                            if isinstance(t := data.get("t"), (int, float))
+                            else None,
+                            "serverT": round(time.time() * 1000),
+                        },
+                    }
+                )
             elif event == "chat":
                 refused = await referee.chat(conn, data)
                 if refused and refused != "empty":

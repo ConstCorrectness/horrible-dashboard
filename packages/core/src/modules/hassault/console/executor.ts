@@ -5,6 +5,7 @@
  * custom keybinds/aliases, and REST/WebSocket dispatch to backend Python runtime.
  */
 
+import { apiUrl } from '../../../origin';
 import { consoleRegistry } from './registry';
 import type { ConsoleExecResult } from './types';
 
@@ -149,7 +150,10 @@ export class ConsoleExecutor {
 
     if (cmd === 'bind' && tokens.length >= 3) {
       const key = tokens[1];
-      const boundCmd = tokens.slice(2).join(' ').replace(/^["']|["']$/g, '');
+      const boundCmd = tokens
+        .slice(2)
+        .join(' ')
+        .replace(/^["']|["']$/g, '');
       this.bind(key, boundCmd);
       return {
         ok: true,
@@ -172,7 +176,10 @@ export class ConsoleExecutor {
 
     if (cmd === 'alias' && tokens.length >= 3) {
       const aliasName = tokens[1];
-      const aliasTarget = tokens.slice(2).join(' ').replace(/^["']|["']$/g, '');
+      const aliasTarget = tokens
+        .slice(2)
+        .join(' ')
+        .replace(/^["']|["']$/g, '');
       this.alias(aliasName, aliasTarget);
       return {
         ok: true,
@@ -217,7 +224,7 @@ export class ConsoleExecutor {
 
     // Dispatch to Backend REST /api/hassault/console/exec
     try {
-      const res = await fetch('/api/hassault/console/exec', {
+      const res = await fetch(apiUrl('/api/hassault/console/exec'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

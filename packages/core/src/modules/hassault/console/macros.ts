@@ -2,11 +2,12 @@
  * Macro management for hAssault Developer Console.
  */
 
+import { apiUrl } from '../../../origin';
 import type { MacroRecord } from './types';
 
 export async function fetchMacros(): Promise<MacroRecord[]> {
   try {
-    const res = await fetch('/api/hassault/console/macros');
+    const res = await fetch(apiUrl('/api/hassault/console/macros'));
     if (!res.ok) return [];
     return (await res.json()) as MacroRecord[];
   } catch {
@@ -20,7 +21,7 @@ export async function saveMacro(
   description = '',
 ): Promise<MacroRecord | null> {
   try {
-    const res = await fetch('/api/hassault/console/macros', {
+    const res = await fetch(apiUrl('/api/hassault/console/macros'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, code, description }),
@@ -34,7 +35,7 @@ export async function saveMacro(
 
 export async function deleteMacro(name: string): Promise<boolean> {
   try {
-    const res = await fetch(`/api/hassault/console/macros/${encodeURIComponent(name)}`, {
+    const res = await fetch(apiUrl(`/api/hassault/console/macros/${encodeURIComponent(name)}`), {
       method: 'DELETE',
     });
     return res.ok;

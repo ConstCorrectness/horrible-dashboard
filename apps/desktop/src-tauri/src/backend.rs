@@ -286,10 +286,13 @@ fn run(sup: Arc<BackendSupervisor>, resource_dir: Option<PathBuf>) {
         if !ready && fast_failures == 1 {
             // If the first startup attempt failed in checkout mode, run `uv sync`
             // to repair any missing or out-of-date dependencies in `.venv` before retrying.
+            // `--inexact` so the repair only adds: a plain sync uninstalls every
+            // optional extra (voice, clip, llamacpp, …) the user installed.
             if let Runtime::Checkout(root) = &runtime {
-                eprintln!("[desktop] backend failed to become ready, running `uv sync` to ensure dependencies are installed...");
+                eprintln!("[desktop] backend failed to become ready, running `uv sync --inexact` to ensure dependencies are installed...");
                 let _ = Command::new("uv")
                     .arg("sync")
+                    .arg("--inexact")
                     .current_dir(root)
                     .status();
             }
@@ -358,7 +361,9 @@ impl Runtime {
         } else {
             root.join("python").join("bin").join("python3")
         };
-        python.is_file().then_some(Runtime::Bundled { root, python })
+        python
+            .is_file()
+            .then_some(Runtime::Bundled { root, python })
     }
 
     /// The working directory the backend runs in — the directory holding `backend/`.
@@ -555,7 +560,8 @@ mod tests {
     }
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("hd-backend-test-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("hd-backend-test-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -580,7 +586,10 @@ mod tests {
     #[test]
     fn an_incomplete_runtime_does_not_resolve() {
         let empty = scratch("empty");
-        assert!(Runtime::bundled_in(&empty).is_none(), "no runtime directory at all");
+        assert!(
+            Runtime::bundled_in(&empty).is_none(),
+            "no runtime directory at all"
+        );
 
         let no_python = scratch("no-python");
         lay_down_runtime(&no_python, true, false);

@@ -16,7 +16,7 @@
 
 import { subscribeChannel, type WsMessage } from '../../ws';
 import { getMixerState, resetMixerState, saveMixerState } from './api';
-import { listInputs, listOutputs, resolveDeviceId } from './devices';
+import { describeMicFailure, listInputs, listOutputs, resolveDeviceId } from './devices';
 import { mixer } from './engine';
 import { SHARE_SINK_DEVICE, type MixerState, type StripState } from './types';
 
@@ -189,6 +189,40 @@ export function inputConstraints(extra: MediaTrackConstraints = {}): MediaTrackC
   // `exact` is deliberately not used: a device that has gone missing should fall
   // back to the default microphone, not make the capture fail outright.
   return resolved ? { ...extra, deviceId: resolved } : extra;
+}
+
+/**
+ * Open the microphone the user picked, falling back to the system default, and
+ * fail with a message that says *why*.
+ *
+ * The fallback exists because the picked device's constraint is only as good as
+ * the list it was resolved against, and that list can be stale by the time the
+ * capture runs. The message exists because a bare "Requested device not found"
+ * is the same text for "no microphone at all", "the OS default input is a
+ * headset that is switched off" and "this webview enumerates nothing", and only
+ * the device list tells those apart — so it is read at the moment of failure and
+ * put in the error, see `describeMicFailure`.
+ */
+export async function openMicrophone(extra: MediaTrackConstraints = {}): Promise<MediaStream> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error('MediaDevices API not available (requires a secure context).');
+  }
+  const picked = inputConstraints(extra);
+  try {
+    return await navigator.mediaDevices.getUserMedia({ audio: picked });
+  } catch (first) {
+    // A refusal is the user's (or the OS's) answer; asking again for a different
+    // device would only ask the same question twice.
+    const name = first instanceof DOMException ? first.name : '';
+    if (name === 'NotAllowedError' || name === 'SecurityError') {
+      throw new Error(describeMicFailure(first, await listInputs().catch(() => [])));
+    }
+    try {
+      return await navigator.mediaDevices.getUserMedia({ audio: extra });
+    } catch (second) {
+      throw new Error(describeMicFailure(second, await listInputs().catch(() => [])));
+    }
+  }
 }
 
 /** Add an output. New buses start with nothing routed to them — adding an

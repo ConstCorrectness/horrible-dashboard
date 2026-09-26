@@ -119,7 +119,9 @@ pub async fn create_browser_webview(
         return existing.show().map_err(|e| e.to_string());
     }
 
-    let builder = WebviewBuilder::new(webview_label(&id), WebviewUrl::External(parsed));
+    // Same arguments as the window it lives in — see `media::WEBVIEW2_ARGS`.
+    let builder = WebviewBuilder::new(webview_label(&id), WebviewUrl::External(parsed))
+        .additional_browser_args(crate::media::WEBVIEW2_ARGS);
     let webview = window
         .add_child(builder, position, size)
         .map_err(|e| e.to_string())?;

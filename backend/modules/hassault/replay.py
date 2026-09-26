@@ -12,20 +12,40 @@ import logging
 import sqlite3
 import time
 import uuid
+from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Generator
 
+from backend.paths import data_dir
+
 logger = logging.getLogger("hassault.replay")
 
-REPLAY_DIR = Path(__file__).resolve().parent.parent.parent.parent / ".data" / "hassault" / "replays"
-REPLAY_DB_PATH = Path(__file__).resolve().parent.parent.parent.parent / ".data" / "hassault" / "replays.db"
+#: The most ticks a recording holds: the last ten minutes at 20 Hz.
+#:
+#: A recording used to keep every tick for the life of the room, in memory, and a
+#: tick of a full room is ~16 KB of dicts — about a gigabyte an hour for a room
+#: nobody closes. A deque drops the oldest frame instead, so a long room keeps
+#: its most recent stretch, which is the part anybody watches a replay for.
+MAX_FRAMES = 20 * 60 * 10
+
+
+def replay_dir() -> Path:
+    """Where `.hrec` files live. Resolved per call, through `paths`, so it follows
+    `HORRIBLE_DATA_DIR` — it was pinned to `<repo>/.data`, which is the right
+    answer only in a checkout (and in a container is not the mounted volume)."""
+    return data_dir() / "hassault" / "replays"
+
+
+def replay_db_path() -> Path:
+    return data_dir() / "hassault" / "replays.db"
 
 
 @contextmanager
 def get_replay_db() -> Generator[sqlite3.Connection, None, None]:
-    REPLAY_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(REPLAY_DB_PATH))
+    db_path = replay_db_path()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     try:
         yield conn
@@ -82,10 +102,12 @@ class ReplayRecorder:
         self.tick_rate = tick_rate
         self.started_at = time.time()
         self.players: dict[str, dict[str, Any]] = {}
-        self.frames: list[dict[str, Any]] = []
+        self.frames: deque[dict[str, Any]] = deque(maxlen=MAX_FRAMES)
         self._finalized = False
 
-    def register_player(self, player_id: str, name: str, team: int, is_bot: bool = False) -> None:
+    def register_player(
+        self, player_id: str, name: str, team: int, is_bot: bool = False
+    ) -> None:
         self.players[player_id] = {
             "id": player_id,
             "name": name,
@@ -120,20 +142,22 @@ class ReplayRecorder:
             crouch = bool(p.get("crouch", False))
             firing = bool(p.get("firing", False))
 
-            compact_players.append({
-                "id": pid,
-                "x": x,
-                "y": y,
-                "z": z,
-                "yaw": yaw,
-                "pitch": pitch,
-                "hp": hp,
-                "armour": armour,
-                "weap": weap,
-                "alive": alive,
-                "crouch": crouch,
-                "firing": firing,
-            })
+            compact_players.append(
+                {
+                    "id": pid,
+                    "x": x,
+                    "y": y,
+                    "z": z,
+                    "yaw": yaw,
+                    "pitch": pitch,
+                    "hp": hp,
+                    "armour": armour,
+                    "weap": weap,
+                    "alive": alive,
+                    "crouch": crouch,
+                    "firing": firing,
+                }
+            )
 
         frame = {
             "tick": tick,
@@ -167,11 +191,12 @@ class ReplayRecorder:
             "winner_team": winner_team,
             "started_at": self.started_at,
             "players": list(self.players.values()),
-            "frames": self.frames,
+            "frames": list(self.frames),
         }
 
-        REPLAY_DIR.mkdir(parents=True, exist_ok=True)
-        file_path = REPLAY_DIR / f"{self.replay_id}.hrec"
+        directory = replay_dir()
+        directory.mkdir(parents=True, exist_ok=True)
+        file_path = directory / f"{self.replay_id}.hrec"
         try:
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, separators=(",", ":"))

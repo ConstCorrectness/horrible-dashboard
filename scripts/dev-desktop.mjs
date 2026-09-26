@@ -35,10 +35,16 @@ const host =
 // a shell there. (POSIX resolves it off PATH without one.)
 const useShell = process.platform === 'win32';
 
-// Keep backend dependencies up-to-date with pyproject.toml
+// Keep backend dependencies up-to-date with pyproject.toml.
+//
+// `--inexact` is load-bearing: a plain `uv sync` makes the venv match the core
+// dependency set *exactly*, which uninstalls every optional extra — so each
+// `pnpm dev:desktop` silently removed `--extra voice` (torch/transformers/
+// edge-tts), `clip`, `llamacpp`, … and the features gated on them reported
+// "not installed" right after the user had installed them.
 if (existsSync('pyproject.toml')) {
   try {
-    const uvResult = spawnSync('uv', ['sync'], {
+    const uvResult = spawnSync('uv', ['sync', '--inexact'], {
       stdio: 'inherit',
       shell: useShell,
     });

@@ -6,7 +6,7 @@ import PubNub from 'pubnub';
 
 import { usePaneSession } from '../../layout/use-pane-session';
 import { mixer } from '../audio/engine';
-import { inputConstraints } from '../audio/store';
+import { openMicrophone } from '../audio/store';
 import { earsActions, type ObservedContextState } from './earsWatchdog';
 import { splitForSpeech } from './speechChunks';
 import {
@@ -751,13 +751,10 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
 
       // Get physical mic (Optional, handle missing permissions or timeouts gracefully)
       try {
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          throw new Error('MediaDevices API not available (requires secure context).');
-        }
-
         const micStream = await Promise.race([
-          // Through the mixer so the chosen microphone is honoured
-          navigator.mediaDevices.getUserMedia({ audio: inputConstraints() }),
+          // Through the mixer so the chosen microphone is honoured, with a
+          // fallback to the default and a failure that names what it could see.
+          openMicrophone(),
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error('Microphone permission timeout')), 3000),
           ),

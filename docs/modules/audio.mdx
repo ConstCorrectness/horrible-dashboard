@@ -133,6 +133,32 @@ device is honoured — a module that keeps calling `getUserMedia({ audio: true }
 silently gets the system default whatever the user picked, with nothing on screen
 to explain it.
 
+`openMicrophone()` wraps that: it asks for the chosen input, retries the system
+default if that fails (unless the failure was a refusal), and otherwise throws a
+message from `describeMicFailure` that names the error **and lists the inputs the
+window can see**. Chromium's "Requested device not found" is the same text for
+"no microphone", "the OS default input is a headset that is switched off" and
+"this webview enumerates nothing"; only the device list tells them apart.
+Clubhouse voice uses it.
+
+### The desktop app runs WebView2's audio service unsandboxed
+
+On Windows the desktop shell passes `AudioServiceSandbox` in WebView2's
+`--disable-features` (`media::WEBVIEW2_ARGS` in `apps/desktop/src-tauri`, and
+`additionalBrowserArgs` for `main` in `tauri.conf.json`). On a machine where the
+sandboxed audio service crash-loops inside WebView2, and only there (Edge on the
+same build was fine), `enumerateDevices()` returned **no audio devices at all**:
+microphone permission was granted, the profile was fine, and every capture failed
+with "Requested device not found". With the sandbox off, all devices came back.
+The renderer stays sandboxed; this is what the enterprise
+`AudioSandboxEnabled=false` policy does.
+
+Two constraints on that string: setting arguments **replaces** wry's defaults, so
+it restates them (including `--autoplay-policy=no-user-gesture-required`, or
+mixer playback waits for a click); and every webview sharing the profile must use
+**identical** arguments or WebView2 refuses to create it, which is why a test
+pins the conf against the constant.
+
 ## Failures that are silent
 
 Every one of these produces *no error* — which is why they are listed rather than

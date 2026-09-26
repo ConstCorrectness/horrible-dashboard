@@ -41,7 +41,11 @@ export interface NativeLaunch {
   launch: (opts: LaunchNativeOptions) => Promise<void>;
 }
 
-export function useNativeLaunch(): NativeLaunch {
+/**
+ * `enabled` is false where there is no node to launch anything — the standalone
+ * web client — so the mount-time status read is not a guaranteed 404.
+ */
+export function useNativeLaunch(enabled = true): NativeLaunch {
   const [result, setResult] = useState<LaunchNativeResult | null>(null);
   // Mutable rather than state: a poll that answers after the pane is gone must
   // not set state, and the check for that must not itself re-run the effect.
@@ -92,8 +96,8 @@ export function useNativeLaunch(): NativeLaunch {
   // loses focus, so a build started before that has nothing left watching it.
   // Asking the node on the way back in picks the same job up.
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    if (enabled) void refresh();
+  }, [refresh, enabled]);
 
   const busy = pending(result);
 

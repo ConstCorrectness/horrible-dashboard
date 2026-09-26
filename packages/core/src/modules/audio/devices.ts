@@ -97,6 +97,43 @@ export async function listInputs(): Promise<MediaDeviceInfo[]> {
 }
 
 /**
+ * Why a microphone capture failed, in words that point at the fix.
+ *
+ * Pure, and handed the input list rather than reading it, so it is testable
+ * without a browser. The list is the evidence: Chromium's `NotFoundError`
+ * ("Requested device not found") reads the same whether the machine has no
+ * microphone or the webview simply enumerates none, and those need different
+ * fixes — so the message says how many inputs this page could see, and names
+ * them when it is allowed to.
+ */
+export function describeMicFailure(err: unknown, inputs: MediaDeviceInfo[]): string {
+  const name = err instanceof DOMException ? err.name : '';
+  const raw = err instanceof Error ? err.message : String(err);
+  const labels = inputs.map((d) => d.label).filter(Boolean);
+  const seen =
+    inputs.length === 0
+      ? 'this window sees no audio inputs at all'
+      : labels.length > 0
+        ? `this window sees ${inputs.length} input(s): ${labels.slice(0, 4).join(', ')}${
+            labels.length > 4 ? ', …' : ''
+          }`
+        : `this window sees ${inputs.length} input(s), unnamed until access is granted`;
+
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
+    return `microphone access was refused (${name}) — allow it for this app, then rejoin. ${seen}.`;
+  }
+  if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+    return inputs.length === 0
+      ? `no microphone found (${name}) — ${seen}. Check that an input is enabled in the OS sound settings.`
+      : `no usable microphone (${name}) — ${seen}. The OS default input may be a disconnected headset; pick a connected one as the default, or choose one in the Audio mixer.`;
+  }
+  if (name === 'NotReadableError' || name === 'AbortError') {
+    return `the microphone is busy or failed to start (${name}) — another app may hold it exclusively. ${seen}.`;
+  }
+  return `${raw}${name ? ` (${name})` : ''} — ${seen}.`;
+}
+
+/**
  * Ask for microphone access, purely to unlock device labels.
  *
  * The track is stopped immediately — this is not the microphone the mixer uses,

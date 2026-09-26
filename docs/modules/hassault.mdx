@@ -7345,6 +7345,45 @@ hAssault supports two client execution targets that speak the exact same backend
    - Renders the **same skinned operator GLB the browser client does**, GPU-skinned, with the 23 Mixamo clips and procedural weapon props. See [The operator in the native client](#the-operator-in-the-native-client).
    - Includes in-game CS:GO-style NetGraph HUD (FPS, Ping, Loss, Variance) toggled with `F3`.
 
+## The standalone web client
+
+`apps/assault-web` runs the in-browser client **without a node**: a guest with a
+callsign plays on the central game server's `/hassault-ws`, and every REST call
+goes to that server too (`VITE_BACKEND_URL`). What the server has to serve for
+that, and the limits that make it safe to leave public, are in
+[deploying the game server](../architecture/game-server-hosting.mdx#the-standalone-web-client).
+
+On the client, `HorribleAssaultPanel` takes a **`standalone`** prop, and it is one
+switch rather than a guest check scattered through the pane:
+
+- **Skipped:** the node account (`/session` — identity is the guest callsign),
+  the armoury (`/skins/inventory`), the friends roster (`/invitees`), ranked maps,
+  the native launcher's status, and the process/debrief poll — which otherwise
+  404s twice every 1.5 s for as long as the tab is open.
+- **Joins on load.** The page's own buttons already chose to play; the node's main
+  menu (ranked, the designer, friends) offers nothing a guest can use. No room id
+  means "any room on this map with space", the server's `find_or_create`.
+
+Two fixes the web client surfaced apply to every client. The **map list no longer
+overrides a chosen map**: it used to set `hd_assault` unconditionally when it
+arrived, racing a join, so a pane could render one map while the server simulated
+another. And the **console's REST calls go through `apiUrl`**, so they reach the
+backend from the desktop build and the web client instead of the page's own origin.
+
+The web build ships only the game's files from `apps/web/public` (`hassault-*.glb`,
+`hd_*.glb`, the icon) — the dashboard's avatar and animation files stay behind —
+and fails if it finds no models, since a build without them renders procedural
+fallbacks and no weapons without any error.
+
+### Replays are bounded
+
+A `ReplayRecorder` keeps at most the last **ten minutes** of ticks (`MAX_FRAMES`,
+a deque): it used to hold every tick of the room's life in memory, ~1 GB an hour
+for a full room. Recordings live under `$HORRIBLE_DATA_DIR/hassault/` via
+`backend/paths.py` (they were pinned to `<repo>/.data`), and a `MatchServer` can
+be built with `record_replays=False` — the game server's is, since nobody could
+watch a replay kept there.
+
 ## The Developer Console and Macro System
 
 `backend/modules/hassault/console.py` + `packages/core/src/modules/hassault/console/*`.

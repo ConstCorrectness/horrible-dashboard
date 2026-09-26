@@ -1,5 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
-import { HorribleAssaultPanel } from '@horrible/core/hassault-panel';
+import { lazy, Suspense, useState, useEffect, useCallback } from 'react';
 import { useGuestSession } from './hooks/useGuestSession';
 import { ServerBrowser } from './components/ServerBrowser';
 import { InstantDeployModal } from './components/InstantDeployModal';
@@ -7,6 +6,19 @@ import { ShareRoomModal } from './components/ShareRoomModal';
 import { MobileWarningBanner } from './components/MobileWarningBanner';
 
 type AppView = 'browser' | 'instant_deploy' | 'playing';
+
+/**
+ * The game itself: three.js, the Rapier physics wasm and the renderer — about
+ * 4 MB of script, which the server browser needs none of.
+ *
+ * Loaded lazily so the landing page arrives in a fraction of that, and then
+ * **prefetched** once the page is idle (below), so pressing Quick Play does not
+ * start the download — by then it has usually finished.
+ */
+const loadPanel = () => import('@horrible/core/hassault-panel');
+const HorribleAssaultPanel = lazy(() =>
+  loadPanel().then((m) => ({ default: m.HorribleAssaultPanel })),
+);
 
 function parseLocationParams(): { room: string | null; map: string } {
   let room: string | null = null;
@@ -37,6 +49,18 @@ export default function App() {
   const [targetMap, setTargetMap] = useState<string>('hd_assault');
   const [shareModal, setShareModal] = useState<{ room: string; map: string } | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    // `requestIdleCallback` is missing on Safari; a short timeout is the same
+    // intent — after first paint, before anyone has had time to click.
+    const prefetch = () => void loadPanel().catch(() => {});
+    if ('requestIdleCallback' in window) {
+      const id = window.requestIdleCallback(prefetch, { timeout: 2000 });
+      return () => window.cancelIdleCallback(id);
+    }
+    const id = globalThis.setTimeout(prefetch, 500);
+    return () => globalThis.clearTimeout(id);
+  }, []);
 
   useEffect(() => {
     const initial = parseLocationParams();
@@ -184,16 +208,19 @@ export default function App() {
             </button>
           </div>
 
-          <HorribleAssaultPanel
-            guestCallsign={callsign}
-            initialMap={targetMap}
-            initialRoom={targetRoom ?? undefined}
-            forceWebGl={true}
-            onShareRoom={handleOpenShare}
-            onToggleFullscreen={toggleFullscreen}
-            isFullscreen={isFullscreen}
-            onExit={handleExitMatch}
-          />
+          <Suspense fallback={<LoadingGame />}>
+            <HorribleAssaultPanel
+              guestCallsign={callsign}
+              initialMap={targetMap}
+              initialRoom={targetRoom ?? undefined}
+              forceWebGl={true}
+              standalone={true}
+              onShareRoom={handleOpenShare}
+              onToggleFullscreen={toggleFullscreen}
+              isFullscreen={isFullscreen}
+              onExit={handleExitMatch}
+            />
+          </Suspense>
         </div>
       )}
 
@@ -204,6 +231,27 @@ export default function App() {
           onClose={() => setShareModal(null)}
         />
       )}
+    </div>
+  );
+}
+
+/** Shown only if Play is pressed before the prefetch above has finished. */
+function LoadingGame() {
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        inset: 0,
+        display: 'grid',
+        placeItems: 'center',
+        color: '#94a3b8',
+        fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+        fontSize: '0.8rem',
+        letterSpacing: '0.14em',
+        textTransform: 'uppercase',
+      }}
+    >
+      Loading game engine…
     </div>
   );
 }

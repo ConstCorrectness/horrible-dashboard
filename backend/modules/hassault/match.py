@@ -736,6 +736,7 @@ class MatchRoom:
         items: list | None = None,
         mode: GameMode | None = None,
         objectives: Objectives | None = None,
+        record: bool = True,
     ) -> None:
         """Takes a world and its spawns rather than a parsed map, so a test can
         build a room without AssaultCube content — which this repo cannot ship.
@@ -813,10 +814,18 @@ class MatchRoom:
         # when a test needs a shotgun to pattern the same way twice.
         self.rng = random.Random(room_id)
         from backend.modules.hassault.replay import ReplayRecorder
-        self.recorder = ReplayRecorder(
-            room_id=self.id,
-            map_name=self.map_name,
-            mode_name=getattr(self.mode, "id", "dm"),
+
+        # `None` when the server hosting the room keeps no replays — the public
+        # game server, where nobody could watch one and every room would write a
+        # file. Every reader already treats a missing recorder as "not recording".
+        self.recorder: ReplayRecorder | None = (
+            ReplayRecorder(
+                room_id=self.id,
+                map_name=self.map_name,
+                mode_name=getattr(self.mode, "id", "dm"),
+            )
+            if record
+            else None
         )
         self.mode.attach(self)
 
@@ -863,7 +872,9 @@ class MatchRoom:
         self.mode.outfit(self, player)
         self.players[player.id] = player
         if hasattr(self, "recorder") and self.recorder is not None:
-            self.recorder.register_player(player.id, player.name, player.team, player.is_bot)
+            self.recorder.register_player(
+                player.id, player.name, player.team, player.is_bot
+            )
         if not player.is_bot:
             self.empty_since = None
         self.mode.on_join(self, player)
@@ -2496,7 +2507,9 @@ class MatchRoom:
 class MatchServer:
     """Process-global registry of rooms, and the tick loop that drives them."""
 
-    def __init__(self) -> None:
+    def __init__(self, record_replays: bool = True) -> None:
+        #: Whether rooms opened here record a replay. See `MatchRoom.recorder`.
+        self.record_replays = record_replays
         self.rooms: dict[str, MatchRoom] = {}
         # Which room each connection's player is in, so a socket closing can be
         # cleaned up without searching every room.
@@ -2536,6 +2549,7 @@ class MatchServer:
             pickups.place(world, cgz.entities),
             mode=game_mode,
             objectives=placed,
+            record=self.record_replays,
         )
         self.rooms[rid] = room
         # Start ticking even though the room is empty: the tick loop is also what
@@ -2697,7 +2711,11 @@ class MatchServer:
                     sent_bytes += len(frame)
                     await send_text(frame)
                 else:
-                    player_rows = room.cull_pvs_snapshot_rows(player, rows, spotted) if pvs_active else rows
+                    player_rows = (
+                        room.cull_pvs_snapshot_rows(player, rows, spotted)
+                        if pvs_active
+                        else rows
+                    )
                     await conn.send_json(
                         room.snapshot_message(now, player_rows, shared, player.ack, you)
                     )

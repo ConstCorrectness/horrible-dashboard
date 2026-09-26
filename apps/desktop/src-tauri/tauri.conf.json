@@ -17,7 +17,8 @@
         "height": 800,
         "minWidth": 640,
         "minHeight": 480,
-        "decorations": false
+        "decorations": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,AudioServiceSandbox --autoplay-policy=no-user-gesture-required"
       }
     ],
     "security": {

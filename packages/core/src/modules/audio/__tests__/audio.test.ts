@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { hasDeviceLabels, isVirtualDevice, resolveDeviceId } from '../devices';
+import { describeMicFailure, hasDeviceLabels, isVirtualDevice, resolveDeviceId } from '../devices';
 import { dbToGain } from '../engine';
 import { busHasSource, SHARE_BUS_ID } from '../store';
 import type { MixerState, StripState } from '../types';
@@ -153,5 +153,35 @@ describe('busHasSource', () => {
     // The unloaded case is the one that used to be silent: no document meant no
     // bus, and the pane blamed the host for not routing a strip.
     expect(busHasSource(null, SHARE_BUS_ID)).toBe(false);
+  });
+});
+
+describe('describeMicFailure', () => {
+  const notFound = new DOMException('Requested device not found', 'NotFoundError');
+
+  it('says the window sees no inputs, which is a different fix from a bad default', () => {
+    const msg = describeMicFailure(notFound, []);
+    expect(msg).toContain('NotFoundError');
+    expect(msg).toContain('sees no audio inputs at all');
+  });
+
+  it('names the inputs it can see, pointing at the OS default', () => {
+    const msg = describeMicFailure(notFound, [
+      device('a', 'Microphone Array (Intel)'),
+      device('b', 'Headset (WH-1000XM5)'),
+    ]);
+    expect(msg).toContain('2 input(s): Microphone Array (Intel), Headset (WH-1000XM5)');
+    expect(msg).toContain('OS default input');
+  });
+
+  it('counts unlabelled inputs rather than printing blanks', () => {
+    expect(describeMicFailure(notFound, [device('a', ''), device('b', '')])).toContain(
+      '2 input(s), unnamed',
+    );
+  });
+
+  it('calls a refusal a refusal', () => {
+    const denied = new DOMException('Permission denied', 'NotAllowedError');
+    expect(describeMicFailure(denied, [])).toContain('refused (NotAllowedError)');
   });
 });
