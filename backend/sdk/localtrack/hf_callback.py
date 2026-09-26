@@ -10,20 +10,10 @@ from backend.sdk.localtrack.client import LocalTrackClient
 logger = logging.getLogger("localtrack.hf")
 
 try:
-    from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
+    from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments  # noqa: F401
 except ImportError:
-    # Minimal fallback stub so module imports cleanly even if transformers is not present
-    class TrainerCallback:  # type: ignore[no-redef]
-        pass
-
-    class TrainerControl:  # type: ignore[no-redef]
-        pass
-
-    class TrainerState:  # type: ignore[no-redef]
-        pass
-
-    class TrainingArguments:  # type: ignore[no-redef]
-        pass
+    # Minimal fallback stubs so module imports cleanly even if transformers is not present
+    from backend.sdk.localtrack.stubs import TrainerCallback, TrainerControl, TrainerState, TrainingArguments  # type: ignore[misc, assignment] # noqa: F401
 
 
 class LocalTrackHFCallback(TrainerCallback):
@@ -156,7 +146,6 @@ class LocalTrackHFCallback(TrainerCallback):
         """Finish the run and upload training state / config artifacts."""
         # Try uploading trainer state or output files if available
         if args and hasattr(args, "output_dir"):
-            import os
             from pathlib import Path
 
             out_dir = Path(args.output_dir)
