@@ -1,0 +1,14 @@
+Title: 🧪 Improve testing coverage for `parse_rewrites` function
+
+Description:
+🎯 **What:** Addressed testing gap for the `parse_rewrites` function in `backend/modules/search/pipeline.py`. Added robust edge-case validation since the functionality relies on somewhat brittle JSON extraction and parsing of LLM outputs.
+
+📊 **Coverage:** Test coverage includes handling:
+- `None` and empty strings.
+- Invalid JSON text wrapped in brackets.
+- Extracted elements that are empty or oversized (length > 300 characters).
+- Case-insensitive deduplication of queries.
+- Stringification of array elements of varying types (boolean, numbers, nulls).
+- Valid JSON arrays embedded within Markdown markdown codeblocks (i.e., ` ```json\n...\n``` `).
+
+✨ **Result:** Enhanced the resilience and reliability of query extraction, closing out all identified testing blind-spots for this critical parsing step.

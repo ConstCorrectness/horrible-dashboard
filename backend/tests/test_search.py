@@ -215,6 +215,41 @@ def test_parse_rewrites_dedupes_and_clamps():
     assert out == ["q", "a", "b"]
 
 
+def test_parse_rewrites_handles_empty_or_none_raw():
+    assert parse_rewrites(None, query="q", limit=3) == ["q"]
+    assert parse_rewrites("", query="q", limit=3) == ["q"]
+
+
+def test_parse_rewrites_handles_invalid_json_with_brackets():
+    # Invalid JSON that still matches the regex `\[.*\]`
+    assert parse_rewrites("[unquoted text]", query="q", limit=3) == ["q"]
+
+
+def test_parse_rewrites_ignores_empty_and_oversized_items():
+    too_long = "x" * 301
+    raw = f'["valid", "", "   ", "{too_long}"]'
+    out = parse_rewrites(raw, query="q", limit=5)
+    assert out == ["q", "valid"]
+
+
+def test_parse_rewrites_dedupes_case_insensitively():
+    raw = '["A", "a", "B", "b"]'
+    out = parse_rewrites(raw, query="q", limit=5)
+    assert out == ["q", "A", "B"]
+
+
+def test_parse_rewrites_stringifies_non_string_items():
+    raw = "[123, true, null]"
+    out = parse_rewrites(raw, query="q", limit=5)
+    assert out == ["q", "123", "True", "None"]
+
+
+def test_parse_rewrites_extracts_json_from_markdown():
+    raw = '```json\n["alt one", "alt two"]\n```'
+    out = parse_rewrites(raw, query="q", limit=3)
+    assert out == ["q", "alt one", "alt two"]
+
+
 # --- crawl scope ------------------------------------------------------------
 
 
