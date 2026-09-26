@@ -20,6 +20,7 @@ Notes on this store's shape:
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import time
 from typing import Any
@@ -220,10 +221,17 @@ def run_query(
     limit = min(q.limit, row_limit)
 
     if q.op == "collections":
-        records = []
-        for name in _table_names(db):
+        names = _table_names(db)
+
+        def get_count(name: str) -> dict[str, Any]:
             tbl = _open(db, name)
-            records.append({"collection": name, "rows": tbl.count_rows()})
+            return {"collection": name, "rows": tbl.count_rows()}
+
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(32, len(names) + 1)
+        ) as executor:
+            records = list(executor.map(get_count, names))
+
         return records_to_result(records, started=started, row_limit=row_limit)
 
     name = q.require_collection(provider)
@@ -324,8 +332,9 @@ def run_query(
 def introspect(config: dict[str, Any]) -> DatabaseSchema:
     """Collections-as-tables, so the console sidebar works for vector stores too."""
     db = _connect(config)
-    tables: list[TableSchema] = []
-    for name in _table_names(db):
+    names = _table_names(db)
+
+    def get_schema(name: str) -> TableSchema:
         try:
             tbl = _open(db, name)
             columns = [
@@ -334,7 +343,13 @@ def introspect(config: dict[str, Any]) -> DatabaseSchema:
             ]
         except DriverError:
             columns = []
-        tables.append(TableSchema(name=name, columns=columns))
+        return TableSchema(name=name, columns=columns)
+
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=min(32, len(names) + 1)
+    ) as executor:
+        tables = list(executor.map(get_schema, names))
+
     return DatabaseSchema(tables=tables)
 
 

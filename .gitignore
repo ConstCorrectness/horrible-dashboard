@@ -256,3 +256,4 @@ apps/web/public/hassault-*.glb
 apps/web/public/models/*.glb
 
 
+benchmark_db_driver/
