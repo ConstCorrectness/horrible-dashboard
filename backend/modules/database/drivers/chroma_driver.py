@@ -15,6 +15,7 @@ result says so.
 
 from __future__ import annotations
 
+import concurrent.futures
 import time
 from typing import Any
 
@@ -350,6 +351,21 @@ def run_query(
     raise unsupported(provider, q.op)
 
 
+def _introspect_collection(client: Any, name: str) -> TableSchema:
+    columns = [
+        ColumnSchema(name="id", type="str", primary_key=True),
+        ColumnSchema(name="text", type="str"),
+    ]
+    try:
+        peek = _get_collection(client, name).peek(limit=1)
+        metas = peek.get("metadatas") or []
+        for key in sorted((metas[0] if metas else {}) or {}):
+            columns.append(ColumnSchema(name=key, type="metadata"))
+    except Exception:  # noqa: BLE001 — an unreadable collection still lists
+        pass
+    return TableSchema(name=name, columns=columns)
+
+
 def introspect(config: dict[str, Any]) -> DatabaseSchema:
     """Collections as tables, with metadata keys sampled from one document.
 
@@ -357,18 +373,11 @@ def introspect(config: dict[str, Any]) -> DatabaseSchema:
     rather than declared — an approximation, and the sidebar is the only consumer.
     """
     client = _client(config)
-    tables: list[TableSchema] = []
-    for name in _collection_names(client):
-        columns = [
-            ColumnSchema(name="id", type="str", primary_key=True),
-            ColumnSchema(name="text", type="str"),
-        ]
-        try:
-            peek = _get_collection(client, name).peek(limit=1)
-            metas = peek.get("metadatas") or []
-            for key in sorted((metas[0] if metas else {}) or {}):
-                columns.append(ColumnSchema(name=key, type="metadata"))
-        except Exception:  # noqa: BLE001 — an unreadable collection still lists
-            pass
-        tables.append(TableSchema(name=name, columns=columns))
+    names = _collection_names(client)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        tables = list(
+            executor.map(lambda name: _introspect_collection(client, name), names)
+        )
+
     return DatabaseSchema(tables=tables)
