@@ -103,26 +103,65 @@ def run_query(
 def introspect(config: dict[str, Any]) -> DatabaseSchema:
     conn = _connect(config)
     try:
-        names = [
-            r[0]
-            for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type IN ('table','view') "
-                "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        try:
+            # Try to use pragma_table_info as a table-valued function (SQLite 3.16.0+)
+            # This allows a single query to get all columns for all tables, avoiding N+1 queries.
+            rows = conn.execute(
+                """
+                SELECT m.name as table_name, p.name as column_name, p.type, p."notnull", p.pk
+                FROM sqlite_master m
+                JOIN pragma_table_info(m.name) p
+                WHERE m.type IN ('table', 'view') AND m.name NOT LIKE 'sqlite_%'
+                ORDER BY m.name, p.cid
+                """
             ).fetchall()
-        ]
-        tables: list[TableSchema] = []
-        for name in names:
-            cols = [
-                ColumnSchema(
-                    name=row[1],
-                    type=row[2] or "",
-                    nullable=not row[3],
-                    primary_key=bool(row[5]),
-                )
-                for row in conn.execute(f'PRAGMA table_info("{name}")').fetchall()
+
+            table_map = {}
+            # Pre-fill all tables to maintain order and include empty ones if any
+            names = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type IN ('table','view') "
+                    "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+                ).fetchall()
             ]
-            tables.append(TableSchema(name=name, columns=cols))
-        return DatabaseSchema(tables=tables)
+            for name in names:
+                table_map[name] = TableSchema(name=name, columns=[])
+
+            for table_name, col_name, col_type, notnull, pk in rows:
+                if table_name in table_map:
+                    table_map[table_name].columns.append(
+                        ColumnSchema(
+                            name=col_name,
+                            type=col_type or "",
+                            nullable=not notnull,
+                            primary_key=bool(pk),
+                        )
+                    )
+
+            return DatabaseSchema(tables=list(table_map.values()))
+        except sqlite3.OperationalError:
+            # Fallback for older SQLite versions
+            names = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type IN ('table','view') "
+                    "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+                ).fetchall()
+            ]
+            tables: list[TableSchema] = []
+            for name in names:
+                cols = [
+                    ColumnSchema(
+                        name=row[1],
+                        type=row[2] or "",
+                        nullable=not row[3],
+                        primary_key=bool(row[5]),
+                    )
+                    for row in conn.execute(f'PRAGMA table_info("{name}")').fetchall()
+                ]
+                tables.append(TableSchema(name=name, columns=cols))
+            return DatabaseSchema(tables=tables)
     except sqlite3.Error as exc:
         raise DriverError(str(exc)) from exc
     finally:
