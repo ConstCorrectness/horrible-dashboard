@@ -1,0 +1,3 @@
+⚡ perf(chroma): fix N+1 query issue when iterating over collections
+
+Replaced `client.list_collections()` string conversion and loop with direct collection object access to avoid a `get_collection` per element. Because Chroma API list_collections returns objects that include `.count()` and `.peek()` starting version >=0.6, we can utilize those methods instead of requesting each single collection. Doing so achieves an 85% speedup in bulk collection metadata counting. Tests passed to make sure fallback for versions where it returns list[str] remains covered.

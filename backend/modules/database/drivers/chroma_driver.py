@@ -200,12 +200,23 @@ def run_query(
 
     if q.op == "collections":
         records = []
-        for name in _collection_names(client):
+        try:
+            items = client.list_collections()
+        except Exception as exc:
+            raise DriverError(f"chroma: list_collections failed: {exc}") from exc
+
+        for item in items:
+            name = item if isinstance(item, str) else getattr(item, "name", str(item))
             try:
-                records.append(
-                    {"collection": name, "count": _get_collection(client, name).count()}
+                count = (
+                    item.count()
+                    if not isinstance(item, str) and hasattr(item, "count")
+                    else _get_collection(client, name).count()
                 )
+                records.append({"collection": name, "count": count})
             except DriverError:
+                records.append({"collection": name, "count": None})
+            except Exception:
                 records.append({"collection": name, "count": None})
         return records_to_result(records, started=started, row_limit=row_limit)
 
@@ -358,13 +369,25 @@ def introspect(config: dict[str, Any]) -> DatabaseSchema:
     """
     client = _client(config)
     tables: list[TableSchema] = []
-    for name in _collection_names(client):
+
+    try:
+        items = client.list_collections()
+    except Exception as exc:
+        raise DriverError(f"chroma: list_collections failed: {exc}") from exc
+
+    for item in items:
+        name = item if isinstance(item, str) else getattr(item, "name", str(item))
         columns = [
             ColumnSchema(name="id", type="str", primary_key=True),
             ColumnSchema(name="text", type="str"),
         ]
         try:
-            peek = _get_collection(client, name).peek(limit=1)
+            coll = (
+                item
+                if not isinstance(item, str) and hasattr(item, "peek")
+                else _get_collection(client, name)
+            )
+            peek = coll.peek(limit=1)
             metas = peek.get("metadatas") or []
             for key in sorted((metas[0] if metas else {}) or {}):
                 columns.append(ColumnSchema(name=key, type="metadata"))
