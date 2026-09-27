@@ -5910,6 +5910,436 @@ button.agent-model-option.is-selected .agent-model-option-name {
   color: var(--text-dim);
 }
 
+/* ── Workflow navigation bar linking the 3 interpretability surfaces ──────── */
+.interp-workflow-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.6rem;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.interp-workflow-label {
+  font-weight: 600;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.interp-workflow-tabs {
+  display: flex;
+  gap: 0.3rem;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.interp-workflow-tab {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 0.2rem 0.5rem;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.interp-workflow-tab:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.interp-workflow-tab.interp-workflow-active {
+  background: var(--bg);
+  color: var(--text);
+  font-weight: 600;
+  border-color: var(--border);
+  box-shadow: var(--shadow-card);
+}
+
+.interp-workflow-sub {
+  font-size: 10px;
+  opacity: 0.75;
+}
+
+.interp-guide-btn {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 0.2rem 0.55rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.interp-guide-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── Research Compass Guide Modal ────────────────────────────────────────── */
+.interp-guide-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: 1.5rem;
+  backdrop-filter: blur(2px);
+}
+
+.interp-guide-modal {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  max-width: 900px;
+  width: 100%;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-overlay);
+  overflow: hidden;
+}
+
+.interp-guide-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.interp-guide-header-title {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.interp-guide-icon {
+  font-size: 1.75rem;
+}
+
+.interp-guide-header-title h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.interp-guide-header-title p {
+  margin: 0.2rem 0 0 0;
+  font-size: 11px;
+}
+
+.interp-guide-close {
+  cursor: pointer;
+}
+
+.interp-guide-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 0.85rem;
+  padding: 1.25rem;
+  overflow-y: auto;
+}
+
+.interp-guide-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.interp-guide-card:hover {
+  border-color: var(--border-strong);
+}
+
+.interp-guide-card-head {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.interp-guide-card-icon {
+  font-size: 1.35rem;
+}
+
+.interp-guide-card-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.interp-guide-card-titles h4 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.interp-guide-qa {
+  font-size: 11px;
+  line-height: 1.45;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  flex: 1;
+}
+
+.interp-guide-q-label,
+.interp-guide-w-label,
+.interp-guide-t-label {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.interp-guide-question {
+  color: var(--text);
+}
+
+.interp-guide-when {
+  color: var(--text-dim);
+}
+
+.interp-guide-tip {
+  color: var(--text-dim);
+  background: var(--bg);
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--radius-sm);
+  border-left: 2px solid var(--accent);
+}
+
+.interp-guide-actions {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  margin-top: auto;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--border);
+}
+
+.interp-guide-open-btn {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 0.25rem 0.6rem;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  flex: 1;
+}
+
+.interp-guide-open-btn:hover {
+  opacity: 0.9;
+}
+
+/* ── Glossary Badges & Tooltips ──────────────────────────────────────────── */
+.interp-glossary-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.interp-glossary-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--bg-hover);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  font-size: 9px;
+  font-weight: 700;
+  cursor: help;
+  padding: 0;
+  line-height: 1;
+}
+
+.interp-glossary-badge:hover {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-color: var(--accent);
+}
+
+.interp-glossary-tooltip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-elevated);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.75rem;
+  font-size: 11px;
+  width: 250px;
+  box-shadow: var(--shadow-card);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  line-height: 1.4;
+  pointer-events: none;
+}
+
+.interp-glossary-title {
+  font-weight: 600;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.2rem;
+}
+
+.interp-glossary-desc {
+  color: var(--text);
+}
+
+.interp-glossary-tip {
+  color: var(--text-dim);
+  font-size: 10px;
+  background: var(--bg);
+  padding: 0.25rem 0.4rem;
+  border-radius: var(--radius-sm);
+}
+
+/* ── Rich Beginner Empty States ──────────────────────────────────────────── */
+.interp-empty-rich {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1.25rem;
+  max-width: 700px;
+}
+
+.interp-empty-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.interp-empty-hero h3 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.interp-empty-hero p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.interp-empty-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.75rem;
+}
+
+.interp-empty-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.interp-empty-card-head {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.interp-empty-card p {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+.interp-starter-prompts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.interp-starter-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.interp-starter-chips {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.interp-starter-chip {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.25rem 0.5rem;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+
+.interp-empty-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.25rem;
+}
+
+.interp-empty-actions button {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 0.35rem 0.75rem;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.interp-empty-actions button:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+
 .interp-turnbar {
   display: flex;
   gap: 0.4rem;

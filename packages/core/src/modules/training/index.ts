@@ -400,8 +400,9 @@ export const trainingModule: ModuleManifest = {
                   tabs: [
                     'localtrack.workspace',
                     'evals.hub',
-                    'llamacpp.server',
+                    'interpretability.context',
                     'interpretability.architecture',
+                    'llamacpp.server',
                     'trajectories.hub',
                   ],
                   active: 0,

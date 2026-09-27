@@ -73,6 +73,18 @@ only be shown together when both the build and the model hash agree
 an answer it did not produce — which is exactly the kind of confident wrongness
 this module exists to refuse.
 
+## Research Compass & Connected Workflow
+
+To make the dashboard approachable for beginners and fast for researchers, both interpretability panes host a unified **Workflow Header** and the **Research Compass** (`interpretability.guide` command or the 🧭 Compass button):
+
+1. **Context Window (Prompt)**: `interpretability.context` — measures exact token counts, prompt block kinds (system, history, buffer, tools), and tool budget truncation. Includes an onboarding launchpad with prompt suggestions and quick navigation when no turns have been captured.
+2. **Model Explorer (Weights)**: `interpretability.architecture` — inspects real GGUF tensor directories, quantizations (Q4_K_M, Q8_0), and architecture specs. Features inline glossary tooltips for technical metrics (GQA vs MHA, KV cache footprint, SwiGLU gating, RoPE θ, MoE active fractions) and empty-state links to Hugging Face and llama.cpp.
+3. **Logit Lens & Stepper (Activations)**: `llamacpp.server` — dynamic layer representations and execution stepping.
+
+The 🧭 **Compass** modal maps the 7 stages of AI research (Literature, Datasets, Context Window, Model Explorer, Logit Lens, Evals, Training), answering *which question each pane answers*, *when to use it*, and *common beginner pitfalls*.
+
+In the `interpretability` workspace preset, `interpretability.architecture` is tabbed beside `llamacpp.server`, putting prompt, weights, and activations within immediate reach.
+
 ## Architecture
 
 Capture is a read-only observer inside the agent loop. It runs once per round,

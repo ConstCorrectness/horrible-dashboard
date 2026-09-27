@@ -3,11 +3,13 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { SplitPane } from '../../SplitPane';
 import { revealSection } from '../../layout/controller';
 import { setModelLocus, useModelLocus } from '../../model-locus';
+import { registry } from '../../registry';
 import { ModelDesigner } from './designer/ModelDesigner';
 import { buildInspectGraph, inspectGraphKey } from './inspect/graph';
 import { HeadGrouping } from './inspect/HeadGrouping';
 import { InspectCanvas } from './inspect/InspectCanvas';
 import { explorerStage, stepperStage } from './inspect/stepper-stage';
+import { GlossaryBadge, ResearchWorkflowHeader } from './ResearchGuide';
 
 import {
   interpretabilityStore,
@@ -306,12 +308,62 @@ function ModelInspector() {
 
   if (!arch || arch.source === 'none') {
     return (
-      <div className="interp-empty">
-        <p>No model architecture available.</p>
-        <p className="interp-dim">
-          {arch?.error ??
-            'Load a model and open a turn — the explorer describes whichever model the captured turns ran on.'}
-        </p>
+      <div className="interp-empty-rich">
+        <div className="interp-empty-hero">
+          <h3>🧬 Model Architecture &amp; Weights Explorer</h3>
+          <p>
+            The weights and architecture form the second layer of AI interpretability. This pane renders the
+            concrete neural network structure (layers, attention heads, GQA ratios, FFN activations, and MoE routing)
+            and inventories real GGUF tensors down to quantization formats and memory footprint.
+          </p>
+        </div>
+
+        <div className="interp-empty-cards">
+          <div className="interp-empty-card">
+            <div className="interp-empty-card-head">
+              <span>🤗</span>
+              <span>Hugging Face Repos</span>
+            </div>
+            <p>
+              Pin any model from the Hugging Face hub (in the Lab workspace) to inspect its config.json and
+              architecture graph without downloading multi-gigabyte weights.
+            </p>
+          </div>
+
+          <div className="interp-empty-card">
+            <div className="interp-empty-card-head">
+              <span>🦙</span>
+              <span>Local GGUF Weights</span>
+            </div>
+            <p>
+              Load a local model in llama.cpp or Ollama to inspect full tensor directories—real shapes, parameter
+              counts, and exact VRAM footprints at any context length.
+            </p>
+          </div>
+
+          <div className="interp-empty-card">
+            <div className="interp-empty-card-head">
+              <span>🎨</span>
+              <span>Model Designer</span>
+            </div>
+            <p>
+              Switch to the <b>Design</b> tab above to experiment with node modifications, layer ablations, and
+              structural variants.
+            </p>
+          </div>
+        </div>
+
+        <div className="interp-empty-actions">
+          <button type="button" onClick={() => registry.openPanel('lab.hub')}>
+            🤗 Browse Models in Hugging Face Hub
+          </button>
+          <button type="button" onClick={() => registry.openPanel('llamacpp.server')}>
+            🦙 Manage Local Models in llama.cpp
+          </button>
+          <button type="button" onClick={() => registry.openPanel('interpretability.context')}>
+            🔍 Inspect Prompt Context
+          </button>
+        </div>
       </div>
     );
   }
@@ -435,9 +487,12 @@ function ModelInspector() {
                   // figure runs to tens of gigabytes, and a number that size with
                   // no denominator beside it reads as a bug.
                   `KV cache @ ${arch.contextLength?.toLocaleString() ?? '—'}`,
-                  arch.contextLength && kvCacheBytes(arch, arch.contextLength)
-                    ? `${fmtBytes(kvCacheBytes(arch, arch.contextLength))} at F16`
-                    : null,
+                  arch.contextLength && kvCacheBytes(arch, arch.contextLength) ? (
+                    <span>
+                      {fmtBytes(kvCacheBytes(arch, arch.contextLength))} at F16{' '}
+                      <GlossaryBadge topic="kv_cache" />
+                    </span>
+                  ) : null,
                 ],
                 ['File size', inventory ? fmtBytes(inventory.fileSize) : null],
               ]}
@@ -448,7 +503,13 @@ function ModelInspector() {
             <>
               <Facts
                 rows={[
-                  ['Kind', ATTENTION_LABEL[attn.kind] ?? attn.kind],
+                  [
+                    'Kind',
+                    <span>
+                      {ATTENTION_LABEL[attn.kind] ?? attn.kind}{' '}
+                      <GlossaryBadge topic={attn.kind === 'mha' ? 'mha' : attn.kind === 'mqa' ? 'mqa' : 'gqa'} />
+                    </span>,
+                  ],
                   ['Query heads', attn.heads],
                   ['KV heads', attn.kvHeads],
                   [
@@ -459,7 +520,12 @@ function ModelInspector() {
                   ],
                   ['Group ratio', attn.groupRatio ? `${attn.groupRatio}:1` : null],
                   ['Sliding window', attn.slidingWindow],
-                  ['RoPE θ', attn.ropeTheta?.toLocaleString()],
+                  [
+                    'RoPE θ',
+                    <span>
+                      {attn.ropeTheta?.toLocaleString()} <GlossaryBadge topic="rope" />
+                    </span>,
+                  ],
                 ]}
               />
               <HeadGrouping attention={attn} />
@@ -474,11 +540,14 @@ function ModelInspector() {
                 ['Activation', arch.ffn.activation],
                 [
                   'Gating',
-                  arch.ffn.gated === null
-                    ? 'unknown'
-                    : arch.ffn.gated
-                      ? 'gated (two up-projections)'
-                      : 'dense (one up-projection)',
+                  arch.ffn.gated === null ? (
+                    'unknown'
+                  ) : (
+                    <span>
+                      {arch.ffn.gated ? 'gated (two up-projections)' : 'dense (one up-projection)'}{' '}
+                      <GlossaryBadge topic="swiglu" />
+                    </span>
+                  ),
                 ],
               ]}
             />
@@ -493,9 +562,11 @@ function ModelInspector() {
                 ['Expert intermediate', arch.moe.expertIntermediateSize],
                 [
                   'Active fraction',
-                  arch.moe.activeFraction != null
-                    ? `${(arch.moe.activeFraction * 100).toFixed(1)}%`
-                    : null,
+                  arch.moe.activeFraction != null ? (
+                    <span>
+                      {(arch.moe.activeFraction * 100).toFixed(1)}% <GlossaryBadge topic="moe" />
+                    </span>
+                  ) : null,
                 ],
               ]}
             />
@@ -522,6 +593,7 @@ function ModelInspector() {
               </div>
               {selection.stage === 'model' && (
                 <div className="mx-quants">
+                  <GlossaryBadge topic="quants" label="Formats:" />
                   {Object.entries(inventory.quantTypes).map(([type, count]) => (
                     <span key={type} className="mx-dtype" title={`${count} tensors`}>
                       {type} <b>{count}</b>
@@ -587,6 +659,7 @@ export function ModelExplorer() {
   const [mode, setMode] = useState<'inspect' | 'design'>('inspect');
   return (
     <div className="mx-pane">
+      <ResearchWorkflowHeader current="architecture" />
       <div className="mx-modes" role="tablist" aria-label="Model explorer mode">
         <button
           type="button"

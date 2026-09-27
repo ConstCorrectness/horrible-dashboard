@@ -7,6 +7,8 @@ import {
   TokenizerBadge,
   ToolList,
 } from '../../ContextBlocks';
+import { registry } from '../../registry';
+import { GlossaryBadge, ResearchWorkflowHeader } from './ResearchGuide';
 import {
   agentsIn,
   buildTurnTree,
@@ -127,6 +129,7 @@ function TurnHeader({ turn }: { turn: TurnSnapshot }) {
         <span className="interp-budget-label">
           {fmtTokens(used)} / {window ? fmtTokens(window) : '?'} tok
           {pct != null && ` (${pct.toFixed(0)}%)`}
+          <GlossaryBadge topic="context_window" />
         </span>
         {/* Carried up from what used to be the separate budget widget: the two
             things worth knowing without scrolling are how full the window is and
@@ -138,6 +141,7 @@ function TurnHeader({ turn }: { turn: TurnSnapshot }) {
             title={`${round.toolsSelected - round.toolBudget} tools were dropped before this prompt was sent.`}
           >
             tools dropped
+            <GlossaryBadge topic="tool_budget" />
           </span>
         )}
       </div>
@@ -179,19 +183,78 @@ export function InterpretabilityPanel() {
 
   if (!turn) {
     return (
-      <div className="interp-empty">
-        <p>No agent turns captured yet.</p>
-        <p className="interp-dim">
-          Ask the agent something — this pane shows the exact context each round was given: the
-          system prompt, tool guides, replayed history, your focused buffer, and the tool schemas,
-          with real token costs.
-        </p>
+      <div className="interp-panel">
+        <ResearchWorkflowHeader current="context" />
+        <div className="interp-empty-rich">
+          <div className="interp-empty-hero">
+            <h3>🔍 Prompt Context Window Inspector</h3>
+            <p>
+              The prompt is the first surface of AI interpretability. This pane captures what the model
+              actually saw before generating its response—measuring real token costs, system instructions,
+              tool schemas, and silent tool truncations.
+            </p>
+          </div>
+
+          <div className="interp-empty-cards">
+            <div className="interp-empty-card">
+              <div className="interp-empty-card-head">
+                <span>🧠</span>
+                <span>What it measures</span>
+              </div>
+              <p>
+                Every round, the agent rebuilds its prompt: system prompt, tool schemas, chat history,
+                and workspace context. We measure exact tokens via Hugging Face tokenizers.
+              </p>
+            </div>
+
+            <div className="interp-empty-card">
+              <div className="interp-empty-card-head">
+                <span>⚠️</span>
+                <span>Tool Budget Truncation</span>
+              </div>
+              <p>
+                Tool JSON is massive. If the tool count exceeds the safety budget (TOOL_BUDGET = 44),
+                overflow tools are dropped silently by the runtime—this pane alerts you when that happens.
+              </p>
+            </div>
+
+            <div className="interp-empty-card">
+              <div className="interp-empty-card-head">
+                <span>🧭</span>
+                <span>Next Surfaces</span>
+              </div>
+              <p>
+                Once you verify the prompt, examine model weights in <b>Model Explorer</b> or dynamic layer
+                activations in <b>Logit Lens & Stepper</b>.
+              </p>
+            </div>
+          </div>
+
+          <div className="interp-starter-prompts">
+            <div className="interp-starter-title">💡 How to start: Ask the agent in the chat dock</div>
+            <div className="interp-starter-chips">
+              <span className="interp-starter-chip">&ldquo;Inspect codebase architecture&rdquo;</span>
+              <span className="interp-starter-chip">&ldquo;Search research papers on arXiv&rdquo;</span>
+              <span className="interp-starter-chip">&ldquo;Calculate 25 * 40 with a tool&rdquo;</span>
+            </div>
+          </div>
+
+          <div className="interp-empty-actions">
+            <button type="button" onClick={() => registry.openPanel('interpretability.architecture')}>
+              🧬 Open Model Explorer (Weights)
+            </button>
+            <button type="button" onClick={() => registry.openPanel('lab.hub')}>
+              🤗 Browse Models on Hugging Face
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="interp-panel">
+      <ResearchWorkflowHeader current="context" />
       <div className="interp-turnbar">
         <select
           value={turn.turnId}

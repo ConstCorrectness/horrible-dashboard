@@ -65,7 +65,7 @@ export const interpretabilityModule: ModuleManifest = {
           sizes: [0.62, 0.38],
           children: [
             { pane: 'interpretability.context' },
-            { pane: 'interpretability.architecture' },
+            { tabs: ['interpretability.architecture', 'llamacpp.server'], active: 0 },
           ],
         },
         docks: {
@@ -76,6 +76,11 @@ export const interpretabilityModule: ModuleManifest = {
     },
   ],
   commands: [
+    {
+      id: 'interpretability.guide',
+      title: 'AI Research: Which pane to use when & why (Workflow Guide)',
+      run: () => registry.openPanel('interpretability.context'),
+    },
     {
       id: 'interpretability.open',
       title: 'Interpretability: Inspect context window',
