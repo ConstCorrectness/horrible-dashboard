@@ -47,6 +47,7 @@ import {
   bootFailed,
   bootReady,
   bootStep,
+  briefingModule,
   notificationsModule,
   marketplaceModule,
   networkModule,
@@ -237,6 +238,8 @@ async function boot(): Promise<void> {
     // addressed to a person, so the roster has to be registered first.
     registry.register(shareModule);
     registry.register(notificationsModule);
+    // Spotlight's empty state: papers, headlines, quick settings. No pane.
+    registry.register(briefingModule);
     registry.register(commonsModule);
     registry.register(peopleModule);
     registry.register(hassaultModule);

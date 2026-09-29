@@ -9,10 +9,15 @@
  *
  * The result list is resolved by `spotlightResults` in core, so what appears and
  * in what order is unit-tested rather than argued about here.
+ *
+ * Before anything is typed it shows the hub instead of that list — the AI
+ * briefing, quick settings and notifications (spotlight/SpotlightHub.tsx). Still
+ * one surface: the first keystroke swaps the hub for the results.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   askAgent,
+  BRIEFING_IN_SPOTLIGHT_KEY,
   bindingsFor,
   focusInstance,
   labelSpec,
@@ -24,11 +29,14 @@ import {
   tryParseSpec,
   useKeyContext,
   useKeymap,
+  useSetting,
   type KeyContext,
   type ResolvedBinding,
   findPaneAnywhere,
   type SpotlightItem,
 } from '@horrible/core';
+
+import { SpotlightHub } from './spotlight/SpotlightHub';
 
 /**
  * The shortcut to show for a command: the one that would actually fire right now
@@ -55,6 +63,10 @@ export function Spotlight({ open, onClose }: { open: boolean; onClose: () => voi
   const inputRef = useRef<HTMLInputElement>(null);
   const bindings = useKeymap();
   const ctx = useKeyContext();
+  const hubEnabled = useSetting<boolean>(BRIEFING_IN_SPOTLIGHT_KEY) !== false;
+  // The hub stands in for the unfiltered list, so it shows only while nothing is
+  // typed and no answer is on screen.
+  const showHub = hubEnabled && query === '' && asking === null;
 
   useEffect(() => {
     if (open) {
@@ -121,57 +133,66 @@ export function Spotlight({ open, onClose }: { open: boolean; onClose: () => voi
   };
 
   return (
-    <div className="palette-backdrop" onClick={onClose}>
-      <div className="palette spotlight" onClick={(e) => e.stopPropagation()}>
-        <input
-          ref={inputRef}
-          value={query}
-          placeholder="Ask, run a command, or jump to a pane…"
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setSelected(0);
-            setAsking(null);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') onClose();
-            if (e.key === 'Enter') run(selected);
-            if (e.key === 'ArrowDown') {
-              e.preventDefault();
-              setSelected((s) => Math.min(s + 1, items.length - 1));
-            }
-            if (e.key === 'ArrowUp') {
-              e.preventDefault();
-              setSelected((s) => Math.max(s - 1, 0));
-            }
-          }}
-        />
-        {asking !== null ? (
-          <div className="spotlight-answer">
-            <p className="spotlight-asked">{asking}</p>
-            <div className="spotlight-reply">{answer || 'Thinking…'}</div>
-          </div>
-        ) : (
-          <ul>
-            {items.map((item, i) => (
-              <li
-                key={item.key}
-                className={`${i === selected ? 'selected' : ''} spotlight-${item.kind}`}
-                onClick={() => run(i)}
-              >
-                <span className="spotlight-title">
-                  {item.icon && (
-                    <span className="spotlight-icon" aria-hidden="true">
-                      {item.icon}
-                    </span>
-                  )}
-                  {item.title}
-                </span>
-                {item.hint && <kbd>{item.hint}</kbd>}
-              </li>
-            ))}
-            {items.length === 0 && <li className="empty">Type to search, or ask a question</li>}
-          </ul>
-        )}
+    <div
+      className={`palette-backdrop${showHub ? ' spotlight-backdrop--hub' : ''}`}
+      onClick={onClose}
+    >
+      <div className="spotlight-stack">
+        <div className="palette spotlight" onClick={(e) => e.stopPropagation()}>
+          <input
+            ref={inputRef}
+            value={query}
+            placeholder="Ask, run a command, or jump to a pane…"
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setSelected(0);
+              setAsking(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') onClose();
+              // With the hub showing, the result list is not rendered — Enter or an
+              // arrow would act on a row the user cannot see.
+              if (showHub) return;
+              if (e.key === 'Enter') run(selected);
+              if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setSelected((s) => Math.min(s + 1, items.length - 1));
+              }
+              if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setSelected((s) => Math.max(s - 1, 0));
+              }
+            }}
+          />
+          {asking !== null ? (
+            <div className="spotlight-answer">
+              <p className="spotlight-asked">{asking}</p>
+              <div className="spotlight-reply">{answer || 'Thinking…'}</div>
+            </div>
+          ) : showHub ? null : (
+            <ul>
+              {items.map((item, i) => (
+                <li
+                  key={item.key}
+                  className={`${i === selected ? 'selected' : ''} spotlight-${item.kind}`}
+                  onClick={() => run(i)}
+                >
+                  <span className="spotlight-title">
+                    {item.icon && (
+                      <span className="spotlight-icon" aria-hidden="true">
+                        {item.icon}
+                      </span>
+                    )}
+                    {item.title}
+                  </span>
+                  {item.hint && <kbd>{item.hint}</kbd>}
+                </li>
+              ))}
+              {items.length === 0 && <li className="empty">Type to search, or ask a question</li>}
+            </ul>
+          )}
+        </div>
+        {showHub && <SpotlightHub />}
       </div>
     </div>
   );

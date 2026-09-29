@@ -126,6 +126,34 @@ export function IconChevron(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+/** An upvote, or any count that means "people liked this". */
+export function IconArrowUp(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M8 13V3.5M4 7.5l4-4 4 4" />
+    </Glyph>
+  );
+}
+
+/** Leaves the app: a link that opens in the system browser. */
+export function IconExternal(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M9.5 2.75h3.75V6.5M13.25 2.75 7.5 8.5" />
+      <path d="M11.5 9.5v3a.75.75 0 0 1-.75.75H3.5a.75.75 0 0 1-.75-.75V5.25a.75.75 0 0 1 .75-.75h3" />
+    </Glyph>
+  );
+}
+
+/** A discussion thread — a comment count. */
+export function IconComment(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Glyph {...props}>
+      <path d="M2.75 4a1.25 1.25 0 0 1 1.25-1.25h8A1.25 1.25 0 0 1 13.25 4v5.5A1.25 1.25 0 0 1 12 10.75H7l-3 2.5v-2.5A1.25 1.25 0 0 1 2.75 9.5z" />
+    </Glyph>
+  );
+}
+
 /** Recently used. A clock, for the Start menu's Recent band. */
 export function IconClock(props: SVGProps<SVGSVGElement>) {
   return (

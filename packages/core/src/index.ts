@@ -12,9 +12,14 @@ export { CopyableLink, CopyableValue } from './CopyableLink';
  *  alternative every pane reached for was a native emoji. */
 export {
   IconAlert,
+  IconArrowUp,
   IconCheck,
   IconChevron,
   IconClock,
+  IconClose,
+  IconComment,
+  IconDot,
+  IconExternal,
   IconPlus,
   IconRetry,
   IconSearch,
@@ -530,6 +535,23 @@ export {
   type NotificationItem,
   type PermissionState,
 } from './modules/notifications';
+export {
+  briefingModule,
+  BRIEFING_IN_SPOTLIGHT_KEY,
+  BRIEFING_FRESH_MS,
+  arxivAbsUrl,
+  arxivPdfUrl,
+  hfPaperUrl,
+  saveBriefingPaper,
+  getBriefing,
+  loadBriefing,
+  subscribeBriefing,
+  useBriefing,
+  type BriefingPaper,
+  type BriefingSection,
+  type BriefingState,
+  type BriefingStory,
+} from './modules/briefing';
 export { explorerModule } from './modules/explorer';
 export { peopleModule } from './modules/people';
 export {

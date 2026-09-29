@@ -718,6 +718,14 @@ things it settles:
 An ask keeps the spotlight open, unlike every other action: the answer is the point,
 and closing to deliver it somewhere else would mean going to find it.
 
+**The empty state is a hub, not a list.** With nothing typed, Spotlight shows the AI
+briefing (the week's top papers and AI headlines), quick settings and notifications
+instead of every command in registry order, a list nobody read, since anyone who knew
+what they wanted typed it. The first keystroke swaps the hub for the results, so
+nothing reached by typing moved, and `Enter` and the arrows do nothing while the hub
+shows. The `briefing.showInSpotlight` setting restores the plain list. See
+[briefing.mdx](../modules/briefing.mdx).
+
 ## Windows
 
 A window's content is an `AreaNode` — the same node the center grid uses — so a plain

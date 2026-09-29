@@ -1,0 +1,121 @@
+---
+sidebar_position: 40
+sidebar_label: AI Briefing
+---
+
+# Module: briefing
+
+:::note This module contributes no panes
+The briefing lives in Spotlight's empty state. Press `mod+k` with nothing typed and
+it is there, beside quick settings and notifications. The first keystroke swaps it
+for the ordinary results.
+:::
+
+A morning-briefing glance at AI: the week's most-upvoted papers and the last two days
+of AI headlines. Two halves:
+
+- **`backend/modules/briefing/`** fetches, ranks and caches both sources, and serves
+  them at `/api/briefing/*`.
+- **`packages/core/src/modules/briefing/`** is the client store and the manifest. The
+  rendering lives with Spotlight in `packages/ui/src/spotlight/SpotlightHub.tsx`.
+
+## Why Spotlight and not a pane
+
+Spotlight is already the surface you open on the way to something else, and a
+briefing is a glance taken on the way to something else. A pane would be a
+destination nobody navigates to. It is also not a second overlay: Spotlight's rule is
+one surface per keystroke (see [desktop-shell.mdx](../architecture/desktop-shell.mdx#spotlight)),
+and the hub replaces what the empty state used to show, the unfiltered command list,
+rather than sitting beside it.
+
+## Sources
+
+| Section | Source | Window | Ranked by |
+| --- | --- | --- | --- |
+| Top papers | Hugging Face Daily Papers, `?week=YYYY-Www` | rolling 7 days | upvotes |
+| Headlines | Hacker News via Algolia search, title matches only | 48 hours | points |
+
+**Why Hugging Face for "top arXiv papers".** arXiv's API sorts by relevance or date
+and has no notion of popularity. HF's daily list is arXiv papers people submitted and
+upvoted, which is the nearest public signal to "what the field read this week". Every
+entry carries its arXiv id, so **Save** files it through the arXiv module's own
+`POST /api/arxiv/download` (the guarded PDF pipeline, tagged `briefing`) instead of
+through a second download path.
+
+**Why a rolling week.** On a Monday the current ISO week holds a handful of papers.
+The client asks for this ISO week and the one seven days back, then filters to the
+window, so the list is full on every day of the week.
+
+**Why title-only headlines.** Algolia ANDs the words of a query and matches inside
+URLs and self-post bodies, so a bare `AI` query pulls in stories that only mention it
+in a link. One query per term (`AI`, `LLM`, `OpenAI`, `Anthropic`, `GPT`, `Gemini`),
+restricted to titles, deduplicated by story id.
+
+## Caching and failure
+
+The backend holds each source in a TTL cache (papers 30 min, headlines 15 min) behind
+a lock, so concurrent opens share one upstream fetch. `?refresh=true` bypasses it.
+
+A refresh that fails **serves the last good copy** with `stale: true`, and the hub
+labels the section "cached … ago". A briefing from an hour ago beats an error card.
+Only a failure with nothing cached is a `502`.
+
+The client store (`store.ts`) loads lazily: nothing fetches at boot. The first
+Spotlight open asks, and later opens reuse the answer until it is ten minutes old. The
+two sections load independently, so a slow source never holds up the other, and a
+failed refresh keeps the items already on screen.
+
+## The rest of the hub
+
+Quick settings and notifications are read from stores that already exist. The hub
+owns no state of its own:
+
+- **Theme**: every entry in `THEMES`, written to `settings.theme`.
+- **Graphics**: `settings.graphicsQuality`. Performance mode also removes the hub's
+  blur and entrance animation, the same as everywhere else.
+- **Desktop alerts**: `notifications.desktop`.
+- **Fullscreen**: the same toggle as the tray, shown only where `window.fullscreen`
+  is granted.
+- **Notifications**: the last five from the notifications feed, dismissable. Unlike
+  the clock flyout, opening Spotlight does **not** mark them read: Spotlight is opened
+  to do something else, and the unread dot on the clock should survive that.
+
+With nothing typed, `Enter` and the arrow keys do nothing, because the result list
+they act on is not rendered.
+
+## Contributions
+
+| Kind | Id | Does |
+| --- | --- | --- |
+| Command | `briefing.show` | Opens Spotlight (via `shell.commandPalette`, so a rebind still applies) |
+| Command | `briefing.refresh` | Refetches both sections, bypassing both caches |
+| Setting | `briefing.showInSpotlight` (default `true`) | Off restores the plain command list in the empty state |
+
+## Backend surface
+
+| Route | Returns |
+| --- | --- |
+| `GET /api/briefing/papers?refresh=` | `papers`, `fetched_at` (epoch s), `stale` |
+| `GET /api/briefing/news?refresh=` | `stories`, `fetched_at` (epoch s), `stale` |
+
+## Browser vs desktop
+
+| | Browser | Desktop |
+| --- | --- | --- |
+| Papers, headlines, save to library | Yes | Yes |
+| Theme, graphics, alerts | Yes | Yes |
+| Fullscreen tile | Yes (DOM Fullscreen API) | Yes (native window) |
+
+External links open in a new tab in the browser, and in the system browser on desktop
+through the shell's external-link bridge.
+
+## Tests
+
+`backend/tests/test_briefing.py` pins parsing (rolling window, dedup across the two
+ISO weeks, hidden authors dropped, non-https repo links refused), that headline
+queries are title-restricted, the cache, the stale fallback, and the `502` with
+nothing cached. It asserts on the HTTP response body, so a `response_model` that
+drops a field fails the test.
+
+`packages/core/src/modules/briefing/__tests__/briefing.test.ts` is the registration
+smoke test, plus the store's freshness window and keep-items-on-failure rule.

@@ -1,0 +1,121 @@
+/**
+ * Spotlight's empty state (SpotlightHub.tsx).
+ *
+ * Everything reads theme tokens, so the hub is frosted under `glass` — where
+ * `--win-backdrop-filter` is a real blur and surfaces carry alpha — and flat and
+ * sharp under `hud`, with no per-theme rules here. Graphics quality already
+ * turns that token off in performance mode, so the hub inherits that too.
+ *
+ * Sizes, spacing and motion come off the shared scales (`--fs-*`, `--space-*`,
+ * `--dur-*`), which `design-tokens.test.ts` holds every theme to.
+ */
+
+/* --- the stack: search bar over the hub --------------------------------------- */
+
+.palette-backdrop.spotlight-backdrop--hub {
+  align-items: flex-start;
+  overflow-y: auto;
+  padding: 8vh 16px 32px;
+  backdrop-filter: var(--win-backdrop-filter);
+  -webkit-backdrop-filter: var(--win-backdrop-filter);
+}
+
+.spotlight-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  width: min(72rem, 100%);
+}
+
+.spotlight-backdrop--hub .palette {
+  max-height: none;
+  box-shadow: var(--shadow-overlay);
+  backdrop-filter: var(--win-backdrop-filter);
+  -webkit-backdrop-filter: var(--win-backdrop-filter);
+}
+
+/* --- layout: asymmetric, briefing wide and settings narrow --------------------- */
+
+.sp-hub {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(16rem, 21rem);
+  gap: 16px;
+  align-items: start;
+  color: var(--text);
+}
+
+.sp-hub-main,
+.sp-hub-side {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+@media (max-width: 860px) {
+  .sp-hub {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* --- entrance: staggered, capped in JS at 8 steps ------------------------------- */
+
+@keyframes sp-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+.sp-hub-greeting,
+.sp-card,
+.sp-hero,
+.sp-paper-row,
+.sp-story,
+.sp-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+}
+
+/* Kind and unread as a small status dot in its own gutter, not a coloured edge. */
+.sp-note-dot {
+  flex: none;
+  margin-top: 4px;
+  color: var(--text-faint);
+}
+
+.sp-note.is-unread .sp-note-dot {
+  color: var(--accent);
+}
+
+.sp-note.is-success .sp-note-dot {
+  color: var(--success);
+}
+
+.sp-note.is-warning .sp-note-dot {
+  color: var(--warn);
+}
+
+.sp-note.is-error .sp-note-dot {
+  color: var(--danger);
+}
+
+.sp-note-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-body);
+}
+
+.sp-note-body strong {
+  color: var(--text-strong);
+  font-weight: 600;
+}

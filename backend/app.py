@@ -68,6 +68,7 @@ from backend.modules.connectors import router as connectors_router
 from backend.modules.artifacts import router as artifacts_router
 from backend.modules.arxiv import register_arxiv_tools
 from backend.modules.arxiv import router as arxiv_router
+from backend.modules.briefing import router as briefing_router
 from backend.modules.research import register_research_tools
 from backend.modules.research import router as research_router
 from backend.modules.research.broadcast import push_research_events
@@ -405,6 +406,7 @@ app.include_router(artifacts_router, prefix="/api")
 app.include_router(research_router, prefix="/api")
 app.include_router(search_router, prefix="/api")
 app.include_router(arxiv_router, prefix="/api")
+app.include_router(briefing_router, prefix="/api")
 app.include_router(interpretability_router, prefix="/api")
 app.include_router(agentpedia_router, prefix="/api")
 app.include_router(hardware_router, prefix="/api")
