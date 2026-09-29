@@ -78,19 +78,8 @@ async fn run(path: &str) {
     // The camera bind group layout the shared shader expects. Rebuilt here
     // rather than borrowed from `Renderer`, which owns a surface this example
     // deliberately does not have.
-    let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("camera"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        }],
-    });
+    let camera_layout = hassault_native::atmosphere::camera_layout(&device);
+    let lights_buffer = hassault_native::atmosphere::default_lights_buffer(&device);
 
     // Placed to look along +x at a row of operators spread across y, from a
     // little above the waist — roughly where another player's eyes would be.
@@ -120,10 +109,16 @@ async fn run(path: &str) {
     let camera_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("camera"),
         layout: &camera_layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: camera_buffer.as_entire_binding(),
-        }],
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: lights_buffer.as_entire_binding(),
+            },
+        ],
     });
 
     // A shadow map with nothing in it: the preview has no world, so every
@@ -145,6 +140,8 @@ async fn run(path: &str) {
         &empty_world,
         0,
         (glam::Vec3::ZERO, glam::Vec3::splat(8.0)),
+        hassault_native::atmosphere::Atmosphere::CUBE.sun_direction(),
+        hassault_native::shadow::ShadowQuality::default(),
     );
 
     let mut characters = Characters::new(

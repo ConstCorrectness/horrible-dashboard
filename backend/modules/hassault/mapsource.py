@@ -56,6 +56,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from backend.modules.hassault import atmosphere
 from backend.modules.hassault.cgz import (
     ANGLED_TYPES,
     CTF_FLAG,
@@ -360,6 +361,12 @@ def _build_entity(grid: _Grid, spec: dict[str, Any]) -> MapEntity:
         if not isinstance(color, list) or len(color) != 3:
             raise _fail(f"light.color must be [r, g, b], got {color!r}")
         attrs[1:4] = [_byte(c, "light.color") for c in color]
+        # A percentage in the fifth attribute, which AC ignores — so an exported
+        # map still opens there. 100 is the default brightness for the radius; see
+        # `atmosphere.lights`.
+        attrs[4] = _byte(
+            round(float(spec.get("intensity", 1.0)) * 100), "light.intensity (x100)"
+        )
     else:
         raw = spec.get("attrs", [])
         if not isinstance(raw, list) or len(raw) > 7:
@@ -470,6 +477,7 @@ def _build(source: dict[str, Any], name: str) -> tuple[CgzMap, list[int]]:
         modes=list(declared_modes),
         objectives=objectives,
         baked_collision=source.get("collision") == "baked",
+        atmosphere=atmosphere.validate(source.get("atmosphere")),
     )
     return built, grid.owners
 
@@ -694,6 +702,14 @@ def schema() -> dict[str, Any]:
                     _f("z", "int", None),
                     _f("radius", "int", 32, minimum=0, maximum=255),
                     _f("color", "color", [255, 255, 255]),
+                    _f(
+                        "intensity",
+                        "number",
+                        1.0,
+                        minimum=0,
+                        maximum=2.55,
+                        description="A multiplier: a light gets intensity × radius / 2 candela.",
+                    ),
                 ],
             },
             {

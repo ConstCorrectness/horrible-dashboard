@@ -28,7 +28,24 @@ pub enum Page {
     Root,
     Crosshair,
     Video,
+    /// The rows a quality preset writes, one by one.
+    Advanced,
+    /// Where the picture goes and what draws it: fullscreen mode, monitor,
+    /// exclusive mode, frame queue, GPU and API.
+    Display,
     Controls,
+}
+
+impl Page {
+    /// Where Escape and BACK go. The two video sub-pages return to VIDEO rather
+    /// than to the top: backing out of ADVANCED to tweak the FOV next door
+    /// should not cost a trip through the root.
+    fn parent(self) -> Page {
+        match self {
+            Page::Advanced | Page::Display => Page::Video,
+            _ => Page::Root,
+        }
+    }
 }
 
 /// What a row does when you activate or step it.
@@ -46,13 +63,30 @@ pub enum Action {
     CrosshairDot,
     CrosshairAlpha,
     CrosshairColor,
+    /// Windowed, borderless or exclusive — one row, three states.
     Fullscreen,
     RenderScale,
     Quality,
     Vsync,
     Fov,
-    Antialias,
+    Msaa,
+    Anisotropy,
+    Textures,
     Shadows,
+    ShadowQuality,
+    MapLights,
+    Bloom,
+    Sky,
+    Sharpen,
+    Brightness,
+    Monitor,
+    ExclusiveMode,
+    FrameLatency,
+    Gpu,
+    GraphicsApi,
+    GpuPreference,
+    /// Start again on the GPU and API just chosen.
+    Restart,
     FpsLimit,
     ShowHitboxes,
     Sensitivity,
@@ -130,12 +164,18 @@ impl Menu {
                 self.open = false;
                 true
             }
-            _ => {
-                self.page = Page::Root;
+            page => {
+                self.page = page.parent();
                 self.cursor = 0;
                 false
             }
         }
+    }
+
+    /// BACK on a page: the same step Escape takes.
+    pub fn back(&mut self) {
+        self.page = self.page.parent();
+        self.cursor = 0;
     }
 
     pub fn rows(&self, settings: &Settings, in_match: bool) -> Vec<Row> {
@@ -214,11 +254,7 @@ impl Menu {
             Page::Video => vec![
                 row(
                     "DISPLAY",
-                    if settings.video.fullscreen {
-                        "FULLSCREEN".into()
-                    } else {
-                        "WINDOWED".into()
-                    },
+                    display_mode_label(&settings.video).into(),
                     Action::Fullscreen,
                 ),
                 row(
@@ -231,35 +267,25 @@ impl Menu {
                     format!("{:.0}", settings.video.fov),
                     Action::Fov,
                 ),
-                // The preset first and the knobs it writes directly under it, so
-                // the relationship is visible: stepping QUALITY moves the rows
-                // below rather than shadowing them, and a player who then changes
-                // one of those sees the preset row stay where they left it.
+                // The preset, and the page of rows it writes one step away. A
+                // row changed there leaves the level where it was and this reads
+                // CUSTOM, so the preset never shadows a choice.
                 row(
                     "QUALITY",
-                    settings.video.quality.label().to_string(),
+                    if settings.video.matches_preset() {
+                        settings.video.quality.label().to_string()
+                    } else {
+                        format!("CUSTOM ({})", settings.video.quality.label())
+                    },
                     Action::Quality,
                 ),
+                row("ADVANCED", String::from(">"), Action::Open(Page::Advanced)),
                 row(
-                    "ANTI-ALIASING",
-                    if settings.video.antialias {
-                        "4X"
-                    } else {
-                        "OFF"
-                    }
-                    .to_string(),
-                    Action::Antialias,
+                    "DISPLAY AND GPU",
+                    String::from(">"),
+                    Action::Open(Page::Display),
                 ),
-                row(
-                    "SHADOWS",
-                    if settings.video.shadows { "ON" } else { "OFF" }.to_string(),
-                    Action::Shadows,
-                ),
-                row(
-                    "VSYNC",
-                    if settings.video.vsync { "ON" } else { "OFF" }.to_string(),
-                    Action::Vsync,
-                ),
+                row("VSYNC", on_off(settings.video.vsync), Action::Vsync),
                 row(
                     "FRAME CAP",
                     if settings.video.fps_limit == 0 {
@@ -274,11 +300,125 @@ impl Menu {
                 // then turn off — and a debug page is somewhere you never look.
                 row(
                     "SHOW HITBOXES",
-                    if settings.show_hitboxes { "ON" } else { "OFF" }.to_string(),
+                    on_off(settings.show_hitboxes),
                     Action::ShowHitboxes,
                 ),
                 row("BACK", String::new(), Action::Back),
             ],
+            Page::Advanced => vec![
+                row(
+                    "ANTI-ALIASING",
+                    match settings.video.samples() {
+                        1 => "OFF".to_string(),
+                        n => format!("{n}X MSAA"),
+                    },
+                    Action::Msaa,
+                ),
+                row(
+                    "TEXTURE FILTERING",
+                    match settings.video.anisotropy {
+                        1 => "TRILINEAR".to_string(),
+                        n => format!("{n}X ANISO"),
+                    },
+                    Action::Anisotropy,
+                ),
+                row(
+                    "TEXTURE QUALITY",
+                    settings.video.textures.label().to_string(),
+                    Action::Textures,
+                ),
+                row("SHADOWS", on_off(settings.video.shadows), Action::Shadows),
+                row(
+                    "SHADOW QUALITY",
+                    format!(
+                        "{} {}",
+                        settings.video.shadow_level.label(),
+                        settings.video.shadow_level.quality().size
+                    ),
+                    Action::ShadowQuality,
+                ),
+                row(
+                    "MAP LIGHTS",
+                    match settings.video.map_lights {
+                        0 => "OFF".to_string(),
+                        n => format!("{n}"),
+                    },
+                    Action::MapLights,
+                ),
+                row("BLOOM", percent_or_off(settings.video.bloom), Action::Bloom),
+                row("SKY", on_off(settings.video.sky), Action::Sky),
+                row(
+                    "SHARPENING",
+                    percent_or_off(settings.video.sharpen),
+                    Action::Sharpen,
+                ),
+                row(
+                    "BRIGHTNESS",
+                    format!("{:.0}%", settings.video.brightness * 100.0),
+                    Action::Brightness,
+                ),
+                row("BACK", String::new(), Action::Back),
+            ],
+            Page::Display => {
+                let running = crate::gpu::running().map(|a| a.name.as_str());
+                let chosen = settings.gpu.adapter_name();
+                // A star where the saved choice is not what is running yet —
+                // the one thing a row whose change needs a restart has to say.
+                let pending = settings.gpu.adapter != 0 && chosen != running;
+                vec![
+                    row(
+                        "DISPLAY",
+                        display_mode_label(&settings.video).into(),
+                        Action::Fullscreen,
+                    ),
+                    row(
+                        "MONITOR",
+                        crate::display::monitor_label(settings.video.monitor),
+                        Action::Monitor,
+                    ),
+                    row(
+                        "EXCLUSIVE MODE",
+                        crate::display::mode_label(settings.video.exclusive_mode),
+                        Action::ExclusiveMode,
+                    ),
+                    row(
+                        "FRAME QUEUE",
+                        match settings.video.frame_latency {
+                            1 => "1 (LOWEST LAG)".to_string(),
+                            n => format!("{n}"),
+                        },
+                        Action::FrameLatency,
+                    ),
+                    row(
+                        "GPU",
+                        format!(
+                            "{}{}",
+                            chosen
+                                .map(crate::gpu::menu_label)
+                                .unwrap_or_else(|| "AUTO".to_string()),
+                            if pending { " *" } else { "" }
+                        ),
+                        Action::Gpu,
+                    ),
+                    row(
+                        "GRAPHICS API",
+                        settings.gpu.backend.label().to_string(),
+                        Action::GraphicsApi,
+                    ),
+                    row(
+                        "GPU PREFERENCE",
+                        if settings.gpu.low_power {
+                            "POWER SAVING"
+                        } else {
+                            "PERFORMANCE"
+                        }
+                        .to_string(),
+                        Action::GpuPreference,
+                    ),
+                    row("RESTART TO APPLY", String::new(), Action::Restart),
+                    row("BACK", String::new(), Action::Back),
+                ]
+            }
             Page::Controls => vec![
                 row(
                     "SENSITIVITY",
@@ -297,6 +437,8 @@ impl Menu {
             Page::Root => "ESC RESUMES - ARROWS AND ENTER, OR THE MOUSE",
             Page::Crosshair => "THE GAP ALSO OPENS WITH THE WEAPON'S SPREAD",
             Page::Video => "RESOLUTION SCALES THE WORLD, NEVER THE HUD",
+            Page::Advanced => "QUALITY WRITES THESE - CHANGING ONE MAKES IT CUSTOM",
+            Page::Display => "* GPU AND API CHANGES APPLY ON RESTART",
             Page::Controls => "DIVIDED BY THE SCOPE'S MAGNIFICATION WHILE SCOPED",
         }
     }
@@ -306,6 +448,8 @@ impl Menu {
             Page::Root => "PAUSED",
             Page::Crosshair => "CROSSHAIR",
             Page::Video => "VIDEO",
+            Page::Advanced => "ADVANCED VIDEO",
+            Page::Display => "DISPLAY AND GPU",
             Page::Controls => "CONTROLS",
         }
     }
@@ -491,9 +635,58 @@ pub fn apply(action: Action, step: i32, settings: &mut Settings) -> Vec<&'static
             vec![KEY_CROSSHAIR_ALPHA]
         }
         Action::Fullscreen => {
-            settings.video.fullscreen = !settings.video.fullscreen;
-            vec![KEY_FULLSCREEN]
+            // Windowed, borderless, exclusive — a cycle, since there is no order
+            // to them that one direction would violate.
+            const MODES: [(bool, bool); 3] = [(false, false), (true, false), (true, true)];
+            let current = (
+                settings.video.fullscreen,
+                settings.video.fullscreen && settings.video.exclusive,
+            );
+            let (fullscreen, exclusive) = cycle(&MODES, current, step);
+            settings.video.fullscreen = fullscreen;
+            settings.video.exclusive = exclusive;
+            vec![KEY_FULLSCREEN, KEY_DISPLAY_MODE]
         }
+        Action::Monitor => {
+            let count = crate::display::monitor_count() as u32;
+            let all: Vec<u32> = (0..=count).collect();
+            settings.video.monitor = cycle(&all, settings.video.monitor.min(count), step);
+            // A mode belongs to a monitor; the next one's list may not have it.
+            settings.video.exclusive_mode = (0, 0, 0);
+            vec![KEY_MONITOR, KEY_EXCLUSIVE_MODE]
+        }
+        Action::ExclusiveMode => {
+            let modes = crate::display::modes();
+            settings.video.exclusive_mode =
+                step_clamped(&modes, settings.video.exclusive_mode, step);
+            vec![KEY_EXCLUSIVE_MODE]
+        }
+        Action::FrameLatency => {
+            settings.video.frame_latency = (settings.video.frame_latency as i32 + step.signum())
+                .clamp(FRAME_LATENCY_RANGE.0 as i32, FRAME_LATENCY_RANGE.1 as i32)
+                as u32;
+            vec![KEY_FRAME_LATENCY]
+        }
+        Action::Gpu => {
+            let count = crate::gpu::adapters().len();
+            let all: Vec<usize> = (0..=count).collect();
+            settings.gpu.adapter = cycle(&all, settings.gpu.adapter.min(count), step);
+            vec![KEY_GPU_ADAPTER]
+        }
+        Action::GraphicsApi => {
+            settings.gpu.backend = cycle(
+                &crate::gpu::BackendPref::available(),
+                settings.gpu.backend,
+                step,
+            );
+            vec![KEY_GPU_BACKEND]
+        }
+        Action::GpuPreference => {
+            settings.gpu.low_power = !settings.gpu.low_power;
+            vec![KEY_GPU_POWER]
+        }
+        // Handled by the app, which owns the process.
+        Action::Restart => vec![],
         Action::Vsync => {
             settings.video.vsync = !settings.video.vsync;
             vec![KEY_VSYNC]
@@ -505,20 +698,84 @@ pub fn apply(action: Action, step: i32, settings: &mut Settings) -> Vec<&'static
         Action::Quality => {
             let quality = cycle(&Quality::ALL, settings.video.quality, step);
             settings.video.apply_preset(quality);
-            vec![KEY_QUALITY, KEY_ANTIALIAS]
+            let mut keys = Video::PRESET_KEYS.to_vec();
+            keys.push(KEY_ANTIALIAS);
+            keys
         }
         Action::Fov => {
             settings.video.fov =
                 step_value(settings.video.fov, step, 5.0, FOV_RANGE.0, FOV_RANGE.1);
             vec![KEY_FOV]
         }
-        Action::Antialias => {
-            settings.video.antialias = !settings.video.antialias;
-            vec![KEY_ANTIALIAS]
+        Action::Msaa => {
+            // Only the counts this GPU grants, so the row never shows a value
+            // the renderer would snap away from. Stepped from the *effective*
+            // count for the same reason.
+            let offered: Vec<u32> = crate::gpu::sample_counts()
+                .iter()
+                .copied()
+                .filter(|c| MSAA_COUNTS.contains(c))
+                .collect();
+            settings.video.msaa = step_clamped(&offered, settings.video.samples(), step);
+            vec![KEY_MSAA, KEY_ANTIALIAS]
+        }
+        Action::Anisotropy => {
+            settings.video.anisotropy =
+                step_clamped(&ANISOTROPY_LEVELS, settings.video.anisotropy, step);
+            vec![KEY_ANISOTROPY]
+        }
+        Action::Textures => {
+            settings.video.textures =
+                step_clamped(&TextureQuality::ALL, settings.video.textures, step);
+            vec![KEY_TEXTURES]
         }
         Action::Shadows => {
             settings.video.shadows = !settings.video.shadows;
             vec![KEY_SHADOWS]
+        }
+        Action::ShadowQuality => {
+            settings.video.shadow_level =
+                step_clamped(&ShadowLevel::ALL, settings.video.shadow_level, step);
+            vec![KEY_SHADOW_QUALITY]
+        }
+        Action::MapLights => {
+            settings.video.map_lights =
+                step_clamped(&MAP_LIGHT_COUNTS, settings.video.map_lights, step);
+            vec![KEY_MAP_LIGHTS]
+        }
+        Action::Bloom => {
+            settings.video.bloom = step_value(
+                settings.video.bloom,
+                step,
+                0.25,
+                BLOOM_RANGE.0,
+                BLOOM_RANGE.1,
+            );
+            vec![KEY_BLOOM]
+        }
+        Action::Sky => {
+            settings.video.sky = !settings.video.sky;
+            vec![KEY_SKY]
+        }
+        Action::Sharpen => {
+            settings.video.sharpen = step_value(
+                settings.video.sharpen,
+                step,
+                0.1,
+                SHARPEN_RANGE.0,
+                SHARPEN_RANGE.1,
+            );
+            vec![KEY_SHARPEN]
+        }
+        Action::Brightness => {
+            settings.video.brightness = step_value(
+                settings.video.brightness,
+                step,
+                0.05,
+                BRIGHTNESS_RANGE.0,
+                BRIGHTNESS_RANGE.1,
+            );
+            vec![KEY_BRIGHTNESS]
         }
         Action::FpsLimit => {
             // Clamped rather than wrapped, unlike the choice rows above. A cap is
@@ -552,6 +809,38 @@ pub fn apply(action: Action, step: i32, settings: &mut Settings) -> Vec<&'static
             vec![KEY_SENSITIVITY]
         }
     }
+}
+
+fn on_off(on: bool) -> String {
+    if on { "ON" } else { "OFF" }.to_string()
+}
+
+fn percent_or_off(v: f32) -> String {
+    if v <= 0.001 {
+        "OFF".to_string()
+    } else {
+        format!("{:.0}%", v * 100.0)
+    }
+}
+
+fn display_mode_label(video: &crate::settings::Video) -> &'static str {
+    match (video.fullscreen, video.exclusive) {
+        (false, _) => "WINDOWED",
+        (true, false) => "BORDERLESS",
+        (true, true) => "EXCLUSIVE",
+    }
+}
+
+/// Step an ordered list without wrapping: for scales with a meaningful end,
+/// where one step past the top landing on the bottom would do the opposite of
+/// what was asked.
+fn step_clamped<T: Copy + PartialEq>(all: &[T], current: T, step: i32) -> T {
+    if all.is_empty() {
+        return current;
+    }
+    let at = all.iter().position(|v| *v == current).unwrap_or(0) as i32;
+    let next = (at + step.signum()).clamp(0, all.len() as i32 - 1);
+    all[next as usize]
 }
 
 /// Step through a fixed list, wrapping. Wrapping and not clamping, because a
@@ -735,7 +1024,14 @@ mod tests {
         // that starts mid-word. Both shipped, and both looked like a layout bug
         // rather than a character the 5×7 font has never had.
         let (mut m, s) = menu();
-        for page in [Page::Root, Page::Crosshair, Page::Video, Page::Controls] {
+        for page in [
+            Page::Root,
+            Page::Crosshair,
+            Page::Video,
+            Page::Advanced,
+            Page::Display,
+            Page::Controls,
+        ] {
             m.page = page;
             for row in m.rows(&s, true) {
                 for ch in row.label.chars().chain(row.value.chars()) {
@@ -751,7 +1047,14 @@ mod tests {
     #[test]
     fn every_page_draws_something_and_a_closed_menu_draws_nothing() {
         let (mut m, s) = menu();
-        for page in [Page::Root, Page::Crosshair, Page::Video, Page::Controls] {
+        for page in [
+            Page::Root,
+            Page::Crosshair,
+            Page::Video,
+            Page::Advanced,
+            Page::Display,
+            Page::Controls,
+        ] {
             m.page = page;
             let mut out = Vec::new();
             m.build(&s, false, 1920.0, 1080.0, &mut out);

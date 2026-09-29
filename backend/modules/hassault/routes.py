@@ -25,6 +25,7 @@ from backend.paths import data_dir, repo_root
 from backend.version import app_version
 from backend.modules.hassault import (
     assets,
+    atmosphere,
     client_install,
     drafts,
     fabric,
@@ -49,6 +50,8 @@ from backend.modules.hassault.match import MAX_PLAYERS, match_server
 from backend.modules.hassault.physics import World as SimWorld
 from backend.modules.hassault.modes import objectives
 from backend.modules.hassault.models import (
+    Atmosphere,
+    MapLight,
     BotRequest,
     MatchRoster,
     BrowseMatch,
@@ -466,6 +469,8 @@ async def get_map(name: str) -> MapInfo:
         plane_order=list(PLANE_ORDER),
         format=map_format,
         meshUrl=f"/api/hassault/maps/{name}/mesh" if map_format == "gltf" else None,
+        atmosphere=Atmosphere(**atmosphere.resolve(world.atmosphere, map_format)),
+        lights=[MapLight(**light) for light in atmosphere.lights(world)],
     )
 
 
@@ -557,7 +562,9 @@ async def delete_match_bots(room_id: str, count: int | None = None) -> dict[str,
 
 
 @router.post("/matches/{room_id}/invite")
-async def post_match_invite(room_id: str, body: dict[str, str] = Body(...)) -> dict[str, Any]:
+async def post_match_invite(
+    room_id: str, body: dict[str, str] = Body(...)
+) -> dict[str, Any]:
     """Invite a friend (name, `@username` or friend code) to a room hosted here —
     every online device of theirs, as the agent's `hassault.invite` does."""
     from backend.modules.hassault.channel import invite_friend
@@ -1255,6 +1262,57 @@ async def launch_native_client(
     # compiling one crosses the line and answers "building".
     await asyncio.wait({job["task"]}, timeout=_LAUNCH_INLINE_SECONDS)
     return _launch_job_response(job)
+
+
+#: `--list-adapters` output, per binary path and mtime. Enumerating adapters
+#: opens every graphics API once, which is a second or so; the GPUs in a machine
+#: do not change between two visits to a settings page.
+_ADAPTER_CACHE: dict[tuple[str, float], dict[str, Any]] = {}
+
+
+@router.get("/native/adapters")
+async def native_adapters() -> dict[str, Any]:
+    """The GPUs and graphics APIs the native client can open on this machine.
+
+    Asked of the **client itself** (`hassault-native --list-adapters`) rather than
+    guessed here: only wgpu knows which adapters it can drive under which API,
+    and a list from anywhere else would offer a GPU the client then cannot open.
+    The same binary the launcher would run, so the list matches what Restart in
+    the in-game menu will do. An empty list, not an error, when there is no
+    client built or installed — the settings page then offers `auto` alone.
+    """
+    import os
+    import subprocess
+
+    from backend.modules.settings.routes import get_value
+
+    repo_root = Path(__file__).resolve().parents[3]
+    custom_bin = str(get_value("hassault.nativeBinaryPath", "") or "").strip()
+    bin_path = pick_binary(custom_bin, _local_client_candidates(repo_root))
+    if not bin_path:
+        installed = client_install.installed_binary()
+        bin_path = str(installed) if installed else None
+    if not bin_path or not os.path.isfile(bin_path):
+        return {"adapters": [], "backends": ["auto"], "binary": None}
+
+    key = (bin_path, os.path.getmtime(bin_path))
+    if key not in _ADAPTER_CACHE:
+
+        def run() -> dict[str, Any]:
+            done = subprocess.run(
+                [bin_path, "--list-adapters"],
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            return json.loads(done.stdout.strip().splitlines()[-1])
+
+        try:
+            _ADAPTER_CACHE[key] = await asyncio.to_thread(run)
+        except (OSError, subprocess.SubprocessError, ValueError, IndexError) as exc:
+            logger.warning("hassault: --list-adapters failed: %s", exc)
+            return {"adapters": [], "backends": ["auto"], "binary": bin_path}
+    return {**_ADAPTER_CACHE[key], "binary": bin_path}
 
 
 @router.get("/launch_native/status", response_model=LaunchNativeResponse)

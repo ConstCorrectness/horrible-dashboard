@@ -45,6 +45,9 @@ struct VertexOut {
     @location(0) normal: vec3<f32>,
     @location(1) uv: vec2<f32>,
     @location(2) view_depth: f32,
+    // World space, for the map's point lights: a rifle carried past a lamp
+    // should catch it.
+    @location(3) world_position: vec3<f32>,
 };
 
 @vertex
@@ -58,6 +61,7 @@ fn vs_prop(in: VertexIn) -> VertexOut {
     // *model's* own transform was already folded in on the CPU, by `prop.rs`,
     // with the inverse transpose it did need.
     out.normal = (camera.light_transform * vec4<f32>(in.normal, 0.0)).xyz;
+    out.world_position = (camera.light_transform * vec4<f32>(in.position, 1.0)).xyz;
     out.uv = in.uv;
     return out;
 }
@@ -77,7 +81,7 @@ fn fs_prop(in: VertexOut) -> @location(0) vec4<f32> {
     // rather than as a shadow moving over something — and the browser does not
     // shadow it either, since three only shadows a mesh with `receiveShadow`
     // and `HorribleAssaultPanel.tsx` sets that on the map's mesh alone.
-    let lit = tonemap(shade(albedo, in.normal, camera.params.y, 1.0));
+    let lit = tonemap(shade(albedo, in.normal, in.world_position, camera.params.y, 1.0));
     // No fog: it is in your hands, roughly a cube and a half away, where every
     // fog curve worth having is still the identity. Applying it anyway would be
     // a per-fragment `exp` to multiply by one.

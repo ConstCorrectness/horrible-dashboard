@@ -129,47 +129,125 @@ fn the_unskinned_weapon_is_the_browsers_palette() {
 }
 
 #[test]
-fn the_muzzle_flash_faces_the_sun_the_shader_actually_uses() {
-    // Not "close enough to look lit": the flash carries this as its normal
-    // precisely so `dot(n, SUN_DIR)` comes out at 1, and any angle at all
-    // between the two takes brightness off it for no visible reason.
-    assert_close(
-        "viewmodel.rs's LIGHT_DIR against lighting.wgsl.inc's SUN_DIR",
-        rust_vec3("LIGHT_DIR"),
-        wgsl_vec3("SUN_DIR"),
-        1e-6,
+fn the_muzzle_flash_is_unlit_in_both_clients() {
+    // The browser draws it with `MeshBasicMaterial`. The native flash used to
+    // carry the sun's direction as its normal to come out at full brightness,
+    // which stopped working the moment the sun became a property of the map —
+    // so it is unlit now, and this pins that the shader still honours the mark.
+    assert!(
+        VIEWMODEL_RS.contains("MATERIAL_UNLIT,"),
+        "the flash no longer carries MATERIAL_UNLIT"
     );
+    assert!(
+        LIGHTING_WGSL.len() > 0
+            && include_str!("../src/shader.wgsl").contains("in.material < -0.5"),
+        "the world shader no longer draws the unlit mark unlit"
+    );
+    assert!(FLASH_TS.contains("MeshBasicMaterial"));
+}
+
+// -- the served atmosphere -----------------------------------------------------
+//
+// The light rig, the fog and the sky are **served** now
+// (`backend/modules/hassault/atmosphere.py`), so neither client holds the
+// numbers. What both still hold is a fallback for a node older than the field,
+// and those fallbacks are pinned against the server's own defaults here — read
+// out of the Python at test time, like everything else in this file.
+
+const ATMOSPHERE_PY: &str = include_str!("../../../backend/modules/hassault/atmosphere.py");
+const ATMOSPHERE_TS: &str =
+    include_str!("../../../packages/core/src/modules/hassault/atmosphere.ts");
+
+/// `"key": 0xABCDEF` or `"key": 1.23` in the Python dict literal after `block`.
+fn py_value(block: &str, key: &str) -> String {
+    let dict = between(ATMOSPHERE_PY, block, "\n}");
+    between(dict, &format!("\"{key}\": "), ",").to_string()
+}
+
+fn py_int(block: &str, key: &str) -> u32 {
+    let v = py_value(block, key);
+    u32::from_str_radix(v.trim_start_matches("0x").trim_start_matches("0X"), 16)
+        .unwrap_or_else(|_| panic!("{key} is not hex: {v}"))
+}
+
+fn py_float(block: &str, key: &str) -> f32 {
+    py_value(block, key).parse().expect("a float")
 }
 
 #[test]
-fn high_quality_fog_is_exactly_the_browsers() {
+fn the_native_fallback_rig_is_the_servers_cube_default() {
+    use hassault_native::atmosphere::Atmosphere;
+    let a = Atmosphere::CUBE;
+    let block = "CUBE_DEFAULT: dict[str, Any] = {";
+    assert_eq!(a.hemi_sky, py_int(block, "hemiSky"));
+    assert_eq!(a.hemi_ground, py_int(block, "hemiGround"));
+    assert_eq!(a.sun_color, py_int(block, "sunColor"));
+    assert_eq!(a.fill_color, py_int(block, "fillColor"));
+    assert_eq!(a.fog_color, py_int(block, "fogColor"));
+    assert_eq!(a.hemi_intensity, py_float(block, "hemiIntensity"));
+    assert_eq!(a.sun_intensity, py_float(block, "sunIntensity"));
+    assert_eq!(a.fill_intensity, py_float(block, "fillIntensity"));
+    assert_eq!(a.fog_density, py_float(block, "fogDensity"));
+    assert_eq!(a.exposure, py_float(block, "exposure"));
+}
+
+#[test]
+fn the_native_fallback_daylight_is_the_servers_gltf_default() {
+    use hassault_native::atmosphere::Atmosphere;
+    let a = Atmosphere::GLTF;
+    let block = "GLTF_DEFAULT: dict[str, Any] = {";
+    assert_eq!(a.sky_zenith, py_int(block, "skyZenith"));
+    assert_eq!(a.sky_horizon, py_int(block, "skyHorizon"));
+    assert_eq!(a.fog_color, py_int(block, "fogColor"));
+    assert_eq!(a.fog_density, py_float(block, "fogDensity"));
+}
+
+#[test]
+fn the_browser_fallback_rig_is_the_servers_too() {
+    // The browser's copy lives in `atmosphere.ts`; the same three numbers that
+    // most change the picture are pinned there.
+    let block = "CUBE_DEFAULT: dict[str, Any] = {";
+    for (key, want) in [
+        ("hemiSky", py_int(block, "hemiSky")),
+        ("sunColor", py_int(block, "sunColor")),
+        ("fogColor", py_int(block, "fogColor")),
+    ] {
+        let got = between(ATMOSPHERE_TS, &format!("  {key}: "), ",");
+        assert_eq!(
+            u32::from_str_radix(got.trim_start_matches("0x"), 16).expect("hex"),
+            want,
+            "atmosphere.ts CUBE_DEFAULT.{key}"
+        );
+    }
+}
+
+#[test]
+fn high_quality_fog_is_the_maps_own_density() {
     // The lower levels are free to trade distance for fill rate. High is not: it
-    // is the level at which the two clients are meant to be the same picture.
-    let density: f32 = between(PANEL_TSX, "new THREE.FogExp2(HORIZON, ", ")")
-        .parse()
-        .expect("a float");
-    assert_eq!(
-        hassault_native::settings::Quality::High.fog_density(),
-        density,
-        "the browser's FogExp2 density"
-    );
+    // is the level at which the two clients are meant to be the same picture,
+    // and the browser draws the served density exactly.
+    use hassault_native::settings::Quality;
+    assert_eq!(Quality::High.fog_scale(), 1.0);
+    assert_eq!(Quality::Ultra.fog_scale(), 1.0);
 }
 
 #[test]
-fn the_fog_colour_is_the_browsers_horizon_decoded() {
-    // Decoded, because this one is applied before an sRGB target encodes it.
-    // Handing the shader the raw hex is the mistake that makes the far end of a
-    // corridor three shades too pale, and it looks like the density is wrong.
-    let hex = between(PANEL_TSX, "const HORIZON = ", ";");
-    let want = hex_channels(hex).map(srgb_to_linear);
-    // Looser than the palette's: the shader spells these to four decimals, which
-    // is coarse against values this near black.
-    assert_close(
-        "lighting.wgsl.inc's FOG_COLOR against the browser's HORIZON",
-        wgsl_vec3("FOG_COLOR"),
-        want,
-        5e-4,
-    );
+fn both_clients_attenuate_a_point_light_the_same_way() {
+    // three's `getDistanceAttenuation` with decay 2, in `atmosphere.ts`, and
+    // its port in `lighting.wgsl.inc`. The two are text here, so the formula's
+    // three load-bearing pieces are what is pinned.
+    for needle in ["distance * distance", "ratio * ratio * ratio * ratio"] {
+        assert!(
+            ATMOSPHERE_TS.contains(needle),
+            "atmosphere.ts lost `{needle}`"
+        );
+        assert!(
+            LIGHTING_WGSL.contains(needle),
+            "lighting.wgsl.inc lost `{needle}`"
+        );
+    }
+    // And the candela convention: intensity × radius / 2, linear in reach.
+    assert!(ATMOSPHERE_TS.contains("light.intensity * light.radius * 0.5"));
 }
 
 // -- bullet marks --------------------------------------------------------------
@@ -214,11 +292,17 @@ fn all_three_implementations_agree_on_the_six_face_normals() {
     // server and both clients. Get the order wrong and every mark lands on the
     // wrong face of the right cube, which is inside a wall about half the time
     // — invisible, and reported by nothing.
-    let ts = between(TRACE_TS, "export const FACE_PX = ", "export const FACE_NONE");
+    let ts = between(
+        TRACE_TS,
+        "export const FACE_PX = ",
+        "export const FACE_NONE",
+    );
     let rs = between(TRACE_RS, "pub const FACE_PX: i32 = ", "pub const FACE_NONE");
-    for (i, name) in ["FACE_PX", "FACE_NX", "FACE_PY", "FACE_NY", "FACE_PZ", "FACE_NZ"]
-        .iter()
-        .enumerate()
+    for (i, name) in [
+        "FACE_PX", "FACE_NX", "FACE_PY", "FACE_NY", "FACE_PZ", "FACE_NZ",
+    ]
+    .iter()
+    .enumerate()
     {
         if i == 0 {
             continue;
@@ -241,8 +325,7 @@ fn all_three_implementations_agree_on_the_six_face_normals() {
 
 const ARMS_TS: &str = include_str!("../../../packages/core/src/modules/hassault/arms.ts");
 const ARMS_RS: &str = include_str!("../src/arms.rs");
-const VIEWCLIPS_TS: &str =
-    include_str!("../../../packages/core/src/modules/hassault/viewclips.ts");
+const VIEWCLIPS_TS: &str = include_str!("../../../packages/core/src/modules/hassault/viewclips.ts");
 const VIEWCLIPS_RS: &str = include_str!("../src/viewclips.rs");
 
 #[test]
@@ -276,16 +359,16 @@ fn both_clients_build_an_arm_to_the_same_dimensions() {
     // hands reach the same grip from two different postures — one game, two
     // pairs of arms. Nothing errors; the two just look like different games.
     for (rust, ts) in [("UPPER_LEN", "UPPER_LEN"), ("LOWER_LEN", "LOWER_LEN")] {
-        assert_eq!(
-            rust_f32(ARMS_RS, rust),
-            browser_f32(ARMS_TS, ts),
-            "{ts}"
-        );
+        assert_eq!(rust_f32(ARMS_RS, rust), browser_f32(ARMS_TS, ts), "{ts}");
     }
     // The shoulders are a `Vec3::new(..)` here and a tuple there, so they are
     // compared component by component rather than by a shared parser.
     for name in ["SHOULDER_R", "SHOULDER_L"] {
-        let rs = between(ARMS_RS, &format!("pub const {name}: Vec3 = Vec3::new("), ")");
+        let rs = between(
+            ARMS_RS,
+            &format!("pub const {name}: Vec3 = Vec3::new("),
+            ")",
+        );
         let ts = between(ARMS_TS, &format!("export const {name}: Vec3 = ["), "]");
         let parse = |text: &str| -> Vec<f32> {
             text.split(',')
@@ -684,7 +767,11 @@ const CONTROLS_TS: &str = include_str!("../../../packages/core/src/modules/hassa
 /// The browser's `DEFAULT_CONTROLS`, parsed out of the TypeScript: each
 /// `name: ['Code', 'Code'],` line of the object literal.
 fn ts_default_controls() -> Vec<(String, Vec<String>)> {
-    let body = between(CONTROLS_TS, "export const DEFAULT_CONTROLS: Bindings = {", "\n};");
+    let body = between(
+        CONTROLS_TS,
+        "export const DEFAULT_CONTROLS: Bindings = {",
+        "\n};",
+    );
     body.lines()
         .map(str::trim)
         .filter(|l| !l.starts_with("//") && l.contains(": ["))
@@ -708,10 +795,22 @@ fn ts_default_controls() -> Vec<(String, Vec<String>)> {
 #[test]
 fn the_default_key_map_is_the_browsers() {
     let ts = ts_default_controls();
-    assert!(ts.len() >= 30, "parsed only {} actions from controls.ts", ts.len());
+    assert!(
+        ts.len() >= 30,
+        "parsed only {} actions from controls.ts",
+        ts.len()
+    );
     let rust: Vec<(String, Vec<String>)> = hassault_native::controls::DEFAULTS
         .iter()
-        .map(|(_, name, keys)| (name.to_string(), keys.iter().map(|k| k.to_string()).collect()))
+        .map(|(_, name, keys)| {
+            (
+                name.to_string(),
+                keys.iter().map(|k| k.to_string()).collect(),
+            )
+        })
         .collect();
-    assert_eq!(rust, ts, "controls.rs DEFAULTS drifted from DEFAULT_CONTROLS");
+    assert_eq!(
+        rust, ts,
+        "controls.rs DEFAULTS drifted from DEFAULT_CONTROLS"
+    );
 }

@@ -237,6 +237,11 @@ class CgzMap:
     #: reachability lint treats those as geometry rather than as a sealed room.
     baked_collision: bool = False
 
+    #: The source's `atmosphere` object, validated but **unresolved** — which
+    #: defaults fill the rest depends on the level format. See `atmosphere.py`.
+    #: Empty for a `.cgz`, which has nowhere to keep one.
+    atmosphere: dict = field(default_factory=dict)
+
     @property
     def ssize(self) -> int:
         return 1 << self.sfactor

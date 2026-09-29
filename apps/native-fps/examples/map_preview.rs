@@ -68,19 +68,8 @@ async fn run(map_name: &str, path: &str) {
         .await
         .expect("device");
 
-    let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("camera"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        }],
-    });
+    let camera_layout = hassault_native::atmosphere::camera_layout(&device);
+    let lights_buffer = hassault_native::atmosphere::default_lights_buffer(&device);
 
     // Scenic eye-level perspective looking along the street or interior
     let camera = match map_name {
@@ -130,10 +119,16 @@ async fn run(map_name: &str, path: &str) {
     let camera_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("camera"),
         layout: &camera_layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: camera_buffer.as_entire_binding(),
-        }],
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: lights_buffer.as_entire_binding(),
+            },
+        ],
     });
 
     let world_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -148,6 +143,8 @@ async fn run(map_name: &str, path: &str) {
         &world_buffer,
         (verts.len() as u32).min(3000),
         (glam::Vec3::new(-50.0, -50.0, -10.0), glam::Vec3::new(100.0, 100.0, 40.0)),
+        hassault_native::atmosphere::Atmosphere::CUBE.sun_direction(),
+        hassault_native::shadow::ShadowQuality::default(),
     );
 
     let detail_layout = hassault_native::detail::bind_group_layout(&device);

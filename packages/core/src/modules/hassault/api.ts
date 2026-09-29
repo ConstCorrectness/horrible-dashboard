@@ -70,6 +70,41 @@ export interface MapInfo {
   format?: 'cube' | 'gltf';
   /** Optional URL to fetch the level mesh (GLB) when format is "gltf". */
   meshUrl?: string;
+  /**
+   * The resolved light rig, sky and fog — served so both clients draw one set of
+   * numbers. Absent only from a node older than this field; see `atmosphere.ts`.
+   */
+  atmosphere?: Atmosphere | null;
+  /** The map's point lights, in map coordinates (z up). */
+  lights?: MapLight[];
+}
+
+/** `backend/modules/hassault/atmosphere.py`. Colours are sRGB hex; directions y-up. */
+export interface Atmosphere {
+  skyZenith: number;
+  skyHorizon: number;
+  hemiSky: number;
+  hemiGround: number;
+  hemiIntensity: number;
+  sunColor: number;
+  sunIntensity: number;
+  sunDir: [number, number, number];
+  fillColor: number;
+  fillIntensity: number;
+  fillDir: [number, number, number];
+  fogColor: number;
+  fogDensity: number;
+  exposure: number;
+  sunDisc: boolean;
+}
+
+export interface MapLight {
+  x: number;
+  y: number;
+  z: number;
+  radius: number;
+  color: number;
+  intensity: number;
 }
 
 /**

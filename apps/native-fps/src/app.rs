@@ -59,7 +59,7 @@ use hassault_native::hud::{
 };
 use hassault_native::interp::{PingTracker, SnapshotBuffer};
 use hassault_native::items::ItemField;
-use hassault_native::menu::{self, Action, Menu, Page};
+use hassault_native::menu::{self, Action, Menu};
 use hassault_native::nades::{self, NadePool};
 use hassault_native::net::{Incoming, MatchSocket};
 use hassault_native::physics::{self, eye_height, MoveInput, JUMP_SPEED, MOVE_SPEED};
@@ -481,7 +481,11 @@ impl App {
             || map_name == "hd_assault";
         let (world3d, rapier_physics, mesh) = if is_gltf {
             let w3d = world3d::create_world_3d(world.info.clone());
-            let rapier = RapierPhysicsWorld::new_with_windows(&w3d.col_vertices, &w3d.col_indices, Some(&w3d.windows));
+            let rapier = RapierPhysicsWorld::new_with_windows(
+                &w3d.col_vertices,
+                &w3d.col_indices,
+                Some(&w3d.windows),
+            );
             let m3d = w3d.to_mesh_data();
             (Some(w3d), Some(rapier), m3d)
         } else {
@@ -891,8 +895,7 @@ impl App {
             weapon.clone()
         };
         let equipped_skin = self.skins.get(&display_weapon);
-        self.viewmodel
-            .set_weapon(&display_weapon, equipped_skin);
+        self.viewmodel.set_weapon(&display_weapon, equipped_skin);
         let prop_name = if display_weapon == "knife" {
             let skin_id = equipped_skin.and_then(|s| s.id.as_deref()).unwrap_or("");
             if skin_id.contains("karambit") {
@@ -1341,6 +1344,11 @@ impl App {
                     self.radar_plan = hassault_native::radar::floor_plan(&self.world);
                     if let Some(renderer) = &mut self.renderer {
                         renderer.set_world(&self.mesh);
+                        // A draft may change its sky or its lamps as well as
+                        // its rooms.
+                        renderer.set_lighting(hassault_native::atmosphere::Lighting::for_map(
+                            &self.world.info,
+                        ));
                     }
                     if let Some(editor) = self.editor.as_mut() {
                         editor.brush_rects = brush_rects(&doc);
@@ -3178,9 +3186,17 @@ impl App {
                 self.menu.page = page;
                 self.menu.move_cursor(-(self.menu.cursor() as i32), 1);
             }
-            Action::Back => {
-                self.menu.page = Page::Root;
-                self.menu.move_cursor(-(self.menu.cursor() as i32), 1);
+            Action::Back => self.menu.back(),
+            Action::Restart => {
+                // Every pending write reaches the node first: the new process
+                // reads the GPU choice back from it, and a restart that races
+                // its own save starts on the old adapter and looks like the
+                // setting did nothing.
+                self.writer.finish();
+                if let Some(socket) = &self.socket {
+                    let _ = socket.leave();
+                }
+                hassault_native::gpu::restart();
             }
             Action::Quit => {
                 // **In a match, the card comes first.** Leaving is the end of
@@ -3229,7 +3245,11 @@ impl App {
     fn apply_settings(&mut self, action: Action) {
         match action {
             Action::Sensitivity => self.sensitivity = self.settings.sensitivity,
-            Action::Fullscreen => self.set_fullscreen(self.settings.video.fullscreen),
+            Action::Fullscreen | Action::Monitor | Action::ExclusiveMode => {
+                self.set_fullscreen(self.settings.video.fullscreen)
+            }
+            // Saved, and applied by `Restart` — a device belongs to one adapter.
+            Action::Gpu | Action::GraphicsApi | Action::GpuPreference => {}
             // Nothing to apply: the flag is read straight from `self.settings`
             // by the render path, so toggling it is already in force.
             Action::ShowHitboxes => {}
@@ -3247,8 +3267,17 @@ impl App {
             Action::RenderScale
             | Action::Quality
             | Action::Vsync
-            | Action::Antialias
-            | Action::Shadows => {
+            | Action::Msaa
+            | Action::Anisotropy
+            | Action::Textures
+            | Action::Shadows
+            | Action::ShadowQuality
+            | Action::MapLights
+            | Action::Bloom
+            | Action::Sky
+            | Action::Sharpen
+            | Action::Brightness
+            | Action::FrameLatency => {
                 if let Some(renderer) = &mut self.renderer {
                     renderer.set_video(self.settings.video);
                 }
@@ -3265,13 +3294,20 @@ impl App {
     /// compositor pass that this client's present mode already avoids the worst
     /// of, and alt-tab is instant — which matters for a game launched from a
     /// dashboard you are going back to.
+    ///
+    /// Exclusive is offered on the Advanced Video page for the drivers that only
+    /// give a compositor-free path, or a refresh rate the desktop is not running
+    /// at, to a window that owns the display — see `display.rs`.
     fn set_fullscreen(&mut self, on: bool) {
         let Some(window) = &self.window else { return };
-        window.set_fullscreen(if on {
-            Some(winit::window::Fullscreen::Borderless(None))
-        } else {
-            None
-        });
+        let mut video = self.settings.video;
+        video.fullscreen = on;
+        let monitors: Vec<_> = window.available_monitors().collect();
+        let current = window.current_monitor();
+        hassault_native::display::capture(&video, monitors.clone(), current.clone());
+        window.set_fullscreen(hassault_native::display::fullscreen(
+            &video, monitors, current,
+        ));
         self.fullscreen = on;
     }
 
@@ -3410,12 +3446,12 @@ impl ApplicationHandler for App {
         // window on a 4K monitor, and on some compositors a resize the renderer
         // has to service before anything has been drawn.
         //
-        // Borderless rather than exclusive: see `set_fullscreen`.
-        let fullscreen = self
-            .settings
-            .video
-            .fullscreen
-            .then_some(winit::window::Fullscreen::Borderless(None));
+        // Borderless unless the player asked for exclusive: see `set_fullscreen`.
+        let monitors: Vec<_> = event_loop.available_monitors().collect();
+        let current = event_loop.primary_monitor();
+        hassault_native::display::capture(&self.settings.video, monitors.clone(), current.clone());
+        let fullscreen =
+            hassault_native::display::fullscreen(&self.settings.video, monitors, current);
         let attrs = Window::default_attributes()
             .with_title("HorribleAssault")
             .with_fullscreen(fullscreen)
@@ -3435,6 +3471,8 @@ impl ApplicationHandler for App {
             window.clone(),
             &self.mesh,
             self.settings.video,
+            hassault_native::atmosphere::Lighting::for_map(&self.world.info),
+            &self.settings.gpu.choice(),
         )) {
             Ok(renderer) => {
                 eprintln!(

@@ -69,6 +69,32 @@ fn the_prop_shader_parses_and_validates() {
     validate("prop.wgsl", &prop_source());
 }
 
+/// The post chain: bloom and the composite into the window. No lighting —
+/// it runs on the finished, tone-mapped scene.
+#[test]
+fn the_post_shader_parses_validates_and_names_its_passes() {
+    let source = include_str!("../src/post.wgsl");
+    validate("post.wgsl", source);
+    let module = naga::front::wgsl::parse_str(source).expect("parses");
+    let names: Vec<&str> = module
+        .entry_points
+        .iter()
+        .map(|e| e.name.as_str())
+        .collect();
+    for wanted in [
+        "vs_fullscreen",
+        "fs_prefilter",
+        "fs_down",
+        "fs_up",
+        "fs_composite",
+    ] {
+        assert!(
+            names.contains(&wanted),
+            "no entry point '{wanted}'; the module has {names:?}"
+        );
+    }
+}
+
 #[test]
 fn the_prop_shader_names_the_entry_points_its_pipeline_uses() {
     let module = naga::front::wgsl::parse_str(&prop_source()).expect("parses");
@@ -104,8 +130,8 @@ fn every_entry_point_a_pipeline_names_exists() {
         "fs_volume",
         "vs_overlay",
         "fs_overlay",
-        "vs_blit",
-        "fs_blit",
+        "vs_sky",
+        "fs_sky",
     ] {
         assert!(
             names.contains(&wanted),
@@ -136,7 +162,9 @@ fn the_volume_pass_reads_the_fog_density_as_a_density() {
         "fs_volume divides by the fog density again; use fog_amount"
     );
     assert_eq!(
-        volume.matches("fog_amount(in.view_depth, camera.params.x)").count(),
+        volume
+            .matches("fog_amount(in.view_depth, camera.params.x)")
+            .count(),
         2,
         "both the flat and the cloud branch fade through fog_amount"
     );

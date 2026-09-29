@@ -184,6 +184,13 @@ pub struct MapInfo {
     pub format: Option<String>,
     #[serde(default, rename = "meshUrl")]
     pub mesh_url: Option<String>,
+    /// The resolved light rig, sky and fog. `None` only from a node older than
+    /// the field, which `Atmosphere::for_map` answers with the format's default.
+    #[serde(default)]
+    pub atmosphere: Option<crate::atmosphere::Atmosphere>,
+    /// Point lights, in map coordinates (z up).
+    #[serde(default, deserialize_with = "null_as_default")]
+    pub lights: Vec<crate::atmosphere::MapLight>,
 }
 
 #[allow(dead_code)] // The map picker lands with the renderer, in B2.
@@ -958,7 +965,10 @@ mod tests {
         let weapons: Vec<WeaponSpec> = serde_json::from_str(json).unwrap();
         let rifle = &weapons[0];
         assert_eq!(rifle.spray.len(), 3);
-        assert!((rifle.spray_reset - 0.35).abs() < 1e-6, "sprayReset was dropped");
+        assert!(
+            (rifle.spray_reset - 0.35).abs() < 1e-6,
+            "sprayReset was dropped"
+        );
         assert!(
             (rifle.residual_spread - 0.004).abs() < 1e-6,
             "residualSpread was dropped"

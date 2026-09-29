@@ -30,6 +30,26 @@ mod app;
 
 use std::time::{Duration, Instant};
 
+/// **Ask hybrid-graphics drivers for the discrete GPU.**
+///
+/// On a laptop with NVIDIA Optimus or AMD switchable graphics the *driver*
+/// chooses which GPU a process runs on, before wgpu is asked anything, and it
+/// gives an unfamiliar executable the integrated one. wgpu's `HighPerformance`
+/// then picks the best adapter from a list the discrete GPU is not on. These two
+/// exported symbols are the documented opt-in for both vendors; they must be
+/// exported **from the executable**, which a Rust binary does not do on its own —
+/// `build.rs` passes the linker `/EXPORT` for each.
+#[cfg(windows)]
+#[no_mangle]
+#[used]
+#[allow(non_upper_case_globals)]
+pub static NvOptimusEnablement: u32 = 1;
+#[cfg(windows)]
+#[no_mangle]
+#[used]
+#[allow(non_upper_case_globals)]
+pub static AmdPowerXpressRequestHighPerformance: u32 = 1;
+
 use winit::event_loop::EventLoop;
 
 use hassault_native::api::NodeApi;
@@ -112,6 +132,19 @@ struct Args {
     /// Load and mesh the map, print what it found, and exit without connecting.
     check_only: bool,
     spawn: Option<usize>,
+    /// `--adapter=<name>` / `--backend=<api>` / `--low-power`: outrank the saved
+    /// GPU choice for this run, so a GPU that will not start can be stepped
+    /// around from a terminal without a menu to reach.
+    adapter: Option<String>,
+    backend: Option<String>,
+    low_power: bool,
+    /// Open in a window this run, whatever the saved setting says — for a
+    /// session somebody wants to watch beside something else, and for tests.
+    windowed: bool,
+    /// `--set=<key>=<value>`: settings-bag rows for this run only, laid over
+    /// what the node holds and never written back. How a preset is compared
+    /// against another from a terminal without touching anybody's settings.
+    overrides: Vec<(String, serde_json::Value)>,
 }
 
 impl Default for Args {
@@ -138,6 +171,11 @@ impl Default for Args {
             headless: false,
             check_only: false,
             spawn: None,
+            adapter: None,
+            backend: None,
+            low_power: false,
+            windowed: false,
+            overrides: Vec::new(),
         }
     }
 }
@@ -191,6 +229,27 @@ fn parse_args() -> Args {
             if let Ok(n) = v.parse::<usize>() {
                 args.spawn = Some(n);
             }
+        } else if let Some(v) = arg.strip_prefix("--adapter=") {
+            args.adapter = Some(v.to_string());
+        } else if let Some(v) = arg.strip_prefix("--backend=") {
+            args.backend = Some(v.to_string());
+        } else if arg == "--low-power" {
+            args.low_power = true;
+        } else if arg == "--windowed" {
+            args.windowed = true;
+        } else if let Some(v) = arg.strip_prefix("--set=") {
+            if let Some((key, value)) = v.split_once('=') {
+                // JSON where it parses (numbers, booleans), a string otherwise,
+                // so `--set=hassault.video.quality=ultra` needs no quoting.
+                let value = serde_json::from_str(value)
+                    .unwrap_or_else(|_| serde_json::Value::String(value.to_string()));
+                args.overrides.push((key.to_string(), value));
+            }
+        } else if arg == "--list-adapters" {
+            // For the node's settings UI, which has no GPU API of its own: one
+            // JSON document and out, before anything touches the network.
+            println!("{}", hassault_native::gpu::adapters_json());
+            std::process::exit(0);
         } else if arg == "--headless" {
             args.headless = true;
         } else if arg == "--check" {
@@ -212,7 +271,13 @@ fn parse_args() -> Args {
                    --sensitivity=<n>   turn per unit of raw mouse movement (default 1)\n\
                    --new               --mode=edit: start from solid rock\n\
                    --headless          no window: connect, join, and log\n\
-                   --check             load and mesh the map, print it, and exit\n"
+                   --check             load and mesh the map, print it, and exit\n\
+                   --adapter=<name>    open this GPU (see --list-adapters)\n\
+                   --backend=<api>     auto, dx12, vulkan, metal or gl\n\
+                   --low-power         prefer the power-saving GPU\n\
+                   --windowed          open in a window, whatever the saved setting\n\
+                   --set=<key>=<value> a settings row for this run only, never saved\n\
+                   --list-adapters     print the GPUs as JSON and exit\n"
             );
             std::process::exit(0);
         }
@@ -300,7 +365,14 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     // hold one set of preferences rather than two. A node that only served the
     // map still gets a playable client — the defaults are the game's, not an
     // error state — so this warns and carries on.
-    let (mut settings, controls) = match node.settings() {
+    let (mut settings, controls) = match node.settings().map(|mut values| {
+        if let Some(bag) = values.as_object_mut() {
+            for (key, value) in &args.overrides {
+                bag.insert(key.clone(), value.clone());
+            }
+        }
+        values
+    }) {
         Ok(values) => (
             Settings::from_values(&values),
             // The pane's Controls screen writes this; the native client used to
@@ -316,6 +388,27 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     // passing what the pane's own slider says, and the two are the same setting.
     if let Some(sensitivity) = args.sensitivity {
         settings.sensitivity = sensitivity;
+    }
+    // The GPU flags outrank the saved choice for this run only; nothing here is
+    // written back, so a terminal experiment does not become the menu's value.
+    if let Some(name) = args.adapter.as_deref() {
+        settings.gpu.adapter = hassault_native::gpu::adapters()
+            .iter()
+            .position(|a| a.name.eq_ignore_ascii_case(name))
+            .map(|i| i + 1)
+            .unwrap_or_else(|| {
+                eprintln!("hassault: no GPU named {name:?}; see --list-adapters");
+                0
+            });
+    }
+    if let Some(api) = args.backend.as_deref() {
+        settings.gpu.backend = hassault_native::gpu::BackendPref::parse(api);
+    }
+    if args.low_power {
+        settings.gpu.low_power = true;
+    }
+    if args.windowed {
+        settings.video.fullscreen = false;
     }
     let writer = SettingsWriter::new(&args.server);
 

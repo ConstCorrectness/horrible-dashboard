@@ -31,6 +31,7 @@ import {
   type GameAction,
 } from './controls';
 import type { MatchInvite, Invitee } from './api';
+import { GRAPHICS_CHOICES, useGraphicsChoice } from './graphics';
 import { VoiceCommsPanel } from './panels/VoiceCommsPanel';
 import type { MatchPeer } from './session';
 
@@ -152,9 +153,35 @@ export function SettingsPanel() {
   const crouchToggle = useSetting<boolean>(CROUCH_TOGGLE_KEY) ?? false;
   const nativeClient = useSetting<boolean>(NATIVE_CLIENT_KEY) ?? true;
   const showHitboxes = useSetting<boolean>(SHOW_HITBOXES_KEY) ?? false;
+  const [graphics, setGraphics] = useGraphicsChoice();
 
   return (
     <div style={styles.rows}>
+      <div style={styles.row}>
+        <div style={styles.rowMain}>
+          <span>Graphics</span>
+          <span style={styles.dim}>
+            The same map, sky and lamps at every level — fewer of them lower down. Anti-aliasing
+            changes on the next load.
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: '0.25rem' }}>
+          {GRAPHICS_CHOICES.map((choice) => (
+            <button
+              key={choice}
+              type="button"
+              aria-pressed={graphics === choice}
+              onClick={() => setGraphics(choice)}
+              style={{
+                ...styles.choice,
+                ...(graphics === choice ? styles.choiceActive : null),
+              }}
+            >
+              {choice === 'auto' ? 'Auto' : choice[0].toUpperCase() + choice.slice(1)}
+            </button>
+          ))}
+        </div>
+      </div>
       <Slider
         label="Mouse sensitivity"
         hint="Turn per pixel of mouse movement, this game only."

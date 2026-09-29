@@ -968,18 +968,40 @@ pub fn texture_layers(size: u32) -> Vec<Vec<u8>> {
 }
 
 /// Helper to construct the complete 2D Texture Array for wgpu.
+///
+/// **Mipmapped**, which it was not: a single-level array sampled across a floor
+/// seen at a grazing angle picks one texel per pixel near enough at random, so
+/// every modelled map's asphalt and marble boiled as you walked — the artefact
+/// `mipmap.rs` was written to remove from the cube maps, left in place here.
+/// The chain is built per layer in **sRGB** space, because the array is
+/// `Rgba8UnormSrgb` and averaging the encoded bytes darkens with distance.
+///
+/// `size` is the texture-quality setting's edge and `anisotropy` its filtering
+/// row; both are clamped to what makes sense rather than trusted.
 pub fn build_pbr_texture_array(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
+    size: u32,
+    anisotropy: u16,
 ) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler) {
+    let size = size.clamp(32, 1024).next_power_of_two();
+    let levels_per_layer: Vec<Vec<(u32, u32, Vec<u8>)>> = texture_layers(size)
+        .into_iter()
+        .map(|layer| crate::mipmap::chain(layer, size, size, crate::mipmap::Space::Srgb))
+        .collect();
+    let mip_level_count = levels_per_layer
+        .first()
+        .map(|l| l.len() as u32)
+        .unwrap_or(1);
+
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("pbr_texture_array"),
         size: wgpu::Extent3d {
-            width: TEXTURE_SIZE,
-            height: TEXTURE_SIZE,
+            width: size,
+            height: size,
             depth_or_array_layers: LAYER_COUNT,
         },
-        mip_level_count: 1,
+        mip_level_count,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8UnormSrgb,
@@ -987,32 +1009,32 @@ pub fn build_pbr_texture_array(
         view_formats: &[],
     });
 
-    let layers = texture_layers(TEXTURE_SIZE);
-
-    for (layer_idx, data) in layers.iter().enumerate() {
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d {
-                    x: 0,
-                    y: 0,
-                    z: layer_idx as u32,
+    for (layer_idx, levels) in levels_per_layer.iter().enumerate() {
+        for (level, (w, h, data)) in levels.iter().enumerate() {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: level as u32,
+                    origin: wgpu::Origin3d {
+                        x: 0,
+                        y: 0,
+                        z: layer_idx as u32,
+                    },
+                    aspect: wgpu::TextureAspect::All,
                 },
-                aspect: wgpu::TextureAspect::All,
-            },
-            data,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(TEXTURE_SIZE * 4),
-                rows_per_image: Some(TEXTURE_SIZE),
-            },
-            wgpu::Extent3d {
-                width: TEXTURE_SIZE,
-                height: TEXTURE_SIZE,
-                depth_or_array_layers: 1,
-            },
-        );
+                data,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(w * 4),
+                    rows_per_image: Some(*h),
+                },
+                wgpu::Extent3d {
+                    width: *w,
+                    height: *h,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
     }
 
     let view = texture.create_view(&wgpu::TextureViewDescriptor {
@@ -1028,13 +1050,15 @@ pub fn build_pbr_texture_array(
         address_mode_w: wgpu::AddressMode::ClampToEdge,
         mag_filter: wgpu::FilterMode::Linear,
         min_filter: wgpu::FilterMode::Linear,
-        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+        // All three `Linear`, which `anisotropy_clamp > 1` requires — see
+        // `mipmap::ANISOTROPY`.
+        mipmap_filter: wgpu::MipmapFilterMode::Linear,
+        anisotropy_clamp: anisotropy.clamp(1, 16),
         ..Default::default()
     });
 
     (texture, view, sampler)
 }
-
 /// Generates a 128x64 prefiltered equirectangular sky-to-ground environment map,
 /// matching Three.js `createPropEnvironment`.
 pub fn build_environment_map(
@@ -1123,8 +1147,19 @@ pub struct PbrResources {
 
 impl PbrResources {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+        Self::with_quality(device, queue, TEXTURE_SIZE, crate::mipmap::ANISOTROPY)
+    }
+
+    /// At the texture-quality setting's edge and the filtering row's anisotropy.
+    pub fn with_quality(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        size: u32,
+        anisotropy: u16,
+    ) -> Self {
         let layout = bind_group_layout(device);
-        let (bind_group, pbr_texture, env_texture) = bind_group(device, queue, &layout);
+        let (bind_group, pbr_texture, env_texture) =
+            bind_group_with(device, queue, &layout, size, anisotropy);
         Self {
             layout,
             bind_group,
@@ -1179,7 +1214,23 @@ pub fn bind_group(
     queue: &wgpu::Queue,
     layout: &wgpu::BindGroupLayout,
 ) -> (wgpu::BindGroup, wgpu::Texture, wgpu::Texture) {
-    let (pbr_tex, pbr_view, pbr_sampler) = build_pbr_texture_array(device, queue);
+    bind_group_with(
+        device,
+        queue,
+        layout,
+        TEXTURE_SIZE,
+        crate::mipmap::ANISOTROPY,
+    )
+}
+
+pub fn bind_group_with(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    layout: &wgpu::BindGroupLayout,
+    size: u32,
+    anisotropy: u16,
+) -> (wgpu::BindGroup, wgpu::Texture, wgpu::Texture) {
+    let (pbr_tex, pbr_view, pbr_sampler) = build_pbr_texture_array(device, queue, size, anisotropy);
     let (env_tex, env_view, env_sampler) = build_environment_map(device, queue);
 
     let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {

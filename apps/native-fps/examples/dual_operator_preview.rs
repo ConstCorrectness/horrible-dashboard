@@ -107,19 +107,8 @@ async fn run(path: &str) {
         .await
         .expect("device");
 
-    let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("camera"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        }],
-    });
+    let camera_layout = hassault_native::atmosphere::camera_layout(&device);
+    let lights_buffer = hassault_native::atmosphere::default_lights_buffer(&device);
 
     let camera = Camera {
         x: -10.5,
@@ -145,10 +134,16 @@ async fn run(path: &str) {
     let camera_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("camera"),
         layout: &camera_layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: camera_buffer.as_entire_binding(),
-        }],
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: lights_buffer.as_entire_binding(),
+            },
+        ],
     });
 
     // Floor plane
@@ -177,6 +172,8 @@ async fn run(path: &str) {
         &world_buffer,
         floor_verts.len() as u32,
         (glam::Vec3::new(-10.0, -10.0, -1.0), glam::Vec3::new(10.0, 10.0, 8.0)),
+        hassault_native::atmosphere::Atmosphere::CUBE.sun_direction(),
+        hassault_native::shadow::ShadowQuality::default(),
     );
 
     let mut characters_ct = Characters::new(

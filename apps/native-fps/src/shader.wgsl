@@ -204,6 +204,14 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let detail = camera.params.y;
     var albedo = in.color;
 
+    // Unlit: the muzzle flash, which the browser draws with `MeshBasicMaterial`.
+    // It used to carry the *sun's* direction as its normal to land at full
+    // brightness, which stopped being possible the moment the sun became a
+    // property of the map — see `viewmodel::MATERIAL_UNLIT`.
+    if (in.material < -0.5) {
+        return vec4<f32>(tonemap(albedo), 1.0);
+    }
+
     let mat_id = u32(round(in.material));
     if (mat_id > 0u) {
         let layer_idx = mat_id - 1u;
@@ -228,7 +236,11 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         }
 
         let N = normalize(in.normal);
-        let V = normalize(vec3<f32>(camera.reveal.y, 1.8, camera.reveal.z) - in.world_position);
+        // From the **eye**. This used to be built from the build-in's centre at
+        // a fixed height of 1.8 — `camera.reveal.yz` is where the map is
+        // revealed *from*, not where anybody is standing — so every reflection
+        // on the map was the one you would see from its middle, at knee height.
+        let V = normalize(lights.eye.xyz - in.world_position);
         let R = reflect(-V, N);
 
         let pi = 3.14159265359;
@@ -266,9 +278,10 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             in.normal,
             shadow.params.x,
             shadow.params.y,
+            shadow.params.z,
         );
     }
-    let lit = tonemap(shade(albedo, in.normal, detail, occlusion));
+    let lit = tonemap(shade(albedo, in.normal, in.world_position, detail, occlusion));
     var out_color = vec4<f32>(apply_fog(lit, in.view_depth, camera.params.x), 1.0);
     // The frontier glow, added over the final lit colour so cubes land hot and
     // cool into their normal shading. Last, after the tone curve and the fog,
@@ -291,35 +304,42 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 }
 
 // ---------------------------------------------------------------------------
-// The blit: the world, rendered at whatever resolution the player chose, scaled
-// into the window.
+// The scaling of the scene into the window — the blit that used to live here —
+// is `post.wgsl`'s composite now, with bloom and sharpening on the way.
 //
-// A fullscreen triangle rather than a quad — two triangles meet on a diagonal
-// seam that some drivers shade twice — and no vertex buffer at all: three
-// vertices are cheaper to compute from the index than to bind a buffer for.
+// The sky: drawn first into the main pass on a map open to it, where the flat
+// clear colour used to be.
+//
+// The same fullscreen triangle as the blit, and a view ray per pixel recovered
+// from the inverse view projection — the far plane's point for this pixel, less
+// the eye. No depth write and no depth test: it is drawn before anything else,
+// so everything after it simply lands on top.
 
-struct BlitOut {
+struct SkyCamera {
+    inverse_view_proj: mat4x4<f32>,
+};
+@group(0) @binding(0) var<uniform> sky_camera: SkyCamera;
+
+struct SkyOut {
     @builtin(position) clip_position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
+    @location(0) ndc: vec2<f32>,
 };
 
 @vertex
-fn vs_blit(@builtin(vertex_index) index: u32) -> BlitOut {
-    var out: BlitOut;
+fn vs_sky(@builtin(vertex_index) index: u32) -> SkyOut {
+    var out: SkyOut;
     let x = f32(i32(index) / 2) * 4.0 - 1.0;
     let y = f32(i32(index) & 1) * 4.0 - 1.0;
     out.clip_position = vec4<f32>(x, y, 0.0, 1.0);
-    // Texture space is y-down and clip space is y-up, so this is not a typo.
-    out.uv = vec2<f32>((x + 1.0) * 0.5, 1.0 - (y + 1.0) * 0.5);
+    out.ndc = vec2<f32>(x, y);
     return out;
 }
 
-@group(0) @binding(0) var scene_texture: texture_2d<f32>;
-@group(0) @binding(1) var scene_sampler: sampler;
-
 @fragment
-fn fs_blit(in: BlitOut) -> @location(0) vec4<f32> {
-    return textureSample(scene_texture, scene_sampler, in.uv);
+fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
+    let far = sky_camera.inverse_view_proj * vec4<f32>(in.ndc, 1.0, 1.0);
+    let direction = far.xyz / far.w - lights.eye.xyz;
+    return vec4<f32>(tonemap(sky_radiance(direction)), 1.0);
 }
 
 // ---------------------------------------------------------------------------

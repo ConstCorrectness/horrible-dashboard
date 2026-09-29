@@ -96,6 +96,44 @@ class ItemPlacement(BaseModel):
     z: float
 
 
+class Atmosphere(BaseModel):
+    """How a map is lit and what surrounds it — see `atmosphere.py`.
+
+    Always **resolved**: every field is present, so a client carries no default
+    of its own. Colours are sRGB hex integers; directions are three-space (y up),
+    unit length, pointing toward the light."""
+
+    skyZenith: int  # noqa: N815
+    skyHorizon: int  # noqa: N815
+    hemiSky: int  # noqa: N815
+    hemiGround: int  # noqa: N815
+    hemiIntensity: float  # noqa: N815
+    sunColor: int  # noqa: N815
+    sunIntensity: float  # noqa: N815
+    sunDir: list[float]  # noqa: N815
+    fillColor: int  # noqa: N815
+    fillIntensity: float  # noqa: N815
+    fillDir: list[float]  # noqa: N815
+    fogColor: int  # noqa: N815
+    fogDensity: float  # noqa: N815
+    exposure: float
+    sunDisc: bool  # noqa: N815
+
+
+class MapLight(BaseModel):
+    """One point light, in **map** coordinates (z up, cubes), like an item.
+
+    `intensity` multiplies `radius / 2` candela; both clients use three's
+    inverse-square falloff with the radius as its range window."""
+
+    x: float
+    y: float
+    z: float
+    radius: float
+    color: int
+    intensity: float
+
+
 class MapInfo(BaseModel):
     """A map's header and entities. The cube grid is fetched separately as binary."""
 
@@ -145,6 +183,11 @@ class MapInfo(BaseModel):
     format: Literal["cube", "gltf"] = "cube"
     #: Optional URL to the 3D level mesh (GLB), served at `/api/hassault/maps/{name}/mesh`.
     meshUrl: str | None = None
+    #: The resolved light rig, sky and fog. Optional only so an old client's
+    #: model of this response still validates; the route always fills it.
+    atmosphere: Atmosphere | None = None
+    #: The map's point lights. Quality levels may draw fewer, never different ones.
+    lights: list[MapLight] = Field(default_factory=list)
 
 
 class MatchSummary(BaseModel):

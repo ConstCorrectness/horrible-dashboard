@@ -64,22 +64,26 @@ export function createLadders(
     // arbitrary — a `ladder` entity carries no facing, so there is nothing to
     // read — and a square footprint is the honest depiction of a volume that
     // catches you from every side.
+    //
+    // Boxes are in **three space** (y up): map `(x, y, height)` is `(x,
+    // height, y)`, as every other placement maps it. This used to build them
+    // z-up, which laid every ladder flat on its side along the map's y axis.
     for (const dx of [-half, half]) {
       addBox(three, positions, normals, {
         cx: ladder.x + dx,
-        cy: ladder.y,
-        cz: ladder.base + height / 2,
+        cy: ladder.base + height / 2,
+        cz: ladder.y,
         sx: RAIL_THICKNESS,
-        sy: RAIL_THICKNESS,
-        sz: height,
+        sy: height,
+        sz: RAIL_THICKNESS,
       });
     }
     const rungs = Math.max(1, Math.floor(height / RUNG_SPACING));
     for (let i = 0; i <= rungs; i += 1) {
       addBox(three, positions, normals, {
         cx: ladder.x,
-        cy: ladder.y,
-        cz: ladder.base + (height * i) / rungs,
+        cy: ladder.base + (height * i) / rungs,
+        cz: ladder.y,
         sx: half * 2,
         sy: RUNG_THICKNESS,
         sz: RUNG_THICKNESS,

@@ -33,26 +33,37 @@ use glam::{Mat4, Vec3};
 
 use crate::renderer::Vertex;
 
-/// Shadow map resolution, matching the browser's `sun.shadow.mapSize`.
-const SIZE: u32 = 2048;
-
 /// Depth-only, so the cheapest format that holds a depth.
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
-/// The sun's direction, as a *direction toward the light*.
+/// How sharp and how soft the sun's shadow is: the map's resolution and the
+/// number of PCF taps the receiver takes.
 ///
-/// Must stay the same vector `lighting.wgsl.inc` shades with: a shadow map cast
-/// from one direction and a Lambert term computed from another produces surfaces
-/// lit from one side and shadowed from the other, which looks like broken
-/// geometry rather than a mismatched constant.
-pub const SUN_DIR: Vec3 = Vec3::new(0.523, 0.780, 0.343);
+/// **Resolution is almost free per frame** — the map is rendered once, at load —
+/// so what it costs is memory (8192² of `Depth32Float` is 256 MB) and the time of
+/// that one pass. The taps are the per-fragment cost. 2048 with 16 taps is the
+/// browser's `sun.shadow.mapSize` and the old fixed setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShadowQuality {
+    pub size: u32,
+    pub taps: u32,
+}
+
+impl Default for ShadowQuality {
+    fn default() -> ShadowQuality {
+        ShadowQuality {
+            size: 2048,
+            taps: 16,
+        }
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct ShadowUniform {
     light_view_proj: [[f32; 4]; 4],
     /// x: one shadow texel in **UV** units, for the PCF kernel's offsets.
-    /// y: depth bias. The rest is padding to the 16-byte minimum.
+    /// y: depth bias. z: how many PCF taps to take. w is padding.
     params: [f32; 4],
 }
 
@@ -67,20 +78,32 @@ impl ShadowMap {
     /// Takes the vertices rather than the uploaded buffer because the pass needs
     /// its own draw anyway, and handing it the data keeps the caller from having
     /// to think about whether the world buffer is bound.
+    ///
+    /// `sun` is the map's own, toward the light — the same vector the lighting
+    /// uniform carries, both taken from one `Atmosphere`. A shadow cast from one
+    /// direction and a Lambert term computed from another gives surfaces lit
+    /// from one side and shadowed from the other, which looks like broken
+    /// geometry rather than a mismatched number.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         world: &wgpu::Buffer,
         world_verts: u32,
         bounds: (Vec3, Vec3),
+        sun: Vec3,
+        quality: ShadowQuality,
     ) -> ShadowMap {
-        let (light_view_proj, _world_texel) = fit(bounds);
+        // Never past what the device will allocate: 8192 is not guaranteed.
+        let size = quality
+            .size
+            .clamp(256, device.limits().max_texture_dimension_2d.max(256));
+        let (light_view_proj, _world_texel) = fit(bounds, sun, size);
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("shadow-map"),
             size: wgpu::Extent3d {
-                width: SIZE,
-                height: SIZE,
+                width: size,
+                height: size,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -106,7 +129,14 @@ impl ShadowMap {
                 // The PCF kernel steps in UV, so the texel it needs is 1/SIZE —
                 // not the world-space size `fit` also returns, which is what the
                 // same word means one function over.
-                params: [1.0 / SIZE as f32, 0.0015, 0.0, 0.0],
+                params: [
+                    1.0 / size as f32,
+                    // The bias was tuned at 2048; a finer map needs less of it,
+                    // or the shadow detaches from the foot of every wall again.
+                    0.0015 * (2048.0 / size as f32).sqrt(),
+                    quality.taps.clamp(1, 16) as f32,
+                    0.0,
+                ],
             }]),
         );
 
@@ -305,7 +335,7 @@ fn render_once(
 /// Returns the matrix and the world size of one shadow texel, which the receiver
 /// uses to offset along the normal — the offset has to be in the same units as
 /// the error it is hiding, and that error is one texel wide.
-fn fit(bounds: (Vec3, Vec3)) -> (Mat4, f32) {
+fn fit(bounds: (Vec3, Vec3), sun: Vec3, size: u32) -> (Mat4, f32) {
     let (min, max) = bounds;
     let center = (min + max) * 0.5;
     // The radius of a sphere around the map, so the fit does not change as the
@@ -313,16 +343,21 @@ fn fit(bounds: (Vec3, Vec3)) -> (Mat4, f32) {
     // instead makes the shadow texel density depend on the map's orientation.
     let radius = ((max - min) * 0.5).length().max(1.0);
 
-    let dir = SUN_DIR.normalize();
+    let dir = sun.try_normalize().unwrap_or(Vec3::Y);
     let eye = center + dir * radius * 2.0;
-    // The map is Y-up, so anything but Y is a degenerate basis only if the sun
-    // is straight overhead — it is not, and the constant says so.
-    let view = glam::camera::rh::view::look_at_mat4(eye, center, Vec3::Y);
+    // The map is Y-up, so Y is a degenerate basis only for a sun straight
+    // overhead — which a map is allowed to ask for, so it gets Z instead.
+    let up = if dir.cross(Vec3::Y).length_squared() < 1e-6 {
+        Vec3::Z
+    } else {
+        Vec3::Y
+    };
+    let view = glam::camera::rh::view::look_at_mat4(eye, center, up);
     // `orthographic_rh` for wgpu's 0..1 depth range, not the -1..1 GL one: the
     // wrong one halves the usable depth precision and puts everything nearer
     // than the midpoint in front of the near plane.
     let proj = Mat4::orthographic_rh(-radius, radius, -radius, radius, 0.01, radius * 4.0);
-    (proj * view, 2.0 * radius / SIZE as f32)
+    (proj * view, 2.0 * radius / size as f32)
 }
 
 /// The axis-aligned bounds of a mesh, for fitting the light camera.
@@ -369,9 +404,17 @@ mod tests {
         // lookup in the frame with NaN, which reads as the world flickering.
         let (min, max) = bounds_of(&[]);
         assert!(min.is_finite() && max.is_finite());
-        let (matrix, texel) = fit((min, max));
+        let (matrix, texel) = fit((min, max), SUN, 2048);
         assert!(matrix.to_cols_array().iter().all(|f| f.is_finite()));
         assert!(texel > 0.0);
+    }
+
+    #[test]
+    fn a_sun_straight_overhead_is_a_usable_camera() {
+        // `look_at` with an up vector parallel to the view is a zero basis, and
+        // every shadow lookup would come out NaN. A map may ask for noon.
+        let (matrix, _) = fit((Vec3::ZERO, Vec3::splat(64.0)), Vec3::Y, 2048);
+        assert!(matrix.to_cols_array().iter().all(|f| f.is_finite()));
     }
 
     #[test]
@@ -380,7 +423,7 @@ mod tests {
         // lit when it should be shadowed — a hole in the shadowing that only
         // appears on large maps.
         let (min, max) = (Vec3::new(0.0, 0.0, 0.0), Vec3::new(256.0, 40.0, 256.0));
-        let (matrix, _) = fit((min, max));
+        let (matrix, _) = fit((min, max), SUN, 2048);
         for i in 0..8 {
             let corner = Vec3::new(
                 if i & 1 == 0 { min.x } else { max.x },
@@ -399,21 +442,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_sun_matches_the_shader() {
-        // The shadow is cast from this vector and the Lambert term is computed
-        // from the copy in `lighting.wgsl.inc`. If they drift, surfaces are lit
-        // from one side and shadowed from the other.
-        let shader = include_str!("lighting.wgsl.inc");
-        let line = shader
-            .lines()
-            .find(|l| l.contains("const SUN_DIR"))
-            .expect("SUN_DIR should be declared in the shared lighting");
-        for component in [SUN_DIR.x, SUN_DIR.y, SUN_DIR.z] {
-            assert!(
-                line.contains(&format!("{component}")),
-                "SUN_DIR component {component} is not in `{line}`"
-            );
-        }
-    }
+    /// The default rig's sun, which is what every test here casts from.
+    const SUN: Vec3 = Vec3::new(0.55, 0.82, 0.36);
 }

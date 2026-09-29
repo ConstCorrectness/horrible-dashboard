@@ -14,19 +14,8 @@ fn test_measure_prop_preload_and_upload_stall() {
         },
     )).expect("device");
 
-    let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("camera"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        }],
-    });
+    let camera_layout = hassault_native::atmosphere::camera_layout(&device);
+    let _lights_buffer = hassault_native::atmosphere::default_lights_buffer(&device);
 
     let mut props = Props::new(&device, &camera_layout, wgpu::TextureFormat::Rgba8UnormSrgb, 1);
 

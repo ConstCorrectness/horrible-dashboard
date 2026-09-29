@@ -200,7 +200,8 @@ impl CameraUniform {
         CameraUniform {
             view_proj: view_proj.to_cols_array_2d(),
             params: [
-                video.quality.fog_density(),
+                // Filled per frame from the map's own density — see `render`.
+                0.0,
                 video.quality.detail(),
                 reveal.height(),
                 // Everything drawn in world space receives the sun's shadow,
@@ -351,12 +352,25 @@ pub struct Renderer {
     video: Video,
     /// Where the world is drawn: a texture at `render_scale` of the window, and
     /// multisampled at the quality level's count. The swapchain never sees the
-    /// world directly any more — only this, scaled up by the blit.
+    /// world directly any more — only this, scaled up by the post chain.
     scene: SceneTargets,
-    blit_pipeline: wgpu::RenderPipeline,
-    blit_layout: wgpu::BindGroupLayout,
-    blit_bind_group: wgpu::BindGroup,
-    sampler: wgpu::Sampler,
+    /// Bloom and sharpening, and the stretch into the window that used to be
+    /// the blit. See `post.rs`.
+    post: crate::post::Post,
+    /// The map's light rig, sky, fog and point lights, and the buffer every
+    /// camera bind group carries at binding 1. See `atmosphere.rs`.
+    lighting: crate::atmosphere::Lighting,
+    lights_buffer: wgpu::Buffer,
+    /// The sky dome, drawn first into the main pass on a map open to the sky.
+    sky_pipeline: wgpu::RenderPipeline,
+    /// Kept for the same reason `world_layout` is: the sky draws in the main
+    /// pass, so a sample-count change rebuilds it.
+    sky_layout: wgpu::PipelineLayout,
+    sky_buffer: wgpu::Buffer,
+    sky_bind_group: wgpu::BindGroup,
+    /// Kept so the shadow can be re-baked when its quality changes; the map and
+    /// the sun are otherwise static and it is never re-rendered.
+    world_bounds: (glam::Vec3, glam::Vec3),
     pub is_3d: bool,
     /// The skinned operators for Counter-Terrorist and Terrorist teams.
     characters_ct: Option<crate::characters_gpu::Characters>,
@@ -401,34 +415,50 @@ impl Renderer {
         window: Arc<Window>,
         mesh: &MeshData,
         video: Video,
+        lighting: crate::atmosphere::Lighting,
+        gpu: &crate::gpu::GpuChoice,
     ) -> Result<Renderer, String> {
         let size = window.inner_size();
         // `new_without_display_handle` rather than a `Default`, which wgpu 30
         // does not provide: the display handle is only required on GLES/Wayland,
-        // and the surface is created from the window itself below.
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        // and the surface is created from the window itself below. The backends
+        // are the player's choice — see `gpu.rs`.
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: gpu.backend.backends(),
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
         let surface = instance
             .create_surface(window.clone())
             .map_err(|e| format!("no drawing surface: {e}"))?;
 
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-                ..Default::default()
-            })
-            .await
-            .map_err(|e| format!("no usable GPU: {e}"))?;
+        let adapter = crate::gpu::pick_adapter(&instance, &surface, gpu).await?;
 
         let info = adapter.get_info();
+        crate::gpu::set_running(crate::gpu::AdapterEntry {
+            name: info.name.clone(),
+            backend: format!("{:?}", info.backend),
+            kind: format!("{:?}", info.device_type),
+            vendor: info.vendor,
+            device: info.device,
+        });
+        // The one optional feature, requested **only where the adapter offers
+        // it**: it is what unlocks 2× and 8× MSAA, and asking for a feature an
+        // adapter lacks is a refusal to start rather than a lower setting.
+        // Everything else stays at nothing exotic — asking for more than the
+        // scene uses is how a client refuses to start on a perfectly capable
+        // integrated GPU.
+        let adapter_specific = adapter
+            .features()
+            .contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES);
+        let required_features = if adapter_specific {
+            wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+        } else {
+            wgpu::Features::empty()
+        };
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("hassault"),
-                // Nothing exotic is needed, and asking for more than the scene
-                // uses is how a client refuses to start on a perfectly capable
-                // integrated GPU.
-                required_features: wgpu::Features::empty(),
+                required_features,
                 required_limits: wgpu::Limits::downlevel_defaults()
                     .using_resolution(adapter.limits()),
                 ..Default::default()
@@ -445,6 +475,13 @@ impl Renderer {
             .copied()
             .find(|f| f.is_srgb())
             .unwrap_or(caps.formats[0]);
+        // Before anything asks `Video::samples()`: every pipeline and target
+        // below is built at the count this snaps to.
+        crate::gpu::set_sample_counts(crate::gpu::supported_sample_counts(
+            &adapter,
+            adapter_specific,
+            &[format, DEPTH_FORMAT],
+        ));
 
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -464,11 +501,12 @@ impl Renderer {
             present_mode: pick_present_mode(&caps.present_modes, video.vsync),
             alpha_mode: caps.alpha_modes[0],
             view_formats: vec![],
-            // One frame in flight. The default is two, which is the right answer
-            // for throughput and the wrong one here: every queued frame is a
-            // frame of input latency, and latency is the reason this client
-            // exists.
-            desired_maximum_frame_latency: 1,
+            // One frame in flight by default. Two is the right answer for
+            // throughput and the wrong one here: every queued frame is a frame
+            // of input latency, and latency is the reason this client exists.
+            // The Advanced Video page offers 2 and 3 for a GPU close to its
+            // limit, where smoother pacing is worth the frame.
+            desired_maximum_frame_latency: video.frame_latency.clamp(1, 3),
         };
         surface.configure(&device, &config);
 
@@ -495,32 +533,26 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("camera-layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                // **Both stages.** The matrix is the vertex shader's and the
-                // quality parameters are the fragment shader's, and they share a
-                // buffer. A `VERTEX`-only visibility here is a validation error
-                // at pipeline creation, not a wrong-looking frame.
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
+        // Group 0 is the camera **and the map's lights** — the one layout every
+        // shading pipeline here shares. See `atmosphere::camera_layout`.
+        let camera_layout = crate::atmosphere::camera_layout(&device);
+        let lights_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("lights"),
+            contents: bytemuck::cast_slice(&[lighting.uniform(
+                glam::Vec3::ZERO,
+                video.map_lights as usize,
+                video.brightness,
+            )]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("camera-bind-group"),
-            layout: &camera_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera_buffer.as_entire_binding(),
-            }],
-        });
+        let camera_bind_group = crate::atmosphere::camera_bind_group(
+            &device,
+            &camera_layout,
+            &camera_buffer,
+            &lights_buffer,
+            "camera-bind-group",
+        );
 
         // The surface grain. Generated, uploaded once, and never touched again:
         // it is the same tile for every map, because it is a *material* rather
@@ -539,15 +571,23 @@ impl Renderer {
         // Rendered here, once, from the map that was just uploaded. The sun and
         // the geometry are both static, so this never has to happen again — see
         // `shadow.rs`.
+        let world_bounds = crate::shadow::bounds_of(&vertices);
         let shadow = crate::shadow::ShadowMap::new(
             &device,
             &queue,
             &world_buffer,
             vertices.len() as u32,
-            crate::shadow::bounds_of(&vertices),
+            world_bounds,
+            lighting.atmosphere.sun_direction(),
+            video.shadow_level.quality(),
         );
 
-        let pbr = crate::textures3d::PbrResources::new(&device, &queue);
+        let pbr = crate::textures3d::PbrResources::with_quality(
+            &device,
+            &queue,
+            video.textures.size(),
+            video.anisotropy,
+        );
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("hassault-layout"),
@@ -607,14 +647,13 @@ impl Renderer {
             )]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
-        let settled_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("settled-bind-group"),
-            layout: &camera_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: settled_camera_buffer.as_entire_binding(),
-            }],
-        });
+        let settled_bind_group = crate::atmosphere::camera_bind_group(
+            &device,
+            &camera_layout,
+            &settled_camera_buffer,
+            &lights_buffer,
+            "settled-bind-group",
+        );
 
         let viewmodel_camera_buffer =
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -627,14 +666,13 @@ impl Renderer {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });
 
-        let viewmodel_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("viewmodel-bind-group"),
-            layout: &camera_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: viewmodel_camera_buffer.as_entire_binding(),
-            }],
-        });
+        let viewmodel_bind_group = crate::atmosphere::camera_bind_group(
+            &device,
+            &camera_layout,
+            &viewmodel_camera_buffer,
+            &lights_buffer,
+            "viewmodel-bind-group",
+        );
 
         let prop_camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("prop-camera"),
@@ -645,14 +683,13 @@ impl Renderer {
             )]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
-        let prop_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("prop-bind-group"),
-            layout: &camera_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: prop_camera_buffer.as_entire_binding(),
-            }],
-        });
+        let prop_bind_group = crate::atmosphere::camera_bind_group(
+            &device,
+            &camera_layout,
+            &prop_camera_buffer,
+            &lights_buffer,
+            "prop-bind-group",
+        );
         let props = crate::props_gpu::Props::new(&device, &camera_layout, format, video.samples());
 
         // The HUD's own pipeline: no camera, no depth, and **alpha blending**,
@@ -712,71 +749,31 @@ impl Renderer {
 
         let scene = create_scene(&device, &config, video.render_scale, video.samples());
 
-        // Linear, so a scaled-up frame is smoothed rather than blocky — nearest
-        // at 50% looks like a rendering fault rather than a setting.
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("scene-sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-        let blit_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("blit-layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-        let blit_bind_group =
-            create_blit_bind_group(&device, &blit_layout, scene.sampled(), &sampler);
-        let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("blit-pipeline"),
-            layout: Some(
-                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("blit-pipeline-layout"),
-                    bind_group_layouts: &[Some(&blit_layout)],
-                    immediate_size: 0,
-                }),
-            ),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_blit"),
-                // No vertex buffer at all: three vertices computed from the
-                // index are cheaper than binding one.
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_blit"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        // The stretch into the window, with bloom and sharpening on the way.
+        let mut post = crate::post::Post::new(&device, format);
+        post.resize(&device, scene.sampled(), scene.width, scene.height);
+        post.set(&queue, video.bloom, video.sharpen);
 
+        // The sky: its own tiny uniform (the inverse view projection) at binding
+        // 0 and the lights at binding 1, so it can use the camera layout as it is.
+        let sky_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("sky-camera"),
+            contents: bytemuck::cast_slice(&[glam::Mat4::IDENTITY.to_cols_array_2d()]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let sky_bind_group = crate::atmosphere::camera_bind_group(
+            &device,
+            &camera_layout,
+            &sky_buffer,
+            &lights_buffer,
+            "sky-bind-group",
+        );
+        let sky_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("sky-layout"),
+            bind_group_layouts: &[Some(&camera_layout)],
+            immediate_size: 0,
+        });
+        let sky_pipeline = sky_pipeline(&device, &sky_layout, &shader, format, video.samples());
         let text = crate::textquad::TextQuad::new(&device, format);
 
         Ok(Renderer {
@@ -822,10 +819,14 @@ impl Renderer {
             pbr,
             video,
             scene,
-            blit_pipeline,
-            blit_layout,
-            blit_bind_group,
-            sampler,
+            post,
+            lighting,
+            lights_buffer,
+            sky_pipeline,
+            sky_layout,
+            sky_buffer,
+            sky_bind_group,
+            world_bounds,
             is_3d: false,
             characters_ct: None,
             characters_t: None,
@@ -946,13 +947,32 @@ impl Renderer {
                 usage: wgpu::BufferUsages::VERTEX,
             });
         self.world_verts = vertices.len() as u32;
+        self.world_bounds = crate::shadow::bounds_of(&vertices);
+        self.rebake_shadow();
+    }
+
+    /// Render the sun's shadow map again, from the map's own sun, at the
+    /// current shadow quality. Only a new world or a new quality needs it.
+    fn rebake_shadow(&mut self) {
         self.shadow = crate::shadow::ShadowMap::new(
             &self.device,
             &self.queue,
             &self.world_buffer,
             self.world_verts,
-            crate::shadow::bounds_of(&vertices),
+            self.world_bounds,
+            self.lighting.atmosphere.sun_direction(),
+            self.video.shadow_level.quality(),
         );
+    }
+
+    /// The map's rig and lights. Everything they feed is uniform data except the
+    /// shadow, which is cast from the sun and so is re-baked here.
+    pub fn set_lighting(&mut self, lighting: crate::atmosphere::Lighting) {
+        let sun_moved = lighting.atmosphere.sun_dir != self.lighting.atmosphere.sun_dir;
+        self.lighting = lighting;
+        if sun_moved {
+            self.rebake_shadow();
+        }
     }
 
     pub fn set_bodies(&mut self, vertices: &[Vertex]) {
@@ -1083,7 +1103,33 @@ impl Renderer {
     /// did not happen" is not the same event as "the GPU is gone".
     pub fn render(&mut self, camera: &Camera) -> Result<bool, String> {
         let vp = camera.view_projection(self.config.width, self.config.height);
-        let fog = if self.is_3d { 0.0 } else { self.video.quality.fog_density() };
+        // The map's own density, thickened at the lower quality levels. 3D maps
+        // used to get none at all; they now get the thin haze their atmosphere
+        // asks for, which is what the browser has always drawn.
+        let fog = self.lighting.atmosphere.fog_density * self.video.quality.fog_scale();
+        // Every point light, the rig and the eye, for every pass this frame.
+        let eye = camera.eye();
+        self.queue.write_buffer(
+            &self.lights_buffer,
+            0,
+            bytemuck::cast_slice(&[self.lighting.uniform(
+                eye,
+                if self.video.quality.detail() < 1.0 {
+                    0
+                } else {
+                    self.video.map_lights as usize
+                },
+                self.video.brightness,
+            )]),
+        );
+        let draw_sky = self.is_3d && self.video.sky;
+        if draw_sky {
+            self.queue.write_buffer(
+                &self.sky_buffer,
+                0,
+                bytemuck::cast_slice(&[vp.inverse().to_cols_array_2d()]),
+            );
+        }
         let mut u_main = CameraUniform::new(vp, self.video, self.reveal);
         u_main.params[0] = fog;
         self.queue.write_buffer(
@@ -1195,21 +1241,22 @@ impl Renderer {
                         self.scene.resolve.as_ref()
                     },
                     ops: wgpu::Operations {
-                        // The fog colour, so geometry fading into the distance
-                        // meets a matching background rather than a hard edge
-                        // against the void. For 3D maps, clear to bright Crossfire daylight sky.
-                        load: wgpu::LoadOp::Clear(if self.is_3d {
+                        // The map's fog colour, so geometry fading into the
+                        // distance meets a matching background rather than a
+                        // hard edge against the void. On a map open to the sky
+                        // the dome covers this whole clear anyway; with the sky
+                        // off it is the flat horizon the dome would have drawn.
+                        load: wgpu::LoadOp::Clear({
+                            let a = &self.lighting.atmosphere;
+                            let c = crate::atmosphere::srgb_hex_to_linear(if self.is_3d {
+                                a.sky_horizon
+                            } else {
+                                a.fog_color
+                            });
                             wgpu::Color {
-                                r: 0.38,
-                                g: 0.58,
-                                b: 0.88,
-                                a: 1.0,
-                            }
-                        } else {
-                            wgpu::Color {
-                                r: 0.0056,
-                                g: 0.0080,
-                                b: 0.0137,
+                                r: c[0] as f64,
+                                g: c[1] as f64,
+                                b: c[2] as f64,
                                 a: 1.0,
                             }
                         }),
@@ -1228,6 +1275,14 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+
+            if draw_sky {
+                // First, with no depth test or write: everything after lands on
+                // top of it.
+                pass.set_pipeline(&self.sky_pipeline);
+                pass.set_bind_group(0, &self.sky_bind_group, &[]);
+                pass.draw(0..3, 0..1);
+            }
 
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
@@ -1332,33 +1387,12 @@ impl Renderer {
             }
         }
 
-        {
-            // The scene, scaled into the window. Always drawn, even at 100%:
-            // branching on "the scale happens to be 1" would give the common
-            // case its own untested code path, and a full-screen textured
-            // triangle is nothing next to the world it is copying.
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("blit"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        // Cleared rather than loaded: this covers every pixel,
-                        // and a load would be reading a surface nothing wrote.
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.blit_pipeline);
-            pass.set_bind_group(0, &self.blit_bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
+        // The scene, scaled into the window — with bloom and sharpening on the
+        // way when they are on. Always drawn, even at 100% with both off:
+        // branching on "the scale happens to be 1" would give the common case
+        // its own untested code path, and a full-screen textured triangle is
+        // nothing next to the world it is copying.
+        self.post.encode(&mut encoder, &view);
 
         if self.overlay_verts > 0 {
             // Last, over everything, with no depth attachment at all: the HUD is
@@ -1428,14 +1462,14 @@ impl Renderer {
             self.video.render_scale,
             self.video.samples(),
         );
-        // The bind group holds a *view*, so it is stale the moment the texture
-        // behind it is replaced. Forgetting this draws the previous frame's
-        // scene, or a texture that has been freed.
-        self.blit_bind_group = create_blit_bind_group(
+        // The post chain holds *views* of the scene, so it is stale the moment
+        // the texture behind it is replaced. Forgetting this draws the previous
+        // frame's scene, or a texture that has been freed.
+        self.post.resize(
             &self.device,
-            &self.blit_layout,
             self.scene.sampled(),
-            &self.sampler,
+            self.scene.width,
+            self.scene.height,
         );
     }
 
@@ -1450,7 +1484,34 @@ impl Renderer {
         let samples_changed = video.samples() != self.video.samples();
         let scale_changed = (video.render_scale - self.video.render_scale).abs() > 1e-4;
         let vsync_changed = video.vsync != self.video.vsync;
+        let latency_changed = video.frame_latency != self.video.frame_latency;
+        let shadow_changed = video.shadow_level != self.video.shadow_level;
+        let textures_changed =
+            video.textures != self.video.textures || video.anisotropy != self.video.anisotropy;
         self.video = video;
+
+        // Uniform data: written now, read next frame, nothing rebuilt.
+        self.post.set(&self.queue, video.bloom, video.sharpen);
+        if shadow_changed {
+            self.rebake_shadow();
+        }
+        if textures_changed {
+            // Into the existing layout, so every pipeline built against it
+            // stays valid; only the bind group and its textures are new.
+            let (bind_group, pbr_texture, _) = crate::textures3d::bind_group_with(
+                &self.device,
+                &self.queue,
+                &self.pbr.layout,
+                video.textures.size(),
+                video.anisotropy,
+            );
+            self.pbr.bind_group = bind_group;
+            self.pbr._pbr_texture = pbr_texture;
+        }
+        if latency_changed {
+            self.config.desired_maximum_frame_latency = video.frame_latency.clamp(1, 3);
+            self.surface.configure(&self.device, &self.config);
+        }
 
         if samples_changed {
             self.pipeline = world_pipeline(
@@ -1469,6 +1530,14 @@ impl Renderer {
             self.volume_pipeline = volume_pipeline(
                 &self.device,
                 &self.volume_layout,
+                &self.shader,
+                self.config.format,
+                video.samples(),
+            );
+            // The sky draws first in that same pass, so it moves with it.
+            self.sky_pipeline = sky_pipeline(
+                &self.device,
+                &self.sky_layout,
                 &self.shader,
                 self.config.format,
                 video.samples(),
@@ -1734,25 +1803,51 @@ fn create_scene(
     }
 }
 
-fn create_blit_bind_group(
+/// The sky dome: a fullscreen triangle drawn first in the main pass.
+///
+/// It shares the main pass's attachments, so its multisample state and depth
+/// format must match theirs — but it neither tests nor writes depth, because it
+/// is drawn before anything it could be behind.
+fn sky_pipeline(
     device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
-    view: &wgpu::TextureView,
-    sampler: &wgpu::Sampler,
-) -> wgpu::BindGroup {
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("blit-bind-group"),
-        layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::Sampler(sampler),
-            },
-        ],
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    format: wgpu::TextureFormat,
+    samples: u32,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("sky-pipeline"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_sky"),
+            buffers: &[],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_sky"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(false),
+            depth_compare: Some(wgpu::CompareFunction::Always),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState {
+            count: samples,
+            ..Default::default()
+        },
+        multiview_mask: None,
+        cache: None,
     })
 }
 

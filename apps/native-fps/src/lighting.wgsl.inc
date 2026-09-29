@@ -38,29 +38,75 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
 
 // --- the lights -----------------------------------------------------------
 //
-// Colours are the browser's hex values already decoded to linear, so the shader
-// does not pay for a conversion of a constant on every fragment.
+// **Served, not constant.** These used to be the browser's hex values typed in
+// here as WGSL constants, which lit every map the same way — a desert at noon
+// and an office at night under one sun. Each map now carries an `atmosphere`
+// (`backend/modules/hassault/atmosphere.py`), resolved on the server so neither
+// client holds a default, and `atmosphere.rs` decodes it into this uniform.
+// A map with none gets exactly the old rig, so nothing changed for it.
 //
-// Hemisphere: sky 0xbfd4ff, ground 0x33302c, intensity 1.55. It carries the
-// ambient, and being a *gradient* rather than a constant is what stops a surface
-// facing away from every light reading as a hole.
-const SKY_COLOR: vec3<f32> = vec3<f32>(0.5029, 0.6584, 1.0000);
-const GROUND_COLOR: vec3<f32> = vec3<f32>(0.0331, 0.0295, 0.0241);
-const HEMI_INTENSITY: f32 = 1.55;
+// Bound at group 0, binding 1 — beside the camera, in every pass that uses the
+// camera layout — because the downlevel limit is four bind groups and the world
+// pass uses all four. See `atmosphere::camera_layout`.
+//
+// - Hemisphere: carries the ambient, and being a *gradient* rather than a
+//   constant is what stops a surface facing away from every light reading as a
+//   hole.
+// - Sun: the one light that casts, and the one the shadow map is rendered from.
+// - Fill: a cool light from behind at a fraction of the sun's strength. Without
+//   it every surface facing away from the sun comes out the same value.
+// - Point lights: the map's own, nearest the eye first, up to the quality's cap.
+//   three's `PointLight` with `decay = 2` and `distance = radius`, so the falloff
+//   below is `getDistanceAttenuation` exactly.
+struct PointLight {
+    // xyz world position, w the range (the light's radius).
+    position_range: vec4<f32>,
+    // rgb linear colour times intensity in candela; w unused.
+    color: vec4<f32>,
+};
 
-// Sun: 0xfff2dd at 1.75, from the direction the browser puts it — normalised
-// from `sun.position` minus its target, which is a fixed offset from the map's
-// centre, so the same direction serves every map.
-const SUN_COLOR: vec3<f32> = vec3<f32>(1.0000, 0.9046, 0.7305);
-const SUN_INTENSITY: f32 = 1.75;
-const SUN_DIR: vec3<f32> = vec3<f32>(0.523, 0.780, 0.343);
+struct Lights {
+    hemi_sky: vec4<f32>,      // rgb linear, w intensity
+    hemi_ground: vec4<f32>,   // rgb linear
+    sun_dir: vec4<f32>,       // xyz unit, toward the sun
+    sun_color: vec4<f32>,     // rgb linear, w intensity
+    fill_dir: vec4<f32>,
+    fill_color: vec4<f32>,    // rgb linear, w intensity
+    fog_color: vec4<f32>,     // rgb linear
+    sky_zenith: vec4<f32>,    // rgb linear, w 1 if the sun disc is drawn
+    sky_horizon: vec4<f32>,   // rgb linear, w exposure
+    eye: vec4<f32>,           // xyz world-space eye, w the number of point lights
+    point: array<PointLight, 64>,
+};
 
-// A cool fill from behind at a fraction of the sun's strength: 0x9fb6ff at 0.45.
-// Without it every surface facing away from the sun is lit only by the
-// hemisphere and comes out the same value.
-const FILL_COLOR: vec3<f32> = vec3<f32>(0.3564, 0.4735, 1.0000);
-const FILL_INTENSITY: f32 = 0.45;
-const FILL_DIR: vec3<f32> = vec3<f32>(-0.538, 0.377, -0.754);
+@group(0) @binding(1) var<uniform> lights: Lights;
+
+/// three's `getDistanceAttenuation` for `decay = 2`: inverse square, windowed
+/// to zero at `range` so a light has an edge rather than a tail that never ends.
+fn point_attenuation(distance: f32, range: f32) -> f32 {
+    let falloff = 1.0 / max(distance * distance, 0.01);
+    let ratio = distance / range;
+    let window = clamp(1.0 - ratio * ratio * ratio * ratio, 0.0, 1.0);
+    return falloff * window * window;
+}
+
+/// The irradiance the map's point lights put on a surface.
+fn point_irradiance(n: vec3<f32>, world_position: vec3<f32>) -> vec3<f32> {
+    var sum = vec3<f32>(0.0);
+    let count = u32(lights.eye.w);
+    for (var i = 0u; i < count; i = i + 1u) {
+        let light = lights.point[i];
+        let to_light = light.position_range.xyz - world_position;
+        let distance = length(to_light);
+        if (distance >= light.position_range.w) {
+            continue;
+        }
+        let l = to_light / max(distance, 1e-4);
+        let ndotl = max(dot(n, l), 0.0);
+        sum = sum + light.color.rgb * point_attenuation(distance, light.position_range.w) * ndotl;
+    }
+    return sum;
+}
 
 /// Lambert's BRDF normalisation.
 ///
@@ -103,6 +149,7 @@ fn sun_shadow(
     normal: vec3<f32>,
     texel: f32,
     bias: f32,
+    taps: f32,
 ) -> f32 {
     // Perspective divide, then into texture space.
     var ndc = light_position.xyz / light_position.w;
@@ -112,17 +159,21 @@ fn sun_shadow(
         return 1.0;
     }
 
-    let ndotl = max(dot(normalize(normal), normalize(SUN_DIR)), 0.0);
+    let ndotl = max(dot(normalize(normal), lights.sun_dir.xyz), 0.0);
     let slope = clamp(1.0 - ndotl, 0.0, 1.0);
     let depth = ndc.z - (bias + bias * 4.0 * slope);
 
+    // The first `taps` points of the disk. The Poisson set is ordered so any
+    // prefix still spreads round the centre, which is what lets a lower shadow
+    // quality take fewer of them rather than a different kernel.
+    let count = clamp(i32(taps), 1, 16);
     var sum = 0.0;
     let radius = texel * 1.5;
-    for (var i = 0; i < 16; i = i + 1) {
+    for (var i = 0; i < count; i = i + 1) {
         let offset = POISSON_16[i] * radius;
         sum = sum + textureSampleCompare(map, map_sampler, uv + offset, depth);
     }
-    return sum * 0.0625;
+    return sum / f32(count);
 }
 
 /// Lambert shading with the three lights above. `albedo` must already be linear.
@@ -136,7 +187,16 @@ fn sun_shadow(
 /// shadow is still lit by the sky above it — and shadowing that too would make
 /// every shadowed face uniformly black, which is the thing real shadows are
 /// supposed to stop happening.
-fn shade(albedo: vec3<f32>, normal: vec3<f32>, detail: f32, shadow: f32) -> vec3<f32> {
+///
+/// `world_position` is for the point lights, which are the only term here that
+/// depends on where the surface is rather than which way it faces.
+fn shade(
+    albedo: vec3<f32>,
+    normal: vec3<f32>,
+    world_position: vec3<f32>,
+    detail: f32,
+    shadow: f32,
+) -> vec3<f32> {
     if (detail < 1.0) {
         return albedo;
     }
@@ -144,13 +204,16 @@ fn shade(albedo: vec3<f32>, normal: vec3<f32>, detail: f32, shadow: f32) -> vec3
 
     // three's hemisphere light: the sky above, the ground below, mixed by how
     // far the normal has tipped between them.
-    let hemi = mix(GROUND_COLOR, SKY_COLOR, n.y * 0.5 + 0.5) * HEMI_INTENSITY;
+    let hemi = mix(lights.hemi_ground.rgb, lights.hemi_sky.rgb, n.y * 0.5 + 0.5) * lights.hemi_sky.w;
 
     var irradiance = hemi;
-    irradiance = irradiance + SUN_COLOR * SUN_INTENSITY * max(dot(n, normalize(SUN_DIR)), 0.0) * shadow;
+    irradiance = irradiance
+        + lights.sun_color.rgb * lights.sun_color.w * max(dot(n, lights.sun_dir.xyz), 0.0) * shadow;
     if (detail >= 2.0) {
-        irradiance = irradiance + FILL_COLOR * FILL_INTENSITY * max(dot(n, normalize(FILL_DIR)), 0.0);
+        irradiance = irradiance
+            + lights.fill_color.rgb * lights.fill_color.w * max(dot(n, lights.fill_dir.xyz), 0.0);
     }
+    irradiance = irradiance + point_irradiance(n, world_position);
     return albedo * irradiance * RECIPROCAL_PI;
 }
 
@@ -161,11 +224,11 @@ fn shade(albedo: vec3<f32>, normal: vec3<f32>, detail: f32, shadow: f32) -> vec3
 // into the same white — which is exactly where a bright surface loses the grain
 // the detail texture exists to give it.
 //
-// Narkowicz's fit, which is what three's `ACESFilmicToneMapping` is.
-const EXPOSURE: f32 = 1.15;
-
+// Narkowicz's fit, which is what three's `ACESFilmicToneMapping` is. The
+// exposure is the map's (1.15 unless it says otherwise, the browser's
+// `toneMappingExposure`) times the player's brightness setting.
 fn tonemap(color: vec3<f32>) -> vec3<f32> {
-    let x = color * EXPOSURE;
+    let x = color * lights.sky_horizon.w;
     let a = 2.51;
     let b = 0.03;
     let c = 2.43;
@@ -200,7 +263,8 @@ fn tonemap(color: vec3<f32>) -> vec3<f32> {
 // Applied **after** tone mapping: fogging before it means the tone curve then
 // lifts the fog itself, and the far end of a corridor comes back grey instead
 // of receding.
-const FOG_COLOR: vec3<f32> = vec3<f32>(0.0056, 0.0080, 0.0137);
+//
+// The colour is the map's `fogColor`, decoded to linear on the CPU.
 
 /// How much fog stands between the eye and something `view_depth` away.
 ///
@@ -220,5 +284,27 @@ fn fog_amount(view_depth: f32, density: f32) -> f32 {
 }
 
 fn apply_fog(color: vec3<f32>, view_depth: f32, density: f32) -> vec3<f32> {
-    return mix(color, FOG_COLOR, fog_amount(view_depth, density));
+    return mix(color, lights.fog_color.rgb, fog_amount(view_depth, density));
+}
+
+// --- the sky --------------------------------------------------------------
+//
+// Shared with the browser's sky dome (`sky.ts`), which is why it is a function
+// of a direction and nothing else: a gradient from the horizon colour up to the
+// zenith, the horizon colour held below it (the ground is geometry, not sky),
+// and a sun disc with a soft halo where the map is open enough to see one.
+//
+// Returned **before** tone mapping, like any other radiance.
+fn sky_radiance(direction: vec3<f32>) -> vec3<f32> {
+    let d = normalize(direction);
+    let up = clamp(d.y, 0.0, 1.0);
+    // A square root keeps the horizon band narrow, which is what reads as
+    // distance: a linear ramp makes the whole upper half of the sky one haze.
+    var color = mix(lights.sky_horizon.rgb, lights.sky_zenith.rgb, sqrt(up));
+    if (lights.sky_zenith.w > 0.5) {
+        let s = max(dot(d, lights.sun_dir.xyz), 0.0);
+        let sun = lights.sun_color.rgb * lights.sun_color.w;
+        color = color + sun * (pow(s, 1800.0) * 6.0 + pow(s, 24.0) * 0.12);
+    }
+    return color;
 }

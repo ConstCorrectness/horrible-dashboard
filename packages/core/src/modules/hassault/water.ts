@@ -73,14 +73,19 @@ export function createWater(
     depthWrite: false,
   });
   const mesh = new three.Mesh(geometry, material);
-  mesh.position.set(size / 2, size / 2, world.waterlevel);
+  // `PlaneGeometry` lies in XY, and the scene is y-up: laid flat, then
+  // placed at `(x, height, y)` like every other map placement. Left in XY at
+  // `z = waterlevel` it was a vertical sheet across the map a few cubes from
+  // one edge — water nobody could stand in, and none where the pools were.
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set(size / 2, world.waterlevel, size / 2);
   // Drawn after the world so blending has something to blend with.
   mesh.renderOrder = 1;
   scene.add(mesh);
 
   return {
     update(elapsed: number) {
-      mesh.position.z = world.waterlevel + Math.sin(elapsed * RIPPLE_SPEED) * RIPPLE;
+      mesh.position.y = world.waterlevel + Math.sin(elapsed * RIPPLE_SPEED) * RIPPLE;
     },
     dispose() {
       scene.remove(mesh);

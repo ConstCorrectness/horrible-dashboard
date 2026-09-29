@@ -282,18 +282,50 @@ export const hassaultModule: ModuleManifest = {
       default: true,
     },
     {
+      key: 'hassault.graphics',
+      title: 'Graphics (pane and web)',
+      description:
+        'auto, low, medium or high — how much of the map’s served look this pane draws: pixel ratio, shadow resolution and softness, how many of the map’s lamps light a frame (0, 4 or 8), the sky dome, texture filtering and how far the fog reaches. Every level draws the same map, sky and lamps as the native window, only fewer of them lower down. auto picks from the GPU the browser reports. Anti-aliasing is a WebGL context flag and changes the next time the pane opens.',
+      type: 'string',
+      default: 'auto',
+    },
+    {
       key: 'hassault.video.fullscreen',
       title: 'Native client: fullscreen',
       description:
-        'Whether the native client opens fullscreen (borderless). On by default — a shooter that opens in a window with a title bar is one you have to configure before it feels like a game. Editable from the in-game menu on Escape, which is what writes this row.',
+        'Whether the native client opens fullscreen. On by default — a shooter that opens in a window with a title bar is one you have to configure before it feels like a game. Borderless unless the display mode below says exclusive. Editable from the in-game menu on Escape, which is what writes this row.',
       type: 'boolean',
       default: true,
+    },
+    {
+      key: 'hassault.video.displayMode',
+      title: 'Native client: fullscreen mode',
+      description:
+        'borderless (the default) or exclusive. Exclusive switches the monitor to the mode below and gives the game the display outright — on some drivers that is the only way to a compositor-free present or a refresh rate the desktop is not running at — at the cost of a mode switch and a black screen at each end.',
+      type: 'string',
+      default: 'borderless',
+    },
+    {
+      key: 'hassault.video.monitor',
+      title: 'Native client: monitor',
+      description:
+        '0 for whichever monitor the window is on, or 1, 2, … for the system’s list. A monitor that is no longer connected falls back to the current one.',
+      type: 'number',
+      default: 0,
+    },
+    {
+      key: 'hassault.video.exclusiveMode',
+      title: 'Native client: exclusive mode',
+      description:
+        'WIDTHxHEIGHT@MILLIHERTZ, as the in-game menu writes it (e.g. 2560x1440@143998), or empty for the monitor’s desktop mode. Only read in exclusive fullscreen.',
+      type: 'string',
+      default: '',
     },
     {
       key: 'hassault.video.renderScale',
       title: 'Native client: resolution scale',
       description:
-        'Fraction of the window the world is rendered at, 0.5–1. The HUD is never scaled with it, so text stays crisp at any setting. Lower it if the frame rate is short on an integrated GPU; on a discrete card it makes no measurable difference.',
+        'Fraction of the window the world is rendered at, 0.5–2. The HUD is never scaled with it, so text stays crisp at any setting. Below 1 trades sharpness for frame rate on an integrated GPU (pair it with sharpening); above 1 is supersampling, the only anti-aliasing that also smooths shader and alpha edges, at four times the pixels at 2.',
       type: 'number',
       default: 1,
     },
@@ -301,7 +333,7 @@ export const hassaultModule: ModuleManifest = {
       key: 'hassault.video.quality',
       title: 'Native client: graphics quality',
       description:
-        'low, medium or high — a preset, not a ceiling. It moves the shading (flat, a directional wash, the wash plus a rim), how far the fog reaches, and it writes the anti-aliasing row below. Changing that row afterwards is honoured: the preset is applied when you pick it, never re-applied on top of a later choice.',
+        'low, medium, high or ultra — a preset, not a ceiling. It sets the shading and fog reach itself, and writes the rows under it: anti-aliasing, texture filtering and quality, shadow quality, map lights, bloom and the sky. A row changed afterwards is honoured and the menu shows CUSTOM: the preset is applied when you pick it, never re-applied on top of a later choice. High is the browser’s picture; ultra adds bloom, every map light, 4096 shadows, 512 textures and 8× MSAA where the GPU offers it.',
       type: 'string',
       default: 'medium',
     },
@@ -314,20 +346,132 @@ export const hassaultModule: ModuleManifest = {
       default: 75,
     },
     {
-      key: 'hassault.video.antialias',
-      title: 'Native client: anti-aliasing',
+      key: 'hassault.video.msaa',
+      title: 'Native client: anti-aliasing (MSAA)',
       description:
-        '4× multisampling, on or off — there is deliberately nothing between. 1 and 4 are the only sample counts the WebGPU spec guarantees a format supports; 2× is a validation error at pipeline creation on plenty of GPUs that list it, which is a crash on the first frame rather than a slower one. Set by the quality preset and overridable from here or the in-game menu.',
+        '1 (off), 2, 4 or 8 samples. 1 and 4 are the only counts the spec guarantees; 2 and 8 are used only where the GPU reports them, and anything it cannot do is snapped down to the nearest it can — asked for, never forced, because an unsupported count is a crash on the first frame rather than a slower one.',
+      type: 'number',
+      default: 1,
+    },
+    {
+      key: 'hassault.video.antialias',
+      title: 'Native client: anti-aliasing (legacy)',
+      description:
+        'The old on/off row, kept in step with the sample count above (on means more than 1) and read only when that row has never been saved.',
       type: 'boolean',
       default: false,
+    },
+    {
+      key: 'hassault.video.anisotropy',
+      title: 'Native client: texture filtering',
+      description:
+        '1, 2, 4, 8 or 16× anisotropic filtering on the modelled maps’ surfaces — what keeps a floor sharp at the grazing angle a shooter nearly always sees it from. Nearly free on a discrete GPU.',
+      type: 'number',
+      default: 16,
+    },
+    {
+      key: 'hassault.video.textureQuality',
+      title: 'Native client: texture quality',
+      description:
+        'low, medium or high: the generated surface textures at 128, 256 or 512 pixels, with a full mip chain. Built on the CPU when the map loads, so it costs load time and video memory, never frame rate.',
+      type: 'string',
+      default: 'medium',
     },
     {
       key: 'hassault.video.shadows',
       title: 'Native client: shadows',
       description:
-        'Whether world surfaces sample the sun’s shadow map. This is a look, not a frame rate: the map and the sun are both static, so the shadow map is baked once at load and turning this off skips no pass — only the shader’s filter taps. Offered because some people prefer the flat read, not as a performance setting.',
+        'Whether world surfaces sample the sun’s shadow map. This is a look, not a frame rate: the map and the sun are both static, so the shadow map is baked once at load and turning this off skips no pass — only the shader’s filter taps.',
       type: 'boolean',
       default: true,
+    },
+    {
+      key: 'hassault.video.shadowQuality',
+      title: 'Native client: shadow quality',
+      description:
+        'low (1024, 4 taps), medium (2048, 8), high (2048, 16 — the browser’s), ultra (4096, 16) or extreme (8192, 16). The map is rendered into it once, at load, so resolution costs memory and a moment rather than frames; the taps are the per-pixel cost.',
+      type: 'string',
+      default: 'high',
+    },
+    {
+      key: 'hassault.video.mapLights',
+      title: 'Native client: map lights',
+      description:
+        '0, 8, 16, 32 or 64 — how many of the map’s own lamps light a frame, nearest first. They light the operators and the weapon in your hands as well as the walls.',
+      type: 'number',
+      default: 8,
+    },
+    {
+      key: 'hassault.video.bloom',
+      title: 'Native client: bloom',
+      description:
+        '0 (off) to 1. A glow on what is already near white — lamps, screens, the sun, a muzzle flash — not a haze over the scene.',
+      type: 'number',
+      default: 0,
+    },
+    {
+      key: 'hassault.video.sky',
+      title: 'Native client: sky',
+      description:
+        'The sky dome and sun disc on maps open to the sky, from the map’s own atmosphere. Off draws the flat horizon colour instead.',
+      type: 'boolean',
+      default: true,
+    },
+    {
+      key: 'hassault.video.sharpen',
+      title: 'Native client: sharpening',
+      description:
+        '0 (off) to 1, contrast-adaptive. Gives back the edge contrast a resolution scale below 100% takes away, without ringing on detail that is already sharp.',
+      type: 'number',
+      default: 0,
+    },
+    {
+      key: 'hassault.video.brightness',
+      title: 'Native client: brightness',
+      description:
+        '0.6–1.6, a multiplier on the map’s own exposure. 1 is the picture the map was lit for.',
+      type: 'number',
+      default: 1,
+    },
+    {
+      key: 'hassault.video.frameLatency',
+      title: 'Native client: frame queue',
+      description:
+        'Frames the GPU may queue, 1–3. 1 is the lowest input latency and the default; 2 or 3 smooths frame pacing on a GPU running close to its limit, at a frame of lag each.',
+      type: 'number',
+      default: 1,
+    },
+    {
+      key: 'hassault.video.adapter',
+      title: 'Native client: GPU',
+      description:
+        'auto, or a GPU’s name as `hassault-native --list-adapters` prints it. On a hybrid laptop the client also asks NVIDIA’s and AMD’s drivers for the discrete GPU, so auto is usually right. Applies the next time the client starts; the in-game menu can restart it.',
+      type: 'string',
+      default: 'auto',
+    },
+    {
+      key: 'hassault.video.backend',
+      title: 'Native client: graphics API',
+      description:
+        'auto, dx12, vulkan, metal or gl. auto picks DirectX 12 or Vulkan on Windows, Vulkan on Linux and Metal on macOS, and never falls back to OpenGL on its own. Applies on restart.',
+      type: 'string',
+      default: 'auto',
+    },
+    {
+      key: 'hassault.video.powerPreference',
+      title: 'Native client: GPU preference',
+      description:
+        'high (performance) or low (power saving), used when the GPU is auto. Applies on restart.',
+      type: 'string',
+      default: 'high',
+    },
+    {
+      key: 'hassault.video.hudScale',
+      title: 'Native client: HUD scale',
+      description:
+        '0.75–1.5 of the HUD’s derived size. The HUD’s unit is derived from the window height in whole pixels, so 1440p and 4K can land on the same size as 1080p; this multiplies it.',
+      type: 'number',
+      default: 1,
     },
     {
       key: 'hassault.video.fpsLimit',
@@ -341,9 +485,9 @@ export const hassaultModule: ModuleManifest = {
       key: 'hassault.video.vsync',
       title: 'Native client: vsync',
       description:
-        'Off by default. A frame of queued latency is precisely what the native client exists to avoid — but tearing is real, and somebody who can see it should be able to say so.',
+        'On by default, which is what the client has always done when the row was unset. Off presents immediately — the lowest latency there is, and the reason the native client exists — at the cost of tearing.',
       type: 'boolean',
-      default: false,
+      default: true,
     },
     {
       key: 'hassault.crosshair.style',

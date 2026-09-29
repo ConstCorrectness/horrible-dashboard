@@ -108,10 +108,14 @@ export class ItemPool {
       const ring = new this.three.Mesh(this.ringGeo, this.ringMats.get(row.kind)!);
       ring.frustumCulled = true;
       ring.rotation.x = -Math.PI / 2;
-      ring.position.z = 0.03;
+      ring.position.y = 0.03;
       group.add(ring);
 
-      group.position.set(row.x, row.y, row.z);
+      // Map coordinates are z-up and the scene is y-up: `(x, z, y)`, the
+      // mapping every other placement uses (`kits.ts`, `drops.ts`,
+      // `avatars.ts`). This set `(x, y, z)` and put every item a map's
+      // depth into the air and its height into the floor plan.
+      group.position.set(row.x, row.z, row.y);
       this.scene.add(group);
       this.items.set(row.id, {
         group,
@@ -150,9 +154,9 @@ export class ItemPool {
       live.body.visible = present > 0.02;
       // Sinks into the floor as it goes rather than shrinking in place: an item
       // being *taken off the floor* is the thing being depicted.
-      live.body.position.z = HOVER + bob - (1 - present) * (HOVER + BOB);
+      live.body.position.y = HOVER + bob - (1 - present) * (HOVER + BOB);
       live.body.scale.setScalar(0.35 + present * 0.65);
-      live.body.rotation.z = spin;
+      live.body.rotation.y = spin;
       const ringMat = live.ring.material as THREE.MeshBasicMaterial;
       // The ring never disappears: it is the timer players read the map from.
       ringMat.opacity = 0.12 + present * 0.23;
@@ -187,7 +191,7 @@ export class ItemPool {
       case 'health': {
         // A cross: the one item shape that needs no legend.
         const arm = new three.BoxGeometry(0.9, 0.28, 0.28);
-        const stem = new three.BoxGeometry(0.28, 0.28, 0.9);
+        const stem = new three.BoxGeometry(0.28, 0.9, 0.28);
         geo = mergeInto(three, [arm, stem]);
         break;
       }
@@ -196,13 +200,13 @@ export class ItemPool {
         break;
       case 'armour':
         // A plate, wider than it is thick, so it reads as a vest end-on too.
-        geo = new three.BoxGeometry(0.75, 0.3, 0.9);
+        geo = new three.BoxGeometry(0.75, 0.9, 0.3);
         break;
       case 'ammo':
         geo = new three.BoxGeometry(0.8, 0.5, 0.5);
         break;
       case 'clips':
-        geo = new three.BoxGeometry(0.45, 0.28, 0.6);
+        geo = new three.BoxGeometry(0.45, 0.6, 0.28);
         break;
       case 'grenade':
         geo = new three.CapsuleGeometry(0.24, 0.34, 4, 8);

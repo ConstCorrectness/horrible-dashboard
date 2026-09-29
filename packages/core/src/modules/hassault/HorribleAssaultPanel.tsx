@@ -147,6 +147,25 @@ import { createLadders } from './ladders';
 import { ItemPool } from './items';
 import { NadePool } from './nades';
 import { createWater } from './water';
+import type { Atmosphere, MapLight } from './api';
+import {
+  CUBE_DEFAULT,
+  candela,
+  createSky,
+  lightPosition,
+  nearestLights,
+  resolveAtmosphere,
+  unit,
+} from './atmosphere';
+import {
+  TIERS,
+  rendererName,
+  resolveTier,
+  configureGraphicsStorage,
+  useGraphicsChoice,
+  type GraphicsTier,
+  type TierSpec,
+} from './graphics';
 import { GrenadeController } from './utility';
 import { TrainingRange } from './training';
 import { equippedSkins, WeaponViewModel, type WeaponSkin } from './viewmodel';
@@ -322,6 +341,9 @@ interface SceneHandle {
   /** Vertical field of view in degrees. A setting, so it has to reach the camera
    * after construction rather than only at it. */
   setFov: (degrees: number) => void;
+  /** Apply a graphics tier live: everything but the context's antialias flag,
+   * which three only reads at creation. See `graphics.ts`. */
+  setGraphics: (tier: GraphicsTier) => void;
   /** Park the render loop, scheduling nothing. Used while the native client owns
    * the GPU; the scene stays resident so `resume` costs one frame. */
   suspend: () => void;
@@ -583,6 +605,19 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   const nativeSetting = useSetting<boolean>(NATIVE_CLIENT_KEY) ?? true;
   const nativeClient = props.forceWebGl ? false : nativeSetting;
   const showHitboxes = useSetting<boolean>(SHOW_HITBOXES_KEY) ?? false;
+  /** How much of the served map look this pane draws. The scene is built once,
+   * so it reads the choice through a ref, and a change is pushed to it below. */
+  configureGraphicsStorage(standalone);
+  const [graphicsChoice] = useGraphicsChoice();
+  const graphicsChoiceRef = useRef(graphicsChoice);
+  graphicsChoiceRef.current = graphicsChoice;
+  // A changed choice reaches the built scene live. `auto` re-resolves against
+  // the hints the scene took at creation, which is the tier it already has.
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene || graphicsChoice === 'auto') return;
+    scene.setGraphics(graphicsChoice);
+  }, [graphicsChoice]);
   const storedControls = useSetting<string>(CONTROLS_KEY);
   const controls = useMemo(() => parseControls(storedControls), [storedControls]);
   const codes = useMemo(() => codeMap(controls), [controls]);
@@ -1363,11 +1398,20 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       scene.fog = new THREE.FogExp2(HORIZON, 0.0055);
 
       const camera = new THREE.PerspectiveCamera(75, 1, 0.1, 600);
+      // `antialias` is the one tier knob three only reads here, at creation;
+      // `auto` keeps it on, since the tier it resolves to is only known once
+      // this context can be asked what GPU it is on.
       const renderer = new THREE.WebGLRenderer({
-        antialias: true,
+        antialias: graphicsChoiceRef.current !== 'low',
         powerPreference: 'high-performance',
       });
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      const hints = {
+        devicePixelRatio: window.devicePixelRatio || 1,
+        renderer: rendererName(renderer.getContext()),
+        cores: navigator.hardwareConcurrency,
+      };
+      let tier: TierSpec = TIERS[resolveTier(graphicsChoiceRef.current, hints)];
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, tier.pixelRatio));
       // ACES rather than the default clip: the sun plus a hemisphere light puts
       // lit floors above 1.0, and `NoToneMapping` flattens everything past that
       // into the same white — which is exactly where a bright surface loses the
@@ -1378,7 +1422,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       // per map** rather than once per frame (see `setMesh`). That is the whole
       // reason real shadows are affordable here at all.
       renderer.shadowMap.enabled = true;
-      renderer.shadowMap.type = THREE.PCFShadowMap;
+      renderer.shadowMap.type = tier.softShadows ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
       renderer.shadowMap.autoUpdate = false;
       mountRef.current.appendChild(renderer.domElement);
       renderer.domElement.style.display = 'block';
@@ -1387,11 +1431,14 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       renderer.domElement.style.cursor = 'crosshair';
 
       // Hemisphere light alone reads flat; the directional adds enough gradient
-      // to tell walls from floors before real textures exist.
-      scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x33302c, 1.55));
+      // to tell walls from floors before real textures exist. The colours here
+      // are only what the loading screen is lit by: every map re-lights the rig
+      // from its served atmosphere in `applyAtmosphere`.
+      const hemi = new THREE.HemisphereLight(0xbfd4ff, 0x33302c, 1.55);
+      scene.add(hemi);
       const sun = new THREE.DirectionalLight(0xfff2dd, 1.75);
       sun.castShadow = true;
-      sun.shadow.mapSize.set(2048, 2048);
+      sun.shadow.mapSize.set(tier.shadowSize, tier.shadowSize);
       // Normal bias, not just a constant one: these surfaces are large flat
       // quads at every angle to the sun, and a constant bias big enough to stop
       // acne on the floors detaches the shadows from the foot of every wall.
@@ -1406,6 +1453,115 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       const fill = new THREE.DirectionalLight(0x9fb6ff, 0.45);
       fill.position.set(-0.5, 0.35, -0.7);
       scene.add(fill);
+
+      // The map's own lamps. A **fixed pool** of the most the High tier draws,
+      // parked at zero intensity when unused: three compiles a light count into
+      // every material, so adding or removing lights as the player walks would
+      // recompile the world's shaders mid-match. Which lamps fill the pool is
+      // re-chosen a few times a second — nearest reach first, as natively.
+      const lampPool: import('three').PointLight[] = [];
+      for (let i = 0; i < TIERS.high.lights; i += 1) {
+        const lamp = new THREE.PointLight(0xffffff, 0, 1, 2);
+        lamp.castShadow = false;
+        scene.add(lamp);
+        lampPool.push(lamp);
+      }
+      let mapLights: MapLight[] = [];
+      let lampClock = 0;
+      const placeLamps = (eye: [number, number, number]) => {
+        const chosen = nearestLights(mapLights, eye, tier.lights);
+        lampPool.forEach((lamp, i) => {
+          const light = chosen[i];
+          if (!light) {
+            lamp.intensity = 0;
+            return;
+          }
+          const [x, y, z] = lightPosition(light);
+          lamp.position.set(x, y, z);
+          lamp.color.setHex(light.color);
+          lamp.intensity = candela(light);
+          lamp.distance = light.radius;
+        });
+      };
+
+      // The sky dome, rebuilt per map from its atmosphere. `null` on a sealed
+      // cube map, and on the Low tier, where the flat horizon colour stands in.
+      let sky: import('three').Mesh | null = null;
+      let atmosphere: Atmosphere = CUBE_DEFAULT;
+      let skyOpen = false;
+
+      /** Light and surround the scene from a map's served atmosphere. */
+      const applyAtmosphere = (a: Atmosphere, open: boolean) => {
+        atmosphere = a;
+        skyOpen = open;
+        hemi.color.setHex(a.hemiSky);
+        hemi.groundColor.setHex(a.hemiGround);
+        hemi.intensity = a.hemiIntensity;
+        sun.color.setHex(a.sunColor);
+        sun.intensity = a.sunIntensity;
+        fill.color.setHex(a.fillColor);
+        fill.intensity = a.fillIntensity;
+        const fd = unit(a.fillDir);
+        fill.position.set(fd[0], fd[1], fd[2]);
+        renderer.toneMappingExposure = a.exposure;
+        // Open maps show the horizon behind anything the dome does not cover;
+        // sealed ones the fog colour, which is what the distance fades into.
+        scene.background = new THREE.Color(open ? a.skyHorizon : a.fogColor);
+        scene.fog = new THREE.FogExp2(a.fogColor, a.fogDensity * tier.fogScale);
+        if (sky) {
+          scene.remove(sky);
+          sky.geometry.dispose();
+          (sky.material as import('three').Material).dispose();
+          sky = null;
+        }
+        if (open && tier.sky) {
+          sky = createSky(THREE, a);
+          scene.add(sky);
+        }
+      };
+
+      /** Aim the sun along the map's direction, fitted to its bounds, and re-bake. */
+      const aimSun = (cx: number, cz: number, extent: number) => {
+        const d = unit(atmosphere.sunDir);
+        const reach = extent * 2;
+        sun.position.set(cx + d[0] * reach, d[1] * reach, cz + d[2] * reach);
+        sun.target.position.set(cx, 0, cz);
+        sun.target.updateMatrixWorld();
+        const cam = sun.shadow.camera;
+        cam.left = -extent * 1.1;
+        cam.right = extent * 1.1;
+        cam.top = extent * 1.1;
+        cam.bottom = -extent * 1.1;
+        // Fitted around the map rather than left at 1..far: the depth range is
+        // what the shadow's precision is spent on, and a near plane at 1 for a
+        // light 170 units away throws most of it away.
+        const distance = sun.position.distanceTo(sun.target.position);
+        cam.near = Math.max(1, distance - extent * 1.4);
+        cam.far = distance + extent * 1.4;
+        cam.updateProjectionMatrix();
+        // The world is static and so is the sun, so this is the only frame that
+        // pays for shadows. `autoUpdate` stays off; anything that moves — the
+        // avatars, the weapon in your hands — deliberately does not cast.
+        renderer.shadowMap.needsUpdate = true;
+      };
+
+      /** Anisotropy on every surface texture of the modelled map, capped by the GPU. */
+      const filterSurfaces = (root: import('three').Object3D | null) => {
+        if (!root) return;
+        const aniso = Math.min(tier.anisotropy, renderer.capabilities.getMaxAnisotropy());
+        root.traverse((child) => {
+          const m = (child as import('three').Mesh).material as
+            | import('three').MeshStandardMaterial
+            | import('three').MeshStandardMaterial[]
+            | undefined;
+          for (const mat of Array.isArray(m) ? m : m ? [m] : []) {
+            if (mat.map && mat.map.anisotropy !== aniso) {
+              mat.map.anisotropy = aniso;
+              mat.map.needsUpdate = true;
+            }
+          }
+        });
+      };
 
       let mesh: import('three').Mesh | null = null;
       let world3dGroup: import('three').Group | null = null;
@@ -1489,10 +1645,17 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         }
         water?.dispose();
         ladders?.dispose();
+        // The map's served light rig, sky, fog and lamps — the same numbers the
+        // native window draws. See `atmosphere.ts`.
+        mapLights = world.info.lights ?? [];
+        applyAtmosphere(resolveAtmosphere(world.info), !!world3d);
+        // Water and ladders belong to the map, not to its format: a modelled
+        // map with a water level (facility, junkflea) used to draw none here,
+        // while the native client and the physics both had it.
+        water = createWater(THREE, scene, world);
+        ladders = createLadders(THREE, scene, world);
 
         if (world3d) {
-          scene.background = new THREE.Color(0x76a7eb);
-          scene.fog = new THREE.FogExp2(0x9cbde8, 0.001);
           scene.environment = propEnvironment;
           world3dGroup = world3d.scene;
           world3dGroup.traverse((child) => {
@@ -1502,6 +1665,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
               m.receiveShadow = true;
             }
           });
+          filterSurfaces(world3dGroup);
           scene.add(world3dGroup);
 
           const cx = world3d.bounds.center[0];
@@ -1512,29 +1676,11 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           reveal.fit([cx, cz], extent * 1.05, Math.max(extent * 0.6, 1));
           reveal.complete();
           backdrop.fit([cx, cz], extent * 2);
-
-          const reach = extent * 2;
-          sun.position.set(cx + reach * 0.55, reach * 0.82, cz + reach * 0.36);
-          sun.target.position.set(cx, 0, cz);
-          sun.target.updateMatrixWorld();
-          const cam = sun.shadow.camera;
-          cam.left = -extent * 1.1;
-          cam.right = extent * 1.1;
-          cam.top = extent * 1.1;
-          cam.bottom = -extent * 1.1;
-          const distance = sun.position.distanceTo(sun.target.position);
-          cam.near = Math.max(1, distance - extent * 1.4);
-          cam.far = distance + extent * 1.4;
-          cam.updateProjectionMatrix();
-          renderer.shadowMap.needsUpdate = true;
+          aimSun(cx, cz, extent);
           return world3d.collision.triangles;
         }
 
-        scene.background = new THREE.Color(HORIZON);
-        scene.fog = new THREE.FogExp2(HORIZON, 0.0055);
         scene.environment = null;
-        water = createWater(THREE, scene, world);
-        ladders = createLadders(THREE, scene, world);
         const data = buildWorldMesh(world);
         const geo = new THREE.BufferGeometry();
         geo.setAttribute('position', new THREE.BufferAttribute(data.positions, 3));
@@ -1567,34 +1713,36 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         // for the same reason the camera is: a map's grid is mostly empty
         // border, so a grid-sized shadow camera spends most of its texels on
         // nothing and leaves the level itself blocky.
-        // Roughly 50 degrees up: high enough that a room is not half in shade,
-        // low enough that a wall throws a shadow long enough to see. A sun
-        // directly overhead casts almost nothing on a map made of vertical
-        // walls, which is the failure mode this angle is chosen against.
-        const reach = extent * 2;
-        sun.position.set(cx + reach * 0.55, reach * 0.82, cz + reach * 0.36);
-        sun.target.position.set(cx, 0, cz);
-        sun.target.updateMatrixWorld();
-        const cam = sun.shadow.camera;
-        cam.left = -extent * 1.1;
-        cam.right = extent * 1.1;
-        cam.top = extent * 1.1;
-        cam.bottom = -extent * 1.1;
-        // Fitted around the map rather than left at 1..far: the depth range is
-        // what the shadow's precision is spent on, and a near plane at 1 for a
-        // light 170 units away throws most of it away.
-        const distance = sun.position.distanceTo(sun.target.position);
-        cam.near = Math.max(1, distance - extent * 1.4);
-        cam.far = distance + extent * 1.4;
-        cam.updateProjectionMatrix();
-        // The world is static and so is the sun, so this is the only frame that
-        // pays for shadows. `autoUpdate` stays off; anything that moves — the
-        // avatars, the weapon in your hands — deliberately does not cast, since
-        // a moving caster would need a map that is never rebuilt.
-        renderer.shadowMap.needsUpdate = true;
+        aimSun(cx, cz, extent);
         return data.triangles;
       };
 
+      /** A new tier, live. Everything but the context's MSAA, which three fixes
+       * at creation — that one takes effect the next time the pane opens. */
+      const setGraphics = (next: GraphicsTier) => {
+        tier = TIERS[next];
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, tier.pixelRatio));
+        resize();
+        const soft = tier.softShadows ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+        if (renderer.shadowMap.type !== soft || sun.shadow.mapSize.x !== tier.shadowSize) {
+          renderer.shadowMap.type = soft;
+          sun.shadow.mapSize.set(tier.shadowSize, tier.shadowSize);
+          // The old map is the old size; three reallocates on the next render.
+          sun.shadow.map?.dispose();
+          sun.shadow.map = null as never;
+          // A shadow-map type is compiled into every material.
+          scene.traverse((child) => {
+            const m = (child as import('three').Mesh).material as
+              | import('three').Material
+              | import('three').Material[]
+              | undefined;
+            for (const mat of Array.isArray(m) ? m : m ? [m] : []) mat.needsUpdate = true;
+          });
+        }
+        applyAtmosphere(atmosphere, skyOpen);
+        filterSurfaces(world3dGroup);
+        renderer.shadowMap.needsUpdate = true;
+      };
       const resize = () => {
         const el = mountRef.current;
         if (!el) return;
@@ -2304,6 +2452,15 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             visible: false,
           });
         }
+        // The dome is centred on the eye, so it is always the backdrop and never
+        // something to walk out of.
+        sky?.position.copy(camera.position);
+        // Which lamps fill the pool, a few times a second: nearest reach first.
+        lampClock -= dt;
+        if (lampClock <= 0) {
+          lampClock = 0.2;
+          placeLamps([camera.position.x, camera.position.y, camera.position.z]);
+        }
         renderer.render(scene, camera);
 
         fpsAccum += dt;
@@ -2368,6 +2525,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       sceneRef.current = {
         setMesh,
         setFov,
+        setGraphics,
         suspend,
         resume,
         avatars,
@@ -2402,6 +2560,11 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         backdrop.dispose();
         if (mesh) mesh.geometry.dispose();
         if (world3dGroup) scene.remove(world3dGroup);
+        if (sky) {
+          sky.geometry.dispose();
+          (sky.material as import('three').Material).dispose();
+        }
+        for (const lamp of lampPool) lamp.dispose();
         material.dispose();
         detail.dispose();
         renderer.dispose();
