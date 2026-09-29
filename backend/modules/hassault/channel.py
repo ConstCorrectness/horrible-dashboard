@@ -64,22 +64,25 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
         # reached, so a gate placed there would leave cross-node play wide open.
         # It also sits above `_leave_any`, so a refused join can't evict someone
         # from the match they are already in.
+        #
+        # There is deliberately no fallback to a typed name for a signed-out node:
+        # one was added for the standalone web client's dev loop, and it would have
+        # let any signed-out node on the LAN — or across the fabric — play under
+        # whatever label it sent. (It never ran: it raised `NameError` on the
+        # first signed-out join.) A guest mode would need its own opt-in, not a
+        # hole in this check.
         name = _signed_in_username()
         if name is None:
-            raw_name = str(data.get("name") or "").strip()
-            if raw_name:
-                name = raw_name[:MAX_NAME_LEN]
-            else:
-                await conn.send_json(
-                    _evt(
-                        "error",
-                        {
-                            "message": "sign in and choose a username to play",
-                            "code": "not_signed_in",
-                        },
-                    )
+            await conn.send_json(
+                _evt(
+                    "error",
+                    {
+                        "message": "sign in and choose a username to play",
+                        "code": "not_signed_in",
+                    },
                 )
-                return
+            )
+            return
 
         # Leaving whatever we were in first is what makes "join" idempotent from
         # the browser's point of view, local or remote.
