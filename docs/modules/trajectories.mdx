@@ -600,6 +600,7 @@ Routes are mounted under `/api/trajectories`.
 | `GET` `PATCH` `DELETE` | `/datasets/{id}` | read, toggle capture, delete |
 | `GET` | `/runs` | filter by dataset, source, harness, outcome, agent, status, `q` |
 | `GET` `DELETE` | `/runs/{id}` | detail with steps; delete (and its blobs) |
+| `GET` | `/runs/by-turn/{turn_id}` | the run one orchestrator turn recorded; 404 when capture was off |
 | `POST` | `/runs/{id}/labels` | attach a judgment |
 | `POST` | `/ingest` | batch — the SDK, importers and adapters all use this |
 | `GET` | `/harnesses`, `/harnesses/{fp}` | list, read |
@@ -652,6 +653,7 @@ One pane, `trajectories.hub` (`role: document`, singleton), four sections:
 | --- | --- | --- |
 | **Runs** | `r` | Run index + timeline + step-by-step detail, with grading, deletion and search |
 | **Live** | `l` | Runs happening right now, socket-fed |
+| **Agent** | `a` | The agent chat's turns from the inside: prompt by source, round-by-round diff, steps, sub-agents. See [Following the agent chat](#following-the-agent-chat) |
 | **Datasets** | `d` | Collections, the capture toggle, headline counts, tool usage, import/export |
 | **Harness** | `h` | The A/B comparison and the harness inspector |
 | **Friends** | `p` | Friends' shared datasets and runs; pull a finished one |
@@ -705,6 +707,70 @@ Iconography inside the pane is inline stroke SVG (`icons.tsx` and the shared
 `glyphs.tsx`) rather than native emoji. The manifest's `icon:` field is the
 activity-rail glyph, typed as a string, and follows the rail's existing emoji
 convention.
+
+### Following the agent chat
+
+The **Agent** section (`panels/FollowSection.tsx`) follows the agent chat pane you
+used last. It shows each turn as the model saw it and as the agent ran it. It adds
+no store. It joins three records that already existed on the chat's own `turnId`:
+
+| Record | Gives |
+| --- | --- |
+| The chat transcript (`agent/chat-state.ts`) | which turns exist, their ids, and the sub-agents each one delegated to |
+| Interpretability's `TurnSnapshot` (live ring, else `GET /interpretability/turns/{id}`) | what the model was *shown* each round, block by block, with where each block came from |
+| The trajectory run (live channel, else `GET /runs/by-turn/{turn_id}`) | what the agent *did* each round |
+
+The layout has four regions:
+
+- **Turn rail.** The conversation's turns, newest first. Each turn's delegated
+  sub-turns sit indented under it and open to the sub-agent's own prompt and rounds.
+  The view moves to the newest turn as it starts. Clicking a turn holds the view there
+  until the next turn starts. The pin holds it indefinitely.
+- **Context bar.** The selected round's tokens split by source family, with rolling
+  counts.
+- **Context.** The round's blocks in order. Each has a source-coloured rule and its
+  full text; harness text is kept up to 64k characters, see
+  [interpretability](interpretability.mdx). Blocks that are new in the selected round
+  are outlined. The tool schemas offered that round are listed last, grouped.
+- **Rounds.** One band per round. Chips show what the round added to or removed from
+  the context, found by block hash rather than by position: a result, a loaded skill,
+  a loaded tool group, a replaced note. Below the chips are that round's steps, drawn
+  with the same `StepRow` as a run's detail. Clicking a band shows the context as of
+  that round.
+
+Colour is by **family**, and two of the families are shared. A skill body pulled in
+with `use_skill` is drawn in the skill catalog's colour. A group guide pulled in with
+`load_tools` is drawn in the tool guides' colour, and so are the tool schemas. That
+way, injected text reads as the same thing as the catalog entry that offered it. The
+colours are `--traj-src-*` tokens in `panels/follow.css`.
+
+The chat gets turn ids by generating them itself (`newTurnId()`, passed to
+`askAgent`). It stamps the id on both the user turn and its reply before the first
+frame arrives, and saves it as `turn_id` on the session's messages, so a past turn can
+still be traced after a reload. Sub-turn ids reach the chat through the agent
+channel's `delegate_start` and `delegate_done` events.
+
+The same view also runs as a **drawer inside the agent chat**. The toolbar's trace
+toggle slides it out beside the transcript, and each reply's **trace** chip opens it
+pinned to that turn. The drawer can be resized by dragging its left edge. Its width
+and whether it is open are kept per viewer in `localStorage`
+(`agent.traceDrawer`). In a chat window narrower than 640px the drawer covers the
+transcript rather than sharing the width.
+
+The drawer and this section hand off to each other. The drawer's **pop out**
+button closes it and opens this section. Here, **dock** closes the Trajectories pane,
+reopens the drawer, and focuses the chat window that is already open (it does not
+open a new one, since `agent.chat` is not a singleton). The drawer is loaded lazily,
+so the chat does not load the trace UI until the drawer first opens. The open state
+lives in `agent/chat-state.ts` (`setTraceDrawer`), and the component takes
+`mode="pane" | "drawer"` to choose its header actions.
+
+Without trajectory capture, a turn still shows its context, since that comes from
+interpretability, but it has no steps. The Rounds header then carries a
+"capture off · turn on" chip.
+
+The joining logic is pure and unit-tested in `panels/follow-model.ts`: the family
+map, the hash diff (multiset-aware), step bucketing and the turn rail.
 
 ### The timeline
 

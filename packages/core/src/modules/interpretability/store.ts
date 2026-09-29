@@ -11,6 +11,11 @@ export interface ContextBlock {
   /** `content` was clipped for transport; `tokens` still counts the full text. */
   clipped: boolean;
   fullChars: number;
+  /** Digest of the full text; equal across rounds for the same block. Absent on
+   *  turns captured before it existed. */
+  hash?: string;
+  /** The tool whose result this is, for tool-derived kinds. */
+  toolName?: string | null;
 }
 
 export interface ToolEntry {
@@ -394,11 +399,17 @@ export function agentsIn(turns: TurnSnapshot[]): { id: string; name: string }[] 
 /** Colour/grouping key for a block kind, so the composition bar stays legible. */
 export const BLOCK_KINDS = [
   'system',
+  'skills',
   'guides',
+  'workspace',
   'history',
   'editor',
   'user',
   'assistant',
   'tool_result',
+  'skill_loaded',
+  'tools_loaded',
+  'mcp_result',
   'nudge',
+  'dropped_tools',
 ] as const;

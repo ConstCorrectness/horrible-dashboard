@@ -18,6 +18,7 @@ Design constraints, both non-negotiable:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from collections import deque
@@ -41,6 +42,17 @@ MAX_TURNS = 25
 # see ContextBlock.clipped.
 MAX_BLOCK_CHARS = 4000
 
+# The cap for the parts of the context the *harness* wrote rather than the
+# conversation: the system prompt, the skill catalog, tool guides, and the bodies
+# `use_skill`/`load_tools` inject. These are what a reader comes to learn from, and
+# 4000 chars cut most system prompts in half. The ring does not multiply them: an
+# unclipped block keeps the message's own string object, so every round of a turn
+# shares one copy in memory.
+MAX_PROMPT_BLOCK_CHARS = 65536
+_PROMPT_KINDS = frozenset(
+    {"system", "skills", "guides", "workspace", "editor", "skill_loaded", "tools_loaded"}
+)
+
 # The marker `_active_editor_message` wraps the focused buffer in. Content-sniffing
 # is how we tell it apart from the guides message: both are `role: system`, and the
 # orchestrator can't tag them without the tag reaching the provider.
@@ -59,6 +71,10 @@ _turns: deque[TurnSnapshot] = deque(maxlen=MAX_TURNS)
 # Per-turn capture state: where the assembled prompt ended and the loop's own
 # appends began. Pinned at round 0 so classification stays stable as the list grows.
 _prompt_end: dict[str, int] = {}
+# Per-turn provenance handed over by whoever assembled the prompt: one kind per
+# message of the assembled prefix. When present it replaces `_classify_prompt`'s
+# guesswork (which, for one, could not tell the workspace index from a tool guide).
+_prompt_sources: dict[str, list[str]] = {}
 
 
 def _skills_marker() -> str:
@@ -71,11 +87,22 @@ def _skills_marker() -> str:
 _SKILLS_MARKER = _skills_marker()
 
 
-def _clip(text: str) -> tuple[str, bool, int]:
+def _clip(text: str, limit: int = MAX_BLOCK_CHARS) -> tuple[str, bool, int]:
     full = len(text)
-    if full <= MAX_BLOCK_CHARS:
+    if full <= limit:
         return text, False, full
-    return text[:MAX_BLOCK_CHARS], True, full
+    return text[:limit], True, full
+
+
+def set_prompt_sources(turn_id: str, sources: list[str]) -> None:
+    """Record where each message of a turn's assembled prompt came from.
+
+    Called by the code that assembles the prompt (`run_agent_turn`, `run_delegate`)
+    before the loop's first capture. The kinds travel beside the messages, never in
+    them: an extra key on a provider message is a 400 on some dialects. Callers that
+    don't call this (evals, flow, the SDK) fall back to `_classify_prompt`.
+    """
+    _prompt_sources[turn_id] = list(sources)
 
 
 def _as_text(content: Any) -> str:
@@ -142,39 +169,109 @@ _LABELS = {
     "assistant": "Assistant (this turn)",
     "tool_result": "Tool result",
     "nudge": "Force-tool nudge",
+    "workspace": "Workspace index",
+    "skill_loaded": "Skill loaded",
+    "tools_loaded": "Tools loaded",
+    "mcp_result": "MCP result",
+    "dropped_tools": "Dropped-tools note",
 }
+
+
+def _tool_names_by_call(messages: list[dict[str, Any]]) -> dict[str, str]:
+    """`tool_call_id` -> tool name, from every assistant message's `tool_calls`."""
+    names: dict[str, str] = {}
+    for msg in messages:
+        for call in msg.get("tool_calls") or []:
+            if not isinstance(call, dict):
+                continue
+            call_id = str(call.get("id") or "")
+            name = str((call.get("function") or {}).get("name") or "")
+            if call_id and name:
+                names[call_id] = name
+    return names
+
+
+def _tool_kind(name: str) -> str:
+    """A tool result, split by what it put into the context. `use_skill` and
+    `load_tools` results are harness text the model asked for (the skill body, the
+    group guide), so they are labelled as such, not as data a tool fetched."""
+    if name == "use_skill":
+        return "skill_loaded"
+    if name == "load_tools":
+        return "tools_loaded"
+    if name.startswith("mcp-"):
+        return "mcp_result"
+    return "tool_result"
+
+
+def _dropped_note() -> str:
+    from backend.modules.agent.orchestrator import _DROPPED_NOTE
+
+    return _DROPPED_NOTE
+
+
+def _loop_kind(
+    msg: dict[str, Any], call_names: dict[str, str]
+) -> tuple[str, str | None]:
+    """Kind (and tool name) of a message the loop appended after the prompt."""
+    role = str(msg.get("role") or "")
+    if role == "assistant":
+        return "assistant", None
+    if role == "tool":
+        name = str(
+            msg.get("tool_name")
+            or msg.get("name")
+            or call_names.get(str(msg.get("tool_call_id") or ""), "")
+        )
+        return _tool_kind(name), name or None
+    if role == "system":
+        if _as_text(msg.get("content")).startswith(_dropped_note()):
+            return "dropped_tools", None
+        return "nudge", None
+    return role or "unknown", None
+
+
+def _block_hash(role: Any, text: str) -> str:
+    """Identity of a block across rounds, from its FULL text. The round diff keys on
+    this rather than on position: the loop removes and re-appends its own notes, so
+    "index N is new" is not the same claim as "this text is new"."""
+    digest = hashlib.sha1(f"{role}\0{text}".encode("utf-8", "replace"))
+    return digest.hexdigest()[:16]
 
 
 def _blocks(
     messages: list[dict[str, Any]], turn_id: str, counter: Counter
 ) -> list[ContextBlock]:
     """Turn the raw provider message list into labelled, counted blocks."""
+    sources = _prompt_sources.get(turn_id)
     boundary = _prompt_end.get(turn_id)
     if boundary is None:
-        boundary = len(messages)
+        # With provenance the prompt is exactly the tagged prefix: a note the loop
+        # slipped in before round 0's capture is loop work, not prompt.
+        boundary = min(len(sources), len(messages)) if sources else len(messages)
         _prompt_end[turn_id] = boundary
-    kinds = _classify_prompt(messages[:boundary])
+    if sources and len(sources) >= boundary:
+        kinds = list(sources[:boundary])
+    else:
+        kinds = _classify_prompt(messages[:boundary])
+    tool_names: list[str | None] = [None] * boundary
     # Everything past the boundary is the loop's own work this turn.
+    call_names = _tool_names_by_call(messages)
     for msg in messages[boundary:]:
-        role = str(msg.get("role") or "")
-        if role == "assistant":
-            kinds.append("assistant")
-        elif role == "tool":
-            kinds.append("tool_result")
-        elif role == "system":
-            kinds.append("nudge")
-        else:
-            kinds.append(role or "unknown")
+        kind, name = _loop_kind(msg, call_names)
+        kinds.append(kind)
+        tool_names.append(name)
 
     blocks: list[ContextBlock] = []
-    for msg, kind in zip(messages, kinds):
+    for msg, kind, tool_name in zip(messages, kinds, tool_names):
         text = _as_text(msg.get("content"))
-        # An assistant message carrying tool calls has little or no content — its
+        # An assistant message carrying tool calls has little or no content; its
         # real context cost is the serialized calls, so count those too.
         calls = msg.get("tool_calls")
         if calls:
             text = (text + "\n" if text else "") + _as_text(calls)
-        preview, clipped, full = _clip(text)
+        limit = MAX_PROMPT_BLOCK_CHARS if kind in _PROMPT_KINDS else MAX_BLOCK_CHARS
+        preview, clipped, full = _clip(text, limit)
         blocks.append(
             ContextBlock(
                 kind=kind,
@@ -184,6 +281,8 @@ def _blocks(
                 tokens=counter.count(text),
                 clipped=clipped,
                 fullChars=full,
+                hash=_block_hash(msg.get("role"), text),
+                toolName=tool_name,
             )
         )
     return blocks
@@ -349,6 +448,7 @@ def _upsert_turn(turn_id: str, **fields: Any) -> TurnSnapshot:
     )
     if len(_turns) == _turns.maxlen:
         _prompt_end.pop(_turns[0].turnId, None)
+        _prompt_sources.pop(_turns[0].turnId, None)
     _turns.append(turn)
     return turn
 
@@ -356,6 +456,7 @@ def _upsert_turn(turn_id: str, **fields: Any) -> TurnSnapshot:
 def finish_turn(turn_id: str, model_context_length: int | None = None) -> None:
     """Drop per-turn capture state; optionally stamp the model's true window."""
     _prompt_end.pop(turn_id, None)
+    _prompt_sources.pop(turn_id, None)
     if model_context_length is None:
         return
     for turn in _turns:
@@ -392,3 +493,4 @@ def get_turn(turn_id: str) -> TurnSnapshot | None:
 def clear() -> None:
     _turns.clear()
     _prompt_end.clear()
+    _prompt_sources.clear()

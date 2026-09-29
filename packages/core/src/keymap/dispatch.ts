@@ -10,7 +10,7 @@
  * See docs/architecture/keybindings.mdx.
  */
 import { getCapture, releaseCapture } from './capture';
-import { canHoldEscape } from './keyboard-lock';
+import { followCaptureWithEscapeLock, hostTakesEscape } from './keyboard-lock';
 import { getKeymap, readKeyContext } from './state';
 import { resolveKey } from './resolve';
 import { isModifierEvent, type Chord } from './spec';
@@ -70,7 +70,7 @@ function handleEscape(): boolean {
   // 3/4. A capturing pane.
   const capture = getCapture();
   if (capture) {
-    if (capture.escape === 'release' || !canHoldEscape()) {
+    if (capture.escape === 'release' || hostTakesEscape()) {
       releaseCapture(capture.instanceId);
       return true;
     }
@@ -154,9 +154,11 @@ export function installKeymap(next: KeymapHooks): () => void {
   hooks = next;
   window.addEventListener('keydown', onKeyDown, true);
   window.addEventListener('keyup', onKeyUp, true);
+  const stopEscapeLock = followCaptureWithEscapeLock();
   return () => {
     window.removeEventListener('keydown', onKeyDown, true);
     window.removeEventListener('keyup', onKeyUp, true);
+    stopEscapeLock();
     clearPending();
     hooks = null;
   };

@@ -203,6 +203,10 @@ export function listRuns(params: {
 
 export const getRun = (id: string) => req<TrajectoryDetail>(`/runs/${encodeURIComponent(id)}`);
 
+/** The run recorded for one orchestrator turn. Rejects (404) when capture was off. */
+export const getRunByTurn = (turnId: string) =>
+  req<TrajectoryDetail>(`/runs/by-turn/${encodeURIComponent(turnId)}`);
+
 /** One persisted request this run made. Mirrors `telemetry_events`. */
 export interface RunIoEvent {
   /** Per-process id. `ev_id` restarts at 1 on every boot, so identity is the pair. */
@@ -237,9 +241,7 @@ export interface RunIoResponse {
 }
 
 export const getRunIo = (id: string, round?: number) =>
-  req<RunIoResponse>(
-    `/runs/${encodeURIComponent(id)}/io${round == null ? '' : `?round=${round}`}`,
-  );
+  req<RunIoResponse>(`/runs/${encodeURIComponent(id)}/io${round == null ? '' : `?round=${round}`}`);
 
 /** One MCP call's durable summary. Mirrors `backend/modules/mcp/calls.py`. */
 export interface McpCallSummary {
@@ -516,11 +518,8 @@ export interface IngestReport {
 export const IMPORT_FORMATS = ['claude-code', 'openai', 'messages'] as const;
 export type ImportFormat = (typeof IMPORT_FORMATS)[number];
 
-export const importRuns = (body: {
-  dataset_id: string;
-  format: ImportFormat;
-  content: string;
-}) => req<IngestReport>('/import', { method: 'POST', body: JSON.stringify(body) });
+export const importRuns = (body: { dataset_id: string; format: ImportFormat; content: string }) =>
+  req<IngestReport>('/import', { method: 'POST', body: JSON.stringify(body) });
 
 export const importReplay = (replayId: string, datasetId = 'games') =>
   req<IngestReport>(

@@ -12,6 +12,12 @@ class ChatMessage(BaseModel):
     content: str = ""
     reasoning: str = ""
     actions: list[str] = []
+    # The orchestrator turn this message belongs to — the join key into
+    # interpretability and trajectories, so a past turn can be traced after reload.
+    # Empty for messages saved before it existed and for slash-command echoes.
+    turn_id: str = ""
+    # Delegated sub-turns started during this (assistant) turn, oldest first.
+    sub_turns: list[dict[str, str | bool]] = []
 
 
 class ChatSession(BaseModel):

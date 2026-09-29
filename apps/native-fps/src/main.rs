@@ -672,6 +672,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         plan,
     );
     app.controls = controls;
+    app.set_own_room(args.mode == Mode::Host && args.host.is_empty());
     if args.mode == Mode::Host {
         // Queued, not sent: `add_bot` needs the room the welcome names, and it is
         // host-only on the channel — which is why the launcher only ever sends a

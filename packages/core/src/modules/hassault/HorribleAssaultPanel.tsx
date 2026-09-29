@@ -108,6 +108,8 @@ import {
   FOV_KEY,
   NATIVE_CLIENT_KEY,
   PUSH_TO_TALK_KEY,
+  GRENADE_ARC_KEY,
+  grenadeArcAllowed,
   SHOW_HITBOXES_KEY,
   SENSITIVITY_KEY,
   VOLUME_KEY,
@@ -605,6 +607,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   const nativeSetting = useSetting<boolean>(NATIVE_CLIENT_KEY) ?? true;
   const nativeClient = props.forceWebGl ? false : nativeSetting;
   const showHitboxes = useSetting<boolean>(SHOW_HITBOXES_KEY) ?? false;
+  const grenadeArc = useSetting<boolean>(GRENADE_ARC_KEY) ?? false;
   /** How much of the served map look this pane draws. The scene is built once,
    * so it reads the choice through a ref, and a change is pushed to it below. */
   configureGraphicsStorage(standalone);
@@ -911,6 +914,8 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   // state, and a toggle has to reach it without tearing the scene down.
   const showHitboxesRef = useRef(showHitboxes);
   showHitboxesRef.current = showHitboxes;
+  const grenadeArcRef = useRef(grenadeArc);
+  grenadeArcRef.current = grenadeArc;
   /** Pointer-lock state as the *handlers* see it: `document.pointerLockElement`
    * has already been cleared by the time an Escape that released it reaches us. */
   const lockedRef = useRef(false);
@@ -1956,16 +1961,12 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
                 }
                 const isKnife = shots.isKnife || shots.slot === 0;
                 if (!isKnife) {
-                  effects.shot(shot.origin, shot.ends, TEAM_COLORS[0] ?? 0xffffff, true);
                   // The range resolves its own shots, so its faces come from
-                  // `trace.ts` rather than off the wire — the same numbers, pinned
-                  // against the server's by `physics-vectors.json`. A range that
-                  // left no marks would be the one place you cannot see your own
-                  // spray pattern, which is what it is for.
+                  // `trace.ts` rather than off the wire. No bullet-hole decal for
+                  // your own shots — see the online path below.
                   for (let i = 0; i < shot.ends.length; i++) {
                     const face = shot.faces[i] ?? -1;
                     const mat = surfaceMaterial(world, shot.ends[i], face);
-                    decals.mark(shot.ends[i], face, mat);
                     if (face >= 0 && face < FACE_NORMALS.length) {
                       effects.impactSpatter(shot.ends[i], FACE_NORMALS[face], mat);
                       const dx = shot.ends[i][0] - player.x;
@@ -2133,21 +2134,24 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             const teamOf = new Map(session.state.peers.map((p) => [p.id, p.team]));
             for (const fx of session.pendingShots) {
               const isKnife = fx.weapon === 0;
+              const own = fx.id === session.state.playerId;
               if (!isKnife) {
                 effects.shot(
                   fx.origin,
                   fx.ends,
                   TEAM_COLORS[teamOf.get(fx.id) ?? 0] ?? 0xffffff,
-                  fx.id === session.state.playerId,
+                  own,
                 );
-                // One mark per pellet that stopped on a surface. `faces` is
+                // One mark per pellet that stopped on a surface — for other
+                // players' shots only. Your own hole lands dead on the crosshair
+                // and reads as a mark on the screen, not the wall. `faces` is
                 // optional on the wire — a fabric peer may be running an older
                 // backend — and an absent list means "no marks", never "mark
                 // everything": `-1` is refused by `mark` itself.
                 for (let i = 0; i < fx.ends.length; i++) {
                   const face = fx.faces?.[i] ?? -1;
                   const mat = surfaceMaterial(world, fx.ends[i], face);
-                  decals.mark(fx.ends[i], face, mat);
+                  if (!own) decals.mark(fx.ends[i], face, mat);
                   if (face >= 0 && face < FACE_NORMALS.length) {
                     effects.impactSpatter(fx.ends[i], FACE_NORMALS[face], mat);
                     const dx = fx.ends[i][0] - player.x;
@@ -2333,8 +2337,12 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           // `THROW_INHERIT` visible — running and jumping feed the throw — and a
           // velocity half a round trip old would lag exactly the movement it is
           // meant to be showing.
+          // Opt-in, and only where it is practice: Training or a room we host.
           const throwPhysics = throwPhysicsRef.current;
-          if (holdingNade && throwPhysics && world) {
+          const arcAllowed =
+            grenadeArcRef.current &&
+            grenadeArcAllowed(online, session?.state.host ?? '', session?.state.ranked ?? false);
+          if (holdingNade && arcAllowed && throwPhysics && world) {
             const eyeZ = eyeHeight(player);
             const arc = simulateThrow(
               world,

@@ -89,6 +89,7 @@ pub enum Action {
     Restart,
     FpsLimit,
     ShowHitboxes,
+    GrenadeArc,
     Sensitivity,
 }
 
@@ -302,6 +303,12 @@ impl Menu {
                     "SHOW HITBOXES",
                     on_off(settings.show_hitboxes),
                     Action::ShowHitboxes,
+                ),
+                // Practice only: drawn in Train and in a room you host.
+                row(
+                    "GRENADE TRAJECTORY",
+                    on_off(settings.grenade_arc),
+                    Action::GrenadeArc,
                 ),
                 row("BACK", String::new(), Action::Back),
             ],
@@ -694,6 +701,10 @@ pub fn apply(action: Action, step: i32, settings: &mut Settings) -> Vec<&'static
         Action::ShowHitboxes => {
             settings.show_hitboxes = !settings.show_hitboxes;
             vec![KEY_SHOW_HITBOXES]
+        }
+        Action::GrenadeArc => {
+            settings.grenade_arc = !settings.grenade_arc;
+            vec![KEY_GRENADE_ARC]
         }
         Action::Quality => {
             let quality = cycle(&Quality::ALL, settings.video.quality, step);

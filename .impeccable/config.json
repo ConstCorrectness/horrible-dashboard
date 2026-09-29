@@ -206,6 +206,14 @@
         ],
         "createdAt": "2026-09-27T11:54:56.049Z",
         "reason": "CLAUDE.local.md (user's design guidelines) asks for 'subtle background patterns (like faint grid overlays)'; used only as the paper-thumbnail placeholder"
+      },
+      {
+        "rule": "codex-grid-background",
+        "value": "*",
+        "files": [
+          "packages/core/src/modules/trajectories/panels/follow.css"
+        ],
+        "createdAt": "2026-09-29T12:30:07.881Z"
       }
     ]
   }

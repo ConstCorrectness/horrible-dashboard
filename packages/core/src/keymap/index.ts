@@ -88,6 +88,7 @@ export {
 export {
   canHoldEscape,
   canHoldSystemKeys,
+  hostTakesEscape,
   CAPTURE_SYSTEM_KEYS_KEY,
   lockEscape,
   lockSystemKeys,

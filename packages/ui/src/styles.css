@@ -3806,11 +3806,96 @@ kbd {
 }
 
 /* Agent chat widget */
+/* The chat and, when it is out, its trace drawer. The drawer sits beside the
+   chat and takes its width from the handle; in a pane too narrow for both it
+   slides over the chat instead. Only transform and opacity animate. */
+.agent-chat-shell {
+  position: relative;
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  container-type: inline-size;
+}
+.agent-chat-shell > .agent-chat {
+  flex: 1 1 auto;
+  min-width: 280px;
+}
+
 .agent-chat {
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
+}
+
+@keyframes agent-trace-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.agent-trace-drawer {
+  position: relative;
+  flex: 0 0 auto;
+  width: min(var(--agent-trace-w, 520px), calc(100% - 280px));
+  min-width: 320px;
+  height: 100%;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg-primary);
+  animation: agent-trace-in var(--dur-base, 200ms) var(--ease-entrance, ease-out) both;
+}
+
+.agent-trace-handle {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.agent-trace-handle:hover,
+.agent-trace-handle:active {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.agent-trace-loading {
+  padding: var(--space-5, 1rem);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--fs-meta, 0.75rem);
+  color: var(--text-dim);
+}
+
+.agent-trace-toggle[aria-pressed='true'] {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Too narrow to share: the drawer covers the chat, and collapsing gives it back. */
+@container (max-width: 640px) {
+  .agent-trace-drawer {
+    position: absolute;
+    inset: 0;
+    width: auto;
+    min-width: 0;
+    border-left: 0;
+  }
+  .agent-trace-handle {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-trace-drawer {
+    animation: none;
+  }
 }
 
 .agent-chat-avatar {
@@ -3867,6 +3952,41 @@ kbd {
   padding: 0;
   font-size: 0.8rem;
   color: var(--success);
+}
+
+/* Per-reply link into Trajectories → Agent. A chip, not an action button, so it
+   carries a class and stays out of the 30px control rule. */
+.agent-trace-btn {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.2rem;
+  padding: 0 0.4rem;
+  height: 18px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--text-dim);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  opacity: 0.55;
+  transition:
+    opacity 120ms ease,
+    border-color 120ms ease;
+}
+.agent-msg:hover .agent-trace-btn,
+.agent-trace-btn:focus-visible {
+  opacity: 1;
+}
+.agent-trace-btn:hover {
+  border-color: var(--border);
+  color: var(--accent);
+}
+.agent-trace-sub {
+  color: var(--accent);
 }
 
 .agent-reasoning {
@@ -6644,6 +6764,29 @@ button.agent-model-option.is-selected .agent-model-option-name {
 .interp-kind-tools {
   background: rgb(160 160 180 / 55%);
   color: #a0a0b4;
+}
+/* Harness text the model pulled in mid-turn shares its catalog's hue: a loaded
+   skill reads as the skill catalog, a loaded tool group as the tool guides. */
+.interp-kind-skills,
+.interp-kind-skill_loaded {
+  background: rgb(255 121 198 / 55%);
+  color: #ff79c6;
+}
+.interp-kind-tools_loaded {
+  background: rgb(186 130 255 / 55%);
+  color: #ba82ff;
+}
+.interp-kind-workspace {
+  background: rgb(120 200 160 / 55%);
+  color: #78c8a0;
+}
+.interp-kind-mcp_result {
+  background: rgb(255 170 120 / 55%);
+  color: #ffaa78;
+}
+.interp-kind-dropped_tools {
+  background: rgb(240 140 140 / 55%);
+  color: #f08c8c;
 }
 
 /* Chips carry the hue as text on a tinted ground; bar segments use it as fill. */

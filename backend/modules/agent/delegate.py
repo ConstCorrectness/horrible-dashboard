@@ -62,13 +62,16 @@ async def run_delegate(
     # silently doesn't when the orchestrator hands the same task to `coder` — and the
     # scope check in `use_skill` already stops a skill widening a specialist's reach.
     skills_msg = orchestrator._skills_message()
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": spec.system_prompt},
-        *([skills_msg] if skills_msg else []),
-        *([guides_msg] if guides_msg else []),
-        {"role": "user", "content": prompt},
-    ]
+    messages, sources = orchestrator.assemble_prompt(
+        [
+            ("system", {"role": "system", "content": spec.system_prompt}),
+            ("skills", skills_msg),
+            ("guides", guides_msg),
+            ("user", {"role": "user", "content": prompt}),
+        ]
+    )
     sub_turn_id = f"{parent_turn_id}:{spec.id}:{uuid.uuid4().hex[:6]}"
+    orchestrator._tag_prompt_sources(sub_turn_id, sources)
 
     async def emit(reasoning: str, content: str) -> None:
         # Surface the sub-agent's answer stream to the UI under the PARENT turn so
@@ -85,6 +88,15 @@ async def run_delegate(
                 )
             )
 
+    # Tell the chat a sub-turn exists, under the parent turn it belongs to. Without
+    # this the sub-turn id never leaves the server, and nothing on the client can
+    # nest the sub-agent's context and steps under the turn that delegated.
+    await _send_quietly(
+        conn,
+        "delegate_start",
+        {"turnId": parent_turn_id, "subTurnId": sub_turn_id, "agentId": spec.id},
+    )
+    ok = False
     try:
         text = await asyncio.wait_for(
             orchestrator.run_agent_loop(
@@ -110,8 +122,31 @@ async def run_delegate(
             ),
             timeout=DELEGATE_TIMEOUT_S,
         )
+        ok = True
     except TimeoutError:
         return {"error": f"agent '{agent_id}' timed out"}
     except httpx.HTTPError as exc:
         return {"error": f"{type(exc).__name__}: {exc}"}
+    finally:
+        await _send_quietly(
+            conn,
+            "delegate_done",
+            {
+                "turnId": parent_turn_id,
+                "subTurnId": sub_turn_id,
+                "agentId": spec.id,
+                "ok": ok,
+            },
+        )
     return {"agent": spec.id, "answer": text}
+
+
+async def _send_quietly(conn: WsConnection, event: str, data: dict[str, Any]) -> None:
+    """Send an `agent`-channel event, ignoring a closed socket. These are progress
+    notes for the UI; losing one must not fail the delegation."""
+    from backend.modules.agent import orchestrator
+
+    try:
+        await conn.send_json(orchestrator._evt(event, data))
+    except Exception:
+        pass

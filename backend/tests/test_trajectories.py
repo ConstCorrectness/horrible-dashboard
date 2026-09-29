@@ -570,3 +570,20 @@ def test_an_existing_steps_table_gains_parent_seq(store_mod):
     run_id = store_mod.start_run("u")
     store_mod.append_step(run_id, StepWrite(kind="action", name="t", parent_seq=None))
     assert store_mod.get_run(run_id).step_list[0].parent_seq is None
+
+
+def test_run_by_turn_id(client, store_mod):
+    """The Follow view holds the chat's turn id, not a run id."""
+    run_id = store_mod.start_run("d1", turn_id="1700-abc123", goal="g", notify=False)
+    found = client.get("/api/trajectories/runs/by-turn/1700-abc123")
+    assert found.status_code == 200
+    assert found.json()["id"] == run_id
+    assert found.json()["turn_id"] == "1700-abc123"
+    # A delegated sub-turn id carries colons; it must still route.
+    sub = store_mod.start_run(
+        "d1", turn_id="1700-abc123:dba:ff00aa", parent_run_id=run_id, notify=False
+    )
+    assert client.get("/api/trajectories/runs/by-turn/1700-abc123:dba:ff00aa").json()[
+        "id"
+    ] == sub
+    assert client.get("/api/trajectories/runs/by-turn/nope").status_code == 404

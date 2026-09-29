@@ -139,32 +139,33 @@ export class EffectsPool {
   ): void {
     const three = this.three;
     const from = new three.Vector3(origin[0], origin[2], origin[1]);
+    // Your own shot draws nothing here. Its endpoint is by definition under the
+    // crosshair, so the impact puff — a pale low-poly sphere grown to ~0.4 cubes
+    // — landed as a white shape on the reticle every time you fired, and the
+    // tracer is a line from your own eye. The muzzle flash and the crosshair kick
+    // carry the local shot; this is for seeing where *other* people's fire goes.
+    if (self) return;
     for (const end of ends) {
       const to = new three.Vector3(end[0], end[2], end[1]);
-      // Bullet tracer lines are only drawn for remote players so you can see where incoming fire comes from.
-      // In first-person player view (self === true), long bullet trajectory lines are suppressed so the
-      // screen is clean and unobstructed (muzzle flash and target impacts still render).
-      if (!self) {
-        const material = new three.LineBasicMaterial({
-          color,
-          transparent: true,
-          opacity: 0.8,
-        });
-        const line = new three.Line(this.tracerGeo, material);
-        line.position.copy(from);
-        // Explicitly rotating the geometry's +Z onto the shot direction rather
-        // than using `lookAt`, whose axis convention differs between cameras and
-        // everything else and is the kind of thing that is wrong by 180°.
-        const length = from.distanceTo(to);
-        if (length > 1e-4) {
-          line.quaternion.setFromUnitVectors(
-            new three.Vector3(0, 0, 1),
-            to.clone().sub(from).divideScalar(length),
-          );
-        }
-        line.scale.set(1, 1, length);
-        this.add(line, material, TRACER_LIFE);
+      const material = new three.LineBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.8,
+      });
+      const line = new three.Line(this.tracerGeo, material);
+      line.position.copy(from);
+      // Explicitly rotating the geometry's +Z onto the shot direction rather
+      // than using `lookAt`, whose axis convention differs between cameras and
+      // everything else and is the kind of thing that is wrong by 180°.
+      const length = from.distanceTo(to);
+      if (length > 1e-4) {
+        line.quaternion.setFromUnitVectors(
+          new three.Vector3(0, 0, 1),
+          to.clone().sub(from).divideScalar(length),
+        );
       }
+      line.scale.set(1, 1, length);
+      this.add(line, material, TRACER_LIFE);
 
       const impactMat = new three.MeshBasicMaterial({
         color: 0xffd9a0,

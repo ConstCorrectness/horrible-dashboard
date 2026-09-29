@@ -6,19 +6,19 @@
  * (Chromium, and only in document fullscreen); everywhere else the browser
  * releases pointer lock on the first Escape whatever we do. Promising a hold
  * gesture that silently isn't available is worse than offering the tap, so the
- * text is derived from `canHoldEscape()` rather than from the pane's preference.
+ * text is derived from `hostTakesEscape()` rather than from the pane's preference.
  *
  * The same rule, harder, for system keys: when Alt+Tab is actually being taken
  * the badge must *say so*. A window that swallows Alt+Tab silently is
  * indistinguishable from a frozen machine, and the release gesture is then the
  * only way out — so it is stated, not implied.
  */
-import { canHoldEscape, canHoldSystemKeys, useCaptureState } from '@horrible/core';
+import { canHoldSystemKeys, hostTakesEscape, useCaptureState } from '@horrible/core';
 
 export function CaptureHud() {
   const capture = useCaptureState();
   if (!capture) return null;
-  const holdWorks = capture.escape === 'passthrough' && canHoldEscape();
+  const holdWorks = capture.escape === 'passthrough' && !hostTakesEscape();
   const systemKeys = canHoldSystemKeys();
   const release = holdWorks ? (
     <>

@@ -158,3 +158,44 @@ def test_roster_route_lists_builtins(monkeypatch, tmp_path) -> None:
     assert {"main", "coder", "dba", "researcher"} <= set(agents)
     assert agents["main"]["tool_groups"] is None
     assert "database" in agents["dba"]["tool_groups"]
+
+
+def test_delegate_announces_its_sub_turn_to_the_chat(monkeypatch) -> None:
+    """`delegate_start`/`delegate_done` carry the sub-turn id under the parent turn,
+    so the chat can nest the sub-agent's trace."""
+    _configure(monkeypatch)
+    seen: dict[str, str] = {}
+
+    async def fake_loop(conn, turn_id, messages, tools, *args, **kwargs) -> str:
+        seen["sub"] = turn_id
+        return "ok"
+
+    monkeypatch.setattr(orchestrator, "run_agent_loop", fake_loop)
+    conn = FakeConn()
+    asyncio.run(delegate.run_delegate(conn, "parent", "dba", "count tables"))
+    events = [(e, d) for e, d in conn.events() if e.startswith("delegate_")]
+    assert events == [
+        ("delegate_start", {"turnId": "parent", "subTurnId": seen["sub"], "agentId": "dba"}),
+        (
+            "delegate_done",
+            {"turnId": "parent", "subTurnId": seen["sub"], "agentId": "dba", "ok": True},
+        ),
+    ]
+
+
+def test_delegate_tags_its_prompt_sources(monkeypatch) -> None:
+    _configure(monkeypatch)
+    from backend.modules.interpretability import recorder
+
+    captured: dict[str, list[str]] = {}
+
+    async def fake_loop(conn, turn_id, messages, tools, *args, **kwargs) -> str:
+        captured["sources"] = list(recorder._prompt_sources.get(turn_id, []))
+        captured["n"] = [len(messages)]
+        return "ok"
+
+    monkeypatch.setattr(orchestrator, "run_agent_loop", fake_loop)
+    asyncio.run(delegate.run_delegate(FakeConn(), "parent", "dba", "count tables"))
+    assert captured["sources"][0] == "system"
+    assert captured["sources"][-1] == "user"
+    assert len(captured["sources"]) == captured["n"][0]

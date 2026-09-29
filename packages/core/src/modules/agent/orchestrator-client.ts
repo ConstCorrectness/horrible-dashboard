@@ -54,6 +54,10 @@ export interface AgentCallbacks {
   onAction?: (text: string) => void;
   /** A delegated sub-agent's streamed answer delta (agent.delegate progress). */
   onDelegateToken?: (agentId: string, delta: string) => void;
+  /** A delegated sub-agent started its own turn, `subTurnId`, under this one. */
+  onDelegateStart?: (subTurnId: string, agentId: string) => void;
+  /** …and finished it. `ok` is false on a timeout or provider error. */
+  onDelegateDone?: (subTurnId: string, agentId: string, ok: boolean) => void;
   onError?: (message: string) => void;
 }
 
@@ -63,6 +67,15 @@ export interface AskOptions {
   /** Aborting stops the turn: the backend cancels it and the promise resolves at
    *  once, so a model that never answers can't hold the chat hostage. */
   signal?: AbortSignal;
+  /** The turn id to use. The chat supplies its own so it can stamp the turn on
+   *  its records before the first frame arrives, which is what the trace view
+   *  joins on. Omitted, one is generated. */
+  turnId?: string;
+}
+
+/** A fresh turn id, in the shape the backend and every recorder key on. */
+export function newTurnId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 /** A prior conversation turn replayed to the backend so a turn has context. */
@@ -164,7 +177,7 @@ export function askAgent(
   opts?: AskOptions,
 ): Promise<void> {
   return new Promise<void>((resolve) => {
-    const turnId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const turnId = opts?.turnId ?? newTurnId();
     // The turn ends on `done`, on `error`, or — this one — when the socket that
     // was going to deliver them goes away. A backend restart takes the turn with
     // it and can no longer send anything, so without this the chat sits on its
@@ -213,6 +226,16 @@ export function askAgent(
             break;
           case 'delegate_token':
             cb.onDelegateToken?.(String(data.agentId ?? ''), String(data.delta ?? ''));
+            break;
+          case 'delegate_start':
+            cb.onDelegateStart?.(String(data.subTurnId ?? ''), String(data.agentId ?? ''));
+            break;
+          case 'delegate_done':
+            cb.onDelegateDone?.(
+              String(data.subTurnId ?? ''),
+              String(data.agentId ?? ''),
+              data.ok !== false,
+            );
             break;
           case 'answer':
             cb.onAnswer?.(String(data.text ?? ''));

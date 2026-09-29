@@ -13,7 +13,7 @@
  * See docs/architecture/keybindings.mdx.
  */
 import { getSetting } from '../settings';
-import { getCapture } from './capture';
+import { captureStore, getCapture } from './capture';
 
 /** Setting gating system-key capture. Declared in modules/keymap. */
 export const CAPTURE_SYSTEM_KEYS_KEY = 'keymap.captureSystemKeys';
@@ -31,6 +31,22 @@ export function canHoldEscape(): boolean {
   if (typeof navigator === 'undefined' || typeof document === 'undefined') return false;
   const keyboard = (navigator as Navigator & { keyboard?: { lock?: unknown } }).keyboard;
   return typeof keyboard?.lock === 'function' && document.fullscreenElement !== null;
+}
+
+/**
+ * Will the **host** act on Escape before the page can keep it?
+ *
+ * Only while it has something of its own to undo — pointer lock or document
+ * fullscreen — and Keyboard Lock can't hold the key back. A windowed editor with
+ * no pointer lock is *not* in that position: the page owns Escape outright, so a
+ * `passthrough` capture needs no degrading there. Treating every non-fullscreen
+ * host as hostile used to swallow an editor's Escape to release capture.
+ */
+export function hostTakesEscape(): boolean {
+  if (typeof document === 'undefined') return false;
+  const hostHasSomething =
+    document.pointerLockElement != null || document.fullscreenElement != null;
+  return hostHasSomething && !canHoldEscape();
 }
 
 /** Ask the host to route Escape to the page. No-op where unsupported. */
@@ -94,4 +110,40 @@ export function unlockEscape(): void {
   } catch {
     /* nothing was locked */
   }
+}
+
+/**
+ * Hold the Escape lock for as long as a `passthrough` capture is held.
+ *
+ * In document fullscreen the host exits fullscreen on Escape before the page
+ * sees the key, so without this an editor's Escape "windowed" the whole
+ * dashboard instead of reaching the editor. Only the game used to take the lock,
+ * and only once pointer-locked. Now the lock follows the capture store, so every
+ * pane that declares `escape: 'passthrough'` (editors, terminals, notebooks) gets
+ * its Escape, and the ladder's hold-to-release still works as the way out.
+ *
+ * Re-evaluated on `fullscreenchange` too: the lock only takes effect in document
+ * fullscreen, and the system-key gates depend on it. Returns an uninstaller.
+ */
+export function followCaptureWithEscapeLock(): () => void {
+  if (typeof navigator === 'undefined' || typeof document === 'undefined') return () => {};
+  let locked = false;
+  const sync = (): void => {
+    const wants = getCapture()?.escape === 'passthrough';
+    if (wants) {
+      locked = true;
+      void lockSystemKeys();
+    } else if (locked) {
+      locked = false;
+      unlockEscape();
+    }
+  };
+  const unsubscribe = captureStore.subscribe(sync);
+  document.addEventListener('fullscreenchange', sync);
+  sync();
+  return () => {
+    unsubscribe();
+    document.removeEventListener('fullscreenchange', sync);
+    if (locked) unlockEscape();
+  };
 }

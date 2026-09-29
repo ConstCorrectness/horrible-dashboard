@@ -12,6 +12,9 @@ export interface ChatMessage {
   content: string;
   reasoning?: string;
   actions?: string[];
+  /** The orchestrator turn id; see `ChatTurn.turnId`. */
+  turn_id?: string;
+  sub_turns?: { turnId: string; agentId: string; ok?: boolean }[];
 }
 
 export interface ChatSession {

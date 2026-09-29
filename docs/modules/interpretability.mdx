@@ -656,11 +656,20 @@ sidecar costs you a tidy layout; losing the `.py` costs you the model.
 
 ## Block classification
 
-The provider payload is an undifferentiated list of role/content dicts, and four
-distinct parts of the prompt all arrive as `role: system`. The recorder recovers
-the distinction from assembly order plus two content markers (`<<<BUFFER` and the
-skill catalog's header, imported from the module that writes it so a reworded header
-can't silently relabel the block):
+The provider payload is an undifferentiated list of role/content dicts, and five
+distinct parts of the prompt all arrive as `role: system`. Callers that assemble a
+chat prompt (`run_agent_turn` and `run_delegate`) build it with
+`orchestrator.assemble_prompt`. That function returns the messages together with a
+parallel list of sources, and hands the sources to `recorder.set_prompt_sources`
+before the loop's first capture. The sources travel beside the messages and never
+inside them: an extra key on a provider message is a 400 on some dialects. With
+sources present, the prompt prefix is labelled exactly.
+
+Callers that pass no sources (evals, flow, the SDK) fall back to `_classify_prompt`.
+It recovers the kinds from assembly order plus two content markers: `<<<BUFFER`, and
+the skill catalog's header, which is imported from the module that writes it so that
+rewording the header can't silently relabel the block. The heuristic cannot tell the
+workspace index from a tool guide, and labels it `guides`.
 
 | Kind | Source | Role |
 | --- | --- | --- |
@@ -671,8 +680,23 @@ can't silently relabel the block):
 | `editor` | `_active_editor_message` — the focused buffer | system |
 | `user` | this turn's prompt | user |
 | `assistant` | the model's output this turn (incl. tool calls) | assistant |
+| `workspace` | `_workspace_context_message` — the other visible panes | system |
 | `tool_result` | a tool's return value | tool |
+| `skill_loaded` | a `use_skill` result — the skill body the model asked for | tool |
+| `tools_loaded` | a `load_tools` result — the guides of the groups it loaded | tool |
+| `mcp_result` | an `mcp-*` tool's return value | tool |
 | `nudge` | the force-tool retry system message | system |
+| `dropped_tools` | the `[tool budget]` note naming groups cut to fit | system |
+
+A tool result's kind is decided by the tool that produced it. The name comes from the
+message's own `tool_name`, or failing that from its `tool_call_id`, matched back to
+the assistant message that made the call.
+
+Every block also carries `hash`, a short digest of its full, role-salted text. The
+same block has the same hash in every round, so a round-by-round diff (the
+trajectories [Agent section](trajectories.mdx#following-the-agent-chat)) keys on the
+hash rather than on position. The loop removes and re-appends its own notes, so
+"index N is new" is not the same claim as "this text is new".
 
 `skills` is deliberately not folded into `guides`: their cost profiles are
 opposites. A guide is paid only on turns where its group is active, while every line
@@ -859,7 +883,13 @@ same context and report a turn as costing several times what it did.
   rather than dropped. Turns **are** now also persisted to `app.db` (see below), so what
   the *pane* shows is bounded while the underlying history is not.
 - **A peer's context is never visible here.** By design — see above.
-- **Block previews are clipped** to 4000 characters for transport. Token counts
-  always describe the *full* text, and clipped blocks say so.
+- **Block previews are clipped** for transport. Conversation and tool results are
+  cut at 4000 characters. Harness text is cut at 65536: the system prompt, the skill
+  catalog, tool guides, the workspace index, the editor buffer, and loaded skill and
+  tool-group bodies. That text is what a reader comes to learn from. The ring does
+  not multiply it, because an unclipped block keeps the message's own string, so
+  every round of a turn shares one copy. The persisted snapshot does repeat it once
+  per round. Token counts always describe the *full* text, and clipped blocks say
+  so.
 - **Counts are of what we send.** Ollama applies its own chat template on top, so
   the true prompt is marginally larger than the sum of the blocks.

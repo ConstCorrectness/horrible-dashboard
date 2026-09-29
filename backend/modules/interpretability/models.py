@@ -18,7 +18,10 @@ class ContextBlock(BaseModel):
     orchestrator knows which is which at assembly time; this preserves that.
     """
 
-    kind: str  # system | skills | guides | history | editor | user | ...
+    # Prompt parts: system | skills | guides | workspace | editor | history | user.
+    # Loop appends: assistant | tool_result | skill_loaded | tools_loaded |
+    # mcp_result | nudge | dropped_tools.
+    kind: str
     role: str
     label: str
     content: str
@@ -27,6 +30,11 @@ class ContextBlock(BaseModel):
     # text — a preview cap must never distort the numbers the pane reasons about.
     clipped: bool = False
     fullChars: int = 0
+    # Short digest of the FULL text (role-salted). The same block in two rounds has
+    # the same hash, which is what a round-by-round diff keys on.
+    hash: str = ""
+    # The tool whose result this block is, for tool-derived kinds.
+    toolName: str | None = None
 
 
 class ToolEntry(BaseModel):

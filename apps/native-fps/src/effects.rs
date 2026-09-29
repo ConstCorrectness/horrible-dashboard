@@ -255,7 +255,7 @@ impl EffectsPool {
                 let dir = [end[0] - origin[0], end[1] - origin[1], end[2] - origin[2]];
                 let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
                 if len <= MINE_TRACER_START {
-                    self.impact(*end, origin, face, on_a_surface, i);
+                    self.impact(*end, origin, face, on_a_surface, i, mine);
                     continue;
                 }
                 let d = [dir[0] / len, dir[1] / len, dir[2] / len];
@@ -287,7 +287,7 @@ impl EffectsPool {
                     life: TRACER_LIFE,
                 });
             }
-            self.impact(*end, origin, face, on_a_surface, i);
+            self.impact(*end, origin, face, on_a_surface, i, mine);
         }
     }
 
@@ -303,17 +303,22 @@ impl EffectsPool {
         face: i32,
         on_a_surface: bool,
         pellet: usize,
+        mine: bool,
     ) {
-        self.push(Live {
-            shape: Shape::Ball {
-                at: end,
-                radius: 0.16,
-            },
-            color: rgb(IMPACT_COLOR),
-            base: 0.9,
-            age: 0.0,
-            life: IMPACT_LIFE,
-        });
+        // Not for your own shots: their endpoint is under the crosshair, so the
+        // flash ball read as a white shape stamped on the reticle every shot.
+        if !mine {
+            self.push(Live {
+                shape: Shape::Ball {
+                    at: end,
+                    radius: 0.16,
+                },
+                color: rgb(IMPACT_COLOR),
+                base: 0.9,
+                age: 0.0,
+                life: IMPACT_LIFE,
+            });
+        }
         // The surface's own normal where the server named one, and the
         // reverse of the incoming ray where it did not.
         let back = if face >= 0 {
@@ -1144,8 +1149,18 @@ mod tests {
         let eye = [10.0, 10.0, 5.0];
         let mut fx = EffectsPool::default();
         fx.shot(eye, &[[10.3, 10.0, 5.0]], &[], true, false);
-        // Impact flash, sparks, dust — but no tracer.
-        assert_eq!(fx.count(), 3, "a tracer was drawn at point-blank range");
+        // Sparks and dust — no tracer, and no impact flash: your own shot's
+        // flash ball sat on the crosshair as a white shape.
+        assert_eq!(fx.count(), 2, "a tracer was drawn at point-blank range");
+    }
+
+    #[test]
+    fn your_own_shot_leaves_no_impact_flash_on_the_crosshair() {
+        let mut mine = EffectsPool::default();
+        mine.shot_ex([0.0; 3], &[[10.0, 0.0, 0.0]], &[], true, false, false);
+        let mut theirs = EffectsPool::default();
+        theirs.shot_ex([0.0; 3], &[[10.0, 0.0, 0.0]], &[], false, false, false);
+        assert_eq!(theirs.count() - mine.count(), 1);
     }
 
     #[test]

@@ -27,6 +27,7 @@ import { useState } from 'react';
 
 import { usePaneSection } from '../../layout/use-sections';
 import { DatasetsSection } from './panels/DatasetsSection';
+import { FollowSection } from './panels/FollowSection';
 import { HarnessSection } from './panels/HarnessSection';
 import { LiveSection } from './panels/LiveSection';
 import { CommonsSection } from './panels/CommonsSection';
@@ -55,7 +56,9 @@ export function TrajectoriesHub() {
         fontSize: 'var(--fs-body)',
       }}
     >
-      {section === 'live' ? (
+      {section === 'follow' ? (
+        <FollowSection />
+      ) : section === 'live' ? (
         <LiveSection />
       ) : section === 'peers' ? (
         <PeersSection onPulled={() => setSection('runs')} />

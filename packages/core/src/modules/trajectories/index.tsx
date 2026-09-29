@@ -42,6 +42,9 @@ export const trajectoriesModule: ModuleManifest = {
       sections: [
         { id: 'runs', label: 'Runs', icon: '▤', key: 'r', default: true },
         { id: 'live', label: 'Live', icon: '◉', key: 'l' },
+        // The agent chat's turns from the inside: what each round was shown, what it
+        // added, and what it did. Follows the chat pane used most recently.
+        { id: 'follow', label: 'Agent', icon: '◈', key: 'a' },
         { id: 'datasets', label: 'Datasets', icon: '▦', key: 'd' },
         { id: 'harness', label: 'Harness', icon: '⚖', key: 'h' },
         // Friends' shared runs. A section, not a pane: a pulled run *is* a run, and it

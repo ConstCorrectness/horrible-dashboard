@@ -615,3 +615,110 @@ def test_finish_turn_stamps_the_window(estimating):
     assert (
         store.get_turn("t1").modelContextLength == 8192
     )  # re-persisted, not just live
+
+
+# --- provenance, loop kinds, hashes, prompt clip ----------------------------------
+
+
+def _tagged_prompt() -> tuple[list[dict[str, Any]], list[str]]:
+    from backend.modules.agent.orchestrator import assemble_prompt
+
+    return assemble_prompt(
+        [
+            ("system", {"role": "system", "content": "You are the orchestrator."}),
+            ("skills", None),
+            ("guides", {"role": "system", "content": "github guide"}),
+            ("history", {"role": "user", "content": "an earlier question"}),
+            ("workspace", {"role": "system", "content": "Open panes: files, editor"}),
+            ("editor", None),
+            ("user", {"role": "user", "content": "refactor this"}),
+        ]
+    )
+
+
+@pytest.mark.anyio
+async def test_tagged_sources_replace_the_heuristic(estimating):
+    """With provenance the workspace index is labelled `workspace`; the positional
+    heuristic calls it a tool guide."""
+    messages, sources = _tagged_prompt()
+    recorder.set_prompt_sources("t1", sources)
+    await _capture(FakeConn(), messages=messages)
+    [turn] = recorder.recent_turns()
+    assert [b.kind for b in turn.rounds[0].blocks] == [
+        "system",
+        "guides",
+        "history",
+        "workspace",
+        "user",
+    ]
+
+
+@pytest.mark.anyio
+async def test_loop_results_are_split_by_the_tool_that_produced_them(estimating):
+    messages, sources = _tagged_prompt()
+    recorder.set_prompt_sources("t1", sources)
+    await _capture(FakeConn(), messages=messages)
+    calls = [
+        {"id": "a", "function": {"name": "use_skill", "arguments": "{}"}},
+        {"id": "b", "function": {"name": "load_tools", "arguments": "{}"}},
+        {"id": "c", "function": {"name": "mcp-fs.read", "arguments": "{}"}},
+        {"id": "d", "function": {"name": "files.read", "arguments": "{}"}},
+    ]
+    grown = messages + [
+        {"role": "assistant", "content": "", "tool_calls": calls},
+        {"role": "tool", "tool_call_id": "a", "content": "# Review skill"},
+        {"role": "tool", "tool_call_id": "b", "content": "fs guide"},
+        {"role": "tool", "tool_call_id": "c", "content": "bytes"},
+        {"role": "tool", "tool_call_id": "d", "content": "text"},
+        {"role": "system", "content": "[tool budget] 3 tools dropped"},
+    ]
+    await _capture(FakeConn(), messages=grown, round_no=1)
+    [turn] = recorder.recent_turns()
+    tail = turn.rounds[1].blocks[len(messages) :]
+    assert [(b.kind, b.toolName) for b in tail] == [
+        ("assistant", None),
+        ("skill_loaded", "use_skill"),
+        ("tools_loaded", "load_tools"),
+        ("mcp_result", "mcp-fs.read"),
+        ("tool_result", "files.read"),
+        ("dropped_tools", None),
+    ]
+
+
+@pytest.mark.anyio
+async def test_same_block_hashes_the_same_across_rounds(estimating):
+    messages, sources = _tagged_prompt()
+    recorder.set_prompt_sources("t1", sources)
+    await _capture(FakeConn(), messages=messages)
+    await _capture(
+        FakeConn(),
+        messages=messages + [{"role": "assistant", "content": "done"}],
+        round_no=1,
+    )
+    [turn] = recorder.recent_turns()
+    first, second = turn.rounds
+    assert [b.hash for b in first.blocks] == [b.hash for b in second.blocks[:-1]]
+    assert second.blocks[-1].hash not in {b.hash for b in first.blocks}
+    assert all(b.hash for b in second.blocks)
+
+
+@pytest.mark.anyio
+async def test_prompt_parts_keep_far_more_text_than_history(estimating):
+    long = "x" * 20_000
+    messages = [
+        {"role": "system", "content": long},
+        {"role": "user", "content": long},
+    ]
+    recorder.set_prompt_sources("t1", ["system", "history"])
+    await _capture(FakeConn(), messages=messages)
+    [turn] = recorder.recent_turns()
+    system, history = turn.rounds[0].blocks
+    assert not system.clipped and len(system.content) == 20_000
+    assert history.clipped and len(history.content) == recorder.MAX_BLOCK_CHARS
+
+
+@pytest.mark.anyio
+async def test_finish_turn_drops_the_sources(estimating):
+    recorder.set_prompt_sources("t1", ["system"])
+    recorder.finish_turn("t1")
+    assert "t1" not in recorder._prompt_sources

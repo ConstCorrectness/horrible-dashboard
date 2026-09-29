@@ -36,7 +36,7 @@ import {
   usd,
 } from './common';
 
-function StepRow({
+export function StepRow({
   runId,
   step,
   index,

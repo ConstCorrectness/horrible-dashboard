@@ -541,6 +541,15 @@ export const hassaultModule: ModuleManifest = {
       default: false,
     },
     {
+      // Both clients read this row, like the hitboxes one above.
+      key: 'hassault.debug.grenadeArc',
+      title: 'Show grenade trajectory',
+      description:
+        'Draw the predicted flight path while a grenade is out. Off by default, and only drawn in Training and in a match you host yourself — never in ranked or on someone else’s server.',
+      type: 'boolean',
+      default: false,
+    },
+    {
       key: 'hassault.nativeBinaryPath',
       title: 'Native client binary',
       description:

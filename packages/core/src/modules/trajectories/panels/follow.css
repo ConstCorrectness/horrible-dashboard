@@ -1,0 +1,402 @@
+/* Follow (Agent) section.
+ *
+ * Source colours are tokens so the bar, the legend, the prompt segments and the
+ * round chips all draw one family in one hue. Skills and loaded skills share a hue;
+ * tool guides, loaded tool groups and tool schemas share another. Each token falls
+ * back to a literal because an undefined var() silently ignores the theme switch. */
+
+.traj-follow {
+  --traj-src-system: var(--text-secondary, #9aa4b2);
+  --traj-src-skills: #ff79c6;
+  --traj-src-tools: #ba82ff;
+  --traj-src-workspace: #78c8a0;
+  --traj-src-editor: var(--success, #2ed573);
+  --traj-src-history: #8b96aa;
+  --traj-src-user: #ffc857;
+  --traj-src-assistant: #5ed6d6;
+  --traj-src-result: #ff8c64;
+  --traj-src-loop: var(--danger, #f08c8c);
+
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  container-type: inline-size;
+}
+
+.traj-follow [data-family='system'] {
+  --src: var(--traj-src-system);
+}
+.traj-follow [data-family='skills'] {
+  --src: var(--traj-src-skills);
+}
+.traj-follow [data-family='tools'] {
+  --src: var(--traj-src-tools);
+}
+.traj-follow [data-family='workspace'] {
+  --src: var(--traj-src-workspace);
+}
+.traj-follow [data-family='editor'] {
+  --src: var(--traj-src-editor);
+}
+.traj-follow [data-family='history'] {
+  --src: var(--traj-src-history);
+}
+.traj-follow [data-family='user'] {
+  --src: var(--traj-src-user);
+}
+.traj-follow [data-family='assistant'] {
+  --src: var(--traj-src-assistant);
+}
+.traj-follow [data-family='result'] {
+  --src: var(--traj-src-result);
+}
+.traj-follow [data-family='loop'] {
+  --src: var(--traj-src-loop);
+}
+
+.traj-follow-pin {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 22px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  cursor: pointer;
+}
+.traj-follow-pin[aria-pressed='true'] {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Rail | main. The faint grid is the backdrop the columns sit on. */
+.traj-follow-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(150px, 22%) 1fr;
+  background-color: var(--bg-primary);
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--border) 45%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--border) 45%, transparent) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.traj-follow-rail {
+  overflow: auto;
+  border-right: 1px solid var(--border);
+  background: var(--bg-secondary);
+  display: flex;
+  flex-direction: column;
+}
+
+.traj-follow-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-left: 2px solid transparent;
+  background: none;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.traj-follow-turn[data-depth='1'] {
+  padding-left: calc(var(--space-4) + var(--space-5));
+  color: var(--text-secondary);
+}
+.traj-follow-turn:hover {
+  background: var(--bg-hover);
+}
+.traj-follow-turn[aria-current='true'] {
+  border-left-color: var(--accent);
+  background: var(--bg-hover);
+}
+.traj-follow-turn-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--fs-body);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.traj-follow-turn-meta {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-secondary);
+}
+.traj-follow-sub {
+  color: var(--accent);
+}
+
+@keyframes traj-follow-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+.traj-follow-pulse {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  background: var(--accent);
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  animation: traj-follow-pulse 1.2s ease-in-out infinite;
+}
+
+.traj-follow-main {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Context bar */
+.traj-follow-bar {
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+  background: var(--bg-secondary);
+}
+.traj-follow-bar-track {
+  display: flex;
+  height: 10px;
+  background: var(--bg-primary);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 6px) 100%, 0 100%);
+}
+.traj-follow-bar-seg {
+  background: var(--src);
+}
+.traj-follow-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  margin-top: var(--space-3);
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: var(--tracking-display);
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+.traj-follow-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.traj-follow-swatch {
+  width: 8px;
+  height: 8px;
+  background: var(--src);
+}
+.traj-follow-num {
+  font-family: var(--font-mono);
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--text-primary);
+}
+.traj-follow-legend-total {
+  margin-left: auto;
+}
+
+/* Two columns: context | rounds */
+.traj-follow-cols {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+}
+.traj-follow-prompt,
+.traj-follow-rounds {
+  overflow: auto;
+  padding: var(--space-4) var(--space-5);
+  min-width: 0;
+}
+.traj-follow-rounds {
+  border-left: 1px solid var(--border);
+}
+.traj-follow-h {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-3);
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: var(--tracking-display);
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+/* Metadata inside a heading stays mono and as written, and gives way first. */
+.traj-follow-h-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* A context block: the house 2px top edge in its source colour, and a tint. */
+.traj-follow-seg {
+  border-top: 2px solid var(--src);
+  background: color-mix(in srgb, var(--src) 7%, var(--bg-secondary));
+  margin-bottom: var(--space-2);
+}
+.traj-follow-seg[data-new] {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.traj-follow-seg-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 26px;
+  padding: 0 var(--space-3);
+  border: 0;
+  background: none;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.traj-follow-seg-label {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  letter-spacing: var(--tracking-display);
+  text-transform: uppercase;
+  color: var(--src);
+}
+.traj-follow-new {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--accent);
+}
+.traj-follow-seg-body {
+  margin: 0;
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  max-height: 340px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-secondary);
+}
+
+.traj-follow-tools {
+  padding: 0 var(--space-3) var(--space-3);
+}
+.traj-follow-tool-group-head,
+.traj-follow-tool {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: var(--fs-meta);
+}
+.traj-follow-tool-group-head {
+  margin-top: var(--space-2);
+  font-weight: 700;
+  letter-spacing: var(--tracking-display);
+  text-transform: uppercase;
+  color: var(--src);
+}
+.traj-follow-tool {
+  padding-left: var(--space-4);
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+
+/* Round bands, with a clipped corner */
+.traj-follow-band {
+  margin-bottom: var(--space-4);
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%);
+}
+.traj-follow-band[aria-current='true'] {
+  border-color: var(--accent);
+}
+.traj-follow-band-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 26px;
+  padding: 0 var(--space-3);
+  border: 0;
+  background: none;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.traj-follow-band-r {
+  font-weight: 800;
+  letter-spacing: var(--tracking-display);
+}
+.traj-follow-band[aria-current='true'] .traj-follow-band-r {
+  color: var(--accent);
+}
+.traj-follow-band > .traj-in {
+  margin: 0 var(--space-3) var(--space-3);
+}
+.traj-follow-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: 0 var(--space-3) var(--space-3);
+}
+.traj-follow-chip {
+  padding: 1px var(--space-3);
+  background: color-mix(in srgb, var(--src) 14%, transparent);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 5px) 100%, 0 100%);
+  font-size: var(--fs-meta);
+  color: var(--text-primary);
+}
+.traj-follow-chip b {
+  color: var(--src);
+}
+
+.traj-follow-capture {
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .traj-follow-pulse {
+    animation: none;
+  }
+}
+
+/* Narrow dock: stack the columns rather than squeezing them. */
+@container (max-width: 640px) {
+  .traj-follow-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+  .traj-follow-rail {
+    max-height: 140px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .traj-follow-cols {
+    grid-template-columns: 1fr;
+  }
+  .traj-follow-rounds {
+    border-left: 0;
+    border-top: 1px solid var(--border);
+  }
+}

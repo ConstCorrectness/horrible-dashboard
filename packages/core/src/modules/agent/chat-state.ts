@@ -36,6 +36,18 @@ export interface ChatTurn {
   actions?: string[];
   /** Slash-command echo/output: shown but not persisted or replayed to the model. */
   ephemeral?: boolean;
+  /** The orchestrator turn this belongs to (a user turn and its reply share one).
+   *  The join key into interpretability and trajectories. */
+  turnId?: string;
+  /** Sub-agents this assistant turn delegated to, oldest first. `ok` is unset
+   *  while the sub-turn is still running. */
+  subTurns?: SubTurn[];
+}
+
+export interface SubTurn {
+  turnId: string;
+  agentId: string;
+  ok?: boolean;
 }
 
 export interface AgentChatState {
@@ -96,6 +108,109 @@ export function useAgentChat(agentId: string): AgentChatState {
     () => chatState(agentId),
     () => chatState(agentId),
   );
+}
+
+/**
+ * Which chat the trace view follows: the agent chat pane used most recently, and
+ * optionally one turn of it pinned in place.
+ *
+ * Set by the chat on focus and on send, and by its per-turn trace button (which
+ * pins). Kept here rather than in the trajectories module: the chat only
+ * lazy-loads the view that watches it (for its drawer), and the view reads this.
+ */
+export interface FollowTarget {
+  agentId: string;
+  /** A turn to hold on instead of advancing to the newest one. */
+  pinnedTurnId: string | null;
+}
+
+let follow: FollowTarget | null = null;
+const followListeners = new Set<() => void>();
+
+export function followTarget(): FollowTarget | null {
+  return follow;
+}
+
+/** Point the trace view at an agent's chat. Keeps an existing pin on the same
+ *  agent unless `pinnedTurnId` is given (null unpins). */
+export function setFollowTarget(agentId: string, pinnedTurnId?: string | null): void {
+  const pinned =
+    pinnedTurnId !== undefined
+      ? pinnedTurnId
+      : follow?.agentId === agentId
+        ? follow.pinnedTurnId
+        : null;
+  if (follow?.agentId === agentId && follow.pinnedTurnId === pinned) return;
+  follow = { agentId, pinnedTurnId: pinned };
+  for (const l of followListeners) l();
+}
+
+function subscribeFollow(listener: () => void): () => void {
+  followListeners.add(listener);
+  return () => {
+    followListeners.delete(listener);
+  };
+}
+
+export function useFollowTarget(): FollowTarget | null {
+  return useSyncExternalStore(subscribeFollow, followTarget, followTarget);
+}
+
+/**
+ * Whether the chat pane's trace drawer is out. Module-level so the state survives
+ * the pane remounting, and so the trajectories pane's "dock into chat" can open it
+ * from outside. The drawer width is a per-viewer convenience kept in localStorage.
+ */
+const DRAWER_KEY = 'agent.traceDrawer';
+let drawer: { open: boolean; width: number } = (() => {
+  try {
+    const raw = globalThis.localStorage?.getItem(DRAWER_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as { open?: unknown; width?: unknown };
+      return {
+        open: parsed.open === true,
+        width: typeof parsed.width === 'number' ? parsed.width : 520,
+      };
+    }
+  } catch {
+    /* storage unavailable: defaults */
+  }
+  return { open: false, width: 520 };
+})();
+const drawerListeners = new Set<() => void>();
+
+export function traceDrawer(): { open: boolean; width: number } {
+  return drawer;
+}
+
+export function setTraceDrawer(patch: Partial<{ open: boolean; width: number }>): void {
+  const next = { ...drawer, ...patch };
+  if (next.open === drawer.open && next.width === drawer.width) return;
+  drawer = next;
+  try {
+    globalThis.localStorage?.setItem(DRAWER_KEY, JSON.stringify(drawer));
+  } catch {
+    /* not persisted: fine */
+  }
+  for (const l of drawerListeners) l();
+}
+
+export function useTraceDrawer(): { open: boolean; width: number } {
+  return useSyncExternalStore(
+    (l) => {
+      drawerListeners.add(l);
+      return () => {
+        drawerListeners.delete(l);
+      };
+    },
+    traceDrawer,
+    traceDrawer,
+  );
+}
+
+/** Subscribe to every agent's chat state (the trace view reads the followed one). */
+export function subscribeChats(listener: () => void): () => void {
+  return subscribe(listener);
 }
 
 /** Test seam: forget everything. Not used by the app. */

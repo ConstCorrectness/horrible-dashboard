@@ -114,3 +114,25 @@ def test_legacy_pre_roster_file_still_loads(client: TestClient, tmp_path) -> Non
     assert state["active"] == "old1"
     assert [s["id"] for s in state["sessions"]] == ["old1"]
     assert state["sessions"][0]["agent_id"] == "main"
+
+
+def test_messages_round_trip_turn_ids(client: TestClient) -> None:
+    """`turn_id`/`sub_turns` must survive the response model, or a reload loses the
+    link from a chat message to its trace."""
+    made = client.post("/api/chat/sessions", json={"title": "T"}).json()
+    body = {
+        **made,
+        "messages": [
+            {"role": "user", "content": "hi", "turn_id": "1-a"},
+            {
+                "role": "assistant",
+                "content": "yo",
+                "turn_id": "1-a",
+                "sub_turns": [{"turnId": "1-a:dba:ff", "agentId": "dba", "ok": True}],
+            },
+        ],
+    }
+    saved = client.put(f"/api/chat/sessions/{made['id']}", json=body).json()
+    assert [m["turn_id"] for m in saved["messages"]] == ["1-a", "1-a"]
+    again = client.get(f"/api/chat/sessions/{made['id']}").json()
+    assert again["messages"][1]["sub_turns"][0]["turnId"] == "1-a:dba:ff"

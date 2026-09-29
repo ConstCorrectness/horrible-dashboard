@@ -151,6 +151,21 @@ async def list_runs(
     return RunListResponse(runs=runs, total=total)
 
 
+@router.get("/runs/by-turn/{turn_id}", response_model=TrajectoryDetail)
+async def get_run_by_turn(turn_id: str, steps: bool = True) -> TrajectoryDetail:
+    """The run recorded for one orchestrator turn, by the chat's own turn id.
+
+    The chat holds turn ids, not run ids, so this is how the Follow view gets from
+    a message to its steps. 404 means nothing was recorded for that turn — capture
+    was off, or the turn ran before it was switched on.
+    """
+    found = store.find_by_turn_id(turn_id)
+    run = store.get_run(found.id, with_steps=steps) if found else None
+    if run is None:
+        raise HTTPException(status_code=404, detail="no run recorded for that turn")
+    return run
+
+
 @router.get("/runs/{run_id}", response_model=TrajectoryDetail)
 async def get_run(run_id: str, steps: bool = True) -> TrajectoryDetail:
     run = store.get_run(run_id, with_steps=steps)

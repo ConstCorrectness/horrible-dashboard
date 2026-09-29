@@ -2094,6 +2094,37 @@ async def _dispatch_call(
     return await _call_frontend_tool(conn, turn_id, name, call.arguments)
 
 
+def assemble_prompt(
+    parts: list[tuple[str, dict[str, Any] | None]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Build a turn's message list from `(source, message)` parts, skipping `None`s.
+
+    Returns the messages and, in parallel, where each came from (`system`, `skills`,
+    `guides`, `workspace`, `editor`, `history`, `user`). The sources go to the
+    interpretability recorder via `_tag_prompt_sources`, never onto the messages: a
+    stray key on a provider message is a 400 on some dialects.
+    """
+    messages: list[dict[str, Any]] = []
+    sources: list[str] = []
+    for source, message in parts:
+        if message is None:
+            continue
+        messages.append(message)
+        sources.append(source)
+    return messages, sources
+
+
+def _tag_prompt_sources(turn_id: str, sources: list[str]) -> None:
+    """Hand the assembled prompt's provenance to the recorder. Self-swallowing, for
+    the same reason as `_capture_context`."""
+    try:
+        from backend.modules.interpretability import recorder
+
+        recorder.set_prompt_sources(turn_id, sources)
+    except Exception:
+        logger.debug("interpretability source tagging skipped", exc_info=True)
+
+
 async def _capture_context(conn: WsConnection, **fields: Any) -> None:
     """Hand one round's assembled context to the interpretability recorder.
 
@@ -2669,18 +2700,21 @@ async def run_agent_turn(
     # Not sent on a remote turn — a peer's agent runs tool-less on someone else's node,
     # so offering it `use_skill` would advertise a tool it cannot call.
     skills_msg = None if remote else _skills_message()
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": spec.system_prompt},
-        *([skills_msg] if skills_msg else []),
-        *([guides_msg] if guides_msg else []),
-        *_history_messages(history),
-        # The workspace index and then the focused buffer go right before the user
-        # turn so they're the freshest context the model sees (and aren't diluted by
-        # prior conversation). Focused buffer last: it's the most specific.
-        *([workspace_msg] if workspace_msg else []),
-        *([editor_msg] if editor_msg else []),
-        {"role": "user", "content": prompt},
-    ]
+    messages, sources = assemble_prompt(
+        [
+            ("system", {"role": "system", "content": spec.system_prompt}),
+            ("skills", skills_msg),
+            ("guides", guides_msg),
+            *(("history", m) for m in _history_messages(history)),
+            # The workspace index and then the focused buffer go right before the
+            # user turn so they're the freshest context the model sees (and aren't
+            # diluted by prior conversation). Focused buffer last: most specific.
+            ("workspace", workspace_msg),
+            ("editor", editor_msg),
+            ("user", {"role": "user", "content": prompt}),
+        ]
+    )
+    _tag_prompt_sources(turn_id, sources)
 
     async def emit(reasoning: str, content: str) -> None:
         # Relay the model's streamed reasoning + answer tokens to the chat widget as

@@ -194,14 +194,28 @@ did two things at once. It is now one ordered ladder in
 6. A popover or context menu → close the most recent.
 7. Otherwise → let it through.
 
-:::warning The hold gesture is not always available
-Keeping Escape away from the browser needs `navigator.keyboard.lock(['Escape'])`,
-which is **Chromium-only and only in document fullscreen**. Everywhere else the
-browser exits pointer lock on the first Escape whatever the page does, and rung 4
-degrades to rung 3.
+Escape reaches the pane that has focus. An editor, terminal or notebook declares a
+`passthrough` capture, so a tap of Escape goes to it (closing autocomplete, leaving
+vim insert mode) rather than to the shell. That holds in fullscreen too: while a
+`passthrough` capture is held, `followCaptureWithEscapeLock` (installed by
+`installKeymap`) keeps `navigator.keyboard.lock(['Escape'])` on. Before this,
+only the game took the lock. Escape in a fullscreen editor went to the host,
+which left fullscreen and put the dashboard back in a window.
 
-This is surfaced, not hidden: the capture badge reads "Hold Esc to release" or
-"Esc to release" based on `canHoldEscape()` at that moment. Promising a gesture
+To leave fullscreen from a capturing pane, hold Escape: that releases the capture,
+and with it the lock. The next Escape goes to the host. F11 and the fullscreen
+command also work at any time.
+
+:::warning The hold gesture is not always available
+The host acts on Escape before the page when it has something of its own to undo:
+pointer lock, or document fullscreen. Keyboard Lock is the only way to keep the key
+then, and it is **Chromium-only and only in document fullscreen**. Where it can't
+help (pointer lock outside fullscreen, or a non-Chromium browser), `hostTakesEscape()`
+is true and rung 4 degrades to rung 3. A windowed pane with no pointer lock never
+degrades, because the page owns Escape there outright.
+
+The capture badge shows which case applies: it reads "Hold Esc to release" or
+"Esc to release" from `hostTakesEscape()` at that moment. Promising a gesture
 that silently doesn't work is worse than offering the tap.
 :::
 

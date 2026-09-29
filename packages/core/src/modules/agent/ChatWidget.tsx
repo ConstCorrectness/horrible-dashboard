@@ -11,18 +11,37 @@
  * edits surface as an accept/decline diff in the editor — not here.
  * See docs/modules/agent-chat.md.
  */
-import { Fragment, useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import {
+  Fragment,
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
 
 import { Avatar3D, DEFAULT_AVATAR_MOOD, DEFAULT_AVATAR_MOODS } from '../../Avatar3D';
 import { dialogs } from '../../dialogs';
-import { IconPlus, IconSend, IconStop, IconTrash } from '../../glyphs';
+import { IconBranch, IconPlus, IconSend, IconStop, IconTrash } from '../../glyphs';
 import { useSetting } from '../../settings';
 import { AgentReadiness } from './AgentReadiness';
 import { getAgentRoster, getAgentStatus, type AgentStatus, type RosterAgent } from './api';
-import { chatState, updateChat, useAgentChat, type ChatTurn } from './chat-state';
+import {
+  chatState,
+  setFollowTarget,
+  setTraceDrawer,
+  traceDrawer,
+  useTraceDrawer,
+  updateChat,
+  useAgentChat,
+  type ChatTurn,
+} from './chat-state';
 import { compactHistory, MAX_HISTORY_TURNS } from './history';
 import { ModelPicker } from './ModelPicker';
-import { askAgent } from './orchestrator-client';
+import { askAgent, newTurnId } from './orchestrator-client';
 import {
   createSession,
   deleteSession,
@@ -64,6 +83,8 @@ function toMessages(turns: ChatTurn[]): ChatMessage[] {
       content: t.text,
       reasoning: t.reasoning,
       actions: t.actions,
+      ...(t.turnId ? { turn_id: t.turnId } : {}),
+      ...(t.subTurns?.length ? { sub_turns: t.subTurns } : {}),
     }));
 }
 
@@ -73,7 +94,58 @@ function toTurns(messages: ChatMessage[]): ChatTurn[] {
     text: m.content,
     reasoning: m.reasoning,
     actions: m.actions,
+    ...(m.turn_id ? { turnId: m.turn_id } : {}),
+    ...(m.sub_turns?.length ? { subTurns: m.sub_turns } : {}),
   }));
+}
+
+/** Open the trace view on one turn, held there. */
+function traceTurn(agentId: string, turnId: string): void {
+  setFollowTarget(agentId, turnId);
+  setTraceDrawer({ open: true });
+}
+
+// The trajectories module's Follow view, loaded only when the drawer first opens:
+// the chat should not pay for the trace UI until someone looks at it.
+const FollowDrawer = lazy(() =>
+  import('../trajectories/panels/FollowSection').then((m) => ({
+    default: () => <m.FollowSection mode="drawer" />,
+  })),
+);
+
+/** Drawer width bounds, px. The upper bound is also capped by the pane in CSS. */
+const DRAWER_MIN = 320;
+const DRAWER_MAX = 1400;
+
+/**
+ * The trace drawer's drag handle. Dragging it left widens the drawer; the width is
+ * written through `setTraceDrawer`, so it persists and survives a remount.
+ */
+function DrawerHandle() {
+  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = traceDrawer().width;
+    const move = (ev: PointerEvent) => {
+      const w = Math.round(startW + (startX - ev.clientX));
+      setTraceDrawer({ width: Math.min(DRAWER_MAX, Math.max(DRAWER_MIN, w)) });
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+  return (
+    <div
+      className="agent-trace-handle"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize trace"
+      onPointerDown={onPointerDown}
+    />
+  );
 }
 
 async function getWorkspaceFiles(): Promise<string[]> {
@@ -161,6 +233,7 @@ export function ChatWidget() {
   // pane that keeps its transcript in `useState` loses it every time the shell
   // unmounts it, and the agent's own layout tools are one of the things that do.
   const { sessions, activeId, turns, prompt, busy, restore } = useAgentChat(agentId);
+  const drawer = useTraceDrawer();
   const setSessions = (v: ChatSessionMeta[]) => updateChat(agentIdRef.current, { sessions: v });
   const setActiveId = (v: string | null) => updateChat(agentIdRef.current, { activeId: v });
   const setPrompt = (v: string) => updateChat(agentIdRef.current, { prompt: v });
@@ -330,7 +403,7 @@ export function ChatWidget() {
     try {
       const session = await createSession(undefined, agentIdRef.current);
       setActiveId(session.id);
-            await refreshSessions();
+      await refreshSessions();
     } catch {
       setActiveId(null);
     }
@@ -403,7 +476,7 @@ export function ChatWidget() {
     try {
       const session = await createSession(firstPrompt.slice(0, 40), agentIdRef.current);
       setActiveId(session.id);
-            await refreshSessions();
+      await refreshSessions();
     } catch {
       /* backend down — proceed without persistence */
     }
@@ -563,7 +636,15 @@ export function ChatWidget() {
         .map((t) => ({ role: t.role as 'user' | 'assistant', content: t.text })),
     );
     const assistantIndex = liveTurns().length + 1;
-    setTurns((prev) => [...prev, { role: 'user', text }, { role: 'assistant', text: '' }]);
+    // Our own turn id, stamped on both turns before the first frame arrives, so the
+    // trace view can join this message to what the model was shown and did.
+    const turnId = newTurnId();
+    setTurns((prev) => [
+      ...prev,
+      { role: 'user', text, turnId },
+      { role: 'assistant', text: '', turnId },
+    ]);
+    setFollowTarget(agentIdRef.current);
 
     const patch = (fn: (t: ChatTurn) => ChatTurn) =>
       setTurns((prev) => prev.map((t, i) => (i === assistantIndex ? fn(t) : t)));
@@ -591,13 +672,23 @@ export function ChatWidget() {
             }
             patch((t) => ({ ...t, reasoning: (t.reasoning ?? '') + delta }));
           },
+          onDelegateStart: (subTurnId, delegateId) =>
+            patch((t) => ({
+              ...t,
+              subTurns: [...(t.subTurns ?? []), { turnId: subTurnId, agentId: delegateId }],
+            })),
+          onDelegateDone: (subTurnId, _delegateId, ok) =>
+            patch((t) => ({
+              ...t,
+              subTurns: (t.subTurns ?? []).map((s) => (s.turnId === subTurnId ? { ...s, ok } : s)),
+            })),
           // The final answer is authoritative; fall back to the streamed text if empty.
           onAnswer: (answer) => patch((t) => ({ ...t, text: answer || t.text })),
           onAction: (note) => patch((t) => ({ ...t, actions: [...(t.actions ?? []), note] })),
           onError: (msg) => patch((t) => ({ ...t, text: `⚠ ${msg}` })),
         },
         history,
-        { agentId: turnAgent, signal: abort.signal },
+        { agentId: turnAgent, signal: abort.signal, turnId },
       );
       if (abort.signal.aborted) patch((t) => ({ ...t, text: t.text || '(stopped)' }));
     } finally {
@@ -610,218 +701,262 @@ export function ChatWidget() {
   const canSend = !busy && prompt.trim().length > 0 && (ready || prompt.startsWith('/'));
 
   return (
-    <div className="agent-chat">
-      <div className="agent-session-bar">
-        {roster.length > 1 && (
+    <div className="agent-chat-shell" data-trace={drawer.open || undefined}>
+      <div className="agent-chat" onPointerDownCapture={() => setFollowTarget(agentId)}>
+        <div className="agent-session-bar">
+          {roster.length > 1 && (
+            <select
+              value={agentId}
+              onChange={(e) => pickAgent(e.target.value)}
+              aria-label="Agent"
+              title={roster.find((a) => a.id === agentId)?.description ?? ''}
+              disabled={busy}
+            >
+              {roster.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          )}
           <select
-            value={agentId}
-            onChange={(e) => pickAgent(e.target.value)}
-            aria-label="Agent"
-            title={roster.find((a) => a.id === agentId)?.description ?? ''}
-            disabled={busy}
+            value={activeId ?? ''}
+            onChange={(e) => void switchSession(e.target.value)}
+            aria-label="Chat session"
           >
-            {roster.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name}
+            {(sessions.length === 0 || !activeId) && <option value="">New chat</option>}
+            {sessions.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.title}
               </option>
             ))}
           </select>
-        )}
-        <select
-          value={activeId ?? ''}
-          onChange={(e) => void switchSession(e.target.value)}
-          aria-label="Chat session"
-        >
-          {(sessions.length === 0 || !activeId) && <option value="">New chat</option>}
-          {sessions.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.title}
-            </option>
-          ))}
-        </select>
-        {/* Both were unlabelled emoji (＋ and 🗑) sitting 24px apart, and the
+          {/* Both were unlabelled emoji (＋ and 🗑) sitting 24px apart, and the
             destructive one fired immediately. Now they are drawn glyphs with
             accessible names, and deleting names the conversation it is about to
             destroy — there is no undo behind it. */}
-        <ModelPicker
-          agentId={agentId}
-          status={typeof status === 'object' ? status : null}
-          disabled={busy}
-        />
-        <button
-          type="button"
-          title="New chat"
-          aria-label="New chat"
-          onClick={() => void newSession()}
-        >
-          <IconPlus />
-        </button>
-        <button
-          type="button"
-          title="Delete this chat"
-          aria-label="Delete this chat"
-          className="agent-session-delete"
-          disabled={!activeId}
-          onClick={() => void confirmRemoveSession()}
-        >
-          <IconTrash />
-        </button>
-      </div>
-      {restore === 'failed' && (
-        <div className="agent-restore-failed" role="alert">
-          <span>
-            Couldn’t load your conversations — the backend didn’t answer. They’re still saved on
-            this node.
-          </span>
-          <button type="button" onClick={() => void loadSessions()}>
-            Retry
-          </button>
-        </div>
-      )}
-      {animateAvatar && (
-        <div className="agent-chat-avatar">
-          <Avatar3D size={120} mood={mood} />
-        </div>
-      )}
-      <div className="agent-chat-log" ref={scrollRef}>
-        {turns.length === 0 && (
-          // An empty transcript says what this agent can do that a chat box can't
-          // — it drives the layout and reads the panes. Three real prompts do that
-          // faster than a sentence describing it, and they are clickable, so the
-          // first turn costs no typing.
-          <div className="agent-chat-starters">
-            <p className="agent-chat-starters-lead">
-              I can see your open panes and rearrange them, read what a widget is showing, and edit
-              an open buffer.
-            </p>
-            <ul className="agent-chat-starter-list">
-              {AGENT_STARTERS.map((s) => (
-                <li key={s}>
-                  <button
-                    type="button"
-                    className="agent-chat-starter"
-                    onClick={() => {
-                      setPrompt(s);
-                      inputRef.current?.focus();
-                    }}
-                  >
-                    {s}
-                  </button>
-                </li>
-              ))}
-            </ul>
-            <p className="agent-chat-starters-foot">
-              Type <code>/help</code> for commands.
-            </p>
-          </div>
-        )}
-        {turns.map((turn, i) => (
-          <Fragment key={i}>
-            {i === compactionBoundary && (
-              // Where the agent's memory of this conversation starts. Silent
-              // compaction is indistinguishable from an agent that forgot, so the
-              // seam is shown rather than inferred from odd answers.
-              <p className="agent-compacted">Earlier messages are no longer sent to the agent</p>
-            )}
-            {turn.role === 'system' ? (
-              <pre className="agent-system">{turn.text}</pre>
-            ) : (
-              <div className={`agent-msg agent-msg-${turn.role}`}>
-                {turn.reasoning && (
-                  <ReasoningBlock reasoning={turn.reasoning} hasText={!!turn.text} />
-                )}
-                {turn.actions && turn.actions.length > 0 && (
-                  <ul className="agent-actions">
-                    {turn.actions.map((a, j) => (
-                      <li key={j}>✓ {a}</li>
-                    ))}
-                  </ul>
-                )}
-                {(turn.text || turn.role === 'user' || (turn.role === 'assistant' && busy)) && (
-                  <div className="agent-bubble">
-                    {turn.text || (turn.role === 'assistant' && busy ? '…' : '')}
-                  </div>
-                )}
-              </div>
-            )}
-          </Fragment>
-        ))}
-      </div>
-      {slashMatches.length > 0 && (
-        <ul className="agent-slash-suggest">
-          {slashMatches.map((c) => (
-            <li key={c.name}>
-              <button type="button" onClick={() => setPrompt(`/${c.name} `)}>
-                <span className="agent-slash-name">/{c.name}</span>
-                <span className="agent-slash-desc">{c.description}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      {showSuggestions && getFilteredItems().length > 0 && (
-        <ul className="agent-slash-suggest">
-          {getFilteredItems().map((item, idx) => {
-            const isSelected = idx === selectedSuggestionIndex;
-            const itemStyle: React.CSSProperties = isSelected
-              ? { background: 'color-mix(in srgb, var(--accent) 22%, var(--bg-hover))' }
-              : {};
-
-            if (showSuggestions === 'files') {
-              const path = item as string;
-              const parts = path.split(/[/\\]/);
-              const name = parts[parts.length - 1];
-              const dir = parts.slice(0, -1).join('/');
-
-              return (
-                <li key={path}>
-                  <button type="button" style={itemStyle} onClick={() => selectSuggestion(path)}>
-                    <span className="agent-slash-name">@{name}</span>
-                    <span className="agent-slash-desc">{dir}</span>
-                  </button>
-                </li>
-              );
-            } else {
-              const pane = item as OpenPaneInfo;
-              return (
-                <li key={pane.instanceId}>
-                  <button type="button" style={itemStyle} onClick={() => selectSuggestion(pane)}>
-                    <span className="agent-slash-name">pane:{pane.title}</span>
-                    <span className="agent-slash-desc">({pane.instanceId})</span>
-                  </button>
-                </li>
-              );
-            }
-          })}
-        </ul>
-      )}
-      <AgentReadiness status={status} onRetry={refreshStatus} />
-      <form className="agent-chat-input" onSubmit={(e) => void send(e)}>
-        <input
-          ref={inputRef}
-          value={prompt}
-          onChange={(e) => handleInputChange(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Ask the agent…  (/ for commands)"
-          disabled={busy}
-        />
-        {busy ? (
-          // A turn waiting on a slow (or never-answering) model used to leave only a
-          // disabled "…" here — the pane had no way out. Stop cancels it server-side.
+          <ModelPicker
+            agentId={agentId}
+            status={typeof status === 'object' ? status : null}
+            disabled={busy}
+          />
           <button
             type="button"
-            title="Stop"
-            aria-label="Stop"
-            onClick={() => inflight.get(agentIdRef.current)?.abort()}
+            title={
+              drawer.open ? 'Collapse the trace' : 'Show the trace: prompt, rounds and tool calls'
+            }
+            aria-label="Trace"
+            aria-pressed={drawer.open}
+            className="agent-trace-toggle"
+            onClick={() => {
+              setFollowTarget(agentId);
+              setTraceDrawer({ open: !drawer.open });
+            }}
           >
-            <IconStop />
+            <IconBranch />
           </button>
-        ) : (
-          <button type="submit" disabled={!canSend} aria-label="Send">
-            <IconSend />
+          <button
+            type="button"
+            title="New chat"
+            aria-label="New chat"
+            onClick={() => void newSession()}
+          >
+            <IconPlus />
           </button>
+          <button
+            type="button"
+            title="Delete this chat"
+            aria-label="Delete this chat"
+            className="agent-session-delete"
+            disabled={!activeId}
+            onClick={() => void confirmRemoveSession()}
+          >
+            <IconTrash />
+          </button>
+        </div>
+        {restore === 'failed' && (
+          <div className="agent-restore-failed" role="alert">
+            <span>
+              Couldn’t load your conversations — the backend didn’t answer. They’re still saved on
+              this node.
+            </span>
+            <button type="button" onClick={() => void loadSessions()}>
+              Retry
+            </button>
+          </div>
         )}
-      </form>
+        {animateAvatar && (
+          <div className="agent-chat-avatar">
+            <Avatar3D size={120} mood={mood} />
+          </div>
+        )}
+        <div className="agent-chat-log" ref={scrollRef}>
+          {turns.length === 0 && (
+            // An empty transcript says what this agent can do that a chat box can't
+            // — it drives the layout and reads the panes. Three real prompts do that
+            // faster than a sentence describing it, and they are clickable, so the
+            // first turn costs no typing.
+            <div className="agent-chat-starters">
+              <p className="agent-chat-starters-lead">
+                I can see your open panes and rearrange them, read what a widget is showing, and
+                edit an open buffer.
+              </p>
+              <ul className="agent-chat-starter-list">
+                {AGENT_STARTERS.map((s) => (
+                  <li key={s}>
+                    <button
+                      type="button"
+                      className="agent-chat-starter"
+                      onClick={() => {
+                        setPrompt(s);
+                        inputRef.current?.focus();
+                      }}
+                    >
+                      {s}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <p className="agent-chat-starters-foot">
+                Type <code>/help</code> for commands.
+              </p>
+            </div>
+          )}
+          {turns.map((turn, i) => (
+            <Fragment key={i}>
+              {i === compactionBoundary && (
+                // Where the agent's memory of this conversation starts. Silent
+                // compaction is indistinguishable from an agent that forgot, so the
+                // seam is shown rather than inferred from odd answers.
+                <p className="agent-compacted">Earlier messages are no longer sent to the agent</p>
+              )}
+              {turn.role === 'system' ? (
+                <pre className="agent-system">{turn.text}</pre>
+              ) : (
+                <div className={`agent-msg agent-msg-${turn.role}`}>
+                  {turn.reasoning && (
+                    <ReasoningBlock reasoning={turn.reasoning} hasText={!!turn.text} />
+                  )}
+                  {turn.actions && turn.actions.length > 0 && (
+                    <ul className="agent-actions">
+                      {turn.actions.map((a, j) => (
+                        <li key={j}>✓ {a}</li>
+                      ))}
+                    </ul>
+                  )}
+                  {(turn.text || turn.role === 'user' || (turn.role === 'assistant' && busy)) && (
+                    <div className="agent-bubble">
+                      {turn.text || (turn.role === 'assistant' && busy ? '…' : '')}
+                    </div>
+                  )}
+                  {turn.role === 'assistant' && turn.turnId && (
+                    <button
+                      type="button"
+                      className="agent-trace-btn"
+                      onClick={() => traceTurn(agentId, turn.turnId!)}
+                      title="Show this turn's prompt, rounds and tool calls"
+                      aria-label="Trace this turn"
+                    >
+                      <IconBranch width={12} height={12} aria-hidden="true" />
+                      <span>trace</span>
+                      {turn.subTurns && turn.subTurns.length > 0 && (
+                        <span className="agent-trace-sub">+{turn.subTurns.length}</span>
+                      )}
+                    </button>
+                  )}
+                </div>
+              )}
+            </Fragment>
+          ))}
+        </div>
+        {slashMatches.length > 0 && (
+          <ul className="agent-slash-suggest">
+            {slashMatches.map((c) => (
+              <li key={c.name}>
+                <button type="button" onClick={() => setPrompt(`/${c.name} `)}>
+                  <span className="agent-slash-name">/{c.name}</span>
+                  <span className="agent-slash-desc">{c.description}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {showSuggestions && getFilteredItems().length > 0 && (
+          <ul className="agent-slash-suggest">
+            {getFilteredItems().map((item, idx) => {
+              const isSelected = idx === selectedSuggestionIndex;
+              const itemStyle: React.CSSProperties = isSelected
+                ? { background: 'color-mix(in srgb, var(--accent) 22%, var(--bg-hover))' }
+                : {};
+
+              if (showSuggestions === 'files') {
+                const path = item as string;
+                const parts = path.split(/[/\\]/);
+                const name = parts[parts.length - 1];
+                const dir = parts.slice(0, -1).join('/');
+
+                return (
+                  <li key={path}>
+                    <button type="button" style={itemStyle} onClick={() => selectSuggestion(path)}>
+                      <span className="agent-slash-name">@{name}</span>
+                      <span className="agent-slash-desc">{dir}</span>
+                    </button>
+                  </li>
+                );
+              } else {
+                const pane = item as OpenPaneInfo;
+                return (
+                  <li key={pane.instanceId}>
+                    <button type="button" style={itemStyle} onClick={() => selectSuggestion(pane)}>
+                      <span className="agent-slash-name">pane:{pane.title}</span>
+                      <span className="agent-slash-desc">({pane.instanceId})</span>
+                    </button>
+                  </li>
+                );
+              }
+            })}
+          </ul>
+        )}
+        <AgentReadiness status={status} onRetry={refreshStatus} />
+        <form className="agent-chat-input" onSubmit={(e) => void send(e)}>
+          <input
+            ref={inputRef}
+            value={prompt}
+            onChange={(e) => handleInputChange(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Ask the agent…  (/ for commands)"
+            disabled={busy}
+          />
+          {busy ? (
+            // A turn waiting on a slow (or never-answering) model used to leave only a
+            // disabled "…" here — the pane had no way out. Stop cancels it server-side.
+            <button
+              type="button"
+              title="Stop"
+              aria-label="Stop"
+              onClick={() => inflight.get(agentIdRef.current)?.abort()}
+            >
+              <IconStop />
+            </button>
+          ) : (
+            <button type="submit" disabled={!canSend} aria-label="Send">
+              <IconSend />
+            </button>
+          )}
+        </form>
+      </div>
+      {drawer.open && (
+        <aside
+          className="agent-trace-drawer"
+          aria-label="Trace"
+          style={{ ['--agent-trace-w' as string]: `${drawer.width}px` }}
+        >
+          <DrawerHandle />
+          <Suspense fallback={<div className="agent-trace-loading">Loading trace…</div>}>
+            <FollowDrawer />
+          </Suspense>
+        </aside>
+      )}
     </div>
   );
 }

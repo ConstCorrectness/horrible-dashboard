@@ -94,6 +94,18 @@ conversations and active pointer. See
 [Specialized agents & delegation](#specialized-agents--delegation).
 Frontend client: `packages/core/src/modules/agent/sessions.ts`.
 
+Each message is saved with its orchestrator `turn_id`. An assistant message also
+saves `sub_turns`, the sub-agents it delegated to. The chat creates the id itself
+(`newTurnId()`, passed to `askAgent` as `turnId`), so the id is on the transcript
+before the first frame arrives. It is the join key into interpretability and
+trajectories. The toolbar's trace toggle slides out a **trace drawer** beside the
+transcript. The drawer shows the trajectories
+[Agent view](trajectories.mdx#following-the-agent-chat): the prompt by source, a
+round-by-round diff, the steps and the sub-agents. It can be resized, popped out
+into its own window, and docked back. Each reply's **trace** chip opens the drawer
+pinned to that turn.
+Messages saved before this carry an empty `turn_id` and have nothing to trace.
+
 ### The transcript lives outside the component
 
 `packages/core/src/modules/agent/chat-state.ts` holds the transcript, the in-flight
@@ -406,6 +418,8 @@ are stable, not creative.
 | server→client | `reasoning`         | `{turnId, agentId, delta}` — streamed thinking   |
 | server→client | `token`             | `{turnId, agentId, delta}` — streamed answer     |
 | server→client | `delegate_token`    | `{turnId, agentId, delta}` — sub-agent's stream  |
+| server→client | `delegate_start`    | `{turnId, subTurnId, agentId}` — a sub-turn began |
+| server→client | `delegate_done`     | `{turnId, subTurnId, agentId, ok}` — …and ended  |
 | server→client | `answer`            | `{turnId, agentId, text}` — final, authoritative |
 | server→client | `done` / `error`    | `{turnId, agentId, …}`                           |
 

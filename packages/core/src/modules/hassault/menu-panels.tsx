@@ -81,6 +81,22 @@ export const NATIVE_CLIENT_KEY = 'hassault.nativeClient';
  */
 export const SHOW_HITBOXES_KEY = 'hassault.debug.hitboxes';
 
+/**
+ * Draw the predicted flight path while a grenade is out.
+ *
+ * Off by default, and even when on it only draws in Training and in a room you
+ * are hosting yourself — never ranked, never someone else's server. It is a
+ * practice aid for learning lineups, and a lineup read off a drawn line in a
+ * real match is not one the player knows. Shared with the native client
+ * (`settings::KEY_GRENADE_ARC`).
+ */
+export const GRENADE_ARC_KEY = 'hassault.debug.grenadeArc';
+
+/** Where the grenade arc may draw: Training (not joined) or our own hosted room. */
+export function grenadeArcAllowed(joined: boolean, host: string, ranked: boolean): boolean {
+  return !joined || (host === '' && !ranked);
+}
+
 // ---- settings ---------------------------------------------------------------
 
 const SENS_MIN = 0.1;
@@ -153,6 +169,7 @@ export function SettingsPanel() {
   const crouchToggle = useSetting<boolean>(CROUCH_TOGGLE_KEY) ?? false;
   const nativeClient = useSetting<boolean>(NATIVE_CLIENT_KEY) ?? true;
   const showHitboxes = useSetting<boolean>(SHOW_HITBOXES_KEY) ?? false;
+  const grenadeArc = useSetting<boolean>(GRENADE_ARC_KEY) ?? false;
   const [graphics, setGraphics] = useGraphicsChoice();
 
   return (
@@ -289,6 +306,33 @@ export function SettingsPanel() {
               style={{
                 ...styles.choice,
                 ...(showHitboxes === option.on ? styles.choiceActive : null),
+              }}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={styles.row}>
+        <div style={styles.rowMain}>
+          <span>Grenade trajectory</span>
+          <span style={styles.dim}>
+            Draws where a held grenade will fly and land. Practice only: it shows in Training and in
+            a match you host yourself, never in ranked or on someone else's server.
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: '0.25rem' }}>
+          {[
+            { on: false, label: 'Off' },
+            { on: true, label: 'On' },
+          ].map((option) => (
+            <button
+              key={option.label}
+              onClick={() => void setSetting(GRENADE_ARC_KEY, option.on)}
+              style={{
+                ...styles.choice,
+                ...(grenadeArc === option.on ? styles.choiceActive : null),
               }}
             >
               {option.label}

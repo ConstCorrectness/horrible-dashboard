@@ -67,6 +67,8 @@ pub const KEY_CROSSHAIR_DOT: &str = "hassault.crosshair.dot";
 pub const KEY_CROSSHAIR_ALPHA: &str = "hassault.crosshair.alpha";
 pub const KEY_HUD_SCALE: &str = "hassault.video.hudScale";
 pub const KEY_SHOW_HITBOXES: &str = "hassault.debug.hitboxes";
+/// `GRENADE_ARC_KEY` in the pane's `menu-panels.tsx`.
+pub const KEY_GRENADE_ARC: &str = "hassault.debug.grenadeArc";
 /// `CONTROLS_KEY` in the pane's `menu-panels.tsx`.
 pub const KEY_CONTROLS: &str = "hassault.controls";
 
@@ -707,6 +709,10 @@ pub struct Settings {
     /// usually right after a shot they were sure of. It is off by default: a
     /// permanent wireframe is a worse picture of the game than the game.
     pub show_hitboxes: bool,
+    /// Draw the predicted flight path while a grenade is out. Off by default,
+    /// and the app only honours it in Train and in a room this player hosts —
+    /// a practice aid, never something to read lineups off in a real match.
+    pub grenade_arc: bool,
 }
 
 /// The GPU rows, as the menu steps them.
@@ -762,6 +768,7 @@ impl Default for Settings {
             video: Video::default(),
             gpu: GpuPick::default(),
             show_hitboxes: false,
+            grenade_arc: false,
         }
     }
 }
@@ -882,6 +889,9 @@ impl Settings {
         if let Some(v) = flag(KEY_SHOW_HITBOXES) {
             s.show_hitboxes = v;
         }
+        if let Some(v) = flag(KEY_GRENADE_ARC) {
+            s.grenade_arc = v;
+        }
         if let Some(v) = text(KEY_CROSSHAIR_COLOR) {
             s.crosshair.color = CrosshairColor::parse(v);
         }
@@ -942,6 +952,7 @@ impl Settings {
             KEY_CROSSHAIR_DOT => json!(self.crosshair.dot),
             KEY_CROSSHAIR_ALPHA => json!(self.crosshair.alpha),
             KEY_SHOW_HITBOXES => json!(self.show_hitboxes),
+            KEY_GRENADE_ARC => json!(self.grenade_arc),
             _ => return None,
         })
     }
@@ -1122,6 +1133,7 @@ mod tests {
             KEY_CROSSHAIR_DOT,
             KEY_CROSSHAIR_ALPHA,
             KEY_SHOW_HITBOXES,
+            KEY_GRENADE_ARC,
         ] {
             bag.insert(key.into(), original.value_for(key).expect("a value"));
         }

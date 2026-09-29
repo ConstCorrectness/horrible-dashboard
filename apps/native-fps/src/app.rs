@@ -263,6 +263,10 @@ pub struct App {
     /// otherwise. A field rather than a local so the render pass can read it
     /// without the simulation handing it across.
     throw_arc: Option<ThrowArc>,
+    /// Whether this is a room we host ourselves (`--mode=host`), which with
+    /// Train is where the grenade trajectory may draw. Never ranked, never a
+    /// friend's node.
+    own_room: bool,
     /// Whether a grenade was in hand on the previous frame. See the stow above.
     nade_held: bool,
     /// The spray index the last snapshot reported, so the camera can be kicked
@@ -560,6 +564,7 @@ impl App {
             volume_verts: Vec::new(),
             throw_physics,
             throw_arc: None,
+            own_room: false,
             nade_held: false,
             match_spray_index: 0,
             last_fire_sent_ms: f64::NEG_INFINITY,
@@ -920,7 +925,10 @@ impl App {
         // `THROW_INHERIT` visible — running and jumping feed the throw — and a
         // velocity half a round trip old would lag exactly the movement it is
         // meant to be showing.
-        self.throw_arc = match (holding_nade, self.throw_physics.as_ref()) {
+        // Opt-in, and only where it is practice: Train or a room we host.
+        let arc_allowed =
+            self.settings.grenade_arc && (self.socket.is_none() || self.own_room);
+        self.throw_arc = match (holding_nade && arc_allowed, self.throw_physics.as_ref()) {
             (true, Some(physics)) => {
                 let state = &self.prediction.state;
                 let (yaw, pitch) = self.view_angles();
@@ -1453,6 +1461,12 @@ impl App {
         });
     }
 
+    /// Mark this match as a room we host, which lets the grenade trajectory
+    /// draw when its setting is on. See `own_room`.
+    pub fn set_own_room(&mut self, own: bool) {
+        self.own_room = own;
+    }
+
     pub fn queue_bots(&mut self, count: u32, skill: String) {
         if count > 0 {
             self.pending_bots = Some((count, skill));
@@ -1839,7 +1853,12 @@ impl App {
                                 };
                                 self.effects
                                     .shot_ex(*origin, ends, faces, is_mine, *hit, draw_beam);
-                                self.decals.shot(ends, faces);
+                                // No bullet holes from your own shots: they land
+                                // dead on the crosshair and read as a mark on the
+                                // screen rather than on the wall.
+                                if !is_mine {
+                                    self.decals.shot(ends, faces);
+                                }
                                 if !ends.is_empty() {
                                     let dir = [
                                         ends[0][0] - origin[0],
@@ -2415,9 +2434,8 @@ impl App {
         self.play_own("shot", 0.55, true);
         // The range resolves its own shots, so its faces come from `trace.rs`
         // rather than off the wire — the same numbers, pinned against the
-        // server's by `physics-vectors.json`. Tracers and impacts too: the range
-        // is where a spray pattern is learnt, and it is not learnable without
-        // seeing where the rounds went.
+        // server's by `physics-vectors.json`. No impact flash or bullet hole for
+        // your own shots, online or here: both land dead on the crosshair.
         if weapon.id != "knife" {
             let draw_beam = self
                 .cvars
@@ -2425,7 +2443,6 @@ impl App {
                 .unwrap_or(false);
             self.effects
                 .shot_ex(shot.origin, &shot.ends, &shot.faces, true, false, draw_beam);
-            self.decals.shot(&shot.ends, &shot.faces);
             if !shot.ends.is_empty() {
                 let dir = [
                     shot.ends[0][0] - shot.origin[0],
@@ -3253,6 +3270,7 @@ impl App {
             // Nothing to apply: the flag is read straight from `self.settings`
             // by the render path, so toggling it is already in force.
             Action::ShowHitboxes => {}
+            Action::GrenadeArc => {}
             // The FOV is the camera's, not the renderer's, and it goes through
             // `apply_zoom` rather than straight onto the camera: setting
             // `camera.fov` here would be overwritten by the next scope step, and
