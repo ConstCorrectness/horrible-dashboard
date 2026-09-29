@@ -1850,6 +1850,18 @@ def build_bank_scene():
     print("Bank scene build complete!")
 
 
+def build_lights():
+    """The bank's modelled fixtures as lights, and its sky.
+
+    The street is open to a morning sky; everything under the roof slab is lit
+    by its chandeliers, sconces and troffers, which until now only glowed.
+    """
+    maplib.lights_from_emitters("Mat_Chandelier_Lamp_Glow", color=(255, 226, 180), radius=14.0, intensity=2.2, spacing=6.0, drop=0.4)
+    maplib.lights_from_emitters("Mat_Sconce_Lamp_Glow", color=(255, 214, 160), radius=6.0, intensity=1.6, spacing=4.0, drop=0.2)
+    maplib.lights_from_emitters("Mat_Fluorescent_Troffer_Glow", color=(240, 244, 255), radius=8.0, intensity=1.4, spacing=5.0, drop=0.3)
+    maplib.set_atmosphere("coastal_morning", hemiSky=0xD8D4CC, hemiGround=0x6A5A48, hemiIntensity=1.45)
+
+
 def export_scene_glb():
     """Scale the metre-authored scene to cubes and export it (see maplib)."""
     maplib.export_map_glb("hd_bank")
@@ -1858,5 +1870,6 @@ def export_scene_glb():
 if __name__ == "__main__":
     print("=== Generating Ultra-Detailed Realistic 'The Bank' (hd_bank) Map in Blender ===")
     build_bank_scene()
+    build_lights()
     export_scene_glb()
     print("=== Generation and Export Complete! ===")

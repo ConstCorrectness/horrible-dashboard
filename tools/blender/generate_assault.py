@@ -1447,6 +1447,26 @@ def build_assault_scene():
     return mats
 
 
+def build_layout_revision(mats):
+    """A second rack aisle, between Site B and the CT spawn.
+
+    The warehouse floor west of the office was open from the loading bays to the
+    back wall, so B was held from spawn without moving. The rack makes the CT
+    rotation into B a choice of two ends rather than a straight line.
+    """
+    col = get_or_create_collection("Revision")
+    add_pallet_rack(col, mats, 10.0, 46.5, 18.0, 49.5, num_tiers=3, total_height=5.5)
+
+
+def build_lights():
+    """The high-bays, office troffers, wall packs and street light as lights."""
+    maplib.lights_from_emitters("Mat_UFO_LED_Glow", color=(240, 246, 255), radius=14.0, intensity=2.2, spacing=4.0, drop=0.4)
+    maplib.lights_from_emitters("Mat_Fluorescent_Glow", color=(235, 242, 255), radius=7.0, intensity=1.4, spacing=4.0, drop=0.3)
+    maplib.lights_from_emitters("Mat_Amber_Glow_Lamp", color=(255, 190, 110), radius=8.0, intensity=1.8, spacing=4.0, drop=0.2)
+    maplib.lights_from_emitters("Mat_Lamp_Glow", color=(255, 226, 180), radius=16.0, intensity=2.0, spacing=4.0, drop=0.4)
+    maplib.set_atmosphere("overcast", sunColor=0xF0ECE4, hemiGround=0x5A544C)
+
+
 def export_scene_glb():
     """Scale the metre-authored scene to cubes and export it (see maplib)."""
     maplib.export_map_glb("hd_assault")
@@ -1454,6 +1474,8 @@ def export_scene_glb():
 
 if __name__ == "__main__":
     print("=== Generating Ultra-Detailed Realistic CS:GO cs_assault Map in Blender (56m Scale) ===")
-    build_assault_scene()
+    mats = build_assault_scene()
+    build_layout_revision(mats)
+    build_lights()
     export_scene_glb()
     print("=== Ultra-Detailed Generation Complete! ===")

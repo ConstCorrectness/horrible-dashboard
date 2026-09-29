@@ -218,13 +218,19 @@ scaled — only *attributes* are.
 
 `backend/modules/hassault/mapsource.py` + `backend/modules/hassault/maps/*.json`.
 
-Five maps ship with the app — `hd_atrium`, `hd_crossing`, `hd_pit`,
-`hd_facility` and `hd_junkflea` — so the pane is playable on a clean clone. They
+Twelve maps ship with the app, so the pane is playable on a clean clone. They
 are ours, CC0, and named `hd_*` so the bundled and installed catalogs share one
 namespace without either being able to shadow the other.
 
-The last two are **`gltf` maps** rather than Cube heightfields; see
-[Two level formats](#two-level-formats-cube-and-gltf) for what that changes. The
+- **Three Cube heightfields:** `hd_atrium`, `hd_crossing` and `hd_pit`.
+- **Nine modelled `gltf` maps:** `hd_assault`, `hd_bank`, `hd_dust2`,
+  `hd_facility`, `hd_inferno`, `hd_junkflea`, `hd_mirage`, `hd_nuke` and
+  `hd_office`. Each is a Blender generator in `tools/blender/` exported to one GLB
+  that both clients load; see
+  [The modelled maps](#the-modelled-maps-how-one-is-built-and-what-each-revision-changed).
+
+See [Two level formats](#two-level-formats-cube-and-gltf) for what the difference
+between the two kinds changes. The
 adjudicable set is pinned exactly — not as a subset — in
 `test_games_hassault_rooms.py`, because the point of that assertion is that the
 set a rated match may be played on is *closed*, so a map appearing in it without
@@ -324,6 +330,67 @@ by the gates through it, and the first draft built two staircases; the reachabil
 test named the two stranded quadrants by their exact bounds. Nothing else in the
 suite would have failed, and the map would simply have had two ledges nobody
 could get to.
+
+### The modelled maps: how one is built, and what each revision changed
+
+A modelled map is a Blender generator (`tools/blender/generate_<map>.py`) plus the
+shared helpers in `maplib.py`. Changing one means running four steps in order,
+because each reads what the step before it wrote:
+
+1. **Generate:** `blender --background --factory-startup --python
+   tools/blender/generate_dust2.py`. This writes the GLB to both homes
+   (`backend/modules/hassault/maps/` and `apps/web/public/`). It also writes the
+   map's lights and atmosphere into its JSON (see below).
+2. **Bake:** `blender --background --factory-startup --python
+   tools/blender/bake_collision.py -- hd_dust2` rasterises the GLB into the
+   JSON's brushes, which is what the server simulates.
+3. **Fit:** `uv run python tools/hassault_fit_placements.py hd_dust2` moves any
+   spawn, item or site the new geometry swallowed to the nearest valid cell.
+4. **Check:** `maplint`, then the native `test_spawn_clearance` (which checks the
+   offline `MAP_CONFIGS` tables in `world3d.ts` and `world3d.rs` against the GLB).
+   Also run the `glb-surfaces` vector test, whose golden list gains a row for any
+   new material. Regenerate it with `UPDATE_GLB_SURFACE_VECTORS=1`.
+
+Run the generators on Blender **4.1**. They call `read_factory_settings`, which the
+Blender MCP sandbox refuses.
+
+**Lights and atmosphere come from the generator.** A GLB carries geometry, not
+lighting. `maplib.add_light` records a point light, and `maplib.lights_from_emitters`
+puts one under every fixture whose material matches (troffers, chandeliers,
+floodlights), merging fixtures closer than a few metres. `maplib.set_atmosphere`
+picks a named sky from `maplib.ATMOSPHERES` (`desert_noon`, `golden_hour`,
+`overcast`, `interior_cool` and so on) with per-map overrides. `export_map_glb`
+writes both into the JSON, replacing its `light` entities and `atmosphere` block,
+so a re-run is idempotent and nothing else in the JSON moves.
+
+**Base colours are linearised on export.** glTF's base colour is linear, and every
+generator picked its colours by eye as sRGB. Exported as-is, each surface was about
+twice as bright as intended and lost most of its saturation, so Dust II's
+sandstone drew as pale grey. `export_map_glb` converts each Principled base colour
+once. The exact curve would turn a 0.2 asphalt into 0.033, which draws black under
+a rig with no bounce light, so `maplib.DARK_FLOOR` keeps any channel at no less
+than 30% of its authored value.
+
+**Keep an eye on GLB size.** `maplib.add_boxes` builds many boxes as one object.
+Use it for trim, beams and clutter: at these sizes a GLB's JSON node table, not
+its vertices, is what grows. No revision below grew its GLB by more than 44%.
+
+What each map's revision changed:
+
+| Map | Sky | Layout | Dressing and lights |
+| --- | --- | --- | --- |
+| `hd_dust2` | `desert_noon` | Mid doors are a choke. A wall now closes the 9 m of open street beside them. A ramp lets you walk onto Catwalk from mid. Pit exit and Suicide are slopes instead of 1.4 m and 1.2 m steps. Adds a cart in Long A, a planter on the CT side of Short and a well in B. | Plinths, vigas, awnings, banners, cables and rubble. Lanterns and sconces light the tunnels and doorways (17 lights). |
+| `hd_mirage` | `desert_noon`, lower western sun | Palace gets stairs at both ends; its 2.8 m floor had no way up. Walking onto the Window Room from the connector is now possible. The B Apartments get outside stairs and a ground-floor wall with a door. Two houses in mid and a wall short of B break the spawn-to-spawn and T-to-B sightlines. | Plinths, mosaic bands, vigas, awnings, planters and five lanterns. |
+| `hd_inferno` | `golden_hour` | A house in the east street splits the approach to A into two alleys. The pit exit and the T ramp are slopes, and mid gets a well. | Shutters, coping, washing across Banana, awnings. Lanterns now light, with sconces down Banana and under the apartments. |
+| `hd_nuke` | `overcast` | Adds jersey barriers and a container stack in the yard, and crates inside A. | Door striping, hall pipes, six yard floodlights, wall packs, and the hall's troffers and reactor as lights. |
+| `hd_office` | `interior_cool` | Two meeting rooms, each with two doors, fill the open band between the core and the cubicles. | Baseboards, planters, every troffer, and the server LEDs as lights. |
+| `hd_bank` | `coastal_morning`, warm interior | Unchanged. It already had the most structure of any map. | Chandeliers, sconces and troffers as lights. |
+| `hd_facility` | `interior_cool`, darker | Broken partition walls turn the two lab corridors, which had only ever been rows of lights, into real ones. | Pit-rim striping and wall pipes. Troffers, sirens and coolant glow as lights. |
+| `hd_junkflea` | `industrial_dusk` | Two-high scrap-bale walls and tyre stacks in the flanks of both spawn yards. | Floodlight towers and strobes as lights. |
+| `hd_assault` | `overcast` | A second pallet-rack aisle between B and the CT spawn. The regenerated GLB ends at the map's real edge; the committed one had geometry at the origin that left a reachable strip outside the west and south walls. | High-bays, office troffers, wall packs and the street light as lights. |
+
+No spawn, item or site moved in any of these revisions, so the offline tables did
+not change.
 
 ## The map designer
 
@@ -603,6 +670,76 @@ is the same scene a human plays in.
 Coordinates: the engine's grid is `(x, y)` with `z` as height, and three.js is
 y-up, so world space maps as `three.x = cube.x`, `three.y = height`,
 `three.z = cube.y`. One cube is one world unit.
+
+### Light, sky and fog are served, not hard-coded
+
+The light rig used to live twice, by hand. `HorribleAssaultPanel.tsx` set a
+hemisphere, a sun and a fill, `lighting.wgsl.inc` held the same numbers as WGSL
+constants, and every map was lit identically: a desert at noon and an office at
+night under one sun. Map `light` entities were parsed and then drawn by nobody.
+
+Now `GET /api/hassault/maps/{name}` serves two more fields, resolved on the
+backend (`backend/modules/hassault/atmosphere.py`):
+
+- **`atmosphere`:** sky zenith and horizon, hemisphere, sun, fill, fog, exposure
+  and whether a sun disc is drawn. A map source may set any of these, and the
+  rest come from its format's default. The two defaults are exactly the old rigs:
+  the dark cube-map rig and the daylight GLB one. So a map that says nothing
+  looks as it always did.
+- **`lights`:** the map's `light` entities as `x, y, z, radius, color, intensity`.
+  AC's grey shorthand (`g = b = 0` means grey of brightness `r`) is expanded here,
+  and our intensity percentage rides the fifth attribute, which AC ignores.
+
+Both clients draw from those numbers and carry no default of their own beyond a
+fallback for an older node. The fallback copies are pinned against the Python by
+`browser_parity.rs`. A point light gets `intensity × radius / 2` candela with
+three's `getDistanceAttenuation` (decay 2, windowed to zero at the radius), ported
+line for line into WGSL.
+
+The candela rule was first `(radius / 2)²`. Under inverse-square falloff that made
+a wide lamp a white blowout on the wall beside it, which is why it is now linear in
+the radius.
+
+The native client keeps the 64 lights nearest the eye (by distance minus radius)
+in a uniform beside the camera, at group 0 binding 1, because the downlevel limit
+is four bind groups. The skinned and prop shaders include the same `shade()`, so
+operators and weapons are lit by the map's lamps too. Lights cast no shadows.
+
+### The browser's graphics tier
+
+`hassault.graphics` is `auto`, `low`, `medium` or `high`. It draws the **same map
+data** at every level and changes only how much of it is drawn
+(`graphics.ts` `TIERS`):
+
+| | Low | Medium | High |
+| --- | --- | --- | --- |
+| Pixel ratio cap | 1 | 1.5 | 2 |
+| Anti-aliasing | off | on | on |
+| Shadow map | 1024, hard | 2048, hard | 2048, soft |
+| Map lights | 0 | 4 nearest | 8 nearest |
+| Sky dome | no | yes | yes |
+| Anisotropy | 1 | 4 | 16 |
+| Fog density | ×2, as native Low | ×1.36, as native Medium | the map's own |
+
+`auto` picks from the device pixel ratio and the WebGL renderer string. The pane
+stores the choice in the settings bag. The standalone build (`apps/assault-web`)
+has no `/api/settings`, so it keeps the choice in `localStorage`, wrapped in
+try/catch.
+
+The map lights are a **fixed pool** of `PointLight`s repositioned to the nearest
+few every 0.2 s. A changing light count recompiles every material's shader, so
+the pool never changes size; unused lights sit at zero intensity. Anti-aliasing is
+a WebGL context flag, so changing it takes effect on the next map load. There is no
+EffectComposer, which keeps the bundle and the frame cheap.
+
+The same change fixed three placement bugs on the browser side, all of the same
+kind: z-up map coordinates were put into y-up three space unconverted.
+
+- **Items** floated in the wrong place (`items.ts`).
+- **Water** was a vertical sheet across the map (`water.ts`).
+- **Ladders** lay on their side (`ladders.ts`).
+
+Water and ladders now also appear on modelled maps, not only cube ones.
 
 ### GLB map surfaces: UVs are derived, colour is authored
 
@@ -5972,33 +6109,123 @@ hip-fire penalty would be a setting that wins gunfights.
 
 ### Fullscreen, resolution and quality
 
-The client **opens fullscreen** (borderless, from the first frame rather than
-toggled after one — the alternative is a visible flash of a 1280×800 window on a
-4K monitor). Borderless rather than exclusive: exclusive takes the display mode,
-which is a mode switch at each end, a black screen with it, and every other window
-on that monitor rearranged when the game exits.
+The client **opens fullscreen** from the first frame rather than toggling after
+one. The alternative is a visible flash of a 1280×800 window on a 4K monitor.
+`hassault.video.displayMode` cycles through three modes, and borderless stays the
+default:
+
+- **Windowed.**
+- **Borderless.** Covers the chosen monitor without taking it over.
+- **Exclusive.** Takes the display mode chosen in `hassault.video.exclusiveMode`
+  (resolution and refresh rate, stored as `WIDTHxHEIGHT@HZ`) on the monitor chosen
+  in `hassault.video.monitor`. This costs a mode switch at each end, a black screen
+  with it, and every other window on that monitor rearranged when the game exits.
+  It is there for the display that only runs its highest refresh rate in
+  exclusive mode.
+
+A saved monitor or mode that no longer exists falls back to borderless on the
+primary monitor rather than failing. `display.rs` snapshots the monitors once and
+builds both fullscreen variants from that snapshot.
 
 "Resolution" is a **render scale**, not a mode switch. The world is drawn into an
-offscreen target at 50–100% of the window and blitted up; the HUD is drawn onto
-the swapchain *after* that blit, at native resolution, because 5×7 glyphs
-upscaled from half resolution are unreadable and the HUD costs nothing to draw at
-full size. The title bar reports the rendered size whenever it is not the
+offscreen target at 50–200% of the window and composited up. The HUD is drawn onto
+the swapchain *after* that, at native resolution, because 5×7 glyphs upscaled
+from half resolution are unreadable and the HUD costs nothing to draw at full
+size. The title bar reports the rendered size whenever it differs from the
 window's, since a render scale is otherwise invisible in a screenshot.
 
-Quality moves three things: the shading (flat, the hemisphere and sun, the fill as
-well), the fog's density, and — as a **preset, not a ceiling** — the
-anti-aliasing row below it. **High is the browser's own fog density**, not a value
-picked to look close: it is the level at which the two clients are meant to be the
-same picture, and the lower levels trade distance for fill rate from there.
+**Quality is a preset, not a ceiling.** Picking a level writes every row it
+covers, and any later change to a row turns the label into `CUSTOM (HIGH)`. That
+is also why `menu::apply` returns a *list* of keys: persisting only
+`hassault.video.quality` would bring the level back next session with the old
+rows underneath it.
 
-Anti-aliasing used to be derived from the level with no way to say otherwise,
-which made the one setting with a measurable cost on an integrated GPU the one
-setting nobody could turn off without also flattening the shading. It is its own
-row now, and picking a quality level **writes** it rather than shadowing it — so
-the menu never shows `HIGH` next to `ANTI-ALIASING OFF`, and a choice made after
-the preset survives it. That is also why `menu::apply` returns a *list* of keys:
-persisting only `hassault.video.quality` would bring the level back next session
-with the old sample count underneath it.
+| | Low | Medium | High | Ultra |
+| --- | --- | --- | --- | --- |
+| Shading | flat | hemisphere + sun | + fill | + fill |
+| Fog | ×2 | ×1.36 | the map's own | the map's own |
+| MSAA | off | off | 4× | 8×, where supported |
+| Anisotropy | 4× | 8× | 16× | 16× |
+| Textures (per layer) | 128 | 256 | 256 | 512 |
+| Shadows | 1024, 4 taps | 2048, 8 taps | 2048, 16 taps | 4096, 16 taps |
+| Map lights | 0 | 8 | 16 | 64 |
+| Sky dome | no | yes | yes | yes |
+| Bloom | off | off | off | 50% |
+
+**High uses the map's own fog density.** That is not a value picked to look
+close: it is the level at which the two clients are meant to draw the same
+picture, and the lower levels trade distance for fill rate from there. Low
+returns the surface *flat*, with no hemisphere, sun or shadow. That is the level's
+choice, not a cheaper approximation of the same picture, so a screenshot taken at
+Low beside a browser screenshot is not evidence the clients diverge.
+
+### Advanced video
+
+The Video page opens an **Advanced** page with the rows the preset writes, plus
+four that no preset touches:
+
+- **Anti-aliasing** (`msaa`): off, 2×, 4× or 8×, offered only where the GPU
+  supports it (see below).
+- **Anisotropy** (`anisotropy`): 1× to 16×.
+- **Texture quality** (`textureQuality`): 128, 256 or 512 texels per layer. The
+  procedural surface array is regenerated with a full mip chain.
+- **Shadows** (`shadowQuality`): Low to Extreme, from 1024 texels and 4 filter taps
+  up to 8192 and 16. The map is still baked once at load, so this costs memory and
+  sampling, not a pass per frame. Bias scales with the texel size.
+- **Map lights** (`mapLights`): 0 to 64 of the nearest.
+- **Sky** (`sky`): the dome on open maps, drawn from the served atmosphere with the
+  same formula as the browser's.
+- **Bloom** (`bloom`): a five-level chain in `post.rs`, a 13-tap downsample and a
+  tent upsample over the tone-mapped scene. The threshold is 0.82, so only
+  lamps, flames and sunlit highlights glow.
+- **Sharpening** (`sharpen`): contrast-adaptive, in the final composite. Most
+  useful below a render scale of 100%.
+- **Brightness** (`brightness`): a multiplier on the map's exposure.
+- **Frame latency** (`frameLatency`): 1 to 3 frames queued, passed to the surface
+  as `desired_maximum_frame_latency`. One is the lowest input lag, three the
+  smoothest pacing on a GPU that is near its limit.
+
+All the keys live under `hassault.video.`, and all are in the manifest, so the
+dashboard's settings page lists them.
+
+### Choosing the GPU
+
+A **Display and GPU** page holds the rows that need the device rebuilt. Each is
+marked "applies on restart", and the page ends in a **Restart now** row. That row
+finishes the settings write, leaves the match and re-executes the client with the
+same arguments.
+
+- **GPU** (`hassault.video.adapter`): `auto`, or an adapter saved by **name**
+  rather than by index, so adding a second GPU does not silently switch the game
+  to it. `gpu::adapters` lists each physical GPU once, deduplicated by PCI vendor
+  and device id; GL reports no device id, so it matches on the name before the
+  first `/`. The list is sorted discrete-first.
+- **Graphics API** (`hassault.video.backend`): `auto`, `dx12`, `vulkan` or `gl`.
+  `auto` means the primary backends and **never GL**, which is there for a machine
+  whose driver is broken for the other two.
+- **Power preference** (`hassault.video.powerPreference`): high performance, or
+  low power for a laptop on battery.
+
+**Hybrid laptops.** On an NVIDIA Optimus or AMD switchable machine, the driver
+can pin a process to the integrated GPU whatever wgpu asks for. The executable
+therefore exports `NvOptimusEnablement` and `AmdPowerXpressRequestHighPerformance`,
+which the drivers read at process start. Rust does not export symbols from a
+binary by default, so `build.rs` passes `/EXPORT:` to the MSVC linker. The machine
+this was written on is such a laptop (RTX 4080 Laptop plus an Intel iGPU), and
+with the GPU on `auto` it opens on the RTX over Vulkan.
+
+**From the command line:**
+
+- `--list-adapters` prints the deduplicated list as JSON and exits.
+  `GET /api/hassault/native/adapters` runs it and caches the answer by binary path
+  and modification time.
+- `--adapter=`, `--backend=` and `--low-power` override the saved choice for one
+  run.
+- `--windowed` starts in a window.
+- `--set=key=value` overrides any setting for one run without saving it, which is
+  how the screenshot scripts pin a preset.
+
+The title bar names the backend and GPU actually in use.
 
 ### The rest of the video page
 
@@ -6044,21 +6271,22 @@ of 37 is not wrong so much as meaningless — honouring it would leave the menu
 holding a value none of its steps can reach, so the row would jump the first time
 it was touched.
 
-:::warning 2× MSAA is not a supported sample count
-Only **1 and 4** are guaranteed by the spec. The machine this was written on
-reports `[1, 2, 4, 8]` — but only behind `TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES`,
-a feature this client deliberately does not request, because asking for more than
-the scene needs is how a client refuses to start on a perfectly capable integrated
-GPU. A pipeline built with 2× is a **validation error on the first frame**, not a
-slower one, and that is exactly how the first build of the quality setting
-crashed. That is why the setting is a **`bool`** rather than a count: a field that
-cannot hold 2 cannot be set to 2 by a later edit either. Low and Medium therefore
-default to no anti-aliasing and differ in shading and fog, which is the more
-visible difference anyway. Note that Low returns the
-surface *flat* — no hemisphere, no sun, no shadow — which is a level's choice and
-not a cheaper approximation of the same picture; a screenshot taken at Low beside
-a browser screenshot is not evidence the clients diverge. The support list is not the
-guarantee.
+:::warning 2× and 8× MSAA exist only where the adapter says so
+The spec guarantees only **1 and 4**. Counts beyond those sit behind
+`TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES`. A pipeline built with an unsupported
+count is a **validation error on the first frame**, not a slower one, and that is
+exactly how the first build of the quality setting crashed.
+
+So the client requests that feature **only if the adapter lists it**. Requiring it
+is how a client refuses to start on a perfectly capable integrated GPU. The client
+then asks the adapter which counts every attachment format of the pass supports,
+and offers only those (`gpu::supported_sample_counts`).
+
+A saved count is **snapped down** to that list (`gpu::snap_samples`), never up:
+8× on a GPU that tops out at 4× becomes 4×, and 2× where only 1 and 4 exist becomes
+off, since the reason to pick 2× was that 4× was too slow. The setting used to be a
+`bool` so that it could not hold an unsupported 2; the snap is what now makes a
+count safe to store.
 :::
 
 ### Selecting High crashed the client
@@ -8124,8 +8352,21 @@ The skin system provides distinct faction styling and collectible operator skins
 - **`CORNER` cells render as open.** The type is a diagonal half-wall; treating it
   as fully open leaves a small gap rather than blocking a passage, which is the
   safer wrong answer. They are rare — 104 of 65 536 cells in `ac_desert`.
-- **No map models, water, or sky.** `mapmodel` entities (crates, foliage) are
-  parsed and exposed but not rendered, and the water level is read but not drawn.
+- **No map models on installed maps.** `mapmodel` entities (crates, foliage) are
+  parsed and exposed but not rendered. Water and a sky are drawn now, in both
+  clients.
+- **Map lights cast no shadows.** Only the sun does, from a map baked once at
+  load. A lamp lights the wall behind a crate as if the crate were not there.
+  Both clients also cap how many they draw at once: the native client the 64
+  nearest, the browser 8.
+- **Nuke's B silo is sealed.** It sits directly under hall A, and the server's
+  heightfield keeps one floor per column. Opening it would make A's floor the
+  silo's ceiling online. The offline tables still place a health and an armour
+  pickup down there, which nobody can reach.
+- **Upper floors are offline-only on modelled maps.** The same one-floor rule
+  means a catwalk or a second storey over a walkable street (Mirage's
+  apartments, Nuke's rafters) is the street's ceiling on the server. It can be
+  stood on offline through Rapier, not in a hosted match.
 - **Two official spawns leave your head in a lintel.** `ac_arid` (180, 122) and
   `ac_snow` (48, 146) sit where the 2.2-cube body reaches into a cell with one or
   two cubes of headroom, so `can_stand` is false at the spot the spawn names. AC
@@ -8194,8 +8435,9 @@ The skin system provides distinct faction styling and collectible operator skins
   per-entity-type scaling table this reader does not apply; such maps are flagged
   `legacy_unscaled_attrs`. Every official 1.3 map is v10, so nothing shipped is
   affected. Positions and the cube grid are correct regardless.
-- Lighting (`r`/`g`/`b` per cube) is computed by the engine at load time via
-  `calclight` and is not stored in the file, so it is not reproduced here.
+- AC's baked lighting (`r`/`g`/`b` per cube) is computed by the engine at load
+  time via `calclight` and is not stored in the file, so it is not reproduced.
+  The `light` entities it is computed from are drawn as real point lights instead.
 - The whole map is one mesh with no culling beyond the frustum. Fine at the ~50–90k
   triangles a 256×256 map produces; it would need chunking before it grows.
 
@@ -8203,10 +8445,10 @@ The skin system provides distinct faction styling and collectible operator skins
 
 1. **Map and asset pipeline** — done, both directions: a reader for AssaultCube's
    maps and a writer for ours.
-2. **Bundled maps** — done: five original maps ship with the app, so it needs no
-   AssaultCube install to be playable. Three are Cube heightfields; `hd_facility`
-   and `hd_junkflea` are [`gltf` levels](#two-level-formats-cube-and-gltf) with
-   real 3D geometry.
+2. **Bundled maps** — done: twelve original maps ship with the app, so it needs no
+   AssaultCube install to be playable. Three are Cube heightfields; nine are
+   [`gltf` levels](#two-level-formats-cube-and-gltf) with real 3D geometry, their
+   own light and sky, and a Blender generator each.
 3. **Three.js renderer** — done: walk any map in first person.
 4. **Netcode** — done: an authoritative match server on the local backend, with
    client prediction, reconciliation, and entity interpolation. JSON on the shared

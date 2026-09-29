@@ -5,6 +5,23 @@
   "sfactor": 8,
   "waterlevel": -100,
   "ambient": 55,
+  "atmosphere": {
+    "skyZenith": 3042503,
+    "skyHorizon": 14997702,
+    "hemiSky": 11848939,
+    "hemiGround": 11897948,
+    "hemiIntensity": 1.25,
+    "sunColor": 16768176,
+    "sunIntensity": 3.1,
+    "sunDir": [-0.52, 0.64, 0.56],
+    "fillColor": 16766627,
+    "fillIntensity": 0.35,
+    "fillDir": [-0.45, 0.25, -0.6],
+    "fogColor": 14734528,
+    "fogDensity": 0.0011,
+    "exposure": 1.0,
+    "sunDisc": true
+  },
   "format": "gltf",
   "modes": ["defuse", "tdm", "dm"],
   "brushes": [
@@ -76,7 +93,7 @@
     },
     {
       "op": "room",
-      "rect": [109, 29, 87, 25],
+      "rect": [109, 29, 87, 4],
       "floor": 0,
       "ceil": 38
     },
@@ -88,31 +105,91 @@
     },
     {
       "op": "room",
-      "rect": [107, 31, 2, 105],
+      "rect": [107, 31, 2, 83],
       "floor": 0,
       "ceil": 38
     },
     {
       "op": "room",
-      "rect": [14, 54, 22, 141],
+      "rect": [109, 33, 50, 21],
       "floor": 0,
       "ceil": 38
     },
     {
       "op": "room",
-      "rect": [36, 54, 36, 42],
+      "rect": [159, 33, 12, 2],
+      "floor": 1,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [171, 33, 25, 21],
+      "floor": 0,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [159, 35, 12, 2],
+      "floor": 2,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [159, 37, 12, 3],
+      "floor": 3,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [159, 40, 12, 2],
+      "floor": 4,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [159, 42, 12, 2],
+      "floor": 5,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [159, 44, 12, 3],
+      "floor": 6,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [159, 47, 12, 4],
+      "floor": 7,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [159, 51, 12, 60],
+      "floor": 8,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [14, 54, 22, 6],
+      "floor": 0,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [36, 54, 34, 42],
       "floor": 0,
       "ceil": 7
     },
     {
       "op": "room",
-      "rect": [72, 54, 2, 36],
-      "floor": 0,
-      "ceil": 8
+      "rect": [70, 54, 4, 18],
+      "floor": 17,
+      "ceil": 38
     },
     {
       "op": "room",
-      "rect": [74, 54, 33, 36],
+      "rect": [74, 54, 33, 12],
       "floor": 0,
       "ceil": 38
     },
@@ -124,7 +201,13 @@
     },
     {
       "op": "room",
-      "rect": [144, 54, 40, 3],
+      "rect": [144, 54, 15, 4],
+      "floor": 8,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [171, 54, 13, 54],
       "floor": 8,
       "ceil": 38
     },
@@ -148,18 +231,6 @@
     },
     {
       "op": "room",
-      "rect": [144, 57, 3, 1],
-      "floor": 8,
-      "ceil": 38
-    },
-    {
-      "op": "room",
-      "rect": [183, 57, 1, 51],
-      "floor": 8,
-      "ceil": 38
-    },
-    {
-      "op": "room",
       "rect": [109, 58, 34, 1],
       "floor": 0,
       "ceil": 38
@@ -178,13 +249,13 @@
     },
     {
       "op": "room",
-      "rect": [145, 58, 2, 1],
+      "rect": [145, 58, 14, 1],
       "floor": 8,
       "ceil": 38
     },
     {
       "op": "room",
-      "rect": [109, 59, 33, 52],
+      "rect": [109, 59, 33, 55],
       "floor": 0,
       "ceil": 38
     },
@@ -202,8 +273,20 @@
     },
     {
       "op": "room",
-      "rect": [146, 59, 1, 49],
+      "rect": [146, 59, 13, 49],
       "floor": 8,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [14, 60, 13, 46],
+      "floor": 0,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [27, 60, 9, 2],
+      "floor": 1,
       "ceil": 38
     },
     {
@@ -220,6 +303,12 @@
     },
     {
       "op": "room",
+      "rect": [27, 62, 9, 3],
+      "floor": 2,
+      "ceil": 38
+    },
+    {
+      "op": "room",
       "rect": [143, 62, 1, 8],
       "floor": 0,
       "ceil": 38
@@ -228,6 +317,54 @@
       "op": "room",
       "rect": [144, 62, 1, 8],
       "floor": 8,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [27, 65, 9, 3],
+      "floor": 3,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [74, 66, 10, 24],
+      "floor": 0,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [84, 66, 18, 3],
+      "floor": 18,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [102, 66, 5, 70],
+      "floor": 0,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [27, 68, 9, 2],
+      "floor": 4,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [84, 69, 3, 12],
+      "floor": 18,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [99, 69, 3, 12],
+      "floor": 18,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [27, 70, 9, 3],
+      "floor": 5,
       "ceil": 38
     },
     {
@@ -256,6 +393,18 @@
     },
     {
       "op": "room",
+      "rect": [70, 72, 4, 6],
+      "floor": 0,
+      "ceil": 7
+    },
+    {
+      "op": "room",
+      "rect": [27, 73, 9, 3],
+      "floor": 6,
+      "ceil": 38
+    },
+    {
+      "op": "room",
       "rect": [142, 73, 1, 10],
       "floor": 0,
       "ceil": 38
@@ -276,6 +425,42 @@
       "op": "room",
       "rect": [144, 74, 1, 8],
       "floor": 8,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [27, 76, 9, 2],
+      "floor": 7,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [27, 78, 9, 3],
+      "floor": 8,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [70, 78, 4, 18],
+      "floor": 17,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [87, 78, 12, 3],
+      "floor": 18,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [27, 81, 9, 3],
+      "floor": 9,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [84, 81, 18, 75],
+      "floor": 0,
       "ceil": 38
     },
     {
@@ -304,6 +489,12 @@
     },
     {
       "op": "room",
+      "rect": [27, 84, 9, 22],
+      "floor": 0,
+      "ceil": 38
+    },
+    {
+      "op": "room",
       "rect": [142, 85, 1, 10],
       "floor": 0,
       "ceil": 38
@@ -328,25 +519,13 @@
     },
     {
       "op": "room",
-      "rect": [72, 90, 1, 6],
-      "floor": 0,
-      "ceil": 8
-    },
-    {
-      "op": "room",
-      "rect": [73, 90, 1, 6],
-      "floor": 17,
-      "ceil": 38
-    },
-    {
-      "op": "room",
       "rect": [74, 90, 9, 3],
       "floor": 5,
       "ceil": 38
     },
     {
       "op": "room",
-      "rect": [83, 90, 24, 46],
+      "rect": [83, 90, 1, 66],
       "floor": 0,
       "ceil": 38
     },
@@ -388,7 +567,7 @@
     },
     {
       "op": "room",
-      "rect": [36, 96, 37, 39],
+      "rect": [36, 96, 37, 10],
       "floor": 0,
       "ceil": 38
     },
@@ -424,43 +603,85 @@
     },
     {
       "op": "room",
-      "rect": [147, 105, 36, 3],
-      "floor": 8,
-      "ceil": 38
-    },
-    {
-      "op": "room",
-      "rect": [144, 108, 44, 10],
+      "rect": [14, 106, 1, 89],
       "floor": 0,
       "ceil": 38
     },
     {
       "op": "room",
-      "rect": [109, 111, 17, 25],
+      "rect": [15, 106, 29, 4],
+      "floor": 15,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [44, 106, 29, 29],
       "floor": 0,
       "ceil": 38
     },
     {
       "op": "room",
-      "rect": [126, 111, 12, 3],
-      "floor": 5,
-      "ceil": 38
-    },
-    {
-      "op": "room",
-      "rect": [138, 111, 4, 84],
+      "rect": [144, 108, 15, 10],
       "floor": 0,
       "ceil": 38
     },
     {
       "op": "room",
-      "rect": [126, 114, 3, 15],
-      "floor": 5,
+      "rect": [171, 108, 17, 36],
+      "floor": 0,
       "ceil": 38
     },
     {
       "op": "room",
-      "rect": [135, 114, 3, 15],
+      "rect": [15, 110, 29, 85],
+      "floor": 0,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [159, 111, 12, 4],
+      "floor": 7,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [107, 114, 1, 22],
+      "floor": 0,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [108, 114, 18, 3],
+      "floor": 15,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [126, 114, 16, 6],
+      "floor": 0,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [159, 115, 12, 2],
+      "floor": 6,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [108, 117, 3, 11],
+      "floor": 15,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [123, 117, 3, 11],
+      "floor": 15,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [159, 117, 12, 2],
       "floor": 5,
       "ceil": 38
     },
@@ -472,8 +693,38 @@
     },
     {
       "op": "room",
-      "rect": [146, 118, 42, 23],
+      "rect": [146, 118, 13, 24],
       "floor": 0,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [159, 119, 12, 2],
+      "floor": 4,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [126, 120, 6, 16],
+      "floor": 0,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [132, 120, 9, 3],
+      "floor": 1,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [141, 120, 1, 75],
+      "floor": 0,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [159, 121, 12, 3],
+      "floor": 3,
       "ceil": 38
     },
     {
@@ -490,14 +741,38 @@
     },
     {
       "op": "room",
+      "rect": [132, 123, 9, 3],
+      "floor": 2,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [159, 124, 12, 2],
+      "floor": 2,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [111, 125, 12, 3],
+      "floor": 15,
+      "ceil": 38
+    },
+    {
+      "op": "room",
       "rect": [73, 126, 10, 30],
       "floor": 0,
       "ceil": 38
     },
     {
       "op": "room",
-      "rect": [129, 126, 6, 3],
-      "floor": 5,
+      "rect": [132, 126, 9, 4],
+      "floor": 3,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [159, 126, 12, 2],
+      "floor": 1,
       "ceil": 38
     },
     {
@@ -508,13 +783,31 @@
     },
     {
       "op": "room",
-      "rect": [126, 129, 12, 7],
+      "rect": [108, 128, 18, 8],
       "floor": 0,
       "ceil": 38
     },
     {
       "op": "room",
-      "rect": [36, 135, 10, 60],
+      "rect": [159, 128, 12, 14],
+      "floor": 0,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [132, 130, 9, 3],
+      "floor": 4,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [132, 133, 9, 3],
+      "floor": 5,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [44, 135, 2, 60],
       "floor": 0,
       "ceil": 38
     },
@@ -550,20 +843,14 @@
     },
     {
       "op": "room",
-      "rect": [83, 136, 19, 20],
-      "floor": 0,
-      "ceil": 38
-    },
-    {
-      "op": "room",
       "rect": [102, 136, 30, 2],
       "floor": 0,
       "ceil": 7
     },
     {
       "op": "room",
-      "rect": [132, 136, 6, 59],
-      "floor": 0,
+      "rect": [132, 136, 9, 4],
+      "floor": 6,
       "ceil": 38
     },
     {
@@ -574,43 +861,13 @@
     },
     {
       "op": "room",
-      "rect": [102, 140, 30, 1],
+      "rect": [102, 140, 39, 3],
       "floor": 7,
       "ceil": 38
     },
     {
       "op": "room",
       "rect": [46, 141, 16, 10],
-      "floor": 0,
-      "ceil": 38
-    },
-    {
-      "op": "room",
-      "rect": [102, 141, 3, 21],
-      "floor": 7,
-      "ceil": 38
-    },
-    {
-      "op": "room",
-      "rect": [129, 141, 3, 21],
-      "floor": 7,
-      "ceil": 38
-    },
-    {
-      "op": "room",
-      "rect": [146, 141, 23, 1],
-      "floor": 0,
-      "ceil": 38
-    },
-    {
-      "op": "room",
-      "rect": [169, 141, 10, 18],
-      "floor": 3,
-      "ceil": 38
-    },
-    {
-      "op": "room",
-      "rect": [179, 141, 9, 54],
       "floor": 0,
       "ceil": 38
     },
@@ -628,7 +885,37 @@
     },
     {
       "op": "room",
-      "rect": [163, 142, 6, 53],
+      "rect": [163, 142, 8, 2],
+      "floor": 0,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [102, 143, 30, 19],
+      "floor": 7,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [132, 143, 9, 52],
+      "floor": 0,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [163, 144, 6, 51],
+      "floor": 0,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [169, 144, 10, 6],
+      "floor": 1,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [179, 144, 9, 51],
       "floor": 0,
       "ceil": 38
     },
@@ -642,6 +929,12 @@
       "op": "room",
       "rect": [158, 146, 5, 49],
       "floor": 0,
+      "ceil": 38
+    },
+    {
+      "op": "room",
+      "rect": [169, 150, 10, 6],
+      "floor": 2,
       "ceil": 38
     },
     {
@@ -700,14 +993,14 @@
     },
     {
       "op": "room",
-      "rect": [64, 158, 4, 3],
-      "floor": 15,
+      "rect": [169, 156, 10, 3],
+      "floor": 3,
       "ceil": 38
     },
     {
       "op": "room",
-      "rect": [105, 159, 24, 3],
-      "floor": 7,
+      "rect": [64, 158, 4, 3],
+      "floor": 15,
       "ceil": 38
     },
     {
@@ -847,7 +1140,52 @@
     {"type": "ammo", "x": 142, "y": 96, "z": 0},
     {"type": "ammo", "x": 100, "y": 150, "z": 0},
     {"type": "clips", "x": 102, "y": 54, "z": 0},
-    {"type": "grenade", "x": 84, "y": 108, "z": 0}
+    {"type": "grenade", "x": 84, "y": 108, "z": 0},
+    {
+      "type": "light",
+      "x": 54,
+      "y": 63,
+      "z": 6,
+      "radius": 21,
+      "color": [255, 186, 112],
+      "intensity": 2.0
+    },
+    {
+      "type": "light",
+      "x": 54,
+      "y": 87,
+      "z": 6,
+      "radius": 21,
+      "color": [255, 186, 112],
+      "intensity": 2.0
+    },
+    {
+      "type": "light",
+      "x": 84,
+      "y": 138,
+      "z": 10,
+      "radius": 21,
+      "color": [255, 186, 112],
+      "intensity": 2.0
+    },
+    {
+      "type": "light",
+      "x": 93,
+      "y": 85,
+      "z": 10,
+      "radius": 18,
+      "color": [255, 186, 112],
+      "intensity": 1.6
+    },
+    {
+      "type": "light",
+      "x": 117,
+      "y": 112,
+      "z": 9,
+      "radius": 18,
+      "color": [255, 186, 112],
+      "intensity": 1.6
+    }
   ],
   "objectives": {
     "sites": [

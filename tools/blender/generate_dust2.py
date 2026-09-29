@@ -324,7 +324,7 @@ def add_crenellations(collection, name, start, end, height, mats):
             add_box(collection, f"{name}_cren_{i}", (cx, cy, sz + height * 0.5), (size_x, size_y, height), mats["sandstone_ochre"])
 
 
-def add_hanging_lantern(collection, name, ceiling_pos, mats):
+def add_hanging_lantern(collection, name, ceiling_pos, mats, radius=7.0, intensity=2.0):
     """Ornate brass Moroccan lantern with chain link and glowing flame core."""
     cx, cy, cz = ceiling_pos
     # Iron chain
@@ -337,6 +337,7 @@ def add_hanging_lantern(collection, name, ceiling_pos, mats):
     add_cylinder(collection, f"{name}_flame_NonCol", (cx, cy, cz - 1.05), radius=0.10, height=0.25, material=mats["lantern_flame"], segments=6)
     # Bottom finial point
     add_cylinder(collection, f"{name}_finial_NonCol", (cx, cy, cz - 1.30), radius=0.06, height=0.12, material=mats["lantern_brass"], segments=6)
+    maplib.add_light((cx, cy, cz - 1.05), color=(255, 186, 112), radius=radius, intensity=intensity)
 
 
 def add_market_stall(collection, name, center, size, mats):
@@ -410,7 +411,7 @@ def build_long_a_and_pit(col, mats):
     add_box(col, "Pit_Curb_West", (50.5, 12.0, 0.4), (1.0, 12.0, 0.8), mats["sandstone_dark"])
     add_box(col, "Pit_Curb_Cap_NonCol", (50.5, 12.0, 0.85), (1.2, 12.2, 0.12), mats["sandstone_light"])
     # Stepped Ramp out of Pit
-    add_box(col, "Pit_Ramp", (54.0, 19.0, -0.4), (4.5, 4.0, 0.8), mats["limestone_paving"])
+    maplib.add_wedge(col, "Pit_Ramp", (54.0, 19.5, -0.7), (4.5, 5.0, 1.4), mats["limestone_paving"], "+y")
 
     # Abandoned rusted vehicle barricade in Pit
     add_box(col, "Pit_Car_Chassis", (58.0, 12.0, -0.2), (4.2, 2.0, 1.0), mats["metal_iron_rusted"])
@@ -509,7 +510,7 @@ def build_middle_and_mid_doors(col, mats):
     add_box(col, "Xbox_Crate_Brackets_NonCol", (30.0, 38.0, 0.8), (1.64, 0.15, 1.64), mats["metal_iron_rusted"])
 
     # Suicide Ramp from T Spawn leading down into Mid
-    add_box(col, "Mid_Suicide_Ramp", (31.0, 20.0, 0.6), (5.5, 8.5, 1.2), mats["limestone_paving"])
+    maplib.add_wedge(col, "Mid_Suicide_Ramp", (31.0, 20.0, 0.6), (5.5, 8.5, 1.2), mats["limestone_paving"], "-y")
 
 
 def build_dark_tunnels(col, mats):
@@ -524,7 +525,7 @@ def build_dark_tunnels(col, mats):
     # Tunnel decorative stone arches every 6 meters with hanging lanterns
     for ty in [26.0, 32.0, 38.0]:
         add_arch(col, f"Tunnel_Arch_{int(ty)}", (15.0, ty, 0.0), span=4.8, height=3.8, depth=1.2, material=mats["sandstone_ochre"])
-        add_hanging_lantern(col, f"Lantern_Tunnel_{int(ty)}", (15.0, ty, 4.1), mats)
+        add_hanging_lantern(col, f"Lantern_Tunnel_{int(ty)}", (15.0, ty, 4.1), mats, radius=8.0, intensity=2.5)
 
 
 def build_site_b(col, mats):
@@ -597,6 +598,118 @@ def build_spawns_and_props(col, mats):
     add_box(col, "Window_Glass_B_Site", (14.0, 56.0, 3.2), (0.12, 2.0, 1.4), mats["glass_window"])
 
 
+def add_wall_sconce(collection, name, pos, facing, mats, radius=6.0, intensity=2.2):
+    """An iron bracket and a caged flame on a wall, lighting the stone around it.
+
+    `facing` is the unit (x, y) the wall faces, so the fixture stands off it.
+    """
+    x, y, z = pos
+    fx, fy = facing
+    add_box(collection, f"{name}_bracket_NonCol", (x + fx * 0.18, y + fy * 0.18, z - 0.2), (0.36 if fx else 0.08, 0.36 if fy else 0.08, 0.08), mats["metal_iron_rusted"])
+    add_cylinder(collection, f"{name}_cage_NonCol", (x + fx * 0.34, y + fy * 0.34, z), radius=0.13, height=0.34, material=mats["lantern_brass"], segments=6)
+    add_cylinder(collection, f"{name}_flame_NonCol", (x + fx * 0.34, y + fy * 0.34, z), radius=0.07, height=0.2, material=mats["lantern_flame"], segments=6)
+    maplib.add_light((x + fx * 0.5, y + fy * 0.5, z), color=(255, 176, 102), radius=radius, intensity=intensity)
+
+
+def build_layout_revision(col, mats):
+    """Layout changes over the original blockout.
+
+    - Mid doors are a choke: the lane is 18 m wide and the doors spanned 6 of it,
+      so the 9 m beside them was an open street. A wall now closes it.
+    - Catwalk can be walked onto from mid (a ramp at its south edge) instead of
+      only jumped onto from the Xbox crate or Site A.
+    - Cover where a lane had none: a cart in Long A, a planter on the CT side of
+      Short, a well in B.
+    """
+    add_box(col, "Wall_MidDoors_East", (38.6, 32.0, 3.0), (9.4, 1.2, 6.0), mats["sandstone_light"])
+    add_box(col, "Cornice_MidDoors_East_NonCol", (38.6, 32.0, 6.12), (9.6, 1.4, 0.24), mats["sandstone_ochre"])
+    maplib.add_wedge(col, "Catwalk_Ramp", (39.5, 39.75, 1.2), (5.0, 5.5, 2.4), mats["limestone_paving"], "+y")
+
+    add_box(col, "LongA_Cart_Bed", (60.0, 26.0, 0.75), (2.4, 1.4, 0.9), mats["wood_crate"])
+    add_box(col, "LongA_Cart_Shaft_NonCol", (61.9, 26.0, 0.55), (1.6, 0.12, 0.1), mats["wood_cedar_weathered"])
+    for wx in (59.1, 60.9):
+        for wy in (25.2, 26.8):
+            add_cylinder(col, f"LongA_Cart_Wheel_{int(wx*10)}_{int(wy*10)}_NonCol", (wx, wy, 0.35), radius=0.35, height=0.1, material=mats["wood_cedar_weathered"], segments=10)
+
+    add_box(col, "CT_Planter", (38.0, 53.0, 0.45), (4.0, 0.9, 0.9), mats["sandstone_dark"])
+    add_box(col, "CT_Planter_Soil_NonCol", (38.0, 53.0, 0.92), (3.7, 0.6, 0.06), mats["desert_sand"])
+
+    add_cylinder(col, "SiteB_Well", (11.0, 48.0, 0.5), radius=1.1, height=1.0, material=mats["sandstone_dark"], segments=14)
+    add_box(col, "SiteB_Well_Beam_NonCol", (11.0, 48.0, 2.3), (2.6, 0.14, 0.14), mats["wood_cedar_weathered"])
+    for px in (9.95, 12.05):
+        add_box(col, f"SiteB_Well_Post_{int(px*100)}_NonCol", (px, 48.0, 1.65), (0.14, 0.14, 1.3), mats["wood_cedar_weathered"])
+
+
+def build_dressing(col, mats):
+    """Trim and clutter. Merged per material so it costs a handful of nodes."""
+    # Plinths: a darker, proud course at the foot of the long walls, which is
+    # what stops a 60 m wall reading as one flat plane.
+    plinth = []
+    for x, y0, y1 in ((44.0, 8.0, 48.0), (26.0, 16.0, 48.0)):
+        for side in (-1, 1):
+            plinth.append(((x + side * 0.76, (y0 + y1) / 2, 0.25), (0.14, y1 - y0, 0.5)))
+    for y in (4.0, 66.0):
+        plinth.append(((35.0, y + (0.76 if y < 35 else -0.76), 0.25), (62.0, 0.14, 0.5)))
+    for x in (4.0, 66.0):
+        plinth.append(((x + (0.76 if x < 35 else -0.76), 35.0, 0.25), (0.14, 62.0, 0.5)))
+    maplib.add_boxes(col, "Trim_Plinths_NonCol", plinth, mats["sandstone_dark"])
+
+    # Vigas: roof timbers poking through the top of the long walls, every 2 m.
+    vigas = []
+    for x, y0, y1 in ((44.0, 9.0, 47.0), (26.0, 17.0, 47.0)):
+        y = y0
+        while y <= y1:
+            vigas.append(((x, y, 8.3), (2.2, 0.22, 0.22)))
+            y += 2.0
+    maplib.add_boxes(col, "Trim_Vigas_NonCol", vigas, mats["wood_cedar_weathered"])
+
+    # Awnings over the doorways people fight through.
+    maplib.add_boxes(col, "Awning_Doors_NonCol", [
+        ((52.0, 16.0, 6.5), (6.4, 1.6, 0.06)),
+        ((24.5, 57.0, 4.2), (1.4, 4.4, 0.06)),
+        ((30.7, 31.1, 5.8), (6.8, 1.2, 0.06)),
+    ], mats["canopy_saffron"])
+
+    # Hung cloth on the perimeter, alternating colours.
+    banners_red, banners_gold = [], []
+    for i, x in enumerate(range(10, 64, 9)):
+        (banners_red if i % 2 == 0 else banners_gold).append(((x, 65.2, 6.5), (1.2, 0.04, 3.0)))
+        (banners_gold if i % 2 == 0 else banners_red).append(((x, 4.8, 6.5), (1.2, 0.04, 3.0)))
+    maplib.add_boxes(col, "Banners_Red_NonCol", banners_red, mats["canopy_crimson"])
+    maplib.add_boxes(col, "Banners_Gold_NonCol", banners_gold, mats["canopy_saffron"])
+
+    # Lines strung across mid, well over head height.
+    maplib.add_boxes(col, "Cable_Mid_NonCol", [
+        ((35.0, y, 7.2 - (i % 2) * 0.4), (18.0, 0.03, 0.03)) for i, y in enumerate((20.0, 26.0, 38.0, 44.0))
+    ], mats["metal_iron_rusted"])
+
+    # Rubble and broken paving at wall corners.
+    maplib.add_boxes(col, "Rubble_NonCol", [
+        ((45.1, 9.0, 0.12), (0.5, 0.4, 0.24)), ((45.3, 9.6, 0.08), (0.3, 0.3, 0.16)),
+        ((27.0, 47.0, 0.1), (0.45, 0.5, 0.2)), ((65.0, 64.9, 0.14), (0.6, 0.5, 0.28)),
+        ((5.2, 5.4, 0.12), (0.5, 0.5, 0.24)), ((21.0, 60.8, 0.1), (0.4, 0.4, 0.2)),
+    ], mats["sandstone_dark"])
+
+
+def build_lights(col, mats):
+    """Sconces where the sun cannot reach, and the map's sky."""
+    # Dark: the roofed tunnel between T and B, lit only by what hangs in it.
+    for i, y in enumerate((23.5, 29.0, 35.0, 41.0)):
+        add_wall_sconce(col, f"Sconce_Tunnel_W_{i}", (8.7, y, 2.6), (1, 0), mats)
+    # The east wall stops at y 38, where the tunnel opens toward Upper B.
+    for i, y in enumerate((26.0, 32.0, 37.0)):
+        add_wall_sconce(col, f"Sconce_Tunnel_E_{i}", (21.3, y, 2.6), (-1, 0), mats)
+    # B: either side of the double doors, and over the exit from Upper Dark.
+    add_wall_sconce(col, "Sconce_BDoors_N", (25.3, 59.6, 3.0), (-1, 0), mats)
+    add_wall_sconce(col, "Sconce_BDoors_S", (25.3, 54.4, 3.0), (-1, 0), mats)
+    add_hanging_lantern(col, "Lantern_UpperB", (16.0, 44.0, 4.4), mats, radius=7.0, intensity=2.0)
+    # CT and the Short A portal.
+    add_hanging_lantern(col, "Lantern_ShortA", (43.0, 48.0, 6.6), mats, radius=6.0, intensity=1.8)
+    add_wall_sconce(col, "Sconce_Goose", (57.5, 61.3, 3.2), (0, -1), mats)
+
+    maplib.set_atmosphere("desert_noon")
+
+
 def build_dust2_scene():
     clear_scene()
     mats = setup_materials()
@@ -618,6 +731,9 @@ def build_dust2_scene():
     build_dark_tunnels(c_tunnels, mats)
     build_site_b(c_site_b, mats)
     build_spawns_and_props(c_props, mats)
+    build_layout_revision(get_or_create_collection("Revision"), mats)
+    build_dressing(get_or_create_collection("Dressing"), mats)
+    build_lights(get_or_create_collection("Lights"), mats)
 
     print("=== Desert Citadel II (hd_dust2) Built Successfully! ===")
 

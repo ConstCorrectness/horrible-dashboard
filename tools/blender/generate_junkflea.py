@@ -702,6 +702,30 @@ def build_junkflea_scene():
     return mats
 
 
+def build_layout_revision(mats):
+    """Scrap-bale walls in the spawn yards' flanks.
+
+    The yards at either end ran wall to wall with nothing in them, so a spawn
+    in one corner was in the open to the other corner and to the top of the
+    bridge ramp. A two-high bale wall on each flank, between spawn and flank
+    container, is cover to leave spawn behind.
+    """
+    col = get_or_create_collection("Revision")
+    for side, y in (("S", 18.0), ("N", 46.0)):
+        for x in (9.8, 54.2):
+            for k, dx in enumerate((-0.7, 0.7)):
+                add_scrap_car_bale(col, mats, f"Yard_Bale_{side}_{int(x)}_{k}", (x + dx, y, 0.0))
+            add_scrap_car_bale(col, mats, f"Yard_Bale_{side}_{int(x)}_Top", (x, y, 1.1))
+        add_tire_stack(col, mats, f"Yard_Tires_{side}", (24.5, y + (-2.5 if side == "S" else 2.5), 0.0), count=3)
+
+
+def build_lights():
+    """The floodlight towers and strobes as lights, under a dusk sky."""
+    maplib.lights_from_emitters("Mat_Sodium_Floodlight_Glow", color=(255, 186, 110), radius=22.0, intensity=2.4, spacing=4.0, drop=0.5)
+    maplib.lights_from_emitters("Mat_Strobe_Amber_Glow", color=(255, 150, 40), radius=5.0, intensity=1.2, spacing=4.0, drop=0.2)
+    maplib.set_atmosphere("industrial_dusk", hemiIntensity=1.7)
+
+
 def export_scene_glb():
     """Scale the metre-authored scene to cubes and export it (see maplib)."""
     maplib.export_map_glb("hd_junkflea")
@@ -709,6 +733,8 @@ def export_scene_glb():
 
 if __name__ == "__main__":
     print("=== Generating Ultra-Detailed Realistic 'Junk Flea' (hd_junkflea) Map in Blender ===")
-    build_junkflea_scene()
+    mats = build_junkflea_scene()
+    build_layout_revision(mats)
+    build_lights()
     export_scene_glb()
     print("=== Junk Flea Generation & Export Complete! ===")

@@ -463,6 +463,78 @@ def build_outside_yard(col, mats):
     add_box(col, "Yard_Pallet_Stack_2", (50.5, 32.0, 0.6), (1.8, 1.8, 1.2), mats["wood_crate"])
 
 
+def build_layout_revision(col, mats):
+    """Cover in the open yard and inside A.
+
+    The yard between T spawn and the hall's south door was 15 m of bare
+    concrete, and A's floor had nothing on it but the hut. Jersey barriers
+    and a container stack break the approach; crates give A a fight inside.
+    (The B silo under the hall stays sealed: the server's heightfield keeps one
+    floor per column, so opening it would make A's floor the silo's ceiling.)
+    """
+    barriers = [(30.0, 22.0, 0.0), (44.0, 20.0, 0.0), (38.0, 24.5, 90.0), (54.0, 26.0, 0.0), (12.0, 48.0, 90.0)]
+    for i, (x, y, yaw) in enumerate(barriers):
+        sx, sy = (3.0, 0.6) if yaw == 0.0 else (0.6, 3.0)
+        add_box(col, f"Jersey_Barrier_{i}", (x, y, 0.45), (sx, sy, 0.9), mats["concrete_floor"])
+        add_box(col, f"Jersey_Barrier_{i}_Stripe_NonCol", (x, y, 0.72), (sx + 0.02, sy + 0.02, 0.14), mats["hazard_yellow"])
+    add_shipping_container(col, "Container_Red_2", (58.0, 16.0, 0.0), 90.0, mats["container_red"], mats)
+    add_shipping_container(col, "Container_Blue_2", (58.0, 16.0, 2.59), 90.0, mats["container_blue"], mats)
+
+    for i, (x, y) in enumerate(((42.0, 34.0), (43.3, 34.0), (42.6, 35.3), (30.0, 46.0), (31.3, 46.0))):
+        add_box(col, f"SiteA_Crate_{i}", (x, y, 0.6), (1.2, 1.2, 1.2), mats["wood_crate"])
+    add_box(col, "SiteA_Crate_Top", (42.6, 34.6, 1.7), (1.1, 1.1, 1.0), mats["wood_crate"])
+
+
+def build_dressing_and_lights(col, mats):
+    """Pipes, striping and lamps; then the sky."""
+    # Hazard striping on the hall's door reveals and the perimeter's foot.
+    maplib.add_boxes(col, "Hazard_Door_Stripes_NonCol", [
+        ((30.0 - 1.85, 52.0, 1.6), (0.2, 1.3, 3.2)), ((30.0 + 1.85, 52.0, 1.6), (0.2, 1.3, 3.2)),
+        ((40.0 - 1.85, 28.0, 1.6), (0.2, 1.3, 3.2)), ((40.0 + 1.85, 28.0, 1.6), (0.2, 1.3, 3.2)),
+        ((22.0, 44.0 - 1.85, 1.6), (1.3, 0.2, 3.2)), ((22.0, 44.0 + 1.85, 1.6), (1.3, 0.2, 3.2)),
+    ], mats["hazard_yellow"])
+    walls = [
+        ((35.0, 4.0, 6.0), (62.0, 1.2, 12.0)),
+        ((35.0, 66.0, 6.0), (62.0, 1.2, 12.0)),
+        ((66.0, 35.0, 6.0), (1.2, 62.0, 12.0)),
+        ((4.0, 35.0, 6.0), (1.2, 62.0, 12.0)),
+    ]
+    maplib.add_plinths(col, "Trim_Kerb_NonCol", walls, mats["concrete_dark"], height=0.35, proud=0.12)
+
+    # Pipe runs along the outside of the hall, on brackets.
+    pipes, brackets = [], []
+    for y, side in ((27.2, -1), (52.8, 1)):
+        pipes.append(((36.0, y, 5.6), (27.0, 0.3, 0.3)))
+        pipes.append(((36.0, y, 6.2), (27.0, 0.2, 0.2)))
+        for x in range(24, 50, 4):
+            brackets.append(((x, y + side * 0.1, 5.9), (0.12, 0.5, 1.0)))
+    maplib.add_boxes(col, "Pipes_Hall_NonCol", pipes, mats["pipe_yellow"])
+    maplib.add_boxes(col, "Pipe_Brackets_NonCol", brackets, mats["steel_dark"])
+
+    # Yard floodlights: a pole, a head, a light each.
+    sodium = maplib.make_material("mat_light_sodium_glow", (1.0, 0.78, 0.42), emission=(1.0, 0.72, 0.35), strength=6.0)
+    poles, heads = [], []
+    for x, y in ((12.0, 12.0), (58.0, 12.0), (10.0, 60.0), (60.0, 58.0), (28.0, 18.0), (48.0, 58.0)):
+        poles.append(((x, y, 3.5), (0.22, 0.22, 7.0)))
+        heads.append(((x, y, 7.05), (0.9, 0.5, 0.18)))
+        maplib.add_light((x, y, 6.6), color=(255, 200, 140), radius=11.0, intensity=1.6)
+    maplib.add_boxes(col, "Floodlight_Poles_NonCol", poles, mats["steel_dark"])
+    maplib.add_boxes(col, "Floodlight_Heads_NonCol", heads, sodium)
+
+    # Wall packs over the hall's three doors.
+    packs = [((30.0, 52.8, 3.9), (0.6, 0.3, 0.3)), ((40.0, 27.2, 3.9), (0.6, 0.3, 0.3)), ((21.2, 44.0, 3.9), (0.3, 0.6, 0.3))]
+    maplib.add_boxes(col, "Wallpack_NonCol", packs, mats["light_fluor"])
+    for (x, y, z), _ in packs:
+        maplib.add_light((x, y, z - 0.4), color=(235, 242, 255), radius=7.0, intensity=1.6)
+
+    # The hall's own troffers.
+    maplib.lights_from_emitters("mat_light_fluor", color=(235, 242, 255), radius=10.0, intensity=1.8, spacing=5.0, drop=0.6)
+    # And the reactor's glow up through the dome.
+    maplib.add_light((36.0, 40.0, 0.8), color=(80, 220, 255), radius=6.0, intensity=1.4)
+
+    maplib.set_atmosphere("overcast")
+
+
 def build_nuke_scene():
     clear_scene()
     mats = setup_materials()
@@ -478,6 +550,8 @@ def build_nuke_scene():
     build_site_b_lower_silo(c_site_b, mats)
     build_connecting_ramps_and_vents(c_connectors, mats)
     build_outside_yard(c_yard, mats)
+    build_layout_revision(get_or_create_collection("Revision"), mats)
+    build_dressing_and_lights(get_or_create_collection("Dressing"), mats)
 
 
 def export_glb():

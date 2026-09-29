@@ -306,7 +306,7 @@ def build_site_a(col, mats):
     add_box(col, "Ticket_Booth_Window", (56.4, 56.0, 1.4), (0.2, 1.6, 0.8), mats["cedar_wood"])
 
     # CT Ramp ascending to Ticket booth
-    add_box(col, "CT_Ramp_Slope", (58.0, 50.0, 0.5), (3.0, 6.0, 1.0), mats["sandstone_paving"])
+    maplib.add_wedge(col, "CT_Ramp_Slope", (58.0, 50.0, 0.5), (3.0, 6.0, 1.0), mats["sandstone_paving"], "+y")
 
 
 def build_middle_and_underpass(col, mats):
@@ -317,8 +317,9 @@ def build_middle_and_underpass(col, mats):
     # Sniper Window cutout at (39.0, 46.0, Z=2.4m)
     add_box(col, "Sniper_Window_Sill", (39.0, 46.0, 2.8), (2.4, 0.8, 0.2), mats["cedar_wood"])
 
-    # Connector stairs connecting Mid to Site A
-    add_box(col, "Connector_Ramp", (44.0, 40.0, 0.8), (4.0, 6.0, 1.6), mats["sandstone_paving"])
+    # Connector: a ramp up the east side of the Window Room to its floor, so the
+    # sniper's nest is a place to fight from rather than a block to walk round.
+    maplib.add_wedge(col, "Connector_Ramp", (45.5, 43.5, 1.2), (3.0, 8.0, 2.4), mats["sandstone_paving"], "+y")
 
     # Underpass tunnel beneath Mid (X: 30..36, Y: 28..38, Z: -1.5m)
     add_box(col, "Underpass_Trench_Floor", (33.0, 33.0, -0.75), (5.0, 10.0, 1.5), mats["sandstone_ochre"])
@@ -372,6 +373,93 @@ def build_props_and_foliage(col, mats):
     add_box(col, "Window_Glass_B_Apts", (24.0, 28.0, 3.6), (0.12, 2.0, 1.4), mats["glass_window"])
 
 
+def build_layout_revision(col, mats):
+    """Layout over the original blockout, which was one open 62 m square.
+
+    - Palace is a route: stairs up its south end from the T side and down its
+      north end onto A. Its 2.8 m floor was a block nobody could stand on.
+    - B Apartments' upper floor is reachable (outside stairs on the west), and
+      its ground floor has a wall and a door rather than being open to mid.
+    - Two houses in mid and a wall short of B break the sightlines that let
+      each spawn see the other and B from T spawn.
+    """
+    maplib.add_stairs(col, "Palace_Stairs_South", (55.0, 11.0, 0.0), 4.0, 2.8, 7.0, 9, "+y", mats["sandstone_paving"])
+    maplib.add_stairs(col, "Palace_Stairs_North", (55.0, 42.5, 0.0), 4.0, 2.8, 6.5, 9, "-y", mats["sandstone_paving"])
+
+    maplib.add_stairs(col, "B_Apts_Stairs", (10.5, 20.0, 0.0), 3.0, 2.95, 8.0, 9, "+y", mats["sandstone_paving"])
+    maplib.add_wall_with_door(col, "B_Apts_Wall_Ground", (24.0, 25.0, 1.4), (0.8, 14.0, 2.8), mats["moorish_plaster_warm"], 25.0, 2.0, 2.6)
+
+    houses = [
+        ("Mid_House", (31.0, 24.5, 3.0), (6.0, 5.0, 6.0)),
+        ("TopMid_House", (39.0, 40.25, 2.5), (6.0, 4.5, 5.0)),
+    ]
+    for name, center, size in houses:
+        add_box(col, name, center, size, mats["moorish_plaster_warm"])
+        cx, cy, cz = center
+        sx, sy, sz = size
+        add_box(col, f"{name}_Cornice_NonCol", (cx, cy, cz + sz / 2 + 0.1), (sx + 0.3, sy + 0.3, 0.2), mats["sandstone_ochre"])
+        add_box(col, f"{name}_Mosaic_NonCol", (cx, cy, cz + sz / 2 - 0.5), (sx + 0.06, sy + 0.06, 0.3), mats["mosaic_tile_blue"])
+    add_box(col, "B_Short_Wall", (9.75, 36.0, 2.5), (9.5, 1.0, 5.0), mats["sandstone_light"])
+    add_box(col, "B_Short_Wall_Cap_NonCol", (9.75, 36.0, 5.1), (9.8, 1.3, 0.2), mats["sandstone_ochre"])
+
+
+def build_dressing_and_lights(col, mats):
+    """Trim, clutter and lamps, merged per material; then the sky."""
+    walls = [
+        ((35.0, 4.0, 5.0), (62.0, 1.2, 10.0)),
+        ((35.0, 66.0, 5.0), (62.0, 1.2, 10.0)),
+        ((66.0, 35.0, 5.0), (1.2, 62.0, 10.0)),
+        ((4.0, 35.0, 5.0), (1.2, 62.0, 10.0)),
+        ((9.75, 36.0, 2.5), (9.5, 1.0, 5.0)),
+        ((31.0, 24.5, 3.0), (6.0, 5.0, 6.0)),
+        ((39.0, 40.25, 2.5), (6.0, 4.5, 5.0)),
+    ]
+    maplib.add_plinths(col, "Trim_Plinths_NonCol", walls, mats["sandstone_ochre"], height=0.45)
+
+    # Vigas through the houses' parapets.
+    vigas = []
+    for cx, cy, top, sx in ((31.0, 24.5, 5.6, 6.0), (39.0, 40.25, 4.6, 6.0)):
+        for i in range(4):
+            x = cx - sx / 2 + 0.9 + i * (sx - 1.8) / 3
+            vigas.append(((x, cy, top), (0.2, 6.2 if cy < 30 else 5.7, 0.2)))
+    maplib.add_boxes(col, "Trim_Vigas_NonCol", vigas, mats["cedar_wood"])
+
+    # Awnings over the doors people fight through.
+    maplib.add_boxes(col, "Awning_Crimson_NonCol", [
+        ((24.9, 25.0, 3.0), (1.2, 3.0, 0.05)),
+        ((31.0, 27.4, 3.4), (3.0, 1.2, 0.05)),
+    ], mats["canopy_crimson"])
+    maplib.add_boxes(col, "Awning_Indigo_NonCol", [
+        ((39.0, 37.6, 3.2), (3.0, 1.2, 0.05)),
+        ((45.5, 47.0, 4.4), (3.2, 1.6, 0.05)),
+    ], mats["canopy_indigo"])
+
+    # Pots and planters along the walls.
+    pots = [(6.0, 20.0), (6.0, 44.0), (26.0, 6.0), (44.0, 6.0), (64.0, 12.0), (64.0, 44.0), (40.0, 64.0), (14.0, 64.0)]
+    for i, (x, y) in enumerate(pots):
+        add_cylinder(col, f"Planter_Pot_{i}_NonCol", (x, y, 0.35), radius=0.4, height=0.7, material=mats["terracotta_urn"], segments=10)
+    maplib.add_boxes(col, "Planter_Leaves_NonCol", [((x, y, 0.95), (0.7, 0.7, 0.5)) for x, y in pots], mats["palm_fronds"])
+
+    # Lanterns in the shade: under the apartments, at the mid doors, the market.
+    maplib.add_lantern(col, "Lantern_Apts_S", (18.0, 21.0, 2.65), hang=0.3)
+    maplib.add_lantern(col, "Lantern_Apts_N", (18.0, 29.0, 2.65), hang=0.3)
+    maplib.add_lantern(col, "Lantern_Market", (28.0, 46.0, 4.15), hang=0.5)
+    maplib.add_lantern(col, "Lantern_MidHouse", (31.0, 28.3, 3.8), hang=0.35, radius=6.0, intensity=1.6)
+    maplib.add_lantern(col, "Lantern_TopMid", (39.0, 37.3, 3.6), hang=0.35, radius=6.0, intensity=1.6)
+    maplib.add_boxes(col, "Lantern_Brackets_NonCol", [
+        ((31.0, 27.65, 3.8), (0.05, 1.3, 0.05)),
+        ((39.0, 37.65, 3.6), (0.05, 1.3, 0.05)),
+    ], mats["wrought_iron"])
+
+    maplib.set_atmosphere(
+        "desert_noon",
+        sunDir=[-0.52, 0.64, 0.56],
+        sunColor=0xFFDCB0,
+        skyHorizon=0xE4D8C6,
+        fogColor=0xE0D4C0,
+    )
+
+
 def build_mirage_scene():
     clear_scene()
     mats = setup_materials()
@@ -387,6 +475,8 @@ def build_mirage_scene():
     build_middle_and_underpass(c_mid, mats)
     build_site_b(c_site_b, mats)
     build_props_and_foliage(c_props, mats)
+    build_layout_revision(get_or_create_collection("Revision"), mats)
+    build_dressing_and_lights(get_or_create_collection("Dressing"), mats)
 
     print("=== Desert Courtyard (hd_mirage) Built Successfully! ===")
 

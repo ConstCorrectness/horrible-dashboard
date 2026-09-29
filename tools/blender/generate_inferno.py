@@ -292,8 +292,9 @@ def add_campanile_tower(collection, mats):
     obj.data.materials.append(mats["terracotta_roof"])
 
 
-def add_hanging_lantern(collection, name, pos, mats):
+def add_hanging_lantern(collection, name, pos, mats, radius=7.0, intensity=2.0):
     px, py, pz = pos
+    maplib.add_light((px, py, pz), color=(255, 190, 120), radius=radius, intensity=intensity)
     # Wrought iron wall bracket and lantern body (NonCol)
     add_box(collection, f"{name}_Bracket_NonCol", (px, py, pz + 0.3), (0.1, 0.6, 0.1), mats["wrought_iron"])
     add_cylinder(collection, f"{name}_Housing_NonCol", (px, py, pz), radius=0.2, height=0.45, material=mats["lantern_brass"], segments=8)
@@ -367,7 +368,7 @@ def build_site_b(col, mats):
     add_wine_cask(col, "SiteB_Cask_Top", (22.0, 52.25, 0.9), mats, radius=0.50, length=1.1)
 
     # Construction Ramp connecting B Site to CT
-    add_box(col, "SiteB_CT_Ramp", (25.0, 57.0, 0.6), (4.0, 6.0, 1.2), mats["cobblestone_street"])
+    maplib.add_wedge(col, "SiteB_CT_Ramp", (25.0, 57.0, 0.6), (4.0, 6.0, 1.2), mats["cobblestone_street"], "+y")
 
 
 def build_middle_and_alt_mid(col, mats):
@@ -379,7 +380,9 @@ def build_middle_and_alt_mid(col, mats):
     add_arch(col, "Arch_Boiler_Door", (36.0, 30.0, 0.0), span=2.8, height=3.6, depth=1.2, material=mats["limestone_carved"])
 
     # T-Ramp ascending from T Spawn into Mid
-    add_box(col, "Mid_TRamp", (34.0, 18.0, 0.5), (6.0, 8.0, 1.0), mats["cobblestone_street"])
+    # A hump, up from T and down into mid: it was a 1 m block you had to jump.
+    maplib.add_wedge(col, "Mid_TRamp_Up", (34.0, 16.0, 0.5), (6.0, 4.0, 1.0), mats["cobblestone_street"], "+y")
+    maplib.add_wedge(col, "Mid_TRamp_Down", (34.0, 20.0, 0.5), (6.0, 4.0, 1.0), mats["cobblestone_street"], "-y")
 
     # Hay cart cover in Alt-Mid at (32.0, 24.0)
     add_box(col, "AltMid_Cart_Bed", (32.0, 24.0, 0.6), (2.0, 3.2, 1.2), mats["wood_chestnut_aged"])
@@ -415,7 +418,7 @@ def build_site_a(col, mats):
 
     # Sunken Pit at (54.0, 44.0, Z = -1.2m)
     add_box(col, "SiteA_Pit_Floor", (54.0, 44.0, -0.6), (6.0, 6.0, 1.2), mats["cobblestone_street"])
-    add_box(col, "SiteA_Pit_Ramp", (54.0, 48.0, -0.3), (4.0, 3.0, 0.6), mats["cobblestone_street"])
+    maplib.add_wedge(col, "SiteA_Pit_Ramp", (54.0, 48.0, -0.6), (4.0, 3.0, 1.2), mats["cobblestone_street"], "+y")
 
     # Moto / Bicycle Cart Cover at (48.0, 52.0)
     add_box(col, "SiteA_Bicycle_Cart", (48.0, 52.0, 0.6), (1.4, 2.4, 1.2), mats["wood_crate"])
@@ -459,6 +462,79 @@ def build_spawns_and_props(col, mats):
     add_box(col, "Window_Glass_Church", (52.0, 48.0, 3.5), (0.12, 2.0, 1.4), mats["glass_window"])
 
 
+def build_layout_revision(col, mats):
+    """Layout over the original blockout.
+
+    - The east street was a 24 m field from T spawn to A. A house now stands in
+      it, so A is approached by two alleys — Short (x 43-52) and Long (x 60-65)
+      — that each have corners to clear.
+    - Mid gets a well to fight around rather than an open street.
+    """
+    add_box(col, "East_House", (56.0, 25.0, 3.5), (8.0, 10.0, 7.0), mats["tuscan_stucco_ochre"])
+    maplib.add_wedge(col, "East_House_Roof_NonCol", (56.0, 25.0, 7.6), (8.6, 10.6, 1.2), mats["terracotta_roof"], "+x")
+    add_box(col, "East_Low_Wall", (47.5, 34.0, 0.6), (4.0, 0.7, 1.2), mats["limestone_carved"])
+    add_cylinder(col, "Mid_Well", (30.0, 38.0, 0.5), radius=1.0, height=1.0, material=mats["limestone_carved"], segments=14)
+    add_box(col, "Mid_Well_Beam_NonCol", (30.0, 38.0, 2.3), (2.4, 0.14, 0.14), mats["wood_chestnut_aged"])
+    for px in (29.0, 31.0):
+        add_box(col, f"Mid_Well_Post_{int(px*10)}_NonCol", (px, 38.0, 1.65), (0.14, 0.14, 1.3), mats["wood_chestnut_aged"])
+
+
+def build_dressing_and_lights(col, mats):
+    """Trim, shutters, washing, lamps; merged per material. Then the sky."""
+    walls = [
+        ((26.0, 26.0, 4.5), (1.2, 28.0, 9.0)),
+        ((12.0, 28.0, 4.5), (1.2, 24.0, 9.0)),
+        ((42.0, 26.0, 4.5), (1.2, 32.0, 9.0)),
+        ((18.0, 62.0, 4.5), (26.0, 1.2, 9.0)),
+        ((56.0, 25.0, 3.5), (8.0, 10.0, 7.0)),
+    ]
+    maplib.add_plinths(col, "Trim_Plinths_NonCol", walls, mats["cobblestone_dark"], height=0.6, proud=0.1)
+    # Terracotta coping along the tops of the lane walls.
+    maplib.add_boxes(col, "Trim_Coping_NonCol", [
+        ((cx, cy, cz + sz / 2 + 0.12), (sx + 0.5, sy + 0.5, 0.24) if sx < sy else (sx + 0.5, sy + 0.5, 0.24))
+        for (cx, cy, cz), (sx, sy, sz) in walls[:4]
+    ], mats["terracotta_roof"])
+
+    # A closed pair of shutters every 7 m along both faces of the lane walls.
+    shutters = []
+    for x, y0, y1 in ((26.0, 14.0, 38.0), (42.0, 12.0, 40.0), (12.0, 18.0, 38.0)):
+        y = y0
+        while y <= y1:
+            for side in (-1, 1):
+                shutters.append(((x + side * 0.64, y, 4.6), (0.06, 1.2, 1.6)))
+            y += 7.0
+    maplib.add_boxes(col, "Shutters_NonCol", shutters, mats["wood_chestnut_aged"])
+
+    # Washing strung across Banana, well above head height.
+    lines, cloth = [], []
+    for i, y in enumerate((18.0, 25.0, 32.0)):
+        z = 6.2 + (i % 2) * 0.5
+        lines.append(((19.0, y, z), (13.6, 0.03, 0.03)))
+        for k in range(4):
+            cloth.append(((14.5 + k * 3.0, y, z - 0.45), (0.9, 0.03, 0.8)))
+    maplib.add_boxes(col, "Washing_Lines_NonCol", lines, mats["wrought_iron"])
+    maplib.add_boxes(col, "Washing_Cloth_NonCol", cloth, mats["awning_stripes"])
+
+    # Awnings over Boiler and the A porch.
+    maplib.add_boxes(col, "Awnings_NonCol", [
+        ((36.0, 31.0, 4.4), (3.6, 1.4, 0.05)),
+        ((48.0, 57.0, 5.0), (4.2, 1.4, 0.05)),
+        ((56.0, 19.6, 3.2), (3.0, 1.2, 0.05)),
+    ], mats["awning_stripes"])
+
+    # Sconces: Banana's walls, under the apartments, the campanile door.
+    for i, y in enumerate((17.0, 24.0, 31.0, 38.0)):
+        add_hanging_lantern(col, f"Lantern_Banana_W_{i}", (12.9, y, 3.0), mats, radius=6.0, intensity=1.8)
+    for i, y in enumerate((20.5, 34.5)):
+        add_hanging_lantern(col, f"Lantern_Banana_E_{i}", (25.1, y, 3.0), mats, radius=6.0, intensity=1.8)
+    add_hanging_lantern(col, "Lantern_Apts_1", (40.0, 36.0, 2.3), mats, radius=6.0, intensity=1.8)
+    add_hanging_lantern(col, "Lantern_Apts_2", (40.0, 43.0, 2.3), mats, radius=6.0, intensity=1.8)
+    add_hanging_lantern(col, "Lantern_Campanile", (12.8, 55.4, 3.2), mats, radius=6.0, intensity=1.8)
+    add_hanging_lantern(col, "Lantern_EastHouse", (51.4, 25.0, 3.0), mats, radius=6.0, intensity=1.8)
+
+    maplib.set_atmosphere("golden_hour")
+
+
 def build_inferno_scene():
     clear_scene()
     mats = setup_materials()
@@ -478,6 +554,8 @@ def build_inferno_scene():
     build_apartments(c_apts, mats)
     build_site_a(c_site_a, mats)
     build_spawns_and_props(c_props, mats)
+    build_layout_revision(get_or_create_collection("Revision"), mats)
+    build_dressing_and_lights(get_or_create_collection("Dressing"), mats)
 
     print("=== Tuscan Citadel (hd_inferno) Built Successfully! ===")
 

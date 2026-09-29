@@ -67,6 +67,7 @@ that both sides replay, or merely asserted in a comment.
 | Shot geometry | `trace.ts`, `weapons.py`, `trace.rs` | same fixture (`traces`, `bodies`) |
 | Operator clip selection | `models/clips.ts`, `clips.rs` | `__tests__/clip-vectors.json` |
 | Surface tint, face shades, detail tile | `geometry.ts` + `surfaces.ts`, `geometry.rs` + `detail.rs` | `__tests__/surface-vectors.json` |
+| Light rig, sky, fog and point lights | `atmosphere.py` (served), `atmosphere.ts`, `atmosphere.rs` + `lighting.wgsl.inc` | `tests/browser_parity.rs`, which reads the TS and Python sources: fallback rigs, candela rule, attenuation |
 | Signed envelope + node id | Python, Kotlin (the Android companion) | `backend/tests/test_network_mobile_conformance.py` |
 
 The contract in every case is the same: **the fixture pins agreement, each side's
@@ -84,7 +85,7 @@ maintenance hazard, listed so that changing one sends you to the other:
 
 | Logic | Implementations | What drift looks like |
 | --- | --- | --- |
-| Light rig, tone curve | `HorribleAssaultPanel.tsx`, `lighting.wgsl.inc` | The two clients stop looking like the same game |
+| Tone curve, sky shader | `HorribleAssaultPanel.tsx` + `atmosphere.ts` `createSky`, `lighting.wgsl.inc` | The two clients stop looking like the same game |
 | Faction colours | `skins.ts`, `bodies.rs` + `animator.rs` | Teams read differently depending on the client |
 | Grip transform for held weapons | `CharacterModel.ts`, `held.rs` | A rifle in the wrist rather than the hand |
 | Radar span, colours, blip sizes | `panels/Radar.tsx`, `radar.rs` + `hud.rs` | The same contact is at a different distance from the centre in each client |
@@ -97,11 +98,18 @@ tile — are the ones that moved to the table above. What happened when they wer
 pinned is the argument for pinning the rest of it, and it has its own section
 below.
 
-:::note One duplication that is *not* a hazard
-The sun's direction appears in both `shadow.rs` and `lighting.wgsl.inc` — a
-shadow map cast from one vector and a Lambert term computed from another gives
-surfaces lit from one side and shadowed from the other. That one **is** pinned,
-by a test in `shadow.rs` that reads the shader source.
+:::note The light rig used to head the table below
+It was two sets of literals, one in the panel and one in the shader, and every map
+was lit the same way. It is now **data**: the backend resolves a map's
+`atmosphere` and `lights` and serves them on `MapInfo`, and both clients draw from
+those numbers ([Light, sky and fog are served](../modules/hassault.mdx#light-sky-and-fog-are-served-not-hard-coded)).
+What each client still holds is a fallback for an older node, and
+`browser_parity.rs` pins both fallbacks against the Python.
+
+The sun's direction used to be a constant in both `shadow.rs` and the shader,
+pinned by a test that read one from the other. The shadow map is now fitted to the
+map's served sun, the same vector the shader's uniform carries, so there is
+nothing left to disagree.
 :::
 
 ## What the native client still lacks

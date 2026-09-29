@@ -826,6 +826,10 @@
       "kind": "carpet"
     },
     {
+      "name": "mat_awning_stripes",
+      "kind": "none"
+    },
+    {
       "name": "mat_black_metal",
       "kind": "vault_steel"
     },
@@ -856,6 +860,10 @@
     {
       "name": "mat_ceiling_tile",
       "kind": "plaster"
+    },
+    {
+      "name": "mat_cobblestone_dark",
+      "kind": "cobblestone"
     },
     {
       "name": "mat_cobblestone_street",
@@ -942,6 +950,10 @@
       "kind": "none"
     },
     {
+      "name": "mat_light_sodium_glow",
+      "kind": "none"
+    },
+    {
       "name": "mat_limestone_carved",
       "kind": "masonry"
     },
@@ -980,6 +992,10 @@
     {
       "name": "mat_mosaic_tile_blue",
       "kind": "marble"
+    },
+    {
+      "name": "mat_office_plant_leaves",
+      "kind": "none"
     },
     {
       "name": "mat_palm_bark",

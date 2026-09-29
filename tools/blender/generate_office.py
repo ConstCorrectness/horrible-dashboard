@@ -698,6 +698,57 @@ def build_lighting(col, mats):
             )
 
 
+def build_layout_revision(col, mats):
+    """Two meeting rooms in the open middle of the floor plate.
+
+    The band between the elevator core and the cubicles was 20 m of open marble
+    from the south spawn to the boardroom door. Each room has two doors on
+    different sides, so it is a route with corners rather than a box to hide in.
+    """
+    rooms = [
+        # name, x0, x1, y0, y1, (wall, door_at) pairs
+        ("Meeting_N", 26.0, 34.0, 39.0, 48.0, {"S": 30.0, "W": 43.5}),
+        ("Meeting_S", 29.0, 37.0, 18.0, 26.0, {"N": 33.0, "E": 22.0}),
+    ]
+    trims = []
+    for name, x0, x1, y0, y1, doors in rooms:
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        sides = {
+            "S": ((cx, y0, 2.0), (x1 - x0 + 0.2, 0.2, 4.0), cx),
+            "N": ((cx, y1, 2.0), (x1 - x0 + 0.2, 0.2, 4.0), cx),
+            "W": ((x0, cy, 2.0), (0.2, y1 - y0, 4.0), cy),
+            "E": ((x1, cy, 2.0), (0.2, y1 - y0, 4.0), cy),
+        }
+        for side, (center, size, _) in sides.items():
+            wall = f"{name}_Wall_{side}"
+            if side in doors:
+                maplib.add_wall_with_door(col, wall, center, size, mats["wall_drywall"], doors[side], 1.6, 2.6)
+            else:
+                add_box(col, wall, center, size, mats["wall_drywall"])
+            trims.append((center, size))
+        add_box(col, f"{name}_Table", (cx, cy, 0.38), (3.6, 1.4, 0.76), mats["mahogany"])
+    maplib.add_plinths(col, "Meeting_Baseboards_NonCol", trims, mats["black_metal"], height=0.12, proud=0.03)
+
+
+def build_dressing_and_lights(col, mats):
+    """Baseboards, planters and every troffer as a light; then the sky."""
+    walls = [
+        ((3.0, 32.0, 2.0), (0.4, 56.0, 4.0)),
+        ((61.0, 32.0, 2.0), (0.4, 56.0, 4.0)),
+    ]
+    maplib.add_plinths(col, "Trim_Baseboards_NonCol", walls, mats["black_metal"], height=0.12, proud=0.03)
+
+    leaves = maplib.make_material("mat_office_plant_leaves", (0.18, 0.4, 0.16), roughness=0.8)
+    spots = [(24.0, 6.5), (46.0, 6.5), (58.5, 30.0), (24.0, 57.5), (46.0, 57.5), (35.0, 36.0)]
+    for i, (x, y) in enumerate(spots):
+        add_cylinder(col, f"Planter_{i}_NonCol", (x, y, 0.3), radius=0.35, height=0.6, material=mats["black_metal"], segments=10)
+    maplib.add_boxes(col, "Planter_Leaves_NonCol", [((x, y, 1.0), (0.8, 0.8, 0.9)) for x, y in spots], leaves)
+
+    maplib.lights_from_emitters("mat_fluorescent", color=(235, 242, 255), radius=9.0, intensity=1.3, spacing=6.0, drop=0.3)
+    maplib.lights_from_emitters("mat_server_leds", color=(90, 170, 255), radius=5.0, intensity=1.2, spacing=4.0, drop=-1.0)
+    maplib.set_atmosphere("interior_cool")
+
+
 def build_office_scene():
     clear_scene()
     mats = setup_materials()
@@ -715,6 +766,8 @@ def build_office_scene():
     build_reception_and_elevators(c_lobby, mats)
     build_server_vault(c_server, mats)
     build_lighting(c_lights, mats)
+    build_layout_revision(get_or_create_collection("Revision"), mats)
+    build_dressing_and_lights(get_or_create_collection("Dressing"), mats)
 
     print("=== High-Rise Corporate Office (hd_office) Built Successfully! ===")
 

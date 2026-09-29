@@ -541,6 +541,53 @@ def build_overhead_fluorescents(collection, mats):
         add_pipe(collection, f"Light_Wire_R_{idx}", (lx + 1.0, ly, lz + 0.15), (lx + 1.0, ly, 13.8), radius=0.012, material=mats["Steel_Structural_Dark"], is_collider=False)
 
 
+def build_layout_revision(collection, mats):
+    """Partition the lab corridors the lights were always hung over.
+
+    The floor either side of the pit was open from wall to wall, so a spawn on
+    one side saw the far corner of the other. Two broken walls per side make a
+    west and an east corridor; the gaps face the pit, so every route to the
+    middle still has two ways in.
+    """
+    walls = []
+    for x in (18.0, 46.0):
+        for y0, y1 in ((6.0, 20.0), (44.0, 58.0)):
+            center, size = (x, (y0 + y1) / 2, 2.0), (0.6, y1 - y0, 4.0)
+            maplib.add_wall_with_door(collection, f"Lab_Partition_{int(x)}_{int(y0)}", center, size, mats["Concrete_Bunker_Dark"], (y0 + y1) / 2, 1.8, 2.6)
+            walls.append((center, size))
+    maplib.add_plinths(collection, "Lab_Partition_Kick_NonCol", walls, mats["Hazard_Yellow"], height=0.25, proud=0.03)
+    return walls
+
+
+def build_dressing_and_lights(collection, mats):
+    """Pit-rim striping, wall pipes, and the fixtures as lights; then the sky."""
+    rim = []
+    for a in (19.6, 44.4):
+        rim.append((((20.0 + 44.0) / 2, a, 0.012), (25.2, 0.5, 0.024)))
+        rim.append(((a, (20.0 + 44.0) / 2, 0.012), (0.5, 25.2, 0.024)))
+    maplib.add_boxes(collection, "Pit_Rim_Stripe_NonCol", rim, mats["Hazard_Yellow"])
+
+    pipes = []
+    for z, r in ((10.5, 0.35), (11.3, 0.22)):
+        pipes.append(((32.0, 0.35 + r, z), (63.0, 2 * r, 2 * r)))
+        pipes.append(((32.0, 63.65 - r, z), (63.0, 2 * r, 2 * r)))
+        pipes.append(((0.35 + r, 32.0, z), (2 * r, 63.0, 2 * r)))
+        pipes.append(((63.65 - r, 32.0, z), (2 * r, 63.0, 2 * r)))
+    maplib.add_boxes(collection, "Wall_Pipes_NonCol", pipes, mats["Pipe_Industrial_Green"])
+
+    maplib.lights_from_emitters("Mat_Fluorescent_Troffer", color=(232, 240, 255), radius=12.0, intensity=1.8, spacing=5.0, drop=0.3)
+    maplib.lights_from_emitters("Mat_Emergency_Siren_Red", color=(255, 60, 40), radius=5.0, intensity=1.2, spacing=6.0, drop=0.2)
+    maplib.lights_from_emitters("Mat_Coolant_Fluid_Glow", color=(60, 220, 150), radius=7.0, intensity=1.4, spacing=6.0, drop=-0.5)
+    maplib.set_atmosphere(
+        "interior_cool",
+        hemiIntensity=1.35,
+        hemiGround=0x2E3236,
+        fogColor=0x1C2228,
+        fogDensity=0.0024,
+        exposure=1.15,
+    )
+
+
 def build_facility_scene():
     """Constructs the complete Deadzone Facility scene graph."""
     clear_scene()
@@ -674,6 +721,8 @@ def build_facility_scene():
     build_server_telemetry_bank(c_props, mats)
     build_decon_and_hazmat_props(c_props, mats)
     build_overhead_fluorescents(c_props, mats)
+    build_layout_revision(get_or_create_collection("Revision"), mats)
+    build_dressing_and_lights(get_or_create_collection("Dressing"), mats)
 
     print("=== Deadzone Facility Scene Built Successfully! ===")
 
