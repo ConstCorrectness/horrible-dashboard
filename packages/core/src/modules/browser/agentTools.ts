@@ -5,26 +5,31 @@
  * modules/agent/manifest.ts). Parameterized actions must be agentTools, not
  * commands — agent-exposed commands ignore their args today.
  *
- * Two tiers, chosen automatically by whether the real backend engine is enabled
- * (`HORRIBLE_ENABLE_SERVER_BROWSER=1`, reported by `/api/browser/engine`):
+ * Which browser they drive is decided per call (engines.ts):
  *
- * - **Light (always available).** `browser.read` fetches a URL server-side and returns
- *   its readable text (SSRF-guarded `/api/browser/read`); `browser.open` shows a page in
- *   the UI.
- * - **Full engine (when on).** The same live Chromium the human panel drives becomes the
- *   agent's browser (one WS connection ⇒ one shared session). `browser.read` navigates
- *   the live page and reads its extracted content; `browser.snapshot` returns the
- *   interactable elements (ref + role + name) so the agent can `browser.click`/
- *   `browser.type` by ref; `browser.scrape` pulls structured data by CSS selector.
- * - **Remembering.** `browser.media` lists the page's images/videos and `browser.save`
- *   files the page or its media into a knowledge library — the write half of RAG, where
- *   `library.search` is the read half. Without these the agent can read the whole web
- *   and keep none of it.
+ * - **The native pane** (desktop, `browser.nativeCdp`). The real browser the human
+ *   is looking at; the agent's clicks happen in front of them, and they can take
+ *   over at any point. This is the default on Windows.
+ * - **The backend's headless Chromium** (`HORRIBLE_ENABLE_SERVER_BROWSER=1`), when
+ *   no native pane is open — the web build, or reading a page in the background.
+ * - **Neither**: `browser.read` still works as an SSRF-guarded server fetch.
+ *
+ * The loop the tools are shaped for is the one real browsing agents use: read the
+ * page as a numbered list of interactable elements (`browser.snapshot`), act on one
+ * by ref, and get the *new* snapshot back in the same result — so the agent never
+ * acts on refs from a page that has since changed, and never pays a round trip just
+ * to look again.
+ *
+ * **Remembering.** `browser.media` lists the page's images/videos and `browser.save`
+ * files the page or its media into a knowledge library — the write half of RAG,
+ * where `library.search` is the read half.
  */
 import type { AgentToolDecl } from '@horribledashboard/sdk';
 
+import { hasCapability } from '../../capabilities';
 import { openDocument } from '../../layout/controller';
-import { engineStatus, readerMode } from './api';
+import { windowControl } from '../../window';
+import { readerMode } from './api';
 import {
   captureAllMedia,
   capturePage,
@@ -33,52 +38,110 @@ import {
   isSavable,
   pageMedia,
 } from './capture';
-import { engine, type MediaItem, type SnapshotElement } from './session';
+import { agentEngine, revealNativeTarget } from './engines';
+import { activeNativeTarget, nativeEngine, waitForNativeTarget } from './native-engine';
+import type { BrowserEngine, MediaItem, PageSnapshot, SnapshotElement } from './session';
 
 // Cap the text handed back to the model so one page can't blow the context window.
 const MAX_TEXT = 8000;
 
-// The engine gate is process-wide and rarely flips within a session; cache the probe.
-let engineProbe: Promise<boolean> | null = null;
-function engineEnabled(): Promise<boolean> {
-  if (!engineProbe) {
-    engineProbe = engineStatus()
-      .then((s) => s.enabled)
-      .catch(() => false);
-  }
-  return engineProbe;
-}
+/** How long `browser.open` waits for a freshly opened native pane to load. */
+const OPEN_TIMEOUT_MS = 15_000;
 
 const clip = (text: string) =>
   text.length > MAX_TEXT ? `${text.slice(0, MAX_TEXT)}… [truncated]` : text;
 
-const ENGINE_OFF = {
+const NO_BROWSER = {
   error:
-    'The full browser engine is off. Enable it (HORRIBLE_ENABLE_SERVER_BROWSER=1 + the ' +
-    'browser-engine extra) to snapshot/scrape/click live pages. You can still use ' +
-    'browser.read to fetch a page’s text.',
+    'No live browser is open. Call browser.open with a URL first (it opens a browser ' +
+    'pane the user can watch). browser.read still works on any URL without one.',
 };
+
+const CHALLENGE_NOTE =
+  'This page is showing a CAPTCHA or bot check. Do not try to solve it: tell the user ' +
+  'to complete it in the browser pane, then continue once they say it is done.';
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** The snapshot shape returned to the model (coordinates are noise to it). */
+function summarize(snap: PageSnapshot) {
+  return {
+    url: snap.url,
+    title: snap.title,
+    elements: snap.elements.map((e: SnapshotElement) => ({
+      ref: e.ref,
+      role: e.role,
+      name: e.name,
+      value: e.value,
+    })),
+    ...(snap.challenge ? { challenge: true, note: CHALLENGE_NOTE } : {}),
+  };
+}
+
+/**
+ * The page as it stands after an action. A click that navigates tears the old
+ * document down mid-evaluate, so a failed first look gets one more try once the
+ * new page has had a moment to exist.
+ */
+async function settledSnapshot(eng: BrowserEngine) {
+  await sleep(400);
+  try {
+    return summarize(await eng.snapshot());
+  } catch {
+    await sleep(1200);
+    return summarize(await eng.snapshot());
+  }
+}
+
+/** Run an action on the current engine and return the page it leaves behind. */
+async function act(run: (eng: BrowserEngine) => Promise<unknown>) {
+  const eng = await agentEngine();
+  if (!eng) return NO_BROWSER;
+  await run(eng);
+  return { ok: true, page: await settledSnapshot(eng) };
+}
+
+/** Resolve once native webview `id` reports a finished load, or after `ms`. */
+function waitForLoad(id: string, ms: number): Promise<void> {
+  const control = windowControl()?.browserWebview;
+  if (!control) return Promise.resolve();
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      off();
+      resolve();
+    };
+    const off = control.onEvent((e) => {
+      if (e.kind === 'load' && e.id === id && !e.loading) finish();
+    });
+    const timer = setTimeout(finish, ms);
+  });
+}
 
 export const browserAgentTools: AgentToolDecl[] = [
   {
     name: 'browser.read',
     description:
-      'Read a web page and return its readable text (title + main content). With the full engine on, navigates the live shared browser to the URL first; otherwise does a server-side SSRF-guarded fetch. Accepts any http(s) URL; omit url to read the page already open in the engine.',
+      'Read a web page and return its readable text (title + main content). Navigates the live browser (the open browser pane, if any) to the URL first; with no live browser, does a server-side fetch. Omit url to read the page already open.',
     params: {
       type: 'object',
       properties: {
-        url: { type: 'string', description: 'The http(s) URL to read (optional in full mode)' },
+        url: {
+          type: 'string',
+          description: 'The http(s) URL to read (optional when a page is open)',
+        },
       },
     },
     sideEffect: false,
     handler: async (args) => {
       const url = args.url ? String(args.url) : '';
-      if (await engineEnabled()) {
-        if (url) await engine.navigate(url);
-        const c = await engine.content();
+      const eng = await agentEngine();
+      if (eng) {
+        if (url) await eng.navigate(url);
+        const c = await eng.content();
         return { url: c.url, title: c.title, author: c.author, text: clip(c.text) };
       }
-      if (!url) return { error: 'browser.read needs a url unless the full engine is on.' };
+      if (!url) return { error: 'browser.read needs a url when no browser is open.' };
       const article = await readerMode(url);
       return {
         url: article.url,
@@ -91,7 +154,7 @@ export const browserAgentTools: AgentToolDecl[] = [
   {
     name: 'browser.open',
     description:
-      'Open a web page in an embedded browser pane in the UI so the user can see it. Returns immediately — call browser.read to get the page contents.',
+      'Open a web page in the browser pane so the user can see it, and make it the page the other browser tools act on. Reuses the open browser pane if there is one. Returns once the page has loaded — then use browser.snapshot to see what is on it.',
     params: {
       type: 'object',
       properties: {
@@ -101,8 +164,22 @@ export const browserAgentTools: AgentToolDecl[] = [
     },
     sideEffect: true,
     specifierTemplate: '{url}',
-    handler: (args) => {
+    handler: async (args) => {
       const url = String(args.url);
+      if (hasCapability('browser.nativeCdp')) {
+        // A native pane is already open: drive it in place, and bring it forward
+        // so the user sees what the agent is doing.
+        const existing = activeNativeTarget();
+        if (existing) {
+          revealNativeTarget(existing);
+          await nativeEngine(existing).navigate(url);
+          return { ok: true, url };
+        }
+        openDocument('browser.view', `browser.view:${url}`, { url }, () => true);
+        const id = await waitForNativeTarget(OPEN_TIMEOUT_MS);
+        if (id) await waitForLoad(id, OPEN_TIMEOUT_MS);
+        return { ok: true, url, ready: Boolean(id) };
+      }
       // Reuse an open browser pane rather than splitting a new one per
       // navigation — the agent browsing five pages is one session, not five panes.
       openDocument('browser.view', `browser.view:${url}`, { url }, () => true);
@@ -112,28 +189,19 @@ export const browserAgentTools: AgentToolDecl[] = [
   {
     name: 'browser.snapshot',
     description:
-      'Return the interactable elements of the live page (each with a numeric ref, role, accessible name, and value) so you can decide what to click or type into. Requires the full browser engine. Use the ref with browser.click / browser.type.',
+      'List the interactable elements of the open page (each with a numeric ref, role, accessible name, and value) so you can decide what to click or type into. Use the ref with browser.click / browser.type. Only on-screen elements are listed — scroll to see more.',
     params: { type: 'object', properties: {} },
     sideEffect: false,
     handler: async () => {
-      if (!(await engineEnabled())) return ENGINE_OFF;
-      const snap = await engine.snapshot();
-      return {
-        url: snap.url,
-        title: snap.title,
-        elements: snap.elements.map((e: SnapshotElement) => ({
-          ref: e.ref,
-          role: e.role,
-          name: e.name,
-          value: e.value,
-        })),
-      };
+      const eng = await agentEngine();
+      if (!eng) return NO_BROWSER;
+      return summarize(await eng.snapshot());
     },
   },
   {
     name: 'browser.click',
     description:
-      'Click an element on the live page by its ref (from browser.snapshot). Requires the full browser engine.',
+      'Click an element on the open page by its ref (from browser.snapshot). Returns the page as it looks afterwards, with fresh refs — refs from earlier snapshots are no longer valid.',
     params: {
       type: 'object',
       properties: { ref: { type: 'number', description: 'element ref from browser.snapshot' } },
@@ -141,36 +209,73 @@ export const browserAgentTools: AgentToolDecl[] = [
     },
     sideEffect: true,
     specifierTemplate: 'ref {ref}',
-    handler: async (args) => {
-      if (!(await engineEnabled())) return ENGINE_OFF;
-      await engine.clickRef(Number(args.ref));
-      return { ok: true, ref: Number(args.ref) };
-    },
+    handler: (args) => act((eng) => eng.clickRef(Number(args.ref))),
   },
   {
     name: 'browser.type',
     description:
-      'Type text into an input element on the live page by its ref (from browser.snapshot). Requires the full browser engine.',
+      'Type text into an input on the open page by its ref (from browser.snapshot), replacing what is there. Set submit to press Enter afterwards (searches, forms). Returns the page as it looks afterwards, with fresh refs.',
     params: {
       type: 'object',
       properties: {
         ref: { type: 'number', description: 'element ref from browser.snapshot' },
         text: { type: 'string', description: 'text to type' },
+        submit: { type: 'boolean', description: 'press Enter after typing' },
       },
       required: ['ref', 'text'],
     },
     sideEffect: true,
     specifierTemplate: '{text} → ref {ref}',
-    handler: async (args) => {
-      if (!(await engineEnabled())) return ENGINE_OFF;
-      await engine.typeRef(Number(args.ref), String(args.text));
-      return { ok: true, ref: Number(args.ref) };
+    handler: (args) =>
+      act(async (eng) => {
+        await eng.typeRef(Number(args.ref), String(args.text));
+        if (args.submit) await eng.press('Enter');
+      }),
+  },
+  {
+    name: 'browser.press',
+    description:
+      'Press one key on the open page, on whatever has focus: Enter, Tab, Escape, Backspace, ArrowUp/Down/Left/Right, PageUp/PageDown, Home, End, or a single character. Returns the page afterwards.',
+    params: {
+      type: 'object',
+      properties: { key: { type: 'string', description: 'the key to press, e.g. "Enter"' } },
+      required: ['key'],
     },
+    sideEffect: true,
+    specifierTemplate: '{key}',
+    handler: (args) => act((eng) => eng.press(String(args.key))),
+  },
+  {
+    name: 'browser.scroll',
+    description:
+      'Scroll the open page up or down to reveal more of it (snapshot only lists what is on screen). Returns the page afterwards.',
+    params: {
+      type: 'object',
+      properties: {
+        direction: { type: 'string', enum: ['down', 'up'], description: 'which way to scroll' },
+        screens: { type: 'number', description: 'how far, in screen-heights (default 1)' },
+      },
+      required: ['direction'],
+    },
+    sideEffect: false,
+    handler: (args) => {
+      const screens = Math.min(Math.max(Number(args.screens) || 1, 0.25), 10);
+      const sign = args.direction === 'up' ? -1 : 1;
+      // About one viewport per screen; the page's real height is not ours to know.
+      return act((eng) => eng.scroll(sign * screens * 700));
+    },
+  },
+  {
+    name: 'browser.back',
+    description: 'Go back one page in the open browser history. Returns the page afterwards.',
+    params: { type: 'object', properties: {} },
+    sideEffect: true,
+    handler: () => act((eng) => eng.back()),
   },
   {
     name: 'browser.scrape',
     description:
-      'Scrape structured data from the live page by CSS selector — returns each matching element’s text, href, and outerHTML (capped). Requires the full browser engine.',
+      'Scrape structured data from the live page by CSS selector — returns each matching element’s text, href, and outerHTML (capped). Requires an open page (browser.open).',
     params: {
       type: 'object',
       properties: {
@@ -180,18 +285,19 @@ export const browserAgentTools: AgentToolDecl[] = [
     },
     sideEffect: false,
     handler: async (args) => {
-      if (!(await engineEnabled())) return ENGINE_OFF;
-      return engine.scrape(String(args.selector));
+      const eng = await agentEngine();
+      if (!eng) return NO_BROWSER;
+      return eng.scrape(String(args.selector));
     },
   },
   {
     name: 'browser.media',
     description:
-      'List the images and videos on the live page — each with its src, alt text, caption, and surrounding context. Use this to see what is available to save before calling browser.save. Requires the full browser engine.',
+      'List the images and videos on the open page — each with its src, alt text, caption, and surrounding context. Use this to see what is available to save before calling browser.save. Requires an open page (browser.open).',
     params: { type: 'object', properties: {} },
     sideEffect: false,
     handler: async () => {
-      if (!(await engineEnabled())) return ENGINE_OFF;
+      if (!(await agentEngine())) return NO_BROWSER;
       const media = await pageMedia();
       // `savable` tells the model which items browser.save would actually accept, so
       // it doesn't try to save a decorative image and get an error. It's not the same
@@ -223,7 +329,7 @@ export const browserAgentTools: AgentToolDecl[] = [
   {
     name: 'browser.save',
     description:
-      'Save what is on the live page into a knowledge library so it can be semantically searched later with library.search. Use target "page" to save the article text, "media" to save one image/video by its src (from browser.media), or "allMedia" to save every described image/video on the page. Requires the full browser engine.',
+      'Save what is on the open page into a knowledge library so it can be semantically searched later with library.search. Use target "page" to save the article text, "media" to save one image/video by its src (from browser.media), or "allMedia" to save every described image/video on the page. Requires an open page (browser.open).',
     params: {
       type: 'object',
       properties: {
@@ -248,7 +354,7 @@ export const browserAgentTools: AgentToolDecl[] = [
     sideEffect: true,
     specifierTemplate: '{target}',
     handler: async (args) => {
-      if (!(await engineEnabled())) return ENGINE_OFF;
+      if (!(await agentEngine())) return NO_BROWSER;
       const opts = {
         library: args.library ? String(args.library) : undefined,
         tags: Array.isArray(args.tags) ? args.tags.map(String) : undefined,

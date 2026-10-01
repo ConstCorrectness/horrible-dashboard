@@ -66,3 +66,13 @@ export function addBookmark(url: string, title: string, tags: string[] = []): Pr
 export function removeBookmark(id: string): Promise<{ ok: boolean }> {
   return apiDelete<{ ok: boolean }>(`/browser/bookmarks/${encodeURIComponent(id)}`);
 }
+
+/** Readable article from HTML the caller already holds (the native pane's live DOM). */
+export function extractArticle(url: string, html: string, title = ''): Promise<ReaderArticle> {
+  return apiPost<ReaderArticle>('/browser/extract', { url, html, title });
+}
+
+/** The page scripts both engines evaluate — fetched so the native one is never stale. */
+export function pageScripts(): Promise<{ scripts: Record<string, string> }> {
+  return apiGet<{ scripts: Record<string, string> }>('/browser/scripts');
+}

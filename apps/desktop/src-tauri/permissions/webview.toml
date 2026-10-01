@@ -39,3 +39,25 @@ identifier = "allow-close-all-browser-webviews"
 description = "Enables the close_all_browser_webviews custom command"
 [permission.commands]
 allow = ["close_all_browser_webviews"]
+
+# browser.nativeCdp (src/browser_cdp.rs): the agent driving the native pane, the
+# pane observing its own navigation and network, and F12. The method and event
+# allowlists are enforced in Rust; these only make the commands callable at all.
+
+[[permission]]
+identifier = "allow-cdp-browser-webview"
+description = "Enables the cdp_browser_webview custom command"
+[permission.commands]
+allow = ["cdp_browser_webview"]
+
+[[permission]]
+identifier = "allow-subscribe-browser-webview-cdp"
+description = "Enables the subscribe_browser_webview_cdp custom command"
+[permission.commands]
+allow = ["subscribe_browser_webview_cdp"]
+
+[[permission]]
+identifier = "allow-open-browser-webview-devtools"
+description = "Enables the open_browser_webview_devtools custom command"
+[permission.commands]
+allow = ["open_browser_webview_devtools"]

@@ -14,6 +14,21 @@ class ReaderResponse(BaseModel):
     text: str
 
 
+class ExtractRequest(BaseModel):
+    """A page's live DOM, handed over by an engine the backend doesn't drive (the
+    desktop's native webview), for the same article extraction `/read` does."""
+
+    url: str
+    html: str = Field(max_length=8_000_000)
+    title: str = ""
+
+
+class PageScriptsResponse(BaseModel):
+    """The page scripts both engines evaluate (`snapshot`, `media`), keyed by name."""
+
+    scripts: dict[str, str]
+
+
 class HistoryEntry(BaseModel):
     id: str
     url: str

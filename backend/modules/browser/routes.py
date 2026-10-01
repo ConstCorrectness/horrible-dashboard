@@ -2,6 +2,9 @@
 
 - `GET /read` — reader mode: SSRF-safe server-side fetch + main-content extraction,
   so a page that refuses iframing can still be read inline.
+- `POST /extract` — the same extraction over HTML the caller already has (the
+  desktop's native webview reads its own live DOM); `GET /scripts` — the page
+  scripts both engines evaluate, so the native one never carries a stale copy.
 - `GET/POST/DELETE /history` and `/bookmarks` — the server-side catalog backing the
   panel's history dropdown and bookmarks strip.
 """
@@ -19,17 +22,19 @@ from backend.modules.browser.models import (
     BookmarksResponse,
     DnsChainResponse,
     EngineStatus,
+    ExtractRequest,
     GeoStatus,
     HistoryEntry,
     HistoryListResponse,
     NetProbeRequest,
     OkResponse,
+    PageScriptsResponse,
     ReaderResponse,
     RecordHistoryRequest,
     TraceHopModel,
     TraceResponse,
 )
-from backend.modules.browser.session import server_browser_enabled
+from backend.modules.browser.session import PAGE_SCRIPTS, page_script, server_browser_enabled
 
 router = APIRouter(prefix="/browser", tags=["browser"])
 
@@ -64,6 +69,31 @@ async def read(url: str = Query(..., description="page URL to read")) -> ReaderR
         author=article.author,
         text=article.text,
     )
+
+
+@router.post("/extract", response_model=ReaderResponse)
+def extract(req: ExtractRequest) -> ReaderResponse:
+    """Extract the readable article from HTML the caller already holds.
+
+    No fetch, so no SSRF surface: the native webview is the one that loaded the
+    page, and what it sends is the post-JS DOM — better input than `/read`'s
+    pre-render HTML for any client-rendered site.
+    """
+    from backend.modules.library.extract import extract_article
+
+    article = extract_article(req.html, req.url)
+    return ReaderResponse(
+        url=req.url,
+        title=article.title or req.title or req.url,
+        author=article.author,
+        text=article.text,
+    )
+
+
+@router.get("/scripts", response_model=PageScriptsResponse)
+def page_scripts() -> PageScriptsResponse:
+    """The snapshot/media page scripts, verbatim from `scripts/`."""
+    return PageScriptsResponse(scripts={name: page_script(name) for name in PAGE_SCRIPTS})
 
 
 @router.get("/history", response_model=HistoryListResponse)

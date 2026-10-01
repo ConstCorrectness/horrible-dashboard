@@ -32,6 +32,14 @@ open = "5"
 [target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
 tauri-plugin-updater = "2"
 
+# The native browser pane's in-process CDP bridge and browser settings (password
+# autosave, devtools) — see src/browser_cdp.rs. Pinned to the exact versions wry
+# uses: `PlatformWebview::controller()` hands back wry's copy of these COM types,
+# and a second copy of the bindings would be a different, incompatible type.
+[target.'cfg(windows)'.dependencies]
+webview2-com = "=0.38.2"
+windows = "=0.61.3"
+
 # WebKitGTK refuses every microphone/camera request that nobody answers, so on
 # Linux getUserMedia fails with NotAllowedError until the shell handles the
 # `permission-request` signal — see src/media.rs. Pinned to the exact version wry

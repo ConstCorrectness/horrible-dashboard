@@ -1,0 +1,162 @@
+/**
+ * The native browser pane's tab strip.
+ *
+ * Classed throughout: `button:not([class])` in controls.css is the 30px action
+ * control, and a tab is a row target, not an action button.
+ *
+ * Tactical treatment per CLAUDE.local.md: tabs are clipped, angular containers with
+ * a 2px accent top edge on the active one rather than a glowing perimeter, and the
+ * strip enters with a short, capped stagger.
+ */
+
+.browser-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 0.25rem 0.4rem 0;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.browser-tab {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 90px;
+  max-width: 200px;
+  flex: 0 1 180px;
+  height: 26px;
+  padding: 0 0.3rem 0 0.55rem;
+  background: var(--bg-hover, rgba(127, 127, 127, 0.08));
+  border: none;
+  border-top: 2px solid transparent;
+  /* An angled trailing edge: the tab reads as a tab, not a pill. */
+  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 100%, 0 100%);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.74rem;
+  cursor: pointer;
+  text-align: left;
+  animation: browser-tab-in 160ms ease-out both;
+  animation-delay: calc(min(var(--i, 0), 6) * 30ms);
+}
+.browser-tab:hover {
+  color: var(--text);
+}
+.browser-tab[aria-selected='true'] {
+  background: var(--bg, transparent);
+  border-top-color: var(--accent, #3b82f6);
+  color: var(--text);
+}
+.browser-tab:focus-visible {
+  outline: 1px solid var(--accent, #3b82f6);
+  outline-offset: -1px;
+}
+
+.browser-tab-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Loading reads as a thin accent bar under the title, not a spinner glyph. */
+.browser-tab[data-loading='true'] .browser-tab-title {
+  background: linear-gradient(var(--accent, #3b82f6), var(--accent, #3b82f6)) no-repeat left
+    bottom / 30% 1px;
+  animation: browser-tab-loading 900ms linear infinite;
+}
+
+.browser-tab-close,
+.browser-tab-new,
+.browser-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+}
+.browser-tab-close {
+  width: 16px;
+  height: 16px;
+  margin-right: 6px;
+  opacity: 0.55;
+}
+.browser-tab-close:hover {
+  opacity: 1;
+  color: var(--danger, #f87171);
+}
+.browser-tab-new {
+  width: 26px;
+  height: 26px;
+  color: var(--text-dim);
+}
+.browser-tab-new:hover {
+  color: var(--accent, #3b82f6);
+}
+
+/* A toolbar button holding a vector icon; same box as the toolbar's glyph buttons. */
+.browser-icon-btn {
+  height: 22px;
+  min-width: 26px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+}
+.browser-icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.browser-download {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+.browser-download[data-state='failed'] {
+  color: var(--danger, #f87171);
+}
+.browser-download-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes browser-tab-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes browser-tab-loading {
+  from {
+    background-position: -30% bottom;
+  }
+  to {
+    background-position: 130% bottom;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .browser-tab,
+  .browser-tab[data-loading='true'] .browser-tab-title {
+    animation: none;
+  }
+}

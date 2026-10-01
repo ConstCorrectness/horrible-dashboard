@@ -26,8 +26,59 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use serde::Deserialize;
-use tauri::{LogicalPosition, LogicalSize, State, Webview, WebviewBuilder, WebviewUrl, Window};
+use serde::{Deserialize, Serialize};
+use tauri::webview::{DownloadEvent, NewWindowResponse, PageLoadEvent};
+use tauri::{
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, State, Webview, WebviewBuilder,
+    WebviewUrl, Window,
+};
+
+use crate::browser_cdp::{configure_browser_settings, CdpSubscriptions};
+
+/// The Tauri event carrying what a native page does on its own — load progress,
+/// title changes, links that want a new tab, downloads — which the pane needs to
+/// behave like a browser (URL bar, tab labels, tab strip, download status).
+pub const WEBVIEW_EVENT: &str = "browser-webview";
+
+/// One [`WEBVIEW_EVENT`], tagged with the pane/tab id that owns the webview.
+#[derive(Serialize, Clone)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum WebviewEvent {
+    /// A navigation started (`loading`) or finished. The URL bar follows this, so
+    /// links clicked *inside* the page show up in the pane.
+    Load {
+        id: String,
+        url: String,
+        loading: bool,
+    },
+    Title {
+        id: String,
+        title: String,
+    },
+    /// A `target=_blank` link or a plain `window.open(url)`: the pane opens a tab.
+    NewTab {
+        id: String,
+        url: String,
+    },
+    Download {
+        id: String,
+        url: String,
+        path: Option<String>,
+        state: DownloadState,
+    },
+}
+
+#[derive(Serialize, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+pub enum DownloadState {
+    Started,
+    Done,
+    Failed,
+}
+
+fn emit(app: &AppHandle, event: WebviewEvent) {
+    let _ = app.emit(WEBVIEW_EVENT, event);
+}
 
 /// Pane rectangle in **logical** (CSS) pixels, as the frontend measures it with
 /// `getBoundingClientRect()`. Logical rather than physical on purpose: Tauri applies
@@ -58,7 +109,7 @@ impl Bounds {
 pub struct BrowserWebviews(Mutex<HashMap<String, Webview>>);
 
 impl BrowserWebviews {
-    fn get(&self, id: &str) -> Result<Webview, String> {
+    pub(crate) fn get(&self, id: &str) -> Result<Webview, String> {
         self.0
             .lock()
             .map_err(|_| "browser webview registry poisoned".to_string())?
@@ -71,7 +122,7 @@ impl BrowserWebviews {
 /// Only `http`/`https` may be loaded, so a compromised or buggy frontend can never
 /// steer a child webview at `file:`/`tauri:` local resources — where it would run
 /// with app privileges rather than as a foreign page.
-fn parse_web_url(url: &str) -> Result<tauri::Url, String> {
+pub(crate) fn parse_web_url(url: &str) -> Result<tauri::Url, String> {
     let parsed = tauri::Url::parse(url).map_err(|e| e.to_string())?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(format!("refusing to load non-http(s) URL: {url}"));
@@ -120,11 +171,17 @@ pub async fn create_browser_webview(
     }
 
     // Same arguments as the window it lives in — see `media::WEBVIEW2_ARGS`.
-    let builder = WebviewBuilder::new(webview_label(&id), WebviewUrl::External(parsed))
-        .additional_browser_args(crate::media::WEBVIEW2_ARGS);
+    let builder = browser_hooks(
+        window.app_handle(),
+        &id,
+        WebviewBuilder::new(webview_label(&id), WebviewUrl::External(parsed))
+            .additional_browser_args(crate::media::WEBVIEW2_ARGS)
+            .general_autofill_enabled(true),
+    );
     let webview = window
         .add_child(builder, position, size)
         .map_err(|e| e.to_string())?;
+    configure_browser_settings(&webview);
 
     state
         .0
@@ -132,6 +189,89 @@ pub async fn create_browser_webview(
         .map_err(|_| "browser webview registry poisoned".to_string())?
         .insert(id, webview);
     Ok(())
+}
+
+/// What makes the child a *browser* rather than a page: each hook reports something
+/// the pane has to hear about to keep its chrome honest.
+fn browser_hooks(
+    app: &AppHandle,
+    id: &str,
+    builder: WebviewBuilder<tauri::Wry>,
+) -> WebviewBuilder<tauri::Wry> {
+    let (load_app, load_id) = (app.clone(), id.to_string());
+    let (title_app, title_id) = (app.clone(), id.to_string());
+    let (tab_app, tab_id) = (app.clone(), id.to_string());
+    let (dl_app, dl_id) = (app.clone(), id.to_string());
+    builder
+        .on_page_load(move |_, payload| {
+            emit(
+                &load_app,
+                WebviewEvent::Load {
+                    id: load_id.clone(),
+                    url: payload.url().to_string(),
+                    loading: matches!(payload.event(), PageLoadEvent::Started),
+                },
+            );
+        })
+        .on_document_title_changed(move |_, title| {
+            emit(
+                &title_app,
+                WebviewEvent::Title {
+                    id: title_id.clone(),
+                    title,
+                },
+            );
+        })
+        .on_new_window(move |url, features| {
+            // A popup that asked for a size or position is a *window* its opener
+            // still talks to: OAuth and payment flows post their result back
+            // through `window.opener`. Let WebView2 open it as one. Everything
+            // else (`target=_blank`, a bare `window.open(url)`) becomes a tab.
+            if features.size().is_some() || features.position().is_some() {
+                return NewWindowResponse::Allow;
+            }
+            if parse_web_url(url.as_str()).is_ok() {
+                emit(
+                    &tab_app,
+                    WebviewEvent::NewTab {
+                        id: tab_id.clone(),
+                        url: url.to_string(),
+                    },
+                );
+            }
+            NewWindowResponse::Deny
+        })
+        .on_download(move |_, event| {
+            // WebView2 already defaults the destination to the user's Downloads
+            // folder and shows its own progress flyout; the pane only reports it.
+            let (url, path, state) = match event {
+                DownloadEvent::Requested { url, destination } => (
+                    url,
+                    Some(destination.display().to_string()).filter(|p| !p.is_empty()),
+                    DownloadState::Started,
+                ),
+                DownloadEvent::Finished { url, path, success } => (
+                    url,
+                    path.map(|p| p.display().to_string()),
+                    if success {
+                        DownloadState::Done
+                    } else {
+                        DownloadState::Failed
+                    },
+                ),
+                _ => return true,
+            };
+            emit(
+                &dl_app,
+                WebviewEvent::Download {
+                    id: dl_id.clone(),
+                    url: url.to_string(),
+                    path,
+                    state,
+                },
+            );
+            true
+        })
 }
 
 /// Follow the pane: called on every resize, split drag, scroll and dock change.
@@ -189,8 +329,10 @@ pub async fn navigate_browser_webview(
 #[tauri::command]
 pub async fn close_browser_webview(
     state: State<'_, BrowserWebviews>,
+    subscriptions: State<'_, CdpSubscriptions>,
     id: String,
 ) -> Result<(), String> {
+    subscriptions.forget(&id);
     let webview = state
         .0
         .lock()
@@ -212,7 +354,11 @@ pub async fn close_browser_webview(
 /// is lost: a pane that is still in the restored layout re-creates its surface on
 /// mount, and one that isn't should never have had a surface at all.
 #[tauri::command]
-pub async fn close_all_browser_webviews(state: State<'_, BrowserWebviews>) -> Result<(), String> {
+pub async fn close_all_browser_webviews(
+    state: State<'_, BrowserWebviews>,
+    subscriptions: State<'_, CdpSubscriptions>,
+) -> Result<(), String> {
+    subscriptions.forget_all();
     let webviews: Vec<Webview> = {
         let mut registry = state
             .0

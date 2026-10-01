@@ -14,7 +14,15 @@
  * is gone. See docs/modules/browser.mdx#saving-to-the-library.
  */
 import { clipStatus, ingestSource, type MediaAsset, type SourceModel } from '../library/api';
-import { engine, type MediaItem, type PageMedia } from './session';
+import { agentEngine } from './engines';
+import type { BrowserEngine, MediaItem, PageMedia } from './session';
+
+/** The engine holding the page being saved: the native pane or the backend's. */
+async function liveEngine(): Promise<BrowserEngine> {
+  const eng = await agentEngine();
+  if (!eng) throw new Error('No page is open to save.');
+  return eng;
+}
 
 /** Where a capture goes and how it's labelled. */
 export interface CaptureOptions {
@@ -85,6 +93,7 @@ export async function isSavable(item: MediaItem): Promise<boolean> {
  * `blog`-by-URL ingest so saving still degrades to something useful.
  */
 export async function capturePage(opts: CaptureOptions = {}): Promise<SourceModel> {
+  const engine = await liveEngine();
   try {
     const cap = await engine.capture();
     return await ingestSource({
@@ -110,8 +119,8 @@ export async function capturePage(opts: CaptureOptions = {}): Promise<SourceMode
 }
 
 /** List the media on the live page, with the text that describes each item. */
-export function pageMedia(): Promise<PageMedia> {
-  return engine.media();
+export async function pageMedia(): Promise<PageMedia> {
+  return (await liveEngine()).media();
 }
 
 /** Save one image/video from the live page. */

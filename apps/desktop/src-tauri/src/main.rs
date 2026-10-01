@@ -3,6 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod backend;
+mod browser_cdp;
 mod media;
 mod shortcuts;
 mod updater;
@@ -60,6 +61,7 @@ fn main() {
         })
         .manage(supervisor)
         .manage(webview::BrowserWebviews::default())
+        .manage(browser_cdp::CdpSubscriptions::default())
         .invoke_handler(tauri::generate_handler![
             backend::backend_status,
             updater::updater_check,
@@ -83,7 +85,10 @@ fn main() {
             webview::set_browser_webview_visible,
             webview::navigate_browser_webview,
             webview::close_browser_webview,
-            webview::close_all_browser_webviews
+            webview::close_all_browser_webviews,
+            browser_cdp::cdp_browser_webview,
+            browser_cdp::subscribe_browser_webview_cdp,
+            browser_cdp::open_browser_webview_devtools
         ])
         .build(tauri::generate_context!())
         .expect("error while building horrible-dashboard")

@@ -30,6 +30,12 @@ export type Capability =
   // pops a page out to a separate OS window: this one stays inside the pane, at the
   // cost of compositing above the HTML layer — see src-tauri/src/webview.rs.
   | 'browser.nativeWebview'
+  // The native pane is **drivable**: the shell bridges the Chrome DevTools Protocol
+  // into that one webview in-process (no debug port), so the agent's browser tools
+  // act on the page the human is looking at, and the pane can read its own
+  // navigation and network. Windows-only — WebView2 speaks CDP, WKWebView and
+  // WebKitGTK don't. See src-tauri/src/browser_cdp.rs.
+  | 'browser.nativeCdp'
   // `getDisplayMedia` actually works here. Granted in every browser and on the
   // Windows/Linux desktop, and **withheld on the macOS desktop**: WKWebView
   // exposes the function and then rejects it with `NotAllowedError`, which is

@@ -25,9 +25,8 @@ describe('browser module', () => {
     expect(keys).toContain('browser.readerModeDefault');
     expect(keys).toContain('browser.engine');
     const engine = (browserModule.settings ?? []).find((s) => s.key === 'browser.engine');
-    // Order is the `auto` preference order, not an alphabetical list: full beats
-    // native even on the desktop, because the agent's tools drive the backend session
-    // and the native overlay is the one surface the agent cannot read.
+    // `auto` resolves per host (native on Windows, where the agent can drive it;
+    // full elsewhere) — see BrowserPanel. The explicit choices follow it.
     expect(engine?.enumValues).toEqual(['auto', 'full', 'native', 'iframe']);
     expect(engine?.default).toBe('auto');
   });
@@ -47,6 +46,13 @@ describe('browser module', () => {
     expect(byName('browser.click')?.params?.required).toContain('ref');
     expect(byName('browser.type')?.params?.required).toEqual(['ref', 'text']);
     expect(byName('browser.scrape')?.params?.required).toContain('selector');
+    // The rest of the loop a browsing agent needs: keys (Enter submits), scroll
+    // (snapshot lists only what's on screen) and back (recover from a wrong click).
+    expect(byName('browser.press')?.params?.required).toEqual(['key']);
+    expect(byName('browser.scroll')?.params?.required).toEqual(['direction']);
+    expect(byName('browser.scroll')?.sideEffect).toBe(false);
+    expect(byName('browser.back')?.sideEffect).toBe(true);
+    expect(byName('browser.type')?.params?.properties).toHaveProperty('submit');
   });
 
   it('registers with the shared registry', () => {

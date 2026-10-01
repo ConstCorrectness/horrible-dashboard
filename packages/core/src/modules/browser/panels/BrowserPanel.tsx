@@ -11,7 +11,7 @@ import {
 
 import { PaneInstanceContext } from '../../../agent-context';
 import { hasCapability } from '../../../capabilities';
-import { openExternal } from '../../../external';
+import { openExternal, openPath } from '../../../external';
 import { toggleRegion } from '../../../layout/controller';
 import { findPaneAnywhere } from '../../../layout/model';
 import { layoutStore } from '../../../layout/store';
@@ -33,10 +33,17 @@ import {
   type ReaderArticle,
 } from '../api';
 import { acquireSession, sendInput } from '../session';
+import './browser-tabs.css';
 import { FullBrowserView } from './FullBrowserView';
 import { NativeBrowserView } from './NativeBrowserView';
 
 import { SaveToLibrary } from './SaveToLibrary';
+import {
+  disposeNativeTabs,
+  newNativeTabsHeld,
+  useNativeTabs,
+  type NativeTabsHeld,
+} from './useNativeTabs';
 
 /**
  * The embedded browser pane. Renders a page inline via `<iframe>` (works in both
@@ -58,6 +65,34 @@ let activeUrlBarFocus: (() => void) | null = null;
 export function focusActiveUrlBar(): void {
   activeUrlBarFocus?.();
 }
+
+// Same pattern for `browser.devtools`: the last focused native pane's active tab.
+let activeDevtools: (() => void) | null = null;
+export function openActiveDevtools(): void {
+  activeDevtools?.();
+}
+
+/** Stroke icons that inherit `currentColor` (CLAUDE.local.md: no emoji in panes). */
+function Icon({ d, size = 12 }: { d: string; size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d={d} />
+    </svg>
+  );
+}
+const ICON_CLOSE = 'M4 4l8 8M12 4l-8 8';
+const ICON_PLUS = 'M8 3v10M3 8h10';
+const ICON_DEVTOOLS = 'M5.5 4.5L2 8l3.5 3.5M10.5 4.5L14 8l-3.5 3.5M9 3l-2 10';
 
 /** Turn URL-bar text into a navigable URL: bare host → https://, else a search. */
 function normalizeUrl(raw: string): string {
@@ -95,29 +130,50 @@ export function BrowserPanel() {
   // streamed here; `native` is a real child webview the desktop shell overlays on
   // this pane; `iframe` is the light embedded frame.
   //
-  // `auto` prefers **full over native** even on the desktop, deliberately. The
-  // agent's browser tools (read/snapshot/scrape/click) drive the backend session,
-  // so a pane showing the native overlay would leave the human and the agent
-  // looking at two different pages — the same URL bar driving two engines. Native
-  // is a strict upgrade over the iframe, so `auto` reaches for it only when the
-  // backend engine is off; choosing it while the engine is available is an
-  // explicit setting, not something we do behind the user's back.
+  // `auto` prefers **native** wherever the agent can drive it (`browser.nativeCdp`,
+  // Windows): it is the browser a person actually wants — native input, crisp
+  // text, clipboard, saved logins, a real Edge fingerprint — and the agent's tools
+  // act on the very page shown here, so the human watches and can take over.
+  //
+  // Where the native view is *not* drivable (macOS/Linux), `auto` still prefers
+  // **full**, because showing the native overlay there would leave the human and
+  // the agent on two different pages behind one URL bar. Native is a strict
+  // upgrade over the iframe, so it is the fallback when the backend engine is off.
   const canNative = hasCapability('browser.nativeWebview');
+  const canCdp = canNative && hasCapability('browser.nativeCdp');
+  const preferNative = enginePref === 'native' || (enginePref === 'auto' && canCdp);
   const [engineOn, setEngineOn] = useState(false);
   useEffect(() => {
-    if (enginePref === 'iframe' || enginePref === 'native') {
+    if (enginePref === 'iframe' || preferNative) {
       setEngineOn(false);
       return;
     }
     engineStatus()
       .then((s) => setEngineOn(enginePref === 'full' ? true : s.enabled))
       .catch(() => setEngineOn(false));
-  }, [enginePref]);
-  const useFull = enginePref !== 'iframe' && enginePref !== 'native' && engineOn;
+  }, [enginePref, preferNative]);
+  const useFull = enginePref !== 'iframe' && !preferNative && engineOn;
   const useNative = !useFull && canNative && (enginePref === 'native' || enginePref === 'auto');
   const [nativeError, setNativeError] = useState<string | null>(null);
 
   const initialUrl = typeof params.url === 'string' ? params.url : '';
+
+  // Everything this pane holds that must outlive a remount, in **one** pane
+  // session: the claim on the shared backend engine and the native tabs. (They
+  // used to be two `usePaneSession` calls under the same pane key — the second
+  // silently received the first one's object, so the native webview was never
+  // closed with its pane.)
+  const paneInstanceId = useContext(PaneInstanceContext);
+  const paneKey = useRef(paneInstanceId || `browser-${Math.random().toString(36).slice(2)}`);
+  const claim = usePaneSession(
+    () => ({ release: null as null | (() => void), native: newNativeTabsHeld() as NativeTabsHeld }),
+    (held) => {
+      held.release?.();
+      disposeNativeTabs(held.native);
+    },
+  );
+  const native = useNativeTabs(useNative ? (claim?.native ?? null) : null, paneKey.current, initialUrl);
+  const activeTab = native.activeTab;
   const [nav, setNav] = useState<Nav>(() =>
     initialUrl ? { stack: [initialUrl], idx: 0 } : { stack: [], idx: -1 },
   );
@@ -128,9 +184,20 @@ export function BrowserPanel() {
   const [navSeq, setNavSeq] = useState(0);
   const [liveMeta, setLiveMeta] = useState<{ url: string; title: string } | null>(null);
 
-  const current = useFull ? liveMeta?.url || fullTarget : nav.idx >= 0 ? nav.stack[nav.idx] : '';
-  const canBack = useFull ? true : nav.idx > 0;
-  const canForward = useFull ? true : nav.idx >= 0 && nav.idx < nav.stack.length - 1;
+  const current = useFull
+    ? liveMeta?.url || fullTarget
+    : useNative
+      ? activeTab?.liveUrl || activeTab?.target || ''
+      : nav.idx >= 0
+        ? nav.stack[nav.idx]
+        : '';
+  const liveTitle = useNative ? activeTab?.title : liveMeta?.title;
+  const canBack = useFull ? true : useNative ? Boolean(activeTab?.canBack) : nav.idx > 0;
+  const canForward = useFull
+    ? true
+    : useNative
+      ? Boolean(activeTab?.canForward)
+      : nav.idx >= 0 && nav.idx < nav.stack.length - 1;
 
   const [input, setInput] = useState(initialUrl);
   const [loading, setLoading] = useState(false);
@@ -148,7 +215,6 @@ export function BrowserPanel() {
   // The network inspector is this pane's right region strip, owned by the layout
   // store — so the 📡 button reflects and drives that, not local state, and the
   // strip survives a workspace reload like every other region.
-  const paneInstanceId = useContext(PaneInstanceContext);
   const networkOpen = useSyncExternalStore(layoutStore.subscribe, () => {
     if (!paneInstanceId) return false;
     const located = findPaneAnywhere(layoutStore.getSnapshot().frame, paneInstanceId);
@@ -172,12 +238,17 @@ export function BrowserPanel() {
         recordHistory(url, url).catch(() => {});
         return;
       }
+      if (useNative) {
+        setInput(url);
+        native.navigate(url);
+        return;
+      }
       setNav((n) => {
         const stack = [...n.stack.slice(0, n.idx + 1), url];
         return { stack, idx: stack.length - 1 };
       });
     },
-    [useFull],
+    [useFull, useNative, native],
   );
 
   // Claim the shared engine for as long as this *pane* exists — not for as long as
@@ -187,10 +258,6 @@ export function BrowserPanel() {
   // workspace switch dropped the last reference and killed the engine: you came
   // back to a browser that had lost its page. The claim now ends when the pane is
   // closed. See layout/pane-lifetime.
-  const claim = usePaneSession(
-    () => ({ release: null as null | (() => void) }),
-    (held) => held.release?.(),
-  );
   useEffect(() => {
     if (!claim) return;
     if (useFull && !claim.release) claim.release = acquireSession();
@@ -235,11 +302,26 @@ export function BrowserPanel() {
     if (!useFull && !useNative) setLoading(true);
     setReader(null);
     setReaderError(null);
-    recordHistory(current, liveMeta?.title || current).catch(() => {});
+    recordHistory(current, liveTitle || current).catch(() => {});
     if (readerDefault) loadReader(current);
     // Re-runs on navigation (current) and reload; readerDefault/loadReader are
     // read once per run by design, not reactive deps.
-  }, [current, reloadKey, readerDefault, loadReader, useFull, useNative, liveMeta?.title]);
+  }, [current, reloadKey, readerDefault, loadReader, useFull, useNative, liveTitle]);
+
+  const openDevtools = useCallback(() => {
+    if (!activeTab?.created) return;
+    windowControl()
+      ?.browserWebview?.cdp?.openDevtools(activeTab.webviewId)
+      .catch(() => {});
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (!useNative || !canCdp) return;
+    activeDevtools = openDevtools;
+    return () => {
+      if (activeDevtools === openDevtools) activeDevtools = null;
+    };
+  }, [useNative, canCdp, openDevtools]);
 
   // Register this pane as the focus target for the global focus-url-bar command.
   useEffect(() => {
@@ -284,8 +366,63 @@ export function BrowserPanel() {
           urlRef.current?.focus();
           urlRef.current?.select();
         };
+        if (useNative && canCdp) activeDevtools = openDevtools;
       }}
     >
+      {/* Tabs — native only: each one is its own live webview. */}
+      {useNative && !nativeError && (
+        <div className="browser-tabs" role="tablist" aria-label="Browser tabs">
+          {native.tabs.map((tab, i) => (
+            <div
+              key={tab.id}
+              className="browser-tab"
+              role="tab"
+              tabIndex={0}
+              aria-selected={tab.id === activeTab?.id}
+              data-loading={tab.loading}
+              title={tab.liveUrl || tab.target}
+              style={{ '--i': i } as CSSProperties}
+              onClick={() => native.activate(tab.id)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') native.activate(tab.id);
+              }}
+              onAuxClick={(e) => {
+                if (e.button === 1) native.close(tab.id);
+              }}
+            >
+              <span className="browser-tab-title">
+                {tab.title || tab.liveUrl || tab.target || 'New tab'}
+              </span>
+              <button
+                type="button"
+                className="browser-tab-close"
+                title="Close tab"
+                aria-label="Close tab"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  native.close(tab.id);
+                }}
+              >
+                <Icon d={ICON_CLOSE} size={10} />
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            className="browser-tab-new"
+            title="New tab"
+            aria-label="New tab"
+            onClick={() => {
+              native.open('');
+              setInput('');
+              urlRef.current?.focus();
+            }}
+          >
+            <Icon d={ICON_PLUS} />
+          </button>
+        </div>
+      )}
+
       {/* Toolbar */}
       <div
         style={{
@@ -301,7 +438,13 @@ export function BrowserPanel() {
           style={btn}
           disabled={!canBack}
           title="Back"
-          onClick={() => (useFull ? sendInput('back') : setNav((n) => ({ ...n, idx: n.idx - 1 })))}
+          onClick={() =>
+            useFull
+              ? sendInput('back')
+              : useNative
+                ? native.back()
+                : setNav((n) => ({ ...n, idx: n.idx - 1 }))
+          }
         >
           ‹
         </button>
@@ -311,7 +454,11 @@ export function BrowserPanel() {
           disabled={!canForward}
           title="Forward"
           onClick={() =>
-            useFull ? sendInput('forward') : setNav((n) => ({ ...n, idx: n.idx + 1 }))
+            useFull
+              ? sendInput('forward')
+              : useNative
+                ? native.forward()
+                : setNav((n) => ({ ...n, idx: n.idx + 1 }))
           }
         >
           ›
@@ -321,7 +468,13 @@ export function BrowserPanel() {
           style={btn}
           disabled={!current}
           title="Reload"
-          onClick={() => (useFull ? sendInput('reload') : setReloadKey((k) => k + 1))}
+          onClick={() =>
+            useFull
+              ? sendInput('reload')
+              : useNative
+                ? native.reload()
+                : setReloadKey((k) => k + 1)
+          }
         >
           ⟳
         </button>
@@ -375,17 +528,31 @@ export function BrowserPanel() {
         <button type="button" style={btn} title="History" onClick={openHistory}>
           🕘
         </button>
+        {(useFull || (useNative && canCdp)) && (
+          <button
+            type="button"
+            style={{ ...btn, color: showSave ? 'var(--accent, #6ea8fe)' : undefined }}
+            disabled={!current}
+            title="Save page or its media to a library"
+            onClick={() => setShowSave((s) => !s)}
+          >
+            📥
+          </button>
+        )}
+        {useNative && canCdp && (
+          <button
+            type="button"
+            className="browser-icon-btn"
+            disabled={!activeTab?.created}
+            title="Developer tools (F12 inside the page)"
+            aria-label="Developer tools"
+            onClick={openDevtools}
+          >
+            <Icon d={ICON_DEVTOOLS} />
+          </button>
+        )}
         {useFull && (
           <>
-            <button
-              type="button"
-              style={{ ...btn, color: showSave ? 'var(--accent, #6ea8fe)' : undefined }}
-              disabled={!current}
-              title="Save page or its media to a library"
-              onClick={() => setShowSave((s) => !s)}
-            >
-              📥
-            </button>
             <button
               type="button"
               style={{ ...btn, color: networkOpen ? 'var(--accent, #6ea8fe)' : undefined }}
@@ -457,6 +624,44 @@ export function BrowserPanel() {
           }}
         >
           Native view unavailable ({nativeError}) — using the embedded frame.
+        </div>
+      )}
+
+      {useNative && native.download && (
+        <div className="browser-download" data-state={native.download.state}>
+          <span>
+            {native.download.state === 'started'
+              ? 'DOWNLOADING'
+              : native.download.state === 'done'
+                ? 'DOWNLOADED'
+                : 'DOWNLOAD FAILED'}
+          </span>
+          <span className="browser-download-path" title={native.download.path ?? native.download.url}>
+            {native.download.path ?? native.download.url}
+          </span>
+          {native.download.state === 'done' && native.download.path && (
+            <button
+              type="button"
+              style={btn}
+              onClick={() => {
+                const path = native.download?.path;
+                // The folder, not the file: opening a just-downloaded file by
+                // default is how a drive-by download becomes a run program.
+                if (path) void openPath(path.replace(/[\\/][^\\/]*$/, ''));
+              }}
+            >
+              Show folder
+            </button>
+          )}
+          <button
+            type="button"
+            className="browser-tab-close"
+            title="Dismiss"
+            aria-label="Dismiss"
+            onClick={native.dismissDownload}
+          >
+            <Icon d={ICON_CLOSE} size={10} />
+          </button>
         </div>
       )}
 
@@ -547,12 +752,33 @@ export function BrowserPanel() {
             </div>
           ) : useFull && current ? (
             <FullBrowserView url={fullTarget} navSeq={navSeq} onMeta={setLiveMeta} />
-          ) : useNative && current && !nativeError ? (
-            // Native history isn't readable from the shell (there's no back/forward
-            // on a child webview), so this shares the iframe's locally tracked nav
-            // stack rather than deferring to the engine the way full mode does.
-            <NativeBrowserView url={current} navSeq={reloadKey} onError={setNativeError} />
-          ) : current ? (
+          ) : useNative && activeTab?.target && !nativeError ? (
+            // Every tab stays mounted (each owns a live webview); only the active one
+            // is shown. A hidden wrapper makes the others' IntersectionObserver
+            // report off-screen, which hides their surfaces.
+            native.tabs.map((tab) =>
+              tab.target ? (
+                <div
+                  key={tab.id}
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    display: tab.id === activeTab.id ? 'block' : 'none',
+                  }}
+                >
+                  <NativeBrowserView
+                    webviewId={tab.webviewId}
+                    url={tab.target}
+                    navSeq={tab.seq}
+                    active={tab.id === activeTab.id}
+                    created={tab.created}
+                    onCreated={native.onCreated}
+                    onError={setNativeError}
+                  />
+                </div>
+              ) : null,
+            )
+          ) : current && (!useNative || nativeError) ? (
             <iframe
               key={`${reloadKey}:${current}`}
               src={current}
@@ -584,7 +810,7 @@ export function BrowserPanel() {
               loading…
             </div>
           )}
-          {showSave && useFull && current && (
+          {showSave && (useFull || (useNative && canCdp)) && current && (
             <SaveToLibrary library={saveLibrary} onClose={() => setShowSave(false)} />
           )}
         </div>

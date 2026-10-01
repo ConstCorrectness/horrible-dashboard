@@ -59,6 +59,15 @@ export interface SnapshotElement {
   y: number;
 }
 
+/** `snapshot`: the page's interactable elements, numbered for click/type by ref. */
+export interface PageSnapshot {
+  url: string;
+  title: string;
+  elements: SnapshotElement[];
+  /** A CAPTCHA / bot check is on the page — a human has to clear it. */
+  challenge?: boolean;
+}
+
 export interface PageContent {
   url: string;
   title: string;
@@ -225,19 +234,47 @@ export function requestOp<T = unknown>(
 
 // --- Agent-facing ops (also used by the panel's dev affordances) ------------
 
+/**
+ * What the agent's browser tools need from a page, whichever browser holds it: the
+ * backend's headless Chromium (`engine` below) or the desktop's native pane
+ * (`native-engine.ts`, over the shell's CDP bridge). Both evaluate the same page
+ * scripts, so refs from one `snapshot` mean the same thing on either.
+ */
+export interface BrowserEngine {
+  readonly kind: 'server' | 'native';
+  navigate(url: string): Promise<unknown>;
+  content(): Promise<PageContent>;
+  capture(): Promise<PageCapture>;
+  snapshot(): Promise<PageSnapshot>;
+  scrape(selector: string): Promise<unknown>;
+  media(): Promise<PageMedia>;
+  screenshot(): Promise<{ frame: string }>;
+  clickRef(ref: number): Promise<unknown>;
+  typeRef(ref: number, text: string): Promise<unknown>;
+  /** Press one key on whatever has focus (`Enter`, `Tab`, `Escape`, `ArrowDown`…). */
+  press(key: string): Promise<unknown>;
+  /** Scroll the page by `dy` CSS pixels (negative scrolls up). */
+  scroll(dy: number): Promise<unknown>;
+  back(): Promise<unknown>;
+  info(): Promise<{ url: string; title: string }>;
+}
+
 export const engine = {
+  kind: 'server' as const,
   navigate: (url: string) => requestOp<null>('navigate', { url }),
   content: (): Promise<PageContent> => requestOp<PageContent>('content'),
   /** Capture the live page as a self-contained HTML artifact (server-stored).
    * Generous timeout: the backend fetches and inlines every subresource. */
   capture: (): Promise<PageCapture> => requestOp<PageCapture>('capture', {}, 120_000),
-  snapshot: (): Promise<{ url: string; title: string; elements: SnapshotElement[] }> =>
-    requestOp('snapshot'),
+  snapshot: (): Promise<PageSnapshot> => requestOp('snapshot'),
   scrape: (selector: string) => requestOp('scrape', { selector }),
   media: (): Promise<PageMedia> => requestOp<PageMedia>('media'),
   screenshot: (): Promise<{ frame: string }> => requestOp('screenshot'),
   clickRef: (ref: number) => requestOp<null>('click_ref', { ref }),
   typeRef: (ref: number, text: string) => requestOp<null>('type_ref', { ref, text }),
+  press: (key: string) => requestOp<null>('key', { key }),
+  scroll: (dy: number) => requestOp<null>('scroll', { dx: 0, dy }),
+  back: () => requestOp<null>('back'),
   info: (): Promise<{ url: string; title: string }> => requestOp('info'),
   /**
    * Resize the live Chromium viewport to match the pane. Returns the size actually
@@ -246,7 +283,7 @@ export const engine = {
    */
   resize: (width: number, height: number): Promise<{ width: number; height: number }> =>
     requestOp('resize', { width, height }),
-};
+} satisfies BrowserEngine & Record<string, unknown>;
 
 // How many browser panes are currently mounted and relying on the shared session.
 // The engine is shared per WS connection, so ONE pane unmounting must not stop it

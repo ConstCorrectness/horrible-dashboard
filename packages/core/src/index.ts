@@ -82,7 +82,14 @@ export {
 } from './Avatar3D';
 export { WorkspaceLauncher } from './WorkspaceLauncher';
 export { apiUrl, getBackendOrigin, initBackendOrigin, wsUrl } from './origin';
-export { setWindowControl, windowControl, type ResizeEdge, type WindowControl } from './window';
+export {
+  setWindowControl,
+  windowControl,
+  type BrowserCdpEvent,
+  type BrowserWebviewEvent,
+  type ResizeEdge,
+  type WindowControl,
+} from './window';
 export {
   isAppFullscreen,
   setAppFullscreen,

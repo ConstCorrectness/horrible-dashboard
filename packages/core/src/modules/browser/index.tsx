@@ -1,7 +1,7 @@
 import { lazyPane } from '../../lazy-pane';
 import { registry, type ModuleManifest } from '../../registry';
 import { browserAgentTools } from './agentTools';
-import { focusActiveUrlBar } from './panels/BrowserPanel';
+import { focusActiveUrlBar, openActiveDevtools } from './panels/BrowserPanel';
 
 // Loaded when the pane first renders, not at boot — see `lazyPane`.
 const BrowserPanel = lazyPane(() => import('./panels/BrowserPanel'), 'BrowserPanel');
@@ -69,6 +69,12 @@ export const browserModule: ModuleManifest = {
       title: 'Browser: Focus URL bar',
       run: () => focusActiveUrlBar(),
     },
+    {
+      // Native pane only (the page's own F12 works too once the page has focus).
+      id: 'browser.devtools',
+      title: 'Browser: Developer tools',
+      run: () => openActiveDevtools(),
+    },
   ],
   keybindings: [
     // Scoped to a focused browser pane so it never shadows a global mod+l.
@@ -100,7 +106,7 @@ export const browserModule: ModuleManifest = {
       key: 'browser.engine',
       title: 'Rendering engine',
       description:
-        'full = real headless Chromium server-rendered from the backend (reads the live DOM, persists cookies/cache, agent can scrape/act); native = a real child webview overlaid on the pane (desktop only — fastest and no iframe restrictions, but it paints above app UI and the agent cannot read it); iframe = the light embedded frame. auto prefers full when the backend has it enabled (HORRIBLE_ENABLE_SERVER_BROWSER=1), then native on the desktop, then iframe.',
+        'native = a real browser (WebView2) inside the pane, with tabs, downloads, devtools and saved logins (desktop only; on Windows the agent drives the same page you see, elsewhere it cannot read it); full = headless Chromium in the backend streamed to the pane (HORRIBLE_ENABLE_SERVER_BROWSER=1); iframe = the light embedded frame. auto prefers native on Windows, otherwise full when the backend has it enabled, then native, then iframe.',
       type: 'enum',
       enumValues: ['auto', 'full', 'native', 'iframe'],
       default: 'auto',

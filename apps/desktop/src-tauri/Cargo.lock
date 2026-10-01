@@ -1298,6 +1298,8 @@ dependencies = [
  "tauri-plugin-updater",
  "tauri-runtime",
  "webkit2gtk",
+ "webview2-com",
+ "windows",
 ]
 
 [[package]]

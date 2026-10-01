@@ -221,3 +221,38 @@ def test_safe_fetch_bytes_caps_an_oversized_body(fake_web):
     fake_web(b"\x00" * 5000, "image/png")
     with pytest.raises(UnsafeUrlError, match="too large"):
         asyncio.run(safe_fetch_bytes("https://example.com/big.png", max_bytes=1000))
+
+
+# --- native-engine support: shared page scripts + extract-from-HTML -----------
+
+
+def test_page_scripts_are_the_files_the_backend_engine_evaluates() -> None:
+    from backend.modules.browser import session
+
+    r = client.get("/api/browser/scripts")
+    assert r.status_code == 200
+    scripts = r.json()["scripts"]
+    assert set(scripts) == {"snapshot", "media"}
+    # One source of truth: what the native webview is handed is byte-for-byte what
+    # Playwright evaluates, so the two engines number refs identically.
+    assert scripts["snapshot"] == session._SNAPSHOT_JS
+    assert scripts["media"] == session._MEDIA_JS
+    assert "data-agent-ref" in scripts["snapshot"]
+
+
+def test_extract_reads_html_without_fetching(monkeypatch: pytest.MonkeyPatch) -> None:
+    def no_network(*_a: object, **_k: object) -> None:
+        raise AssertionError("extract must not fetch")
+
+    monkeypatch.setattr(fetch, "fetch_readable", no_network)
+    body = "<p>" + "Native webviews hand over their live DOM. " * 20 + "</p>"
+    html = f"<html><head><title>Live DOM</title></head><body><article>{body}</article></body></html>"
+    r = client.post(
+        "/api/browser/extract",
+        json={"url": "https://example.com/a", "html": html, "title": "Tab title"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["url"] == "https://example.com/a"
+    assert "live DOM" in data["text"]
+    assert data["title"]

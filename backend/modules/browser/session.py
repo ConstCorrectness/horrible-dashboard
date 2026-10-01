@@ -125,49 +125,28 @@ def _profile_dir(profile: str) -> Path:
     return root
 
 
+# The page scripts live in `scripts/` as plain files rather than Python strings:
+# the desktop's native webview evaluates the very same ones over its own CDP
+# bridge (fetched from `GET /api/browser/scripts`), so the two engines can't drift
+# into reporting different refs or media for one page.
+_SCRIPT_DIR = Path(__file__).with_name("scripts")
+PAGE_SCRIPTS = ("snapshot", "media")
+
+
+def page_script(name: str) -> str:
+    # Each file is one arrow function. The repo formatter ends it with `;`, which
+    # turns Playwright's "is this a function?" probe (it parses `(<source>)`) into a
+    # syntax error, so the arrow would be *returned* instead of called. Strip it.
+    source = (_SCRIPT_DIR / f"{name}.js").read_text(encoding="utf-8")
+    return source.strip().rstrip(";").rstrip()
+
+
 # JS injected to tag interactable elements with a stable ref and return a flat,
 # agent-friendly snapshot (role + accessible name + value). Refs survive as long as
 # the DOM node does, and `click_ref`/`type_ref` re-select via the attribute — the
 # standard agentic-browser affordance, but with clickable handles the raw a11y tree
 # from `page.accessibility.snapshot()` doesn't give.
-_SNAPSHOT_JS = r"""
-() => {
-  const SEL = 'a[href], button, input, select, textarea, [role=button],' +
-    '[role=link], [role=tab], [role=menuitem], [role=checkbox], [onclick],' +
-    '[contenteditable=true]';
-  const out = [];
-  let ref = 0;
-  const nodes = document.querySelectorAll(SEL);
-  for (const el of nodes) {
-    const rect = el.getBoundingClientRect();
-    const visible = rect.width > 0 && rect.height > 0 &&
-      rect.bottom > 0 && rect.right > 0 &&
-      rect.top < innerHeight && rect.left < innerWidth &&
-      getComputedStyle(el).visibility !== 'hidden' &&
-      getComputedStyle(el).display !== 'none';
-    if (!visible) continue;
-    ref += 1;
-    el.setAttribute('data-agent-ref', String(ref));
-    const role = el.getAttribute('role') ||
-      (el.tagName === 'A' ? 'link' :
-       el.tagName === 'BUTTON' ? 'button' :
-       el.tagName === 'INPUT' ? (el.type || 'textbox') :
-       el.tagName.toLowerCase());
-    let name = (el.getAttribute('aria-label') || el.innerText ||
-      el.value || el.getAttribute('placeholder') ||
-      el.getAttribute('title') || el.getAttribute('alt') || '').trim();
-    if (name.length > 120) name = name.slice(0, 117) + '...';
-    out.push({
-      ref, role, name,
-      value: (el.value !== undefined ? String(el.value).slice(0, 120) : ''),
-      x: Math.round(rect.left + rect.width / 2),
-      y: Math.round(rect.top + rect.height / 2),
-    });
-    if (ref >= 200) break;
-  }
-  return { url: location.href, title: document.title, elements: out };
-}
-"""
+_SNAPSHOT_JS = page_script("snapshot")
 
 
 # JS that harvests the page's media along with the **text that describes it**.
@@ -179,76 +158,7 @@ _SNAPSHOT_JS = r"""
 # in hand, is the only moment it's cheaply available; by the time an asset reaches the
 # ingest pipeline it's just bytes at a URL. A future CLIP vector would *supplement*
 # these fields, not replace them.
-_MEDIA_JS = r"""
-() => {
-  const abs = (u) => { try { return new URL(u, location.href).href; } catch { return null; } };
-  const clip = (s, n) => { s = (s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
-
-  // The words that describe an element: its own labels, then its <figure>
-  // caption, then the nearest preceding heading. Ordered most- to least-specific.
-  const describe = (el) => {
-    const parts = [];
-    const fig = el.closest('figure');
-    const cap = fig && fig.querySelector('figcaption');
-    if (cap) parts.push(clip(cap.innerText, 300));
-    let node = el, heading = null;
-    while (node && !heading) {
-      let sib = node.previousElementSibling;
-      while (sib && !heading) {
-        if (/^H[1-6]$/.test(sib.tagName)) heading = sib;
-        sib = sib.previousElementSibling;
-      }
-      node = node.parentElement;
-    }
-    if (heading) parts.push(clip(heading.innerText, 160));
-    return parts;
-  };
-
-  const images = [];
-  for (const el of document.querySelectorAll('img')) {
-    const src = abs(el.currentSrc || el.src);
-    if (!src || src.startsWith('data:')) continue;      // inline pixels aren't addressable
-    const w = el.naturalWidth || el.width, h = el.naturalHeight || el.height;
-    if (w && h && w < 64 && h < 64) continue;           // spacers, icons, tracking pixels
-    images.push({
-      src, kind: 'image',
-      alt: clip(el.alt, 300),
-      title: clip(el.getAttribute('title'), 160),
-      width: w || null, height: h || null,
-      context: describe(el),
-    });
-    if (images.length >= 100) break;
-  }
-
-  const videos = [];
-  for (const el of document.querySelectorAll('video, iframe')) {
-    let src = null, kind = 'video';
-    if (el.tagName === 'VIDEO') {
-      src = abs(el.currentSrc || el.src);
-      if (!src) { const s = el.querySelector('source'); if (s) src = abs(s.src); }
-    } else {
-      // Only embeds that are actually video players — a generic iframe isn't media.
-      const u = abs(el.src) || '';
-      if (!/(youtube|youtube-nocookie|vimeo|dailymotion|player\.twitch)\./.test(u)) continue;
-      src = u; kind = 'embed';
-    }
-    if (!src) continue;
-    videos.push({
-      src, kind,
-      alt: clip(el.getAttribute('aria-label') || el.getAttribute('title'), 300),
-      title: clip(el.getAttribute('title'), 160),
-      width: el.videoWidth || el.width || null,
-      height: el.videoHeight || el.height || null,
-      duration: (el.duration && isFinite(el.duration)) ? Math.round(el.duration) : null,
-      poster: el.poster ? abs(el.poster) : null,
-      context: describe(el),
-    });
-    if (videos.length >= 50) break;
-  }
-
-  return { url: location.href, title: document.title, images, videos };
-}
-"""
+_MEDIA_JS = page_script("media")
 
 
 class _Cmd:
@@ -1241,9 +1151,7 @@ class BrowserManager:
         )
         return await session.submit(op, args)
 
-    async def open_headless(
-        self, key: str, profile: str = "default"
-    ) -> BrowserSession:
+    async def open_headless(self, key: str, profile: str = "default") -> BrowserSession:
         """Start a Chromium session with no viewer, owned by `key`.
 
         Everything that makes the panel's session safe applies unchanged — the

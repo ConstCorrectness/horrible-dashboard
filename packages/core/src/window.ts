@@ -43,6 +43,48 @@ export interface WebviewBounds {
  * that region — for the command palette, modals, pane drags, or a workspace switch.
  * See apps/desktop/src-tauri/src/webview.rs.
  */
+/** What a native page did on its own, reported by the shell (`browser-webview`). */
+export type BrowserWebviewEvent =
+  | { kind: 'load'; id: string; url: string; loading: boolean }
+  | { kind: 'title'; id: string; title: string }
+  /** A `target=_blank` link or bare `window.open(url)` — the pane opens a tab. */
+  | { kind: 'newTab'; id: string; url: string }
+  | {
+      kind: 'download';
+      id: string;
+      url: string;
+      path: string | null;
+      state: 'started' | 'done' | 'failed';
+    };
+
+/** One CDP event forwarded from a native webview (`browser-cdp`). */
+export interface BrowserCdpEvent {
+  id: string;
+  method: string;
+  params: Record<string, unknown>;
+}
+
+/**
+ * `browser.nativeCdp` — the Chrome DevTools Protocol, in-process, scoped to one
+ * native webview. Absent unless the shell grants the capability (Windows only).
+ * The shell allowlists methods (page, DOM, input, script, read-only network) and
+ * events; see apps/desktop/src-tauri/src/browser_cdp.rs.
+ */
+export interface BrowserCdpControl {
+  /** Run one CDP method on webview `id`; resolves with its result object. */
+  call<T = Record<string, unknown>>(
+    id: string,
+    method: string,
+    params?: Record<string, unknown>,
+  ): Promise<T>;
+  /** Start forwarding CDP event `event` from webview `id`. Idempotent per pair. */
+  subscribe(id: string, event: string): Promise<void>;
+  /** Listen to every forwarded CDP event; returns an unsubscribe. */
+  onEvent(listener: (event: BrowserCdpEvent) => void): () => void;
+  /** Open the DevTools window for webview `id`. */
+  openDevtools(id: string): Promise<void>;
+}
+
 export interface BrowserWebviewControl {
   /** Create (or re-point and show) the overlay owned by pane `id`. Idempotent. */
   create(id: string, url: string, bounds: WebviewBounds): Promise<void>;
@@ -64,6 +106,10 @@ export interface BrowserWebviewControl {
    * its own surface on mount.
    */
   closeAll(): Promise<void>;
+  /** Listen to every webview's page events (load, title, new tab, download). */
+  onEvent(listener: (event: BrowserWebviewEvent) => void): () => void;
+  /** Present only on hosts granting `browser.nativeCdp`. */
+  cdp?: BrowserCdpControl;
 }
 
 export interface WindowControl {

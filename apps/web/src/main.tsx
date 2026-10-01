@@ -149,7 +149,7 @@ async function boot(): Promise<void> {
     // while WebView2 and WebKitGTK can, and the difference is invisible to
     // feature detection.
     initCapabilities(desktopCapabilities(platform));
-    const control = createTauriWindowControl();
+    const control = createTauriWindowControl({ cdp: platform === 'win' });
     setWindowControl(control);
     // A reload wiped every pane session that owned a native browser overlay, but
     // the OS window (and its child webviews) survived it. Sweep before any pane

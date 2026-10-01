@@ -26,18 +26,25 @@ It has **three rendering engines**, selected by the `browser.engine` setting:
   browser inherently agentic (the agent is handed content + an accessibility snapshot and
   can scrape/click/type). Opt-in and gated — see [Full engine](#full-engine-real-chromium).
 - **native** (desktop only, `browser.nativeWebview`) — a **real child webview** the Tauri
-  shell composites over the pane's rectangle. Fastest of the three by a wide margin (no
-  frame encode, no decode, native scrolling and input) and no site can refuse it. The
-  price is that it is **not part of the HTML layer**: the OS paints it above everything
-  the app draws, and the agent cannot read it. See
-  [Native webview overlay](#native-webview-overlay-desktop).
+  shell composites over the pane's rectangle: an actual browser, with tabs, downloads,
+  devtools, saved passwords and a real Edge fingerprint. Fastest of the three by a wide
+  margin (no frame encode, no decode, native scrolling, input, clipboard and IME) and no
+  site can refuse it. The price is that it is **not part of the HTML layer**: the OS
+  paints it above everything the app draws. On **Windows** the agent drives it directly
+  over an in-process CDP bridge (`browser.nativeCdp`); elsewhere the agent cannot read
+  it. See [Native webview overlay](#native-webview-overlay-desktop).
 
-`auto` (the default) prefers **full** when the backend reports it enabled, then **native**
-on the desktop, then **iframe**. Full is preferred over native on purpose: the agent's
-browser tools drive the backend session, so showing the native overlay while the engine is
-available would leave the human and the agent looking at two different pages with one URL
-bar between them. Native is a strict upgrade on the iframe, so `auto` reaches for it only
-when the backend engine is off; picking it over a live engine is an explicit setting.
+`auto` (the default) resolves per host:
+
+| Host | `auto` picks | Why |
+| --- | --- | --- |
+| Desktop, Windows (`browser.nativeCdp`) | **native** | The real browser, and the agent's tools act on the page shown |
+| Desktop, macOS/Linux | **full** if enabled, else **native** | The native view isn't agent-drivable there; full keeps human and agent on one page |
+| Browser build | **full** if enabled, else **iframe** | No native shell |
+
+The rule underneath: never show the human one page while the agent's tools act on
+another. On Windows the native view satisfies that, so it wins; where it can't, full
+does.
 
 ## Contributions to the layout shell
 
@@ -78,27 +85,48 @@ backend Chromium that an iframe can't give: **📥 Save**
 
 The panel declares `agentTools`, so the agent orchestrator can use the browser (pushed
 to the backend in the capability manifest whenever the module is registered — always
-available, not tied to an open pane). They come in two tiers, chosen automatically by
-whether the full engine is enabled (`/api/browser/engine`):
+available, not tied to an open pane).
 
-**Light (always available):**
+**Which browser they drive** is decided per call (`engines.ts`):
+
+1. **The native pane the human last used**, when one is open (Windows desktop). Agent and
+   human share one real page: the agent's clicks happen in front of the user, who can
+   take over mid-task. Over the [CDP bridge](#the-cdp-bridge-windows).
+2. **The backend's headless Chromium**, when the full engine is enabled
+   (`/api/browser/engine`) — the web build, or the desktop with no native pane open.
+3. **Neither** — `browser.read` falls back to a server fetch; the others say to
+   `browser.open` a page first.
+
+Both engines evaluate **the same page scripts** (`backend/modules/browser/scripts/`,
+served to the native one by `GET /api/browser/scripts`), so a snapshot ref means the same
+element on either.
+
+The tools are shaped for the loop real browsing agents use (Playwright MCP, browser-use,
+Claude in Chrome): read the page as a numbered list of interactable elements, act on one
+by ref, and get the **new** snapshot back in the same result — the agent never acts on
+refs from a page that has since changed, and never pays a round trip just to look again.
 
 - **`browser.read`** (read-only) — return a page's readable text (title + extracted
-  content, capped). This is how the agent **reads / researches the web**. With the full
-  engine on it navigates the **live shared** browser and reads its content (omit `url` to
-  read the page already open); otherwise it runs the SSRF-guarded `/api/browser/read`
-  fetch, so the agent can't reach internal services. Read-only, never permission-gated.
-- **`browser.open`** (side-effecting) — open a page in a browser pane in the UI so the
-  user can see it. Gated by the permission engine via a `{url}` specifier.
-
-**Full engine (when enabled) — the same live Chromium the human panel drives becomes the
-agent's browser (one WS connection ⇒ one shared session):**
-
-- **`browser.snapshot`** (read-only) — the page's **interactable elements**, each with a
-  numeric `ref`, `role`, accessible `name`, and `value` (a tagged accessibility snapshot
-  via injected JS). The agent's "what can I click?" affordance.
-- **`browser.click{ref}`** / **`browser.type{ref,text}`** (side-effecting) — act on an
-  element by its snapshot `ref`.
+  content, capped). This is how the agent **reads / researches the web**. With a live
+  browser it navigates it and reads the post-JS DOM (omit `url` to read the page already
+  open); otherwise it runs the SSRF-guarded `/api/browser/read` fetch, so the agent
+  can't reach internal services. Read-only, never permission-gated.
+- **`browser.open`** (side-effecting) — open a page in the browser pane so the user can
+  see it, and make it the page the other tools act on. On Windows it drives an open
+  native pane in place (bringing it forward), or opens one and returns once it has
+  loaded. Gated by the permission engine via a `{url}` specifier.
+- **`browser.snapshot`** (read-only) — the page's **on-screen interactable elements**,
+  each with a numeric `ref`, `role`, accessible `name`, and `value` (a tagged
+  accessibility snapshot via injected JS). The agent's "what can I click?" affordance.
+  When the page shows a CAPTCHA or bot check it adds `challenge: true` and a note
+  telling the agent to hand the page to the user — it must not try to solve it.
+- **`browser.click{ref}`** / **`browser.type{ref,text,submit?}`** (side-effecting) — act
+  on an element by its snapshot `ref`; `type` replaces the field's contents and
+  `submit` presses Enter after. Both return the page afterwards.
+- **`browser.press{key}`** (side-effecting) — one key on whatever has focus (`Enter`,
+  `Tab`, `Escape`, arrows, …). **`browser.scroll{direction,screens?}`** (read-only)
+  and **`browser.back`** (side-effecting) complete the loop: snapshot only lists what is
+  on screen, and a wrong click needs a way back. All return the page afterwards.
 - **`browser.scrape{selector}`** (read-only) — pull structured data (text / href /
   outerHTML, capped) for every element matching a CSS selector.
 - **`browser.media`** (read-only) — the page's images and videos, each with its `src`,
@@ -390,6 +418,10 @@ A normal backend module (`backend/modules/browser`), same shape as `library`:
 
 - `GET /read?url=` — **reader mode**: SSRF-guarded fetch + main-content extraction
   (reuses `library.extract.extract_article`).
+- `POST /extract` — the same extraction over HTML the caller already holds (the native
+  pane's live DOM). No fetch, so no SSRF surface.
+- `GET /scripts` — the page scripts both engines evaluate (`snapshot`, `media`), verbatim
+  from `scripts/`, so the native engine never carries a stale copy.
 - `GET/POST/DELETE /history` and `GET/POST /bookmarks`, `DELETE /bookmarks/{id}` — a
   SQLite catalog (`browser_history`, `browser_bookmarks`) in the shared app DB. History
   is upserted per URL; bookmarks are deduped per URL.
@@ -548,8 +580,15 @@ approach, not a bug to be fixed, and it drives the whole design:
 - Anything drawing over that region must **claim suppression** via
   `suppressNativeOverlays()` (`packages/core/src/modules/browser/overlay.ts`), which
   hides the overlay for as long as it's held. The command palette does this; **any new
-  full-window UI must too**, or it will open behind the page. The registry is
-  reference-counted so a dropdown closing inside a modal doesn't un-hide it early.
+  full-window UI should too**. The registry is reference-counted so a dropdown closing
+  inside a modal doesn't un-hide it early.
+- **Anything else on top is caught by hit-testing.** On a floating desktop, raising or
+  dragging another window over the browser fires no event on the pane, and the page
+  used to paint over the window in front of it. So the region is hit-tested every
+  250 ms and on every pointer release (`document.elementFromPoint` on a 3x3 grid inset
+  12 px from the edges): when something else is topmost inside it, the page's photo,
+  which is plain HTML and so obeys z-order, takes the surface's place until the pane
+  is uncovered. This is also the backstop for UI that forgets to suppress.
 - **Invisible is not unmounted.** A pane on a non-visible workspace still owns its
   native surface, which would otherwise float over whatever replaced it — so an
   `IntersectionObserver` and `visibilitychange` hide it as well, and **unmounting the
@@ -562,8 +601,10 @@ approach, not a bug to be fixed, and it drives the whole design:
 Lifetime is the **pane's**, not the component's. A workspace switch unmounts panes (see
 [`unmount-is-not-close`](../architecture/layout-shell.mdx)), and destroying the webview
 there would drop the user's page, scroll position and logged-in state — so
-`usePaneSession` ties `close_browser_webview` to the pane actually closing, and
-`create_browser_webview` is idempotent so a remount re-points the existing surface.
+`BrowserPanel`'s pane session ties `close_browser_webview` (one per tab) to the pane
+actually closing. A remount **re-attaches** to the live surface rather than calling
+`create_browser_webview` again: create on an existing webview navigates it, which is a
+reload that throws the user back to where the tab started.
 
 The one path with no owner is a **frontend reload**: it destroys every pane session
 while the OS window and its children live on, leaving overlays composited over the app
@@ -576,9 +617,59 @@ Only `http`/`https` URLs load, enforced in Rust: a child webview steered at
 are `async` because `add_child` dispatches to the main thread and blocks on the reply —
 a sync command already runs there and would deadlock the app.
 
-Two things the overlay deliberately does **not** do: the agent cannot read it (it's out
-of process, so `browser.*` tools still drive the backend session), and back/forward come
-from the pane's locally tracked nav stack, since a child webview exposes no history API.
+**A menu over the page shows a photo of it, not a hole.** With the CDP bridge, the tab is
+photographed (`Page.captureScreenshot`, within a 150 ms budget) before suppression hides
+the surface, and the photo stands in until it comes back. Without the bridge (or past the
+budget) the region is blank while hidden, as before.
+
+### Tabs, downloads, devtools, logins
+
+- **Tabs.** Each tab is its own child webview (`<paneId>:<tabId>` to the shell), so a
+  background tab keeps its page, scroll and form state. The tab list lives in the
+  pane's session, not React state, so a workspace switch keeps it. The shell reports
+  what pages do on their own as `browser-webview` events (`webview.rs`): **loads** keep
+  the URL bar honest when a link is clicked *inside* the page, **titles** label the
+  tabs, and **`target=_blank` / `window.open(url)` open a tab** here. A popup that asks
+  for a size or position is let through as a real window instead — OAuth and payment
+  flows post their result back through `window.opener`.
+- **Back/forward** read the tab's real history over CDP (`Page.getNavigationHistory`) on
+  Windows; elsewhere a per-tab stack built from load events stands in.
+- **Downloads** land where WebView2 puts them by default (the user's Downloads folder,
+  with its own progress flyout); the pane shows a status line with *Show folder*.
+- **Devtools**: F12 inside the page, the toolbar button, or the `browser.devtools`
+  command. Enabled on the browser webviews only, release builds included.
+- **Logins**: cookies persist in the WebView2 profile, so sites stay signed in across
+  restarts, and password autosave + form autofill are on. The child webviews share the
+  app window's WebView2 environment (Tauri creates them in it), so site data lives in
+  the app's WebView2 user-data folder.
+
+### The CDP bridge (Windows)
+
+`browser.nativeCdp` (`apps/desktop/src-tauri/src/browser_cdp.rs`) gives the frontend the
+Chrome DevTools Protocol **in-process, scoped to one webview**:
+`ICoreWebView2::CallDevToolsProtocolMethod` for calls and
+`GetDevToolsProtocolEventReceiver` for events (re-emitted as `browser-cdp`). The agent's
+native engine (`native-engine.ts`) is built on it: `Runtime.evaluate` runs the shared page
+scripts, `Input.dispatchMouseEvent` / `insertText` / `dispatchKeyEvent` act (trusted
+events — `isTrusted` is true, which sites guarding against scripted clicks check), and
+`content` posts the live DOM to `POST /api/browser/extract`.
+
+**Why not `--remote-debugging-port`.** A debug port is a local TCP listener that hands
+*every* webview in the process — the app's own UI, its origin and the tokens it holds —
+to any program on the machine. The in-process API reaches one webview and nothing outside
+the process can call it.
+
+The frontend is trusted but not given the whole protocol. Methods are allowlisted:
+`Page`, `Runtime`, `DOM`, `Input`, `Accessibility`, and `Network.enable/disable/
+getResponseBody`. Events: `Page`, `Runtime`, `DOM`, `Network`. Refused: `Browser.*`
+(the browser process), `Target.*` (attaching to other targets, the app included),
+`Storage.*`, `Fetch.*` (interception), `Security.*`, and `Emulation.*` — fingerprint
+overrides are exactly what bot walls look for. `Page.navigate` keeps the http(s)-only
+guard. Calls run on the webview's UI thread (WebView2 ignores them anywhere else) and
+reply over a channel.
+
+macOS (WKWebView) and Linux (WebKitGTK) have no CDP, so the capability is Windows-only;
+there `auto` keeps preferring the full engine.
 
 ## Browser vs desktop
 
@@ -587,13 +678,14 @@ from the pane's locally tracked nav stack, since a child webview exposes no hist
 | Inline framable sites | ✅ iframe | ✅ iframe |
 | Reader mode (any site) | ✅ | ✅ |
 | Full Chromium engine (any site, live DOM, agentic) | ✅ (gated + extra) | ✅ (gated + extra) |
-| Native in-pane webview (any site, fastest, not agent-readable) | ❌ | ✅ (`browser.nativeWebview`) |
+| Native in-pane webview (any site, fastest, tabs, downloads, logins) | ❌ | ✅ (`browser.nativeWebview`) |
+| Agent drives the page the human sees | full engine only | ✅ native on Windows (`browser.nativeCdp`); full elsewhere |
 | Blocked-site escape (iframe mode) | Open in new tab (`window.open`) | **Native browser window** (`browser.nativeWindow`) |
 
-The full engine renders **the same backend Chromium** in both builds, so it's the
-general answer to framing-blocked sites; the native overlay is the desktop's faster
-in-pane alternative when the engine is off, and the native-window pop-out remains an
-iframe-mode escape hatch.
+The full engine renders **the same backend Chromium** in both builds, so it's the general
+answer to framing-blocked sites in the browser build and on macOS/Linux. On Windows the
+native pane is the browser, for the human and the agent alike; the native-window pop-out
+remains an iframe-mode escape hatch.
 
 ## Known limitations / future
 
@@ -606,7 +698,8 @@ iframe-mode escape hatch.
   every frame pays base64's ~33%. A real encoded stream would need server-side H.264
   (PyAV/ffmpeg) and a licensing call, and was deliberately not taken. Chromium is heavy,
   so full mode stays bounded (one context per connection, released on disconnect).
-- Deferred full-engine work: in-pane **tabs** (multiple pages per context), a smart URL
+- Deferred full-engine work: in-pane **tabs** (multiple pages per context — the native
+  pane has them), a smart URL
   bar / start page with favicons & titles, a history/bookmarks manager, and
   multi-profile switching.
 - Media search is proxy-text only **unless [CLIP visual search](./library.mdx#visual-search-clip)
@@ -621,10 +714,18 @@ iframe-mode escape hatch.
   the user's own browser and are invisible to the backend.
 - Iframe-block detection is best-effort; in iframe mode the manual escapes are always
   shown rather than auto-triggered.
-- The **native overlay** can't be read by the agent, has no back/forward history API,
-  and is invisible to the network view — it's a fast renderer, not an agentic one. It
-  also rides Tauri's `unstable` multi-webview, so a Tauri upgrade needs it re-checked.
-  Any new full-window UI must call `suppressNativeOverlays()` or it will render behind
-  the page; nothing enforces that automatically.
+- The **native pane** is agent-drivable on Windows only, and is **invisible to the
+  network view** on every platform: the strip reads the backend session's telemetry.
+  The bridge already forwards `Network.*` events, so feeding them to the strip is the
+  remaining work. Saving a native page files its extracted text (`blog`), not a
+  self-contained archive — `capture` re-fetches subresources with the *backend*
+  session's cookies, which a native page doesn't have. The native pane also rides
+  Tauri's `unstable` multi-webview, so a Tauri upgrade needs it re-checked.
+- The agent tools can't hand the model a **screenshot**: tool results reach the model
+  as text, so a vision fallback for canvas-heavy pages needs image support in the tool
+  relay first.
+- Full-window UI should still call `suppressNativeOverlays()`: the occlusion check
+  catches anything it misses, but only on its next 250 ms poll, so an unsuppressed
+  modal shows the page over it for a moment first.
 - Not to be confused with the external **Claude-in-Chrome** automation, which drives the
   user's *real* Chrome; this module renders pages *inside* the dashboard.

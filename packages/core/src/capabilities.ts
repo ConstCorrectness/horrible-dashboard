@@ -42,6 +42,8 @@ export const DESKTOP_CAPABILITIES: Capability[] = [
  * the shell subtracts what its own platform cannot do.
  */
 export function desktopCapabilities(platform: 'mac' | 'win' | 'linux'): Capability[] {
+  // Only WebView2 speaks CDP, so only Windows can drive its native browser pane.
+  if (platform === 'win') return [...DESKTOP_CAPABILITIES, 'browser.nativeCdp'];
   if (platform !== 'mac') return DESKTOP_CAPABILITIES;
   return DESKTOP_CAPABILITIES.filter((c) => c !== 'media.displayCapture');
 }
