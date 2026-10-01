@@ -100,6 +100,21 @@ def test_relative_with_root_name_segment(client: TestClient, root) -> None:
     assert res.json()["content"] == "nested"
 
 
+def test_not_found_names_the_resolved_path_and_roots(client: TestClient, root) -> None:
+    # The agent sees only this detail; it has to say where a relative path landed.
+    res = client.get("/api/files/list", params={"path": "packages/core/src"})
+    assert res.status_code == 404
+    detail = res.json()["detail"]
+    assert str(root.resolve() / "packages" / "core" / "src") in detail
+    assert str(root.resolve()) in detail
+
+
+def test_outside_root_names_the_resolved_path(client: TestClient, tmp_path) -> None:
+    res = client.get("/api/files/list", params={"path": str(tmp_path)})
+    assert res.status_code == 403
+    assert str(tmp_path.resolve()) in res.json()["detail"]
+
+
 def test_relative_dotdot_escape_still_rejected(client: TestClient) -> None:
     # Anchoring happens before the boundary check, so a relative `..` escape is
     # still rejected.

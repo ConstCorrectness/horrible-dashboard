@@ -128,7 +128,7 @@ capability manifest. Verified live: the agent wrote a file through gated
 `files.write`, which prompted with the rendered `{path}` specifier and wrote on
 approval. The tree exposes [agent tools & `getAgentContext`](../architecture/agent-tools.mdx):
 
-- **Read (ungated):** `files.list(path)`, `files.read(path)`, and
+- **Read (ungated):** `files.roots()`, `files.list(path)`, `files.read(path)`, and
   `files.gitStatus(path)` (branch + each changed path's status); the tree's roots,
   the active selection, the full **multi-selection** (`selectedPaths`), and a git
   summary (`{branch, changeCount}`) are exposed through the pane's

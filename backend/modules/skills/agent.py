@@ -91,9 +91,9 @@ def catalog_text(skills: list[store.Skill] | None = None) -> str | None:
         return None
     lines = [
         CATALOG_MARKER,
-        "Reusable instructions the user has written. When one matches the task, call "
+        "Reusable instructions. Only when one clearly matches the task, call "
         "`use_skill` with its name to read it BEFORE doing the work — the description "
-        "below is a summary, not the instructions.",
+        "below is a summary, not the instructions. Ignore the ones that don't match.",
     ]
     for skill in active:
         lines.append(f"- `{skill.name}`: {skill.description}")

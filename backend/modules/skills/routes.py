@@ -24,7 +24,7 @@ router = APIRouter(prefix="/skills", tags=["skills"])
 
 
 def _model(skill: store.Skill) -> SkillModel:
-    return SkillModel(**skill.public(), enabled=store.is_enabled(skill.name))
+    return SkillModel(**skill.public(), enabled=store.is_enabled(skill))
 
 
 @router.get("", response_model=SkillListResponse)
@@ -101,7 +101,7 @@ def set_enabled(name: str, payload: EnableInput) -> SkillModel:
     fire, not rewriting their descriptions.
     """
     skill = _require(name)
-    store.set_enabled(skill.name, payload.enabled)
+    store.set_enabled(skill, payload.enabled)
     agent.invalidate()
     return _model(skill)
 

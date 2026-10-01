@@ -139,10 +139,21 @@ def _resolve(raw: str, *, must_exist: bool = True) -> Path:
     except OSError as exc:
         raise HTTPException(status_code=400, detail=f"bad path: {exc}") from exc
 
+    # Both details name the resolved path and the roots. The agent sees only this
+    # string: a bare "not found" for `packages/core/src` gave it no way to learn the
+    # path had been anchored to `~/Projects` rather than the repo it had in mind.
+    roots_text = ", ".join(str(r) for r in roots)
     if not any(resolved == root or resolved.is_relative_to(root) for root in roots):
-        raise HTTPException(status_code=403, detail="path outside workspace roots")
+        raise HTTPException(
+            status_code=403,
+            detail=f"path outside workspace roots: {resolved} (roots: {roots_text})",
+        )
     if must_exist and not resolved.exists():
-        raise HTTPException(status_code=404, detail="not found")
+        raise HTTPException(
+            status_code=404,
+            detail=f"not found: {resolved} (relative paths resolve against the "
+            f"workspace roots: {roots_text})",
+        )
     return resolved
 
 

@@ -11,6 +11,7 @@ import {
   deleteEntry,
   gitStatus,
   listDir,
+  listRoots,
   readFile,
   renameEntry,
   writeFile,
@@ -18,7 +19,7 @@ import {
 import { refreshTree } from './store';
 
 const PATH_DESC =
-  'Path within a workspace root — absolute, or relative to a root (e.g. "notes.txt" or "src/app.py"); a leading segment matching a root name selects that root.';
+  'Path within a workspace root — absolute, or relative to a root (e.g. "notes.txt" or "src/app.py"); a leading segment matching a root name selects that root, otherwise it is relative to the FIRST root. Call files.roots to see the roots. The roots are the user folders, not the source tree of this app.';
 
 const pathParam = {
   type: 'object' as const,
@@ -29,6 +30,14 @@ const pathParam = {
 };
 
 export const filesAgentTools: AgentToolDecl[] = [
+  {
+    name: 'files.roots',
+    description:
+      'List the workspace roots (absolute paths). Every files.* path must be inside one; relative paths resolve against the first.',
+    params: { type: 'object', properties: {} },
+    sideEffect: false,
+    handler: () => listRoots(),
+  },
   {
     name: 'files.list',
     description: 'List the entries of a directory under a workspace root.',

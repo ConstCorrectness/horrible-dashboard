@@ -740,6 +740,38 @@ def test_github_keywords_preload_the_group() -> None:
     assert "github" not in orchestrator._preload_groups(conn, "what time is it")
 
 
+def test_a_visualization_request_arrives_with_the_visualizer_guide() -> None:
+    # Preload is what puts the group in play without a load_tools round, so the
+    # guide has to ride on the preload path: keyword match → guides message.
+    conn = FakeConn(
+        agent_tools=[{"name": "visualizer.render_html", "description": "r"}]
+    )
+    groups = orchestrator._preload_groups(
+        conn, "create a visualization of the solar system"
+    )
+    msg = orchestrator._guides_message(groups)
+    assert msg is not None
+    # The two facts a model cannot infer from the tool schemas.
+    assert "render_html" in msg["content"]
+    assert "localStorage" in msg["content"]
+
+
+def test_visualization_requests_preload_the_visualizer() -> None:
+    # Regression: "visualizer" is not a substring of "visualization", so this prompt
+    # loaded only `files` (via "create") and the agent wrote an HTML file to disk.
+    conn = FakeConn(
+        agent_tools=[{"name": "visualizer.render_html", "description": "r"}]
+    )
+    for prompt in (
+        "create a visualization of the solar system",
+        "chart my monthly spend",
+        "plot sin(x)",
+        "draw a diagram of the auth flow",
+    ):
+        assert "visualizer" in orchestrator._preload_groups(conn, prompt), prompt
+    assert "visualizer" not in orchestrator._preload_groups(conn, "what time is it")
+
+
 def test_auto_load_forgiveness_activates_group_and_runs() -> None:
     # The model calls a known tool from a group it never loaded — run it anyway and
     # activate the group so it's visible next round.

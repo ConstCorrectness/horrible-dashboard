@@ -861,10 +861,19 @@ _GROUP_DESCRIPTIONS: dict[str, str] = {
         "ran under. Also forks a recorded turn — re-runs it with a tool dropped or "
         "the prompt changed, tools simulated — and diffs the two decisions."
     ),
-    "files": "Browse, read, search, create, and edit files in the workspace.",
+    "files": (
+        "Browse, read, search, create, and edit files under the user's workspace "
+        "roots (`files.roots` names them; relative paths resolve against the first "
+        "— they are not this app's source tree). To SHOW something visual, use the "
+        "visualizer group instead of writing an HTML file for the user to open."
+    ),
     "editor": "Inspect and modify open editor buffers (read, propose edits, format, rename).",
     "terminal": "Run shell commands and manage terminal sessions.",
-    "visualizer": "Render Canvas / Three.js / Babylon.js animations and stream Pygame frames.",
+    "visualizer": (
+        "Show visualizations in-app: charts, diagrams, SVG and HTML/D3 pages "
+        "(render_html), Canvas / Three.js / Babylon.js animations (render_js), and "
+        "streamed Pygame frames."
+    ),
     "database": "Connect to and query SQL/vector databases (psql-like): list connections, inspect schema, run read queries, write/execute statements, and semantic search the app DB.",
     "social": (
         "The user's friends: list the roster with presence, message a person, or ask "
@@ -1051,7 +1060,17 @@ _GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
         "my documents",
     ),
     "visualizer": (
-        "visualizer",
+        # Substring match: "visualiz" covers visualize/visualization/visualizer.
+        # "visualizer" alone missed "create a visualization of the solar system",
+        # and the agent wrote an HTML file for the user to open instead.
+        "visualiz",
+        "chart",
+        "plot",
+        "diagram",
+        "svg",
+        "infographic",
+        "solar system",
+        "orbit",
         "render",
         "pygame",
         "canvas",
@@ -2348,6 +2367,16 @@ async def run_agent_loop(
         # every round, below, because `_select_tools` rebuilds the list from the
         # live catalog and would hand the tool straight back.
         tools = [t for t in tools if t["function"]["name"] not in denied]
+    # Under progressive disclosure the caller passes a placeholder `[]`, and the real
+    # list only exists once `_select_tools` runs. Build round 0's list here so the
+    # harness fingerprints the catalog the model was actually offered — recording
+    # the placeholder gave every chat turn `tool_names: []`, one harness for all.
+    # Reused verbatim as round 0's list below, so the budget check logs once.
+    entry_stats: dict[str, Any] = {}
+    if progressive:
+        tools = _select_tools(conn, active_groups or set(), spec, entry_stats)
+        if denied:
+            tools = [t for t in tools if t["function"]["name"] not in denied]
     # Record what the agent *does*, beside the `_capture_context` call that records
     # what it was *shown*. Both are keyed by `turn_id`; both are self-swallowing.
     # `None` whenever trajectory capture is off, which is the default.
@@ -2407,7 +2436,10 @@ async def run_agent_loop(
                 telemetry_turn.mark_round(turn_id, round_no)
                 # Under progressive disclosure, inject the groups loaded last round.
                 tool_stats: dict[str, Any] = {}
-                if progressive:
+                if progressive and round_no == 0:
+                    tool_stats = entry_stats
+                    _note_dropped_tools(messages, tool_stats)
+                elif progressive:
                     tools = _select_tools(conn, active_groups, spec, tool_stats)
                     if denied:
                         tools = [

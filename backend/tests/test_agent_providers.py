@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 from typing import Any
 
 import httpx
@@ -593,6 +594,62 @@ def test_a_name_collision_is_disambiguated_not_merged() -> None:
     names = [t["function"]["name"] for t in out]
     assert len(set(names)) == 2, names
     assert {restore[n] for n in names} == {"library.search", "library_search"}
+
+
+def test_the_litellm_path_sanitizes_and_restores_tool_names(monkeypatch) -> None:
+    """OpenRouter goes through litellm, which never sanitized: Cohere rejected the
+    whole turn on `agent.ask_peer` ("A-Za-z0-9_ ... can't begin with a digit")."""
+    from types import SimpleNamespace
+
+    seen: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any) -> Any:
+        seen.update(kwargs)
+        message = SimpleNamespace(
+            model_dump=lambda: {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": "agent_ask_peer", "arguments": "{}"},
+                    }
+                ],
+            }
+        )
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=None)
+
+    monkeypatch.setattr(P.litellm, "acompletion", fake_acompletion)
+    tools = [
+        {"type": "function", "function": {"name": "agent.ask_peer", "parameters": {}}},
+        {"type": "function", "function": {"name": "mcp-gh.search", "parameters": {}}},
+    ]
+    client = _client(lambda r: httpx.Response(500))
+
+    async def run() -> Any:
+        out = await P.chat(client, P.PROVIDERS["openrouter"], "", "m", [], tools)
+        await client.aclose()
+        return out
+
+    result = asyncio.run(run())
+    sent = [t["function"]["name"] for t in seen["tools"]]
+    assert sent == ["agent_ask_peer", "mcp_gh_search"]
+    assert all(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", n) for n in sent)
+    assert [c.name for c in result.tool_calls] == ["agent.ask_peer"]
+    # The transcript keeps the app's own names, so the next round re-sanitizes.
+    assert (
+        result.assistant_message["tool_calls"][0]["function"]["name"]
+        == "agent.ask_peer"
+    )
+
+
+def test_a_leading_digit_is_prefixed() -> None:
+    out, _msgs, restore = P.sanitize_tool_names(
+        [{"type": "function", "function": {"name": "3d.render"}}], []
+    )
+    name = out[0]["function"]["name"]
+    assert not name[0].isdigit() and restore[name] == "3d.render"
 
 
 def test_a_provider_error_body_reaches_the_message() -> None:

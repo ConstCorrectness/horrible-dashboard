@@ -25,6 +25,17 @@ import io
 # Ensure pygame is imported after setting the dummy driver
 import pygame
 
+# A gutted install (dist-info present, most of `pygame/` deleted, no `__init__.py`)
+# imports as an empty namespace package, and the only symptom used to be
+# "module 'pygame' has no attribute 'init'" — twice mistaken for an app bug.
+if getattr(pygame, "__file__", None) is None:
+    sys.stderr.write(
+        "The pygame install is broken: it imports as an empty namespace package "
+        "(" + ", ".join(getattr(pygame, "__path__", [])) + "). Reinstall it with "
+        "`uv pip install --reinstall --no-deps pygame`.\\n"
+    )
+    sys.exit(1)
+
 # Standard capture logic
 def _capture_frame():
     try:

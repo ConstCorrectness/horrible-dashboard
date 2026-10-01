@@ -426,37 +426,63 @@ def _state_path() -> Path:
     return user_dir().parent / "skills-state.json"
 
 
-def disabled_names() -> set[str]:
+def _read_state() -> dict[str, set[str]]:
     import json
 
     try:
         data = json.loads(_state_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return set()
-    names = data.get("disabled") if isinstance(data, dict) else None
-    return {str(n) for n in names} if isinstance(names, list) else set()
+        data = {}
+    out: dict[str, set[str]] = {}
+    for key in ("disabled", "enabled"):
+        names = data.get(key) if isinstance(data, dict) else None
+        out[key] = {str(n) for n in names} if isinstance(names, list) else set()
+    return out
 
 
-def set_enabled(name: str, enabled: bool) -> set[str]:
+def disabled_names() -> set[str]:
+    """User skills switched off. User skills are on unless listed here."""
+    return _read_state()["disabled"]
+
+
+def enabled_project_names() -> set[str]:
+    """Project skills switched on. Project skills are off unless listed here.
+
+    The defaults are opposite on purpose. `project_dir()` is the checkout the app runs
+    from, so its skills are the ones written for developing *this app* (`new-module`,
+    `running-the-app`). Offered to the in-app agent unasked, they pulled a "make a
+    visualization" request into scaffolding a dashboard module against paths that
+    don't exist under the user's files roots.
+    """
+    return _read_state()["enabled"]
+
+
+def set_enabled(skill: Skill, enabled: bool) -> None:
     import json
 
-    current = disabled_names()
-    if enabled:
-        current.discard(name)
+    state = _read_state()
+    if skill.scope == "project":
+        target, on = state["enabled"], enabled
     else:
-        current.add(name)
+        target, on = state["disabled"], not enabled
+    if on:
+        target.add(skill.name)
+    else:
+        target.discard(skill.name)
     path = _state_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps({"disabled": sorted(current)}, indent=2), encoding="utf-8"
+        json.dumps({k: sorted(v) for k, v in state.items()}, indent=2),
+        encoding="utf-8",
     )
-    return current
 
 
-def is_enabled(name: str) -> bool:
-    return name not in disabled_names()
+def is_enabled(skill: Skill) -> bool:
+    if skill.scope == "project":
+        return skill.name in enabled_project_names()
+    return skill.name not in disabled_names()
 
 
 def active_skills() -> list[Skill]:
     """The skills that actually reach the model: usable, and not switched off."""
-    return [s for s in list_skills() if s.usable and is_enabled(s.name)]
+    return [s for s in list_skills() if s.usable and is_enabled(s)]

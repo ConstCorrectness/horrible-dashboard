@@ -229,3 +229,44 @@ def test_a_failing_final_round_is_reported_not_swallowed(monkeypatch) -> None:
         assert "stopped after 1 steps" in answer
 
     asyncio.run(go())
+
+
+def test_a_progressive_turn_records_the_tools_it_offered(monkeypatch) -> None:
+    """The chat turn passes a placeholder `[]` and lets progressive disclosure build
+    the list per round. Fingerprinting that placeholder recorded `tool_names: []` for
+    every chat turn, so every harness looked the same."""
+
+    async def go() -> None:
+        recorded: dict[str, Any] = {}
+        monkeypatch.setattr(
+            orchestrator, "_begin_trajectory", lambda **kw: recorded.update(kw)
+        )
+        calls: list[set[str]] = []
+
+        def fake_select(conn, active_groups, spec=None, stats=None):
+            calls.append(set(active_groups))
+            return [_tool("show"), _tool("files.read")]
+
+        monkeypatch.setattr(orchestrator, "_select_tools", fake_select)
+        model = ScriptedModel(["done"])
+        monkeypatch.setattr(P, "chat_stream", model)
+        await orchestrator.run_agent_loop(
+            FakeConn(),
+            "t1",
+            [{"role": "user", "content": "do it"}],
+            [],  # the placeholder the chat turn passes
+            INFO,
+            "http://localhost:11434",
+            "test-model",
+            _noop_emit,
+            temperature=0.0,
+            active_groups={"files"},
+            simulate=_simulate,
+        )
+        names = [t["function"]["name"] for t in recorded["tools"]]
+        assert names == ["show", "files.read"]
+        # Round 0 reuses the entry list rather than selecting (and logging) twice.
+        assert model.seen[0]["tools"] == recorded["tools"]
+        assert len(calls) == 1
+
+    asyncio.run(go())

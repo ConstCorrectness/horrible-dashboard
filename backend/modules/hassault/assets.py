@@ -29,7 +29,6 @@ from pathlib import Path
 from backend import paths
 from backend.modules.hassault import drafts, mapsource
 from backend.modules.hassault.cgz import CgzMap, read_cgz
-from backend.modules.settings.routes import get_value
 
 # Where AssaultCube usually lands, per platform. Only used when the setting is
 # blank; a version-suffixed directory means the glob has to do the walking.
@@ -74,6 +73,11 @@ def install_root() -> Path | None:
     per-platform locations are probed. Returns None rather than raising so the
     module loads (and can explain itself in the UI) with no install present.
     """
+    # Imported here, as `routes.py` does: a top-level import put the node's settings
+    # store in the import graph of everything that loads this package — including
+    # the game server, which deploys without a node behind it.
+    from backend.modules.settings.routes import get_value
+
     configured = str(get_value("hassault.installPath", "") or "").strip()
     if configured:
         path = Path(configured).expanduser()

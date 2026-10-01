@@ -1,9 +1,24 @@
 import { lazyPane } from '../../lazy-pane';
 import { registry, type ModuleManifest } from '../../registry';
-import { getActiveVisualizer } from './store';
+import { getActiveVisualizer, type VisualizerInstance } from './store';
 
 // Loaded when the pane first renders, not at boot — see `lazyPane`.
 const VisualizerWidget = lazyPane(() => import('./widgets'), 'VisualizerWidget');
+
+/**
+ * Open the pane and wait for its instance to register. A fixed 100ms wait was too
+ * short the first time: the lazy chunk (three.js included) is still loading, so the
+ * agent's first render reported "pane is not open" and burned a round on `show`.
+ */
+async function openVisualizer(timeoutMs = 5000): Promise<VisualizerInstance | null> {
+  registry.openPanel('visualizer.pane');
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const active = getActiveVisualizer();
+    if (active || Date.now() >= deadline) return active;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
 
 export const visualizerModule: ModuleManifest = {
   id: 'visualizer',
@@ -74,11 +89,7 @@ export const visualizerModule: ModuleManifest = {
           handler: async (args) => {
             const { mode, code } = args as { mode: 'canvas' | 'three' | 'babylon'; code: string };
             // Auto open the panel
-            registry.openPanel('visualizer.pane');
-            // Wait 100ms for React mounting if needed
-            await new Promise((resolve) => setTimeout(resolve, 100));
-
-            const active = getActiveVisualizer();
+            const active = await openVisualizer();
             if (active) {
               active.setMode(mode);
               active.updateCode(code);
@@ -86,6 +97,44 @@ export const visualizerModule: ModuleManifest = {
               return { success: true, mode, codeLength: code.length };
             }
             return { error: 'Visualizer pane is not open or mounted.' };
+          },
+        },
+        {
+          name: 'visualizer.render_html',
+          description:
+            'Show an HTML document in the Visualizer pane — the way to SHOW charts, diagrams, ' +
+            'SVG, D3/Chart.js/Plotly pages, dashboards, infographics or any DOM/CSS visual to the ' +
+            'user in-app. Pass a complete self-contained document (inline <style>/<script>; CDN ' +
+            '<script src> from cdn.jsdelivr.net or unpkg.com works). It runs in a sandboxed ' +
+            'frame with no access to the app or its storage. ' +
+            'Prefer this over writing an .html file and telling the user to open it. For a ' +
+            'frame-by-frame Canvas/Three.js/Babylon.js animation, render_js also works. To change ' +
+            'what is on screen, read it with visualizer.get_state and resend it with a minimal edit.',
+          params: {
+            type: 'object',
+            properties: {
+              html: {
+                type: 'string',
+                description: 'The full HTML document (<!doctype html>…) to render.',
+              },
+            },
+            required: ['html'],
+          },
+          sideEffect: true,
+          handler: async (args) => {
+            const { html } = args as { html: string };
+            const first = await openVisualizer();
+            if (!first) return { error: 'Visualizer pane is not open or mounted.' };
+            // Unlink from editor buffers first: with the default "active buffer" source,
+            // updateCode mirrors into whatever the user has focused, and an agent's
+            // document must not overwrite the user's file.
+            first.setTarget('none', 'html');
+            // The instance re-registers once that state lands; use the fresh one.
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            const active = getActiveVisualizer() ?? first;
+            active.updateCode(html);
+            active.run();
+            return { success: true, mode: 'html', codeLength: html.length };
           },
         },
         {
@@ -107,10 +156,7 @@ export const visualizerModule: ModuleManifest = {
           sideEffect: true,
           handler: async (args) => {
             const { code } = args as { code: string };
-            registry.openPanel('visualizer.pane');
-            await new Promise((resolve) => setTimeout(resolve, 100));
-
-            const active = getActiveVisualizer();
+            const active = await openVisualizer();
             if (active) {
               active.setMode('pygame');
               active.updateCode(code);

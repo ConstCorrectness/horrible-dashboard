@@ -1,4 +1,4 @@
-type VisualizerMode = 'canvas' | 'three' | 'babylon' | 'pygame';
+import type { VisualizerMode } from './bridge';
 
 export interface VisualizerInstance {
   setMode: (mode: VisualizerMode) => void;

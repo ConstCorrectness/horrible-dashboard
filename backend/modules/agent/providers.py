@@ -420,8 +420,11 @@ def raise_for_status_with_body(res: httpx.Response, body: str) -> None:
     raise httpx.HTTPStatusError(message, request=res.request, response=res)
 
 
-#: Everything OpenAI's function-name grammar disallows. Replaced with `_`.
-_UNSAFE_TOOL_CHARS = re.compile(r"[^a-zA-Z0-9_-]")
+#: Everything the strictest function-name grammar disallows. Replaced with `_`.
+#: OpenAI and NIM allow `-` as well; Cohere (reached through OpenRouter) does not,
+#: and rejects the whole request: "tool names can only contain certain characters
+#: (A-Za-z0-9_) and can't begin with a digit". One grammar for every strict path.
+_UNSAFE_TOOL_CHARS = re.compile(r"[^a-zA-Z0-9_]")
 
 
 def sanitize_tool_names(
@@ -449,6 +452,8 @@ def sanitize_tool_names(
         if not name or name in forward:
             continue
         safe = _UNSAFE_TOOL_CHARS.sub("_", name)
+        if safe[:1].isdigit():
+            safe = f"t_{safe}"
         if safe != name or safe in restore:
             candidate, n = safe, 1
             while candidate in restore:
@@ -505,6 +510,24 @@ def restore_tool_names(
     if not restore:
         return calls
     return [replace(c, name=restore[c.name]) if c.name in restore else c for c in calls]
+
+
+def restore_message_tool_names(
+    message: dict[str, Any], restore: dict[str, str]
+) -> dict[str, Any]:
+    """Undo the rewrite on an assistant message's `tool_calls`, so the transcript
+    stays in the app's own vocabulary (see `_openai_chat_stream`)."""
+    calls = message.get("tool_calls")
+    if not restore or not isinstance(calls, list):
+        return message
+    fixed = []
+    for call in calls:
+        fn = (call or {}).get("function") or {}
+        name = fn.get("name")
+        if name in restore:
+            call = {**call, "function": {**fn, "name": restore[name]}}
+        fixed.append(call)
+    return {**message, "tool_calls": fixed}
 
 
 @dataclass(frozen=True)
@@ -969,14 +992,17 @@ async def chat(
             call_kwargs["temperature"] = temperature
         if max_tokens is not None:
             call_kwargs["max_tokens"] = max_tokens
+        # Always sanitized: litellm fronts hosted vendors, and every one of them
+        # enforces some name grammar. A no-op for names that are already legal.
+        sent_tools, sent_messages, restore = sanitize_tool_names(tools, messages)
         response = await litellm.acompletion(
             model=qualify_model(info, model),
-            messages=messages,
-            tools=tools or None,
+            messages=sent_messages,
+            tools=sent_tools or None,
             **call_kwargs,
         )
         msg = response.choices[0].message
-        msg_dict = msg.model_dump()
+        msg_dict = restore_message_tool_names(msg.model_dump(), restore)
         return ChatResult(
             assistant_message=msg_dict,
             tool_calls=_parse_tool_calls(msg_dict.get("tool_calls") or []),
@@ -1044,7 +1070,7 @@ async def chat(
         msg = choices[0].get("message", {})
         usage = _usage_from_openai(body.get("usage"))
     return ChatResult(
-        assistant_message=msg,
+        assistant_message=restore_message_tool_names(msg, restore),
         tool_calls=restore_tool_names(
             _parse_tool_calls(msg.get("tool_calls") or []), restore
         ),
@@ -1498,6 +1524,9 @@ async def _litellm_chat_stream(
         kwargs["max_tokens"] = max_tokens
     if top_p is not None:
         kwargs["top_p"] = top_p
+    # Sanitized for the same reason as non-streamed `chat()`: Cohere behind
+    # OpenRouter 400'd the whole turn on `agent.ask_peer`.
+    tools, messages, restore = sanitize_tool_names(tools, messages)
     if tools:
         kwargs["tools"] = tools
 
@@ -1574,10 +1603,13 @@ async def _litellm_chat_stream(
 
     reasoning, full = await extractor.flush()
     ordered = [tool_acc[i] for i in sorted(tool_acc)]
-    tool_calls = [
-        _tool_call(str(s["id"] or i), s["name"], s["args"])
-        for i, s in enumerate(ordered)
-    ]
+    tool_calls = restore_tool_names(
+        [
+            _tool_call(str(s["id"] or i), s["name"], s["args"])
+            for i, s in enumerate(ordered)
+        ],
+        restore,
+    )
     assistant: dict[str, Any] = {"role": "assistant", "content": full}
     if reasoning:
         assistant["reasoning_content"] = reasoning
@@ -1586,7 +1618,10 @@ async def _litellm_chat_stream(
             {
                 "id": str(s["id"] or i),
                 "type": "function",
-                "function": {"name": s["name"], "arguments": s["args"]},
+                "function": {
+                    "name": restore.get(s["name"], s["name"]),
+                    "arguments": s["args"],
+                },
             }
             for i, s in enumerate(ordered)
         ]

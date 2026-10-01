@@ -195,3 +195,30 @@ def test_pygame_process_terminate_kills_and_cleans_up() -> None:
         assert proc.temp_file_path is None
     finally:
         loop.close()
+
+
+def test_a_gutted_pygame_install_is_named_not_misreported(tmp_path) -> None:
+    """A pygame whose files were deleted out from under its dist-info imports as an
+    empty namespace package. It used to surface as "module 'pygame' has no
+    attribute 'init'", which reads like an app bug; the wrapper now names it."""
+    import subprocess
+    import sys
+
+    from backend.modules.visualizer.runner import PYGAME_WRAPPER_TEMPLATE
+
+    (tmp_path / "pygame").mkdir()  # no __init__.py: a namespace package
+    script = tmp_path / "viz.py"
+    script.write_text(
+        PYGAME_WRAPPER_TEMPLATE.format(user_code="pass"), encoding="utf-8"
+    )
+    # -S drops site-packages, so the empty directory is the only `pygame` there is.
+    proc = subprocess.run(
+        [sys.executable, "-S", str(script)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={**os.environ, "PYTHONPATH": str(tmp_path)},
+    )
+    assert proc.returncode == 1
+    assert "pygame install is broken" in proc.stderr
+    assert "has no attribute 'init'" not in proc.stderr

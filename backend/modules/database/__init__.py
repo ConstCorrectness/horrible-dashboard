@@ -9,22 +9,33 @@ here so backend consumers — notably agent-commons matchmaking — keep importi
 from this module.
 """
 
-from backend.modules.database.routes import router
-from backend.modules.database.vectorstore import (
-    delete_document,
-    get_db_stats,
-    init_db,
-    list_documents,
-    search_documents,
-    upsert_document,
-)
+from __future__ import annotations
 
-__all__ = [
-    "router",
-    "delete_document",
-    "get_db_stats",
-    "init_db",
-    "list_documents",
-    "search_documents",
-    "upsert_document",
-]
+from typing import Any
+
+# Resolved on first access (PEP 562), not at import. Importing *any* submodule runs
+# this file, and `routes` drags in the agent stack and the settings store — so
+# `hassault/results.py` asking for `app_db.ensure_app_db_dir` (a path helper) put
+# all of that in the standalone game server's import graph.
+_EXPORTS = {
+    "router": "backend.modules.database.routes",
+    "delete_document": "backend.modules.database.vectorstore",
+    "get_db_stats": "backend.modules.database.vectorstore",
+    "init_db": "backend.modules.database.vectorstore",
+    "list_documents": "backend.modules.database.vectorstore",
+    "search_documents": "backend.modules.database.vectorstore",
+    "upsert_document": "backend.modules.database.vectorstore",
+}
+
+__all__ = list(_EXPORTS)
+
+
+def __getattr__(name: str) -> Any:
+    module = _EXPORTS.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import importlib
+
+    value = getattr(importlib.import_module(module), name)
+    globals()[name] = value  # cache: later lookups skip this hook
+    return value

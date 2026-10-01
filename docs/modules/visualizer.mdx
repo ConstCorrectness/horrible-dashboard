@@ -133,6 +133,7 @@ The visualizer registers tools with the agent orchestrator to allow agents to ge
 | Tool Name | Description | Parameters | Side Effect |
 | --- | --- | --- | --- |
 | `visualizer.render_js` | Compiles and executes a 2D Canvas, Three.js, or Babylon.js script in the browser. | `mode` (`canvas`\|`three`\|`babylon`), `code` (str) | Yes |
+| `visualizer.render_html` | Shows a self-contained HTML document (SVG, charts, D3/Chart.js pages) in a sandboxed `allow-scripts` iframe: an opaque origin, so it has no access to the app's storage or the agent socket. It unlinks the pane from editor buffers first, so it never overwrites the user's file. | `html` (str) | Yes |
 | `visualizer.run_pygame` | Runs a Pygame script on the backend, streaming frames to the canvas. | `code` (str) | Yes |
 | `visualizer.clear` | Stops any running animation (JS loop or Python subprocess) and clears the canvas. | None | Yes |
 | `visualizer.get_state` | Retrieves the active mode, rendering status, error details, and the **full current source `code`**. | None | No |

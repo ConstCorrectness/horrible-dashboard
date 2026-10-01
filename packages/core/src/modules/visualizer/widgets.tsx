@@ -5,15 +5,13 @@ import { useAgentContext } from '../../agent-context';
 import { registry } from '../../registry';
 import { sendChannel, subscribeChannel } from '../../ws';
 import { registerVisualizerInstance } from './store';
-import { languageForMode } from './bridge';
+import { languageForMode, type VisualizerMode } from './bridge';
 import { describeRunError } from './run-error';
 import type { EditorService } from '../editor/service';
 
 /** The editor's buffer surface, looked up lazily (the editor module registers it
  * at load). Undefined only if the editor module never loaded. */
 const editor = (): EditorService | undefined => registry.getService<EditorService>('editor');
-
-type VisualizerMode = 'canvas' | 'three' | 'babylon' | 'pygame';
 
 interface ScriptHooks {
   init?: (canvas: HTMLCanvasElement, threeLib: typeof THREE, babylonLib: unknown) => void;
@@ -168,13 +166,36 @@ while running:
     
 pygame.quit()
 `,
+  html: `<!doctype html>
+<html>
+<body style="margin:0;background:#14161a;display:grid;place-items:center;height:100vh">
+  <svg viewBox="-110 -110 220 220" width="70%">
+    <circle r="12" fill="#f5c542"/>
+    <circle r="60" fill="none" stroke="#3a3f4b"/>
+    <circle cx="60" r="5" fill="#6ea8fe">
+      <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="6s" repeatCount="indefinite"/>
+    </circle>
+  </svg>
+</body>
+</html>
+`,
 };
+
+/**
+ * The iframe sandbox for `html` mode. `allow-scripts` without `allow-same-origin`
+ * gives the document an opaque origin: its scripts run (CDN `<script src>` included)
+ * but it cannot read the app's storage or cookies, reach the parent DOM, or touch
+ * the agent socket. Never add `allow-same-origin` alongside `allow-scripts` — the
+ * pair lets the frame remove its own sandbox.
+ */
+const HTML_SANDBOX = 'allow-scripts';
 
 export function VisualizerWidget() {
   const [mode, setMode] = useState<VisualizerMode>('canvas');
   const [code, setCode] = useState(TEMPLATES.canvas);
   const [error, setError] = useState<string | null>(null);
   const [pygameFrame, setPygameFrame] = useState<string | null>(null);
+  const [htmlDoc, setHtmlDoc] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(true);
   const [targetUri, setTargetUri] = useState<string>('active');
   const [openBuffers, setOpenBuffers] = useState<string[]>([]);
@@ -196,13 +217,18 @@ export function VisualizerWidget() {
   // mounted, else the pane's own `code`. Used by the hot-poll loop and snapshots
   // (a backend fetch per tick would be wasteful); the initial run uses the async
   // path below so an unmounted target tab still resolves.
+  // Read through a ref, not the `code` binding: the hot-reload interval keeps the
+  // closure from the render that started it, so with no linked buffer an agent's
+  // `updateCode` never reached the screen unless the mode changed in the same call.
+  const codeRef = useRef(code);
+  codeRef.current = code;
   const getResolvedCode = (): { uri: string | null; code: string } => {
     const uri = resolveTargetUri();
     if (uri) {
       const live = editor()?.peekBufferContent(uri);
       if (live != null) return { uri, code: live };
     }
-    return { uri: null, code };
+    return { uri: null, code: codeRef.current };
   };
 
   // Expose context to agent orchestrator
@@ -316,12 +342,20 @@ export function VisualizerWidget() {
     // 3. Stop Pygame subprocess on backend
     sendChannel('visualizer', 'stop_pygame');
     setPygameFrame(null);
+    // 4. Unload an html document (its own timers and loops die with the frame)
+    setHtmlDoc(null);
   };
 
   // Run the current script
   const runCode = async (currentCode: string) => {
     stopAll();
     setError(null);
+
+    if (mode === 'html') {
+      // No canvas involved: the document renders in its own sandboxed frame.
+      if (isRunning) setHtmlDoc(currentCode);
+      return;
+    }
 
     if (!canvasRef.current) return;
     const canvas = canvasRef.current;
@@ -581,6 +615,7 @@ export function VisualizerWidget() {
                 <option value="three">🔺 Three.js</option>
                 <option value="babylon">🪐 Babylon.js</option>
                 <option value="pygame">🐍 Pygame</option>
+                <option value="html">HTML / SVG</option>
               </select>
             </div>
 
@@ -700,7 +735,18 @@ export function VisualizerWidget() {
             </div>
           )}
 
-          {mode === 'pygame' && pygameFrame ? (
+          {mode === 'html' ? (
+            htmlDoc != null ? (
+              <iframe
+                title="Visualizer document"
+                sandbox={HTML_SANDBOX}
+                srcDoc={htmlDoc}
+                style={{ width: '100%', height: '100%', border: 0, background: '#fff' }}
+              />
+            ) : (
+              <div style={{ color: 'var(--text-dim)', fontSize: '0.85rem' }}>Playback paused.</div>
+            )
+          ) : mode === 'pygame' && pygameFrame ? (
             <img
               src={pygameFrame}
               alt="Pygame Headless Frame"

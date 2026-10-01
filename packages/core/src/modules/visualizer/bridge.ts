@@ -6,12 +6,14 @@
  */
 import type { BufferLanguage } from '../editor/service';
 
-export type VisualizerMode = 'canvas' | 'three' | 'babylon' | 'pygame';
+/** `html` renders a whole document in a sandboxed iframe rather than driving the canvas. */
+export type VisualizerMode = 'canvas' | 'three' | 'babylon' | 'pygame' | 'html';
 
 const JS_MODES: VisualizerMode[] = ['canvas', 'three', 'babylon'];
 
 /** The editor language a given engine's code should be highlighted as. */
 export function languageForMode(mode: VisualizerMode): BufferLanguage {
+  // The editor has no HTML language yet; JavaScript highlighting is the nearer fit.
   return mode === 'pygame' ? 'python' : 'javascript';
 }
 

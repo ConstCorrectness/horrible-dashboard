@@ -211,10 +211,38 @@ def test_disabling_removes_a_skill_from_the_catalog_entirely(dirs):
     _write(user, "tidy", GOOD)
     agent.invalidate()
     assert "tidy" in (agent.catalog_text() or "")
-    store.set_enabled("tidy", False)
+    store.set_enabled(store.get("tidy"), False)
     agent.invalidate()
     assert agent.catalog_text() is None
     assert not agent.has_active()
+
+
+def test_a_project_skill_is_off_until_enabled(dirs):
+    """The project dir is the app's own checkout: its skills are for developing the
+    app, and offered unasked they hijacked unrelated requests."""
+    _, project = dirs
+    _write(project, "tidy", GOOD)
+    agent.invalidate()
+    assert agent.catalog_text() is None
+    assert agent.use("tidy").get("error")
+    skill = store.get("tidy")
+    assert skill is not None
+    store.set_enabled(skill, True)
+    agent.invalidate()
+    assert "tidy" in (agent.catalog_text() or "")
+    store.set_enabled(skill, False)
+    agent.invalidate()
+    assert agent.catalog_text() is None
+
+
+def test_an_old_state_file_with_only_disabled_still_loads(dirs):
+    user, project = dirs
+    _write(user, "tidy", GOOD)
+    _write(project, "other", GOOD.replace("name: tidy", "name: other"))
+    store._state_path().parent.mkdir(parents=True, exist_ok=True)
+    store._state_path().write_text('{"disabled": ["tidy"]}', encoding="utf-8")
+    agent.invalidate()
+    assert agent.catalog_text() is None
 
 
 def test_enablement_is_not_written_into_the_skill_file(dirs):
@@ -223,7 +251,7 @@ def test_enablement_is_not_written_into_the_skill_file(dirs):
     user, _ = dirs
     path = _write(user, "tidy", GOOD)
     before = path.read_text(encoding="utf-8")
-    store.set_enabled("tidy", False)
+    store.set_enabled(store.get("tidy"), False)
     assert path.read_text(encoding="utf-8") == before
 
 
@@ -328,7 +356,7 @@ def test_a_disabled_skill_cannot_be_used_by_name(dirs):
     callable by a model that remembers it from earlier in the conversation."""
     user, _ = dirs
     _write(user, "tidy", GOOD)
-    store.set_enabled("tidy", False)
+    store.set_enabled(store.get("tidy"), False)
     agent.invalidate()
     assert agent.use("tidy").get("error")
 
