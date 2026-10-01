@@ -200,4 +200,86 @@ describe('LSP IntelliSense client', () => {
 
     view.destroy();
   });
+
+  it('anchors hover to returned range and reuses cache within token', async () => {
+    const bufferUri = 'workspace-file:/mock/dataset.ts';
+    const state = EditorState.create({
+      doc: 'load_dataset("imdb")',
+      extensions: [
+        lspExtension({
+          path: '/mock/dataset.ts',
+          languageId: 'typescript',
+          root: '/mock',
+          bufferUri,
+        }),
+      ],
+    });
+
+    const view = new EditorView({ state });
+    const client = getLspClient(bufferUri) as unknown as {
+      hover(pos: number): Promise<{ pos: number; end: number; create: () => { dom: HTMLElement } } | null>;
+    };
+    expect(client).toBeDefined();
+
+    await Promise.resolve();
+
+    // The shared session is already initialized from the first test
+    _clearSent();
+
+    // Fire hover at position 2 (inside "load_dataset")
+    const hoverPromise = client.hover(2);
+
+    expect(_getSent()).toHaveLength(1);
+    const sentMsg = _getSent()[0];
+    const activeSessionId = (sentMsg.data as { sessionId: string }).sessionId;
+    const rpcId = (sentMsg.data as { payload: { id: number } }).payload.id;
+
+    expect(sentMsg).toEqual(
+      expect.objectContaining({
+        channel: 'lsp',
+        event: 'rpc',
+        data: expect.objectContaining({
+          sessionId: activeSessionId,
+          payload: expect.objectContaining({
+            method: 'textDocument/hover',
+            params: expect.objectContaining({ position: { line: 0, character: 2 } }),
+          }),
+        }),
+      }),
+    );
+
+    // Server returns hover with range 0..12
+    _triggerMessage('lsp', 'rpc', {
+      sessionId: activeSessionId,
+      payload: {
+        id: rpcId,
+        result: {
+          contents: '```python\n(function) def load_dataset(): pass\n```',
+          range: {
+            start: { line: 0, character: 0 },
+            end: { line: 0, character: 12 },
+          },
+        },
+      },
+    });
+
+    const tip = await hoverPromise;
+    expect(tip).toBeDefined();
+    expect(tip?.pos).toBe(0);
+    expect(tip?.end).toBe(12);
+
+    const rendered = tip?.create().dom;
+    expect(rendered?.innerHTML).toContain('cm-lsp-kind');
+    expect(rendered?.innerHTML).toContain('load_dataset');
+
+    _clearSent();
+
+    // Hover at position 8 (still inside "load_dataset") -> should hit cache immediately!
+    const cachedTip = await client.hover(8);
+    expect(_getSent()).toHaveLength(0); // No new network request
+    expect(cachedTip?.pos).toBe(0);
+    expect(cachedTip?.end).toBe(12);
+
+    view.destroy();
+  });
 });

@@ -41,6 +41,11 @@ pub struct ArmPose {
     pub support: Option<Vec3>,
     pub primary_roll: Option<f32>,
     pub support_roll: Option<f32>,
+    /// Finger curls, thumb first, with how much of them to apply over the
+    /// grip's own curl. A weight because a key without fingers means "the
+    /// grip's curl", which only the view model knows.
+    pub primary_fingers: Option<([f32; 5], f32)>,
+    pub support_fingers: Option<([f32; 5], f32)>,
 }
 
 impl ArmPose {
@@ -53,6 +58,8 @@ impl ArmPose {
             support: action.support.or(self.support),
             primary_roll: action.primary_roll.or(self.primary_roll),
             support_roll: action.support_roll.or(self.support_roll),
+            primary_fingers: action.primary_fingers.or(self.primary_fingers),
+            support_fingers: action.support_fingers.or(self.support_fingers),
         }
     }
 
@@ -63,6 +70,8 @@ impl ArmPose {
             support: self.support.map(|v| v * k),
             primary_roll: self.primary_roll.map(|r| r * k),
             support_roll: self.support_roll.map(|r| r * k),
+            primary_fingers: self.primary_fingers,
+            support_fingers: self.support_fingers,
         }
     }
 }
@@ -91,7 +100,6 @@ impl Locomotion {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     Reload,
-    Inspect,
     Throw,
     Draw,
 }
@@ -100,7 +108,6 @@ impl Action {
     fn key(self) -> &'static str {
         match self {
             Action::Reload => "reload",
-            Action::Inspect => "inspect",
             Action::Throw => "throw",
             Action::Draw => "draw",
         }
@@ -147,7 +154,49 @@ fn parse_pose(value: &serde_json::Value) -> ArmPose {
             .get("supportRoll")
             .and_then(|v| v.as_f64())
             .map(|v| v as f32),
+        primary_fingers: curl5(value, "primaryFingers").map(|c| (c, 1.0)),
+        support_fingers: curl5(value, "supportFingers").map(|c| (c, 1.0)),
     }
+}
+
+fn curl5(value: &serde_json::Value, key: &str) -> Option<[f32; 5]> {
+    let a = value.get(key)?.as_array()?;
+    let mut out = [0.0; 5];
+    for (i, slot) in out.iter_mut().enumerate() {
+        *slot = a.get(i)?.as_f64()? as f32;
+    }
+    Some(out)
+}
+
+/// A finger channel between two keys: where only one has fingers, its curl is
+/// held and its weight fades, so the hand eases in from the grip's own curl.
+fn lerp_fingers(
+    a: Option<([f32; 5], f32)>,
+    b: Option<([f32; 5], f32)>,
+    k: f32,
+) -> Option<([f32; 5], f32)> {
+    match (a, b) {
+        (Some((a, _)), Some((b, _))) => {
+            let mut c = a;
+            for i in 0..5 {
+                c[i] = a[i] + (b[i] - a[i]) * k;
+            }
+            Some((c, 1.0))
+        }
+        (Some((a, _)), None) => Some((a, 1.0 - k)),
+        (None, Some((b, _))) => Some((b, k)),
+        (None, None) => None,
+    }
+}
+
+/// A pose's finger channel laid over the grip's own curl.
+pub fn curl_over(grip: [f32; 5], fingers: Option<([f32; 5], f32)>) -> [f32; 5] {
+    let Some((c, w)) = fingers else { return grip };
+    let mut out = grip;
+    for i in 0..5 {
+        out[i] = grip[i] + (c[i] - grip[i]) * w;
+    }
+    out
 }
 
 fn parse_tracks(value: &serde_json::Value) -> std::collections::HashMap<String, Track> {
@@ -238,6 +287,8 @@ fn sample(track: &Track, t: f32) -> ArmPose {
         support: lerp_opt(a.pose.support, b.pose.support, k),
         primary_roll: lerp_opt_f32(a.pose.primary_roll, b.pose.primary_roll, k),
         support_roll: lerp_opt_f32(a.pose.support_roll, b.pose.support_roll, k),
+        primary_fingers: lerp_fingers(a.pose.primary_fingers, b.pose.primary_fingers, k),
+        support_fingers: lerp_fingers(a.pose.support_fingers, b.pose.support_fingers, k),
     }
 }
 
@@ -299,7 +350,7 @@ mod tests {
         Locomotion::Jump,
         Locomotion::Land,
     ];
-    const ACTIONS: [Action; 4] = [Action::Reload, Action::Inspect, Action::Throw, Action::Draw];
+    const ACTIONS: [Action; 3] = [Action::Reload, Action::Throw, Action::Draw];
 
     #[test]
     fn every_clip_the_file_promises_is_actually_there() {

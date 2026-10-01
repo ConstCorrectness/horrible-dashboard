@@ -18,8 +18,20 @@ use std::collections::HashMap;
 use glam::Vec3;
 use wgpu::util::DeviceExt;
 
-use crate::character::{MaterialDef, TextureImage};
-use crate::prop::{Prop, PropVertex};
+use crate::character::{MaterialDef, Primitive, TextureImage};
+use crate::prop::{Prop, PropPart, PropVertex};
+
+/// How many separately posed parts a prop may have, body included. Each costs
+/// one camera uniform a frame; the butterfly knife, with two handles, needs 3.
+pub const MAX_PROP_PARTS: usize = 4;
+
+/// What the view model needs to know about the prop it is holding.
+#[derive(Debug, Clone)]
+pub struct PropInfo {
+    pub bounds: (Vec3, Vec3),
+    pub parts: Vec<PropPart>,
+    pub markers: Vec<(String, Vec3)>,
+}
 
 impl PropVertex {
     pub fn layout() -> wgpu::VertexBufferLayout<'static> {
@@ -47,6 +59,22 @@ struct Draw {
     first_vertex: u32,
     vertex_count: u32,
     material: usize,
+    /// Which camera uniform this draw is posed by: 0 is the body.
+    part: usize,
+}
+
+/// The first-person hands: materials uploaded once, vertices rewritten every
+/// frame after `hands.rs` skins them.
+struct HandsGpu {
+    vertices: wgpu::Buffer,
+    capacity: usize,
+    /// One arm's primitives. Drawn twice: the left arm's copy is the same
+    /// ranges offset by `per_arm`.
+    draws: Vec<Draw>,
+    per_arm: u32,
+    materials: Vec<wgpu::BindGroup>,
+    right: u32,
+    left: u32,
 }
 
 /// One uploaded weapon, ready to draw.
@@ -54,10 +82,10 @@ pub struct PropGpu {
     vertices: wgpu::Buffer,
     draws: Vec<Draw>,
     materials: Vec<wgpu::BindGroup>,
-    /// The model's bounds, kept so a swap back can be re-fitted to the boxes
-    /// without the parsed `Prop` — which is exactly what the cache exists to
-    /// avoid rebuilding.
-    bounds: (Vec3, Vec3),
+    /// The model's bounds, parts and markers, kept so a swap back can be
+    /// re-fitted to the boxes without the parsed `Prop` — which is exactly what
+    /// the cache exists to avoid rebuilding.
+    info: PropInfo,
 }
 
 /// The pipeline and the resident prop.
@@ -70,6 +98,7 @@ pub struct Props {
     uploaded: HashMap<String, PropGpu>,
     /// Which of them is in the hands, if any.
     current: Option<String>,
+    hands: Option<HandsGpu>,
 }
 
 impl Props {
@@ -150,16 +179,17 @@ impl Props {
             sampler,
             uploaded: HashMap::new(),
             current: None,
+            hands: None,
         }
     }
 
     /// Put an already-uploaded prop in the hands, and report its bounds so the
     /// view model can fit it. `None` leaves the current one alone — the caller
     /// has nothing to draw for this weapon and keeps its boxes.
-    pub fn select(&mut self, weapon: &str) -> Option<(Vec3, Vec3)> {
-        let bounds = self.uploaded.get(weapon)?.bounds;
+    pub fn select(&mut self, weapon: &str) -> Option<PropInfo> {
+        let info = self.uploaded.get(weapon)?.info.clone();
         self.current = Some(weapon.to_string());
-        Some(bounds)
+        Some(info)
     }
 
     /// Stop drawing a prop. The boxes take over; **nothing is unloaded**, so
@@ -202,10 +232,14 @@ impl Props {
         let draws = prop
             .primitives
             .iter()
-            .map(|p| Draw {
+            .enumerate()
+            .map(|(i, p)| Draw {
                 first_vertex: p.first_vertex,
                 vertex_count: p.vertex_count,
                 material: p.material,
+                // A part past the uniforms there are is drawn with the body:
+                // unanimated, but present.
+                part: prop.primitive_parts.get(i).copied().unwrap_or(0).min(MAX_PROP_PARTS - 1),
             })
             .collect();
 
@@ -215,9 +249,111 @@ impl Props {
                 vertices,
                 draws,
                 materials,
-                bounds: prop.bounds(),
+                info: PropInfo {
+                    bounds: prop.bounds(),
+                    parts: prop.parts.clone(),
+                    markers: prop.markers.clone(),
+                },
             },
         );
+    }
+
+    /// Upload the hands' materials and a vertex buffer big enough for both
+    /// arms. Once: the geometry changes every frame, the materials never do.
+    pub fn set_hands(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        materials: &[MaterialDef],
+        textures: &[TextureImage],
+        primitives: &[Primitive],
+        per_arm: usize,
+    ) {
+        let views: Vec<wgpu::TextureView> =
+            textures.iter().map(|image| upload_texture(device, queue, image)).collect();
+        let fallback = upload_texture(device, queue, &TextureImage::single_pixel(255, 255, 255, 255));
+        let groups = materials
+            .iter()
+            .map(|material| self.material_group(device, material, &views, &fallback))
+            .collect();
+        let capacity = per_arm * 2;
+        let vertices = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("hands-vertices"),
+            size: (capacity * std::mem::size_of::<PropVertex>()) as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.hands = Some(HandsGpu {
+            vertices,
+            capacity,
+            draws: primitives
+                .iter()
+                .map(|p| Draw {
+                    first_vertex: p.first_vertex,
+                    vertex_count: p.vertex_count,
+                    material: p.material,
+                    part: 0,
+                })
+                .collect(),
+            per_arm: per_arm as u32,
+            materials: groups,
+            right: 0,
+            left: 0,
+        });
+    }
+
+    pub fn has_hands(&self) -> bool {
+        self.hands.is_some()
+    }
+
+    /// This frame's skinned arms: `right` vertices, then `left` (0 for a
+    /// one-handed weapon), in camera space.
+    pub fn write_hands(&mut self, queue: &wgpu::Queue, vertices: &[PropVertex], right: usize, left: usize) {
+        let Some(hands) = self.hands.as_mut() else {
+            return;
+        };
+        let n = vertices.len().min(hands.capacity);
+        if n > 0 {
+            queue.write_buffer(&hands.vertices, 0, bytemuck::cast_slice(&vertices[..n]));
+        }
+        hands.right = right.min(n) as u32;
+        hands.left = left.min(n.saturating_sub(right)) as u32;
+    }
+
+    /// Stop drawing the hands this frame: dead, stowed, in the menu.
+    pub fn hide_hands(&mut self) {
+        if let Some(hands) = self.hands.as_mut() {
+            hands.right = 0;
+            hands.left = 0;
+        }
+    }
+
+    pub fn hands_visible(&self) -> bool {
+        self.hands.as_ref().is_some_and(|h| h.right > 0)
+    }
+
+    /// Draw the hands with `camera`, whose pose must be the identity: the
+    /// vertices are already in camera space.
+    pub fn draw_hands(&self, pass: &mut wgpu::RenderPass<'_>, camera: &wgpu::BindGroup) {
+        let Some(hands) = self.hands.as_ref().filter(|h| h.right > 0) else {
+            return;
+        };
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, camera, &[]);
+        pass.set_vertex_buffer(0, hands.vertices.slice(..));
+        for (offset, count) in [(0, hands.right), (hands.per_arm, hands.left)] {
+            if count == 0 {
+                continue;
+            }
+            for draw in &hands.draws {
+                let Some(material) = hands.materials.get(draw.material) else {
+                    continue;
+                };
+                pass.set_bind_group(1, material, &[]);
+                let start = offset + draw.first_vertex;
+                pass.draw(start..start + draw.vertex_count, 0..1);
+            }
+        }
     }
 
     fn material_group(
@@ -283,17 +419,23 @@ impl Props {
     /// model's: that uniform carries both the weapon's own projection and the
     /// camera-to-world matrix the shader lights by. Handing it the world camera
     /// would draw the weapon somewhere out in the map.
-    pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, camera: &wgpu::BindGroup) -> bool {
+    ///
+    /// `cameras[n]` poses part `n`: the body first, then each part in
+    /// `PropInfo::parts` order.
+    pub fn draw(&self, pass: &mut wgpu::RenderPass<'_>, cameras: &[wgpu::BindGroup]) -> bool {
         let Some(prop) = self.current.as_ref().and_then(|id| self.uploaded.get(id)) else {
             return false;
         };
+        if cameras.is_empty() {
+            return false;
+        }
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, camera, &[]);
         pass.set_vertex_buffer(0, prop.vertices.slice(..));
         for draw in &prop.draws {
             let Some(material) = prop.materials.get(draw.material) else {
                 continue;
             };
+            pass.set_bind_group(0, &cameras[draw.part.min(cameras.len() - 1)], &[]);
             pass.set_bind_group(1, material, &[]);
             pass.draw(
                 draw.first_vertex..draw.first_vertex + draw.vertex_count,

@@ -166,7 +166,7 @@ async fn run(path: &str) {
                 1.0,
             );
             cleared = true;
-            props.draw(&mut pass, &camera_group);
+            props.draw(&mut pass, std::slice::from_ref(&camera_group));
         }
         queue.submit([encoder.finish()]);
     }

@@ -186,7 +186,7 @@ async fn run(path: &str) {
                 0.0,
                 1.0,
             );
-            assert!(props.draw(&mut pass, &camera_group), "{name} drew nothing");
+            assert!(props.draw(&mut pass, std::slice::from_ref(&camera_group)), "{name} drew nothing");
         }
         queue.submit([encoder.finish()]);
         cleared = true;

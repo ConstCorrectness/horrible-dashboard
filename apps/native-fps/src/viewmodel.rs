@@ -33,6 +33,9 @@ use std::collections::HashMap;
 use glam::{Mat4, Vec3};
 
 use crate::arms::{self, GripAnchors};
+use crate::hands::{self, HandTarget};
+use crate::inspects::{self, Fingers, InspectSample};
+use crate::prop::{PropPart, PropVertex};
 use crate::viewclips::{self, Action, ArmPose, Locomotion};
 
 use crate::renderer::Vertex;
@@ -381,40 +384,6 @@ pub struct Frame {
     pub reload_progress: Option<f32>,
 }
 
-/// How long one inspect takes, in seconds.
-///
-/// Long enough to read the weapon, short enough that it is over before it costs
-/// you a gunfight — and it is interruptible anyway, so this is a maximum rather
-/// than a commitment.
-const INSPECT_DURATION: f32 = 1.5;
-
-/// How long the pose takes to reach full weight, and to return.
-///
-/// The fall is longer than the rise on purpose: a flourish that snaps back to
-/// the aim faster than it left reads as being yanked away.
-const INSPECT_RISE: f32 = 0.30;
-const INSPECT_FALL: f32 = 0.46;
-
-/// The roll at full weight, before the turn adds to it, in radians.
-const INSPECT_ROLL: f32 = 2.15;
-
-/// How much further the weapon turns across the hold, in radians.
-///
-/// **This is the whole difference between an inspect and a freeze frame.** The
-/// pose used to be one scalar driving every axis, so the weapon travelled out,
-/// stopped dead for the ~0.7s of the hold, and retraced its path — which reads
-/// as a stutter rather than as somebody turning a weapon over. Keeping it
-/// rotating through the hold is what makes the same journey read as deliberate.
-const INSPECT_TURN: f32 = 0.85;
-
-/// How far the lift leads the roll, in seconds.
-///
-/// Every axis starting and stopping on the same frame is the signature of a
-/// single rigid transform, which is exactly what this is. Sixty milliseconds of
-/// lead costs nothing and buys the weapon coming up first and rolling over as it
-/// goes, instead of doing both as one motion.
-const INSPECT_LEAD: f32 = 0.06;
-
 /// Smootherstep — Perlin's, with a continuous second derivative.
 ///
 /// Smoothstep's acceleration jumps at both ends; over a 0.3s rise that is a
@@ -426,33 +395,6 @@ fn ease(x: f32) -> f32 {
     // near the top — enough for a caller that trusts the range to scale a pose
     // very slightly past the pose it was told about.
     (x * x * x * (x * (x * 6.0 - 15.0) + 10.0)).clamp(0.0, 1.0)
-}
-
-/// The inspect pose's weight over its own duration: ease in, hold, ease out.
-///
-/// Eased at both ends rather than linear. A linear ramp reverses direction
-/// instantly at the hold, which reads as the animation being cut off and
-/// restarted — the one thing a "look at this weapon" flourish must not do.
-fn inspect_envelope(t: f32) -> f32 {
-    let out = INSPECT_DURATION - INSPECT_FALL;
-    ease(if t < INSPECT_RISE {
-        t / INSPECT_RISE
-    } else if t > out {
-        1.0 - (t - out) / INSPECT_FALL
-    } else {
-        1.0
-    })
-}
-
-/// How far through the turn the weapon is, 0..1, monotonic across the whole
-/// animation.
-///
-/// Deliberately **not** the envelope: the envelope comes back down, and a roll
-/// driven by it unwinds along the path it wound up. This only ever climbs, so
-/// the weapon keeps turning the same way throughout — and because the roll is
-/// still *scaled* by the envelope, it lands back at rest anyway.
-fn inspect_turn(t: f32) -> f32 {
-    ease(t / INSPECT_DURATION)
 }
 
 /// The reload dip's weight across the reload's own length: down, hold, up.
@@ -555,6 +497,16 @@ pub struct WeaponViewModel {
     /// function of how far in it is, and every frame of it — including the fact
     /// that it has finished — falls out of one number.
     inspect: Option<f32>,
+    /// This frame's inspect sample, from `inspects.rs`, or the default (rest)
+    /// when none is running. `update` writes it; the prop and the hands read it.
+    inspect_sample: InspectSample,
+    /// The resident prop's separately posed parts and named markers, from
+    /// `PropInfo`. The butterfly's handles, and the karambit's `spin_origin`.
+    prop_parts: Vec<PropPart>,
+    prop_markers: Vec<(String, Vec3)>,
+    /// The skinned hands' two arm poses, when `hands.rs` parsed; `None` draws
+    /// the procedural arms instead.
+    hands: Option<hands::Arms>,
     /// The pivot's transform for this frame, rebuilt by `update`.
     transform: Mat4,
     /// Where a loaded prop sits relative to the box model it replaces, and the
@@ -579,6 +531,10 @@ impl Default for WeaponViewModel {
         WeaponViewModel {
             weapon: String::new(),
             inspect: None,
+            inspect_sample: InspectSample::default(),
+            prop_parts: Vec::new(),
+            prop_markers: Vec::new(),
+            hands: hands::asset().map(hands::Arms::new),
             skin: None,
             shape: None,
             kick: 0.0,
@@ -717,16 +673,27 @@ impl WeaponViewModel {
     /// Re-pressing while it runs restarts it rather than queueing a second pass:
     /// the button means "show me the gun", and it should answer every press.
     pub fn inspect(&mut self) {
-        if self.shape.is_some() {
-            let is_knife = self.weapon == "knife";
-            if is_knife && self.inspect.is_some() {
-                let cur = self.inspect.unwrap_or(0.0);
-                self.inspect = Some((cur + 0.38) % INSPECT_DURATION);
-            } else {
-                self.inspect = Some(0.0);
-            }
-            self.start_action(Action::Inspect, INSPECT_DURATION);
+        if self.shape.is_none() {
+            return;
         }
+        let clip = inspects::clip(&self.inspect_clip_id());
+        let repeat = clip.and_then(|c| c.repeat_from.map(|r| r * c.duration));
+        // A second press mid-flourish on a knife jumps back to the clip's
+        // `repeatFrom`, so mashing F chains twirls instead of re-raising it.
+        self.inspect = match (self.weapon == "knife", self.inspect, repeat) {
+            (true, Some(_), Some(at)) => Some(at),
+            _ => Some(0.0),
+        };
+    }
+
+    /// Which choreography the weapon in the hands runs.
+    fn inspect_clip_id(&self) -> String {
+        let skin_id = self
+            .skin
+            .as_ref()
+            .and_then(|s| s.id.as_deref())
+            .unwrap_or("");
+        inspects::inspect_clip_for(&self.weapon, skin_id, "")
     }
 
     /// Whether the inspect animation is running. The HUD reads it to name what
@@ -837,29 +804,17 @@ impl WeaponViewModel {
         if frame.reloading {
             self.inspect = None;
         }
-        // The envelope: in, hold, out. Advanced before it is read, so the frame
-        // it completes on is the frame it is back at rest rather than one after.
-        //
-        // Three numbers, not one: the weight (how much of the pose is applied),
-        // the lift (the same weight, run slightly ahead so the gun rises before
-        // it rolls) and the turn (monotonic, so the roll keeps going through the
-        // hold instead of freezing). See the constants above.
-        let (inspect, lift, turn) = match self.inspect {
-            None => (0.0, 0.0, 0.0),
-            Some(t) => {
-                let t = t + dt;
-                if t >= INSPECT_DURATION {
-                    self.inspect = None;
-                    (0.0, 0.0, 0.0)
-                } else {
-                    self.inspect = Some(t);
-                    (
-                        inspect_envelope(t),
-                        inspect_envelope(t + INSPECT_LEAD),
-                        inspect_turn(t),
-                    )
-                }
-            }
+        // Advanced before it is read, so the frame it completes on is the frame
+        // the weapon is back at rest rather than one after.
+        let clip_id = self.inspect_clip_id();
+        let duration = inspects::clip(&clip_id).map(|c| c.duration).unwrap_or(1.5);
+        if let Some(t) = self.inspect {
+            let t = t + dt;
+            self.inspect = (t < duration).then_some(t);
+        }
+        self.inspect_sample = match self.inspect {
+            Some(t) => inspects::sample_inspect(&clip_id, t / duration),
+            None => InspectSample::default(),
         };
 
         self.ads_t += (frame.ads - self.ads_t) * (dt * 14.0).min(1.0);
@@ -872,193 +827,19 @@ impl WeaponViewModel {
         let bob_x = (self.bob_phase * 0.5).cos() * 0.05 * bob_amount * ads_damp;
         let bob_y = (self.bob_phase).sin().abs() * -0.055 * bob_amount * ads_damp;
 
-        // Where the inspect pose takes the weapon: in towards the centre of
-        // the screen, up, and rolled most of the way over so the side of the
-        // receiver — which is where a skin's pattern actually lives — faces the
-        // camera. A pose that only lifted the gun would show the same face it
-        // already shows.
-        //
-        // The translation rides `lift` and the rotation rides `inspect`, which
-        // is the lead: the weapon is already on its way up before it starts
-        // turning, and it finishes unrolling after it has come back down.
-        //
-        // The roll is `inspect * (ROLL + TURN * turn)` rather than `inspect *
-        // ROLL`. The envelope still scales it, so it starts and ends at rest;
-        // the turn is what keeps it moving in between.
-        let is_knife = self.weapon == "knife";
-        let skin_id = self
-            .skin
-            .as_ref()
-            .and_then(|s| s.id.as_deref())
-            .unwrap_or("");
-        let is_karambit = is_knife && skin_id.contains("karambit");
-        let is_butterfly = is_knife && skin_id.contains("butterfly");
-        let is_bayonet = is_knife && (skin_id.contains("bayonet") || skin_id.contains("lore"));
-        let is_skeleton = is_knife && skin_id.contains("skeleton");
-        let is_huntsman = is_knife && skin_id.contains("huntsman");
-        let is_tactical_knife = is_knife
-            && !is_karambit
-            && !is_butterfly
-            && !is_bayonet
-            && !is_skeleton
-            && !is_huntsman;
-
+        // Where the inspect takes the weapon: a choreography per weapon and
+        // knife, from `models/inspects.json`. `pos` and `rot` move the whole
+        // pivot, hands and all; `spin` and the named parts move the prop alone,
+        // in `prop_model` and `prop_part_models`.
         let is_pistol = self.weapon == "pistol";
         let is_shotgun = self.weapon == "shotgun";
         let is_sniper = self.weapon == "sniper";
-        let is_nade = self.weapon.starts_with("nade") || self.weapon.starts_with("grenade");
-
-        let (
-            inspect_pitch,
-            inspect_yaw,
-            inspect_roll,
-            inspect_lift_x,
-            inspect_lift_y,
-            inspect_lift_z,
-        ) = if is_karambit {
-            // Karambit continuous finger-ring twirl on phase 1, followed by reverse blade showcase
-            let ring_twirl = if turn < 0.35 {
-                (turn / 0.35) * std::f32::consts::TAU * 2.0
-            } else {
-                0.0
-            };
-            (
-                inspect * (0.35 + 0.25 * (turn * std::f32::consts::PI).sin()),
-                -inspect * 0.45 + (turn * std::f32::consts::PI).sin() * 0.30,
-                inspect * (1.25 + ring_twirl + (turn * std::f32::consts::PI).sin() * 0.40),
-                lift * 0.18,
-                lift * 0.22,
-                lift * 0.28,
-            )
-        } else if is_butterfly {
-            // Balisong aerial dual-handle flip and whip
-            let flip_osc = (turn * std::f32::consts::TAU * 2.0).sin();
-            (
-                inspect * (0.22 + 0.25 * flip_osc),
-                inspect * (-0.35 + 0.35 * (turn * std::f32::consts::TAU).cos()),
-                inspect * (1.10 + flip_osc * 1.50),
-                lift * 0.16,
-                lift * 0.20,
-                lift * 0.24,
-            )
-        } else if is_bayonet {
-            // Heavy combat bayonet vertical toss-and-catch with 360 flip
-            let toss = (turn * std::f32::consts::PI).sin();
-            let toss_flip = if turn < 0.38 {
-                (turn / 0.38) * std::f32::consts::TAU
-            } else {
-                0.0
-            };
-            (
-                inspect * (0.30 + toss_flip + 0.12 * toss),
-                -inspect * 0.40,
-                inspect * (0.65 + 0.20 * toss),
-                lift * 0.15,
-                lift * 0.26
-                    + if turn < 0.45 {
-                        ((turn / 0.45) * std::f32::consts::PI).sin() * 0.22
-                    } else {
-                        0.0
-                    },
-                lift * 0.25,
-            )
-        } else if is_skeleton {
-            // Skeleton knife rapid center-hole finger twirl & reverse snap
-            let ring_twirl = if turn < 0.36 {
-                (turn / 0.36) * std::f32::consts::TAU * 2.0
-            } else {
-                0.0
-            };
-            let snap_flick = if turn > 0.72 {
-                ((turn - 0.72) / 0.28 * std::f32::consts::PI).sin() * 0.45
-            } else {
-                0.0
-            };
-            (
-                inspect * (0.24 + 0.18 * (turn * std::f32::consts::PI).sin() + snap_flick),
-                -inspect * 0.35 + (turn * std::f32::consts::PI).sin() * 0.25,
-                inspect * (1.30 + ring_twirl + (turn * std::f32::consts::PI).sin() * 0.35),
-                lift * 0.17,
-                lift * 0.21,
-                lift * 0.25,
-            )
-        } else if is_huntsman {
-            // Heavy Huntsman forward wrist-flip over knuckles and sawback angle check
-            let heavy_tilt = (turn * std::f32::consts::PI).sin();
-            let forward_snap = if turn < 0.40 {
-                ((turn / 0.40) * std::f32::consts::PI).sin() * 0.48
-            } else {
-                0.0
-            };
-            (
-                inspect * (0.38 + forward_snap + 0.15 * heavy_tilt),
-                -inspect * (0.60 - 0.25 * turn),
-                inspect * (1.55 + 0.35 * heavy_tilt),
-                lift * 0.19,
-                lift * 0.24,
-                lift * 0.28,
-            )
-        } else if is_tactical_knife {
-            // Tactical knife tanto bevel and spine serration inspection
-            (
-                inspect * (0.28 + 0.25 * (turn * std::f32::consts::PI).sin()),
-                -inspect * (0.50 - 0.20 * turn),
-                inspect * (1.45 + 0.40 * turn),
-                lift * 0.18,
-                lift * 0.22,
-                lift * 0.26,
-            )
-        } else if is_pistol {
-            // Tactical pistol one-handed chamber and slide inspection
-            (
-                inspect * (0.25 + 0.15 * (turn * std::f32::consts::PI).sin()),
-                -inspect * (0.65 - 0.30 * turn),
-                inspect * (1.40 + 0.55 * turn),
-                lift * 0.24,
-                lift * 0.22,
-                lift * 0.15,
-            )
-        } else if is_shotgun {
-            // Shotgun barrel rib and underside loading gate check
-            (
-                inspect * (0.42 - 0.28 * (turn * std::f32::consts::PI).sin()),
-                -inspect * (0.75 - 0.45 * turn),
-                inspect * (1.85 + 0.70 * turn),
-                lift * 0.26,
-                lift * 0.16,
-                lift * 0.24,
-            )
-        } else if is_sniper {
-            // Sniper rifle precision optical reflection and bolt check
-            (
-                inspect * (0.30 - 0.18 * (turn * std::f32::consts::PI).sin()),
-                -inspect * (0.85 - 0.25 * turn),
-                inspect * (1.65 + 0.60 * turn),
-                lift * 0.34,
-                lift * 0.14,
-                lift * 0.28,
-            )
-        } else if is_nade {
-            // Grenade palm toss and fuse ring check
-            (
-                inspect * (0.20 + 0.35 * (turn * std::f32::consts::PI).sin()),
-                -inspect * 0.30,
-                inspect * 0.85,
-                lift * 0.15,
-                lift * 0.25,
-                lift * 0.20,
-            )
-        } else {
-            // Tactical assault rifle two-handed receiver and dust cover inspection
-            (
-                inspect * (0.34 - 0.12 * (turn * std::f32::consts::PI).sin()),
-                -inspect * (0.95 - 0.35 * turn),
-                inspect * (INSPECT_ROLL + INSPECT_TURN * turn),
-                lift * 0.30,
-                lift * 0.16,
-                lift * 0.20,
-            )
-        };
+        let inspect_lift_x = self.inspect_sample.pos.x;
+        let inspect_lift_y = self.inspect_sample.pos.y;
+        let inspect_lift_z = self.inspect_sample.pos.z;
+        let inspect_pitch = self.inspect_sample.rot.x;
+        let inspect_yaw = self.inspect_sample.rot.y;
+        let inspect_roll = self.inspect_sample.rot.z;
 
         // Mechanical reload physical dynamics: mag release jolt, mag seat slam, and action rack
         let mut reload_impulse_y = 0.0;
@@ -1215,15 +996,112 @@ impl WeaponViewModel {
     /// partial keyframe is legal.
     fn posed_grips(&self) -> GripAnchors {
         let pose = self.arm_pose;
+        let inspect = &self.inspect_sample;
+        let g = self.grips;
+        let primary_roll = pose.primary_roll.unwrap_or(0.0);
+        let support_roll = pose.support_roll.unwrap_or(0.0);
+        // A pose's roll turns the hand about its own aim: the channel the
+        // procedural arms read as a roll about the forearm.
+        let roll = |up: Vec3, aim: Vec3, angle: f32| {
+            if angle.abs() < 1e-6 {
+                up
+            } else {
+                glam::Quat::from_axis_angle(aim.normalize_or(Vec3::NEG_Z), angle) * up
+            }
+        };
         GripAnchors {
-            primary: self.grips.primary + pose.primary.unwrap_or(Vec3::ZERO),
-            support: self
-                .grips
+            primary: g.primary + pose.primary.unwrap_or(Vec3::ZERO) + inspect.primary,
+            support: g
                 .support
-                .map(|s| s + pose.support.unwrap_or(Vec3::ZERO)),
-            primary_roll: self.grips.primary_roll + pose.primary_roll.unwrap_or(0.0),
-            support_roll: self.grips.support_roll + pose.support_roll.unwrap_or(0.0),
+                .map(|s| s + pose.support.unwrap_or(Vec3::ZERO) + inspect.support),
+            primary_roll: g.primary_roll + primary_roll,
+            support_roll: g.support_roll + support_roll,
+            primary_up: roll(g.primary_up, g.primary_aim, primary_roll),
+            support_up: roll(g.support_up, g.support_aim, support_roll),
+            primary_curl: Fingers::over(
+                inspect.primary_fingers,
+                viewclips::curl_over(g.primary_curl, pose.primary_fingers),
+            ),
+            support_curl: Fingers::over(
+                inspect.support_fingers,
+                viewclips::curl_over(g.support_curl, pose.support_fingers),
+            ),
+            ..g
         }
+    }
+
+    /// The space the grip anchors are written in, as camera space: the prop's
+    /// own, through its fit — or, while only the boxes are drawn, the box
+    /// model's, which is an approximation the fallback lives with.
+    fn grip_space(&self) -> Mat4 {
+        match (&self.prop, &self.shape) {
+            // The anchors are in the prop's own space (`models/grips.json`).
+            (Some(fit), _) => self.transform * Mat4::from_translation(fit.offset),
+            (None, Some(shape)) => {
+                self.transform
+                    * Mat4::from_euler(
+                        glam::EulerRot::XYZ,
+                        shape.rest.x,
+                        shape.rest.y,
+                        shape.rest.z,
+                    )
+            }
+            (None, None) => self.transform,
+        }
+    }
+
+    /// The skinned hands for this frame, in camera space: right-arm vertices
+    /// then left. `None` when there is nothing to draw — no hands asset, not
+    /// visible, or the weapon stowed out of frame.
+    pub fn hands_vertices(&mut self, out: &mut Vec<PropVertex>) -> Option<(usize, usize)> {
+        out.clear();
+        let asset = hands::asset()?;
+        if !self.visible || self.shape.is_none() || self.stow >= 0.92 {
+            return None;
+        }
+        let grips = self.posed_grips();
+        let space = self.grip_space();
+        let point = |p: Vec3| space.transform_point3(p);
+        let dir = |d: Vec3| space.transform_vector3(d);
+        let primary = HandTarget {
+            grip: point(grips.primary),
+            aim: dir(grips.primary_aim),
+            up: dir(grips.primary_up),
+            curl: grips.primary_curl,
+        };
+        let support = grips.support.map(|s| HandTarget {
+            grip: point(s),
+            aim: dir(grips.support_aim),
+            up: dir(grips.support_up),
+            curl: grips.support_curl,
+        });
+        let arms = self.hands.as_mut()?;
+        Some(arms.build(asset, &primary, support.as_ref(), out))
+    }
+
+    /// The resident prop's parts and markers, from `PropInfo`.
+    pub fn set_prop_layout(&mut self, parts: Vec<PropPart>, markers: Vec<(String, Vec3)>) {
+        self.prop_parts = parts;
+        self.prop_markers = markers;
+    }
+
+    /// Each separately posed part's matrix, in `set_prop_layout` order: the
+    /// body's pose, then the part turned about its own pivot by the inspect.
+    pub fn prop_part_models(&self) -> Vec<Mat4> {
+        let Some(body) = self.prop_model() else {
+            return Vec::new();
+        };
+        self.prop_parts
+            .iter()
+            .map(|part| match self.inspect_sample.nodes.get(&part.name) {
+                Some(rot) => {
+                    body * Mat4::from_translation(part.pivot)
+                        * Mat4::from_euler(glam::EulerRot::XYZ, rot.x, rot.y, rot.z)
+                        * Mat4::from_translation(-part.pivot)
+                }
+                None => body,
+            })
+            .collect()
     }
 
     /// Fit a prop to the weapon currently held, and start drawing it.
@@ -1246,7 +1124,13 @@ impl WeaponViewModel {
         if !box_min.is_finite() || !box_max.is_finite() {
             return None;
         }
-        let offset = (box_min + box_max) * 0.5 - (min + max) * 0.5;
+        // A knife is placed by its hilt, the GLB's origin, rather than its box —
+        // see `knife_hilt`. Every other prop by its bounding-box centre.
+        let offset = if self.weapon == "knife" {
+            arms::knife_hilt()
+        } else {
+            (box_min + box_max) * 0.5 - (min + max) * 0.5
+        };
         // Front-centre of the fitted prop. The converter points every barrel
         // down -Z, so the front is the minimum z.
         let centre = (min + max) * 0.5 + offset;
@@ -1280,7 +1164,27 @@ impl WeaponViewModel {
             return None;
         }
         let fit = self.prop?;
-        Some(self.transform * Mat4::from_translation(fit.offset))
+        let body = self.transform * Mat4::from_translation(fit.offset);
+        let spin = self.inspect_sample.spin;
+        if spin.abs() < 1e-6 {
+            return Some(body);
+        }
+        // The weapon alone, turned about its marker: the hands are solved
+        // through `grip_space`, which this does not touch, so a karambit spins
+        // on the finger in its ring while the hand stays where it is.
+        let clip = inspects::clip(&self.inspect_clip_id())?;
+        let pivot = clip
+            .spin_pivot
+            .as_ref()
+            .and_then(|name| self.prop_markers.iter().find(|(n, _)| n == name))
+            .map(|(_, at)| *at)
+            .unwrap_or(Vec3::ZERO);
+        let axis = clip.spin_axis.normalize_or(Vec3::X);
+        Some(
+            body * Mat4::from_translation(pivot)
+                * Mat4::from_axis_angle(axis, spin)
+                * Mat4::from_translation(-pivot),
+        )
     }
 
     /// This frame's vertices, in camera space, ready for the view-model pass.
@@ -1315,8 +1219,8 @@ impl WeaponViewModel {
         // animation this module has without knowing about any of them. Hidden
         // while fully stowed: at `stow` 1 the weapon is out of frame, and two
         // arms reaching for it are two arms pointing at nothing.
-        if self.stow < 0.92 {
-            arms::vertices(&self.posed_grips(), &model, out);
+        if self.stow < 0.92 && hands::asset().is_none() {
+            arms::vertices(&self.posed_grips(), &self.grip_space(), out);
         }
         if self.prop.is_none() {
             for v in &shape.verts {
@@ -2464,7 +2368,8 @@ mod tests {
         let mut previous = tip(&mut vm);
         let mut still = 0;
         let mut worst = 0;
-        let steps = (INSPECT_DURATION / 0.016) as i32 - 2;
+        let duration = crate::inspects::clip("assault").unwrap().duration;
+        let steps = (duration / 0.016) as i32 - 2;
         for _ in 0..steps {
             vm.update(0.016, &frame(true));
             let now = tip(&mut vm);
@@ -2483,46 +2388,79 @@ mod tests {
     }
 
     #[test]
-    fn an_inspect_starts_and_ends_at_rest() {
-        // The other half: it has to *stop* moving at both ends, or the weapon
-        // snaps out of the aim and snaps back into it. `ease` is what buys this
-        // — the envelope's slope is zero at 0 and at 1.
-        assert_eq!(inspect_envelope(0.0), 0.0);
-        assert!(inspect_envelope(INSPECT_DURATION) <= 1e-6);
-        // And no step larger than the curve's own steepest, which is what tells
-        // a smooth ramp from a discontinuity. Smootherstep's peak slope is 15/8
-        // over its span, so the bound comes from the constants rather than from
-        // a number that would quietly stop meaning anything if the rise changed.
-        const DT: f32 = 0.016;
-        let steepest = 1.875 / INSPECT_RISE.min(INSPECT_FALL) * DT * 1.05;
-        let mut previous = 0.0;
+    fn an_inspect_lands_back_exactly_at_rest() {
+        // A clip whose last frame is a few degrees off leaves the weapon off
+        // home for the rest of the match.
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("pistol", None);
+        settle(&mut vm);
+        let before = vm.transform;
+        vm.inspect();
+        let duration = crate::inspects::clip("pistol").unwrap().duration;
         let mut t = 0.0;
-        while t < INSPECT_DURATION {
-            let now = inspect_envelope(t);
-            assert!(
-                (now - previous).abs() <= steepest,
-                "the envelope jumped {:.3} at t={t:.3}, over the curve's own {steepest:.3}",
-                now - previous
-            );
-            previous = now;
-            t += DT;
+        while t < duration + 0.2 {
+            vm.update(0.016, &frame(true));
+            t += 0.016;
         }
+        assert!(!vm.inspecting());
+        assert!(
+            (vm.transform.w_axis - before.w_axis).length() < 1e-3,
+            "the pistol came back {} off home",
+            (vm.transform.w_axis - before.w_axis).length()
+        );
     }
 
     #[test]
-    fn the_turn_only_ever_winds_one_way() {
-        // If the roll were driven by the envelope it would unwind along the path
-        // it wound up, which is the "played backwards" look. The turn climbs
-        // throughout; the envelope scaling it is what still lands it at rest.
-        let mut previous = -1.0;
+    fn the_hands_are_skinned_and_close_on_the_weapon() {
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("assault", None);
+        settle(&mut vm);
+        let mut out = Vec::new();
+        let (right, left) = vm.hands_vertices(&mut out).expect("hands drawn");
+        assert!(right > 1000 && left > 1000, "{right} / {left}");
+        assert!(out.iter().all(|v| v.position.iter().all(|c| c.is_finite())));
+        // A one-handed weapon draws one arm.
+        vm.set_weapon("knife", None);
+        settle(&mut vm);
+        let (_, left) = vm.hands_vertices(&mut out).expect("hands drawn");
+        assert_eq!(left, 0);
+    }
+
+    #[test]
+    fn a_butterfly_inspect_swings_its_handles_and_not_its_body() {
+        let mut vm = WeaponViewModel::default();
+        let skin = Skin {
+            id: Some("knife_butterfly_marble".into()),
+            base_color: "#ffffff".into(),
+            accent_color: "#000000".into(),
+            pattern_type: "fade".into(),
+            float_value: 0.01,
+        };
+        vm.set_weapon("knife", Some(&skin));
+        settle(&mut vm);
+        vm.fit_prop(Vec3::new(-0.02, -0.02, -0.16), Vec3::new(0.02, 0.02, 0.13))
+            .expect("fits");
+        vm.set_prop_layout(
+            vec![PropPart {
+                name: "handle_bite".into(),
+                pivot: Vec3::new(0.0, 0.011, 0.006),
+            }],
+            Vec::new(),
+        );
+        vm.inspect();
+        let duration = crate::inspects::clip("knife-butterfly").unwrap().duration;
         let mut t = 0.0;
-        while t <= INSPECT_DURATION {
-            let now = inspect_turn(t);
-            assert!(now >= previous, "the turn reversed at t={t:.3}");
-            previous = now;
+        while t < duration * 0.28 {
+            vm.update(0.016, &frame(true));
             t += 0.016;
         }
-        assert!(inspect_turn(INSPECT_DURATION) > 0.99);
+        let body = vm.prop_model().unwrap();
+        let parts = vm.prop_part_models();
+        assert_eq!(parts.len(), 1);
+        assert!(
+            !parts[0].abs_diff_eq(body, 1e-3),
+            "the handle did not move relative to the body"
+        );
     }
 
     fn drawn(vm: &mut WeaponViewModel) -> Vec<Vertex> {
@@ -2737,8 +2675,13 @@ mod tests {
         // and the flare is unlit. Compared against a rig rendered on its own
         // rather than against zero, because the arms are also in this pass now —
         // an empty stream would mean the hands had gone too.
+        // With the skinned hands parsed they are their own draw (`hands_vertices`)
+        // and the stream is empty; the procedural arms are only here as the
+        // fallback.
         let mut rig = Vec::new();
-        arms::vertices(&arms::grips_for("assault"), &Mat4::IDENTITY, &mut rig);
+        if hands::asset().is_none() {
+            arms::vertices(&arms::grips_for("assault"), &Mat4::IDENTITY, &mut rig);
+        }
         assert_eq!(
             drawn(&mut vm).len(),
             rig.len(),
@@ -3274,7 +3217,7 @@ mod tests {
         pistol.set_weapon("pistol", None);
         settle(&mut pistol);
         pistol.inspect();
-        pistol.update(0.8, &frame(true));
+        pistol.update(0.6, &frame(true));
         assert!(pistol.inspecting());
 
         let mut sniper = WeaponViewModel::default();

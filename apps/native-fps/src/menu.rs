@@ -17,6 +17,7 @@
 //! Two copies of that arithmetic is how a menu develops the bug where clicking a
 //! row activates the one above it.
 
+use crate::controls::{self, Controls};
 use crate::hud::{OverlayVertex, Painter};
 use crate::settings::Settings;
 
@@ -34,7 +35,75 @@ pub enum Page {
     /// exclusive mode, frame queue, GPU and API.
     Display,
     Controls,
+    /// One group of key bindings, reached from CONTROLS.
+    Keys(KeyGroup),
 }
+
+/// The key pages, grouped as the pane's Controls screen groups them
+/// (`CONTROL_GROUPS` in `controls.ts`), so a key is found in the same place in
+/// both clients.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyGroup {
+    Movement,
+    Combat,
+    Utility,
+    Communication,
+}
+
+impl KeyGroup {
+    pub const ALL: [KeyGroup; 4] = [
+        KeyGroup::Movement,
+        KeyGroup::Combat,
+        KeyGroup::Utility,
+        KeyGroup::Communication,
+    ];
+
+    fn title(self) -> &'static str {
+        match self {
+            KeyGroup::Movement => "MOVEMENT",
+            KeyGroup::Combat => "COMBAT",
+            KeyGroup::Utility => "UTILITY",
+            KeyGroup::Communication => "COMMUNICATION",
+        }
+    }
+}
+
+/// Every action the native client acts on, with its row label and page.
+/// Ping, drop and noclip are left out: they exist in the pane only, and a row
+/// here would be a binding that does nothing.
+pub const KEY_ROWS: &[(controls::Action, &str, KeyGroup)] = {
+    use controls::Action as A;
+    use KeyGroup::*;
+    &[
+        (A::Forward, "MOVE FORWARD", Movement),
+        (A::Back, "MOVE BACK", Movement),
+        (A::Left, "STRAFE LEFT", Movement),
+        (A::Right, "STRAFE RIGHT", Movement),
+        (A::Jump, "JUMP", Movement),
+        (A::Crouch, "CROUCH", Movement),
+        (A::Sprint, "SPRINT", Movement),
+        (A::Reload, "RELOAD", Combat),
+        (A::Inspect, "INSPECT WEAPON", Combat),
+        (A::Quickswitch, "QUICK SWITCH", Combat),
+        (A::Weapon1, "WEAPON 1", Combat),
+        (A::Weapon2, "WEAPON 2", Combat),
+        (A::Weapon3, "WEAPON 3", Combat),
+        (A::Weapon4, "WEAPON 4", Combat),
+        (A::Weapon5, "WEAPON 5", Combat),
+        (A::Scores, "SCOREBOARD", Combat),
+        (A::NadeHe, "HE GRENADE", Utility),
+        (A::NadeFlash, "FLASHBANG", Utility),
+        (A::NadeSmoke, "SMOKE", Utility),
+        (A::NadeMolotov, "INCENDIARY", Utility),
+        (A::Throw, "THROW", Utility),
+        (A::Lob, "UNDERHAND THROW", Utility),
+        (A::Use, "USE", Utility),
+        (A::Buy, "BUY MENU", Utility),
+        (A::Voice, "PUSH TO TALK", Communication),
+        (A::ChatAll, "CHAT - EVERYONE", Communication),
+        (A::ChatTeam, "CHAT - TEAM", Communication),
+    ]
+};
 
 impl Page {
     /// Where Escape and BACK go. The two video sub-pages return to VIDEO rather
@@ -43,6 +112,7 @@ impl Page {
     fn parent(self) -> Page {
         match self {
             Page::Advanced | Page::Display => Page::Video,
+            Page::Keys(_) => Page::Controls,
             _ => Page::Root,
         }
     }
@@ -91,6 +161,10 @@ pub enum Action {
     ShowHitboxes,
     GrenadeArc,
     Sensitivity,
+    /// Wait for the next key and bind it to this action.
+    Bind(controls::Action),
+    /// Every key back to the shipped defaults.
+    ResetKeys,
 }
 
 /// One line of the menu, as it will be drawn.
@@ -140,11 +214,16 @@ pub struct Menu {
     cursor: usize,
     /// Last known pointer position, in window pixels.
     pointer: (f32, f32),
+    /// A bind row was activated and the next key press is its new key. The
+    /// menu owns the keyboard while this is set: Escape cancels, Backspace
+    /// clears, anything else is bound.
+    pub listening: Option<controls::Action>,
 }
 
 impl Menu {
     pub fn toggle(&mut self) {
         self.open = !self.open;
+        self.listening = None;
         if self.open {
             // Always opens at the top level. Reopening three pages deep, where
             // you left off ten minutes ago, is disorienting every time.
@@ -155,11 +234,16 @@ impl Menu {
 
     pub fn close(&mut self) {
         self.open = false;
+        self.listening = None;
     }
 
     /// Escape, in the menu. One step out rather than straight to the game, so a
     /// sub-page has a way back that is not the mouse.
     pub fn escape(&mut self) -> bool {
+        // Waiting for a key: Escape cancels that and nothing more.
+        if self.listening.take().is_some() {
+            return false;
+        }
         match self.page {
             Page::Root => {
                 self.open = false;
@@ -179,11 +263,20 @@ impl Menu {
         self.cursor = 0;
     }
 
-    pub fn rows(&self, settings: &Settings, in_match: bool) -> Vec<Row> {
+    pub fn rows(&self, settings: &Settings, keys: &Controls, in_match: bool) -> Vec<Row> {
         let row = |label: &str, value: String, action: Action| Row {
             label: label.to_string(),
             value,
             action,
+        };
+        let bind = |action: controls::Action, label: &str| Row {
+            label: label.to_string(),
+            value: if self.listening == Some(action) {
+                "PRESS A KEY".to_string()
+            } else {
+                bound_keys(keys, action)
+            },
+            action: Action::Bind(action),
         };
         match self.page {
             Page::Root => vec![
@@ -426,27 +519,49 @@ impl Menu {
                     row("BACK", String::new(), Action::Back),
                 ]
             }
-            Page::Controls => vec![
-                row(
-                    "SENSITIVITY",
-                    format!("{:.2}", settings.sensitivity),
-                    Action::Sensitivity,
-                ),
-                row("BACK", String::new(), Action::Back),
-            ],
+            Page::Controls => {
+                let mut rows = vec![
+                    row(
+                        "SENSITIVITY",
+                        format!("{:.2}", settings.sensitivity),
+                        Action::Sensitivity,
+                    ),
+                    // Also on COMMUNICATION; here as well because it is the one
+                    // binding people come to this page looking for.
+                    bind(controls::Action::Voice, "PUSH TO TALK"),
+                ];
+                rows.extend(
+                    KeyGroup::ALL
+                        .iter()
+                        .map(|g| row(g.title(), String::from(">"), Action::Open(Page::Keys(*g)))),
+                );
+                rows.push(row("RESET KEYS", String::new(), Action::ResetKeys));
+                rows.push(row("BACK", String::new(), Action::Back));
+                rows
+            }
+            Page::Keys(group) => KEY_ROWS
+                .iter()
+                .filter(|(_, _, g)| *g == group)
+                .map(|(action, label, _)| bind(*action, label))
+                .chain(std::iter::once(row("BACK", String::new(), Action::Back)))
+                .collect(),
         }
     }
 
     /// The subtitle under the page title. Where a page needs a sentence, this is
     /// it — a menu row is four words and some settings genuinely need more.
     fn hint(&self) -> &'static str {
+        if self.listening.is_some() {
+            return "PRESS A KEY - ESC CANCELS, BACKSPACE CLEARS";
+        }
         match self.page {
             Page::Root => "ESC RESUMES - ARROWS AND ENTER, OR THE MOUSE",
             Page::Crosshair => "THE GAP ALSO OPENS WITH THE WEAPON'S SPREAD",
             Page::Video => "RESOLUTION SCALES THE WORLD, NEVER THE HUD",
             Page::Advanced => "QUALITY WRITES THESE - CHANGING ONE MAKES IT CUSTOM",
             Page::Display => "* GPU AND API CHANGES APPLY ON RESTART",
-            Page::Controls => "DIVIDED BY THE SCOPE'S MAGNIFICATION WHILE SCOPED",
+            Page::Controls => "SENSITIVITY IS DIVIDED BY THE SCOPE ZOOM",
+            Page::Keys(_) => "ENTER OR CLICK A ROW, THEN PRESS ITS NEW KEY",
         }
     }
 
@@ -458,6 +573,7 @@ impl Menu {
             Page::Advanced => "ADVANCED VIDEO",
             Page::Display => "DISPLAY AND GPU",
             Page::Controls => "CONTROLS",
+            Page::Keys(group) => group.title(),
         }
     }
 
@@ -515,6 +631,7 @@ impl Menu {
     pub fn build(
         &self,
         settings: &Settings,
+        keys: &Controls,
         in_match: bool,
         width: f32,
         height: f32,
@@ -523,7 +640,7 @@ impl Menu {
         if !self.open {
             return;
         }
-        let rows = self.rows(settings, in_match);
+        let rows = self.rows(settings, keys, in_match);
         let rects = self.rows_at(rows.len(), width, height);
         let mut p = Painter::new(out, width, height);
 
@@ -607,7 +724,13 @@ impl Menu {
 pub fn apply(action: Action, step: i32, settings: &mut Settings) -> Vec<&'static str> {
     use crate::settings::*;
     match action {
-        Action::Resume | Action::Open(_) | Action::Back | Action::Quit => vec![],
+        // Keys live in `Controls`, not `Settings`; the caller binds and saves.
+        Action::Resume
+        | Action::Open(_)
+        | Action::Back
+        | Action::Quit
+        | Action::Bind(_)
+        | Action::ResetKeys => vec![],
         Action::CrosshairStyle => {
             settings.crosshair.style = cycle(&CrosshairStyle::ALL, settings.crosshair.style, step);
             vec![KEY_CROSSHAIR_STYLE]
@@ -822,6 +945,19 @@ pub fn apply(action: Action, step: i32, settings: &mut Settings) -> Vec<&'static
     }
 }
 
+/// What a bind row shows: the primary key and the alternate, or `-` for none.
+fn bound_keys(keys: &Controls, action: controls::Action) -> String {
+    let codes = keys.keys(action);
+    if codes.is_empty() {
+        return "-".to_string();
+    }
+    codes
+        .iter()
+        .map(|c| controls::key_label(c))
+        .collect::<Vec<_>>()
+        .join(" / ")
+}
+
 fn on_off(on: bool) -> String {
     if on { "ON" } else { "OFF" }.to_string()
 }
@@ -905,7 +1041,7 @@ mod tests {
     #[test]
     fn the_cursor_wraps_and_never_leaves_the_list() {
         let (mut m, s) = menu();
-        let count = m.rows(&s, false).len();
+        let count = m.rows(&s, &Controls::default(), false).len();
         m.move_cursor(-1, count);
         assert_eq!(m.cursor(), count - 1, "up from the top wraps to the bottom");
         m.move_cursor(1, count);
@@ -929,7 +1065,7 @@ mod tests {
         // The bug this exists to prevent: layout and hit-testing drifting apart,
         // so clicking a row activates its neighbour. Both read `rows_at`.
         let (mut m, s) = menu();
-        let count = m.rows(&s, false).len();
+        let count = m.rows(&s, &Controls::default(), false).len();
         let rects = m.rows_at(count, 1920.0, 1080.0);
         for (i, rect) in rects.iter().enumerate() {
             let (cx, cy) = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
@@ -942,7 +1078,7 @@ mod tests {
     #[test]
     fn a_click_outside_the_panel_hits_nothing() {
         let (mut m, s) = menu();
-        let count = m.rows(&s, false).len();
+        let count = m.rows(&s, &Controls::default(), false).len();
         m.hover(4.0, 4.0, count, 1920.0, 1080.0);
         assert_eq!(m.hit(count, 1920.0, 1080.0), None);
     }
@@ -1022,10 +1158,57 @@ mod tests {
     #[test]
     fn leaving_says_which_thing_it_leaves() {
         let (m, s) = menu();
-        let solo = m.rows(&s, false).pop().expect("a last row").label;
-        let match_ = m.rows(&s, true).pop().expect("a last row").label;
+        let solo = m
+            .rows(&s, &Controls::default(), false)
+            .pop()
+            .expect("a last row")
+            .label;
+        let match_ = m
+            .rows(&s, &Controls::default(), true)
+            .pop()
+            .expect("a last row")
+            .label;
         assert_eq!(solo, "QUIT");
         assert_eq!(match_, "LEAVE MATCH");
+    }
+
+    #[test]
+    fn every_key_the_native_client_acts_on_has_a_row_and_push_to_talk_is_up_front() {
+        let (mut m, s) = menu();
+        let keys = Controls::default();
+        let mut listed = Vec::new();
+        for group in KeyGroup::ALL {
+            m.page = Page::Keys(group);
+            let rows = m.rows(&s, &keys, false);
+            assert!(
+                rows.len() * ROW_H as usize + 104 < 720,
+                "{group:?} overflows 720p"
+            );
+            listed.extend(rows.iter().filter_map(|r| match r.action {
+                Action::Bind(a) => Some(a),
+                _ => None,
+            }));
+        }
+        for (action, name, _) in controls::DEFAULTS {
+            let pane_only = matches!(name, &"ping" | &"drop" | &"noclip");
+            assert_eq!(listed.contains(action), !pane_only, "{name}");
+        }
+        m.page = Page::Controls;
+        let ptt = m
+            .rows(&s, &keys, false)
+            .into_iter()
+            .find(|r| r.action == Action::Bind(controls::Action::Voice))
+            .expect("push to talk on the controls page");
+        assert_eq!(ptt.value, "V");
+        m.listening = Some(controls::Action::Voice);
+        let rows = m.rows(&s, &keys, false);
+        assert!(rows.iter().any(|r| r.value == "PRESS A KEY"));
+        m.page = Page::Keys(KeyGroup::Combat);
+        // Escape while waiting for a key cancels the wait, then steps up.
+        assert!(!m.escape());
+        assert_eq!((m.page, m.listening), (Page::Keys(KeyGroup::Combat), None));
+        assert!(!m.escape());
+        assert_eq!(m.page, Page::Controls);
     }
 
     #[test]
@@ -1042,9 +1225,13 @@ mod tests {
             Page::Advanced,
             Page::Display,
             Page::Controls,
+            Page::Keys(KeyGroup::Movement),
+            Page::Keys(KeyGroup::Combat),
+            Page::Keys(KeyGroup::Utility),
+            Page::Keys(KeyGroup::Communication),
         ] {
             m.page = page;
-            for row in m.rows(&s, true) {
+            for row in m.rows(&s, &Controls::default(), true) {
                 for ch in row.label.chars().chain(row.value.chars()) {
                     assert!(crate::hud::has_glyph(ch), "{page:?}: no glyph for {ch:?}");
                 }
@@ -1065,10 +1252,14 @@ mod tests {
             Page::Advanced,
             Page::Display,
             Page::Controls,
+            Page::Keys(KeyGroup::Movement),
+            Page::Keys(KeyGroup::Combat),
+            Page::Keys(KeyGroup::Utility),
+            Page::Keys(KeyGroup::Communication),
         ] {
             m.page = page;
             let mut out = Vec::new();
-            m.build(&s, false, 1920.0, 1080.0, &mut out);
+            m.build(&s, &Controls::default(), false, 1920.0, 1080.0, &mut out);
             assert!(!out.is_empty(), "{page:?} drew nothing");
             // Every vertex inside clip space, or the panel is off screen.
             assert!(out
@@ -1077,7 +1268,7 @@ mod tests {
         }
         m.close();
         let mut out = Vec::new();
-        m.build(&s, false, 1920.0, 1080.0, &mut out);
+        m.build(&s, &Controls::default(), false, 1920.0, 1080.0, &mut out);
         assert!(out.is_empty());
     }
 }

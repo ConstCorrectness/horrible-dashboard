@@ -18,6 +18,7 @@ describe('HorribleAssault Assets Manifest', () => {
   it('declares all required weapon, operator and grenade assets', () => {
     const keys = Object.keys(manifest.assets);
     expect(keys).toContain('hassault-arms');
+    expect(keys).toContain('hassault-hands');
     expect(keys).toContain('hassault-operator');
     expect(keys).toContain('hassault-operator-t');
     expect(keys).toContain('hassault-clips');

@@ -13,6 +13,15 @@
  * language-server client into a component that will never have one.
  */
 
+import { pythonLanguage } from '@codemirror/lang-python';
+import {
+  javascriptLanguage,
+  typescriptLanguage,
+  jsxLanguage,
+  tsxLanguage,
+} from '@codemirror/lang-javascript';
+import { classHighlighter, highlightCode } from '@lezer/highlight';
+
 const NAMED_ENTITIES: Record<string, string> = {
   amp: '&',
   lt: '<',
@@ -71,10 +80,75 @@ export function renderInline(escaped: string): string {
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');
 }
 
+function getParserForLang(lang: string) {
+  switch (lang) {
+    case 'python':
+    case 'py':
+      return pythonLanguage.parser;
+    case 'typescript':
+    case 'ts':
+      return typescriptLanguage.parser;
+    case 'javascript':
+    case 'js':
+    case 'mjs':
+    case 'cjs':
+      return javascriptLanguage.parser;
+    case 'jsx':
+      return jsxLanguage.parser;
+    case 'tsx':
+      return tsxLanguage.parser;
+    default:
+      return null;
+  }
+}
+
+/** Render a fenced code block with theme-aligned Lezer syntax highlighting and
+ * symbol kind badge detection (matching VS Code / Pyright hover output). */
+export function renderHighlightedCodeBlock(source: string, lang: string): string {
+  let kindHtml = '';
+  let code = source;
+
+  // Pyright / language servers prefix symbol signatures with kind tags like
+  // `(function) `, `(class) `, `(method) `, `(variable) `, `(property) `, etc.
+  const kindMatch = code.match(/^\(([a-zA-Z0-9_\s]+)\)\s+/);
+  if (kindMatch) {
+    kindHtml = `<span class="cm-lsp-kind">(${escapeHtml(kindMatch[1])})</span> `;
+    code = code.slice(kindMatch[0].length);
+  }
+
+  const parser = getParserForLang(lang);
+  let highlighted = '';
+
+  if (parser && code.length < 200_000) {
+    try {
+      const tree = parser.parse(code);
+      highlightCode(
+        code,
+        tree,
+        classHighlighter,
+        (text, cls) => {
+          const esc = escapeHtml(text);
+          highlighted += cls ? `<span class="${cls}">${esc}</span>` : esc;
+        },
+        () => {
+          highlighted += '\n';
+        },
+      );
+    } catch {
+      highlighted = escapeHtml(code);
+    }
+  } else {
+    highlighted = escapeHtml(code);
+  }
+
+  const langAttr = lang ? ` class="language-${escapeHtml(lang)}"` : '';
+  return `<pre class="cm-lsp-code-block"><code${langAttr}>${kindHtml}${highlighted}</code></pre>`;
+}
+
 /** Render a small subset of markdown (fenced/inline code, headings, bullet lists,
- * bold/italics, paragraphs) to a safe DOM node. Every user-supplied span is
- * HTML-escaped before any tag is added, so the built string carries only our own
- * markup — no XSS surface from a docstring. Used for completion doc panes and hover. */
+ * bold/italics, paragraphs, horizontal rules) to a safe DOM node. Every user-supplied
+ * span is HTML-escaped before any tag is added, so the built string carries only our
+ * own markup — no XSS surface from a docstring. Used for completion doc panes and hover. */
 export function renderMarkdown(md: string): HTMLElement {
   const container = document.createElement('div');
   const lines = md.replace(/\r\n/g, '\n').split('\n');
@@ -88,16 +162,29 @@ export function renderMarkdown(md: string): HTMLElement {
     }
   };
   const isBlockStart = (l: string): boolean =>
-    /^\s*```/.test(l) || /^#{1,6}\s/.test(l) || /^\s*[-*+]\s/.test(l);
+    /^\s*```/.test(l) ||
+    /^#{1,6}\s/.test(l) ||
+    /^\s*[-*+]\s/.test(l) ||
+    /^\s*([-_*])\s*\1\s*\1[\s\-_*]*$/.test(l);
+
   while (i < lines.length) {
     const line = lines[i];
     if (/^\s*```/.test(line)) {
       closeList();
+      const langMatch = line.match(/^\s*```([a-zA-Z0-9_-]*)/);
+      const lang = langMatch ? langMatch[1].toLowerCase() : '';
       const buf: string[] = [];
       i++;
       while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) buf.push(lines[i++]);
       i++; // skip the closing fence
-      html += `<pre><code>${escapeHtml(buf.join('\n'))}</code></pre>`;
+      html += renderHighlightedCodeBlock(buf.join('\n'), lang);
+      continue;
+    }
+    // Horizontal rule divider (e.g. `---` or `***`)
+    if (/^\s*([-_*])\s*\1\s*\1[\s\-_*]*$/.test(line)) {
+      closeList();
+      html += '<hr class="cm-lsp-divider" />';
+      i++;
       continue;
     }
     const heading = line.match(/^(#{1,6})\s+(.*)$/);

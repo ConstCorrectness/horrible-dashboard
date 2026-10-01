@@ -24,9 +24,25 @@
 import type * as THREE from 'three';
 
 import { ArmRig, gripsFor, type GripAnchors, type Vec3 } from './arms';
-import { PROP_ENV_INTENSITY, fitWeaponModel, loadWeaponModel } from './models/weapons';
+import {
+  blendCurl,
+  clipFor,
+  inspectClipFor,
+  knifeArchetype,
+  knifePropId,
+  sampleInspect,
+  type InspectClip,
+  type InspectSample,
+} from './inspects';
+import {
+  PROP_ENV_INTENSITY,
+  fitKnifeModel,
+  fitWeaponModel,
+  loadWeaponModel,
+} from './models/weapons';
 import {
   AuthoredPoseSource,
+  curlOver,
   DRAW_DURATION,
   THROW_DURATION,
   mergePose,
@@ -388,6 +404,25 @@ function scalePose(pose: PartialPose, k: number): PartialPose {
   return out;
 }
 
+/** Two optional offsets, summed; absent is zero. */
+function addVec(a: Vec3 | undefined, b: Vec3 | undefined): Vec3 | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+}
+
+/** `v` turned by `angle` about the unit-ish `axis` (Rodrigues). */
+function rollAbout(v: Vec3, axis: Vec3, angle: number): Vec3 {
+  if (Math.abs(angle) < 1e-6) return v;
+  const l = Math.hypot(axis[0], axis[1], axis[2]) || 1;
+  const k: Vec3 = [axis[0] / l, axis[1] / l, axis[2] / l];
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  const dot = k[0] * v[0] + k[1] * v[1] + k[2] * v[2];
+  const cross: Vec3 = [k[1] * v[2] - k[2] * v[1], k[2] * v[0] - k[0] * v[2], k[0] * v[1] - k[1] * v[0]];
+  return [0, 1, 2].map((i) => v[i] * c + cross[i] * s + k[i] * dot * (1 - c)) as Vec3;
+}
+
 /** A grip anchor plus a pose offset. An absent offset leaves the hand on the gun. */
 function offsetBy(anchor: Vec3, offset: Vec3 | undefined): Vec3 {
   if (!offset) return anchor;
@@ -418,49 +453,6 @@ interface Built extends Shape {
  * whatever the server last said we are holding and only pay for real changes.
  */
 /**
- * How long one inspect takes, in seconds.
- *
- * Long enough to read the weapon, short enough to be over before it costs a
- * gunfight — and it is interruptible anyway, so this is a maximum rather than a
- * commitment. Shared with the native client's `INSPECT_DURATION`, which runs the
- * same pose: the two clients drawing the same weapon differently is the drift
- * this module's shape exists to avoid.
- */
-export const INSPECT_DURATION = 1.5;
-
-/**
- * How long the pose takes to reach full weight, and to return.
- *
- * The fall is longer than the rise on purpose: a flourish that snaps back to the
- * aim faster than it left reads as being yanked away.
- */
-const INSPECT_RISE = 0.3;
-const INSPECT_FALL = 0.46;
-
-/** The roll at full weight, before the turn adds to it, in radians. */
-const INSPECT_ROLL = 2.15;
-
-/**
- * How much further the weapon turns across the hold, in radians.
- *
- * **This is the whole difference between an inspect and a freeze frame.** The
- * pose used to be one scalar driving every axis, so the weapon travelled out,
- * stopped dead for the ~0.7s of the hold, and retraced its path — which reads as
- * a stutter rather than as somebody turning a weapon over. Keeping it rotating
- * through the hold is what makes the same journey read as deliberate.
- */
-const INSPECT_TURN = 0.85;
-
-/**
- * How far the lift leads the roll, in seconds.
- *
- * Every axis starting and stopping on the same frame is the signature of a
- * single rigid transform, which is exactly what this is. Sixty milliseconds of
- * lead buys the weapon coming up first and rolling over as it goes.
- */
-const INSPECT_LEAD = 0.06;
-
-/**
  * Smootherstep — Perlin's, with a continuous second derivative.
  *
  * Smoothstep's acceleration jumps at both ends; over a 0.3s rise that is a
@@ -474,32 +466,6 @@ function ease(x: number): number {
   // check, and enough for a caller that trusts the range to scale a pose very
   // slightly past the pose it was told about.
   return clamp(c * c * c * (c * (c * 6 - 15) + 10), 0, 1);
-}
-
-/**
- * The inspect pose's weight over its own duration: ease in, hold, ease out.
- *
- * Eased at both ends rather than linear. A linear ramp reverses direction
- * instantly at the hold, which reads as the animation being cut off and
- * restarted — the one thing a "look at this weapon" flourish must not do.
- */
-export function inspectEnvelope(t: number): number {
-  const out = INSPECT_DURATION - INSPECT_FALL;
-  return ease(
-    t < INSPECT_RISE ? t / INSPECT_RISE : t > out ? 1 - (t - out) / INSPECT_FALL : 1,
-  );
-}
-
-/**
- * How far through the turn the weapon is, 0..1, monotonic across the animation.
- *
- * Deliberately **not** the envelope: the envelope comes back down, and a roll
- * driven by it unwinds along the path it wound up. This only ever climbs, so the
- * weapon keeps turning the same way throughout — and because the roll is still
- * *scaled* by the envelope, it lands back at rest anyway.
- */
-export function inspectTurn(t: number): number {
-  return ease(t / INSPECT_DURATION);
 }
 
 export class WeaponViewModel {
@@ -594,6 +560,17 @@ export class WeaponViewModel {
    * that it has finished — falls out of one number.
    */
   private inspectT: number | null = null;
+  /**
+   * The fitted prop, as the inspect needs it: its rest transform, the spin
+   * marker, and the named parts a clip may swing. `null` while the boxes are up.
+   */
+  private prop: {
+    model: THREE.Object3D;
+    position: THREE.Vector3;
+    quaternion: THREE.Quaternion;
+    pivot: THREE.Vector3;
+    nodes: Map<string, { obj: THREE.Object3D; rest: THREE.Quaternion }>;
+  } | null = null;
   /** Current ADS interpolation state, 0 (hipfire) to 1 (full ADS) */
   private adsT = 0;
   /** Active knife melee animation and elapsed seconds */
@@ -708,22 +685,8 @@ export class WeaponViewModel {
   private requestProp(id: string, skinKey: string, skin: WeaponSkin | null): void {
     const token = `${id}|${skinKey}`;
     this.propToken = token;
-    let propId = id;
-    if (id === 'knife' && skin) {
-      const skinId = skin.id ?? '';
-      const skinName = (skin.name ?? '').toLowerCase();
-      if (skinId.includes('karambit') || skinName.includes('karambit')) {
-        propId = 'knife_karambit';
-      } else if (skinId.includes('butterfly') || skinName.includes('butterfly')) {
-        propId = 'knife_butterfly';
-      } else if (skinId.includes('bayonet') || skinName.includes('bayonet') || skinId.includes('lore')) {
-        propId = 'knife_bayonet';
-      } else if (skinId.includes('skeleton') || skinName.includes('skeleton')) {
-        propId = 'knife_skeleton';
-      } else if (skinId.includes('huntsman') || skinName.includes('huntsman')) {
-        propId = 'knife_huntsman';
-      }
-    }
+    const propId =
+      id === 'knife' ? knifePropId(knifeArchetype(skin?.id ?? '', skin?.name ?? '')) : id;
     void loadWeaponModel(propId)
       .then((asset) => {
         // Three ways to be stale, and they are all the same check: the weapon
@@ -731,7 +694,10 @@ export class WeaponViewModel {
         // fetch was in flight.
         if (!asset || this.propToken !== token || !this.built) return;
         const built = this.built;
-        const { model, muzzle } = fitWeaponModel(this.three, asset.prototype, built.group);
+        const { model, muzzle } =
+          id === 'knife'
+            ? fitKnifeModel(this.three, asset.prototype)
+            : fitWeaponModel(this.three, asset.prototype, built.group);
 
         // The skin tints the prop rather than repainting it: these materials
         // carry real texture maps, and `color` multiplies the base colour map.
@@ -786,6 +752,7 @@ export class WeaponViewModel {
         for (const geo of built.geometries) geo.dispose();
         built.geometries = [];
         built.group.add(model);
+        this.rememberProp(model);
         // The prop is exported already oriented, so it needs none of the box
         // model's resting rotation — that was a property of how the boxes were
         // built, not of how a weapon is held.
@@ -798,7 +765,8 @@ export class WeaponViewModel {
         // If the weapon prop has animations (such as the FN FAL reload clip), initialize mixer
         if (asset.animations && asset.animations.length > 0) {
           const mixer = new this.three.AnimationMixer(model);
-          const reloadClip = asset.animations.find((c) => c.name === 'reload') || asset.animations[0];
+          const reloadClip =
+            asset.animations.find((c) => c.name === 'reload') || asset.animations[0];
           const action = mixer.clipAction(reloadClip);
           action.setLoop(this.three.LoopOnce, 1);
           action.clampWhenFinished = true;
@@ -827,6 +795,7 @@ export class WeaponViewModel {
    */
   setEnvironment(environment: THREE.Texture | null): void {
     this.environment = environment;
+    this.arms?.setEnvironment(environment);
     const built = this.built;
     if (!built) return;
     // Applied to whatever is already in the hands, so an environment arriving
@@ -927,18 +896,88 @@ export class WeaponViewModel {
    * is what makes it usable in a match rather than a state you have to wait out.
    *
    * Pressing again while it runs restarts it rather than queueing a second pass:
-   * the key means "show me the gun", and it should answer every press.
+   * the key means "show me the gun", and it should answer every press. A knife
+   * is the exception: a second press mid-flourish jumps back to the clip's
+   * `repeatFrom`, so mashing F chains twirls instead of re-raising the knife.
    */
   inspect(): void {
-    if (this.built) {
-      if (this.weaponId === 'knife' && this.inspectT !== null) {
-        // Continuous knife flourish spam (CS2-style endless twirl/spin on repeated F presses)
-        this.inspectT = (this.inspectT + 0.38) % INSPECT_DURATION;
-      } else {
-        this.inspectT = 0;
-      }
-      this.startAction('inspect', INSPECT_DURATION);
+    if (!this.built) return;
+    const clip = clipFor(this.inspectClipId());
+    if (this.weaponId === 'knife' && this.inspectT !== null && clip.repeatFrom !== undefined) {
+      this.inspectT = clip.repeatFrom * clip.duration;
+    } else {
+      this.inspectT = 0;
     }
+  }
+
+  /**
+   * Record what the inspect moves on a freshly fitted prop: its rest transform,
+   * where its `spin_origin` marker sits (in the prop's own space), and the rest
+   * rotation of every named part a clip might swing.
+   */
+  private rememberProp(model: THREE.Object3D): void {
+    const three = this.three;
+    model.updateMatrixWorld(true);
+    const inverse = model.matrixWorld.clone().invert();
+    const pivot = model.getObjectByName('spin_origin');
+    const nodes = new Map<string, { obj: THREE.Object3D; rest: THREE.Quaternion }>();
+    model.traverse((o) => {
+      if (o !== model && o.name) nodes.set(o.name, { obj: o, rest: o.quaternion.clone() });
+    });
+    this.prop = {
+      model,
+      position: model.position.clone(),
+      quaternion: model.quaternion.clone(),
+      pivot: pivot
+        ? new three.Vector3().setFromMatrixPosition(pivot.matrixWorld.clone().premultiply(inverse))
+        : new three.Vector3(),
+      nodes,
+    };
+  }
+
+  /**
+   * Apply an inspect sample's `spin` and named parts to the prop, or put them
+   * back at rest when there is no sample.
+   *
+   * On the prop rather than the pivot, and that is the point of `spin`: the
+   * hands are solved through the pivot and the weapon group, so turning the
+   * prop underneath them spins a karambit on the finger in its ring while the
+   * hand stays where it is. The box fallback has no marker and simply does not
+   * spin.
+   */
+  private applyInspectToProp(clip: InspectClip, sample: InspectSample | null): void {
+    const prop = this.prop;
+    if (!prop) return;
+    const three = this.three;
+    const spin = sample?.spin ?? 0;
+    if (Math.abs(spin) > 1e-6) {
+      const axis = new three.Vector3(...(clip.spinAxis ?? [1, 0, 0])).normalize();
+      const turn = new three.Quaternion().setFromAxisAngle(axis, spin);
+      // About the marker: p' = offset + o + R(p - o) — so the prop's own
+      // rotation becomes R and its position moves by o - R o.
+      const o = clip.spinPivot ? prop.pivot : new three.Vector3();
+      const shift = o.clone().sub(o.clone().applyQuaternion(turn));
+      prop.model.quaternion.copy(prop.quaternion).multiply(turn);
+      prop.model.position.copy(prop.position).add(shift.applyQuaternion(prop.quaternion));
+    } else {
+      prop.model.quaternion.copy(prop.quaternion);
+      prop.model.position.copy(prop.position);
+    }
+    for (const [name, node] of prop.nodes) {
+      const rot = sample?.nodes[name];
+      if (rot) {
+        node.obj.quaternion
+          .copy(node.rest)
+          .multiply(new three.Quaternion().setFromEuler(new three.Euler(rot[0], rot[1], rot[2])));
+      } else {
+        node.obj.quaternion.copy(node.rest);
+      }
+    }
+  }
+
+  /** Which choreography the weapon in the hands runs. */
+  private inspectClipId(): string {
+    return inspectClipFor(this.weaponId, this.currentSkin?.id ?? '', this.currentSkin?.name ?? '');
   }
 
   /** Whether the animation is running, so the HUD can name what the weapon is
@@ -1011,9 +1050,7 @@ export class WeaponViewModel {
 
     // Landing shockwave dip (damped spring compression)
     const landPhase =
-      frame.sinceLanded !== undefined && frame.sinceLanded < 0.28
-        ? frame.sinceLanded / 0.28
-        : 1;
+      frame.sinceLanded !== undefined && frame.sinceLanded < 0.28 ? frame.sinceLanded / 0.28 : 1;
     const landDip = landPhase < 1 ? -0.075 * Math.sin(landPhase * Math.PI) * (1.0 - landPhase) : 0;
 
     this.kick -= this.kick * Math.min(1, dt * KICK_DECAY);
@@ -1052,7 +1089,12 @@ export class WeaponViewModel {
     // `approach`.
     if (this.holsterHold > 0) this.holsterHold = Math.max(0, this.holsterHold - dt);
     const stowTarget = this.holsterHold > 0 ? 1 : 0;
-    this.stow = approach(this.stow, stowTarget, stowTarget > this.stow ? HOLSTER_TIME : DRAW_TIME, dt);
+    this.stow = approach(
+      this.stow,
+      stowTarget,
+      stowTarget > this.stow ? HOLSTER_TIME : DRAW_TIME,
+      dt,
+    );
     const stow = ease(this.stow);
 
     // A reload takes the weapon away for an animation of its own, and two poses
@@ -1061,24 +1103,10 @@ export class WeaponViewModel {
     if (frame.reloading) this.inspectT = null;
     // Advanced before it is read, so the frame it completes on is the frame the
     // weapon is back at rest rather than one after.
-    //
-    // Three numbers, not one: the weight (how much of the pose is applied), the
-    // lift (the same weight, run slightly ahead so the gun rises before it
-    // rolls) and the turn (monotonic, so the roll keeps going through the hold
-    // instead of freezing). See the constants above.
-    let inspect = 0;
-    let lift = 0;
-    let turn = 0;
+    const inspectClip = clipFor(this.inspectClipId());
     if (this.inspectT !== null) {
       const t = this.inspectT + dt;
-      if (t >= INSPECT_DURATION) {
-        this.inspectT = null;
-      } else {
-        this.inspectT = t;
-        inspect = inspectEnvelope(t);
-        lift = inspectEnvelope(t + INSPECT_LEAD);
-        turn = inspectTurn(t);
-      }
+      this.inspectT = t >= inspectClip.duration ? null : t;
     }
 
     // ADS smooth transition: target is frame.ads (defaulting to 0)
@@ -1098,154 +1126,40 @@ export class WeaponViewModel {
     let boltPullZ = 0;
     let boltPullPitch = 0;
     let boltPullRoll = 0;
-    if (frame.reloadingEmpty && frame.reloadProgress !== null && frame.reloadProgress !== undefined) {
+    if (
+      frame.reloadingEmpty &&
+      frame.reloadProgress !== null &&
+      frame.reloadProgress !== undefined
+    ) {
       const p = frame.reloadProgress;
       if (p >= 0.68 && p <= 0.88) {
-        const boltPhase = Math.sin(((p - 0.68) / 0.20) * Math.PI);
+        const boltPhase = Math.sin(((p - 0.68) / 0.2) * Math.PI);
         boltPullZ = -0.14 * boltPhase;
         boltPullPitch = 0.22 * boltPhase;
         boltPullRoll = 0.12 * boltPhase;
       }
     }
 
-    // Where the inspect pose takes the weapon: in towards the centre of the
-    // screen, up, and rolled most of the way over so the side of the receiver —
-    // which is where a skin's pattern lives — faces the camera. A pose that only
-    // lifted the gun would show the face it already shows.
-    //
-    // The translation rides `lift` and the rotation rides `inspect`, which is
-    // the lead: the weapon is already on its way up before it starts turning,
-    // and finishes unrolling after it has come back down. The roll is
-    // `inspect * (ROLL + TURN * turn)` rather than `inspect * ROLL` — the
-    // envelope still scales it, so it starts and ends at rest; the turn is what
-    // keeps it moving in between.
-    // CS2-style inspect flourishes:
-    // For knife: agile flourish twirl and flip around the grip during the initial rise,
-    // followed by horizontal blade presentation showing off the finish and edge.
-    // For firearms: two-stage inspect showcasing the play-side receiver/chamber first,
-    // then subtly tilting across to inspect the top and reverse side.
-    const isKnife = this.weaponId === 'knife';
-    const skinId = this.currentSkin?.id ?? '';
-    const skinName = (this.currentSkin?.name ?? '').toLowerCase();
-    const isKarambit = isKnife && (skinId.includes('karambit') || skinName.includes('karambit'));
-    const isButterfly = isKnife && (skinId.includes('butterfly') || skinName.includes('butterfly'));
-    const isBayonet =
-      isKnife &&
-      (skinId.includes('bayonet') || skinName.includes('bayonet') || skinId.includes('lore'));
-    const isSkeleton = isKnife && (skinId.includes('skeleton') || skinName.includes('skeleton'));
-    const isHuntsman = isKnife && (skinId.includes('huntsman') || skinName.includes('huntsman'));
-    const isTacticalKnife =
-      isKnife && !isKarambit && !isButterfly && !isBayonet && !isSkeleton && !isHuntsman;
-
+    // Where the inspect takes the weapon: a choreography per weapon and knife,
+    // authored in `tools/blender/author_inspects.py` and sampled by
+    // `inspects.ts`. `pos` and `rot` move the whole pivot — hands and all — and
+    // are faded to rest at both ends; `spin`, the finger poses and the named
+    // parts are applied below, to the prop and the hands.
     const isPistol = this.weaponId === 'pistol';
     const isShotgun = this.weaponId === 'shotgun';
     const isSniper = this.weaponId === 'sniper';
-    const isNade = this.weaponId.startsWith('nade') || this.weaponId.startsWith('grenade');
 
-    let inspectPitch = 0;
-    let inspectYaw = 0;
-    let inspectRoll = 0;
-    let inspectLiftX = 0;
-    let inspectLiftY = 0;
-    let inspectLiftZ = 0;
-
-    if (isKarambit) {
-      // Karambit continuous finger-ring twirl on phase 1, followed by reverse blade showcase
-      const ringTwirl = turn < 0.35 ? (turn / 0.35) * Math.PI * 4.0 : 0;
-      inspectPitch = inspect * (0.35 + 0.25 * Math.sin(turn * Math.PI));
-      inspectYaw = -inspect * 0.45 + Math.sin(turn * Math.PI) * 0.30;
-      inspectRoll = inspect * (1.25 + ringTwirl + Math.sin(turn * Math.PI) * 0.40);
-      inspectLiftX = lift * 0.18;
-      inspectLiftY = lift * 0.22;
-      inspectLiftZ = lift * 0.28;
-    } else if (isButterfly) {
-      // Balisong aerial dual-handle flip and whip
-      const flipOsc = Math.sin(turn * Math.PI * 4.0);
-      inspectPitch = inspect * (0.22 + 0.25 * flipOsc);
-      inspectYaw = inspect * (-0.35 + 0.35 * Math.cos(turn * Math.PI * 2.0));
-      inspectRoll = inspect * (1.10 + flipOsc * 1.50);
-      inspectLiftX = lift * 0.16;
-      inspectLiftY = lift * 0.20;
-      inspectLiftZ = lift * 0.24;
-    } else if (isBayonet) {
-      // Heavy combat bayonet vertical toss-and-catch with 360 flip
-      const toss = Math.sin(turn * Math.PI);
-      const tossFlip = turn < 0.38 ? (turn / 0.38) * Math.PI * 2.0 : 0;
-      inspectPitch = inspect * (0.30 + tossFlip + 0.12 * toss);
-      inspectYaw = -inspect * 0.40;
-      inspectRoll = inspect * (0.65 + 0.20 * toss);
-      inspectLiftX = lift * 0.15;
-      inspectLiftY = lift * 0.26 + (turn < 0.45 ? Math.sin((turn / 0.45) * Math.PI) * 0.22 : 0);
-      inspectLiftZ = lift * 0.25;
-    } else if (isSkeleton) {
-      // Skeleton knife rapid center-hole finger twirl & reverse snap
-      const ringTwirl = turn < 0.36 ? (turn / 0.36) * Math.PI * 4.0 : 0;
-      const snapFlick = turn > 0.72 ? Math.sin(((turn - 0.72) / 0.28) * Math.PI) * 0.45 : 0;
-      inspectPitch = inspect * (0.24 + 0.18 * Math.sin(turn * Math.PI) + snapFlick);
-      inspectYaw = -inspect * 0.35 + Math.sin(turn * Math.PI) * 0.25;
-      inspectRoll = inspect * (1.30 + ringTwirl + Math.sin(turn * Math.PI) * 0.35);
-      inspectLiftX = lift * 0.17;
-      inspectLiftY = lift * 0.21;
-      inspectLiftZ = lift * 0.25;
-    } else if (isHuntsman) {
-      // Heavy Huntsman forward wrist-flip over knuckles and sawback angle check
-      const heavyTilt = Math.sin(turn * Math.PI);
-      const forwardSnap = turn < 0.40 ? Math.sin((turn / 0.40) * Math.PI) * 0.48 : 0;
-      inspectPitch = inspect * (0.38 + forwardSnap + 0.15 * heavyTilt);
-      inspectYaw = -inspect * (0.60 - 0.25 * turn);
-      inspectRoll = inspect * (1.55 + 0.35 * heavyTilt);
-      inspectLiftX = lift * 0.19;
-      inspectLiftY = lift * 0.24;
-      inspectLiftZ = lift * 0.28;
-    } else if (isTacticalKnife) {
-      // Tactical knife tanto bevel and spine serration inspection
-      inspectPitch = inspect * (0.28 + 0.25 * Math.sin(turn * Math.PI));
-      inspectYaw = -inspect * (0.50 - 0.20 * turn);
-      inspectRoll = inspect * (1.45 + 0.40 * turn);
-      inspectLiftX = lift * 0.18;
-      inspectLiftY = lift * 0.22;
-      inspectLiftZ = lift * 0.26;
-    } else if (isPistol) {
-      // Tactical pistol one-handed chamber and slide inspection
-      inspectPitch = inspect * (0.25 + 0.15 * Math.sin(turn * Math.PI));
-      inspectYaw = -inspect * (0.65 - 0.30 * turn);
-      inspectRoll = inspect * (1.40 + 0.55 * turn);
-      inspectLiftX = lift * 0.24;
-      inspectLiftY = lift * 0.22;
-      inspectLiftZ = lift * 0.15;
-    } else if (isShotgun) {
-      // Shotgun barrel rib and underside loading gate check
-      inspectPitch = inspect * (0.42 - 0.28 * Math.sin(turn * Math.PI));
-      inspectYaw = -inspect * (0.75 - 0.45 * turn);
-      inspectRoll = inspect * (1.85 + 0.70 * turn);
-      inspectLiftX = lift * 0.26;
-      inspectLiftY = lift * 0.16;
-      inspectLiftZ = lift * 0.24;
-    } else if (isSniper) {
-      // Sniper rifle precision optical reflection and bolt check
-      inspectPitch = inspect * (0.30 - 0.18 * Math.sin(turn * Math.PI));
-      inspectYaw = -inspect * (0.85 - 0.25 * turn);
-      inspectRoll = inspect * (1.65 + 0.60 * turn);
-      inspectLiftX = lift * 0.34;
-      inspectLiftY = lift * 0.14;
-      inspectLiftZ = lift * 0.28;
-    } else if (isNade) {
-      // Grenade palm toss and fuse ring check
-      inspectPitch = inspect * (0.20 + 0.35 * Math.sin(turn * Math.PI));
-      inspectYaw = -inspect * 0.30;
-      inspectRoll = inspect * 0.85;
-      inspectLiftX = lift * 0.15;
-      inspectLiftY = lift * 0.25;
-      inspectLiftZ = lift * 0.20;
-    } else {
-      // Tactical assault rifle two-handed receiver and dust cover inspection
-      inspectPitch = inspect * (0.34 - 0.12 * Math.sin(turn * Math.PI));
-      inspectYaw = -inspect * (0.95 - 0.35 * turn);
-      inspectRoll = inspect * (INSPECT_ROLL + INSPECT_TURN * turn);
-      inspectLiftX = lift * 0.30;
-      inspectLiftY = lift * 0.16;
-      inspectLiftZ = lift * 0.20;
-    }
+    const sample =
+      this.inspectT !== null
+        ? sampleInspect(this.inspectClipId(), this.inspectT / inspectClip.duration)
+        : null;
+    const inspectLiftX = sample?.pos[0] ?? 0;
+    const inspectLiftY = sample?.pos[1] ?? 0;
+    const inspectLiftZ = sample?.pos[2] ?? 0;
+    const inspectPitch = sample?.rot[0] ?? 0;
+    const inspectYaw = sample?.rot[1] ?? 0;
+    const inspectRoll = sample?.rot[2] ?? 0;
+    this.applyInspectToProp(inspectClip, sample);
 
     // Mechanical reload physical dynamics: mag release jolt, mag seat slam, and action rack
     let reloadImpulseY = 0;
@@ -1257,13 +1171,13 @@ export class WeaponViewModel {
       const p = Math.max(0, Math.min(1, frame.reloadProgress));
       // 1. Mag drop jolt (p in 0.18..0.28)
       if (p >= 0.18 && p <= 0.28) {
-        const s = Math.sin(((p - 0.18) / 0.10) * Math.PI);
+        const s = Math.sin(((p - 0.18) / 0.1) * Math.PI);
         reloadImpulseY -= 0.045 * s;
         reloadImpulsePitch += 0.08 * s;
       }
       // 2. Mag insert upward slam impact (p in 0.58..0.68)
       if (p >= 0.58 && p <= 0.68) {
-        const s = Math.sin(((p - 0.58) / 0.10) * Math.PI);
+        const s = Math.sin(((p - 0.58) / 0.1) * Math.PI);
         reloadImpulseY += 0.065 * s;
         reloadImpulseZ -= 0.04 * s;
         reloadImpulsePitch -= 0.12 * s;
@@ -1274,7 +1188,7 @@ export class WeaponViewModel {
         if (isPistol) {
           const s = Math.sin(rackT * Math.PI);
           reloadImpulseZ += 0.06 * s;
-          reloadImpulsePitch -= 0.10 * s;
+          reloadImpulsePitch -= 0.1 * s;
         } else if (isShotgun) {
           const s = Math.sin(rackT * Math.PI * 2.0);
           reloadImpulseZ -= 0.08 * s;
@@ -1283,7 +1197,7 @@ export class WeaponViewModel {
           const s = Math.sin(rackT * Math.PI);
           reloadImpulseZ -= 0.12 * s;
           reloadImpulsePitch += 0.16 * s;
-          reloadImpulseRoll -= 0.10 * s;
+          reloadImpulseRoll -= 0.1 * s;
         } else {
           const s = Math.sin(rackT * Math.PI);
           reloadImpulseZ -= 0.09 * s;
@@ -1317,7 +1231,7 @@ export class WeaponViewModel {
         // Heavy stab: powerful forward thrust along -Z
         knifeX = -0.12 * arc;
         knifeY = 0.06 * arc;
-        knifeZ = -0.40 * arc;
+        knifeZ = -0.4 * arc;
         knifePitch = -0.12 * arc;
         knifeYaw = 0.15 * arc;
         knifeRoll = 0.55 * arc;
@@ -1335,7 +1249,9 @@ export class WeaponViewModel {
     const breathPitch = Math.cos(this.breathPhase) * 0.006 * breathWeight;
 
     // Sprint weapon tuck transition
-    const isSprinting = Boolean(frame.sprint || (frame.speed > MOVE_SPEED * 1.15 && frame.onGround));
+    const isSprinting = Boolean(
+      frame.sprint || (frame.speed > MOVE_SPEED * 1.15 && frame.onGround),
+    );
     const targetSprint = isSprinting ? 1.0 : 0.0;
     this.sprintT += (targetSprint - this.sprintT) * Math.min(1.0, dt * 8.0);
     const sprintDip = this.sprintT * -0.06;
@@ -1344,18 +1260,43 @@ export class WeaponViewModel {
     const sprintRoll = this.sprintT * 0.15;
 
     this.pivot.position.set(
-      curHomeX + (bobX + (this.swayX + this.strafeSway) * adsDamp) - inspectLiftX + knifeX + breathX,
+      curHomeX +
+        (bobX + (this.swayX + this.strafeSway) * adsDamp) -
+        inspectLiftX +
+        knifeX +
+        breathX,
       // The stow drops the weapon out of frame entirely. Applied to the same
       // axis as the reload dip and *added* rather than blended, so a switch
       // asked for mid-reload takes the gun the rest of the way down instead of
       // fighting the dip for the pivot.
-      curHomeY + (bobY + this.swayY * adsDamp + landDip) - this.reloadT * 0.55 + reloadImpulseY + inspectLiftY - stow * 1.15 + knifeY + breathY + sprintDip,
+      curHomeY +
+        (bobY + this.swayY * adsDamp + landDip) -
+        this.reloadT * 0.55 +
+        reloadImpulseY +
+        inspectLiftY -
+        stow * 1.15 +
+        knifeY +
+        breathY +
+        sprintDip,
       // Recoil is mostly backwards: a gun that only rotates looks hinged.
       curHomeZ + this.kick * 0.28 + boltPullZ + reloadImpulseZ + inspectLiftZ + knifeZ,
     );
     this.pivot.rotation.set(
-      this.kick * -0.16 + this.reloadT * 0.7 + boltPullPitch + reloadImpulsePitch + bobY * 0.4 + inspectPitch + stow * 0.9 + knifePitch + breathPitch + sprintPitch,
-      (this.swayX * 0.7 + this.strafeSway * 0.5) * adsDamp + this.reloadT * 0.25 + inspectYaw + knifeYaw + sprintYaw,
+      this.kick * -0.16 +
+        this.reloadT * 0.7 +
+        boltPullPitch +
+        reloadImpulsePitch +
+        bobY * 0.4 +
+        inspectPitch +
+        stow * 0.9 +
+        knifePitch +
+        breathPitch +
+        sprintPitch,
+      (this.swayX * 0.7 + this.strafeSway * 0.5) * adsDamp +
+        this.reloadT * 0.25 +
+        inspectYaw +
+        knifeYaw +
+        sprintYaw,
       (this.swayX * 0.5 + this.swayRoll) * adsDamp +
         bobX * 0.6 +
         boltPullRoll +
@@ -1369,7 +1310,7 @@ export class WeaponViewModel {
     this.flashAge += dt;
     this.smokeAge += dt;
     this.updateFlash();
-    this.updateArms(dt, frame, walk, stow);
+    this.updateArms(dt, frame, walk, stow, sample);
   }
 
   /**
@@ -1381,7 +1322,13 @@ export class WeaponViewModel {
    * is already doing — bob, sway, recoil, the reload dip, the stow, the inspect
    * roll — reaches the hands with nothing here knowing it happened.
    */
-  private updateArms(dt: number, frame: ViewModelFrame, walk: number, stow: number): void {
+  private updateArms(
+    dt: number,
+    frame: ViewModelFrame,
+    walk: number,
+    stow: number,
+    inspect: InspectSample | null,
+  ): void {
     const arms = this.arms;
     const built = this.built;
     if (!arms || !built) return;
@@ -1407,19 +1354,38 @@ export class WeaponViewModel {
     // apart. Scaled by `walk` on the two moving clips only: at a standstill the
     // idle track is the whole of it.
     const base = this.poses.locomotion(clip, this.bobPhase / (Math.PI * 2));
-    const scaled: PartialPose =
-      clip === 'walk' || clip === 'run' ? scalePose(base, walk) : base;
+    const scaled: PartialPose = clip === 'walk' || clip === 'run' ? scalePose(base, walk) : base;
     const pose = this.action
       ? mergePose(scaled, this.poses.action(this.action.clip, Math.min(1, this.action.t)))
       : scaled;
 
+    // The inspect's hand channels ride on top: offsets add to whatever the
+    // layers above said, and its finger curls blend over the grip's own.
     const grips = this.grips;
+    const primaryCurl = blendCurl(
+      curlOver(grips.primaryCurl, pose.primaryFingers, pose.primaryFingersWeight),
+      inspect?.primaryFingers ?? null,
+    );
+    const supportCurl = blendCurl(
+      curlOver(grips.supportCurl, pose.supportFingers, pose.supportFingersWeight),
+      inspect?.supportFingers ?? null,
+    );
+    const primaryOffset = addVec(pose.primary, inspect?.primary);
+    const supportOffset = addVec(pose.support, inspect?.support);
+    const primaryRoll = pose.primaryRoll ?? 0;
+    const supportRoll = pose.supportRoll ?? 0;
     const anchors: GripAnchors = {
-      primary: offsetBy(grips.primary, pose.primary),
-      support:
-        grips.support === null ? null : offsetBy(grips.support, pose.support),
-      primaryRoll: grips.primaryRoll + (pose.primaryRoll ?? 0),
-      supportRoll: grips.supportRoll + (pose.supportRoll ?? 0),
+      ...grips,
+      primary: offsetBy(grips.primary, primaryOffset),
+      support: grips.support === null ? null : offsetBy(grips.support, supportOffset),
+      primaryRoll: grips.primaryRoll + primaryRoll,
+      supportRoll: grips.supportRoll + supportRoll,
+      // A pose's roll turns the hand about its own aim — the same channel the
+      // procedural arms read as a roll about the forearm.
+      primaryUp: rollAbout(grips.primaryUp, grips.primaryAim, primaryRoll),
+      supportUp: rollAbout(grips.supportUp, grips.supportAim, supportRoll),
+      primaryCurl,
+      supportCurl,
     };
 
     // The weapon's model space into camera space, through the same two matrices
@@ -1427,14 +1393,24 @@ export class WeaponViewModel {
     // pivot moves every frame and that motion is the entire point.
     built.group.updateMatrix();
     this.pivot.updateMatrix();
+    // The anchors are in the prop's own space (`models/grips.json`), so they
+    // go through the prop's fitted offset first — its rest position, not the
+    // spun one, so a twirl turns the knife and not the hand.
+    const propOffset = this.prop?.position;
     const toCamera = (p: Vec3): Vec3 => {
       const v = new this.three.Vector3(p[0], p[1], p[2]);
+      if (propOffset) v.add(propOffset);
       v.applyMatrix4(built.group.matrix).applyMatrix4(this.pivot.matrix);
+      return [v.x, v.y, v.z];
+    };
+    const dirToCamera = (d: Vec3): Vec3 => {
+      const v = new this.three.Vector3(d[0], d[1], d[2]);
+      v.transformDirection(built.group.matrix).transformDirection(this.pivot.matrix);
       return [v.x, v.y, v.z];
     };
     // Hidden while fully stowed: at `stow` 1 the weapon is out of frame, and two
     // arms reaching for it are two arms pointing at nothing.
-    arms.update(anchors, toCamera, stow < 0.92);
+    arms.update(anchors, toCamera, stow < 0.92, dirToCamera);
   }
 
   /**
@@ -1673,6 +1649,7 @@ export class WeaponViewModel {
   private release(): void {
     const built = this.built;
     this.built = null;
+    this.prop = null;
     this.flashCore = null;
     this.flashHalo = null;
     this.flashSmoke = null;
@@ -1766,7 +1743,7 @@ export class WeaponViewModel {
     // Ergonomic curved handle: 3 contoured angled segments
     group.add(this.box([0.12, 0.16, 0.22], [0, 0.02, 0.02], this.grip, [0.14, 0, 0]));
     group.add(this.box([0.14, 0.18, 0.24], [0, 0.06, 0.22], this.grip, [0.28, 0, 0]));
-    group.add(this.box([0.13, 0.16, 0.20], [0, 0.14, 0.42], this.dark, [0.42, 0, 0]));
+    group.add(this.box([0.13, 0.16, 0.2], [0, 0.14, 0.42], this.dark, [0.42, 0, 0]));
     // Contoured finger index notches
     group.add(this.box([0.145, 0.04, 0.04], [0, -0.06, 0.12], this.dark));
     group.add(this.box([0.145, 0.04, 0.04], [0, -0.04, 0.24], this.dark));
@@ -1774,25 +1751,25 @@ export class WeaponViewModel {
     // Pommel retention ring: circular loop with an open inner hole
     group.add(this.box([0.14, 0.14, 0.08], [0, 0.22, 0.54], this.metal, [0.55, 0, 0]));
     // Open ring frame
-    group.add(this.box([0.10, 0.04, 0.10], [0, 0.36, 0.62], this.metal, [0.65, 0, 0]));
-    group.add(this.box([0.10, 0.04, 0.10], [0, 0.16, 0.68], this.metal, [0.65, 0, 0]));
-    group.add(this.box([0.04, 0.16, 0.10], [0.06, 0.26, 0.65], this.metal, [0.65, 0, 0]));
-    group.add(this.box([0.04, 0.16, 0.10], [-0.06, 0.26, 0.65], this.metal, [0.65, 0, 0]));
+    group.add(this.box([0.1, 0.04, 0.1], [0, 0.36, 0.62], this.metal, [0.65, 0, 0]));
+    group.add(this.box([0.1, 0.04, 0.1], [0, 0.16, 0.68], this.metal, [0.65, 0, 0]));
+    group.add(this.box([0.04, 0.16, 0.1], [0.06, 0.26, 0.65], this.metal, [0.65, 0, 0]));
+    group.add(this.box([0.04, 0.16, 0.1], [-0.06, 0.26, 0.65], this.metal, [0.65, 0, 0]));
 
     // Claw/Talon blade: curves forward and sweeps down into an aggressive talon
-    group.add(this.box([0.06, 0.16, 0.16], [0, -0.01, -0.16], this.dark, [-0.10, 0, 0]));
+    group.add(this.box([0.06, 0.16, 0.16], [0, -0.01, -0.16], this.dark, [-0.1, 0, 0]));
     group.add(this.box([0.045, 0.18, 0.32], [0, -0.05, -0.38], this.metal, [-0.22, 0, 0]));
-    group.add(this.box([0.04, 0.17, 0.30], [0, -0.14, -0.66], this.metal, [-0.44, 0, 0]));
-    group.add(this.box([0.035, 0.15, 0.26], [0, -0.29, -0.90], this.metal, [-0.70, 0, 0]));
+    group.add(this.box([0.04, 0.17, 0.3], [0, -0.14, -0.66], this.metal, [-0.44, 0, 0]));
+    group.add(this.box([0.035, 0.15, 0.26], [0, -0.29, -0.9], this.metal, [-0.7, 0, 0]));
     // Razor ground inside bevel
     group.add(this.box([0.026, 0.09, 0.36], [0, -0.12, -0.52], this.accent, [-0.32, 0, 0]));
     // Sharp talon beak point
-    group.add(this.box([0.028, 0.10, 0.22], [0, -0.48, -1.06], this.accent, [-0.98, 0, 0]));
+    group.add(this.box([0.028, 0.1, 0.22], [0, -0.48, -1.06], this.accent, [-0.98, 0, 0]));
     // Thumb ramp jimping notches on spine
     for (let i = 0; i < 3; i += 1) {
       group.add(this.box([0.055, 0.04, 0.04], [0, 0.08, -0.14 - i * 0.08], this.accent));
     }
-    return { group, muzzle: [0, -0.48, -1.10], rest: [0.10, -0.36, 0.28] };
+    return { group, muzzle: [0, -0.48, -1.1], rest: [0.1, -0.36, 0.28] };
   }
 
   private buildButterfly(): Shape {
@@ -1803,14 +1780,14 @@ export class WeaponViewModel {
     group.add(this.box([0.035, 0.13, 0.65], [-0.015, 0.0, 0.12], this.grip));
     group.add(this.box([0.065, 0.11, 0.05], [-0.042, 0.0, -0.16], this.dark));
     group.add(this.box([0.065, 0.11, 0.05], [-0.042, 0.0, 0.12], this.dark));
-    group.add(this.box([0.065, 0.11, 0.05], [-0.042, 0.0, 0.40], this.dark));
+    group.add(this.box([0.065, 0.11, 0.05], [-0.042, 0.0, 0.4], this.dark));
 
     // Right handle rails
     group.add(this.box([0.035, 0.13, 0.65], [0.015, 0.0, 0.12], this.grip));
     group.add(this.box([0.035, 0.13, 0.65], [0.07, 0.0, 0.12], this.grip));
     group.add(this.box([0.065, 0.11, 0.05], [0.042, 0.0, -0.16], this.dark));
     group.add(this.box([0.065, 0.11, 0.05], [0.042, 0.0, 0.12], this.dark));
-    group.add(this.box([0.065, 0.11, 0.05], [0.042, 0.0, 0.40], this.dark));
+    group.add(this.box([0.065, 0.11, 0.05], [0.042, 0.0, 0.4], this.dark));
 
     // Latch mechanism at the base of the bite handle
     group.add(this.box([0.03, 0.05, 0.11], [0.042, 0.0, 0.48], this.metal));
@@ -1825,7 +1802,7 @@ export class WeaponViewModel {
     // Symmetrical spear-point blade with fuller
     group.add(this.box([0.042, 0.17, 0.88], [0, 0.01, -0.76], this.metal));
     group.add(this.box([0.028, 0.12, 0.84], [0, -0.06, -0.76], this.accent));
-    group.add(this.box([0.030, 0.08, 0.60], [0, 0.07, -0.80], this.accent));
+    group.add(this.box([0.03, 0.08, 0.6], [0, 0.07, -0.8], this.accent));
     group.add(this.box([0.048, 0.04, 0.52], [0, 0.01, -0.68], this.dark));
     group.add(this.box([0.032, 0.13, 0.26], [0, 0.0, -1.28], this.accent));
 
@@ -1836,7 +1813,7 @@ export class WeaponViewModel {
     const group = new this.three.Group();
     // Heavy ribbed combat grip with finger grooves
     group.add(this.box([0.13, 0.17, 0.54], [0, 0, 0.12], this.grip));
-    group.add(this.box([0.16, 0.20, 0.10], [0, 0, 0.41], this.metal));
+    group.add(this.box([0.16, 0.2, 0.1], [0, 0, 0.41], this.metal));
     group.add(this.box([0.08, 0.08, 0.06], [0, 0, 0.48], this.dark));
     group.add(this.box([0.05, 0.05, 0.05], [0, -0.09, 0.44], this.dark));
     for (let i = 0; i < 4; i += 1) {
@@ -1845,18 +1822,18 @@ export class WeaponViewModel {
 
     // Steel crossguard with barrel attachment ring
     group.add(this.box([0.22, 0.24, 0.08], [0, 0.02, -0.18], this.metal));
-    group.add(this.box([0.06, 0.10, 0.07], [0, 0.14, -0.18], this.metal));
+    group.add(this.box([0.06, 0.1, 0.07], [0, 0.14, -0.18], this.metal));
     group.add(this.tube(0.06, 0.07, [0, 0.21, -0.18], this.metal));
     group.add(this.box([0.06, 0.08, 0.06], [0, -0.12, -0.18], this.metal, [-0.2, 0, 0]));
 
     // Clip-point blade with sawback serrations and fuller
-    group.add(this.box([0.065, 0.16, 0.16], [0, 0.02, -0.30], this.metal));
-    group.add(this.box([0.052, 0.20, 1.05], [0, 0.07, -0.88], this.metal));
+    group.add(this.box([0.065, 0.16, 0.16], [0, 0.02, -0.3], this.metal));
+    group.add(this.box([0.052, 0.2, 1.05], [0, 0.07, -0.88], this.metal));
     group.add(this.box([0.035, 0.15, 1.02], [0, -0.06, -0.87], this.accent));
     group.add(this.box([0.058, 0.04, 0.65], [0, 0.03, -0.78], this.dark));
     group.add(this.box([0.042, 0.16, 0.32], [0, 0.0, -1.48], this.accent, [0.18, 0, 0]));
     for (let i = 0; i < 5; i += 1) {
-      group.add(this.box([0.058, 0.05, 0.05], [0, 0.18, -0.48 - i * 0.10], this.dark));
+      group.add(this.box([0.058, 0.05, 0.05], [0, 0.18, -0.48 - i * 0.1], this.dark));
     }
 
     return { group, muzzle: [0, 0.02, -1.62], rest: [0.06, -0.32, 0.22] };
@@ -1891,7 +1868,7 @@ export class WeaponViewModel {
     const group = new this.three.Group();
     // Drop-point blade with recurve belly and razor edge
     group.add(this.box([0.042, 0.16, 0.82], [0, 0.04, -0.74], this.metal));
-    group.add(this.box([0.030, 0.12, 0.78], [0, -0.05, -0.74], this.accent));
+    group.add(this.box([0.03, 0.12, 0.78], [0, -0.05, -0.74], this.accent));
     group.add(this.box([0.035, 0.14, 0.26], [0, 0.01, -1.22], this.accent));
 
     // Large center finger hole at ricasso transition for twirling
@@ -1908,14 +1885,14 @@ export class WeaponViewModel {
       group.add(this.box([0.062, 0.145, 0.05], [0, 0, -0.06 + i * 0.09], this.grip));
     }
 
-    return { group, muzzle: [0, 0.01, -1.35], rest: [0.06, -0.28, 0.20] };
+    return { group, muzzle: [0, 0.01, -1.35], rest: [0.06, -0.28, 0.2] };
   }
 
   private buildHuntsman(): Shape {
     const group = new this.three.Group();
     // Heavy textured G10 contoured grip
     group.add(this.box([0.14, 0.18, 0.58], [0, 0, 0.15], this.grip));
-    group.add(this.box([0.16, 0.20, 0.12], [0, 0, 0.45], this.dark));
+    group.add(this.box([0.16, 0.2, 0.12], [0, 0, 0.45], this.dark));
     group.add(this.box([0.08, 0.08, 0.06], [0, 0, 0.52], this.accent));
 
     // Ergonomic finger grooves
@@ -1925,16 +1902,16 @@ export class WeaponViewModel {
 
     // Heavy crossguard and gut choil
     group.add(this.box([0.22, 0.22, 0.08], [0, 0.02, -0.18], this.dark));
-    group.add(this.tube(0.06, 0.05, [0, -0.10, -0.22], this.accent));
+    group.add(this.tube(0.06, 0.05, [0, -0.1, -0.22], this.accent));
 
     // Heavy recurve tanto blade
-    group.add(this.box([0.065, 0.22, 0.98], [0, 0.06, -0.80], this.metal));
-    group.add(this.box([0.040, 0.16, 0.95], [0, -0.06, -0.80], this.accent));
+    group.add(this.box([0.065, 0.22, 0.98], [0, 0.06, -0.8], this.metal));
+    group.add(this.box([0.04, 0.16, 0.95], [0, -0.06, -0.8], this.accent));
     group.add(this.box([0.048, 0.18, 0.34], [0, 0.02, -1.38], this.accent));
 
     // Double row sawback spine teeth
     for (let i = 0; i < 6; i += 1) {
-      group.add(this.box([0.068, 0.06, 0.06], [0, 0.18, -0.42 - i * 0.10], this.metal));
+      group.add(this.box([0.068, 0.06, 0.06], [0, 0.18, -0.42 - i * 0.1], this.metal));
     }
 
     return { group, muzzle: [0, 0.02, -1.52], rest: [0.07, -0.34, 0.24] };
@@ -1944,31 +1921,31 @@ export class WeaponViewModel {
     const group = new this.three.Group();
     // Slide assembly with chamfered profile
     group.add(this.box([0.21, 0.22, 1.15], [0, 0.04, -0.52], this.metal));
-    group.add(this.box([0.04, 0.04, 1.15], [-0.10, 0.14, -0.52], this.metal, [0, 0, 0.78]));
-    group.add(this.box([0.04, 0.04, 1.15], [0.10, 0.14, -0.52], this.metal, [0, 0, -0.78]));
+    group.add(this.box([0.04, 0.04, 1.15], [-0.1, 0.14, -0.52], this.metal, [0, 0, 0.78]));
+    group.add(this.box([0.04, 0.04, 1.15], [0.1, 0.14, -0.52], this.metal, [0, 0, -0.78]));
     // Ejection port and extractor claw
-    group.add(this.box([0.04, 0.12, 0.32], [0.10, 0.05, -0.42], this.dark));
+    group.add(this.box([0.04, 0.12, 0.32], [0.1, 0.05, -0.42], this.dark));
     group.add(this.box([0.02, 0.04, 0.12], [0.115, 0.05, -0.28], this.accent));
-    group.add(this.box([0.20, 0.18, 0.04], [0, 0.04, 0.06], this.dark));
+    group.add(this.box([0.2, 0.18, 0.04], [0, 0.04, 0.06], this.dark));
     // Match-grade crowned barrel and recoil spring plug
     group.add(this.tube(0.052, 0.28, [0, 0, -1.16], this.accent));
-    group.add(this.tube(0.038, 0.06, [0, 0, -1.30], this.dark));
-    group.add(this.tube(0.046, 0.06, [0, -0.10, -1.12], this.dark));
+    group.add(this.tube(0.038, 0.06, [0, 0, -1.3], this.dark));
+    group.add(this.tube(0.046, 0.06, [0, -0.1, -1.12], this.dark));
     // Frame, dust cover & Picatinny rail
     group.add(this.box([0.19, 0.13, 0.95], [0, -0.12, -0.48], this.dark));
     group.add(this.box([0.02, 0.04, 0.14], [-0.11, -0.04, -0.32], this.accent));
     // Grip frame, stippled backstrap, and mag baseplate
-    group.add(this.box([0.20, 0.62, 0.32], [0, -0.42, -0.02], this.grip, [0.30, 0, 0]));
-    group.add(this.box([0.08, 0.52, 0.08], [0, -0.40, 0.14], this.dark, [0.30, 0, 0]));
-    group.add(this.box([0.21, 0.10, 0.34], [0, -0.72, 0.08], this.dark, [0.30, 0, 0]));
+    group.add(this.box([0.2, 0.62, 0.32], [0, -0.42, -0.02], this.grip, [0.3, 0, 0]));
+    group.add(this.box([0.08, 0.52, 0.08], [0, -0.4, 0.14], this.dark, [0.3, 0, 0]));
+    group.add(this.box([0.21, 0.1, 0.34], [0, -0.72, 0.08], this.dark, [0.3, 0, 0]));
     group.add(this.box([0.04, 0.06, 0.06], [-0.11, -0.28, -0.12], this.accent));
     // Beavertail and skeletonized hammer
     group.add(this.box([0.14, 0.06, 0.16], [0, -0.06, 0.12], this.dark, [-0.25, 0, 0]));
-    group.add(this.box([0.06, 0.12, 0.08], [0, 0.02, 0.14], this.accent, [-0.40, 0, 0]));
+    group.add(this.box([0.06, 0.12, 0.08], [0, 0.02, 0.14], this.accent, [-0.4, 0, 0]));
     // Trigger guard loop and trigger shoe with safety blade
     group.add(this.box([0.09, 0.05, 0.34], [0, -0.28, -0.36], this.dark));
     group.add(this.box([0.09, 0.14, 0.05], [0, -0.21, -0.52], this.dark));
-    group.add(this.box([0.05, 0.14, 0.05], [0, -0.20, -0.28], this.accent, [0.25, 0, 0]));
+    group.add(this.box([0.05, 0.14, 0.05], [0, -0.2, -0.28], this.accent, [0.25, 0, 0]));
     // 3-Dot Combat Sights
     group.add(this.box([0.14, 0.06, 0.06], [0, 0.17, -0.05], this.dark));
     group.add(this.box([0.04, 0.07, 0.06], [0, 0.17, -1.02], this.dark));
@@ -1977,7 +1954,7 @@ export class WeaponViewModel {
       group.add(this.box([0.222, 0.18, 0.03], [0, 0.04, -0.06 - i * 0.08], this.dark));
     }
     for (let i = 0; i < 3; i += 1) {
-      group.add(this.box([0.222, 0.18, 0.03], [0, 0.04, -0.80 - i * 0.08], this.dark));
+      group.add(this.box([0.222, 0.18, 0.03], [0, 0.04, -0.8 - i * 0.08], this.dark));
     }
     return { group, muzzle: [0, -0.01, -1.32], rest: [0, -0.05, 0] };
   }
@@ -1985,36 +1962,34 @@ export class WeaponViewModel {
   private buildTacticalShotgun(): Shape {
     const group = new this.three.Group();
     // Over-and-under twin barrels
-    group.add(this.tube(0.078, 2.20, [0, 0.09, -1.50], this.metal));
+    group.add(this.tube(0.078, 2.2, [0, 0.09, -1.5], this.metal));
     group.add(this.tube(0.076, 2.05, [0, -0.05, -1.42], this.metal));
     // Ventilated barrel rib with brass bead sight
-    group.add(this.box([0.04, 0.06, 2.00], [0, 0.17, -1.45], this.dark));
-    group.add(this.box([0.05, 0.06, 0.06], [0, 0.20, -2.48], this.accent));
+    group.add(this.box([0.04, 0.06, 2.0], [0, 0.17, -1.45], this.dark));
+    group.add(this.box([0.05, 0.06, 0.06], [0, 0.2, -2.48], this.accent));
     // Breacher standoff choke with aggressive muzzle teeth
     group.add(this.tube(0.095, 0.14, [0, 0.09, -2.58], this.dark));
     group.add(this.tube(0.092, 0.12, [0, -0.05, -2.48], this.dark));
     // Magazine tube clamp and sling swivel
     group.add(this.box([0.18, 0.24, 0.08], [0, 0.02, -2.15], this.dark));
     // Ribbed ergonomic forend pump with dual action bars
-    group.add(this.box([0.30, 0.24, 0.62], [0, -0.19, -1.20], this.grip));
-    group.add(this.box([0.04, 0.04, 0.75], [-0.10, -0.02, -0.80], this.metal));
-    group.add(this.box([0.04, 0.04, 0.75], [0.10, -0.02, -0.80], this.metal));
+    group.add(this.box([0.3, 0.24, 0.62], [0, -0.19, -1.2], this.grip));
+    group.add(this.box([0.04, 0.04, 0.75], [-0.1, -0.02, -0.8], this.metal));
+    group.add(this.box([0.04, 0.04, 0.75], [0.1, -0.02, -0.8], this.metal));
     // Milled tactical receiver with ejection port and shell lifter
-    group.add(this.box([0.32, 0.38, 0.85], [0, -0.04, -0.30], this.dark));
+    group.add(this.box([0.32, 0.38, 0.85], [0, -0.04, -0.3], this.dark));
     group.add(this.box([0.34, 0.42, 0.12], [0, -0.04, 0.14], this.metal));
     group.add(this.box([0.04, 0.16, 0.36], [0.16, 0.02, -0.28], this.dark));
     group.add(this.box([0.18, 0.04, 0.42], [0, -0.21, -0.32], this.accent));
-    group.add(this.box([0.09, 0.05, 0.30], [0, -0.26, -0.16], this.dark));
-    group.add(this.box([0.05, 0.11, 0.05], [0, -0.20, -0.20], this.accent, [0.2, 0, 0]));
+    group.add(this.box([0.09, 0.05, 0.3], [0, -0.26, -0.16], this.dark));
+    group.add(this.box([0.05, 0.11, 0.05], [0, -0.2, -0.2], this.accent, [0.2, 0, 0]));
     // Stock: contoured wrist, comb, and ventilated recoil pad
-    group.add(this.box([0.22, 0.30, 0.50], [0, -0.14, 0.42], this.grip, [-0.12, 0, 0]));
-    group.add(this.box([0.20, 0.34, 0.60], [0, -0.24, 0.90], this.grip, [-0.08, 0, 0]));
-    group.add(this.box([0.21, 0.36, 0.10], [0, -0.28, 1.22], this.dark, [-0.08, 0, 0]));
+    group.add(this.box([0.22, 0.3, 0.5], [0, -0.14, 0.42], this.grip, [-0.12, 0, 0]));
+    group.add(this.box([0.2, 0.34, 0.6], [0, -0.24, 0.9], this.grip, [-0.08, 0, 0]));
+    group.add(this.box([0.21, 0.36, 0.1], [0, -0.28, 1.22], this.dark, [-0.08, 0, 0]));
     // Pump grip ridges
     for (let i = 0; i < 5; i += 1) {
-      group.add(
-        this.box([0.315, 0.055, 0.05], [0, -0.19, -1.42 + i * 0.11], this.dark),
-      );
+      group.add(this.box([0.315, 0.055, 0.05], [0, -0.19, -1.42 + i * 0.11], this.dark));
     }
     return { group, muzzle: [0, 0.02, -2.62], rest: [0, -0.04, 0] };
   }
@@ -2022,41 +1997,41 @@ export class WeaponViewModel {
   private buildTacticalSniper(): Shape {
     const group = new this.three.Group();
     // Heavy match-grade fluted barrel
-    group.add(this.tube(0.078, 1.10, [0, 0.02, -1.05], this.metal));
-    group.add(this.tube(0.052, 1.60, [0, 0.02, -2.35], this.metal));
+    group.add(this.tube(0.078, 1.1, [0, 0.02, -1.05], this.metal));
+    group.add(this.tube(0.052, 1.6, [0, 0.02, -2.35], this.metal));
     // Dual-port tactical muzzle brake
     group.add(this.tube(0.085, 0.28, [0, 0.02, -3.24], this.dark));
-    group.add(this.box([0.20, 0.05, 0.05], [0, 0.08, -3.20], this.accent));
-    group.add(this.box([0.20, 0.05, 0.05], [0, 0.08, -3.30], this.accent));
+    group.add(this.box([0.2, 0.05, 0.05], [0, 0.08, -3.2], this.accent));
+    group.add(this.box([0.2, 0.05, 0.05], [0, 0.08, -3.3], this.accent));
     // Receiver & chassis forend
-    group.add(this.box([0.26, 0.34, 1.20], [0, -0.04, -0.50], this.dark));
-    group.add(this.box([0.22, 0.24, 1.05], [0, -0.06, -1.60], this.grip));
+    group.add(this.box([0.26, 0.34, 1.2], [0, -0.04, -0.5], this.dark));
+    group.add(this.box([0.22, 0.24, 1.05], [0, -0.06, -1.6], this.grip));
     // 34mm Tactical Optic Scope
     group.add(this.tube(0.11, 0.95, [0, 0.34, -0.85], this.dark));
     group.add(this.tube(0.145, 0.24, [0, 0.34, -1.36], this.dark));
-    group.add(this.tube(0.135, 0.08, [0, 0.34, -1.50], this.accent));
-    group.add(this.tube(0.125, 0.20, [0, 0.34, -0.33], this.dark));
-    group.add(this.tube(0.12, 0.06, [0, 0.34, -0.20], this.dark));
+    group.add(this.tube(0.135, 0.08, [0, 0.34, -1.5], this.accent));
+    group.add(this.tube(0.125, 0.2, [0, 0.34, -0.33], this.dark));
+    group.add(this.tube(0.12, 0.06, [0, 0.34, -0.2], this.dark));
     // Scope target turrets
-    group.add(this.box([0.09, 0.12, 0.16], [0, 0.47, -0.90], this.accent));
-    group.add(this.box([0.16, 0.09, 0.14], [0.12, 0.34, -0.90], this.accent));
-    group.add(this.box([0.10, 0.20, 0.10], [0, 0.19, -0.55], this.metal));
-    group.add(this.box([0.10, 0.20, 0.10], [0, 0.19, -1.18], this.metal));
+    group.add(this.box([0.09, 0.12, 0.16], [0, 0.47, -0.9], this.accent));
+    group.add(this.box([0.16, 0.09, 0.14], [0.12, 0.34, -0.9], this.accent));
+    group.add(this.box([0.1, 0.2, 0.1], [0, 0.19, -0.55], this.metal));
+    group.add(this.box([0.1, 0.2, 0.1], [0, 0.19, -1.18], this.metal));
     // Fluted bolt and tactical knob
-    group.add(this.tube(0.045, 0.40, [0.12, 0.06, -0.12], this.metal));
-    group.add(this.box([0.30, 0.06, 0.06], [0.24, 0.04, -0.04], this.metal));
+    group.add(this.tube(0.045, 0.4, [0.12, 0.06, -0.12], this.metal));
+    group.add(this.box([0.3, 0.06, 0.06], [0.24, 0.04, -0.04], this.metal));
     group.add(this.box([0.08, 0.08, 0.08], [0.38, 0.0, -0.04], this.accent));
     // Detachable box magazine and paddle release
-    group.add(this.box([0.19, 0.44, 0.34], [0, -0.36, -0.50], this.dark));
-    group.add(this.box([0.21, 0.06, 0.36], [0, -0.57, -0.50], this.metal));
+    group.add(this.box([0.19, 0.44, 0.34], [0, -0.36, -0.5], this.dark));
+    group.add(this.box([0.21, 0.06, 0.36], [0, -0.57, -0.5], this.metal));
     group.add(this.box([0.06, 0.08, 0.04], [0, -0.22, -0.34], this.accent));
     // Ergonomic sniper pistol grip
     group.add(this.box([0.18, 0.46, 0.26], [0, -0.32, -0.06], this.grip, [0.26, 0, 0]));
     // Skeletonized marksman stock with cheek riser
-    group.add(this.box([0.20, 0.09, 0.95], [0, 0.06, 0.55], this.dark));
-    group.add(this.box([0.20, 0.09, 0.80], [0, -0.28, 0.50], this.dark));
-    group.add(this.box([0.22, 0.16, 0.40], [0, 0.19, 0.55], this.grip));
-    group.add(this.box([0.24, 0.44, 0.10], [0, -0.06, 1.00], this.dark));
+    group.add(this.box([0.2, 0.09, 0.95], [0, 0.06, 0.55], this.dark));
+    group.add(this.box([0.2, 0.09, 0.8], [0, -0.28, 0.5], this.dark));
+    group.add(this.box([0.22, 0.16, 0.4], [0, 0.19, 0.55], this.grip));
+    group.add(this.box([0.24, 0.44, 0.1], [0, -0.06, 1.0], this.dark));
     // Barrel fluting grooves
     for (let i = 0; i < 4; i += 1) {
       const angle = (i / 4) * Math.PI * 2;
@@ -2070,56 +2045,52 @@ export class WeaponViewModel {
     }
     // Forend M-LOK slots
     for (let i = 0; i < 3; i += 1) {
-      group.add(this.box([0.235, 0.07, 0.12], [0, -0.06, -1.25 - i * 0.30], this.dark));
+      group.add(this.box([0.235, 0.07, 0.12], [0, -0.06, -1.25 - i * 0.3], this.dark));
     }
-    return { group, muzzle: [0, 0.02, -3.40], rest: [0, -0.03, 0] };
+    return { group, muzzle: [0, 0.02, -3.4], rest: [0, -0.03, 0] };
   }
 
   private buildTacticalAssault(): Shape {
     const group = new this.three.Group();
     // Split upper and lower forged receiver
-    group.add(this.box([0.24, 0.22, 1.50], [0, 0.08, -0.75], this.dark));
-    group.add(this.box([0.23, 0.20, 0.95], [0, -0.11, -0.55], this.metal));
+    group.add(this.box([0.24, 0.22, 1.5], [0, 0.08, -0.75], this.dark));
+    group.add(this.box([0.23, 0.2, 0.95], [0, -0.11, -0.55], this.metal));
     // Ejection port, bolt carrier group & hinged dust cover
     group.add(this.box([0.03, 0.12, 0.32], [0.115, 0.08, -0.45], this.accent));
-    group.add(this.box([0.06, 0.09, 0.09], [0.11, 0.0, -0.30], this.metal));
+    group.add(this.box([0.06, 0.09, 0.09], [0.11, 0.0, -0.3], this.metal));
     group.add(this.box([0.16, 0.05, 0.12], [0, 0.17, 0.02], this.accent));
     // Modular railed handguard
-    group.add(this.box([0.21, 0.22, 1.00], [0, 0.04, -1.65], this.grip));
+    group.add(this.box([0.21, 0.22, 1.0], [0, 0.04, -1.65], this.grip));
     // Stepped chrome-moly barrel and gas block
-    group.add(this.tube(0.048, 0.75, [0, 0.04, -2.40], this.metal));
-    group.add(this.box([0.13, 0.16, 0.16], [0, 0.09, -2.20], this.dark));
-    group.add(this.box([0.06, 0.20, 0.06], [0, 0.24, -2.20], this.accent));
+    group.add(this.tube(0.048, 0.75, [0, 0.04, -2.4], this.metal));
+    group.add(this.box([0.13, 0.16, 0.16], [0, 0.09, -2.2], this.dark));
+    group.add(this.box([0.06, 0.2, 0.06], [0, 0.24, -2.2], this.accent));
     // A2 birdcage compensator with radial vents
     group.add(this.tube(0.072, 0.24, [0, 0.04, -2.78], this.dark));
-    group.add(this.box([0.15, 0.05, 0.05], [0, 0.10, -2.74], this.accent));
+    group.add(this.box([0.15, 0.05, 0.05], [0, 0.1, -2.74], this.accent));
     // Flattop Picatinny optic rail with aperture rear sight
-    group.add(this.box([0.14, 0.06, 1.50], [0, 0.21, -0.85], this.metal));
-    group.add(this.box([0.12, 0.14, 0.07], [0, 0.29, -0.20], this.accent));
+    group.add(this.box([0.14, 0.06, 1.5], [0, 0.21, -0.85], this.metal));
+    group.add(this.box([0.12, 0.14, 0.07], [0, 0.29, -0.2], this.accent));
     // Curved STANAG magazine in two segments with floorplate
-    group.add(this.box([0.19, 0.36, 0.30], [0, -0.36, -0.79], this.metal, [-0.10, 0, 0]));
+    group.add(this.box([0.19, 0.36, 0.3], [0, -0.36, -0.79], this.metal, [-0.1, 0, 0]));
     group.add(this.box([0.18, 0.34, 0.29], [0, -0.66, -0.72], this.metal, [-0.26, 0, 0]));
-    group.add(this.box([0.20, 0.06, 0.31], [0, -0.83, -0.68], this.dark, [-0.26, 0, 0]));
+    group.add(this.box([0.2, 0.06, 0.31], [0, -0.83, -0.68], this.dark, [-0.26, 0, 0]));
     group.add(this.box([0.08, 0.05, 0.34], [0, -0.28, -0.28], this.dark));
     group.add(this.box([0.08, 0.12, 0.05], [0, -0.24, -0.44], this.dark));
-    group.add(this.box([0.05, 0.12, 0.05], [0, -0.20, -0.22], this.accent));
+    group.add(this.box([0.05, 0.12, 0.05], [0, -0.2, -0.22], this.accent));
     // Ergonomic A2 pistol grip
-    group.add(this.box([0.18, 0.44, 0.26], [0, -0.30, -0.02], this.grip, [0.30, 0, 0]));
+    group.add(this.box([0.18, 0.44, 0.26], [0, -0.3, -0.02], this.grip, [0.3, 0, 0]));
     // Buffer tube, CTR stock, and buttpad
-    group.add(this.tube(0.09, 0.70, [0, 0.02, 0.42], this.metal));
-    group.add(this.box([0.22, 0.30, 0.60], [0, -0.04, 0.50], this.dark, [-0.04, 0, 0]));
+    group.add(this.tube(0.09, 0.7, [0, 0.02, 0.42], this.metal));
+    group.add(this.box([0.22, 0.3, 0.6], [0, -0.04, 0.5], this.dark, [-0.04, 0, 0]));
     group.add(this.box([0.23, 0.34, 0.09], [0, -0.06, 0.82], this.dark));
     // Handguard vent slots
     for (let i = 0; i < 3; i += 1) {
-      group.add(
-        this.box([0.225, 0.06, 0.14], [0, 0.04, -1.35 - i * 0.28], this.dark),
-      );
+      group.add(this.box([0.225, 0.06, 0.14], [0, 0.04, -1.35 - i * 0.28], this.dark));
     }
     // Top rail cross ribs
     for (let i = 0; i < 5; i += 1) {
-      group.add(
-        this.box([0.15, 0.09, 0.05], [0, 0.21, -0.35 - i * 0.16], this.dark),
-      );
+      group.add(this.box([0.15, 0.09, 0.05], [0, 0.21, -0.35 - i * 0.16], this.dark));
     }
     return { group, muzzle: [0, 0.04, -2.92], rest: [0, -0.04, 0] };
   }
@@ -2134,21 +2105,20 @@ export class WeaponViewModel {
   private build(id: string, skin: WeaponSkin | null = null): Shape {
     switch (id) {
       case 'knife': {
-        const skinId = skin?.id ?? '';
-        const skinName = (skin?.name ?? '').toLowerCase();
-        const isKarambit = skinId.includes('karambit') || skinName.includes('karambit');
-        const isButterfly = skinId.includes('butterfly') || skinName.includes('butterfly');
-        const isBayonet =
-          skinId.includes('bayonet') || skinName.includes('bayonet') || skinId.includes('lore');
-        const isSkeleton = skinId.includes('skeleton') || skinName.includes('skeleton');
-        const isHuntsman = skinId.includes('huntsman') || skinName.includes('huntsman');
-
-        if (isKarambit) return this.buildKarambit();
-        if (isButterfly) return this.buildButterfly();
-        if (isBayonet) return this.buildBayonet();
-        if (isSkeleton) return this.buildSkeletonKnife();
-        if (isHuntsman) return this.buildHuntsman();
-        return this.buildTacticalKnife();
+        switch (knifeArchetype(skin?.id ?? '', skin?.name ?? '')) {
+          case 'knife-karambit':
+            return this.buildKarambit();
+          case 'knife-butterfly':
+            return this.buildButterfly();
+          case 'knife-bayonet':
+            return this.buildBayonet();
+          case 'knife-skeleton':
+            return this.buildSkeletonKnife();
+          case 'knife-huntsman':
+            return this.buildHuntsman();
+          default:
+            return this.buildTacticalKnife();
+        }
       }
 
       case 'pistol':

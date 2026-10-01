@@ -11,6 +11,7 @@
  */
 import { type Extension, type Text } from '@codemirror/state';
 import {
+  activateHover,
   EditorView,
   ViewPlugin,
   keymap,
@@ -298,6 +299,24 @@ function hoverText(result: unknown): string {
   const one = (c: string | { value: string }): string => (typeof c === 'string' ? c : c.value);
   const text = Array.isArray(contents) ? contents.map(one).join('\n\n') : one(contents);
   return text.trim();
+}
+
+interface LspHoverResult {
+  contents?: HoverContents;
+  range?: { start: LspPosition; end: LspPosition };
+}
+
+interface ParsedHover {
+  text: string;
+  range?: { start: LspPosition; end: LspPosition };
+}
+
+function parseHover(result: unknown): ParsedHover | null {
+  if (!result || typeof result !== 'object') return null;
+  const text = hoverText(result);
+  if (!text) return null;
+  const range = (result as LspHoverResult).range;
+  return { text, range };
 }
 
 interface LspLocation {
@@ -932,7 +951,8 @@ export function lspExtension(opts: LspOptions): Extension {
       // to one dropdown.
       completionCache = new Map<string, LspCompletionItem[]>();
       resolveCache = new Map<LspCompletionItem, LspCompletionItem>();
-      hoverCache = new Map<string, string>();
+      hoverCache = new Map<string, { text: string; from: number; to: number }>();
+      hoverRequestId = 0;
 
       constructor(readonly view: EditorView) {
         ref.plugin = this;
@@ -1281,26 +1301,64 @@ export function lspExtension(opts: LspOptions): Extension {
       }
 
       async hover(pos: number): Promise<Tooltip | null> {
-        this.flushChanges();
-        const key = `${this.version}:${pos}`;
-        let text = this.hoverCache.get(key);
-        if (text === undefined) {
-          let result: unknown;
-          try {
-            result = await this.request('textDocument/hover', {
-              textDocument: { uri },
-              position: positionAt(this.view.state.doc, pos),
-            });
-          } catch {
-            return null;
-          }
-          text = hoverText(result);
-          this.hoverCache.set(key, text);
+        const doc = this.view.state.doc;
+        const word = this.view.state.wordAt(pos);
+        const defaultFrom = word ? word.from : pos;
+        const defaultTo = word ? word.to : pos;
+        const cacheKey = `${this.version}:${defaultFrom}-${defaultTo}`;
+        const cached = this.hoverCache.get(cacheKey);
+
+        if (cached) {
+          if (!cached.text) return null;
+          return {
+            pos: cached.from,
+            end: cached.to,
+            above: true,
+            create: () => {
+              const dom = document.createElement('div');
+              dom.className = 'cm-lsp-hover';
+              dom.appendChild(renderMarkdown(cached.text));
+              return { dom };
+            },
+          };
         }
-        if (!text) return null;
-        const body = text;
+
+        const reqId = ++this.hoverRequestId;
+        let result: unknown;
+        try {
+          result = await this.request('textDocument/hover', {
+            textDocument: { uri },
+            position: positionAt(doc, pos),
+          });
+        } catch {
+          return null;
+        }
+
+        if (this.hoverRequestId !== reqId) return null;
+
+        const parsed = parseHover(result);
+        if (!parsed) {
+          this.hoverCache.set(cacheKey, { text: '', from: defaultFrom, to: defaultTo });
+          return null;
+        }
+
+        let from = defaultFrom;
+        let to = defaultTo;
+        if (parsed.range) {
+          from = offsetAt(this.view, parsed.range.start);
+          to = offsetAt(this.view, parsed.range.end);
+        }
+
+        const item = { text: parsed.text, from, to };
+        this.hoverCache.set(`${this.version}:${from}-${to}`, item);
+        if (from !== defaultFrom || to !== defaultTo) {
+          this.hoverCache.set(cacheKey, item);
+        }
+
+        const body = parsed.text;
         return {
-          pos,
+          pos: from,
+          end: to,
           above: true,
           create: () => {
             const dom = document.createElement('div');
@@ -1389,22 +1447,25 @@ export function lspExtension(opts: LspOptions): Extension {
    * `lsp` is dropped from the fallback order because it is *this* branch; letting
    * the chain re-enter it would ask the same server the same question twice.
    */
-  const hover = hoverTooltip(async (view, pos) => {
-    if (opts.hover === false) return null;
-    if (ref.plugin?.initialized) {
-      const tip = await ref.plugin.hover(pos);
-      if (tip) return tip;
-    }
-    const code = view.state.doc.toString();
-    const { text: symbol, from, to } = symbolAt(code, pos);
-    if (!symbol) return null;
-    const sources = enabledDocSources().filter((s) => s !== 'lsp');
-    if (!sources.length) return null;
-    const { entries } = await lookupDocs({ symbol, code, cursorPos: pos, sources });
-    const entry = entries[0];
-    if (!entry) return null;
-    return { pos: from, end: to, above: true, create: () => ({ dom: renderDocEntry(entry) }) };
-  });
+  const hover = hoverTooltip(
+    async (view, pos) => {
+      if (opts.hover === false) return null;
+      if (ref.plugin?.initialized) {
+        const tip = await ref.plugin.hover(pos);
+        if (tip) return tip;
+      }
+      const code = view.state.doc.toString();
+      const { text: symbol, from, to } = symbolAt(code, pos);
+      if (!symbol) return null;
+      const sources = enabledDocSources().filter((s) => s !== 'lsp');
+      if (!sources.length) return null;
+      const { entries } = await lookupDocs({ symbol, code, cursorPos: pos, sources });
+      const entry = entries[0];
+      if (!entry) return null;
+      return { pos: from, end: to, above: true, create: () => ({ dom: renderDocEntry(entry) }) };
+    },
+    { hoverTime: 250 },
+  );
 
   // F12 jumps to definition (same-file: move the cursor; cross-file: open it).
   const gotoDefinition = keymap.of([
@@ -1474,6 +1535,17 @@ export function lspExtension(opts: LspOptions): Extension {
     extraSources: opts.extraSources,
   });
 
+  // Alt-F1 triggers the hover tooltip at the cursor position (VS Code parity)
+  const triggerHover = keymap.of([
+    {
+      key: 'Alt-F1',
+      run: (view) => {
+        activateHover(view, view.state.selection.main.head, 1);
+        return true;
+      },
+    },
+  ]);
+
   return [
     ...(opts.diagnostics === false ? [] : [lintGutter()]),
     plugin,
@@ -1482,5 +1554,6 @@ export function lspExtension(opts: LspOptions): Extension {
     gotoDefinition,
     renameSymbol,
     triggerCompletion,
+    triggerHover,
   ];
 }

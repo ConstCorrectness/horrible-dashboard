@@ -21,16 +21,18 @@ Generates authentic PBR rarity finish textures:
 """
 
 import sys
-import os
 import math
 from pathlib import Path
 
 try:
+    import bmesh
     import bpy
     import mathutils
     from mathutils import Vector, Matrix, Euler
 except ImportError:
-    print("Error: Run this script inside Blender: blender -b -P tools/blender/generate_all_knives.py")
+    print(
+        "Error: Run this script inside Blender: blender -b -P tools/blender/generate_all_knives.py"
+    )
     sys.exit(1)
 
 
@@ -72,6 +74,7 @@ def create_texture_image(name, width, height, generator_fn):
 
 # --- Procedural Texture Generators ---
 
+
 def tex_fade(nx, ny):
     """Amber Gold -> Vivid Magenta -> Deep Cyan Blue -> Violet gradient with brushed sheen."""
     t = nx * 0.75 + ny * 0.25
@@ -100,13 +103,25 @@ def tex_marble_fade(nx, ny):
     t = (angle % 3.0) / 3.0
     if t < 0.35:
         p = t / 0.35
-        r, g, b = (0.95 * (1.0 - p) + 1.0 * p, 0.15 * (1.0 - p) + 0.80 * p, 0.18 * (1.0 - p) + 0.10 * p)
+        r, g, b = (
+            0.95 * (1.0 - p) + 1.0 * p,
+            0.15 * (1.0 - p) + 0.80 * p,
+            0.18 * (1.0 - p) + 0.10 * p,
+        )
     elif t < 0.70:
         p = (t - 0.35) / 0.35
-        r, g, b = (1.0 * (1.0 - p) + 0.12 * p, 0.80 * (1.0 - p) + 0.55 * p, 0.10 * (1.0 - p) + 0.98 * p)
+        r, g, b = (
+            1.0 * (1.0 - p) + 0.12 * p,
+            0.80 * (1.0 - p) + 0.55 * p,
+            0.10 * (1.0 - p) + 0.98 * p,
+        )
     else:
         p = (t - 0.70) / 0.30
-        r, g, b = (0.12 * (1.0 - p) + 0.95 * p, 0.55 * (1.0 - p) + 0.15 * p, 0.98 * (1.0 - p) + 0.18 * p)
+        r, g, b = (
+            0.12 * (1.0 - p) + 0.95 * p,
+            0.55 * (1.0 - p) + 0.15 * p,
+            0.98 * (1.0 - p) + 0.18 * p,
+        )
     return (r, g, b, 1.0)
 
 
@@ -162,7 +177,9 @@ def tex_damascus(nx, ny):
 
 def tex_doppler_phase2(nx, ny):
     """Sapphire base with cosmic magenta/ruby galaxy smoke."""
-    nebula = math.sin(nx * 9.0 + math.sin(ny * 12.0) * 1.5) * math.cos(ny * 10.0 + nx * 5.0)
+    nebula = math.sin(nx * 9.0 + math.sin(ny * 12.0) * 1.5) * math.cos(
+        ny * 10.0 + nx * 5.0
+    )
     if nebula > 0.15:
         p = (nebula - 0.15) / 0.85
         r = 0.94 * p + 0.15 * (1.0 - p)
@@ -217,15 +234,19 @@ def create_pbr_material(name, base_color, metallic=0.9, roughness=0.25, tex_img=
         bsdf.inputs["Metallic"].default_value = metallic
         bsdf.inputs["Roughness"].default_value = roughness
         if tex_img:
-            tex_node = nodes.new('ShaderNodeTexImage')
+            tex_node = nodes.new("ShaderNodeTexImage")
             tex_node.image = tex_img
-            tex_coord = nodes.new('ShaderNodeTexCoord')
-            mat.node_tree.links.new(tex_coord.outputs['Generated'], tex_node.inputs['Vector'])
-            mat.node_tree.links.new(tex_node.outputs['Color'], bsdf.inputs['Base Color'])
+            # The mesh's own UVs, not generated coordinates: glTF has no
+            # generated coordinates, so the exporter would drop the mapping and
+            # the file would disagree with what Blender shows.
+            mat.node_tree.links.new(
+                tex_node.outputs["Color"], bsdf.inputs["Base Color"]
+            )
     return mat
 
 
 # --- Geometry Helpers ---
+
 
 def add_box(col, name, min_pt, max_pt, material=None, bevel=False, bevel_width=0.003):
     dx = max_pt[0] - min_pt[0]
@@ -242,10 +263,10 @@ def add_box(col, name, min_pt, max_pt, material=None, bevel=False, bevel_width=0
     bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
 
     if bevel:
-        mod = obj.modifiers.new(name="Bevel", type='BEVEL')
+        mod = obj.modifiers.new(name="Bevel", type="BEVEL")
         mod.width = bevel_width
         mod.segments = 2
-        mod.limit_method = 'ANGLE'
+        mod.limit_method = "ANGLE"
         mod.angle_limit = math.radians(35)
         bpy.ops.object.modifier_apply(modifier="Bevel")
 
@@ -260,22 +281,29 @@ def add_box(col, name, min_pt, max_pt, material=None, bevel=False, bevel_width=0
     return obj
 
 
-def add_cylinder(col, name, center, radius, height, material=None, segments=16, rot_axis='Z', rot_angle=0.0):
+def add_cylinder(
+    col,
+    name,
+    center,
+    radius,
+    height,
+    material=None,
+    segments=16,
+    rot_axis="Z",
+    rot_angle=0.0,
+):
     bpy.ops.mesh.primitive_cylinder_add(
-        radius=radius,
-        depth=height,
-        vertices=segments,
-        location=center
+        radius=radius, depth=height, vertices=segments, location=center
     )
     obj = bpy.context.active_object
     obj.name = name
 
     if rot_angle != 0.0:
-        if rot_axis == 'X':
+        if rot_axis == "X":
             obj.rotation_euler[0] = rot_angle
-        elif rot_axis == 'Y':
+        elif rot_axis == "Y":
             obj.rotation_euler[1] = rot_angle
-        elif rot_axis == 'Z':
+        elif rot_axis == "Z":
             obj.rotation_euler[2] = rot_angle
         bpy.ops.object.transform_apply(location=False, rotation=True, scale=False)
 
@@ -290,23 +318,34 @@ def add_cylinder(col, name, center, radius, height, material=None, segments=16, 
     return obj
 
 
-def add_torus(col, name, center, major_r, minor_r, material=None, major_seg=24, minor_seg=12, rot_axis='Y', rot_angle=0.0):
+def add_torus(
+    col,
+    name,
+    center,
+    major_r,
+    minor_r,
+    material=None,
+    major_seg=24,
+    minor_seg=12,
+    rot_axis="Y",
+    rot_angle=0.0,
+):
     bpy.ops.mesh.primitive_torus_add(
         location=center,
         major_radius=major_r,
         minor_radius=minor_r,
         major_segments=major_seg,
-        minor_segments=minor_seg
+        minor_segments=minor_seg,
     )
     obj = bpy.context.active_object
     obj.name = name
 
     if rot_angle != 0.0:
-        if rot_axis == 'X':
+        if rot_axis == "X":
             obj.rotation_euler[0] = rot_angle
-        elif rot_axis == 'Y':
+        elif rot_axis == "Y":
             obj.rotation_euler[1] = rot_angle
-        elif rot_axis == 'Z':
+        elif rot_axis == "Z":
             obj.rotation_euler[2] = rot_angle
         bpy.ops.object.transform_apply(location=False, rotation=True, scale=False)
 
@@ -321,257 +360,881 @@ def add_torus(col, name, center, major_r, minor_r, material=None, major_seg=24, 
     return obj
 
 
-def finalize_knife(col, knife_name):
-    """Joins all parts in the collection, sets proper transform and export normals."""
-    bpy.ops.object.select_all(action='DESELECT')
-    for obj in col.objects:
+# --- Profile slabs -----------------------------------------------------------
+#
+# A knife is mostly two flat things: a blade and a pair of grip scales. Both are
+# built here the same way, and neither is a box. An **outline** in the side
+# plane (y up the spine, z along the blade, -z forward) is filled, sampled into
+# a grid of interior points, and every point is given a **thickness** from how
+# far it is from the outline:
+#
+# - a blade thins towards the segments flagged as cutting edge, which is a real
+#   grind line and a real edge rather than a bevelled box with a strip glued
+#   under it; a fuller is a band of reduced thickness, not a boolean;
+# - a grip scale is thickest in the middle and rounds over at the rim, which is
+#   what makes it read as a handle and not as a plank.
+#
+# UVs are a side projection, so a finish texture runs along the blade the way a
+# pattern on a real knife does, instead of being scattered across smart-UV
+# islands.
+
+
+def _seg_dist(py, pz, ay, az, by, bz):
+    dy, dz = by - ay, bz - az
+    l2 = dy * dy + dz * dz
+    t = (
+        0.0
+        if l2 < 1e-14
+        else max(0.0, min(1.0, ((py - ay) * dy + (pz - az) * dz) / l2))
+    )
+    qy, qz = ay + dy * t - py, az + dz * t - pz
+    return math.sqrt(qy * qy + qz * qz)
+
+
+def _smooth(x):
+    x = max(0.0, min(1.0, x))
+    return x * x * (3.0 - 2.0 * x)
+
+
+def _inside(py, pz, loop):
+    """Even-odd point-in-polygon."""
+    inside = False
+    n = len(loop)
+    for i in range(n):
+        ay, az = loop[i]
+        by, bz = loop[(i + 1) % n]
+        if (az > pz) != (bz > pz):
+            cross = ay + (pz - az) * (by - ay) / (bz - az)
+            if py < cross:
+                inside = not inside
+    return inside
+
+
+def _fill(loops, spacing):
+    """A constrained Delaunay fill of `loops` (outline first, then holes).
+
+    The outline is resampled to `spacing` and a regular grid of interior points
+    is added, so every triangle is roughly the same size. A fill of the bare
+    outline gives long slivers across a handle, and a thickness sampled at
+    their corners shades as diagonal streaks.
+    """
+    coords, edges, faces = [], [], []
+    for loop in loops:
+        idx = []
+        n = len(loop)
+        for i in range(n):
+            ay, az = loop[i]
+            by, bz = loop[(i + 1) % n]
+            steps = max(1, int(math.hypot(by - ay, bz - az) / spacing))
+            for k in range(steps):
+                f = k / steps
+                idx.append(len(coords))
+                coords.append((ay + (by - ay) * f, az + (bz - az) * f))
+        for i in range(len(idx)):
+            edges.append((idx[i], idx[(i + 1) % len(idx)]))
+        faces.append(idx)
+    ys = [p[0] for p in loops[0]]
+    zs = [p[1] for p in loops[0]]
+    rim = [(p, q) for loop in loops for p, q in zip(loop, loop[1:] + loop[:1])]
+    y = min(ys) + spacing * 0.5
+    while y < max(ys):
+        z = min(zs) + spacing * 0.5
+        while z < max(zs):
+            if _inside(y, z, loops[0]) and not any(_inside(y, z, h) for h in loops[1:]):
+                near = min(_seg_dist(y, z, a[0], a[1], b[0], b[1]) for a, b in rim)
+                if near > spacing * 0.45:
+                    coords.append((y, z))
+            z += spacing
+        y += spacing
+    from mathutils.geometry import delaunay_2d_cdt
+
+    verts, _e, tris, *_ = delaunay_2d_cdt([Vector(c) for c in coords], edges, faces, 2, 1e-7)
+    bm = bmesh.new()
+    vs = [bm.verts.new((0.0, v[0], v[1])) for v in verts]
+    for t in tris:
+        try:
+            bm.faces.new([vs[i] for i in t])
+        except ValueError:
+            pass
+    bmesh.ops.triangulate(bm, faces=list(bm.faces))
+    loose = [v for v in bm.verts if not v.link_faces]
+    bmesh.ops.delete(bm, geom=loose, context="VERTS")
+    return bm
+
+
+def slab(
+    col,
+    name,
+    outline,
+    th_fn,
+    material,
+    edge_material=None,
+    edge_th=0.0011,
+    holes=(),
+    cuts=3,
+    x=0.0,
+    uv_box=(-0.2, -0.1, 0.4),
+):
+    """Fill `outline` [(y, z, is_edge), ...] and give it thickness `th_fn`.
+
+    `is_edge` marks the segment from that point to the next as cutting edge.
+    `th_fn(y, z, d_edge, d_rim)` returns the full thickness at a point, where
+    `d_edge` is its distance to the nearest edge segment and `d_rim` to the
+    nearest segment of any kind. `holes` are extra closed loops of (y, z).
+    """
+    # Consecutive duplicates are a zero-length edge, and one of those is enough
+    # for the fill to silently drop most of the shape.
+    clean = []
+    for p in outline:
+        if clean and abs(clean[-1][0] - p[0]) < 1e-7 and abs(clean[-1][1] - p[1]) < 1e-7:
+            clean[-1] = (p[0], p[1], clean[-1][2] or p[2])
+            continue
+        clean.append(p)
+    if abs(clean[0][0] - clean[-1][0]) < 1e-7 and abs(clean[0][1] - clean[-1][1]) < 1e-7:
+        clean.pop()
+    outline = clean
+    loops = [[(p[0], p[1]) for p in outline]] + [list(h) for h in holes]
+    edge_segs, rim_segs = [], []
+    for li, loop in enumerate(loops):
+        n = len(loop)
+        for i in range(n):
+            a, b = loop[i], loop[(i + 1) % n]
+            rim_segs.append((a[0], a[1], b[0], b[1]))
+            if li == 0 and outline[i][2]:
+                edge_segs.append((a[0], a[1], b[0], b[1]))
+
+    bm = _fill(loops, 0.008 / (cuts + 1))
+    bm.verts.index_update()
+
+    thick = {}
+    for v in bm.verts:
+        py, pz = v.co.y, v.co.z
+        de = min((_seg_dist(py, pz, *s) for s in edge_segs), default=1.0)
+        dr = min(_seg_dist(py, pz, *s) for s in rim_segs)
+        thick[v.index] = max(0.00035, th_fn(py, pz, de, dr))
+
+    out = bmesh.new()
+    uv = out.loops.layers.uv.new("UVMap")
+    top = {
+        v.index: out.verts.new((x + thick[v.index] * 0.5, v.co.y, v.co.z))
+        for v in bm.verts
+    }
+    bot = {
+        v.index: out.verts.new((x - thick[v.index] * 0.5, v.co.y, v.co.z))
+        for v in bm.verts
+    }
+    u0, v0, span = uv_box
+
+    def put_uv(face):
+        for loop in face.loops:
+            loop[uv].uv = ((loop.vert.co.z - u0) / span, (loop.vert.co.y - v0) / span)
+
+    for f in bm.faces:
+        ids = [v.index for v in f.verts]
+        mean_th = sum(thick[i] for i in ids) / len(ids)
+        mi = 1 if edge_material is not None and mean_th < edge_th else 0
+        ft = out.faces.new([top[i] for i in ids])
+        fb = out.faces.new([bot[i] for i in reversed(ids)])
+        for face in (ft, fb):
+            face.material_index = mi
+            put_uv(face)
+    for e in bm.edges:
+        if len(e.link_faces) != 1:
+            continue
+        a, b = e.verts
+        side = out.faces.new([top[a.index], top[b.index], bot[b.index], bot[a.index]])
+        mean_th = (thick[a.index] + thick[b.index]) * 0.5
+        side.material_index = (
+            1 if edge_material is not None and mean_th < edge_th else 0
+        )
+        put_uv(side)
+    bm.free()
+    bmesh.ops.recalc_face_normals(out, faces=list(out.faces))
+
+    me = bpy.data.meshes.new(name)
+    out.to_mesh(me)
+    out.free()
+    me.materials.append(material)
+    if edge_material is not None:
+        me.materials.append(edge_material)
+    obj = bpy.data.objects.new(name, me)
+    col.objects.link(obj)
+    return obj
+
+
+def blade_th(spine=0.0055, edge=0.0005, grind=0.016, fuller=None, spine_round=0.0012):
+    """A grind towards the edge, a softened spine, and an optional fuller.
+
+    `fuller` is (z_from, z_to, y_centre, half_width, depth).
+    """
+
+    def f(y, z, de, dr):
+        th = edge + (spine - edge) * _smooth(de / grind)
+        # The spine's corners are broken, as on any finished blade.
+        th *= 0.82 + 0.18 * _smooth(dr / spine_round)
+        if fuller is not None:
+            z0, z1, yc, hw, depth = fuller
+            along = _smooth((z - z0) / 0.008) * _smooth((z1 - z) / 0.008)
+            across = max(0.0, 1.0 - ((y - yc) / hw) ** 2)
+            th -= 2.0 * depth * along * across
+        return th
+
+    return f
+
+
+def pillow_th(full, rim=0.004, floor=0.4, ripple=None):
+    """Thickest in the middle, rounding over at the rim. `ripple(y, z)` adds texture."""
+
+    def f(y, z, de, dr):
+        th = full * (floor + (1.0 - floor) * math.sqrt(_smooth(dr / rim)))
+        if ripple is not None:
+            th += ripple(y, z) * _smooth(dr / rim)
+        return th
+
+    return f
+
+
+def flat_th(full):
+    return lambda y, z, de, dr: full
+
+
+def circle(cy, cz, r, n=20):
+    return [
+        (cy + r * math.cos(2 * math.pi * k / n), cz + r * math.sin(2 * math.pi * k / n))
+        for k in range(n)
+    ]
+
+
+def rounded_rect(y0, y1, z0, z1, r, n=5):
+    pts = []
+    corners = [
+        (y1 - r, z1 - r, 0.0),
+        (y0 + r, z1 - r, 0.5),
+        (y0 + r, z0 + r, 1.0),
+        (y1 - r, z0 + r, 1.5),
+    ]
+    for cy, cz, start in corners:
+        for k in range(n + 1):
+            a = math.pi * (start + 0.5 * k / n)
+            pts.append((cy + r * math.cos(a), cz + r * math.sin(a)))
+    return pts
+
+
+def teeth(y_base, depth, z_from, z_to, count, flag=False):
+    """A row of points: `count` teeth between z_from and z_to, pointing +y by `depth`."""
+    pts = []
+    for i in range(count):
+        za = z_from + (z_to - z_from) * i / count
+        zb = z_from + (z_to - z_from) * (i + 0.5) / count
+        pts.append((y_base, za, flag))
+        pts.append((y_base + depth, zb, flag))
+    return pts
+
+
+def serrations(y_base, depth, z_from, z_to, count):
+    """Scallops cut up into the edge: every segment is cutting edge."""
+    pts = []
+    for i in range(count):
+        for k in range(4):
+            f = (i + k / 4.0) / count
+            z = z_from + (z_to - z_from) * f
+            pts.append((y_base + depth * math.sin(math.pi * k / 4.0), z, True))
+    return pts
+
+
+def grip_outline(z0, z1, top, bottom, grooves=3, groove_depth=0.0035, samples=28):
+    """A handle side profile: a gently swelled spine and finger grooves below."""
+    pts = []
+    for i in range(samples + 1):
+        f = i / samples
+        z = z0 + (z1 - z0) * f
+        pts.append((top + 0.0015 * math.sin(math.pi * f), z, False))
+    for i in range(samples + 1):
+        f = 1.0 - i / samples
+        z = z0 + (z1 - z0) * f
+        groove = 0.0
+        if 0.08 < f < 0.85 and grooves:
+            g = (f - 0.08) / 0.77
+            groove = groove_depth * (0.5 - 0.5 * math.cos(2 * math.pi * g * grooves))
+        pts.append((bottom + groove, z, False))
+    return pts
+
+
+# Authored in metres with the blade down -Z and the spine up +Y. Exported in
+# **cube units** (1 cube = 36 cm), like every other prop and the hands: a knife
+# left in metres is a third of a cube long, a speck beside the fist holding it.
+#
+# The glTF exporter maps Blender (x, y, z) to (x, z, -y), so a quarter turn about
+# +X is what lands the blade on glTF -Z and the spine on glTF +Y — the
+# orientation both clients and `weapon-prop-orientation.test.ts` expect.
+#
+# The origin is the **hilt**: where the blade meets the guard. Both clients place
+# a knife prop by that point rather than by its bounding box, so every knife's
+# handle sits in the same fist whatever its blade does.
+CUBE = 1.0 / 0.36
+STAND_UP = Matrix.Scale(CUBE, 4) @ Matrix.Rotation(math.radians(90), 4, "X")
+
+
+def finalize_knife(name, parts, empties=()):
+    """Join each part's collection into one object, stand it up and hand it back.
+
+    `parts` is [(object_name, collection, pivot_or_None)]; the first is the
+    knife body and the rest are parented to it with their origin at `pivot` —
+    the butterfly's handles, which the inspect swings about their pins.
+    `empties` are (name, point) markers carried into the GLB as bare nodes:
+    `spin_origin` is what a twirl rotates about.
+    """
+    rot = STAND_UP
+    joined = []
+    for obj_name, col, pivot in parts:
+        objs = list(col.objects)
+        bpy.ops.object.select_all(action="DESELECT")
+        for o in objs:
+            o.select_set(True)
+        bpy.context.view_layer.objects.active = objs[0]
+        if len(objs) > 1:
+            bpy.ops.object.join()
+        obj = bpy.context.view_layer.objects.active
+        obj.name = obj_name
+        # Bake the transform into the mesh, then stand it up about the world
+        # origin (not the object's own), so every part turns together.
+        obj.data.transform(obj.matrix_world)
+        obj.matrix_world = Matrix.Identity(4)
+        obj.data.transform(rot)
+        if pivot is not None:
+            p = rot @ Vector(pivot)
+            obj.data.transform(Matrix.Translation(-p))
+            obj.location = p
+        joined.append(obj)
+    body = joined[0]
+    for child in joined[1:]:
+        child.parent = body
+    for marker, point in empties:
+        e = bpy.data.objects.new(marker, None)
+        e.location = rot @ Vector(point)
+        e.parent = body
+        bpy.context.scene.collection.objects.link(e)
+    for obj in joined:
+        bpy.ops.object.select_all(action="DESELECT")
         obj.select_set(True)
-    bpy.context.view_layer.objects.active = col.objects[0]
-    bpy.ops.object.join()
-    knife = bpy.context.active_object
-    knife.name = knife_name
-    knife.rotation_euler[0] = math.radians(-90)
-    bpy.ops.object.transform_apply(location=False, rotation=True, scale=False)
-    bpy.ops.object.shade_smooth()
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.uv.smart_project(angle_limit=math.radians(66), island_margin=0.01)
-    bpy.ops.object.mode_set(mode='OBJECT')
-    print(f"Built '{knife_name}' with {len(knife.data.polygons)} polygons.")
-    return knife
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.shade_smooth()
+        try:
+            bpy.ops.object.shade_smooth_by_angle(angle=math.radians(34))
+        except (AttributeError, RuntimeError):
+            pass
+    faces = sum(len(o.data.polygons) for o in joined)
+    print(f"Built '{name}': {len(joined)} node(s), {faces} faces")
+    return body
+
+
+def new_col(name):
+    c = bpy.data.collections.new(name)
+    bpy.context.scene.collection.children.link(c)
+    return c
 
 
 # --- 1. Default Tactical Combat Knife ---
 def build_default_knife(mat_blade, mat_edge, mat_grip, mat_guard, mat_pommel):
-    c = bpy.data.collections.new("Default_Knife")
-    bpy.context.scene.collection.children.link(c)
+    """A tanto: straight spine with jimping, a swedge, a true tanto point and a
+    partly serrated edge, over contoured G10 scales on a steel liner."""
+    c = new_col("Default_Knife")
+    outline = [(0.0155, 0.004, False)]
+    outline += teeth(0.0135, 0.002, -0.004, -0.028, 6)
+    outline += [
+        (0.0155, -0.030, False),
+        (0.0155, -0.118, False),
+        (0.0125, -0.141, False),
+        (0.0030, -0.175, True),  # the point
+        (-0.0165, -0.152, True),  # tanto transition
+        (-0.0190, -0.100, True),
+        (-0.0190, -0.047, True),
+    ]
+    outline += serrations(-0.0190, 0.0032, -0.047, -0.009, 5)
+    outline += [(-0.0175, -0.006, False), (-0.0170, 0.004, False)]
+    slab(
+        c,
+        "Blade",
+        outline,
+        blade_th(grind=0.017, fuller=(-0.108, -0.036, 0.0055, 0.0030, 0.0011)),
+        mat_blade,
+        mat_edge,
+    )
 
-    # Blade Spine & Body
-    add_box(c, "Blade_Body", (-0.003, -0.018, -0.13), (0.003, 0.016, 0.0), mat_blade, bevel=True, bevel_width=0.001)
-    # Tanto Tip
-    add_box(c, "Blade_Tanto_Tip", (-0.0025, -0.014, -0.17), (0.0025, 0.008, -0.13), mat_edge, bevel=True, bevel_width=0.001)
-    # Lower Cutting Edges
-    add_box(c, "Blade_Edge_Main", (-0.001, -0.022, -0.13), (0.001, -0.014, -0.005), mat_edge)
-    add_box(c, "Blade_Edge_Tanto", (-0.0008, -0.018, -0.17), (0.0008, -0.012, -0.13), mat_edge)
+    add_box(
+        c,
+        "Guard",
+        (-0.011, -0.025, 0.002),
+        (0.011, 0.021, 0.009),
+        mat_guard,
+        bevel=True,
+        bevel_width=0.0025,
+    )
+    grip = grip_outline(0.009, 0.118, 0.0165, -0.0195, grooves=3)
 
-    # Spine Serrations
-    for sz in range(6):
-        z_pos = -0.018 - (sz * 0.007)
-        add_box(c, f"Serration_{sz}", (-0.0032, 0.015, z_pos - 0.002), (0.0032, 0.019, z_pos + 0.002), mat_blade)
+    def ripple(y, z):
+        return 0.0005 * math.sin(z * 900.0) * math.sin(y * 700.0)
 
-    # Fuller Grooves
-    add_box(c, "Fuller_L", (-0.0034, -0.003, -0.11), (-0.0026, 0.005, -0.02), mat_guard)
-    add_box(c, "Fuller_R", (0.0026, -0.003, -0.11), (0.0034, 0.005, -0.02), mat_guard)
-
-    # Crossguard & Jimping
-    add_box(c, "Crossguard", (-0.012, -0.026, -0.005), (0.012, 0.022, 0.006), mat_guard, bevel=True, bevel_width=0.002)
-    for j in [-0.002, 0.001, 0.004]:
-        add_box(c, f"Jimping_{int((j+0.01)*1000)}", (-0.008, 0.021, j), (0.008, 0.024, j + 0.0015), mat_guard)
-
-    # Handle Core & Choils
-    add_box(c, "Handle_Core", (-0.011, -0.018, 0.006), (0.011, 0.018, 0.115), mat_grip, bevel=True, bevel_width=0.003)
-    for f_idx, fz in enumerate([0.025, 0.050, 0.075, 0.100]):
-        add_cylinder(c, f"Choil_{f_idx}", (0.0, -0.019, fz), radius=0.008, height=0.024, material=mat_grip, segments=12, rot_axis='Y', rot_angle=math.radians(90))
-
-    # Grip Screws
-    for s_idx, sz in enumerate([0.035, 0.085]):
-        add_cylinder(c, f"Handle_Screw_{s_idx}", (0.0, 0.0, sz), radius=0.0035, height=0.025, material=mat_blade, segments=12, rot_axis='Y', rot_angle=math.radians(90))
-
-    # Pommel & Breaker Tip
-    add_box(c, "Pommel_Base", (-0.010, -0.017, 0.115), (0.010, 0.017, 0.126), mat_pommel, bevel=True, bevel_width=0.002)
-    add_cylinder(c, "Breaker_Tip", (0.0, 0.0, 0.129), radius=0.004, height=0.006, material=mat_blade, segments=8)
-    add_cylinder(c, "Lanyard_Hole", (0.0, 0.006, 0.121), radius=0.003, height=0.022, material=mat_guard, segments=12, rot_axis='Y', rot_angle=math.radians(90))
-
-    return finalize_knife(c, "Weapon_Knife_Default")
+    slab(
+        c,
+        "Scales",
+        grip,
+        pillow_th(0.0232, rim=0.0045, ripple=ripple),
+        mat_grip,
+        cuts=4,
+    )
+    liner = [(y * 1.05 + 0.0002, z, f) for (y, z, f) in grip]
+    slab(c, "Liner", liner, flat_th(0.0092), mat_guard, cuts=1)
+    for i, z in enumerate((0.030, 0.094)):
+        add_cylinder(
+            c,
+            f"Screw_{i}",
+            (0.0, -0.001, z),
+            radius=0.0033,
+            height=0.0252,
+            material=mat_pommel,
+            segments=6,
+            rot_axis="Y",
+            rot_angle=math.radians(90),
+        )
+    add_cylinder(
+        c,
+        "Breaker",
+        (0.0, -0.001, 0.1180),
+        radius=0.0065,
+        height=0.0038,
+        material=mat_pommel,
+        segments=6,
+    )
+    for side in (-1, 1):
+        add_torus(
+            c,
+            f"Lanyard_{side}",
+            (side * 0.0118, -0.004, 0.109),
+            major_r=0.0038,
+            minor_r=0.0011,
+            material=mat_pommel,
+            major_seg=16,
+            minor_seg=6,
+            rot_axis="Y",
+            rot_angle=math.radians(90),
+        )
+    return finalize_knife("Weapon_Knife_Default", [("Weapon_Knife_Default", c, None)])
 
 
 # --- 2. Karambit ---
 def build_karambit(mat_blade, mat_edge, mat_grip, mat_ring):
-    c = bpy.data.collections.new("Karambit")
-    bpy.context.scene.collection.children.link(c)
+    """A talon: the blade sweeps down along a curve with the edge on the inside."""
+    c = new_col("Karambit")
+    n = 22
 
-    # Curved Talon Blade (approx arc in -Z and -Y)
-    segments = 7
-    prev_z, prev_y = 0.0, 0.0
-    for i in range(1, segments + 1):
-        t = i / float(segments)
-        cur_z = -0.15 * math.sin(t * math.pi * 0.5)
-        cur_y = -0.065 * (t ** 1.8)
-        cz = (prev_z + cur_z) / 2.0
-        cy = (prev_y + cur_y) / 2.0
-        depth = math.sqrt((cur_z - prev_z)**2 + (cur_y - prev_y)**2)
+    def centre(s):
+        return (-0.058 * s**1.7, -0.128 * math.sin(s * math.pi * 0.5))
 
-        thickness = 0.0035 * (1.0 - t * 0.6)
-        width = 0.022 * (1.0 - t * 0.7)
-        # Blade segment
-        add_box(c, f"Karambit_Blade_{i}", (-thickness, cy - width * 0.5, cz - depth * 0.5), (thickness, cy + width * 0.5, cz + depth * 0.5), mat_blade)
-        # Concave Razor Edge
-        add_box(c, f"Karambit_Edge_{i}", (-thickness * 0.5, cy - width * 0.65, cz - depth * 0.5), (thickness * 0.5, cy - width * 0.35, cz + depth * 0.5), mat_edge)
-        prev_z, prev_y = cur_z, cur_y
+    def width(s):
+        return 0.0215 * (1.0 - s) ** 0.75 + 0.0008
 
-    # Curved Ergonomic Reverse-Grip Handle
-    for h_idx in range(4):
-        hz = 0.015 + (h_idx * 0.024)
-        hy = 0.008 * math.sin(h_idx * 0.6)
-        add_box(c, f"Karambit_Handle_{h_idx}", (-0.010, hy - 0.014, hz - 0.012), (0.010, hy + 0.014, hz + 0.012), mat_grip, bevel=True, bevel_width=0.003)
-        # Finger Scallops on inner face
-        add_cylinder(c, f"Karambit_Choil_{h_idx}", (0.0, hy + 0.015, hz), radius=0.007, height=0.022, material=mat_grip, segments=12, rot_axis='Y', rot_angle=math.radians(90))
+    spine, edge = [], []
+    for i in range(n + 1):
+        s = i / n
+        y, z = centre(s)
+        y2, z2 = centre(min(1.0, s + 1e-3))
+        y1, z1 = centre(max(0.0, s - 1e-3))
+        ty, tz = y2 - y1, z2 - z1
+        length = math.hypot(ty, tz)
+        ny, nz = -tz / length, ty / length
+        if ny < 0:
+            ny, nz = -ny, -nz
+        w = width(s) * 0.5
+        spine.append((y + ny * w, z + nz * w, False))
+        edge.append((y - ny * w, z - nz * w, True))
+    outline = (
+        [(0.011, 0.006, False)] + spine[:-1] + [(spine[-1][0], spine[-1][1], True)]
+    )
+    outline += list(reversed(edge))[1:-1] + [(-0.011, 0.006, False)]
+    slab(c, "Blade", outline, blade_th(spine=0.0048, grind=0.012), mat_blade, mat_edge)
 
-    # Signature Safety Index Finger Ring at the pommel
-    ring_center = (0.0, 0.012, 0.118)
-    add_torus(c, "Karambit_Safety_Ring", ring_center, major_r=0.013, minor_r=0.004, material=mat_ring, major_seg=24, minor_seg=12, rot_axis='Y', rot_angle=math.radians(90))
-    # Inner chamfer sleeve
-    add_cylinder(c, "Karambit_Ring_Inner", ring_center, radius=0.010, height=0.010, material=mat_edge, segments=24, rot_axis='Y', rot_angle=math.radians(90))
-
-    # Fastener Screws
-    add_cylinder(c, "Karambit_Screw_0", (0.0, 0.002, 0.030), radius=0.0035, height=0.022, material=mat_blade, segments=12, rot_axis='Y', rot_angle=math.radians(90))
-    add_cylinder(c, "Karambit_Screw_1", (0.0, 0.006, 0.075), radius=0.0035, height=0.022, material=mat_blade, segments=12, rot_axis='Y', rot_angle=math.radians(90))
-
-    return finalize_knife(c, "Weapon_Knife_Karambit")
+    handle = []
+    for i in range(25):
+        f = i / 24
+        handle.append(
+            (0.0145 + 0.010 * math.sin(f * math.pi * 0.9), 0.004 + 0.098 * f, False)
+        )
+    for i in range(25):
+        f = 1.0 - i / 24
+        groove = (
+            0.0030 * (0.5 - 0.5 * math.cos(2 * math.pi * f * 2))
+            if 0.1 < f < 0.9
+            else 0.0
+        )
+        handle.append(
+            (
+                -0.0135 + 0.010 * math.sin(f * math.pi * 0.9) + groove,
+                0.004 + 0.098 * f,
+                False,
+            )
+        )
+    slab(c, "Scales", handle, pillow_th(0.021, rim=0.004), mat_grip, cuts=4)
+    ring = (0.0, 0.0095, 0.112)
+    add_torus(
+        c,
+        "Ring",
+        ring,
+        major_r=0.0145,
+        minor_r=0.0044,
+        material=mat_ring,
+        major_seg=32,
+        minor_seg=12,
+        rot_axis="Y",
+        rot_angle=math.radians(90),
+    )
+    for i, z in enumerate((0.030, 0.074)):
+        add_cylinder(
+            c,
+            f"Screw_{i}",
+            (0.0, 0.004 + 0.006 * i, z),
+            radius=0.0032,
+            height=0.022,
+            material=mat_ring,
+            segments=6,
+            rot_axis="Y",
+            rot_angle=math.radians(90),
+        )
+    return finalize_knife(
+        "Weapon_Knife_Karambit",
+        [("Weapon_Knife_Karambit", c, None)],
+        empties=[("spin_origin", ring)],
+    )
 
 
 # --- 3. Butterfly Knife / Balisong ---
 def build_butterfly(mat_blade, mat_edge, mat_handle, mat_hardware):
-    c = bpy.data.collections.new("Butterfly")
-    bpy.context.scene.collection.children.link(c)
+    """A balisong whose two handles are **separate nodes**, pivoting on their pins,
+    so the inspect can actually flip it open and shut."""
+    body, safe, bite = (
+        new_col("Butterfly"),
+        new_col("Butterfly_Safe"),
+        new_col("Butterfly_Bite"),
+    )
+    outline = [
+        (0.0115, 0.004, False),
+        (0.0115, -0.098, False),
+        (0.0065, -0.138, False),
+        (0.0010, -0.160, True),
+        (-0.0115, -0.132, True),
+        (-0.0135, -0.060, True),
+        (-0.0130, -0.012, False),
+        (-0.0110, 0.004, False),
+    ]
+    slab(
+        body, "Blade", outline, blade_th(spine=0.0045, grind=0.013), mat_blade, mat_edge
+    )
+    add_box(
+        body,
+        "Tang",
+        (-0.0034, -0.0155, -0.010),
+        (0.0034, 0.0155, 0.009),
+        mat_hardware,
+        bevel=True,
+        bevel_width=0.0012,
+    )
+    for side, sign in (("Safe", -1), ("Bite", 1)):
+        add_cylinder(
+            body,
+            f"StopPin_{side}",
+            (0.0, sign * 0.0135, -0.006),
+            radius=0.0022,
+            height=0.013,
+            material=mat_hardware,
+            segments=10,
+            rot_axis="Y",
+            rot_angle=math.radians(90),
+        )
 
-    # Swedge Clip-Point Blade (z: -0.16 to 0.0)
-    add_box(c, "Balisong_Blade_Body", (-0.0028, -0.014, -0.12), (0.0028, 0.012, 0.0), mat_blade, bevel=True, bevel_width=0.001)
-    add_box(c, "Balisong_Blade_Tip", (-0.002, -0.008, -0.16), (0.002, 0.004, -0.12), mat_edge, bevel=True, bevel_width=0.001)
-    add_box(c, "Balisong_Cutting_Edge", (-0.0008, -0.018, -0.15), (0.0008, -0.012, -0.01), mat_edge)
-    add_box(c, "Balisong_Swedge", (-0.0015, 0.010, -0.15), (0.0015, 0.014, -0.06), mat_edge)
-
-    # Tang & Stop Pins
-    add_box(c, "Balisong_Tang", (-0.0035, -0.016, -0.012), (0.0035, 0.016, 0.008), mat_hardware)
-    add_cylinder(c, "Balisong_Tang_Pin_L", (0.0, -0.014, -0.006), radius=0.0025, height=0.014, material=mat_hardware, segments=10, rot_axis='Y', rot_angle=math.radians(90))
-    add_cylinder(c, "Balisong_Tang_Pin_R", (0.0, 0.014, -0.006), radius=0.0025, height=0.014, material=mat_hardware, segments=10, rot_axis='Y', rot_angle=math.radians(90))
-
-    # Dual Pivot Pins
-    add_cylinder(c, "Pivot_Pin_Safe", (0.0, -0.011, 0.006), radius=0.0035, height=0.024, material=mat_hardware, segments=12, rot_axis='Y', rot_angle=math.radians(90))
-    add_cylinder(c, "Pivot_Pin_Bite", (0.0, 0.011, 0.006), radius=0.0035, height=0.024, material=mat_hardware, segments=12, rot_axis='Y', rot_angle=math.radians(90))
-
-    # Channeled Skeleton Handles (Safe Handle & Bite Handle)
-    for side, sign in [("Safe", -1), ("Bite", 1)]:
-        hy = sign * 0.013
-        # Main handle channel
-        add_box(c, f"Handle_{side}_Body", (-0.0075, hy - 0.006, 0.006), (0.0075, hy + 0.006, 0.130), mat_handle, bevel=True, bevel_width=0.0015)
-        # Skeletonized Lightening Holes
-        for hole_i, hz in enumerate([0.030, 0.052, 0.074, 0.096, 0.118]):
-            add_cylinder(c, f"Hole_{side}_{hole_i}", (0.0, hy, hz), radius=0.0032, height=0.018, material=mat_hardware, segments=12, rot_axis='Y', rot_angle=math.radians(90))
-
-    # Spring Latch at the base of the Bite Handle
-    add_cylinder(c, "Balisong_Latch_Pin", (0.0, 0.013, 0.132), radius=0.0025, height=0.018, material=mat_hardware, segments=10, rot_axis='Y', rot_angle=math.radians(90))
-    add_box(c, "Balisong_Latch_Bar", (-0.004, 0.004, 0.130), (0.004, 0.015, 0.144), mat_hardware, bevel=True, bevel_width=0.001)
-
-    return finalize_knife(c, "Weapon_Knife_Butterfly")
+    pivots = {}
+    for side, sign, col in (("Safe", -1, safe), ("Bite", 1, bite)):
+        hy = sign * 0.0125
+        pivot = (0.0, sign * 0.011, 0.006)
+        pivots[side] = pivot
+        rim = rounded_rect(hy - 0.0062, hy + 0.0062, 0.001, 0.118, 0.004)
+        holes = [circle(hy, z, 0.0026, 14) for z in (0.030, 0.052, 0.074, 0.096)]
+        slab(
+            col,
+            f"Handle_{side}",
+            [(y, z, False) for (y, z) in rim],
+            pillow_th(0.0148, rim=0.0022, floor=0.6),
+            mat_handle,
+            holes=holes,
+            cuts=2,
+        )
+        add_cylinder(
+            col,
+            f"Pivot_{side}",
+            pivot,
+            radius=0.0036,
+            height=0.0165,
+            material=mat_hardware,
+            segments=14,
+            rot_axis="Y",
+            rot_angle=math.radians(90),
+        )
+    add_box(
+        bite,
+        "Latch",
+        (-0.0042, 0.004, 0.110),
+        (0.0042, 0.0155, 0.118),
+        mat_hardware,
+        bevel=True,
+        bevel_width=0.001,
+    )
+    return finalize_knife(
+        "Weapon_Knife_Butterfly",
+        [
+            ("Weapon_Knife_Butterfly", body, None),
+            ("handle_safe", safe, pivots["Safe"]),
+            ("handle_bite", bite, pivots["Bite"]),
+        ],
+    )
 
 
 # --- 4. M9 Tactical Bayonet ---
 def build_bayonet(mat_blade, mat_edge, mat_handle, mat_guard, mat_pommel):
-    c = bpy.data.collections.new("Bayonet")
-    bpy.context.scene.collection.children.link(c)
-
-    # Long Spear-Point Blade (z: -0.20 to 0.0)
-    add_box(c, "Bayonet_Blade_Main", (-0.0035, -0.019, -0.16), (0.0035, 0.015, 0.0), mat_blade, bevel=True, bevel_width=0.001)
-    add_box(c, "Bayonet_Spear_Tip", (-0.0025, -0.014, -0.20), (0.0025, 0.008, -0.16), mat_edge, bevel=True, bevel_width=0.001)
-    add_box(c, "Bayonet_Edge", (-0.001, -0.024, -0.17), (0.001, -0.016, -0.005), mat_edge)
-
-    # Aggressive Sawback Spine Teeth (7 teeth)
-    for st in range(7):
-        sz = -0.025 - (st * 0.012)
-        add_box(c, f"Sawtooth_{st}", (-0.0038, 0.014, sz - 0.004), (0.0038, 0.020, sz + 0.004), mat_blade)
-
-    # Deep Fuller
-    add_box(c, "Bayonet_Fuller_L", (-0.004, -0.004, -0.14), (-0.003, 0.005, -0.02), mat_guard)
-    add_box(c, "Bayonet_Fuller_R", (0.003, -0.004, -0.14), (0.004, 0.005, -0.02), mat_guard)
-
-    # Muzzle-Ring Crossguard
-    add_box(c, "Bayonet_Guard_Plate", (-0.014, -0.022, -0.006), (0.014, 0.028, 0.006), mat_guard, bevel=True, bevel_width=0.002)
-    # Rifle barrel mounting ring
-    add_torus(c, "Bayonet_Muzzle_Ring", (0.0, 0.034, 0.0), major_r=0.012, minor_r=0.003, material=mat_guard, major_seg=20, minor_seg=10, rot_axis='Z', rot_angle=0.0)
-
-    # Ribbed Cylindrical Polymer/Steel Handle (z: 0.006 to 0.122)
-    add_cylinder(c, "Bayonet_Grip_Core", (0.0, 0.0, 0.064), radius=0.013, height=0.116, material=mat_handle, segments=20)
-    for rg in range(6):
-        rz = 0.020 + (rg * 0.016)
-        add_torus(c, f"Grip_Rib_{rg}", (0.0, 0.0, rz), major_r=0.0138, minor_r=0.0018, material=mat_guard, major_seg=20, minor_seg=8)
-
-    # Steel Pommel with Rifle Attachment Lug
-    add_box(c, "Bayonet_Pommel_Base", (-0.013, -0.015, 0.122), (0.013, 0.015, 0.138), mat_pommel, bevel=True, bevel_width=0.002)
-    add_box(c, "Bayonet_Barrel_Lug", (-0.006, 0.012, 0.124), (0.006, 0.022, 0.136), mat_pommel)
-    add_cylinder(c, "Bayonet_Lock_Release", (0.0, -0.016, 0.130), radius=0.004, height=0.008, material=mat_blade, segments=10, rot_axis='Y', rot_angle=math.radians(90))
-
-    return finalize_knife(c, "Weapon_Knife_Bayonet")
+    """A long clip-point with a sawback spine, a muzzle-ring guard and a ribbed grip."""
+    c = new_col("Bayonet")
+    outline = [(0.0150, 0.004, False)]
+    outline += teeth(0.0150, 0.0045, -0.024, -0.100, 7)
+    outline += [
+        (0.0150, -0.100, False),
+        (0.0150, -0.150, False),
+        (0.0070, -0.182, False),
+        (-0.0010, -0.203, True),
+        (-0.0180, -0.170, True),
+        (-0.0225, -0.110, True),
+        (-0.0225, -0.020, True),
+        (-0.0190, -0.004, False),
+        (-0.0180, 0.004, False),
+    ]
+    slab(
+        c,
+        "Blade",
+        outline,
+        blade_th(
+            spine=0.0062, grind=0.019, fuller=(-0.140, -0.028, 0.0035, 0.0034, 0.0013)
+        ),
+        mat_blade,
+        mat_edge,
+    )
+    add_box(
+        c,
+        "Guard",
+        (-0.013, -0.024, -0.004),
+        (0.013, 0.027, 0.006),
+        mat_guard,
+        bevel=True,
+        bevel_width=0.0022,
+    )
+    add_torus(
+        c,
+        "Muzzle_Ring",
+        (0.0, 0.034, 0.001),
+        major_r=0.0115,
+        minor_r=0.0032,
+        material=mat_guard,
+        major_seg=24,
+        minor_seg=10,
+    )
+    add_cylinder(
+        c,
+        "Grip",
+        (0.0, 0.0, 0.061),
+        radius=0.0135,
+        height=0.110,
+        material=mat_handle,
+        segments=28,
+    )
+    for i in range(7):
+        add_torus(
+            c,
+            f"Rib_{i}",
+            (0.0, 0.0, 0.014 + i * 0.0148),
+            major_r=0.0138,
+            minor_r=0.0019,
+            material=mat_handle,
+            major_seg=28,
+            minor_seg=8,
+        )
+    add_box(
+        c,
+        "Pommel",
+        (-0.0135, -0.0155, 0.106),
+        (0.0135, 0.0155, 0.119),
+        mat_pommel,
+        bevel=True,
+        bevel_width=0.0025,
+    )
+    add_box(
+        c,
+        "Lug",
+        (-0.0055, 0.012, 0.107),
+        (0.0055, 0.022, 0.118),
+        mat_pommel,
+        bevel=True,
+        bevel_width=0.001,
+    )
+    add_cylinder(
+        c,
+        "Release",
+        (0.0, -0.0165, 0.112),
+        radius=0.0040,
+        height=0.008,
+        material=mat_blade,
+        segments=12,
+        rot_axis="Y",
+        rot_angle=math.radians(90),
+    )
+    return finalize_knife("Weapon_Knife_Bayonet", [("Weapon_Knife_Bayonet", c, None)])
 
 
 # --- 5. Skeleton Knife ---
 def build_skeleton_knife(mat_blade, mat_edge, mat_wrap, mat_hardware):
-    c = bpy.data.collections.new("Skeleton")
-    bpy.context.scene.collection.children.link(c)
-
-    # Full-Tang Single-Piece Blade & Frame (z: -0.16 to 0.12)
-    # Blade Portion (z: -0.16 to 0.0)
-    add_box(c, "Skeleton_Blade_Body", (-0.0024, -0.016, -0.12), (0.0024, 0.013, 0.0), mat_blade, bevel=True, bevel_width=0.001)
-    add_box(c, "Skeleton_Blade_Tip", (-0.0018, -0.010, -0.16), (0.0018, 0.006, -0.12), mat_edge, bevel=True, bevel_width=0.001)
-    add_box(c, "Skeleton_Recurve_Edge", (-0.0008, -0.020, -0.15), (0.0008, -0.014, -0.01), mat_edge)
-
-    # Large Center Finger Hole at the balance point (for finger twirls!)
-    hole_center = (0.0, -0.002, 0.010)
-    add_torus(c, "Skeleton_Center_Ring", hole_center, major_r=0.011, minor_r=0.003, material=mat_hardware, major_seg=24, minor_seg=10, rot_axis='Y', rot_angle=math.radians(90))
-    add_cylinder(c, "Skeleton_Ring_Hole", hole_center, radius=0.009, height=0.012, material=mat_edge, segments=24, rot_axis='Y', rot_angle=math.radians(90))
-
-    # Skeletal Tang Frame (z: 0.022 to 0.115)
-    add_box(c, "Skeleton_Tang_Spine", (-0.0025, 0.008, 0.022), (0.0025, 0.015, 0.115), mat_blade)
-    add_box(c, "Skeleton_Tang_Belly", (-0.0025, -0.015, 0.022), (0.0025, -0.008, 0.115), mat_blade)
-    add_box(c, "Skeleton_Tang_End", (-0.003, -0.015, 0.110), (0.003, 0.015, 0.122), mat_hardware, bevel=True, bevel_width=0.002)
-
-    # Paracord Handle Wrap (Criss-Cross wraps over the skeletal frame)
-    for wrap_i in range(8):
-        wz = 0.028 + (wrap_i * 0.010)
-        slant = 0.003 * ((wrap_i % 2) * 2 - 1)
-        add_torus(c, f"Paracord_Wrap_{wrap_i}", (0.0, slant, wz), major_r=0.0125, minor_r=0.0022, material=mat_wrap, major_seg=16, minor_seg=8, rot_axis='Z', rot_angle=math.radians(12 * ((wrap_i % 2) * 2 - 1)))
-
-    return finalize_knife(c, "Weapon_Knife_Skeleton")
+    """One piece of steel: blade, finger hole and an open tang, wrapped in cord."""
+    c = new_col("Skeleton")
+    hole = (-0.002, 0.012)
+    outline = [
+        (0.0135, 0.118, False),
+        (0.0135, 0.026, False),
+        (0.0125, -0.010, False),
+        (0.0125, -0.105, False),
+        (0.0055, -0.140, False),
+        (0.0005, -0.162, True),
+        (-0.0120, -0.140, True),
+        (-0.0170, -0.090, True),
+        (-0.0150, -0.040, True),
+        (-0.0165, -0.012, False),
+        (-0.0140, 0.026, False),
+        (-0.0140, 0.118, False),
+    ]
+    holes = [
+        circle(hole[0], hole[1], 0.0085, 24),
+        rounded_rect(-0.0068, 0.0062, 0.036, 0.104, 0.0045),
+    ]
+    slab(
+        c,
+        "Steel",
+        outline,
+        blade_th(spine=0.0048, grind=0.013),
+        mat_blade,
+        mat_edge,
+        holes=holes,
+    )
+    for i in range(8):
+        add_torus(
+            c,
+            f"Cord_{i}",
+            (0.0, -0.0003, 0.040 + i * 0.0085),
+            major_r=0.0122,
+            minor_r=0.0024,
+            material=mat_wrap,
+            major_seg=18,
+            minor_seg=8,
+            rot_axis="Z",
+            rot_angle=math.radians(14 * (1 if i % 2 else -1)),
+        )
+    return finalize_knife(
+        "Weapon_Knife_Skeleton",
+        [("Weapon_Knife_Skeleton", c, None)],
+        empties=[("spin_origin", (0.0, hole[0], hole[1]))],
+    )
 
 
 # --- 6. Huntsman Knife ---
 def build_huntsman(mat_blade, mat_edge, mat_grip, mat_hardware):
-    c = bpy.data.collections.new("Huntsman")
-    bpy.context.scene.collection.children.link(c)
+    """Heavy recurve with a double-row sawback, a gut-hook choil and chunky scales."""
+    c = new_col("Huntsman")
+    outline = [(0.0165, 0.004, False)]
+    outline += teeth(0.0165, 0.0048, -0.016, -0.100, 8)
+    outline += [
+        (0.0165, -0.100, False),
+        (0.0140, -0.135, False),
+        (0.0050, -0.172, True),
+        (-0.0180, -0.150, True),
+        (-0.0270, -0.110, True),
+        (-0.0240, -0.060, True),
+        (-0.0255, -0.030, True),
+        (-0.0200, -0.016, False),
+        (-0.0160, -0.010, False),
+        (-0.0205, -0.004, False),
+        (-0.0200, 0.004, False),
+    ]
+    slab(c, "Blade", outline, blade_th(spine=0.0068, grind=0.021), mat_blade, mat_edge)
+    add_box(
+        c,
+        "Guard",
+        (-0.0125, -0.027, 0.002),
+        (0.0125, 0.021, 0.009),
+        mat_hardware,
+        bevel=True,
+        bevel_width=0.0025,
+    )
+    grip = grip_outline(0.009, 0.108, 0.0175, -0.0215, grooves=4, groove_depth=0.0042)
+    slab(c, "Scales", grip, pillow_th(0.0255, rim=0.005), mat_grip, cuts=4)
+    liner = [(y * 1.05, z, f) for (y, z, f) in grip]
+    slab(c, "Liner", liner, flat_th(0.0098), mat_hardware, cuts=1)
+    for i, z in enumerate((0.030, 0.062, 0.094)):
+        add_cylinder(
+            c,
+            f"Screw_{i}",
+            (0.0, -0.002, z),
+            radius=0.0038,
+            height=0.0275,
+            material=mat_hardware,
+            segments=6,
+            rot_axis="Y",
+            rot_angle=math.radians(90),
+        )
+    add_box(
+        c,
+        "Pommel",
+        (-0.0118, -0.0200, 0.106),
+        (0.0118, 0.0180, 0.119),
+        mat_hardware,
+        bevel=True,
+        bevel_width=0.0028,
+    )
+    return finalize_knife("Weapon_Knife_Huntsman", [("Weapon_Knife_Huntsman", c, None)])
 
-    # Massive Heavy Recurve Tanto Blade (z: -0.17 to 0.0, y: -0.024 to 0.018)
-    add_box(c, "Huntsman_Blade_Body", (-0.0038, -0.022, -0.12), (0.0038, 0.016, 0.0), mat_blade, bevel=True, bevel_width=0.001)
-    add_box(c, "Huntsman_Blade_Tanto", (-0.0032, -0.016, -0.17), (0.0032, 0.008, -0.12), mat_edge, bevel=True, bevel_width=0.001)
-    add_box(c, "Huntsman_Recurve_Belly", (-0.001, -0.028, -0.12), (0.001, -0.018, -0.01), mat_edge)
-    add_box(c, "Huntsman_Tanto_Edge", (-0.0008, -0.022, -0.17), (0.0008, -0.014, -0.12), mat_edge)
 
-    # Heavy Double-Row Sawback Spine Teeth (8 teeth)
-    for ht in range(8):
-        hz = -0.015 - (ht * 0.011)
-        add_box(c, f"Huntsman_Tooth_{ht}", (-0.0042, 0.015, hz - 0.0035), (0.0042, 0.022, hz + 0.0035), mat_blade)
-
-    # Gut Hook / Choil Indent at Ricasso
-    add_cylinder(c, "Huntsman_Choil", (0.0, -0.024, -0.008), radius=0.006, height=0.012, material=mat_hardware, segments=12, rot_axis='Y', rot_angle=math.radians(90))
-
-    # Machined G10 Tactical Scales with Finger Grooves
-    add_box(c, "Huntsman_Grip_Core", (-0.012, -0.020, 0.005), (0.012, 0.018, 0.125), mat_grip, bevel=True, bevel_width=0.003)
-    for fg_i, fz in enumerate([0.028, 0.055, 0.082, 0.108]):
-        add_cylinder(c, f"Huntsman_Finger_Groove_{fg_i}", (0.0, -0.022, fz), radius=0.009, height=0.026, material=mat_grip, segments=12, rot_axis='Y', rot_angle=math.radians(90))
-
-    # Heavy Grip Fasteners
-    for hf_i, hz in enumerate([0.035, 0.072, 0.105]):
-        add_cylinder(c, f"Huntsman_Screw_{hf_i}", (0.0, 0.0, hz), radius=0.004, height=0.026, material=mat_hardware, segments=12, rot_axis='Y', rot_angle=math.radians(90))
-
-    # Pommel Impact Surface with Lanyard Cutout
-    add_box(c, "Huntsman_Pommel", (-0.011, -0.018, 0.125), (0.011, 0.018, 0.138), mat_hardware, bevel=True, bevel_width=0.002)
-    add_cylinder(c, "Huntsman_Lanyard_Loop", (0.0, 0.008, 0.132), radius=0.0035, height=0.024, material=mat_blade, segments=12, rot_axis='Y', rot_angle=math.radians(90))
-
-    return finalize_knife(c, "Weapon_Knife_Huntsman")
+def render_showcase(out_dir, name):
+    """One side-on still per knife, for checking the build without opening Blender."""
+    scene = bpy.context.scene
+    scene.render.engine = "BLENDER_WORKBENCH"
+    scene.display.shading.light = "STUDIO"
+    scene.display.shading.color_type = "TEXTURE"
+    scene.display.shading.show_cavity = True
+    scene.render.resolution_x = 900
+    scene.render.resolution_y = 420
+    cam = bpy.data.objects.new("ShowcaseCam", bpy.data.cameras.new("ShowcaseCam"))
+    scene.collection.objects.link(cam)
+    cam.data.type = "ORTHO"
+    cam.data.ortho_scale = 0.36 * CUBE
+    # After `STAND_UP` the blade runs along Blender +Y and the spine along +Z.
+    cam.location = (1.0, 0.0, 0.0)
+    cam.rotation_euler = (math.radians(90), 0.0, math.radians(90))
+    scene.camera = cam
+    scene.render.filepath = str(Path(out_dir) / f"{name}.png")
+    bpy.ops.render.render(write_still=True)
+    bpy.data.objects.remove(cam, do_unlink=True)
 
 
 def main():
     repo_root = Path(__file__).resolve().parent.parent.parent
     web_public = repo_root / "apps/web/public"
+    argv = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
+    render_dir = None
+    if "--out" in argv:
+        web_public = Path(argv[argv.index("--out") + 1])
+    if "--render" in argv:
+        render_dir = Path(argv[argv.index("--render") + 1])
     web_public.mkdir(parents=True, exist_ok=True)
 
     full_clear()
@@ -588,50 +1251,142 @@ def main():
     t_steel = create_texture_image("Tex_Steel", 256, 256, tex_steel)
 
     print("=== [2/3] Setting Up PBR Shader Materials ===")
-    mat_steel = create_pbr_material("Mat_Steel", (0.85, 0.86, 0.88), metallic=0.96, roughness=0.22, tex_img=t_steel)
-    mat_edge = create_pbr_material("Mat_Edge", (0.95, 0.96, 0.98), metallic=0.98, roughness=0.12)
-    mat_grip = create_pbr_material("Mat_Grip", (0.08, 0.09, 0.10), metallic=0.05, roughness=0.75)
-    mat_guard = create_pbr_material("Mat_Guard", (0.12, 0.13, 0.15), metallic=0.75, roughness=0.35)
-    mat_pommel = create_pbr_material("Mat_Pommel", (0.45, 0.46, 0.48), metallic=0.90, roughness=0.30)
+    mat_steel = create_pbr_material(
+        "Mat_Steel", (0.85, 0.86, 0.88), metallic=0.96, roughness=0.22, tex_img=t_steel
+    )
+    mat_edge = create_pbr_material(
+        "Mat_Edge", (0.95, 0.96, 0.98), metallic=0.98, roughness=0.12
+    )
+    mat_grip = create_pbr_material(
+        "Mat_Grip", (0.08, 0.09, 0.10), metallic=0.05, roughness=0.75
+    )
+    mat_guard = create_pbr_material(
+        "Mat_Guard", (0.12, 0.13, 0.15), metallic=0.75, roughness=0.35
+    )
+    mat_pommel = create_pbr_material(
+        "Mat_Pommel", (0.45, 0.46, 0.48), metallic=0.90, roughness=0.30
+    )
 
     # Rarity Skin Materials
-    mat_fade = create_pbr_material("Mat_Skin_Fade", (0.9, 0.5, 0.5), metallic=0.98, roughness=0.15, tex_img=t_fade)
-    mat_marble = create_pbr_material("Mat_Skin_Marble", (0.8, 0.5, 0.5), metallic=0.98, roughness=0.15, tex_img=t_marble)
-    mat_case = create_pbr_material("Mat_Skin_CaseHardened", (0.4, 0.6, 0.9), metallic=0.95, roughness=0.18, tex_img=t_case)
-    mat_crimson = create_pbr_material("Mat_Skin_Crimson", (0.8, 0.1, 0.1), metallic=0.85, roughness=0.25, tex_img=t_crimson)
-    mat_damascus = create_pbr_material("Mat_Skin_Damascus", (0.7, 0.7, 0.7), metallic=0.92, roughness=0.28, tex_img=t_damascus)
-    mat_doppler = create_pbr_material("Mat_Skin_Doppler", (0.2, 0.1, 0.4), metallic=0.98, roughness=0.12, tex_img=t_doppler)
-    mat_lore = create_pbr_material("Mat_Skin_Lore", (0.98, 0.82, 0.20), metallic=0.98, roughness=0.14, tex_img=t_lore)
-    mat_tiger = create_pbr_material("Mat_Skin_Tiger", (0.95, 0.70, 0.10), metallic=0.96, roughness=0.16, tex_img=t_tiger)
-    mat_slaughter = create_pbr_material("Mat_Skin_Slaughter", (0.75, 0.12, 0.15), metallic=0.95, roughness=0.15, tex_img=t_slaughter)
-    mat_paracord = create_pbr_material("Mat_Paracord", (0.15, 0.16, 0.18), metallic=0.10, roughness=0.85)
+    mat_fade = create_pbr_material(
+        "Mat_Skin_Fade", (0.9, 0.5, 0.5), metallic=0.98, roughness=0.15, tex_img=t_fade
+    )
+    mat_marble = create_pbr_material(
+        "Mat_Skin_Marble",
+        (0.8, 0.5, 0.5),
+        metallic=0.98,
+        roughness=0.15,
+        tex_img=t_marble,
+    )
+    mat_case = create_pbr_material(
+        "Mat_Skin_CaseHardened",
+        (0.4, 0.6, 0.9),
+        metallic=0.95,
+        roughness=0.18,
+        tex_img=t_case,
+    )
+    mat_crimson = create_pbr_material(
+        "Mat_Skin_Crimson",
+        (0.8, 0.1, 0.1),
+        metallic=0.85,
+        roughness=0.25,
+        tex_img=t_crimson,
+    )
+    mat_damascus = create_pbr_material(
+        "Mat_Skin_Damascus",
+        (0.7, 0.7, 0.7),
+        metallic=0.92,
+        roughness=0.28,
+        tex_img=t_damascus,
+    )
+    mat_doppler = create_pbr_material(
+        "Mat_Skin_Doppler",
+        (0.2, 0.1, 0.4),
+        metallic=0.98,
+        roughness=0.12,
+        tex_img=t_doppler,
+    )
+    mat_lore = create_pbr_material(
+        "Mat_Skin_Lore",
+        (0.98, 0.82, 0.20),
+        metallic=0.98,
+        roughness=0.14,
+        tex_img=t_lore,
+    )
+    mat_tiger = create_pbr_material(
+        "Mat_Skin_Tiger",
+        (0.95, 0.70, 0.10),
+        metallic=0.96,
+        roughness=0.16,
+        tex_img=t_tiger,
+    )
+    mat_slaughter = create_pbr_material(
+        "Mat_Skin_Slaughter",
+        (0.75, 0.12, 0.15),
+        metallic=0.95,
+        roughness=0.15,
+        tex_img=t_slaughter,
+    )
+    mat_paracord = create_pbr_material(
+        "Mat_Paracord", (0.15, 0.16, 0.18), metallic=0.10, roughness=0.85
+    )
 
     knives = [
-        ("Default Tactical Knife", "hassault-weapon-knife.glb", lambda: build_default_knife(mat_steel, mat_edge, mat_grip, mat_guard, mat_pommel)),
-        ("Karambit Fade", "hassault-weapon-knife-karambit.glb", lambda: build_karambit(mat_fade, mat_edge, mat_grip, mat_pommel)),
-        ("Butterfly Marble Fade", "hassault-weapon-knife-butterfly.glb", lambda: build_butterfly(mat_marble, mat_edge, mat_grip, mat_guard)),
-        ("M9 Bayonet Lore", "hassault-weapon-knife-bayonet.glb", lambda: build_bayonet(mat_lore, mat_edge, mat_grip, mat_guard, mat_pommel)),
-        ("Skeleton Crimson Web", "hassault-weapon-knife-skeleton.glb", lambda: build_skeleton_knife(mat_crimson, mat_edge, mat_paracord, mat_guard)),
-        ("Huntsman Case Hardened", "hassault-weapon-knife-huntsman.glb", lambda: build_huntsman(mat_case, mat_edge, mat_grip, mat_pommel)),
+        (
+            "Default Tactical Knife",
+            "hassault-weapon-knife.glb",
+            lambda: build_default_knife(
+                mat_steel, mat_edge, mat_grip, mat_guard, mat_pommel
+            ),
+        ),
+        (
+            "Karambit Fade",
+            "hassault-weapon-knife-karambit.glb",
+            lambda: build_karambit(mat_fade, mat_edge, mat_grip, mat_pommel),
+        ),
+        (
+            "Butterfly Marble Fade",
+            "hassault-weapon-knife-butterfly.glb",
+            lambda: build_butterfly(mat_marble, mat_edge, mat_grip, mat_guard),
+        ),
+        (
+            "M9 Bayonet Lore",
+            "hassault-weapon-knife-bayonet.glb",
+            lambda: build_bayonet(mat_lore, mat_edge, mat_grip, mat_guard, mat_pommel),
+        ),
+        (
+            "Skeleton Crimson Web",
+            "hassault-weapon-knife-skeleton.glb",
+            lambda: build_skeleton_knife(
+                mat_crimson, mat_edge, mat_paracord, mat_guard
+            ),
+        ),
+        (
+            "Huntsman Case Hardened",
+            "hassault-weapon-knife-huntsman.glb",
+            lambda: build_huntsman(mat_case, mat_edge, mat_grip, mat_pommel),
+        ),
     ]
 
     print("=== [3/3] Constructing, Modeling, and Exporting All 6 Knife Props ===")
     for title, glb_name, build_fn in knives:
         clear_objects()
         print(f"\n--- Generating {title} -> {glb_name} ---")
-        knife_obj = build_fn()
+        build_fn()
+        if render_dir is not None:
+            render_showcase(render_dir, Path(glb_name).stem)
 
         out_path = web_public / glb_name
         print(f"Exporting GLB to: {out_path}")
         bpy.ops.export_scene.gltf(
             filepath=str(out_path),
-            export_format='GLB',
+            export_format="GLB",
             use_selection=False,
             export_apply=True,
             export_yup=True,
-            export_materials='EXPORT',
+            export_materials="EXPORT",
             export_lights=False,
-            export_cameras=False
+            export_cameras=False,
         )
 
     print("\nAll 6 Knife Props and Rarity Skins generated and exported successfully!")

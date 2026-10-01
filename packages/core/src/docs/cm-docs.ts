@@ -18,7 +18,7 @@ import {
   type DocLookupRequest,
   type DocSourceId,
 } from './chain';
-import { renderMarkdown } from './markdown';
+import { renderHighlightedCodeBlock, renderMarkdown } from './markdown';
 import { openReference } from './reference-query';
 import { getSetting } from '../settings';
 
@@ -62,11 +62,10 @@ export function renderDocEntry(entry: DocEntry): HTMLElement {
   dom.className = 'cm-docs-popup';
 
   if (entry.signature) {
-    const sig = document.createElement('pre');
-    sig.className = 'cm-docs-signature';
-    // textContent, not innerHTML: a signature is arbitrary text from a package.
-    sig.textContent = entry.signature;
-    dom.appendChild(sig);
+    const wrap = document.createElement('div');
+    wrap.className = 'cm-docs-signature-wrap';
+    wrap.innerHTML = renderHighlightedCodeBlock(entry.signature, 'python');
+    dom.appendChild(wrap);
   }
   if (entry.body) dom.appendChild(renderMarkdown(entry.body));
 

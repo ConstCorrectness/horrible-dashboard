@@ -10,6 +10,14 @@
       "category": "arms",
       "description": "Game-ready FPS Female Arms rigged viewmodel"
     },
+    "hassault-hands": {
+      "filename": "hassault-hands.glb",
+      "destination": "apps/web/public/hassault-hands.glb",
+      "sha256": "e1d4df91676952ad9b86acfaa8430396559e573f81b343b2ddf7e8679e230600",
+      "size": 1023452,
+      "category": "arms",
+      "description": "Custom rigged first-person tactical sleeved and gloved hands viewmodel"
+    },
     "hassault-clips": {
       "filename": "hassault-clips.glb",
       "destination": "apps/web/public/hassault-clips.glb",

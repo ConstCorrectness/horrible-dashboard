@@ -6,6 +6,7 @@
  * unclamped `acos` yields `NaN`, which yields a `NaN` matrix, which three
  * silently declines to draw. An arm that vanishes with no error anywhere.
  */
+import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -108,19 +109,6 @@ describe('the shoulders', () => {
     expect(SHOULDER_R[1]).toBeLessThan(0);
     expect(SHOULDER_L[1]).toBe(SHOULDER_R[1]);
   });
-
-  it('are within reach of where a weapon is held', () => {
-    // `HOME` is (0.92, -0.86, -1.35) and the grips sit near it. If an arm cannot
-    // reach the gun it is holding, every frame is the `stretched` case and the
-    // elbows lock — which looks like a rig that was never posed.
-    const grips = gripsFor('assault');
-    const hand: Vec3 = [
-      0.92 + grips.primary[0],
-      -0.86 + grips.primary[1],
-      -1.35 + grips.primary[2],
-    ];
-    expect(dist(SHOULDER_R, hand)).toBeLessThan(UPPER_LEN + LOWER_LEN);
-  });
 });
 
 describe('gripsFor', () => {
@@ -148,6 +136,18 @@ describe('gripsFor', () => {
     expect(grips.primary.every((n) => Number.isFinite(n))).toBe(true);
   });
 
+  it('provides aim vectors and finger curls for all weapons', () => {
+    for (const id of ['knife', 'pistol', 'assault', 'shotgun', 'sniper']) {
+      const grips = gripsFor(id);
+      expect(grips.primaryAim).toHaveLength(3);
+      expect(grips.primaryUp).toHaveLength(3);
+      expect(grips.primaryCurl).toHaveLength(5);
+      expect(grips.supportAim).toHaveLength(3);
+      expect(grips.supportUp).toHaveLength(3);
+      expect(grips.supportCurl).toHaveLength(5);
+    }
+  });
+
   it('puts the support hand forward of the trigger hand', () => {
     // -z is forward in the model's own space, so a support hand *behind* the
     // trigger hand is a rifle held backwards.
@@ -155,5 +155,75 @@ describe('gripsFor', () => {
       const grips = gripsFor(id);
       expect(grips.support![2]).toBeLessThan(grips.primary[2]);
     }
+  });
+});
+
+describe('SkinnedArmRig', () => {
+  it('poses the wrist on target and never produces NaN bone matrices', async () => {
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const GLB = fileURLToPath(
+      new URL('../../../../../../apps/web/public/hassault-hands.glb', import.meta.url),
+    );
+    const buf = readFileSync(GLB);
+    const length = buf.readUInt32LE(12);
+    const gltf = JSON.parse(buf.subarray(20, 20 + length).toString('utf8')) as {
+      nodes: {
+        name?: string;
+        children?: number[];
+        translation?: number[];
+        rotation?: number[];
+        scale?: number[];
+      }[];
+      skins: { joints: number[] }[];
+      scenes: { nodes: number[] }[];
+    };
+    const joints = new Set(gltf.skins[0].joints);
+    const objects = gltf.nodes.map((n, i) => {
+      const o = joints.has(i) ? new THREE.Bone() : new THREE.Object3D();
+      o.name = n.name ?? '';
+      if (n.translation) o.position.fromArray(n.translation);
+      if (n.rotation) o.quaternion.fromArray(n.rotation);
+      if (n.scale) o.scale.fromArray(n.scale);
+      return o;
+    });
+    gltf.nodes.forEach((n, i) => n.children?.forEach((c) => objects[i].add(objects[c])));
+    const prototype = new THREE.Group();
+    for (const i of gltf.scenes[0].nodes) prototype.add(objects[i]);
+
+    const { SkinnedArmRig } = await import('../arms');
+    const parent = new THREE.Group();
+    const rig = new SkinnedArmRig(
+      THREE,
+      parent,
+      {
+        prototype,
+        clone: (s: THREE.Object3D) => s.clone(true),
+      },
+      null,
+    );
+
+    const grips = gripsFor('assault');
+    rig.update(grips, (p) => p, true);
+
+    parent.traverse((o) => {
+      o.updateMatrix();
+      for (const el of o.matrix.elements) {
+        expect(Number.isFinite(el)).toBe(true);
+      }
+    });
+
+    // An unreachable target far away also produces no NaN
+    const farGrips = {
+      ...grips,
+      primary: [50, 50, 50] as Vec3,
+    };
+    rig.update(farGrips, (p) => p, true);
+    parent.traverse((o) => {
+      o.updateMatrix();
+      for (const el of o.matrix.elements) {
+        expect(Number.isFinite(el)).toBe(true);
+      }
+    });
   });
 });

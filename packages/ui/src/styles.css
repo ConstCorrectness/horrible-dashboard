@@ -888,13 +888,30 @@ body {
 /* LSP hover tooltip and completion documentation pane (editor/lsp.ts → CodeMirror
  * hoverTooltip / completion `info`). Both hold markdown rendered by `renderMarkdown`. */
 .cm-lsp-hover,
-.cm-lsp-doc {
-  max-width: 480px;
-  max-height: 320px;
+.cm-lsp-doc,
+.cm-docs-popup {
+  max-width: 560px;
+  max-height: 400px;
   overflow: auto;
-  padding: 0.4rem 0.6rem;
+  padding: 0.5rem 0.75rem;
   font-size: 0.82rem;
-  line-height: 1.4;
+  line-height: 1.45;
+  background: var(--bg-elevated);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+}
+
+/* Symbol kind tag prefix: `(function)`, `(class)`, `(method)`, etc. */
+.cm-lsp-kind {
+  display: inline-block;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.85em;
+  color: var(--text-dim);
+  font-weight: 500;
+  margin-right: 0.35rem;
+  opacity: 0.85;
 }
 
 /* The `detail` signature line above a completion item's documentation. */
@@ -906,32 +923,54 @@ body {
 
 /* Markdown element styling shared by hover + doc panes: tight blocks, mono code. */
 .cm-lsp-hover p,
-.cm-lsp-doc p {
+.cm-lsp-doc p,
+.cm-docs-popup p {
   margin: 0 0 0.4rem;
 }
 .cm-lsp-hover p:last-child,
-.cm-lsp-doc p:last-child {
+.cm-lsp-doc p:last-child,
+.cm-docs-popup p:last-child {
   margin-bottom: 0;
 }
+
 .cm-lsp-hover pre,
-.cm-lsp-doc pre {
+.cm-lsp-doc pre,
+.cm-docs-popup pre {
   margin: 0 0 0.4rem;
-  padding: 0.35rem 0.5rem;
+  padding: 0.4rem 0.6rem;
   overflow: auto;
   border-radius: var(--radius-sm);
-  background: var(--surface-2, rgba(127, 127, 127, 0.12));
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
 }
+
+.cm-lsp-hover pre.cm-lsp-code-block,
+.cm-lsp-doc pre.cm-lsp-code-block,
+.cm-docs-popup pre.cm-lsp-code-block {
+  margin: 0.2rem 0 0.5rem;
+}
+
+/* Divider between signature header and docstring body */
+.cm-lsp-divider {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 0.5rem 0;
+}
+
 .cm-lsp-hover code,
-.cm-lsp-doc code {
+.cm-lsp-doc code,
+.cm-docs-popup code {
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 0.95em;
 }
 .cm-lsp-hover pre code,
-.cm-lsp-doc pre code {
+.cm-lsp-doc pre code,
+.cm-docs-popup pre code {
   white-space: pre;
 }
 .cm-lsp-hover ul,
-.cm-lsp-doc ul {
+.cm-lsp-doc ul,
+.cm-docs-popup ul {
   margin: 0 0 0.4rem;
   padding-left: 1.1rem;
 }
@@ -942,9 +981,115 @@ body {
 .cm-lsp-doc h1,
 .cm-lsp-doc h2,
 .cm-lsp-doc h3,
-.cm-lsp-doc h4 {
+.cm-lsp-doc h4,
+.cm-docs-popup h1,
+.cm-docs-popup h2,
+.cm-docs-popup h3,
+.cm-docs-popup h4 {
   margin: 0.3rem 0;
   font-size: 0.9rem;
+}
+
+/* Syntax highlighting token classes inside hover and doc popups */
+.cm-lsp-hover .tok-keyword,
+.cm-lsp-doc .tok-keyword,
+.cm-docs-popup .tok-keyword,
+.cm-lsp-hover .tok-modifier,
+.cm-lsp-doc .tok-modifier,
+.cm-docs-popup .tok-modifier,
+.cm-lsp-hover .tok-controlKeyword,
+.cm-lsp-doc .tok-controlKeyword,
+.cm-docs-popup .tok-controlKeyword {
+  color: #c678dd;
+}
+
+.cm-lsp-hover .tok-string,
+.cm-lsp-doc .tok-string,
+.cm-docs-popup .tok-string,
+.cm-lsp-hover .tok-regexp,
+.cm-lsp-doc .tok-regexp,
+.cm-docs-popup .tok-regexp {
+  color: #98c379;
+}
+
+.cm-lsp-hover .tok-comment,
+.cm-lsp-doc .tok-comment,
+.cm-docs-popup .tok-comment,
+.cm-lsp-hover .tok-lineComment,
+.cm-lsp-doc .tok-lineComment,
+.cm-docs-popup .tok-lineComment,
+.cm-lsp-hover .tok-blockComment,
+.cm-lsp-doc .tok-blockComment,
+.cm-docs-popup .tok-blockComment {
+  color: #7f848e;
+  font-style: italic;
+}
+
+.cm-lsp-hover .tok-number,
+.cm-lsp-doc .tok-number,
+.cm-docs-popup .tok-number,
+.cm-lsp-hover .tok-bool,
+.cm-lsp-doc .tok-bool,
+.cm-docs-popup .tok-bool,
+.cm-lsp-hover .tok-null,
+.cm-lsp-doc .tok-null,
+.cm-docs-popup .tok-null,
+.cm-lsp-hover .tok-atom,
+.cm-lsp-doc .tok-atom,
+.cm-docs-popup .tok-atom {
+  color: #d19a66;
+}
+
+.cm-lsp-hover .tok-typeName,
+.cm-lsp-doc .tok-typeName,
+.cm-docs-popup .tok-typeName,
+.cm-lsp-hover .tok-className,
+.cm-lsp-doc .tok-className,
+.cm-docs-popup .tok-className,
+.cm-lsp-hover .tok-namespace,
+.cm-lsp-doc .tok-namespace,
+.cm-docs-popup .tok-namespace {
+  color: #e5c07b;
+}
+
+.cm-lsp-hover .tok-variableName,
+.cm-lsp-doc .tok-variableName,
+.cm-docs-popup .tok-variableName,
+.cm-lsp-hover .tok-function,
+.cm-lsp-doc .tok-function,
+.cm-docs-popup .tok-function {
+  color: #61afef;
+}
+
+.cm-lsp-hover .tok-definition,
+.cm-lsp-doc .tok-definition,
+.cm-docs-popup .tok-definition {
+  font-weight: 600;
+  color: #61afef;
+}
+
+.cm-lsp-hover .tok-propertyName,
+.cm-lsp-doc .tok-propertyName,
+.cm-docs-popup .tok-propertyName,
+.cm-lsp-hover .tok-attributeName,
+.cm-lsp-doc .tok-attributeName,
+.cm-docs-popup .tok-attributeName {
+  color: #56b6c2;
+}
+
+.cm-lsp-hover .tok-operator,
+.cm-lsp-doc .tok-operator,
+.cm-docs-popup .tok-operator,
+.cm-lsp-hover .tok-punctuation,
+.cm-lsp-doc .tok-punctuation,
+.cm-docs-popup .tok-punctuation,
+.cm-lsp-hover .tok-separator,
+.cm-lsp-doc .tok-separator,
+.cm-docs-popup .tok-separator,
+.cm-lsp-hover .tok-bracket,
+.cm-lsp-doc .tok-bracket,
+.cm-docs-popup .tok-bracket {
+  color: #abb2bf;
 }
 
 /* Git decorations (see files/store.ts, files/FileTree.tsx). Per-status color is

@@ -36,9 +36,10 @@ use crate::character::{decode_image, normalise_glb, MaterialDef, Primitive, Text
 /// client has no asset directory and fetching them would put three downloads
 /// between deploying and having a weapon in your hands.
 ///
-/// `knife` is **absent, and that is the answer rather than a gap** — there is no
-/// knife model at all. A weapon with no entry keeps the procedural boxes, which
-/// is what every weapon had before any of this. The M4A1 used to be absent too,
+/// Every weapon here has a model, the knives included —
+/// `tools/blender/generate_all_knives.py` builds all six. A weapon with no entry
+/// keeps the procedural boxes, which is what every weapon had before any of
+/// this. The M4A1 used to be absent,
 /// at 687k triangles — twenty times the whole map — and is here now because
 /// `scripts/decimate_weapon.py` takes it to 30k. `models/weapons.ts` carries the
 /// identical list for the browser.
@@ -146,10 +147,26 @@ pub struct PropVertex {
     pub uv: [f32; 2],
 }
 
+/// A separately posable piece of a prop: a mesh node nested under another
+/// mesh node. The butterfly knife's two handles are the case — an inspect
+/// swings them about their pins, so they cannot be baked into the body.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PropPart {
+    pub name: String,
+    /// The node's origin in the prop's space: what the part rotates about.
+    pub pivot: Vec3,
+}
+
 /// One parsed weapon model.
 pub struct Prop {
     pub vertices: Vec<PropVertex>,
     pub primitives: Vec<Primitive>,
+    /// Which part each primitive belongs to: 0 is the body, `n` is `parts[n - 1]`.
+    pub primitive_parts: Vec<usize>,
+    pub parts: Vec<PropPart>,
+    /// Named nodes with no mesh — `spin_origin`, which a karambit twirls about —
+    /// and where they sit in the prop's space.
+    pub markers: Vec<(String, Vec3)>,
     pub materials: Vec<MaterialDef>,
     pub textures: Vec<TextureImage>,
 }
@@ -225,6 +242,7 @@ impl Prop {
 
         let mut vertices = Vec::new();
         let mut primitives = Vec::new();
+        let mut layout = Layout::default();
 
         // Every node in every scene, with its accumulated world transform. A
         // recursive walk rather than a flat pass over `document.nodes()`,
@@ -232,7 +250,15 @@ impl Prop {
         // the converter puts the scale on one node and the mesh on its child.
         for scene in document.scenes() {
             for node in scene.nodes() {
-                walk(&node, Mat4::IDENTITY, blob, &mut vertices, &mut primitives);
+                walk(
+                    &node,
+                    Mat4::IDENTITY,
+                    blob,
+                    &mut vertices,
+                    &mut primitives,
+                    &mut layout,
+                    (0, false),
+                );
             }
         }
 
@@ -242,6 +268,9 @@ impl Prop {
         Ok(Prop {
             vertices,
             primitives,
+            primitive_parts: layout.primitive_parts,
+            parts: layout.parts,
+            markers: layout.markers,
             materials,
             textures,
         })
@@ -265,15 +294,42 @@ impl Prop {
     }
 }
 
+/// Parts and markers, gathered alongside the geometry by `walk`.
+#[derive(Default)]
+struct Layout {
+    primitive_parts: Vec<usize>,
+    parts: Vec<PropPart>,
+    markers: Vec<(String, Vec3)>,
+}
+
 /// One node and its children, with `parent` already applied.
+///
+/// `(part, under_mesh)`: which part this subtree draws into, and whether an
+/// ancestor already had a mesh — a mesh node under another mesh node starts a
+/// part of its own.
 fn walk(
     node: &gltf::Node,
     parent: Mat4,
     blob: Option<&[u8]>,
     vertices: &mut Vec<PropVertex>,
     primitives: &mut Vec<Primitive>,
+    layout: &mut Layout,
+    (mut part, under_mesh): (usize, bool),
 ) {
     let world = parent * local_matrix(node);
+    let origin = world.transform_point3(Vec3::ZERO);
+    if node.mesh().is_some() && under_mesh {
+        layout.parts.push(PropPart {
+            name: node.name().unwrap_or_default().to_string(),
+            pivot: origin,
+        });
+        part = layout.parts.len();
+    }
+    if node.mesh().is_none() && node.children().len() == 0 {
+        if let Some(name) = node.name().filter(|n| !n.is_empty()) {
+            layout.markers.push((name.to_string(), origin));
+        }
+    }
 
     if let Some(mesh) = node.mesh() {
         // The normal matrix is the inverse transpose, not the world matrix. They
@@ -336,11 +392,13 @@ fn walk(
                 vertex_count: vertices.len() as u32 - first_vertex,
                 material: prim.material().index().unwrap_or(0),
             });
+            layout.primitive_parts.push(part);
         }
     }
 
+    let under = under_mesh || node.mesh().is_some();
     for child in node.children() {
-        walk(&child, world, blob, vertices, primitives);
+        walk(&child, world, blob, vertices, primitives, layout, (part, under));
     }
 }
 
@@ -490,6 +548,18 @@ mod tests {
                 "prop {id} has PBR texture map"
             );
         }
+    }
+
+    #[test]
+    fn the_butterfly_handles_are_parts_and_the_karambit_has_a_spin_marker() {
+        let butterfly = Prop::from_slice(weapon_glb("knife_butterfly").unwrap()).unwrap();
+        let names: Vec<&str> = butterfly.parts.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"handle_bite") && names.contains(&"handle_safe"), "{names:?}");
+        assert_eq!(butterfly.primitive_parts.len(), butterfly.primitives.len());
+        assert!(butterfly.primitive_parts.iter().any(|&p| p == 0));
+        let karambit = Prop::from_slice(weapon_glb("knife_karambit").unwrap()).unwrap();
+        assert!(karambit.markers.iter().any(|(n, _)| n == "spin_origin"));
+        assert!(karambit.parts.is_empty());
     }
 
     #[test]

@@ -147,6 +147,8 @@ pub struct App {
     /// catches up.
     prop_weapon: String,
     prop_fitted: bool,
+    /// Reused every frame for the skinned hands, so they allocate once.
+    hand_verts: Vec<hassault_native::prop::PropVertex>,
     mesh: MeshData,
     world: World,
     pub world3d: Option<World3D>,
@@ -504,6 +506,7 @@ impl App {
             prop_loads: prop::preload(),
             prop_weapon: String::new(),
             prop_fitted: false,
+            hand_verts: Vec::new(),
             window: None,
             renderer: None,
             mesh,
@@ -901,21 +904,11 @@ impl App {
         };
         let equipped_skin = self.skins.get(&display_weapon);
         self.viewmodel.set_weapon(&display_weapon, equipped_skin);
+        // One rule for which knife a skin is, shared with the inspect that
+        // knife runs — see `inspects::knife_archetype`.
         let prop_name = if display_weapon == "knife" {
             let skin_id = equipped_skin.and_then(|s| s.id.as_deref()).unwrap_or("");
-            if skin_id.contains("karambit") {
-                "knife_karambit"
-            } else if skin_id.contains("butterfly") {
-                "knife_butterfly"
-            } else if skin_id.contains("bayonet") || skin_id.contains("lore") {
-                "knife_bayonet"
-            } else if skin_id.contains("skeleton") {
-                "knife_skeleton"
-            } else if skin_id.contains("huntsman") {
-                "knife_huntsman"
-            } else {
-                "knife"
-            }
+            hassault_native::inspects::knife_prop_id(hassault_native::inspects::knife_archetype(skin_id, ""))
         } else {
             display_weapon.as_str()
         };
@@ -926,8 +919,7 @@ impl App {
         // velocity half a round trip old would lag exactly the movement it is
         // meant to be showing.
         // Opt-in, and only where it is practice: Train or a room we host.
-        let arc_allowed =
-            self.settings.grenade_arc && (self.socket.is_none() || self.own_room);
+        let arc_allowed = self.settings.grenade_arc && (self.socket.is_none() || self.own_room);
         self.throw_arc = match (holding_nade && arc_allowed, self.throw_physics.as_ref()) {
             (true, Some(physics)) => {
                 let state = &self.prediction.state;
@@ -1008,6 +1000,19 @@ impl App {
         // at all".
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.set_prop_model(self.viewmodel.prop_model());
+            renderer.set_prop_parts(&self.viewmodel.prop_part_models());
+            // The skinned hands: materials once, vertices every frame. Nothing
+            // when the asset did not parse — the procedural arms are in the
+            // view model's own vertices then.
+            if let Some(asset) = hassault_native::hands::asset() {
+                if !renderer.has_hands() {
+                    renderer.set_hands(asset);
+                }
+                match self.viewmodel.hands_vertices(&mut self.hand_verts) {
+                    Some((right, left)) => renderer.write_hands(&self.hand_verts, right, left),
+                    None => renderer.write_hands(&[], 0, 0),
+                }
+            }
         }
         self.footsteps(dt);
     }
@@ -1859,7 +1864,12 @@ impl App {
                                 if !is_mine {
                                     self.decals.shot(ends, faces);
                                 }
-                                if !ends.is_empty() {
+                                // Brass and the smoke wisp are world effects at the
+                                // shot's origin, which for your own shot is your
+                                // *eye*: the casing and the puff landed on the
+                                // crosshair for a frame every time you fired. Your
+                                // own shot has the view model's flash instead.
+                                if !is_mine && !ends.is_empty() {
                                     let dir = [
                                         ends[0][0] - origin[0],
                                         ends[0][1] - origin[1],
@@ -2443,43 +2453,8 @@ impl App {
                 .unwrap_or(false);
             self.effects
                 .shot_ex(shot.origin, &shot.ends, &shot.faces, true, false, draw_beam);
-            if !shot.ends.is_empty() {
-                let dir = [
-                    shot.ends[0][0] - shot.origin[0],
-                    shot.ends[0][1] - shot.origin[1],
-                    shot.ends[0][2] - shot.origin[2],
-                ];
-                let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
-                if len > 1e-4 {
-                    let f = [dir[0] / len, dir[1] / len, dir[2] / len];
-                    let h = if f[2].abs() < 0.9 {
-                        [0.0, 0.0, 1.0]
-                    } else {
-                        [1.0, 0.0, 0.0]
-                    };
-                    let r = [
-                        f[1] * h[2] - f[2] * h[1],
-                        f[2] * h[0] - f[0] * h[2],
-                        f[0] * h[1] - f[1] * h[0],
-                    ];
-                    let r_len = (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt();
-                    if r_len > 1e-4 {
-                        let r = [r[0] / r_len, r[1] / r_len, r[2] / r_len];
-                        let u = [
-                            r[1] * f[2] - r[2] * f[1],
-                            r[2] * f[0] - r[0] * f[2],
-                            r[0] * f[1] - r[1] * f[0],
-                        ];
-                        self.effects.eject_casing(shot.origin, f, r, u);
-                        let muzzle = [
-                            shot.origin[0] + f[0] * 0.45,
-                            shot.origin[1] + f[1] * 0.45,
-                            shot.origin[2] + f[2] * 0.45,
-                        ];
-                        self.effects.muzzle_smoke(muzzle);
-                    }
-                }
-            }
+            // No brass or smoke wisp either: both spawn at the shot origin, which
+            // is your eye, and landed on the crosshair for a frame every shot.
         }
     }
 
@@ -2890,7 +2865,8 @@ impl App {
         // every frame for a prop that has not moved is work for nothing.
         if !self.prop_fitted {
             match renderer.use_prop(weapon) {
-                Some((min, max)) if self.viewmodel.fit_prop(min, max).is_some() => {
+                Some(info) if self.viewmodel.fit_prop(info.bounds.0, info.bounds.1).is_some() => {
+                    self.viewmodel.set_prop_layout(info.parts, info.markers);
                     self.prop_fitted = true;
                 }
                 Some(_) => {
@@ -3163,10 +3139,38 @@ impl App {
     }
 
     fn menu_rows(&self) -> usize {
-        self.menu.rows(&self.settings, self.socket.is_some()).len()
+        self.menu
+            .rows(&self.settings, &self.controls, self.socket.is_some())
+            .len()
+    }
+
+    /// Save the key map where the pane reads it, as the diff it writes.
+    fn save_controls(&mut self) {
+        self.writer.save(
+            hassault_native::settings::KEY_CONTROLS,
+            serde_json::Value::String(self.controls.serialize()),
+        );
     }
 
     fn menu_key(&mut self, code: KeyCode, event_loop: &ActiveEventLoop) {
+        // A bind row is waiting: this key is the answer, not navigation.
+        if let Some(action) = self.menu.listening {
+            let name = hassault_native::controls::code_name(code);
+            match code {
+                KeyCode::Escape => {
+                    self.menu.listening = None;
+                    return;
+                }
+                KeyCode::Backspace => self.controls.bind(action, None),
+                // Refused keys keep the prompt up rather than silently
+                // doing nothing and dropping it.
+                _ if hassault_native::controls::RESERVED.contains(&name.as_str()) => return,
+                _ => self.controls.bind(action, Some(&name)),
+            }
+            self.menu.listening = None;
+            self.save_controls();
+            return;
+        }
         let count = self.menu_rows();
         match code {
             KeyCode::Escape => {
@@ -3192,9 +3196,16 @@ impl App {
     /// Act on one row. `step` is which way a value moves; a click is +1, which is
     /// what makes one control serve both the mouse and the keyboard.
     fn menu_activate(&mut self, index: usize, step: i32, event_loop: &ActiveEventLoop) {
-        let rows = self.menu.rows(&self.settings, self.socket.is_some());
+        let rows = self
+            .menu
+            .rows(&self.settings, &self.controls, self.socket.is_some());
         let Some(row) = rows.get(index) else { return };
         match row.action {
+            Action::Bind(action) => self.menu.listening = Some(action),
+            Action::ResetKeys => {
+                self.controls = hassault_native::controls::Controls::default();
+                self.save_controls();
+            }
             Action::Resume => {
                 self.menu.close();
                 self.set_grab(true);
@@ -3617,6 +3628,11 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::MouseInput { state, button, .. } if self.menu.open => {
+                // A click while a bind row waits cancels it: keys are bound
+                // from the keyboard only, as the shared table stores codes.
+                if state == ElementState::Pressed && self.menu.listening.take().is_some() {
+                    return;
+                }
                 if button == MouseButton::Left && state == ElementState::Pressed {
                     let (w, h) = self.window_size();
                     let count = self.menu_rows();
@@ -4153,6 +4169,7 @@ impl ApplicationHandler for App {
                 // it.
                 self.menu.build(
                     &self.settings,
+                    &self.controls,
                     self.socket.is_some(),
                     view.width as f32,
                     view.height as f32,

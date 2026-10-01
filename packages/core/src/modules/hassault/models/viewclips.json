@@ -1,110 +1,345 @@
 {
-  "_comment": "Keyframed offsets for the first-person hands. Read by BOTH packages/core/src/modules/hassault/viewclips.ts and apps/native-fps/src/viewclips.rs (include_str!), and pinned together by apps/native-fps/tests/browser_parity.rs — two hand-typed copies of forty keyframes drift on the very first tweak. Every pose is an OFFSET from the weapon's grip anchor (models/grips.json), in the weapon's own space, so a keyframe that names no channel leaves that hand on the gun. That is what makes a partial track legal, and it is what makes the two layers composable at all. `t` is normalised 0..1 over the clip's own length, never seconds: the reload track then stretches to whatever reloadTime the server served, so a 1.4s pistol and a 2.6s shotgun share one authored motion.",
+  "_comment": "Keyframed offsets for the first-person hands. Read by BOTH packages/core/src/modules/hassault/viewclips.ts and apps/native-fps/src/viewclips.rs (include_str!), and pinned together by apps/native-fps/tests/browser_parity.rs \u2014 two hand-typed copies of forty keyframes drift on the very first tweak. Every pose is an OFFSET from the weapon's grip anchor (models/grips.json), in the weapon's own space, so a keyframe that names no channel leaves that hand on the gun. That is what makes a partial track legal, and it is what makes the two layers composable at all. `t` is normalised 0..1 over the clip's own length, never seconds: the reload track then stretches to whatever reloadTime the server served, so a 1.4s pistol and a 2.6s shotgun share one authored motion.",
   "locomotion": {
     "_comment": "The base layer. Looping, phase-driven off the view model's own bobPhase so it can never drift out of step with the bob. t=0 and t=1 must be identical or the cycle ticks once per stride.",
     "idle": [
-      { "t": 0, "pose": {} },
-      { "t": 0.5, "pose": { "primary": [0, 0.012, 0], "support": [0, 0.016, 0] } },
-      { "t": 1, "pose": {} }
+      {
+        "t": 0,
+        "pose": {}
+      },
+      {
+        "t": 0.5,
+        "pose": {
+          "primary": [
+            0,
+            0.012,
+            0
+          ],
+          "support": [
+            0,
+            0.016,
+            0
+          ]
+        }
+      },
+      {
+        "t": 1,
+        "pose": {}
+      }
     ],
     "walk": [
-      { "t": 0, "pose": {} },
+      {
+        "t": 0,
+        "pose": {}
+      },
       {
         "t": 0.25,
-        "pose": { "primary": [0.018, -0.02, 0], "support": [0.026, -0.03, 0], "supportRoll": 0.04 }
+        "pose": {
+          "primary": [
+            0.018,
+            -0.02,
+            0
+          ],
+          "support": [
+            0.026,
+            -0.03,
+            0
+          ],
+          "supportRoll": 0.04
+        }
       },
-      { "t": 0.5, "pose": {} },
+      {
+        "t": 0.5,
+        "pose": {}
+      },
       {
         "t": 0.75,
         "pose": {
-          "primary": [-0.018, -0.02, 0],
-          "support": [-0.026, -0.03, 0],
+          "primary": [
+            -0.018,
+            -0.02,
+            0
+          ],
+          "support": [
+            -0.026,
+            -0.03,
+            0
+          ],
           "supportRoll": -0.04
         }
       },
-      { "t": 1, "pose": {} }
+      {
+        "t": 1,
+        "pose": {}
+      }
     ],
     "run": [
-      { "t": 0, "pose": {} },
+      {
+        "t": 0,
+        "pose": {}
+      },
       {
         "t": 0.25,
         "pose": {
-          "primary": [0.04, -0.055, 0.03],
-          "support": [0.06, -0.08, 0.05],
+          "primary": [
+            0.04,
+            -0.055,
+            0.03
+          ],
+          "support": [
+            0.06,
+            -0.08,
+            0.05
+          ],
           "supportRoll": 0.1
         }
       },
-      { "t": 0.5, "pose": { "primary": [0, -0.02, 0.01], "support": [0, -0.03, 0.02] } },
+      {
+        "t": 0.5,
+        "pose": {
+          "primary": [
+            0,
+            -0.02,
+            0.01
+          ],
+          "support": [
+            0,
+            -0.03,
+            0.02
+          ]
+        }
+      },
       {
         "t": 0.75,
         "pose": {
-          "primary": [-0.04, -0.055, 0.03],
-          "support": [-0.06, -0.08, 0.05],
+          "primary": [
+            -0.04,
+            -0.055,
+            0.03
+          ],
+          "support": [
+            -0.06,
+            -0.08,
+            0.05
+          ],
           "supportRoll": -0.1
         }
       },
-      { "t": 1, "pose": {} }
+      {
+        "t": 1,
+        "pose": {}
+      }
     ],
     "jump": [
-      { "t": 0, "pose": { "primary": [0, 0.05, 0.04], "support": [0, 0.07, 0.05] } },
-      { "t": 1, "pose": { "primary": [0, 0.05, 0.04], "support": [0, 0.07, 0.05] } }
+      {
+        "t": 0,
+        "pose": {
+          "primary": [
+            0,
+            0.05,
+            0.04
+          ],
+          "support": [
+            0,
+            0.07,
+            0.05
+          ]
+        }
+      },
+      {
+        "t": 1,
+        "pose": {
+          "primary": [
+            0,
+            0.05,
+            0.04
+          ],
+          "support": [
+            0,
+            0.07,
+            0.05
+          ]
+        }
+      }
     ],
     "land": [
-      { "t": 0, "pose": { "primary": [0, -0.09, 0], "support": [0, -0.12, 0] } },
-      { "t": 1, "pose": {} }
+      {
+        "t": 0,
+        "pose": {
+          "primary": [
+            0,
+            -0.09,
+            0
+          ],
+          "support": [
+            0,
+            -0.12,
+            0
+          ]
+        }
+      },
+      {
+        "t": 1,
+        "pose": {}
+      }
     ]
   },
   "actions": {
-    "_comment": "The upper layer. One-shot, and it REPLACES the channels it names rather than blending with locomotion — models/clips.ts already explains that two poses averaged on one bone give you half a reload, and makes its track sets disjoint for exactly this reason.",
+    "_comment": "The upper layer. One-shot, and it REPLACES the channels it names rather than blending with locomotion \u2014 models/clips.ts already explains that two poses averaged on one bone give you half a reload, and makes its track sets disjoint for exactly this reason. Finger channels (primaryFingers / supportFingers) are absolute curls, thumb first, and REPLACE the grip's curl while the key is in force; a key without them leaves the grip's own. The inspect has no track here: each weapon's inspect is its own clip in models/inspects.json.",
     "reload": [
-      { "t": 0, "pose": {} },
+      {
+        "t": 0,
+        "pose": {}
+      },
       {
         "t": 0.16,
         "_comment": "FN FAL reload: support hand moves off handguard down to magazine release.",
-        "pose": { "support": [0.15, -0.38, 0.45], "supportRoll": 0.5 }
+        "pose": {
+          "support": [
+            0.15,
+            -0.38,
+            0.45
+          ],
+          "supportRoll": 0.5,
+          "supportFingers": [
+            0.35,
+            0.3,
+            0.3,
+            0.3,
+            0.3
+          ]
+        }
       },
       {
         "t": 0.32,
         "_comment": "Magazine unlocked and pulled down and forward out of receiver.",
-        "pose": { "support": [0.22, -0.78, 0.42], "supportRoll": 0.85 }
+        "pose": {
+          "support": [
+            0.22,
+            -0.78,
+            0.42
+          ],
+          "supportRoll": 0.85,
+          "supportFingers": [
+            0.7,
+            0.85,
+            0.85,
+            0.85,
+            0.85
+          ]
+        }
       },
       {
         "t": 0.48,
         "_comment": "Fresh magazine retrieved and aligned with magazine well.",
-        "pose": { "support": [0.18, -0.52, 0.48], "supportRoll": 0.65 }
+        "pose": {
+          "support": [
+            0.18,
+            -0.52,
+            0.48
+          ],
+          "supportRoll": 0.65,
+          "supportFingers": [
+            0.7,
+            0.85,
+            0.85,
+            0.85,
+            0.85
+          ]
+        }
       },
       {
         "t": 0.58,
         "_comment": "Fresh magazine firmly inserted and locked into receiver.",
-        "pose": { "support": [0.12, -0.32, 0.5], "supportRoll": 0.45 }
+        "pose": {
+          "support": [
+            0.12,
+            -0.32,
+            0.5
+          ],
+          "supportRoll": 0.45,
+          "supportFingers": [
+            0.4,
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ]
+        }
       },
       {
         "t": 0.72,
         "_comment": "Support hand moves up to left-side charging handle.",
-        "pose": { "support": [0.28, -0.15, -0.12], "supportRoll": 0.35 }
+        "pose": {
+          "support": [
+            0.28,
+            -0.15,
+            -0.12
+          ],
+          "supportRoll": 0.35,
+          "supportFingers": [
+            0.7,
+            0.85,
+            0.85,
+            0.85,
+            0.85
+          ]
+        }
       },
       {
         "t": 0.78,
         "_comment": "Charging handle racked backward, compressing bolt spring.",
-        "pose": { "support": [0.32, -0.12, 0.05], "supportRoll": 0.4 }
+        "pose": {
+          "support": [
+            0.32,
+            -0.12,
+            0.05
+          ],
+          "supportRoll": 0.4,
+          "supportFingers": [
+            0.7,
+            0.85,
+            0.85,
+            0.85,
+            0.85
+          ]
+        }
       },
       {
         "t": 0.84,
         "_comment": "Charging handle released, bolt snaps forward chambering round.",
-        "pose": { "support": [0.26, -0.16, -0.1], "supportRoll": 0.3 }
+        "pose": {
+          "support": [
+            0.26,
+            -0.16,
+            -0.1
+          ],
+          "supportRoll": 0.3,
+          "supportFingers": [
+            0.35,
+            0.3,
+            0.3,
+            0.3,
+            0.3
+          ]
+        }
       },
       {
         "t": 0.92,
         "_comment": "Support hand returning to forward handguard grip.",
-        "pose": { "support": [0.08, -0.06, 0.04], "supportRoll": 0.1 }
+        "pose": {
+          "support": [
+            0.08,
+            -0.06,
+            0.04
+          ],
+          "supportRoll": 0.1
+        }
       },
-      { "t": 1, "pose": {} }
-    ],
-    "inspect": [
-      { "t": 0, "pose": {} },
-      { "t": 0.3, "pose": { "support": [-0.06, -0.1, -0.16], "supportRoll": 0.3 } },
-      { "t": 0.7, "pose": { "support": [-0.06, -0.1, -0.16], "supportRoll": 0.3 } },
-      { "t": 1, "pose": {} }
+      {
+        "t": 1,
+        "pose": {}
+      }
     ],
     "throw": [
       {
@@ -112,22 +347,115 @@
         "_comment": "Pull the pin: the support hand comes across to the primary.",
         "pose": {}
       },
-      { "t": 0.25, "pose": { "primary": [0.02, 0.06, 0.1], "support": [0.1, 0.02, 0.16] } },
+      {
+        "t": 0.25,
+        "pose": {
+          "primary": [
+            0.02,
+            0.06,
+            0.1
+          ],
+          "support": [
+            0.1,
+            0.02,
+            0.16
+          ],
+          "supportFingers": [
+            0.8,
+            0.9,
+            0.4,
+            0.4,
+            0.4
+          ]
+        }
+      },
       {
         "t": 0.5,
         "_comment": "Windup, back and up over the shoulder.",
-        "pose": { "primary": [0.1, 0.3, 0.55], "support": [0, -0.1, 0], "primaryRoll": -0.4 }
+        "pose": {
+          "primary": [
+            0.1,
+            0.3,
+            0.55
+          ],
+          "support": [
+            0,
+            -0.1,
+            0
+          ],
+          "primaryRoll": -0.4,
+          "primaryFingers": [
+            0.9,
+            1,
+            1,
+            1,
+            1
+          ]
+        }
       },
       {
         "t": 0.7,
         "_comment": "Release, out and forward.",
-        "pose": { "primary": [-0.05, -0.05, -0.5], "support": [0, -0.05, 0], "primaryRoll": 0.25 }
+        "pose": {
+          "primary": [
+            -0.05,
+            -0.05,
+            -0.5
+          ],
+          "support": [
+            0,
+            -0.05,
+            0
+          ],
+          "primaryRoll": 0.25,
+          "primaryFingers": [
+            0.1,
+            0.05,
+            0.05,
+            0.05,
+            0.05
+          ]
+        }
       },
-      { "t": 1, "pose": {} }
+      {
+        "t": 1,
+        "pose": {}
+      }
     ],
     "draw": [
-      { "t": 0, "pose": { "primary": [0, -0.4, 0.2], "support": [0, -0.5, 0.2] } },
-      { "t": 1, "pose": {} }
+      {
+        "t": 0,
+        "pose": {
+          "primary": [
+            0,
+            -0.4,
+            0.2
+          ],
+          "support": [
+            0,
+            -0.5,
+            0.2
+          ],
+          "primaryFingers": [
+            0.5,
+            0.6,
+            0.6,
+            0.6,
+            0.6
+          ],
+          "supportFingers": [
+            0.4,
+            0.4,
+            0.4,
+            0.4,
+            0.4
+          ]
+        }
+      },
+      {
+        "t": 1,
+        "pose": {}
+      }
     ]
   }
 }

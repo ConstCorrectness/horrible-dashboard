@@ -109,6 +109,7 @@ against that rule first.
 
 | Path                              | Size   | Source                                      | Licence | Used by                                            |
 | --------------------------------- | ------ | ------------------------------------------- | ------- | -------------------------------------------------- |
+| `hassault-hands.glb`              | 1.0 MB | Procedural rig by `tools/blender/generate_arms.py` | MIT (ours) | **First-person hands & arm rig**                   |
 | `green swat.fbx`                  | 35 MB  | Mixamo auto-rig of the Sketchfab mesh below | GPL     | **The operator GLB**                               |
 | `animations/` (23 FBX)            | 6.4 MB | Mixamo                                      | GPL     | **The operator GLB**                               |
 | `t-pose-male-green-swat/`         | 63 MB  | Sketchfab                                   | GPL     | Nothing — kept for its full-resolution `textures/` |

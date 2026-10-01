@@ -1287,6 +1287,13 @@ dispatches through `game_key`:
   both.
 - **Pane-only actions do nothing natively.** Ping, drop and noclip have no native
   implementation, so bound there they do nothing rather than something else.
+- **Rebindable from the native Esc menu too.** CONTROLS lists PUSH TO TALK up
+  front, then one page per group (Movement, Combat, Utility, Communication) with
+  every action the native client acts on; the three pane-only actions are left out.
+  Activate a row, then press its new key: Escape cancels, Backspace clears.
+  `Controls::bind` mirrors `setBinding` (taking a held key takes it from the other
+  action), and the result is saved as the same diff `serializeControls` writes, so
+  a rebind in either client is a rebind in both.
 
 The screen once listed its groups by hand as `['Movement', 'Combat', 'View']`,
 which silently left out **Utility**. So the grenade, throw, buy, use and drop keys
@@ -1460,6 +1467,57 @@ That port is also what equipping a grenade uses. The holster is **purely
 cosmetic**: it changes nothing about what is held, what can be fired, or what the
 wire says — which is exactly why it is the right tool, and `ShotController.select`
 is not.
+
+### Skinned hands, knives in cube units, and one inspect per weapon
+
+The cylinder-and-box arms above are now the **fallback**. What both clients draw is
+`hassault-hands.glb`: a sleeved forearm and a gloved hand with jointed fingers,
+built by `tools/blender/generate_arms.py` — ours end to end, which is why the
+unlicensed "FPS Female Arms" GLB beside it is not what ships. The browser poses it
+in `hands.ts`; the native client in `hands.rs`, which skins it on the CPU and draws
+it with the weapon props' textured, lit pipeline, so the glove and the gun in it
+are shaded by one model.
+
+- **The fist goes on the grip.** An anchor in `grips.json` is the centre of the
+  closed fist (the rig's `grip` bone) plus `*Aim` (wrist to knuckles) and `*Up`
+  (the hole through the fist). The hand's rotation falls out of those, the wrist
+  is the grip minus where the grip sits in the hand, and the two-bone solve
+  reaches the wrist. `*Curl` closes each finger, thumb first.
+- **Anchors are in the prop's own space** — the GLB coordinates both clients read
+  byte for byte — and were measured off each model's geometry (the pistol grip,
+  the handguard, the SVU's forward grip). In box-model space they had put both
+  hands behind every rifle, because the box models are a different length from
+  the props they stand in for.
+- **Out of reach, the shoulder comes forward** — straight forward, so it stays
+  below the frame (`slideShoulder` / `slide_shoulder`). A view-model rifle's
+  handguard is two cubes from the off shoulder; a hand short of the grip is worse
+  than a shoulder nobody can see.
+- **Knives are in cube units and placed by the hilt.** The generator
+  (`generate_all_knives.py`) builds every blade from a profile outline with a real
+  grind, fuller, jimping and serrations, exports at real size in cube units with
+  the origin at the hilt, and both clients put that origin at `knifeHilt` from
+  `grips.json` rather than centring the bounding box — so every knife's handle
+  lands in the same fist whatever its blade does. The butterfly's handles are
+  separate nodes on their pins; the karambit and skeleton carry a `spin_origin`.
+
+Each weapon's inspect is its own clip in `models/inspects.json`, authored in
+`tools/blender/author_inspects.py` (which documents every channel and writes
+`inspects.golden.json`, the vectors both samplers are tested against). A pistol
+press-checks, a rifle checks its magazine, the FAL pulls its charging handle, the
+shotgun half-pumps, the sniper works its bolt; a karambit twirls on its ring
+(`spin` about `spin_origin`, applied to the prop alone so the hand stays put), the
+butterfly flips open and shut (`nodes`), the bayonet is tossed and caught. A
+second F on a knife jumps back to the clip's `repeatFrom`.
+
+To give a new weapon hands and an inspect: add its anchors to `grips.json` in its
+prop's coordinates, add a clip to `author_inspects.py` and run it, then check the
+picture — `cargo run --example viewmodel_preview -- out.png <weapon>` renders the
+client's own path per inspect moment, and `PREVIEW_ORBIT=70` swings the eye round
+to show where the arms really are.
+
+Own shots spawn **no brass and no smoke wisp** in the native client any more. Both
+are world effects at the shot's origin, which for your own shot is your eye, so
+they landed on the crosshair for a frame every time you fired.
 
 ### Muzzle flash: a billboard, not a cone
 

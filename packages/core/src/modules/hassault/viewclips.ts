@@ -40,13 +40,25 @@
  */
 import clips from './models/viewclips.json';
 
-/** The four channels a pose can move. Anything not named is left on the gun. */
+/** The channels a pose can move. Anything not named is left on the gun. */
 export interface ArmPose {
   primary: [number, number, number];
   support: [number, number, number];
   primaryRoll: number;
   supportRoll: number;
+  /**
+   * Finger curls, thumb first, and how much of them to apply over the grip's own
+   * curl (1 when absent). A weight rather than a hard value because a key with
+   * no fingers means "the grip's curl", which only the caller knows: sampled
+   * as a hard value, a track snapped the hand open on its first frame.
+   */
+  primaryFingers: Curl5;
+  supportFingers: Curl5;
+  primaryFingersWeight: number;
+  supportFingersWeight: number;
 }
+
+export type Curl5 = [number, number, number, number, number];
 
 export type PartialPose = Partial<ArmPose>;
 
@@ -59,7 +71,7 @@ export interface Keyframe {
 export type Track = Keyframe[];
 
 export type LocomotionClip = 'idle' | 'walk' | 'run' | 'jump' | 'land';
-export type ActionClip = 'reload' | 'inspect' | 'throw' | 'draw';
+export type ActionClip = 'reload' | 'throw' | 'draw';
 
 interface ClipFile {
   locomotion: Record<string, Track>;
@@ -112,7 +124,39 @@ function lerp3(
   return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 }
 
+function lerp5(a: Curl5, b: Curl5, t: number): Curl5 {
+  return [
+    a[0] + (b[0] - a[0]) * t,
+    a[1] + (b[1] - a[1]) * t,
+    a[2] + (b[2] - a[2]) * t,
+    a[3] + (b[3] - a[3]) * t,
+    a[4] + (b[4] - a[4]) * t,
+  ];
+}
+
 const ZERO3: [number, number, number] = [0, 0, 0];
+
+/**
+ * A finger channel between two keys. Where only one key has fingers, its curl
+ * is held and its weight fades, so the hand eases between the grip's curl and
+ * the key's instead of jumping.
+ */
+function fingersBetween(
+  a: Curl5 | undefined,
+  b: Curl5 | undefined,
+  k: number,
+): { curl: Curl5; weight: number } | null {
+  if (a && b) return { curl: lerp5(a, b, k), weight: 1 };
+  if (a) return { curl: [...a] as Curl5, weight: 1 - k };
+  if (b) return { curl: [...b] as Curl5, weight: k };
+  return null;
+}
+
+/** Blend a pose's finger channel over the grip's own curl. */
+export function curlOver(grip: Curl5, fingers: Curl5 | undefined, weight = 1): Curl5 {
+  if (!fingers) return grip;
+  return grip.map((v, i) => v + (fingers[i] - v) * weight) as Curl5;
+}
 
 /**
  * Sample one track at a normalised time.
@@ -150,6 +194,16 @@ export function sampleTrack(track: Track, t: number): PartialPose {
   if (a.pose.supportRoll !== undefined || b.pose.supportRoll !== undefined) {
     const from = a.pose.supportRoll ?? 0;
     out.supportRoll = from + ((b.pose.supportRoll ?? 0) - from) * k;
+  }
+  const primary = fingersBetween(a.pose.primaryFingers, b.pose.primaryFingers, k);
+  if (primary) {
+    out.primaryFingers = primary.curl;
+    out.primaryFingersWeight = primary.weight;
+  }
+  const support = fingersBetween(a.pose.supportFingers, b.pose.supportFingers, k);
+  if (support) {
+    out.supportFingers = support.curl;
+    out.supportFingersWeight = support.weight;
   }
   return out;
 }

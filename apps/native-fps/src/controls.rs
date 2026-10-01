@@ -136,6 +136,10 @@ impl Controls {
                 .map(str::to_string)
                 .collect();
         }
+        Controls::from_table(table)
+    }
+
+    fn from_table(table: Vec<(Action, Vec<String>)>) -> Controls {
         // First binding wins, in action order — the same rule as `codeMap`, so a
         // duplicate left in hand-edited storage resolves identically in both.
         let mut by_code = HashMap::new();
@@ -145,6 +149,61 @@ impl Controls {
             }
         }
         Controls { by_code, table }
+    }
+
+    /// The keys `action` holds, primary first.
+    pub fn keys(&self, action: Action) -> &[String] {
+        self.table
+            .iter()
+            .find(|(a, _)| *a == action)
+            .map(|(_, codes)| codes.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Put `code` in `action`'s primary slot, or clear that slot with `None` —
+    /// `setBinding(bindings, action, 0, code)` in `controls.ts`.
+    ///
+    /// Taking a key another action holds **takes it from that action**, as the
+    /// pane does: two actions on one key is a state nobody can see from the
+    /// menu, so it is never reached. A reserved key is refused outright.
+    pub fn bind(&mut self, action: Action, code: Option<&str>) {
+        if code.is_some_and(|c| RESERVED.contains(&c)) {
+            return;
+        }
+        let mut table = std::mem::take(&mut self.table);
+        if let Some(code) = code {
+            for (a, codes) in table.iter_mut() {
+                let mine = *a == action;
+                let mut i = 0;
+                codes.retain(|c| {
+                    let keep = c != code || (mine && i == 0);
+                    i += 1;
+                    keep
+                });
+            }
+        }
+        if let Some((_, codes)) = table.iter_mut().find(|(a, _)| *a == action) {
+            let mut slots: Vec<Option<String>> =
+                (0..SLOTS).map(|i| codes.get(i).cloned()).collect();
+            slots[0] = code.map(str::to_string);
+            // Compacted, so clearing the primary promotes the alternate.
+            *codes = slots.into_iter().flatten().collect();
+        }
+        *self = Controls::from_table(table);
+    }
+
+    /// Only what differs from the defaults, as `serializeControls` writes it —
+    /// the value stored under `hassault.controls`.
+    pub fn serialize(&self) -> String {
+        let mut diff = serde_json::Map::new();
+        // `table` is built from `DEFAULTS` and never reordered.
+        for ((_, codes), (_, name, shipped)) in self.table.iter().zip(DEFAULTS) {
+            if codes.len() != shipped.len() || codes.iter().zip(shipped.iter()).any(|(a, b)| a != b)
+            {
+                diff.insert((*name).to_string(), serde_json::json!(codes));
+            }
+        }
+        serde_json::Value::Object(diff).to_string()
     }
 
     /// Read the table out of the node's settings bag. Kept beside `Settings`
@@ -201,7 +260,15 @@ pub fn key_label(code: &str) -> String {
         "ControlRight" => "R CTRL".into(),
         "AltLeft" => "L ALT".into(),
         "AltRight" => "R ALT".into(),
-        other => other.to_ascii_uppercase(),
+        "ArrowUp" => "UP".into(),
+        "ArrowDown" => "DOWN".into(),
+        "ArrowLeft" => "LEFT".into(),
+        "ArrowRight" => "RIGHT".into(),
+        "CapsLock" => "CAPS".into(),
+        other => match other.strip_prefix("Numpad") {
+            Some(rest) => format!("NUM {}", rest.to_ascii_uppercase()),
+            None => other.to_ascii_uppercase(),
+        },
     }
 }
 
@@ -246,6 +313,27 @@ mod tests {
         assert!(Controls::parse(Some("not json"))
             .action(KeyCode::KeyW)
             .is_some());
+    }
+
+    #[test]
+    fn binding_a_held_key_takes_it_and_saves_only_the_diff() {
+        let mut c = Controls::default();
+        assert_eq!(c.serialize(), "{}");
+        // V is push-to-talk by default; giving it to inspect takes it away.
+        c.bind(Action::Inspect, Some("KeyV"));
+        assert_eq!(c.action(KeyCode::KeyV), Some(Action::Inspect));
+        assert!(c.keys(Action::Voice).is_empty());
+        c.bind(Action::Voice, Some("CapsLock"));
+        let saved = Controls::parse(Some(&c.serialize()));
+        assert_eq!(saved.action(KeyCode::CapsLock), Some(Action::Voice));
+        assert_eq!(saved.action(KeyCode::KeyV), Some(Action::Inspect));
+        assert_eq!(saved.action(KeyCode::KeyF), None);
+        // Clearing the primary promotes the alternate, as the pane does.
+        c.bind(Action::Forward, None);
+        assert_eq!(c.keys(Action::Forward), ["ArrowUp".to_string()]);
+        // A reserved key is refused.
+        c.bind(Action::Jump, Some("Escape"));
+        assert_eq!(c.action(KeyCode::Space), Some(Action::Jump));
     }
 
     #[test]

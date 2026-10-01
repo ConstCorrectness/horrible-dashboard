@@ -1,41 +1,193 @@
 {
-  "_comment": "Where the hands go on each weapon, in the fitted model's own space. Read by BOTH packages/core/src/modules/hassault/arms.ts and apps/native-fps/src/arms.rs (include_str!), and pinned together by apps/native-fps/tests/browser_parity.rs. Coordinates are cube units, x right / y up / z forward-negative.",
+  "_comment": "Where the hands go on each weapon, in the PROP's own space: the GLB's coordinates as both clients read them (firearms: origin at the rear-bottom, barrel down -Z, y up; knives: origin at the hilt). Measured off each model's own geometry, so a hand lands on the grip whatever the procedural box model looked like. Read by BOTH packages/core/src/modules/hassault/arms.ts and apps/native-fps/src/arms.rs (include_str!), and pinned together by apps/native-fps/tests/browser_parity.rs. Cube units. `primary`/`support` are the centre of the closed fist (the hands rig's `grip` bone). `*Aim` runs wrist to knuckles and `*Up` along the hole through the fist, thumb side -- the hand closes around that axis, so a vertical pistol grip wants an `up` near +Y and a handguard one near -Z. `*Curl` is how closed each finger is, thumb first: a trigger finger at about 0.4 rests on the trigger rather than through it. `*Roll` only steers the procedural fallback arms, which have no fingers to aim.",
+  "_knifeHilt": "Where a knife prop's origin -- its hilt, where blade meets guard -- is placed in the box model's space. Knives are placed by that point rather than by their bounding box, so every archetype's handle lands in the same fist whatever its blade does. Read by fitKnifeModel (models/weapons.ts) and fit_prop (viewmodel.rs).",
+  "knifeHilt": [
+    0.0,
+    0.02,
+    -0.2
+  ],
   "defaults": {
-    "primary": [0.0, -0.12, 0.16],
-    "support": [0.0, -0.08, -0.28],
+    "primary": [
+      0.0,
+      0.28,
+      -0.56
+    ],
+    "support": [
+      0.0,
+      0.44,
+      -1.4
+    ],
     "primaryRoll": 0.0,
-    "supportRoll": 0.0
+    "supportRoll": 0.0,
+    "primaryAim": [
+      0.0,
+      0.3,
+      -1.0
+    ],
+    "primaryUp": [
+      0.0,
+      1.0,
+      0.3
+    ],
+    "primaryCurl": [
+      0.7,
+      0.4,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "supportAim": [
+      1.0,
+      0.25,
+      0.0
+    ],
+    "supportUp": [
+      0.0,
+      0.0,
+      -1.0
+    ],
+    "supportCurl": [
+      0.3,
+      0.85,
+      0.85,
+      0.85,
+      0.85
+    ]
   },
   "weapons": {
     "pistol": {
-      "primary": [0.0, -0.08, 0.10],
-      "support": [-0.08, -0.14, 0.06],
+      "primary": [
+        0.0,
+        0.18,
+        -0.09
+      ],
+      "support": [
+        -0.05,
+        0.1,
+        -0.1
+      ],
       "primaryRoll": 0.0,
-      "supportRoll": 0.35
+      "supportRoll": 0.35,
+      "primaryAim": [
+        0.0,
+        0.25,
+        -1.0
+      ],
+      "primaryUp": [
+        0.0,
+        1.0,
+        0.1
+      ],
+      "primaryCurl": [
+        0.75,
+        0.38,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "supportAim": [
+        0.8,
+        0.1,
+        -0.6
+      ],
+      "supportUp": [
+        0.0,
+        0.8,
+        -0.6
+      ],
+      "supportCurl": [
+        0.5,
+        0.95,
+        0.95,
+        0.95,
+        0.95
+      ]
     },
     "assault": {
-      "primary": [0.0, -0.12, 0.16],
-      "support": [0.0, -0.08, -0.28],
+      "primary": [
+        0.0,
+        0.28,
+        -0.56
+      ],
+      "support": [
+        0.0,
+        0.44,
+        -1.4
+      ],
       "primaryRoll": 0.0,
-      "supportRoll": -0.12
+      "supportRoll": -0.12,
+      "primaryAim": [
+        0.0,
+        0.3,
+        -1.0
+      ],
+      "primaryUp": [
+        0.0,
+        1.0,
+        0.3
+      ]
     },
     "shotgun": {
-      "primary": [0.0, -0.12, 0.18],
-      "support": [0.0, -0.12, -0.32],
+      "primary": [
+        0.0,
+        0.26,
+        -0.52
+      ],
+      "support": [
+        0.0,
+        0.33,
+        -1.72
+      ],
       "primaryRoll": 0.0,
-      "supportRoll": -0.08
+      "supportRoll": -0.08,
+      "supportCurl": [
+        0.35,
+        0.95,
+        0.95,
+        0.95,
+        0.95
+      ]
     },
     "sniper": {
-      "primary": [0.0, -0.12, 0.22],
-      "support": [0.0, -0.08, -0.36],
+      "primary": [
+        0.0,
+        0.22,
+        -1.19
+      ],
+      "support": [
+        0.0,
+        0.38,
+        -1.72
+      ],
       "primaryRoll": 0.0,
       "supportRoll": -0.1
     },
     "knife": {
-      "primary": [0.0, -0.06, 0.10],
+      "primary": [
+        0.0,
+        -0.02,
+        0.17
+      ],
       "support": null,
       "primaryRoll": 0.5,
-      "supportRoll": 0.0
+      "supportRoll": 0.0,
+      "primaryAim": [
+        0.15,
+        1.0,
+        0.25
+      ],
+      "primaryUp": [
+        0.0,
+        0.25,
+        -1.0
+      ],
+      "primaryCurl": [
+        0.9,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
     }
   }
 }

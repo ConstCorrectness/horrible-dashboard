@@ -5,11 +5,11 @@
 //! themselves come from the same `models/grips.json` — compiled in with
 //! `include_str!`, the trick `prop.rs` already uses for the weapon GLBs.
 //!
-//! ## Procedural, and solved onto the weapon
+//! ## Procedural, and the fallback
 //!
 //! Two arms, each an upper arm, a forearm and a gloved hand built from
-//! primitives — the module's licensing rule, and the same construction the
-//! weapons use.
+//! primitives. What this client drew before `hands.rs`, and what it still draws
+//! if the skinned hands will not parse.
 //!
 //! The **shoulders are fixed in camera space** and each hand is solved onto a
 //! grip anchor **on the weapon**, by two-bone analytic IK. That one decision is
@@ -30,8 +30,8 @@ use glam::{Mat4, Vec3};
 use crate::renderer::Vertex;
 
 /// Where the shoulders sit, in **camera** space. `arms.ts`'s `SHOULDER_R`/`_L`.
-pub const SHOULDER_R: Vec3 = Vec3::new(0.42, -0.62, 0.28);
-pub const SHOULDER_L: Vec3 = Vec3::new(-0.42, -0.62, 0.28);
+pub const SHOULDER_R: Vec3 = Vec3::new(0.46, -0.95, 0.2);
+pub const SHOULDER_L: Vec3 = Vec3::new(-0.46, -0.95, 0.2);
 
 /// Segment lengths, in cube units. About 30cm and 27cm — an arm.
 pub const UPPER_LEN: f32 = 0.84;
@@ -63,6 +63,43 @@ pub struct GripAnchors {
     pub support: Option<Vec3>,
     pub primary_roll: f32,
     pub support_roll: f32,
+    /// The skinned hands' orientation and fingers: wrist to knuckles, the hole
+    /// through the fist, and how closed each finger is (thumb first). See
+    /// `hands.rs`. The procedural arms, which have no fingers, ignore them.
+    pub primary_aim: Vec3,
+    pub primary_up: Vec3,
+    pub primary_curl: [f32; 5],
+    pub support_aim: Vec3,
+    pub support_up: Vec3,
+    pub support_curl: [f32; 5],
+}
+
+fn curl_from(value: &serde_json::Value) -> Option<[f32; 5]> {
+    let a = value.as_array()?;
+    let mut out = [0.0; 5];
+    for (i, slot) in out.iter_mut().enumerate() {
+        *slot = a.get(i)?.as_f64()? as f32;
+    }
+    Some(out)
+}
+
+/// The hand frames and curls every weapon starts from, before `grips.json`.
+const DEFAULT_PRIMARY_CURL: [f32; 5] = [0.7, 0.4, 1.0, 1.0, 1.0];
+const DEFAULT_SUPPORT_CURL: [f32; 5] = [0.3, 0.85, 0.85, 0.85, 0.85];
+
+fn fallback_grips() -> GripAnchors {
+    GripAnchors {
+        primary: Vec3::new(0.0, -0.3, 0.22),
+        support: Some(Vec3::new(0.0, -0.22, -0.55)),
+        primary_roll: 0.0,
+        support_roll: 0.0,
+        primary_aim: Vec3::new(0.0, 0.3, -1.0),
+        primary_up: Vec3::new(0.0, 1.0, 0.3),
+        primary_curl: DEFAULT_PRIMARY_CURL,
+        support_aim: Vec3::new(1.0, 0.25, 0.0),
+        support_up: Vec3::NEG_Z,
+        support_curl: DEFAULT_SUPPORT_CURL,
+    }
 }
 
 fn vec3_from(value: &serde_json::Value) -> Option<Vec3> {
@@ -90,21 +127,21 @@ pub fn grips_for(weapon_id: &str) -> GripAnchors {
         // Compiled in, so this cannot happen at runtime — but a panic in a
         // renderer for a malformed constant would take the whole client down
         // rather than drawing one weapon without hands.
-        Err(_) => {
-            return GripAnchors {
-                primary: Vec3::new(0.0, -0.3, 0.22),
-                support: Some(Vec3::new(0.0, -0.22, -0.55)),
-                primary_roll: 0.0,
-                support_roll: 0.0,
-            }
-        }
+        Err(_) => return fallback_grips(),
     };
     let defaults = &file["defaults"];
+    let base = fallback_grips();
     let mut out = GripAnchors {
-        primary: vec3_from(&defaults["primary"]).unwrap_or(Vec3::new(0.0, -0.3, 0.22)),
+        primary: vec3_from(&defaults["primary"]).unwrap_or(base.primary),
         support: vec3_from(&defaults["support"]),
         primary_roll: defaults["primaryRoll"].as_f64().unwrap_or(0.0) as f32,
         support_roll: defaults["supportRoll"].as_f64().unwrap_or(0.0) as f32,
+        primary_aim: vec3_from(&defaults["primaryAim"]).unwrap_or(base.primary_aim),
+        primary_up: vec3_from(&defaults["primaryUp"]).unwrap_or(base.primary_up),
+        primary_curl: curl_from(&defaults["primaryCurl"]).unwrap_or(base.primary_curl),
+        support_aim: vec3_from(&defaults["supportAim"]).unwrap_or(base.support_aim),
+        support_up: vec3_from(&defaults["supportUp"]).unwrap_or(base.support_up),
+        support_curl: curl_from(&defaults["supportCurl"]).unwrap_or(base.support_curl),
     };
     let Some(listed) = file["weapons"].get(weapon_id) else {
         if weapon_id.starts_with("nade_") || weapon_id.starts_with("grenade_") {
@@ -112,7 +149,7 @@ pub fn grips_for(weapon_id: &str) -> GripAnchors {
                 primary: Vec3::new(0.08, -0.24, 0.20),
                 support: None,
                 primary_roll: 0.1,
-                support_roll: 0.0,
+                ..out
             };
         }
         return out;
@@ -132,7 +169,34 @@ pub fn grips_for(weapon_id: &str) -> GripAnchors {
     if let Some(r) = listed["supportRoll"].as_f64() {
         out.support_roll = r as f32;
     }
+    if let Some(v) = vec3_from(&listed["primaryAim"]) {
+        out.primary_aim = v;
+    }
+    if let Some(v) = vec3_from(&listed["primaryUp"]) {
+        out.primary_up = v;
+    }
+    if let Some(c) = curl_from(&listed["primaryCurl"]) {
+        out.primary_curl = c;
+    }
+    if let Some(v) = vec3_from(&listed["supportAim"]) {
+        out.support_aim = v;
+    }
+    if let Some(v) = vec3_from(&listed["supportUp"]) {
+        out.support_up = v;
+    }
+    if let Some(c) = curl_from(&listed["supportCurl"]) {
+        out.support_curl = c;
+    }
     out
+}
+
+/// Where a knife prop's hilt — its origin — is placed in the box model's space.
+/// `knifeHilt` in `grips.json`; the browser's `fitKnifeModel` reads the same.
+pub fn knife_hilt() -> Vec3 {
+    serde_json::from_str::<serde_json::Value>(GRIPS_JSON)
+        .ok()
+        .and_then(|f| vec3_from(&f["knifeHilt"]))
+        .unwrap_or(Vec3::new(0.0, 0.02, -0.2))
 }
 
 /// Put the elbow somewhere plausible between a shoulder and a hand.

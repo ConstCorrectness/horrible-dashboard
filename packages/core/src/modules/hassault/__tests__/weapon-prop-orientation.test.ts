@@ -227,9 +227,12 @@ describe('the shipped weapon props', () => {
       // The knife has a blade pointing down -Z and a pommel at +Z.
       // Unlike guns with wide stocks and narrow barrels, a knife's blade tip has
       // spine-to-bevel height while the rear pommel breaker is tapered.
-      // Both ends must have valid geometry and extend forward into -Z from its hilt origin.
-      expect(near).toBeLessThan(-0.15);
-      expect(far).toBeLessThanOrEqual(0.12);
+      // Both ends must have valid geometry and extend forward into -Z from its
+      // hilt origin. In cube units, like every prop: 0.83 cubes is a 30 cm
+      // knife, and one left in metres would be a speck in the fist.
+      expect(near).toBeLessThan(-0.35);
+      expect(far).toBeGreaterThan(0.15);
+      expect(far).toBeLessThanOrEqual(0.45);
       return;
     }
     expect(back.diagonal / front.diagonal).toBeGreaterThan(1.8);
@@ -254,10 +257,11 @@ describe('the shipped weapon props', () => {
         if (p[i] > hi[i]) hi[i] = p[i];
       }
     }
-    // The box the prop occupies, centred like `fitWeaponModel` leaves it.
-    const half = [0, 1, 2].map((i) => (hi[i] - lo[i]) / 2);
+    // The anchors are in the prop's own space, so they have to be inside its
+    // own bounds — with a margin, because a fist centre sits beside a grip
+    // rather than in it.
     const grips = gripsFor(weapon);
-    const margin = 0.45;
+    const margin = 0.12;
     for (const [name, anchor] of [
       ['primary', grips.primary],
       ['support', grips.support],
@@ -265,9 +269,9 @@ describe('the shipped weapon props', () => {
       if (anchor === null) continue;
       for (let i = 0; i < 3; i++) {
         expect(
-          Math.abs(anchor[i]),
-          `${weapon} ${name} axis ${i} is ${anchor[i]}, outside a ${half[i].toFixed(2)}-cube weapon`,
-        ).toBeLessThanOrEqual(half[i] + margin);
+          anchor[i] >= lo[i] - margin && anchor[i] <= hi[i] + margin,
+          `${weapon} ${name} axis ${i} is ${anchor[i]}, outside ${lo[i].toFixed(2)}..${hi[i].toFixed(2)}`,
+        ).toBe(true);
       }
     }
   });

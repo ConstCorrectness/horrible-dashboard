@@ -353,6 +353,27 @@ fn both_clients_read_the_same_grips_and_the_same_clips() {
     );
 }
 
+const INSPECTS_TS: &str = include_str!("../../../packages/core/src/modules/hassault/inspects.ts");
+const INSPECTS_RS: &str = include_str!("../src/inspects.rs");
+const HANDS_TS: &str = include_str!("../../../packages/core/src/modules/hassault/hands.ts");
+const HANDS_RS: &str = include_str!("../src/hands.rs");
+
+#[test]
+fn both_clients_run_the_same_inspects_on_the_same_hands() {
+    // The same arrangement as the grips: one clip file and one rig, read by
+    // both. The samplers are held to `inspects.golden.json` by each client's
+    // own tests; this catches a client quietly going back to formulas.
+    assert!(INSPECTS_TS.contains("from './models/inspects.json'"));
+    assert!(INSPECTS_RS.contains("models/inspects.json"));
+    assert!(HANDS_TS.contains("/hassault-hands.glb"));
+    assert!(HANDS_RS.contains("hassault-hands.glb"));
+    // The flex axes are the one part of the hands not read from the file.
+    assert!(HANDS_TS.contains("FINGER_FLEX_AXIS: Vec3 = [0, 1, 0]"));
+    assert!(HANDS_RS.contains("const FINGER_FLEX_AXIS: Vec3 = Vec3::Y"));
+    assert!(HANDS_TS.contains("normalize([-0.7, 0, 0.57])"));
+    assert!(HANDS_RS.contains("Vec3::new(-0.7, 0.0, 0.57).normalize()"));
+}
+
 #[test]
 fn both_clients_build_an_arm_to_the_same_dimensions() {
     // A shoulder in a different place, or a forearm a different length, and the

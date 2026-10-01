@@ -33,21 +33,48 @@
  */
 import type * as THREE from 'three';
 
+import {
+  findBones,
+  loadHandsModel,
+  poseArm,
+  readRest,
+  type BoneMap,
+  type Curl,
+  type HandsModel,
+  type HandsRest,
+} from './hands';
 import grips from './models/grips.json';
 
 /** A point in the weapon's own model space. */
 export type Vec3 = [number, number, number];
+export type { Curl };
+
+/** What the view model drives: either kind of arms. */
+export interface ArmRigInstance {
+  update(
+    anchors: GripAnchors,
+    toCamera: (p: Vec3) => Vec3,
+    visible: boolean,
+    dirToCamera?: (d: Vec3) => Vec3,
+  ): void;
+  dispose(): void;
+}
+
+/** How strongly the gloves reflect the prop environment. Below the metal's. */
+const HANDS_ENV_INTENSITY = 0.9;
 
 /**
  * Where the shoulders sit, in **camera** space.
  *
  * Below and behind the eye, because that is where shoulders are. The numbers are
  * in cube units: the eye is 4.5 cubes up and eyes sit about 1.6m off the ground,
- * so a cube is roughly 36cm — these put the shoulders about 25cm below the eye
- * and 20cm apart either side of it, which is a person.
+ * so a cube is roughly 36cm — these put the shoulders about 34cm below the eye
+ * and 17cm either side of it. A little low for a person, on purpose: the upper
+ * arm is then below the frame, so what the player sees is forearms and hands
+ * rather than a sleeve filling the bottom of the screen.
  */
-export const SHOULDER_R: Vec3 = [0.42, -0.62, 0.28];
-export const SHOULDER_L: Vec3 = [-0.42, -0.62, 0.28];
+export const SHOULDER_R: Vec3 = [0.46, -0.95, 0.2];
+export const SHOULDER_L: Vec3 = [-0.46, -0.95, 0.2];
 
 /** Segment lengths, in cube units. About 30cm and 27cm — an arm. */
 export const UPPER_LEN = 0.84;
@@ -78,10 +105,23 @@ export interface GripAnchors {
   support: Vec3 | null;
   primaryRoll: number;
   supportRoll: number;
+  /**
+   * The skinned hands' orientation and fingers: wrist-to-knuckles, the hole
+   * through the fist, and how closed each finger is. See `hands.ts`. Ignored by
+   * the procedural arms, which have no fingers to close.
+   */
+  primaryAim: Vec3;
+  primaryUp: Vec3;
+  primaryCurl: Curl;
+  supportAim: Vec3;
+  supportUp: Vec3;
+  supportCurl: Curl;
 }
 
+type GripDefaults = Omit<GripAnchors, 'support'> & { support: Vec3 };
+
 interface GripFile {
-  defaults: { primary: Vec3; support: Vec3; primaryRoll: number; supportRoll: number };
+  defaults: GripDefaults;
   weapons: Record<string, Partial<GripAnchors> | undefined>;
 }
 
@@ -113,10 +153,9 @@ export function gripsFor(
   const length = extent?.length ?? 1;
   const height = extent?.height ?? 1;
   const fallback: GripAnchors = {
+    ...d,
     primary: [d.primary[0], d.primary[1] * height, d.primary[2] * length],
     support: [d.support[0], d.support[1] * height, d.support[2] * length],
-    primaryRoll: d.primaryRoll,
-    supportRoll: d.supportRoll,
   };
   if (!listed) return fallback;
   return {
@@ -127,6 +166,12 @@ export function gripsFor(
     support: listed.support === undefined ? fallback.support : listed.support,
     primaryRoll: listed.primaryRoll ?? fallback.primaryRoll,
     supportRoll: listed.supportRoll ?? fallback.supportRoll,
+    primaryAim: listed.primaryAim ?? fallback.primaryAim,
+    primaryUp: listed.primaryUp ?? fallback.primaryUp,
+    primaryCurl: listed.primaryCurl ?? fallback.primaryCurl,
+    supportAim: listed.supportAim ?? fallback.supportAim,
+    supportUp: listed.supportUp ?? fallback.supportUp,
+    supportCurl: listed.supportCurl ?? fallback.supportCurl,
   };
 }
 
@@ -221,13 +266,14 @@ interface Limb {
 }
 
 /**
- * Two arms, drawn in camera space and solved onto the weapon every frame.
+ * The fallback arms: cylinders and a box, solved onto the weapon by two-bone IK.
  *
- * The meshes are built once and only ever repositioned — a limb rebuilt per
- * frame is three allocations and three disposals sixty times a second, for
- * shapes that never change size.
+ * What the game drew before the skinned hands, and what it still draws until
+ * they load or if they cannot. The meshes are built once and only ever
+ * repositioned — a limb rebuilt per frame is three allocations and three
+ * disposals sixty times a second, for shapes that never change size.
  */
-export class ArmRig {
+export class ProceduralArmRig implements ArmRigInstance {
   private group: THREE.Group;
   private right: Limb;
   private left: Limb;
@@ -265,7 +311,11 @@ export class ArmRig {
     const lowerGeo = new three.CylinderGeometry(LOWER_RADIUS, LOWER_RADIUS * 0.85, 1, 8);
     const handGeo = new three.BoxGeometry(HAND_SIZE[0], HAND_SIZE[1], HAND_SIZE[2]);
     const cuffGeo = new three.CylinderGeometry(LOWER_RADIUS * 0.88, LOWER_RADIUS * 0.84, 0.08, 8);
-    const knuckleGeo = new three.BoxGeometry(HAND_SIZE[0] * 1.04, HAND_SIZE[1] * 0.28, HAND_SIZE[2] * 0.65);
+    const knuckleGeo = new three.BoxGeometry(
+      HAND_SIZE[0] * 1.04,
+      HAND_SIZE[1] * 0.28,
+      HAND_SIZE[2] * 0.65,
+    );
     this.geometries.push(upperGeo, lowerGeo, handGeo, cuffGeo, knuckleGeo);
 
     const upper = new three.Mesh(upperGeo, this.material(ARM_PALETTE.sleeve, 8));
@@ -362,5 +412,212 @@ export class ArmRig {
     for (const material of this.materials) material.dispose();
     this.geometries = [];
     this.materials = [];
+  }
+}
+
+/**
+ * The skinned hands: `hassault-hands.glb`, two clones of one rig, solved onto
+ * the weapon by `hands.ts`.
+ *
+ * The left arm is the same rig under a parent scaled `x = -1`, solved as a
+ * right arm in that mirrored space — every point and direction has its x
+ * negated on the way in, and `SHOULDER_L` mirrored is `SHOULDER_R`. three flips
+ * the winding of a mesh whose world matrix has a negative determinant, so the
+ * mirrored glove is not drawn inside out.
+ */
+export class SkinnedArmRig implements ArmRigInstance {
+  private group: THREE.Group;
+  private leftGroup: THREE.Group;
+  private rightBones: BoneMap;
+  private leftBones: BoneMap;
+  private rest: HandsRest;
+  private materials: THREE.MeshStandardMaterial[] = [];
+
+  constructor(
+    private readonly three: typeof THREE,
+    parent: THREE.Object3D,
+    handsModel: HandsModel,
+    environment: THREE.Texture | null,
+  ) {
+    const rightRoot = handsModel.clone(handsModel.prototype);
+    this.rightBones = findBones(rightRoot);
+    // Read before anything is posed: a rig missing a bone throws here, before
+    // it has been added to the scene, and the caller keeps the procedural arms.
+    this.rest = readRest(three, rightRoot, this.rightBones);
+    const leftRoot = handsModel.clone(handsModel.prototype);
+    this.leftBones = findBones(leftRoot);
+
+    this.group = new three.Group();
+    this.group.renderOrder = 2;
+    this.leftGroup = new three.Group();
+    this.leftGroup.scale.set(-1, 1, 1);
+    this.leftGroup.add(leftRoot);
+    this.group.add(rightRoot, this.leftGroup);
+    for (const root of [rightRoot, leftRoot]) this.setupMeshes(root, environment);
+    parent.add(this.group);
+  }
+
+  private setupMeshes(root: THREE.Object3D, environment: THREE.Texture | null): void {
+    root.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      // The bind-pose bounds are the arm pointing straight ahead from the
+      // shoulder — nothing like where it is drawn — so culling would drop it on
+      // exactly the frames it is most visible.
+      mesh.frustumCulled = false;
+      mesh.renderOrder = 2;
+      // Own materials, so the environment can be set on them without touching
+      // the prototype every future rig is cloned from.
+      const own = (m: THREE.Material) => {
+        const c = (m as THREE.MeshStandardMaterial).clone();
+        c.envMap = environment;
+        c.envMapIntensity = HANDS_ENV_INTENSITY;
+        this.materials.push(c);
+        return c;
+      };
+      mesh.material = Array.isArray(mesh.material) ? mesh.material.map(own) : own(mesh.material);
+    });
+  }
+
+  /** The gloves reflect what the weapon props reflect: one world, not two. */
+  setEnvironment(environment: THREE.Texture | null): void {
+    for (const m of this.materials) {
+      m.envMap = environment;
+      m.needsUpdate = true;
+    }
+  }
+
+  update(
+    anchors: GripAnchors,
+    toCamera: (p: Vec3) => Vec3,
+    visible: boolean,
+    dirToCamera?: (d: Vec3) => Vec3,
+  ): void {
+    this.group.visible = visible;
+    if (!visible) return;
+    const dir = dirToCamera ?? directionsVia(toCamera);
+
+    poseArm(
+      this.three,
+      this.rest,
+      this.rightBones,
+      SHOULDER_R,
+      {
+        grip: toCamera(anchors.primary),
+        aim: dir(anchors.primaryAim),
+        up: dir(anchors.primaryUp),
+        curl: anchors.primaryCurl,
+      },
+      [1, -1, 0],
+      solveTwoBone,
+    );
+
+    if (anchors.support === null) {
+      // A one-handed weapon. Hidden rather than parked: a hand gripping thin
+      // air is a hand the player will eventually see.
+      this.leftGroup.visible = false;
+      return;
+    }
+    this.leftGroup.visible = true;
+    const m = (v: Vec3): Vec3 => [-v[0], v[1], v[2]];
+    poseArm(
+      this.three,
+      this.rest,
+      this.leftBones,
+      m(SHOULDER_L),
+      {
+        grip: m(toCamera(anchors.support)),
+        aim: m(dir(anchors.supportAim)),
+        up: m(dir(anchors.supportUp)),
+        curl: anchors.supportCurl,
+      },
+      [1, -1, 0],
+      solveTwoBone,
+    );
+  }
+
+  dispose(): void {
+    this.group.parent?.remove(this.group);
+    // The clones share the prototype's geometry, which outlives any one view
+    // model; only the materials are this rig's own.
+    for (const m of this.materials) m.dispose();
+    this.materials = [];
+  }
+}
+
+/** A direction through a point transform: the image of `d` minus the image of 0. */
+function directionsVia(toCamera: (p: Vec3) => Vec3): (d: Vec3) => Vec3 {
+  return (d) => {
+    const o = toCamera([0, 0, 0]);
+    return sub(toCamera(d), o);
+  };
+}
+
+/**
+ * Two arms, drawn in camera space and solved onto the weapon every frame.
+ *
+ * The same swap the weapons make: the **procedural** arms are drawn at once and
+ * until `hassault-hands.glb` arrives, then the **skinned** ones take over for
+ * good. A failed load leaves the procedural arms standing — which is what the
+ * game drew before the skinned ones existed. The hands are an upgrade over a
+ * working pair, never a dependency of one.
+ */
+export class ArmRig implements ArmRigInstance {
+  private active: ArmRigInstance;
+  private procedural: ProceduralArmRig;
+  private skinned: SkinnedArmRig | null = null;
+  private environment: THREE.Texture | null = null;
+  private disposed = false;
+
+  constructor(
+    private readonly three: typeof THREE,
+    private readonly parent: THREE.Object3D,
+  ) {
+    this.procedural = new ProceduralArmRig(three, parent);
+    this.active = this.procedural;
+    void loadHandsModel()
+      .then((model) => this.adopt(model))
+      .catch((err) => {
+        // Said once: the procedural arms still draw, so the only other symptom
+        // would be blocky hands and no reason given anywhere.
+        console.warn('hassault: could not load the hands; keeping the procedural arms', err);
+      });
+  }
+
+  /** Swap in the skinned hands. Public so a test can hand it a rig directly. */
+  adopt(model: HandsModel): void {
+    if (this.disposed || this.skinned) return;
+    try {
+      this.skinned = new SkinnedArmRig(this.three, this.parent, model, this.environment);
+    } catch (err) {
+      console.warn('hassault: the hands rig is not the one this solver expects', err);
+      return;
+    }
+    this.procedural.dispose();
+    this.active = this.skinned;
+  }
+
+  get isSkinned(): boolean {
+    return this.skinned !== null;
+  }
+
+  setEnvironment(environment: THREE.Texture | null): void {
+    this.environment = environment;
+    this.skinned?.setEnvironment(environment);
+  }
+
+  update(
+    anchors: GripAnchors,
+    toCamera: (p: Vec3) => Vec3,
+    visible: boolean,
+    dirToCamera?: (d: Vec3) => Vec3,
+  ): void {
+    this.active.update(anchors, toCamera, visible, dirToCamera);
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.procedural.dispose();
+    this.skinned?.dispose();
   }
 }

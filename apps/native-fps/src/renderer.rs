@@ -310,8 +310,16 @@ pub struct Renderer {
     props: crate::props_gpu::Props,
     /// This frame's prop pose, from `WeaponViewModel::prop_model`.
     prop_model: Option<glam::Mat4>,
-    prop_camera_buffer: wgpu::Buffer,
-    prop_bind_group: wgpu::BindGroup,
+    /// The poses of the prop's separately posed parts — the butterfly's
+    /// handles — in `PropInfo::parts` order, each already including the body.
+    prop_parts: Vec<glam::Mat4>,
+    /// One camera uniform per part, body first. See `props_gpu::MAX_PROP_PARTS`.
+    prop_camera_buffers: Vec<wgpu::Buffer>,
+    prop_bind_groups: Vec<wgpu::BindGroup>,
+    /// The hands' camera: the prop pipeline, with the identity as its pose,
+    /// because `hands.rs` has already skinned them into camera space.
+    hands_camera_buffer: wgpu::Buffer,
+    hands_bind_group: wgpu::BindGroup,
     viewmodel_buffer: wgpu::Buffer,
     viewmodel_verts: u32,
     viewmodel_camera_buffer: wgpu::Buffer,
@@ -674,21 +682,39 @@ impl Renderer {
             "viewmodel-bind-group",
         );
 
-        let prop_camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("prop-camera"),
-            contents: bytemuck::cast_slice(&[CameraUniform::new(
-                glam::Mat4::IDENTITY,
-                video,
-                crate::reveal::Reveal::done(),
-            )]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-        let prop_bind_group = crate::atmosphere::camera_bind_group(
+        let identity_camera = |label: &str| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(label),
+                contents: bytemuck::cast_slice(&[CameraUniform::new(
+                    glam::Mat4::IDENTITY,
+                    video,
+                    crate::reveal::Reveal::done(),
+                )]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            })
+        };
+        let prop_camera_buffers: Vec<wgpu::Buffer> = (0..crate::props_gpu::MAX_PROP_PARTS)
+            .map(|_| identity_camera("prop-camera"))
+            .collect();
+        let prop_bind_groups: Vec<wgpu::BindGroup> = prop_camera_buffers
+            .iter()
+            .map(|buffer| {
+                crate::atmosphere::camera_bind_group(
+                    &device,
+                    &camera_layout,
+                    buffer,
+                    &lights_buffer,
+                    "prop-bind-group",
+                )
+            })
+            .collect();
+        let hands_camera_buffer = identity_camera("hands-camera");
+        let hands_bind_group = crate::atmosphere::camera_bind_group(
             &device,
             &camera_layout,
-            &prop_camera_buffer,
+            &hands_camera_buffer,
             &lights_buffer,
-            "prop-bind-group",
+            "hands-bind-group",
         );
         let props = crate::props_gpu::Props::new(&device, &camera_layout, format, video.samples());
 
@@ -796,8 +822,11 @@ impl Renderer {
             volume_verts: 0,
             props,
             prop_model: None,
-            prop_camera_buffer,
-            prop_bind_group,
+            prop_parts: Vec::new(),
+            prop_camera_buffers,
+            prop_bind_groups,
+            hands_camera_buffer,
+            hands_bind_group,
             viewmodel_buffer,
             viewmodel_verts: 0,
             viewmodel_camera_buffer,
@@ -1028,7 +1057,7 @@ impl Renderer {
 
     /// Draw this weapon's uploaded prop, reporting its bounds for the fit.
     /// `None` when it has not been uploaded — the boxes stay.
-    pub fn use_prop(&mut self, weapon: &str) -> Option<(glam::Vec3, glam::Vec3)> {
+    pub fn use_prop(&mut self, weapon: &str) -> Option<crate::props_gpu::PropInfo> {
         self.props.select(weapon)
     }
 
@@ -1043,6 +1072,39 @@ impl Renderer {
     /// being the fallback means in practice.
     pub fn set_prop_model(&mut self, model: Option<glam::Mat4>) {
         self.prop_model = model;
+    }
+
+    /// The poses of the prop's separate parts, in `PropInfo::parts` order.
+    pub fn set_prop_parts(&mut self, parts: &[glam::Mat4]) {
+        self.prop_parts.clear();
+        self.prop_parts.extend_from_slice(parts);
+    }
+
+    /// Whether the hands' materials are on the GPU yet.
+    pub fn has_hands(&self) -> bool {
+        self.props.has_hands()
+    }
+
+    /// Upload the hands' materials. Once.
+    pub fn set_hands(&mut self, asset: &crate::hands::HandsAsset) {
+        self.props.set_hands(
+            &self.device,
+            &self.queue,
+            asset.materials(),
+            asset.textures(),
+            asset.primitives(),
+            asset.vertex_count(),
+        );
+    }
+
+    /// This frame's skinned arms, in camera space; `right` then `left`
+    /// vertices. Empty hides them.
+    pub fn write_hands(&mut self, vertices: &[crate::prop::PropVertex], right: usize, left: usize) {
+        if vertices.is_empty() {
+            self.props.hide_hands();
+        } else {
+            self.props.write_hands(&self.queue, vertices, right, left);
+        }
     }
 
     /// Already in camera space: `viewmodel.rs` applies the pivot's transform on
@@ -1179,15 +1241,35 @@ impl Renderer {
         // bob and sway the first one applies — lit as though it never moved.
         let pose = self.prop_model.unwrap_or(glam::Mat4::IDENTITY);
         let projection = viewmodel_projection(camera.fov, self.config.width, self.config.height);
+        // Part 0 is the body; each later part is posed by its own matrix, and
+        // a part with none this frame rides the body.
+        for (i, buffer) in self.prop_camera_buffers.iter().enumerate() {
+            let part = if i == 0 {
+                pose
+            } else {
+                self.prop_parts.get(i - 1).copied().unwrap_or(pose)
+            };
+            self.queue.write_buffer(
+                buffer,
+                0,
+                bytemuck::cast_slice(&[CameraUniform::new(
+                    projection * part,
+                    self.video,
+                    crate::reveal::Reveal::done(),
+                )
+                .attached_to(camera.camera_to_world() * part)]),
+            );
+        }
+        // The hands arrive in camera space, so their pose is the identity.
         self.queue.write_buffer(
-            &self.prop_camera_buffer,
+            &self.hands_camera_buffer,
             0,
             bytemuck::cast_slice(&[CameraUniform::new(
-                projection * pose,
+                projection,
                 self.video,
                 crate::reveal::Reveal::done(),
             )
-            .attached_to(camera.camera_to_world() * pose)]),
+            .attached_to(camera.camera_to_world())]),
         );
 
         use wgpu::CurrentSurfaceTexture as Cst;
@@ -1210,7 +1292,10 @@ impl Renderer {
         };
         // Decided **once** and used in both places that care — see
         // `draws_viewmodel`.
-        let draw_viewmodel = draws_viewmodel(self.viewmodel_verts, self.prop_model.is_some());
+        let draw_viewmodel = draws_viewmodel(
+            self.viewmodel_verts,
+            self.prop_model.is_some() || self.props.hands_visible(),
+        );
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -1368,7 +1453,11 @@ impl Renderer {
             // The prop first, then the box geometry — which with a prop loaded
             // is only the muzzle flare, and has to land on top of the barrel it
             // comes out of.
-            self.props.draw(&mut pass, &self.prop_bind_group);
+            // The hands before the weapon: the depth test sorts them where they
+            // overlap, and the gun is the last thing written — the thing a
+            // player is looking at.
+            self.props.draw_hands(&mut pass, &self.hands_bind_group);
+            self.props.draw(&mut pass, &self.prop_bind_groups);
 
             // Guarded on its own, because the pass now runs for a prop with no
             // CPU vertices behind it — which is the common case, and the one

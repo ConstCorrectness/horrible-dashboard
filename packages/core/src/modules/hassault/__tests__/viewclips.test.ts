@@ -21,14 +21,23 @@ import {
   type Track,
 } from '../viewclips';
 
-const CHANNELS = ['primary', 'support', 'primaryRoll', 'supportRoll'];
+const CHANNELS = [
+  'primary',
+  'support',
+  'primaryRoll',
+  'supportRoll',
+  'primaryFingers',
+  'supportFingers',
+  'primaryFingersWeight',
+  'supportFingersWeight',
+];
 
 const source = new AuthoredPoseSource();
 
 describe('the clip tables', () => {
   it('carries the five locomotion clips and the four actions', () => {
     expect(LOCOMOTION_CLIPS.sort()).toEqual(['idle', 'jump', 'land', 'run', 'walk']);
-    expect(ACTION_CLIPS.sort()).toEqual(['draw', 'inspect', 'reload', 'throw']);
+    expect(ACTION_CLIPS.sort()).toEqual(['draw', 'reload', 'throw']);
   });
 
   it('names no channel that is not a channel', () => {
@@ -118,6 +127,19 @@ describe('mergePose', () => {
       support: [9, 9, 9],
     });
   });
+
+  it('interpolates and merges finger channels properly', () => {
+    const track: Track = [
+      { t: 0, pose: { primaryFingers: [0, 0, 0, 0, 0] } },
+      { t: 1, pose: { primaryFingers: [1, 1, 1, 1, 1] } },
+    ];
+    const sampled = sampleTrack(track, 0.5);
+    expect(sampled.primaryFingers).toEqual([0.5, 0.5, 0.5, 0.5, 0.5]);
+
+    const base: PartialPose = { primaryFingers: [0.2, 0.2, 0.2, 0.2, 0.2] };
+    const action: PartialPose = { primaryFingers: [0.8, 0.8, 0.8, 0.8, 0.8] };
+    expect(mergePose(base, action).primaryFingers).toEqual([0.8, 0.8, 0.8, 0.8, 0.8]);
+  });
 });
 
 describe('selectLocomotion', () => {
@@ -148,7 +170,7 @@ describe('fadeFor', () => {
   });
 
   it('eases into everything else', () => {
-    for (const clip of ['idle', 'walk', 'run', 'jump', 'reload', 'inspect'] as const) {
+    for (const clip of ['idle', 'walk', 'run', 'jump', 'reload'] as const) {
       expect(fadeFor(clip)).toBeGreaterThan(0);
     }
   });

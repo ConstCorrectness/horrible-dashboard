@@ -17,6 +17,8 @@
 
 import type * as THREE from 'three';
 
+import gripsFile from './grips.json';
+
 /**
  * Which weapons have a prop, and where it is served from.
  *
@@ -25,10 +27,10 @@ import type * as THREE from 'three';
  * one — a missing entry is a decision, an entry pointing at a missing file is a
  * failed fetch, and only the second is worth a console line.
  *
- * `knife` is deliberately absent: there is no knife model at all. The M4A1 used
- * to be too, at 687k triangles — twenty times the whole map — and is here now
- * because `scripts/decimate_weapon.py` takes it to 30k, which is the same order
- * as the other three.
+ * All five primary weapon categories have shipped GLB props, including the
+ * tactical combat knife. The M4A1 used to be absent at 687k triangles — twenty
+ * times the whole map — and is here now because scripts/decimate_weapon.py takes
+ * it to 30k, which is the same order as the other three.
  */
 export const WEAPON_MODEL_URLS: Readonly<Record<string, string>> = {
   knife: '/hassault-weapon-knife.glb',
@@ -70,9 +72,7 @@ export const KNIFE_ARCHETYPE_URLS: Readonly<Record<string, string>> = {
 
 export function loadWeaponModel(id: string): Promise<WeaponModel | null> {
   const url =
-    id === 'fal'
-      ? '/hassault-weapon-fal.glb'
-      : (KNIFE_ARCHETYPE_URLS[id] ?? WEAPON_MODEL_URLS[id]);
+    id === 'fal' ? '/hassault-weapon-fal.glb' : (KNIFE_ARCHETYPE_URLS[id] ?? WEAPON_MODEL_URLS[id]);
   if (!url) return Promise.resolve(null);
   const cached = pending.get(id);
   if (cached) return cached;
@@ -134,6 +134,37 @@ export function computeLocalBox(three: typeof THREE, target: THREE.Object3D): TH
   });
   return targetBox;
 }
+
+/**
+ * Place a knife prop by its **hilt**, not its bounding box.
+ *
+ * A knife's box is mostly blade, and the blades differ — a karambit curls, a
+ * bayonet runs long — so centring each on the box model put every handle
+ * somewhere different and none of them in the fist. The generator puts each
+ * knife's origin at the hilt, and this puts that origin at `knifeHilt` from
+ * `models/grips.json`, which the native `fit_prop` reads too.
+ */
+export function fitKnifeModel(
+  three: typeof THREE,
+  prototype: THREE.Object3D,
+): { model: THREE.Object3D; muzzle: [number, number, number] } {
+  const model = prototype.clone(true);
+  model.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    mesh.material = Array.isArray(mesh.material)
+      ? mesh.material.map((m) => m.clone())
+      : mesh.material.clone();
+  });
+  const [x, y, z] = KNIFE_HILT;
+  model.position.set(x, y, z);
+  const box = computeLocalBox(three, model).translate(model.position);
+  // A knife has no muzzle; its tip is the nearest thing, and nothing flashes.
+  return { model, muzzle: [x, y, box.isEmpty() ? z : box.min.z] };
+}
+
+export const KNIFE_HILT = (gripsFile as unknown as { knifeHilt: [number, number, number] })
+  .knifeHilt;
 
 export function fitWeaponModel(
   three: typeof THREE,

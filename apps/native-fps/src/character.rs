@@ -174,6 +174,10 @@ pub struct SkinVertex {
 pub struct Operator {
     /// Rest pose, indexed by glTF node index.
     rest: Vec<Trs>,
+    /// Each node's name exactly as the file spells it. `bone_by_name` is keyed
+    /// by `bone_key`, which folds Mixamo's `_1` duplicates together — right for
+    /// the operator, and wrong for a rig whose `index_1..3` are three bones.
+    names: Vec<String>,
     /// Parent of each node, `None` for a scene root.
     parents: Vec<Option<usize>>,
     /// Node indices, parents always before children.
@@ -448,6 +452,10 @@ impl Operator {
 
         Ok(Operator {
             rest,
+            names: nodes
+                .iter()
+                .map(|n| n.name().unwrap_or_default().to_string())
+                .collect(),
             parents,
             order,
             bone_nodes,
@@ -481,6 +489,20 @@ impl Operator {
     /// The node index of a bone, by its sanitised Mixamo name.
     pub fn bone_node(&self, name: &str) -> Option<usize> {
         self.bone_by_name.get(name).map(|&i| self.bone_nodes[i])
+    }
+
+    /// A node by its exact name, with no Mixamo folding. See `names`.
+    pub fn node_named(&self, name: &str) -> Option<usize> {
+        self.names.iter().position(|n| n == name)
+    }
+
+    /// A node's rest transform, local to its parent.
+    pub fn rest_trs(&self, node: usize) -> Trs {
+        self.rest[node]
+    }
+
+    pub fn parent_of(&self, node: usize) -> Option<usize> {
+        self.parents[node]
     }
 }
 
@@ -591,6 +613,24 @@ impl Pose {
             }
             out[slot] = model * self.globals[node] * *inverse;
         }
+    }
+
+    /// Overwrite one node's local rotation, and its translation if given.
+    ///
+    /// For a pose computed outside any clip — the first-person hands, which are
+    /// solved onto a weapon every frame rather than played.
+    pub fn set_local(&mut self, node: usize, rotation: Quat, translation: Option<Vec3>) {
+        let local = &mut self.locals[node];
+        local.rotation = rotation;
+        if let Some(t) = translation {
+            local.translation = t;
+        }
+    }
+
+    /// One node's global transform as of the last `skinning` call, without the
+    /// model matrix.
+    pub fn global(&self, node: usize) -> Mat4 {
+        self.globals[node]
     }
 
     /// The world transform of one bone, for hanging a weapon prop off a hand.

@@ -11,13 +11,11 @@
  * that the thing they equipped is not there.
  */
 import * as THREE from 'three';
+import { clipFor, sampleInspect } from '../inspects';
 import { describe, expect, it } from 'vitest';
 
 import {
   equippedSkins,
-  INSPECT_DURATION,
-  inspectEnvelope,
-  inspectTurn,
   WeaponViewModel,
 } from '../viewmodel';
 
@@ -222,7 +220,8 @@ describe('inspect', () => {
     vm.inspect();
     expect(vm.inspecting).toBe(true);
     // Just short of the end it is still running…
-    for (let t = 0; t < INSPECT_DURATION - 0.1; t += 0.05) vm.update(0.05, frame);
+    const duration = clipFor('assault').duration;
+    for (let t = 0; t < duration - 0.1; t += 0.05) vm.update(0.05, frame);
     expect(vm.inspecting).toBe(true);
     // …and past it, it has put itself away. A pose that needed cancelling would
     // be one you could get stuck in.
@@ -255,7 +254,7 @@ describe('inspect', () => {
       pivot.rotation.z,
     ];
     let previous = pose();
-    for (let i = 0; i < Math.floor(INSPECT_DURATION / 0.016) - 2; i += 1) {
+    for (let i = 0; i < Math.floor(clipFor('assault').duration / 0.016) - 2; i += 1) {
       vm.update(0.016, frame);
       const now = pose();
       const moved = now.some((v, j) => Math.abs(v - previous[j]) > 1e-5);
@@ -264,31 +263,37 @@ describe('inspect', () => {
     }
   });
 
-  it('winds one way and lands back at rest', () => {
-    // If the roll were driven by the envelope it would unwind along the path it
-    // wound up, which is the "played backwards" look. The turn only climbs; the
-    // envelope scaling it is what still returns the weapon to the aim.
-    let previous = -1;
-    for (let t = 0; t <= INSPECT_DURATION; t += 0.016) {
-      const now = inspectTurn(t);
-      expect(now).toBeGreaterThanOrEqual(previous);
-      previous = now;
-    }
-    expect(inspectTurn(INSPECT_DURATION)).toBeGreaterThan(0.99);
-    expect(inspectEnvelope(0)).toBe(0);
-    expect(inspectEnvelope(INSPECT_DURATION)).toBeLessThanOrEqual(1e-6);
+  it('lands back exactly at rest', () => {
+    // A clip whose last frame is a few degrees off leaves the weapon off home for
+    // the rest of the match.
+    const { vm, camera } = stand();
+    vm.setWeapon('pistol');
+    // Past the draw, which starts the weapon stowed below the frame.
+    for (let t = 0; t < 0.6; t += 0.016) vm.update(0.016, frame);
+    const pivot = camera.children[0];
+    const before = [pivot.position.clone(), pivot.rotation.clone()] as const;
+    vm.inspect();
+    for (let t = 0; t < clipFor('pistol').duration + 0.2; t += 0.016) vm.update(0.016, frame);
+    expect(vm.inspecting).toBe(false);
+    expect(pivot.position.distanceTo(before[0])).toBeLessThan(1e-3);
+    expect(Math.abs(pivot.rotation.z - before[1].z)).toBeLessThan(1e-3);
   });
 
-  it('matches the native client, which runs the same pose', () => {
-    // `apps/native-fps/src/viewmodel.rs` carries these as constants. The two
-    // clients drawing the same weapon differently is the drift this module's
-    // shape exists to avoid, and an inspect is the one animation a player
-    // watches closely enough to notice.
-    expect(INSPECT_DURATION).toBe(1.5);
-    // Sampled rather than compared symbolically: the Rust is a separate
-    // implementation, and what has to agree is the curve, not the source.
-    expect(inspectEnvelope(0.15)).toBeCloseTo(0.5, 5);
-    expect(inspectTurn(0.75)).toBeCloseTo(0.5, 5);
+  it('runs a different choreography for each weapon', () => {
+    // Read off the pivot a third of the way in: the rifle is rolled to its
+    // ejection port, the pistol tilted to its slide the other way.
+    const rollAt = (weapon: string) => {
+      const { vm, camera } = stand();
+      vm.setWeapon(weapon);
+      vm.update(0.016, frame);
+      vm.inspect();
+      const target = clipFor(weapon).duration * 0.3;
+      for (let t = 0; t < target; t += 0.016) vm.update(0.016, frame);
+      return camera.children[0].rotation.z;
+    };
+    expect(rollAt('assault')).toBeGreaterThan(1);
+    expect(rollAt('pistol')).toBeLessThan(-0.3);
+    expect(sampleInspect('shotgun', 0.4).support[2]).toBeGreaterThan(0.05);
   });
 
   it('is cancelled by firing', () => {
@@ -324,22 +329,6 @@ describe('inspect', () => {
     expect(vm.inspecting).toBe(false);
   });
 
-  it('has an envelope that starts and ends at rest', () => {
-    // Both ends matter: a pose that does not start at zero snaps into place on
-    // the first frame, and one that does not end at zero leaves the weapon a few
-    // degrees off home for the rest of the match.
-    expect(inspectEnvelope(0)).toBeCloseTo(0, 5);
-    expect(inspectEnvelope(INSPECT_DURATION)).toBeCloseTo(0, 5);
-    expect(inspectEnvelope(INSPECT_DURATION / 2)).toBeCloseTo(1, 5);
-  });
-
-  it('never leaves its envelope, so the weapon cannot be flung off screen', () => {
-    for (let t = -0.5; t < INSPECT_DURATION + 0.5; t += 0.01) {
-      const w = inspectEnvelope(t);
-      expect(w).toBeGreaterThanOrEqual(0);
-      expect(w).toBeLessThanOrEqual(1);
-    }
-  });
 });
 
 describe('Knife archetypes and PBR skin materials', () => {
