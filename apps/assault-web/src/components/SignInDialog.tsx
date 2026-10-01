@@ -11,7 +11,8 @@ import {
   type ProviderFlows,
 } from '../auth';
 
-type Step = 'in' | 'up' | 'handle';
+export type SignInStep = 'in' | 'up' | 'handle';
+type Step = SignInStep;
 
 /**
  * Sign in, create an account, or — for an account that has none yet — choose the
@@ -27,6 +28,35 @@ export function SignInDialog({
 }: {
   initialStep?: Step;
   onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="signin-title">
+        <SignInPanel initialStep={initialStep} onDone={onClose} onClose={onClose} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The heading and form, without a frame: the dialog above wraps it, and the
+ * onboarding gate puts it on the page. `onDone` runs once the account is
+ * finished — signed in *and* holding a username.
+ */
+export function SignInPanel({
+  initialStep = 'in',
+  onDone,
+  onClose,
+}: {
+  initialStep?: Step;
+  onDone: () => void;
+  onClose?: () => void;
 }) {
   const { account } = useAuth();
   const [step, setStep] = useState<Step>(initialStep);
@@ -44,17 +74,11 @@ export function SignInDialog({
     return () => abortRef.current?.abort();
   }, []);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   // Signed in without a username: move to choosing one, pre-filled with the
   // server's suggestion (which is not reserved — it can still be taken).
   const after = (handleNow: string | null | undefined, suggested?: string | null) => {
     if (handleNow) {
-      onClose();
+      onDone();
       return;
     }
     setHandle(suggested ?? '');
@@ -97,7 +121,7 @@ export function SignInDialog({
       }
       void run('handle', async () => {
         await claimHandle(handle);
-        onClose();
+        onDone();
       });
       return;
     }
@@ -133,161 +157,161 @@ export function SignInDialog({
   const webOff = (p: Provider) => providers[p]?.web === false;
 
   return (
-    <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="signin-title">
-        <div className="dialog-head">
-          <div>
-            <h2 id="signin-title" className="display">
-              {step === 'in' ? 'Sign in' : step === 'up' ? 'Create account' : 'Choose a username'}
-            </h2>
-            <p>
-              {step === 'handle'
-                ? 'This is the name on the scoreboard. It is permanent once claimed.'
-                : 'One account for the browser game and the desktop app.'}
-            </p>
-          </div>
+    <>
+      <div className="dialog-head">
+        <div>
+          <h2 id="signin-title" className="display">
+            {step === 'in' ? 'Sign in' : step === 'up' ? 'Create account' : 'Choose a username'}
+          </h2>
+          <p>
+            {step === 'handle'
+              ? 'This is the name on the scoreboard. It is permanent once claimed.'
+              : 'One account for the browser game and the desktop app.'}
+          </p>
+        </div>
+        {onClose && (
           <button type="button" className="close" onClick={onClose}>
             Close
           </button>
-        </div>
+        )}
+      </div>
 
-        <form className="dialog-body" onSubmit={submit}>
-          {step !== 'handle' && (
-            <>
-              <div className="providers">
-                {(['github', 'google'] as const).map((p) => (
-                  <button
-                    key={p}
-                    type="button"
-                    className="btn"
-                    disabled={busy !== null || webOff(p)}
-                    title={
-                      webOff(p)
-                        ? `This server has no ${p === 'github' ? 'GitHub' : 'Google'} sign-in set up`
-                        : undefined
-                    }
-                    onClick={() => oauth(p)}
-                  >
-                    {p === 'github' ? GITHUB_MARK : GOOGLE_MARK}
-                    {busy === p ? 'Waiting…' : p === 'github' ? 'GitHub' : 'Google'}
-                  </button>
-                ))}
-              </div>
-              {webOff('github') && webOff('google') && (
-                <p className="hint">
-                  This server has no GitHub or Google sign-in set up. Use email instead.
-                </p>
-              )}
-              {(busy === 'github' || busy === 'google') && (
-                <p className="hint">
-                  Finish signing in in the window that opened. Nothing opened?{' '}
-                  <button type="button" className="link" onClick={() => abortRef.current?.abort()}>
-                    Cancel
-                  </button>{' '}
-                  and allow pop-ups for this site.
-                </p>
-              )}
-              <div className="divider">or with email</div>
-              <label className="field">
-                <span>Email</span>
-                <input
-                  type="email"
-                  className="input"
-                  autoComplete="email"
-                  placeholder="you@example.com"
-                  value={email}
-                  onChange={(e) => {
-                    setEmail(e.target.value);
-                    setError('');
-                  }}
-                />
-              </label>
-              <label className="field">
-                <span>Password</span>
-                <input
-                  type="password"
-                  className="input"
-                  autoComplete={step === 'up' ? 'new-password' : 'current-password'}
-                  value={password}
-                  onChange={(e) => {
-                    setPassword(e.target.value);
-                    setError('');
-                  }}
-                />
-              </label>
-              {step === 'up' && (
-                <label className="field">
-                  <span>Username</span>
-                  <input
-                    type="text"
-                    className="input"
-                    autoComplete="username"
-                    placeholder="night_owl"
-                    maxLength={20}
-                    value={username}
-                    onChange={(e) => {
-                      setUsername(e.target.value.toLowerCase());
-                      setError('');
-                    }}
-                  />
-                </label>
-              )}
-            </>
-          )}
-
-          {step === 'handle' && (
+      <form className="dialog-body" onSubmit={submit}>
+        {step !== 'handle' && (
+          <>
+            <div className="providers">
+              {(['github', 'google'] as const).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  className="btn"
+                  disabled={busy !== null || webOff(p)}
+                  title={
+                    webOff(p)
+                      ? `This server has no ${p === 'github' ? 'GitHub' : 'Google'} sign-in set up`
+                      : undefined
+                  }
+                  onClick={() => oauth(p)}
+                >
+                  {p === 'github' ? GITHUB_MARK : GOOGLE_MARK}
+                  {busy === p ? 'Waiting…' : p === 'github' ? 'GitHub' : 'Google'}
+                </button>
+              ))}
+            </div>
+            {webOff('github') && webOff('google') && (
+              <p className="hint">
+                This server has no GitHub or Google sign-in set up. Use email instead.
+              </p>
+            )}
+            {(busy === 'github' || busy === 'google') && (
+              <p className="hint">
+                Finish signing in in the window that opened. Nothing opened?{' '}
+                <button type="button" className="link" onClick={() => abortRef.current?.abort()}>
+                  Cancel
+                </button>{' '}
+                and allow pop-ups for this site.
+              </p>
+            )}
+            <div className="divider">or with email</div>
             <label className="field">
-              <span>Username</span>
+              <span>Email</span>
               <input
-                type="text"
+                type="email"
                 className="input"
-                autoComplete="username"
-                maxLength={20}
-                value={handle}
+                autoComplete="email"
+                placeholder="you@example.com"
+                value={email}
                 onChange={(e) => {
-                  setHandle(e.target.value.toLowerCase());
+                  setEmail(e.target.value);
                   setError('');
                 }}
-                autoFocus
               />
             </label>
-          )}
-
-          {error && (
-            <div className="error" role="alert">
-              {error}
-            </div>
-          )}
-
-          <div className="form-actions">
-            <button type="submit" className="btn btn-primary" disabled={busy !== null}>
-              {busy === 'password' || busy === 'handle'
-                ? 'Working…'
-                : step === 'in'
-                  ? 'Sign in'
-                  : step === 'up'
-                    ? 'Create account'
-                    : 'Claim username'}
-            </button>
-          </div>
-
-          {step !== 'handle' && (
-            <p className="hint">
-              {step === 'in' ? 'New here? ' : 'Already have an account? '}
-              <button
-                type="button"
-                className="link"
-                onClick={() => {
-                  setStep(step === 'in' ? 'up' : 'in');
+            <label className="field">
+              <span>Password</span>
+              <input
+                type="password"
+                className="input"
+                autoComplete={step === 'up' ? 'new-password' : 'current-password'}
+                value={password}
+                onChange={(e) => {
+                  setPassword(e.target.value);
                   setError('');
                 }}
-              >
-                {step === 'in' ? 'Create an account' : 'Sign in'}
-              </button>
-            </p>
-          )}
-        </form>
-      </div>
-    </div>
+              />
+            </label>
+            {step === 'up' && (
+              <label className="field">
+                <span>Username</span>
+                <input
+                  type="text"
+                  className="input"
+                  autoComplete="username"
+                  placeholder="night_owl"
+                  maxLength={20}
+                  value={username}
+                  onChange={(e) => {
+                    setUsername(e.target.value.toLowerCase());
+                    setError('');
+                  }}
+                />
+              </label>
+            )}
+          </>
+        )}
+
+        {step === 'handle' && (
+          <label className="field">
+            <span>Username</span>
+            <input
+              type="text"
+              className="input"
+              autoComplete="username"
+              maxLength={20}
+              value={handle}
+              onChange={(e) => {
+                setHandle(e.target.value.toLowerCase());
+                setError('');
+              }}
+              autoFocus
+            />
+          </label>
+        )}
+
+        {error && (
+          <div className="error" role="alert">
+            {error}
+          </div>
+        )}
+
+        <div className="form-actions">
+          <button type="submit" className="btn btn-primary" disabled={busy !== null}>
+            {busy === 'password' || busy === 'handle'
+              ? 'Working…'
+              : step === 'in'
+                ? 'Sign in'
+                : step === 'up'
+                  ? 'Create account'
+                  : 'Claim username'}
+          </button>
+        </div>
+
+        {step !== 'handle' && (
+          <p className="hint">
+            {step === 'in' ? 'New here? ' : 'Already have an account? '}
+            <button
+              type="button"
+              className="link"
+              onClick={() => {
+                setStep(step === 'in' ? 'up' : 'in');
+                setError('');
+              }}
+            >
+              {step === 'in' ? 'Create an account' : 'Sign in'}
+            </button>
+          </p>
+        )}
+      </form>
+    </>
   );
 }

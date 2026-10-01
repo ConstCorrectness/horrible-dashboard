@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
-import { useGuestSession } from './hooks/useGuestSession';
+import { chooseGuest, guestChosen, useGuestSession } from './hooks/useGuestSession';
+import { OnboardingGate } from './components/OnboardingGate';
 import { accountName, applySocketIdentity, useAuth } from './auth';
 import { Landing } from './components/Landing';
 import { DeploySplash } from './components/DeploySplash';
@@ -62,10 +63,16 @@ export default function App() {
     | null
   >(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isGuest, setIsGuest] = useState(guestChosen);
 
   // Signed in with a username → the socket carries the token; otherwise the
   // guest callsign. Re-applied whenever either changes.
   const handle = accountName(auth.account);
+  // New visitors meet the sign-in gate first. Passed by finishing an account
+  // (signed in with a username) or by choosing guest play, which is remembered.
+  // Not shown while a stored token is still being checked, so a returning
+  // player never sees it flash.
+  const gated = !auth.checking && !handle && !isGuest;
   useEffect(() => {
     applySocketIdentity(callsign);
   }, [auth.token, handle, callsign]);
@@ -146,7 +153,21 @@ export default function App() {
     <div style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
       <MobileWarningBanner />
 
-      {view === 'browser' && (
+      {gated && (
+        <OnboardingGate
+          callsign={callsign}
+          onCallsignChange={setCallsign}
+          onGuest={() => {
+            chooseGuest();
+            setIsGuest(true);
+          }}
+          onSignedIn={() => {
+            /* the account store updates `handle`, which lifts the gate */
+          }}
+        />
+      )}
+
+      {!gated && view === 'browser' && (
         <Landing
           callsign={callsign}
           onCallsignChange={setCallsign}
@@ -158,7 +179,7 @@ export default function App() {
         />
       )}
 
-      {view === 'deploy' && (
+      {!gated && view === 'deploy' && (
         <DeploySplash
           room={target.room}
           map={target.map}
@@ -172,7 +193,7 @@ export default function App() {
         />
       )}
 
-      {view === 'playing' && (
+      {!gated && view === 'playing' && (
         <div style={{ width: '100%', height: '100%', position: 'relative' }}>
           <Suspense fallback={<LoadingGame />}>
             <HorribleAssaultPanel

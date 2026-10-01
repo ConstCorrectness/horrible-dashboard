@@ -4,6 +4,8 @@ import { useRollingNumber } from '../hooks/useRollingNumber';
 import { accountName, signOut, useAuth } from '../auth';
 import { MAPS, mapArt, mapEntry, modeLabel } from '../maps';
 import { MapBackdrop } from './MapBackdrop';
+import { Wordmark } from './Logo';
+import { CallsignField } from './CallsignField';
 
 /** Where Quick Play opens a room when nothing is running. */
 const QUICK_MAP = 'hd_dust2';
@@ -76,12 +78,7 @@ export function Landing(props: LandingProps) {
     <div className="page" ref={pageRef}>
       <header className="topbar">
         <div className="wrap topbar-inner">
-          <div className="wordmark">
-            <i className="wordmark-mark" aria-hidden="true" />
-            <span>
-              Horrible<b>Assault</b>
-            </span>
-          </div>
+          <Wordmark />
           <nav className="nav" aria-label="Sections">
             {(['play', 'servers', 'maps'] as const).map((id) => (
               <button
@@ -287,13 +284,6 @@ function OperatorPanel({
 }) {
   const { account } = useAuth();
   const handle = accountName(account);
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(callsign);
-
-  const save = () => {
-    onCallsignChange(draft);
-    setEditing(false);
-  };
 
   if (handle) {
     return (
@@ -333,44 +323,9 @@ function OperatorPanel({
         </span>
         <span className="tag">Guest</span>
       </div>
-      {editing ? (
-        <form
-          className="inline-edit"
-          onSubmit={(e) => {
-            e.preventDefault();
-            save();
-          }}
-        >
-          <input
-            type="text"
-            className="input"
-            aria-label="Callsign"
-            maxLength={16}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            autoFocus
-          />
-          <button type="submit" className="btn">
-            Save
-          </button>
-        </form>
-      ) : (
-        <div className="operator-name">
-          <span className="display">{callsign}</span>
-          <button
-            type="button"
-            className="btn btn-sm btn-ghost"
-            onClick={() => {
-              setDraft(callsign);
-              setEditing(true);
-            }}
-          >
-            Rename
-          </button>
-        </div>
-      )}
+      <CallsignField callsign={callsign} onChange={onCallsignChange} />
       <p className="operator-note">
-        You're playing as a guest. Sign in to keep your name and record.
+        Guest matches are unrated and your name isn't reserved. Sign in to keep both.
       </p>
       <ul className="operator-perks">
         <li>A username that's yours on every server</li>
