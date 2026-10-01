@@ -17,7 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { setSetting, useSetting } from '../../settings';
 import { addFriend, searchDirectory, type DirectoryEntry } from '../social/api';
-import { browseServers, type BrowseMatch, type MapSummary } from './api';
+import { browseServers, ONLINE_HOST, type BrowseMatch, type MapSummary } from './api';
 import {
   ACTIONS,
   CONTROL_GROUPS,
@@ -353,6 +353,8 @@ export function SettingsPanel() {
 export interface ServerBrowserProps {
   /** Maps this node can actually load, so an unjoinable row says why. */
   maps: MapSummary[];
+  /** The loaded map: what "open an online room" opens on. */
+  mapName?: string;
   /** Who is in the match we are already in, if any. */
   peers: MatchPeer[];
   playerId: string;
@@ -392,6 +394,9 @@ export function ServerBrowserPanel(props: ServerBrowserProps) {
   }, [refresh]);
 
   const known = useMemo(() => new Set(props.maps.map((m) => m.name)), [props.maps]);
+  // The game server plays bundled maps only — it has nobody's install.
+  const onlineMap =
+    props.maps.find((m) => m.name === props.mapName && m.source === 'bundled')?.name ?? '';
   const q = filter.trim().toLowerCase();
   const visibleMatches = matches.filter(
     (m) =>
@@ -426,6 +431,23 @@ export function ServerBrowserPanel(props: ServerBrowserProps) {
         </button>
       </div>
 
+      {/* Online rooms run on the game server, which is where web players are:
+          a room opened here shows up in the browser game's list, and theirs
+          show up below. Unrated once a guest joins — the server decides. */}
+      <div style={styles.row}>
+        <div style={styles.rowMain}>
+          <span>Online room</span>
+          <span style={styles.dim}>
+            {onlineMap
+              ? `Open one on ${onlineMap} that web players can join`
+              : 'Load a bundled map to open one'}
+          </span>
+        </div>
+        <button onClick={() => props.onJoin('', onlineMap, ONLINE_HOST)} disabled={!onlineMap}>
+          Open
+        </button>
+      </div>
+
       {error && <div style={styles.error}>{error}</div>}
       {partial && (
         <div style={styles.dim}>
@@ -444,6 +466,7 @@ export function ServerBrowserPanel(props: ServerBrowserProps) {
       )}
       {visibleMatches.map((m) => {
         const here = m.host === '';
+        const online = m.host === ONLINE_HOST;
         const playable = known.has(m.map);
         const current = here && m.id === props.room;
         return (
@@ -451,6 +474,7 @@ export function ServerBrowserPanel(props: ServerBrowserProps) {
             <div style={styles.rowMain}>
               <span>
                 <code>{m.map}</code> · {m.hostName}
+                {online && <span style={styles.badge}>web</span>}
                 {current && <span style={styles.badge}>you're in this one</span>}
               </span>
               <span style={styles.dim}>

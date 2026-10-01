@@ -7650,6 +7650,15 @@ switch rather than a guest check scattered through the pane:
   menu (ranked, the designer, friends) offers nothing a guest can use. No room id
   means "any room on this map with space", the server's `find_or_create`.
 
+**Desktop and web players meet in online rooms.** A node's casual and hosted
+matches live in its own process, which a browser cannot reach, so the meeting
+point is the game server. The desktop server browser lists the server's rooms
+alongside local and friends' matches (`ranked.online_rooms`, tagged with
+`host == "@server"`, shown with a *web* badge), and **Open** under *Online room*
+opens a new one there on the loaded bundled map (`new: true` on the join). Both go
+through the same proxy as ranked, so the node's token never reaches the client. A
+room is unrated once a guest is in it — the server's call, not the node's.
+
 Two fixes the web client surfaced apply to every client. The **map list no longer
 overrides a chosen map**: it used to set `hd_assault` unconditionally when it
 arrived, racing a join, so a pane could render one map while the server simulated

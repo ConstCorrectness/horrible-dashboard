@@ -199,6 +199,7 @@ export function MainMenu(props: MainMenuProps) {
           {section === 'servers' && (
             <ServerBrowserPanel
               maps={props.maps}
+              mapName={props.mapName}
               peers={props.peers}
               playerId={props.playerId}
               room={props.room}

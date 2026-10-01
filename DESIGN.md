@@ -19,6 +19,25 @@ colors:
   warn: '#e2c08d'
   danger: '#e06c75'
   gold: '#f5b942'
+  # The game site (apps/assault-web) — its own palette; see "Game Site" below.
+  # Namespaced so nothing in the dashboard reaches for them by accident.
+  game-bg: '#0e0f11'
+  game-bg-raised: '#15171a'
+  game-panel: '#16181b'
+  game-panel-glass: 'rgb(20 22 25 / 90%)'
+  game-line: '#2a2d31'
+  game-line-strong: '#3b3f45'
+  game-text: '#e8e6e1'
+  game-text-secondary: '#b3b1ab'
+  game-text-dim: '#8a8c8f'
+  game-text-faint: '#5d5f62'
+  game-accent: '#f2a900'
+  game-accent-hover: '#ffbb26'
+  game-accent-contrast: '#15120a'
+  game-success: '#7fb069'
+  game-danger: '#e5484d'
+  game-danger-text: '#f0a3a5'
+  game-wash: 'rgb(255 255 255 / 4%)'
 typography:
   display:
     fontFamily: "Geist, 'Segoe UI', system-ui, sans-serif"
@@ -68,6 +87,61 @@ typography:
     fontWeight: 400
     lineHeight: 1.1
     letterSpacing: 'normal'
+  game-hero:
+    fontFamily: "'Barlow Condensed', 'Arial Narrow', sans-serif"
+    fontSize: 'clamp(56px, 8.2vw, 112px)'
+    fontWeight: 700
+    lineHeight: 0.95
+    letterSpacing: '0.02em'
+  game-splash:
+    fontFamily: "'Barlow Condensed', 'Arial Narrow', sans-serif"
+    fontSize: 'clamp(64px, 11vw, 150px)'
+    fontWeight: 700
+    lineHeight: 0.95
+    letterSpacing: '0.03em'
+  game-heading:
+    fontFamily: "'Barlow Condensed', 'Arial Narrow', sans-serif"
+    fontSize: '34px'
+    fontWeight: 700
+    lineHeight: 0.95
+    letterSpacing: '0.06em'
+  game-title:
+    fontFamily: "'Barlow Condensed', 'Arial Narrow', sans-serif"
+    fontSize: '28px'
+    fontWeight: 700
+    lineHeight: 0.95
+    letterSpacing: '0.05em'
+  game-label:
+    fontFamily: "'Barlow Condensed', 'Arial Narrow', sans-serif"
+    fontSize: '13px'
+    fontWeight: 600
+    lineHeight: 1.2
+    letterSpacing: '0.14em'
+  game-body:
+    fontFamily: "Barlow, 'Segoe UI', system-ui, sans-serif"
+    fontSize: '15px'
+    fontWeight: 400
+    lineHeight: 1.55
+    letterSpacing: 'normal'
+  game-mono:
+    fontFamily: "'JetBrains Mono', ui-monospace, Consolas, monospace"
+    fontSize: '13px'
+    fontWeight: 400
+    lineHeight: 1.4
+    letterSpacing: 'normal'
+  # The game site's full ramp (px). The roles above are its named steps.
+  scale:
+    game-11: '11px'
+    game-12: '12px'
+    game-13: '13px'
+    game-14: '14px'
+    game-15: '15px'
+    game-18: '18px'
+    game-21: '21px'
+    game-24: '24px'
+    game-28: '28px'
+    game-30: '30px'
+    game-34: '34px'
 rounded:
   sm: '4px'
   md: '6px'
@@ -622,3 +696,48 @@ animated component adds the eighth.
   bevel is the model: one rule, two looks, no conditional).
 - **Don't** invent a middle elevation step. There are three, and each aliases
   what the theme already declares.
+
+## Game Site
+
+`apps/assault-web` — the public, browser-played HorribleAssault — is not a pane
+in this console, and it does not wear the console's skin. It is a player-facing
+front door: one page that has to sell a match in a glance, then get out of the
+way. The `game-*` tokens above are its whole vocabulary, and nothing outside
+`apps/assault-web` should use them. Inside it they are CSS custom properties
+(`apps/assault-web/src/theme.css`), deliberately named like the console's
+(`--accent`, `--text`, `--text-dim`, `--border`, `--font-mono`) so the
+HorribleAssault menus in `packages/core` pick the game palette up unchanged.
+
+**Graphite and signal amber.** Near-neutral graphite grounds (never navy), bone
+text, and one amber. Amber does exactly three jobs: the primary action, the
+active nav item, and the 2px top rule on a panel. A fourth use dilutes all
+three. Green is the live dot and nothing else; red is errors and nothing else.
+
+**Real art, no pattern.** The ground behind the hero and the deploy splash is a
+still captured from the game's own renderer (`src/assets/maps/<id>.webp`),
+graded dark where the type sits, with fine film grain to break banding. No grid
+overlays, no gradient meshes, no stock imagery. A map with no capture shows the
+plain graphite ground. The full capture set — six framings a map — lives in
+`tools/key-art/hassault-maps/` (see its README) for picking a different shot later.
+
+**Type.** Barlow Condensed for anything that names something (uppercase, 0.06em
+on headlines, 0.14em on labels); Barlow for sentences; JetBrains Mono for
+figures, ids, map codes and pings. Sizes come from `typography.scale` — the
+game ramp is larger than the console's because it is read at arm's length, not
+in a 320px split.
+
+**Shape.** Square corners everywhere. The primary button and the map cards
+carry a clipped corner (`clip-path`, `--notch`), which is the site's one
+ornament. Hairline borders, no shadows, no glow.
+
+**Motion.** Staggered rise on arrival (capped at eight steps), rolling counters
+for live numbers (seeded at the real value, snapped by a timeout for background
+tabs), crossfade between map stills. Transforms and opacity only — a bar that
+fills animates `scaleX`, never `width`. All of it off under
+`prefers-reduced-motion`.
+
+**Controls.** 36px, not the console's 30px: this is a page you click with a
+mouse across a room, not a dense tool. Horizontal padding only on inputs, and
+every button carries a class (`.btn`, `.chip`, `.close`, …) — there is no
+global button style to inherit.
+

@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { mapEntry } from '../maps';
 
 export interface ShareRoomModalProps {
   room: string;
@@ -8,121 +9,73 @@ export interface ShareRoomModalProps {
 
 export function ShareRoomModal({ room, map, onClose }: ShareRoomModalProps) {
   const [copied, setCopied] = useState(false);
+  const [failed, setFailed] = useState(false);
   const shareUrl = `${window.location.origin}/#room=${encodeURIComponent(room)}&map=${encodeURIComponent(map)}`;
 
-  const copyToClipboard = async () => {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const copy = async () => {
     try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(shareUrl);
-      } else {
-        const input = document.createElement('input');
-        input.value = shareUrl;
-        document.body.appendChild(input);
-        input.select();
-        document.execCommand('copy');
-        document.body.removeChild(input);
-      }
+      await navigator.clipboard.writeText(shareUrl);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2500);
+      setFailed(false);
+      setTimeout(() => setCopied(false), 2200);
     } catch {
-      // Fallback
+      // Clipboard denied (no permission, or an embedded frame). The field is
+      // selectable, so say so rather than pretending it worked.
+      setFailed(true);
     }
   };
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        backgroundColor: 'rgba(0, 0, 0, 0.75)',
-        backdropFilter: 'blur(4px)',
-        zIndex: 10000,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '1rem',
-      }}
-      onClick={onClose}
-    >
-      <div
-        style={{
-          width: '100%',
-          maxWidth: 480,
-          backgroundColor: '#111620',
-          border: '1px solid #2a3447',
-          borderRadius: 8,
-          padding: '1.5rem',
-          boxShadow: '0 20px 50px rgba(0, 0, 0, 0.6)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '1rem',
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: '#f8fafc', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <span>🔗</span> Share Match Invite
-          </h3>
-          <button
-            type="button"
-            onClick={onClose}
-            style={{
-              background: 'transparent',
-              border: 'none',
-              color: '#94a3b8',
-              fontSize: '1.2rem',
-              cursor: 'pointer',
-            }}
-          >
-            ✕
+    <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="share-title">
+        <div className="dialog-head">
+          <div>
+            <h2 id="share-title" className="display">
+              Invite to match
+            </h2>
+            <p>
+              Anyone with this link lands on the deploy screen for this room. No install, no
+              account.
+            </p>
+          </div>
+          <button type="button" className="close" onClick={onClose}>
+            Close
           </button>
         </div>
-
-        <p style={{ fontSize: '0.85rem', color: '#94a3b8', lineHeight: 1.4 }}>
-          Send this link to dashboard users or guests. Anyone can click to instantly deploy into this match with zero install!
-        </p>
-
-        <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
-          <input
-            type="text"
-            readOnly
-            value={shareUrl}
-            style={{
-              flex: 1,
-              backgroundColor: '#0b0e14',
-              border: '1px solid #334155',
-              borderRadius: 6,
-              color: '#38bdf8',
-              padding: '0.6rem 0.8rem',
-              fontSize: '0.82rem',
-              fontFamily: 'monospace',
-              outline: 'none',
-            }}
-            onClick={(e) => (e.target as HTMLInputElement).select()}
-          />
-          <button
-            type="button"
-            onClick={copyToClipboard}
-            style={{
-              backgroundColor: copied ? '#10b981' : '#2563eb',
-              color: '#ffffff',
-              border: 'none',
-              borderRadius: 6,
-              padding: '0.6rem 1.2rem',
-              fontSize: '0.85rem',
-              fontWeight: 600,
-              cursor: 'pointer',
-              transition: 'background-color 0.15s ease',
-              whiteSpace: 'nowrap',
-            }}
+        <div className="dialog-body">
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input
+              type="text"
+              className="input"
+              readOnly
+              value={shareUrl}
+              aria-label="Invite link"
+              onFocus={(e) => e.currentTarget.select()}
+              style={{ fontFamily: 'var(--font-mono)', fontSize: 13 }}
+            />
+            <button type="button" className="btn btn-primary" onClick={() => void copy()}>
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+          {failed && (
+            <p className="hint">Couldn't reach the clipboard. Select the link and copy it.</p>
+          )}
+          <hr className="rule" />
+          <div
+            className="mono"
+            style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}
           >
-            {copied ? '✓ Copied!' : 'Copy Link'}
-          </button>
-        </div>
-
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', color: '#64748b', borderTop: '1px solid #1e293b', paddingTop: '0.8rem', marginTop: '0.5rem' }}>
-          <span>Room: <code>{room}</code></span>
-          <span>Map: <code>{map}</code></span>
+            <span>room {room}</span>
+            <span>
+              {mapEntry(map).title} · {map}
+            </span>
+          </div>
         </div>
       </div>
     </div>

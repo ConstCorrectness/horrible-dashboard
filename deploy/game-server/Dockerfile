@@ -5,7 +5,7 @@
 #   fly deploy
 #   docker build -f deploy/game-server/Dockerfile -t horrible-game-server .
 #
-# Only backend/ is copied in; the frontend and local .data/logs are excluded by the
+# Only backend/ and the built browser game are copied in; the rest of the frontend and local .data/logs are excluded by the
 # repo-root .dockerignore, so the image stays small (no torch/ML deps in this project).
 
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
@@ -33,6 +33,12 @@ RUN uv sync --frozen --no-dev --no-install-project --extra games-native
 # Layer 2 — the server source. The game server imports only backend.games_server and
 # backend.games_engine (plus the light backend/__init__).
 COPY backend ./backend
+
+# Layer 3 — the browser game, served at `/` by the same process (see
+# `_mount_web_client` in app.py). Built on the host, not here: building it needs the
+# whole pnpm workspace. `pnpm deploy:games` builds it and then deploys; a plain
+# `fly deploy` with no build fails on this COPY rather than shipping without a site.
+COPY apps/assault-web/dist ./apps/assault-web/dist
 
 # Production defaults. Real secrets (GAMES_JWT_SECRET, GAMES_GITHUB_CLIENT_ID) are
 # injected by the host (`fly secrets set ...`), never baked into the image.

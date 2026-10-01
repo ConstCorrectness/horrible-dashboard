@@ -332,3 +332,85 @@ def test_the_endpoint_follows_the_server_the_node_signed_in_to(monkeypatch):
         lambda: "http://127.0.0.1:9200/",
     )
     assert ranked.server_ws_url() == "ws://127.0.0.1:9200/hassault-ws"
+
+
+# ---------------------------------------------------------------------------
+# Online rooms: the server's rooms in the desktop browser
+# ---------------------------------------------------------------------------
+
+
+def test_an_online_row_joins_that_room_on_the_server(fake_server: FakeServerSocket):
+    """A row out of the browser names a room; the proxy must carry it up, or the
+    player lands in some other room than the one they clicked."""
+    client = FakeClient()
+
+    async def go():
+        await channel.handle(client, join_msg(host=ranked.ONLINE_HOST, room="abc123"))
+        assert match_server.player_for(client) is None
+        sent = fake_server.sent[0]["data"]
+        assert sent["room"] == "abc123"
+        assert sent["new"] is False
+        await ranked.leave(client)
+
+    asyncio.run(go())
+
+
+def test_an_online_join_with_no_room_opens_one(fake_server: FakeServerSocket):
+    client = FakeClient()
+
+    async def go():
+        await channel.handle(client, join_msg(host=ranked.ONLINE_HOST))
+        assert fake_server.sent[0]["data"]["new"] is True
+        await ranked.leave(client)
+
+    asyncio.run(go())
+
+
+def test_the_servers_rooms_become_browse_rows(monkeypatch):
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url == "https://horrible-games.fly.dev/api/hassault/rooms"
+        return httpx.Response(
+            200,
+            json={
+                "rooms": [
+                    {"id": "r1", "map": "hd_pit", "playerCount": 3, "maxPlayers": 16}
+                ]
+            },
+        )
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw),
+    )
+    monkeypatch.setattr(
+        "backend.modules.games.client.resolve_server_url",
+        lambda: "wss://horrible-games.fly.dev",
+    )
+    rows = asyncio.run(ranked.online_rooms())
+    assert rows == [
+        {
+            "id": "r1",
+            "map": "hd_pit",
+            "mode": "dm",
+            "modeName": "dm",
+            "players": 3,
+            "bots": 0,
+            "maxPlayers": 16,
+            "createdAt": 0.0,
+            "host": ranked.ONLINE_HOST,
+            "hostName": "online",
+        }
+    ]
+
+
+def test_an_unreachable_server_lists_no_online_rooms(monkeypatch):
+    """The browser still has local and friends' matches to show."""
+    monkeypatch.setattr(
+        "backend.modules.games.client.resolve_server_url",
+        lambda: "http://127.0.0.1:1",
+    )
+    assert asyncio.run(ranked.online_rooms()) == []

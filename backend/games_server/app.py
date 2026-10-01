@@ -60,14 +60,17 @@ def _web_origins() -> list[str]:
     return [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
 
 
-# GET only, no credentials: the web client reads public game data, and its only
-# identity is a guest name on the websocket. Nothing a browser could be tricked
-# into doing here with somebody else's cookies — there are no cookies.
+# No credentials, ever: the web client signs in with a bearer token it holds and
+# attaches itself (`/auth/local/*`, `/auth/{provider}/web/*`, `/me`,
+# `/account/handle`), so POST and `Authorization` have to be allowed. That is still
+# nothing a page on another origin could ride — there are no cookies here for a
+# browser to attach on someone's behalf, and a token has to be sent deliberately.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_web_origins(),
     allow_origin_regex=os.environ.get("GAMES_WEB_ORIGIN_REGEX") or None,
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
     allow_credentials=False,
 )
 
@@ -792,6 +795,7 @@ async def hassault_ws(websocket: WebSocket) -> None:
                         conn,
                         str(data.get("map") or ""),
                         str(data.get("room") or "") or None,
+                        new=bool(data.get("new")),
                     )
                 except (ValueError, LookupError) as exc:
                     await conn.send_json(
@@ -930,3 +934,24 @@ app.add_api_websocket_route("/relay-ws", _relay_broker.relay_ws)
 @app.get("/relay/health")
 def relay_health() -> dict[str, object]:
     return {"status": "ok", "clients": len(_relay_broker._clients)}
+
+
+def _mount_web_client() -> None:
+    """Serve the standalone browser game (`apps/assault-web` build) at `/`.
+
+    Same origin as the API and `/hassault-ws`, so the client needs no backend URL
+    and no CORS entry. Mounted last: a mount at `/` matches every path, and only
+    routes registered before it win. Absent in dev (Vite serves the client), so
+    skip quietly — the image's COPY is what makes a missing build fail loudly.
+    """
+    from pathlib import Path
+
+    from fastapi.staticfiles import StaticFiles
+
+    default = Path(__file__).resolve().parents[2] / "apps" / "assault-web" / "dist"
+    web_dir = Path(os.environ.get("GAMES_WEB_DIR") or default)
+    if (web_dir / "index.html").is_file():
+        app.mount("/", StaticFiles(directory=web_dir, html=True), name="web")
+
+
+_mount_web_client()

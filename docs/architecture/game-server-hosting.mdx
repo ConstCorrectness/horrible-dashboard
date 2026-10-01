@@ -108,8 +108,8 @@ fly secrets set GAMES_JWT_SECRET="$(openssl rand -hex 32)" \
 #                 hold a redirect URI), Authorized redirect URI:
 #                 https://<server>/auth/google/callback
 
-# Deploy / redeploy:
-fly deploy
+# Deploy / redeploy (builds the web client first — the image COPYs its dist):
+pnpm deploy:games
 ```
 
 On Windows PowerShell (no `openssl`), generate the secret with .NET's CSPRNG instead:
@@ -172,9 +172,15 @@ files — it is the server that cannot live there. See below.
 ## The standalone web client
 
 `apps/assault-web` is HorribleAssault in a browser with **no node behind it**: a
-guest picks a callsign and plays on this server. It is a static Vite build, so it
-can be served from anywhere (a CDN such as Vercel suits it — the game's models are
-~44 MB), with `VITE_BACKEND_URL` set at build time to this server's URL.
+guest picks a callsign and plays on this server. **This server hosts it**: the
+image copies `apps/assault-web/dist` in and `_mount_web_client` serves it at `/`,
+so `https://horrible-games.fly.dev/` is the game. Same origin means no
+`VITE_BACKEND_URL` and no CORS entry. The build happens on the host (it needs the
+whole pnpm workspace), which is why the deploy command is `pnpm deploy:games` — a
+bare `fly deploy` with no build fails on the `COPY` instead of shipping without a
+site. It is still a plain static build, so a CDN (with `VITE_BACKEND_URL` and
+`GAMES_WEB_ORIGINS` set) remains an option if the ~60 MB of models ever outgrows
+one machine's bandwidth.
 
 That makes this server the client's **entire** backend, which it was not built to
 be. In dev it looked as if it were, because Vite proxied `/api` to a node and only

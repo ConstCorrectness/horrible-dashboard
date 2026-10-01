@@ -1,0 +1,322 @@
+/*
+ * The browser build's look: graphite and signal amber.
+ *
+ * One accent, used for exactly three things — the primary action, the active nav
+ * item, and the 2px top rule on a panel. Everything else is graphite and bone.
+ * If a new element wants amber and is none of those three, it probably doesn't.
+ *
+ * The tokens are also the names `packages/core`'s HorribleAssault menus read
+ * (`--accent`, `--text`, `--text-dim`, `--border`, `--success`, `--danger`,
+ * `--font-mono`), so the in-match menus pick up this palette instead of falling
+ * back to their default blue. Rename one here and the game silently goes blue.
+ */
+
+:root {
+  --bg: #0e0f11;
+  --bg-raised: #15171a;
+  --panel: rgba(20, 22, 25, 0.9);
+  --panel-solid: #16181b;
+  --line: #2a2d31;
+  --line-strong: #3b3f45;
+
+  --text: #e8e6e1;
+  --text-secondary: #b3b1ab;
+  --text-dim: #8a8c8f;
+
+  --accent: #f2a900;
+  --accent-hover: #ffbb26;
+  --accent-contrast: #15120a;
+  --accent-wash: rgba(242, 169, 0, 0.1);
+
+  --success: #7fb069;
+  --danger: #e5484d;
+  --border: var(--line);
+
+  --font-display: 'Barlow Condensed', 'Arial Narrow', sans-serif;
+  --font-body: 'Barlow', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, Consolas, monospace;
+
+  --control-h: 36px;
+  --notch: 10px;
+  color-scheme: dark;
+  /* Native range/checkbox controls inside the game's menus. */
+  accent-color: var(--accent);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 15px;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ---- type ---------------------------------------------------------------- */
+
+.display {
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  line-height: 0.95;
+}
+
+.label {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}
+
+/* ---- buttons --------------------------------------------------------------
+ * Every button here carries a class: there is no global button style to inherit,
+ * so a row or chip never accidentally becomes a 36px action button.            */
+
+.btn {
+  height: var(--control-h);
+  padding: 0 1.1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease,
+    transform 0.08s ease;
+}
+.btn:hover {
+  border-color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.04);
+}
+.btn:active {
+  transform: translateY(1px);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+.btn svg {
+  flex: none;
+}
+
+/* The one amber action per view. Clipped corners rather than a radius. */
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+  clip-path: polygon(
+    0 0,
+    calc(100% - var(--notch)) 0,
+    100% var(--notch),
+    100% 100%,
+    var(--notch) 100%,
+    0 calc(100% - var(--notch))
+  );
+}
+.btn-primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.btn-lg {
+  --control-h: 48px;
+  --notch: 14px;
+  padding: 0 1.6rem;
+  font-size: 18px;
+}
+
+.btn-sm {
+  --control-h: 30px;
+  --notch: 8px;
+  padding: 0 0.8rem;
+  font-size: 13px;
+}
+
+.btn-ghost {
+  border-color: transparent;
+  color: var(--text-dim);
+}
+.btn-ghost:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+  border-color: transparent;
+}
+
+.btn-icon {
+  width: var(--control-h);
+  padding: 0;
+}
+
+/* ---- fields --------------------------------------------------------------
+ * Fixed height, horizontal padding only — vertical padding on an input shrinks
+ * the box under the text instead of growing it.                               */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.field > span {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-dim);
+}
+.input {
+  height: var(--control-h);
+  padding: 0 0.75rem;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 15px;
+  outline: none;
+  width: 100%;
+}
+.input:focus {
+  border-color: var(--accent);
+}
+.input::placeholder {
+  color: #5d5f62;
+}
+
+/* ---- panels --------------------------------------------------------------- */
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-top: 2px solid var(--accent);
+  backdrop-filter: blur(6px);
+}
+
+.panel-plain {
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+
+.rule {
+  height: 1px;
+  background: var(--line);
+  border: 0;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 0.5rem;
+  border: 1px solid var(--line-strong);
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.tag-accent {
+  color: var(--accent);
+  border-color: rgba(242, 169, 0, 0.45);
+}
+
+.live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 0 0 rgba(127, 176, 105, 0.6);
+  animation: live-pulse 2.2s ease-out infinite;
+  flex: none;
+}
+
+/* ---- motion ---------------------------------------------------------------- */
+
+@keyframes live-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(127, 176, 105, 0.55);
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 7px rgba(127, 176, 105, 0);
+  }
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Staggered entrance: set `--i` per item. The delay is capped so a long list
+ * has finished arriving in well under half a second. */
+.rise {
+  animation: rise-in 0.42s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: calc(min(var(--i, 0), 8) * 40ms);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rise,
+  .live-dot {
+    animation: none !important;
+  }
+}

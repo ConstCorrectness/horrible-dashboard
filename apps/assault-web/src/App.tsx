@@ -1,15 +1,18 @@
-import { lazy, Suspense, useState, useEffect, useCallback } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { useGuestSession } from './hooks/useGuestSession';
-import { ServerBrowser } from './components/ServerBrowser';
-import { InstantDeployModal } from './components/InstantDeployModal';
+import { accountName, applySocketIdentity, useAuth } from './auth';
+import { Landing } from './components/Landing';
+import { DeploySplash } from './components/DeploySplash';
+import { CreateMatchDialog } from './components/CreateMatchDialog';
+import { SignInDialog } from './components/SignInDialog';
 import { ShareRoomModal } from './components/ShareRoomModal';
 import { MobileWarningBanner } from './components/MobileWarningBanner';
 
-type AppView = 'browser' | 'instant_deploy' | 'playing';
+type AppView = 'browser' | 'deploy' | 'playing';
 
 /**
  * The game itself: three.js, the Rapier physics wasm and the renderer — about
- * 4 MB of script, which the server browser needs none of.
+ * 4 MB of script, which the landing page needs none of.
  *
  * Loaded lazily so the landing page arrives in a fraction of that, and then
  * **prefetched** once the page is idle (below), so pressing Quick Play does not
@@ -20,11 +23,13 @@ const HorribleAssaultPanel = lazy(() =>
   loadPanel().then((m) => ({ default: m.HorribleAssaultPanel })),
 );
 
+const DEFAULT_MAP = 'hd_dust2';
+
 function parseLocationParams(): { room: string | null; map: string } {
   let room: string | null = null;
-  let map = 'hd_assault';
+  let map = DEFAULT_MAP;
 
-  // Check URL hash first (#room=abc&map=hd_assault)
+  // Check URL hash first (#room=abc&map=hd_dust2)
   const hash = window.location.hash.replace(/^#\/?/, '');
   if (hash) {
     const params = new URLSearchParams(hash);
@@ -32,7 +37,7 @@ function parseLocationParams(): { room: string | null; map: string } {
     if (params.get('map')) map = params.get('map') || map;
   }
 
-  // Fallback to query string (?room=abc&map=hd_assault)
+  // Fallback to query string (?room=abc&map=hd_dust2)
   if (!room) {
     const search = new URLSearchParams(window.location.search);
     if (search.get('room')) room = search.get('room');
@@ -44,11 +49,26 @@ function parseLocationParams(): { room: string | null; map: string } {
 
 export default function App() {
   const { callsign, setCallsign } = useGuestSession();
+  const auth = useAuth();
   const [view, setView] = useState<AppView>('browser');
-  const [targetRoom, setTargetRoom] = useState<string | null>(null);
-  const [targetMap, setTargetMap] = useState<string>('hd_assault');
-  const [shareModal, setShareModal] = useState<{ room: string; map: string } | null>(null);
+  const [target, setTarget] = useState<{ room: string | null; map: string }>({
+    room: null,
+    map: DEFAULT_MAP,
+  });
+  const [dialog, setDialog] = useState<
+    | { kind: 'create' }
+    | { kind: 'signin'; step: 'in' | 'handle' }
+    | { kind: 'share'; room: string; map: string }
+    | null
+  >(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Signed in with a username → the socket carries the token; otherwise the
+  // guest callsign. Re-applied whenever either changes.
+  const handle = accountName(auth.account);
+  useEffect(() => {
+    applySocketIdentity(callsign);
+  }, [auth.token, handle, callsign]);
 
   useEffect(() => {
     // `requestIdleCallback` is missing on Safari; a short timeout is the same
@@ -62,191 +82,140 @@ export default function App() {
     return () => globalThis.clearTimeout(id);
   }, []);
 
+  // A shared link lands on the deploy screen for its room.
   useEffect(() => {
     const initial = parseLocationParams();
     if (initial.room) {
-      setTargetRoom(initial.room);
-      setTargetMap(initial.map);
-      setView('instant_deploy');
+      setTarget({ room: initial.room, map: initial.map });
+      setView('deploy');
     }
   }, []);
 
   useEffect(() => {
-    const onFullscreenChange = () => {
-      setIsFullscreen(Boolean(document.fullscreenElement));
-    };
+    const onFullscreenChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
     document.addEventListener('fullscreenchange', onFullscreenChange);
     return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
   }, []);
 
   const toggleFullscreen = useCallback(async () => {
     try {
-      if (document.fullscreenElement) {
-        await document.exitFullscreen();
-      } else {
-        await document.documentElement.requestFullscreen();
-      }
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await document.documentElement.requestFullscreen();
     } catch {
-      // Fullscreen permission error ignored
+      // Fullscreen refused (permissions policy, iframe) — the button just does nothing.
     }
   }, []);
 
-  const handleJoinMatch = (room: string, map: string) => {
-    setTargetRoom(room);
-    setTargetMap(map);
-    // Update hash for easy bookmarking and sharing
+  const join = (room: string, map: string) => {
+    setTarget({ room, map });
+    // Bookmarkable and shareable from the moment you pick it.
     window.location.hash = `room=${encodeURIComponent(room)}&map=${encodeURIComponent(map)}`;
-    setView('playing');
+    setView('deploy');
   };
 
-  const handleHostMatch = (map: string) => {
-    setTargetRoom(null);
-    setTargetMap(map);
+  const host = (map: string) => {
+    setDialog(null);
+    setTarget({ room: null, map });
     window.location.hash = `map=${encodeURIComponent(map)}`;
-    setView('playing');
+    setView('deploy');
   };
 
-  const handleExitMatch = () => {
+  const backToBrowser = () => {
     window.location.hash = '';
-    setTargetRoom(null);
+    setTarget((t) => ({ ...t, room: null }));
     setView('browser');
   };
 
-  const handleOpenShare = (room: string, map: string) => {
-    setShareModal({ room, map });
-  };
-
   return (
-    <div
-      style={{
-        width: '100%',
-        height: '100%',
-        position: 'relative',
-        overflow: 'hidden',
-        backgroundColor: '#070a10',
-      }}
-    >
+    <div style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>
       <MobileWarningBanner />
 
       {view === 'browser' && (
-        <ServerBrowser
+        <Landing
           callsign={callsign}
           onCallsignChange={setCallsign}
-          onJoinMatch={handleJoinMatch}
-          onHostMatch={handleHostMatch}
+          onJoin={join}
+          onHost={host}
+          onCreate={() => setDialog({ kind: 'create' })}
+          onSignIn={() => setDialog({ kind: 'signin', step: 'in' })}
+          onChooseHandle={() => setDialog({ kind: 'signin', step: 'handle' })}
         />
       )}
 
-      {view === 'instant_deploy' && targetRoom && (
-        <InstantDeployModal
-          room={targetRoom}
-          map={targetMap}
+      {view === 'deploy' && (
+        <DeploySplash
+          room={target.room}
+          map={target.map}
           callsign={callsign}
           onCallsignChange={setCallsign}
-          onDeploy={(room, map) => {
-            setTargetRoom(room);
-            setTargetMap(map);
-            setView('playing');
-          }}
-          onCancel={() => {
-            window.location.hash = '';
-            setTargetRoom(null);
-            setView('browser');
-          }}
+          onDeploy={() => setView('playing')}
+          onCancel={backToBrowser}
         />
       )}
 
       {view === 'playing' && (
         <div style={{ width: '100%', height: '100%', position: 'relative' }}>
-          {/* Quick HUD Toolbar (Fullscreen & Share) */}
-          <div
-            style={{
-              position: 'absolute',
-              top: 10,
-              right: 12,
-              zIndex: 50,
-              display: 'flex',
-              gap: '0.5rem',
-              alignItems: 'center',
-            }}
-          >
+          <div className="match-tools">
             <button
               type="button"
-              onClick={() => handleOpenShare(targetRoom || 'live-match', targetMap)}
-              style={{
-                backgroundColor: 'rgba(15, 23, 42, 0.75)',
-                border: '1px solid rgba(56, 189, 248, 0.4)',
-                color: '#38bdf8',
-                borderRadius: 5,
-                padding: '0.35rem 0.7rem',
-                fontSize: '0.78rem',
-                fontWeight: 700,
-                cursor: 'pointer',
-                backdropFilter: 'blur(4px)',
-              }}
+              className="btn btn-sm"
+              onClick={() =>
+                setDialog({ kind: 'share', room: target.room || 'live-match', map: target.map })
+              }
               title="Share match link"
             >
-              🔗 Share
+              Invite
             </button>
             <button
               type="button"
-              onClick={toggleFullscreen}
-              style={{
-                backgroundColor: 'rgba(15, 23, 42, 0.75)',
-                border: '1px solid rgba(255, 255, 255, 0.2)',
-                color: '#cbd5e1',
-                borderRadius: 5,
-                padding: '0.35rem 0.6rem',
-                fontSize: '0.78rem',
-                fontWeight: 700,
-                cursor: 'pointer',
-                backdropFilter: 'blur(4px)',
-              }}
-              title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+              className="btn btn-sm"
+              onClick={() => void toggleFullscreen()}
+              title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
             >
-              {isFullscreen ? '⤢ Window' : '⤡ Fullscreen'}
+              {isFullscreen ? 'Windowed' : 'Fullscreen'}
             </button>
           </div>
 
           <Suspense fallback={<LoadingGame />}>
             <HorribleAssaultPanel
-              guestCallsign={callsign}
-              initialMap={targetMap}
-              initialRoom={targetRoom ?? undefined}
+              guestCallsign={handle ?? callsign}
+              initialMap={target.map}
+              initialRoom={target.room ?? undefined}
               forceWebGl={true}
               standalone={true}
-              onShareRoom={handleOpenShare}
-              onToggleFullscreen={toggleFullscreen}
+              onShareRoom={(room, map) => setDialog({ kind: 'share', room, map })}
+              onToggleFullscreen={() => void toggleFullscreen()}
               isFullscreen={isFullscreen}
-              onExit={handleExitMatch}
+              onExit={backToBrowser}
             />
           </Suspense>
         </div>
       )}
 
-      {shareModal && (
-        <ShareRoomModal
-          room={shareModal.room}
-          map={shareModal.map}
-          onClose={() => setShareModal(null)}
-        />
+      {dialog?.kind === 'create' && (
+        <CreateMatchDialog onLaunch={host} onClose={() => setDialog(null)} />
+      )}
+      {dialog?.kind === 'signin' && (
+        <SignInDialog initialStep={dialog.step} onClose={() => setDialog(null)} />
+      )}
+      {dialog?.kind === 'share' && (
+        <ShareRoomModal room={dialog.room} map={dialog.map} onClose={() => setDialog(null)} />
       )}
     </div>
   );
 }
 
-/** Shown only if Play is pressed before the prefetch above has finished. */
+/** Shown only if Deploy is pressed before the prefetch above has finished. */
 function LoadingGame() {
   return (
     <div
+      className="mono"
       style={{
         position: 'absolute',
         inset: 0,
         display: 'grid',
         placeItems: 'center',
-        color: '#94a3b8',
-        fontFamily: "'JetBrains Mono', ui-monospace, monospace",
-        fontSize: '0.8rem',
+        fontSize: 13,
         letterSpacing: '0.14em',
         textTransform: 'uppercase',
       }}

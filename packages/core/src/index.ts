@@ -82,6 +82,7 @@ export {
 } from './Avatar3D';
 export { WorkspaceLauncher } from './WorkspaceLauncher';
 export { apiUrl, getBackendOrigin, initBackendOrigin, wsUrl } from './origin';
+export { GITHUB_MARK, GOOGLE_MARK } from './provider-marks';
 export {
   setWindowControl,
   windowControl,
@@ -501,6 +502,8 @@ export {
   getMapCubes,
   getMapInfo,
   formatBytes,
+  DEFAULT_CONTROLS,
+  keyLabel,
   type MapSummary,
   type MapInfo,
 } from './modules/hassault';

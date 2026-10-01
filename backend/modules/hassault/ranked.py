@@ -46,10 +46,72 @@ CHANNEL = "hassault"
 #: is looking at a map that never loads.
 CONNECT_TIMEOUT = 10.0
 
+#: The `host` a browse row and a join carry for a room on the game server rather
+#: than on a node. Node ids are base32, so `@` can never collide with one; and a
+#: non-empty host already means "not ours" to every caller that asks (no bots, no
+#: invites), which is true of a server room too.
+ONLINE_HOST = "@server"
+
+#: How long the browser waits for the server's room list. The same budget the
+#: fabric fan-out gets: a slow server should shorten the list, not stall it.
+BROWSE_TIMEOUT = 2.0
+
 #: How long `leave` waits for the server's parting `result`. Short: the player is
 #: already back in the menu, and a card that arrives is worth a beat while a menu
 #: that hangs is not.
 RESULT_WAIT = 2.0
+
+
+def server_http_url() -> str:
+    """The game server's HTTP origin — `server_ws_url` without the socket."""
+    from backend.modules.games.client import resolve_server_url
+
+    base = resolve_server_url().rstrip("/")
+    if base.startswith("wss://"):
+        return "https://" + base[len("wss://") :]
+    if base.startswith("ws://"):
+        return "http://" + base[len("ws://") :]
+    return base
+
+
+async def online_rooms() -> list[dict[str, Any]]:
+    """The rooms the game server is running, as browse rows.
+
+    These are where web players are — the public browser client plays only
+    there. Unauthenticated (the same public list the web client reads), and an
+    unreachable server is an empty list rather than an error: the browser still
+    has this node's and friends' matches to show.
+    """
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=BROWSE_TIMEOUT) as client:
+            resp = await client.get(f"{server_http_url()}/api/hassault/rooms")
+            resp.raise_for_status()
+            rooms = resp.json().get("rooms") or []
+    except Exception as exc:
+        logger.info("hassault: online room list unavailable: %s", exc)
+        return []
+    rows = []
+    for room in rooms:
+        if not isinstance(room, dict) or not room.get("id"):
+            continue
+        mode = str(room.get("mode") or "dm")
+        rows.append(
+            {
+                "id": str(room["id"]),
+                "map": str(room.get("map") or ""),
+                "mode": mode,
+                "modeName": mode,
+                "players": int(room.get("playerCount") or 0),
+                "bots": 0,
+                "maxPlayers": int(room.get("maxPlayers") or 0),
+                "createdAt": 0.0,
+                "host": ONLINE_HOST,
+                "hostName": "online",
+            }
+        )
+    return rows
 
 
 def server_ws_url() -> str:
@@ -107,8 +169,18 @@ def session_for(conn: WsConnection) -> RankedSession | None:
     return _sessions.get(id(conn))
 
 
-async def join(conn: WsConnection, map_name: str) -> None:
-    """Open a socket to the game server and put this client in a rated room.
+async def join(
+    conn: WsConnection,
+    map_name: str,
+    room_id: str | None = None,
+    new: bool = False,
+) -> None:
+    """Open a socket to the game server and put this client in a room there.
+
+    With no `room_id` it is a ranked join: any room on that map with space. A
+    `room_id` is a specific online room out of the browser, and `new` opens one
+    of our own. Either way the server decides whether the result is rated — it
+    is not, once a guest is in the room.
 
     Errors are reported **to the client on its own channel** rather than raised:
     the caller is a websocket handler, and a ranked join that fails should leave
@@ -142,7 +214,9 @@ async def join(conn: WsConnection, map_name: str) -> None:
         return
 
     _sessions[id(conn)] = session
-    await session.send("join", {"map": map_name, "name": ""})
+    await session.send(
+        "join", {"map": map_name, "name": "", "room": room_id or "", "new": new}
+    )
     # Detached: this pump delivers the welcome that the caller is *inside the
     # handler for*. Awaiting it here would deadlock the socket that has to
     # receive it — the same rule the other `/ws` relays follow.

@@ -35,6 +35,7 @@ from backend.modules.hassault import (
     mapsource,
     modes,
     pickups,
+    ranked,
     textures,
     weapons,
 )
@@ -750,12 +751,12 @@ async def get_invites() -> list[MatchInvite]:
 async def get_browse() -> ServerBrowse:
     """The server browser: every match we can see, and everyone we could play with.
 
-    There is no master server to query — this game has no central list and is not
-    getting one. "Available servers" here means matches on **this node** plus
-    matches on the nodes of friends the fabric currently has a session with, asked
-    for over the peer wire on a two-second deadline. That is the honest extent of
-    it: a stranger's match is not discoverable, because it is also not joinable
-    (see `fabric.handle_join`).
+    "Available servers" means matches on **this node**, matches on the nodes of
+    friends the fabric currently has a session with (asked over the peer wire on a
+    two-second deadline), and the **game server's** rooms — where web players
+    are, tagged `host == ranked.ONLINE_HOST`. A stranger's *node* match is still
+    not discoverable, because it is also not joinable (see `fabric.handle_join`);
+    a room on the game server is both.
 
     Players are the roster's, and they carry a `room` when one of their devices is
     playing in a match hosted here — which is the only place we can know it from.
@@ -764,7 +765,10 @@ async def get_browse() -> ServerBrowse:
         BrowseMatch(**row, host="", hostName="this node")
         for row in match_server.listing()
     ]
-    remote, asked, answered = await fabric.browse_peers()
+    (remote, asked, answered), online_rows = await asyncio.gather(
+        fabric.browse_peers(), ranked.online_rooms()
+    )
+    online_matches = [BrowseMatch(**row) for row in online_rows]
 
     # Which of our own rooms a friend's device is standing in. `player_nodes` is
     # the only view of that: a remote player is a `PeerPlayerConn`, so its node id
@@ -803,7 +807,7 @@ async def get_browse() -> ServerBrowse:
         )
 
     return ServerBrowse(
-        matches=local + [BrowseMatch(**row) for row in remote],
+        matches=local + [BrowseMatch(**row) for row in remote] + online_matches,
         players=players,
         peers_asked=asked,
         peers_answered=answered,

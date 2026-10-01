@@ -143,6 +143,35 @@ def test_two_players_share_a_room_on_the_same_map(referee: HassaultReferee):
     asyncio.run(go())
 
 
+def test_a_new_join_opens_its_own_room(referee: HassaultReferee):
+    """The desktop's "open an online room": a room to share, not a seat in
+    whatever is already running on that map."""
+
+    async def go():
+        a, b, c = seat("alice"), seat("bob"), seat("carol")
+        first = await referee.join(a, "hd_pit")
+        second = await referee.join(b, "hd_pit", new=True)
+        assert first["room"] != second["room"]
+        # And it is a real room others can follow by id.
+        third = await referee.join(c, "hd_pit", second["room"])
+        assert third["room"] == second["room"]
+
+    asyncio.run(go())
+
+
+def test_a_new_room_still_counts_against_the_cap(
+    referee: HassaultReferee, monkeypatch
+):
+    monkeypatch.setenv("HASSAULT_MAX_ROOMS", "1")
+
+    async def go():
+        await referee.join(seat("alice"), "hd_pit")
+        with pytest.raises(ValueError, match="full"):
+            await referee.join(seat("bob"), "hd_pit", new=True)
+
+    asyncio.run(go())
+
+
 def test_the_display_name_never_decides_the_account(referee: HassaultReferee):
     """The match knows a nameplate; the ladder needs an account. Keeping the
     mapping on the connection is what stops a player naming themselves into

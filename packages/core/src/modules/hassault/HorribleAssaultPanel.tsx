@@ -20,6 +20,7 @@ import {
   listTacticals,
   getItems,
   listWeapons,
+  ONLINE_HOST,
   type TacticalSpec,
   type ThrowPhysics,
   type BrowseMatch,
@@ -3771,7 +3772,11 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             <span style={{ color: '#4c8fd4' }}>{net.scores[1]}</span>
             {' · '}
             {net.peers.length} in · {Math.round(net.rtt)} ms
-            {net.host ? ` · guest on ${net.host.slice(0, 8)}` : ''}
+            {net.host === ONLINE_HOST
+              ? ' · online'
+              : net.host
+                ? ` · guest on ${net.host.slice(0, 8)}`
+                : ''}
           </span>
         )}
         {phase === 'playing' && (
@@ -4148,6 +4153,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             hosting={online && !net.host}
             room={net.room}
             maps={maps}
+            mapName={mapName}
             peers={net.peers}
             playerId={net.playerId}
             invitees={invitees}

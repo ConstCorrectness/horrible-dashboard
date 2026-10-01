@@ -45,6 +45,8 @@ export interface GameMenuProps {
   room: string;
   /** Maps this node can actually load, so an unjoinable row says why. */
   maps: MapSummary[];
+  /** The loaded map: where the server browser opens an online room. */
+  mapName: string;
   peers: MatchPeer[];
   playerId: string;
   invitees: Invitee[];
@@ -138,6 +140,7 @@ export function GameMenu(props: GameMenuProps) {
           {tab === 'servers' && (
             <ServerBrowserPanel
               maps={props.maps}
+              mapName={props.mapName}
               peers={props.peers}
               playerId={props.playerId}
               room={props.room}

@@ -160,7 +160,11 @@ class HassaultReferee:
     # -- play ---------------------------------------------------------------
 
     async def join(
-        self, conn: SeatConn, map_name: str, room_id: str | None = None
+        self,
+        conn: SeatConn,
+        map_name: str,
+        room_id: str | None = None,
+        new: bool = False,
     ) -> dict[str, Any]:
         """Seat a player, opening a room if there is none on that map.
 
@@ -171,6 +175,11 @@ class HassaultReferee:
         taken, the mode, the scores — exactly what a node sends its own browser.
         It used to be five fields, so a client joining here drew no pickups and
         no mode until something happened to mention them.
+
+        `new` opens a room of its own instead of filling one that has space —
+        the desktop's "open an online room", which is a room to share, not a
+        seat in whatever happens to be running. Ignored when `room_id` names a
+        live room: that is a join, not a creation.
         """
         existing = self.server.get(room_id) if room_id else None
         if room_id and existing is None:
@@ -182,11 +191,11 @@ class HassaultReferee:
         target_map = existing.map_name if existing else (map_name or "hd_assault")
         if not self.playable(target_map):
             raise ValueError(f"{target_map!r} is not a bundled map")
-        if existing is None and not room_id and not self._has_space(target_map):
-            if len(self.server.rooms) >= max_rooms():
-                raise ValueError(
-                    "this server is full; try a room that is already running"
-                )
+        opening = existing is None and (new or not self._has_space(target_map))
+        if opening and len(self.server.rooms) >= max_rooms():
+            raise ValueError("this server is full; try a room that is already running")
+        if existing is None and new:
+            room_id = self.server.create(target_map).id
         room, player = await self.server.join(
             conn, target_map, conn.display_name, room_id
         )

@@ -583,3 +583,4 @@ export const hassaultModule: ModuleManifest = {
 export { lobbyVoice } from './lobby-voice';
 export { listMaps, getMapCubes, getMapInfo, type MapSummary, type MapInfo } from './api';
 export { formatBytes } from './boot';
+export { DEFAULT_CONTROLS, keyLabel } from './controls';

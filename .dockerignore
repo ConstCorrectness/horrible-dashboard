@@ -1,5 +1,7 @@
 node_modules
 apps
+# ...except the built browser game the game server serves at `/`.
+!apps/assault-web/dist
 packages
 website
 .git

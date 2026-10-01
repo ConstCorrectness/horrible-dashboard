@@ -332,6 +332,13 @@ export interface BrowseMatch extends MatchSummary {
   hostName: string;
 }
 
+/**
+ * The `host` of a room on the game server rather than on a node — where web
+ * players are. Mirrors `ranked.ONLINE_HOST`; joining with it routes through the
+ * node's server proxy, and joining with it and no room opens a new online room.
+ */
+export const ONLINE_HOST = '@server';
+
 /** Someone reachable: a friend on the roster, wherever they happen to be. */
 export interface BrowsePlayer {
   name: string;
