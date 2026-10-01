@@ -84,7 +84,11 @@ const BASELINE: Record<string, number> = {
   // the eight around them went with them. Lowered rather than left at 801: a
   // ratchet that keeps slack lets the next regression back in unnoticed.
   excluded: 793,
-  canvas: 6,
+  // 6 → 11, raised deliberately (2026-10-01): the visualizer's `html` mode. Its
+  // demo document and the iframe's white backdrop render inside a sandboxed
+  // opaque-origin frame, where the app's custom properties do not resolve — a
+  // token there would silently fall back, the uPlot bug below in another costume.
+  canvas: 11,
   // 221 → 217 with `viz/uplot-theme.ts`. `MetricsPane` held five of these, and
   // they are worth naming because they were not a shortcut — they were a bug. Its
   // series said `stroke: 'var(--accent, #539bf5)'`, which looks themed and is not:
