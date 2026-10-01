@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '../../api';
 import { usePaneSection } from '../../layout/use-sections';
 import { LocalModels } from './LocalModels';
+import { registry } from '../../registry';
 import { setSetting } from '../../settings';
 import {
   isReadable,
@@ -241,6 +242,18 @@ function HubBrowser({ section }: { section: string | undefined }) {
               {kind === 'dataset'
                 ? 'Search the Hub for a dataset, or list your own with “Mine”.'
                 : 'Search the Hub for a model, or list your own with “Mine”. Pin one as the model repo to drive exact token counts and the model explorer.'}
+              <p>
+                <button
+                  type="button"
+                  onClick={() =>
+                    void registry.runCommand(
+                      kind === 'dataset' ? 'discover.open.datasets' : 'discover.open.models',
+                    )
+                  }
+                >
+                  See what’s trending in Discover
+                </button>
+              </p>
             </div>
           )}
           {hits.map((hit) => (

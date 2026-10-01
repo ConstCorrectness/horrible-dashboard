@@ -1,0 +1,153 @@
+---
+sidebar_position: 22
+sidebar_label: Discover
+---
+
+# Module: Discover
+
+One browser over every external catalog the app works with: Hugging Face models,
+datasets, Spaces and Daily Papers, arXiv, GitHub repositories, Kaggle, the MCP
+registry, plugins, agent skills and documentation.
+
+**Status: implemented.** Each section opens on a **real, labelled default feed**,
+not an empty search box. The line under the controls says exactly what the list is
+and how old it is, for example "Trending models on the Hub · fetched 2m ago" or
+"Most-starred machine-learning repos · pushed in the last 7 days · 620 total".
+Search, sort and filters are the ones the upstream actually supports. Upstream
+trouble is reported as what it is ("connect Kaggle", "rate limit resets in 41s",
+"showing cached results"), never as a bare error.
+
+## What each section shows by default
+
+| Section | Source | Default feed | Notes |
+| --- | --- | --- | --- |
+| Models / Datasets / Spaces | Hugging Face Hub | `sort=trendingScore`, the Hub's own trending ranking | Works **without** a connection (public repos). Connecting adds private and gated repos. |
+| Papers | HF Daily Papers | The latest day, by upvotes | A day picker covers the past week. Search covers every paper the Hub has indexed. |
+| arXiv | `export.arxiv.org` | Newest submissions in cs.LG · cs.AI · cs.CL | Every term is scoped to `all:` and ANDed. `"quoted phrases"` and `au:` / `cat:` pass through. |
+| Repos | GitHub search | Most-starred `topic:machine-learning` repos pushed in the last 7 days, with more than 100 stars | GitHub has **no trending API**, so the label says what the list is. Anonymous: 10 searches/min. |
+| Kaggle | Kaggle API | Competitions: newest. Datasets: hottest. Models: hottest. | Every Kaggle call needs credentials. Without them the section says so, and nothing is scraped. |
+| MCP | Official MCP registry + curated overlay | Curated first, then registry latest | Install happens in the MCP pane, which collects secrets. |
+| Plugins | This node's plugin catalog | Catalog + installed | Managed in [Marketplace](marketplace.mdx). |
+| Skills | `anthropics/skills`, `huggingface/skills`, `openai/skills`, `vercel-labs/agent-skills` | Every skill, by name | Install copies the **whole skill directory**, scripts included. |
+| Docs | DevDocs + HF docs + captured sets | Pinned doc sets (newest version of each) | "Search docs" searches one DevDocs set's entry index. HF docs are captured with the [doc viewer](docviewer.mdx). |
+
+## Accuracy rules
+
+The backend normalises every source to one item shape (`DiscoverItem`), under rules
+that keep the numbers honest:
+
+- **Unknown is not zero.** A metric the upstream didn't return has `value: null` and
+  renders as "—".
+- **Labels say what a number is.** The Hub's `downloads` is a 30-day count, so it is
+  labelled `downloads · 30d` and shown beside `downloads · all time`.
+- **Nothing that upstream reports wrongly is shown.** Kaggle's competition list
+  returns `kernel_count = 0` for every competition, so there is no notebook count.
+  The Hub's single-repo endpoint serves a different `downloads` figure than its list
+  endpoint, so the detail card keeps the figures of the row you clicked.
+- **No invented lists.** Kaggle's SDK cannot list benchmarks (it can only fetch the
+  leaderboard of a benchmark you already know), so the Benchmarks tab says that and
+  links to the site.
+
+## Efficiency
+
+- **TTL cache** in the backend: 10 min for a feed, 2 min for a search, 10 min for a
+  detail card. Adapters keep longer caches of their own where the data is static
+  (DevDocs indexes for a day, skill repo listings for 6 h).
+- **In-flight coalescing.** Identical concurrent requests share one upstream call.
+- **Last good page.** When upstream fails, the last successful answer is served
+  marked `stale`, with the failure beside it.
+- **Rate-limit cooldown.** After a 429, the source isn't called again until the
+  reported reset. Requests are answered from cache or with the countdown.
+- **Frontend state lives outside the pane** (`discover/store.ts`). Switching sections
+  and back costs no request. Typing is debounced (300 ms), and a reply overtaken by a
+  newer request is dropped.
+- Skills cost one GitHub API call per repo (`git/trees?recursive=1`). The `SKILL.md`
+  texts come from `raw.githubusercontent.com`, which is outside the API rate limit.
+
+## Contributions to the layout shell
+
+| Kind | ID | Notes |
+| --- | --- | --- |
+| Panel | `discover.browse` | "Discover"; singleton, role `document` |
+| Sections | `models` (default), `datasets`, `spaces`, `papers`, `arxiv`, `repos`, `kaggle`, `mcp`, `plugins`, `skills`, `docs` | Keys <kbd>m</kbd> <kbd>d</kbd> <kbd>s</kbd> <kbd>p</kbd> <kbd>a</kbd> <kbd>g</kbd> <kbd>k</kbd> <kbd>c</kbd> <kbd>u</kbd> <kbd>l</kbd> <kbd>o</kbd> |
+| Command | `discover.open` | Opens the pane |
+| Command | `discover.open.<section>` | Opens the pane *on* a section. The synthesized `section.show:*` only switches an already-open pane. |
+| Command | `discover.search` | Prompt. `repos: vllm` searches a section, and a bare query searches Models. |
+| Frame | `lab` | A tab beside `lab.hub` |
+
+Entry points from elsewhere: the [Lab](lab.mdx) Hugging Face pane and the arXiv
+browser in [Research](research.mdx) both link to their Discover section from their
+empty states.
+
+Actions in the detail card reuse the flows that own them:
+
+- **HF model:** Pin as model repo (`interpretability.modelRepo`).
+- **HF dataset:** Inspect in [Datasets](datasets.mdx).
+- **Papers and arXiv:** Open PDF or Save to library (`POST /api/arxiv/download`).
+- **MCP:** install through the MCP pane.
+- **Skills:** Install.
+- **Docs:** Read in app, Search this set, or Capture with the doc viewer.
+
+## Backend surface
+
+`backend/modules/discover/` is mounted at `/api/discover`:
+
+| Route | Purpose |
+| --- | --- |
+| `GET /sources` | Every source's kinds, sorts, filters (with defaults) and connection state |
+| `GET /{source}/list?kind=&q=&sort=&cursor=&f.<filter>=&fresh=` | A feed (no `q`) or a search, one page at a time |
+| `GET /{source}/item?kind=&id=&fresh=` | One item's card: README / abstract / `SKILL.md`, facts, links, files |
+| `POST /skills/install` | Copy a listed skill's directory into the user skills folder |
+
+A list call always answers 200. The upstream's state travels in `status`, which is
+one of `ok`, `needs_connect`, `rate_limited`, `degraded` or `error`, together with
+`message`, `retry_after` and `stale`. Filters are passed as `f.<id>`, and an empty
+value means "any". That differs from omitting the filter, which applies the
+source's default.
+
+Each adapter in `sources/` **delegates to the module that already owns its
+upstream**:
+
+- `huggingface_tools.hub_get` / `read_text`: authenticated when connected, anonymous
+  otherwise.
+- `github_api.public_get`: also authenticated when connected and anonymous otherwise.
+  It returns rate-limit headers.
+- `arxiv.client` (throttled to one request per 3 s).
+- The training module's `kaggle_provider.client()`.
+- `mcp.catalog`.
+- The plugins and docviewer stores.
+
+Changes these made to shared code:
+
+- **Hugging Face reads no longer require a connection.** `_request` and `readFile`
+  send a token only when one exists. An anonymous 401 is reported as "isn't public"
+  rather than "token rejected". `huggingface_routes.my_repos` now reads the `repos`
+  key, which fixed the "Mine" button that was always empty.
+- `arxiv.client.build_query` scopes every term. `search(categories=[…])` ORs
+  categories.
+- `kaggle_provider.has_credentials()` and `client()` are public.
+
+## Browser vs desktop
+
+| Concern | Browser | Desktop |
+| --- | --- | --- |
+| Browsing | Identical: all traffic goes through the backend | Identical |
+| External links | New tab | System browser, via the external-link bridge |
+| "Read in app" (docs) | `browser.view` pane | `browser.view` pane |
+
+## Testing
+
+- `backend/tests/test_discover.py` covers adapter normalisation and that null
+  metrics stay null. It also covers:
+  - HF `Link` cursor paging and rate-limit mapping;
+  - GitHub's default query and the cooldown;
+  - the last-good page served on failure, and coalescing;
+  - Kaggle `needs_connect` and benchmarks;
+  - DevDocs ranking;
+  - skill listing and whole-directory install;
+  - the HF "Mine" regression.
+
+  Route tests assert on the HTTP body.
+- `packages/core/src/modules/discover/__tests__/discover.test.ts` covers the manifest,
+  formatting, and the store: dropping overtaken replies, independent views,
+  append + dedupe, debounce, and filter defaults versus an explicit "any".

@@ -134,6 +134,11 @@ asserts against the HTTP body for the same reason.
 | Section | `lab.hub` → `local` | "Local"; what this node made. Key <kbd>l</kbd> |
 | Command | `lab.openHub` | Lab: Browse Hugging Face |
 
+The `lab` frame also tabs [Discover](discover.mdx) (`discover.browse`) beside `lab.hub`.
+Discover holds the trending feeds and everything that isn't on the Hub. The hub's empty
+state links to its Discover section. "Mine" was always empty until 2026-10-01: the route
+read a `results` key that `_list_repos` never returned (it returns `repos`).
+
 Section commands (`section.show:lab.hub:models`, …) are synthesized by the registry,
 so both sections are reachable from the palette without being declared as commands.
 

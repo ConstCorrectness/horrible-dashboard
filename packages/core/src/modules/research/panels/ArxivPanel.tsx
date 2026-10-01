@@ -185,6 +185,11 @@ export function ArxivPanel() {
             <div style={{ padding: '0.75rem', color: 'var(--text-dim)', fontSize: '0.8rem' }}>
               Search arXiv, read the abstract, and pull papers you want to keep into the library —
               they land as searchable PDFs.
+              <p>
+                <button type="button" onClick={() => void registry.runCommand('discover.open.arxiv')}>
+                  Browse the newest submissions in Discover
+                </button>
+              </p>
             </div>
           )}
           {result?.entries.map((entry) => (

@@ -1,6 +1,6 @@
 # Using the Hugging Face tools
 
-The connected account's own models and datasets are reachable, private ones included.
+Public repos are readable with or without a connection. The connected account adds its own models and datasets, private ones included, and gated repos it has accepted.
 
 ## Pick the right tool
 
@@ -26,6 +26,7 @@ Many popular models (Llama, Gemma, …) are **gated**: the user must accept a li
 
 ## When a tool returns an error
 
+- "isn't public" → the repo is private or doesn't exist; if it should be the user's own, they need to connect Hugging Face.
 - "isn't connected" / "rejected the stored token" → the user must connect or reconnect Hugging Face from the home page. You cannot fix this yourself; say so and stop. Setting it up needs an OAuth app: on huggingface.co, **Settings → Connected Apps → Developer Applications → Create App**, with no client secret. Give those clicks rather than a settings URL — HF's settings pages are auth-gated and a logged-out link just shows a login form.
 - "gated behind a licence" → see above; the user accepts it on the Hub.
 - "not found" → check whether you passed the right `type`. That's the usual cause.

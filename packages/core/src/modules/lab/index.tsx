@@ -70,6 +70,9 @@ export const labModule: ModuleManifest = {
             {
               tabs: [
                 'lab.hub',
+                // Everything else worth finding — papers, repos, datasets beyond
+                // the Hub, docs — one tab over.
+                'discover.browse',
                 'interpretability.architecture',
                 'interpretability.context',
                 // The Lab is where you study a model; `llamacpp.server` is where

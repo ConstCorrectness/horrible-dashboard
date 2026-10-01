@@ -359,6 +359,18 @@ sequenceDiagram
     N-->>H: {connected: true, account}
 ```
 
+### Public repos need no connection
+
+Every Hub read (`searchModels`, `searchDatasets`, `repoInfo`, `readFile`, and the
+`hub_get` / `read_text` helpers behind the [Discover](discover.mdx) pane) sends a token
+only when one is stored, and otherwise goes out anonymously. The Hub serves all public
+repos that way. A connection adds private repos, gated repos you've accepted, and a
+higher rate limit. Only `listRepos` (it needs `whoami`) and the write tools still
+answer "isn't connected". An anonymous 401 is reported as "isn't public" (private or
+missing), not as a rejected token, because no token was sent. GitHub has the same
+split: `github_api.public_get` reads anonymously for browsing, while `request` (agent
+tools and publishing) still requires the token.
+
 ### Models and datasets are separate namespaces
 
 Every repo-taking tool has a `type` (`model` | `dataset`, default `model`), because

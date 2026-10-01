@@ -247,14 +247,60 @@ def test_status_is_clean_when_refreshable():
 # --- tools ------------------------------------------------------------------
 
 
-def test_tools_report_a_missing_connection_as_a_value(monkeypatch):
-    """Every tool has to degrade to an instruction the user can act on, not a raise."""
+#: Tools that act on *your* account; everything else reads public repos anonymously.
+ACCOUNT_TOOLS = {
+    "huggingface.listRepos",
+    "huggingface.createRepo",
+    "huggingface.uploadFolder",
+}
+
+
+def test_account_tools_report_a_missing_connection_as_a_value(monkeypatch):
+    """A tool that needs an account has to degrade to an instruction the user can act
+    on, not a raise."""
     store.clear("huggingface")
     for tool in huggingface_tools._TOOLS:
+        if tool.name not in ACCOUNT_TOOLS:
+            continue
         result = asyncio.run(
             tool.handler({"query": "q", "repo": "a/b", "path": "R.md"})
         )
         assert "isn't connected" in result["error"], tool.name
+
+
+def test_read_tools_work_anonymously_when_not_connected(monkeypatch):
+    """Public repos need no account: searching and reading go out without a token
+    instead of refusing with "not connected"."""
+    store.clear("huggingface")
+    sent: list[dict[str, str]] = []
+
+    class FakeClient:
+        def __init__(self, **_: Any) -> None: ...
+
+        async def __aenter__(self) -> FakeClient:
+            return self
+
+        async def __aexit__(self, *_: Any) -> None: ...
+
+        async def get(self, url: str, params: Any = None, headers: Any = None) -> Any:
+            sent.append(headers)
+            body: Any = (
+                [{"id": "a/b"}]
+                if url.endswith(("/models", "/datasets"))
+                else {"id": "a/b"}
+            )
+            return httpx.Response(200, json=body, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+    for name in (
+        "huggingface.searchModels",
+        "huggingface.searchDatasets",
+        "huggingface.repoInfo",
+    ):
+        tool = next(t for t in huggingface_tools._TOOLS if t.name == name)
+        result = asyncio.run(tool.handler({"query": "q", "repo": "a/b"}))
+        assert "error" not in result, (name, result)
+    assert sent and all(h == {} for h in sent)
 
 
 def test_dataset_reads_use_the_datasets_path(monkeypatch, configured):

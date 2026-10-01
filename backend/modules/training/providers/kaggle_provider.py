@@ -46,6 +46,32 @@ def _api() -> Any:
     return api
 
 
+def has_credentials() -> bool:
+    """Whether Kaggle credentials are configured anywhere the client looks.
+
+    A cheap check that never authenticates — for a status badge, not a guarantee
+    the key is valid (only a real call can say that).
+    """
+    if get_value("training.kaggle.username", "") and get_value("training.kaggle.key", ""):
+        return True
+    if os.environ.get("KAGGLE_USERNAME") and os.environ.get("KAGGLE_KEY"):
+        return True
+    if os.environ.get("KAGGLE_API_TOKEN"):
+        return True
+    config_dir = Path(os.environ.get("KAGGLE_CONFIG_DIR") or Path.home() / ".kaggle")
+    return (config_dir / "kaggle.json").is_file() or (config_dir / "access_token").is_file()
+
+
+def client() -> Any:
+    """An authenticated `KaggleApi`. Raises `ProviderError` with an actionable message."""
+    return _api()
+
+
+def as_items(result: Any, attr: str) -> list[Any]:
+    """Public alias of `_as_items` for callers outside this provider."""
+    return _as_items(result, attr)
+
+
 def _as_items(result: Any, attr: str) -> list[Any]:
     """Normalize a Kaggle list call to a plain list of items. Kaggle 2.2+ wraps
     some list calls in a response object (e.g. `competitions_list` →

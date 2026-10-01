@@ -68,6 +68,7 @@ import {
   agentpediaModule,
   trajectoriesModule,
   labModule,
+  discoverModule,
   llamacppModule,
   observabilityModule,
   registry,
@@ -188,6 +189,8 @@ async function boot(): Promise<void> {
     // After interpretability so the Lab workspace tab sits beside it, and because the
     // Lab frame composes its panes more heavily than any other module's.
     registry.register(labModule);
+    // After the Lab, whose frame tabs it beside the Hugging Face browser.
+    registry.register(discoverModule);
     registry.register(evalsModule);
     // After evals: an eval case runs through the same orchestrator loop, so a
     // trajectory is what an eval result is a grade *of*.

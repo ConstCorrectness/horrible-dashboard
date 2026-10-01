@@ -214,6 +214,15 @@
           "packages/core/src/modules/trajectories/panels/follow.css"
         ],
         "createdAt": "2026-09-29T12:30:07.881Z"
+      },
+      {
+        "rule": "codex-grid-background",
+        "value": "*",
+        "files": [
+          "packages/core/src/modules/discover/panels/discover.css"
+        ],
+        "createdAt": "2026-10-01T10:43:46.156Z",
+        "reason": "project design system: CLAUDE.local.md §2 prescribes 'subtle background patterns (like faint grid overlays)' for this app's tactical aesthetic"
       }
     ]
   }

@@ -39,27 +39,60 @@ _NOT_CONNECTED = {
 }
 
 
-async def _request(path: str, *, params: dict[str, Any] | None = None) -> Any:
-    """One authenticated Hub API call, with errors as values."""
+async def _auth_headers() -> dict[str, str]:
+    """The bearer header when connected, nothing otherwise.
+
+    Public repos read fine anonymously, and the Hub serves every search and repo
+    page this connector makes without a token — so "not connected" means "public
+    only", not "nothing". The token, when there is one, adds private repos, gated
+    repos you've accepted, and a higher rate limit.
+    """
+    token = await huggingface.token()
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+async def hub_get(
+    path: str, *, params: dict[str, Any] | list[tuple[str, Any]] | None = None
+) -> tuple[Any, dict[str, str]]:
+    """One Hub API GET, returning `(decoded body or error dict, response headers)`.
+
+    The headers are the point: the Hub paginates through a `Link` cursor and reports
+    its rate-limit window in `RateLimit`, and a caller that pages or backs off needs
+    both. `params` may be a list of pairs because `expand[]` repeats.
+    """
     import httpx
 
-    token = await huggingface.token()
-    if not token:
-        return _NOT_CONNECTED
     try:
         async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
             res = await client.get(
-                f"{API}{path}",
-                params=params,
-                headers={"Authorization": f"Bearer {token}"},
+                f"{API}{path}", params=params, headers=await _auth_headers()
             )
     except httpx.HTTPError as exc:
-        return {"error": f"couldn't reach Hugging Face: {exc}"}
-    return _decode(res, path)
+        return {"error": f"couldn't reach Hugging Face: {exc}"}, {}
+    return _decode(res, path), dict(res.headers)
+
+
+async def _request(path: str, *, params: dict[str, Any] | None = None) -> Any:
+    """One Hub API call (authenticated when connected), with errors as values."""
+    data, _headers = await hub_get(path, params=params)
+    return data
 
 
 def _decode(res: Any, what: str) -> Any:
     """Shared error mapping for a Hub response."""
+    try:
+        anonymous = "authorization" not in {k.lower() for k in res.request.headers}
+    except RuntimeError:  # a Response built without a request (tests)
+        anonymous = False
+    if res.status_code == 401 and anonymous:
+        # Anonymously, the Hub answers 401 for a private or missing repo — there is
+        # no stored token to blame.
+        return {
+            "error": (
+                f"{what} isn't public — it may be private or not exist. Connect "
+                "Hugging Face from the home page to read your own and gated repos."
+            )
+        }
     if res.status_code == 401:
         return {
             "error": (
@@ -195,8 +228,6 @@ async def _read_file(args: dict[str, Any]) -> Any:
     Note this bypasses `/api` entirely: file content lives on the `resolve` CDN path,
     not the JSON API, so it can't go through `_request`.
     """
-    import httpx
-
     repo = str(args.get("repo") or "").strip().strip("/")
     path = str(args.get("path") or "").strip().lstrip("/")
     if not repo or not path:
@@ -205,18 +236,33 @@ async def _read_file(args: dict[str, Any]) -> Any:
     if kind not in REPO_TYPES:
         return {"error": f"type must be one of {sorted(REPO_TYPES)}"}
     revision = str(args.get("revision") or "main")
+    return await read_text(repo, path, kind=kind, revision=revision)
 
-    token = await huggingface.token()
-    if not token:
-        return _NOT_CONNECTED
-    prefix = "datasets/" if kind == "dataset" else ""
-    url = f"{HUB}/{prefix}{repo}/resolve/{revision}/{path}"
+
+#: URL prefix per repo type on the `resolve` path. Spaces are readable here (a
+#: Space's README is its card) even though the agent tools leave them out.
+_RESOLVE_PREFIX = {"model": "", "dataset": "datasets/", "space": "spaces/"}
+
+
+async def read_text(
+    repo: str, path: str, *, kind: str = "model", revision: str = "main"
+) -> Any:
+    """One text file from a public (or, when connected, accessible) repo.
+
+    Size-capped and binary-refusing; errors as values. Shared by `readFile` and the
+    Discover pane's model/dataset/Space cards.
+    """
+    import httpx
+
+    if kind not in _RESOLVE_PREFIX:
+        return {"error": f"type must be one of {sorted(_RESOLVE_PREFIX)}"}
+    url = f"{HUB}/{_RESOLVE_PREFIX[kind]}{repo}/resolve/{revision}/{path}"
     try:
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
             # Streamed so a multi-gigabyte weights file can't be pulled into memory
             # before we notice it isn't text.
             async with client.stream(
-                "GET", url, headers={"Authorization": f"Bearer {token}"}
+                "GET", url, headers=await _auth_headers()
             ) as res:
                 if res.status_code >= 400:
                     await res.aread()

@@ -112,6 +112,14 @@ lock enforces ≥3 s between requests, and a 10-minute TTL cache absorbs repeats
 Parsing is stdlib `ElementTree`; arXiv ids are validated against both id
 grammars (`2107.03374v2`, `cs/0112017`) before any URL is built from them.
 
+Free text is turned into a `search_query` by `build_query`. Every term gets its own
+`all:` prefix and the terms are ANDed. Before this, `all:large language models`
+scoped only the first word, so multi-word searches came back loose. A `"quoted
+phrase"` stays one phrase. Explicit `au:` / `cat:` / `ti:` terms and `AND` / `OR` /
+`ANDNOT` pass through unchanged. `search(categories=[…])` ORs several categories; the
+[Discover](discover.mdx) pane's default feed uses it for cs.LG, cs.AI and cs.CL. The
+arXiv browser's empty state links to that feed.
+
 Spacing requests isn't the whole story — arXiv also rate-limits over longer
 windows and answers **429** (or **503** while shedding load), which no local
 throttle can predict. Both statuses are retried up to three times with a

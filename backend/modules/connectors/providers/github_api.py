@@ -71,3 +71,53 @@ async def request(
     if res.status_code == 204 or not res.content:
         return {}
     return res.json()
+
+
+async def public_get(
+    path: str, *, params: dict[str, Any] | None = None
+) -> tuple[Any, dict[str, str]]:
+    """A read of public GitHub data, authenticated when connected and anonymous otherwise.
+
+    Returns `(body or error dict, response headers)`. Separate from `request` because
+    that one's contract is "acts on the connector's token" — publishing and the agent
+    tools must not silently fall back to anonymous. A *browse* should: searching
+    public repos needs no account, only a lower rate limit (10 searches/min
+    anonymously, 30 with a token), which the headers report so the caller can say
+    exactly when it resets.
+    """
+    import httpx
+
+    token = await github.token()
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            res = await client.get(f"{API}{path}", params=params, headers=headers)
+    except httpx.HTTPError as exc:
+        return {"error": f"couldn't reach GitHub: {exc}"}, {}
+    meta = dict(res.headers)
+    limited = res.status_code == 429 or (
+        res.status_code == 403 and meta.get("x-ratelimit-remaining") == "0"
+    )
+    if limited:
+        return {"error": "GitHub rate limit reached", "status": 429}, meta
+    if res.status_code == 401 and token:
+        return {
+            "error": "GitHub rejected the stored token — reconnect GitHub from the home page.",
+            "status": 401,
+        }, meta
+    if res.status_code >= 400:
+        detail = ""
+        try:
+            detail = str(res.json().get("message") or "")
+        except ValueError:
+            detail = res.text[:200]
+        return {
+            "error": f"GitHub returned {res.status_code}: {detail}",
+            "status": res.status_code,
+        }, meta
+    return (res.json() if res.content else {}), meta

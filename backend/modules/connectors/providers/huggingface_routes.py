@@ -151,7 +151,9 @@ async def my_repos(type: str = "model", fresh: bool = False) -> SearchResponse:
     if not fresh and (hit := _cached(key)) is not None:
         return SearchResponse(results=hit)
     data = _check(await hf._list_repos({"type": kind}))
-    results = list(data.get("results") or [])
+    # `_list_repos` answers `{"author", "repos"}` (the agent tool's shape), not
+    # `{"results"}` — reading the wrong key made "Mine" silently always empty.
+    results = list(data.get("repos") or [])
     _store(key, results, TTL_SEARCH_S)
     return SearchResponse(results=[RepoHit(**r) for r in results])
 

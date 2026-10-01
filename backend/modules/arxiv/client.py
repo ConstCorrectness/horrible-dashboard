@@ -240,6 +240,42 @@ async def _feed(url: str) -> tuple[int, list[ArxivEntry]]:
     return result
 
 
+_TERM_RE = re.compile(r'"([^"]+)"|(\S+)')
+# arXiv's boolean operators, which a user may type on purpose.
+_OPERATORS = frozenset({"AND", "OR", "ANDNOT"})
+
+
+def build_query(query: str) -> str:
+    """A free-text query → arXiv `search_query`, every term scoped to `all:`.
+
+    `all:large language models` scopes only `large`; the rest are matched against
+    whatever arXiv defaults to, which is why multi-word searches came back loose.
+    Each bare term gets its own `all:` and terms are ANDed; a `"quoted phrase"`
+    stays one phrase; a term that already names a field (`au:hinton`, `cat:cs.LG`)
+    and explicit `AND`/`OR`/`ANDNOT` are passed through.
+    """
+    parts: list[str] = []
+    pending_op = False
+    for phrase, word in _TERM_RE.findall(query.strip()):
+        if word in _OPERATORS:
+            if parts:
+                parts.append(word)
+                pending_op = True
+            continue
+        if parts and not pending_op:
+            parts.append("AND")
+        pending_op = False
+        if phrase:
+            parts.append(f'all:"{phrase.strip()}"')
+        elif re.match(r"^(ti|au|abs|co|jr|cat|rn|id|all):", word):
+            parts.append(word)
+        else:
+            parts.append(f"all:{word}")
+    if pending_op:
+        parts.pop()
+    return " ".join(parts)
+
+
 async def search(
     query: str,
     *,
@@ -247,11 +283,19 @@ async def search(
     max_results: int = 20,
     category: str | None = None,
     sort: str = "relevance",
+    categories: list[str] | None = None,
 ) -> tuple[int, list[ArxivEntry]]:
-    """Search arXiv. `sort` is `relevance` | `lastUpdatedDate` | `submittedDate`."""
-    search_query = f"all:{query}" if query else ""
-    if category:
-        prefix = f"cat:{category}"
+    """Search arXiv. `sort` is `relevance` | `lastUpdatedDate` | `submittedDate`.
+
+    `categories` ORs several (`cat:cs.LG OR cat:cs.AI`); `category` is the single
+    form and wins when both are given.
+    """
+    search_query = build_query(query)
+    cats = [category] if category else [c for c in categories or [] if c]
+    if cats:
+        prefix = " OR ".join(f"cat:{c}" for c in cats)
+        if len(cats) > 1 and search_query:
+            prefix = f"({prefix})"
         search_query = f"{prefix} AND ({search_query})" if search_query else prefix
     if not search_query:
         raise ArxivError("empty query")

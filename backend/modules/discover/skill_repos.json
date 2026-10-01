@@ -1,0 +1,6 @@
+[
+  { "repo": "anthropics/skills", "label": "Anthropic" },
+  { "repo": "huggingface/skills", "label": "Hugging Face" },
+  { "repo": "openai/skills", "label": "OpenAI" },
+  { "repo": "vercel-labs/agent-skills", "label": "Vercel" }
+]

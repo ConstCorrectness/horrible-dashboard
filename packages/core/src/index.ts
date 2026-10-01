@@ -481,6 +481,7 @@ export { evalsModule } from './modules/evals';
 export { trajectoriesModule } from './modules/trajectories';
 export { agentpediaModule } from './modules/agentpedia';
 export { labModule } from './modules/lab';
+export { discoverModule, openDiscover } from './modules/discover';
 export { llamacppModule } from './modules/llamacpp';
 export { observabilityModule } from './modules/observability';
 export { marketplaceModule } from './modules/marketplace';
