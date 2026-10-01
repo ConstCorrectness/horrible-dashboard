@@ -97,6 +97,16 @@ export interface SessionState {
    * is the only kind anything comparative may ever be built on — see
    * `backend/games_server/hassault_rooms.py`. */
   ranked: boolean;
+  /**
+   * The room's host-controlled practice aids (`ROOM_SETTINGS` in
+   * `backend/games_server/hassault_rooms.py`), and who the host is. `null` when
+   * the server keeps none — a node-hosted room, where the host is whoever runs it
+   * and the settings are their own console's.
+   */
+  roomSettings: Record<string, boolean> | null;
+  hostId: string;
+  /** The server's answer to the last refused `setRoomSetting`, for the console. */
+  roomNotice: string;
   /** Invitations from friends, newest first. */
   invites: MatchInvite[];
   /**
@@ -335,6 +345,9 @@ export class MatchSession {
     roundKills: [],
     host: '',
     ranked: false,
+    roomSettings: null,
+    hostId: '',
+    roomNotice: '',
     invites: [],
     items: [],
     itemsOut: [],
@@ -479,6 +492,27 @@ export class MatchSession {
   sendChat(text: string, team: boolean): void {
     if (this.state.status !== 'joined' || !text.trim()) return;
     sendChannel('hassault', 'chat', { text, team });
+  }
+
+  /** Ask the server to change a room setting. Only the host's request is
+   * honoured; the answer arrives as `room_settings` or `room_settings_refused`. */
+  setRoomSetting(key: string, value: boolean): void {
+    if (this.state.status !== 'joined') return;
+    sendChannel('hassault', 'room_set', { key, value });
+  }
+
+  private absorbRoomSettings(raw: unknown): void {
+    const payload = (raw ?? null) as { settings?: unknown; hostId?: unknown } | null;
+    const settings = payload?.settings;
+    if (!settings || typeof settings !== 'object') {
+      this.state.roomSettings = null;
+      this.state.hostId = '';
+      return;
+    }
+    this.state.roomSettings = Object.fromEntries(
+      Object.entries(settings as Record<string, unknown>).map(([k, v]) => [k, v === true]),
+    );
+    this.state.hostId = String(payload?.hostId ?? '');
   }
 
   /** Tell teammates we are on the radio (the indicator, not the audio). */
@@ -633,6 +667,7 @@ export class MatchSession {
         // mid-round otherwise shows a round clock reading zero, which looks
         // exactly like the round having just ended.
         this.state.modeState = (data.mode as ModeShared | undefined) ?? null;
+        this.absorbRoomSettings(data.roomSettings);
         if (this.state.mode && (this.state.mode.v ?? 0) > SUPPORTED_MODE_V) {
           // The one thing that would otherwise fail in silence. An unknown key
           // inside this blob is simply absent to an older build — no error, no
@@ -811,6 +846,17 @@ export class MatchSession {
           this.state.rtt = this.ping.rtt;
           this.emit();
         }
+        break;
+      }
+      case 'room_settings': {
+        this.absorbRoomSettings(data);
+        this.state.roomNotice = '';
+        this.emit();
+        break;
+      }
+      case 'room_settings_refused': {
+        this.state.roomNotice = String(data.message ?? 'refused');
+        this.emit();
         break;
       }
       case 'error': {
@@ -997,6 +1043,9 @@ export class MatchSession {
       roundKills: [],
       host: '',
       ranked: false,
+      roomSettings: null,
+      hostId: '',
+      roomNotice: '',
       invites: this.state.invites,
       // A reset is leaving a room: its items, its mode and anything the mode
       // was saying go with it. Carrying a mode across a reset is how a pane

@@ -143,6 +143,26 @@ class ClientConsoleRegistry {
         flags: ['server', 'replicated'],
       },
       {
+        name: 'server.show_hitboxes',
+        namespace: 'server',
+        type: 'boolean',
+        default_value: false,
+        current_value: false,
+        description:
+          "Draw every body's authoritative hitbox for everyone in the room. Host only on a server room",
+        flags: ['server', 'room'],
+      },
+      {
+        name: 'server.grenade_trajectory',
+        namespace: 'server',
+        type: 'boolean',
+        default_value: false,
+        current_value: false,
+        description:
+          'Draw where a held grenade will fly and land, for everyone in the room. Host only; never in ranked',
+        flags: ['server', 'room'],
+      },
+      {
         name: 'server.timescale',
         namespace: 'server',
         type: 'number',

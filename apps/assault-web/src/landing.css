@@ -918,21 +918,6 @@
   white-space: nowrap;
 }
 
-/* ---- in-match toolbar -------------------------------------------------------- */
-
-.match-tools {
-  position: absolute;
-  top: 8px;
-  right: 10px;
-  z-index: 50;
-  display: flex;
-  gap: 6px;
-}
-.match-tools .btn {
-  background: rgba(14, 15, 17, 0.72);
-  backdrop-filter: blur(4px);
-}
-
 .banner {
   position: absolute;
   z-index: 200;

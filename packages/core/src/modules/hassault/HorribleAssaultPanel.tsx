@@ -37,6 +37,7 @@ import {
 import { GameAudio } from './audio';
 import { AvatarPool } from './avatars';
 import { createBackdrop, type Backdrop } from './backdrop';
+import { setSurfaceQuality } from './surface-quality';
 import { MatchCompanion } from './panels/MatchCompanion';
 import { BuyMenu } from './panels/BuyMenu';
 import { ModeHud, ModeProgress } from './panels/ModeHud';
@@ -188,6 +189,7 @@ import {
   type MapCoordinates,
 } from './workspace-bus';
 import { consoleRegistry } from './console/registry';
+import { consoleExecutor } from './console/executor';
 import { registry } from '../../registry';
 
 /**
@@ -317,6 +319,9 @@ const EMPTY_SESSION: SessionState = {
   status: 'idle',
   room: '',
   ranked: false,
+  roomSettings: null,
+  hostId: '',
+  roomNotice: '',
   map: '',
   playerId: '',
   peers: [],
@@ -607,8 +612,17 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   /** Whether Play, Train and Host open the native window rather than this pane. */
   const nativeSetting = useSetting<boolean>(NATIVE_CLIENT_KEY) ?? true;
   const nativeClient = props.forceWebGl ? false : nativeSetting;
-  const showHitboxes = useSetting<boolean>(SHOW_HITBOXES_KEY) ?? false;
-  const grenadeArc = useSetting<boolean>(GRENADE_ARC_KEY) ?? false;
+  // The practice aids. In a server room the host's `room_settings` decide.
+  // Anywhere else (Training, a match on our own node) the console's `server.*`
+  // cvars do — and on the desktop the node settings too, which the native
+  // client shares and the Settings tab still offers there.
+  const hitboxSetting = useSetting<boolean>(SHOW_HITBOXES_KEY) ?? false;
+  const arcSetting = useSetting<boolean>(GRENADE_ARC_KEY) ?? false;
+  const [localAids, setLocalAids] = useState(() => ({
+    hitboxes:
+      consoleRegistry.getBool('server.show_hitboxes') || consoleRegistry.getBool('draw.hitboxes'),
+    arc: consoleRegistry.getBool('server.grenade_trajectory'),
+  }));
   /** How much of the served map look this pane draws. The scene is built once,
    * so it reads the choice through a ref, and a change is pushed to it below. */
   configureGraphicsStorage(standalone);
@@ -913,10 +927,75 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   crouchToggleRef.current = crouchToggle;
   // By ref like the rest: the frame loop is built once and cannot read React
   // state, and a toggle has to reach it without tearing the scene down.
+  const roomAids = net.status === 'joined' ? net.roomSettings : null;
+  const showHitboxes = roomAids
+    ? roomAids.show_hitboxes === true
+    : localAids.hitboxes || (!standalone && hitboxSetting);
+  const grenadeArc = roomAids
+    ? roomAids.grenade_trajectory === true
+    : localAids.arc || (!standalone && arcSetting);
   const showHitboxesRef = useRef(showHitboxes);
   showHitboxesRef.current = showHitboxes;
   const grenadeArcRef = useRef(grenadeArc);
   grenadeArcRef.current = grenadeArc;
+
+  // `server.show_hitboxes` / `server.grenade_trajectory` typed into the console.
+  // In a server room the host asks the server and everyone gets the answer; in
+  // Training or our own node's match it is ours to set here; in someone else's
+  // node match it is theirs, and their console's.
+  useEffect(() => {
+    const ROOM_KEYS: Record<string, string> = {
+      'server.show_hitboxes': 'show_hitboxes',
+      'server.grenade_trajectory': 'grenade_trajectory',
+    };
+    const reply = (ok: boolean, text: string, value?: boolean) => ({
+      ok,
+      command: '',
+      output: ok ? [text] : [],
+      error: ok ? undefined : text,
+      affected_cvars: {},
+      result_data: value,
+    });
+    return consoleExecutor.setRoomHandler(async (name, raw) => {
+      const key = ROOM_KEYS[name];
+      const session = sessionRef.current;
+      const st = session?.state;
+      const inServerRoom = st?.status === 'joined' && st.roomSettings != null;
+      if (raw === undefined) {
+        const value = inServerRoom
+          ? st!.roomSettings![key!] === true
+          : consoleRegistry.getBool(name);
+        return reply(
+          true,
+          `"${name}" is "${value}"${inServerRoom ? ' (set by the room host)' : ''}`,
+          value,
+        );
+      }
+      const on = ['1', 'true', 'yes', 'on'].includes(raw.toLowerCase());
+      if (!key) return reply(false, `${name} is not a room setting`);
+      if (inServerRoom && session && st) {
+        if (st.playerId !== st.hostId) {
+          return reply(false, "Only the room's host can change that.");
+        }
+        session.setRoomSetting(key, on);
+        // The answer comes back over the socket; wait briefly for it so the
+        // console prints the server's word, not ours.
+        for (let i = 0; i < 30; i += 1) {
+          await new Promise((r) => setTimeout(r, 100));
+          if (session.state.roomNotice) return reply(false, session.state.roomNotice);
+          if (session.state.roomSettings?.[key] === on) {
+            return reply(true, `${name} = ${on} (for everyone in the room)`, on);
+          }
+        }
+        return reply(false, 'The server did not answer. Try again.');
+      }
+      if (st?.status === 'joined' && st.host !== '') {
+        return reply(false, "This match is on another player's node; its host decides.");
+      }
+      consoleRegistry.set(name, on);
+      return reply(true, `${name} = ${on}`, on);
+    });
+  }, []);
   /** Pointer-lock state as the *handlers* see it: `document.pointerLockElement`
    * has already been cleared by the time an Escape that released it reaches us. */
   const lockedRef = useRef(false);
@@ -1343,7 +1422,13 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     const unsubCvar = consoleRegistry.subscribe((name, val) => {
       if (name === 'player.god') godModeRef.current = Boolean(val);
       if (name === 'player.noclip') noclipRef.current = Boolean(val);
-      if (name === 'draw.hitboxes') void setSetting(SHOW_HITBOXES_KEY, Boolean(val));
+      // The desktop's backend practice macros set `draw.hitboxes`; it stays the
+      // node setting there, as it always was.
+      if (name === 'draw.hitboxes' && !standalone) void setSetting(SHOW_HITBOXES_KEY, Boolean(val));
+      if (name === 'draw.hitboxes' || name === 'server.show_hitboxes') {
+        setLocalAids((a) => ({ ...a, hitboxes: Boolean(val) }));
+      }
+      if (name === 'server.grenade_trajectory') setLocalAids((a) => ({ ...a, arc: Boolean(val) }));
     });
 
     const unsubCmd = onConsoleCommand((req) => {
@@ -1460,8 +1545,9 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       fill.position.set(-0.5, 0.35, -0.7);
       scene.add(fill);
 
-      // The map's own lamps. A **fixed pool** of the most the High tier draws,
-      // parked at zero intensity when unused: three compiles a light count into
+      // The map's own lamps. A **fixed pool** of the most the High tier draws:
+      // the tier's share visible (parked at zero intensity when there is no lamp
+      // near enough to fill a slot), the rest hidden. three compiles a light count into
       // every material, so adding or removing lights as the player walks would
       // recompile the world's shaders mid-match. Which lamps fill the pool is
       // re-chosen a few times a second — nearest reach first, as natively.
@@ -1469,6 +1555,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       for (let i = 0; i < TIERS.high.lights; i += 1) {
         const lamp = new THREE.PointLight(0xffffff, 0, 1, 2);
         lamp.castShadow = false;
+        lamp.visible = i < tier.lights;
         scene.add(lamp);
         lampPool.push(lamp);
       }
@@ -1477,6 +1564,12 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
       const placeLamps = (eye: [number, number, number]) => {
         const chosen = nearestLights(mapLights, eye, tier.lights);
         lampPool.forEach((lamp, i) => {
+          // Zero intensity is not "off": three shades every *visible* light,
+          // whatever its brightness, so a Low tier that only zeroed the pool
+          // still paid for all eight (40 fps → 62 on an Intel UHD). Visibility
+          // follows the tier's count, which only changes with the tier, so the
+          // shader recompile it causes happens there and never mid-walk.
+          lamp.visible = i < tier.lights;
           const light = chosen[i];
           if (!light) {
             lamp.intensity = 0;
@@ -1672,6 +1765,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             }
           });
           filterSurfaces(world3dGroup);
+          setSurfaceQuality(THREE, world3dGroup, tier.lambert);
           scene.add(world3dGroup);
 
           const cx = world3d.bounds.center[0];
@@ -1747,6 +1841,8 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         }
         applyAtmosphere(atmosphere, skyOpen);
         filterSurfaces(world3dGroup);
+        setSurfaceQuality(THREE, world3dGroup, tier.lambert);
+        lampPool.forEach((lamp, i) => (lamp.visible = i < tier.lights));
         renderer.shadowMap.needsUpdate = true;
       };
       const resize = () => {
@@ -2340,9 +2436,13 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           // meant to be showing.
           // Opt-in, and only where it is practice: Training or a room we host.
           const throwPhysics = throwPhysicsRef.current;
+          // A server room's host has already decided (and never in ranked);
+          // elsewhere it is ours only in Training or a match we host.
           const arcAllowed =
             grenadeArcRef.current &&
-            grenadeArcAllowed(online, session?.state.host ?? '', session?.state.ranked ?? false);
+            !(session?.state.ranked ?? false) &&
+            (session?.state.roomSettings != null ||
+              grenadeArcAllowed(online, session?.state.host ?? '', false));
           if (holdingNade && arcAllowed && throwPhysics && world) {
             const eyeZ = eyeHeight(player);
             const arc = simulateThrow(
@@ -2834,7 +2934,14 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         setLocked(true);
         lockedRef.current = true;
       } else if (!isDocLocked && !document.pointerLockElement) {
-        if (hadPointerLockRef.current && lockedRef.current && !menuOpenRef.current) {
+        // The console releases the lock on purpose; only a release nobody asked
+        // for (the browser's Escape) is a request for the pause menu.
+        if (
+          hadPointerLockRef.current &&
+          lockedRef.current &&
+          !menuOpenRef.current &&
+          !consoleOpenRef.current
+        ) {
           hadPointerLockRef.current = false;
           openMenu();
         }
@@ -2951,6 +3058,14 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           setConsoleOpen(false);
           if (!menuOpenRef.current) grabInput();
         } else {
+          // Mark it open *before* letting go of the pointer: the
+          // pointerlockchange that follows reads the ref, and would otherwise
+          // take the release for an Escape and open the pause menu behind us.
+          consoleOpenRef.current = true;
+          hadPointerLockRef.current = false;
+          setLocked(false);
+          lockedRef.current = false;
+          keysRef.current.clear();
           if (document.pointerLockElement) document.exitPointerLock?.();
           setConsoleOpen(true);
         }
@@ -3714,140 +3829,144 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.5rem',
-          padding: '0.4rem 0.6rem',
-          borderBottom: '1px solid var(--border, #2a2a2a)',
-          fontSize: '0.8rem',
-          flexShrink: 0,
-        }}
-      >
-        {/* The toolbar is *status*, not setup. Choosing a map, hosting, adding
+      {/* No toolbar in the browser build: the game is the whole page there, and
+          everything this strip does is in the pause menu instead (`match`). */}
+      {!standalone && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.5rem',
+            padding: '0.4rem 0.6rem',
+            borderBottom: '1px solid var(--border, #2a2a2a)',
+            fontSize: '0.8rem',
+            flexShrink: 0,
+          }}
+        >
+          {/* The toolbar is *status*, not setup. Choosing a map, hosting, adding
             bots and inviting people all live in the main menu now — a game that has
             a front door should not also have half of one bolted to its chrome, and
             two ways to start a match is two things to keep in step. */}
-        <button onClick={exitToMenu} disabled={phase !== 'playing'} title="Back to the main menu">
-          ☰ Menu
-        </button>
-        {/* The username, shown not typed: it comes from the account, and the
+          <button onClick={exitToMenu} disabled={phase !== 'playing'} title="Back to the main menu">
+            ☰ Menu
+          </button>
+          {/* The username, shown not typed: it comes from the account, and the
             backend refuses any name the client supplies. Renaming happens on the
             enlist screen, which owns the uniqueness check. */}
-        <span
-          title="Your username — change it from the sign-in screen"
-          style={{
-            fontFamily: 'var(--font-mono, monospace)',
-            color: 'var(--accent, #6ea8fe)',
-            padding: '0 0.2rem',
-          }}
-        >
-          {playerName || '—'}
-        </span>
-        {info && (
           <span
+            title="Your username — change it from the sign-in screen"
             style={{
-              color: 'var(--text-dim)',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
+              fontFamily: 'var(--font-mono, monospace)',
+              color: 'var(--accent, #6ea8fe)',
+              padding: '0 0.2rem',
             }}
           >
-            <code>{info.name}</code> · {info.title}
+            {playerName || '—'}
           </span>
-        )}
-        {!online && phase === 'playing' && (
-          <>
-            <span style={{ color: 'var(--text-dim)' }}>training</span>
-            <button onClick={respawn} disabled={!info} title="Back to a spawn point">
-              Respawn
-            </button>
-          </>
-        )}
-        {online && (
-          <span style={{ color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
-            <span style={{ color: '#d9a441' }}>{net.scores[0]}</span>
-            {' · '}
-            <span style={{ color: '#4c8fd4' }}>{net.scores[1]}</span>
-            {' · '}
-            {net.peers.length} in · {Math.round(net.rtt)} ms
-            {net.host === ONLINE_HOST
-              ? ' · online'
-              : net.host
-                ? ` · guest on ${net.host.slice(0, 8)}`
-                : ''}
-          </span>
-        )}
-        {phase === 'playing' && (
-          <>
-            {isRecording ? (
-              <button
-                onClick={stopAndDownloadRecording}
-                style={{
-                  background: 'rgba(218, 54, 51, 1)',
-                  color: 'white',
-                  fontWeight: 600,
-                  borderRadius: '3px',
-                  padding: '2px 8px',
-                }}
-                title="Stop recording and download .hademo match demo"
-              >
-                ⏹ Stop REC ({recordingSeconds}s)
+          {info && (
+            <span
+              style={{
+                color: 'var(--text-dim)',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              <code>{info.name}</code> · {info.title}
+            </span>
+          )}
+          {!online && phase === 'playing' && (
+            <>
+              <span style={{ color: 'var(--text-dim)' }}>training</span>
+              <button onClick={respawn} disabled={!info} title="Back to a spawn point">
+                Respawn
               </button>
-            ) : (
-              <button
-                onClick={startRecording}
+            </>
+          )}
+          {online && (
+            <span style={{ color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
+              <span style={{ color: '#d9a441' }}>{net.scores[0]}</span>
+              {' · '}
+              <span style={{ color: '#4c8fd4' }}>{net.scores[1]}</span>
+              {' · '}
+              {net.peers.length} in · {Math.round(net.rtt)} ms
+              {net.host === ONLINE_HOST
+                ? ' · online'
+                : net.host
+                  ? ` · guest on ${net.host.slice(0, 8)}`
+                  : ''}
+            </span>
+          )}
+          {phase === 'playing' && (
+            <>
+              {isRecording ? (
+                <button
+                  onClick={stopAndDownloadRecording}
+                  style={{
+                    background: 'rgba(218, 54, 51, 1)',
+                    color: 'white',
+                    fontWeight: 600,
+                    borderRadius: '3px',
+                    padding: '2px 8px',
+                  }}
+                  title="Stop recording and download .hademo match demo"
+                >
+                  ⏹ Stop REC ({recordingSeconds}s)
+                </button>
+              ) : (
+                <button
+                  onClick={startRecording}
+                  style={{
+                    background: 'rgba(255,255,255,0.08)',
+                    borderRadius: '3px',
+                    padding: '2px 8px',
+                  }}
+                  title="Record match demo (.hademo) for montages"
+                >
+                  ⏺ Record
+                </button>
+              )}
+              <label
                 style={{
+                  cursor: 'pointer',
                   background: 'rgba(255,255,255,0.08)',
+                  padding: '2px 8px',
+                  borderRadius: '3px',
+                  border: '1px solid rgba(255,255,255,0.15)',
+                }}
+                title="Load and replay a .hademo recording"
+              >
+                🎞 Replay
+                <input
+                  type="file"
+                  accept=".hademo,.json"
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) loadReplayFile(f);
+                  }}
+                />
+              </label>
+              <button
+                onClick={() => setCleanView((cv) => !cv)}
+                style={{
+                  background: cleanView ? 'var(--accent, rgba(31, 111, 235, 1))' : 'transparent',
+                  color: cleanView ? 'white' : 'inherit',
                   borderRadius: '3px',
                   padding: '2px 8px',
                 }}
-                title="Record match demo (.hademo) for montages"
+                title="Toggle Clean Montage View without HUD (Ctrl+H)"
               >
-                ⏺ Record
+                {cleanView ? '👁 Show HUD' : '🎬 Clean View'}
               </button>
-            )}
-            <label
-              style={{
-                cursor: 'pointer',
-                background: 'rgba(255,255,255,0.08)',
-                padding: '2px 8px',
-                borderRadius: '3px',
-                border: '1px solid rgba(255,255,255,0.15)',
-              }}
-              title="Load and replay a .hademo recording"
-            >
-              🎞 Replay
-              <input
-                type="file"
-                accept=".hademo,.json"
-                style={{ display: 'none' }}
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) loadReplayFile(f);
-                }}
-              />
-            </label>
-            <button
-              onClick={() => setCleanView((cv) => !cv)}
-              style={{
-                background: cleanView ? 'var(--accent, rgba(31, 111, 235, 1))' : 'transparent',
-                color: cleanView ? 'white' : 'inherit',
-                borderRadius: '3px',
-                padding: '2px 8px',
-              }}
-              title="Toggle Clean Montage View without HUD (Ctrl+H)"
-            >
-              {cleanView ? '👁 Show HUD' : '🎬 Clean View'}
-            </button>
-          </>
-        )}
-        {net.status === 'error' && <span style={{ color: '#f85149' }}>{net.error}</span>}
-        <span style={{ marginLeft: 'auto', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
-          {hud.fps} fps · {(hud.triangles / 1000).toFixed(0)}k tris
-        </span>
-      </div>
+            </>
+          )}
+          {net.status === 'error' && <span style={{ color: '#f85149' }}>{net.error}</span>}
+          <span style={{ marginLeft: 'auto', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
+            {hud.fps} fps · {(hud.triangles / 1000).toFixed(0)}k tris
+          </span>
+        </div>
+      )}
 
       <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
         <div
@@ -4176,22 +4295,53 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             onResume={resumeGame}
             onExitToMenu={exitToMenu}
             onShare={props.onShareRoom ? () => props.onShareRoom?.(net.room, mapName) : undefined}
-            onOpenStudio={() => {
-              if (playerRef.current) {
-                requestMapEditorInspect({
-                  mapName,
-                  camera: {
-                    x: playerRef.current.x,
-                    y: playerRef.current.y,
-                    z: playerRef.current.z,
-                    yaw: playerRef.current.yaw,
-                  },
-                  source: 'play',
-                });
-              }
-              registry.openPanel('hassault.studio');
+            standalone={standalone}
+            match={
+              standalone
+                ? {
+                    fullscreen: props.isFullscreen ?? false,
+                    onToggleFullscreen: () => props.onToggleFullscreen?.(),
+                    recording: isRecording,
+                    recordingSeconds,
+                    onRecord: startRecording,
+                    onStopRecording: stopAndDownloadRecording,
+                    onReplayFile: (file) => {
+                      loadReplayFile(file);
+                      resumeGame();
+                    },
+                    cleanView,
+                    onToggleCleanView: () => setCleanView((cv) => !cv),
+                  }
+                : undefined
+            }
+            onOpenStudio={
+              standalone
+                ? undefined
+                : () => {
+                    if (playerRef.current) {
+                      requestMapEditorInspect({
+                        mapName,
+                        camera: {
+                          x: playerRef.current.x,
+                          y: playerRef.current.y,
+                          z: playerRef.current.z,
+                          yaw: playerRef.current.yaw,
+                        },
+                        source: 'play',
+                      });
+                    }
+                    registry.openPanel('hassault.studio');
+                  }
+            }
+            onOpenConsole={() => {
+              // The browser build has no dock to open a pane in; its console is
+              // the in-game overlay that backquote opens.
+              if (standalone) {
+                setMenuOpen(false);
+                menuOpenRef.current = false;
+                setConsoleOpen(true);
+              } else registry.openPanel('hassault.console');
             }}
-            onOpenConsole={() => registry.openPanel('hassault.console')}
           />
         )}
 

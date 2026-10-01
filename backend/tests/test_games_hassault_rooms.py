@@ -582,3 +582,84 @@ def test_voice_signaling_routed_between_room_peers(server):
                 pytest.fail("Bob never received lobby_signal")
 
 
+
+
+# ---------------------------------------------------------------------------
+# Room settings: the host's practice aids
+# ---------------------------------------------------------------------------
+
+
+def _settings_events(conn: SeatConn) -> list[dict]:
+    return [m["data"] for m in conn.websocket.sent if m.get("event") == "room_settings"]
+
+
+def test_the_welcome_carries_the_room_settings_and_its_host(referee: HassaultReferee):
+    async def go():
+        a, b = seat("alice"), seat("bob")
+        first = await referee.join(a, "hd_pit")
+        second = await referee.join(b, "hd_pit")
+        assert first["roomSettings"]["settings"] == hassault_rooms.ROOM_SETTINGS
+        # The first seat is the host, and the second player is told so.
+        assert second["roomSettings"]["hostId"] == first["playerId"]
+
+    asyncio.run(go())
+
+
+def test_only_the_host_can_change_a_room_setting(referee: HassaultReferee):
+    async def go():
+        a, b = seat("alice"), seat("bob")
+        await referee.join(a, "hd_pit")
+        await referee.join(b, "hd_pit")
+        refused = await referee.set_room_setting(b, {"key": "show_hitboxes", "value": True})
+        assert refused and "host" in refused
+        room = referee.server.player_for(a)[0]
+        assert referee.settings_for(room.id)["show_hitboxes"] is False
+
+        assert await referee.set_room_setting(a, {"key": "show_hitboxes", "value": True}) is None
+        assert referee.settings_for(room.id)["show_hitboxes"] is True
+        # Everyone in the room hears it, the host included.
+        for conn in (a, b):
+            assert _settings_events(conn)[-1]["settings"]["show_hitboxes"] is True
+
+    asyncio.run(go())
+
+
+def test_an_unknown_or_non_boolean_setting_is_refused(referee: HassaultReferee):
+    async def go():
+        a = seat("alice")
+        await referee.join(a, "hd_pit")
+        assert await referee.set_room_setting(a, {"key": "server.cheats", "value": True})
+        assert await referee.set_room_setting(a, {"key": "show_hitboxes", "value": "1"})
+
+    asyncio.run(go())
+
+
+def test_the_next_seat_becomes_host_when_the_host_leaves(referee: HassaultReferee):
+    async def go():
+        a, b = seat("alice"), seat("bob")
+        await referee.join(a, "hd_pit")
+        second = await referee.join(b, "hd_pit")
+        await referee.leave(a)
+        assert _settings_events(b)[-1]["hostId"] == second["playerId"]
+        assert await referee.set_room_setting(b, {"key": "grenade_trajectory", "value": True}) is None
+
+    asyncio.run(go())
+
+
+def test_a_refused_setting_over_the_wire_does_not_end_the_match(server):
+    """A refusal is its own event: `error` would tell the client the match failed."""
+    with server.websocket_connect("/hassault-ws?guest=1&name=Host") as ws:
+        ws.send_text(json.dumps({"channel": "hassault", "event": "join", "data": {"map": "hd_pit"}}))
+        assert json.loads(ws.receive_text())["event"] == "welcome"
+        ws.send_text(
+            json.dumps(
+                {"channel": "hassault", "event": "room_set", "data": {"key": "nope", "value": True}}
+            )
+        )
+        for _ in range(200):
+            msg = json.loads(ws.receive_text())
+            assert msg["event"] != "error"
+            if msg["event"] == "room_settings_refused":
+                break
+        else:
+            pytest.fail("the refusal never came back")

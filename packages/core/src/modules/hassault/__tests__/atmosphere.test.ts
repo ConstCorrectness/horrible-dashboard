@@ -87,7 +87,9 @@ describe('graphics tiers', () => {
   it('auto is conservative about what it cannot see', () => {
     expect(autoTier({ devicePixelRatio: 1, renderer: 'Google SwiftShader' })).toBe('low');
     expect(autoTier({ devicePixelRatio: 1, renderer: 'NVIDIA GeForce RTX 4080' })).toBe('high');
-    expect(autoTier({ devicePixelRatio: 1, renderer: 'Intel(R) UHD Graphics 620' })).toBe('medium');
+    // Entry-level integrated: Medium measured 43 fps on a UHD, Low 162.
+    expect(autoTier({ devicePixelRatio: 1, renderer: 'Intel(R) UHD Graphics 620' })).toBe('low');
+    expect(autoTier({ devicePixelRatio: 1, renderer: 'Intel(R) Iris(R) Xe Graphics' })).toBe('medium');
     expect(autoTier({ devicePixelRatio: 3 })).toBe('medium');
     expect(autoTier({ devicePixelRatio: 1, cores: 2 })).toBe('low');
   });

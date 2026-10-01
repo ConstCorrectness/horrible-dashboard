@@ -9,6 +9,14 @@ import { apiUrl } from '../../../origin';
 import { consoleRegistry } from './registry';
 import type { ConsoleExecResult } from './types';
 
+/**
+ * Who answers for a `room` cvar — a setting the match's host owns rather than
+ * each player. The pane registers one while it is mounted, because only it
+ * knows whether we are in a server room (ask the server), our own match (set it
+ * here) or someone else's (refuse). `value` is undefined for a query.
+ */
+export type RoomCvarHandler = (name: string, value: string | undefined) => Promise<ConsoleExecResult>;
+
 const HISTORY_STORAGE_KEY = 'hassault.console.history';
 const BINDS_STORAGE_KEY = 'hassault.console.binds';
 const ALIASES_STORAGE_KEY = 'hassault.console.aliases';
@@ -20,8 +28,18 @@ export class ConsoleExecutor {
   aliases = new Map<string, string>();
   binds = new Map<string, string>();
 
+  private roomHandler: RoomCvarHandler | null = null;
+
   constructor() {
     this.loadPersistedData();
+  }
+
+  /** Install the room-cvar handler; returns its removal. */
+  setRoomHandler(handler: RoomCvarHandler): () => void {
+    this.roomHandler = handler;
+    return () => {
+      if (this.roomHandler === handler) this.roomHandler = null;
+    };
   }
 
   private loadPersistedData(): void {
@@ -189,8 +207,18 @@ export class ConsoleExecutor {
       };
     }
 
-    // Check if it's a client CVar assignment or query
+    // A room setting: whoever holds the room decides, so the pane answers.
     const targetCvar = consoleRegistry.cvars.get(tokens[0]);
+    if (targetCvar && targetCvar.flags.includes('room') && this.roomHandler) {
+      const assigns = tokens.length === 2 || (tokens.length === 3 && tokens[1] === '=');
+      if (tokens.length === 1 || assigns) {
+        const valStr = tokens.length === 1 ? undefined : tokens[tokens.length - 1];
+        const res = await this.roomHandler(targetCvar.name, valStr);
+        return { ...res, command: line };
+      }
+    }
+
+    // Check if it's a client CVar assignment or query
     if (targetCvar && targetCvar.flags.includes('client') && !tokens[0].includes('(')) {
       if (tokens.length === 1) {
         return {

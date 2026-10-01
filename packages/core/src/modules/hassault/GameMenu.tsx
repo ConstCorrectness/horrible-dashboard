@@ -68,17 +68,38 @@ export interface GameMenuProps {
   onOpenStudio?: () => void;
   onOpenArmory?: () => void;
   onOpenConsole?: () => void;
+  /**
+   * The browser build. Its menu *is* the chrome — there is no toolbar above the
+   * game there — so it carries the match actions the desktop keeps in the
+   * pane's toolbar (`match`), shows only the tabs a guest can use, and leaves a
+   * match straight back to the server list.
+   */
+  standalone?: boolean;
+  match?: MatchActions;
 }
+
+/** What the desktop's toolbar does, for a host that has no toolbar. */
+export interface MatchActions {
+  fullscreen: boolean;
+  onToggleFullscreen: () => void;
+  recording: boolean;
+  recordingSeconds: number;
+  onRecord: () => void;
+  onStopRecording: () => void;
+  onReplayFile: (file: File) => void;
+  cleanView: boolean;
+  onToggleCleanView: () => void;
+}
+
+const STANDALONE_TABS: MenuTab[] = ['settings', 'controls'];
 
 export function GameMenu(props: GameMenuProps) {
   const [tab, setTab] = useState<MenuTab>('settings');
+  const tabs = props.standalone ? TABS.filter((t) => STANDALONE_TABS.includes(t.id)) : TABS;
+  const match = props.match;
 
   return (
-    <div
-      style={styles.backdrop}
-      onClick={props.onResume}
-      title="Click outside to resume game"
-    >
+    <div style={styles.backdrop} onClick={props.onResume} title="Click outside to resume game">
       <div style={styles.sheet} onClick={(e) => e.stopPropagation()}>
         <div style={styles.header}>
           <strong style={{ letterSpacing: '0.14em', fontSize: '0.95rem' }}>PAUSED</strong>
@@ -87,7 +108,7 @@ export function GameMenu(props: GameMenuProps) {
               <button
                 type="button"
                 onClick={props.onOpenStudio}
-                style={{ ...styles.tab, color: 'rgb(56, 189, 248)' }}
+                style={{ ...styles.tab, color: 'var(--accent, #6ea8fe)' }}
                 title="Edit current map and position in 3D Level Studio"
               >
                 ◈ 3D Studio
@@ -115,7 +136,7 @@ export function GameMenu(props: GameMenuProps) {
             )}
           </div>
           <div style={styles.tabs}>
-            {TABS.map((entry) => (
+            {tabs.map((entry) => (
               <button
                 key={entry.id}
                 onClick={() => setTab(entry.id)}
@@ -136,7 +157,7 @@ export function GameMenu(props: GameMenuProps) {
         </div>
 
         <div style={styles.body}>
-          {tab === 'settings' && <SettingsPanel />}
+          {tab === 'settings' && <SettingsPanel standalone={props.standalone} />}
           {tab === 'servers' && (
             <ServerBrowserPanel
               maps={props.maps}
@@ -164,9 +185,62 @@ export function GameMenu(props: GameMenuProps) {
           )}
         </div>
 
+        {match && (
+          <div style={styles.matchRow}>
+            <button type="button" style={styles.action} onClick={match.onToggleFullscreen}>
+              {match.fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+            </button>
+            {match.recording ? (
+              <button
+                type="button"
+                style={{ ...styles.action, color: 'var(--danger, #e5484d)' }}
+                onClick={match.onStopRecording}
+                title="Stop and download the .hademo"
+              >
+                Stop recording · {match.recordingSeconds}s
+              </button>
+            ) : (
+              <button
+                type="button"
+                style={styles.action}
+                onClick={match.onRecord}
+                title="Record this match as a .hademo for montages"
+              >
+                Record demo
+              </button>
+            )}
+            <label style={styles.action} title="Load and play back a .hademo recording">
+              Play a demo
+              <input
+                type="file"
+                accept=".hademo,.json"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) match.onReplayFile(f);
+                }}
+              />
+            </label>
+            <button
+              type="button"
+              style={styles.action}
+              onClick={match.onToggleCleanView}
+              title="Hide the HUD (Ctrl+H)"
+            >
+              {match.cleanView ? 'Show HUD' : 'Hide HUD'}
+            </button>
+          </div>
+        )}
+
         <div style={styles.footer}>
-          <span>Esc or click outside to resume · hold Esc to give mouse back to app</span>
-          <span style={{ marginLeft: 'auto', display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+          <span>
+            {props.standalone
+              ? 'Esc or click outside to resume · hold Esc to leave fullscreen'
+              : 'Esc or click outside to resume · hold Esc to give mouse back to app'}
+          </span>
+          <span
+            style={{ marginLeft: 'auto', display: 'flex', gap: '0.4rem', alignItems: 'center' }}
+          >
             <button
               type="button"
               onClick={props.onResume}
@@ -179,14 +253,28 @@ export function GameMenu(props: GameMenuProps) {
               <button
                 type="button"
                 onClick={props.onShare}
-                style={{ ...styles.resumeFooter, background: 'rgba(255,255,255,0.12)', color: 'var(--text)' }}
+                style={{
+                  ...styles.resumeFooter,
+                  background: 'rgba(255,255,255,0.12)',
+                  color: 'var(--text)',
+                }}
                 title="Copy share link for friends/guests"
               >
-                🔗 Share Match
+                {props.standalone ? 'Invite' : '🔗 Share Match'}
               </button>
             )}
-            {props.online && <button onClick={props.onLeave}>Leave match</button>}
-            <button onClick={props.onExitToMenu}>Exit to menu</button>
+            {props.standalone ? (
+              // One way out on the web: the match *is* the menu's context, and
+              // leaving it returns to the server list.
+              <button type="button" style={styles.action} onClick={props.onExitToMenu}>
+                Leave match
+              </button>
+            ) : (
+              <>
+                {props.online && <button onClick={props.onLeave}>Leave match</button>}
+                <button onClick={props.onExitToMenu}>Exit to menu</button>
+              </>
+            )}
           </span>
         </div>
       </div>
@@ -242,7 +330,7 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
   },
   tabActive: {
-    background: 'rgba(110,168,254,0.14)',
+    background: 'color-mix(in srgb, var(--accent, #6ea8fe) 14%, transparent)',
     // The shorthand, not `borderColor`: spread over `tab`, which sets `border`.
     border: '1px solid var(--accent, #6ea8fe)',
     color: 'var(--text)',
@@ -251,7 +339,7 @@ const styles: Record<string, React.CSSProperties> = {
     marginLeft: '0.4rem',
     flexShrink: 0,
     background: 'var(--accent, #6ea8fe)',
-    color: '#ffffff',
+    color: 'var(--accent-contrast, #ffffff)',
     border: 'none',
     padding: '0.3rem 0.85rem',
     borderRadius: 5,
@@ -261,11 +349,10 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'inline-flex',
     alignItems: 'center',
     gap: '0.35rem',
-    boxShadow: '0 2px 8px rgba(110, 168, 254, 0.35)',
   },
   resumeFooter: {
     background: 'var(--accent, #6ea8fe)',
-    color: '#ffffff',
+    color: 'var(--accent-contrast, #ffffff)',
     border: 'none',
     padding: '0.3rem 0.85rem',
     borderRadius: 5,
@@ -277,6 +364,25 @@ const styles: Record<string, React.CSSProperties> = {
     gap: '0.35rem',
   },
   body: { padding: '0.7rem 0.8rem', overflowY: 'auto', minHeight: 0 },
+  matchRow: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '0.4rem',
+    padding: '0.5rem 0.8rem',
+    borderTop: '1px solid var(--border, #2a2a2a)',
+  },
+  action: {
+    background: 'transparent',
+    border: '1px solid var(--border, #2a2a2a)',
+    color: 'var(--text)',
+    padding: '0 0.75rem',
+    height: 28,
+    display: 'inline-flex',
+    alignItems: 'center',
+    borderRadius: 5,
+    cursor: 'pointer',
+    fontSize: '0.78rem',
+  },
   footer: {
     display: 'flex',
     alignItems: 'center',

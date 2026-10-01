@@ -43,6 +43,9 @@ export interface TierSpec {
   anisotropy: number;
   /** Multiplier on the map's fog density — Low hides distance to save fill. */
   fogScale: number;
+  /** Map surfaces as Lambert instead of PBR (see surface-quality.ts). The
+   * single biggest fill saving on an integrated GPU. */
+  lambert: boolean;
 }
 
 /**
@@ -61,6 +64,7 @@ export const TIERS: Record<GraphicsTier, TierSpec> = {
     sky: false,
     anisotropy: 1,
     fogScale: 2,
+    lambert: true,
   },
   medium: {
     pixelRatio: 1.5,
@@ -71,6 +75,7 @@ export const TIERS: Record<GraphicsTier, TierSpec> = {
     sky: true,
     anisotropy: 4,
     fogScale: 0.0075 / 0.0055,
+    lambert: false,
   },
   high: {
     pixelRatio: 2,
@@ -81,6 +86,7 @@ export const TIERS: Record<GraphicsTier, TierSpec> = {
     sky: true,
     anisotropy: 16,
     fogScale: 1,
+    lambert: false,
   },
 };
 
@@ -105,7 +111,11 @@ export function autoTier(hints: DeviceHints): GraphicsTier {
   if (/nvidia|geforce|rtx|radeon rx|radeon pro|arc a|apple m[1-9] (pro|max|ultra)/.test(r)) {
     return 'high';
   }
-  if (/intel|uhd|iris|adreno|mali|apple|radeon\(tm\) graphics|vega/.test(r)) return 'medium';
+  // The entry-level integrated parts go Low. Measured on an Intel UHD at 1080p,
+  // Dust II: Medium (four lamps, PBR surfaces) 43 fps, Low 162 — and Low looks
+  // nearly the same, because the lamps and the PBR term are what it drops.
+  if (/uhd|intel\(r\) hd|mali|adreno/.test(r)) return 'low';
+  if (/intel|iris|apple|radeon\(tm\) graphics|vega/.test(r)) return 'medium';
   // Unknown (the renderer string is masked): a very dense display is usually a
   // laptop or a phone, where fill rate is the constraint.
   return hints.devicePixelRatio >= 2.5 ? 'medium' : 'high';

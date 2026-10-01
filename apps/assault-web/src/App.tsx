@@ -106,6 +106,21 @@ export default function App() {
     }
   }, []);
 
+  /**
+   * Deploy is the one click that may ask for fullscreen — browsers only grant it
+   * inside a user gesture — so it is asked for here, synchronously. Pointer lock
+   * follows on the game's own click-to-play, and the keyboard lock (so a tap of
+   * Escape opens the pause menu instead of leaving fullscreen) is taken by the
+   * game when it grabs input; holding Escape still leaves, by browser rule.
+   */
+  const enterFullscreen = () => {
+    if (document.fullscreenElement || !document.documentElement.requestFullscreen) return;
+    document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {
+      // Refused (an iframe without allowfullscreen, a permissions policy): the
+      // game plays windowed, and the pause menu's Fullscreen can try again.
+    });
+  };
+
   const join = (room: string, map: string) => {
     setTarget({ room, map });
     // Bookmarkable and shareable from the moment you pick it.
@@ -121,6 +136,7 @@ export default function App() {
   };
 
   const backToBrowser = () => {
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
     window.location.hash = '';
     setTarget((t) => ({ ...t, room: null }));
     setView('browser');
@@ -148,34 +164,16 @@ export default function App() {
           map={target.map}
           callsign={callsign}
           onCallsignChange={setCallsign}
-          onDeploy={() => setView('playing')}
+          onDeploy={() => {
+            enterFullscreen();
+            setView('playing');
+          }}
           onCancel={backToBrowser}
         />
       )}
 
       {view === 'playing' && (
         <div style={{ width: '100%', height: '100%', position: 'relative' }}>
-          <div className="match-tools">
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() =>
-                setDialog({ kind: 'share', room: target.room || 'live-match', map: target.map })
-              }
-              title="Share match link"
-            >
-              Invite
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() => void toggleFullscreen()}
-              title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-            >
-              {isFullscreen ? 'Windowed' : 'Fullscreen'}
-            </button>
-          </div>
-
           <Suspense fallback={<LoadingGame />}>
             <HorribleAssaultPanel
               guestCallsign={handle ?? callsign}

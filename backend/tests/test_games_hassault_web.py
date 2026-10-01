@@ -106,7 +106,9 @@ def test_nothing_that_writes_is_exposed(server):
     visitor resize everybody's body."""
     assert server.put("/api/hassault/hitbox", json={"radius": 9}).status_code == 405
     assert server.post("/api/hassault/maps/drafts", json={}).status_code in (404, 405)
-    assert server.post("/api/hassault/console/exec", json={}).status_code == 404
+    # 405 once the built web client is mounted at `/` (its StaticFiles answers a
+    # POST it has no route for that way); 404 without it. Either is "not here".
+    assert server.post("/api/hassault/console/exec", json={}).status_code in (404, 405)
     assert server.get("/api/hassault/skins/inventory").status_code == 404
 
 

@@ -64,6 +64,17 @@ logger = logging.getLogger(__name__)
 GAME_ID = "hassault"
 
 
+#: Practice aids the room's host may switch on for everyone in it, and their
+#: defaults. Display only — none of them changes what the simulation decides —
+#: but they are the room's call, not each player's: a hitbox overlay one side
+#: sees and the other doesn't is an unequal match. Never on in a ranked room
+#: is the client's to enforce for the grenade arc, the one that is an aim aid.
+ROOM_SETTINGS: dict[str, bool] = {
+    "show_hitboxes": False,
+    "grenade_trajectory": False,
+}
+
+
 def max_rooms() -> int:
     """How many rooms this server will run at once (`HASSAULT_MAX_ROOMS`).
 
@@ -121,6 +132,8 @@ class HassaultReferee:
         # reach, and on a server that never restarts its rooms it is a file per
         # room forever.
         self.server = MatchServer(record_replays=False)
+        #: Room id → the settings its host has changed from `ROOM_SETTINGS`.
+        self._settings: dict[str, dict[str, bool]] = {}
 
     # -- maps ---------------------------------------------------------------
 
@@ -205,7 +218,47 @@ class HassaultReferee:
         welcome = room.state_payload()
         welcome["playerId"] = player.id
         welcome["rated"] = not has_guests
+        welcome["roomSettings"] = self.settings_payload(room)
         return welcome
+
+    # -- room settings ------------------------------------------------------
+
+    @staticmethod
+    def host_of(room: Any) -> str:
+        """The room's host: its longest-seated human. Nobody is elected and
+        nothing is stored — when the host leaves, the next-oldest seat simply
+        is the host, so a room is never left with nobody able to change it."""
+        humans = room.humans
+        return humans[0].id if humans else ""
+
+    def settings_for(self, room_id: str) -> dict[str, bool]:
+        # Forget rooms that have closed, so the table never outgrows the server.
+        for stale in [r for r in self._settings if r not in self.server.rooms]:
+            del self._settings[stale]
+        return {**ROOM_SETTINGS, **self._settings.get(room_id, {})}
+
+    def settings_payload(self, room: Any) -> dict[str, Any]:
+        return {"settings": self.settings_for(room.id), "hostId": self.host_of(room)}
+
+    async def set_room_setting(self, conn: SeatConn, data: dict[str, Any]) -> str | None:
+        """The host changing a room setting; why it was refused, or None.
+
+        On success every player in the room gets `room_settings`, the host
+        included — the echo is what the client shows, as with chat.
+        """
+        entry = self.server.player_for(conn)
+        if entry is None:
+            return "join a room first"
+        room, player = entry
+        if player.id != self.host_of(room):
+            return "only the room's host can change that"
+        key = data.get("key")
+        value = data.get("value")
+        if key not in ROOM_SETTINGS or not isinstance(value, bool):
+            return f"unknown room setting {key!r}"
+        self._settings.setdefault(room.id, {})[str(key)] = value
+        await self.server.broadcast_event(room, "room_settings", self.settings_payload(room))
+        return None
 
     def _has_space(self, map_name: str) -> bool:
         """Whether a join on `map_name` would land in a room that already exists —
@@ -276,6 +329,11 @@ class HassaultReferee:
             return None
         result["authority"] = "server"
         self._record(conn, result)
+        # The host may have been the one who left: tell whoever is still there
+        # who holds the room now, so their console knows whose call it is.
+        room = self.server.rooms.get(str(result.get("room", "")))
+        if room is not None and room.humans:
+            await self.server.broadcast_event(room, "room_settings", self.settings_payload(room))
         return result
 
     def _record(self, conn: SeatConn, result: dict[str, Any]) -> None:

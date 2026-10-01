@@ -162,7 +162,15 @@ function Slider({
  * deliberately not there — it is a JSON document rather than a scalar, and the
  * settings page renders scalars — which is why `ControlsPanel` is its only editor.
  */
-export function SettingsPanel() {
+/**
+ * `standalone` is the browser build, which shows none of the last three rows:
+ * there is no native client to choose, and hitboxes and the grenade arc are the
+ * room's call there — a hitbox overlay one side sees and the other doesn't is an
+ * unequal match — so they are host commands in the console
+ * (`server.show_hitboxes`, `server.grenade_trajectory`). On the desktop they stay
+ * node settings, shared with the native client.
+ */
+export function SettingsPanel({ standalone = false }: { standalone?: boolean } = {}) {
   const sensitivity = useSetting<number>(SENSITIVITY_KEY) ?? 1;
   const fov = useSetting<number>(FOV_KEY) ?? 75;
   const volume = useSetting<number>(VOLUME_KEY) ?? 0.7;
@@ -256,90 +264,94 @@ export function SettingsPanel() {
         </div>
       </div>
 
-      <div style={styles.row}>
-        <div style={styles.rowMain}>
-          <span>Client</span>
-          <span style={styles.dim}>
-            The native client is where the game is played: its own window, raw mouse input, no frame
-            cap. This pane is then setup and spectating. It has to be built first (`cargo build
-            --release --manifest-path apps/native-fps/Cargo.toml`); playing in the pane is the
-            fallback while it is not.
-          </span>
-        </div>
-        <div style={{ display: 'flex', gap: '0.25rem' }}>
-          {[
-            { on: false, label: 'This pane' },
-            { on: true, label: 'Native' },
-          ].map((option) => (
-            <button
-              key={option.label}
-              onClick={() => void setSetting(NATIVE_CLIENT_KEY, option.on)}
-              style={{
-                ...styles.choice,
-                ...(nativeClient === option.on ? styles.choiceActive : null),
-              }}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-      </div>
+      {!standalone && (
+        <>
+          <div style={styles.row}>
+            <div style={styles.rowMain}>
+              <span>Client</span>
+              <span style={styles.dim}>
+                The native client is where the game is played: its own window, raw mouse input, no
+                frame cap. This pane is then setup and spectating. It has to be built first (`cargo
+                build --release --manifest-path apps/native-fps/Cargo.toml`); playing in the pane is
+                the fallback while it is not.
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: '0.25rem' }}>
+              {[
+                { on: false, label: 'This pane' },
+                { on: true, label: 'Native' },
+              ].map((option) => (
+                <button
+                  key={option.label}
+                  onClick={() => void setSetting(NATIVE_CLIENT_KEY, option.on)}
+                  style={{
+                    ...styles.choice,
+                    ...(nativeClient === option.on ? styles.choiceActive : null),
+                  }}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
 
-      <div style={styles.row}>
-        <div style={styles.rowMain}>
-          <span>Show hitboxes</span>
-          <span style={styles.dim}>
-            Draws the exact volume a shot is resolved against around every body, with the head band
-            marked. It is the served spec, not a second copy — which is the point: a body drawn a
-            few percent off its hitbox costs you shots you were sure of and looks like lag. Works in
-            both clients.
-          </span>
-        </div>
-        <div style={{ display: 'flex', gap: '0.25rem' }}>
-          {[
-            { on: false, label: 'Off' },
-            { on: true, label: 'On' },
-          ].map((option) => (
-            <button
-              key={option.label}
-              onClick={() => void setSetting(SHOW_HITBOXES_KEY, option.on)}
-              style={{
-                ...styles.choice,
-                ...(showHitboxes === option.on ? styles.choiceActive : null),
-              }}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-      </div>
+          <div style={styles.row}>
+            <div style={styles.rowMain}>
+              <span>Show hitboxes</span>
+              <span style={styles.dim}>
+                Draws the exact volume a shot is resolved against around every body, with the head
+                band marked. It is the served spec, not a second copy — which is the point: a body
+                drawn a few percent off its hitbox costs you shots you were sure of and looks like
+                lag. Works in both clients.
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: '0.25rem' }}>
+              {[
+                { on: false, label: 'Off' },
+                { on: true, label: 'On' },
+              ].map((option) => (
+                <button
+                  key={option.label}
+                  onClick={() => void setSetting(SHOW_HITBOXES_KEY, option.on)}
+                  style={{
+                    ...styles.choice,
+                    ...(showHitboxes === option.on ? styles.choiceActive : null),
+                  }}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
 
-      <div style={styles.row}>
-        <div style={styles.rowMain}>
-          <span>Grenade trajectory</span>
-          <span style={styles.dim}>
-            Draws where a held grenade will fly and land. Practice only: it shows in Training and in
-            a match you host yourself, never in ranked or on someone else's server.
-          </span>
-        </div>
-        <div style={{ display: 'flex', gap: '0.25rem' }}>
-          {[
-            { on: false, label: 'Off' },
-            { on: true, label: 'On' },
-          ].map((option) => (
-            <button
-              key={option.label}
-              onClick={() => void setSetting(GRENADE_ARC_KEY, option.on)}
-              style={{
-                ...styles.choice,
-                ...(grenadeArc === option.on ? styles.choiceActive : null),
-              }}
-            >
-              {option.label}
-            </button>
-          ))}
-        </div>
-      </div>
+          <div style={styles.row}>
+            <div style={styles.rowMain}>
+              <span>Grenade trajectory</span>
+              <span style={styles.dim}>
+                Draws where a held grenade will fly and land. Practice only: it shows in Training
+                and in a match you host yourself, never in ranked or on someone else's server.
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: '0.25rem' }}>
+              {[
+                { on: false, label: 'Off' },
+                { on: true, label: 'On' },
+              ].map((option) => (
+                <button
+                  key={option.label}
+                  onClick={() => void setSetting(GRENADE_ARC_KEY, option.on)}
+                  style={{
+                    ...styles.choice,
+                    ...(grenadeArc === option.on ? styles.choiceActive : null),
+                  }}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
 
       <div style={{ marginTop: '1rem' }}>
         <VoiceCommsPanel />

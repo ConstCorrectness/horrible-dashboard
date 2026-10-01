@@ -811,6 +811,18 @@ async def hassault_ws(websocket: WebSocket) -> None:
                 )
             elif event == "input":
                 referee.apply_input(conn, data)
+            elif event == "room_set":
+                refused = await referee.set_room_setting(conn, data)
+                if refused:
+                    # Not `error`: a client treats that as the match failing,
+                    # and a refused setting is only an answer to the console.
+                    await conn.send_json(
+                        {
+                            "channel": "hassault",
+                            "event": "room_settings_refused",
+                            "data": {"message": refused},
+                        }
+                    )
             elif event == "ping":
                 # Answered here, not by whoever sits in front: the round trip a
                 # player feels is to the machine simulating them. The client's

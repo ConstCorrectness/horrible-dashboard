@@ -13,7 +13,15 @@ export type CVarType = 'boolean' | 'number' | 'string' | 'enum';
  * has to decide how to render one.
  */
 export type CVarValue = boolean | number | string;
-export type CVarFlag = 'cheat' | 'server' | 'client' | 'replicated' | 'archived' | 'readonly';
+/** `room`: owned by the match's host, answered by the pane (see `RoomCvarHandler`). */
+export type CVarFlag =
+  | 'cheat'
+  | 'server'
+  | 'client'
+  | 'replicated'
+  | 'archived'
+  | 'readonly'
+  | 'room';
 
 export interface CVarDefinition {
   name: string;
