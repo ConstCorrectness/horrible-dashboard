@@ -142,3 +142,14 @@ export const FilmIcon = (p: IconProps) =>
     </>,
     p,
   );
+
+/** Live co-editing: two people. */
+export const LiveIcon = (p: IconProps) =>
+  svg(
+    <>
+      <circle cx="9" cy="8" r="3.2" />
+      <path d="M3.5 19a5.5 5.5 0 0 1 11 0" />
+      <path d="M16 5.2a3.2 3.2 0 0 1 0 5.6M17.5 13.6A5.5 5.5 0 0 1 20.5 19" />
+    </>,
+    p,
+  );

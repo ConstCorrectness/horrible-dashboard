@@ -20,7 +20,7 @@ import {
 import type { NbOutput } from '../../../notebook/types';
 import { cellId, codeCellsOf } from '../cells';
 import { parseMyst, splitFrontmatter, type MystNode } from '../myst/parse';
-import { buildSite, cellKey, isPublic, type SiteBuild, type SiteSource } from './build';
+import { buildPrint, buildSite, cellKey, isPublic, type SiteBuild, type SiteSource } from './build';
 import { mermaidVariables, themePalettes } from './palette';
 
 export interface PreparedSite {
@@ -86,6 +86,51 @@ async function outputsFor(
   return out;
 }
 
+/** Everything a print build of one page needs: that page alone, read whatever its
+ * status, with its cell outputs and diagrams. */
+export async function preparePage(site: string, path: string): Promise<PreparedSite> {
+  const [{ site: meta, config }, metas, themes, page] = await Promise.all([
+    getSite(site),
+    listPages(site),
+    listThemes(site),
+    readPage(site, path),
+  ]);
+  const theme =
+    themes.find((t) => t.id === config.theme) ??
+    themes.find((t) => t.id === 'minimal') ??
+    themes[0];
+  const pageMeta = metas.find((m) => m.path === path) ?? page.meta;
+  const cells: SiteSource['cells'] = {};
+  if (path.endsWith('.md')) {
+    const outputs = await outputsFor(site, path, page.content);
+    if (Object.keys(outputs).length) cells[path] = outputs;
+  }
+  return {
+    theme,
+    source: {
+      id: site,
+      title: config.title || meta.title,
+      theme: { layout: theme.layout, tokens: theme.tokens, templates: theme.templates },
+      pages: [{ meta: pageMeta, content: page.content }],
+      cells,
+      mermaid: await drawDiagrams(mermaidSources(page.content), theme.tokens),
+    },
+  };
+}
+
+/** A print build of one page, shaped for the backend's PDF export. */
+export async function buildPrintBundle(site: string, path: string): Promise<SiteBundle> {
+  const { source } = await preparePage(site, path);
+  const build = buildPrint(source, path);
+  return {
+    files: build.files,
+    assets: build.assets,
+    scenes: build.scenes,
+    cards: [],
+    pages: build.pages,
+  };
+}
+
 export async function prepareSite(site: string): Promise<PreparedSite> {
   const [{ site: meta, config }, metas, themes] = await Promise.all([
     getSite(site),
@@ -115,7 +160,7 @@ export async function prepareSite(site: string): Promise<PreparedSite> {
     source: {
       id: site,
       title: config.title || meta.title,
-      theme: { layout: theme.layout, tokens: theme.tokens },
+      theme: { layout: theme.layout, tokens: theme.tokens, templates: theme.templates },
       pages,
       cells,
       mermaid: await drawDiagrams(codes, theme.tokens),

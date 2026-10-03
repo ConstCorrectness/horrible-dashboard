@@ -1,6 +1,7 @@
 /**
- * Share a page: compose an X thread, a LinkedIn link post or a YouTube upload, see what
- * preflight says, and approve, send or schedule it.
+ * Share a page: compose an X thread, a LinkedIn link post or a YouTube upload, or
+ * cross-post the whole article to dev.to or Hashnode; see what preflight says, and
+ * approve, send or schedule it.
  *
  * Each composer edits one outbox row (backend/modules/scrive/outbox.py). Edits are
  * saved as you type (debounced) and checked as they are saved, so the counts, the
@@ -40,6 +41,8 @@ import {
   SCRIVE_CHANNEL,
   sendOutbox,
   unscheduleOutbox,
+  type DevtoPayload,
+  type HashnodePayload,
   type LinkedInPayload,
   type OutboxChanged,
   type OutboxItem,
@@ -171,7 +174,7 @@ function Share({ site, page }: { site: string; page: string }) {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-          {(['x', 'linkedin', 'youtube'] as const).map((target) => (
+          {(['x', 'linkedin', 'youtube', 'devto', 'hashnode'] as const).map((target) => (
             <button key={target} type="button" onClick={() => void create(target)}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                 <PlusIcon /> {TARGET_LABEL[target]}
@@ -255,9 +258,11 @@ function Share({ site, page }: { site: string; page: string }) {
 }
 
 function summary(item: OutboxItem): string {
-  const p = item.payload as Partial<XPayload & LinkedInPayload & YouTubePayload>;
+  const p = item.payload as Partial<
+    XPayload & LinkedInPayload & YouTubePayload & DevtoPayload & HashnodePayload
+  >;
   const text =
-    item.target === 'x' ? p.posts?.[0]?.text : item.target === 'youtube' ? p.title : p.text;
+    item.target === 'x' ? p.posts?.[0]?.text : item.target === 'linkedin' ? p.text : p.title;
   return (text ?? '').replace(/\s+/g, ' ').trim() || '(empty)';
 }
 
@@ -346,6 +351,7 @@ function Composer({
       'not-video',
       'bad-text',
       'publish-at',
+      'tags',
     ].includes(f.rule),
   );
   const unknownStep = Object.values(item.steps).some((s) => s.status === 'unknown');
@@ -364,9 +370,18 @@ function Composer({
     editor = (
       <LinkedInEditor payload={payload as LinkedInPayload} onChange={change} readOnly={!editable} />
     );
-  else
+  else if (item.target === 'youtube')
     editor = (
       <YouTubeEditor payload={payload as YouTubePayload} onChange={change} readOnly={!editable} />
+    );
+  else
+    editor = (
+      <ArticleEditor
+        target={item.target}
+        payload={payload as DevtoPayload | HashnodePayload}
+        onChange={change}
+        readOnly={!editable}
+      />
     );
 
   return (
@@ -858,6 +873,106 @@ function YouTubeEditor({
         />
         Made for kids
       </label>
+    </>
+  );
+}
+
+/** The tag limit each platform enforces (preflight refuses more). */
+const TAG_LIMIT: Partial<Record<OutboxTarget, number>> = { devto: 4, hashnode: 5 };
+
+function ArticleEditor({
+  target,
+  payload,
+  onChange,
+  readOnly,
+}: {
+  target: OutboxTarget;
+  payload: DevtoPayload | HashnodePayload;
+  onChange: (p: DevtoPayload | HashnodePayload) => void;
+  readOnly: boolean;
+}) {
+  const set = (patch: Partial<DevtoPayload & HashnodePayload>) =>
+    onChange({ ...payload, ...patch } as DevtoPayload | HashnodePayload);
+  const devto = target === 'devto' ? (payload as DevtoPayload) : null;
+  const lead = devto ? devto.description : (payload as HashnodePayload).subtitle;
+  const limit = TAG_LIMIT[target] ?? 5;
+  return (
+    <>
+      <Field label="Title">
+        <TextInput value={payload.title} onChange={(title) => set({ title })} />
+      </Field>
+      <Field label={devto ? 'Description' : 'Subtitle'}>
+        <TextInput
+          value={lead}
+          onChange={(text) => set(devto ? { description: text } : { subtitle: text })}
+        />
+      </Field>
+      <Field
+        label="Article"
+        aside={<span className="scrive-meta">{payload.body.length.toLocaleString()} chars</span>}
+      >
+        <textarea
+          className="scrive-outline-text scrive-share-article"
+          rows={16}
+          spellCheck={false}
+          value={payload.body}
+          readOnly={readOnly}
+          onChange={(e) => set({ body: e.target.value })}
+        />
+      </Field>
+      <div className="scrive-outline-pair">
+        <Field label="Tags" aside={<Count value={payload.tags.length} limit={limit} />}>
+          <TextInput
+            value={payload.tags.join(', ')}
+            onChange={(tags) =>
+              set({
+                tags: tags
+                  .split(',')
+                  .map((t) => t.trim())
+                  .filter(Boolean),
+              })
+            }
+            placeholder="comma, separated"
+          />
+        </Field>
+        <Field label="Cover">
+          <TextInput
+            value={payload.cover}
+            onChange={(cover) => set({ cover })}
+            placeholder="media/cover.png (optional)"
+          />
+        </Field>
+      </div>
+      <div className="scrive-outline-pair">
+        <Field label="Canonical URL">
+          <TextInput
+            value={payload.canonical_url}
+            onChange={(canonical_url) => set({ canonical_url })}
+            placeholder={POST_URL}
+          />
+        </Field>
+        {devto && (
+          <Field label="Series (optional)">
+            <TextInput value={devto.series} onChange={(series) => set({ series })} />
+          </Field>
+        )}
+      </div>
+      {devto && (
+        <label className="scrive-share-check">
+          <input
+            type="checkbox"
+            checked={!devto.published}
+            disabled={readOnly}
+            onChange={(e) => set({ published: !e.target.checked })}
+          />
+          Send as a dev.to draft, to finish and publish there
+        </label>
+      )}
+      <p className="scrive-meta scrive-publish-note">
+        The whole article, converted from MyST. {'{{site.url}}'} and {POST_URL} are filled in from
+        the published site at approval; the canonical URL tells search engines the site has the
+        original.
+      </p>
     </>
   );
 }

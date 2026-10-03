@@ -278,6 +278,9 @@ export interface ThemeInfo {
   tokens: string;
   /** THEME.md: the brand and voice guide. */
   guide: string;
+  /** A site theme's own layouts (`layouts/<name>.html`), by name: `page`, `home`, `list`,
+   * `base`. Each replaces the built-in layout for that kind of file (`site/template.ts`). */
+  templates: Record<string, string>;
 }
 
 export function listThemes(site?: string | null): Promise<ThemeInfo[]> {
@@ -395,7 +398,9 @@ export function cachedCells(site: string, path: string): Promise<{ cells: Cached
 
 // --- the outbox (Phase 6) ------------------------------------------------------------
 
-export type OutboxTarget = 'x' | 'linkedin' | 'youtube';
+export type OutboxTarget = 'x' | 'linkedin' | 'youtube' | 'devto' | 'hashnode';
+/** The targets that take the whole article rather than a post about it. */
+export const ARTICLE_TARGETS: readonly OutboxTarget[] = ['devto', 'hashnode'];
 export type OutboxStatus = 'draft' | 'approved' | 'scheduled' | 'sending' | 'sent' | 'failed';
 
 export interface XPostDraft {
@@ -429,7 +434,35 @@ export interface YouTubePayload {
   synthetic: boolean;
 }
 
-export type OutboxPayload = XPayload | LinkedInPayload | YouTubePayload;
+/** A whole article for dev.to: the page converted to its Markdown (backend `crosspost.py`). */
+export interface DevtoPayload {
+  title: string;
+  body: string;
+  description: string;
+  tags: string[];
+  /** A site path or an https URL. */
+  cover: string;
+  canonical_url: string;
+  /** false: a dev.to draft, finished there. */
+  published: boolean;
+  series: string;
+}
+
+export interface HashnodePayload {
+  title: string;
+  subtitle: string;
+  body: string;
+  tags: string[];
+  cover: string;
+  canonical_url: string;
+}
+
+export type OutboxPayload =
+  | XPayload
+  | LinkedInPayload
+  | YouTubePayload
+  | DevtoPayload
+  | HashnodePayload;
 
 export interface OutboxItem {
   id: string;
@@ -520,13 +553,59 @@ export function retryOutbox(id: string): Promise<OutboxItem> {
   return apiPost(`/scrive/outbox/${id}/retry`, {});
 }
 
-/** Which of the three targets are connected (from `/api/connectors`). */
+/** Which targets are connected (from `/api/connectors`). */
 export async function connectedTargets(): Promise<Record<OutboxTarget, boolean>> {
   const { connectors } = await apiGet<{ connectors: { id: string; connected: boolean }[] }>(
     '/connectors',
   );
   const on = (id: string) => connectors.some((c) => c.id === id && c.connected);
-  return { x: on('x'), linkedin: on('linkedin'), youtube: on('youtube') };
+  return {
+    x: on('x'),
+    linkedin: on('linkedin'),
+    youtube: on('youtube'),
+    devto: on('devto'),
+    hashnode: on('hashnode'),
+  };
+}
+
+// ── PDF export ───────────────────────────────────────────────────────────────
+// Mirrors backend/modules/scrive/exports.py.
+
+export type PdfEngine = 'auto' | 'print' | 'typst';
+
+export interface ExportStatus {
+  myst: boolean;
+  typst: boolean;
+  auto: 'print' | 'typst';
+}
+
+export interface ExportOutcome {
+  /** Site-relative: `_build/exports/<page>.pdf`. */
+  path: string;
+  engine: 'print' | 'typst';
+  bytes: number;
+  seconds: number;
+  findings: PublishFinding[];
+  note: string;
+}
+
+export function exportStatus(): Promise<ExportStatus> {
+  return apiGet('/scrive/export/status');
+}
+
+export function exportPage(
+  site: string,
+  page: string,
+  engine: PdfEngine,
+  paper: 'a4' | 'letter',
+  bundle: SiteBundle,
+): Promise<ExportOutcome> {
+  return apiPost(`/scrive/sites/${site}/export`, { page, engine, paper, bundle });
+}
+
+/** The exported file, as a download. */
+export function exportFileUrl(site: string, path: string): string {
+  return apiUrl(`/scrive/sites/${site}/export-file?path=${encodeURIComponent(path)}`);
 }
 
 // ── clips ────────────────────────────────────────────────────────────────────

@@ -64,3 +64,10 @@ export function openClip(site: string, path = ''): void {
     () => true,
   );
 }
+
+export const LIVE_VIEW = 'scrive.live';
+
+/** A live session this machine was invited to (backend/modules/scrive/live.py). */
+export function openLive(key: string, title: string): void {
+  openDocument(LIVE_VIEW, `${LIVE_VIEW}:${key}`, { key, title: `Live ${title}` }, () => true);
+}

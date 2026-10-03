@@ -23,6 +23,7 @@ describe('scrive manifest', () => {
       'scrive.share',
       'scrive.outbox',
       'scrive.clip',
+      'scrive.live',
     ]);
     const commands = (scriveModule.commands ?? []).map((c) => c.id);
     expect(commands).toEqual(
@@ -40,9 +41,11 @@ describe('scrive manifest', () => {
     );
   });
 
-  it('keeps an outline awaiting review on screen with the pane closed', () => {
+  it('keeps an outline awaiting review, and a live invitation, on screen with no pane', () => {
     registry.register(scriveModule);
-    expect(registry.shellIndicators.map((i) => i.id)).toContain('scrive.outlines');
+    const ids = registry.shellIndicators.map((i) => i.id);
+    expect(ids).toContain('scrive.outlines');
+    expect(ids).toContain('scrive.live');
   });
 
   it('binds mod+s only while a Scrive page has focus', () => {

@@ -61,6 +61,56 @@ export interface DocumentProps {
   children: ReactNode;
 }
 
+export type HeadProps = Pick<
+  DocumentProps,
+  | 'siteTitle'
+  | 'title'
+  | 'description'
+  | 'url'
+  | 'canonical'
+  | 'image'
+  | 'type'
+  | 'date'
+  | 'katexCss'
+>;
+
+/** Everything in a page's `<head>`: also what a theme's own layout template gets as
+ * `{{{head}}}`, so it never has to rebuild the title, share tags or stylesheets. */
+export function HeadTags({
+  siteTitle,
+  title,
+  description,
+  url,
+  canonical,
+  image,
+  type,
+  date,
+  katexCss,
+}: HeadProps) {
+  const fullTitle = title && title !== siteTitle ? `${title} · ${siteTitle}` : siteTitle;
+  return (
+    <>
+      <meta charSet="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <title>{fullTitle}</title>
+      {description && <meta name="description" content={description} />}
+      <link rel="canonical" href={canonical} />
+      <meta property="og:site_name" content={siteTitle} />
+      <meta property="og:title" content={title || siteTitle} />
+      {description && <meta property="og:description" content={description} />}
+      <meta property="og:type" content={type} />
+      <meta property="og:url" content={canonical} />
+      {image && <meta property="og:image" content={image} />}
+      {date && type === 'article' && <meta property="article:published_time" content={date} />}
+      <meta name="twitter:card" content={image ? 'summary_large_image' : 'summary'} />
+      <link rel="alternate" type="application/rss+xml" title={siteTitle} href={url('feed.xml')} />
+      <link rel="stylesheet" href={url('_scrive/site.css')} />
+      {katexCss && <link rel="stylesheet" href={katexCss} crossOrigin="anonymous" />}
+      <meta name="generator" content="Scrive" />
+    </>
+  );
+}
+
 export function Document({
   layout,
   siteTitle,
@@ -78,27 +128,20 @@ export function Document({
   year,
   children,
 }: DocumentProps) {
-  const fullTitle = title && title !== siteTitle ? `${title} · ${siteTitle}` : siteTitle;
   return (
     <html lang="en">
       <head>
-        <meta charSet="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>{fullTitle}</title>
-        {description && <meta name="description" content={description} />}
-        <link rel="canonical" href={canonical} />
-        <meta property="og:site_name" content={siteTitle} />
-        <meta property="og:title" content={title || siteTitle} />
-        {description && <meta property="og:description" content={description} />}
-        <meta property="og:type" content={type} />
-        <meta property="og:url" content={canonical} />
-        {image && <meta property="og:image" content={image} />}
-        {date && type === 'article' && <meta property="article:published_time" content={date} />}
-        <meta name="twitter:card" content={image ? 'summary_large_image' : 'summary'} />
-        <link rel="alternate" type="application/rss+xml" title={siteTitle} href={url('feed.xml')} />
-        <link rel="stylesheet" href={url('_scrive/site.css')} />
-        {katexCss && <link rel="stylesheet" href={katexCss} crossOrigin="anonymous" />}
-        <meta name="generator" content="Scrive" />
+        <HeadTags
+          siteTitle={siteTitle}
+          title={title}
+          description={description}
+          url={url}
+          canonical={canonical}
+          image={image}
+          type={type}
+          date={date}
+          katexCss={katexCss}
+        />
       </head>
       <body className={`site site-${layout}`}>
         <a className="site-skip" href="#main">

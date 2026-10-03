@@ -1,10 +1,15 @@
-"""What a post to X, LinkedIn or YouTube says, and what is checked before it may go.
+"""What a post to X, LinkedIn, YouTube, dev.to or Hashnode says, and what is checked
+before it may go.
 
 Each target has a payload model (what the composer edits and the outbox stores), and
 `preflight` runs that target's rules plus the shared secret scan. Preflight runs when
 a person **approves** a row — and approval freezes the payload: `{{post.url}}` is
-replaced by the page's published URL then, so a scheduled send ships exactly what was
-approved.
+replaced by the page's published URL then (and `{{site.url}}`, which a cross-posted
+article's images and links use, by the site's), so a scheduled send ships exactly
+what was approved.
+
+dev.to and Hashnode take the **whole article**, converted from MyST by
+`crosspost.to_markdown`, with its canonical URL pointing back at the Pages post.
 
 Findings follow the site publisher's contract (`publish.Finding`): `blocking` stops
 approval until acknowledged, and a few rules are **hard** (`HARD_RULES`) — a post that
@@ -32,18 +37,28 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from backend.modules.connectors import store as connector_store
-from backend.modules.connectors.providers import linkedin
-from backend.modules.scrive import clips, publish, store
+from backend.modules.connectors.providers import devto, hashnode, linkedin
+from backend.modules.scrive import clips, crosspost, publish, store
 from backend.modules.scrive.publish import Finding
 from backend.modules.settings.routes import get_value
 from backend.publishing.scan import scan_text
 
-Target = Literal["x", "linkedin", "youtube"]
-TARGETS: tuple[str, ...] = ("x", "linkedin", "youtube")
-LABELS = {"x": "X", "linkedin": "LinkedIn", "youtube": "YouTube"}
+Target = Literal["x", "linkedin", "youtube", "devto", "hashnode"]
+TARGETS: tuple[str, ...] = ("x", "linkedin", "youtube", "devto", "hashnode")
+LABELS = {
+    "x": "X",
+    "linkedin": "LinkedIn",
+    "youtube": "YouTube",
+    "devto": "dev.to",
+    "hashnode": "Hashnode",
+}
+#: The targets that take a whole article (`crosspost`), rather than a post about one.
+ARTICLE_TARGETS = ("devto", "hashnode")
 
 #: Replaced at approval by the page's published URL.
-POST_URL = "{{post.url}}"
+POST_URL = crosspost.POST_URL
+#: Replaced at approval by the published site's root URL (ends in `/`).
+SITE_URL = crosspost.SITE_URL
 
 #: Rules no acknowledgement gets past: the platform would refuse the post anyway, or
 #: the row cannot be sent at all.
@@ -57,6 +72,7 @@ HARD_RULES = {
     "not-video",
     "bad-text",
     "publish-at",
+    "tags",
 }
 
 # X (pay-per-use since February 2026; the prices the composer estimates with).
@@ -73,6 +89,7 @@ X_MAX_VIDEO_SECONDS = clips.X_VIDEO_SECONDS
 LINKEDIN_LIMIT = 3000
 YOUTUBE_TITLE = 100
 YOUTUBE_DESCRIPTION = 5000
+ARTICLE_TITLE = 250  # Hashnode's limit; dev.to's is longer
 YOUTUBE_DAILY_UPLOADS = 6  # 10,000 units a day at 1,600 an upload
 AUDITED_SETTING = "scrive.youtube.audited"
 LINK_IN_REPLY_SETTING = "scrive.x.linkInReply"
@@ -123,10 +140,39 @@ class YouTubePayload(BaseModel):
     synthetic: bool = False
 
 
+class DevtoPayload(BaseModel):
+    """A whole article, as dev.to Markdown (liquid tags for math, details, embeds)."""
+
+    title: str = ""
+    body: str = ""
+    description: str = ""
+    tags: list[str] = Field(default_factory=list)
+    #: A site path (or an https URL): the cover image, which dev.to fetches by URL.
+    cover: str = ""
+    #: Where the original lives. `{{post.url}}`: the Pages post.
+    canonical_url: str = POST_URL
+    #: False makes a dev.to draft, finished on dev.to.
+    published: bool = True
+    series: str = ""
+
+
+class HashnodePayload(BaseModel):
+    """A whole article, as Hashnode Markdown, published to the connected publication."""
+
+    title: str = ""
+    subtitle: str = ""
+    body: str = ""
+    tags: list[str] = Field(default_factory=list)
+    cover: str = ""
+    canonical_url: str = POST_URL
+
+
 PAYLOADS: dict[str, type[BaseModel]] = {
     "x": XPayload,
     "linkedin": LinkedInPayload,
     "youtube": YouTubePayload,
+    "devto": DevtoPayload,
+    "hashnode": HashnodePayload,
 }
 
 
@@ -233,13 +279,44 @@ def published_url(site_id: str, page: str) -> str | None:
     return record.url + page_dir(page)
 
 
+def site_url(site_id: str) -> str | None:
+    """The published site's root URL (static mode), or None before a first publish."""
+    record = publish.read_record(site_id)
+    if record is None or record.mode != "static":
+        return None
+    return record.url if record.url.endswith("/") else f"{record.url}/"
+
+
 def _uses_url(value: Any) -> bool:
     return POST_URL in json.dumps(value)
 
 
-def resolve(target: str, payload: dict[str, Any], url: str) -> dict[str, Any]:
-    """The payload with `{{post.url}}` filled in — what approval freezes."""
-    return json.loads(json.dumps(payload).replace(POST_URL, url))
+def _uses_site_url(value: Any) -> bool:
+    return SITE_URL in json.dumps(value)
+
+
+def _is_site_path(value: str) -> bool:
+    return bool(value) and not re.match(r"^[a-z][a-z0-9+.-]*:|^\{\{", value, re.I)
+
+
+def resolve(
+    target: str,
+    payload: dict[str, Any],
+    post_url: str | None,
+    site: str | None = None,
+) -> dict[str, Any]:
+    """The payload with `{{post.url}}` and `{{site.url}}` filled in (each when it is
+    known) — what approval freezes. An article's cover, a site path, becomes the URL
+    the platform fetches it from."""
+    text = json.dumps(payload)
+    if post_url:
+        text = text.replace(POST_URL, post_url)
+    if site:
+        text = text.replace(SITE_URL, site)
+    out = json.loads(text)
+    if site and target in ARTICLE_TARGETS and _is_site_path(out.get("cover") or ""):
+        out["cover"] = site + str(out["cover"]).lstrip("/")
+    return out
 
 
 # --- preflight ------------------------------------------------------------------------
@@ -267,6 +344,10 @@ def _texts(target: str, model: BaseModel) -> list[str]:
         return [model.text, model.title, model.description]
     if isinstance(model, YouTubePayload):
         return [model.title, model.description, *model.tags]
+    if isinstance(model, DevtoPayload):
+        return [model.title, model.description, model.body, *model.tags]
+    if isinstance(model, HashnodePayload):
+        return [model.title, model.subtitle, model.body, *model.tags]
     return []
 
 
@@ -297,6 +378,14 @@ def preflight(
                 "Publish the site (static mode) first, or replace {{post.url}} with a link.",
             )
         )
+    elif _uses_site_url(payload) and site_url(site_id) is None:
+        findings.append(
+            _hard(
+                "unpublished",
+                "The article points at files on the published site ({{site.url}}), and "
+                "the site has not been published (static mode) yet.",
+            )
+        )
     for text in _texts(target, model):
         for hit in scan_text(text):
             findings.append(
@@ -314,6 +403,8 @@ def preflight(
         findings += _linkedin_rules(site_id, model)
     elif isinstance(model, YouTubePayload):
         findings += _youtube_rules(site_id, model, sent_today)
+    elif isinstance(model, (DevtoPayload, HashnodePayload)):
+        findings += _article_rules(site_id, target, model)
     return findings
 
 
@@ -426,6 +517,120 @@ def _linkedin_rules(site_id: str, model: LinkedInPayload) -> list[Finding]:
     )
     if note:
         findings.append(Finding(rule="expiry", message=note))
+    return findings
+
+
+_SITE_REF = re.compile(re.escape(SITE_URL) + r"([^\s)\"'<>#?]+)")
+
+
+def _article_rules(
+    site_id: str, target: str, model: DevtoPayload | HashnodePayload
+) -> list[Finding]:
+    findings: list[Finding] = []
+    label = LABELS[target]
+    if not model.title.strip():
+        findings.append(_hard("empty", f"A {label} article needs a title."))
+    elif len(model.title) > ARTICLE_TITLE:
+        findings.append(
+            _hard(
+                "too-long",
+                f"The title is {len(model.title)}/{ARTICLE_TITLE} characters.",
+            )
+        )
+    if not model.body.strip():
+        findings.append(_hard("empty", "The article has no body."))
+    limit = devto.MAX_TAGS if target == "devto" else hashnode.MAX_TAGS
+    if len(model.tags) > limit:
+        findings.append(
+            _hard(
+                "tags",
+                f"{label} takes at most {limit} tags; this has {len(model.tags)}.",
+            )
+        )
+    if target == "devto":
+        odd = [t for t in model.tags if devto.devto_tag(t) != t]
+        if odd:
+            findings.append(
+                Finding(
+                    rule="tags",
+                    message="dev.to keeps only lowercase letters and digits in a tag: "
+                    + ", ".join(
+                        f"{t} → {devto.devto_tag(t) or '(nothing)'}" for t in odd
+                    )
+                    + ".",
+                )
+            )
+    if (
+        target == "hashnode"
+        and connector_store.is_connected("hashnode")
+        and not hashnode.publication()["id"]
+    ):
+        findings.append(
+            _hard(
+                "not-connected",
+                "No Hashnode publication is chosen — reconnect Hashnode and name one.",
+            )
+        )
+    # Files on the published site that the article shows: a missing one is a broken
+    # image on someone else's platform, with your name on it.
+    record = publish.read_record(site_id)
+    live = set(record.files) if record and record.mode == "static" else None
+    if model.cover:
+        if _is_site_path(model.cover):
+            rel = model.cover.lstrip("/")
+            if _file(site_id, rel) is None:
+                findings.append(
+                    _hard("missing-file", f"{rel} is not in the site.", rel)
+                )
+            elif live is not None and rel not in live:
+                findings.append(
+                    _hard(
+                        "media",
+                        f"The cover {rel} is not on the published site, and {label} "
+                        "fetches it from there. Embed it in a published page, or use an "
+                        "https URL.",
+                        rel,
+                    )
+                )
+        elif not model.cover.startswith("https://"):
+            findings.append(
+                _hard("media", "The cover must be a site file or an https URL.")
+            )
+    if live is not None:
+        missing = sorted(
+            {
+                m.group(1)
+                for m in _SITE_REF.finditer(model.body)
+                if m.group(1) not in live and f"{m.group(1)}index.html" not in live
+            }
+        )
+        for rel in missing:
+            findings.append(
+                Finding(
+                    blocking=True,
+                    rule="not-live",
+                    message=f"{rel} is linked from the article but is not on the "
+                    "published site: it will be broken there.",
+                    file=rel,
+                )
+            )
+    myst = crosspost.leftover_myst(model.body)
+    if myst:
+        findings.append(
+            Finding(
+                rule="myst",
+                message=f"{label} does not render MyST: "
+                + ", ".join(f"{{{n}}}" for n in myst)
+                + " will show as plain text.",
+            )
+        )
+    if not model.canonical_url.strip():
+        findings.append(
+            Finding(
+                rule="canonical",
+                message="No canonical URL: search engines may treat this copy as the original.",
+            )
+        )
     return findings
 
 
@@ -594,6 +799,8 @@ def blank(target: str) -> dict[str, Any]:
     model = parse_payload(target, {})
     if isinstance(model, (XPayload, LinkedInPayload)):
         model.link = ""
+    if isinstance(model, (DevtoPayload, HashnodePayload)):
+        model.canonical_url = ""
     return model.model_dump()
 
 
@@ -623,6 +830,8 @@ def suggest(site_id: str, page: str, target: str) -> dict[str, Any]:
     if target == "x":
         lead = f"{title}\n\n{description}".strip()
         return XPayload(posts=[XPost(text=lead)]).model_dump()
+    if target in ARTICLE_TARGETS:
+        return article(page, target, text, fm, title, description, tags, thumb)
     if target == "linkedin":
         return LinkedInPayload(
             text=description or title,
@@ -638,4 +847,49 @@ def suggest(site_id: str, page: str, target: str) -> dict[str, Any]:
     body += f"\n\nThe post: {POST_URL}"
     return YouTubePayload(
         title=title[:YOUTUBE_TITLE], description=body.strip(), tags=tags
+    ).model_dump()
+
+
+def article(
+    page: str,
+    target: str,
+    text: str,
+    fm: dict[str, Any],
+    title: str,
+    description: str,
+    tags: list[str],
+    cover: str,
+) -> dict[str, Any]:
+    """A cross-post draft: the page converted whole. What did not carry over is listed
+    in a leading HTML comment, which renders as nothing if it is left in."""
+    converted = crosspost.to_markdown(text, page=page, flavor=target)  # type: ignore[arg-type]
+    body = converted.markdown
+    if converted.notes:
+        body = (
+            "<!-- Scrive: what changed from the page\n"
+            + "\n".join(f"  - {n}" for n in converted.notes)
+            + "\n-->\n\n"
+            + body
+        )
+    if target == "devto":
+        seen: list[str] = []
+        for tag in tags:
+            norm = devto.devto_tag(tag)
+            if norm and norm not in seen:
+                seen.append(norm)
+        series = fm.get("series")
+        return DevtoPayload(
+            title=title,
+            body=body,
+            description=description,
+            tags=seen[: devto.MAX_TAGS],
+            cover=cover,
+            series=series if isinstance(series, str) else "",
+        ).model_dump()
+    return HashnodePayload(
+        title=title,
+        subtitle=description,
+        body=body,
+        tags=tags[: hashnode.MAX_TAGS],
+        cover=cover,
     ).model_dump()

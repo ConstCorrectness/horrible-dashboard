@@ -49,6 +49,7 @@
     "codemirror": "^6.0.2",
     "js-yaml": "^4.2.0",
     "katex": "^0.18.5",
+    "lib0": "^0.2.119",
     "mdast-util-gfm-footnote": "^2.1.0",
     "mdast-util-gfm-table": "^2.0.0",
     "mdast-util-gfm-task-list-item": "^2.0.0",
@@ -60,7 +61,10 @@
     "pubnub": "^11.0.2",
     "qrcode.react": "^4.2.0",
     "three": "^0.184.0",
-    "uplot": "^1.6.32"
+    "uplot": "^1.6.32",
+    "y-codemirror.next": "^0.3.6",
+    "y-protocols": "^1.0.7",
+    "yjs": "^13.6.33"
   },
   "peerDependencies": {
     "react": "^19.0.0",

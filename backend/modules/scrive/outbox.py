@@ -279,10 +279,12 @@ def approve(item_id: str, *, acknowledged: bool = False) -> tuple[OutboxItem, bo
     findings = check(item_id)
     if social.blocked(findings, acknowledged):
         return _update(item_id, findings=findings), False
-    payload = item.payload
-    url = social.published_url(item.site, item.page)
-    if url:
-        payload = social.resolve(item.target, payload, url)
+    payload = social.resolve(
+        item.target,
+        item.payload,
+        social.published_url(item.site, item.page),
+        social.site_url(item.site),
+    )
     return (
         _update(
             item_id,

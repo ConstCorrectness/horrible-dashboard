@@ -78,6 +78,16 @@ const ICONS: Record<string, JSX.Element> = {
       <path d="M23 7.2a3 3 0 0 0-2.1-2.1C19 4.6 12 4.6 12 4.6s-7 0-8.9.5A3 3 0 0 0 1 7.2 31 31 0 0 0 .5 12a31 31 0 0 0 .5 4.8 3 3 0 0 0 2.1 2.1c1.9.5 8.9.5 8.9.5s7 0 8.9-.5a3 3 0 0 0 2.1-2.1 31 31 0 0 0 .5-4.8 31 31 0 0 0-.5-4.8zM9.8 15V9l5.8 3z" />
     </svg>
   ),
+  devto: (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">
+      <path d="M3 4.5A1.5 1.5 0 0 1 4.5 3h15A1.5 1.5 0 0 1 21 4.5v15a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 19.5zM6 8.5v7h1.6c1.4 0 2.4-.9 2.4-2.3v-2.4c0-1.4-1-2.3-2.4-2.3zm1.3 1.2h.3c.7 0 1.1.4 1.1 1.1v2.4c0 .7-.4 1.1-1.1 1.1h-.3zm4.3-1.2v7h3v-1.2h-1.7v-1.7h1.5v-1.2h-1.5V9.7h1.7V8.5zm4 0 1.6 7h1.1l1.6-7h-1.3l-.9 4.3-.9-4.3z" />
+    </svg>
+  ),
+  hashnode: (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">
+      <path d="M2.9 9.1a4.2 4.2 0 0 0 0 5.8l6.2 6.2a4.2 4.2 0 0 0 5.8 0l6.2-6.2a4.2 4.2 0 0 0 0-5.8l-6.2-6.2a4.2 4.2 0 0 0-5.8 0zM12 15.2a3.2 3.2 0 1 1 0-6.4 3.2 3.2 0 0 1 0 6.4z" />
+    </svg>
+  ),
   chart: (
     // The `trackers` connector (W&B key + MLflow URI). It rendered as a letter
     // avatar until now, which is what an unknown slug falls back to.

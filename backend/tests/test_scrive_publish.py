@@ -112,6 +112,24 @@ def test_a_site_theme_extends_a_builtin_with_its_own_tokens(site) -> None:
     assert "brand" in {t.id for t in themes.list_themes(site)}
 
 
+def test_a_site_theme_ships_its_own_layouts(client, site) -> None:
+    write(site, "themes/brand/template.json", '{"name": "Brand"}')
+    write(site, "themes/brand/layouts/page.html", "<article>{{{content}}}</article>")
+    write(site, "themes/brand/layouts/base.html", "<html>{{{body}}}</html>")
+    # Only the four known names, and nothing oversized.
+    write(site, "themes/brand/layouts/sidebar.html", "<aside></aside>")
+    write(site, "themes/brand/layouts/home.html", "x" * (themes.MAX_TEMPLATE_BYTES + 1))
+    brand = themes.get_theme(site, "brand")
+    assert brand.templates == {
+        "base": "<html>{{{body}}}</html>",
+        "page": "<article>{{{content}}}</article>",
+    }
+    # The built-ins have none; the client keeps their React layouts.
+    assert themes.get_theme(None, "minimal").templates == {}
+    listed = client.get("/api/scrive/themes", params={"site": site}).json()
+    assert next(t for t in listed if t["id"] == "brand")["templates"]["page"]
+
+
 def test_a_theme_folder_is_never_listed_as_pages(site) -> None:
     write(site, "themes/brand/THEME.md", "# Brand\n")
     assert all(not p.path.startswith("themes/") for p in store.list_pages(site))

@@ -6,11 +6,11 @@ sidebar_label: Scrive
 # Module: scrive
 
 A Notion-like editor over **MyST Markdown files on disk**, and a publisher that puts
-them on GitHub Pages, X, LinkedIn and YouTube. A Scrive *site* is a folder that
+them on GitHub Pages, X, LinkedIn, YouTube, dev.to and Hashnode. A Scrive *site* is a folder that
 [Jupyter Book 2](https://jupyterbook.org) can build, git can track, and any other
 editor can open. Scrive never keeps a second copy of a page anywhere else.
 
-**Status: Phases 0–7 implemented.**
+**Status: Phases 0–8 implemented.**
 
 - Phase 0: sites, pages with revision-checked saves, the on-disk watcher, and the
   shared publishing core.
@@ -36,8 +36,10 @@ editor can open. Scrive never keeps a second copy of a page anywhere else.
   over it, swap the sound, and render for X, YouTube, a page or a GIF with ffmpeg. A
   screen recorder and the 3D scenes' Record button feed it; a render becomes an X or
   YouTube draft.
-
-Later: dev.to and Hashnode targets, PDF export, custom theme layouts.
+- Phase 8: the extras — cross-posting a whole article to dev.to and Hashnode with its
+  canonical URL pointing home, PDF export (printed like the site, or typeset by mystmd
+  and Typst), site themes with their own HTML layout templates, and live co-editing of
+  a page with friends (Yjs over the peer fabric).
 
 - Frontend: `packages/core/src/modules/scrive/`
 - Backend: `backend/modules/scrive/`
@@ -637,10 +639,54 @@ A theme is a folder, after OpenDesign's split:
 | `book` | A table of contents beside every page (home, `pages/`, posts) |
 | `article` | Serif long read; the home page is the article, with numbered sections and equations and the other pages under "More" |
 
-A site's own theme lives in `<site>/themes/<id>/` and **overrides tokens only**: its
-`template.json` names the built-in it `extends`, and its `tokens.css` is appended
-after that built-in's. Custom layouts are code and come later. A `scrive.yml` naming a
-theme that does not exist falls back to `minimal` rather than breaking the site.
+A site's own theme lives in `<site>/themes/<id>/`: its `template.json` names the
+built-in it `extends`, and its `tokens.css` is appended after that built-in's (any CSS
+works there, not only tokens). It may also ship **layouts** (below). A `scrive.yml`
+naming a theme that does not exist falls back to `minimal` rather than breaking the
+site.
+
+### Theme layouts (`site/template.ts`)
+
+A site theme can change the structure of the published site, not only its colours:
+`themes/<id>/layouts/` may hold `page.html`, `home.html`, `list.html` and `base.html`.
+Each one present replaces the built-in layout for that kind of file; the rest keep the
+built-in's React layout. The page body is still drawn by `MystView` and handed to the
+template, so what the Preview shows is still what the page says.
+
+They are **templates, not code**: HTML with a few `{{…}}` tags, filled by a small
+renderer in the client's static build. Nothing in a layout runs while the site is
+built, so a theme the agent wrote cannot reach the app. (Scripts a theme puts *in* the
+page run on the published site, like any site's.)
+
+| Tag | Meaning |
+| --- | --- |
+| `{{ page.title }}` | A value, HTML-escaped |
+| `{{{ content }}}` | A value as HTML — the page body, `head` |
+| `{{#if page.date}}…{{else}}…{{/if}}` | Either branch, by truthiness (`''`, `0`, `null` and an empty list are false) |
+| `{{#unless prev}}…{{/unless}}` | The opposite |
+| `{{#each posts}}…{{else}}…{{/each}}` | Once per item; `{{this}}`, `{{@index}}`, `{{@first}}`, `{{@last}}`. Names look in the item first, then outward |
+| `{{! note }}`, `{{!-- note --}}` | Nothing |
+
+What each file gets (every URL is already relative to the file being written):
+
+| Template | Values |
+| --- | --- |
+| all | `site {title, root, feed, year, layout}`, `head` (Scrive's title, share tags, stylesheet and KaTeX links — use `{{{head}}}`), `css`, `nav [{title, url, current}]`, `toc [{title, links}]` (book layout) |
+| `page.html` | `page {title, showTitle, description, date, minutes, kind, url, hero, tags [{title, url}]}`, `content`, `prev` / `next` `{title, url}` or null |
+| `home.html` | `home {title, showTitle, description}` or null, `content` (the home page's body), `posts` and `pages` as entries `{title, url, date, description, tags}` |
+| `list.html` | `title`, `entries` (a tag's posts), `tags [{title, count, url}]` (the tags index), `tag` |
+| `base.html` | everything above, plus `body`: the output of the template it wraps |
+
+Rules that are quiet if wrong:
+
+- `base.html` wraps **only** what the theme's own templates draw; a built-in page is
+  never put inside it.
+- A template with no `<html>` is a fragment: it gets the document around it (`head`
+  and `<body class="site site-<layout>">`).
+- A malformed template stops the build with its file and line rather than publishing
+  a broken page: `layouts/home.html:4: {{#each}} is never closed`.
+- Files are read only by these four names, and only up to 256 KB each.
+- Jupyter Book mode ignores layouts: Jupyter Book draws the site.
 
 ### The static build (`site/`)
 
@@ -740,7 +786,8 @@ sandboxed page, so the preview opens in the system browser.
 ## The outbox
 
 A page's **Share** pane (`scrive.share`, the page header's "share" button or "Scrive:
-Share page") composes posts about it for X, LinkedIn and YouTube; the **Outbox** pane
+Share page") composes posts about it for X, LinkedIn and YouTube, and cross-posts the
+whole article to dev.to and Hashnode; the **Outbox** pane
 (`scrive.outbox`) lists every post across sites by status. Each post is one row of
 `scrive_outbox` in `app.db` (`outbox.py`):
 
@@ -762,10 +809,52 @@ change a page's `status`.
 | X | `{posts: [{text, media}], link, link_in_reply}` | A thread: each post replies to the one before. The page link goes in a final reply (setting `scrive.x.linkInReply`, default on) or at the end of the first post. Media: up to four images or one video per post, by chunked upload |
 | LinkedIn | `{text, link, title, description, thumbnail}` | A post whose content is an **article link card** — the API cannot publish a LinkedIn Article. The text is escaped for LinkedIn's "little" format; the card image is uploaded first. `LinkedIn-Version` is pinned by `scrive.linkedin.version` |
 | YouTube | `{video, title, description, tags, privacy, publish_at, made_for_kids, synthetic}` | A resumable upload of a video file from the site. `publish_at` schedules on YouTube's side (the video uploads private and goes public then). `synthetic` is YouTube's altered-or-synthetic-media disclosure |
+| dev.to | `{title, body, description, tags, cover, canonical_url, published, series}` | The whole article as dev.to Markdown, one `POST /api/articles` with the key in an `api-key` header. At most four tags, lowercase letters and digits only. `published: false` makes a dev.to draft, finished on dev.to |
+| Hashnode | `{title, subtitle, body, tags, cover, canonical_url}` | The whole article, one GraphQL `publishPost` to the publication chosen when connecting. At most five tags (`{slug, name}`) |
 
-`{{post.url}}` stands for the page's published URL. "New draft" fills a first payload
-from the page's frontmatter (`social.suggest`), with its `##` headings as YouTube
-chapter lines whose times are left to set.
+`{{post.url}}` stands for the page's published URL, and `{{site.url}}` for the
+site's root. "New draft" fills a first payload from the page's frontmatter
+(`social.suggest`), with its `##` headings as YouTube chapter lines whose times are
+left to set.
+
+### Cross-posting the article (`crosspost.py`)
+
+dev.to and Hashnode take the article itself, so a draft is the page converted to the
+platform's Markdown, with `canonical_url` set to `{{post.url}}`: search engines read
+the Pages post as the original and the copy as a copy.
+
+| MyST | dev.to | Hashnode |
+| --- | --- | --- |
+| admonitions (`{note}` …) | blockquote with a bold title | same |
+| `{dropdown}`, `:class: dropdown` | `{% details %}` | `<details>` |
+| `$…$`, `$$…$$`, `{math}` | `{% katex %}` liquid tags | `$…$`, `$$…$$` |
+| `{figure}`, `{image}` | image and an italic caption | same |
+| `{code-cell}`, `{code}` | fenced code; outputs stay on the site | same |
+| `{iframe}` (YouTube…) | `{% embed %}` | `%[url]` |
+| `{r3f}`, `{video}` | a link to the page, or to the file | same |
+| `{tab-set}`, `{card}`, `{grid}` | flattened, labels in bold | same |
+| `(label)=`, `{ref}`, comments, `+++` | dropped; a `{ref}` reads as its heading | same |
+
+Rules that are quiet if wrong:
+
+- **Every site link is absolute.** An image or page link relative to the page means
+  nothing on dev.to, so it becomes `{{site.url}}<path>` (a page: its published
+  folder). Approval fills it from the publish record, as it fills `{{post.url}}`; a
+  cover given as a site path becomes its URL there too.
+- **Code is never rewritten.** Fenced code and inline code spans pass through byte for
+  byte, so a `$` in a shell line is not math. Prices are not math either: MyST's own
+  dollar rule is followed (`$5 and $10` stays text).
+- **What did not carry over is said.** The draft's body opens with an HTML comment
+  listing it (3D scenes became links, outputs stayed home, headings moved down a level
+  because the title is the article's only `h1`). It renders as nothing if left in.
+- Preflight adds: the title and body are present; the tag limits (a hard rule);
+  dev.to's tag normalising; **a file the article shows that is not on the published
+  site** (blocking, acknowledgeable — it would be a broken image with your name on
+  it); a cover that is neither a published site file nor an https URL (hard); MyST
+  syntax left in the body; no canonical URL.
+- Hashnode answers errors with HTTP 200 and an `errors` list: they fail the send with
+  Hashnode's message, as a refusal, never as an unknown outcome. Its token goes bare
+  in `Authorization` — with `Bearer` it silently acts as nobody.
 
 ### Approval
 
@@ -974,6 +1063,79 @@ The agent's `scrive.makeClip` writes an edit list and renders it, waiting up to
 `wait` seconds. It is local work on the site's own files and posts nothing; sharing
 the render is a `scrive.draftSocial` draft like any other.
 
+## PDF export
+
+The page header's **pdf** button exports the page to `<site>/_build/exports/<page>.pdf`
+(`exports.py`), by one of two engines:
+
+| Engine | How | Needs | Looks like |
+| --- | --- | --- | --- |
+| **print** | The page's print build (`site/build.tsx` `buildPrint`, the publisher's own renderer) printed by headless Chromium | Chromium for Playwright, as share cards do | The site: its theme, tokens and layout, chrome hidden by `site.css`'s `@media print` |
+| **typst** | `myst build --typst` on a copy of the page, then Typst | `mystmd` (`npm install -g mystmd`) and Typst (typst.app — not npm, whose build is stale) on `PATH` | A typeset paper: numbered equations and cross-references, in the Typst template's look |
+
+`auto` picks typst when both binaries are there, else print. `scrive.yml` →
+`targets.pdf.template` names a mystmd Typst template.
+
+Rules that are quiet if wrong:
+
+- **Drafts export.** A PDF is for the person holding it, so `isPublic` does not apply
+  (`buildPrint` forces the page in, alone).
+- **The person's files are never touched.** typst works in a temporary folder on a
+  copy of the page — with one `exports:` entry written into the copy's frontmatter —
+  beside copies of only the files the page embeds. print serves the page from memory.
+- **The print page reaches only the site.** Requests to its origin are answered from
+  the build and the site's files; anything else is refused, except the KaTeX
+  stylesheet the page names. A page cannot make an export depend on, or report to, an
+  arbitrary server.
+- **Unsaved edits are saved first**: both engines read the page from disk.
+- **Paper has no clicks.** Before printing, every dropdown is opened, every tab is
+  shown (`site.css` `@media print`), and what the site loads lazily is loaded.
+- **WebGL does not print.** Each 3D scene is waited for until it draws, photographed
+  on screen, and replaced by the picture; any other embed (a video) becomes a link.
+
+## Live co-editing
+
+The page header's **live** button starts a live session: friends who are online can
+be invited, their machines show an invitation (a toast and a **Live** indicator in the
+shell), and joining opens the page in a `scrive.live` pane on their side. Everyone
+types into the same page; edits merge as a CRDT (Yjs), with each person's cursor and
+selection shown in their colour.
+
+```
+ guest browser ⇄ guest node ══ fabric ══▶ host node ⇄ host browser(s) ── Save ──▶ disk
+                                           ║
+ guest browser ⇄ guest node ══ fabric ═════╝
+```
+
+- **The host's machine keeps the page.** Guests edit the host's buffer; the file is
+  written by the host's Save, and autosaved while live (2.5 s after the last change)
+  so a session that ends abruptly loses seconds, not an hour.
+- **A star through the host.** `live.py` relays opaque y-protocols frames (sync and
+  awareness, base64 on the `/ws` `scrive-live` channel and the `scrive_live` fabric
+  message) and does not read them. A guest's machine talks only to the host's; the
+  host's relays each frame to its own browsers and to every other guest, never back to
+  the sender.
+- **Invited by person, delivered by node**, as `network/collab.py` does. Only the
+  invited person's machines that are online are in the room.
+- **Trust, then membership.** A fabric message from an untrusted peer is dropped; a
+  trusted peer's message is accepted only for a room its node is in. Knowing a room's
+  key — random besides — is not permission.
+- **A document is seeded once.** The host pane puts the page into a fresh `Y.Doc`
+  only when no other pane on its machine holds the session; a second pane syncs from
+  the first. A host that comes back after a reload (within a 30 s grace period)
+  reseeds, and the guests drop their copy and resync (`reset`) — two separately
+  seeded documents would merge into the page twice.
+- **Write mode is off while live.** It is a view over the buffer that does not follow
+  edits made under it, so everyone edits the source, beside the preview. A change on
+  disk (an agent's edit, git) reaches the guests as an ordinary edit.
+- **Undo undoes your own typing** (a Yjs undo manager bound to the shared text), not a
+  guest's.
+- **Frames are bounded**: one over 800,000 base64 characters is refused with an error
+  rather than severing the fabric link (1 MiB).
+- On the guest's side the page is not on their machine: images and scenes in its
+  preview do not load, and when the session ends the text stays readable but stops
+  syncing — the banner says it was not saved there.
+
 ## The posts database
 
 `scrive.posts` shows the current site's posts as a **table** (sortable by title,
@@ -1031,6 +1193,9 @@ Mounted at `/api/scrive`:
 | `POST /scrive/sites/{site}/clip/captions?path=` | Start auto-captioning; the cues come back on the job |
 | `GET /scrive/clip-jobs?site=&clip=` · `POST /scrive/clip-jobs/{id}/cancel` | Jobs, newest first; cancel one |
 | `POST /scrive/sites/{site}/clip/draft` | `{path, target}` → an X or YouTube outbox **draft** carrying the render |
+| `GET /scrive/export/status` | Which PDF engines are installed (`myst`, `typst`, and which `auto` picks) |
+| `POST /scrive/sites/{site}/export` | `{page, engine, paper, bundle}` → write the PDF; answers `{path, engine, bytes, seconds, findings, note}`. A missing engine or a failed build is a 422 with the reason |
+| `GET /scrive/sites/{site}/export-file?path=` | An exported PDF, as a download; only files under `_build/exports/` |
 | `POST /scrive/sites/{site}/assets` | Upload a pasted or dropped file (multipart `file`, optional `folder`, default `media`). Media, PDF, glTF, CSV and JSON types only; 512 MB cap; streamed to a temporary file first. **Never overwrites** — a taken name becomes `-2`, `-3`…, since another page may embed the existing file. Answers `{path}` relative to the site |
 
 WS channel `scrive`: `page.changed {site, path, change, revision, origin}` (`origin`
@@ -1043,6 +1208,14 @@ site, clip, status, progress, label, output, cues, findings, error}`).
 
 WS channel `scrive-kernel`: the notebook kernel protocol (`open {site, path}`, `cells`,
 `run_cell`, `run_all`, `interrupt`, …) for a page's shadow notebook.
+
+WS channel `scrive-live` (live co-editing): client → server `host {site, path, title}`,
+`join {key}`, `leave {key}`, `msg {key, data}`, `invite {key, personId}`, `uninvite`,
+`end {key}`, `invitations`; server → client `hosted {key, people, existing}`,
+`joined`, `msg`, `people`, `reset`, `ended`, `error`, `invitations {rooms}`. On the
+`scrive` channel: `live.invited {key, site, path, title, host}` and `live.ended
+{key}`. Between machines: the fabric message `scrive_live` (`op` = `invite`, `msg`,
+`reset`, `end`), dispatched serially.
 
 ## Shared publishing core
 
@@ -1090,10 +1263,15 @@ Notebook publishing benefits from all of this too.
     rolling counts.
   - `scrive.clip` ("Scrive Clip", document, params `{site, path}`): the clip editor;
     with no `path`, the site's clips and videos and the screen recorder.
+  - `scrive.live` ("Scrive Live", document, params `{key, title}`): a page a friend is
+    hosting, edited live.
 - **Shell indicator** `scrive.outlines`: "Outline · to review" while any outline
   waits. The same module-level watcher opens a proposed outline, and a page an agent
   creates, as soon as it appears (`outline-watch.ts`, started once however many
   chrome surfaces mount the indicator).
+- **Shell indicator** `scrive.live`: `Live · <host>` while this machine is invited to a
+  session. It watches invitations without loading Yjs (`live/invites.ts`); a new one
+  also raises a toast with **Join**.
 - **Opening a page** always goes through `openScrivePage(site, path)` in `open.ts`.
   - It focuses the pane that already holds the page.
   - Otherwise it retargets a page pane with no unsaved edits, because the pane
@@ -1135,6 +1313,10 @@ Notebook publishing benefits from all of this too.
 | Screen recording into a clip | ✅ | Where the shell can capture the screen (`media.displayCapture`); not the macOS shell, which has no capture API |
 | Share cards from the theme's template | ✅ with Chromium installed; plainer cards without | same |
 | Live on-disk change detection | ✅ (backend watcher) | ✅ (backend watcher) |
+| Cross-posting to dev.to and Hashnode | ✅ | ✅ |
+| PDF export (print) | ✅ with Chromium installed | same |
+| PDF export (typst) | ✅ with `myst` and `typst` on `PATH` | same |
+| Live co-editing | ✅ with the peer fabric and a trusted friend online | same |
 
 ## Roadmap
 
@@ -1151,8 +1333,13 @@ Each phase ships on its own.
 6. ~~**Outbox and runner,** plus `x`, `linkedin` and `youtube` connectors.~~ Done — see
    [The outbox](#the-outbox).
 7. ~~**Clip editor and GIF maker** (ffmpeg).~~ Done — see [Clips](#clips).
-8. **Later:** dev.to and Hashnode targets (with `canonical_url` back to the Pages
-   post), Typst/PDF export through mystmd, custom theme layouts, multi-user editing.
+8. ~~**Extras:** dev.to and Hashnode, PDF export, theme layouts, live
+   co-editing.~~ Done — see [Cross-posting the article](#cross-posting-the-article-crosspostpy),
+   [PDF export](#pdf-export), [Theme layouts](#theme-layouts-sitetemplatets) and
+   [Live co-editing](#live-co-editing).
+
+Not built: images and scenes in a live guest's preview (they would have to travel over
+the fabric too), Hashnode drafts, and a theme-layout editor in the app.
 
 ## Testing
 
@@ -1176,6 +1363,12 @@ Each phase ships on its own.
 | `backend/tests/test_scrive_media.py` | The exact filtergraph (trim, concat, speed, crop, scale, burned captions, gain); the GIF palette pass; replaced and muted sound; `atempo` chains and the frame-rate cap; unrenderable edit lists refused; crop windows and fitting to a preset; ASS text printed as typed and late cues dropped; speech cut at pauses into short cues; findings; output naming. With real ffmpeg on a generated video: create, list, save, a stale save, render, draft for X and YouTube; a GIF and the cached filmstrip; auto-captions on the output timeline (speech-to-text faked); cancel; a pipe-written WebM remuxed; a page-less draft with no link; `scrive.makeClip` end to end; X preflight refusing a video over 2:20 |
 | `packages/core/src/modules/scrive/__tests__/clip.test.ts` | Source ⇄ output time across segments and speed; split, trim, remove, reorder; the crop window on the backend's own cases; time formatting and parsing; cues placed at the playhead |
 | `packages/core/src/modules/scrive/__tests__/xcount.test.ts` | The composer's X counter, link placement and cost, on the backend's own cases |
+| `backend/tests/test_scrive_crosspost.py` | The converter (liquid tags vs dollar math, details, prices and code left alone, absolute site links, demoted headings, notes); the dev.to draft's tags and canonical URL; approval filling both URLs and the cover; an image not on the site blocking until acknowledged; an unpublished site and a fifth tag as hard rules; the agent drafting a cross-post; dev.to's `api-key` header and article; Hashnode's bare token, publication, tags and cover; a GraphQL error with a 200 failing the send as a refusal; a refused token saying reconnect; choosing a publication by host; a dev.to key checked before it is kept |
+| `backend/tests/test_scrive_export.py` | Export paths and the download route's guard; the copy's single `exports:` entry; a real Chromium print reaching only the site's files, of a draft, leaving the page untouched; print without a build refused; typst through a stand-in `myst` that checks the copy and its files; the install hint without the tools |
+| `backend/tests/test_scrive_live.py` | Between simulated machines: an invitation reaching only the invited machine; edits through the host, never echoed to the sender; a node outside the room not heard; an untrusted peer dropped; ending reaching the guests; a second host pane joining while a reload reseeds and resets the guests; the last host pane ending the session; oversized frames refused |
+| `packages/core/src/modules/scrive/__tests__/template.test.tsx` | Escaping and raw values, if/unless/else, each with scope lookup and `@first`/`@last`, comments with braces, errors naming file and line; a theme's page and base templates in the static build, built-in layouts kept for the rest, fragments wrapped |
+| `packages/core/src/modules/scrive/__tests__/live.test.ts` | The provider over an in-memory relay: a late joiner synced from one exchange, concurrent edits merged, presence and leaving, large frames through base64 |
+| `packages/core/src/modules/scrive/__tests__/site.test.tsx` (print) | `buildPrint`: one page, draft or not, with only its stylesheet |
 | `packages/core/src/modules/scrive/__tests__/` (others) | EOL detection, manifest registration, `mod+s` scoping |
 | `backend/tests/test_scrive_pages.py` (code cells) | The shadow notebook's path and escape guard, the cache read without a kernel, session keys refusing non-pages, nbformat-legal ids |
 | `backend/tests/test_scrive_pages.py` (assets) | Asset serving with its sandbox headers, `/`-rooted paths, escape and `.scrive/`/`.git/` refusals; uploads that never overwrite, refuse unknown types and escapes, and leave no temporary files |

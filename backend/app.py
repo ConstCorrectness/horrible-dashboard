@@ -169,6 +169,7 @@ from backend.modules.scrive import router as scrive_router
 from backend.modules.scrive import watcher as scrive_watcher
 from backend.modules.scrive.runner import runner as scrive_outbox
 from backend.modules.scrive.kernel import handle_scrive_kernel_message, scrive_kernels
+from backend.modules.scrive import live as scrive_live
 from backend.modules.keymap import router as keymap_router
 from backend.modules.notes import router as notes_router
 from backend.modules.plugins import router as plugins_router
@@ -277,6 +278,9 @@ async def lifespan(app: FastAPI):
     # Scrive's outbox: sends approved posts, promotes scheduled ones every 30 s (the
     # repo has no scheduler), and resumes a send a restart cut off.
     scrive_outbox.start()
+    # Live co-editing: Yjs messages between this machine's browsers and the trusted
+    # peers a page is shared with. Registering a handler is all the fabric needs.
+    scrive_live.register()
     # Fill the remote providers' model listings (OpenRouter's catalog, NVIDIA NIM's
     # `/v1/models`) in the background, so the first model dropdown opens filled
     # rather than waiting on a round trip to the other side of the internet. Never
@@ -667,6 +671,8 @@ async def ws(websocket: WebSocket) -> None:
                 await handle_notebook_message(conn, msg)
             elif channel == "scrive-kernel":
                 await handle_scrive_kernel_message(conn, msg)
+            elif channel == scrive_live.CHANNEL:
+                await scrive_live.handle_live_message(conn, msg)
             elif channel == "network":
                 await handle_network_message(conn, msg)
             elif channel == "collab":
@@ -718,6 +724,7 @@ async def ws(websocket: WebSocket) -> None:
         training_kernels.detach(conn)
         notebook_manager.detach(conn)
         scrive_kernels.detach(conn)
+        scrive_live.relay.drop(conn)
         collab_manager.drop(conn)
         chat_manager.drop(conn)
         await hassault_on_disconnect(conn)

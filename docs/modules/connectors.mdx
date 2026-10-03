@@ -455,6 +455,25 @@ pinned port (`oauth.redirect_uri`), because X and LinkedIn match it exactly.
 None of the live endpoints have been exercised from this repository; the tests drive
 the real request code against an `httpx.MockTransport` of each API.
 
+### dev.to and Hashnode
+
+Two **api-key** connectors for the same outbox, which cross-posts a page's whole
+article to them ([Scrive: cross-posting](./scrive.mdx#cross-posting-the-article-crosspostpy)).
+They also unlock no agent tools.
+
+| | dev.to | Hashnode |
+| --- | --- | --- |
+| File | `providers/devto.py` | `providers/hashnode.py` |
+| Credential | A personal API key (Settings → Extensions) | A personal access token (Account settings → Developer), and a **publication** |
+| Sent as | `api-key: <key>` header, REST `POST /api/articles` | `Authorization: <token>` — bare, no `Bearer` — GraphQL at `gql.hashnode.com` |
+| Checked on connect | `GET /api/users/me`; a key that fails is not kept | `me { publications }`; with several, the form's publication host picks one, and its id is stored with the token |
+
+- A blank secret on a reconfigure keeps the stored one (the form cannot prefill a
+  secret). For Hashnode, a new publication host with a blank token re-chooses the
+  publication with the stored token.
+- Hashnode reports errors inside a 200 response. `hashnode.graphql` raises them as
+  `SendError`s; an `UNAUTHENTICATED` or `FORBIDDEN` code is treated like a 401.
+
 ## Agent tools + guides
 
 Connector tools are **backend** `AgentTool`s (`backend/sdk`), not frontend-declared
@@ -525,6 +544,8 @@ had seen.
 
 ## Testing
 
+- `backend/tests/test_scrive_crosspost.py` — dev.to's key check and header, Hashnode's
+  publication choice, bare token and GraphQL errors (with the Scrive outbox).
 - `backend/tests/test_connectors.py` — the tile projection, all three kinds, the
   naming invariant, "a token is never in the payload".
 - `backend/tests/test_connectors_oauth.py` — state/PKCE rejection, the device flow,

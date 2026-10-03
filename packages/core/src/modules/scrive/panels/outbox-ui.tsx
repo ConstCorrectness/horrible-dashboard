@@ -11,6 +11,8 @@ export const TARGET_LABEL: Record<OutboxTarget, string> = {
   x: 'X',
   linkedin: 'LinkedIn',
   youtube: 'YouTube',
+  devto: 'dev.to',
+  hashnode: 'Hashnode',
 };
 
 const MARKS: Record<OutboxTarget, ReactNode> = {
@@ -25,6 +27,19 @@ const MARKS: Record<OutboxTarget, ReactNode> = {
     <>
       <rect x="2.5" y="5" width="19" height="14" rx="4" />
       <path d="M10 9.5v5l4.5-2.5z" />
+    </>
+  ),
+  // Line drawings of the two marks: DEV's letters in a box, Hashnode's ring.
+  devto: (
+    <>
+      <rect x="2.5" y="5" width="19" height="14" rx="2" />
+      <path d="M6.5 9v6h1.2a1.8 1.8 0 0 0 1.8-1.8v-2.4A1.8 1.8 0 0 0 7.7 9zM13.5 9h-2v6h2M11.5 12h1.5M15.5 9l1.5 6 1.5-6" />
+    </>
+  ),
+  hashnode: (
+    <>
+      <path d="M12 2.5l9.5 9.5-9.5 9.5L2.5 12z" />
+      <circle cx="12" cy="12" r="3" />
     </>
   ),
 };

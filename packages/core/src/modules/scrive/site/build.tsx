@@ -17,6 +17,10 @@
  *
  * Which pages go: `isPublic`, the same rule as the backend's jupyter-book mode — a post
  * once its status is `published`, any other page unless its status says otherwise.
+ *
+ * A site theme may ship its own layouts (`themes/<id>/layouts/{page,home,list,base}.html`,
+ * `template.ts`). Each one it has replaces the built-in React layout for that kind of
+ * file; the page body is still `MystView`'s, handed to the template as `{{{content}}}`.
  */
 import katex from 'katex';
 import type { ReactNode } from 'react';
@@ -38,6 +42,7 @@ import { StaticRenderContext, type StaticRender } from '../render/static-context
 import {
   Document,
   EntryList,
+  HeadTags,
   layoutOf,
   PostHeader,
   PrevNext,
@@ -50,6 +55,7 @@ import {
 } from './layouts';
 import { diagramCss, themePalettes } from './palette';
 import siteCss from './site.css?raw';
+import { compileTheme, render, type Template, type TemplateName } from './template';
 import { outputPath, pageDir, relativeUrl, SITE_URL, sitePath, tagDir } from './urls';
 
 export interface SourcePage {
@@ -60,7 +66,8 @@ export interface SourcePage {
 export interface SiteSource {
   id: string;
   title: string;
-  theme: { layout: string; tokens: string };
+  /** `templates`: a site theme's own layouts by name (`page`, `home`, `list`, `base`). */
+  theme: { layout: string; tokens: string; templates?: Record<string, string> };
   pages: SourcePage[];
   /** A page's cached code-cell outputs: page path → `cellKey(source, occurrence)`. */
   cells?: Record<string, Record<string, NbOutput[]>>;
@@ -68,6 +75,8 @@ export interface SiteSource {
   mermaid?: Record<string, string>;
   /** For the footer; defaults to this year. */
   year?: number;
+  /** Pages built whatever their status: a print build exports a draft. */
+  force?: string[];
 }
 
 /** A share card the backend draws (backend/modules/scrive/cards.py). */
@@ -214,12 +223,33 @@ function cardPath(dir: string): string {
   return `_scrive/og/${dir.replace(/\/$/, '').replace(/\//g, '--') || 'index'}.png`;
 }
 
+/** What a theme template gets for one file, beside what every file gets. */
+interface Shape {
+  name: Exclude<TemplateName, 'base'>;
+  data: Record<string, unknown>;
+  content?: ReactNode;
+}
+
+/** An entry list item as a template sees it: URLs resolved for the file being written. */
+function entryData(entry: Entry, url: (path: string) => string) {
+  return {
+    title: entry.title,
+    url: url(entry.path),
+    date: entry.date,
+    description: entry.description,
+    tags: entry.tags.map((t) => ({ title: t.title, url: url(t.path) })),
+  };
+}
+
 export function buildSite(input: SiteSource): SiteBuild {
   const layout: LayoutId = layoutOf(input.theme.layout);
+  // Compiled once; a malformed template stops the build with its file and line.
+  const templates = compileTheme(input.theme.templates);
   const year = input.year ?? new Date().getFullYear();
-  const published = input.pages.filter((p) => isPublic(p.meta));
+  const included = (p: SourcePage) => isPublic(p.meta) || !!input.force?.includes(p.meta.path);
+  const published = input.pages.filter(included);
   const leftOut = input.pages
-    .filter((p) => !isPublic(p.meta))
+    .filter((p) => !included(p))
     .map((p) => ({ path: p.meta.path, title: p.meta.title, status: p.meta.status || 'draft' }));
   const pages = published.map(prepare);
   const bySource = new Map(pages.map((p) => [p.source, p]));
@@ -341,8 +371,14 @@ export function buildSite(input: SiteSource): SiteBuild {
     },
     body: ReactNode,
     absoluteLinks = false,
+    shape?: Shape,
   ) => {
     const url = absoluteLinks ? (to: string) => absolute(to) : (to: string) => relativeUrl(out, to);
+    const template = shape ? templates[shape.name] : undefined;
+    if (shape && template) {
+      files[out] = '<!doctype html>\n' + fromTemplate(template, shape, props, path, url);
+      return;
+    }
     files[out] =
       '<!doctype html>\n' +
       renderToStaticMarkup(
@@ -365,6 +401,52 @@ export function buildSite(input: SiteSource): SiteBuild {
           {body}
         </Document>,
       );
+  };
+
+  /** A file drawn by the theme's own template (`template.ts`). */
+  const fromTemplate = (
+    template: Template,
+    shape: Shape,
+    props: {
+      title: string;
+      description: string;
+      type: 'website' | 'article';
+      image: string;
+      date?: string;
+      math?: boolean;
+    },
+    path: string,
+    url: (path: string) => string,
+  ): string => {
+    const head = renderToStaticMarkup(
+      <HeadTags
+        siteTitle={input.title}
+        title={props.title}
+        description={props.description}
+        url={url}
+        canonical={absolute(path)}
+        image={props.image}
+        type={props.type}
+        date={props.date}
+        katexCss={props.math ? KATEX_CSS : undefined}
+      />,
+    );
+    const link = (l: NavLink) => ({ title: l.title, url: url(l.path), current: l.path === path });
+    const context: Record<string, unknown> = {
+      site: { title: input.title, root: url(''), feed: url('feed.xml'), year, layout },
+      head,
+      css: url('_scrive/site.css'),
+      nav: nav.map(link),
+      toc: (toc ?? []).map((g) => ({ title: g.title, links: g.links.map(link) })),
+      ...shape.data,
+      content: shape.content ? renderToStaticMarkup(shape.content) : '',
+    };
+    let html = render(template, context);
+    if (templates.base) html = render(templates.base, { ...context, body: html });
+    // A template may be a fragment: give it the document around it.
+    if (!/<html[\s>]/i.test(html))
+      html = `<html lang="en"><head>${head}</head><body class="site site-${layout}">${html}</body></html>`;
+    return html;
   };
 
   const content = (page: Prepared) => (
@@ -420,6 +502,29 @@ export function buildSite(input: SiteSource): SiteBuild {
           />
         )}
       </article>,
+      false,
+      {
+        name: 'page',
+        content: content(page),
+        data: {
+          page: {
+            title: page.title,
+            showTitle: !page.ownTitle,
+            description: page.description,
+            date: page.date,
+            minutes: page.minutes,
+            kind: page.kind,
+            url: url(page.dir),
+            hero: page.thumbnail ? relativeUrl(page.out, page.thumbnail) : '',
+            tags: tagLinks(page.tags).map((t) => ({ title: t.title, url: url(t.path) })),
+          },
+          prev: at > 0 ? { title: posts[at - 1].title, url: url(posts[at - 1].dir) } : null,
+          next:
+            at >= 0 && at < posts.length - 1
+              ? { title: posts[at + 1].title, url: url(posts[at + 1].dir) }
+              : null,
+        },
+      },
     );
   }
 
@@ -479,6 +584,22 @@ export function buildSite(input: SiteSource): SiteBuild {
         {lists}
         {!home && !lists.length && <p className="site-empty">Nothing published yet.</p>}
       </>,
+      false,
+      {
+        name: 'home',
+        content: home ? content(home) : undefined,
+        data: {
+          home: home
+            ? {
+                title: home.title,
+                showTitle: !home.ownTitle,
+                description: home.description,
+              }
+            : null,
+          posts: posts.map((p) => entryData(entry(p), url)),
+          pages: others.map((p) => entryData(entry(p), url)),
+        },
+      },
     );
   }
 
@@ -498,6 +619,19 @@ export function buildSite(input: SiteSource): SiteBuild {
           url={(to) => relativeUrl('tags/index.html', to)}
         />
       </Section>,
+      false,
+      {
+        name: 'list',
+        data: {
+          title: 'Tags',
+          entries: [],
+          tags: tags.map((t) => ({
+            title: t,
+            count: tagIndex.get(t)?.length ?? 0,
+            url: relativeUrl('tags/index.html', tagDir(t)),
+          })),
+        },
+      },
     );
     for (const tag of tags) {
       const out = `${tagDir(tag)}index.html`;
@@ -511,6 +645,18 @@ export function buildSite(input: SiteSource): SiteBuild {
             url={(to) => relativeUrl(out, to)}
           />
         </Section>,
+        false,
+        {
+          name: 'list',
+          data: {
+            title: `Tagged “${tag}”`,
+            tag,
+            entries: (tagIndex.get(tag) ?? []).map((p) =>
+              entryData(entry(p), (to) => relativeUrl(out, to)),
+            ),
+            tags: [],
+          },
+        },
       );
     }
   }
@@ -588,5 +734,26 @@ export function buildSite(input: SiteSource): SiteBuild {
     cards,
     pages: pages.map((p) => p.source),
     leftOut,
+  };
+}
+
+/**
+ * One page for print (the PDF export's print engine): the same document the site
+ * publishes, with the site's print rules (`site.css` `@media print`) hiding its chrome.
+ * The page is built whatever its status — a PDF is for the person holding it — and
+ * nothing else is: the result holds the page's file and the stylesheet.
+ */
+export function buildPrint(input: SiteSource, path: string): SiteBuild {
+  const page = input.pages.find((p) => p.meta.path === path);
+  if (!page) throw new Error(`no page ${path}`);
+  const build = buildSite({ ...input, pages: [page], force: [path] });
+  const out = outputPath(path);
+  return {
+    files: { [out]: build.files[out], '_scrive/site.css': build.files['_scrive/site.css'] },
+    assets: build.assets,
+    scenes: build.scenes,
+    cards: [],
+    pages: [path],
+    leftOut: [],
   };
 }

@@ -11,6 +11,7 @@ import type { ModuleManifest } from '../../registry';
 import { createPage } from './api';
 import {
   CLIP_VIEW,
+  LIVE_VIEW,
   openClip,
   openPublish,
   openScrivePage,
@@ -21,6 +22,7 @@ import {
   SHARE_VIEW,
 } from './open';
 import { OUTLINE_VIEW } from './outline-watch';
+import { LiveIndicator } from './panels/LiveIndicator';
 import { OutlineIndicator } from './panels/OutlineIndicator';
 import { getCurrentSite, getPageController, requestGenerate, type PageMode } from './state';
 
@@ -33,6 +35,7 @@ const PublishPanel = lazyPane(() => import('./panels/PublishPanel'), 'PublishPan
 const SharePanel = lazyPane(() => import('./panels/SharePanel'), 'SharePanel');
 const OutboxPanel = lazyPane(() => import('./panels/OutboxPanel'), 'OutboxPanel');
 const ClipPanel = lazyPane(() => import('./panels/ClipPanel'), 'ClipPanel');
+const LivePanel = lazyPane(() => import('./panels/LivePanel'), 'LivePanel');
 
 const SITES_VIEW = 'scrive.sites';
 const POSTS_VIEW = 'scrive.posts';
@@ -222,9 +225,22 @@ export const scriveModule: ModuleManifest = {
       role: 'document',
       icon: '🪶',
     },
+    {
+      // A page a friend is hosting, edited live (params: {key, title}). Opened from
+      // their invitation; the page itself stays on their machine.
+      id: LIVE_VIEW,
+      title: 'Scrive Live',
+      component: LivePanel,
+      role: 'document',
+      icon: '🪶',
+    },
   ],
   // An outline the agent proposed waits on a person; it must not get lost.
-  shellIndicators: [{ id: 'scrive.outlines', component: OutlineIndicator }],
+  shellIndicators: [
+    { id: 'scrive.outlines', component: OutlineIndicator },
+    // An invitation to edit a friend's page live arrives with no pane open.
+    { id: 'scrive.live', component: LiveIndicator },
+  ],
   commands: [
     { id: 'scrive.open', title: 'Scrive: Open sites', run: () => void openPane(SITES_VIEW) },
     { id: 'scrive.newPost', title: 'Scrive: New post', run: newPost },

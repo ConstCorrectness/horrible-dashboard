@@ -29,7 +29,7 @@
  * the page — saving first, so the agent reads what is on screen.
  */
 import { markdown } from '@codemirror/lang-markdown';
-import { EditorState } from '@codemirror/state';
+import { Compartment, EditorState } from '@codemirror/state';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { EditorView } from '@codemirror/view';
 import { basicSetup } from 'codemirror';
@@ -62,6 +62,17 @@ import { selectionPrompt } from '../prompts';
 import { PageAgentContext } from '../render/page-agent';
 import { registerPageController, type PageMode } from '../state';
 import { usePageCells } from '../render/CellOutputs';
+import {
+  collabExtension,
+  hostPage,
+  invite,
+  onRoom,
+  presenceOf,
+  uninvite,
+  type HostedSession,
+} from '../live/session';
+import { ExportStrip } from './ExportStrip';
+import { LiveStrip, type HostLiveState } from './LiveStrip';
 import { PreviewCanvas, type Device } from './PreviewCanvas';
 import '../scrive.css';
 
@@ -77,6 +88,26 @@ export function PagePanel() {
 }
 
 const MODES: PageMode[] = ['write', 'source', 'split', 'preview'];
+/** While live, unsaved changes (yours and theirs) are written this long after the last. */
+const LIVE_AUTOSAVE_MS = 2500;
+
+/** The smallest change that turns `current` into `next`, or null when they agree. */
+function minimalChange(
+  current: string,
+  next: string,
+): { from: number; to: number; insert: string } | null {
+  if (current === next) return null;
+  let start = 0;
+  while (start < current.length && start < next.length && current[start] === next[start]) start++;
+  let end = 0;
+  while (
+    end < current.length - start &&
+    end < next.length - start &&
+    current[current.length - 1 - end] === next[next.length - 1 - end]
+  )
+    end++;
+  return { from: start, to: current.length - end, insert: next.slice(start, next.length - end) };
+}
 // TipTap loads with the first Write view, not with the pane.
 const WriteView = lazy(() => import('../editor/WriteView').then((m) => ({ default: m.WriteView })));
 const DEVICES: Device[] = ['phone', 'tablet', 'desktop'];
@@ -138,15 +169,32 @@ function PageEditor({ site, path }: { site: string; path: string }) {
     setReviewState(next);
   }, []);
   const [findings, setFindings] = useState<Finding[] | null>(null);
+  const [exporting, setExporting] = useState(false);
+  // Live co-editing (this machine hosts): the shared document is bound into the
+  // editor through a compartment, so going live and back never rebuilds the view.
+  const liveCompartment = useRef(new Compartment());
+  const hostedRef = useRef<HostedSession | null>(null);
+  const liveOffRef = useRef<(() => void) | null>(null);
+  const [live, setLive] = useState<HostLiveState | null>(null);
+  const [liveOpen, setLiveOpen] = useState(false);
+  const [liveBusy, setLiveBusy] = useState(false);
+  const [liveError, setLiveError] = useState<string | null>(null);
   /** What is selected, for the agent's view of this pane. */
   const selectionRef = useRef('');
   const writable = path.endsWith('.md');
-  const modes = writable ? MODES : MODES.filter((m) => m !== 'write');
+  // Write mode is a view over the buffer that does not follow edits made under it, so
+  // it is off while others are typing into the same buffer.
+  const modes = writable && !live ? MODES : MODES.filter((m) => m !== 'write');
   const [storedMode, setModeState] = useState<PageMode>(() =>
     remembered('scrive.pageMode', MODES, 'write'),
   );
   // A notebook has no Write; it opens as the page a reader sees.
-  const mode: PageMode = storedMode === 'write' && !writable ? 'preview' : storedMode;
+  const mode: PageMode =
+    storedMode === 'write' && !writable
+      ? 'preview'
+      : storedMode === 'write' && live
+        ? 'split'
+        : storedMode;
   /** Bumped when the buffer is replaced from disk: Write re-opens from the new text. */
   const [writeKey, setWriteKey] = useState(0);
   const writeFlushRef = useRef<(() => void) | null>(null);
@@ -208,6 +256,20 @@ function PageEditor({ site, path }: { site: string; path: string }) {
     (page: Page) => {
       const host = hostRef.current;
       if (!host) return;
+      if (hostedRef.current && viewRef.current) {
+        // Live: the view is bound to the shared document. Apply the disk's text as an
+        // edit (it reaches the guests like any other) instead of rebuilding the view.
+        const change = minimalChange(viewRef.current.state.doc.toString(), page.content);
+        programmaticRef.current = true;
+        if (change) viewRef.current.dispatch({ changes: change });
+        programmaticRef.current = false;
+        revisionRef.current = page.meta.revision;
+        setPreviewText(page.content);
+        setMeta(page.meta);
+        setDirty(false);
+        setBanner(null);
+        return;
+      }
       viewRef.current?.destroy();
       viewRef.current = new EditorView({
         parent: host,
@@ -219,6 +281,7 @@ function PageEditor({ site, path }: { site: string; path: string }) {
             markdown(),
             EditorView.lineWrapping,
             EditorState.lineSeparator.of(detectEol(page.content)),
+            liveCompartment.current.of([]),
             EditorView.updateListener.of((u) => {
               if (u.docChanged) {
                 if (!programmaticRef.current) setDirty(true);
@@ -305,25 +368,71 @@ function PageEditor({ site, path }: { site: string; path: string }) {
   const applyText = useCallback((text: string) => {
     const view = viewRef.current;
     if (!view) return;
-    const current = view.state.doc.toString();
-    if (current === text) return;
-    let start = 0;
-    while (start < current.length && start < text.length && current[start] === text[start]) start++;
-    let end = 0;
-    while (
-      end < current.length - start &&
-      end < text.length - start &&
-      current[current.length - 1 - end] === text[text.length - 1 - end]
-    )
-      end++;
-    view.dispatch({
-      changes: {
-        from: start,
-        to: current.length - end,
-        insert: text.slice(start, text.length - end),
-      },
-    });
+    const change = minimalChange(view.state.doc.toString(), text);
+    if (change) view.dispatch({ changes: change });
   }, []);
+
+  const stopLive = useCallback((end: boolean) => {
+    const session = hostedRef.current;
+    if (!session) return;
+    hostedRef.current = null;
+    liveOffRef.current?.();
+    liveOffRef.current = null;
+    viewRef.current?.dispatch({ effects: liveCompartment.current.reconfigure([]) });
+    session.destroy(end);
+    setLive(null);
+  }, []);
+
+  const startLive = useCallback(async () => {
+    const view = viewRef.current;
+    if (!view || hostedRef.current) return;
+    setLiveBusy(true);
+    setLiveError(null);
+    try {
+      writeFlushRef.current?.();
+      const session = await hostPage(site, path, meta?.title ?? path, () =>
+        view.state.doc.toString(),
+      );
+      const current = viewRef.current;
+      if (!current) {
+        session.destroy(false);
+        return;
+      }
+      if (session.joined) {
+        // Another pane here hosts this page: take its text (it may hold edits not
+        // saved yet), as an ordinary edit so this pane knows it is unsaved.
+        const change = minimalChange(current.state.doc.toString(), session.text.toString());
+        if (change) current.dispatch({ changes: change });
+      }
+      current.dispatch({
+        effects: liveCompartment.current.reconfigure(
+          collabExtension(session.text, session.provider),
+        ),
+      });
+      hostedRef.current = session;
+      const presence = () =>
+        setLive((l) => (l ? { ...l, presence: presenceOf(session.provider) } : l));
+      session.provider.awareness.on('change', presence);
+      const offRoom = onRoom(session.key, {
+        people: (people) => setLive((l) => (l ? { ...l, people } : l)),
+        error: (message) => setLiveError(message),
+        ended: () => stopLive(false),
+      });
+      liveOffRef.current = () => {
+        offRoom();
+        session.provider.awareness.off('change', presence);
+      };
+      setLive({ key: session.key, people: session.people, presence: presenceOf(session.provider) });
+    } catch (e) {
+      setLiveError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLiveBusy(false);
+    }
+  }, [site, path, meta, stopLive]);
+
+  // Leaving the page (or closing the pane) leaves the session; the relay ends it if
+  // this was the last pane here holding it.
+  useEffect(() => () => stopLive(false), [site, path, stopLive]);
 
   const save = useCallback(async () => {
     writeFlushRef.current?.();
@@ -476,6 +585,14 @@ function PageEditor({ site, path }: { site: string; path: string }) {
     return registerPageController(instanceId, { save, setMode, saveAsTemplate: saveTemplate });
   }, [instanceId, save, setMode, saveTemplate]);
 
+  // While live, what the guests type is unsaved here until someone saves: keep the
+  // file current so a session that ends abruptly loses at most a few seconds.
+  useEffect(() => {
+    if (!live || !dirty || saving || banner) return;
+    const timer = setTimeout(() => void save(), LIVE_AUTOSAVE_MS);
+    return () => clearTimeout(timer);
+  }, [live, dirty, saving, banner, save]);
+
   const keepMine = useCallback(() => {
     if (banner?.kind === 'changed') {
       // The next save overwrites the disk version on purpose.
@@ -606,12 +723,32 @@ function PageEditor({ site, path }: { site: string; path: string }) {
             <button
               type="button"
               className="scrive-seg-btn"
-              title="Draft an X thread, a LinkedIn post or a YouTube upload about this page"
+              title="Draft an X thread, a LinkedIn post or a YouTube upload about this page, or cross-post it to dev.to or Hashnode"
               onClick={() => openShare(site, path)}
             >
               share
             </button>
           )}
+          {writable && (
+            <button
+              type="button"
+              className="scrive-seg-btn"
+              title="Edit this page live with friends: changes merge as you both type"
+              aria-pressed={liveOpen || !!live}
+              onClick={() => setLiveOpen((x) => !x)}
+            >
+              {live ? `live · ${live.presence.length}` : 'live'}
+            </button>
+          )}
+          <button
+            type="button"
+            className="scrive-seg-btn"
+            title="Export the page as a PDF: printed like the site, or typeset with Typst"
+            aria-pressed={exporting}
+            onClick={() => setExporting((x) => !x)}
+          >
+            pdf
+          </button>
           <div className="scrive-seg" role="group" aria-label="Mode">
             {modes.map((m) => (
               <button
@@ -742,6 +879,30 @@ function PageEditor({ site, path }: { site: string; path: string }) {
             </button>
           ))}
         </div>
+      )}
+
+      {liveOpen && (
+        <LiveStrip
+          live={live}
+          busy={liveBusy}
+          error={liveError}
+          onStart={() => void startLive()}
+          onEnd={() => stopLive(true)}
+          onInvite={(personId) => live && invite(live.key, personId)}
+          onUninvite={(personId) => live && uninvite(live.key, personId)}
+          onClose={() => setLiveOpen(false)}
+        />
+      )}
+
+      {exporting && (
+        <ExportStrip
+          site={site}
+          path={path}
+          beforeExport={async () => {
+            if (dirty) await save();
+          }}
+          onClose={() => setExporting(false)}
+        />
       )}
 
       {error && (

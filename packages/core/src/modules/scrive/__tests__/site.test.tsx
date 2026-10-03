@@ -12,7 +12,14 @@ import { mystParse } from 'myst-parser';
 import { describe, expect, it } from 'vitest';
 
 import type { PageMeta } from '../api';
-import { buildSite, cellKey, isPublic, siteStylesheet, type SourcePage } from '../site/build';
+import {
+  buildPrint,
+  buildSite,
+  cellKey,
+  isPublic,
+  siteStylesheet,
+  type SourcePage,
+} from '../site/build';
 import { diagramCss, mermaidVariables, themePalettes } from '../site/palette';
 import { outputPath, pageDir, relativeUrl, SITE_URL, sitePath, tagDir } from '../site/urls';
 
@@ -258,6 +265,34 @@ describe('buildSite', () => {
     expect(css).toContain('.scrive-page');
     expect(css).toContain('.site-entry');
     expect(css).not.toContain('@import');
+  });
+});
+
+describe('buildPrint', () => {
+  const source = {
+    id: 'blog',
+    title: 'Field Notes',
+    theme: { layout: 'minimal', tokens: tokens('minimal') },
+    year: 2026,
+    pages: [
+      page('posts/draft.md', POST, { title: 'Draft', status: 'draft', kind: 'post' as const }),
+    ],
+  };
+
+  it('builds the one page, draft or not, with only its stylesheet beside it', () => {
+    const build = buildPrint(source, 'posts/draft.md');
+    expect(Object.keys(build.files).sort()).toEqual(['_scrive/site.css', 'posts/draft/index.html']);
+    expect(build.files['posts/draft/index.html']).toContain('First.');
+    expect(build.assets).toContain('media/plot.png');
+    expect(build.scenes).toEqual(['scenes/orbit.tsx']);
+    expect(build.cards).toEqual([]);
+  });
+
+  it('leaves the site chrome to the print stylesheet', () => {
+    // The page is the published document; `@media print` in site.css hides the rest.
+    const html = buildPrint(source, 'posts/draft.md').files['posts/draft/index.html'];
+    expect(html).toContain('class="site-header"');
+    expect(html).toContain('href="../../_scrive/site.css"');
   });
 });
 

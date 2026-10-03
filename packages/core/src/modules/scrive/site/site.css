@@ -557,3 +557,77 @@ body.site {
   transform: translateY(-50%);
   color: var(--text-dim);
 }
+
+/* --- print ---------------------------------------------------------------------
+ * A reader printing a page, and Scrive's own PDF export (`exports.py`, print
+ * engine), get the article alone: no site chrome, the full page width, and no block
+ * split across a page break where that can be avoided. */
+
+@media print {
+  .site-header,
+  .site-footer,
+  .site-toc,
+  .site-skip,
+  .site-prevnext,
+  .site-tags {
+    display: none !important;
+  }
+
+  body.site {
+    font-size: 11pt;
+  }
+
+  .site-frame,
+  .site-book .site-frame {
+    display: block;
+    max-width: none;
+    padding: 0;
+  }
+
+  .site-entry {
+    animation: none;
+  }
+
+  .site-post h1,
+  .site-post h2,
+  .site-post h3,
+  .site-post h4 {
+    break-after: avoid;
+  }
+
+  .site-post pre,
+  .site-post figure,
+  .site-post table,
+  .site-post blockquote,
+  .site-post .katex-display {
+    break-inside: avoid;
+  }
+
+  .site-post a[href^='http'] {
+    text-decoration: underline;
+  }
+
+  /* An embed cannot play on paper: the PDF export swaps it for a link, which needs
+   * no 16:9 box around it. */
+  .scrive-embed {
+    aspect-ratio: auto;
+    background: none;
+  }
+
+  /* Paper cannot switch tabs: every tab, its label above its panel. */
+  .scrive-tabs-static {
+    display: block;
+  }
+
+  .scrive-tabs-static .scrive-tab {
+    display: block;
+    border: none;
+    font-weight: 700;
+    padding: 0.5em 0 0.25em;
+  }
+
+  .scrive-tabs-static .scrive-tab-panel {
+    display: block;
+    border-top: none;
+  }
+}

@@ -700,19 +700,26 @@ def register_agent_tools() -> None:
             name="scrive.draftSocial",
             description=(
                 "Draft a post about a page for X (a thread), LinkedIn (a link card) or "
-                "YouTube (a video from the site) into Scrive's outbox. Drafts only: a "
-                "person approves and sends. Omit `payload` for a first draft from the "
-                "page's frontmatter. Payloads — x: {posts: [{text, media: [site paths]}], "
-                "link}; linkedin: {text, link, title, description, thumbnail}; youtube: "
-                "{video, title, description, tags, privacy}. `{{post.url}}` stands for "
-                "the page's published URL."
+                "YouTube (a video from the site), or a cross-post of the whole article to "
+                "dev.to or Hashnode, into Scrive's outbox. Drafts only: a person approves "
+                "and sends. Omit `payload` for a first draft from the page (for dev.to "
+                "and Hashnode: the page converted to their Markdown, canonical URL set). "
+                "Payloads — x: {posts: [{text, media: [site paths]}], link}; linkedin: "
+                "{text, link, title, description, thumbnail}; youtube: {video, title, "
+                "description, tags, privacy}; devto: {title, body, description, tags, "
+                "cover, canonical_url, published}; hashnode: {title, subtitle, body, "
+                "tags, cover, canonical_url}. `{{post.url}}` stands for the page's "
+                "published URL, `{{site.url}}` for the site's."
             ),
             handler=draft_social,
             group="scrive",
             parameters={
                 "site": _SITE,
                 "page": _PATH,
-                "target": {"type": "string", "enum": ["x", "linkedin", "youtube"]},
+                "target": {
+                    "type": "string",
+                    "enum": ["x", "linkedin", "youtube", "devto", "hashnode"],
+                },
                 "payload": {"type": "object"},
                 "note": {
                     "type": "string",

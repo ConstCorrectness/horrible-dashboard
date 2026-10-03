@@ -14,9 +14,15 @@ and optionally `og.html`, the share-card template (`cards.py`); without one the 
 `builtin_themes/og.html` is used.
 
 Built-ins live in `builtin_themes/<id>/`. A site's own theme lives in
-`<site>/themes/<id>/` and **overrides tokens only**: its `template.json` names the
-built-in it `extends` (default `minimal`), and its `tokens.css` is appended after that
-built-in's, so it only has to say what differs. Custom layouts are code, and come later.
+`<site>/themes/<id>/`: its `template.json` names the built-in it `extends` (default
+`minimal`), and its `tokens.css` is appended after that built-in's, so it only has to
+say what differs (any CSS works there, not only tokens).
+
+A site theme may also ship **layouts**: `layouts/page.html`, `home.html`, `list.html`
+and `base.html`, HTML with `{{…}}` tags that the client's static build fills in
+(`site/template.ts`). Each one present replaces the built-in layout for that kind of
+file; the rest keep the built-in's. They are templates, not code: nothing in them runs
+while the site is built.
 """
 
 from __future__ import annotations
@@ -25,7 +31,7 @@ import json
 import re
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.modules.scrive import store
 
@@ -34,6 +40,10 @@ SITE_DIR = "themes"
 LAYOUTS = ("minimal", "tactical", "book", "article")
 DEFAULT_THEME = "minimal"
 _ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+LAYOUTS_DIR = "layouts"
+TEMPLATE_NAMES = ("base", "page", "home", "list")
+#: A layout is a page of HTML, not a bundle: anything larger is a mistake.
+MAX_TEMPLATE_BYTES = 256 * 1024
 
 
 class ThemeInfo(BaseModel):
@@ -46,6 +56,8 @@ class ThemeInfo(BaseModel):
     tokens: str = ""
     #: THEME.md — the brand and voice guide for whoever writes for the site.
     guide: str = ""
+    #: A site theme's own layout templates by name (`page`, `home`, `list`, `base`).
+    templates: dict[str, str] = Field(default_factory=dict)
 
 
 class ThemeError(ValueError):
@@ -82,6 +94,18 @@ def _builtin(theme_id: str) -> ThemeInfo | None:
     )
 
 
+def _templates(folder: Path) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for name in TEMPLATE_NAMES:
+        path = folder / LAYOUTS_DIR / f"{name}.html"
+        try:
+            if path.is_file() and path.stat().st_size <= MAX_TEMPLATE_BYTES:
+                out[name] = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+    return out
+
+
 def _site_theme(base: Path, theme_id: str) -> ThemeInfo | None:
     folder = base / SITE_DIR / theme_id
     if not _ID.match(theme_id) or not folder.is_dir():
@@ -102,6 +126,7 @@ def _site_theme(base: Path, theme_id: str) -> ThemeInfo | None:
         if own_tokens
         else parent.tokens,
         guide=_read(folder / "THEME.md") or parent.guide,
+        templates=_templates(folder),
     )
 
 

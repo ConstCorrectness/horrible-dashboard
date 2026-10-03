@@ -20,6 +20,7 @@ from backend import extras
 from backend.modules.scrive import (
     clips,
     critique,
+    exports,
     kernel,
     media,
     outbox,
@@ -387,6 +388,39 @@ def built_file(site: str, path: str = "") -> FileResponse:
             "allow-popups-to-escape-sandbox",
             "X-Content-Type-Options": "nosniff",
         },
+    )
+
+
+@router.get("/export/status", response_model=exports.ExportStatus)
+def export_status() -> exports.ExportStatus:
+    """Which PDF engines this machine has (typst needs mystmd and Typst on PATH)."""
+    return exports.status()
+
+
+@router.post("/sites/{site}/export", response_model=exports.ExportOutcome)
+async def export_page(site: str, body: exports.ExportRequest) -> exports.ExportOutcome:
+    """Write the page as a PDF to `<site>/_build/exports/`. Drafts export too: the
+    file is for the person, not the published site."""
+    _call(lambda: store.site_dir(site))
+    try:
+        return await asyncio.to_thread(exports.export, site, body)
+    except exports.ExportError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except (store.StoreError, PublishError, themes.ThemeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(404, f"not found: {exc}") from exc
+
+
+@router.get("/sites/{site}/export-file")
+def export_file(site: str, path: str = Query(...)) -> FileResponse:
+    """An exported PDF, as a download."""
+    resolved = _call(lambda: exports.export_file(site, path))
+    return FileResponse(
+        resolved,
+        media_type="application/pdf",
+        filename=resolved.name,
+        headers={"Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff"},
     )
 
 

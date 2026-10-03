@@ -317,6 +317,20 @@ span.scrive-db-sort {
   background: var(--bg-raised);
 }
 
+.scrive-export-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-top: 2px solid var(--accent);
+}
+
+.scrive-export-note {
+  margin: 0;
+  padding: 0 var(--space-3) var(--space-2);
+}
+
 .scrive-findings .scrive-row[data-severity='error'] {
   border-left-color: var(--danger);
 }
@@ -792,6 +806,14 @@ span.scrive-db-sort {
   text-transform: none;
 }
 
+/* A cross-post's body is Markdown source: read and edited as code. */
+.scrive-share-article {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.85em;
+  line-height: 1.5;
+  tab-size: 2;
+}
+
 .scrive-share-check {
   display: flex;
   align-items: center;
@@ -1188,5 +1210,121 @@ span.scrive-db-sort {
   .scrive-clip-segments li,
   .scrive-clip-rec {
     animation: none;
+  }
+}
+
+/* ── live co-editing ─────────────────────────────────────────────────────────── */
+
+/* Who is in the page: a chip each, edged in their cursor's colour. */
+.scrive-live-people {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.scrive-live-people .scrive-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  text-transform: none;
+  color: var(--text);
+}
+
+/* Each person's cursor colour, as their cursor shows it in the editor. */
+.scrive-live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.scrive-live-invite {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  padding: 0 var(--space-3) var(--space-2);
+}
+
+button.scrive-live-person {
+  height: 22px;
+  background: transparent;
+  cursor: pointer;
+  text-transform: none;
+}
+
+button.scrive-live-person[aria-pressed='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* The guest's pane: source beside preview, under a header. */
+.scrive-live {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  /* Narrow panes stack source over preview (the query below). */
+  container-type: inline-size;
+}
+
+.scrive-live-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+}
+
+.scrive-live-bar > :first-child {
+  flex: 1 1 14rem;
+}
+
+.scrive-live-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scrive-live-banner {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  border-left: 2px solid var(--warn);
+  background: var(--bg-raised);
+}
+
+.scrive-live-banner[data-tone='danger'] {
+  border-left-color: var(--danger);
+  color: var(--danger);
+}
+
+.scrive-live-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.scrive-live-source,
+.scrive-live-preview {
+  min-height: 0;
+  overflow: auto;
+}
+
+.scrive-live-source {
+  border-right: 1px solid var(--border);
+}
+
+@container (max-width: 640px) {
+  .scrive-live-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
   }
 }

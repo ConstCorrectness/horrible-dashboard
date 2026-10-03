@@ -10,12 +10,14 @@ from __future__ import annotations
 # google_sync is imported for the side effect of its `register_handler` call — the
 # library module does the same thing with its queue_handlers.
 from backend.modules.connectors.providers import (  # noqa: F401
+    devto,
     drive_fs,
     github,
     github_tools,
     google,
     google_sync,
     google_tools,
+    hashnode,
     huggingface,
     huggingface_tools,
     linkedin,
@@ -39,11 +41,13 @@ def register_connectors() -> None:
         google.build(),
         huggingface.build(),
         nvidia.build(),
-        # Scrive's outbox sends through these three; they unlock no agent tools —
-        # no agent can post, only draft (see backend/modules/scrive/outbox.py).
+        # Scrive's outbox sends through these; they unlock no agent tools — no
+        # agent can post, only draft (see backend/modules/scrive/outbox.py).
         x.build(),
         linkedin.build(),
         youtube.build(),
+        devto.build(),
+        hashnode.build(),
         streaming.connector(),
     ):
         registry.connectors[connector.id] = connector

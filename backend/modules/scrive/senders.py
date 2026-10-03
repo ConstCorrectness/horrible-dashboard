@@ -22,7 +22,7 @@ import mimetypes
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from backend.modules.connectors.providers import linkedin, x, youtube
+from backend.modules.connectors.providers import devto, hashnode, linkedin, x, youtube
 from backend.modules.connectors.providers.social_http import SendError
 from backend.modules.scrive import outbox, social, store
 
@@ -70,9 +70,14 @@ async def _read(path: Any, offset: int, size: int) -> bytes:
 
 
 async def _post_step(
-    job: Job, name: str, label: str, request: Callable[[], Awaitable[str]]
+    job: Job,
+    name: str,
+    label: str,
+    request: Callable[[], Awaitable[str | tuple[str, str]]],
 ) -> str:
-    """Run a non-repeatable post once, recording its outcome (see the module docstring)."""
+    """Run a non-repeatable post once, recording its outcome (see the module docstring).
+    A request may answer `(id, url)` when the platform names the URL; the step keeps
+    it, so a resumed send still knows where the post is."""
     step = job.step(name)
     if step.get("status") == "done":
         return str(step.get("id") or "")
@@ -85,7 +90,7 @@ async def _post_step(
         )
     job.save(name, "running", kind="post")
     try:
-        new_id = await request()
+        answer = await request()
     except SendError as exc:
         if exc.status is None:
             job.save(name, "unknown", kind="post")
@@ -95,7 +100,12 @@ async def _post_step(
             ) from exc
         job.save(name, "pending", kind="post")
         raise
-    job.save(name, "done", kind="post", id=new_id)
+    if isinstance(answer, tuple):
+        new_id, url = answer
+        job.save(name, "done", kind="post", id=new_id, url=url)
+    else:
+        new_id = answer
+        job.save(name, "done", kind="post", id=new_id)
     return new_id
 
 
@@ -240,8 +250,62 @@ async def send_youtube(job: Job) -> tuple[str, str]:
     return video_id, youtube.video_url(video_id)
 
 
+# --- dev.to and Hashnode ----------------------------------------------------------------
+# One call each, and the call is the post: whatever the article shows is already on the
+# published site (approval filled in the URLs), so there is nothing to upload.
+
+
+async def send_devto(job: Job) -> tuple[str, str]:
+    payload = social.DevtoPayload.model_validate(job.item.payload)
+    article: dict[str, Any] = {
+        "title": payload.title,
+        "body_markdown": payload.body,
+        "published": payload.published,
+        "tags": payload.tags,
+    }
+    for key, value in (
+        ("description", payload.description),
+        ("main_image", payload.cover),
+        ("canonical_url", payload.canonical_url),
+        ("series", payload.series),
+    ):
+        if value.strip():
+            article[key] = value.strip()
+    await job.progress("posting the article", None)
+    article_id = await _post_step(
+        job, "post", "the dev.to article", lambda: devto.create_article(article)
+    )
+    return article_id, str(job.step("post").get("url") or "")
+
+
+async def send_hashnode(job: Job) -> tuple[str, str]:
+    payload = social.HashnodePayload.model_validate(job.item.payload)
+    post: dict[str, Any] = {
+        "title": payload.title,
+        "contentMarkdown": payload.body,
+        "tags": [
+            {"slug": hashnode.tag_slug(t), "name": t}
+            for t in payload.tags
+            if hashnode.tag_slug(t)
+        ],
+    }
+    if payload.subtitle.strip():
+        post["subtitle"] = payload.subtitle.strip()
+    if payload.canonical_url.strip():
+        post["originalArticleURL"] = payload.canonical_url.strip()
+    if payload.cover.strip():
+        post["coverImageOptions"] = {"coverImageURL": payload.cover.strip()}
+    await job.progress("publishing the article", None)
+    post_id = await _post_step(
+        job, "post", "the Hashnode article", lambda: hashnode.publish_post(post)
+    )
+    return post_id, str(job.step("post").get("url") or "")
+
+
 SENDERS: dict[str, Callable[[Job], Awaitable[tuple[str, str]]]] = {
     "x": send_x,
     "linkedin": send_linkedin,
     "youtube": send_youtube,
+    "devto": send_devto,
+    "hashnode": send_hashnode,
 }
