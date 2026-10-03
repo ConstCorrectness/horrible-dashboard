@@ -1,0 +1,717 @@
+/* KaTeX's own layout (subscripts, fractions). Imported here, not left to the
+ * notebook's stylesheet: a Scrive page may be the first math the app draws. */
+@import 'katex/dist/katex.min.css';
+
+/*
+ * A Scrive page's *content*: readable prose, not the pane chrome's uppercase
+ * tactical type. Everything reads `--scrive-page-*` tokens that default to the app
+ * theme, so a site theme (Phase 5) re-skins a page by overriding tokens, and the
+ * preview follows the app's light/dark theme until then.
+ */
+
+.scrive-page {
+  --scrive-page-text: var(--text);
+  --scrive-page-muted: var(--text-dim);
+  --scrive-page-accent: var(--accent);
+  --scrive-page-rule: var(--border);
+  --scrive-page-surface: var(--bg-raised);
+  --scrive-page-inset: var(--bg-inset, var(--bg-secondary));
+  --scrive-page-measure: 72ch;
+  --scrive-page-font: inherit;
+  --scrive-page-size: 15px;
+
+  max-width: var(--scrive-page-measure);
+  margin: 0 auto;
+  color: var(--scrive-page-text);
+  font-family: var(--scrive-page-font);
+  font-size: var(--scrive-page-size);
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.scrive-page h1,
+.scrive-page h2,
+.scrive-page h3,
+.scrive-page h4,
+.scrive-page h5,
+.scrive-page h6 {
+  line-height: 1.25;
+  margin: 1.6em 0 0.5em;
+  font-weight: 650;
+  color: var(--text-strong, var(--scrive-page-text));
+}
+
+.scrive-page h1 {
+  font-size: 1.9em;
+  letter-spacing: -0.01em;
+}
+.scrive-page h2 {
+  font-size: 1.45em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--scrive-page-rule);
+}
+.scrive-page h3 {
+  font-size: 1.2em;
+}
+.scrive-page h4 {
+  font-size: 1.05em;
+}
+
+.scrive-page p,
+.scrive-page ul,
+.scrive-page ol,
+.scrive-page dl,
+.scrive-page blockquote,
+.scrive-page figure,
+.scrive-page .scrive-code,
+.scrive-page .scrive-table,
+.scrive-page .scrive-math {
+  margin: 0 0 1em;
+}
+
+.scrive-page a {
+  color: var(--scrive-page-accent);
+  text-underline-offset: 0.15em;
+}
+
+.scrive-page code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  padding: 0.05em 0.3em;
+  background: var(--scrive-page-inset);
+}
+
+.scrive-page ul,
+.scrive-page ol {
+  padding-left: 1.5em;
+}
+
+.scrive-page li + li {
+  margin-top: 0.2em;
+}
+
+.scrive-page li.scrive-task {
+  list-style: none;
+  margin-left: -1.4em;
+}
+
+.scrive-page li.scrive-task > input {
+  margin: 0 0.5em 0 0;
+  vertical-align: -0.1em;
+}
+
+.scrive-page blockquote {
+  padding: 0.1em 1em;
+  border-left: 2px solid var(--scrive-page-rule);
+  color: var(--scrive-page-muted);
+}
+
+.scrive-page hr {
+  border: 0;
+  border-top: 1px solid var(--scrive-page-rule);
+  margin: 2em 0;
+}
+
+.scrive-page img,
+.scrive-page video {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+.scrive-page dt {
+  font-weight: 650;
+}
+
+.scrive-page dd {
+  margin: 0 0 0.6em 1.5em;
+}
+
+/* --- code ------------------------------------------------------------------ */
+
+.scrive-code {
+  background: var(--scrive-page-inset);
+  border-top: 2px solid var(--scrive-page-rule);
+}
+
+.scrive-code-label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro, 11px);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--scrive-page-muted);
+  padding: 0.35rem 0.8rem 0;
+}
+
+.scrive-code pre {
+  margin: 0;
+  padding: 0.6rem 0.8rem 0.8rem;
+  overflow-x: auto;
+  font-size: 0.85em;
+  line-height: 1.5;
+}
+
+.scrive-code pre code {
+  padding: 0;
+  background: none;
+  font-size: inherit;
+}
+
+/* Syntax colours from theme tokens, so code follows the app (and later the site) theme. */
+.scrive-code .tok-keyword,
+.scrive-code .tok-modifier,
+.scrive-code .tok-controlKeyword,
+.scrive-code .tok-operatorKeyword {
+  color: var(--accent);
+}
+.scrive-code .tok-string,
+.scrive-code .tok-regexp {
+  color: var(--success);
+}
+.scrive-code .tok-number,
+.scrive-code .tok-bool,
+.scrive-code .tok-atom {
+  color: var(--warn);
+}
+.scrive-code .tok-comment,
+.scrive-code .tok-lineComment,
+.scrive-code .tok-blockComment {
+  color: var(--text-dim);
+  font-style: italic;
+}
+.scrive-code .tok-definition,
+.scrive-code .tok-function,
+.scrive-code .tok-className,
+.scrive-code .tok-typeName {
+  color: var(--text-strong, var(--text));
+  font-weight: 600;
+}
+
+/* --- math, tables, figures ------------------------------------------------- */
+
+.scrive-math {
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+}
+
+.scrive-table {
+  overflow-x: auto;
+}
+
+.scrive-table table {
+  border-collapse: collapse;
+  min-width: 50%;
+}
+
+.scrive-table th,
+.scrive-table td {
+  padding: 0.35em 0.8em;
+  border-bottom: 1px solid var(--scrive-page-rule);
+  text-align: left;
+}
+
+.scrive-table th {
+  font-weight: 650;
+  border-bottom-width: 2px;
+}
+
+.scrive-figure {
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.scrive-figure figcaption,
+.scrive-mermaid figcaption {
+  margin-top: 0.4em;
+  font-size: 0.9em;
+  color: var(--scrive-page-muted);
+}
+
+.scrive-mermaid {
+  margin: 0 0 1em;
+  text-align: center;
+}
+
+.scrive-mermaid.is-loading {
+  min-height: 6rem;
+  background: var(--scrive-page-inset);
+}
+
+.scrive-mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.scrive-embed {
+  aspect-ratio: 16 / 9;
+  margin: 0 0 1em;
+  background: var(--scrive-page-inset);
+}
+
+.scrive-embed iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+/* A 3D scene's slot until the sandboxed renderer lands (Phase 3): a plain inset
+ * surface with the accent rule, sized to the scene's declared height. */
+/* A 3D scene: the sandboxed frame, and a bar for its label, status and tools. */
+.scrive-scene {
+  margin: 0 0 1em;
+  border: 1px solid var(--scrive-page-rule);
+  border-top: 2px solid var(--scrive-page-accent);
+  background: var(--scrive-page-inset);
+}
+
+.scrive-scene iframe {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: transparent;
+}
+
+.scrive-scene-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5em 0.75em;
+  padding: 0.35rem 0.6rem;
+  border-top: 1px solid var(--scrive-page-rule);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--scrive-page-muted);
+}
+
+.scrive-scene-status {
+  flex: 1;
+  min-width: 0;
+}
+
+.scrive-scene[data-status='error'] .scrive-scene-status,
+.scrive-scene-error {
+  color: var(--danger);
+}
+
+.scrive-scene-error,
+.scrive-scene-note {
+  padding: 0.35rem 0.6rem;
+}
+
+.scrive-scene-tools {
+  display: inline-flex;
+  gap: 0.4em;
+}
+
+.scrive-scene-tweaks {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: 0.4em 1em;
+  padding: 0.5rem 0.6rem;
+  border-top: 1px solid var(--scrive-page-rule);
+}
+
+.scrive-scene-tweak {
+  display: grid;
+  grid-template-columns: 7rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5em;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+}
+
+/* --- admonitions ---------------------------------------------------------- */
+
+.scrive-admonition {
+  margin: 0 0 1em;
+  padding: 0.6em 0.9em;
+  border-left: 2px solid var(--scrive-page-accent);
+  background: var(--scrive-page-surface);
+}
+
+.scrive-admonition.is-warning,
+.scrive-admonition.is-caution,
+.scrive-admonition.is-attention {
+  border-left-color: var(--warn);
+}
+
+.scrive-admonition.is-danger,
+.scrive-admonition.is-error {
+  border-left-color: var(--danger);
+}
+
+.scrive-admonition.is-tip,
+.scrive-admonition.is-hint,
+.scrive-admonition.is-seealso {
+  border-left-color: var(--success);
+}
+
+.scrive-admonition-title {
+  font-size: 0.78em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--scrive-page-muted);
+  margin-bottom: 0.3em;
+}
+
+details.scrive-admonition > summary {
+  cursor: pointer;
+}
+
+.scrive-admonition-body > :last-child {
+  margin-bottom: 0;
+}
+
+.scrive-details {
+  margin: 0 0 1em;
+  padding: 0.4em 0.9em;
+  border: 1px solid var(--scrive-page-rule);
+}
+
+.scrive-details > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+/* --- layout directives ---------------------------------------------------- */
+
+.scrive-grid {
+  display: grid;
+  gap: 0.8em;
+  margin: 0 0 1em;
+}
+
+.scrive-card {
+  padding: 0.7em 0.9em;
+  border: 1px solid var(--scrive-page-rule);
+  border-top: 2px solid var(--scrive-page-accent);
+  background: var(--scrive-page-surface);
+}
+
+.scrive-card > :last-child {
+  margin-bottom: 0;
+}
+
+.scrive-card-title,
+.scrive-tab-solo-title {
+  font-weight: 650;
+  margin-bottom: 0.3em;
+}
+
+.scrive-tabs {
+  margin: 0 0 1em;
+  border: 1px solid var(--scrive-page-rule);
+}
+
+.scrive-tab-strip {
+  display: flex;
+  border-bottom: 1px solid var(--scrive-page-rule);
+}
+
+.scrive-tab {
+  min-height: 0;
+  padding: 0.35rem 0.9rem;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--scrive-page-muted);
+  font: inherit;
+  font-size: 0.9em;
+  cursor: pointer;
+}
+
+.scrive-tab[aria-selected='true'] {
+  color: var(--scrive-page-text);
+  border-bottom-color: var(--scrive-page-accent);
+}
+
+.scrive-tab-panel {
+  padding: 0.7em 0.9em 0.1em;
+}
+
+/* A published page's tabs work without script: a radio per tab, and the panel
+ * after the checked one is the one shown. The labels sit in a row above, the
+ * panels (order 1, full width) below them. */
+.scrive-tabs-static {
+  display: flex;
+  flex-wrap: wrap;
+  position: relative;
+}
+
+.scrive-tabs-static .scrive-tab-radio {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.scrive-tabs-static .scrive-tab-panel {
+  order: 1;
+  width: 100%;
+  display: none;
+  border-top: 1px solid var(--scrive-page-rule);
+}
+
+.scrive-tabs-static .scrive-tab-radio:checked + .scrive-tab {
+  color: var(--scrive-page-text);
+  border-bottom-color: var(--scrive-page-accent);
+}
+
+.scrive-tabs-static .scrive-tab-radio:focus-visible + .scrive-tab {
+  outline: 2px solid var(--scrive-page-accent);
+  outline-offset: -2px;
+}
+
+.scrive-tabs-static .scrive-tab-radio:checked + .scrive-tab + .scrive-tab-panel {
+  display: block;
+}
+
+/* --- raw, html, footnotes ------------------------------------------------- */
+
+.scrive-raw {
+  margin: 0 0 1em;
+  border: 1px dashed var(--scrive-page-rule);
+}
+
+.scrive-raw figcaption {
+  padding: 0.3rem 0.7rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro, 11px);
+  color: var(--scrive-page-muted);
+  border-bottom: 1px dashed var(--scrive-page-rule);
+}
+
+.scrive-raw pre {
+  margin: 0;
+  padding: 0.5rem 0.7rem;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  white-space: pre-wrap;
+}
+
+.scrive-raw-detail {
+  opacity: 0.8;
+}
+
+.scrive-raw-inline {
+  border: 1px dashed var(--scrive-page-rule);
+}
+
+.scrive-fnref a {
+  text-decoration: none;
+}
+
+.scrive-footnotes {
+  margin-top: 2.5em;
+  padding-top: 0.6em;
+  border-top: 1px solid var(--scrive-page-rule);
+  font-size: 0.9em;
+  color: var(--scrive-page-muted);
+}
+
+.scrive-footnotes li > p {
+  display: inline;
+}
+
+.scrive-fnback {
+  display: inline-flex;
+  vertical-align: middle;
+}
+
+/* --- the preview's own affordances ---------------------------------------- */
+
+.scrive-page .scrive-block[data-line] {
+  cursor: text;
+}
+
+.scrive-page .scrive-target {
+  display: block;
+  position: relative;
+  top: -1rem;
+}
+
+/* --- page header (from frontmatter) ---------------------------------------- */
+
+.scrive-page-header {
+  margin-bottom: 2em;
+}
+
+.scrive-page .scrive-page-title {
+  margin: 0 0 0.3em;
+  font-size: 2.2em;
+}
+
+.scrive-page-byline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6em;
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  color: var(--scrive-page-muted);
+}
+
+.scrive-page-tag::before {
+  content: '#';
+  opacity: 0.6;
+}
+
+.scrive-page-description {
+  margin: 0.8em 0 0;
+  font-size: 1.1em;
+  color: var(--scrive-page-muted);
+}
+
+/* --- code cells --------------------------------------------------------- */
+
+.scrive-cell {
+  margin: 1em 0;
+  border: 1px solid var(--scrive-page-rule);
+  border-top: 2px solid var(--scrive-page-accent);
+  background: var(--scrive-page-inset);
+}
+
+.scrive-cell > .scrive-code {
+  margin: 0;
+  border: 0;
+}
+
+.scrive-cell-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75em;
+  padding: 0.25em 0.6em;
+  border-bottom: 1px solid var(--scrive-page-rule);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--scrive-page-muted);
+}
+
+.scrive-cell-bar .scrive-code-label {
+  padding: 0;
+  border: 0;
+}
+
+.scrive-cell-state {
+  margin-left: auto;
+}
+
+.scrive-cell-state[data-state='running'],
+.scrive-cell-state[data-state='queued'] {
+  color: var(--scrive-page-accent);
+}
+
+.scrive-cell-state[data-state='error'] {
+  color: var(--danger);
+}
+
+/* A classed button: compact, not the 30px control. */
+.scrive-cell-run {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  min-height: 0;
+  height: 22px;
+  padding: 0 0.6em;
+  border: 1px solid var(--scrive-page-rule);
+  background: transparent;
+  color: var(--scrive-page-text);
+  font: inherit;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.scrive-cell-run:hover {
+  border-color: var(--scrive-page-accent);
+  color: var(--scrive-page-accent);
+}
+
+.scrive-cell-outputs {
+  padding: 0.5em 0.75em;
+  border-top: 1px solid var(--scrive-page-rule);
+  background: var(--scrive-page-surface);
+  overflow-x: auto;
+}
+
+.scrive-cell-outputs .nb-output-media img {
+  max-width: 100%;
+}
+
+.scrive-cell-outputs table {
+  border-collapse: collapse;
+  font-size: 0.85em;
+}
+
+.scrive-cell-outputs th,
+.scrive-cell-outputs td {
+  border: 1px solid var(--scrive-page-rule);
+  padding: 0.2em 0.5em;
+}
+
+/* In the editor the source is a field. */
+.scrive-cell textarea.scrive-cell-source {
+  display: block;
+  width: 100%;
+  margin: 0;
+  border: 0;
+  border-top: 0;
+  background: transparent;
+  resize: vertical;
+  min-height: 0;
+  font-size: 0.88em;
+  line-height: 1.55;
+  padding: 0.6em 0.75em;
+  tab-size: 4;
+}
+
+/* A {pending} placeholder: a section still to write. Dashed, so it can never be
+   mistaken for content; its intent reads as a note, not as prose. */
+.scrive-pending {
+  margin: 1em 0;
+  padding: 0.55em 0.85em 0.7em;
+  border: 1px dashed color-mix(in srgb, var(--scrive-page-accent) 55%, var(--scrive-page-rule));
+  background: color-mix(in srgb, var(--scrive-page-accent) 5%, transparent);
+}
+
+.scrive-pending-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75em;
+  margin-bottom: 0.25em;
+}
+
+.scrive-pending-intent {
+  color: var(--scrive-page-muted);
+  white-space: pre-wrap;
+  font-size: 0.94em;
+}
+
+.scrive-pending-ask {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  min-height: 0;
+  padding: 0.05em 0.6em;
+  border: 1px solid var(--scrive-page-accent);
+  background: transparent;
+  color: var(--scrive-page-accent);
+  cursor: pointer;
+}
+
+.scrive-pending-ask:hover {
+  background: color-mix(in srgb, var(--scrive-page-accent) 14%, transparent);
+}
+
+/* Blocks the agent's last edit changed, until the person keeps or undoes it. */
+.scrive-agent-changed {
+  --scrive-agent-tint: color-mix(in srgb, var(--scrive-page-accent) 7%, transparent);
+  background: var(--scrive-agent-tint);
+  /* The tint reaches 12px into the margin, and a 2px rule sits beyond it — clear of
+     the text, so it never reads as a caret. The first shadow paints on top. */
+  box-shadow:
+    -12px 0 0 0 var(--scrive-agent-tint),
+    -14px 0 0 0 var(--scrive-page-accent);
+  transition: background 400ms ease-out;
+}

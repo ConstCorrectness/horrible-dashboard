@@ -1,0 +1,5 @@
+{
+  "name": "Minimal",
+  "description": "A quiet blog: one readable column, a dated post list, nothing else.",
+  "layout": "minimal"
+}

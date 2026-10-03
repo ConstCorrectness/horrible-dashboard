@@ -21,8 +21,9 @@ import {
   openPaneInArea,
   openToolInDock,
   roleOf,
+  setDesktopMode,
 } from '../controller';
-import { collectAreas, findPaneAnywhere } from '../model';
+import { collectAreas, findPaneAnywhere, listPanes } from '../model';
 import { seedFromPreset, type FramePreset } from '../presets';
 import { layoutStore } from '../store';
 
@@ -258,6 +259,20 @@ describe('openPane', () => {
     expect(openPane('t.doc')).toBe('t.doc#0');
     const panes = collectAreas(layoutStore.getSnapshot().frame.center).flatMap((a) => a.tabs);
     expect(panes.filter((p) => p.viewId === 't.doc')).toHaveLength(1);
+  });
+});
+
+describe('a singleton tool on a floating desktop', () => {
+  it('is focused on a second open, not duplicated into a second window', () => {
+    // `openPane` windows a docked tool on a floating desktop, so the second open
+    // must find it in its window — looking only in the docks opened a twin.
+    setDesktopMode('floating');
+    const first = openPane('t.tool');
+    expect(openPane('t.tool')).toBe(first);
+    const tools = listPanes(layoutStore.getSnapshot().frame).filter(
+      (p) => p.pane.viewId === 't.tool',
+    );
+    expect(tools).toHaveLength(1);
   });
 });
 

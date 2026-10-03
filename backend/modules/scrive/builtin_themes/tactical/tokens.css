@@ -1,0 +1,38 @@
+/* Tactical: dark first, amber accent, a faint grid behind everything. */
+:root {
+  color-scheme: dark light;
+  --bg: #0d0f12;
+  --bg-raised: #141820;
+  --bg-inset: #10141a;
+  --text: #d5dbe3;
+  --text-strong: #f3f6fa;
+  --text-dim: #7d8896;
+  --accent: #f0a23b;
+  --border: #232a34;
+  --grid: rgba(125, 136, 150, 0.07);
+  --danger: #ff6b5b;
+  --warn: #f0c03b;
+  --success: #3fd08a;
+  --font-body: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-display: var(--font-body);
+  --font-mono: ui-monospace, 'Cascadia Code', 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+  --site-width: 60rem;
+  --page-size: 16px;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f2f3f0;
+    --bg-raised: #ffffff;
+    --bg-inset: #e9eae6;
+    --text: #1a1e23;
+    --text-strong: #07090b;
+    --text-dim: #5d6672;
+    --accent: #b8650c;
+    --border: #d4d7d1;
+    --grid: rgba(26, 30, 35, 0.05);
+    --danger: #c0321f;
+    --warn: #9a6b00;
+    --success: #1d7a4c;
+  }
+}

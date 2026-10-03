@@ -417,6 +417,21 @@ function targetAreaFor(): string | null {
  * redirects where the pane ends up.
  */
 export function openPane(viewId: string, opts?: OpenPaneOptions): string | null {
+  // A tool routed to its dock is moved into a window below, so on a floating desktop
+  // the dock lookup in `openToolInDock` can never find it again and every second
+  // open of a singleton tool used to add a twin window. Focus the windowed one.
+  const windowed = floatingSingletonTool(viewId, opts);
+  if (windowed) {
+    if (opts?.params) {
+      layoutStore.dispatch({
+        type: 'SET_PANE_PARAMS',
+        instanceId: windowed.pane.instanceId,
+        params: opts.params,
+      });
+    }
+    focusInstance(windowed);
+    return windowed.pane.instanceId;
+  }
   const instanceId = openPaneRouted(viewId, opts);
   if (instanceId && frame().mode === 'floating' && !windowOfInstance(frame(), instanceId)) {
     // Back where you last left it, rather than onto the cascade. A pane snapped
@@ -433,6 +448,14 @@ export function openPane(viewId: string, opts?: OpenPaneOptions): string | null 
     if (placement?.snap) snapWindow(instanceId, placement.snap);
   }
   return instanceId;
+}
+
+function floatingSingletonTool(viewId: string, opts?: OpenPaneOptions): LocatedPane | null {
+  const f = frame();
+  if (f.mode !== 'floating' || opts?.instanceId || roleOf(viewId) !== 'tool') return null;
+  const panel = registry.panels.find((p) => p.id === viewId);
+  if (panel && !panel.singleton) return null;
+  return listPanes(f).find((p) => p.pane.viewId === viewId && p.location.kind === 'window') ?? null;
 }
 
 function openPaneRouted(viewId: string, opts?: OpenPaneOptions): string | null {

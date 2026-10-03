@@ -89,6 +89,7 @@ export {
   type BrowserCdpEvent,
   type BrowserWebviewEvent,
   type ResizeEdge,
+  type WebviewBounds,
   type WindowControl,
 } from './window';
 export {
@@ -97,6 +98,17 @@ export {
   subscribeFullscreen,
   toggleAppFullscreen,
 } from './fullscreen';
+export {
+  canZoom,
+  currentZoom,
+  installZoom,
+  resetZoom,
+  setZoom,
+  subscribeZoom,
+  zoomIn,
+  zoomOut,
+  ZOOM_LEVELS,
+} from './zoom';
 export {
   loadPlugins,
   pluginLoadErrors,
@@ -442,6 +454,7 @@ export { trainingModule } from './modules/training';
 export { datasetsModule } from './modules/datasets';
 export { localtrackModule } from './modules/localtrack';
 export { notebookModule } from './modules/notebook';
+export { scriveModule } from './modules/scrive';
 export { visualizerModule } from './modules/visualizer';
 export { flowModule } from './modules/flow';
 export { gamesModule } from './modules/games';

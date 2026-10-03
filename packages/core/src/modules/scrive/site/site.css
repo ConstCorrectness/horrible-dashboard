@@ -1,0 +1,559 @@
+/*
+ * A published Scrive site's chrome: header, lists, the four layouts. Written into
+ * `_scrive/site.css` after the theme's tokens and `render/page.css`, never loaded by
+ * the app. Every colour and font is a theme token (`--bg`, `--accent`, `--font-body`…),
+ * so a theme is its `tokens.css` and this file does not change between themes.
+ */
+
+/* What a site theme's tokens.css may leave out. `:where` has no specificity, so the
+ * theme's own `:root` values (written earlier in the file) still win. */
+:where(:root) {
+  --font-body: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-display: var(--font-body);
+  --page-size: 16px;
+  --site-width: 44rem;
+  --grid: transparent;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body.site {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: var(--page-size, 16px);
+  line-height: 1.6;
+}
+
+.site a {
+  color: var(--accent);
+  text-underline-offset: 0.15em;
+}
+
+.site-skip {
+  position: absolute;
+  left: -9999px;
+}
+
+.site-skip:focus {
+  left: 16px;
+  top: 8px;
+  z-index: 1;
+  padding: 6px 10px;
+  background: var(--bg-raised);
+}
+
+.site-meta {
+  font-family: var(--font-mono);
+  font-size: 0.78em;
+  color: var(--text-dim);
+}
+
+/* --- header and footer ------------------------------------------------------ */
+
+.site-header {
+  border-bottom: 1px solid var(--border);
+}
+
+.site-header-inner,
+.site-frame,
+.site-footer {
+  max-width: var(--site-width, 44rem);
+  margin: 0 auto;
+  padding-left: 20px;
+  padding-right: 20px;
+}
+
+.site-header-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 24px;
+  padding-top: 18px;
+  padding-bottom: 18px;
+}
+
+.site-brand {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.05em;
+  color: var(--text-strong) !important;
+  text-decoration: none;
+}
+
+.site-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  font-size: 0.92em;
+}
+
+.site-nav a {
+  color: var(--text-dim);
+  text-decoration: none;
+}
+
+.site-nav a:hover,
+.site-nav a[aria-current] {
+  color: var(--text-strong);
+}
+
+.site-frame {
+  padding-top: 36px;
+  padding-bottom: 72px;
+}
+
+.site-main {
+  min-width: 0;
+}
+
+.site-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  padding-top: 22px;
+  padding-bottom: 48px;
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 0.85em;
+}
+
+.site-footer a {
+  color: var(--text-dim);
+}
+
+/* The page's content: the layout sets the width, not page.css's measure. */
+.site .scrive-page {
+  --scrive-page-size: 1em;
+  --scrive-page-measure: none;
+  max-width: none;
+}
+
+/* --- a post's header ---------------------------------------------------------- */
+
+.site-post-head {
+  margin-bottom: 2.2em;
+}
+
+.site-title {
+  margin: 0.2em 0 0.3em;
+  font-family: var(--font-display);
+  font-size: clamp(1.9em, 5vw, 2.6em);
+  line-height: 1.12;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+}
+
+.site-lede {
+  margin: 0 0 0.8em;
+  font-size: 1.15em;
+  color: var(--text-dim);
+}
+
+.site-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0.6em 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.site-tags a {
+  display: inline-block;
+  padding: 1px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 0.76em;
+  text-decoration: none;
+}
+
+.site-tags a:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.site-hero {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 0 0 2em;
+  border-radius: 6px;
+}
+
+/* --- lists of pages ------------------------------------------------------------ */
+
+.site-section {
+  margin-top: 3em;
+}
+
+.site-section:first-child {
+  margin-top: 0;
+}
+
+.site-section-title {
+  margin: 0 0 0.9em;
+  font-family: var(--font-mono);
+  font-size: 0.78em;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.site-entries {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.site-entry {
+  display: grid;
+  grid-template-columns: 7.5em minmax(0, 1fr);
+  gap: 0.15em 1.2em;
+  padding: 1em 0;
+  border-top: 1px solid var(--border);
+  animation: site-rise 0.4s ease both;
+  /* Capped: a long archive must not take seconds to arrive. */
+  animation-delay: calc(min(var(--i, 0), 8) * 40ms);
+}
+
+.site-entry > .site-meta {
+  grid-row: 1 / span 3;
+  padding-top: 0.25em;
+}
+
+.site-entry-title {
+  font-weight: 650;
+  font-size: 1.1em;
+  color: var(--text-strong) !important;
+  text-decoration: none;
+}
+
+.site-entry-title:hover {
+  color: var(--accent) !important;
+}
+
+.site-entry-desc {
+  margin: 0;
+  color: var(--text-dim);
+}
+
+.site-entry .site-tags {
+  margin-top: 0.3em;
+}
+
+.site-prevnext {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 4em;
+  padding-top: 1.4em;
+  border-top: 1px solid var(--border);
+}
+
+.site-prevnext a {
+  display: block;
+  text-decoration: none;
+  color: var(--text-strong);
+}
+
+.site-prevnext .site-meta {
+  display: block;
+  margin-bottom: 0.2em;
+}
+
+.site-prevnext .is-next {
+  grid-column: 2;
+  text-align: right;
+}
+
+.site-empty {
+  color: var(--text-dim);
+}
+
+@keyframes site-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .site-entry {
+    animation: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .site-entry {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .site-entry > .site-meta {
+    grid-row: auto;
+  }
+}
+
+/* --- code-cell outputs (the notebook's own stylesheet is not published) ------- */
+
+.site .nb-output-text,
+.site .nb-output-stream,
+.site .nb-output-error {
+  margin: 0;
+  padding: 0.5em 0.8em;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+.site .nb-output-error {
+  color: var(--danger);
+}
+
+.site .nb-output-media img,
+.site .nb-output-media svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.site .nb-output-html {
+  overflow-x: auto;
+}
+
+/* --- tactical: the dashboard's own look ---------------------------------------- */
+
+.site-tactical {
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.site-tactical .site-header {
+  border-top: 2px solid var(--accent);
+  border-bottom-color: var(--border);
+  background: var(--bg);
+}
+
+.site-tactical .site-brand,
+.site-tactical .site-nav a {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+
+.site-tactical .site-nav a {
+  font-size: 0.78em;
+}
+
+.site-tactical .site-title,
+.site-tactical .scrive-page h1,
+.site-tactical .scrive-page h2,
+.site-tactical .scrive-page h3 {
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+
+.site-tactical .site-title {
+  letter-spacing: 0.06em;
+  font-weight: 800;
+}
+
+.site-tactical .scrive-page h2 {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.site-tactical .scrive-page h2::before {
+  content: '';
+  display: block;
+  width: 32px;
+  height: 2px;
+  margin-bottom: 0.6em;
+  background: var(--accent);
+}
+
+.site-tactical .site-entries {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  gap: 14px;
+}
+
+.site-tactical .site-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45em;
+  padding: 16px 18px 20px;
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+  background: var(--bg-raised);
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%);
+}
+
+.site-tactical .site-entry-title {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.site-tactical .site-tags a {
+  border-radius: 0;
+}
+
+.site-tactical .scrive-code,
+.site-tactical .scrive-table,
+.site-tactical .scrive-cell,
+.site-tactical .scrive-scene {
+  border-top: 2px solid var(--accent);
+}
+
+/* --- book: a table of contents beside every page -------------------------------- */
+
+.site-book .site-frame {
+  display: grid;
+  grid-template-columns: 15rem minmax(0, 1fr);
+  gap: 48px;
+}
+
+.site-book .site-main {
+  max-width: 46rem;
+}
+
+.site-toc {
+  position: sticky;
+  top: 16px;
+  align-self: start;
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  font-size: 0.9em;
+}
+
+.site-toc-group {
+  margin: 0 0 1.4em;
+}
+
+.site-toc-title {
+  margin-bottom: 0.4em;
+  font-family: var(--font-mono);
+  font-size: 0.78em;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.site-toc ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.site-toc a {
+  display: block;
+  padding: 3px 0 3px 10px;
+  border-left: 2px solid var(--border);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.site-toc a:hover {
+  color: var(--accent);
+}
+
+.site-toc a[aria-current] {
+  border-left-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+@media (max-width: 860px) {
+  .site-book .site-frame {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+  }
+  .site-toc {
+    position: static;
+    max-height: none;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+/* --- article: one long read, numbered ------------------------------------------- */
+
+.site-article .site-header-inner {
+  justify-content: center;
+}
+
+.site-article .site-post-head {
+  text-align: center;
+}
+
+.site-article .site-tags {
+  justify-content: center;
+}
+
+.site-article .scrive-page {
+  line-height: 1.7;
+  hyphens: auto;
+}
+
+.site-article .site-main {
+  counter-reset: h2 h3 eq;
+}
+
+.site-article .scrive-page h2 {
+  border-bottom: 0;
+}
+
+.site-article .scrive-block:has(> h2) {
+  counter-increment: h2;
+  counter-reset: h3;
+}
+
+.site-article .scrive-block:has(> h3) {
+  counter-increment: h3;
+}
+
+.site-article .scrive-block > h2::before {
+  content: counter(h2) '\2002';
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.site-article .scrive-block > h3::before {
+  content: counter(h2) '.' counter(h3) '\2002';
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.site-article .scrive-math {
+  position: relative;
+  padding-right: 3em;
+  counter-increment: eq;
+}
+
+.site-article .scrive-math::after {
+  content: '(' counter(eq) ')';
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-dim);
+}

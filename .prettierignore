@@ -1,3 +1,6 @@
 # Docusaurus build output and generated cache
 website/build
 website/.docusaurus
+
+# Scrive golden round-trip corpus: byte-exact fixtures, a formatter would invalidate them
+packages/core/src/modules/scrive/__tests__/corpus

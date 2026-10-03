@@ -1,0 +1,5 @@
+{
+  "name": "Book",
+  "description": "Jupyter Book's shape: a sidebar table of contents beside every page, for docs and course notes.",
+  "layout": "book"
+}

@@ -53,7 +53,13 @@ import {
   type ChatSessionMeta,
 } from './sessions';
 import { matchSlash, runSlash } from './slash';
-import { claimPendingChatSession, onOpenChatSession } from './openSession';
+import {
+  claimChatSend,
+  claimPendingChatSession,
+  hasChatSend,
+  onOpenChatSession,
+  onSendInChat,
+} from './openSession';
 import { listRoots, listDir } from '../files/api';
 import { registry, type OpenPaneInfo } from '../../registry';
 import { agentForWorkspace, setWorkspaceAgent } from '../../layout/persistence';
@@ -609,12 +615,17 @@ export function ChatWidget() {
 
   const send = async (e: FormEvent) => {
     e.preventDefault();
-    const text = prompt.trim();
+    await sendText(prompt.trim(), true);
+  };
+
+  /** Send `text` as the next turn. `typed` is false for a turn another pane handed
+   *  in (`sendInChat`): it must not clear what the user is typing in the box. */
+  const sendText = async (text: string, typed: boolean) => {
     if (!text || busy) return;
 
     // Slash command: run locally, render as ephemeral system output, no model turn.
     if (text.startsWith('/')) {
-      setPrompt('');
+      if (typed) setPrompt('');
       setTurns((prev) => [...prev, { role: 'user', text, ephemeral: true }]);
       const out = await runSlash(text, { newSession, setAgent: pickAgent });
       setTurns((prev) => [...prev, { role: 'system', text: out, ephemeral: true }]);
@@ -622,7 +633,7 @@ export function ChatWidget() {
     }
 
     if (!ready) return;
-    setPrompt('');
+    if (typed) setPrompt('');
     setBusy(true);
     await ensureSession(text);
 
@@ -697,6 +708,17 @@ export function ChatWidget() {
       void persist();
     }
   };
+
+  // A turn handed in by another pane (`sendInChat`) goes out once this chat can
+  // take it: ready, and not in the middle of a turn.
+  const [sendTick, setSendTick] = useState(0);
+  useEffect(() => onSendInChat(() => setSendTick((n) => n + 1)), []);
+  useEffect(() => {
+    if (!ready || busy || !hasChatSend()) return;
+    const text = claimChatSend();
+    if (text) void sendText(text, false);
+    // sendText reads live refs; these are the conditions that gate a send.
+  }, [ready, busy, sendTick]);
 
   const canSend = !busy && prompt.trim().length > 0 && (ready || prompt.startsWith('/'));
 

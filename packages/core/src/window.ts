@@ -144,6 +144,12 @@ export interface WindowControl {
   // browser.nativeWebview — a native child webview overlaid on a browser pane.
   /** Present only on hosts granting `browser.nativeWebview`. */
   browserWebview?: BrowserWebviewControl;
+
+  /**
+   * Page zoom for this window's own webview (`zoom.ts`). Resolves to the factor
+   * applied (the shell clamps). Absent where the host zooms by itself (the browser).
+   */
+  setZoom?(factor: number): Promise<number>;
 }
 
 let control: WindowControl | null = null;

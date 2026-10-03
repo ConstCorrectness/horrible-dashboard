@@ -13,6 +13,7 @@
     "allow-window-is-maximized",
     "allow-window-toggle-maximize",
     "allow-window-close",
+    "allow-window-set-zoom",
     "allow-window-start-resize-dragging",
     "allow-window-open-workspace",
     "allow-browser-open-url",

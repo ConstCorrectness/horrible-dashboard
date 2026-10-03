@@ -1,0 +1,450 @@
+/*
+ * Write mode. The page content keeps the reader's typography (`.scrive-page`, from
+ * render/page.css), so writing looks like what gets published; the editing chrome —
+ * handles, menus, field strips, raw-block labels — uses the pane's tactical type.
+ */
+
+.scrive-ed-host {
+  position: relative;
+  height: 100%;
+  overflow: auto;
+  background: var(--bg);
+}
+
+.scrive-ed-column {
+  max-width: calc(var(--scrive-page-measure, 72ch) + 2 * var(--space-5, 2rem));
+  margin: 0 auto;
+  padding: var(--space-5, 2rem) var(--space-5, 2rem) 30vh 3.5rem;
+}
+
+/* ── properties ─────────────────────────────────────────────────────────────── */
+
+.scrive-ed-props {
+  display: grid;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+/* The title is page content, not a control: no box, the page's heading size. */
+.scrive-ed-props input.scrive-ed-title {
+  height: auto;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-strong, var(--text));
+  /* The page's own h1 (render/page.css: 1.9em of the page size), not a chrome step. */
+  font-size: calc(var(--scrive-page-size, 15px) * 1.9);
+  font-weight: 650;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  outline: none;
+}
+
+.scrive-ed-title::placeholder {
+  color: var(--text-dim);
+}
+
+.scrive-ed-propgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+  gap: var(--space-2) var(--space-3);
+}
+
+.scrive-ed-prop {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.scrive-ed-prop.is-wide {
+  grid-column: span 2;
+}
+
+.scrive-ed-prop.is-full {
+  grid-column: 1 / -1;
+}
+
+/* ── the editable page ──────────────────────────────────────────────────────── */
+
+.scrive-ed {
+  outline: none;
+  max-width: none;
+  min-height: 40vh;
+}
+
+.scrive-ed p.is-empty:first-child::before,
+.scrive-ed .is-empty::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+
+.scrive-ed ul[data-type='taskList'] {
+  list-style: none;
+  padding-left: 0.2em;
+}
+
+.scrive-ed ul[data-type='taskList'] li {
+  display: flex;
+  gap: 0.5em;
+  align-items: baseline;
+}
+
+.scrive-ed ul[data-type='taskList'] li > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.scrive-ed pre.scrive-ed-code {
+  padding: 0.75em 1em;
+  background: var(--scrive-page-inset);
+  border: 1px solid var(--scrive-page-rule);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+}
+
+.scrive-ed table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1em 0;
+}
+
+.scrive-ed th,
+.scrive-ed td {
+  border: 1px solid var(--scrive-page-rule);
+  padding: 0.35em 0.6em;
+  vertical-align: top;
+}
+
+.scrive-ed th {
+  background: var(--scrive-page-surface);
+  font-weight: 600;
+}
+
+.scrive-ed th p,
+.scrive-ed td p {
+  margin: 0;
+}
+
+.scrive-ed .selectedCell {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.scrive-ed img {
+  max-width: 100%;
+}
+
+/* A selected atom block: the accent rule, never a glow. Only while the author is
+ * in the page (the editor, or a field inside the block): a page whose first block
+ * is an atom opens with a node selection on it, which is not a choice anyone made. */
+.ProseMirror-focused .scrive-ed-block[data-selected='true'],
+.scrive-ed-block[data-selected='true']:focus-within,
+.scrive-ed.ProseMirror-focused .ProseMirror-selectednode {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── node views ─────────────────────────────────────────────────────────────── */
+
+.ProseMirror-focused .scrive-ed-math-inline[data-selected='true'],
+.scrive-ed-math-inline[data-selected='true']:focus-within {
+  outline: 1px solid var(--accent);
+}
+
+.scrive-ed-math {
+  margin: 1em 0;
+}
+
+.scrive-ed-math .scrive-math {
+  position: relative;
+}
+
+.scrive-ed-label {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+}
+
+.scrive-ed-fields {
+  display: grid;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+
+.scrive-ed-fields.is-image {
+  display: flex;
+  gap: var(--space-1);
+}
+
+/* Fields inside page content are chrome: mono, compact, no vertical padding. */
+.scrive-ed-field {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  padding: 0 0.5rem;
+  min-width: 0;
+}
+
+textarea.scrive-ed-field.is-code {
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  resize: vertical;
+  line-height: 1.5;
+  background: var(--bg-inset, var(--bg));
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+}
+
+input.scrive-ed-field.is-inline {
+  height: 1.6em;
+  min-height: 0;
+  vertical-align: baseline;
+}
+
+.scrive-ed-admonition-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: 0.4em;
+}
+
+.scrive-ed-admonition-head select.scrive-ed-kind {
+  height: 24px;
+  min-height: 0;
+  padding: 0 0.4rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.scrive-ed-admonition-head input.scrive-ed-field.is-title {
+  flex: 1;
+  height: 24px;
+  min-height: 0;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 600;
+}
+
+.scrive-ed-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.scrive-ed-chip {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  padding: 0 0.3em;
+  border: 1px solid var(--scrive-page-rule);
+  color: var(--scrive-page-accent);
+  white-space: nowrap;
+}
+
+.scrive-ed-chip.is-html {
+  color: var(--text-dim);
+}
+
+.scrive-ed-chip-name {
+  color: var(--text-dim);
+  margin-right: 0.35em;
+}
+
+.scrive-ed-chip-name::before {
+  content: '{';
+}
+
+.scrive-ed-chip-name::after {
+  content: '}';
+}
+
+.ProseMirror-focused .scrive-ed-image[data-selected='true'] img,
+.scrive-ed-image[data-selected='true']:focus-within img {
+  outline: 1px solid var(--accent);
+}
+
+/* A raw MyST block: a labelled slot, its source when selected. */
+.scrive-ed-raw {
+  position: relative;
+  margin: 1em 0;
+  padding: 0.5em 0.75em;
+  border-left: 2px solid var(--border);
+  background: color-mix(in srgb, var(--scrive-page-surface) 60%, transparent);
+}
+
+.ProseMirror-focused .scrive-ed-raw[data-selected='true'],
+.scrive-ed-raw[data-selected='true']:focus-within {
+  border-left-color: var(--accent);
+}
+
+.scrive-ed-raw-label {
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 0.25em;
+}
+
+.scrive-ed-raw-preview > .scrive-page {
+  max-width: none;
+  margin: 0;
+}
+
+.scrive-ed-raw-preview .scrive-block:first-child > :first-child {
+  margin-top: 0;
+}
+
+.scrive-ed-raw-source {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+  white-space: pre-wrap;
+}
+
+/* ── block handle ───────────────────────────────────────────────────────────── */
+
+.scrive-ed-handle {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  gap: 1px;
+  transform: translateX(calc(-100% - 6px));
+  padding-top: 2px;
+}
+
+.scrive-ed-handle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 22px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0.55;
+}
+
+.scrive-ed-handle-btn:hover,
+.scrive-ed-handle-btn[aria-expanded='true'] {
+  opacity: 1;
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.scrive-ed-handle-btn[draggable='true'] {
+  cursor: grab;
+}
+
+/* ── menus ──────────────────────────────────────────────────────────────────── */
+
+.scrive-ed-menu {
+  z-index: 50;
+  width: 240px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 4px 0;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.28);
+  animation: scrive-ed-menu-in 120ms ease-out both;
+}
+
+.scrive-ed-menu.is-block {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+}
+
+.scrive-ed-menu-group {
+  padding: 6px 10px 2px;
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-dim);
+}
+
+.scrive-ed-menu-item {
+  display: block;
+  width: 100%;
+  min-height: 0;
+  padding: 4px 10px;
+  border: 0;
+  border-left: 2px solid transparent;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.scrive-ed-menu-item:hover,
+.scrive-ed-menu-item[aria-selected='true'] {
+  background: var(--bg-hover);
+  border-left-color: var(--accent);
+}
+
+.scrive-ed-menu-item.is-danger {
+  color: var(--danger);
+}
+
+.scrive-ed-menu-empty {
+  padding: 6px 10px;
+}
+
+.scrive-ed-bubble {
+  z-index: 40;
+  background: var(--bg-raised);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.25);
+}
+
+.scrive-ed-linkform input {
+  width: 18rem;
+}
+
+/* A question is a sentence, not a URL. */
+.scrive-ed-askform input {
+  width: min(32rem, 70vw);
+}
+
+@keyframes scrive-ed-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scrive-ed-menu {
+    animation: none;
+  }
+}
+
+/* `type=date` is outside the shared control-height rule (controls.css lists the
+ * text-like types only); hold it to the same 30px. */
+.scrive-ed-prop input[type='date'] {
+  height: var(--control-h);
+}

@@ -1,0 +1,55 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      {{tokens}}
+      html, body { margin: 0; width: 1200px; height: 630px; }
+      body {
+        box-sizing: border-box;
+        padding: 80px 88px;
+        display: flex;
+        flex-direction: column;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--font-display, var(--font-body));
+      }
+      .rule { width: 96px; height: 6px; background: var(--accent); }
+      .kicker {
+        margin-top: 32px;
+        font-family: var(--font-mono);
+        font-size: 24px;
+        color: var(--text-dim);
+      }
+      h1 {
+        margin: 16px 0 0;
+        font-size: 68px;
+        line-height: 1.1;
+        font-weight: 750;
+        color: var(--text-strong);
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      p {
+        margin: 24px 0 0;
+        font-size: 30px;
+        line-height: 1.4;
+        color: var(--text-dim);
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      .site { margin-top: auto; font-size: 26px; font-weight: 650; color: var(--accent); }
+    </style>
+  </head>
+  <body>
+    <div class="rule"></div>
+    <div class="kicker">{{kicker}}</div>
+    <h1>{{title}}</h1>
+    <p>{{description}}</p>
+    <div class="site">{{site}}</div>
+  </body>
+</html>

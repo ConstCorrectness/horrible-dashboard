@@ -47,3 +47,39 @@ export function draftInChat(prompt: string): void {
   updateChat(agentId, { prompt });
   registry.openPanel('agent.chat');
 }
+
+const sends: string[] = [];
+const sendListeners = new Set<() => void>();
+
+/**
+ * Open the chat and **send** `prompt` as the next turn — for a click whose label
+ * already says the agent will act ("Approve and write", "Ask"), on substance the
+ * person typed or approved. Anything less explicit should use `draftInChat`.
+ *
+ * The turn is an ordinary chat turn: it shows in the transcript, streams, can be
+ * stopped, and passes the same permission prompts as a typed one. It waits until a
+ * chat pane is mounted, its agent is ready and no turn is running; the user's own
+ * unsent draft in the box is left alone.
+ */
+export function sendInChat(prompt: string): void {
+  sends.push(prompt);
+  registry.openPanel('agent.chat');
+  sendListeners.forEach((l) => l());
+}
+
+/** ChatWidget subscribes to learn that a send is waiting. */
+export function onSendInChat(listener: () => void): () => void {
+  sendListeners.add(listener);
+  return () => {
+    sendListeners.delete(listener);
+  };
+}
+
+/** The oldest waiting send, taken (so two chat panes never both send it). */
+export function claimChatSend(): string | null {
+  return sends.shift() ?? null;
+}
+
+export function hasChatSend(): boolean {
+  return sends.length > 0;
+}

@@ -1,7 +1,10 @@
 {
   "detector": {
     "ignoreRules": [],
-    "ignoreFiles": [],
+    "ignoreFiles": [
+      "backend/modules/scrive/builtin_themes/**",
+      "packages/core/src/modules/scrive/site/site.css"
+    ],
     "ignoreValues": [
       {
         "rule": "design-system-color",
@@ -223,6 +226,25 @@
         ],
         "createdAt": "2026-10-01T10:43:46.156Z",
         "reason": "project design system: CLAUDE.local.md §2 prescribes 'subtle background patterns (like faint grid overlays)' for this app's tactical aesthetic"
+      },
+      {
+        "rule": "codex-grid-background",
+        "value": "*",
+        "files": [
+          "packages/core/src/modules/scrive/scrive.css"
+        ],
+        "createdAt": "2026-10-01T23:11:07.076Z",
+        "reason": "Claude triage: .scrive-canvas is the Preview's device-width layout canvas (a measurement surface the rule exempts); CLAUDE.local.md calls for faint grid overlays"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "arial",
+        "createdAt": "2026-10-02T21:11:28.678Z"
+      },
+      {
+        "rule": "overused-font",
+        "value": "arial",
+        "createdAt": "2026-10-02T21:16:44.781Z"
       }
     ]
   }

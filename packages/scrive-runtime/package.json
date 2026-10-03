@@ -1,0 +1,26 @@
+{
+  "name": "@horrible/scrive-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The sandboxed React Three Fiber runtime Scrive's {r3f} scenes run in: one classic script with its own React, three, R3F, drei and an in-browser TSX compiler. Built into backend/modules/scrive/static/, served at /api/scrive/runtime.js.",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@react-three/drei": "^10.7.9",
+    "@react-three/fiber": "^9.8.1",
+    "react": "~19.2.0",
+    "react-dom": "~19.2.0",
+    "sucrase": "^3.35.1",
+    "three": "^0.184.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/three": "^0.184.1",
+    "typescript": "^5.8.0",
+    "vite": "^7.0.0"
+  }
+}

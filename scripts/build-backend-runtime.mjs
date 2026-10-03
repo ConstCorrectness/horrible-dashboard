@@ -243,6 +243,10 @@ function installDependencies(python) {
 
 /** Copy the backend source tree and the manifest that sits beside it. */
 function copySource(outDir) {
+  // Scrive's {r3f} scene runtime is built into backend/ and must ship with it.
+  log('building the Scrive scene runtime');
+  // pnpm is a .cmd shim on Windows, which execFileSync cannot run without a shell.
+  run('pnpm', ['--filter', '@horrible/scrive-runtime', 'build'], { shell: process.platform === 'win32' });
   log('copying backend/');
   cpSync(join(REPO, 'backend'), join(outDir, 'backend'), {
     recursive: true,

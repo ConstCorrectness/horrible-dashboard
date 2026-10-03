@@ -1,0 +1,4 @@
+# Prettier reads .prettierignore from the working directory only, so a run from
+# packages/core does not see the root file. The Scrive golden corpus is byte-exact
+# fixtures; formatting them silently invalidates the round-trip gate.
+src/modules/scrive/__tests__/corpus

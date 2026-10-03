@@ -75,6 +75,17 @@ class FakeGitHub:
     def __init__(self, routes: dict[tuple[str, str], Any]) -> None:
         self.routes = routes
         self.calls: list[tuple[str, str, Any]] = []
+        self.blobs: list[bytes] = []
+
+    def pushed(self) -> dict[str, bytes]:
+        """Path → content of every file in the trees this fake was sent."""
+        out: dict[str, bytes] = {}
+        for method, path, payload in self.calls:
+            if method == "POST" and path.endswith("/git/trees"):
+                for entry in payload["tree"]:
+                    if entry["sha"] is not None:
+                        out[entry["path"]] = self.blobs[int(entry["sha"][4:])]
+        return out
 
     async def __call__(
         self, method: str, path: str, *, params: Any = None, json: Any = None
@@ -85,10 +96,22 @@ class FakeGitHub:
             if isinstance(answer, list):
                 return answer.pop(0) if len(answer) > 1 else answer[0]
             return answer
-        if method == "GET" and "/contents/" in path:
-            return {"error": "GitHub returned 404: Not Found", "status": 404}
-        if method == "PUT" and "/contents/" in path:
-            return {"content": {}}
+        # The Git Data API, as `publishing.github_pages.push_files` walks it.
+        if method == "POST" and path.endswith("/git/blobs"):
+            self.blobs.append(base64.b64decode(json["content"]))
+            return {"sha": f"blob{len(self.blobs) - 1}"}
+        if method == "GET" and "/git/ref/heads/" in path:
+            return {"object": {"sha": "c0"}}
+        if method == "GET" and path.endswith("/git/commits/c0"):
+            return {"tree": {"sha": "t0"}}
+        if method == "GET" and path.endswith("/git/trees/t0"):
+            return {"tree": []}  # a fresh repository: nothing to reuse or delete
+        if method == "POST" and path.endswith("/git/trees"):
+            return {"sha": "t1"}
+        if method == "POST" and path.endswith("/git/commits"):
+            return {"sha": "c1"}
+        if method == "PATCH" and "/git/refs/heads/" in path:
+            return {}
         raise AssertionError(f"unexpected GitHub call: {method} {path}")
 
 
@@ -296,13 +319,16 @@ def test_pages_creates_the_repo_and_publishes_rendered_html(
     slug = clean_nb.removesuffix(".ipynb").replace("_", "-")
     assert body["publication"]["url"] == f"https://alice.github.io/notebooks/{slug}/"
 
-    puts = {path: payload for method, path, payload in fake.calls if method == "PUT"}
-    assert "/repos/alice/notebooks/contents/.nojekyll" in puts
-    html = base64.b64decode(
-        puts[f"/repos/alice/notebooks/contents/{slug}/index.html"]["content"]
-    )
+    pushed = fake.pushed()
+    assert ".nojekyll" in pushed
+    html = pushed[f"{slug}/index.html"]
     assert b"Churn analysis" in html
     assert b"<html" in html.lower()
+    # One publish is one commit, not one per file.
+    commits = [
+        c for c in fake.calls if c[0] == "POST" and c[1].endswith("/git/commits")
+    ]
+    assert len(commits) == 1
 
 
 def test_pages_refuses_a_private_repo(client, clean_nb, monkeypatch) -> None:

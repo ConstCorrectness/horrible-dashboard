@@ -13,6 +13,11 @@ import {
   onExternalOpenFailed,
   startAutoUpdateChecks,
   toggleAppFullscreen,
+  canZoom,
+  installZoom,
+  resetZoom,
+  zoomIn,
+  zoomOut,
   registry,
   workspacesEnabled,
   setBackdrop,
@@ -147,6 +152,13 @@ export function AppShell({
     // owned by the browser with `preventable: false`, so binding it in the
     // browser layout would produce a binding that silently never fires.
     const nativeFullscreenKey = canFullscreen && windowControl() !== null;
+    // Page zoom, desktop only. In the browser the browser's own zoom already owns
+    // Ctrl+= / Ctrl+- / Ctrl+0 / Ctrl+wheel; binding them here would cancel it.
+    const nativeZoom = canZoom();
+    const uninstallZoom = installZoom();
+    const sayZoom = (level: number | null) => {
+      if (level !== null) toastsStore.add('info', `Zoom ${Math.round(level * 100)}%`, '', 900);
+    };
     // First: the layout engine's controller, commands and hydration. The
     // desktop is the landing surface, so the tiling Frame may never mount —
     // and everything from the agent's layout tools to the backdrop commands
@@ -226,6 +238,25 @@ export function AppShell({
               },
             ]
           : []),
+        ...(nativeZoom
+          ? [
+              {
+                id: 'shell.zoomIn',
+                title: 'Window: Zoom in',
+                run: async () => sayZoom(await zoomIn()),
+              },
+              {
+                id: 'shell.zoomOut',
+                title: 'Window: Zoom out',
+                run: async () => sayZoom(await zoomOut()),
+              },
+              {
+                id: 'shell.zoomReset',
+                title: 'Window: Reset zoom',
+                run: async () => sayZoom(await resetZoom()),
+              },
+            ]
+          : []),
       ],
       keybindings: [
         // Deliberately NOT `override`. The old service's comments claimed the
@@ -235,6 +266,16 @@ export function AppShell({
         // (minibuffer) is the binding that genuinely must never be shadowed.
         { key: 'mod+k', command: 'shell.commandPalette' },
         ...(nativeFullscreenKey ? [{ key: 'f11', command: 'shell.toggleFullscreen' }] : []),
+        ...(nativeZoom
+          ? [
+              // `mod+=` is the unshifted key; `mod++` is what a "Ctrl +" reads as
+              // with shift held. Both, as browsers do.
+              { key: 'mod+=', command: 'shell.zoomIn' },
+              { key: 'mod++', command: 'shell.zoomIn' },
+              { key: 'mod+-', command: 'shell.zoomOut' },
+              { key: 'mod+0', command: 'shell.zoomReset' },
+            ]
+          : []),
       ],
       settings: [
         {
@@ -266,6 +307,8 @@ export function AppShell({
     registry.setWorkspaceSwitcher(switchWorkspaceWhenReady);
     registry.setWorkspaceGate(workspacesEnabled);
     if (initialWorkspaceId) switchWorkspaceWhenReady(initialWorkspaceId);
+    // The Ctrl+wheel listener; a development double-mount must not stack two.
+    return uninstallZoom;
   }, []);
 
   // One capture-phase handler owns the keyboard, including the Escape ladder —

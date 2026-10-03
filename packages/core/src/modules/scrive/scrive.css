@@ -1,0 +1,1192 @@
+/*
+ * Scrive pane chrome. Inline styles carry most of it (the house idiom); this file
+ * holds only what inline styles cannot: keyframes, hover/focus states, and the class
+ * that lets row buttons opt out of the 30px control rule (`button:not([class])`).
+ */
+
+.scrive-head {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-dim);
+}
+
+.scrive-meta {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+}
+
+/* A row is a button (keyboard-reachable, one tab stop) that is not a control. */
+.scrive-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 0;
+  padding: 0.35rem 0.6rem;
+  border: 0;
+  border-left: 2px solid transparent;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  animation: scrive-enter 180ms ease-out both;
+}
+
+.scrive-row:hover {
+  background: var(--bg-hover);
+}
+
+.scrive-row:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.scrive-row[aria-current='true'] {
+  border-left-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.scrive-chip {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0 0.35rem;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.scrive-chip[data-status='published'] {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.scrive-chip[data-status='scheduled'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* The page header's accent rule: a 2px top border, not a glowing perimeter. A plain
+ * surface — the faint grid belongs on the Preview canvas (a page-measuring surface),
+ * not on chrome. */
+.scrive-bar {
+  border-top: 2px solid var(--accent);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+@keyframes scrive-enter {
+  from {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scrive-row {
+    animation: none;
+  }
+}
+
+/* The Preview is a layout canvas — the one Scrive surface where a measuring grid
+ * belongs. The sheet on it is the page at the chosen device width. */
+.scrive-canvas {
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(var(--border-dim) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border-dim) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.scrive-sheet {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+  /* A device switch snaps to the new size on purpose: easing the sheet's size
+   * would re-lay-out the whole rendered page on every frame. */
+}
+
+/* Segmented mode/device switches: classed, so not 30px controls. */
+.scrive-seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+}
+
+.scrive-seg-btn {
+  min-height: 0;
+  height: 24px;
+  padding: 0 0.6rem;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.scrive-seg-btn + .scrive-seg-btn {
+  border-left: 1px solid var(--border);
+}
+
+.scrive-seg-btn[aria-pressed='true'] {
+  background: var(--bg-hover);
+  color: var(--text-strong, var(--text));
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.scrive-seg-btn:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* ── posts database ──────────────────────────────────────────────────────────── */
+
+.scrive-db {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.scrive-db th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  padding: 0;
+}
+
+/* Column headers are sort controls, styled as headings. */
+.scrive-db-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-height: 0;
+  padding: 0.4rem var(--space-3);
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: var(--fs-label);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  text-align: left;
+  cursor: pointer;
+}
+
+span.scrive-db-sort {
+  cursor: default;
+}
+
+.scrive-db td {
+  padding: 0.4rem var(--space-3);
+  border-bottom: 1px solid var(--border-dim, var(--border));
+  vertical-align: top;
+}
+
+.scrive-db-row {
+  animation: scrive-enter 180ms ease-out both;
+}
+
+.scrive-db-row:hover {
+  background: var(--bg-hover);
+}
+
+.scrive-db-title {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-strong, var(--text));
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.scrive-db-title:hover {
+  color: var(--accent);
+}
+
+.scrive-db-desc {
+  display: block;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 48ch;
+}
+
+/* The board: one column per status, cards dragged between them. */
+.scrive-board {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(14rem, 1fr);
+  gap: var(--space-3);
+  padding: var(--space-3);
+  min-height: 100%;
+  align-items: start;
+}
+
+.scrive-board-col {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-top: 2px solid var(--border);
+  background: color-mix(in srgb, var(--bg-raised) 50%, transparent);
+  min-height: 8rem;
+}
+
+.scrive-board-col[data-over='true'] {
+  border-top-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.scrive-card {
+  display: grid;
+  gap: 4px;
+  min-height: 0;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-left: 2px solid transparent;
+  background: var(--bg-raised);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: grab;
+  animation: scrive-enter 180ms ease-out both;
+}
+
+.scrive-card:hover {
+  border-left-color: var(--accent);
+}
+
+.scrive-card:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.scrive-card-title {
+  font-weight: 600;
+  color: var(--text-strong, var(--text));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scrive-db-row,
+  .scrive-card {
+    animation: none;
+  }
+}
+
+/* "Run all" sits beside the mode switch; a lone segment button. */
+.scrive-run-all {
+  border: 1px solid var(--border);
+}
+
+/* ── The agent ──────────────────────────────────────────────────────────────── */
+
+/* "The agent edited this page": changed blocks marked, Keep / Undo. */
+.scrive-agent-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg-raised));
+}
+
+.scrive-findings {
+  max-height: 38%;
+  overflow: auto;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.scrive-findings .scrive-row[data-severity='error'] {
+  border-left-color: var(--danger);
+}
+
+.scrive-findings .scrive-row[data-severity='warning'] {
+  border-left-color: var(--warn);
+}
+
+.scrive-findings .scrive-row[data-severity='info'] {
+  border-left-color: var(--border);
+}
+
+/* The outline review pane. */
+.scrive-outline {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  font-size: var(--fs-body);
+}
+
+.scrive-outline-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-top: 2px solid var(--accent);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.scrive-outline-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-3);
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--border) 30%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--border) 30%, transparent) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.scrive-outline-fields {
+  display: grid;
+  gap: var(--space-3);
+  max-width: 46rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.scrive-outline-field {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.scrive-outline-field.is-title input {
+  font-size: 1.1em;
+  font-weight: 650;
+}
+
+.scrive-outline-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: var(--space-3);
+}
+
+.scrive-outline-text {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+}
+
+.scrive-outline-sections-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--space-1);
+}
+
+.scrive-outline-sections {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.scrive-outline-section {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  background: var(--bg-raised);
+  animation: scrive-enter 180ms ease-out both;
+}
+
+.scrive-outline-section[data-level='3'] {
+  margin-left: 1.5rem;
+  border-left-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.scrive-outline-section[data-level='4'] {
+  margin-left: 3rem;
+  border-left-color: var(--border);
+}
+
+.scrive-outline-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.scrive-outline-index {
+  flex: none;
+  width: 1.6rem;
+}
+
+.scrive-outline-heading {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+}
+
+.scrive-outline-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-self: start;
+  padding: 0.3rem 0.7rem;
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  cursor: pointer;
+}
+
+.scrive-outline-add:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.scrive-outline-request {
+  max-width: 46rem;
+  margin: var(--space-3) 0 0;
+  white-space: pre-wrap;
+}
+
+/* "Generate a page": the request form in the sites pane. */
+.scrive-generate {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0 var(--space-3) var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+  background: var(--bg-raised);
+}
+
+/* ── the publish pane ────────────────────────────────────────────────────────── */
+
+.scrive-publish {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  font-size: var(--fs-body);
+}
+
+.scrive-publish-error {
+  padding: var(--space-2) var(--space-3);
+  color: var(--danger);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Asymmetric: the site's content on the left, where it goes on the right. */
+.scrive-publish-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem);
+  align-content: start;
+  gap: var(--space-4);
+  padding: var(--space-3);
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--border) 30%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--border) 30%, transparent) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+@container (max-width: 720px) {
+  .scrive-publish-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.scrive-publish {
+  container-type: inline-size;
+}
+
+.scrive-publish-main,
+.scrive-publish-side {
+  display: grid;
+  gap: var(--space-4);
+  align-content: start;
+  min-width: 0;
+}
+
+.scrive-publish-section {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.scrive-publish-side .scrive-publish-section {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+  background: var(--bg-raised);
+}
+
+.scrive-publish-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--border);
+}
+
+.scrive-publish-note {
+  margin: 0;
+}
+
+.scrive-publish-warn {
+  margin: 0;
+  color: var(--warn);
+}
+
+.scrive-theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+  gap: var(--space-2);
+}
+
+/* A theme is a card-shaped button: classed, so not a 30px control. */
+.scrive-theme-card {
+  display: grid;
+  gap: var(--space-1);
+  align-content: start;
+  min-height: 0;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-top: 2px solid transparent;
+  background: var(--bg-raised);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%);
+  animation: scrive-enter 180ms ease-out both;
+}
+
+.scrive-theme-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+}
+
+.scrive-theme-card[aria-pressed='true'] {
+  border-top-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.scrive-theme-card:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.scrive-theme-swatches {
+  display: flex;
+  height: 18px;
+  border: 1px solid var(--border);
+}
+
+.scrive-theme-swatch {
+  flex: 1;
+}
+
+.scrive-theme-swatch-gap {
+  width: 3px;
+  background: var(--border);
+}
+
+.scrive-theme-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-label);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-strong, var(--text));
+}
+
+.scrive-theme-card[aria-pressed='true'] .scrive-theme-name {
+  color: var(--accent);
+}
+
+.scrive-theme-desc {
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+.scrive-publish-pages {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.scrive-publish-page {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--border-dim, var(--border));
+}
+
+.scrive-publish-page .scrive-row {
+  flex: 1;
+  min-width: 0;
+  animation-delay: calc(var(--i, 0) * 24ms);
+}
+
+.scrive-publish-page[data-held='true'] .scrive-row {
+  color: var(--text-dim);
+}
+
+.scrive-publish-include {
+  flex: none;
+  min-height: 0;
+  padding: 0 0.5rem;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.scrive-publish-include:hover {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+/* A link-styled button (classed: not a 30px control). */
+.scrive-publish-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.scrive-publish-link:hover {
+  text-decoration: underline;
+}
+
+.scrive-publish-record {
+  display: grid;
+  gap: 2px;
+}
+
+.scrive-publish-phase {
+  display: grid;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.scrive-publish-phase.is-done {
+  color: var(--success);
+}
+
+.scrive-publish-pulse {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 4px;
+  background: var(--accent);
+  animation: scrive-publish-pulse 900ms ease-in-out infinite alternate;
+}
+
+@keyframes scrive-publish-pulse {
+  from {
+    opacity: 0.25;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.scrive-publish-findings {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text);
+}
+
+.scrive-publish-findings li {
+  display: grid;
+  gap: 2px;
+  padding: 4px 8px;
+  border-left: 2px solid var(--border);
+  background: var(--bg);
+}
+
+.scrive-publish-findings li[data-severity='block'] {
+  border-left-color: var(--danger);
+}
+
+.scrive-publish-findings li[data-severity='warning'] {
+  border-left-color: var(--warn);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scrive-theme-card,
+  .scrive-publish-pulse {
+    animation: none;
+  }
+}
+
+/* ── share and outbox ────────────────────────────────────────────────────────── */
+
+.scrive-share-post {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  background: var(--bg-raised);
+}
+
+.scrive-share-media {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.scrive-share-media .scrive-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  text-transform: none;
+}
+
+.scrive-share-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-dim);
+}
+
+.scrive-share-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.scrive-chip[data-status='failed'] {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.scrive-chip[data-status='approved'],
+.scrive-chip[data-status='sending'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.scrive-chip[data-status='sent'] {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+/* The outbox's status counts: a strip of cells, the number in mono. */
+.scrive-outbox-counts {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  border-bottom: 1px solid var(--border);
+}
+
+.scrive-outbox-count {
+  display: grid;
+  gap: 2px;
+  padding: var(--space-2) var(--space-3);
+  border-top: 2px solid transparent;
+}
+
+.scrive-outbox-count + .scrive-outbox-count {
+  border-left: 1px solid var(--border);
+}
+
+.scrive-outbox-count[data-status='draft'] {
+  border-top-color: var(--accent);
+}
+
+.scrive-outbox-count[data-status='failed'] {
+  border-top-color: var(--danger);
+}
+
+.scrive-outbox-count-n {
+  font-family: var(--font-mono);
+  font-size: 1.3em;
+  color: var(--text-strong, var(--text));
+}
+
+.scrive-outbox-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  /* One column that may shrink: a long one-line summary ellipsizes, never scrolls. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+  padding: var(--space-3);
+}
+
+@container (max-width: 520px) {
+  .scrive-outbox-counts {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* ── the clip editor ─────────────────────────────────────────────────────────── */
+
+.scrive-clip:focus {
+  outline: none;
+}
+
+.scrive-clip-body {
+  grid-template-columns: minmax(0, 1fr) minmax(16rem, 20rem);
+}
+
+.scrive-clip-list,
+.scrive-clip-segments,
+.scrive-clip-cues {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.scrive-clip-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+}
+
+.scrive-clip-notice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg-raised));
+}
+
+.scrive-clip-notice > span {
+  flex: 1;
+}
+
+.scrive-clip-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.scrive-clip-clock {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The stage: the picture as it will render, on a measuring grid. */
+.scrive-clip-stage {
+  display: grid;
+  place-items: center;
+  min-height: 12rem;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(var(--border-dim, var(--border)) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border-dim, var(--border)) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.scrive-clip-viewport {
+  position: relative;
+  overflow: hidden;
+  /* As wide as fits, but never taller than 52vh: the width is capped by the height
+   * the aspect ratio would give it. */
+  width: min(100%, calc(52vh * var(--clip-aspect, 1.7778)));
+  background: #000;
+  container-type: size;
+}
+
+.scrive-clip-viewport[data-frame='true'] {
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.scrive-clip-viewport video {
+  display: block;
+  object-fit: fill;
+  pointer-events: none;
+}
+
+.scrive-clip-window {
+  position: absolute;
+  border: 2px solid var(--accent);
+  box-shadow: 0 0 0 100vmax color-mix(in srgb, #000 55%, transparent);
+  pointer-events: none;
+}
+
+/* Captions and overlays: what ffmpeg will burn in, approximately. Sized against the
+ * frame's height, as the .ass file is, and in Arial because that is the font the .ass
+ * file names (clips.py `build_ass`) — this is a picture of the render, not chrome. */
+.scrive-clip-caption,
+.scrive-clip-overlay {
+  position: absolute;
+  left: 5%;
+  right: 5%;
+  text-align: center;
+  white-space: pre-line;
+  color: #fff;
+  font-family: Arial, sans-serif;
+  pointer-events: none;
+  text-shadow:
+    0 0 2px #000,
+    0 0 2px #000,
+    0 0 1px #000;
+}
+
+.scrive-clip-caption {
+  bottom: 5cqh;
+  font-size: 5.5cqh;
+}
+
+.scrive-clip-overlay {
+  font-size: 7cqh;
+  font-weight: 700;
+}
+
+.scrive-clip-overlay[data-pos='top'] {
+  top: 5cqh;
+}
+
+.scrive-clip-overlay[data-pos='center'] {
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.scrive-clip-overlay[data-pos='bottom'] {
+  bottom: 5cqh;
+}
+
+.scrive-clip-render {
+  display: block;
+  max-width: 100%;
+  max-height: 52vh;
+  background: #000;
+}
+
+/* Timelines: the source with its filmstrip, and the output with its cues. */
+.scrive-clip-track-wrap {
+  display: grid;
+  gap: 2px;
+}
+
+.scrive-clip-track,
+.scrive-clip-out {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+}
+
+.scrive-clip-track {
+  height: 48px;
+}
+
+.scrive-clip-out {
+  height: 14px;
+}
+
+.scrive-clip-strip {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.scrive-clip-seg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border: 1px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  border-top: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  pointer-events: none;
+}
+
+.scrive-clip-seg[aria-current='true'] {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.scrive-clip-seg span {
+  position: absolute;
+  top: 1px;
+  left: 3px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--text-strong, var(--text));
+}
+
+.scrive-clip-cue {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  pointer-events: none;
+}
+
+.scrive-clip-cue[data-kind='overlay'] {
+  top: 50%;
+  background: color-mix(in srgb, var(--success) 50%, transparent);
+}
+
+.scrive-clip-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--text-strong, var(--text));
+  pointer-events: none;
+}
+
+.scrive-clip-ticks {
+  display: flex;
+  justify-content: space-between;
+}
+
+.scrive-clip-segments li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 2px var(--space-2);
+  border-left: 2px solid transparent;
+  animation: scrive-enter 180ms ease-out both;
+}
+
+.scrive-clip-segments li[aria-current='true'] {
+  border-left-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.scrive-clip-time {
+  width: 6.5em;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.scrive-clip-cues li {
+  display: grid;
+  gap: 4px;
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.scrive-clip-cue-times {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.scrive-clip-cue-times select {
+  flex: 1;
+}
+
+.scrive-clip-field {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.scrive-clip-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+}
+
+.scrive-clip-share {
+  display: grid;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.scrive-clip-progress {
+  height: 3px;
+  background: var(--border);
+}
+
+/* Filled by scaling, not by width: no layout on every progress event. */
+.scrive-clip-progress > div {
+  height: 100%;
+  background: var(--accent);
+  transform-origin: left;
+  transition: transform 200ms linear;
+}
+
+.scrive-clip-rec {
+  width: 10px;
+  height: 10px;
+  background: var(--danger);
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  animation: scrive-publish-pulse 900ms ease-in-out infinite alternate;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scrive-clip-segments li,
+  .scrive-clip-rec {
+    animation: none;
+  }
+}

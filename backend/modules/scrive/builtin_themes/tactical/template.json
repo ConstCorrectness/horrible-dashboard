@@ -1,0 +1,5 @@
+{
+  "name": "Tactical",
+  "description": "The dashboard's own look: a faint grid, 2px accent rules, uppercase display type and mono metadata.",
+  "layout": "tactical"
+}

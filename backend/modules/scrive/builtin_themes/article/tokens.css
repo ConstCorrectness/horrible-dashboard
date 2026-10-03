@@ -1,0 +1,36 @@
+/* Article: a serif long read with numbered sections and equations. */
+:root {
+  color-scheme: light dark;
+  --bg: #fbfaf6;
+  --bg-raised: #f3f1ea;
+  --bg-inset: #eeebe2;
+  --text: #232120;
+  --text-strong: #0f0e0d;
+  --text-dim: #6c6862;
+  --accent: #9b2c2c;
+  --border: #e2ddd2;
+  --danger: #b42318;
+  --warn: #8f5a00;
+  --success: #2c6e3f;
+  --font-body: Charter, 'Bitstream Charter', 'Sitka Text', Cambria, Georgia, serif;
+  --font-display: var(--font-body);
+  --font-mono: ui-monospace, 'Cascadia Code', 'SF Mono', Menlo, Consolas, monospace;
+  --site-width: 42rem;
+  --page-size: 19px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #171615;
+    --bg-raised: #1f1e1c;
+    --bg-inset: #232220;
+    --text: #e7e3dc;
+    --text-strong: #ffffff;
+    --text-dim: #a29d94;
+    --accent: #ec8a7d;
+    --border: #33302c;
+    --danger: #f97066;
+    --warn: #fdb022;
+    --success: #6fcf97;
+  }
+}

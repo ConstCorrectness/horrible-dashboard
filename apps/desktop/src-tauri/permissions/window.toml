@@ -39,6 +39,12 @@ description = "Enables the window_toggle_maximize custom command"
 allow = ["window_toggle_maximize"]
 
 [[permission]]
+identifier = "allow-window-set-zoom"
+description = "Enables the window_set_zoom custom command"
+[permission.commands]
+allow = ["window_set_zoom"]
+
+[[permission]]
 identifier = "allow-window-close"
 description = "Enables the window_close custom command"
 [permission.commands]

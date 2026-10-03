@@ -1,0 +1,36 @@
+/* Book: Jupyter Book's shape, a teal accent, a sidebar beside the page. */
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --bg-raised: #f6f8f9;
+  --bg-inset: #f0f3f4;
+  --text: #1f2a30;
+  --text-strong: #0b1418;
+  --text-dim: #5b6b73;
+  --accent: #0b7a75;
+  --border: #dfe5e8;
+  --danger: #b42318;
+  --warn: #9a6200;
+  --success: #1f7a3d;
+  --font-body: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --font-display: var(--font-body);
+  --font-mono: ui-monospace, 'Cascadia Code', 'SF Mono', Menlo, Consolas, monospace;
+  --site-width: 74rem;
+  --page-size: 16px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12181b;
+    --bg-raised: #182125;
+    --bg-inset: #1c262a;
+    --text: #dbe4e8;
+    --text-strong: #ffffff;
+    --text-dim: #8fa1a9;
+    --accent: #3cc2b9;
+    --border: #26343a;
+    --danger: #f97066;
+    --warn: #fdb022;
+    --success: #47cd89;
+  }
+}

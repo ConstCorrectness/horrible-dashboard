@@ -10,48 +10,22 @@ immediately and irreversibly exploitable (gists and Pages are crawled for exactl
 Everything else — a home path that names you, a traceback, a widget that will render as
 nothing — is a warning shown alongside.
 
-Scanned surfaces are sources and the *text* representations of outputs. Base64 image
-payloads are skipped: they are not text a person pasted, and random base64 matches
-short key prefixes often enough to train people to click through.
+The patterns themselves live in `backend/publishing/scan.py`, shared with Scrive; this
+file decides which surfaces of a notebook to feed them. Scanned surfaces are sources and
+the *text* representations of outputs. Base64 image payloads are skipped: they are not
+text a person pasted, and random base64 matches short key prefixes often enough to train
+people to click through.
 """
 
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
 from backend.modules.notebook.models import PublishFinding
+from backend.publishing.scan import scan_text as _scan_hits
 
 WIDGET_MIME = "application/vnd.jupyter.widget-view+json"
-
-#: Label, pattern. Prefix-anchored formats first; the generic assignment last so a
-#: token that matches both is reported by its specific name.
-SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    (
-        "GitHub token",
-        re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,})\b"),
-    ),
-    ("API key (sk-…)", re.compile(r"\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}")),
-    ("Hugging Face token", re.compile(r"\bhf_[A-Za-z0-9]{30,}\b")),
-    ("AWS access key", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
-    ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
-    ("Slack token", re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}")),
-    ("Private key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
-    (
-        "Credential in code",
-        re.compile(
-            r"(?i)\b\w*(?:api[_-]?key|secret|token|passw(?:or)?d)\w*\s*[:=]\s*"
-            r"['\"][^'\"\s]{8,}['\"]"
-        ),
-    ),
-)
-
-#: A home directory, which names the account it belongs to. One or two backslashes,
-#: because a Windows path appears escaped inside a repr and bare inside a print.
-HOME_PATH = re.compile(
-    r"\b[A-Za-z]:\\{1,2}Users\\{1,2}[^\\\s'\"<>]+|/(?:home|Users)/[^/\s'\"<>]+"
-)
 
 
 def _text(value: Any) -> str:
@@ -72,11 +46,6 @@ def _output_text(output: dict[str, Any]) -> str:
     return "\n".join(p for p in parts if p)
 
 
-def _mask(secret: str) -> str:
-    """Enough to find it in the cell, not enough to use it."""
-    return f"{secret[:4]}…" if len(secret) > 4 else "…"
-
-
 def scan(nb: Any) -> list[PublishFinding]:
     findings: list[PublishFinding] = []
     seen: set[tuple[int, str, str, str]] = set()
@@ -88,32 +57,16 @@ def scan(nb: Any) -> list[PublishFinding]:
             findings.append(finding)
 
     def scan_text(index: int, cell_id: str, where: str, text: str) -> None:
-        if not text:
-            return
-        for label, pattern in SECRET_PATTERNS:
-            for match in pattern.finditer(text):
-                add(
-                    PublishFinding(
-                        cell=index,
-                        cell_id=cell_id,
-                        where=where,
-                        kind="secret",
-                        label=label,
-                        excerpt=_mask(match.group(0)),
-                        blocking=True,
-                    )
-                )
-        match = HOME_PATH.search(text)
-        if match:
+        for hit in _scan_hits(text):
             add(
                 PublishFinding(
                     cell=index,
                     cell_id=cell_id,
                     where=where,
-                    kind="path",
-                    label="Home directory path",
-                    excerpt=match.group(0)[:80],
-                    blocking=False,
+                    kind=hit.kind,
+                    label=hit.label,
+                    excerpt=hit.excerpt,
+                    blocking=hit.blocking,
                 )
             )
 

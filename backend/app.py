@@ -131,6 +131,9 @@ from backend.modules.records import (
     register_records_tools,
 )
 from backend.modules.records import router as records_router
+from backend.modules.scrive.agent_tools import (
+    register_agent_tools as register_scrive_tools,
+)
 from backend.modules.lsp import LspManager
 from backend.modules.lsp import router as lsp_router
 from backend.modules.mcp import router as mcp_router
@@ -162,6 +165,10 @@ from backend.modules.social import router as social_router
 from backend.modules.notebook import handle_notebook_message, notebook_manager
 from backend.modules.docs import router as docs_router
 from backend.modules.notebook import router as notebook_router
+from backend.modules.scrive import router as scrive_router
+from backend.modules.scrive import watcher as scrive_watcher
+from backend.modules.scrive.runner import runner as scrive_outbox
+from backend.modules.scrive.kernel import handle_scrive_kernel_message, scrive_kernels
 from backend.modules.keymap import router as keymap_router
 from backend.modules.notes import router as notes_router
 from backend.modules.plugins import router as plugins_router
@@ -264,6 +271,12 @@ async def lifespan(app: FastAPI):
     # Deep-research runner: resumes any run that was in flight when the process
     # last died (steps stuck `running` reset to `pending`), then works the queue.
     research_runner.start()
+    # Pushes on-disk page changes (another editor, git, an agent tool) to open
+    # Scrive editors. Optional: without watchfiles a stale save still 409s.
+    scrive_watcher.start()
+    # Scrive's outbox: sends approved posts, promotes scheduled ones every 30 s (the
+    # repo has no scheduler), and resumes a send a restart cut off.
+    scrive_outbox.start()
     # Fill the remote providers' model listings (OpenRouter's catalog, NVIDIA NIM's
     # `/v1/models`) in the background, so the first model dropdown opens filled
     # rather than waiting on a round trip to the other side of the internet. Never
@@ -287,6 +300,8 @@ async def lifespan(app: FastAPI):
 
         _finish_training()
         research_runner.stop()
+        await scrive_watcher.stop()
+        await scrive_outbox.stop()
         agent_routes.stop_warm_model_lists()
         # Flushes the batch in hand on the way out: those are the events of the turn
         # that was most likely still running, which is the one somebody will want.
@@ -305,6 +320,7 @@ async def lifespan(app: FastAPI):
         # would strand orphaned ipykernels.
         await training_kernels.shutdown_all()
         await notebook_manager.shutdown_all()
+        await scrive_kernels.shutdown_all()
         # Same reasoning: llama-server is a child process holding gigabytes of
         # mapped weights and a bound port. An orphan survives a reload and then
         # makes the next spawn fail on a port that looks free.
@@ -423,6 +439,7 @@ app.include_router(browser_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(files_router, prefix="/api")
 app.include_router(notebook_router, prefix="/api")
+app.include_router(scrive_router, prefix="/api")
 app.include_router(docs_router, prefix="/api")
 app.include_router(notes_router, prefix="/api")
 app.include_router(clubhouse_router, prefix="/api")
@@ -540,6 +557,11 @@ register_search_tools()
 # free, commit and createSchema go through the permission gate.
 register_records_tools()
 
+# Register the Scrive agent tools (grouped under `scrive`): read and search are
+# free; writing a page or scene goes through the permission gate. None of them
+# publishes — see backend/modules/scrive/agent_tools.py.
+register_scrive_tools()
+
 # Discover and mount backend plugins (bundled, HORRIBLE_PLUGINS_DIR, and pip entry
 # points). Ships empty; each plugin's routes mount under /api + its prefix. Agent
 # tools, /ws channels, dash facades, and lifespan hooks are read from the registry
@@ -643,6 +665,8 @@ async def ws(websocket: WebSocket) -> None:
                 await handle_training_message(conn, msg)
             elif channel == "notebook":
                 await handle_notebook_message(conn, msg)
+            elif channel == "scrive-kernel":
+                await handle_scrive_kernel_message(conn, msg)
             elif channel == "network":
                 await handle_network_message(conn, msg)
             elif channel == "collab":
@@ -693,6 +717,7 @@ async def ws(websocket: WebSocket) -> None:
         datasets_unsub()
         training_kernels.detach(conn)
         notebook_manager.detach(conn)
+        scrive_kernels.detach(conn)
         collab_manager.drop(conn)
         chat_manager.drop(conn)
         await hassault_on_disconnect(conn)

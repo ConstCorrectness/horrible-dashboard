@@ -455,8 +455,11 @@ it was published, and the next publish makes a new copy.
 - **Pages is public-only.** Pages on a private repository needs a paid plan, so a
   private repository is refused up front rather than producing a link that 404s.
   The repository (`notebook.publish.pagesRepo`, default `notebooks` on your
-  account) is created public when missing; `.nojekyll` goes in first so Jekyll does
-  not drop `_`-prefixed paths; and the slug is remembered, so renaming a notebook
+  account) is created public when missing; `.nojekyll` goes in with every push so
+  Jekyll does not drop `_`-prefixed paths; the page, the `.ipynb` and any stale-file
+  removals land as **one commit** (Git Data API, via the shared
+  [`backend/publishing/`](scrive.mdx#shared-publishing-core) core); and the slug is
+  remembered, so renaming a notebook
   does not move its public URL. Pages builds asynchronously and the result says the
   first publish takes about a minute — a fresh link that 404s looks exactly like a
   broken one.

@@ -62,6 +62,17 @@ EDIT_SAFE_TOOLS: frozenset[str] = frozenset(
         "files.create",
         "files.write",
         "files.mkdir",
+        # Scrive drafts: every page write is marked in the open editor with Keep /
+        # Undo, an outbox draft waits for a person's approval, and none of them
+        # deletes a file or publishes anything.
+        "scrive.createPage",
+        "scrive.draftSocial",
+        "scrive.editPage",
+        "scrive.fillSection",
+        # Writes an edit list and renders a new file beside the source; the source
+        # is never touched and nothing is posted.
+        "scrive.makeClip",
+        "scrive.writeScene",
     }
 )
 

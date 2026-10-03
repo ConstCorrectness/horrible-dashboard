@@ -1,0 +1,5 @@
+{
+  "name": "Article",
+  "description": "One long-form piece as the home page: serif type, numbered sections and equations, references at the end.",
+  "layout": "article"
+}

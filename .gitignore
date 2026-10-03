@@ -118,6 +118,9 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
+# Scrive's {r3f} scene runtime: built by packages/scrive-runtime
+backend/modules/scrive/static/scrive-runtime.js
+
 # pytype static type analyzer
 .pytype/
 

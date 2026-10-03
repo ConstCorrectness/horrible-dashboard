@@ -75,6 +75,7 @@ fn main() {
             window::window_is_maximized,
             window::window_toggle_maximize,
             window::window_close,
+            window::window_set_zoom,
             window::window_start_resize_dragging,
             window::window_open_workspace,
             window::browser_open_url,

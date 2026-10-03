@@ -983,6 +983,31 @@ gestures arriving from anywhere else.
 `mode` and `snap` are set through **one** action (`SET_WINDOW_MODE`) rather than
 several, so `restoreRect` is written and consumed in a single place.
 
+### Page zoom
+
+Ctrl+= (or Ctrl++), Ctrl+- and Ctrl+0 zoom the whole dashboard the way a browser zooms
+a page, and so does Ctrl+wheel. The steps are Chromium's own (50% … 300%).
+
+| Layout  | Who zooms |
+| ------- | --------- |
+| Browser | **The browser.** Its page zoom already owns those keys, so the app binds nothing — a binding would `preventDefault` a working feature away. |
+| Desktop | **`core/zoom.ts`**, through the shell's `window_set_zoom` (`src-tauri/src/window.rs`). Tauri turns WebView2's own zoom keys off, so without this the keys did nothing. The commands are `shell.zoomIn`, `shell.zoomOut`, `shell.zoomReset`, registered only where the seam has `setZoom`. |
+
+Rules that are quiet if wrong:
+
+- **Native zoom, not CSS `zoom`.** Every pane — canvases, CodeMirror, pointer maths,
+  the 3D views — sees an ordinary page at a different device-pixel ratio, exactly as
+  under browser zoom, so none of them has to know.
+- **Native browser panes are separate webviews** placed in *window* pixels, while a
+  pane measures itself in CSS pixels, which zoom makes bigger. `tauriWindow.ts` scales
+  their bounds by the zoom factor on the way to the shell; the panes' bounds polling
+  re-syncs them after a zoom change.
+- **Ctrl+wheel yields** to anything that handled the event first: a canvas that zooms
+  itself (the model graph) calls `preventDefault` and keeps its gesture. The listener is
+  in the bubble phase on `window` for exactly that reason.
+- **Remembered per machine** (localStorage, guarded): a zoom belongs to the screen you
+  are sitting at, not to your account. It is restored at boot.
+
 ## Where it mounts
 
 The window layer is a **sibling of the shell's views**, inside `.shell-content`:

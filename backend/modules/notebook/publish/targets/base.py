@@ -7,10 +7,9 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from backend.modules.notebook.models import PublicationModel
+from backend.publishing.errors import PublishError
 
-
-class PublishError(RuntimeError):
-    """A failure worth showing the person verbatim — with what to do about it."""
+__all__ = ["PublishContext", "PublishError", "PublishResult", "PublishTarget"]
 
 
 @dataclass

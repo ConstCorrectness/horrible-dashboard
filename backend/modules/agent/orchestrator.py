@@ -966,6 +966,12 @@ _GROUP_DESCRIPTIONS: dict[str, str] = {
         "row-shaped data): read them, propose field values for review, and define "
         "new tables."
     ),
+    "scrive": (
+        "Scrive sites — blog posts and pages as MyST Markdown files: list, read and "
+        "search them, propose an outline for a new page, fill its sections, edit by "
+        "section, write 3D scenes, cut and render video clips and GIFs, and review "
+        "a page. Drafts only: nothing here publishes or posts."
+    ),
 }
 
 # Keywords that auto-preload a group for a turn (so common asks stay one-shot). A
@@ -1218,6 +1224,29 @@ _GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
         "a row",
         "spreadsheet",
         "data entry",
+    ),
+    # Phrases, not "post" or "page": both are everyday words in other asks (an HTTP
+    # POST, a web page), and a bare match would preload this group on all of them.
+    "scrive": (
+        "blog",
+        "myst",
+        "jupyter book",
+        "write a post",
+        "draft a post",
+        "a post about",
+        "new post",
+        "devlog",
+        # Not "release notes": matching is substring, and it contains `network`'s
+        # "lease".
+        "changelog",
+        "tutorial post",
+        "deep dive",
+        "outline for",
+        "x thread",
+        "tweet thread",
+        "make a gif",
+        "a gif of",
+        "video clip",
     ),
 }
 

@@ -1,0 +1,1181 @@
+---
+sidebar_position: 41
+sidebar_label: Scrive
+---
+
+# Module: scrive
+
+A Notion-like editor over **MyST Markdown files on disk**, and a publisher that puts
+them on GitHub Pages, X, LinkedIn and YouTube. A Scrive *site* is a folder that
+[Jupyter Book 2](https://jupyterbook.org) can build, git can track, and any other
+editor can open. Scrive never keeps a second copy of a page anywhere else.
+
+**Status: Phases 0–7 implemented.**
+
+- Phase 0: sites, pages with revision-checked saves, the on-disk watcher, and the
+  shared publishing core.
+- Phase 1: the MyST pipeline — parsing, the source-preserving writer (gated by a
+  golden round-trip corpus), and a live Preview in Source / Split / Preview modes.
+- Phase 2: the block editor (Write mode) over the same files, the MyST printer and
+  the mdast ⇄ editor converter, a properties strip, paste/drop uploads, and the
+  posts table and board.
+- Phase 3: rich blocks — `{code-cell}` running on a Python kernel with an output
+  cache, `.ipynb` pages, and `{r3f}` scenes in a sandboxed React Three Fiber runtime
+  with tweaks, posters and recordings.
+- Phase 4: the agent — a `scrive` tool group that reads, searches and edits MyST text
+  by section, post templates, an outline → approve → fill flow, a review strip for
+  agent edits, "ask about selection", a review pass, and a semantic index per site.
+- Phase 5: site publishing — four site themes, a static site built in the browser by
+  the Preview's own renderer (pages, tags, feed, sitemap, share cards), and GitHub
+  Pages in two modes: the static site, or the sources plus a Jupyter Book workflow.
+- Phase 6: the outbox — X threads, LinkedIn link posts and YouTube uploads composed per
+  page, checked, approved, sent now or scheduled by a person, and sent by a resumable
+  runner. The agent can draft them, never send them.
+- Phase 7: the clip editor — one source video, one track: cut, crop to a platform's
+  shape, change the speed, caption (by hand or by local speech-to-text), put text
+  over it, swap the sound, and render for X, YouTube, a page or a GIF with ffmpeg. A
+  screen recorder and the 3D scenes' Record button feed it; a render becomes an X or
+  YouTube draft.
+
+Later: dev.to and Hashnode targets, PDF export, custom theme layouts.
+
+- Frontend: `packages/core/src/modules/scrive/`
+- Backend: `backend/modules/scrive/`
+- Shared publishing infrastructure: `backend/publishing/`
+
+## Decisions this module is built on
+
+| Decision | Why |
+| --- | --- |
+| The source of truth is **MyST files**, not block JSON. | Pages stay git-friendly, open in any editor, and `jupyter book build` builds the site as-is. The block editor is a view over the file. |
+| **The agent drafts and a human sends.** | Same rule as [notebook publishing](notebook.mdx#publishing): no agent tool puts anything on the internet. The agent can write pages and queue *drafts*, and every send is a click (a scheduled send counts once it has been approved). |
+| [Notes](editor.mdx) stays separate. | Notes are quick scratch text in `notes.json`. Scrive is for long-form writing that gets published. |
+
+## Sites on disk
+
+```
+<scrive.root>/<site>/          default root: ~/horrible/scrive
+  myst.yml      Jupyter Book 2 / mystmd project + toc (posts/*.md and pages/*.md by pattern)
+  scrive.yml    Scrive's own settings: {version, title, theme, targets, defaults}
+  index.md
+  posts/YYYY-MM-DD-slug.md     MyST + frontmatter (title, date, status, tags, description)
+  pages/*.md  notebooks/*.ipynb
+  media/  scenes/
+  .scrive/      cache + trash (gitignored)
+```
+
+- `scrive.yml` is kept separate from `myst.yml` so that a real `jupyter book build`
+  never runs into keys it doesn't recognise. It carries a `version` from the start,
+  so the first migration has something to key on.
+- A site's id is its folder name and must match `[a-z0-9][a-z0-9-]{0,63}`.
+
+### Rules that fail silently if broken
+
+- **Bytes, not text.**
+  - Pages are read and written as raw UTF-8 bytes with no newline translation.
+    `atomic_write.write_text_atomic` opens files in text mode, which on Windows turns
+    every `\n` into `\r\n`. You can't see it in the editor, but it rewrites every
+    line of a hand-written file on the first save.
+  - The editor writes back the line ending it read (`eol.ts`, majority wins).
+    Otherwise CodeMirror would join lines with `\n` and do the same thing from the
+    other side.
+- **A revision is a hash of the file's bytes.**
+  - A save names the revision it was based on. A stale save gets a 409 that carries
+    the current page.
+  - When the file changes on disk while the pane has unsaved edits, the pane shows a
+    banner offering **Load disk version** or **Keep mine**. Neither choice
+    overwrites silently.
+  - When there are no unsaved edits, the disk version is simply loaded.
+- **The frontmatter is the property schema.** Title, date, status and tags are read
+  from the file each time it is listed and stored nowhere else.
+  - A post's title falls back to its first `#` heading, then to its file name.
+  - Malformed YAML reads as no frontmatter. One broken file must not hide the whole
+    site.
+- **Delete is a move** into `.scrive/trash/`. These are the person's own files, often
+  not yet committed anywhere.
+- **Paths are escape-guarded.** A page must resolve inside its site, must be `.md` or
+  `.ipynb`, and must not be under `.scrive/`, `_build/`, `.git/`, `templates/` or
+  `.github/`.
+
+### The watcher
+
+`watcher.py` runs one `watchfiles` task over the Scrive root, started from the app
+lifespan.
+
+- Every change to a page becomes a `scrive` / `page.changed` event carrying the new
+  revision.
+- That includes the editor's own saves. A client compares the revision with the one
+  it holds and drops its own echo, which is simpler than the backend trying to guess
+  who wrote a file.
+- **An event reports what is on disk now, not what the OS said happened.** On
+  Windows an atomic save (temp file + `os.replace`) reaches `watchfiles` as
+  *deleted* then *added* for the same path. Taken literally, every save from every
+  editor told open panes their page was gone. The pane also re-reads before showing
+  "deleted", because only a 404 proves the file is gone.
+- **Identical text is never a conflict.** A save's own echo can arrive before the
+  save's response, and two saves can fire in one tick. When disk and editor agree,
+  the pane adopts the disk revision and goes clean instead of raising a banner.
+- `watchfiles` is optional. Without it nothing is pushed, and a stale save is still
+  caught by the 409.
+
+## The MyST pipeline
+
+Everything here is in `packages/core/src/modules/scrive/myst/` and `render/`, and is
+pure where it can be, so it runs in core's DOM-less vitest.
+
+### Parsing
+
+`myst-parser` (mystmd, MIT) turns MyST into the **MyST mdast** — the AST Jupyter Book 2
+builds from, so a Scrive block and a JB block are one vocabulary. Scrive uses the
+*raw* parse, which keeps what both a renderer and a writer need: a directive carries
+its `name`, `args`, `options`, its raw body as `value`, **and** the parsed body as
+`children`.
+
+The frontmatter is split off before parsing (`splitFrontmatter`) and read with
+`js-yaml` on the JSON schema, so dates stay the strings the author typed and nothing in
+a file can construct anything but plain data.
+
+`myst-to-md` was evaluated as the writer and rejected. It is lossy and opinionated:
+`$x^2$` becomes `` {math}`x^2` ``, `- item` becomes `*   item`, an admonition's
+`:class: dropdown` option is dropped, and `(label)=` targets are dropped as
+"unsupported" — it replaces any node type it doesn't know with an empty string.
+
+### The source-preserving writer
+
+`myst/segments.ts` represents a file as an ordered list of **segments** whose
+concatenation is the file, byte for byte. Every edit replaces the *body* of one
+segment; every other byte stays as it was. So a hand-written file is never
+reformatted by being opened and saved, and its git diff is exactly the block that
+changed.
+
+- A segment starts on the first line of each top-level node. `+++` breaks wrap the
+  content after them in `block` nodes; those are flattened, and each `+++` marker gets a
+  segment of its own (kind `break`).
+- A segment's **body** is its node's own lines; its **tail** is everything up to the
+  next segment.
+- The tail matters. `myst-parser` emits **no node** for a `[ref]: url` definition, and
+  **hoists** footnote definitions to the end of the tree with the position of the
+  document's *last* line. Neither can start a segment reliably, so both ride in the tail
+  of the block before them — and survive any edit of that block, because an edit
+  replaces only the body.
+- A footnote definition never starts a segment, and no segment starts inside the node
+  before it. The hoisted position can fall *inside* a directive that ends the file, and
+  starting a segment there cut the directive in two.
+- Positions are line-granular (markdown-it maps), and top-level blocks are
+  line-aligned, so cutting on lines never splits a block.
+- An edited body is written back in the file's own line ending.
+
+**The golden corpus gates this.** `__tests__/corpus/` holds real-world MyST — a
+Jupyter Book page (frontmatter with nested YAML, labels, math, colon fences, a
+code-cell, `+++` with JSON, figures, tables, nested-fence tab sets, a dropdown,
+comments, definition lists, footnotes, reference links, an `{r3f}`), CommonMark edge
+cases, nested directives, and empty / frontmatter-only files. Each fixture, plus a CRLF
+and a no-final-newline variant generated in the test, must:
+
+1. come back byte-identical from split → join;
+2. come back byte-identical when every segment is "edited" to its own body;
+3. when one block is edited, differ from the original in exactly that block.
+
+The corpus is in `.prettierignore`: a formatter touching a fixture would invalidate it.
+
+### Preview
+
+`render/MystView.tsx` renders the mdast to React. It is the same component the static
+site build will render to HTML in Phase 5, so what you preview is what gets published.
+
+| MyST | Rendered as |
+| --- | --- |
+| headings, paragraphs, emphasis, links, images, lists, task lists, quotes, rules, tables (with alignment), definition lists | semantic HTML; headings get MyST/GitHub-style anchors |
+| `$…$`, `$$…$$`, `{math}`, `{eq}` | KaTeX, via the one entry point `notebook/math.ts` |
+| code fences | Lezer highlighting (the docs renderer's), coloured from theme tokens |
+| `{note}` … `{danger}`, `{admonition}` | admonition boxes; `:class: dropdown` makes them collapsible |
+| `{figure}` | `<figure>` with caption, labelled for cross-references |
+| `{dropdown}`, `<details>` | `<details>` |
+| `{tab-set}` / `{tab-item}`, `{grid}` / `{card}` | tabs, CSS grid, cards (sphinx-design shapes; parsed by Scrive, since `myst-parser` leaves them raw) |
+| `{iframe}` | a sandboxed embed, `https://` only |
+| `{mermaid}` | Mermaid, loaded on first use, `securityLevel: 'strict'` |
+| `{code-cell}` | the code, labelled; execution arrives in Phase 3 |
+| `{video}` | `<video>` from the site's media |
+| `{r3f}` | a labelled scene slot; the sandboxed renderer arrives in Phase 3 |
+| footnotes, `{ref}`, `{cite}`, `(label)=` | numbered footnotes with back-links, anchors |
+| anything else | **its source, in a labelled box** |
+
+Rules that are quiet if wrong:
+
+- **Unknown is visible.** A directive or role Scrive does not draw renders as its
+  source in a box saying so. A page must never quietly lose a paragraph because the
+  preview didn't recognise it.
+- **Nothing a page says runs on the app's origin.** Pages may be agent-written, and the
+  preview shares an origin with the app's session. React renders every string as text
+  except four, each escaped or sanitized at its source: KaTeX, the Lezer highlighter,
+  Mermaid's strict mode, and raw HTML through `render/sanitize.ts` — an allowlist that
+  unwraps unknown tags, drops every handler and style attribute, and removes `script`,
+  `iframe`, `object`, forms and `svg` with their content. Links pass `safeHref`
+  (http, https, mailto, relative; never `javascript:` or `data:`, including the
+  tab-split `java\tscript:` form browsers accept).
+- **Media resolves the way MyST resolves it** — relative to the page's own folder, or
+  to the site root when it starts with `/` — and is served by the asset route below.
+  A post in `posts/` that means the site's `media/` folder writes `../media/x.png` or
+  `/media/x.png`.
+- **Raw inline HTML stays inline.** Inside a paragraph, heading or table cell it
+  renders in a `<span>`, never a block element inside a `<p>`.
+- **Page content is not chrome.** It reads `--scrive-page-*` tokens (prose measure,
+  size, colours) that default to the app theme, so a Phase 5 site theme re-skins a page
+  by overriding tokens.
+
+### Modes
+
+The page pane has four modes, remembered per browser:
+
+- **Write** — the block editor (below). Not offered for `.ipynb` pages.
+- **Source** — the MyST text in CodeMirror.
+- **Split** — source beside the preview. Moving the cursor scrolls the preview to the
+  block it is in.
+- **Preview** — the page alone, on a measuring grid, at phone (390px), tablet (768px)
+  or desktop width.
+
+The preview re-parses 150 ms after typing settles. Clicking a block in the preview
+puts the cursor on its first line (switching Preview to Split to show it).
+
+New pages put their title in the frontmatter only. A `# Title` heading as well would
+show the title twice in Jupyter Book, which renders the frontmatter title itself.
+
+## The block editor
+
+Write mode is TipTap 3 (`editor/`) over the same file. It is a *view*: the page
+pane's CodeMirror buffer is still the one copy of the text, and Write writes every
+change back into it as a minimal edit. Saving, conflicts, the watcher and the preview
+never need to know which mode the author typed in.
+
+### File ⇄ blocks (`myst/doc.ts`)
+
+`openDoc` cuts the file into segments and makes **one top-level block per segment**,
+tagged with the segment's id (a `seg` attribute that is never rendered, so a copy
+pasted elsewhere is new text). `writeDoc` goes back, block by block:
+
+| Block | Written as |
+| --- | --- |
+| Unchanged (deep-equal to the block as it opened) | The segment's original bytes, body and tail |
+| Edited | The block printed as MyST in place of the body; the tail is kept |
+| New, or a second copy of one | The block printed |
+| Untagged but identical to an untouched original | That original's bytes — ProseMirror moves the tag to the empty half when you press Enter at the start of a paragraph |
+| Emptied | Nothing: a deletion |
+
+A deleted block's tail survives if it holds anything but blank lines (a `[ref]: url`
+another paragraph still uses). Wherever the output departs from the file's order, the
+blocks either side are kept a blank line apart, and blank-only tails stay behind, so
+a moved block never glues onto its new neighbour or leaves a stray blank line.
+
+### Faithful or raw (`myst/pm.ts`)
+
+The converter turns a block into rich editor content **only when that cannot lose
+anything**. It converts what it can represent and throws `Unsupported` otherwise; then
+`faithful` prints the converted block, re-parses the print, and compares it with the
+original node. A block that fails either check opens as a **raw block** (`mystBlock`):
+its source verbatim, rendered by the same `MystView` as the Preview, editable as text
+when selected. After TipTap loads the document the check runs once more on what TipTap
+actually holds, since its schema can normalise content (its code mark excludes all
+others, so `` **`x`** `` cannot survive as a rich block).
+
+Equality is MyST's, not the file's:
+
+- A soft line break is a space. The editor flows paragraphs, so an *edited* paragraph
+  that was hand-wrapped comes back as one line. Unedited paragraphs keep their wrapping.
+- A directive's raw `value` is ignored in favour of its parsed children.
+- `myst-parser` records no difference between a tight and a loose list, so lists print
+  tight.
+
+| Rich in the editor | MyST |
+| --- | --- |
+| Text, headings 1–6, bulleted / numbered / task lists, quotes, dividers | CommonMark + GFM task lists |
+| Bold, italic, inline code, links, hard breaks | |
+| Code blocks (language and meta kept) | ```` ``` ```` fences |
+| Tables, with column alignment | GFM tables |
+| Inline math, display math with a label | `$…$`, `$$…$$ (label)`, `{math}` with `:label:` |
+| Callouts with a body of blocks | `{note}` … `{danger}`, `{admonition}`, `{dropdown}`, and `:class: dropdown` |
+| Roles, footnote references, inline HTML, images | chips; an image's path and alt text open when selected |
+
+Everything else — figures, embeds, tabs, cards, Mermaid, code cells, `{r3f}`, labels,
+comments, `+++` breaks, definition lists, HTML blocks — is a raw block. Footnote
+*definitions* live in segment tails and are edited in Source.
+
+### The printer (`myst/printer.ts`)
+
+Only an edited block is printed, on `mdast-util-to-markdown` plus its GFM table,
+task-list and footnote extensions. MyST additions:
+
+- Handlers for inline and display math, roles, targets, comments, container
+  directives and raw source.
+- Directives with a Markdown body use **colon fences** (`:::{note}`), the MyST guide's
+  recommendation, unless the block was written with backticks. The fence is made one
+  longer than any run of its character opening a body line, so nested directives and
+  code fences stay inside. Flag options print bare (`:open:`).
+- Rules print as `***`: a `---` opening the body would read as frontmatter.
+- `unsafe` patterns escape MyST's extra syntax in plain text: `$` (math), `%` at a line
+  start (comment), and `{name}` right before a backtick (a role).
+
+### Editing
+
+- **Slash menu** (`/`): text blocks, lists, code, table, equation, inline math, the
+  callouts, and MyST templates for figure, embed, video, tabs, cards, diagram, code
+  cell, 3D scene and raw source. A template is inserted as a raw block and selected, so
+  its source opens for filling in.
+- **Block handle** beside the hovered block: `+` adds a block below and opens the
+  slash menu; the grip drags the block (ProseMirror's own move, so it keeps its source
+  bytes); clicking the grip opens **Turn into**, Duplicate, **Edit as MyST** (hold a
+  rich block as source) / **Edit as blocks** (the reverse), and Delete.
+- **Selection toolbar:** bold, italic, code, link, and *math* (the selection becomes
+  inline math). Typing `$x$` makes inline math; `$$` and a space starts an equation.
+- **Fields open on purpose.** A raw block's source, a math block's TeX, a role's name
+  and value open when the author selects the node — not when the editor merely
+  *starts* with it selected (a page whose first block is a label opens with a node
+  selection on it).
+- **Paste:** Markdown pasted as plain text (from an agent, a README) becomes blocks;
+  a single paragraph pastes inline. Files pasted or dropped are uploaded (below):
+  images become inline images, videos a `{video}` block, anything else a link — each
+  with a path **relative to the page**, so the site still builds in Jupyter Book.
+
+### Properties
+
+Above the blocks: the title (as the page's own heading style), status, date, tags and
+description. Each change rewrites **one frontmatter field** (`myst/frontmatter.ts`):
+its own lines are replaced and every other line — comments, key order, quoting — is
+left alone. Values are written by `js-yaml` on the JSON schema, so a string YAML would
+misread (`a: b`, `true`) is quoted, and lists are written flow-style. Other keys are
+listed as "also in frontmatter" and edited in Source.
+
+## Code cells
+
+A `{code-cell}` is a rich block in Write (its source is always editable; **Shift+Enter**
+or **Run** runs it) and renders in the Preview with its outputs. The page header has
+**Run all** and the kernel's status whenever the page has code cells. Running is
+always an explicit click: opening or previewing a page never starts Python.
+
+### The shadow notebook
+
+`notebook_core.KernelSession` runs an `.ipynb` that is authoritative for its cells and
+outputs, and MyST files do not store outputs. So each page gets a **shadow notebook**,
+`<site>/.scrive/cache/cells/<page>.ipynb` (gitignored with the rest of `.scrive/`),
+run on the `scrive-kernel` channel by `backend/modules/scrive/kernel.py` — the same
+engine, client (`kernelClient.ts`, `SessionStore`) and output renderer as the Notebook
+editor. The outputs the kernel writes back *are* the output cache.
+
+- **Cell ids are content.** A shadow cell's id is `c-<sha256(source)[:12]>-<n>`, `n`
+  counting identical sources in page order (`cells.ts` ⇄ `kernel.cell_id`, pinned by a
+  test on both sides). An output is found by its *source*: inserting a block above
+  does not detach it, and editing a cell makes it a new cell with no output — an old
+  output is never shown under new code.
+- **A run syncs first.** Before running, the shadow is made to match the page's code
+  cells exactly (`syncOps`: deletes, inserts, the moves that are needed), so a run
+  never executes code that is no longer on the page.
+- **Outputs without a kernel.** `GET /scrive/sites/{site}/cells?path=` reads the cache
+  with no kernel; the Preview of a page that ran yesterday shows its results.
+- **The Python** is the Notebook editor's managed venv (a library installed for one is
+  there for the other); the working directory is the page's folder, as Jupyter Book
+  uses when it executes a page; the mode is classic (top to bottom).
+
+### Outputs are made safe
+
+The notebook's `OutputRenderer` trusts HTML and SVG — a notebook is your own code on
+your own machine. A Scrive page may be agent-written or downloaded, and the preview
+shares the app's origin, so `render/CellOutputs.tsx` sanitizes `text/html`
+(`sanitize.ts` keeps tables, so a DataFrame survives) and draws SVG as an `<img>`,
+which never runs script. Verified live: an output carrying `<script>`, an `onerror`
+handler and a scripted SVG ran none of them.
+
+## Notebook pages
+
+An `.ipynb` page opens in Preview (it has no Write mode) and renders through the same
+`MystView` as a page: `myst/notebook.ts` turns markdown cells into MyST nodes and code
+cells into nodes carrying the outputs stored in the file, under the same output
+safety rules. It is read-only here; the Notebook editor edits notebooks.
+
+## 3D scenes
+
+`{r3f} ../scenes/orbit.tsx` mounts a React Three Fiber component from the site, with
+`:height:`, `:params:` and `:poster:` options. In Write it is a rich block whose
+**Poster** button saves the current frame to `media/<scene>-poster.png` and writes
+`:poster:` into the block, and whose **Record** button saves five seconds of the canvas
+as `media/<scene>-take.webm`. The Preview offers the tweaks only.
+
+A scene is a TSX module whose default export is a component receiving `{ params }`. It
+may import `react`, `three`, `@react-three/fiber` and `@react-three/drei` — nothing
+else.
+
+```tsx
+import { useFrame } from '@react-three/fiber';
+import { useRef } from 'react';
+import type { Mesh } from 'three';
+
+export default function Spin({ params }: { params: { speed?: number } }) {
+  const mesh = useRef<Mesh>(null);
+  useFrame((_, dt) => mesh.current && (mesh.current.rotation.y += dt * (params.speed ?? 1)));
+  return (
+    <mesh ref={mesh}>
+      <torusKnotGeometry />
+      <meshNormalMaterial />
+    </mesh>
+  );
+}
+```
+
+`:params:` is a JSON object of tweakables: a number (a slider), a boolean (a
+checkbox), a colour `"#rrggbb"`, or `{"value": 1, "min": 0, "max": 5, "step": 0.1}`.
+Tweaks re-render the scene live without reloading it; they are not written back.
+
+### The sandbox
+
+Scene code is often agent-written, so it runs where it can do no harm:
+
+- A `srcdoc` iframe with `sandbox="allow-scripts"` and **never** `allow-same-origin`:
+  an opaque origin with no access to the app, its storage, cookies or session.
+- A CSP of `default-src 'none'` plus inline script and eval. **The frame loads nothing
+  over the network.** The page posts in everything it runs: first the runtime, then
+  the scene's source, which the page fetched from the site's asset route.
+- The frame talks to the page only by `postMessage` (`ready`, `error`, `poster`,
+  `recorded`), and the page only listens to its own frame.
+
+The first design loaded the runtime with `<script src>`. The app's own preview browser
+refuses *every* subresource request from an opaque origin, so the runtime is posted in
+instead. That also means a scene cannot load models or textures by URL yet; scenes are
+self-contained (geometry, procedural materials) until assets are posted in the same
+way.
+
+### The runtime (`packages/scrive-runtime`)
+
+One classic script holding its own React (pinned to what R3F 9 supports), three, R3F,
+drei and `sucrase`, which compiles a scene's TSX in the frame. It is its own package so
+its React never touches the app's. It builds into
+`backend/modules/scrive/static/scrive-runtime.js` (gitignored) and is served at
+`GET /scrive/runtime.js`; `pnpm dev` builds it on first run and the desktop backend
+build builds it before copying `backend/`. About 3 MB minified (≈ 930 kB gzipped),
+fetched once per session for every scene on every page. `ready` is sent when the
+canvas is created rather than on the first frame, since a hidden window runs no
+animation frames.
+
+## The agent
+
+The agent writes Scrive pages the way a person would hand them to an editor: as
+**MyST text**, never as editor JSON, and section by section, so every byte it does
+not touch stays as the author wrote it. It **drafts and never publishes** — no tool
+in the group can push a site, post a thread or upload a video, and a test pins the
+group's whole surface to keep it that way.
+
+### The tools (`backend/modules/scrive/agent_tools.py`)
+
+Backend tools in group `scrive`, so they work with no tab open. The group's guide
+(`backend/modules/agent/guides/scrive.md`) is the agent's MyST cheat sheet and the
+flows below. Writers go through the permission gate and are auto-allowed under
+*accept edits*, like `files.write`: each is marked in the open editor with Keep /
+Undo, and none deletes a file.
+
+| Tool | Writes? | What it does |
+| --- | --- | --- |
+| `scrive.listPages` | | Sites, or a site's pages, scenes, templates (with inputs) and outlines awaiting review. A lone site needs no `site` argument |
+| `scrive.readPage` | | A page's MyST with its revision, outline and `{pending}` placeholders; or one `section`; or a scene's source; or a `template` and its writing guidance |
+| `scrive.searchSite` | | Past posts, pages, scenes and templates by keywords and meaning (below) |
+| `scrive.proposeOutline` | | Files an outline for review. Writes nothing to the site; the agent is told to stop |
+| `scrive.fillSection` | ✓ | Replaces the `{pending}` placeholder under a heading (or the lead, `heading: ''`). Refuses a section that is already written |
+| `scrive.editPage` | ✓ | Ops, all or nothing, against a `base_revision`: `replaceSection`, `deleteSection`, `insert` (after/before a heading, after some text, at start/end), `replaceText` (must match exactly once), `setFrontmatter` |
+| `scrive.createPage` | ✓ | A page from a template (with inputs) or from full MyST. For a real page the agent is told to propose an outline instead |
+| `scrive.writeScene` | ✓ | `scenes/<name>.tsx` for an `{r3f}` block; refuses to overwrite unless asked |
+| `scrive.makeClip` | ✓ | An edit list for a site video (segments, crop, speed, captions, overlays, preset), rendered locally; answers the file and the MyST to embed it. Posts nothing |
+| `scrive.critiquePage` | | The review pass below |
+
+The plan's `scrive.draftSocial` and `scrive.makeClip` arrive with the outbox (Phase 6)
+and the clip editor (Phase 7), and `scrive.selection` became unnecessary: the page
+pane tells the agent what is selected through its agent context (below).
+
+### Editing by section (`sections.py`)
+
+The Python twin of the editor's source-preserving writer, for the agent. A heading is
+an ATX heading outside every fence — a code fence or a MyST colon fence, so a `##`
+inside a `{note}` belongs to the note. A section runs to the next heading of the same
+or a higher level. Lines keep their own `\r`, so a CRLF file stays CRLF; edits add or
+drop blank lines only at their own seams, keeping one between blocks. A heading the
+page does not have is an error that lists the ones it does, so the agent's retry can
+be right. `insert after_text` inside a directive lands after the directive, never in
+it.
+
+### Post templates (`templates.py`)
+
+A template is a MyST file whose frontmatter has a `template:` block — name,
+description, page kind and **inputs** — over headings with `{pending}` placeholders
+saying what belongs under each. `{{input}}` in the body is filled in; a missing
+required input is an error naming it. Beside each one, `<id>.skill.md` tells the
+agent how to write that kind of page well (OpenDesign's split: the template is the
+shape, the skill the craft).
+
+- Built in (`backend/modules/scrive/builtin_templates/`): tutorial, deep dive with a
+  3D figure, paper review, devlog, release notes, thread-first post.
+- Per site: `<site>/templates/<id>.md`, which wins over a built-in of the same id and
+  is never listed as a page. **Save as template** (command, or the page pane) writes
+  the page there with its title, date and status removed.
+- The sites pane's new-post form offers them, asking for their inputs inline.
+
+### Outline → approve → fill
+
+A whole new page is three steps with a person in the middle (Kombai's plan mode):
+
+1. **Generate** (the spark in the sites pane, or `scrive.generate`) sends the request
+   to the agent, which looks at what the site has and calls `scrive.proposeOutline`:
+   title, the lead's intent, sections (heading, intent, planned figure), and a
+   template with its inputs when one fits. The outline is a file in
+   `.scrive/outlines/`; nothing is written to the site.
+2. The **outline pane** (`scrive.outline`) opens by itself. Every part is editable —
+   reorder, add, drop, change levels — and edits are saved as they are made. While an
+   outline waits, the shell shows an **Outline · to review** readout, because the
+   agent has stopped and nothing happens until someone looks.
+3. **Approve and write** creates the page (the template's frontmatter, then each
+   section as a heading over a `{pending}` placeholder holding its intent), opens it,
+   and sends the agent the instruction to fill it. Each `scrive.fillSection` is a
+   write the editor shows as it lands, so the page grows section by section; the
+   agent finishes with `scrive.critiquePage`. **Discard** drops the outline.
+
+Approve and discard are routes behind buttons; no agent tool can approve.
+
+A `{pending}` block renders as a dashed **To write** card (in Write and Preview) with
+a **write with agent** button for that one section.
+
+### Handing a prompt to the chat
+
+Scrive's agent buttons send their prompt through `sendInChat`
+(`modules/agent/openSession.ts`): an ordinary chat turn that shows in the transcript,
+streams, can be stopped and passes the same permission prompts as a typed one. It is
+the sibling of `draftInChat`, which only fills the box, and is used **only** for a
+click whose label already says the agent will act ("Approve and write", "ask",
+"write with agent") on words the person typed or approved. A send waits until a chat
+pane is mounted, its agent is ready and no turn is running, and never touches what
+the person is typing in the box. The wording lives in `prompts.ts`, tested to never
+ask for anything to be published.
+
+### Reviewing what the agent changed
+
+The watcher reports a write by an agent tool as `page.changed` with
+`origin: "agent"` (the store notes the revision it wrote; the watcher claims it once).
+An open page with no unsaved edits loads it as a **review**:
+
+- `myst/changes.ts` compares the segments before and after. Blocks whose exact
+  source is new are marked (a tint and a 2px rule in the margin) in Write — a
+  ProseMirror node decoration, so nothing enters the document — and in Preview.
+  Moved blocks are not counted as changes.
+- A strip says what changed and offers **Keep** or **Undo**. Undo puts back the text
+  from before the first unreviewed agent edit and saves it; consecutive writes (an
+  outline being filled) add up to one review. Undo waits while the person has unsaved
+  edits of their own.
+- A page with unsaved edits gets the ordinary "changed on disk" banner instead; a
+  change from anyone else clears the review.
+
+### Ask about a selection
+
+Select text in Write and choose **ask** in the selection toolbar. The agent gets the
+selected blocks as MyST (their original source when untouched), the exact words when
+the selection is part of a block, and the instruction to change only what was asked.
+The page is saved first, since the agent reads the file. Separately, the page pane's
+agent context (`useAgentContext`) always carries the site, path, revision, mode,
+whether there are unsaved edits, and the current selection.
+
+### The review pass (`critique.py`)
+
+Deterministic, so the agent runs it after filling a page and the page pane's
+**check** button shows the same list (click a finding to jump to its line):
+
+| Severity | Finding |
+| --- | --- |
+| error | A relative link, image, `{figure}` or `{r3f}` path that points at nothing |
+| warning | `{pending}` placeholders left; images and figures without alt text; a heading that skips a level |
+| info | An equation with no sentence beside it; a figure or finding with no link or citation in its paragraph (a heuristic, and it says so); a section over 700 words with no subheading; a post with no description or tags; a code block with no language |
+
+### Search (`search.py`, `index.py`)
+
+`scrive.searchSite` fuses two rankings by rank (RRF, as the library does):
+
+- **Keywords**, always: titles, headings, paths and text of every page, scene and site
+  template.
+- **Meaning**, from a LanceDB collection per site (`scrive-<site>`) of section chunks,
+  each prefixed with its page title and heading. The first search builds it; after
+  that the watcher schedules changed pages and they are re-embedded together after ten
+  seconds of quiet, in one request and one upsert — `merge_insert` rewrites the table
+  on every call. Hash-fallback vectors (no embedding model answered) are **never**
+  written; search says it is on keywords only. A collection per site rather than
+  library sources: a source is ingested once, a page changes on every save.
+
+The `scrive.semanticSearch` setting turns the index off: page text goes to whatever
+embedding model the agent uses, which may not be local.
+
+## Publishing a site
+
+The **Publish** pane (`scrive.publish`, from the sites pane header or "Scrive: Publish
+site") holds a site's theme, its GitHub Pages target, which pages go, a local preview
+build, and the Publish button. Publishing is a person's click: no agent tool reaches
+any of it, and the agent cannot change a page's `status` either (`scrive.editPage`
+refuses any edit that would).
+
+### Which pages go
+
+A **post** is published once its `status` is `published`. Any **other page** is
+published unless its status says otherwise (`draft`, `review`…). The client build
+(`isPublic` in `site/build.tsx`) and the backend's jupyter-book file set
+(`is_public` in `publish.py`) apply the same rule, so a draft is never in the pushed
+tree. The pane lists both groups; "mark published" on a held-back post sets its status.
+
+### Themes (`themes.py`, `builtin_themes/`)
+
+A theme is a folder, after OpenDesign's split:
+
+- `template.json` — name, description, and which of the four **layouts** it uses.
+- `tokens.css` — CSS custom properties (`--bg`, `--text`, `--accent`, `--font-body`,
+  `--site-width`…), with an optional `prefers-color-scheme` block for the other
+  scheme. A theme is mostly its tokens.
+- `THEME.md` — the brand and voice guide. `scrive.listPages` hands it to the agent.
+- `og.html` (optional) — the share-card template.
+
+| Theme | Layout |
+| --- | --- |
+| `minimal` | One readable column; the home page is the dated post list |
+| `tactical` | The dashboard's look: faint grid, 2px accent rules, uppercase display type, mono metadata, clipped post cards |
+| `book` | A table of contents beside every page (home, `pages/`, posts) |
+| `article` | Serif long read; the home page is the article, with numbered sections and equations and the other pages under "More" |
+
+A site's own theme lives in `<site>/themes/<id>/` and **overrides tokens only**: its
+`template.json` names the built-in it `extends`, and its `tokens.css` is appended
+after that built-in's. Custom layouts are code and come later. A `scrive.yml` naming a
+theme that does not exist falls back to `minimal` rather than breaking the site.
+
+### The static build (`site/`)
+
+The site is built **in the browser**, by the same `MystView` the Preview uses, so what
+you preview is what you publish:
+
+- `prepare.ts` gathers what the build needs: the pages that will be published, the
+  theme, each page's **cached** code-cell outputs (cells are not run; a cell never run
+  publishes as code alone), and each Mermaid diagram drawn ahead of time — twice, in
+  the theme's palette and its other colour scheme (`palette.ts`), since Mermaid bakes
+  colours into its SVG. The stylesheet shows the one matching the reader's scheme.
+- `build.tsx` is pure. Under a `StaticRenderContext` (`render/static-context.ts`) the
+  blocks that reach outside the page ask it instead of the backend: embeds become
+  relative URLs and are recorded for copying, links to other pages become their URLs
+  (a link to an unpublished page keeps its text and loses its link), `{code-cell}`
+  shows its cached outputs, tabs work without script (radio inputs and CSS), `{r3f}`
+  becomes a sandboxed iframe of the scene's page, and `{pending}` is dropped. Run bars,
+  agent buttons and editor line anchors are not published.
+
+Output:
+
+| Path | What |
+| --- | --- |
+| `index.html` | The site's `index.md`, then the posts (or the article layout's "More") |
+| `<page folder>/index.html` | `posts/2026-10-01-x.md` → `posts/2026-10-01-x/` |
+| `tags/index.html`, `tags/<tag>/index.html` | Tag pages |
+| `feed.xml`, `sitemap.xml`, `robots.txt` | RSS 2.0 (newest 50 posts), sitemap, robots |
+| `404.html` | Served at any path, so its links are absolute |
+| `_scrive/site.css` | Theme tokens + `render/page.css` + `site/site.css` |
+| `_scrive/og/*.png` | Share cards (drawn by the backend) |
+| `_scrive/runtime.js`, `_scrive/scene/<path>.html` | The scene runtime and one page per scene (added by the backend) |
+
+Rules that are quiet if wrong:
+
+- **Every link is relative**, so the site works at `you.github.io/repo/`, at a custom
+  domain's root, or in the local preview. What must be absolute (feed and sitemap
+  entries, `og:` tags, the 404 page) is written with the placeholder
+  `__SCRIVE_SITE_URL__/`, which the backend fills in at push time — only the push
+  knows the repository.
+- **A published scene runs sandboxed** (`allow-scripts`, an opaque origin), as in the
+  app: every project site of an account shares the `<you>.github.io` origin, and a
+  scene must not reach another site's storage. Its page carries the scene source
+  inline and reads its `:params:` values from the URL fragment
+  (`window.__SCRIVE_SCENE__`, booted by the same runtime).
+- **KaTeX's stylesheet** is linked from a CDN, and only from pages with math.
+
+### Share cards (`cards.py`)
+
+Each page gets a 1200×630 card from the theme's `og.html`, filled with its title,
+description and date (HTML-escaped) and screenshotted by headless Chromium with every
+network request refused. A page with its own `thumbnail:` uses that instead. Cards are
+cached by a hash of their HTML in `.scrive/cache/og/`. Without Chromium (`uv run
+playwright install chromium`) a plainer card is drawn with Pillow from the theme's
+colours, never cached, and the result says so; a publish never fails over a card.
+
+### GitHub Pages, two modes (`publish.py`)
+
+`scrive.yml` → `targets.pages: {repo, mode, cname}`. A blank `repo` means a public
+repository named after the site, on your account, created if missing.
+
+- **`static`** — the client posts the built file set; the backend adds embedded media,
+  scene pages, the runtime and the cards; fills in the site URL; and pushes it all as
+  one commit. Pages serves the branch root (`build_type: legacy`).
+- **`jupyter-book`** — the backend pushes the site's **sources** minus drafts, Scrive's
+  state, templates and themes, plus:
+  - `.github/workflows/scrive-pages.yml`: installs `jupyter-book>=2` (and
+    `requirements.txt` when the site has one), runs `jupyter book build --html
+    --execute` with `BASE_URL` set to the repository's path, copies `_scrive/` into the
+    output, and deploys with `actions/deploy-pages`. Pages is switched to
+    `build_type: workflow`.
+  - `scrive-myst-plugin.mjs`, listed in the **pushed** copy of `myst.yml` (the site's
+    own file is never rewritten). It teaches the real build Scrive's directives:
+    `{r3f}` → an iframe of the prebuilt scene page, `{video}` → media, `{pending}` →
+    nothing.
+
+  The theme does not apply in this mode; the site looks like Jupyter Book.
+
+Switching mode switches the Pages build type. A **custom domain** writes `CNAME` and
+becomes the site URL.
+
+**Preflight reads the bytes that leave**, not the sources: every text file in the final
+set goes through the shared scanner (the 3 MB runtime excepted). A secret blocks until
+the person chooses **Publish anyway**; a home path, a `{pending}` placeholder left in a
+page, a missing embed or scene, and a file over 25 MB are warnings. A file over 100 MB
+(GitHub's limit) and an empty site block, and an empty site cannot be acknowledged.
+
+**Only our own files are deleted.** `.scrive/published.json` records what the last
+publish wrote; the next one removes what it no longer writes, and nothing else in the
+repository is touched.
+
+**Build preview** writes the same static site to `<site>/_build/site/` (gitignored)
+without pushing, and serves it at `/api/scrive/sites/{site}/built/` with
+`Content-Security-Policy: sandbox allow-scripts`: the pages are often agent-written
+HTML on the app's origin. The app's own embedded browser refuses subresources from a
+sandboxed page, so the preview opens in the system browser.
+
+## The outbox
+
+A page's **Share** pane (`scrive.share`, the page header's "share" button or "Scrive:
+Share page") composes posts about it for X, LinkedIn and YouTube; the **Outbox** pane
+(`scrive.outbox`) lists every post across sites by status. Each post is one row of
+`scrive_outbox` in `app.db` (`outbox.py`):
+
+```
+draft ──approve──▶ approved ──send──▶ sending ──▶ sent
+                      │                  │
+                      └──schedule──▶ scheduled ──tick──┘     └──▶ failed ──retry──▶ sending
+```
+
+**The agent drafts; a person sends.** `scrive.draftSocial` creates a `draft` (marked
+`agent`, with a note for the reviewer) and can do nothing else; approve, send,
+schedule and retry are HTTP routes the Share pane's buttons call. The agent also cannot
+change a page's `status`.
+
+### What each target sends (`social.py`)
+
+| Target | Payload | Sent as |
+| --- | --- | --- |
+| X | `{posts: [{text, media}], link, link_in_reply}` | A thread: each post replies to the one before. The page link goes in a final reply (setting `scrive.x.linkInReply`, default on) or at the end of the first post. Media: up to four images or one video per post, by chunked upload |
+| LinkedIn | `{text, link, title, description, thumbnail}` | A post whose content is an **article link card** — the API cannot publish a LinkedIn Article. The text is escaped for LinkedIn's "little" format; the card image is uploaded first. `LinkedIn-Version` is pinned by `scrive.linkedin.version` |
+| YouTube | `{video, title, description, tags, privacy, publish_at, made_for_kids, synthetic}` | A resumable upload of a video file from the site. `publish_at` schedules on YouTube's side (the video uploads private and goes public then). `synthetic` is YouTube's altered-or-synthetic-media disclosure |
+
+`{{post.url}}` stands for the page's published URL. "New draft" fills a first payload
+from the page's frontmatter (`social.suggest`), with its `##` headings as YouTube
+chapter lines whose times are left to set.
+
+### Approval
+
+Approval runs preflight on the payload and, when nothing stops it, **freezes** it:
+`{{post.url}}` is replaced by the page's URL on the published site, and what is stored
+is exactly what will be sent, however long it is scheduled for. Editing an approved
+or scheduled post puts it back to `draft`.
+
+A secret in the text blocks until acknowledged ("Approve anyway"), as in site
+publishing. Some rules are **hard** and cannot be acknowledged, because the platform
+would refuse the post or it cannot be sent at all:
+
+- the target is not connected;
+- the post links to its page and the page is not on the published site (static mode;
+  Jupyter Book chooses its own URLs, which Scrive does not predict);
+- an X post over 280 weighted characters, LinkedIn text over 3,000, a YouTube title over
+  100 or a description over 5,000;
+- a missing file, or media X would refuse (over 5 MB per image or 512 MB per video;
+  more than four images, or a video mixed with images);
+- `<` or `>` in a YouTube title or description, or a `publish_at` that has passed.
+
+Warnings, which never stop approval:
+
+- **YouTube.** The Cloud project is not audited, so the video stays private: setting
+  `scrive.youtube.audited`, default off.
+- **YouTube.** Chapters that YouTube will not show: the first must be 0:00, there must
+  be at least three, and each must be at least 10 seconds long.
+- **YouTube.** More than six uploads today, which is roughly the default API quota.
+- **YouTube.** A video over 15 minutes, which needs a verified account. This is only
+  checked when `ffprobe` is installed.
+- **LinkedIn.** The sign-in expires within a week.
+
+**What X costs.** X's API is pay-per-use: about $0.015 a post, and $0.20 for a post with
+a URL. The composer shows the estimate as you type, from `social/xcount.ts`. That counter
+mirrors the backend's twitter-text weighting: a URL counts 23, CJK and emoji count 2,
+and both implementations are pinned to the same test cases.
+
+### The runner (`runner.py`, `senders.py`)
+
+One worker, started in the app's lifespan with a **ticker** every 30 seconds (the repo
+has no scheduler). The ticker promotes `scheduled` rows whose time has come and re-queues
+rows whose backoff has passed. Progress goes out on the `scrive` channel as
+`outbox.changed {id, site, page, target, status, label?, progress?}`.
+
+A send is a sequence of steps, each checkpointed in the row:
+
+- **Uploads resume.** X's media id and next segment, and YouTube's session URL and
+  offset, are saved after every chunk. After a restart, an X upload continues from its
+  segment. A YouTube upload first asks YouTube how much it already has (`bytes */N`)
+  instead of trusting the saved count.
+- **A post is never sent twice by the runner.** A post step is saved `running` before
+  its request and `done` with the new id after. Two cases leave the outcome unknown:
+  the request got no answer at all, or the process died while it was out. Either way
+  the step becomes `unknown` and the row **fails**, saying so. **Retry** is the person
+  accepting the risk of a duplicate; the button says so.
+- **When a step fails**, the platform's answer decides what happens next:
+
+  | Platform's answer | Outcome |
+  | --- | --- |
+  | 429 or 5xx | Back off exponentially (15 s doubling, capped at 15 minutes), or wait as long as `Retry-After` says. After 5 attempts the row fails |
+  | 401 | Fails: reconnect the account |
+  | Any other 4xx | Fails with the platform's own message |
+
+  An HTTP error from the platform means the post was not created, so its step goes back
+  to `pending` and is not marked `unknown`.
+
+No token is ever stored in a row. A row holds payloads, ids and URLs only.
+
+## Clips
+
+The **clip** pane (`scrive.clip`; "Scrive: Clips", or the film button in the sites
+pane) edits one source video on one track. Opened without a clip, it lists the site's
+clips and videos and records the screen. Rendering needs `ffmpeg` on `PATH`; without
+it the pane says so and offers no render.
+
+### The edit list (`clips.py`)
+
+A clip is a JSON file beside its source, `media/<name>.clip.json`. The source is
+never modified (with one exception, below):
+
+```json
+{
+  "version": 1,
+  "source": "media/demo.webm",
+  "page": "posts/2026-10-02-demo.md",
+  "segments": [{"in": 1.2, "out": 4.0}, {"in": 7.5, "out": 9.0}],
+  "crop": {"aspect": "9:16", "x": 0.5, "y": 0.5},
+  "speed": 1.5,
+  "captions": [{"t0": 0, "t1": 1.8, "text": "What it says"}],
+  "overlays": [{"t0": 0, "t1": 2, "text": "DEMO", "pos": "top"}],
+  "audio": {"replace": "", "gain": 1.0, "mute": false},
+  "output": {"preset": "x", "gif_fps": 12, "gif_width": 480, "burn_captions": true}
+}
+```
+
+- **Two timelines.** `segments` are in **source** seconds and play in list order (so
+  reordering is moving a segment). `captions` and `overlays` are in **output**
+  seconds, after the segments are joined and the speed applied — the timeline the
+  person watches and captions against.
+- **Crop** is an aspect and the window's centre. The window is the largest rectangle
+  of that aspect inside the frame, kept inside it. `crop_rect` (Python) and `cropBox`
+  (`clip/edit.ts`) compute the same even-pixel numbers — the preview shows exactly the
+  window ffmpeg cuts, and a test pins both to the same cases.
+- **`page`** is the page the clip belongs to, if any. Drafts made from it start from
+  that page's frontmatter and link.
+- Saves are revision-checked like pages: a stale save is a 409 carrying the clip as it
+  is now.
+- **A browser recording is remuxed once.** A MediaRecorder WebM has no duration in
+  its header, so a player cannot seek it. Creating a clip from a `.webm` whose header
+  lacks one rewrites it with `-c copy` (lossless) so it can be scrubbed. Without the
+  remux, the duration is measured by demuxing the file.
+
+### The render (`compile_render`)
+
+One ffmpeg command, compiled by a pure function the tests pin exactly:
+
+1. `trim` / `atrim` per segment, then `concat`.
+2. `setpts` and a chain of `atempo` for the speed (each `atempo` takes 0.5–2).
+3. `crop`, then `scale` to fit the preset, never enlarging.
+4. `subtitles=captions.ass` — captions and overlays burned in from a generated ASS
+   file sized to the output frame. ffmpeg runs in a work folder holding that file, so
+   no path inside the filtergraph needs escaping. Text prints as typed: braces become
+   parentheses and a backslash a lookalike, since ASS reads both as markup.
+5. For a GIF: `fps`, then `split` into `palettegen` and `paletteuse` (the two-pass
+   palette in one graph), no sound, looping.
+6. For video: H.264 (`yuv420p`, `+faststart`), AAC at 48 kHz, or no audio track when
+   muted or silent. A replacement sound is trimmed to the clip.
+
+| Preset | Fits inside | Frame rate | Limit checked |
+| --- | --- | --- | --- |
+| `x` | 1920×1200 | ≤ 60 | 2:20, 512 MB |
+| `youtube` | 1920×1080 | ≤ 60 | — |
+| `web` (for a page) | 1280×720 | ≤ 30 | — |
+| `gif` | `gif_width` square box | `gif_fps` | 15 MB (X's GIF limit) |
+
+The same table is the outbox's: X preflight (`social.py`) reads its video length, video
+size and GIF size limits from it, so a render made for X passes there. A video over
+2:20 attached to an X post is a hard block.
+
+The output lands beside the clip as `<name>.<preset>.mp4` or `<name>.gif`. Re-rendering
+**replaces** it, because a page that embeds the render wants the new cut. ffmpeg
+writes into the work folder; the file is moved into the site only when ffmpeg exits
+cleanly, so a failed or cancelled render never leaves half a video behind.
+
+### Jobs (`media.py`)
+
+Renders and auto-captions are jobs:
+
+- ffmpeg is a blocking `Popen` pumped on a thread. `asyncio` subprocesses cannot spawn
+  under `--reload` on Windows.
+- The child gets its own process group, so a console signal aimed at the backend
+  does not stop it. Cancel kills it by handle.
+- Progress comes from ffmpeg's `-progress pipe:1` and goes out on the `scrive` channel
+  as `clip.job` with the whole job, throttled to four a second.
+- One job of each kind runs per clip; starting another answers the running one.
+- Jobs live in memory. A restart forgets them; what they finished is on disk.
+
+**Auto-captions** transcribe the clip's sound on the **output** timeline with the local
+Whisper (`agent/stt_service.py`, the `voice` extra):
+
+1. The output timeline's sound is written as 16 kHz mono WAV, by the same segment and
+   speed graph as the render.
+2. ffmpeg's `silencedetect` (-35 dB, 0.35 s) finds the pauses.
+3. Each stretch of speech is cut into even pieces of at most 6 seconds; anything
+   under 0.3 seconds is dropped.
+4. Each piece is transcribed on the app's event loop, so it queues behind a voice
+   agent's pass instead of racing it for the GPU.
+
+The cues go back on the job. The pane puts them in its edit list, replacing the
+captions it had, with an Undo. The job never writes the clip file, which the person
+may be editing.
+
+The **filmstrip** under the source timeline is one JPEG of evenly spaced frames
+(`tile`), cached in `.scrive/cache/filmstrip/` by the file's size and mtime.
+
+### The pane (`panels/ClipPanel.tsx`)
+
+- **Cut** view: a `<video>` of the source that jumps from segment to segment as it
+  plays, cropped by CSS to the exact window, with captions and overlays drawn on top.
+  It is close to the render, not identical — the fonts and outline are ffmpeg's.
+- **Frame** view: the whole frame with the crop window; dragging moves it.
+- **Render** view: the last render.
+- The source timeline shows the segments over the filmstrip; the output bar shows the
+  captions and overlays.
+- Keys: space plays, S splits at the playhead, I and O set the selected segment's in
+  and out, the arrows step a frame.
+- Edits save as they are made (600 ms debounce).
+- After a render: **Draft for X** (the render attached to the first post) and **Draft
+  for YouTube** (not for a GIF), and the MyST to embed it in a page. A draft opens in
+  the Share pane like any other; a clip with no page opens the site's **page-less**
+  Share pane (`openShare(site, '')`). Its drafts carry no `{{post.url}}`, since there
+  is no page to link to.
+
+### Getting video in
+
+- **Record the screen** from the picker: the share module's capture (`startCapture`,
+  which knows which shells can capture and says why when one cannot) into a
+  MediaRecorder. It is saved under `media/recordings/` and opens as a new clip. The
+  browser's own "Stop sharing" bar stops the recording too.
+- **A 3D scene's Record button** saves its take and opens it in the clip editor,
+  belonging to the page the scene is on.
+- Any video already in the site: **new clip** in the picker. A source can have several
+  clips (`demo.clip.json`, `demo-2.clip.json`…).
+
+The agent's `scrive.makeClip` writes an edit list and renders it, waiting up to
+`wait` seconds. It is local work on the site's own files and posts nothing; sharing
+the render is a `scrive.draftSocial` draft like any other.
+
+## The posts database
+
+`scrive.posts` shows the current site's posts as a **table** (sortable by title,
+status, date and last edit; filtered by title, tag or status) or a **board** with a
+column per status (`draft`, `review`, `scheduled`, `published`, then any other status
+in use). There is no database: every row is a file and every column a frontmatter key.
+Dragging a card to another column rewrites that file's `status:` line (`posts.ts`),
+against the revision it just read, re-applied once if someone saved in between.
+
+## Backend surface
+
+Mounted at `/api/scrive`:
+
+| Route | Purpose |
+| --- | --- |
+| `GET /scrive/sites` | Every site under the root, with page counts |
+| `POST /scrive/sites` | Create a site (`{id, title}`): MyST project, `scrive.yml`, `index.md`, folders. 409 if it exists |
+| `GET /scrive/sites/{site}` | Site meta + parsed `scrive.yml` |
+| `GET /scrive/sites/{site}/pages` | Page metadata from frontmatter. Posts come first, newest first by their own `date` |
+| `POST /scrive/sites/{site}/pages` | New post (`posts/<today>-<slug>.md`, `status: draft`) or page. Never overwrites |
+| `GET /scrive/sites/{site}/page?path=` | One page: exact text + metadata + revision |
+| `PUT /scrive/sites/{site}/page?path=` | Save `{content, base_revision}`. A stale revision returns 409 `{current}` |
+| `DELETE /scrive/sites/{site}/page?path=` | Move to `.scrive/trash/` |
+| `GET /scrive/sites/{site}/asset?path=` | An embedded file (image, video, scene) by site-relative path. Same escape guard as pages; `.scrive/` and `.git/` are not assets. `no-cache`, so a replaced figure shows without a hard reload. Served with `Content-Security-Policy: sandbox` and `nosniff`: an SVG or HTML file opened directly runs no script on the app's origin |
+| `GET /scrive/sites/{site}/cells?path=` | A page's cached code-cell outputs (its shadow notebook), read without starting a kernel |
+| `GET /scrive/runtime.js` | The `{r3f}` scene runtime. Revalidated on every load; when it has not been built, a script that reports how to build it |
+| `GET /scrive/templates?site=` | Built-in post templates, plus the site's own |
+| `POST /scrive/sites/{site}/templates` | Save a page as a template (`{path, id, name, description}`). Never overwrites |
+| `GET /scrive/outlines?site=&status=` | Outlines, newest first |
+| `GET` / `PUT /scrive/sites/{site}/outlines/{id}` | Read an outline; edit it while it is proposed |
+| `POST /scrive/sites/{site}/outlines/{id}/approve` | Write the page it describes (optional last edits in the body). Answers `{outline, page}` |
+| `POST /scrive/sites/{site}/outlines/{id}/discard` | Drop it |
+| `GET /scrive/sites/{site}/critique?path=` | The page's review findings |
+| `GET /scrive/sites/{site}/search?q=` | `scrive.searchSite` over HTTP |
+| `GET /scrive/themes?site=` | The four built-in themes, plus the site's own, with their tokens and guides |
+| `PUT /scrive/sites/{site}/config` | Change `scrive.yml`: `{title?, theme?, pages?: {repo, mode, cname}}`. Unknown keys are kept; an unknown theme or a malformed domain is a 400 |
+| `GET /scrive/sites/{site}/publish` | The Pages target, the last publish record, whether GitHub is connected, and the local build's folder |
+| `POST /scrive/sites/{site}/build` | Write the client-built site to `_build/site/` with media, scenes and cards; answers the files written and preflight's findings. Pushes nothing |
+| `GET /scrive/sites/{site}/built/{path}` | The local build, sandboxed |
+| `POST /scrive/sites/{site}/publish` | `{bundle?, acknowledged}` → push to GitHub Pages, or (blocked) push nothing and answer the findings |
+| `GET /scrive/outbox?site=&page=&status=` | Outbox rows, newest first. `page=` (empty) is the rows that belong to no page |
+| `POST /scrive/outbox` | A new draft `{site, page, target, payload?}` (payload omitted: suggested from the page) |
+| `GET` / `PUT` / `DELETE /scrive/outbox/{id}` | Read; edit the payload (back to `draft`); delete (not while sending) |
+| `POST /scrive/outbox/{id}/check` | Preflight without approving |
+| `POST /scrive/outbox/{id}/approve` | `{acknowledged}` → `{item, approved}`; approval freezes the payload |
+| `POST /scrive/outbox/{id}/send` / `schedule` / `unschedule` / `retry` | The person's decisions; a state that does not allow one is a 409 |
+| `GET /scrive/social/suggest?site=&page=&target=` | A first draft of a payload |
+| `GET /scrive/media/status` | Whether ffmpeg (rendering) and local speech-to-text (auto-captions) are installed |
+| `GET /scrive/sites/{site}/media` | The site's clips, videos and audio files |
+| `GET /scrive/sites/{site}/media/probe?path=` | Duration, size, frame rate, whether it has sound |
+| `GET /scrive/sites/{site}/media/filmstrip?path=&count=` | The filmstrip JPEG |
+| `POST /scrive/sites/{site}/clips` | A new clip `{source, name?, page?, edit?}` beside its source (never overwrites) |
+| `GET` / `PUT /scrive/sites/{site}/clip?path=` | Read a clip (edit list, probe, findings, output path, whether it is rendered); save `{edit, base_revision}` — stale is a 409 `{current}` |
+| `POST /scrive/sites/{site}/clip/render?path=` | Start a render (or answer the one running) |
+| `POST /scrive/sites/{site}/clip/captions?path=` | Start auto-captioning; the cues come back on the job |
+| `GET /scrive/clip-jobs?site=&clip=` · `POST /scrive/clip-jobs/{id}/cancel` | Jobs, newest first; cancel one |
+| `POST /scrive/sites/{site}/clip/draft` | `{path, target}` → an X or YouTube outbox **draft** carrying the render |
+| `POST /scrive/sites/{site}/assets` | Upload a pasted or dropped file (multipart `file`, optional `folder`, default `media`). Media, PDF, glTF, CSV and JSON types only; 512 MB cap; streamed to a temporary file first. **Never overwrites** — a taken name becomes `-2`, `-3`…, since another page may embed the existing file. Answers `{path}` relative to the site |
+
+WS channel `scrive`: `page.changed {site, path, change, revision, origin}` (`origin`
+is `agent` for a write by an agent tool), `outline.changed {site, id, status}` and
+`site.published {site, url, commit}`, `outbox.changed {id, site, page, target,
+status, label?, progress?, deleted?}` and `clip.job` (the whole job: `{id, kind,
+site, clip, status, progress, label, output, cues, findings, error}`).
+
+`POST /scrive/sites/{site}/pages` also takes `template` and `inputs`.
+
+WS channel `scrive-kernel`: the notebook kernel protocol (`open {site, path}`, `cells`,
+`run_cell`, `run_all`, `interrupt`, …) for a page's shadow notebook.
+
+## Shared publishing core
+
+`backend/publishing/` was extracted from `backend/modules/notebook/publish/` when
+Scrive became the second publisher. It is the same move `notebook_core` made, because
+feature modules must not import each other's internals.
+
+| File | What it provides |
+| --- | --- |
+| `scan.py` | The secret and home-path scanner behind every preflight. It reports "found these", never "clean". The notebook preflight now feeds it cell sources and outputs. |
+| `github_pages.py` | Resolves or creates a public Pages repository, turns Pages on (serving the branch, or a GitHub Actions deploy), and pushes a whole file set as **one commit** through the Git Data API (blobs → tree → commit → ref). |
+| `errors.py` | `PublishError`. |
+
+Details of `push_files` in `github_pages.py`:
+
+- The Contents API made one commit **per file**. For a site of forty files that was
+  forty commits, forty queued Pages builds, and a half-published site if anything
+  failed in between.
+- `.nojekyll` is included in every push.
+- **Only changed files are uploaded.** Each file's git blob sha is computed locally
+  and compared with the tip's tree, so a site's images and scene runtime are sent
+  once, not on every publish.
+- An unchanged set makes no commit.
+- Deleting a path that is already gone is a no-op.
+- A ref update that loses a race with another push is rebuilt on the new tip once.
+
+Notebook publishing benefits from all of this too.
+
+## Contributions to the Layout Shell
+
+- **Panels:**
+  - `scrive.sites` ("Scrive", singleton tool, left dock): site picker, new-site form,
+    and posts / pages / notebooks lists with status chips.
+  - `scrive.page` ("Scrive Page", non-singleton document, params
+    `{site, path, title}`): the editor.
+  - `scrive.posts` ("Scrive Posts", singleton document): the posts table and board,
+    opened from the sites pane header.
+  - `scrive.outline` ("Scrive Outline", non-singleton document, params `{site, id}`):
+    an agent's proposed outline, for review.
+  - `scrive.publish` ("Scrive Publish", document, params `{site}`): theme, Pages
+    target, pages going and staying home, build preview, publish.
+  - `scrive.share` ("Scrive Share", document, params `{site, path}`): a page's X,
+    LinkedIn and YouTube composers and its outbox rows.
+  - `scrive.outbox` ("Scrive Outbox", singleton document): every row by status, with
+    rolling counts.
+  - `scrive.clip` ("Scrive Clip", document, params `{site, path}`): the clip editor;
+    with no `path`, the site's clips and videos and the screen recorder.
+- **Shell indicator** `scrive.outlines`: "Outline · to review" while any outline
+  waits. The same module-level watcher opens a proposed outline, and a page an agent
+  creates, as soon as it appears (`outline-watch.ts`, started once however many
+  chrome surfaces mount the indicator).
+- **Opening a page** always goes through `openScrivePage(site, path)` in `open.ts`.
+  - It focuses the pane that already holds the page.
+  - Otherwise it retargets a page pane with no unsaved edits, because the pane
+    reports its edits through `setPaneDirty`.
+- **Commands:**
+  - `scrive.open`
+  - `scrive.newPost` (into the current site)
+  - `scrive.save`
+  - `scrive.openPosts`
+  - `scrive.mode.write`, `scrive.mode.source`, `scrive.mode.split`,
+    `scrive.mode.preview` (the focused page)
+  - `scrive.generate` (opens the sites pane's Generate form)
+  - `scrive.saveAsTemplate` (the focused page)
+  - `scrive.publishSite` (the current site's Publish pane)
+  - `scrive.sharePage` (the focused page's Share pane), `scrive.openOutbox`
+  - `scrive.openClips` (the current site's clips)
+- **Keybinding:** `mod+s` → `scrive.save` with `when: paneFocus == 'scrive.page'`. That
+  is more specific than the editor's unconditional `mod+s`, so it takes over only while
+  a Scrive page has focus.
+- **Settings:** `scrive.root` (default `~/horrible/scrive`); `scrive.semanticSearch`
+  (default on); `scrive.x.linkInReply` (default on); `scrive.youtube.audited` (default
+  off); `scrive.linkedin.version` (default `202606`).
+
+## Browser vs desktop
+
+| Capability | Browser | Desktop (Tauri) |
+| --- | --- | --- |
+| Sites, pages, source editing | ✅ | ✅ |
+| Live preview (math, Mermaid, embeds) | ✅ | ✅ |
+| Block editor, posts table and board | ✅ | ✅ |
+| Paste / drop uploads | ✅ | ✅ |
+| Code cells (managed Python venv) | ✅ | ✅ |
+| 3D scenes, posters, recordings | ✅ | ✅ |
+| Agent tools, outlines, review strip | ✅ | ✅ |
+| Themes, build preview, publish to GitHub Pages | ✅ | ✅ (preview opens in the system browser) |
+| Outbox: compose, approve, schedule, send to X / LinkedIn / YouTube | ✅ | ✅ |
+| Clip editor, renders, GIFs | ✅ with ffmpeg on `PATH` | same |
+| Auto-captions | ✅ with the `voice` extra | same |
+| Screen recording into a clip | ✅ | Where the shell can capture the screen (`media.displayCapture`); not the macOS shell, which has no capture API |
+| Share cards from the theme's template | ✅ with Chromium installed; plainer cards without | same |
+| Live on-disk change detection | ✅ (backend watcher) | ✅ (backend watcher) |
+
+## Roadmap
+
+Each phase ships on its own.
+
+1. ~~**MyST pipeline.**~~ Done — see [The MyST pipeline](#the-myst-pipeline).
+2. ~~**Block editor.**~~ Done — see [The block editor](#the-block-editor) and
+   [The posts database](#the-posts-database).
+3. ~~**Rich blocks.**~~ Done — see [Code cells](#code-cells), [Notebook
+   pages](#notebook-pages) and [3D scenes](#3d-scenes).
+4. ~~**Agent.**~~ Done — see [The agent](#the-agent).
+5. ~~**Site themes and publishing to Pages.**~~ Done — see [Publishing a
+   site](#publishing-a-site).
+6. ~~**Outbox and runner,** plus `x`, `linkedin` and `youtube` connectors.~~ Done — see
+   [The outbox](#the-outbox).
+7. ~~**Clip editor and GIF maker** (ffmpeg).~~ Done — see [Clips](#clips).
+8. **Later:** dev.to and Hashnode targets (with `canonical_url` back to the Pages
+   post), Typst/PDF export through mystmd, custom theme layouts, multi-user editing.
+
+## Testing
+
+| Test file | What it covers |
+| --- | --- |
+| `backend/tests/test_scrive_pages.py` | Site scaffold, frontmatter listing, byte-exact CRLF round trip, 409 with the current page, path escapes, trash, malformed frontmatter, watcher event filtering |
+| `backend/tests/test_publishing_core.py` | One commit per file set, deletion filtering, no-op when the tree is unchanged, ref-race retry, scanner masking |
+| `backend/tests/test_notebook_publish.py` | Notebook Pages publishing, now through the Git Data API and asserted to be one commit |
+| `packages/core/src/modules/scrive/__tests__/segments.test.ts` | The golden corpus: byte-identical split → join, identity edits, single-block edits — each fixture in LF, CRLF and no-final-newline form; footnote/reference definitions surviving an edit; `+++` markers; file line numbers |
+| `packages/core/src/modules/scrive/__tests__/render.test.tsx` | Every fixture renders; the JB sample's vocabulary appears; unknown directives shown as written; `safeHref` / `safeEmbedSrc` refusals; MyST media path resolution; `data-line` tagging; no `javascript:` link survives |
+| `packages/core/src/modules/scrive/__tests__/blocks.test.ts` | Every corpus fixture (LF, CRLF, no final newline): open → write unchanged is byte-identical, and re-printing any rich block keeps the document's MyST meaning. Edits keep tails; inserts and moves get blank-line separation; emptied blocks are deletions that keep definitions; a split-off block gets its bytes back; frontmatter added to a bare file. Printer round trips per construct, escaping of `$` / `%` / roles, nested fences, `{math}` vs `$$`, what stays raw |
+| `packages/core/src/modules/scrive/__tests__/cells.test.ts` | Code cells found in page order with occurrence counts; the shadow id matches the backend's for the same source; `syncOps` reaches the page's order from any shadow and sends nothing when they agree |
+| `packages/core/src/modules/scrive/__tests__/scene.test.ts` | The scene frame's CSP names no network source and no `<script src>`; the bootstrap accepts code only from its parent; `:params:` parsing and values |
+| `packages/core/src/modules/scrive/__tests__/frontmatter.test.ts` | One-field edits keep comments and order; block lists, removals, appends, quoting, CRLF, prefix-safe keys |
+| `backend/tests/test_scrive_agent.py` | Sections: headings skip fences, edits leave other bytes alone, CRLF stays CRLF, fills refuse written sections, the lead, inserts never land inside a directive, ambiguous text refused, frontmatter keys, ops all-or-nothing. Templates: inputs, defaults, site override, save-as-template. Outlines: nothing written until approval, edits, approve-once, discard, template inputs checked at proposal. Tools: the pinned surface with no publishing tool, agent writes marked once for the watcher, stale revisions refused, scenes kept in `scenes/`, site inference. Critique rules. Keyword search; index chunks; hash-fallback vectors never stored |
+| `packages/core/src/modules/scrive/__tests__/agent.test.ts` | Changed-block detection (fills, moves, removals, frontmatter); prompt wording, including the fence a selection is quoted in and that no prompt asks to publish; `sendInChat`'s queue |
+| `backend/tests/test_scrive_publish.py` | Themes (built-ins, a site theme extending one, fallback, never listed as pages), the config route, which pages go, scene pages that cannot be broken out of, the jupyter-book file set (no drafts or state, plugin in the pushed `myst.yml` only, workflow), preflight on the outgoing bytes, static publish end to end against a fake Pages (media, cards, `CNAME`, URL filling, record), deleting only last publish's files, a secret blocking until acknowledged, paths a bundle may not write, missing embeds and scenes, the local build and its sandboxed route, share cards (escaping, Pillow fallback, content cache, a real Chromium render), the agent refused a `status` change |
+| `backend/tests/test_publishing_core.py` (Phase 5) | Unchanged files are not uploaded again; nothing new makes no tree; the blob sha matches git's |
+| `packages/core/src/modules/scrive/__tests__/site.test.tsx` | Page folders and relative URLs; `isPublic`; the file set with drafts left out; every link relative, links to drafts unlinked; no app chrome published; cached outputs, scriptless tabs, scene iframes; KaTeX only with math; share images; post order and prev/next; feed, sitemap and 404; per-layout shape; the stylesheet; theme palettes; the MyST plugin's directives through `myst-parser` |
+| `backend/tests/test_scrive_outbox.py` | The agent can only draft; suggested payloads; approval freezes the payload with the live link; an unpublished link, a missing connection and over-long posts are hard blocks; a secret blocks until acknowledged and is never echoed; send and schedule need approval; X weighting, link placement, cost and media rules; the ticker sends a scheduled post; a thread replies to itself; 429 backs off then sends; a refusal fails with the platform's reason; a thread cut off resumes without re-posting; a post with no answer fails as unknown and Retry posts again; a restart mid-post marks it unknown; X media and YouTube uploads resume at their saved or confirmed offset; YouTube metadata, private lock, chapters and refused characters; the LinkedIn card with escaped text, image and pinned version; no token in a row or in `/api/connectors`; PKCE URLs with exact redirects, X's rotated refresh token, LinkedIn's expiry countdown, YouTube on the Google client with its own grant |
+| `backend/tests/test_scrive_media.py` | The exact filtergraph (trim, concat, speed, crop, scale, burned captions, gain); the GIF palette pass; replaced and muted sound; `atempo` chains and the frame-rate cap; unrenderable edit lists refused; crop windows and fitting to a preset; ASS text printed as typed and late cues dropped; speech cut at pauses into short cues; findings; output naming. With real ffmpeg on a generated video: create, list, save, a stale save, render, draft for X and YouTube; a GIF and the cached filmstrip; auto-captions on the output timeline (speech-to-text faked); cancel; a pipe-written WebM remuxed; a page-less draft with no link; `scrive.makeClip` end to end; X preflight refusing a video over 2:20 |
+| `packages/core/src/modules/scrive/__tests__/clip.test.ts` | Source ⇄ output time across segments and speed; split, trim, remove, reorder; the crop window on the backend's own cases; time formatting and parsing; cues placed at the playhead |
+| `packages/core/src/modules/scrive/__tests__/xcount.test.ts` | The composer's X counter, link placement and cost, on the backend's own cases |
+| `packages/core/src/modules/scrive/__tests__/` (others) | EOL detection, manifest registration, `mod+s` scoping |
+| `backend/tests/test_scrive_pages.py` (code cells) | The shadow notebook's path and escape guard, the cache read without a kernel, session keys refusing non-pages, nbformat-legal ids |
+| `backend/tests/test_scrive_pages.py` (assets) | Asset serving with its sandbox headers, `/`-rooted paths, escape and `.scrive/`/`.git/` refusals; uploads that never overwrite, refuse unknown types and escapes, and leave no temporary files |

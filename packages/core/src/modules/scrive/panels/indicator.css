@@ -1,0 +1,41 @@
+/* OutlineIndicator — the shell-chrome readout for an outline awaiting review.
+   Same shape as the share readout: a clipped corner and a 2px rule in the accent. */
+.scrive-indicator {
+  display: inline-flex;
+  align-items: stretch;
+  flex: none;
+  align-self: center;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  background: var(--bg-inset);
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%);
+}
+
+.scrive-indicator__open {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0 8px;
+}
+
+.scrive-indicator__open:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.scrive-indicator__label {
+  font-size: var(--fs-micro, 0.64rem);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.scrive-indicator__meta {
+  font-family: var(--font-mono, ui-monospace, 'JetBrains Mono', monospace);
+  font-size: var(--fs-meta, 0.72rem);
+  color: var(--text-dim);
+}

@@ -97,6 +97,17 @@ console.log(
     (gamesServerUrl ? '' : ' (HORRIBLE_DEV_LOCAL_GAMESERVER=1 for the bundled one on :9090)'),
 );
 
+// Scrive's {r3f} scene runtime is a build artifact the backend serves
+// (backend/modules/scrive/static/, gitignored). Build it once if it is missing, so a
+// fresh checkout's scenes work without knowing the step exists.
+if (!existsSync('backend/modules/scrive/static/scrive-runtime.js')) {
+  console.log('🧊 Building the Scrive scene runtime (first run only)…');
+  spawnSync('pnpm', ['--filter', '@horrible/scrive-runtime', 'build'], {
+    stdio: 'inherit',
+    shell: useShell,
+  });
+}
+
 const backend = spawn(
   'uv',
   [

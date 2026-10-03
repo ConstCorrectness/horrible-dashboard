@@ -87,6 +87,7 @@ import {
   localtrackModule,
   docsModule,
   notebookModule,
+  scriveModule,
   visualizerModule,
 } from '@horrible/core';
 import { AppRoot } from '@horrible/ui';
@@ -230,6 +231,7 @@ async function boot(): Promise<void> {
     registry.register(localtrackModule);
     registry.register(docsModule);
     registry.register(notebookModule);
+    registry.register(scriveModule);
     registry.register(visualizerModule);
     registry.register(flowModule);
     registry.register(gamesModule);

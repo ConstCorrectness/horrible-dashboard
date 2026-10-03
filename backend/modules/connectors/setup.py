@@ -18,8 +18,11 @@ from backend.modules.connectors.providers import (  # noqa: F401
     google_tools,
     huggingface,
     huggingface_tools,
+    linkedin,
     nvidia,
     nvidia_tools,
+    x,
+    youtube,
 )
 from backend.sdk.registry import registry
 
@@ -36,6 +39,11 @@ def register_connectors() -> None:
         google.build(),
         huggingface.build(),
         nvidia.build(),
+        # Scrive's outbox sends through these three; they unlock no agent tools —
+        # no agent can post, only draft (see backend/modules/scrive/outbox.py).
+        x.build(),
+        linkedin.build(),
+        youtube.build(),
         streaming.connector(),
     ):
         registry.connectors[connector.id] = connector

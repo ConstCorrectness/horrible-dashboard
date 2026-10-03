@@ -1,0 +1,67 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      {{tokens}}
+      html, body { margin: 0; width: 1200px; height: 630px; }
+      body {
+        box-sizing: border-box;
+        padding: 72px 80px;
+        display: flex;
+        flex-direction: column;
+        background-color: var(--bg);
+        background-image: linear-gradient(var(--grid) 1px, transparent 1px),
+          linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+        background-size: 32px 32px;
+        color: var(--text);
+        font-family: var(--font-body);
+        border-top: 6px solid var(--accent);
+      }
+      .kicker {
+        font-family: var(--font-mono);
+        font-size: 24px;
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+      }
+      h1 {
+        margin: 28px 0 0;
+        font-size: 64px;
+        line-height: 1.08;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--text-strong);
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      p {
+        margin: 24px 0 0;
+        font-size: 28px;
+        line-height: 1.4;
+        color: var(--text-dim);
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      .site {
+        margin-top: auto;
+        font-family: var(--font-mono);
+        font-size: 22px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--text-dim);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="kicker">{{kicker}}</div>
+    <h1>{{title}}</h1>
+    <p>{{description}}</p>
+    <div class="site">{{site}}</div>
+  </body>
+</html>

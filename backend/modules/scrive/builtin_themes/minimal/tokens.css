@@ -1,0 +1,36 @@
+/* Minimal: system sans, one column, a single blue accent. */
+:root {
+  color-scheme: light dark;
+  --bg: #fcfcfb;
+  --bg-raised: #f4f3f0;
+  --bg-inset: #efeee9;
+  --text: #1f1f22;
+  --text-strong: #0e0e10;
+  --text-dim: #6a6a70;
+  --accent: #2f5fd0;
+  --border: #e3e1db;
+  --danger: #b42318;
+  --warn: #a15c07;
+  --success: #1f7a3d;
+  --font-body: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --font-display: var(--font-body);
+  --font-mono: ui-monospace, 'Cascadia Code', 'SF Mono', Menlo, Consolas, monospace;
+  --site-width: 44rem;
+  --page-size: 17px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141416;
+    --bg-raised: #1c1c1f;
+    --bg-inset: #202024;
+    --text: #e6e6e8;
+    --text-strong: #ffffff;
+    --text-dim: #9a9aa2;
+    --accent: #7ea3ff;
+    --border: #2c2c31;
+    --danger: #f97066;
+    --warn: #fdb022;
+    --success: #47cd89;
+  }
+}

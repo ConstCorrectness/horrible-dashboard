@@ -143,6 +143,21 @@ pub fn window_toggle_maximize(window: WebviewWindow) -> Result<bool, String> {
     Ok(!maximized)
 }
 
+/// Page zoom for the calling window's own webview — the desktop's Ctrl+= / Ctrl+-
+/// / Ctrl+0, which WebView2 does not provide by itself here (Tauri turns its zoom
+/// hotkeys off by default). Clamped to the range Chromium offers; returns the factor
+/// applied. Native browser-pane children are separate webviews and keep their own
+/// zoom; the frontend scales their bounds by this factor (apps/web/src/tauriWindow.ts).
+#[tauri::command]
+pub fn window_set_zoom(window: WebviewWindow, factor: f64) -> Result<f64, String> {
+    if !factor.is_finite() {
+        return Err("zoom factor must be a number".into());
+    }
+    let factor = factor.clamp(0.25, 5.0);
+    window.set_zoom(factor).map_err(|e| e.to_string())?;
+    Ok(factor)
+}
+
 /// Close the calling window (titlebar close button) — exits the app.
 #[tauri::command]
 pub fn window_close(window: WebviewWindow) -> Result<(), String> {

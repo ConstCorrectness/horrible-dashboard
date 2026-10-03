@@ -428,6 +428,33 @@ Three things differ because the caller is a browser, not an agent loop:
 Coercing a missing value to `false` would tell the user a repo is open on no evidence.
 :::
 
+## X, LinkedIn and YouTube
+
+Three connectors that unlock **no agent tools**. Their only caller is Scrive's outbox
+runner, which sends what a person approved (see [Scrive: the outbox](./scrive.mdx#the-outbox)).
+Every one is bring-your-own-app, and the configure form names the redirect URL to
+register: `http://127.0.0.1:<backend port>/api/connectors/<id>/callback`, built from the
+pinned port (`oauth.redirect_uri`), because X and LinkedIn match it exactly.
+
+| | X | LinkedIn | YouTube |
+| --- | --- | --- | --- |
+| File | `providers/x.py` | `providers/linkedin.py` | `providers/youtube.py` |
+| Flow | code + PKCE, **public client** (Native App: no secret) | code + client secret (no PKCE) | the **Google** client (same Cloud project), its own consent |
+| Scopes | `tweet.read tweet.write users.read media.write offline.access` | `openid profile w_member_social` | `youtube.upload youtube.readonly` |
+| Token life | 2 h; refresh token **rotates** on every use (kept by `ensure_fresh`) | ~60 days; usually **no refresh**. The tile counts the days down and turns into an error a week out | 1 h; refresh token |
+| Env pins | `X_CLIENT_ID` | `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET` | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` |
+
+- **YouTube is a separate grant on purpose.** Connecting Drive must not silently grant
+  the right to publish videos, and disconnecting YouTube must not cut off Drive. The
+  credential is stored under `youtube`; only the client id/secret are shared.
+- `social_http.py` is the one HTTP helper the three share. Failures are `SendError`s
+  that say whether retrying can help: network, 5xx and 429 (with `Retry-After`) are
+  transient, 401 means reconnect, and other 4xx carry the platform's own message.
+- The tile marks are monochrome `currentColor` glyphs, like GitHub's.
+
+None of the live endpoints have been exercised from this repository; the tests drive
+the real request code against an `httpx.MockTransport` of each API.
+
 ## Agent tools + guides
 
 Connector tools are **backend** `AgentTool`s (`backend/sdk`), not frontend-declared
