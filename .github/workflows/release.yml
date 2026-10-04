@@ -69,8 +69,10 @@ jobs:
             args: '--target aarch64-apple-darwin'
           - platform: macos-latest
             args: '--target x86_64-apple-darwin'
+          # `--verbose` is what shows linuxdeploy's own output. Without it a failed
+          # AppImage is a bare "failed to run linuxdeploy" with no cause.
           - platform: ubuntu-22.04
-            args: ''
+            args: '--verbose'
           - platform: windows-latest
             args: ''
 
@@ -123,6 +125,13 @@ jobs:
 
       - uses: tauri-apps/tauri-action@v0
         env:
+          # linuxdeploy's bundled `strip` is older than the toolchains that build
+          # python-build-standalone and many wheels, and fails on their newer ELF
+          # sections (`.relr.dyn`). The AppImage then dies as "failed to run
+          # linuxdeploy", as v0.4.1's first run did, the first Linux build to reach
+          # bundling with the backend runtime inside it. Tauri's documented remedy.
+          # Only linuxdeploy reads it.
+          NO_STRIP: 'true'
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
