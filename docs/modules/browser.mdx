@@ -637,7 +637,12 @@ budget) the region is blank while hidden, as before.
 - **Downloads** land where WebView2 puts them by default (the user's Downloads folder,
   with its own progress flyout); the pane shows a status line with *Show folder*.
 - **Devtools**: F12 inside the page, the toolbar button, or the `browser.devtools`
-  command. Enabled on the browser webviews only, release builds included.
+  command. Enabled on the browser webviews only. On Windows that includes release
+  builds, through WebView2's own `OpenDevToolsWindow`. On macOS and Linux the
+  inspector is Tauri's `Webview::open_devtools`, which only exists in debug builds
+  (or with Tauri's `devtools` feature, which this crate does not enable), so a
+  release build answers the command with an error. Calling it unconditionally broke
+  every non-Windows release build of v0.4.0.
 - **Logins**: cookies persist in the WebView2 profile, so sites stay signed in across
   restarts, and password autosave + form autofill are on. The child webviews share the
   app window's WebView2 environment (Tauri creates them in it), so site data lives in

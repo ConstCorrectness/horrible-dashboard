@@ -341,10 +341,20 @@ mod imp {
     }
 
     pub fn open_devtools(webview: &Webview) -> Result<(), String> {
-        // WKWebView/WebKitGTK inspectors are reachable through Tauri itself (debug
-        // builds, or the `devtools` feature).
-        webview.open_devtools();
-        Ok(())
+        // WKWebView/WebKitGTK inspectors are reachable through Tauri itself, but
+        // `Webview::open_devtools` only exists in debug builds or with Tauri's
+        // `devtools` feature, which this crate does not enable. Calling it
+        // unconditionally broke every macOS and Linux release build of v0.4.0.
+        #[cfg(debug_assertions)]
+        {
+            webview.open_devtools();
+            Ok(())
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            let _ = webview;
+            Err("the browser inspector is only available in debug builds on this platform".into())
+        }
     }
 
     pub fn configure(_: &Webview) {}
