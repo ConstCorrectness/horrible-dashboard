@@ -8,6 +8,7 @@ import { usePaneSession } from '../../layout/use-pane-session';
 import { mixer } from '../audio/engine';
 import { openMicrophone } from '../audio/store';
 import { earsActions, type ObservedContextState } from './earsWatchdog';
+import { MAX_FLOATERS, parseRoomReaction } from './reactions';
 import { Downsampler, UtteranceBuffer, encodeWav, startPcmCapture } from './liveCapture';
 import { splitForSpeech } from './speechChunks';
 import {
@@ -26,6 +27,7 @@ import {
   pingClubhouseChannel,
   muteClubhouseChannel,
   setClubhouseHand,
+  sendClubhouseReaction,
   acceptClubhouseSpeaker,
   getClubhouseStatus,
   getClubhouseChannelChat,
@@ -204,6 +206,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     voiceError,
     chatDisabledReason,
     liveCaption,
+    reactionOptions,
   } = state;
 
   const propsRef = useRef(props);
@@ -224,6 +227,19 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     (message: string) => session.reportVoiceError(message, session.handlers.onVoiceError),
     [session],
   );
+
+  /** Put one reaction on screen for three seconds, keeping the overlay bounded. */
+  const floatReaction = (emoji: string, gifUrl?: string, idHint = '') => {
+    const id = `${idHint || 'r'}-${Math.random().toString(36).slice(2, 9)}`;
+    const x = 15 + Math.random() * 70;
+    const y = 80 + Math.random() * 10;
+    session.update('activeReactions', (prev) =>
+      [...prev, { id, emoji, gifUrl, x, y }].slice(-MAX_FLOATERS),
+    );
+    setTimeout(() => {
+      session.update('activeReactions', (prev) => prev.filter((r) => r.id !== id));
+    }, 3000);
+  };
 
   // Helper: update a single user's live state
   const updateLiveUser = useCallback(
@@ -309,6 +325,9 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       // rejects with a bare `cannot send message`. `joined` stays below, since
       // that gates the room UI on a working connection rather than on membership.
       session.patch({ activeChannel: channelName });
+
+      // The room's own emoji. Not a constant: a room can serve its own set.
+      session.patch({ reactionOptions: chDetails.emoji_reaction_options ?? [] });
 
       // Chat is per-room *and* per-account, and Clubhouse's refusal is a bare
       // "cannot send message", so record its verdict now. Only an explicit
@@ -943,25 +962,18 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
               }
             }
 
-            // --- Emoji reactions ---
-            if (action === 'react' || (!action && (msg.emoji || msg.reaction))) {
-              const emoji = msg.emoji || msg.reaction;
-              if (emoji && typeof emoji === 'string') {
-                if (senderId != null && myUserId != null && Number(senderId) === Number(myUserId))
-                  return;
-                const reactionId = String(event.timetoken || Math.random());
-                const x = 15 + Math.random() * 70;
-                const y = 80 + Math.random() * 10;
-                session.update('activeReactions', (prev) => [
-                  ...prev,
-                  { id: reactionId, emoji, x, y },
-                ]);
-                setTimeout(() => {
-                  session.update('activeReactions', (prev) =>
-                    prev.filter((r) => r.id !== reactionId),
-                  );
-                }, 3000);
-              }
+            // --- Reactions: emoji and GIF ---
+            const reaction = parseRoomReaction(msg as Record<string, unknown>);
+            if (reaction) {
+              // Our own are floated when the send succeeds; Clubhouse echoes them back.
+              if (senderId != null && myUserId != null && Number(senderId) === Number(myUserId))
+                return;
+              floatReaction(reaction.emoji ?? '', reaction.gifUrl, String(event.timetoken || ''));
+            } else if (/gif/i.test(action ?? '') || 'gif' in msg) {
+              // A GIF we could not show: its host is not on the allowlist, or its
+              // URL is somewhere unexpected. Said once per message so the shape is
+              // there to read the next time someone adds a provider.
+              console.warn('Clubhouse GIF reaction not rendered:', event.message);
             }
           },
         });
@@ -1172,36 +1184,17 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
   };
 
   // 8. Send an emoji reaction
+  /**
+   * Through Clubhouse's own `/emoji_reaction`. This used to float the emoji locally
+   * and publish an invented `react` message straight onto the PubNub channel, which
+   * Clubhouse never saw: the sender watched their reaction rise and nobody else in
+   * the room got it. Floated on success, so a refusal shows nothing here either —
+   * it throws, and the pane says why.
+   */
   const sendReaction = async (emoji: string) => {
-    if (!session.pubnub || !activeChannel) return;
-    const profile = session.myProfile;
-    const reactionId = 'my-react-' + Math.random().toString(36).slice(2, 9);
-    const x = 15 + Math.random() * 70;
-    const y = 80 + Math.random() * 10;
-
-    session.update('activeReactions', (prev) => [...prev, { id: reactionId, emoji, x, y }]);
-    setTimeout(() => {
-      session.update('activeReactions', (prev) => prev.filter((r) => r.id !== reactionId));
-    }, 3000);
-
-    const payload = {
-      action: 'react',
-      emoji,
-      user_profile: {
-        name: profile?.name || 'Anonymous',
-        photo_url: profile?.photoUrl || null,
-        user_id: profile?.userId || null,
-      },
-      timestamp: Date.now(),
-    };
-    try {
-      await session.pubnub.publish({
-        channel: `channel_all.${activeChannel}`,
-        message: payload,
-      });
-    } catch (err2) {
-      console.error('Failed to publish reaction:', err2);
-    }
+    if (!activeChannel) return;
+    await sendClubhouseReaction(activeChannel, emoji);
+    floatReaction(emoji);
   };
 
   // Play Agent Audio through the mixer
@@ -1571,6 +1564,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     speakingVolumes,
     chatDisabledReason,
     liveCaption,
+    reactionOptions,
     playAgentAudio,
     previewTtsVoice,
     stopAgentAudio,

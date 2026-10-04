@@ -535,6 +535,36 @@ named on `JoinChannelResult`, or the response model drops them.
 A room read for a room the account is not in (never joined, left, or ended)
 answers **409 "not in this room"**, from Clubhouse's `should_leave: true`.
 
+#### Reactions and GIFs in the pane
+
+The reaction buttons render the room's own `emoji_reaction_options` (falling back to a
+fixed six until the join result arrives) and send through `POST …/reaction`. They used
+to float the emoji locally and publish an invented `react` message straight onto the
+PubNub channel, which Clubhouse never saw — the sender watched their reaction rise and
+nobody else in the room received it. The emoji now floats when the send **succeeds**
+(Clubhouse echoes it back, and our own echo is skipped), and a refusal toasts.
+
+Incoming reactions are read by `parseRoomReaction` in
+[reactions.ts](file:///C:/Users/Horrible/Code/horrible-dashboard/packages/core/src/modules/clubhouse/reactions.ts),
+which accepts an emoji under `react` / any `*reaction*` action, and an image URL under
+any GIF-named action, and returns `null` — never a guess — for the rest. Two guards:
+
+- **GIFs render only from allow-listed hosts** (Giphy, Tenor, Clubhouse's own CDN),
+  `https:` only, with no referrer. The sender chooses the URL, so rendering any address
+  would give a stranger every viewer's IP and a picture they can swap at will. A GIF that
+  is refused logs `Clubhouse GIF reaction not rendered:` with the raw message, which is
+  how a missing provider host is found.
+- **The overlay is capped at 30 floaters.** One animated node per message, each alive for
+  three seconds, otherwise grows without limit when a reaction or GIF is spammed.
+
+:::caution Sending a GIF is not built
+Clubhouse sends a GIF through its own `/gif_reaction` endpoint (separate from chat), and
+a room advertises support with `is_gif_enabled`. The request body, the GIF search source
+and the exact PubNub message a GIF arrives as have not been captured, so the pane
+displays incoming GIFs but cannot send one. The shape to confirm is in the console line
+above; `parseRoomReaction` is where it gets pinned.
+:::
+
 ### 15. `GET /channels/{channel}/chat`
 
 The chat backlog, fetched on join so a late arrival sees what was already said —

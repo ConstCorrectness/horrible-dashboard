@@ -39,6 +39,7 @@ import {
 } from './api';
 import { bindClubhouse } from './actions';
 import { MediaInsightsModal } from './MediaInsightsModal';
+import { DEFAULT_REACTIONS } from './reactions';
 import { useClubhouseVoice, type EarsHealth } from './useClubhouseVoice';
 import {
   chatSpeakerLabel,
@@ -944,6 +945,7 @@ export function RoomsPanel() {
     speakingVolumes,
     chatDisabledReason,
     liveCaption,
+    reactionOptions,
     playAgentAudio,
     previewTtsVoice,
     stopAgentAudio,
@@ -1746,7 +1748,7 @@ export function RoomsPanel() {
     }
   };
 
-  const REACTIONS = ['❤️', '😂', '👍', '🙌', '👏', '🔥'];
+  const REACTIONS = reactionOptions.length > 0 ? reactionOptions : DEFAULT_REACTIONS;
 
   /**
    * The network inspector, built once and rendered in **both** views.
@@ -2427,6 +2429,14 @@ export function RoomsPanel() {
             text-shadow: 0 2px 10px rgba(0,0,0,0.5);
           }
 
+          .ch-floating-gif img {
+            display: block;
+            width: 96px;
+            height: auto;
+            border-radius: 6px;
+            border-top: 2px solid var(--accent, #6ea8fe);
+          }
+
           @keyframes ch-reaction-float {
             0% {
               transform: translateY(0) scale(0.3) rotate(0deg);
@@ -3100,7 +3110,9 @@ export function RoomsPanel() {
             return (
               <span
                 key={r.id}
-                className="ch-floating-reaction"
+                className={
+                  r.gifUrl ? 'ch-floating-reaction ch-floating-gif' : 'ch-floating-reaction'
+                }
                 style={{
                   left: `${r.x}%`,
                   top: `${r.y}%`,
@@ -3110,7 +3122,12 @@ export function RoomsPanel() {
                   } as React.CSSProperties),
                 }}
               >
-                {r.emoji}
+                {r.gifUrl ? (
+                  // No referrer, and only allow-listed hosts reach here (reactions.ts).
+                  <img src={r.gifUrl} alt="" referrerPolicy="no-referrer" draggable={false} />
+                ) : (
+                  r.emoji
+                )}
               </span>
             );
           })}
@@ -4977,7 +4994,15 @@ export function RoomsPanel() {
               <button
                 key={emoji}
                 className="ch-reaction-btn"
-                onClick={() => void sendReaction(emoji)}
+                onClick={() =>
+                  void sendReaction(emoji).catch((err) =>
+                    toastsStore.add(
+                      'warning',
+                      'Reaction',
+                      err instanceof Error ? err.message : String(err),
+                    ),
+                  )
+                }
                 title={`Send ${emoji}`}
               >
                 {emoji}

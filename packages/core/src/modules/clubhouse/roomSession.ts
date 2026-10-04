@@ -48,7 +48,10 @@ export interface ChatComment {
 
 export interface FloatingReaction {
   id: string;
+  /** Empty for a GIF, which carries `gifUrl` instead. */
   emoji: string;
+  /** An allow-listed https URL (see `reactions.isAllowedGifUrl`). */
+  gifUrl?: string;
   x: number;
   y: number;
 }
@@ -89,6 +92,8 @@ export interface RoomState {
   chatDisabledReason: string | null;
   /** Music the agent is playing into the room, or `null`. */
   music: { title: string; paused: boolean } | null;
+  /** The emoji this room accepts, from the join result; empty until joined. */
+  reactionOptions: string[];
   /**
    * The current utterance as transcribed so far, refreshed about once a second
    * while someone is talking and cleared when their finished sentence arrives.
@@ -111,6 +116,7 @@ export const EMPTY_ROOM_STATE: RoomState = {
   speakingVolumes: {},
   chatDisabledReason: null,
   music: null,
+  reactionOptions: [],
   liveCaption: null,
 };
 
