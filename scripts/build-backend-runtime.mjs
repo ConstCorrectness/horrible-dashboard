@@ -186,8 +186,30 @@ function installPython(outDir) {
 
   const pythonDir = join(outDir, 'python');
   log(`copying ${dists[0].name} -> python/`);
-  cpSync(join(staging, dists[0].name), pythonDir, { recursive: true, dereference: true });
+  // On macOS and Linux `bin/python3` is a relative symlink (`-> python3.12`). Node's
+  // `cp` rewrites relative links as *absolute* ones into the source tree unless told
+  // `verbatimSymlinks`, and the source is the staging dir deleted just below, so the
+  // copied interpreter was a dangling link: uv answered "No virtual environment or
+  // system Python installation found" and v0.3.0 shipped Windows only. Kept verbatim,
+  // the link resolves inside the copy. Windows has no links inside the dist, and
+  // keeps `dereference` for the junction it never descends into anyway.
+  const posix = process.platform !== 'win32';
+  cpSync(
+    join(staging, dists[0].name),
+    pythonDir,
+    posix ? { recursive: true, verbatimSymlinks: true } : { recursive: true, dereference: true },
+  );
   rmSync(staging, { recursive: true, force: true });
+  const python = interpreterPath(pythonDir);
+  if (!existsSync(python)) {
+    // `existsSync` follows links, so a dangling one fails here, with the listing,
+    // rather than minutes later inside uv with a message that names neither.
+    const bin = join(pythonDir, 'bin');
+    throw new Error(
+      `no interpreter at ${python} after copying the dist; bin/ holds: ` +
+        (existsSync(bin) ? readdirSync(bin).join(', ') : '(no bin/ directory)'),
+    );
+  }
 
   // python-build-standalone ships PEP 668's `EXTERNALLY-MANAGED` marker, and uv
   // refuses to install into an interpreter carrying it. The marker exists to stop
