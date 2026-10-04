@@ -8,19 +8,14 @@ import { apiUrl } from '../../origin';
 
 export interface MapSummary {
   name: string;
-  /** `bundled` for a map the app ships, otherwise the install directory it came
-   * from (official / servermaps / …). */
+  /** Always `bundled`: the game plays only the maps it ships. Kept because the
+   * server and the native client still send and read it. */
   source: string;
   size: number;
 }
 
-export interface InstallStatus {
-  /** Whether an *AssaultCube install* was found — an addition, not a gate. The
-   * bundled maps play without one, so the panel keys off `map_count`. */
-  found: boolean;
-  path: string | null;
-  configured: boolean;
-  /** Every playable map, bundled and installed together. */
+export interface CatalogStatus {
+  /** Every playable map. Zero only if the bundled maps failed to build. */
   map_count: number;
   bundled_count: number;
   message: string | null;
@@ -766,8 +761,8 @@ export function listInvites(): Promise<MatchInvite[]> {
   return apiGet<MatchInvite[]>('/hassault/invites');
 }
 
-export function getInstallStatus(): Promise<InstallStatus> {
-  return apiGet<InstallStatus>('/hassault/status');
+export function getCatalogStatus(): Promise<CatalogStatus> {
+  return apiGet<CatalogStatus>('/hassault/status');
 }
 
 export function listMaps(): Promise<MapSummary[]> {

@@ -37,6 +37,13 @@ def pytest_configure(config):
     # The relay is on by default and hosted by the game server; a test that boots the
     # app must not open a connection to it (see `network.setup.relay_url`).
     os.environ["HORRIBLE_RELAY_URL"] = "off"
+    # The small Cube arenas the hassault suite is built on (`hd_pit`, `hd_atrium`,
+    # `hd_crossing`). They are not shipped maps anymore, so the game never offers
+    # them, but they simulate in milliseconds where a modelled map's baked grid
+    # does not. See `mapsource.EXTRA_MAP_DIRS_ENV`.
+    os.environ["HASSAULT_EXTRA_MAP_DIRS"] = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "fixtures", "hassault_maps"
+    )
 
 
 @pytest.fixture(autouse=True)

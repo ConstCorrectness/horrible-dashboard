@@ -690,7 +690,7 @@ class ConsoleRegistry:
                     name="map",
                     type="string",
                     required=True,
-                    description="Map name (e.g. hd_atrium, hd_pit)",
+                    description="Map name (e.g. hd_dust2, hd_mirage)",
                 ),
                 ConCommandParameter(
                     name="bots",
@@ -706,7 +706,7 @@ class ConsoleRegistry:
                     description="Bot difficulty",
                 ),
             ],
-            example='server.start("hd_atrium", bots=3, skill="hard")',
+            example='server.start("hd_dust2", bots=3, skill="hard")',
         )
 
         # server.stop
@@ -744,7 +744,7 @@ class ConsoleRegistry:
                     description="Map name",
                 )
             ],
-            example='server.map("hd_crossing")',
+            example='server.map("hd_mirage")',
         )
 
         # server.restart
@@ -969,7 +969,7 @@ class ConsoleRegistry:
             self._cmd_edit_open,
             description="Open one of this app's maps for editing",
             signature="edit.open(map: str)",
-            example="edit.open(map='hd_pit')",
+            example="edit.open(map='hd_mirage')",
             params=[
                 ConCommandParameter(
                     name="map",
@@ -1218,7 +1218,7 @@ class ConsoleRegistry:
     async def _cmd_server_start(
         self, args: dict[str, Any], ctx: ConsoleExecutionContext
     ) -> Any:
-        map_name = str(args.get("map") or "hd_atrium").strip()
+        map_name = str(args.get("map") or "hd_dust2").strip()
         bots_count = int(args.get("bots") or 0)
         skill = str(args.get("skill") or "normal").lower()
         room = match_server.create(map_name)
@@ -1968,7 +1968,7 @@ class ConsoleRegistry:
         self, _args: dict[str, Any], ctx: ConsoleExecutionContext
     ) -> Any:
         if not self.active_draft:
-            ctx.print("[edit] Nothing open. edit.open(map='hd_pit') or edit.new().")
+            ctx.print("[edit] Nothing open. edit.new() or edit.open(map='hd_mirage').")
             return {"draft": None}
         draft = self._edit_draft()
         findings = drafts.lint(draft.id)

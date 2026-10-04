@@ -51,7 +51,7 @@ def draft():
 def sandbox_maps(tmp_path, monkeypatch):
     """A maps directory saving can write into without touching the real one."""
     for name in mapsource.bundled_names():
-        source = mapsource.MAPS_DIR / f"{name}.json"
+        source = mapsource.source_path(name)
         (tmp_path / f"{name}.json").write_text(
             source.read_text(encoding="utf-8"), encoding="utf-8"
         )
@@ -91,9 +91,9 @@ def test_load_map_resolves_a_draft_by_name(draft):
 
 
 def test_a_draft_never_reaches_the_filesystem(draft):
-    """`find_map`'s path validation is untouched by drafts, because a draft is
-    never a path. A draft id that looks like a traversal is simply not a draft."""
-    assert assets.find_map(drafts.PREFIX + draft.id) is None
+    """A draft is never a path: it is not a map source on disk, and a draft id
+    that looks like a traversal is simply not a draft."""
+    assert mapsource.source_path(drafts.PREFIX + draft.id) is None
     with pytest.raises(drafts.DraftError):
         assets.load_map(drafts.PREFIX + "../../etc/passwd")
 
@@ -420,9 +420,7 @@ def test_an_uncatalogued_slot_is_described_rather_than_refused():
 def test_every_bundled_map_paints_with_slots_the_palette_names():
     used = set()
     for name in mapsource.bundled_names():
-        source = json.loads(
-            (mapsource.MAPS_DIR / f"{name}.json").read_text(encoding="utf-8")
-        )
+        source = json.loads(mapsource.source_path(name).read_text(encoding="utf-8"))
         for brush in source["brushes"]:
             used.update(
                 brush[k] for k in ("wtex", "ftex", "ctex", "utex") if k in brush

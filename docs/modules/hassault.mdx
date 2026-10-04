@@ -17,8 +17,10 @@ authoritative match server on your own backend, five weapons with
 lag-compensated hit registration, and bot players to fill out a match when nobody
 else is about.
 
-**It needs nothing installed.** The game ships with three maps of its own, and
-pointing it at an AssaultCube install adds that install's 44 on top.
+**It needs nothing installed.** The game plays nine modelled maps of its own,
+the same nine on every platform. It used to also read AssaultCube's maps out of a
+local install, and that was removed on 2026-10-03 (see
+[Bundled maps](#bundled-maps)).
 
 ## Licensing: whose content ships, and whose does not
 
@@ -33,15 +35,15 @@ AssaultCube splits its licensing, and the split decides the whole design:
 
 This repo is public, deploys to GitHub Pages, and ships a server image to Fly, so
 committing a single AssaultCube `.cgz` or texture would be a violation.
-HorribleAssault therefore **supports AssaultCube content without ever bundling
-it**: you point it at your own install and the backend reads from there. Same
+HorribleAssault therefore **supported AssaultCube content without ever bundling
+it**: you pointed it at your own install and the backend read from there. That
+support has since been removed, and the game plays only its own maps. Same
 precedent as SearXNG (AGPL — supported, never bundled) and choosing pypdf over
 AGPL PyMuPDF.
 
 That restriction is about *their* content, and it says nothing about ours. The
 format is understood well enough to write as well as read, so the game ships
-**its own maps** — see [Bundled maps](#bundled-maps). An install is an
-enhancement, not a prerequisite, and the same rule has held for every asset class
+**its own maps**. See [Bundled maps](#bundled-maps). The same rule has held for every asset class
 since: surface detail is generated at runtime (`surfaces.ts`), the weapon and item
 shapes are geometric, and the gunshots are synthesized. Nothing that would ever
 need someone else's copyright.
@@ -87,9 +89,9 @@ Two things it deliberately does **not** own:
   `playerstart` entities as `team: 0` / `team: 1`. `TEAM_FACTIONS` maps that index
   onto a faction; it does not decide it, so no existing map changes meaning.
 
-Map briefs exist only for the three maps this repo ships. Writing fiction over a
-level out of somebody's AssaultCube install would be the same mistake as bundling
-it.
+Every map this repo ships has a brief, one per modelled map, and
+`test_the_lore_route_serves_both_factions_and_the_map_briefs` fails if one is
+missing.
 
 ## The hitbox is served, and it is not finished
 
@@ -218,27 +220,44 @@ scaled — only *attributes* are.
 
 `backend/modules/hassault/mapsource.py` + `backend/modules/hassault/maps/*.json`.
 
-Twelve maps ship with the app, so the pane is playable on a clean clone. They
-are ours, CC0, and named `hd_*` so the bundled and installed catalogs share one
-namespace without either being able to shadow the other.
+Nine maps ship with the app, and they are the only maps the game plays, on every
+platform: the browser, the desktop pane, the native client and the game server.
+They are ours, CC0, and named `hd_*`. All nine are modelled `gltf` maps:
+`hd_assault`, `hd_bank`, `hd_dust2`, `hd_facility`, `hd_inferno`, `hd_junkflea`,
+`hd_mirage`, `hd_nuke` and `hd_office`. Each is a Blender generator in
+`tools/blender/` exported to one GLB that both clients load; see
+[The modelled maps](#the-modelled-maps-how-one-is-built-and-what-each-revision-changed).
+`apps/assault-web/src/maps.ts` lists the same nine with their key art, and
+`lore.py` has a brief for each.
 
-- **Three Cube heightfields:** `hd_atrium`, `hd_crossing` and `hd_pit`.
-- **Nine modelled `gltf` maps:** `hd_assault`, `hd_bank`, `hd_dust2`,
-  `hd_facility`, `hd_inferno`, `hd_junkflea`, `hd_mirage`, `hd_nuke` and
-  `hd_office`. Each is a Blender generator in `tools/blender/` exported to one GLB
-  that both clients load; see
-  [The modelled maps](#the-modelled-maps-how-one-is-built-and-what-each-revision-changed).
+**What was removed on 2026-10-03.** Two catalogs used to sit beside these:
+
+- **An AssaultCube install's maps.** `hassault.installPath` (or a probe of the
+  usual install locations) added an install's 44 `.cgz` maps to every map picker.
+  The setting, the probe and the install half of `assets.py` are gone. The `.cgz`
+  reader and writer stay: the Cube grid is still the collision layer that every
+  modelled map is baked into, and the map designer's drafts are Cube maps.
+- **Three Cube heightfields:** `hd_atrium`, `hd_crossing` and `hd_pit`. They
+  moved to `backend/tests/fixtures/hassault_maps/`. The backend suite is built on
+  them, since they simulate in milliseconds, and `backend/tests/conftest.py`
+  adds that directory through `HASSAULT_EXTRA_MAP_DIRS`
+  (`mapsource.EXTRA_MAP_DIRS_ENV`). They are in the catalog during tests and
+  nowhere else. `test_the_lore_route_serves_both_factions_and_the_map_briefs`
+  pins the shipped directory at exactly nine.
+
+Read a map source through `mapsource.source_path(name)`, never
+`MAPS_DIR / f"{name}.json"`: the second misses the fixture directory, which is
+how the suite's first run after the move failed.
 
 See [Two level formats](#two-level-formats-cube-and-gltf) for what the difference
 between the two kinds changes. The
 adjudicable set is pinned exactly — not as a subset — in
 `test_games_hassault_rooms.py`, because the point of that assertion is that the
 set a rated match may be played on is *closed*, so a map appearing in it without
-being added deliberately is precisely what it should catch. `assets.load_map` resolves bundled names first: an install directory is
-somewhere anyone can drop a file, and letting a stray `hd_pit.cgz` there decide
-what the game loads would be a surprise with no upside.
+being added deliberately is precisely what it should catch.
 
-`assets.py` is the map catalog and nothing else. The 3D asset cache — the
+`assets.py` is the map catalog and nothing else: `list_maps` and `load_map`,
+which resolves a draft first and then a bundled map. The 3D asset cache — the
 GLB download/verify pipeline behind `/api/hassault/assets/*` — is
 `asset_cache.py`, deliberately a separate module: it was briefly written *over*
 `assets.py`, which removed `install_root`/`list_maps` from under six call sites in
@@ -345,14 +364,99 @@ because each reads what the step before it wrote:
    tools/blender/bake_collision.py -- hd_dust2` rasterises the GLB into the
    JSON's brushes, which is what the server simulates.
 3. **Fit:** `uv run python tools/hassault_fit_placements.py hd_dust2` moves any
-   spawn, item or site the new geometry swallowed to the nearest valid cell.
+   spawn, item, site or **light** the new geometry swallowed to the nearest valid
+   cell. Never skip it: step 1 rewrites every light from the generator, a few of
+   those land inside a wall, and the committed JSON holds them only after fitting.
+   Skipping it shows up as lights "drifting" in a diff that changed none.
 4. **Check:** `maplint`, then the native `test_spawn_clearance` (which checks the
    offline `MAP_CONFIGS` tables in `world3d.ts` and `world3d.rs` against the GLB).
    Also run the `glb-surfaces` vector test, whose golden list gains a row for any
-   new material. Regenerate it with `UPDATE_GLB_SURFACE_VECTORS=1`.
+   new material. Regenerate it with `UPDATE_GLB_SURFACE_VECTORS=1`. And run
+   `map-geometry.test.ts`, which reads every shipped GLB and fails on an
+   inside-out mesh or two surfaces fighting for one plane.
 
 Run the generators on Blender **4.1**. They call `read_factory_settings`, which the
-Blender MCP sandbox refuses.
+Blender MCP sandbox refuses. With `HASSAULT_MAP_OUT` set to a scratch directory a
+generator writes there instead of the repo, so a change can be diffed first. The
+generators are deterministic: unchanged, they reproduce the committed GLBs byte
+for byte.
+
+To look at a map without running the game,
+`tools/blender/render_map_views.py -- hd_dust2 [out_dir] [glb]` renders a frame
+from the first spawn of each team at eye height. It has no detail textures and a
+different light rig, so use it for judging shape, not finish.
+
+#### What export does to every map's shape
+
+`export_map_glb` first rings the map with invisible walls, then runs five passes
+over the finished scene after scaling it to cubes. All of it is generic on
+purpose: it fixes every map, and every future map, without touching a generator.
+
+0. **`add_boundary_walls`** puts a `Map_Bounds_<side>_ColOnly` wall on each side
+   of the map's footprint, 3 m taller than its highest surface. It is the safety
+   floor's sides. Assault's south street ran to the edge of the model at both
+   ends, and so did its north-east yard, with nothing there. Offline, where
+   Rapier walks the GLB itself, a body walked off the map. Hosted matches never
+   showed it, because the baked grid ends in rock. `test_glb_colliders.rs` only
+   caught it once a rounded corner stopped one of its 16 rays clipping a wall's
+   exact tip. In the baked grid the walls are columns whose floor is the wall
+   top. The bake leaves them out by that exact prefix, because the grid already
+   ends in rock past the map, and on the roofed Office their corners baked as
+   standable cells nobody could reach. The prefix is unique because Junk Flea's
+   own perimeter walls are `Boundary_Wall_*`. A looser match dropped them from
+   the server's grid.
+
+1. **`clean_meshes`** drops zero-area slivers and re-winds any **closed** mesh
+   that faces inward. Both clients cull back faces and derive normals from
+   winding, so an inside-out mesh is drawn as its own interior, and the bake,
+   which counts solid by face orientation, gets it wrong too. The bank's 460 gold
+   ingots and Junk Flea's two bridge ramps shipped that way. Open sheets are
+   left alone, because "outward" is a guess there.
+2. **`weather_walls`** slices big vertical stone and plaster faces into a
+   1.25 m grid and pushes the interior vertices in and out by up to 3 cm of
+   world-space noise: hand-built walls instead of perfect planes. 3 cm is the
+   ceiling because `bake_collision.py` samples a quarter-cube in from each cell
+   edge, so the grid cannot move. Edge vertices never move, and nothing moves
+   within one and a half cells of any other surface (trim, decor, the floor), so
+   the wall never weaves through what is mounted on or beside it. Office drywall
+   and floors are excluded.
+3. **`soften_edges`** rounds every edge sharper than 50° with a two-segment
+   bevel. The radius comes from the material's kind in `glb-surfaces.json`:
+   15 cm for masonry, 12 cm for plaster, 4 cm for wood, 2.5 cm for steel, and
+   none for glass or emissive surfaces. It is capped at a fraction of the
+   object's thinnest side. Edges where a face carries on into another surface
+   (floor slabs laid edge to edge, a wall standing on the ground) are **seams**
+   and stay sharp, otherwise every joint would become a gutter. Above 45° on
+   purpose: an eight-sided post's facets meet at 45°, and rounding them collapses
+   the bevels into each other. A bevel that opens a mesh is thrown away.
+4. **`separate_coplanar`** finds faces of different objects and materials lying
+   in one plane, facing the same way and overlapping. The depth buffer cannot
+   order them, so they flicker. Every map shipped some, from Dust II's canopies
+   drawn twice to Nuke's hazard stripes inside the door reveals. Within one
+   plane, an object goes one 7 mm layer above the highest larger object it
+   actually overlaps, so a mosaic field on a brass border on a floor needs three
+   heights. Same-material overlaps are left alone, since they shade identically.
+   Three things in it were each learned from a wrong first version:
+   - **Layers are per plane.** An object-wide depth inherited chains across
+     planes and lifted Assault's curbs 8 cm.
+   - **The step is 7 mm, not 1 cm.** The generators stack their own decals in
+     1 cm steps, so a 1 cm lift put a crosswalk stripe exactly on the manhole
+     cover above it.
+   - **It repeats until nothing fights** (at most six passes), since any lift
+     can still land on a plane that was already taken.
+   Decals on a busy floor end up at most about 4 cm proud.
+5. **`mark_sharp_edges`** keeps every edge above 35° hard, and keeps the line
+   where a rounding strip meets its flat face hard. Otherwise a flat face shares
+   the strip's vertices, and both clients' recomputed normals shade it as a slow
+   gradient.
+
+`HASSAULT_MAP_SOFTEN=0` skips passes 2 and 3, for comparing against the map as
+authored. Faces are triangulated with Blender's `loop_triangles`, never as a fan:
+rounding and weathering leave concave n-gons, and a fan of those covers the
+wrong area. The cost is triangles: the nine GLBs went from 13.8 MB to 26 MB in total
+(Dust II 0.7 to 2.6 MB, the Bank 6.0 to 9.0 MB), and a player only ever loads
+one. The native client compiles them into its binary. Inside the boundary, the bake moved at most four cells per map
+between solid and open. No spawn, item or site moved on any map.
 
 **Lights and atmosphere come from the generator.** A GLB carries geometry, not
 lighting. `maplib.add_light` records a point light, and `maplib.lights_from_emitters`
@@ -430,9 +534,9 @@ clients already call, so the native client's boot sequence (`map_info` →
 and an edit is just a re-fetch of a map. There are no designer read routes for the
 map itself, and that absence is the design rather than an omission.
 
-A draft never touches the filesystem until it is saved, so `find_map`'s path
-validation is untouched by it — a draft id that looks like a traversal is simply
-not an open draft.
+A draft never touches the filesystem until it is saved, so it never meets the
+map-name validation in `mapsource.source_path`: a draft id that looks like a
+traversal is simply not an open draft.
 
 ### `mapsource.build` stays the only compiler
 
@@ -5463,7 +5567,7 @@ ticks, which proves the wire with no GPU involved.
 
 ```bash
 pnpm build:hassault        # optimized; `pnpm build:hassault:debug` for the other profile
-./apps/native-fps/target/release/hassault-native --server=http://127.0.0.1:8000 --map=hd_pit --check
+./apps/native-fps/target/release/hassault-native --server=http://127.0.0.1:8000 --map=hd_dust2 --check
 ```
 
 `pnpm build:hassault` is `cargo build --release --manifest-path
@@ -5824,7 +5928,7 @@ So the request carries `mode` (`train` / `host` / `join`), the room, the host no
 id, and the bot count, and the route turns them into flags:
 
 ```
---server=http://127.0.0.1:8100 --map=hd_pit --mode=host --max-fps=240 --bots=3 --bot-skill=hard
+--server=http://127.0.0.1:8100 --map=hd_dust2 --mode=host --max-fps=240 --bots=3 --bot-skill=hard
 ```
 
 Four rules in that translation are load-bearing:
@@ -7153,11 +7257,12 @@ the server and the clients disagree.
 
 Three properties are load-bearing:
 
-- **Bundled maps only.** `assets.load_map` also resolves an AssaultCube install's
-  maps, and the server has no install — which is the right answer rather than a
-  gap to close. A map that exists on one player's disk cannot be adjudicated by
-  anybody else. The refusal is explicit (`referee.playable`) so the reason is
-  legible instead of arriving as a `LookupError`.
+- **Bundled maps only.** A map that exists on one player's disk cannot be
+  adjudicated by anybody else. Since AssaultCube installs stopped being read,
+  every node's catalog is the bundled set, but a draft (`draft:<id>`) still
+  resolves through `assets.load_map` and is still refused here. The refusal is
+  explicit (`referee.playable`) so the reason is legible instead of arriving as a
+  `LookupError`.
 - **One validator.** Input goes through `match.parse_command` — the same function
   the browser channel and the peer fabric use. It moved out of `channel.py` when
   this landed: it had three callers and a second, laxer copy on whichever path
@@ -7366,10 +7471,7 @@ the two places a user is offered a way of working.
   `.open`, `.close`, `.status`, `.save`, `.list`, `.select`, `.brush.add`,
   `.brush.set`, `.brush.remove`, `.ent.add`, `.ent.set`, `.ent.remove`, `.undo`,
   `.redo`, `.lint`, `.textures`, `.playtest`.
-- **Settings:** `hassault.installPath` — the folder containing `packages/maps`.
-  Blank auto-detects the usual per-platform locations. **Optional**: it only adds
-  an AssaultCube install's maps to the ones already bundled.
-  `hassault.sensitivity` — mouse look multiplier, also editable live from the
+- **Settings:** `hassault.sensitivity` — mouse look multiplier, also editable live from the
   pause menu. The control map (`hassault.controls`) rides the same setting
   storage but is not a declared `SettingDecl` row — see
   [Controls](#controls-and-why-they-are-not-keymap-bindings).
@@ -7418,7 +7520,7 @@ changing the state of a running match rather than describing it.
 
 | Tool | Does |
 | --- | --- |
-| `hassault.list_maps` | Maps this install can host |
+| `hassault.list_maps` | The maps this node can host |
 | `hassault.list_matches` | Matches running here, plus invitations received |
 | `hassault.host` | Open a match, optionally inviting someone in the same call |
 | `hassault.invite` | Invite a friend; the room may be omitted when only one runs |
@@ -7482,11 +7584,11 @@ it into an X rather than fading a second element in and out.
 | Route | Purpose |
 | --- | --- |
 | `GET /api/hassault/session` | Who this node plays as: `{signed_in, username, enlisted}`. `?refresh=true` re-reads it from the game server, which is how a username claimed on another machine appears |
-| `GET /api/hassault/status` | What is playable: `map_count` (bundled + installed), `bundled_count`, and whether an AssaultCube install was found. `found: false` is **not** a gate — the bundled maps play without one |
-| `GET /api/hassault/maps` | Every playable map, bundled first, each tagged with its `source` |
+| `GET /api/hassault/status` | What is playable (`CatalogStatus`): `map_count`, `bundled_count` and a `message`. Zero maps only if the bundled maps failed to build |
+| `GET /api/hassault/maps` | Every playable map. `source` is always `bundled`, kept on the wire because the native client and older panes read it |
 | `GET /api/hassault/maps/{name}` | Header, entities, spawn counts (JSON) |
 | `GET /api/hassault/maps/{name}/cubes` | The cube grid as raw byte planes. `{name}` may be `draft:<id>`, which is how an unsaved map reaches every client through the path it already uses |
-| `GET /api/hassault/maps/{name}/download` | A **bundled** map — or a draft — as a real `.cgz`, openable in AssaultCube's editor. 404 for anything else, because re-serving an install's copyright maps is the thing this module does not do |
+| `GET /api/hassault/maps/{name}/download` | A bundled map, or a draft, as a real `.cgz`, openable in AssaultCube's editor. For a modelled map that is its baked collision grid |
 | `POST /api/hassault/maps/drafts` | Open a map for editing, blank or seeded from a bundled one. See [The map designer](#the-map-designer) |
 | `GET`/`PATCH`/`DELETE /api/hassault/maps/drafts/{id}` | The document; one typed edit; close it |
 | `POST /api/hassault/maps/drafts/{id}/undo` \| `/redo` | Walk the edit history |
@@ -7607,13 +7709,13 @@ sides, so the two cannot drift. `floor` and `ceil` are signed; the rest are not.
 
 ### Path safety
 
-An install path is user-supplied configuration and the names indexing into it come
-from files we did not write, so both are validated. `find_map` accepts only bare
-alphanumeric names — anything containing a separator or a dot is refused outright
-rather than normalized, because a "cleaned" traversal attempt is still an attempt.
-`resolve_asset` compares the **resolved** target against the resolved package root,
-which is what actually catches symlinks and encoded forms; a string check for `..`
-would miss both.
+A map name arrives in a URL and indexes into a directory, so it is validated
+rather than trusted. `mapsource.is_bundled_name` accepts only an `hd_` prefix and
+bare alphanumeric names (plus `-` and `_`); anything containing a separator or a
+dot is refused outright rather than normalised, because a "cleaned" traversal
+attempt is still an attempt. `test_load_map_refuses_anything_that_is_not_a_bare_name`
+pins it. (This section used to cover an AssaultCube install path too; that
+support is gone.)
 
 ## In-Browser vs. Native Desktop Client
 
@@ -7716,7 +7818,7 @@ differentiates between the two:
 1. **Source / Quake Command Syntax**:
    - Set CVar: `net.graph 2`, `draw.hitboxes 1`, `server.timescale 0.5`
    - Query CVar: `draw.fov`, `net.simulate_lag`
-   - Command with keyword params: `server.start map:hd_atrium bots:3 skill:hard`
+   - Command with keyword params: `server.start map:hd_dust2 bots:3 skill:hard`
    - Command chaining: `server.cheats 1; draw.hitboxes 1; net.graph 2`
    - Client binds & aliases: `bind F1 "macro.run('warmup')"`, `alias prac "server.cheats 1; draw.hitboxes 1"`
 
@@ -8323,6 +8425,15 @@ mirrored one: both look right head-on and disagree everywhere else. The test
 walks the full circle and compares against the forward vector `bodies.rs`
 derives, which is the definition the rest of the client already agrees with.
 
+The browser client got this wrong for longer. `avatars.ts` turned the operator
+with the camera's own `-yaw - π/2`, which is correct for a −Z forward. That was
+the box rig's forward, but a Mixamo character faces +Z, so every remote player
+was drawn facing exactly away from where they were looking. It took a second
+player watching you turn to notice. The rotation is now `avatarRotationY`
+(`π/2 − yaw`). `avatar-facing.test.ts` pins it the same way the native client
+does, and also checks the shipped operator GLBs themselves face +Z: toes ahead
+of the feet, left hand on +X.
+
 ### The weapon props stay procedural
 
 The five weapon props and the muzzle flash are still built from primitives, and
@@ -8419,9 +8530,6 @@ The skin system provides distinct faction styling and collectible operator skins
 - **`CORNER` cells render as open.** The type is a diagonal half-wall; treating it
   as fully open leaves a small gap rather than blocking a passage, which is the
   safer wrong answer. They are rare — 104 of 65 536 cells in `ac_desert`.
-- **No map models on installed maps.** `mapmodel` entities (crates, foliage) are
-  parsed and exposed but not rendered. Water and a sky are drawn now, in both
-  clients.
 - **Map lights cast no shadows.** Only the sun does, from a map baked once at
   load. A lamp lights the wall behind a crate as if the crate were not there.
   Both clients also cap how many they draw at once: the native client the 64
@@ -8512,10 +8620,10 @@ The skin system provides distinct faction styling and collectible operator skins
 
 1. **Map and asset pipeline** — done, both directions: a reader for AssaultCube's
    maps and a writer for ours.
-2. **Bundled maps** — done: twelve original maps ship with the app, so it needs no
-   AssaultCube install to be playable. Three are Cube heightfields; nine are
-   [`gltf` levels](#two-level-formats-cube-and-gltf) with real 3D geometry, their
-   own light and sky, and a Blender generator each.
+2. **Bundled maps** — done: nine original
+   [`gltf` levels](#two-level-formats-cube-and-gltf) are the whole catalog, on every
+   platform, with real 3D geometry, their own light and sky, and a Blender
+   generator each. AssaultCube installs are no longer read.
 3. **Three.js renderer** — done: walk any map in first person.
 4. **Netcode** — done: an authoritative match server on the local backend, with
    client prediction, reconciliation, and entity interpolation. JSON on the shared

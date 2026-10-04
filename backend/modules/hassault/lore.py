@@ -36,9 +36,9 @@ PREMISE = (
 )
 
 LONG_PREMISE = """\
-The Deadzone is what the grid left behind: coolant pits drained to bedrock, \
-switchyards still humming off dead schedules, campus atria with the lights on and \
-nobody billed. The machines in them did not stop. The invoices did.
+The Deadzone is what the grid left behind: relay towns in the sand, a reactor \
+nobody pays to cool, a reserve bank still guarding the credits, office towers with \
+the meetings still booked. The machines in them did not stop. The invoices did.
 
 ARC says a machine left running belongs to whoever keeps it running. HALON says it \
 belongs to the contract, and the contract was never cancelled. Neither side is \
@@ -140,9 +140,7 @@ def rank_name(tier: str) -> str:
 class MapBrief:
     """What the menu and the loading screen say about a map.
 
-    Keyed by map name, and **only** for the maps this repo ships. A brief for a map
-    read out of somebody's AssaultCube install would be us writing fiction over
-    their level, which is the same mistake as bundling it.
+    Keyed by map name: one for every map this repo ships, which a test enforces.
     """
 
     map_name: str
@@ -154,34 +152,94 @@ class MapBrief:
 
 
 MAP_BRIEFS: dict[str, MapBrief] = {
-    "hd_pit": MapBrief(
-        map_name="hd_pit",
-        site="Coolant Pit 7",
-        tagline="Drained to bedrock. Nothing to hide behind but the pumps.",
+    "hd_dust2": MapBrief(
+        map_name="hd_dust2",
+        site="Citadel Relay, Dust Basin",
+        tagline="The relay still answers. Nobody remembers the question.",
         brief=(
-            "They pulled the coolant out in a week and never came back for the "
-            "plant. What is left is a bowl with a floor you can see across and a rim "
-            "you cannot hold — every angle is somebody else's angle."
+            "A walled market town grown up around a relay mast in the sand. Long A is "
+            "a rifle lane in full sun, the tunnels are the only shade, and both sites "
+            "sit where the old uplink cables still come up through the paving."
         ),
     ),
-    "hd_crossing": MapBrief(
-        map_name="hd_crossing",
-        site="Switchyard Crossing",
-        tagline="Still energised. Still on a schedule nobody wrote.",
+    "hd_mirage": MapBrief(
+        map_name="hd_mirage",
+        site="Mirage Exchange",
+        tagline="The courtyard trades in sightlines.",
         brief=(
-            "Two approaches, one yard, and a bus bar down the middle neither side "
-            "can walk through. The gear still trips on a timer. Nobody has found the "
-            "timer."
+            "A palace exchange where compute was auctioned by the hour. The courtyard "
+            "is open to every window around it, and whoever holds mid decides which "
+            "site the other side gets to walk into."
         ),
     ),
-    "hd_atrium": MapBrief(
-        map_name="hd_atrium",
-        site="Flagship Campus, North Atrium",
-        tagline="The lights are on. The invoice is not.",
+    "hd_inferno": MapBrief(
+        map_name="hd_inferno",
+        site="Inferno Terraces",
+        tagline="Every street is a corridor and every corridor is watched.",
         brief=(
-            "A lobby built to be photographed, with a gallery ring above it and "
-            "sightlines that were never meant to be defended. HALON still logs "
-            "entries here. ARC still uses the service stairs."
+            "A hill town that ran its own small grid off a bank of rooftop panels. "
+            "The streets are narrow enough to touch both walls. Banana is the one way "
+            "up to B, and both sides know it."
+        ),
+    ),
+    "hd_nuke": MapBrief(
+        map_name="hd_nuke",
+        site="Coolant Plant 4",
+        tagline="Two sites, one above the other, and a floor between them.",
+        brief=(
+            "A reactor that kept the grid warm until the grid stopped paying for it. "
+            "The yard is open ground, the halls are not, and the vents connect things "
+            "the floor plan says should be apart."
+        ),
+    ),
+    "hd_office": MapBrief(
+        map_name="hd_office",
+        site="Tower 9, Floor 31",
+        tagline="The meeting rooms are still booked.",
+        brief=(
+            "A high-rise floor where the orchestration was signed off. Cubicles, "
+            "glass and a server core, all of it close enough that the fight is "
+            "decided by who opens the door."
+        ),
+    ),
+    "hd_bank": MapBrief(
+        map_name="hd_bank",
+        site="Compute Reserve Bank",
+        tagline="The vault holds the only currency left.",
+        brief=(
+            "The reserve that backed the grid's compute credits, with the ledgers "
+            "still in the vault. In through the lobby, through the offices, down to "
+            "the gold. HALON guards it and ARC wants it."
+        ),
+    ),
+    "hd_assault": MapBrief(
+        map_name="hd_assault",
+        site="Depot 12",
+        tagline="Somebody is still shipping something.",
+        brief=(
+            "A freight depot where containers keep arriving on a schedule nobody "
+            "wrote. One side holds the warehouse and the racks, the other comes "
+            "across the yard from the rail line."
+        ),
+    ),
+    "hd_facility": MapBrief(
+        map_name="hd_facility",
+        site="Research Facility Kappa",
+        tagline="Emergency lighting only.",
+        brief=(
+            "The lab complex where the shells were tested, now running on emergency "
+            "power. Two corridors, a coolant pit between them, and alarms that never "
+            "learned to stop."
+        ),
+    ),
+    "hd_junkflea": MapBrief(
+        map_name="hd_junkflea",
+        site="Junk Flea Yard",
+        tagline="Everything here was something else first.",
+        brief=(
+            "A scrapyard market built out of what the grid threw away. Bale walls, "
+            "tyre stacks and a bridge over the middle. There is cover everywhere, and "
+            "none of it is where you expect."
         ),
     ),
 }
@@ -191,7 +249,7 @@ def faction_for_team(team: int) -> Faction:
     """The faction a `playerstart`'s team index belongs to.
 
     Out-of-range indices fold onto the first faction rather than raising: a map is
-    data (a bundled one *or* one out of somebody's install), and an unexpected team
+    data (a bundled one *or* a designer draft), and an unexpected team
     number is a reason to draw somebody in amber, not to fail the match.
     """
     return FACTIONS[TEAM_FACTIONS[team % len(TEAM_FACTIONS)]]

@@ -41,7 +41,7 @@ GLB_MAPS = [
     name
     for name in mapsource.bundled_names()
     if json.loads(
-        (mapsource.MAPS_DIR / f"{name}.json").read_text(encoding="utf-8")
+        mapsource.source_path(name).read_text(encoding="utf-8")
     ).get("format")
     == "gltf"
 ]

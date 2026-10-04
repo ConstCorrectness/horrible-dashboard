@@ -70,7 +70,7 @@ from backend.modules.hassault.models import (
     EntityOut,
     HitboxOut,
     HitboxTuneRequest,
-    InstallStatus,
+    CatalogStatus,
     Invitee,
     ItemOut,
     ItemPlacement,
@@ -112,35 +112,14 @@ def _load(name: str):
     return world
 
 
-@router.get("/status", response_model=InstallStatus)
-async def get_status() -> InstallStatus:
-    """What is playable here. An install is an *addition*, never a prerequisite."""
-    root = assets.install_root()
-    from backend.modules.settings.routes import get_value
-
-    configured = bool(str(get_value("hassault.installPath", "") or "").strip())
+@router.get("/status", response_model=CatalogStatus)
+async def get_status() -> CatalogStatus:
+    """What is playable here: the bundled maps, which need nothing installed."""
     bundled = len(mapsource.bundled_names())
-    total = len(assets.list_maps())
-    if root is None:
-        return InstallStatus(
-            found=False,
-            configured=configured,
-            map_count=total,
-            bundled_count=bundled,
-            message=(
-                "That path is not an AssaultCube install (no packages/maps inside)."
-                if configured
-                else "Playing the maps that ship with the app. Point "
-                "hassault.installPath at an AssaultCube install to add its maps "
-                "too — its content is read from your own copy and never bundled."
-            ),
-        )
-    return InstallStatus(
-        found=True,
-        path=str(root),
-        configured=configured,
-        map_count=total,
+    return CatalogStatus(
+        map_count=bundled,
         bundled_count=bundled,
+        message="Playing the maps that ship with the game.",
     )
 
 
@@ -415,20 +394,16 @@ async def get_map(name: str) -> MapInfo:
         "rvsf": len(world.spawns(1)),
         "total": len(world.spawns()),
     }
-    map_format = (
-        "gltf"
-        if name in ("hd_facility", "hd_junkflea", "hd_bank", "hd_assault", "hd_office")
-        else "cube"
-    )
-    if map_format == "cube":
-        json_path = mapsource.MAPS_DIR / f"{name}.json"
-        if json_path.is_file():
-            try:
-                src = json.loads(json_path.read_text(encoding="utf-8"))
-                if src.get("format") == "gltf":
-                    map_format = "gltf"
-            except Exception:
-                pass
+    # A map declares its own format. A draft has no source file and is a Cube map.
+    map_format = "cube"
+    json_path = mapsource.source_path(name)
+    if json_path is not None:
+        try:
+            src = json.loads(json_path.read_text(encoding="utf-8"))
+            if src.get("format") == "gltf":
+                map_format = "gltf"
+        except Exception:
+            pass
 
     return MapInfo(
         name=world.name,

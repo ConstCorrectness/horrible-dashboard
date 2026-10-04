@@ -5,7 +5,7 @@ import { lockSystemKeys, unlockEscape, useCapture } from '../../keymap';
 import { setSetting, useSetting } from '../../settings';
 import {
   dismissMatchSummary,
-  getInstallStatus,
+  getCatalogStatus,
   getLatestMatchSummary,
   getRankedMaps,
   browseServers,
@@ -24,7 +24,7 @@ import {
   type TacticalSpec,
   type ThrowPhysics,
   type BrowseMatch,
-  type InstallStatus,
+  type CatalogStatus,
   type LaunchNativeOptions,
   type LaunchNativeResult,
   type Invitee,
@@ -408,7 +408,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const pendingSpawnRef = useRef<MapCoordinates | null>(null);
   const godModeRef = useRef<boolean>(consoleRegistry.getBool('player.god'));
-  const [status, setStatus] = useState<InstallStatus | null>(null);
+  const [status, setStatus] = useState<CatalogStatus | null>(null);
   const [maps, setMaps] = useState<MapSummary[]>([]);
   const [mapName, setMapName] = useState<string>(props.initialMap || '');
   const [info, setInfo] = useState<MapInfo | null>(null);
@@ -1357,7 +1357,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     let cancelled = false;
     void (async () => {
       try {
-        const st = await getInstallStatus();
+        const st = await getCatalogStatus();
         if (cancelled) return;
         setStatus(st);
         const list = await listMaps();
@@ -1371,7 +1371,6 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           list.find((m) => m.name === 'hd_assault') ??
           list.find((m) => m.name === 'hd_bank') ??
           list.find((m) => m.name === 'hd_facility') ??
-          list.find((m) => m.name === 'hd_atrium') ??
           list.find((m) => m.source === 'bundled') ??
           list[0];
         // Only a *default*: a map already chosen — `initialMap`, or one a join
@@ -3722,10 +3721,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     position: { x: Math.round(hud.x), y: Math.round(hud.y), z: Math.round(hud.z) },
     onGround: hud.onGround,
     triangles: hud.triangles,
-    // Spelled out rather than a bare `installed`, which an agent would read as
-    // "cannot play" — the bundled maps play with no install at all.
     mapCount: status?.map_count ?? 0,
-    assaultCubeInstalled: status?.found ?? false,
     match:
       net.status === 'joined'
         ? {
@@ -3793,18 +3789,14 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
 
   // ---- render ---------------------------------------------------------------------
 
-  // Gated on having a map to play, *not* on having an AssaultCube install: the
-  // bundled maps ship with the app, so a missing install is only ever a smaller
-  // map list. This is reachable at all in case the bundled maps fail to build.
+  // The maps ship with the app, so this is reachable only if they failed to build.
   if (status && status.map_count === 0) {
     return (
       <div style={{ padding: '1rem', color: 'var(--text-dim)', fontSize: '0.85rem' }}>
         <h3 style={{ margin: '0 0 0.5rem', color: 'var(--text)' }}>No maps available</h3>
-        <p>{status.message}</p>
         <p>
-          Set <code>hassault.installPath</code> in Settings to the folder containing{' '}
-          <code>packages/maps</code>. AssaultCube content is read from your own copy and is never
-          bundled with this app.
+          The maps that ship with the game did not load. Check the backend log for the error that
+          stopped them.
         </p>
       </div>
     );

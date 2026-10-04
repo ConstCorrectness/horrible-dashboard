@@ -503,7 +503,7 @@ export function ServerBrowserPanel(props: ServerBrowserProps) {
               title={
                 playable
                   ? undefined
-                  : 'That map is neither bundled nor in your AssaultCube install, so it cannot be loaded here.'
+                  : 'That map does not ship with this version of the game, so it cannot be loaded here.'
               }
             >
               {m.players >= m.maxPlayers ? 'Full' : 'Join'}

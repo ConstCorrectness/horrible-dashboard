@@ -1,12 +1,11 @@
 """Maps this project authors itself, built from a declarative source.
 
-HorribleAssault cannot ship AssaultCube's maps — its content is redistributable
-only inside an unmodified AssaultCube package, and this repo is public. That
-restriction is about *their* maps. It says nothing about ours, and the format is
-understood well enough to write (`cgz.write_cgz`), so the game ships with its own
-maps and needs no install to be playable. Pointing `hassault.installPath` at a
-real AssaultCube is now an *enhancement* — 44 more maps — rather than the price
-of entry.
+These are the only maps the game plays: the nine modelled `hd_*` maps in `maps/`,
+on every platform. AssaultCube's own maps were readable from a local install
+(`hassault.installPath`) until 2026-10-03, and that support is gone. The Cube
+format is still the collision layer underneath every map (a modelled map's GLB
+is baked into the brushes here, and that grid is what a hosted match simulates),
+so the reader and writer stay.
 
 **The source of truth is the JSON in `maps/`, not a `.cgz`.** A committed binary
 would be an opaque blob in a public repo: it cannot be reviewed, it cannot be
@@ -52,6 +51,7 @@ they are chosen to be far apart rather than left at the defaults.
 from __future__ import annotations
 
 import json
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -78,10 +78,35 @@ from backend.modules.hassault.cgz import (
 
 MAPS_DIR = Path(__file__).parent / "maps"
 
-# Every bundled map is named with this prefix. It keeps our maps and an install's
-# maps in one flat namespace without either being able to shadow the other — a
-# bundled `ac_desert` would be a nasty surprise for someone who owns the real one.
+#: Extra directories of map sources, `os.pathsep`-separated. The test suite
+#: points it at `backend/tests/fixtures/hassault_maps`, where the small Cube
+#: arenas (`hd_pit`, `hd_atrium`, `hd_crossing`) live. They are cheap to simulate
+#: and the suite is built on them, but they are not maps anyone should be offered.
+#: An environment variable rather than a monkeypatch, so subprocesses a test
+#: spawns see the same catalog.
+EXTRA_MAP_DIRS_ENV = "HASSAULT_EXTRA_MAP_DIRS"
+
+# Every bundled map is named with this prefix, and a name indexes into a
+# directory, so the prefix is part of what `is_bundled_name` validates.
 BUNDLED_PREFIX = "hd_"
+
+
+def map_dirs() -> list[Path]:
+    """Where map sources are read from: the shipped directory, then any extras."""
+    extra = os.environ.get(EXTRA_MAP_DIRS_ENV, "")
+    return [MAPS_DIR] + [Path(p) for p in extra.split(os.pathsep) if p]
+
+
+def source_path(name: str) -> Path | None:
+    """The JSON source of a map, or `None` if no map directory has one."""
+    if not is_bundled_name(name):
+        return None
+    for directory in map_dirs():
+        path = directory / f"{name}.json"
+        if path.is_file():
+            return path
+    return None
+
 
 # Solid rock, the state every cell starts in. Matches `sqrdefault` in the fields a
 # SOLID record cannot store, because `write_cgz` refuses anything else.
@@ -486,8 +511,8 @@ def _build(source: dict[str, Any], name: str) -> tuple[CgzMap, list[int]]:
 
 
 def is_bundled_name(name: str) -> bool:
-    """Bundled names index into a directory, so they are validated, not trusted —
-    the same rule `assets.find_map` applies to an install's map names."""
+    """Bundled names index into a directory, so they are validated, not trusted:
+    anything with a separator or a dot is refused rather than normalised."""
     return (
         bool(name)
         and name.startswith(BUNDLED_PREFIX)
@@ -499,24 +524,24 @@ def is_bundled_name(name: str) -> bool:
 def bundled_names() -> tuple[str, ...]:
     """Every map shipped with the app, sorted. Cached: the directory is read-only
     at runtime and ships inside the package."""
-    if not MAPS_DIR.is_dir():
-        return ()
-    return tuple(
-        sorted(p.stem for p in MAPS_DIR.glob("*.json") if is_bundled_name(p.stem))
-    )
+    names: set[str] = set()
+    for directory in map_dirs():
+        if directory.is_dir():
+            names.update(
+                p.stem for p in directory.glob("*.json") if is_bundled_name(p.stem)
+            )
+    return tuple(sorted(names))
 
 
 @lru_cache(maxsize=8)
 def load_bundled(name: str) -> CgzMap | None:
     """Build a bundled map by name, or `None` if there is no such map.
 
-    Cached by name rather than by mtime — unlike an install's maps these ship
-    with the code and cannot change under a running process.
+    Cached by name rather than by mtime: these ship with the code and cannot
+    change under a running process.
     """
-    if not is_bundled_name(name):
-        return None
-    path = MAPS_DIR / f"{name}.json"
-    if not path.is_file():
+    path = source_path(name)
+    if path is None:
         return None
     try:
         source = json.loads(path.read_text(encoding="utf-8"))

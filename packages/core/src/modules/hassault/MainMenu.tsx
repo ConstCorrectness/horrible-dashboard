@@ -442,7 +442,6 @@ function PlaySection(props: MainMenuProps) {
   // and the server's answer is the one that decides, so asking it means a map
   // added on either side never needs a matching change on the other.
   const rankedPlayable = props.rankedMaps.includes(props.mapName);
-  const installed = props.maps.filter((m) => m.source !== 'bundled');
   const chosen = props.maps.find((m) => m.name === props.mapName);
 
   return (
@@ -462,35 +461,18 @@ function PlaySection(props: MainMenuProps) {
         style={{ width: '100%', padding: '0 0.4rem' }}
         aria-label="Map"
       >
-        {/* Grouped so it is obvious which maps ship with the app and which came
-            from your own AssaultCube — they are different in kind, not just in
-            name. The second group is absent without an install. */}
-        <optgroup label={`Bundled (${bundled.length})`}>
-          {bundled.map((m) => (
-            <option key={m.name} value={m.name}>
-              {m.name}
-            </option>
-          ))}
-        </optgroup>
-        {installed.length > 0 && (
-          <optgroup label={`AssaultCube (${installed.length})`}>
-            {installed.map((m) => (
-              <option key={m.name} value={m.name}>
-                {m.name}
-              </option>
-            ))}
-          </optgroup>
-        )}
+        {bundled.map((m) => (
+          <option key={m.name} value={m.name}>
+            {m.name}
+          </option>
+        ))}
       </select>
       {chosen && (
         <div style={{ ...panel.dim, marginTop: '0.3rem' }}>
           {/* `size` is the map *file's* byte count, not a grid dimension — the grid
               size only arrives with `MapInfo`, one request later. Saying "cubes"
               here would be confidently wrong. */}
-          {(chosen.size / 1024).toFixed(0)} KB ·{' '}
-          {chosen.source === 'bundled'
-            ? 'ships with the app'
-            : `from your AssaultCube install (${chosen.source})`}
+          {(chosen.size / 1024).toFixed(0)} KB · ships with the app
         </div>
       )}
 

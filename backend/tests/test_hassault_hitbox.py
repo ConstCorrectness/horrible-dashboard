@@ -219,10 +219,14 @@ def test_the_lore_route_serves_both_factions_and_the_map_briefs():
     body = _client().get("/api/hassault/lore").json()
     assert [f["short"] for f in body["factions"]] == ["ARC", "HALON"]
     assert body["teamFactions"] == ["arc", "halon"]
-    # Every map this repo ships has a brief; one read out of somebody's install
-    # deliberately does not.
-    for name in ("hd_pit", "hd_crossing", "hd_atrium"):
-        assert body["mapBriefs"][name]["site"]
+    # Every map this repo ships has a brief. Read from the shipped directory only:
+    # the suite's fixture arenas are in the catalog during tests and have none.
+    from backend.modules.hassault import mapsource
+
+    shipped = sorted(p.stem for p in mapsource.MAPS_DIR.glob("hd_*.json"))
+    assert len(shipped) == 9
+    for name in shipped:
+        assert body["mapBriefs"][name]["site"], name
 
 
 def test_rank_names_cover_every_ladder_tier():

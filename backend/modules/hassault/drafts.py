@@ -134,8 +134,8 @@ def read_source(name: str) -> dict[str, Any]:
     """
     if not mapsource.is_bundled_name(name):
         raise DraftError(f"{name!r} is not one of ours; only bundled maps have sources")
-    path = mapsource.MAPS_DIR / f"{name}.json"
-    if not path.is_file():
+    path = mapsource.source_path(name)
+    if path is None:
         raise DraftError(f"no bundled map named {name!r}")
     doc = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(doc, dict):

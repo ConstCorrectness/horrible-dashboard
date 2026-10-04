@@ -1,6 +1,6 @@
 """Agent tools for HorribleAssault.
 
-These let the agent run the *social* side of a game — "start a match on hd_atrium
+These let the agent run the *social* side of a game — "start a match on hd_dust2
 and invite Rob", "who's in the match?", "what's around me?" — which is the part
 that is genuinely tedious for a human mid-session and genuinely easy for an
 agent.
@@ -39,22 +39,9 @@ PROBE_RANGE = 24
 
 
 async def list_maps(_args: dict[str, Any]) -> dict[str, Any]:
-    """Which maps this node can host: the bundled ones, plus an install's if any.
-
-    Split by origin rather than returned as one list, so the agent can answer
-    "why so few maps?" without a second call — and never reports a missing
-    AssaultCube install as a reason it cannot host, which it is not.
-    """
-    maps = assets.list_maps()
-    bundled = sorted(m["name"] for m in maps if m["source"] == "bundled")
-    installed = sorted(m["name"] for m in maps if m["source"] != "bundled")
-    return {
-        "count": len(maps),
-        "maps": bundled + installed,
-        "bundled": bundled,
-        "from_assaultcube_install": installed,
-        "install_path": str(assets.install_root() or ""),
-    }
+    """Which maps this node can host: the ones that ship with the game."""
+    maps = sorted(m["name"] for m in assets.list_maps())
+    return {"count": len(maps), "maps": maps}
 
 
 async def list_matches(_args: dict[str, Any]) -> dict[str, Any]:
@@ -370,7 +357,7 @@ def _bearing(x0: float, y0: float, x1: float, y1: float) -> str:
 def register_hassault_tools() -> None:
     registry.agent_tools["hassault.list_maps"] = AgentTool(
         name="hassault.list_maps",
-        description="List the AssaultCube maps this node can host a match on.",
+        description="List the maps this node can host a match on.",
         handler=list_maps,
         group="hassault",
     )
@@ -392,7 +379,7 @@ def register_hassault_tools() -> None:
         handler=host_match,
         group="hassault",
         parameters={
-            "map": {"type": "string", "description": "Map name, e.g. hd_atrium."},
+            "map": {"type": "string", "description": "Map name, e.g. hd_dust2."},
             "mode": {
                 "type": "string",
                 "enum": [m["id"] for m in modes.catalog()],

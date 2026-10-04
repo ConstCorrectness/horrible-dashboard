@@ -28,445 +28,445 @@
       "op": "room",
       "rect": [12, 10, 168, 2],
       "floor": 42,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [10, 12, 2, 168],
       "floor": 42,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [12, 12, 168, 11],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [180, 12, 2, 168],
       "floor": 42,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [12, 23, 11, 68],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [23, 23, 2, 2],
       "floor": 36,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [25, 23, 142, 7],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [167, 23, 2, 2],
       "floor": 36,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [169, 23, 11, 69],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 24, 1, 1],
       "floor": 1,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 25, 1, 1],
-      "floor": 3,
-      "ceil": 50
+      "floor": 2,
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [23, 25, 2, 47],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [167, 25, 2, 47],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 26, 1, 1],
-      "floor": 4,
-      "ceil": 50
+      "floor": 3,
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 27, 1, 1],
-      "floor": 5,
-      "ceil": 50
+      "floor": 4,
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 28, 1, 1],
-      "floor": 6,
-      "ceil": 50
+      "floor": 5,
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 29, 1, 1],
-      "floor": 7,
-      "ceil": 50
+      "floor": 6,
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 30, 1, 1],
-      "floor": 8,
-      "ceil": 50
+      "floor": 7,
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [25, 30, 28, 4],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [53, 30, 2, 3],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [55, 30, 1, 1],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [56, 30, 2, 3],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [58, 30, 109, 4],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 31, 1, 1],
-      "floor": 9,
-      "ceil": 50
+      "floor": 8,
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [55, 31, 1, 1],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 32, 1, 1],
-      "floor": 10,
-      "ceil": 50
+      "floor": 9,
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [55, 32, 1, 1],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 33, 1, 1],
       "floor": 11,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [53, 33, 1, 9],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [54, 33, 2, 2],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [56, 33, 2, 9],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 34, 1, 1],
       "floor": 12,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [25, 34, 4, 1],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [29, 34, 2, 4],
       "floor": 4,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [31, 34, 22, 1],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [58, 34, 103, 1],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [161, 34, 2, 4],
       "floor": 4,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [163, 34, 4, 1],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 35, 1, 1],
       "floor": 13,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [25, 35, 3, 17],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [28, 35, 1, 2],
       "floor": 4,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [31, 35, 1, 2],
       "floor": 4,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [32, 35, 21, 7],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [54, 35, 2, 7],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [58, 35, 102, 2],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [160, 35, 1, 2],
       "floor": 4,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [163, 35, 1, 2],
       "floor": 4,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [164, 35, 3, 17],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 36, 1, 1],
       "floor": 14,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 37, 1, 1],
       "floor": 15,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [28, 37, 1, 15],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [31, 37, 1, 15],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [58, 37, 3, 5],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [61, 37, 4, 2],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [65, 37, 56, 2],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [121, 37, 5, 5],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [126, 37, 35, 4],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [163, 37, 1, 15],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 38, 1, 1],
       "floor": 16,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [29, 38, 2, 14],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [161, 38, 2, 14],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 39, 1, 1],
       "floor": 17,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [61, 39, 2, 2],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [63, 39, 5, 3],
       "floor": 7,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [68, 39, 53, 2],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 40, 1, 1],
-      "floor": 19,
-      "ceil": 50
+      "floor": 18,
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 41, 1, 1],
-      "floor": 20,
-      "ceil": 50
+      "floor": 19,
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [61, 41, 2, 1],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [68, 41, 2, 5],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [70, 41, 51, 1],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [126, 41, 4, 1],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [130, 41, 31, 1],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [32, 42, 16, 10],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [48, 42, 15, 18],
       "floor": -7,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
@@ -484,13 +484,13 @@
       "op": "room",
       "rect": [66, 42, 2, 2],
       "floor": 7,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [70, 42, 20, 3],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
@@ -502,23 +502,17 @@
       "op": "room",
       "rect": [102, 42, 23, 18],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [125, 42, 1, 4],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
-      "rect": [126, 42, 2, 1],
-      "floor": -7,
-      "ceil": 0
-    },
-    {
-      "op": "room",
-      "rect": [128, 42, 2, 1],
+      "rect": [126, 42, 4, 1],
       "floor": -7,
       "ceil": -1
     },
@@ -526,349 +520,337 @@
       "op": "room",
       "rect": [130, 42, 14, 18],
       "floor": -7,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [144, 42, 17, 10],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
-      "rect": [126, 43, 1, 1],
-      "floor": -7,
-      "ceil": 0
-    },
-    {
-      "op": "room",
-      "rect": [127, 43, 1, 3],
+      "rect": [126, 43, 2, 3],
       "floor": -7,
       "ceil": -1
     },
     {
       "op": "room",
-      "rect": [128, 43, 2, 1],
+      "rect": [128, 43, 1, 1],
       "floor": -7,
       "ceil": 0
+    },
+    {
+      "op": "room",
+      "rect": [129, 43, 1, 3],
+      "floor": -7,
+      "ceil": -1
     },
     {
       "op": "room",
       "rect": [63, 44, 2, 16],
       "floor": -7,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [66, 44, 2, 2],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
-      "rect": [126, 44, 1, 2],
+      "rect": [128, 44, 1, 1],
       "floor": -7,
       "ceil": -1
-    },
-    {
-      "op": "room",
-      "rect": [128, 44, 1, 2],
-      "floor": -7,
-      "ceil": -1
-    },
-    {
-      "op": "room",
-      "rect": [129, 44, 1, 1],
-      "floor": -7,
-      "ceil": 0
     },
     {
       "op": "room",
       "rect": [70, 45, 2, 47],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [72, 45, 3, 3],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [75, 45, 15, 15],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
-      "rect": [129, 45, 1, 1],
+      "rect": [128, 45, 1, 1],
       "floor": -7,
-      "ceil": -1
+      "ceil": 0
     },
     {
       "op": "room",
       "rect": [65, 46, 1, 14],
       "floor": -7,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [66, 46, 4, 46],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [125, 46, 1, 46],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [126, 46, 4, 14],
       "floor": -7,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [72, 48, 3, 44],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [25, 52, 2, 4],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [27, 52, 5, 4],
       "floor": 7,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [32, 52, 2, 4],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [34, 52, 14, 20],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [144, 52, 14, 20],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [158, 52, 2, 4],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [160, 52, 5, 4],
       "floor": 7,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [165, 52, 2, 4],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [25, 56, 9, 16],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [158, 56, 9, 16],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [48, 60, 18, 32],
       "floor": -6,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [75, 60, 3, 32],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [78, 60, 12, 2],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [90, 60, 12, 3],
       "floor": 19,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [102, 60, 12, 2],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [114, 60, 11, 32],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [126, 60, 18, 32],
       "floor": -6,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [78, 62, 11, 1],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [89, 62, 1, 1],
       "floor": 17,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [102, 62, 1, 1],
       "floor": 17,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [103, 62, 11, 1],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [78, 63, 3, 15],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [111, 63, 3, 15],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [23, 72, 1, 19],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [24, 72, 18, 3],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [42, 72, 6, 20],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [144, 72, 6, 20],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [150, 72, 18, 3],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [168, 72, 1, 20],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [24, 75, 3, 3],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [39, 75, 3, 3],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [81, 75, 9, 3],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [90, 75, 12, 3],
       "floor": 19,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [102, 75, 9, 3],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [150, 75, 3, 3],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [165, 75, 3, 3],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [24, 78, 3, 13],
       "floor": 19,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [39, 78, 3, 14],
       "floor": 19,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [78, 78, 12, 14],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
@@ -880,19 +862,19 @@
       "op": "room",
       "rect": [102, 78, 12, 14],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [150, 78, 3, 14],
       "floor": 19,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [165, 78, 3, 14],
       "floor": 19,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
@@ -916,7 +898,7 @@
       "op": "room",
       "rect": [12, 91, 9, 1],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
@@ -928,13 +910,13 @@
       "op": "room",
       "rect": [24, 91, 3, 1],
       "floor": 35,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [12, 92, 6, 88],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
@@ -946,13 +928,13 @@
       "op": "room",
       "rect": [24, 92, 3, 3],
       "floor": 38,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [39, 92, 3, 3],
       "floor": 38,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
@@ -994,13 +976,13 @@
       "op": "room",
       "rect": [150, 92, 3, 3],
       "floor": 38,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [165, 92, 3, 3],
       "floor": 38,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
@@ -1012,7 +994,7 @@
       "op": "room",
       "rect": [174, 92, 6, 88],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
@@ -1060,73 +1042,73 @@
       "op": "room",
       "rect": [18, 95, 3, 2],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [24, 95, 3, 2],
       "floor": 35,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [39, 95, 3, 2],
       "floor": 19,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [42, 95, 6, 2],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [48, 95, 18, 2],
       "floor": -6,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [66, 95, 24, 2],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [102, 95, 24, 2],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [126, 95, 18, 2],
       "floor": -6,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [144, 95, 6, 2],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [150, 95, 3, 2],
       "floor": 19,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [165, 95, 3, 2],
       "floor": 19,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [168, 95, 6, 2],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
@@ -1138,13 +1120,13 @@
       "op": "room",
       "rect": [24, 97, 3, 3],
       "floor": 38,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [39, 97, 3, 3],
       "floor": 38,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
@@ -1186,13 +1168,13 @@
       "op": "room",
       "rect": [150, 97, 3, 3],
       "floor": 38,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [165, 97, 3, 3],
       "floor": 38,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
@@ -1228,85 +1210,85 @@
       "op": "room",
       "rect": [18, 100, 3, 80],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [24, 100, 3, 1],
       "floor": 35,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [39, 100, 3, 14],
       "floor": 19,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [42, 100, 6, 80],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [48, 100, 18, 32],
       "floor": -6,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [66, 100, 24, 14],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [102, 100, 24, 14],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [126, 100, 18, 32],
       "floor": -6,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [144, 100, 6, 80],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [150, 100, 3, 14],
       "floor": 19,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [165, 100, 3, 14],
       "floor": 19,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [168, 100, 6, 67],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [21, 101, 3, 66],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [24, 101, 3, 13],
       "floor": 19,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
@@ -1324,145 +1306,145 @@
       "op": "room",
       "rect": [24, 114, 3, 6],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [39, 114, 3, 6],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [66, 114, 12, 30],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [78, 114, 12, 3],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [90, 114, 12, 3],
       "floor": 19,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [102, 114, 12, 3],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [114, 114, 12, 31],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [150, 114, 3, 6],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [165, 114, 3, 6],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [27, 117, 12, 3],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [78, 117, 3, 15],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [111, 117, 3, 15],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [153, 117, 12, 3],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [24, 120, 18, 16],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [150, 120, 18, 16],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [81, 129, 8, 3],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [89, 129, 1, 1],
       "floor": 17,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [90, 129, 12, 3],
       "floor": 19,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [102, 129, 1, 1],
       "floor": 17,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [103, 129, 8, 3],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [89, 130, 1, 2],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [102, 130, 1, 2],
       "floor": 10,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [48, 132, 18, 13],
       "floor": -7,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [78, 132, 12, 48],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
@@ -1474,109 +1456,109 @@
       "op": "room",
       "rect": [102, 132, 12, 48],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [126, 132, 18, 15],
       "floor": -7,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [24, 136, 1, 31],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [25, 136, 2, 4],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [27, 136, 5, 4],
       "floor": 7,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [32, 136, 2, 4],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [34, 136, 8, 44],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [150, 136, 8, 44],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [158, 136, 2, 4],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [160, 136, 5, 4],
       "floor": 7,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [165, 136, 2, 4],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [167, 136, 1, 31],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [25, 140, 9, 14],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [158, 140, 9, 14],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [66, 144, 6, 5],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [72, 144, 3, 3],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [75, 144, 3, 36],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [48, 145, 13, 5],
       "floor": -7,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
@@ -1588,19 +1570,19 @@
       "op": "room",
       "rect": [114, 145, 7, 35],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [121, 145, 4, 2],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [125, 145, 1, 2],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
@@ -1624,19 +1606,19 @@
       "op": "room",
       "rect": [72, 147, 3, 33],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [121, 147, 2, 2],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [123, 147, 3, 5],
       "floor": 7,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
@@ -1648,7 +1630,7 @@
       "op": "room",
       "rect": [128, 147, 16, 2],
       "floor": -7,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
@@ -1672,23 +1654,35 @@
       "op": "room",
       "rect": [66, 149, 4, 5],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [70, 149, 2, 31],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [121, 149, 2, 31],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
-      "rect": [126, 149, 4, 1],
+      "rect": [126, 149, 2, 1],
+      "floor": -7,
+      "ceil": 0
+    },
+    {
+      "op": "room",
+      "rect": [128, 149, 1, 1],
+      "floor": -7,
+      "ceil": -1
+    },
+    {
+      "op": "room",
+      "rect": [129, 149, 1, 1],
       "floor": -7,
       "ceil": 0
     },
@@ -1696,397 +1690,397 @@
       "op": "room",
       "rect": [130, 149, 14, 1],
       "floor": -7,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 150, 1, 1],
-      "floor": 20,
-      "ceil": 50
+      "floor": 19,
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [48, 150, 17, 30],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [65, 150, 1, 4],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [90, 150, 12, 30],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [126, 150, 2, 2],
       "floor": 7,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [128, 150, 2, 4],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [130, 150, 14, 9],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 151, 1, 1],
       "floor": 18,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 152, 1, 1],
       "floor": 17,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [123, 152, 2, 28],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [125, 152, 3, 2],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 153, 1, 1],
       "floor": 16,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 154, 1, 1],
       "floor": 15,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [25, 154, 4, 1],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [29, 154, 2, 4],
       "floor": 4,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [31, 154, 3, 1],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [65, 154, 5, 26],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [125, 154, 5, 26],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [158, 154, 3, 1],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [161, 154, 2, 4],
       "floor": 4,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [163, 154, 4, 1],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 155, 1, 1],
       "floor": 14,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [25, 155, 3, 25],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [28, 155, 1, 2],
       "floor": 4,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [31, 155, 1, 2],
       "floor": 4,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [32, 155, 2, 25],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [158, 155, 2, 25],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [160, 155, 1, 2],
       "floor": 4,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [163, 155, 1, 2],
       "floor": 4,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [164, 155, 3, 25],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 156, 1, 1],
       "floor": 13,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 157, 1, 1],
       "floor": 12,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [28, 157, 1, 23],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [31, 157, 1, 23],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [160, 157, 1, 23],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [163, 157, 1, 23],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 158, 1, 1],
       "floor": 11,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [29, 158, 2, 22],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [161, 158, 2, 22],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 159, 1, 1],
-      "floor": 10,
-      "ceil": 50
+      "floor": 9,
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [130, 159, 5, 21],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [135, 159, 5, 2],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [140, 159, 4, 21],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 160, 1, 1],
-      "floor": 9,
-      "ceil": 50
+      "floor": 8,
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 161, 1, 1],
-      "floor": 8,
-      "ceil": 50
+      "floor": 7,
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [135, 161, 2, 1],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [137, 161, 1, 1],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [138, 161, 2, 1],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 162, 1, 1],
-      "floor": 7,
-      "ceil": 50
+      "floor": 6,
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [135, 162, 1, 18],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [136, 162, 3, 2],
       "floor": 3,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [139, 162, 1, 18],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 163, 1, 1],
-      "floor": 6,
-      "ceil": 50
+      "floor": 5,
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 164, 1, 1],
-      "floor": 5,
-      "ceil": 50
+      "floor": 4,
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [136, 164, 3, 16],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 165, 1, 1],
-      "floor": 4,
-      "ceil": 50
+      "floor": 3,
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 166, 1, 1],
       "floor": 2,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [9, 167, 1, 1],
       "floor": 1,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [21, 167, 2, 13],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [23, 167, 2, 2],
       "floor": 36,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [167, 167, 2, 2],
       "floor": 36,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [169, 167, 5, 13],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [23, 169, 2, 11],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [167, 169, 2, 11],
       "floor": 0,
-      "ceil": 50
+      "ceil": 51
     },
     {
       "op": "room",
       "rect": [12, 180, 168, 2],
       "floor": 42,
-      "ceil": 50
+      "ceil": 51
     }
   ],
   "entities": [

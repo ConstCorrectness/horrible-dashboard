@@ -80,6 +80,638 @@ def _bake_modifiers() -> None:
             bpy.data.meshes.remove(old)
 
 
+#: Edges sharper than this stay hard on a smooth-shaded face (a cylinder's rim).
+SHARP_ANGLE = math.radians(35.0)
+
+
+def clean_meshes() -> dict:
+    """Make every mesh's faces point out, drop slivers, and keep hard edges hard.
+
+    Both clients cull back faces and both derive normals from winding (the
+    browser via `computeVertexNormals`, native via `face_normal`), so a mesh
+    built inside-out is drawn as its own interior: hollow from the outside, and
+    — because `bake_collision.py` counts solid by face orientation — wrong in
+    the server's grid too. The bank's 460 gold ingots and Junk Flea's bridge
+    ramps shipped that way.
+
+    `recalc_face_normals` runs only on **closed** meshes. On an open sheet
+    "outward" is a guess, and a guess that flips an authored sheet is worse
+    than leaving it. Vertices are never welded: `add_boxes` packs touching boxes
+    into one mesh, and welding them would make it non-manifold.
+
+    Sharp edges are marked by `mark_sharp_edges`, after `soften_edges` has
+    added the geometry they are judged on.
+    """
+    stats = {"flipped": 0, "degenerate": 0, "open": []}
+    for mesh in bpy.data.meshes:
+        if not mesh.users or not mesh.polygons:
+            continue
+        bm = bmesh.new()
+        bm.from_mesh(mesh)
+        before = len(bm.faces)
+        bmesh.ops.dissolve_degenerate(bm, dist=1e-6, edges=bm.edges[:])
+        stats["degenerate"] += before - len(bm.faces)
+        if all(e.is_manifold for e in bm.edges):
+            normals = [f.normal.copy() for f in bm.faces]
+            bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
+            if any(f.normal.dot(n) < 0 for f, n in zip(bm.faces, normals)):
+                stats["flipped"] += 1
+        else:
+            stats["open"].append(mesh.name)
+        bm.to_mesh(mesh)
+        bm.free()
+    print(
+        f"clean_meshes: {stats['flipped']} meshes re-wound, "
+        f"{stats['degenerate']} slivers dropped, {len(stats['open'])} open: "
+        + ", ".join(stats["open"][:12])
+    )
+    return stats
+
+
+def mark_sharp_edges() -> None:
+    """Keep hard edges hard on smooth-shaded faces.
+
+    Unmarked, a smooth-shaded cylinder's cap and side share vertices and the rim
+    is averaged into a dark gradient (13k such vertices on Assault). Marked, the
+    exporter splits them, and both clients' recomputed normals stay split.
+    """
+    for mesh in bpy.data.meshes:
+        if not (mesh.users and mesh.polygons):
+            continue
+        # Added to, never overwritten: `soften_edges` has already marked where a
+        # rounding strip meets the flat face it came from, at an angle below
+        # this one, and `set_sharp_from_angle` would clear those.
+        bm = bmesh.new()
+        bm.from_mesh(mesh)
+        for e in bm.edges:
+            if not e.is_manifold or e.calc_face_angle(0.0) > SHARP_ANGLE:
+                e.smooth = False
+        bm.to_mesh(mesh)
+        bm.free()
+
+
+#: Edges sharper than this get rounded by `soften_edges`. Above 45° on purpose:
+#: an eight-sided post's facets meet at 45°, and rounding every facet seam of a
+#: thin cylinder collapses the bevels into each other. Its rims still round.
+SOFTEN_ANGLE = math.radians(50.0)
+
+#: Rounding per surface kind, as (radius in metres, fraction of the object's
+#: thinnest side). The radius is the most a kind ever gets; the fraction keeps a
+#: thin shelf or post in proportion. Kinds are the game's own classification of
+#: a material name (`glb-surfaces.json`, read by both clients), so "what is
+#: stone" is decided in one place. Worn masonry and plaster are where a hard
+#: 90° edge reads most as a Cube level, so they get the most.
+SOFTEN_BY_KIND = {
+    "masonry": (0.15, 0.25),
+    "plaster": (0.12, 0.25),
+    "brick": (0.06, 0.2),
+    "cobblestone": (0.05, 0.2),
+    "roof_tile": (0.05, 0.2),
+    "marble": (0.03, 0.15),
+    "wood": (0.04, 0.2),
+    "crate": (0.04, 0.2),
+    "carpet": (0.03, 0.3),
+    "container": (0.025, 0.15),
+    "vault_steel": (0.025, 0.15),
+    "gold": (0.02, 0.2),
+    "asphalt": (0.04, 0.2),
+    "hazard": (0.025, 0.15),
+}
+#: A material the table does not classify.
+SOFTEN_DEFAULT = (0.04, 0.2)
+#: Below this thinnest side (metres) an object is trim or a cable: left sharp,
+#: because a bevel there costs triangles nobody can see.
+SOFTEN_MIN_SIDE = 0.05
+#: How far past an edge (metres) the seam probe looks for a surface carrying on.
+SEAM_PROBE = 0.02
+
+_SURFACES_JSON = os.path.join(
+    REPO_ROOT, "packages", "core", "src", "modules", "hassault", "glb-surfaces.json"
+)
+
+
+def _surface_kind(material_name: str, rules: list) -> str:
+    """The kind `glb-surfaces.ts` gives a material: first matching rule wins."""
+    name = material_name.lower()
+    for rule in rules:
+        if any(m in name for m in rule["match"]):
+            return rule["kind"]
+    return "default"
+
+
+def _world_bvh(exclude=None):
+    """One BVH over every visible map surface, in world space, optionally
+    leaving one object out."""
+    from mathutils.bvhtree import BVHTree
+
+    verts: list = []
+    polys: list = []
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    for obj in bpy.data.objects:
+        if obj.type != "MESH" or "ColOnly" in obj.name or "Invisible" in obj.name:
+            continue
+        if obj is exclude:
+            continue
+        mesh = obj.evaluated_get(depsgraph).data
+        base = len(verts)
+        m = obj.matrix_world
+        verts.extend(m @ v.co for v in mesh.vertices)
+        polys.extend([base + i for i in p.vertices] for p in mesh.polygons)
+    return BVHTree.FromPolygons(verts, polys)
+
+
+def _is_seam(bvh, edge, matrix, normal_matrix, probe: float) -> bool:
+    """Whether a face beside `edge` carries on into, or rests against, another
+    surface just past it: two floor slabs laid edge to edge, a wall standing on
+    the ground, a wall butting into another. Rounding there carves a gutter.
+
+    For each face, step `probe` past the edge within that face's plane, then
+    look along the face normal for a surface lying in the same plane.
+    """
+    a = matrix @ edge.verts[0].co
+    b = matrix @ edge.verts[1].co
+    mid = (a + b) / 2
+    along = (b - a).normalized()
+    for face in edge.link_faces:
+        n = (normal_matrix @ face.normal).normalized()
+        # In-plane, perpendicular to the edge, pointing away from the face.
+        out = n.cross(along).normalized()
+        centre = matrix @ face.calc_center_median()
+        if out.dot(centre - mid) > 0:
+            out = -out
+        p = mid + out * probe
+        lift = probe * 2.5
+        hit, hit_n, _i, dist = bvh.ray_cast(p + n * lift, -n, lift * 2)
+        if (
+            hit is not None
+            and abs(dist - lift) < probe * 0.5
+            and abs(hit_n.dot(n)) > 0.98
+        ):
+            return True
+    return False
+
+
+#: How far `separate_coplanar` lifts a losing face per layer, metres. Not 1 cm
+#: on purpose: the generators stack their own decals in 1 cm steps, and a lift
+#: equal to that step lands one decal exactly on the next (Assault's bay floor
+#: ping-ponged for four passes). 7 mm is still resolved by the depth buffer out
+#: to about 150 cubes at the camera's 0.1-600 range, and far too little for the
+#: physics or the collision bake to notice.
+COPLANAR_LIFT = 0.007
+#: The most layers one plane's stack is lifted by: a guard, since layers are per
+#: plane and a real stack is two to four deep. Before they were per plane, a
+#: depth inherited across planes compounded to 8 cm on Assault's curbs.
+COPLANAR_MAX_LAYERS = 6
+
+
+def separate_coplanar(factor: float = 1.0, passes: int = 6) -> dict:
+    """Run `_separate_coplanar_pass` until nothing fights, or `passes` runs.
+
+    More than one pass because a lift can land a face on a plane that was
+    already taken: generators stack decals in 1 cm steps of their own, so a
+    crosswalk stripe lifted 1 cm off the asphalt met the manhole cover its author
+    had put exactly 1 cm up. The next pass lifts the cover.
+    """
+    total = {"faces": 0, "objects": 0}
+    for _ in range(passes):
+        done = _separate_coplanar_pass(factor)
+        total["faces"] += done["faces"]
+        total["objects"] += done["objects"]
+        if not done["faces"]:
+            break
+    return total
+
+
+def _separate_coplanar_pass(factor: float = 1.0) -> dict:
+    """Stop two surfaces drawn in the same plane from z-fighting.
+
+    Two faces of different objects and different materials, facing the same way
+    in the same plane and overlapping, are never meant: the depth buffer cannot
+    order them, so they flicker as the camera moves. Every map shipped some:
+    the souk canopies drawn twice, hazard stripes inside the wall they mark,
+    monitor screens flush with their bezels, a brick skirt in the plane of its
+    wall, floor slabs over the tops of pit walls.
+
+    Within each cluster of faces that overlap in one plane, the largest object
+    is the base and each smaller one is dressing laid on it, one
+    `COPLANAR_LIFT` per rank toward the viewer: a mosaic field on its brass
+    border on a floor sits two lifts up, the border one. Same-material overlaps are left
+    alone, since the two shade identically and the fight cannot be seen.
+    """
+    lift = COPLANAR_LIFT * factor
+    tol_d = 0.004 * factor
+    # Overlaps thinner than this (a shared edge, rounding) do not count.
+    eps = 0.002 * factor
+    objects = [
+        o
+        for o in bpy.data.objects
+        if o.type == "MESH"
+        and o.data.polygons
+        and "ColOnly" not in o.name
+        and "Invisible" not in o.name
+    ]
+    size = {o.name: sum(p.area for p in o.data.polygons) for o in objects}
+    # (object, polygon index, normal, plane offset, world triangles)
+    buckets: dict = {}
+    for o in objects:
+        m = o.matrix_world
+        nm = m.to_3x3().inverted_safe().transposed()
+        verts = [m @ v.co for v in o.data.vertices]
+        # Blender's own triangulation: a fan from the first corner is wrong for
+        # the concave n-gons that rounding and weathering leave behind.
+        o.data.calc_loop_triangles()
+        poly_tris: dict = {}
+        for lt in o.data.loop_triangles:
+            poly_tris.setdefault(lt.polygon_index, []).append(
+                tuple(verts[i] for i in lt.vertices)
+            )
+        for p in o.data.polygons:
+            if p.area < 1e-8:
+                continue
+            n = (nm @ p.normal).normalized()
+            pts = [verts[i] for i in p.vertices]
+            d = n.dot(pts[0])
+            tris = poly_tris.get(p.index, [])
+            key = (round(n.x, 2), round(n.y, 2), round(n.z, 2))
+            mat = p.material_index
+            name = (
+                o.data.materials[mat].name
+                if mat < len(o.data.materials) and o.data.materials[mat]
+                else ""
+            )
+            buckets.setdefault(key, []).append((o, p.index, n, d, tris, name))
+
+    def flat(tri, n):
+        """The triangle in 2D, dropping the normal's dominant axis."""
+        ax = max(range(3), key=lambda i: abs(n[i]))
+        keep = [i for i in range(3) if i != ax]
+        return [(v[keep[0]], v[keep[1]]) for v in tri]
+
+    def overlaps(t1, t2, eps) -> bool:
+        """Separating-axis test: true only for a positive-area overlap, so two
+        faces that merely share an edge are not a fight."""
+        for tri in (t1, t2):
+            for i in range(3):
+                (x1, y1), (x2, y2) = tri[i], tri[(i + 1) % 3]
+                ax, ay = y1 - y2, x2 - x1
+                p1 = [ax * x + ay * y for x, y in t1]
+                p2 = [ax * x + ay * y for x, y in t2]
+                scale = (ax * ax + ay * ay) ** 0.5 or 1.0
+                if min(p1) >= max(p2) - eps * scale or min(p2) >= max(p1) - eps * scale:
+                    return False
+        return True
+
+    # Union-find over faces: each component is one cluster of faces that
+    # overlap in one plane. Layers are assigned per cluster, so a stack is only
+    # as deep as what actually shares that plane, never a chain inherited from
+    # other planes (which lifted Assault's curbs 8 cm).
+    parent: dict = {}
+
+    def find(k):
+        while parent.setdefault(k, k) != k:
+            parent[k] = parent[parent[k]]
+            k = parent[k]
+        return k
+
+    face_of: dict = {}
+    pairs: list = []
+    for faces in buckets.values():
+        if len(faces) < 2:
+            continue
+        # Same facing; now same plane, as a window over the sorted offsets.
+        faces.sort(key=lambda f: f[3])
+        for i, fa in enumerate(faces):
+            for fb in faces[i + 1 :]:
+                if fb[3] - fa[3] > tol_d:
+                    break
+                oa, ob = fa[0], fb[0]
+                if oa is ob or fa[5] == fb[5]:
+                    continue
+                if fa[2].dot(fb[2]) < 0.999:
+                    continue
+                ta = [flat(t, fa[2]) for t in fa[4]]
+                tb = [flat(t, fa[2]) for t in fb[4]]
+                if not any(overlaps(x, y, eps) for x in ta for y in tb):
+                    continue
+                ka, kb = (oa.name, fa[1]), (ob.name, fb[1])
+                face_of[ka], face_of[kb] = fa, fb
+                parent[find(ka)] = find(kb)
+                pairs.append((ka, kb))
+
+    # Within a cluster, an object sits one layer above the highest larger
+    # object it actually overlaps there. Ranking a whole cluster by size
+    # instead (a street with every stripe and stain on it) ran out of layers,
+    # and stripes that never touch each other do not need different heights.
+    above: dict = {}
+    for ka, kb in pairs:
+        a, b = ka[0], kb[0]
+        small, big = (ka, kb) if (size[a], a) <= (size[b], b) else (kb, ka)
+        above.setdefault((find(ka), small[0]), set()).add(big[0])
+
+    memo: dict = {}
+
+    def layer(cluster, name: str) -> int:
+        key = (cluster, name)
+        if key not in memo:
+            memo[key] = 0
+            memo[key] = 1 + max(
+                (layer(cluster, b) for b in above.get(key, ())), default=-1
+            )
+        return memo[key]
+
+    # Per object, per polygon: how many layers up it goes.
+    lifts: dict = {}
+    for k in face_of:
+        n, pi = k
+        up = layer(find(k), n)
+        if up:
+            per = lifts.setdefault(n, {})
+            per[pi] = max(per.get(pi, 0), up)
+
+    moved = 0
+    for name, polys in lifts.items():
+        o = bpy.data.objects[name]
+        mesh = o.data
+        to_local = o.matrix_world.inverted_safe()
+        nm = o.matrix_world.to_3x3().inverted_safe().transposed()
+        offsets: dict = {}
+        for pi, layers in polys.items():
+            p = mesh.polygons[pi]
+            n = (nm @ p.normal).normalized() * (lift * min(layers, COPLANAR_MAX_LAYERS))
+            for vi in p.vertices:
+                offsets[vi] = offsets.get(vi, Vector()) + n
+        m = o.matrix_world
+        for vi, off in offsets.items():
+            v = mesh.vertices[vi]
+            v.co = to_local @ (m @ v.co + off)
+        moved += len(polys)
+    print(f"separate_coplanar: {moved} faces lifted on {len(lifts)} objects")
+    return {"faces": moved, "objects": len(lifts)}
+
+
+#: Materials whose walls are hand-built: undulated by `weather_walls`. Lowercase
+#: substrings, like `glb-surfaces.json`; `WEATHER_EXCLUDE` wins over a match.
+WEATHER_MATCH = (
+    "sandstone",
+    "stucco",
+    "adobe",
+    "plaster",
+    "limestone",
+    "granite",
+    "stone",
+    "sand",
+    "terracotta",
+)
+WEATHER_EXCLUDE = (
+    "drywall",
+    "office",
+    "ceiling",
+    "paving",
+    "tile",
+    "marble",
+    "wall_accent",
+)
+#: Grid the faces are sliced into before displacing, metres.
+WEATHER_CELL = 1.25
+#: Peak displacement, metres. Under 3.5 cm on purpose: `bake_collision.py`
+#: samples 4x4 rays per one-cube cell, the outermost a quarter of a cube (8 cm)
+#: in from the cell edge, so a wall can bulge this far without moving the grid.
+WEATHER_AMPLITUDE = 0.03
+#: Only faces at least this large (m²) are worth slicing.
+WEATHER_MIN_AREA = 3.0
+#: A decoration this close (metres) in front of a wall pins the wall flat there.
+WEATHER_CLEARANCE = 0.12
+
+
+def _weathers(material_name: str) -> bool:
+    name = material_name.lower()
+    return any(m in name for m in WEATHER_MATCH) and not any(
+        x in name for x in WEATHER_EXCLUDE
+    )
+
+
+def weather_walls(factor: float = 1.0) -> dict:
+    """Give big masonry and plaster walls a gentle hand-built undulation.
+
+    A rounded edge fixes a box's corners; a wall forty metres long is still a
+    single perfect plane, and that flatness under a raking sun is the other half
+    of what reads as a Cube level. This slices each large vertical stone or
+    plaster face into a `WEATHER_CELL` grid and pushes the interior vertices in
+    and out along the face normal by low-frequency noise in world space, so two
+    walls that meet agree at the seam.
+
+    Vertices on an edge never move (their faces disagree on a normal), so
+    corners, seams and the later rounding all stay true; and a vertex with any
+    other surface within `WEATHER_CLEARANCE` of it, in any direction, stays put:
+    a rug or sconce mounted flush, a trim in the wall's own plane, the floor at
+    its foot. Otherwise the wall would weave through them. Floors are never
+    touched.
+    """
+    from mathutils import noise
+
+    stats = {"objects": 0, "moved": 0}
+    done: set[str] = set()
+    cell = WEATHER_CELL * factor
+    amp = WEATHER_AMPLITUDE * factor
+    clearance = WEATHER_CLEARANCE * factor
+    min_area = WEATHER_MIN_AREA * factor * factor
+    for obj in bpy.data.objects:
+        if obj.type != "MESH" or obj.data.name in done or obj.data.users > 1:
+            continue
+        if "ColOnly" in obj.name or "Invisible" in obj.name:
+            continue
+        mesh = obj.data
+        material = (
+            mesh.materials[0].name if mesh.materials and mesh.materials[0] else ""
+        )
+        if not _weathers(material):
+            continue
+        matrix = obj.matrix_world
+        normal_matrix = matrix.to_3x3().inverted_safe().transposed()
+        to_local = matrix.inverted_safe()
+        big = [
+            p
+            for p in mesh.polygons
+            if p.area * abs(matrix.determinant()) ** (2 / 3) >= min_area
+            and abs((normal_matrix @ p.normal).normalized().z) < 0.2
+        ]
+        if not big:
+            continue
+        done.add(mesh.name)
+        others = _world_bvh(exclude=obj)
+        bm = bmesh.new()
+        bm.from_mesh(mesh)
+        # Boxes packed into one mesh (`add_boxes`) touch and overlap; slicing
+        # those opens them. Only a closed mesh is sliced, and only kept closed.
+        if not all(e.is_manifold for e in bm.edges):
+            bm.free()
+            continue
+        corners = [matrix @ v.co for v in bm.verts]
+        lo = [min(c[i] for c in corners) for i in range(3)]
+        hi = [max(c[i] for c in corners) for i in range(3)]
+        for axis in range(3):
+            step = lo[axis] + cell
+            while step < hi[axis] - cell * 0.25:
+                co = [0.0, 0.0, 0.0]
+                no = [0.0, 0.0, 0.0]
+                co[axis], no[axis] = step, 1.0
+                world_co = Vector(co)
+                local_co = to_local @ world_co
+                local_no = (matrix.to_3x3().transposed() @ Vector(no)).normalized()
+                geom = bm.verts[:] + bm.edges[:] + bm.faces[:]
+                bmesh.ops.bisect_plane(
+                    bm, geom=geom, dist=1e-5, plane_co=local_co, plane_no=local_no
+                )
+                step += cell
+        bmesh.ops.dissolve_degenerate(bm, dist=1e-5 * factor, edges=bm.edges[:])
+        if not all(e.is_manifold for e in bm.edges):
+            bm.free()
+            continue
+        bm.normal_update()
+        moved = 0
+        for v in bm.verts:
+            faces = v.link_faces
+            if not faces:
+                continue
+            n0 = faces[0].normal
+            if any(f.normal.dot(n0) < 0.9999 for f in faces) or len(faces) < 3:
+                continue
+            n = (normal_matrix @ n0).normalized()
+            if abs(n.z) >= 0.2:
+                continue
+            p = matrix @ v.co
+            # The reach is a cell and a half, not just the clearance: a triangle
+            # interpolates between its corners, so one pinned corner and one
+            # moved corner a cell away still tilt through whatever is beside the
+            # pinned one. Clear of everything by that much, a moved triangle is
+            # clear along its whole extent.
+            if others.find_nearest(p, clearance + cell * 1.5)[0] is not None:
+                continue
+            q = p / (cell * 2.2)
+            d = noise.noise(q) * 0.7 + noise.noise(q * 2.3) * 0.3
+            v.co = to_local @ (p + n * (d * amp))
+            for f in faces:
+                f.smooth = True
+            moved += 1
+        bm.to_mesh(mesh)
+        bm.free()
+        if moved:
+            stats["objects"] += 1
+            stats["moved"] += moved
+    print(f"weather_walls: {stats['objects']} objects, {stats['moved']} vertices moved")
+    return stats
+
+
+def soften_edges(factor: float = 1.0, skip: set[str] | None = None) -> dict:
+    """Round every hard edge on every map, so the world stops reading as boxes.
+
+    The generators build almost everything from `create_cube`, and a raw cube's
+    90° edges are the single thing that makes a map look like a Cube level: in
+    real places, plaster, stone and pressed steel all catch light along a
+    rounded edge. Two segments put each step at 22.5°, under `SHARP_ANGLE`, so
+    the rounding shades smooth instead of as a second hard chamfer.
+
+    Seams are left sharp (`_is_seam`), judged against the map as it stood before
+    any rounding, so the order objects are visited in cannot change the answer.
+
+    `factor` is the scene's units per metre (run after `scale_scene`). `skip`
+    names objects that already carry their own bevel, so a crate's authored
+    chamfer is not rounded a second time.
+    """
+    skip = skip or set()
+    with open(_SURFACES_JSON, encoding="utf-8") as f:
+        rules = json.load(f)["rules"]
+    bvh = _world_bvh()
+    probe = SEAM_PROBE * factor
+    stats = {
+        "objects": 0,
+        "edges": 0,
+        "seams": 0,
+        "reverted": 0,
+        "faces_before": 0,
+        "faces_after": 0,
+    }
+    done: set[str] = set()
+    for obj in bpy.data.objects:
+        if obj.type != "MESH" or obj.name in skip or obj.data.name in done:
+            continue
+        if "ColOnly" in obj.name or "Invisible" in obj.name:
+            continue
+        mesh = obj.data
+        done.add(mesh.name)
+        material = (
+            mesh.materials[0].name if mesh.materials and mesh.materials[0] else ""
+        )
+        kind = _surface_kind(material, rules)
+        radius, fraction = SOFTEN_BY_KIND.get(kind, SOFTEN_DEFAULT)
+        if kind in ("none", "glass", "site_a", "site_b"):
+            continue
+        dims = sorted(abs(d) for d in obj.dimensions)
+        thinnest = dims[0] / factor if dims else 0.0
+        if thinnest < SOFTEN_MIN_SIDE:
+            continue
+        width = min(radius, thinnest * fraction) * factor
+        matrix = obj.matrix_world
+        normal_matrix = matrix.to_3x3().inverted_safe().transposed()
+        bm = bmesh.new()
+        bm.from_mesh(mesh)
+        # An open mesh has no inside for a bevel to keep; leave it as authored.
+        if not all(e.is_manifold for e in bm.edges):
+            bm.free()
+            continue
+        edges = []
+        for e in bm.edges:
+            if e.calc_face_angle(0.0) <= SOFTEN_ANGLE:
+                continue
+            if _is_seam(bvh, e, matrix, normal_matrix, probe):
+                stats["seams"] += 1
+                continue
+            edges.append(e)
+        if edges:
+            before = len(bm.faces)
+            rounded = bmesh.ops.bevel(
+                bm,
+                geom=edges,
+                offset=width,
+                offset_type="OFFSET",
+                segments=2,
+                profile=0.5,
+                affect="EDGES",
+                clamp_overlap=True,
+                loop_slide=True,
+            )
+            # The strip shades round; where it meets the face it was cut from is
+            # a hard edge. Otherwise the face shares the strip's vertices, and a
+            # recomputed normal (both clients recompute) leans its corners
+            # toward the rounding: a flat wall shaded as a slow gradient.
+            strip = set(rounded["faces"])
+            for f in strip:
+                f.smooth = True
+            for e in bm.edges:
+                inside = sum(1 for f in e.link_faces if f in strip)
+                if 0 < inside < len(e.link_faces):
+                    e.smooth = False
+            bmesh.ops.dissolve_degenerate(bm, dist=1e-6 * factor, edges=bm.edges[:])
+            # A bevel that opened the mesh is thrown away: a hole is worse than a
+            # sharp edge, and the object keeps exactly the shape it was built with.
+            if all(e.is_manifold for e in bm.edges):
+                bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
+                stats["objects"] += 1
+                stats["edges"] += len(edges)
+                stats["faces_before"] += before
+                stats["faces_after"] += len(bm.faces)
+                bm.to_mesh(mesh)
+            else:
+                stats["reverted"] += 1
+        bm.free()
+    print(
+        f"soften_edges: {stats['objects']} objects, {stats['edges']} edges rounded, "
+        f"{stats['seams']} seams kept, {stats['reverted']} reverted, "
+        f"{stats['faces_before']} -> {stats['faces_after']} faces"
+    )
+    return stats
+
+
 def scale_scene(factor: float) -> None:
     """Scale the whole scene about the origin by `factor`, hierarchy intact.
 
@@ -301,6 +933,53 @@ def add_safety_floor(collection, name="Safety_Floor_ColOnly", thickness=0.5):
     )
 
 
+#: Name prefix of the ring `add_boundary_walls` adds. Unique on purpose: the
+#: bake leaves exactly these out, and Junk Flea's own perimeter walls are called
+#: `Boundary_Wall_*`. Excluding by a looser prefix dropped them from the
+#: server's grid and opened the map's edge.
+BOUNDS_PREFIX = "Map_Bounds_"
+
+
+def add_boundary_walls(collection, thickness=0.5, overhead=3.0):
+    """Invisible walls around the whole map's footprint, the safety floor's sides.
+
+    A map is only closed where its generator remembered to close it. Assault's
+    south street ran to the edge of the model at both ends with nothing there,
+    and so did its north-east yard, so offline (where Rapier walks the GLB
+    itself) a body walked off the map onto the safety floor. Hosted matches
+    never showed it, since the server's baked grid ends in solid rock, and
+    `test_glb_colliders.rs` only caught it once a rounded corner stopped one
+    of its rays clipping a wall's exact tip.
+
+    Run after `add_safety_floor`, so the ring encloses the floor too. The walls
+    rise `overhead` metres above the highest surface, so they cannot be jumped
+    from a roof.
+    """
+    lo = [math.inf] * 3
+    hi = [-math.inf] * 3
+    for obj in bpy.data.objects:
+        if obj.type != "MESH":
+            continue
+        for corner in obj.bound_box:
+            w = obj.matrix_world @ Vector(corner)
+            lo = [min(a, b) for a, b in zip(lo, w)]
+            hi = [max(a, b) for a, b in zip(hi, w)]
+    if not math.isfinite(lo[0]):
+        return []
+    t = thickness
+    z0, z1 = lo[2], hi[2] + overhead
+    sides = {
+        "West": ((lo[0] - t, lo[1] - t, z0), (lo[0], hi[1] + t, z1)),
+        "East": ((hi[0], lo[1] - t, z0), (hi[0] + t, hi[1] + t, z1)),
+        "South": ((lo[0], lo[1] - t, z0), (hi[0], lo[1], z1)),
+        "North": ((lo[0], hi[1], z0), (hi[0], hi[1] + t, z1)),
+    }
+    return [
+        _box(collection, f"{BOUNDS_PREFIX}{side}_ColOnly", a, b, None)
+        for side, (a, b) in sides.items()
+    ]
+
+
 # ---- lights and atmosphere ----------------------------------------------------------
 
 #: Point lights recorded by `add_light`, in metres, until `export_map_glb`.
@@ -469,7 +1148,9 @@ def add_light(pos, color=(255, 214, 160), radius=8.0, intensity=1.0) -> dict:
     return light
 
 
-def make_material(name, color, emission=None, strength=0.0, metallic=0.0, roughness=0.6):
+def make_material(
+    name, color, emission=None, strength=0.0, metallic=0.0, roughness=0.6
+):
     """A plain Principled material, reused by name."""
     mat = bpy.data.materials.get(name)
     if mat:
@@ -671,8 +1352,27 @@ def export_map_glb(name: str) -> str:
     """
     factor = float(os.environ.get("HASSAULT_MAP_SCALE", MAP_SCALE))
     add_safety_floor(bpy.context.scene.collection)
+    add_boundary_walls(bpy.context.scene.collection)
     _linearize_base_colors()
+    # Objects that bring their own bevel, noted before `scale_scene` bakes the
+    # modifier away, so `soften_edges` does not round them twice.
+    authored = {
+        o.name
+        for o in bpy.data.objects
+        if any(m.type == "BEVEL" for m in getattr(o, "modifiers", []))
+    }
     scale_scene(factor)
+    clean_meshes()
+    # Shape passes, both on by default. `HASSAULT_MAP_SOFTEN=0` exports the map
+    # as authored, for comparing against what the passes did.
+    if os.environ.get("HASSAULT_MAP_SOFTEN", "1") != "0":
+        weather_walls(factor)
+        soften_edges(factor, authored)
+        # Again, over what the shape passes made: their slivers and any face a
+        # bevel corner turned around.
+        clean_meshes()
+    separate_coplanar(factor)
+    mark_sharp_edges()
 
     override = os.environ.get("HASSAULT_MAP_OUT")
     backend_dir = override or os.path.join(

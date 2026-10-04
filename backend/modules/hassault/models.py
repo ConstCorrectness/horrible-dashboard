@@ -15,23 +15,10 @@ class MapSummary(BaseModel):
     size: int
 
 
-class InstallStatus(BaseModel):
-    """What this node can play, and whether an AssaultCube install adds to it.
+class CatalogStatus(BaseModel):
+    """What this node can play. The pane gates starting a match on `map_count`,
+    which is only ever zero if the bundled maps failed to build."""
 
-    `found` is about the *install* only — it is deliberately not a gate on
-    playing, because the bundled maps need no install at all. The pane decides
-    whether it can start a match from `map_count`, and treats `found` as the
-    reason a number is smaller than it could be.
-
-    `configured` distinguishes "you have not set this" from "the path you set is
-    not an install" — the two need different advice.
-    """
-
-    found: bool
-    path: str | None = None
-    configured: bool = False
-    """Every playable map, bundled and installed together — the count the map
-    list will actually show."""
     map_count: int = 0
     bundled_count: int = 0
     message: str | None = None
@@ -406,7 +393,7 @@ class Invitee(BaseModel):
     can_play: bool
     devices_online: int
     """A room on this node they are standing in, and its map. Presence beyond
-    online/offline: "playing hd_crossing" is what makes a roster worth opening."""
+    online/offline: "playing hd_dust2" is what makes a roster worth opening."""
     room: str = ""
     room_map: str = ""
 

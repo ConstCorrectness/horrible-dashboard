@@ -33,8 +33,8 @@ from fastapi import APIRouter, HTTPException
 from backend.modules.hassault import mapsource
 from backend.modules.hassault import routes as node
 from backend.modules.hassault.models import (
+    CatalogStatus,
     HitboxOut,
-    InstallStatus,
     ItemsResponse,
     LoreOut,
     MapInfo,
@@ -54,12 +54,10 @@ def _bundled(name: str) -> None:
         raise HTTPException(status_code=404, detail=f"no map named {name!r}")
 
 
-@router.get("/status", response_model=InstallStatus)
-async def get_status() -> InstallStatus:
+@router.get("/status", response_model=CatalogStatus)
+async def get_status() -> CatalogStatus:
     bundled = len(mapsource.bundled_names())
-    return InstallStatus(
-        found=False,
-        configured=False,
+    return CatalogStatus(
         map_count=bundled,
         bundled_count=bundled,
         message="Playing the maps that ship with the game.",

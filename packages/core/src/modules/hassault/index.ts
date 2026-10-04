@@ -569,14 +569,6 @@ export const hassaultModule: ModuleManifest = {
       type: 'boolean',
       default: true,
     },
-    {
-      key: 'hassault.installPath',
-      title: 'AssaultCube install path',
-      description:
-        'Folder containing packages/maps — the game content is read from your own copy and never bundled with this app. Blank auto-detects the usual locations for your platform.',
-      type: 'string',
-      default: '',
-    },
   ],
 };
 

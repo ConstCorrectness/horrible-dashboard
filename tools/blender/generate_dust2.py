@@ -353,9 +353,10 @@ def add_market_stall(collection, name, center, size, mats):
     # Perimeter roof beams
     add_box(collection, f"{name}_beam_n_NonCol", (cx, cy + sy * 0.5 - 0.1, cz + sz - 0.06), (sx, 0.12, 0.12), mats["wood_cedar_weathered"])
     add_box(collection, f"{name}_beam_s_NonCol", (cx, cy - sy * 0.5 + 0.1, cz + sz - 0.06), (sx, 0.12, 0.12), mats["wood_cedar_weathered"])
-    # Slanted Striped Fabric Canopy
-    add_box(collection, f"{name}_canopy_red_NonCol", (cx, cy, cz + sz + 0.05), (sx * 1.08, sy * 0.5, 0.04), mats["canopy_crimson"])
-    add_box(collection, f"{name}_canopy_gold_NonCol", (cx, cy, cz + sz + 0.05), (sx * 1.08, sy * 0.5, 0.04), mats["canopy_saffron"])
+    # Striped Fabric Canopy: two half-depth panels side by side. They once shared
+    # one centre, so the same box was drawn twice in two colours and z-fought.
+    add_box(collection, f"{name}_canopy_red_NonCol", (cx, cy - sy * 0.25, cz + sz + 0.05), (sx * 1.08, sy * 0.5, 0.04), mats["canopy_crimson"])
+    add_box(collection, f"{name}_canopy_gold_NonCol", (cx, cy + sy * 0.25, cz + sz + 0.05), (sx * 1.08, sy * 0.5, 0.04), mats["canopy_saffron"])
     # Display Table
     add_box(collection, f"{name}_table", (cx, cy, cz + 0.45), (sx * 0.85, sy * 0.75, 0.9), mats["wood_crate"])
     # Amphoras / Produce on table

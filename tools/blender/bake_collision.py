@@ -78,6 +78,12 @@ def collides(obj) -> bool:
     name = obj.name
     if BREAKABLE.search(name):
         return False
+    # `maplib.add_boundary_walls` exists for the clients' physics, which walk the
+    # GLB. The grid already ends in rock past the map; baked, the ring became
+    # columns open to the sky, and on a roofed map (the office) their corners
+    # were standable and unreachable, which `maplint` rightly calls cut off.
+    if name.startswith("Map_Bounds_"):  # maplib.BOUNDS_PREFIX
+        return False
     if any(k in name for k in TABLE["explicitNonCollider"]):
         return False
     mats = [m.name for m in obj.data.materials if m]
@@ -131,7 +137,9 @@ def load_colliders(name: str):
     return solids, zlo, zhi
 
 
-def object_solid(tree, x: float, y: float, zlo: float, zhi: float) -> list[tuple[float, float]]:
+def object_solid(
+    tree, x: float, y: float, zlo: float, zhi: float
+) -> list[tuple[float, float]]:
     """Where one object is solid along the vertical line at (x, y), bottom up.
 
     Counts depth by face orientation: a face whose normal points down is where
@@ -170,7 +178,9 @@ def object_solid(tree, x: float, y: float, zlo: float, zhi: float) -> list[tuple
     return out
 
 
-def free_intervals(solids, x: float, y: float, zlo: float, zhi: float) -> list[tuple[float, float]]:
+def free_intervals(
+    solids, x: float, y: float, zlo: float, zhi: float
+) -> list[tuple[float, float]]:
     """Open space along the line: everything no object is solid in."""
     blocked = []
     for tree, lo, hi in solids:
@@ -210,7 +220,12 @@ def bake(name: str) -> list[dict]:
     for cy in range(1, SSIZE - 1):
         for cx in range(1, SSIZE - 1):
             cell_solids = [
-                s for s in solids if s[1][0] <= cx + 1 and s[2][0] >= cx and s[1][1] <= cy + 1 and s[2][1] >= cy
+                s
+                for s in solids
+                if s[1][0] <= cx + 1
+                and s[2][0] >= cx
+                and s[1][1] <= cy + 1
+                and s[2][1] >= cy
             ]
             common = None
             for oy in offsets:
@@ -285,7 +300,9 @@ def choose(openings, spawns, ladders, sky):
         base = min(openings[c][i][0] for c, i in base_cells)
         top = base + height
         feet = [(c, i) for c, i in base_cells if abs(openings[c][i][0] - base) <= 1]
-        heads = [(c, i) for c, i in base_cells if abs(openings[c][i][0] - top) <= JUMP_CLIMB]
+        heads = [
+            (c, i) for c, i in base_cells if abs(openings[c][i][0] - top) <= JUMP_CLIMB
+        ]
         for a in feet:
             ladder_links.setdefault(a, []).extend(heads)
         for b in heads:
@@ -305,7 +322,10 @@ def choose(openings, spawns, ladders, sky):
                 queue.append(nxt)
     reached_cells = {}
     for cell, i in seen:
-        if cell not in reached_cells or openings[cell][i][0] < openings[cell][reached_cells[cell]][0]:
+        if (
+            cell not in reached_cells
+            or openings[cell][i][0] < openings[cell][reached_cells[cell]][0]
+        ):
             reached_cells[cell] = i
     chosen = {cell: openings[cell][i] for cell, i in reached_cells.items()}
     walked = dict(chosen)  # judged against reached floor only, never a chain of tops

@@ -1,13 +1,10 @@
 """The HorribleAssault `.cgz` reader.
 
-Two kinds of test here. The first are hermetic: maps synthesized in-memory so the
-header, entity, and run-length paths are exercised on every machine, CI included.
-The second run over a **real AssaultCube install** when one is present and skip
-otherwise — the format has enough historical quirks (variable header size, the
-`ACMP` magic, v10 attribute scaling) that only real files prove the reader works.
-
-No map is committed here: AssaultCube's content is copyright and redistributable
-only inside an unmodified AssaultCube package. See docs/modules/hassault.mdx.
+Hermetic: maps synthesized in-memory so the header, entity, and run-length paths
+are exercised on every machine, CI included. This used to also run over a real
+AssaultCube install when one was present. Reading installs was removed on
+2026-10-03, and the reader now only reads what `write_cgz` writes, which
+`test_hassault_bundled.py` round-trips.
 """
 
 from __future__ import annotations
@@ -22,7 +19,6 @@ from backend.modules.hassault.cgz import (
     DEFAULT_CEIL,
     DEFAULT_FLOOR,
     DEFAULT_WALL,
-    PLANE_ORDER,
     PLAYERSTART,
     SIZEOF_HEADER,
     SOLID,
@@ -30,7 +26,6 @@ from backend.modules.hassault.cgz import (
     CgzError,
     fix_header_size,
     parse_cgz,
-    read_cgz,
 )
 
 # ---- synthetic maps ---------------------------------------------------------------
@@ -229,71 +224,18 @@ def test_rejects_short_file():
 
 @pytest.mark.parametrize(
     "name",
-    ["../../etc/passwd", "..", "a/b", "a\\b", "map.cgz", "", "map;rm", "map name"],
+    [
+        "../../etc/passwd",
+        "..",
+        "a/b",
+        "a\\b",
+        "map.cgz",
+        "",
+        "map;rm",
+        "map name",
+        "hd_../x",
+    ],
 )
-def test_find_map_refuses_anything_that_is_not_a_bare_name(name):
-    assert assets.find_map(name) is None
-
-
-# ---- the real corpus, when an install is present ----------------------------------
-
-_INSTALL = assets.install_root()
-needs_install = pytest.mark.skipif(
-    _INSTALL is None, reason="no local AssaultCube install to read"
-)
-
-
-def installed_maps() -> list[dict[str, str]]:
-    """Only the install's maps. `list_maps` also carries the ones this app ships,
-    which are built from source and have no `.cgz` on disk to read — they are
-    covered by `test_hassault_bundled.py`, and this file is about real files."""
-    if _INSTALL is not None:
-        from backend.modules.settings.routes import set_value
-        set_value("hassault.installPath", str(_INSTALL))
-    return [m for m in assets.list_maps() if m["source"] != "bundled"]
-
-
-@needs_install
-def test_every_installed_map_parses():
-    """The reader must handle the whole shipped map set, not just a happy path."""
-    failures = []
-    for summary in installed_maps():
-        path = assets.find_map(summary["name"])
-        assert path is not None
-        try:
-            world = read_cgz(path)
-        except CgzError as exc:
-            failures.append(f"{summary['name']}: {exc}")
-            continue
-        if world.truncated:
-            failures.append(f"{summary['name']}: cube stream ran short")
-        if len(world.type) != world.cubic_size:
-            failures.append(f"{summary['name']}: wrong grid size")
-    assert not failures, "maps failed to parse: " + "; ".join(failures)
-
-
-@needs_install
-def test_installed_maps_have_plausible_content():
-    maps = installed_maps()
-    assert maps, "an install was detected but holds no maps"
-    world = read_cgz(assets.find_map(maps[0]["name"]))
-
-    assert world.entities, "a real map always has entities"
-    assert world.spawns(), "a real map always has player spawns"
-    # Every plane is exactly one byte per cube — this is what lets the grid be
-    # shipped as typed arrays.
-    for plane in PLANE_ORDER:
-        assert len(getattr(world, plane)) == world.cubic_size, plane
-    # A playable map is neither all solid nor all empty.
-    solid = world.type.count(SOLID)
-    assert 0 < solid < world.cubic_size
-
-
-@needs_install
-def test_all_spawn_angles_are_in_range():
-    """Cross-checks the v10 angle scaling against the whole corpus: a wrong
-    divisor would push yaw outside 0..360."""
-    for summary in installed_maps():
-        world = read_cgz(assets.find_map(summary["name"]))
-        for spawn in world.spawns():
-            assert 0.0 <= (spawn.yaw or 0.0) < 360.0, (summary["name"], spawn.yaw)
+def test_load_map_refuses_anything_that_is_not_a_bare_name(name):
+    """A map name indexes into a directory, so it is validated, not normalised."""
+    assert assets.load_map(name) is None

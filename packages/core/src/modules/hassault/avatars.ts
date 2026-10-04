@@ -26,6 +26,22 @@ import type { PlayerRow } from './net';
 const HITBOX_COLOR = 0x33f2d9;
 const HEAD_BAND_COLOR = 0xffc740;
 
+/**
+ * The avatar's rotation about Three's Y for a player at `yaw`.
+ *
+ * Mixamo characters face **+Z** in model space, and a +Z-facing object turned
+ * by θ about Y faces (sin θ, cos θ) in Three's (x, z). Setting that equal to the
+ * cube heading (cos yaw, sin yaw) gives θ = π/2 − yaw.
+ *
+ * Not the camera's `-yaw - π/2`: that is for a -Z forward, which the box rig
+ * this model replaced had and the operator does not. Reusing it drew every
+ * remote player facing exactly away from where they were looking. The native
+ * client pins the same thing as `FACING_OFFSET` in `character.rs`.
+ */
+export function avatarRotationY(yaw: number): number {
+  return Math.PI / 2 - yaw;
+}
+
 interface Avatar {
   group: THREE.Group;
   model: CharacterModel;
@@ -218,8 +234,7 @@ export class AvatarPool {
       // Position in Three.js coordinates: Cube (x, y, height) -> Three (x, height, z)
       avatar.group.position.set(row.x, row.z, row.y);
 
-      // Facing yaw: Three's default forward is -Z
-      avatar.group.rotation.y = -row.yaw - Math.PI / 2;
+      avatar.group.rotation.y = avatarRotationY(row.yaw);
 
       // Clip selection, crossfades, aim pitch, weapon and stale fade.
       avatar.animator.update(dt, row);

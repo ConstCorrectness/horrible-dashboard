@@ -154,7 +154,7 @@ impl Default for Args {
             // Hyper-V reserves ranges on Windows that can swallow 8000 — so the
             // launcher passes `--server` rather than anyone guessing.
             server: "http://127.0.0.1:8000".into(),
-            map: "hd_crossing".into(),
+            map: "hd_dust2".into(),
             // Joining is the least surprising default and the one the old
             // argument-free launch effectively did.
             mode: Mode::Join,

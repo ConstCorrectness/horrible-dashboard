@@ -125,7 +125,8 @@ def _own_copy(name: str):
 
 
 def _read_source(name: str) -> dict:
-    path = mapsource.MAPS_DIR / f"{name}.json"
+    path = mapsource.source_path(name)
+    assert path is not None, name
     return json.loads(path.read_text(encoding="utf-8"))
 
 
