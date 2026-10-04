@@ -123,14 +123,31 @@ jobs:
       - name: Build the bundled backend runtime
         run: node scripts/build-backend-runtime.mjs
 
+      # linuxdeploy, which builds the AppImage, resolves the shared-library
+      # dependencies of every ELF file in the AppDir, the bundled runtime's wheels
+      # included. manylinux wheels vendor their libraries into `<pkg>.libs/` under
+      # hashed names and find them by an `$ORIGIN` rpath that linuxdeploy does not
+      # follow. v0.4.1 failed with "Could not find dependency:
+      # libk5crypto-b1f99d5c.so.3.1", and only the first miss is ever reported.
+      # Putting every `*.libs` directory, and the interpreter's own `lib/`, on
+      # LD_LIBRARY_PATH lets it resolve them all.
+      - name: Let linuxdeploy find the runtime's vendored libraries
+        if: matrix.platform == 'ubuntu-22.04'
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime="$PWD/apps/desktop/src-tauri/backend-runtime"
+          dirs=$(find "$runtime" -type d -name '*.libs' | sort | paste -sd: -)
+          echo "vendored library dirs: $(find "$runtime" -type d -name '*.libs' | wc -l)"
+          echo "LD_LIBRARY_PATH=${dirs:+$dirs:}$runtime/python/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+
       - uses: tauri-apps/tauri-action@v0
         env:
-          # linuxdeploy's bundled `strip` is older than the toolchains that build
-          # python-build-standalone and many wheels, and fails on their newer ELF
-          # sections (`.relr.dyn`). The AppImage then dies as "failed to run
-          # linuxdeploy", as v0.4.1's first run did, the first Linux build to reach
-          # bundling with the backend runtime inside it. Tauri's documented remedy.
-          # Only linuxdeploy reads it.
+          # A precaution, not the fix for v0.4.1 (that was the vendored libraries
+          # above). linuxdeploy's bundled `strip` predates the toolchains behind
+          # python-build-standalone and many wheels, and Tauri documents this as the
+          # remedy when it trips on their newer ELF sections. Stripping prebuilt
+          # extension modules gains nothing anyway. Only linuxdeploy reads it.
           NO_STRIP: 'true'
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
