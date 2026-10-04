@@ -26,6 +26,7 @@ import type PubNub from 'pubnub';
 
 import type { StripHandle } from '../audio/types';
 import { leaveClubhouseChannel } from './api';
+import type { PcmCapture, UtteranceBuffer } from './liveCapture';
 
 export interface LiveUserState {
   userId: number;
@@ -50,6 +51,12 @@ export interface FloatingReaction {
   emoji: string;
   x: number;
   y: number;
+}
+
+/** The utterance being transcribed while it is still being spoken. */
+export interface LiveCaption {
+  text: string;
+  speakerId: number | null;
 }
 
 export interface SpeakerInvite {
@@ -82,6 +89,11 @@ export interface RoomState {
   chatDisabledReason: string | null;
   /** Music the agent is playing into the room, or `null`. */
   music: { title: string; paused: boolean } | null;
+  /**
+   * The current utterance as transcribed so far, refreshed about once a second
+   * while someone is talking and cleared when their finished sentence arrives.
+   */
+  liveCaption: LiveCaption | null;
 }
 
 export const EMPTY_ROOM_STATE: RoomState = {
@@ -99,6 +111,7 @@ export const EMPTY_ROOM_STATE: RoomState = {
   speakingVolumes: {},
   chatDisabledReason: null,
   music: null,
+  liveCaption: null,
 };
 
 /**
@@ -109,14 +122,19 @@ export class ClubhouseRoomSession {
   // --- connection resources (previously the hook's refs) ---
   audioCtx: AudioContext | null = null;
   agentAudioDest: MediaStreamAudioDestinationNode | null = null;
-  sttDest: MediaStreamAudioDestinationNode | null = null;
-  sttRecorder: MediaRecorder | null = null;
+  /** Everything the agent hears — remote speakers and the operator's mic — summed. */
+  sttBus: GainNode | null = null;
+  /** The PCM tap on `sttBus` (see `liveCapture`). `null` until built, or after it died. */
+  sttCapture: PcmCapture | null = null;
+  /** When the tap last delivered frames; a running context with none is a dead tap. */
+  sttLastFrameAt = 0;
+  /** The utterance being captured, plus its pre-roll. */
+  sttUtterance: UtteranceBuffer | null = null;
   /**
-   * Whether the chunk `sttRecorder` is currently filling will be flushed as a
-   * partial. Mutable and shared with the recorder's own handler because the answer
-   * is not known until the moment it is stopped.
+   * Finished utterances, transcribed one after another so they reach the agent in
+   * the order they were spoken even when a long one is still at the server.
    */
-  sttChunk: { partial: boolean; discard?: boolean } | null = null;
+  sttFinals: Promise<void> = Promise.resolve();
   physicalMicStream: MediaStream | null = null;
   humanGain: GainNode | null = null;
   rtcClient: IAgoraRTCClient | null = null;
@@ -132,8 +150,8 @@ export class ClubhouseRoomSession {
    */
   earsInterval: ReturnType<typeof setInterval> | null = null;
   /**
-   * Build a fresh `MediaRecorder` on the current `sttDest`, closed over by the join
-   * that set it up. Held on the session because the watchdog runs outside that
+   * Rebuild the PCM tap on the current `sttBus`, closed over by the join that set
+   * it up. Held on the session because the watchdog runs outside that
    * closure and a room can outlive any one mount.
    */
   restartEars: (() => void) | null = null;
@@ -200,7 +218,6 @@ export class ClubhouseRoomSession {
     onVoiceError?: (message: string) => void;
   } = {};
 
-  chunkIntervalMs = 5000;
   /** Distinct speech-pipeline failures already reported, so a per-chunk failure
    *  raises one alarm rather than one every few seconds. */
   reportedVoiceErrors = new Set<string>();
@@ -340,29 +357,19 @@ export class ClubhouseRoomSession {
   async #teardown(): Promise<void> {
     const channel = this.state.activeChannel;
 
-    for (const key of [
-      'pingInterval',
-      'volumeInterval',
-      'vadInterval',
-      'earsInterval',
-    ] as const) {
+    for (const key of ['pingInterval', 'volumeInterval', 'vadInterval', 'earsInterval'] as const) {
       const handle = this[key];
       if (handle) clearInterval(handle);
       this[key] = null;
     }
 
-    if (this.sttRecorder) {
-      try {
-        if (this.sttRecorder.state !== 'inactive') this.sttRecorder.stop();
-      } catch {
-        /* already stopped */
-      }
-      this.sttRecorder = null;
-    }
-    this.sttChunk = null;
-    // Cleared with the recorder it rebuilds: left set, the next room's watchdog
-    // would call a closure holding the *previous* room's `sttDest` -- the orphaned-
-    // loop bug this teardown exists to prevent, wearing a different hat.
+    this.sttCapture?.stop();
+    this.sttCapture = null;
+    this.sttUtterance = null;
+    this.sttLastFrameAt = 0;
+    // Cleared with the tap it rebuilds: left set, the next room's watchdog would
+    // call a closure holding the *previous* room's `sttBus` -- the orphaned-loop
+    // bug this teardown exists to prevent, wearing a different hat.
     this.restartEars = null;
     this.earsRestarts = 0;
     this.lastHeardAt = 0;
@@ -386,7 +393,7 @@ export class ClubhouseRoomSession {
     // Clubhouse join, whose first `createMediaStreamDestination()` throws
     // `InvalidStateError` on a closed context. Disconnect our own nodes instead;
     // the physical mic stream is stopped above, which drops its source with it.
-    for (const node of [this.humanGain, this.agentAudioDest, this.sttDest]) {
+    for (const node of [this.humanGain, this.agentAudioDest, this.sttBus]) {
       try {
         node?.disconnect();
       } catch {
@@ -395,7 +402,7 @@ export class ClubhouseRoomSession {
     }
     this.audioCtx = null;
     this.agentAudioDest = null;
-    this.sttDest = null;
+    this.sttBus = null;
     this.humanGain = null;
     this.agentAudioSource = null;
     this.isAgentSpeaking = false;

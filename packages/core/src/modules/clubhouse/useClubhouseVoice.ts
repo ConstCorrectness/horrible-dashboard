@@ -8,6 +8,7 @@ import { usePaneSession } from '../../layout/use-pane-session';
 import { mixer } from '../audio/engine';
 import { openMicrophone } from '../audio/store';
 import { earsActions, type ObservedContextState } from './earsWatchdog';
+import { Downsampler, UtteranceBuffer, encodeWav, startPcmCapture } from './liveCapture';
 import { splitForSpeech } from './speechChunks';
 import {
   ClubhouseRoomSession,
@@ -46,6 +47,19 @@ const CLUBCARD_AGORA_APP_ID = '938d7e95aeaa4f4ca1f416ab40a498d9';
  */
 const SPEECH_LEVEL = 12;
 const BARGE_IN_LEVEL = 22;
+
+/**
+ * Utterance length caps. Whisper sees 30 s at a time, and a room where nobody pauses
+ * for 750 ms would otherwise transcribe nothing until somebody does. Past the soft
+ * cap the utterance is cut at the next gap between words; at the hard cap, wherever
+ * it is.
+ */
+const SOFT_MAX_UTTERANCE_MS = 15_000;
+const HARD_MAX_UTTERANCE_MS = 25_000;
+/** Too short to caption: Whisper invents words for a syllable. */
+const MIN_LIVE_CAPTION_MS = 700;
+/** A running context whose tap has delivered nothing for this long is a dead tap. */
+const CAPTURE_STALL_MS = 3_000;
 
 /** Mixer strip the agent's room music is monitored through. */
 const MUSIC_STRIP = 'clubhouse-music';
@@ -96,7 +110,8 @@ export interface UseClubhouseVoiceProps {
   onHandRaise?: (userId: number, userName: string) => void;
   /** Speech pipeline failed (missing `voice` extra, backend down, decode error). */
   onVoiceError?: (message: string) => void;
-  sttChunkIntervalMs?: number;
+  /** How often the live caption re-transcribes the utterance in progress. */
+  liveCaptionMs?: number;
   endpointingDelayMs?: number;
   allowBargeIn?: boolean;
   /**
@@ -188,6 +203,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     speakingVolumes,
     voiceError,
     chatDisabledReason,
+    liveCaption,
   } = state;
 
   const propsRef = useRef(props);
@@ -203,7 +219,6 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     onHandRaise: props?.onHandRaise,
     onVoiceError: props?.onVoiceError,
   };
-  session.chunkIntervalMs = props?.sttChunkIntervalMs || 5000;
 
   const reportVoiceError = useCallback(
     (message: string) => session.reportVoiceError(message, session.handlers.onVoiceError),
@@ -328,8 +343,10 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       const dest = audioCtx.createMediaStreamDestination();
       session.agentAudioDest = dest;
 
-      const sttDest = audioCtx.createMediaStreamDestination();
-      session.sttDest = sttDest;
+      // The agent's ears: one bus every remote speaker and the operator's mic feed,
+      // tapped for PCM (see `liveCapture`) and watched by the VAD's analyser.
+      const sttBus = audioCtx.createGain();
+      session.sttBus = sttBus;
 
       // b. Initialize Agora Client
       const client = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
@@ -337,7 +354,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
 
       // Helper to route remote audio stream track to agent's STT
       /*
-       * Tracks already wired into `sttDest`, by track id.
+       * Tracks already wired into `sttBus`, by track id.
        *
        * Two paths reach here for the same speaker — the join-time sweep above and the
        * `user-published` event — and without this a track connected twice is summed
@@ -352,7 +369,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         try {
           const stream = new MediaStream([track]);
           const source = audioCtx.createMediaStreamSource(stream);
-          source.connect(sttDest);
+          source.connect(sttBus);
           // Counted so the pane can say "nobody's audio is reaching me" rather than
           // "listening…". Zero here with people plainly talking is a different bug
           // from a level that never crosses the threshold, and they are
@@ -426,167 +443,160 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         }),
       );
 
-      // Start STT Recorder with VAD
+      // Start the ears: PCM tap + VAD
       try {
         const analyser = audioCtx.createAnalyser();
         analyser.fftSize = 256;
-        sttDest.stream.getAudioTracks().forEach((track) => {
-          const stream = new MediaStream([track]);
-          const src = audioCtx.createMediaStreamSource(stream);
-          src.connect(analyser);
-        });
+        sttBus.connect(analyser);
+
+        const utterance = new UtteranceBuffer();
+        session.sttUtterance = utterance;
+        /** Whether this tap still belongs to the room that built it. */
+        const current = () => session.sttUtterance === utterance;
 
         let silenceTicks = 0;
         let isSpeaking = false;
-        let idleSilenceTicks = 0;
-        let hasSpeechInChunk = false;
         let bargeInTicks = 0;
         let activeSpeakerUidDuringSpeech: number | null = null;
         /** When the current unbroken run of speech began, for the interject timer. */
         let speechStartedAt = 0;
         /** One interjection per run of speech — otherwise it fires every tick. */
         let interjectedThisRun = false;
-        /**
-         * Text transcribed so far during the current run of speech.
-         *
-         * A partial flush has to *stop* the recorder, because each blob is a complete
-         * WebM and a fragment without its header decodes to nothing. That leaves every
-         * chunk after the first holding only the tail, so the pieces are concatenated
-         * here: it is what lets the finished utterance still be the whole sentence
-         * after the agent has already cut in on the first half of it.
-         */
-        let runText = '';
+        let lastLiveAt = 0;
+        /** One live caption at the server at a time, so a slow model sets the pace. */
+        let liveInFlight = false;
+        /** Which utterance the caption on screen belongs to. */
+        let captionFor = -1;
+        let building = false;
 
-        const getOptimalMimeType = (): string | undefined => {
-          if (typeof MediaRecorder === 'undefined') return undefined;
-          const candidates = [
-            'audio/webm;codecs=opus',
-            'audio/webm',
-            'audio/ogg;codecs=opus',
-            'audio/mp4',
-          ];
-          for (const mime of candidates) {
-            if (MediaRecorder.isTypeSupported(mime)) return mime;
-          }
-          return undefined;
-        };
-
-        const startRecordingChunk = (speakerUidForChunk: number | null = null) => {
-          if (!session.sttDest) return;
-          const mime = getOptimalMimeType();
-          const recorder = mime
-            ? new MediaRecorder(session.sttDest.stream, { mimeType: mime })
-            : new MediaRecorder(session.sttDest.stream);
-          session.sttRecorder = recorder;
-          // Read at `ondataavailable` time, not now: whether a chunk is a partial is
-          // decided when it is flushed, which is always after the recorder was made.
-          const chunk: { partial: boolean; discard?: boolean } = { partial: false };
-          session.sttChunk = chunk;
-          const boundSpeakerId = speakerUidForChunk ?? activeSpeakerUidDuringSpeech;
-
-          recorder.ondataavailable = async (e) => {
-            if (chunk.discard) {
+        const buildCapture = async () => {
+          if (building) return;
+          building = true;
+          try {
+            session.sttCapture?.stop();
+            session.sttCapture = null;
+            const downsampler = new Downsampler(audioCtx.sampleRate);
+            const capture = await startPcmCapture(audioCtx, sttBus, (frames) => {
+              session.sttLastFrameAt = Date.now();
+              utterance.push(downsampler.process(frames));
+            });
+            // A teardown or a room switch got there while the worklet was loading.
+            if (!current()) {
+              capture.stop();
               return;
             }
-            if (e.data.size > 0 && session.handlers.onTranscribe) {
-              const formData = new FormData();
-              formData.append(
-                'file',
-                new File([e.data], 'chunk.webm', { type: e.data.type || 'audio/webm' }),
-              );
-              try {
-                const res = await fetch(apiUrl('/api/agent/stt'), {
-                  method: 'POST',
-                  body: formData,
-                });
-                // A non-2xx here is the single most common "the agent doesn't hear
-                // me" cause: /api/agent/stt answers 503 until `uv sync --extra voice`
-                // has been run.
-                if (!res.ok) {
-                  let detail = `HTTP ${res.status}`;
-                  try {
-                    detail = (await res.json()).detail || detail;
-                  } catch {
-                    /* keep the status */
-                  }
-                  reportVoiceError(`Speech-to-text unavailable: ${detail}`);
-                  return;
-                }
-                const json = await res.json();
-                // A 200 is not a success: transcription failures answer 200 with an
-                // empty `text` and an `error`, because a caller that posts a chunk
-                // every few seconds cannot treat "nobody spoke" as an error status.
-                // Reported, or a deaf agent is indistinguishable from a quiet room —
-                // which is exactly how this failed for months.
-                if (json.error) {
-                  reportVoiceError(`Speech-to-text failed: ${json.error}`);
-                  return;
-                }
-                session.clearVoiceError();
-                session.lastHeardAt = Date.now();
-                const piece = json.text && json.text.trim();
-                if (session.handlers.onTranscribe && piece) {
-                  runText = runText ? `${runText} ${piece}` : piece;
-                  const whole = runText;
-                  // The run ends with the final chunk; a partial leaves it open so the
-                  // next piece appends rather than starting a new utterance.
-                  if (!chunk.partial) runText = '';
-                  session.handlers.onTranscribe(whole, undefined, boundSpeakerId, chunk.partial);
-                }
-              } catch (err) {
-                console.error('STT failed:', err);
-                reportVoiceError(
-                  `Speech-to-text failed: ${err instanceof Error ? err.message : String(err)}`,
-                );
-              }
-            }
-          };
+            session.sttCapture = capture;
+            session.sttLastFrameAt = Date.now();
+          } finally {
+            building = false;
+          }
+        };
+        session.restartEars = () => void buildCapture();
 
-          // A recorder that errors is a **silently deaf agent**: `flushChunk` returns
-          // early on an inactive recorder and nothing else ever calls
-          // `startRecordingChunk`, so the VAD loop goes on ticking over a recorder
-          // that will never produce another chunk. Left to itself this is the whole
-          // of "it worked for ten minutes and then stopped". The watchdog below
-          // rebuilds it; this just makes sure it is *left* in the state the watchdog
-          // recognises, and says so once.
-          recorder.onerror = (event) => {
-            console.error('STT recorder error:', event);
-            try {
-              if (recorder.state !== 'inactive') recorder.stop();
-            } catch {
-              /* it is already gone; the watchdog rebuilds either way */
-            }
-            if (session.sttRecorder === recorder) session.sttRecorder = null;
-          };
-
+        /** Post one stretch of audio. `null` when it failed — and the failure is reported. */
+        const transcribe = async (audio: Float32Array): Promise<string | null> => {
+          const formData = new FormData();
+          formData.append(
+            'file',
+            new File([encodeWav(audio)], 'utterance.wav', { type: 'audio/wav' }),
+          );
           try {
-            recorder.start();
+            const res = await fetch(apiUrl('/api/agent/stt'), {
+              method: 'POST',
+              body: formData,
+            });
+            // A non-2xx here is the single most common "the agent doesn't hear me"
+            // cause: /api/agent/stt answers 503 until `uv sync --extra voice` has run.
+            if (!res.ok) {
+              let detail = `HTTP ${res.status}`;
+              try {
+                detail = (await res.json()).detail || detail;
+              } catch {
+                /* keep the status */
+              }
+              reportVoiceError(`Speech-to-text unavailable: ${detail}`);
+              return null;
+            }
+            const json = await res.json();
+            // A 200 is not a success: transcription failures answer 200 with an
+            // empty `text` and an `error`. Reported, or a deaf agent is
+            // indistinguishable from a quiet room.
+            if (json.error) {
+              reportVoiceError(`Speech-to-text failed: ${json.error}`);
+              return null;
+            }
+            session.clearVoiceError();
+            const text = String(json.text ?? '').trim();
+            if (text) session.lastHeardAt = Date.now();
+            return text;
           } catch (err) {
-            // Throws when the stream's track has ended — a device change, or Agora
-            // tearing a track down under us. Same contract as `onerror`.
-            console.error('Failed to start STT recorder:', err);
-            if (session.sttRecorder === recorder) session.sttRecorder = null;
+            console.error('STT failed:', err);
+            reportVoiceError(
+              `Speech-to-text failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+            return null;
           }
         };
 
-        // Reachable from the watchdog, which runs outside this closure.
-        session.restartEars = () => startRecordingChunk();
-
-        /**
-         * End the current chunk and start the next. `partial` marks the flushed chunk
-         * as mid-sentence, which is the only thing that distinguishes an interjection
-         * from an ordinary end-of-speech turn by the time it reaches the server.
-         */
-        const flushChunk = (partial: boolean, speakerUid: number | null) => {
-          if (!session.sttRecorder || session.sttRecorder.state === 'inactive') return;
-          if (session.sttChunk) session.sttChunk.partial = partial;
-          hasSpeechInChunk = false;
-          idleSilenceTicks = 0;
-          session.sttRecorder.stop();
-          startRecordingChunk(speakerUid);
+        const showCaption = (id: number, text: string, speakerId: number | null) => {
+          captionFor = id;
+          session.patch({ liveCaption: { text, speakerId } });
         };
 
-        startRecordingChunk();
+        /** The utterance so far, for the caption only — never sent to the agent. */
+        const sendLive = (speakerUid: number | null) => {
+          liveInFlight = true;
+          lastLiveAt = Date.now();
+          const id = utterance.id;
+          void transcribe(utterance.snapshot()).then((text) => {
+            liveInFlight = false;
+            // The sentence ended (or the next began) while this was at the server;
+            // its final transcript is the one to show now.
+            if (!text || !current() || utterance.id !== id || !utterance.active) return;
+            showCaption(id, text, speakerUid);
+          });
+        };
+
+        /**
+         * The interject posture's cut-in: the utterance so far, handed to the agent
+         * as a partial. The capture is *not* interrupted — the finished sentence
+         * still arrives whole when the speaker stops.
+         */
+        const sendPartial = (speakerUid: number | null) => {
+          const id = utterance.id;
+          void transcribe(utterance.snapshot()).then((text) => {
+            if (!text || !current()) return;
+            if (utterance.id === id && utterance.active) showCaption(id, text, speakerUid);
+            session.handlers.onTranscribe?.(text, undefined, speakerUid, true);
+          });
+        };
+
+        /**
+         * End the utterance and transcribe all of it. Queued behind the previous
+         * one, so the agent hears sentences in the order they were spoken.
+         */
+        const finishUtterance = (speakerUid: number | null) => {
+          if (!utterance.active) return;
+          const id = utterance.id;
+          const heard = utterance.hasSpeech;
+          const audio = utterance.end();
+          // Only the silent tail of a sentence already cut at its length cap.
+          if (!heard) return;
+          session.sttFinals = session.sttFinals.then(async () => {
+            const text = await transcribe(audio);
+            if (!current()) return;
+            if (captionFor === id) {
+              captionFor = -1;
+              session.patch({ liveCaption: null });
+            }
+            if (text) session.handlers.onTranscribe?.(text, undefined, speakerUid, false);
+          });
+        };
+
+        await buildCapture();
+        if (!session.sttCapture) {
+          reportVoiceError('Could not start the agent’s ears: no audio capture is available.');
+        }
 
         session.vadInterval = setInterval(() => {
           const dataArray = new Uint8Array(analyser.frequencyBinCount);
@@ -597,6 +607,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
           // The VAD's own decision variable, exposed for the pane's meter. Written
           // as a plain field at 50 Hz; the pane pulls it on its own timer.
           session.earsLevel = avgVolume;
+          const now = Date.now();
 
           // Barge-in: Stop agent if it's currently speaking and human is speaking loudly and clearly
           if (session.isAgentSpeaking) {
@@ -629,9 +640,6 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
           }
 
           if (avgVolume > SPEECH_LEVEL) {
-            hasSpeechInChunk = true;
-            idleSilenceTicks = 0;
-
             // Track loudest speaker UID across live volumes
             const vols = session.getState().speakingVolumes || {};
             let highestVol = 0;
@@ -650,11 +658,13 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
             // Human is speaking
             if (!isSpeaking) {
               session.handlers.onBargeIn?.();
-              speechStartedAt = Date.now();
+              speechStartedAt = now;
               interjectedThisRun = false;
             }
             isSpeaking = true;
             silenceTicks = 0;
+            if (!utterance.active) utterance.begin();
+            utterance.hasSpeech = true;
 
             // The agent cutting in
             const interjectAfterMs = propsRef.current?.interjectAfterMs ?? 0;
@@ -662,41 +672,50 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
               interjectAfterMs > 0 &&
               !interjectedThisRun &&
               !session.isAgentSpeaking &&
-              Date.now() - speechStartedAt >= interjectAfterMs
+              now - speechStartedAt >= interjectAfterMs
             ) {
               interjectedThisRun = true;
-              flushChunk(true, activeSpeakerUidDuringSpeech);
+              sendPartial(activeSpeakerUidDuringSpeech);
             }
-          } else {
-            // Volume below threshold
-            if (isSpeaking) {
-              silenceTicks++;
-              const requiredSilenceTicks = Math.max(
-                4,
-                Math.round((propsRef.current?.endpointingDelayMs || 750) / 50),
-              );
-              if (silenceTicks >= requiredSilenceTicks) {
-                isSpeaking = false;
-                silenceTicks = 0;
-                const completedSpeakerUid = activeSpeakerUidDuringSpeech;
-                activeSpeakerUidDuringSpeech = null;
-                // End of speech detected, send chunk!
-                flushChunk(false, completedSpeakerUid);
-              }
-            } else {
-              // Idle silence without active speech
-              idleSilenceTicks++;
-              // Every ~1.5s of unbroken silence without speech in this chunk, rotate and discard
-              // to prevent accumulating massive silence buffers that dilute STT RMS energy.
-              if (!hasSpeechInChunk && idleSilenceTicks >= 30) {
-                idleSilenceTicks = 0;
-                if (session.sttRecorder && session.sttRecorder.state !== 'inactive') {
-                  if (session.sttChunk) session.sttChunk.discard = true;
-                  session.sttRecorder.stop();
-                  startRecordingChunk();
-                }
-              }
+
+            // Nobody has paused in a long time. Cut here, or Whisper's 30 s window
+            // drops the rest — and nothing reaches the agent until a pause that, in
+            // a busy room, may never come.
+            if (utterance.durationMs >= HARD_MAX_UTTERANCE_MS) {
+              finishUtterance(activeSpeakerUidDuringSpeech);
+              utterance.begin();
+              utterance.hasSpeech = true;
             }
+          } else if (isSpeaking) {
+            silenceTicks++;
+            const requiredSilenceTicks = Math.max(
+              4,
+              Math.round((propsRef.current?.endpointingDelayMs || 750) / 50),
+            );
+            if (silenceTicks >= requiredSilenceTicks) {
+              isSpeaking = false;
+              silenceTicks = 0;
+              const completedSpeakerUid = activeSpeakerUidDuringSpeech;
+              activeSpeakerUidDuringSpeech = null;
+              // End of speech detected: transcribe the whole utterance.
+              finishUtterance(completedSpeakerUid);
+            } else if (utterance.durationMs >= SOFT_MAX_UTTERANCE_MS) {
+              // A long turn: cut at this gap between words rather than mid-word at
+              // the hard cap.
+              finishUtterance(activeSpeakerUidDuringSpeech);
+              utterance.begin();
+            }
+          }
+
+          // The live caption: the utterance so far, about once a second.
+          if (
+            utterance.active &&
+            utterance.hasSpeech &&
+            !liveInFlight &&
+            utterance.durationMs >= MIN_LIVE_CAPTION_MS &&
+            now - lastLiveAt >= (propsRef.current?.liveCaptionMs ?? 1000)
+          ) {
+            sendLive(activeSpeakerUidDuringSpeech);
           }
         }, 50);
 
@@ -704,26 +723,28 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
          * The ears watchdog.
          *
          * Everything upstream of the agent is a live browser resource that can die
-         * quietly and stay dead: a `MediaRecorder` that errored, a recorder whose
-         * `start()` threw because its track ended, an `AudioContext` the OS suspended
-         * on a device change or a backgrounded tab. None of them raise anything a
-         * person can see. The VAD loop keeps ticking over an analyser reading zeros,
-         * the pane keeps saying "listening", and the agent is simply deaf from then
-         * on — which is what "it stops working" means in practice.
+         * quietly and stay dead: a capture node whose processor crashed, an
+         * `AudioContext` the OS suspended on a device change or a backgrounded tab.
+         * None of them raise anything a person can see. The VAD loop keeps ticking
+         * over an analyser reading zeros, the pane keeps saying "listening", and the
+         * agent is simply deaf from then on — which is what "it stops working" means
+         * in practice.
          *
-         * So the ears are checked on a timer and rebuilt, rather than being assumed
-         * to survive the room. Two seconds is comfortably under the shortest silence
-         * anyone waits through, and the check is three field reads when all is well.
+         * A tap is judged dead when the context is running and no frames have
+         * arrived for a few seconds: a healthy one delivers every ~40 ms, silence
+         * included.
          *
          * It is *not* folded into the 50 ms VAD loop: that loop is one of the things
          * being watched, and a watchdog that dies with its subject is decoration.
          */
         session.earsInterval = setInterval(() => {
           const ctx = session.audioCtx;
-          if (!session.sttDest) return;
+          if (!session.sttBus || building) return;
+          const stalled =
+            ctx?.state === 'running' && Date.now() - session.sttLastFrameAt > CAPTURE_STALL_MS;
           const actions = earsActions({
             contextState: (ctx?.state as ObservedContextState) ?? null,
-            recorderState: session.sttRecorder?.state ?? null,
+            recorderState: !session.sttCapture ? null : stalled ? 'inactive' : 'recording',
           });
 
           if (actions.resumeContext) {
@@ -735,18 +756,21 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
           if (actions.restartRecorder) {
             session.earsRestarts++;
             // Said once, and only on the second restart: a single one is routine (a
-            // chunk boundary racing a device change) and toasting it would train
-            // people to ignore the warning on the day it means something.
+            // device change) and toasting it would train people to ignore the
+            // warning on the day it means something.
             if (session.earsRestarts === 2) {
               reportVoiceError(
                 'The agent stopped hearing the room; restarting its microphone feed.',
               );
             }
-            startRecordingChunk();
+            void buildCapture();
           }
         }, 2000);
       } catch (err) {
-        console.error('Failed to start VAD STT recorder:', err);
+        console.error('Failed to start the STT capture:', err);
+        reportVoiceError(
+          `Could not start the agent’s ears: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
 
       // Get physical mic (Optional, handle missing permissions or timeouts gracefully)
@@ -769,7 +793,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
 
         micSource.connect(humanGain);
         humanGain.connect(dest); // published to Clubhouse room when unmuted
-        micSource.connect(sttDest); // agent's ears always hear operator
+        micSource.connect(sttBus); // agent's ears always hear operator
       } catch (err) {
         // Continuing as a listener is a legitimate outcome, but it must be *said*.
         // Without `humanGain` there is nothing between a microphone and the
@@ -1465,7 +1489,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       level: session.earsLevel,
       speechLevel: SPEECH_LEVEL,
       tracksConnected: session.earsTracks,
-      recorderState: session.sttRecorder?.state ?? null,
+      recorderState: session.sttCapture ? 'recording' : null,
       contextState: session.audioCtx?.state ?? null,
       restarts: session.earsRestarts,
       lastHeardAt: session.lastHeardAt,
@@ -1546,6 +1570,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     speakerInvite,
     speakingVolumes,
     chatDisabledReason,
+    liveCaption,
     playAgentAudio,
     previewTtsVoice,
     stopAgentAudio,
@@ -1578,7 +1603,7 @@ export interface EarsHealth {
   speechLevel: number;
   /** Remote audio tracks wired into the agent's ears this room. */
   tracksConnected: number;
-  /** `null` means no recorder exists — the watchdog rebuilds one within 2s. */
+  /** `null` means no capture tap exists — the watchdog rebuilds one within 2s. */
   recorderState: RecordingState | null;
   contextState: AudioContextState | null;
   /** Times the watchdog has had to rebuild the recorder this room. */

@@ -472,9 +472,19 @@ def _stub_health(
     served: list[str] | None = None,
     raises: Exception | None = None,
     model: str = "m",
+    whisper=None,
 ):
-    """Pin every probe the health route makes. `(available, certain)` per extra."""
+    """Pin every probe the health route makes. `(available, certain)` per extra.
+
+    `whisper` stands in for the STT service the ears check imports — `None` skips
+    that check entirely, because the real one would load a model into the suite.
+    """
+    import sys
+    import types
+
     from backend import extras
+    from backend.modules.clubhouse import voice_routes as VR
+    from backend.modules.network import borrow
     from backend.modules.agent import routes as AR
     from backend.modules.agent.models import AgentConfig
 
@@ -501,6 +511,16 @@ def _stub_health(
         return served if served is not None else [model]
 
     monkeypatch.setattr(P, "list_models", fake_list_models)
+
+    if whisper is None:
+        monkeypatch.setattr(VR, "_whisper_health", lambda ears: ears)
+    else:
+        monkeypatch.setattr(
+            borrow, "route", lambda _cap: types.SimpleNamespace(local=True)
+        )
+        fake = types.ModuleType("backend.modules.agent.stt_service")
+        fake.stt_service = whisper
+        monkeypatch.setitem(sys.modules, "backend.modules.agent.stt_service", fake)
 
 
 def test_health_is_green_when_every_leg_answers(
@@ -553,17 +573,49 @@ def test_health_checks_the_rooms_own_model_not_the_orchestrators(
     assert "room-model" in scoped["model"]["detail"]
 
 
-def test_a_deaf_agent_with_the_extra_installed_blames_ffmpeg(
-    client: TestClient, monkeypatch
-) -> None:
-    """Whisper is handed WebM/Opus from the browser and cannot decode it alone, so
-    this is a perfectly installed extra that still hears nothing."""
+def test_the_ears_do_not_need_ffmpeg(client: TestClient, monkeypatch) -> None:
+    """The pane sends 16 kHz PCM WAV, which the STT service reads itself, so a
+    machine without ffmpeg still hears the room."""
     _stub_health(monkeypatch, ffmpeg=(False, True))
     body = client.get("/api/clubhouse/voice/health").json()
+    assert body["ears"]["ok"] is True
+
+
+class _FakeWhisper:
+    def __init__(self, *, loaded=False, load_error=None):
+        self.loaded = loaded
+        self.load_error = load_error
+        self.warmed = 0
+
+    async def warm(self):
+        self.warmed += 1
+        self.loaded = True
+
+
+def test_a_whisper_model_that_will_not_load_is_not_ready(
+    client: TestClient, monkeypatch
+) -> None:
+    """An installed extra is not a usable model. A load that threw (Errno 22 from a
+    dead stderr, 2026-10-02) left this saying "speech-to-text ready" over an agent
+    that failed every chunk."""
+    whisper = _FakeWhisper(load_error="OSError: [Errno 22] Invalid argument")
+    _stub_health(monkeypatch, whisper=whisper)
+    body = client.get("/api/clubhouse/voice/health").json()
     assert body["ears"]["ok"] is False
-    assert "ffmpeg" in body["ears"]["detail"]
-    # The mouth does not need a decoder; only the ears are down.
+    assert "Errno 22" in body["ears"]["detail"]
     assert body["mouth"]["ok"] is True
+
+
+def test_health_warms_whisper_before_anyone_speaks(
+    client: TestClient, monkeypatch
+) -> None:
+    """A cold load is seconds long and otherwise lands on the first sentence."""
+    whisper = _FakeWhisper()
+    _stub_health(monkeypatch, whisper=whisper)
+    assert client.get("/api/clubhouse/voice/health").json()["ears"]["ok"] is True
+    # The warm-up is a background task; a second request gives the loop a turn.
+    client.get("/api/clubhouse/voice/health")
+    assert whisper.warmed == 1
 
 
 def test_a_probe_that_could_not_ask_is_unknown_not_broken(

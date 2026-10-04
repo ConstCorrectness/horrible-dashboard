@@ -9,6 +9,7 @@ rather than an inspection of React state.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any
@@ -206,6 +207,43 @@ async def turn(req: TurnRequest) -> TurnResponse:
     )
 
 
+#: The in-flight Whisper warm-up, held so the task is not garbage-collected mid-load.
+_whisper_warmup: asyncio.Task[None] | None = None
+
+
+def _whisper_health(ears: LegHealth) -> LegHealth:
+    """Refine an installed ear with whether Whisper actually *loads*, and warm it.
+
+    The extra being present is not the model being usable: a load that throws left
+    this reporting "speech-to-text ready" over an agent that failed every chunk. And
+    since this is polled the moment a room opens, it is also the natural place to
+    load the model before anyone speaks, rather than on their first sentence.
+
+    Only for local transcription — a borrowed ear loads on the peer, not here.
+    """
+    global _whisper_warmup
+    from backend.modules.network import borrow
+
+    if not borrow.route("voice").local:
+        return ears
+    try:
+        from backend.modules.agent.stt_service import stt_service
+    except ImportError:
+        # The extra probe said yes and the import says no; the chunk's own error
+        # will name the missing piece.
+        return ears
+
+    if stt_service.load_error:
+        return LegHealth(
+            ok=False,
+            detail=f"the Whisper model failed to load: {stt_service.load_error}",
+            fix="Check the backend log; the next chunk of room audio retries the load",
+        )
+    if not stt_service.loaded and (_whisper_warmup is None or _whisper_warmup.done()):
+        _whisper_warmup = asyncio.create_task(stt_service.warm())
+    return ears
+
+
 @router.get("/health", response_model=VoiceHealth)
 async def health(channel: str | None = None) -> VoiceHealth:
     """Probe the three legs of a voice turn without taking one.
@@ -238,16 +276,10 @@ async def health(channel: str | None = None) -> VoiceHealth:
         or ("speech-to-text ready" if voice_extra.available else ""),
         fix=voice_extra.install if not voice_extra.available else "",
     )
-    ffmpeg = extras.probe("ffmpeg")
-    if ears.ok and ffmpeg.certain and not ffmpeg.available:
-        # Whisper is handed WebM/Opus from the browser and cannot decode it alone, so
-        # this is a deaf agent with a perfectly installed extra.
-        ears = LegHealth(
-            ok=False,
-            certain=True,
-            detail="ffmpeg is not on PATH, so room audio cannot be decoded",
-            fix=ffmpeg.install,
-        )
+    # No ffmpeg check: the pane sends 16 kHz PCM WAV, which the STT service reads
+    # directly. ffmpeg only decodes other callers' containers.
+    if ears.ok:
+        ears = _whisper_health(ears)
     mouth = LegHealth(
         ok=voice_extra.available,
         certain=voice_extra.certain,

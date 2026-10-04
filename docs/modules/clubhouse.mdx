@@ -224,8 +224,8 @@ through React would re-render the pane at 50 Hz):
   it as a line, so "loud enough for me but not for the switch" is visible;
 - **tracks wired in** — zero with people plainly talking is a different bug from a
   level that never crosses;
-- **recorder state**, **context state**, and the watchdog's **restart count**;
-- how long since a transcript was last accepted.
+- **capture tap state** (`tap live` / `down`), **context state**, and the watchdog's **restart count**;
+- how long since words were last transcribed.
 
 The thresholds (`SPEECH_LEVEL`, `BARGE_IN_LEVEL`) are named constants now rather than
 inline numbers, because the meter draws the same line the VAD decides on and the two
@@ -662,10 +662,12 @@ and keep what was already collected, since those pages are only ever extra.
 The room view can put an **LLM agent in the room**: it listens, decides when it
 is its turn, and speaks. The speech pipeline is two routes on the agent module:
 
-- **`POST /api/agent/stt`** — an uploaded WebM/Opus chunk in, transcript out.
-  Local Whisper (`whisper-tiny.en`), decoded via `ffmpeg` as a plain subprocess
-  on a worker thread (asyncio cannot spawn one under `uvicorn --reload` on
-  Windows). Whisper answers silence with its priors rather than with nothing, so
+- **`POST /api/agent/stt`** — uploaded audio in, transcript out. Local Whisper
+  (`whisper-tiny.en`). The pane sends **16 kHz mono PCM WAV**, which is read
+  directly; any other container is decoded via `ffmpeg` as a plain subprocess on a
+  worker thread (asyncio cannot spawn one under `uvicorn --reload` on Windows).
+  Audio longer than Whisper's 30 s window is transcribed window by window — the
+  processor otherwise truncates it without a word. Whisper answers silence with its priors rather than with nothing, so
   a small set of known hallucinations (`"you"`, `"thank you"`, …) is filtered to
   empty — otherwise the agent answers a room that said nothing. A `language` hint
   is forwarded to the transcriber (and on to a remote node's `/api/agent/stt`
@@ -673,11 +675,11 @@ is its turn, and speaks. The speech pipeline is two routes on the agent module:
   which is why it is a hint rather than a setting.
   A transcription that **fails** answers `200` with an empty `text` **and an
   `error`** saying why, which the pane reports (deduplicated — the same message
-  toasts once, however many chunks hit it). It must not be an error _status_: the
-  pane posts a chunk every few seconds whether or not anyone spoke, so a failure
+  toasts once, however many requests hit it). It must not be an error _status_: the
+  pane posts audio about once a second while anyone speaks, so a failure
   cannot be signalled the same way a room full of silence is. But it must not be
   indistinguishable from silence either, and it was — a node with a broken decoder
-  (no `ffmpeg` on `PATH`, a corrupt chunk, a model that would not load) ran an agent
+  (a corrupt upload, a model that would not load) ran an agent
   that sat in a room hearing nothing and never said why. That is the single most
   common report of the voice agent "not working".
 
@@ -784,10 +786,41 @@ every echo through, and the result sounds exactly like a broken agent talking to
 Utterances shorter than three words are never treated as an echo, or one person saying
 "yes" would be silenced.
 
-Turn-taking (when a chunk is cut) stays client-side in
+Turn-taking (when an utterance ends) stays client-side in
 [useClubhouseVoice.ts](file:///C:/Users/Horrible/Code/horrible-dashboard/packages/core/src/modules/clubhouse/useClubhouseVoice.ts):
-a VAD watches the mixed stream and a silence delay closes the chunk, so the agent waits
-for a pause instead of interrupting.
+a VAD watches the mixed stream and a silence delay closes the utterance, so the agent
+waits for a pause instead of interrupting.
+
+### Live transcription — PCM, not `MediaRecorder`
+
+The ears used to be a `MediaRecorder` producing WebM, and that shape could not be live:
+a WebM blob only decodes from its first byte, so nothing was transcribed until the
+speaker paused for the endpointing delay — in a busy room, often never — and getting
+text mid-sentence meant *stopping* the recorder, which lost the audio between one
+recorder and the next.
+
+[liveCapture.ts](file:///C:/Users/Horrible/Code/horrible-dashboard/packages/core/src/modules/clubhouse/liveCapture.ts)
+taps the agent's input bus (`session.sttBus` — every remote speaker plus the operator's
+mic) with an AudioWorklet (a `ScriptProcessorNode` where the worklet will not load),
+downsamples to 16 kHz, and keeps the current utterance in an `UtteranceBuffer` with a
+400 ms pre-roll so the first syllable is not clipped. Because the utterance so far is
+always one array:
+
+- **Live caption** — about once a second while someone speaks, a snapshot of the
+  utterance so far is transcribed and shown as the dimmed **LIVE** line under the last
+  few finished sentences (`state.liveCaption`). One request in flight at a time, so a
+  slow model sets the pace rather than queueing. It is display only — never sent to
+  the agent.
+- **Final** — when the speaker stops, the whole utterance is transcribed once and
+  handed to `onTranscribe`. Finals are chained on `session.sttFinals`, so the agent
+  hears sentences in the order they were spoken.
+- **Length caps** — past 15 s an utterance is cut at the next gap between words, and
+  at 25 s wherever it is. Without them a room where nobody pauses reaches the agent
+  late or not at all, and Whisper drops everything past 30 s.
+
+Measured on CPU `whisper-tiny.en`: a caption costs 0.2–0.4 s and grows a word or two
+per second; the final arrives ~0.4 s after the speaker stops. A cold model load is
+~8 s, which is why the health check warms it (below).
 
 ### Interrupting, in both directions
 
@@ -797,14 +830,15 @@ These are two separate mechanisms and only one of them is new.
 watching the mixed stream, which carries the remote speakers *and* the local mic but
 never the agent's own TTS, so any real voice in the room stops playback: the audio
 source is stopped, the TTS fetch is aborted, and the pending queue is dropped. It stops
-at a **chunk boundary**, so it cannot cut a word in half.
+at a **TTS chunk boundary**, so it cannot cut a word in half.
 
 **The agent cuts into the room** — the `interject` posture. Every other posture only
 ever sees finished utterances, because a turn is only sent once the endpointing silence
-closes the chunk. Under `interject` the pane also flushes a chunk *mid-breath* once one
-person has held the floor past `interjectAfterS` (default 6s), and marks it `partial`.
+closes the utterance. Under `interject` the pane also sends the utterance so far
+*mid-breath* once one person has held the floor past `interjectAfterS` (default 6s),
+and marks it `partial`.
 
-Three things about that flush are easy to get wrong:
+Three things about that partial are easy to get wrong:
 
 - **The server, not the pane, decides.** A `partial` is dropped with the reason
   `waiting for a pause` under every posture but `interject` — being eager
@@ -815,11 +849,10 @@ Three things about that flush are easy to get wrong:
 - **A partial is never remembered.** The finished utterance follows seconds later and
   contains it; keeping both puts the same sentence in the history twice, once truncated
   mid-word, and the model starts answering the fragment.
-- **The flush has to stop the recorder**, because each blob is a complete WebM and a
-  fragment without its header decodes to nothing. Every chunk after the first therefore
-  holds only the tail, so the pane concatenates the run's pieces — that is what keeps
-  the finished utterance a whole sentence after the agent has already cut in on its
-  first half. Cutting in is also skipped while the agent is already speaking, and a
+- **The capture is not interrupted.** The partial is a snapshot of the PCM buffer, so
+  the finished utterance is still the whole sentence after the agent has already cut in
+  on its first half. (The `MediaRecorder` version had to stop the recorder and stitch
+  the pieces back together.) Cutting in is also skipped while the agent is already speaking, and a
   partial that arrives to a busy queue is dropped rather than queued: a partial is only
   worth acting on while the speaker is still inside it.
 
@@ -906,34 +939,33 @@ and the same turn sent again a moment later answered normally. So:
 Everything upstream of the agent is a live browser resource that can die quietly and
 stay dead:
 
-- a `MediaRecorder` that errored (its `onerror` was never handled),
-- one whose `start()` threw because its track ended under it — a device change, or
-  Agora tearing a track down,
+- a capture tap whose processor died, so frames stop arriving,
 - an `AudioContext` the OS suspended (autoplay policy, a device change, a
   backgrounded tab, or Safari's `interrupted` during a phone call).
 
-None of them raise anything a person can see, and — this is the part that makes it
-permanent — **`flushChunk` returns early on an inactive recorder and nothing else
-ever calls `startRecordingChunk`**. So the 50 ms VAD loop goes on ticking over an
-analyser full of zeros, the pane goes on saying "listening", and the agent is deaf
-until the room is rejoined. That is what "it worked for ten minutes and then stopped"
-is.
+None of them raise anything a person can see, and nothing else rebuilds them. So the
+50 ms VAD loop goes on ticking over an analyser full of zeros, the pane goes on saying
+"listening", and the agent is deaf until the room is rejoined. That is what "it worked
+for ten minutes and then stopped" is. (In the `MediaRecorder` era the dead thing was
+the recorder; the rule carried over unchanged.)
 
-`session.earsInterval` checks every **2 seconds** and rebuilds. The decision is a
-pure function, `earsActions` in `earsWatchdog.ts`, so it can be tested without a real
-`AudioContext` or `MediaRecorder` (jsdom has neither):
+`session.earsInterval` checks every **2 seconds** and rebuilds. A tap counts as dead
+when the context is running and it has delivered no frames for 3 s — a healthy one
+posts every ~40 ms, silence included. The decision is a pure function, `earsActions`
+in `earsWatchdog.ts`, so it can be tested without a real `AudioContext` (jsdom has
+none); its `recorderState` input is the tap's liveness:
 
-- A suspended context and a dead recorder are **independent** failures and both flags
+- A suspended context and a dead tap are **independent** failures and both flags
   can come back true, because a device change causes both. Resuming without
-  rebuilding leaves a recorder that never fires again; rebuilding without resuming
+  rebuilding leaves a tap that never fires again; rebuilding without resuming
   feeds it silence.
-- A **paused** recorder is left alone — nothing here pauses one, so that state
+- A **paused** recorder state is left alone — nothing here pauses one, so that state
   belongs to something else and stopping it would race whatever set it.
 - The watchdog is deliberately **not** folded into the VAD loop. That loop is one of
   the things being watched, and a watchdog that dies with its subject is decoration.
 
-It warns on the **second** restart, not the first: one is routine (a chunk boundary
-racing a device change), and a toast for every one is a toast people learn to ignore
+It warns on the **second** restart, not the first: one is routine (a device
+change), and a toast for every one is a toast people learn to ignore
 before the day it matters.
 
 ### `GET /voice/health` — whether a turn would work, without taking one
@@ -945,10 +977,11 @@ a room is open with the agent on, and renders a single green `READY` pill or a r
 one per broken leg with its fix in the tooltip.
 
 - **ears** / **mouth** — the `voice` extra, reported separately because they fail
-  differently once it is installed: **`ffmpeg` missing from `PATH` is an ear
-  problem**, since Whisper is handed WebM/Opus from the browser and cannot decode it
-  alone. A perfectly installed extra that still hears nothing is otherwise
-  unexplainable.
+  differently once it is installed. The ears also report whether **the Whisper model
+  actually loads**: an installed extra over a model whose load throws reported
+  "speech-to-text ready" while every request failed. The first poll also **warms the
+  model** in the background, so the ~8 s cold load does not land on the first thing
+  anyone says. `ffmpeg` is no longer an ears requirement — the pane sends WAV.
 - **model** — the configured provider's own catalog, one request to a usually-loopback
   server. It honours the **room's `model` override**, since reporting the
   orchestrator's model healthy while the room points at one the server lacks is a
@@ -1262,8 +1295,19 @@ uv sync --extra voice
 
 Without the extra, `/api/agent/stt` and `/api/agent/tts` answer **503** with an
 install hint rather than 500, and the rest of the Clubhouse module is unaffected.
-Decoding also needs `ffmpeg` on `PATH` (the same optional binary karaoke's pitch
-shift uses).
+The room's ears do not need `ffmpeg` (the pane sends WAV); other callers that upload
+compressed audio do (the same optional binary karaoke's pitch shift uses).
+
+:::note Desktop: `[Errno 22] Invalid argument`
+From 2026-10-02 every transcription on the desktop build failed with this. The desktop
+supervisor read the backend's stderr with `lines().map_while(Result::ok)`, which stops
+at the first line that is not UTF-8 — and a piped Python stderr on Windows is cp1252,
+so the first log line with an em dash ended the reader and closed the pipe. Logging
+swallows the resulting write errors; transformers' "Loading weights" tqdm bar does not,
+so Whisper never loaded. The reader is now lossy and runs to EOF
+(`drain_stderr` in `backend.rs`), the backend gets `PYTHONIOENCODING=utf-8`, and the
+STT service disables Hugging Face progress bars.
+:::
 
 The pane now **surfaces** that 503 as a toast and a line in the Agent tab. It used
 to call `res.json()` on the error body, read `undefined` off it and return silently,
@@ -1277,7 +1321,7 @@ backend lives on a port the shell reports at boot, so a relative `/api` URL reso
 against the webview and never reaches the backend — the agent was mute on the desktop
 build. Relatedly, an `AudioContext` created without a user gesture starts `suspended`,
 and a suspended context is silent in the quietest possible way: the graph is wired,
-`MediaRecorder` produces valid-but-empty WebM, and the VAD analyser reads zero forever.
+the capture tap delivers silence, and the VAD analyser reads zero forever.
 The hook now resumes it explicitly after joining.
 :::
 

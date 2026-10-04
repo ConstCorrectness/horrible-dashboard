@@ -11,9 +11,11 @@ loop is a ``SelectorEventLoop``, which cannot spawn subprocesses at all.
 """
 
 import asyncio
+import io
 import logging
 import os
 import subprocess
+import wave
 from typing import Any
 
 import numpy as np
@@ -23,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 MODEL_ID = os.getenv("WHISPER_MODEL", "openai/whisper-tiny.en")
 SAMPLE_RATE = 16000
+# Whisper's encoder sees 30 s at a time and the processor silently truncates the
+# rest, so longer audio is transcribed window by window.
+WINDOW_SECONDS = 30
 
 # Minimum RMS energy required before running Whisper inference.
 # Near-silent audio chunks (background air hiss, muted line) fall below this
@@ -74,24 +79,80 @@ class SttService:
         self.model_id = MODEL_ID
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self._lock = asyncio.Lock()
+        # Why the last load failed, for the voice health check. The extra being
+        # installed says nothing about whether the model will load — this does.
+        self.load_error: str | None = None
+
+    @property
+    def loaded(self) -> bool:
+        return self.model is not None
 
     def _load_model(self) -> None:
         if self.model is not None:
             return
         logger.info("Loading Whisper model %s on %s...", self.model_id, self.device)
         from transformers import WhisperForConditionalGeneration, WhisperProcessor
+        from transformers.utils import logging as hf_logging
 
-        self.processor = WhisperProcessor.from_pretrained(self.model_id)
-        self.model = WhisperForConditionalGeneration.from_pretrained(self.model_id).to(
-            self.device
-        )
+        # transformers 5 draws a tqdm bar while loading weights. A server has nobody
+        # to show it to, and under the desktop supervisor a stderr write could raise
+        # `OSError: [Errno 22]` and fail the whole load (see `drain_stderr` in
+        # apps/desktop/src-tauri/src/backend.rs).
+        hf_logging.disable_progress_bar()
+        try:
+            self.processor = WhisperProcessor.from_pretrained(self.model_id)
+            self.model = WhisperForConditionalGeneration.from_pretrained(
+                self.model_id
+            ).to(self.device)
+        except Exception as exc:
+            self.processor = self.model = None
+            self.load_error = f"{type(exc).__name__}: {exc}"
+            raise
+        self.load_error = None
         logger.info("Whisper model loaded.")
+
+    async def warm(self) -> None:
+        """Load the model ahead of the first utterance.
+
+        A cold load is several seconds, and it otherwise lands on the first thing
+        anyone says in the room — exactly the sentence that decides whether the
+        transcript looks live.
+        """
+        if self.model is not None:
+            return
+        async with self._lock:
+            try:
+                await asyncio.to_thread(self._load_model)
+            except Exception as exc:  # noqa: BLE001 — recorded in load_error
+                logger.warning("Whisper warm-up failed: %s", exc)
 
     async def transcribe(self, audio_bytes: bytes, language: str | None = None) -> str:
         # Serialized: one Whisper pass at a time, so concurrent chunks from a
         # busy room don't multiply VRAM use.
         async with self._lock:
             return await asyncio.to_thread(self._transcribe_sync, audio_bytes, language)
+
+    @staticmethod
+    def _decode_wav(audio_bytes: bytes) -> np.ndarray | None:
+        """16 kHz mono 16-bit PCM WAV, read directly — `None` for anything else.
+
+        This is what the Clubhouse pane sends: it captures PCM itself, so there is
+        no container to demux and no ffmpeg process to spawn per live caption.
+        """
+        if audio_bytes[:4] != b"RIFF" or audio_bytes[8:12] != b"WAVE":
+            return None
+        try:
+            with wave.open(io.BytesIO(audio_bytes)) as wav:
+                if (
+                    wav.getframerate() != SAMPLE_RATE
+                    or wav.getnchannels() != 1
+                    or wav.getsampwidth() != 2
+                ):
+                    return None
+                frames = wav.readframes(wav.getnframes())
+        except (wave.Error, EOFError):
+            return None
+        return np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
 
     def _decode_audio(self, audio_bytes: bytes) -> bytes:
         if not audio_bytes or len(audio_bytes) < 32:
@@ -150,12 +211,11 @@ class SttService:
         if not audio_bytes or len(audio_bytes) < 32:
             return ""
 
-        raw_audio = self._decode_audio(audio_bytes)
-        if not raw_audio or len(raw_audio) < 1600 * 4:  # less than 100ms of audio
-            return ""
-
-        data = np.frombuffer(raw_audio, dtype=np.float32)
-        if data.size == 0:
+        data = self._decode_wav(audio_bytes)
+        if data is None:
+            raw_audio = self._decode_audio(audio_bytes)
+            data = np.frombuffer(raw_audio, dtype=np.float32)
+        if data.size < SAMPLE_RATE // 10:  # less than 100ms of audio
             return ""
         data = np.nan_to_num(data)
 
@@ -170,10 +230,22 @@ class SttService:
             )
             return ""
 
+        # Not caught: a model that will not load is a failure the caller must hear
+        # about, not an empty transcript.
         self._load_model()
         if self.processor is None or self.model is None:
             return ""
 
+        window = SAMPLE_RATE * WINDOW_SECONDS
+        pieces = [
+            self._transcribe_window(data[start : start + window], language)
+            for start in range(0, data.size, window)
+        ]
+        return " ".join(p for p in pieces if p)
+
+    def _transcribe_window(self, data: np.ndarray, language: str | None) -> str:
+        if data.size < SAMPLE_RATE // 10:
+            return ""
         try:
             features = self.processor(
                 data, sampling_rate=SAMPLE_RATE, return_tensors="pt"

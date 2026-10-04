@@ -512,6 +512,10 @@ fn spawn_backend(
     // "no OPENSSL_Applink" on the first SSL context init. The backend never
     // needs keylogging — drop it from the child env.
     cmd.env_remove("SSLKEYLOGFILE");
+    // A piped stderr on Windows is cp1252 by default, so every log line with an em
+    // dash arrives as byte 0x97. The tail reader below tolerates that now, but the
+    // tail is for people to read, and UTF-8 is what it renders.
+    cmd.env("PYTHONIOENCODING", "utf-8");
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -522,18 +526,38 @@ fn spawn_backend(
     let mut child = cmd.spawn()?;
     if let Some(stderr) = child.stderr.take() {
         let tail = Arc::clone(stderr_tail);
-        std::thread::spawn(move || {
-            let reader = std::io::BufReader::new(stderr);
-            for line in reader.lines().map_while(Result::ok) {
-                let mut tail = tail.lock().unwrap();
-                if tail.len() >= STDERR_TAIL_LINES {
-                    tail.pop_front();
-                }
-                tail.push_back(line);
-            }
-        });
+        std::thread::spawn(move || drain_stderr(std::io::BufReader::new(stderr), &tail));
     }
     Ok(child)
+}
+
+/// Read the backend's stderr into `tail` until the pipe closes — and **only** then.
+///
+/// This used to be `reader.lines().map_while(Result::ok)`, which stops at the first
+/// line that is not valid UTF-8. Python writes a piped stderr in the locale encoding
+/// (cp1252 on Windows), so the first log line with an em dash ended the loop, dropped
+/// the read end, and from then on every stderr write in the backend raised
+/// `OSError: [Errno 22] Invalid argument`. Logging swallows that; tqdm does not, and
+/// transformers draws a tqdm bar while loading weights — so Whisper never loaded and
+/// the Clubhouse agent went deaf with nothing but `Errno 22` to show for it.
+fn drain_stderr(mut reader: impl BufRead, tail: &Mutex<VecDeque<String>>) {
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match reader.read_until(b'\n', &mut buf) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+        let line = String::from_utf8_lossy(&buf);
+        let line = line.trim_end_matches(['\r', '\n']);
+        let mut tail = tail.lock().unwrap();
+        if tail.len() >= STDERR_TAIL_LINES {
+            tail.pop_front();
+        }
+        tail.push_back(line.to_string());
+    }
 }
 
 #[cfg(test)]
@@ -638,5 +662,19 @@ mod tests {
         // that a missing resource dir is not itself an error.
         let resolved = Runtime::resolve(None);
         assert!(matches!(resolved, Some(Runtime::Checkout(_)) | None));
+    }
+
+    /// cp1252's em dash (0x97) is not UTF-8. Stopping on it closed the backend's
+    /// stderr and broke every later write there — see `drain_stderr`.
+    #[test]
+    fn stderr_drain_survives_a_line_that_is_not_utf8() {
+        let input: &[u8] = b"first\r\nlocale \x97 dash\nlast\n";
+        let tail = Mutex::new(VecDeque::new());
+        drain_stderr(input, &tail);
+        let tail: Vec<String> = tail.into_inner().unwrap().into();
+        assert_eq!(tail.len(), 3);
+        assert_eq!(tail[0], "first");
+        assert!(tail[1].starts_with("locale "));
+        assert_eq!(tail[2], "last");
     }
 }

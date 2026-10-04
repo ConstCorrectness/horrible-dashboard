@@ -28,7 +28,7 @@ const source = readFileSync(fileURLToPath(new URL('../RoomsPanel.tsx', import.me
 
 /** The reset effect: the one `useEffect` whose dependency list is the active channel. */
 const resetEffect = (() => {
-  const start = source.indexOf('setLastHeardSpeech(null)');
+  const start = source.indexOf('setHeardLines([])');
   if (start === -1) return '';
   const open = source.lastIndexOf('useEffect(() => {', start);
   const close = source.indexOf('}, [activeChannel', start);
@@ -44,7 +44,7 @@ describe('a room switch clears the pane state that described the old room', () =
 
   it.each([
     // The reported bug: the placeholder must come back.
-    ['setLastHeardSpeech(null)', 'the live STT line'],
+    ['setHeardLines([])', 'the live transcript'],
     ['setAgentReason(null)', "the previous room's reason for staying quiet"],
     ['setAgentMemory([])', "the previous room's remembered conversation"],
     ['setCommentText', 'a chat draft typed in the room you left'],

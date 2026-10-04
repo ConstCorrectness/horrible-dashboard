@@ -73,6 +73,82 @@ const agentLabelStyle: React.CSSProperties = {
   fontWeight: 600,
 };
 
+interface HeardLine {
+  id: number;
+  text: string;
+  speaker?: string;
+  time: string;
+}
+
+/** Finished utterances kept on screen. The agent's memory holds the rest. */
+const HEARD_LINES_KEPT = 6;
+
+/**
+ * The room as the agent hears it: the last few finished sentences, then the one
+ * being spoken right now, re-transcribed about once a second while it lasts. The
+ * live line is dimmed and marked, because Whisper revises it as more audio arrives —
+ * it is a preview of the sentence, not what the agent will be given.
+ */
+function TranscriptLines({
+  lines,
+  live,
+}: {
+  lines: HeardLine[];
+  live: { text: string; speaker?: string } | null;
+}) {
+  const meta: React.CSSProperties = {
+    fontFamily: 'var(--font-mono, ui-monospace, monospace)',
+    fontSize: '0.6rem',
+    color: 'var(--text-dim)',
+    flexShrink: 0,
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+      {lines.map((line, i) => (
+        <div
+          key={line.id}
+          style={{
+            display: 'flex',
+            gap: '0.45rem',
+            alignItems: 'baseline',
+            color: 'var(--text)',
+            // Older lines recede, so the eye lands on the newest.
+            opacity: 0.55 + (0.45 * (i + 1)) / lines.length,
+            animation: 'ch-fade-in 0.2s ease-out',
+          }}
+        >
+          <span style={meta}>{line.time}</span>
+          <span>
+            <strong style={{ color: 'var(--accent)' }}>{line.speaker || 'Room'}:</strong>{' '}
+            {line.text}
+          </span>
+        </div>
+      ))}
+      {live && (
+        <div
+          style={{
+            display: 'flex',
+            gap: '0.45rem',
+            alignItems: 'baseline',
+            color: 'var(--text-muted)',
+            fontStyle: 'italic',
+          }}
+        >
+          <span style={{ ...meta, color: 'var(--success)', fontStyle: 'normal', fontWeight: 700 }}>
+            LIVE
+          </span>
+          <span>
+            <strong style={{ color: 'var(--accent)', fontStyle: 'normal' }}>
+              {live.speaker || 'Room'}:
+            </strong>{' '}
+            {live.text}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /**
  * What the agent's ears are doing, under the transcript.
  *
@@ -83,17 +159,11 @@ const agentLabelStyle: React.CSSProperties = {
  *
  * So this shows the VAD's own decision variable with the line it has to cross drawn
  * on it, plus the things that are either true or not: how many remote tracks are
- * wired in, whether a recorder exists, whether the context is running. Polled at
+ * wired in, whether the PCM tap exists, whether the context is running. Polled at
  * 4 Hz — the VAD writes its level fifty times a second, and pushing that through
  * React would re-render this pane at 50 Hz.
  */
-function EarsReadout({
-  getHealth,
-  hasHeard,
-}: {
-  getHealth: () => EarsHealth;
-  hasHeard: boolean;
-}) {
+function EarsReadout({ getHealth, hasHeard }: { getHealth: () => EarsHealth; hasHeard: boolean }) {
   const [h, setH] = useState<EarsHealth>(getHealth);
   useEffect(() => {
     const interval = setInterval(() => setH(getHealth()), 250);
@@ -106,7 +176,7 @@ function EarsReadout({
     h.tracksConnected === 0
       ? 'No room audio is reaching the agent — nobody is publishing, or the subscribe failed.'
       : h.recorderState === null
-        ? 'The recorder is down; rebuilding it.'
+        ? 'The audio tap is down; rebuilding it.'
         : h.contextState !== 'running'
           ? `Audio is ${h.contextState ?? 'unavailable'} — the browser suspended it.`
           : null;
@@ -120,7 +190,9 @@ function EarsReadout({
     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '2px' }}>
       {!hasHeard && !fault && (
         <span style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontSize: '0.7rem' }}>
-          {over ? 'Hearing the room — transcribing…' : 'Listening. Nothing above the speech line yet.'}
+          {over
+            ? 'Hearing the room — transcribing…'
+            : 'Listening. Nothing above the speech line yet.'}
         </span>
       )}
       {fault && (
@@ -169,11 +241,19 @@ function EarsReadout({
           fontFamily: 'var(--font-mono, ui-monospace, monospace)',
         }}
       >
-        <span>lvl {h.level.toFixed(1)}/{h.speechLevel}</span>
-        <span>{h.tracksConnected} track{h.tracksConnected === 1 ? '' : 's'}</span>
-        <span>rec {h.recorderState ?? 'down'}</span>
-        {h.restarts > 0 && <span title="Times the watchdog rebuilt the recorder">↻ {h.restarts}</span>}
-        <span>{secsSinceHeard === null ? 'no transcript yet' : `heard ${secsSinceHeard}s ago`}</span>
+        <span>
+          lvl {h.level.toFixed(1)}/{h.speechLevel}
+        </span>
+        <span>
+          {h.tracksConnected} track{h.tracksConnected === 1 ? '' : 's'}
+        </span>
+        <span>tap {h.recorderState ? 'live' : 'down'}</span>
+        {h.restarts > 0 && (
+          <span title="Times the watchdog rebuilt the audio tap">↻ {h.restarts}</span>
+        )}
+        <span>
+          {secsSinceHeard === null ? 'no transcript yet' : `heard ${secsSinceHeard}s ago`}
+        </span>
       </div>
     </div>
   );
@@ -341,7 +421,6 @@ export function RoomsPanel() {
   const [agentReason, setAgentReason] = useState<string | null>(null);
   const [voiceHealth, setVoiceHealth] = useState<VoiceHealth | null>(null);
   const [agentMemory, setAgentMemory] = useState<VoiceStateTurn[]>([]);
-  const [sttChunkMs] = useState(5000);
 
   const [wakeWordsInput, setWakeWordsInput] = useState(() =>
     (agentConfig.wakeWords || []).join(', '),
@@ -350,11 +429,8 @@ export function RoomsPanel() {
     () => agentConfig.persona || DEFAULT_VOICE_CONFIG.persona,
   );
   const [selectedPreset, setSelectedPreset] = useState('');
-  const [lastHeardSpeech, setLastHeardSpeech] = useState<{
-    text: string;
-    speaker?: string;
-    time: string;
-  } | null>(null);
+  /** The last few finished utterances, oldest first; the live caption follows them. */
+  const [heardLines, setHeardLines] = useState<HeardLine[]>([]);
 
   const [agentPromptPresets, setAgentPromptPresets] = useState<{ name: string; prompt: string }[]>(
     () => {
@@ -843,6 +919,7 @@ export function RoomsPanel() {
   const chatScrollTopRef = useRef<number | null>(null);
   const isNearBottomRef = useRef<boolean>(true);
   const lastRoomActivityTsRef = useRef<number>(Date.now());
+  const heardLineSeq = useRef(0);
   const enqueueUtteranceRef = useRef<
     (
       text: string,
@@ -866,6 +943,7 @@ export function RoomsPanel() {
     speakerInvite,
     speakingVolumes,
     chatDisabledReason,
+    liveCaption,
     playAgentAudio,
     previewTtsVoice,
     stopAgentAudio,
@@ -887,7 +965,6 @@ export function RoomsPanel() {
     getNetworkInsights,
     getEarsHealth,
   } = useClubhouseVoice({
-    sttChunkIntervalMs: sttChunkMs,
     endpointingDelayMs: agentConfig.endpointingDelayMs || 750,
     allowBargeIn: agentConfig.allowBargeIn !== false,
     // Zero everywhere but the interject posture: the flush is what *creates* a
@@ -923,15 +1000,21 @@ export function RoomsPanel() {
         if (userInDetails?.name) resolvedName = userInDetails.name;
       }
       if (text.trim().length > 0) {
-        setLastHeardSpeech({
-          text: text.trim(),
-          speaker: resolvedName,
-          time: new Date().toLocaleTimeString([], {
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-          }),
-        });
+        // A partial is the interject posture's cut-in, not a finished sentence: the
+        // live caption already shows it, and the whole utterance follows.
+        if (!partial) {
+          const line: HeardLine = {
+            id: ++heardLineSeq.current,
+            text: text.trim(),
+            speaker: resolvedName,
+            time: new Date().toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit',
+              second: '2-digit',
+            }),
+          };
+          setHeardLines((prev) => [...prev, line].slice(-HEARD_LINES_KEPT));
+        }
         const isSelf = isAgentSpeaking;
         enqueueUtteranceRef.current(
           text.trim(),
@@ -1376,6 +1459,17 @@ export function RoomsPanel() {
   const liveUsersRef = useRef(liveUsers);
   const speakingVolumesRef = useRef(speakingVolumes);
   const [myProfileName, setMyProfileName] = useState('');
+
+  /** The live caption's speaker, resolved the way `onTranscribe` resolves one. */
+  const speakerNameFor = (speakerId: number | null): string | undefined => {
+    if (speakerId === 0 || (myUserId != null && speakerId === myUserId)) {
+      return myProfileName || 'Me';
+    }
+    if (speakerId == null) return undefined;
+    return (
+      activeRoomInfoRef.current?.users?.find((u) => u.user_id === speakerId)?.name ?? undefined
+    );
+  };
   useEffect(() => {
     activeChannelRef.current = activeChannel;
   }, [activeChannel]);
@@ -1569,7 +1663,7 @@ export function RoomsPanel() {
     stopAgentAudio();
     setIsAgentThinking(false);
     setIsAgentSpeaking(false);
-    setLastHeardSpeech(null);
+    setHeardLines([]);
     setAgentReason(null);
     // Not left to the 5s poll: until it lands the Agent tab shows the previous
     // room's conversation under the new room's name.
@@ -4039,38 +4133,40 @@ export function RoomsPanel() {
                         </span>
                       </div>
 
-                      {/* Live STT Transcript Pill */}
+                      {/* Live transcript */}
                       <div
                         style={{
                           padding: '0.45rem 0.65rem',
                           background: 'rgba(0, 0, 0, 0.3)',
-                          border: '1px solid rgba(255, 255, 255, 0.08)',
-                          borderRadius: '6px',
+                          borderTop: '2px solid var(--success)',
                           fontSize: '0.72rem',
                           display: 'flex',
                           flexDirection: 'column',
-                          gap: '2px',
+                          gap: '3px',
                         }}
                       >
-                        <div
+                        <span
                           style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
                             color: 'var(--text-dim)',
-                            fontSize: '0.65rem',
+                            fontSize: '0.62rem',
+                            fontWeight: 700,
+                            letterSpacing: '0.14em',
+                            textTransform: 'uppercase',
                           }}
                         >
-                          <span>🎙️ LIVE STT RECOGNITION</span>
-                          {lastHeardSpeech && <span>{lastHeardSpeech.time}</span>}
-                        </div>
-                        {lastHeardSpeech ? (
-                          <div style={{ color: 'var(--text)' }}>
-                            <strong style={{ color: 'var(--accent)' }}>
-                              {lastHeardSpeech.speaker || 'Room'}:
-                            </strong>{' '}
-                            <span style={{ fontStyle: 'italic' }}>"{lastHeardSpeech.text}"</span>
-                          </div>
-                        ) : null}
+                          Live transcript
+                        </span>
+                        <TranscriptLines
+                          lines={heardLines}
+                          live={
+                            liveCaption
+                              ? {
+                                  text: liveCaption.text,
+                                  speaker: speakerNameFor(liveCaption.speakerId),
+                                }
+                              : null
+                          }
+                        />
                         {/*
                          * Always rendered, not only while waiting: a transcript that
                          * arrived ten minutes ago is not evidence that the ears still
@@ -4078,7 +4174,10 @@ export function RoomsPanel() {
                          * room was quiet, nobody's audio had ever reached the agent,
                          * or the level simply never crossed the threshold.
                          */}
-                        <EarsReadout getHealth={getEarsHealth} hasHeard={!!lastHeardSpeech} />
+                        <EarsReadout
+                          getHealth={getEarsHealth}
+                          hasHeard={heardLines.length > 0 || !!liveCaption}
+                        />
                       </div>
 
                       {/* When to speak & Wake Words */}
@@ -4776,7 +4875,6 @@ export function RoomsPanel() {
                           <code>/agent remember @name fact</code>, <code>/agent people</code>
                         </span>
                       </div>
-
                     </div>
 
                     <div

@@ -220,6 +220,89 @@ def test_a_failed_transcription_says_so_instead_of_returning_silence(
     assert "ffmpeg" in res.json()["error"]
 
 
+def _wav(samples, rate: int = 16000) -> bytes:
+    import io
+    import wave
+
+    import numpy as np
+
+    pcm = (np.clip(samples, -1, 1) * 32767).astype("<i2").tobytes()
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm)
+    return buf.getvalue()
+
+
+def test_pcm_wav_is_read_without_ffmpeg() -> None:
+    """The Clubhouse pane sends 16 kHz PCM WAV. Reading it directly is what lets a
+    live caption skip an ffmpeg process per request — and work with no ffmpeg."""
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+    import numpy as np
+
+    from backend.modules.agent.stt_service import SttService
+
+    tone = 0.5 * np.sin(np.linspace(0, 2 * np.pi * 440, 16000))
+    data = SttService._decode_wav(_wav(tone))
+    assert data is not None and data.size == 16000
+    assert abs(float(data.max()) - 0.5) < 0.01
+    # Anything else goes to ffmpeg, as before.
+    assert SttService._decode_wav(_wav(tone, rate=48000)) is None
+    assert SttService._decode_wav(b"not a riff container") is None
+
+
+def test_audio_past_whispers_window_is_not_dropped(monkeypatch) -> None:
+    """Whisper's processor truncates to 30 s without a word. A long monologue used
+    to lose everything after that."""
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+    import numpy as np
+
+    from backend.modules.agent import stt_service as S
+
+    svc = S.SttService()
+    monkeypatch.setattr(svc, "_load_model", lambda: None)
+    svc.model = svc.processor = object()
+    seen: list[int] = []
+
+    def window(data, language):
+        seen.append(data.size)
+        return f"w{len(seen)}"
+
+    monkeypatch.setattr(svc, "_transcribe_window", window)
+    audio = 0.2 * np.sin(np.linspace(0, 2 * np.pi * 300 * 70, 16000 * 70))
+    assert svc._transcribe_sync(_wav(audio)) == "w1 w2 w3"
+    assert seen == [16000 * 30, 16000 * 30, 16000 * 10]
+
+
+def test_a_failed_model_load_is_an_error_not_silence(
+    client: TestClient, monkeypatch
+) -> None:
+    """The load used to be able to die (Errno 22 from a dead stderr) and every
+    chunk after it still had to say so."""
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+    import numpy as np
+
+    from backend.modules.agent import stt_service as S
+
+    def broken():
+        raise OSError(22, "Invalid argument")
+
+    monkeypatch.setattr(S.stt_service, "_load_model", broken)
+    monkeypatch.setattr(S.stt_service, "model", None)
+    audio = 0.2 * np.sin(np.linspace(0, 2 * np.pi * 300, 16000))
+    res = client.post(
+        "/api/agent/stt", files={"file": ("chunk.wav", _wav(audio), "audio/wav")}
+    )
+    assert res.status_code == 200
+    assert res.json()["text"] == ""
+    assert "Invalid argument" in res.json()["error"]
+
+
 def test_provider_key_roundtrip(client: TestClient) -> None:
     """A stored key is what makes a hosted provider usable, and it is never read back."""
     status = {p["kind"]: p for p in client.get("/api/agent/status").json()["providers"]}
