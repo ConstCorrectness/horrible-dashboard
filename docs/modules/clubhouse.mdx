@@ -547,7 +547,19 @@ nobody else in the room received it. The emoji now floats when the send **succee
 Incoming reactions are read by `parseRoomReaction` in
 [reactions.ts](file:///C:/Users/Horrible/Code/horrible-dashboard/packages/core/src/modules/clubhouse/reactions.ts),
 which accepts an emoji under `react` / any `*reaction*` action, and an image URL under
-any GIF-named action, and returns `null` — never a guess — for the rest. Two guards:
+any GIF-named action, and returns `null` — never a guess — for the rest.
+
+The event as captured from a live room (2026-10-04) is
+`{action: 'new_channel_reaction', action_user_profile: {…}, channel, message_id, message: ''}`.
+Two things follow from it. **The sender is `action_user_profile`**, not `user_profile`, so
+the hook reads that too — otherwise our own echo is not recognised and every reaction
+floats twice. And **the field holding the emoji was hidden by DevTools' `{…}`**, so for a
+`*reaction*` action the parser takes the first short string that is an emoji, never looking
+inside the sender's block (its `photo_url` is on Clubhouse's CDN, which the GIF allowlist
+permits — scanned, an avatar would render as a GIF). A message with no action only counts
+through the explicit `emoji` / `reaction` field, so a chat line holding a link or an emoji is
+not a reaction. The hook now logs each room message as `JSON.stringify` text, because a
+pasted console loses a collapsed object's fields. Two guards:
 
 - **GIFs render only from allow-listed hosts** (Giphy, Tenor, Clubhouse's own CDN),
   `https:` only, with no referrer. The sender chooses the URL, so rendering any address
@@ -560,9 +572,9 @@ any GIF-named action, and returns `null` — never a guess — for the rest. Two
 :::caution Sending a GIF is not built
 Clubhouse sends a GIF through its own `/gif_reaction` endpoint (separate from chat), and
 a room advertises support with `is_gif_enabled`. The request body, the GIF search source
-and the exact PubNub message a GIF arrives as have not been captured, so the pane
-displays incoming GIFs but cannot send one. The shape to confirm is in the console line
-above; `parseRoomReaction` is where it gets pinned.
+and the exact PubNub message a GIF arrives as have not been captured (no GIF has appeared
+in a capture yet), so the pane displays incoming GIFs on a best-effort reading but cannot
+send one. The next capture containing a GIF pins it in `parseRoomReaction`.
 :::
 
 ### 15. `GET /channels/{channel}/chat`

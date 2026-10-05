@@ -79,3 +79,47 @@ describe('reading a reaction off a room message', () => {
     expect(parseRoomReaction({ action: 'react', emoji: 'x'.repeat(200) })).toBeNull();
   });
 });
+
+describe('the real new_channel_reaction event', () => {
+  // The shape seen on the wire (2026-10-04): the sender lives under
+  // `action_user_profile`, and `message` is empty.
+  const base = {
+    action: 'new_channel_reaction',
+    action_user_profile: {
+      user_id: 774824534,
+      name: 'Someone',
+      photo_url: 'https://clubhouseprod.s3.amazonaws.com/avatars/someone.jpg',
+    },
+    channel: 'M4GkVV5y',
+    message_id: '38f9befd-12a2-4c5b-b028-216fdc9870de',
+    message: '',
+  };
+
+  it('finds the emoji under a key nobody documented', () => {
+    expect(parseRoomReaction({ ...base, reaction_emoji: '🔥' })).toEqual({ emoji: '🔥' });
+    expect(parseRoomReaction({ ...base, emoji_reaction: { value: '👏' } })).toEqual({
+      emoji: '👏',
+    });
+  });
+
+  it('does not read the sender’s avatar as a GIF — it is on the allowed CDN', () => {
+    expect(parseRoomReaction({ ...base, reaction_emoji: '❤️' })).toEqual({ emoji: '❤️' });
+    expect(parseRoomReaction(base)).toBeNull();
+  });
+
+  it('reads a GIF carried under the same action, from any field', () => {
+    expect(
+      parseRoomReaction({
+        ...base,
+        content: { media: 'https://media.giphy.com/media/x/giphy.gif' },
+      }),
+    ).toEqual({ gifUrl: 'https://media.giphy.com/media/x/giphy.gif' });
+  });
+
+  it('does not turn a chat line into a reaction', () => {
+    // No action: only the old explicit emoji/reaction fields count.
+    expect(parseRoomReaction({ text: 'https://media.giphy.com/x.gif' })).toBeNull();
+    expect(parseRoomReaction({ message: 'nice 🔥 one' })).toBeNull();
+    expect(parseRoomReaction({ action: 'chat_message', text: '🔥' })).toBeNull();
+  });
+});

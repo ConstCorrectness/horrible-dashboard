@@ -882,11 +882,19 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
 
         pubnub.addListener({
           message: (event) => {
-            console.log('PubNub Message Received:', event);
+            // Stringified: devtools collapses a logged object to `{…}`, and a copy-paste of
+            // the console then loses exactly the fields being looked for.
+            console.log('PubNub Message Received:', JSON.stringify(event.message));
             const msg = event.message as PubNubRoomMessage;
             if (!msg) return;
 
-            const sender = msg.user_profile || msg.user || {};
+            // `action_user_profile` is who a reaction event came from; without it our own
+            // echo is not recognised and every reaction floats twice.
+            const sender =
+              msg.user_profile ||
+              msg.user ||
+              (msg as { action_user_profile?: typeof msg.user }).action_user_profile ||
+              {};
             const senderId = sender.user_id ?? msg.user_id ?? msg.from_user_id;
 
             // --- Room signaling events ---
