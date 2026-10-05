@@ -362,14 +362,13 @@ def build_props_and_foliage(col, mats):
     add_box(col, "Canopy_Market_Crimson_NonCol", (28.0, 46.0, 4.2), (6.0, 4.0, 0.1), mats["canopy_crimson"])
     add_box(col, "Canopy_Palace_Indigo_NonCol", (52.0, 36.0, 4.5), (5.0, 6.0, 0.1), mats["canopy_indigo"])
 
-    # Terracotta urns
+    # Terracotta urns. Solid: a 0.9 m urn is cover, not something to walk through.
     for ux, uy in [(22.0, 12.0), (34.0, 12.0), (54.0, 54.0), (20.0, 56.0)]:
-        add_cylinder(col, f"Urn_{int(ux)}_{int(uy)}_NonCol", (ux, uy, 0.45), radius=0.35, height=0.9, material=mats["terracotta_urn"], segments=12)
+        add_cylinder(col, f"Urn_{int(ux)}_{int(uy)}", (ux, uy, 0.45), radius=0.35, height=0.9, material=mats["terracotta_urn"], segments=12)
 
-    # Breakable windows overlooking key sniper corridors (tactical glass penetration)
-    add_box(col, "Window_Glass_SniperNest_1", (36.0, 48.0, 3.8), (2.2, 0.12, 1.4), mats["glass_window"])
-    add_box(col, "Window_Glass_SniperNest_2", (42.0, 48.0, 3.8), (2.2, 0.12, 1.4), mats["glass_window"])
-    add_box(col, "Window_Glass_Palace_Balcony", (54.0, 24.0, 3.8), (0.12, 2.4, 1.4), mats["glass_window"])
+    # Breakable window in the B apartments' east wall. Three more (two "sniper nest",
+    # one palace balcony) stood in open space with no wall around them and are gone:
+    # a window needs a wall with an opening; add both together.
     add_box(col, "Window_Glass_B_Apts", (24.0, 28.0, 3.6), (0.12, 2.0, 1.4), mats["glass_window"])
 
 
@@ -437,7 +436,8 @@ def build_dressing_and_lights(col, mats):
     # Pots and planters along the walls.
     pots = [(6.0, 20.0), (6.0, 44.0), (26.0, 6.0), (44.0, 6.0), (64.0, 12.0), (64.0, 44.0), (40.0, 64.0), (14.0, 64.0)]
     for i, (x, y) in enumerate(pots):
-        add_cylinder(col, f"Planter_Pot_{i}_NonCol", (x, y, 0.35), radius=0.4, height=0.7, material=mats["terracotta_urn"], segments=10)
+        # The pot is solid and wider than the leaves, so no body stands in the leaves.
+        add_cylinder(col, f"Planter_Pot_{i}", (x, y, 0.35), radius=0.4, height=0.7, material=mats["terracotta_urn"], segments=10)
     maplib.add_boxes(col, "Planter_Leaves_NonCol", [((x, y, 0.95), (0.7, 0.7, 0.5)) for x, y in pots], mats["palm_fronds"])
 
     # Lanterns in the shade: under the apartments, at the mid doors, the market.

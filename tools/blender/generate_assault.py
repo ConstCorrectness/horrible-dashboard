@@ -499,8 +499,9 @@ def add_fire_sprinkler_system(col, mats):
             # Brass sprinkler frame and deflector plate
             add_cylinder(col, f"Sprinkler_Head_{int(bx)}_{int(sy)}_Detail", (bx, sy, 8.22), radius=0.035, height=0.04, material=mats["Sprinkler_Brass"], segments=12, is_collider=False)
 
-    # Main vertical riser pipe going down near west wall
-    add_oriented_cylinder(col, "Sprinkler_Riser_Pipe", (9.5, 24.0, 1.0), (9.5, 24.0, 8.45), radius=0.06, material=mats["Sprinkler_Red"])
+    # Main vertical riser going down near west wall. Not named a Pipe: pipes are
+    # decoration, and a body stood inside this one, which vanished from there.
+    add_oriented_cylinder(col, "Sprinkler_Riser", (9.5, 24.0, 1.0), (9.5, 24.0, 8.45), radius=0.06, material=mats["Sprinkler_Red"])
     # Red OS&Y gate control valve wheel
     add_cylinder(col, "Sprinkler_Valve_Wheel_Detail", (9.5, 24.0, 1.8), radius=0.18, height=0.03, material=mats["Hazard_Yellow"], segments=16, is_collider=False)
 
@@ -635,8 +636,9 @@ def add_pallet_jack(col, mats, x, y, z=0.0):
     add_cylinder(col, "PalletJack_Wheel_L_Detail", (x - 0.18, y - 0.75, z + 0.08), radius=0.08, height=0.06, material=mats["Hazard_Black"], segments=16, is_collider=False)
     add_cylinder(col, "PalletJack_Wheel_R_Detail", (x + 0.18, y - 0.75, z + 0.08), radius=0.08, height=0.06, material=mats["Hazard_Black"], segments=16, is_collider=False)
 
-    add_oriented_cylinder(col, "PalletJack_Handle_Rod_Detail", (x, y - 0.75, z + 0.55), (x, y - 1.15, z + 1.1), radius=0.02, material=mats["Pallet_Jack_Yellow"])
-    add_box(col, "PalletJack_Handle_Loop_Detail", (x - 0.12, y - 1.18, z + 1.08), (x + 0.12, y - 1.12, z + 1.22), mats["Hazard_Black"], bevel=True, bevel_width=0.02, is_collider=False)
+    # The handle rests tilted back, its loop under a crouched eye (1.125 m).
+    add_oriented_cylinder(col, "PalletJack_Handle_Rod_Detail", (x, y - 0.75, z + 0.55), (x, y - 1.2, z + 0.92), radius=0.02, material=mats["Pallet_Jack_Yellow"])
+    add_box(col, "PalletJack_Handle_Loop_Detail", (x - 0.12, y - 1.23, z + 0.9), (x + 0.12, y - 1.17, z + 1.04), mats["Hazard_Black"], bevel=True, bevel_width=0.02, is_collider=False)
 
 
 def add_emergency_eyewash_station(col, mats, x, y, z=0.0):
@@ -784,11 +786,12 @@ def add_overhead_crane(col, mats):
     add_cylinder(col, "Crane_Hook_Stem_Detail", (tx, cy, 4.70), radius=0.08, height=0.30, material=mats["Steel_Dark"], segments=16, is_collider=False)
     add_cylinder(col, "Crane_Hook_Horn_Detail", (tx + 0.08, cy, 4.50), radius=0.14, height=0.18, material=mats["Steel_Dark"], segments=16, is_collider=False)
 
-    # Suspended Pushbutton Pendant Control Station hanging down to chest height (z=1.5m)
-    add_oriented_cylinder(col, "Crane_Pendant_Cable_Wire", (tx + 1.2, cy - 0.4, 8.35), (tx + 1.2, cy - 0.4, 1.8), radius=0.008, material=mats["Steel_Dark"])
-    add_box(col, "Crane_Pendant_Station_Detail", (tx + 1.12, cy - 0.46, 1.25), (tx + 1.28, cy - 0.34, 1.80), mats["Hazard_Yellow"], bevel=True, bevel_width=0.02, is_collider=False)
+    # Suspended Pushbutton Pendant Control Station hanging down to waist height, under
+    # a crouched eye (1.125 m): at chest height a body walked its eye into it.
+    add_oriented_cylinder(col, "Crane_Pendant_Cable_Wire", (tx + 1.2, cy - 0.4, 8.35), (tx + 1.2, cy - 0.4, 1.07), radius=0.008, material=mats["Steel_Dark"])
+    add_box(col, "Crane_Pendant_Station_Detail", (tx + 1.12, cy - 0.46, 0.52), (tx + 1.28, cy - 0.34, 1.07), mats["Hazard_Yellow"], bevel=True, bevel_width=0.02, is_collider=False)
     # Red Mushroom Emergency Stop button
-    add_cylinder(col, "Crane_Pendant_Estop_Detail", (tx + 1.20, cy - 0.40, 1.82), radius=0.045, height=0.04, material=mats["Fire_Extinguisher_Red"], segments=12, is_collider=False)
+    add_cylinder(col, "Crane_Pendant_Estop_Detail", (tx + 1.20, cy - 0.40, 1.09), radius=0.045, height=0.04, material=mats["Fire_Extinguisher_Red"], segments=12, is_collider=False)
 
     # C-Rail Festoon Loop Cable Electrification along Bridge
     for fx in range(12, 44, 4):
@@ -841,8 +844,9 @@ def add_workshop_maintenance_bay(col, mats):
     # Industrial Compressed Air Network: Blue airline piping, FRL unit, and yellow hose reel
     add_oriented_cylinder(col, "Airline_Main_Header_Pipe", (9.0, 53.0, 4.5), (14.0, 53.0, 4.5), radius=0.025, material=mats["Airline_Blue"])
     add_oriented_cylinder(col, "Airline_Drop_Pipe", (9.0, 53.0, 1.4), (9.0, 53.0, 4.5), radius=0.020, material=mats["Airline_Blue"])
-    # Filter-Regulator-Lubricator (FRL) Unit with Pressure Gauge
-    add_box(col, "Airline_FRL_Body_Detail", (8.90, 52.88, 1.35), (9.10, 53.12, 1.55), mats["Steel_Dark"], is_collider=False)
+    # Filter-Regulator-Lubricator (FRL) Unit with Pressure Gauge. The body is solid:
+    # it hangs on the drop in open floor, and a body stood with its eye inside it.
+    add_box(col, "Airline_FRL_Body", (8.90, 52.88, 1.35), (9.10, 53.12, 1.55), mats["Steel_Dark"])
     add_cylinder(col, "Airline_Pressure_Gauge_Detail", (9.12, 53.0, 1.50), radius=0.05, height=0.03, material=mats["Brass_Fitting"], segments=16, is_collider=False)
     # Spring-Rewind Coiled Yellow Hose Reel
     add_cylinder(col, "Hose_Reel_Drum_Hose", (9.0, 52.7, 1.85), radius=0.25, height=0.18, material=mats["Steel_Dark"], segments=20, is_collider=False)

@@ -287,7 +287,9 @@ def build_office_architecture(col, mats):
         col, "Ceiling_Main", (32.0, 32.0, 4.2), (60.0, 58.0, 0.4), mats["ceiling_tile"]
     )
 
-    # North exterior wall with breakable curtain windows (Y = 60.0)
+    # North exterior wall with breakable curtain windows (Y = 60.0). The mullions
+    # are solid: hosted play treats the glass as open, and a NonCol mullion was a
+    # 0.4 m column a body stood inside, unseen from there.
     for x in range(6, 60, 8):
         add_box(
             col,
@@ -298,7 +300,7 @@ def build_office_architecture(col, mats):
         )
         add_box(
             col,
-            f"Mullion_N_{x}_NonCol",
+            f"Mullion_N_{x}",
             (x + 3.8, 60.0, 2.0),
             (0.4, 0.4, 4.0),
             mats["black_metal"],
@@ -315,7 +317,7 @@ def build_office_architecture(col, mats):
         )
         add_box(
             col,
-            f"Mullion_S_{x}_NonCol",
+            f"Mullion_S_{x}",
             (x + 3.8, 4.0, 2.0),
             (0.4, 0.4, 4.0),
             mats["black_metal"],
@@ -324,18 +326,19 @@ def build_office_architecture(col, mats):
     # The curtain glass is breakable, and past it there is nothing but a drop off
     # the slab edge. An invisible collision-only barrier just outside each façade
     # keeps a shattered pane from being an exit from the map; the glass still
-    # breaks and the view stays open.
+    # breaks and the view stays open. The barrier is flush against the glass: with
+    # a 0.2 m gap the server let a body stand with its eye inside the pane.
     add_box(
         col,
         "Exterior_Barrier_N_ColOnly",
-        (32.0, 60.45, 2.0),
+        (32.0, 60.25, 2.0),
         (60.0, 0.3, 4.0),
         mats["smoked_glass"],
     )
     add_box(
         col,
         "Exterior_Barrier_S_ColOnly",
-        (32.0, 3.55, 2.0),
+        (32.0, 3.75, 2.0),
         (60.0, 0.3, 4.0),
         mats["smoked_glass"],
     )
@@ -416,7 +419,8 @@ def build_executive_boardroom(col, mats):
         mats["black_metal"],
     )
 
-    # Executive Leather Chairs around conference table (NonCol)
+    # Executive Leather Chairs around conference table. The backs are solid: a
+    # crouched eye sat inside a NonCol back, which vanished from there.
     for i in range(5):
         cx = 9.0 + i * 1.5
         # North side
@@ -429,7 +433,7 @@ def build_executive_boardroom(col, mats):
         )
         add_box(
             col,
-            f"Chair_Back_N_{i}_NonCol",
+            f"Chair_Back_N_{i}",
             (cx, 50.05, 0.85),
             (0.55, 0.08, 0.7),
             mats["black_metal"],
@@ -444,7 +448,7 @@ def build_executive_boardroom(col, mats):
         )
         add_box(
             col,
-            f"Chair_Back_S_{i}_NonCol",
+            f"Chair_Back_S_{i}",
             (cx, 45.95, 0.85),
             (0.55, 0.08, 0.7),
             mats["black_metal"],
@@ -741,7 +745,8 @@ def build_dressing_and_lights(col, mats):
     leaves = maplib.make_material("mat_office_plant_leaves", (0.18, 0.4, 0.16), roughness=0.8)
     spots = [(24.0, 6.5), (46.0, 6.5), (58.5, 30.0), (24.0, 57.5), (46.0, 57.5), (35.0, 36.0)]
     for i, (x, y) in enumerate(spots):
-        add_cylinder(col, f"Planter_{i}_NonCol", (x, y, 0.3), radius=0.35, height=0.6, material=mats["black_metal"], segments=10)
+        # Solid, and as wide as the leaves: a body stood inside NonCol foliage.
+        add_cylinder(col, f"Planter_{i}", (x, y, 0.3), radius=0.4, height=0.6, material=mats["black_metal"], segments=10)
     maplib.add_boxes(col, "Planter_Leaves_NonCol", [((x, y, 1.0), (0.8, 0.8, 0.9)) for x, y in spots], leaves)
 
     maplib.lights_from_emitters("mat_fluorescent", color=(235, 242, 255), radius=9.0, intensity=1.3, spacing=6.0, drop=0.3)

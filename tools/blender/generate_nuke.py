@@ -201,14 +201,16 @@ def add_pipe_run(collection, name_prefix, start, end, radius, material, has_flan
             add_cylinder(collection, f"{name_prefix}_Flange_{int(t*100)}_NonCol", pos, radius * 1.5, 0.12, material, segments=12)
 
 
-def add_shipping_container(collection, name_prefix, center, yaw_deg, material, mats):
-    """Detailed intermodal ISO shipping container with corrugated ribs, corner castings, and latch doors."""
+def add_shipping_container(collection, name_prefix, center, material, mats):
+    """Detailed intermodal ISO shipping container with corrugated ribs, corner castings, and latch doors.
+
+    Always long along X. This once took a yaw and turned only the trim, never the
+    body: the ribs, castings and lock rods of a 90° container stood in a line across
+    open yard with the box lying the other way, and a body walked through them.
+    """
     cx, cy, cz = center
     # Main container body (6.0m L x 2.44m W x 2.59m H)
     L, W, H = 6.0, 2.44, 2.59
-    rad = math.radians(yaw_deg)
-    cos_y = math.cos(rad)
-    sin_y = math.sin(rad)
 
     # Base box
     add_box(collection, f"{name_prefix}_Body", (cx, cy, cz + H * 0.5), (L, W, H), material)
@@ -216,27 +218,19 @@ def add_shipping_container(collection, name_prefix, center, yaw_deg, material, m
     # Corrugated side ribs (decorative NonCol)
     num_ribs = 9
     for i in range(num_ribs):
-        offset = -L * 0.45 + (L * 0.9 / (num_ribs - 1)) * i
-        rx = cx + offset * cos_y - (W * 0.51) * (-sin_y)
-        ry = cy + offset * sin_y - (W * 0.51) * cos_y
-        add_box(collection, f"{name_prefix}_RibL_{i}_NonCol", (rx, ry, cz + H * 0.5), (0.1, 0.08, H * 0.94), material)
-        rx2 = cx + offset * cos_y + (W * 0.51) * (-sin_y)
-        ry2 = cy + offset * sin_y + (W * 0.51) * cos_y
-        add_box(collection, f"{name_prefix}_RibR_{i}_NonCol", (rx2, ry2, cz + H * 0.5), (0.1, 0.08, H * 0.94), material)
+        rx = cx - L * 0.45 + (L * 0.9 / (num_ribs - 1)) * i
+        add_box(collection, f"{name_prefix}_RibL_{i}_NonCol", (rx, cy - W * 0.51, cz + H * 0.5), (0.1, 0.08, H * 0.94), material)
+        add_box(collection, f"{name_prefix}_RibR_{i}_NonCol", (rx, cy + W * 0.51, cz + H * 0.5), (0.1, 0.08, H * 0.94), material)
 
     # Corner casting blocks
     for dx in [-L * 0.48, L * 0.48]:
         for dy in [-W * 0.48, W * 0.48]:
             for dz in [0.15, H - 0.15]:
-                ccx = cx + dx * cos_y - dy * sin_y
-                ccy = cy + dx * sin_y + dy * cos_y
-                add_box(collection, f"{name_prefix}_Cast_NonCol", (ccx, ccy, cz + dz), (0.24, 0.24, 0.28), mats["steel_dark"])
+                add_box(collection, f"{name_prefix}_Cast_NonCol", (cx + dx, cy + dy, cz + dz), (0.24, 0.24, 0.28), mats["steel_dark"])
 
     # Rear door locking cam rods
     for rod_dy in [-W * 0.2, W * 0.2]:
-        rx = cx - (L * 0.51) * cos_y - rod_dy * sin_y
-        ry = cy - (L * 0.51) * sin_y + rod_dy * cos_y
-        add_cylinder(collection, f"{name_prefix}_LockRod_NonCol", (rx, ry, cz + H * 0.5), 0.04, H * 0.88, mats["steel_industrial"], segments=8)
+        add_cylinder(collection, f"{name_prefix}_LockRod_NonCol", (cx - L * 0.51, cy + rod_dy, cz + H * 0.5), 0.04, H * 0.88, mats["steel_industrial"], segments=8)
 
 
 def add_gantry_crane(collection, mats):
@@ -335,13 +329,15 @@ def build_site_a_upper_hall(col, mats):
     add_box(col, "SiteA_Hut_Wall_S", (26.0, 34.0, 1.3), (4.0, 0.4, 2.6), mats["concrete_wall"])
     add_box(col, "SiteA_Hut_Doorframe", (28.0, 37.0, 2.3), (0.4, 6.0, 0.6), mats["hazard_yellow"])
 
-    # Hut window opening on East wall
+    # Hut window opening on East wall. A window needs wall under it: without this
+    # the pane and sill hung in the hut's open side and a body stood in the glass.
+    add_box(col, "SiteA_Hut_Wall_E_Low", (28.0, 38.5, 0.525), (0.4, 1.8, 1.05), mats["concrete_wall"])
     add_box(col, "SiteA_Hut_Window_Sill", (28.0, 38.5, 1.1), (0.4, 1.8, 0.1), mats["steel_industrial"])
     add_box(col, "Window_Glass_SiteA_Hut", (28.0, 38.5, 1.6), (0.1, 1.8, 0.9), mats["glass_window"])
 
-    # Observation / Control Room Breakable Windows overlooking Site A
-    add_box(col, "Window_Glass_ControlRoom_1", (23.8, 44.0, 1.6), (0.1, 2.0, 1.2), mats["glass_window"])
-    add_box(col, "Window_Glass_ControlRoom_2", (23.8, 47.0, 1.6), (0.1, 2.0, 1.2), mats["glass_window"])
+    # No control-room windows. The two this hall had stood in the open yard with no
+    # wall around them, one of them inside Container_Green_1. A window needs a wall
+    # with an opening; add both together.
 
     # Overhead Rafters / Catwalks at Z = 3.8m
     add_box(col, "SiteA_Catwalk_East", (48.0, 40.0, 3.8), (2.0, 22.0, 0.2), mats["steel_grate"])
@@ -446,9 +442,9 @@ def build_outside_yard(col, mats):
         add_box(col, f"Silo_Ladder_Rung_{step}_NonCol", (18.9, 20.0, sz), (0.05, 0.6, 0.04), mats["hazard_yellow"])
 
     # Red, Blue, and Green Shipping Containers in Yard
-    add_shipping_container(col, "Container_Red_1", (16.0, 34.0, 0.0), 0.0, mats["container_red"], mats)
-    add_shipping_container(col, "Container_Blue_1", (16.0, 42.0, 0.0), 12.0, mats["container_blue"], mats)
-    add_shipping_container(col, "Container_Green_1", (23.0, 48.0, 0.0), 90.0, mats["container_green"], mats)
+    add_shipping_container(col, "Container_Red_1", (16.0, 34.0, 0.0), mats["container_red"], mats)
+    add_shipping_container(col, "Container_Blue_1", (16.0, 42.0, 0.0), mats["container_blue"], mats)
+    add_shipping_container(col, "Container_Green_1", (23.0, 48.0, 0.0), mats["container_green"], mats)
 
     # Electrical Substation in North Yard
     add_substation(col, mats)
@@ -477,8 +473,8 @@ def build_layout_revision(col, mats):
         sx, sy = (3.0, 0.6) if yaw == 0.0 else (0.6, 3.0)
         add_box(col, f"Jersey_Barrier_{i}", (x, y, 0.45), (sx, sy, 0.9), mats["concrete_floor"])
         add_box(col, f"Jersey_Barrier_{i}_Stripe_NonCol", (x, y, 0.72), (sx + 0.02, sy + 0.02, 0.14), mats["hazard_yellow"])
-    add_shipping_container(col, "Container_Red_2", (58.0, 16.0, 0.0), 90.0, mats["container_red"], mats)
-    add_shipping_container(col, "Container_Blue_2", (58.0, 16.0, 2.59), 90.0, mats["container_blue"], mats)
+    add_shipping_container(col, "Container_Red_2", (58.0, 16.0, 0.0), mats["container_red"], mats)
+    add_shipping_container(col, "Container_Blue_2", (58.0, 16.0, 2.59), mats["container_blue"], mats)
 
     for i, (x, y) in enumerate(((42.0, 34.0), (43.3, 34.0), (42.6, 35.3), (30.0, 46.0), (31.3, 46.0))):
         add_box(col, f"SiteA_Crate_{i}", (x, y, 0.6), (1.2, 1.2, 1.2), mats["wood_crate"])
@@ -518,7 +514,8 @@ def build_dressing_and_lights(col, mats):
         poles.append(((x, y, 3.5), (0.22, 0.22, 7.0)))
         heads.append(((x, y, 7.05), (0.9, 0.5, 0.18)))
         maplib.add_light((x, y, 6.6), color=(255, 200, 140), radius=11.0, intensity=1.6)
-    maplib.add_boxes(col, "Floodlight_Poles_NonCol", poles, mats["steel_dark"])
+    # Solid: a NonCol pole is one a body stands inside, and it vanishes from there.
+    maplib.add_boxes(col, "Yard_Poles", poles, mats["steel_dark"])
     maplib.add_boxes(col, "Floodlight_Heads_NonCol", heads, sodium)
 
     # Wall packs over the hall's three doors.

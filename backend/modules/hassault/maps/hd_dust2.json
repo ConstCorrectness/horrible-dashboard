@@ -1762,13 +1762,13 @@
     {
       "op": "room",
       "rect": [29, 143, 1, 2],
-      "floor": 7,
+      "floor": 8,
       "ceil": 42
     },
     {
       "op": "room",
       "rect": [36, 143, 1, 2],
-      "floor": 7,
+      "floor": 8,
       "ceil": 42
     },
     {

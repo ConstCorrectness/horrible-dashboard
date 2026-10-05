@@ -979,24 +979,83 @@ all — offline, walking through the west door dropped you out of the world.
 back faces, and from inside a mesh every face is a back face. So a visible prop a
 body can walk into vanishes for whoever is in it, while still hiding them from
 everyone outside. That is "see-through from one side". `NonCol` is right for
-anything above head height, flush on a wall, or thinner than a body can reach
-into: vigas, cables, banners, rafters. It is wrong for anything body-sized at eye
-level. Dust II had five 1 m amphoras you could crouch inside, pergola posts and
-well posts you walked through, and a rug and four "windows" floating in open
-space where walls had been before a layout revision. On 2026-10-04 the jars and
-posts became solid, the rug was hung on `Wall_LongA_West` (the other rug had been
-inside the perimeter wall), and the four floating panes were removed. Dust II has
-no breakable glass now, because a window needs a wall to sit in.
+anything above head height, flush on a wall, below a crouched eye, or standing off
+a solid by less than a body's radius: vigas, cables, banners, rafters, jars. It is
+wrong for anything at eye level that a body can reach, which is 3.375 to 4.5
+cubes above the floor (crouched, standing). What the 2026-10-04 pass fixed:
 
-Two checks found them, both run over the shipped GLB from every reachable cell of
-the baked grid. The first casts sight lines and counts any that first hit the back
-of a face. Put the eye off the half-cube grid the maps are built on, or rays run
-inside face planes and report false hits. The second tests whether an eye can be
-inside a visible, non-colliding mesh, at positions `physics.can_stand` accepts and
-at crouched, middle and standing heights. The same check flags props on the other
-maps: Inferno's and Mirage's urns and amphoras, the office's window mullions,
-Nuke's container ribs and floodlight poles, Assault's guardrails, and the bank's
-globe and teller pillars.
+- **Posts and poles a body stood in:** Dust II's pergola and well posts,
+  Inferno's well posts, the office's window mullions, Nuke's yard floodlight
+  poles, Assault's sprinkler riser. All solid now. A decoration keyword makes a
+  name non-colliding at that size, so the riser lost its `Pipe` and the bank's
+  globe its `Globe` (it is a `Terrestrial_Sphere`).
+- **Furniture at eye height:** the office's conference chair backs, the bank's
+  globe, Assault's air-line regulator, Bank's teller pillar shafts and street
+  trees. All solid now. The pillar shafts are 7 cm, not 6: the bake samples a
+  cell on a quarter-cube grid, and a thin enough cylinder fits between the
+  samples and blocks nothing.
+- **Foliage:** Mirage's and the office's planter leaves are wider than a body at
+  crouched eye height. Their pots are now solid and at least as wide as the
+  leaves, so no body gets into the leaves.
+- **Overhead pieces at eye height when you stand on something:** the bank's
+  teller cage beam sat at a crouched eye on the counter, and the well beams on
+  Dust II and Inferno at an eye standing up on the rim. All were raised clear.
+  Assault's crane pendant and pallet-jack handle were lowered under a crouched
+  eye. The Bank's van mirrors and police spotlight were pulled in against the
+  vehicle body.
+- **Glass with no wall:** Dust II had four panes in open space, Mirage three,
+  and Nuke two (one inside a shipping container). All are removed: a window needs
+  a wall with an opening, so add the two together. Nuke's hut window had a sill
+  and no wall under it; it has a wall now.
+- **Nuke's turned containers:** `add_shipping_container` took a yaw but turned
+  only the trim (ribs, castings, lock rods), never the box. The trim of every
+  90° container stood in a line across open yard. Containers are long along X
+  now, and the trim matches the box players have always collided with.
+- **Rugs:** Dust II's rug floated in a souk doorway. It now hangs on
+  `Wall_LongA_West`. Its twin, buried inside the perimeter wall, was moved out.
+
+Dust II's jars were made solid too. They are 1 m tall, below any eye, so they
+never hid anyone; but a body walked through them, and a 1 m jar is cover.
+
+**Breakable glass is the exception.** Hosted play treats breakable glass as open
+(see `bake_collision.py`), so a body can stand inside any pane. That is by
+design, not a bug. The office's server-room glass walls are the two that report.
+The façade did too, until its invisible barrier was moved flush against the
+glass: it had stood 0.2 m out, and the server let a body into the gap.
+
+Two checks found these. Both run over the shipped GLB from where the server says
+a body fits.
+
+1. **Back-face sight lines.** From every reachable cell, cast sight lines and
+   count any that hit the back of a face first. Put the eye off the half-cube
+   grid the maps are built on. Otherwise rays run inside face planes and report
+   false hits.
+2. **Eye inside.** This one is checked in, and the second command exits 1 on
+   anything other than glass:
+
+   ```bash
+   uv run python tools/hassault_body_points.py hd_dust2 > dust2-bodies.json
+   blender --background --factory-startup --python tools/blender/probe_eye_inside.py -- hd_dust2 dust2-bodies.json
+   ```
+
+   It tests every position `physics.can_stand` accepts, at the resting eye
+   heights, against every visible mesh the bake does not collide with. All nine
+   maps read 0 after the 2026-10-04 pass.
+
+That pass cost each map a little open floor, because the newly solid props now
+take up space:
+
+| Map | Reachable cells lost |
+| --- | --- |
+| Office | 598 (the façade gap is half of it) |
+| Mirage | 208 |
+| Nuke | 132 |
+| Bank | 74 |
+| Inferno | 68 |
+| Assault | 17 |
+| Dust II | 4 |
+
+The fit only moved lights; no spawn, item or site.
 
 **The body that collides** (`physics-rapier.ts`, `physics_rapier.rs`). The Rapier
 controller was tuned in metres — a 1.8-tall, 0.45-radius capsule — and was never

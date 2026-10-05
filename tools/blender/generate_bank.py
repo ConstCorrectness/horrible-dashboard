@@ -779,14 +779,18 @@ def build_bank_scene():
     add_box(c_lobby, "Teller_Countertop_Marble", (25.6, 23.6, 1.15), (38.4, 27.4, 1.25), mats["Marble_Black"], bevel=True, bevel_width=0.03)
 
     # BEAUX-ARTS POLISHED BRASS WICKET CAGE (Eliminating the opaque cyan Lego blocks!)
-    # 5 Monumental Fluted Brass Station Pillars
+    # 5 Monumental Fluted Brass Station Pillars. The cage tops out above a standing
+    # eye on the counter (the server's floor there is 4 cubes, 1.33 m, so the eye is
+    # at 2.83 m): at 2.48 m a body crouched on the counter had its eye in the beam.
+    # The shafts are solid, so no body stands inside one; 7 cm, not 6, so the bake's
+    # quarter-cube samples cannot all fall around one.
     for st_i, st_x in enumerate([26.2, 29.1, 32.0, 34.9, 37.8]):
         add_cylinder(c_lobby, f"Teller_Pillar_Base_{st_i}", (st_x, 25.5, 1.27), radius=0.10, height=0.06, material=mats["Brass_Polished"], segments=12, is_collider=False)
-        add_cylinder(c_lobby, f"Teller_Pillar_Shaft_{st_i}", (st_x, 25.5, 1.85), radius=0.06, height=1.10, material=mats["Brass_Polished"], segments=12, is_collider=False)
-        add_cylinder(c_lobby, f"Teller_Pillar_Cap_{st_i}", (st_x, 25.5, 2.42), radius=0.10, height=0.08, material=mats["Brass_Polished"], segments=12, is_collider=False)
+        add_cylinder(c_lobby, f"Teller_Pillar_Shaft_{st_i}", (st_x, 25.5, 2.08), radius=0.07, height=1.56, material=mats["Brass_Polished"], segments=12)
+        add_cylinder(c_lobby, f"Teller_Pillar_Cap_{st_i}", (st_x, 25.5, 2.90), radius=0.10, height=0.08, material=mats["Brass_Polished"], segments=12, is_collider=False)
 
     # Horizontal Brass Upper Header Beam & Decorative Frieze
-    add_box(c_lobby, "Teller_Cage_Upper_Beam", (26.0, 25.42, 2.38), (38.0, 25.58, 2.48), mats["Brass_Polished"], is_collider=False)
+    add_box(c_lobby, "Teller_Cage_Upper_Beam", (26.0, 25.42, 2.86), (38.0, 25.58, 2.96), mats["Brass_Polished"], is_collider=False)
     add_box(c_lobby, "Teller_Cage_Lower_Sill", (26.0, 25.44, 1.25), (38.0, 25.56, 1.30), mats["Brass_Polished"], is_collider=False)
 
     # 4 Service Station Bays (Stations 1..4)
@@ -803,7 +807,7 @@ def build_bank_scene():
         # Vertical Brass Spindles / Security Bars across the Bay (0.16m spacing, see-through)
         for sp_x in [-1.15, -0.95, -0.75, 0.75, 0.95, 1.15]:
             add_oriented_cylinder(c_lobby, f"Wicket_Bar_{b_idx}_{int((bay_x+sp_x)*10)}", 
-                                  (bay_x + sp_x, 25.5, 1.28), (bay_x + sp_x, 25.5, 2.38),
+                                  (bay_x + sp_x, 25.5, 1.28), (bay_x + sp_x, 25.5, 2.86),
                                   radius=0.015, material=mats["Brass_Polished"], segments=8, is_collider=False)
 
     # 4 Authentic Teller Workstations behind the Cage (High-Fidelity Banking Equipment)
@@ -1537,7 +1541,9 @@ def build_bank_scene():
         ly = gl_y + math.sin(l_ang) * 0.28
         add_oriented_cylinder(c_offices, f"Globe_Leg_{leg_i}", (lx, ly, 0.05), (gl_x, gl_y, 0.65), radius=0.025, material=mats["Mahogany_Dark"], segments=8, is_collider=False)
     add_cylinder(c_offices, "Globe_Meridian_Ring", (gl_x, gl_y, 0.95), radius=0.32, height=0.03, material=mats["Brass_Polished"], segments=20, is_collider=False)
-    add_cylinder(c_offices, "Globe_Sphere", (gl_x, gl_y, 0.95), radius=0.28, height=0.52, material=mats["Painting_Canvas_2"], segments=20, is_collider=False)
+    # Solid, and not named a Globe (a decoration keyword, for lamp globes): a
+    # crouched eye fitted inside a walk-through one, which vanished.
+    add_cylinder(c_offices, "Terrestrial_Sphere", (gl_x, gl_y, 0.95), radius=0.28, height=0.52, material=mats["Painting_Canvas_2"], segments=20)
 
     # -------------------------------------------------------------------------
     # EXECUTIVE BOARDROOM CONFERENCE TABLE & CHAIRS (x: 18.0..24.0, y: 50.0..54.0)
@@ -1666,8 +1672,10 @@ def build_bank_scene():
 
     # Sloped Armored Windshield & Dual Heavy Side Mirrors
     add_box(c_street, "SWAT_Windshield_Detail", (18.2, 12.42, 1.50), (21.8, 12.65, 2.35), mats["Smoked_Glass"], is_collider=False)
-    for mx in [17.7, 22.3]:
-        add_box(c_street, f"SWAT_Mirror_Bracket_{int(mx*10)}", (mx - 0.05, 12.8, 1.8), (mx + 0.05, 13.1, 1.9), mats["Chrome_Polished"], is_collider=False)
+    # The mirrors stand off the cab (x 18..22) by less than a body's radius, so no
+    # eye fits inside one; at 0.3 m off they were walked into.
+    for mx, cab in ((17.85, 18.0), (22.15, 22.0)):
+        add_box(c_street, f"SWAT_Mirror_Bracket_{int(mx*10)}", (min(mx, cab), 12.8, 1.8), (max(mx, cab), 13.1, 1.9), mats["Chrome_Polished"], is_collider=False)
         add_box(c_street, f"SWAT_Mirror_Glass_{int(mx*10)}", (mx - 0.08, 12.7, 1.6), (mx + 0.08, 12.9, 2.1), mats["Chrome_Polished"], is_collider=False)
 
     # Armored Side Vision Slits & Recessed Door Handles
@@ -1727,10 +1735,11 @@ def build_bank_scene():
         add_box(c_street, f"Police_Headlight_{int(hx*10)}", (hx - 0.25, 9.94, 0.65), (hx + 0.25, 10.02, 0.88), mats["Chandelier_Lamp"], is_collider=False)
         add_box(c_street, f"Police_TurnSignal_{int(hx*10)}", (hx - 0.25, 9.94, 0.50), (hx + 0.25, 10.02, 0.62), mats["Amber_Reflector"], is_collider=False)
 
-    # Driver A-Pillar Spotlight with Chrome Shell
-    add_oriented_cylinder(c_street, "Police_Spotlight_Shaft", (41.90, 11.2, 1.30), (41.65, 11.0, 1.40), radius=0.02, material=mats["Chrome_Polished"], segments=8, is_collider=False)
-    add_cylinder(c_street, "Police_Spotlight_Head", (41.60, 10.95, 1.40), radius=0.08, height=0.12, material=mats["Chrome_Polished"], segments=12, is_collider=False)
-    add_cylinder(c_street, "Police_Spotlight_Lens", (41.60, 10.88, 1.40), radius=0.075, height=0.03, material=mats["Chandelier_Lamp"], segments=12, is_collider=False)
+    # Driver A-Pillar Spotlight with Chrome Shell, on the body's side (x 42.0). It
+    # once hung 0.4 m out in the air, where a body walked into it.
+    add_oriented_cylinder(c_street, "Police_Spotlight_Shaft", (42.10, 11.2, 1.45), (41.95, 11.05, 1.50), radius=0.02, material=mats["Chrome_Polished"], segments=8, is_collider=False)
+    add_cylinder(c_street, "Police_Spotlight_Head", (41.92, 11.0, 1.50), radius=0.08, height=0.12, material=mats["Chrome_Polished"], segments=12, is_collider=False)
+    add_cylinder(c_street, "Police_Spotlight_Lens", (41.92, 10.93, 1.50), radius=0.075, height=0.03, material=mats["Chandelier_Lamp"], segments=12, is_collider=False)
 
     # Sleek Low-Profile Police Lightbar
     add_box(c_street, "Police_Lightbar_Housing", (42.6, 11.9, 1.62), (45.4, 12.2, 1.76), mats["Smoked_Glass"], bevel=True, bevel_width=0.02, is_collider=False)
@@ -1825,8 +1834,9 @@ def build_bank_scene():
         # Cast-Iron Slotted Tree Grate Flush with Sidewalk
         add_box(c_street, f"Tree_Grate_{tree_i}", (tree_x - 0.8, 14.7, 0.198), (tree_x + 0.8, 16.3, 0.205), mats["Cast_Iron_Dark"], is_collider=False)
         add_cylinder(c_street, f"Tree_Grate_Inner_{tree_i}", (tree_x, 15.5, 0.206), radius=0.25, height=0.01, material=mats["Granite_Curb"], segments=16, is_collider=False)
-        # Young Sidewalk Street Tree with Trunk & Foliage
-        add_cylinder(c_street, f"Tree_Trunk_{tree_i}", (tree_x, 15.5, 1.8), radius=0.08, height=3.2, material=mats["Mahogany_Dark"], segments=8, is_collider=False)
+        # Young Sidewalk Street Tree with Trunk & Foliage. The trunk is solid: a body
+        # walked into a decorative one and it vanished from inside.
+        add_cylinder(c_street, f"Tree_Trunk_{tree_i}", (tree_x, 15.5, 1.8), radius=0.08, height=3.2, material=mats["Mahogany_Dark"], segments=8)
         add_cylinder(c_street, f"Tree_Crown_B_{tree_i}", (tree_x, 15.5, 3.8), radius=1.25, height=1.6, material=mats["Foliage_Green"], segments=12, is_collider=False)
         add_cylinder(c_street, f"Tree_Crown_T_{tree_i}", (tree_x, 15.5, 4.8), radius=0.85, height=1.4, material=mats["Foliage_Green"], segments=12, is_collider=False)
 

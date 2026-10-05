@@ -640,9 +640,11 @@ def build_layout_revision(col, mats):
     add_box(col, "CT_Planter_Soil_NonCol", (38.0, 53.0, 0.92), (3.7, 0.6, 0.06), mats["desert_sand"])
 
     add_cylinder(col, "SiteB_Well", (11.0, 48.0, 0.5), radius=1.1, height=1.0, material=mats["sandstone_dark"], segments=14)
-    add_box(col, "SiteB_Well_Beam_NonCol", (11.0, 48.0, 2.3), (2.6, 0.14, 0.14), mats["wood_cedar_weathered"])
+    # The beam clears a standing eye on the rim (1.0 + 1.5 m): at 2.3 m a body
+    # standing up on the well passed its eye through it.
+    add_box(col, "SiteB_Well_Beam_NonCol", (11.0, 48.0, 2.67), (2.6, 0.14, 0.14), mats["wood_cedar_weathered"])
     for px in (9.95, 12.05):
-        add_box(col, f"SiteB_Well_Post_{int(px*100)}", (px, 48.0, 1.65), (0.14, 0.14, 1.3), mats["wood_cedar_weathered"])
+        add_box(col, f"SiteB_Well_Post_{int(px*100)}", (px, 48.0, 1.8), (0.14, 0.14, 1.6), mats["wood_cedar_weathered"])
 
 
 def build_dressing(col, mats):

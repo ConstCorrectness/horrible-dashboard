@@ -445,9 +445,10 @@ def build_spawns_and_props(col, mats):
     # Site A Exterior Cypress tree
     add_cypress_tree(col, "SiteA_Cypress", (62.0, 48.0, 0.0), mats)
 
-    # Terracotta wine amphoras / urns
+    # Terracotta wine amphoras / urns. Solid: a 0.9 m jar is cover, and as NonCol a
+    # crouching body hid inside one, and the jar vanished from its own view.
     for ax, ay in [(28.0, 12.0), (28.8, 12.2), (36.0, 12.0), (52.0, 56.0)]:
-        add_cylinder(col, f"Amphora_{int(ax*10)}_NonCol", (ax, ay, 0.45), radius=0.35, height=0.9, material=mats["terracotta_roof"], segments=12)
+        add_cylinder(col, f"Amphora_{int(ax*10)}", (ax, ay, 0.45), radius=0.35, height=0.9, material=mats["terracotta_roof"], segments=12)
 
     # Wrought iron hanging wall lanterns
     add_hanging_lantern(col, "Lantern_Boiler", (34.8, 30.0, 3.2), mats)
@@ -474,9 +475,12 @@ def build_layout_revision(col, mats):
     maplib.add_wedge(col, "East_House_Roof_NonCol", (56.0, 25.0, 7.6), (8.6, 10.6, 1.2), mats["terracotta_roof"], "+x")
     add_box(col, "East_Low_Wall", (47.5, 34.0, 0.6), (4.0, 0.7, 1.2), mats["limestone_carved"])
     add_cylinder(col, "Mid_Well", (30.0, 38.0, 0.5), radius=1.0, height=1.0, material=mats["limestone_carved"], segments=14)
-    add_box(col, "Mid_Well_Beam_NonCol", (30.0, 38.0, 2.3), (2.4, 0.14, 0.14), mats["wood_chestnut_aged"])
+    # The beam clears a standing eye on the rim (1.0 + 1.5 m): at 2.3 m a body
+    # standing up on the well passed its eye through it.
+    add_box(col, "Mid_Well_Beam_NonCol", (30.0, 38.0, 2.67), (2.4, 0.14, 0.14), mats["wood_chestnut_aged"])
+    # The posts are solid: a body could stand in a NonCol post, and it vanished.
     for px in (29.0, 31.0):
-        add_box(col, f"Mid_Well_Post_{int(px*10)}_NonCol", (px, 38.0, 1.65), (0.14, 0.14, 1.3), mats["wood_chestnut_aged"])
+        add_box(col, f"Mid_Well_Post_{int(px*10)}", (px, 38.0, 1.8), (0.14, 0.14, 1.6), mats["wood_chestnut_aged"])
 
 
 def build_dressing_and_lights(col, mats):
