@@ -466,9 +466,11 @@ def build_catwalk_and_short_a(col, mats):
     # Catwalk bridge / ledge (X: 34.0 .. 44.0, Y: 42.0 .. 48.0, Z = +2.4m)
     add_box(col, "Catwalk_Floor", (39.0, 45.0, 1.2), (10.0, 5.0, 2.4), mats["sandstone_light"])
 
-    # Timber Pergola with overhead shade beams across Catwalk
+    # Timber Pergola with overhead shade beams across Catwalk. The posts collide:
+    # tagged NonCol, a body walked into them, and from inside a mesh every face is a
+    # back face, so a post vanished for whoever stood in it while hiding them.
     for px in [35.5, 38.5, 41.5]:
-        add_cylinder(col, f"Pergola_Post_{int(px*10)}_NonCol", (px, 42.6, 3.8), radius=0.08, height=2.8, material=mats["wood_cedar_weathered"], segments=8)
+        add_cylinder(col, f"Pergola_Post_{int(px*10)}", (px, 42.6, 3.8), radius=0.08, height=2.8, material=mats["wood_cedar_weathered"], segments=8)
         # Overhead cross beam
         add_box(col, f"Pergola_Rafter_{int(px*10)}_NonCol", (px, 45.0, 5.25), (0.12, 5.2, 0.16), mats["wood_cedar_weathered"])
 
@@ -578,13 +580,17 @@ def build_spawns_and_props(col, mats):
     add_market_stall(col, "T_Souk_Stall_1", (28.0, 10.0, 0.0), (5.5, 4.0, 3.8), mats)
     add_market_stall(col, "T_Souk_Stall_2", (36.0, 10.0, 0.0), (5.5, 4.0, 3.8), mats)
 
-    # Decorative Persian rugs hung against sandstone walls
-    add_box(col, "Persian_Rug_Wall1_NonCol", (24.6, 12.0, 2.5), (0.05, 3.0, 2.0), mats["canopy_crimson"])
-    add_box(col, "Persian_Rug_Wall2_NonCol", (38.0, 4.6, 2.5), (3.0, 0.05, 2.0), mats["moorish_tile_blue"])
+    # Decorative Persian rugs, hung 5 mm proud of real walls. The first used to
+    # float in the open souk at x 24.6, where a wall had been before the layout
+    # revision, and players walked through it. The second sat inside the perimeter
+    # wall (face at y 4.7), so it was never seen.
+    add_box(col, "Persian_Rug_Wall1_NonCol", (43.27, 12.0, 2.5), (0.05, 3.0, 2.0), mats["canopy_crimson"])  # Wall_LongA_West, x 43.3
+    add_box(col, "Persian_Rug_Wall2_NonCol", (38.0, 4.73, 2.5), (3.0, 0.05, 2.0), mats["moorish_tile_blue"])  # Wall_Perimeter_South, y 4.7
 
-    # Terracotta amphoras / water jars
+    # Terracotta amphoras / water jars. Solid: a 1 m jar is cover, and as NonCol a
+    # crouching body hid inside one, and the jar vanished from its own view.
     for ax, ay in [(26.0, 7.0), (26.8, 7.2), (38.0, 7.0), (53.0, 42.0), (28.0, 58.0)]:
-        add_cylinder(col, f"Amphora_{int(ax*10)}_{int(ay*10)}_NonCol", (ax, ay, 0.5), radius=0.35, height=1.0, material=mats["sandstone_ochre"], segments=12)
+        add_cylinder(col, f"Amphora_{int(ax*10)}_{int(ay*10)}", (ax, ay, 0.5), radius=0.35, height=1.0, material=mats["sandstone_ochre"], segments=12)
 
     # Palm trees in T courtyard & Long A exterior
     add_palm_tree(col, "T_Palm_1", (22.0, 8.0, 0.0), mats)
@@ -592,11 +598,9 @@ def build_spawns_and_props(col, mats):
     add_palm_tree(col, "LongA_Palm_1", (62.0, 28.0, 0.0), mats)
     add_palm_tree(col, "LongA_Palm_2", (62.0, 44.0, 0.0), mats)
 
-    # Breakable windows overlooking key sightlines (tactical glass penetration)
-    add_box(col, "Window_Glass_Courtyard_1", (24.0, 14.0, 3.5), (0.12, 2.2, 1.4), mats["glass_window"])
-    add_box(col, "Window_Glass_Courtyard_2", (40.0, 14.0, 3.5), (0.12, 2.2, 1.4), mats["glass_window"])
-    add_box(col, "Window_Glass_A_Site", (54.0, 52.0, 3.2), (0.12, 2.0, 1.4), mats["glass_window"])
-    add_box(col, "Window_Glass_B_Site", (14.0, 56.0, 3.2), (0.12, 2.0, 1.4), mats["glass_window"])
+    # No breakable windows. The four this map had (two in the souk, one at each
+    # site) stood in open space with no wall around them: free-standing panes of
+    # glass. A window needs a wall with an opening; add both together.
 
 
 def add_wall_sconce(collection, name, pos, facing, mats, radius=6.0, intensity=2.2):
@@ -638,7 +642,7 @@ def build_layout_revision(col, mats):
     add_cylinder(col, "SiteB_Well", (11.0, 48.0, 0.5), radius=1.1, height=1.0, material=mats["sandstone_dark"], segments=14)
     add_box(col, "SiteB_Well_Beam_NonCol", (11.0, 48.0, 2.3), (2.6, 0.14, 0.14), mats["wood_cedar_weathered"])
     for px in (9.95, 12.05):
-        add_box(col, f"SiteB_Well_Post_{int(px*100)}_NonCol", (px, 48.0, 1.65), (0.14, 0.14, 1.3), mats["wood_cedar_weathered"])
+        add_box(col, f"SiteB_Well_Post_{int(px*100)}", (px, 48.0, 1.65), (0.14, 0.14, 1.3), mats["wood_cedar_weathered"])
 
 
 def build_dressing(col, mats):

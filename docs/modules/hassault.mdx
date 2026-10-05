@@ -975,6 +975,29 @@ invisible `Safety_Floor_ColOnly` under every map at its lowest surface, because
 the bank lays one slab per room and the strip under each doorway had no floor at
 all — offline, walking through the west door dropped you out of the world.
 
+**`NonCol` is a promise that nobody's eye ends up inside it.** Both clients cull
+back faces, and from inside a mesh every face is a back face. So a visible prop a
+body can walk into vanishes for whoever is in it, while still hiding them from
+everyone outside. That is "see-through from one side". `NonCol` is right for
+anything above head height, flush on a wall, or thinner than a body can reach
+into: vigas, cables, banners, rafters. It is wrong for anything body-sized at eye
+level. Dust II had five 1 m amphoras you could crouch inside, pergola posts and
+well posts you walked through, and a rug and four "windows" floating in open
+space where walls had been before a layout revision. On 2026-10-04 the jars and
+posts became solid, the rug was hung on `Wall_LongA_West` (the other rug had been
+inside the perimeter wall), and the four floating panes were removed. Dust II has
+no breakable glass now, because a window needs a wall to sit in.
+
+Two checks found them, both run over the shipped GLB from every reachable cell of
+the baked grid. The first casts sight lines and counts any that first hit the back
+of a face. Put the eye off the half-cube grid the maps are built on, or rays run
+inside face planes and report false hits. The second tests whether an eye can be
+inside a visible, non-colliding mesh, at positions `physics.can_stand` accepts and
+at crouched, middle and standing heights. The same check flags props on the other
+maps: Inferno's and Mirage's urns and amphoras, the office's window mullions,
+Nuke's container ribs and floodlight poles, Assault's guardrails, and the bank's
+globe and teller pillars.
+
 **The body that collides** (`physics-rapier.ts`, `physics_rapier.rs`). The Rapier
 controller was tuned in metres — a 1.8-tall, 0.45-radius capsule — and was never
 touched when the maps went to cubes, so it became a third of the avatar's size
