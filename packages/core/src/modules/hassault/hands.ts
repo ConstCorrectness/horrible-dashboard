@@ -81,6 +81,12 @@ export interface HandTarget {
   /** The hole through the fist, thumb side. Made perpendicular to `aim` here. */
   up: Vec3;
   curl: Curl;
+  /**
+   * How thick the handle is around the fist's centre: no finger closes past
+   * touching it. Zero or absent for "closes on nothing". The thumb settles on the
+   * handle's surface instead (`thumbCurl`): it lies along it, not around it.
+   */
+  radius?: number;
 }
 
 function normalize(v: Vec3): Vec3 {
@@ -214,6 +220,138 @@ function perpendicular(three: typeof THREE, v: THREE.Vector3, axis: THREE.Vector
   return out.normalize();
 }
 
+/** How far past the handle's surface a fingertip's pad may sit. `hands.rs`'s `FINGERTIP_PAD`. */
+const FINGERTIP_PAD = 0.015;
+/** The coarse step of the contact search, in curl. */
+const CONTACT_STEP = 0.05;
+/** A curl no finger passes. */
+const MAX_CURL = 1.2;
+
+/**
+ * A finger's tip at `curl`, in the hand's rest frame, walked down the chain with
+ * the same folds `poseArm` applies. `hands.rs`'s `fingertip`.
+ */
+export function fingertip(
+  three: typeof THREE,
+  rest: HandsRest,
+  finger: string,
+  curl: number,
+): THREE.Vector3 {
+  const ratios = finger === 'thumb' ? JOINT_FLEX.thumb : JOINT_FLEX.finger;
+  const w = (n: string) => rest.world.get(n)!;
+  let rot = w('hand').quat.clone();
+  let pos = w('hand').pos.clone();
+  let parent = 'hand';
+  for (const j of [1, 2, 3]) {
+    const name = `${finger}_${j}`;
+    const local = w(name).pos.clone().sub(w(parent).pos).applyQuaternion(w(parent).quat.clone().invert());
+    pos.add(local.applyQuaternion(rot));
+    const fold = new three.Quaternion().setFromAxisAngle(rest.flexAxis.get(name)!, curl * ratios[j - 1]);
+    rot = rot.clone().multiply(rest.local.get(name)!).multiply(fold).normalize();
+    parent = name;
+  }
+  // One more distal segment on: the last bone's own length, along the line the
+  // previous bone ran into it.
+  const last = w(`${finger}_3`);
+  const span = last.pos.clone().sub(w(`${finger}_2`).pos).applyQuaternion(last.quat.clone().invert());
+  return pos.add(span.applyQuaternion(rot));
+}
+
+/**
+ * How far a finger can close before its tip meets a handle `radius` thick around
+ * the fist's centre: the fist's hole is the `up` axis through the `grip` bone, so
+ * a handle is a cylinder on it. `MAX_CURL` when it never gets there, or when
+ * `radius` is zero. `hands.rs`'s `contact_curl`.
+ */
+export function contactCurl(
+  three: typeof THREE,
+  rest: HandsRest,
+  finger: string,
+  radius: number,
+): number {
+  if (!(radius > 0)) return MAX_CURL;
+  const target = radius + FINGERTIP_PAD;
+  const centre = rest.world.get('grip')!.pos;
+  const distance = (curl: number) => {
+    const d = fingertip(three, rest, finger, curl).sub(centre);
+    return d.sub(rest.up.clone().multiplyScalar(d.dot(rest.up))).length();
+  };
+  let last = distance(0);
+  if (last <= target) return 0;
+  let curl = 0;
+  while (curl < MAX_CURL) {
+    const next = Math.min(curl + CONTACT_STEP, MAX_CURL);
+    const here = distance(next);
+    if (here <= target) {
+      // Linear between the two samples: the tip's path is smooth.
+      const t = (last - target) / Math.max(last - here, 1e-6);
+      return curl + (next - curl) * Math.min(1, Math.max(0, t));
+    }
+    last = here;
+    curl = next;
+  }
+  return MAX_CURL;
+}
+
+/**
+ * How closed the thumb ends up for a handle `radius` thick, given the curl it was
+ * asked for: that curl if its tip is clear of the handle, otherwise the nearest
+ * curl that is. A thumb asked to close all the way (`MAX_CURL`) so comes to rest
+ * touching the handle, and is never inside it. Unchanged for a zero radius.
+ * `hands.rs`'s `thumb_curl`.
+ */
+export function thumbCurl(
+  three: typeof THREE,
+  rest: HandsRest,
+  radius: number,
+  requested: number,
+): number {
+  if (!(radius > 0)) return requested;
+  const target = radius + FINGERTIP_PAD;
+  const centre = rest.world.get('grip')!.pos;
+  const distance = (curl: number) => {
+    const d = fingertip(three, rest, 'thumb', curl).sub(centre);
+    return d.sub(rest.up.clone().multiplyScalar(d.dot(rest.up))).length();
+  };
+  const clear = (curl: number) => distance(curl) >= target;
+  if (clear(requested)) return requested;
+  for (let step = CONTACT_STEP; step <= MAX_CURL; step += CONTACT_STEP) {
+    // Nearest first, and the way it was asked to go first: a thumb asked to close
+    // further than it can backs off rather than springing open.
+    for (const candidate of [requested - step, requested + step]) {
+      if (candidate >= 0 && candidate <= MAX_CURL && clear(candidate)) return candidate;
+    }
+  }
+  // A handle thicker than any pose clears: the furthest the thumb gets.
+  let best = requested;
+  for (let curl = 0; curl <= MAX_CURL; curl += CONTACT_STEP) {
+    if (distance(curl) > distance(best)) best = curl;
+  }
+  return best;
+}
+
+/** How far a wrist bends before the hand has to follow the forearm: ~40 degrees. */
+export const MAX_WRIST_BEND = 0.7;
+/** Passes of the wrist/forearm fixed point; three settle it to well under a degree. */
+const WRIST_PASSES = 3;
+
+/**
+ * `aim` turned toward `forearm` until it is no more than `MAX_WRIST_BEND` from
+ * it. Unchanged when it already is. `hands.rs`'s `limit_wrist_aim`.
+ */
+export function limitWristAim(
+  three: typeof THREE,
+  forearm: THREE.Vector3,
+  aim: THREE.Vector3,
+): THREE.Vector3 {
+  const angle = forearm.angleTo(aim);
+  if (angle <= MAX_WRIST_BEND) return aim.clone();
+  let axis = forearm.clone().cross(aim);
+  if (axis.lengthSq() < 1e-8) axis = perpendicular(three, new three.Vector3(0, 1, 0), forearm);
+  else axis.normalize();
+  return forearm.clone().applyAxisAngle(axis, MAX_WRIST_BEND).normalize();
+}
+
 /**
  * Where the shoulder has to be for the arm to reach `wrist`.
  *
@@ -269,21 +407,47 @@ export function poseArm(
   const V = (v: Vec3) => new three.Vector3(v[0], v[1], v[2]);
 
   // The hand's rotation comes from the weapon, before anything else is known.
-  const aim = V(target.aim).normalize();
+  let aim = V(target.aim).normalize();
   if (aim.lengthSq() < 1e-8) aim.copy(rest.aim);
-  const up = perpendicular(three, V(target.up), aim);
-  const handDelta = frameRotation(three, rest.aim, rest.up, aim, up);
+  const wantedAim = aim.clone();
+  let up = perpendicular(three, V(target.up), aim);
+  let handDelta = frameRotation(three, rest.aim, rest.up, aim, up);
 
-  // So the wrist is wherever puts the fist's centre on the grip.
-  const wrist = V(target.grip).sub(rest.gripOffset.clone().applyQuaternion(handDelta));
-  const s = V(slideShoulder(shoulder, [wrist.x, wrist.y, wrist.z], (rest.upperLen + rest.lowerLen) * 0.985));
-  const solved = solveTwoBone(
+  // So the wrist is wherever puts the fist's centre on the grip. That moves the
+  // forearm, and a forearm that has to meet the hand at an angle no wrist makes
+  // is the kinked look: so the hand turns toward the forearm's line until the
+  // bend is one a wrist can make, and the fist stays on the grip. The wrist and
+  // the forearm depend on each other, so a few passes settle it.
+  let wrist = V(target.grip).sub(rest.gripOffset.clone().applyQuaternion(handDelta));
+  let s = V(
+    slideShoulder(shoulder, [wrist.x, wrist.y, wrist.z], (rest.upperLen + rest.lowerLen) * 0.985),
+  );
+  let solved = solveTwoBone(
     [s.x, s.y, s.z],
     [wrist.x, wrist.y, wrist.z],
     rest.upperLen,
     rest.lowerLen,
     pole,
   );
+  for (let pass = 0; pass < WRIST_PASSES; pass++) {
+    const forearm = wrist.clone().sub(V(solved.elbow)).normalize();
+    const limited = limitWristAim(three, forearm, wantedAim);
+    if (limited.angleTo(aim) < 1e-4) break;
+    aim = limited;
+    up = perpendicular(three, V(target.up), aim);
+    handDelta = frameRotation(three, rest.aim, rest.up, aim, up);
+    wrist = V(target.grip).sub(rest.gripOffset.clone().applyQuaternion(handDelta));
+    s = V(
+      slideShoulder(shoulder, [wrist.x, wrist.y, wrist.z], (rest.upperLen + rest.lowerLen) * 0.985),
+    );
+    solved = solveTwoBone(
+      [s.x, s.y, s.z],
+      [wrist.x, wrist.y, wrist.z],
+      rest.upperLen,
+      rest.lowerLen,
+      pole,
+    );
+  }
   const elbow = V(solved.elbow);
 
   // Each segment aimed along its span and rolled to keep the hand's up — so
@@ -321,7 +485,12 @@ export function poseArm(
   // The fingers are children of the hand, so a curl is local and needs nothing
   // from above: the rest rotation, then a fold about the finger's own axis.
   FINGERS.forEach((f, i) => {
-    const amount = Math.max(0, Math.min(1.2, target.curl[i] ?? 0));
+    let amount = Math.max(0, Math.min(MAX_CURL, target.curl[i] ?? 0));
+    const radius = target.radius ?? 0;
+    amount =
+      f === 'thumb'
+        ? thumbCurl(three, rest, radius, amount)
+        : Math.min(amount, contactCurl(three, rest, f, radius));
     const ratios = f === 'thumb' ? JOINT_FLEX.thumb : JOINT_FLEX.finger;
     for (const j of [1, 2, 3]) {
       const name = `${f}_${j}`;

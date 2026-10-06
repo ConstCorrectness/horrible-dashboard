@@ -12,7 +12,18 @@ import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 
 import { LOWER_LEN, SHOULDER_R, solveTwoBone, UPPER_LEN } from '../arms';
-import { findBones, poseArm, readRest, type Curl, type HandTarget } from '../hands';
+import {
+  contactCurl,
+  findBones,
+  fingertip,
+  limitWristAim,
+  MAX_WRIST_BEND,
+  poseArm,
+  readRest,
+  thumbCurl,
+  type Curl,
+  type HandTarget,
+} from '../hands';
 
 const GLB = fileURLToPath(
   new URL('../../../../../../apps/web/public/hassault-hands.glb', import.meta.url),
@@ -86,11 +97,16 @@ describe('the hands rig', () => {
     const g = worldIn(root, bones.get('grip')!);
     expect(g.distanceTo(new THREE.Vector3(...grip))).toBeLessThan(1e-3);
 
-    // The hand points where it was aimed.
+    // The hand points where it was aimed, or as near as a wrist bends: never
+    // more than MAX_WRIST_BEND off the forearm, and never further from the aim
+    // than the forearm itself is.
     const hand = worldIn(root, bones.get('hand')!);
     const knuckles = worldIn(root, bones.get('middle_1')!);
     const a = new THREE.Vector3(...aim).normalize();
-    expect(knuckles.sub(hand).normalize().dot(a)).toBeGreaterThan(0.97);
+    const pointing = knuckles.sub(hand).normalize();
+    const forearm = hand.clone().sub(worldIn(root, bones.get('fore')!)).normalize();
+    expect(pointing.angleTo(forearm)).toBeLessThanOrEqual(MAX_WRIST_BEND + 0.05);
+    expect(pointing.angleTo(a)).toBeLessThanOrEqual(forearm.angleTo(a) + 1e-3);
 
     // And the shoulder stayed on the shoulder.
     expect(
@@ -130,10 +146,86 @@ describe('the hands rig', () => {
       );
       return worldIn(root, bones.get('middle_3')!);
     };
+    const grip = new THREE.Vector3(0.3, -0.35, -0.6);
     const open = tip([0, 0, 0, 0, 0]);
     const closed = tip(FIST);
-    // At rest the palm faces -X: a closing finger moves that way and back.
-    expect(closed.x).toBeLessThan(open.x - 0.05);
-    expect(closed.z).toBeGreaterThan(open.z + 0.05);
+    // A closing finger curls in around the fist's centre, whatever way the
+    // wrist has turned the hand.
+    expect(closed.distanceTo(grip)).toBeLessThan(open.distanceTo(grip) - 0.05);
+  });
+
+  it('stops a finger where its tip meets the handle', () => {
+    const root = loadRig();
+    const bones = findBones(root);
+    const rest = readRest(THREE, root, bones);
+    const centre = rest.world.get('grip')!.pos;
+    const fromAxis = (finger: string, curl: number) => {
+      const d = fingertip(THREE, rest, finger, curl).sub(centre);
+      return d.sub(rest.up.clone().multiplyScalar(d.dot(rest.up))).length();
+    };
+    for (const finger of ['index', 'middle', 'ring', 'pinky']) {
+      // No handle: closes as far as it is asked to.
+      expect(contactCurl(THREE, rest, finger, 0)).toBe(1.2);
+      // A handle: the tip stops on its surface, not inside it.
+      const stop = contactCurl(THREE, rest, finger, 0.07);
+      expect(stop).toBeGreaterThan(0);
+      expect(stop).toBeLessThan(1.2);
+      expect(Math.abs(fromAxis(finger, stop) - 0.085)).toBeLessThan(0.01);
+      // A fatter handle stops it sooner.
+      expect(contactCurl(THREE, rest, finger, 0.12)).toBeLessThan(stop);
+    }
+  });
+
+  it('rests the thumb on the handle and never in it', () => {
+    const root = loadRig();
+    const rest = readRest(THREE, root, findBones(root));
+    const centre = rest.world.get('grip')!.pos;
+    const fromAxis = (curl: number) => {
+      const d = fingertip(THREE, rest, 'thumb', curl).sub(centre);
+      return d.sub(rest.up.clone().multiplyScalar(d.dot(rest.up))).length();
+    };
+    // No handle: it does as it is told.
+    expect(thumbCurl(THREE, rest, 0, 1.2)).toBe(1.2);
+    for (const radius of [0.05, 0.07, 0.09, 0.12]) {
+      const curl = thumbCurl(THREE, rest, radius, 1.2);
+      // Clear of it, or as far from it as a thumb gets when none clears.
+      expect(fromAxis(curl)).toBeGreaterThanOrEqual(Math.min(radius + 0.015, 0.12) - 1e-3);
+    }
+    // A thumb already clear of the handle is left where it was put.
+    expect(thumbCurl(THREE, rest, 0.05, 0.3)).toBe(0.3);
+  });
+
+  it('holds a closed fist open on a thick handle', () => {
+    const root = loadRig();
+    const bones = findBones(root);
+    const rest = readRest(THREE, root, bones);
+    const grip = new THREE.Vector3(0.3, -0.35, -0.6);
+    const tip = (radius: number) => {
+      poseArm(
+        THREE,
+        rest,
+        bones,
+        SHOULDER_R,
+        { grip: [grip.x, grip.y, grip.z], aim: [0, 0, -1], up: [0, 1, 0], curl: FIST, radius },
+        [1, -1, 0],
+        solveTwoBone,
+      );
+      return worldIn(root, bones.get('middle_3')!);
+    };
+    expect(tip(0.09).distanceTo(grip)).toBeGreaterThan(tip(0).distanceTo(grip) + 0.01);
+  });
+
+  it('turns the hand toward the forearm rather than bend the wrist past its limit', () => {
+    const forearm = new THREE.Vector3(0, 0, -1);
+    const slight = new THREE.Vector3(0.3, 0, -1).normalize();
+    expect(limitWristAim(THREE, forearm, slight).angleTo(slight)).toBeLessThan(1e-6);
+    const across = new THREE.Vector3(1, 0, 0);
+    const limited = limitWristAim(THREE, forearm, across);
+    expect(limited.angleTo(forearm)).toBeCloseTo(MAX_WRIST_BEND, 4);
+    // Turned toward the aim, not away from it.
+    expect(limited.x).toBeGreaterThan(0);
+    // Dead behind: any direction at the limit will do, but it must be finite.
+    const behind = limitWristAim(THREE, forearm, new THREE.Vector3(0, 0, 1));
+    expect(behind.angleTo(forearm)).toBeCloseTo(MAX_WRIST_BEND, 4);
   });
 });

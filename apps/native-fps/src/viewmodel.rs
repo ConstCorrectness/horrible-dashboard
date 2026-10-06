@@ -1068,12 +1068,14 @@ impl WeaponViewModel {
             aim: dir(grips.primary_aim),
             up: dir(grips.primary_up),
             curl: grips.primary_curl,
+            radius: grips.primary_radius * space.transform_vector3(Vec3::X).length(),
         };
         let support = grips.support.map(|s| HandTarget {
             grip: point(s),
             aim: dir(grips.support_aim),
             up: dir(grips.support_up),
             curl: grips.support_curl,
+            radius: grips.support_radius * space.transform_vector3(Vec3::X).length(),
         });
         let arms = self.hands.as_mut()?;
         Some(arms.build(asset, &primary, support.as_ref(), out))

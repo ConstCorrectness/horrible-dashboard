@@ -116,6 +116,12 @@ export interface GripAnchors {
   supportAim: Vec3;
   supportUp: Vec3;
   supportCurl: Curl;
+  /**
+   * How thick the handle is around each fist's centre, in the prop's units: the
+   * fingers close on it and no further (`hands.ts`'s `contactCurl`).
+   */
+  primaryRadius: number;
+  supportRadius: number;
 }
 
 type GripDefaults = Omit<GripAnchors, 'support'> & { support: Vec3 };
@@ -172,6 +178,8 @@ export function gripsFor(
     supportAim: listed.supportAim ?? fallback.supportAim,
     supportUp: listed.supportUp ?? fallback.supportUp,
     supportCurl: listed.supportCurl ?? fallback.supportCurl,
+    primaryRadius: listed.primaryRadius ?? fallback.primaryRadius,
+    supportRadius: listed.supportRadius ?? fallback.supportRadius,
   };
 }
 
@@ -496,6 +504,8 @@ export class SkinnedArmRig implements ArmRigInstance {
     this.group.visible = visible;
     if (!visible) return;
     const dir = dirToCamera ?? directionsVia(toCamera);
+    // A handle's thickness is the prop's units; the hand is in camera space.
+    const scale = Math.hypot(...dir([1, 0, 0]));
 
     poseArm(
       this.three,
@@ -507,6 +517,7 @@ export class SkinnedArmRig implements ArmRigInstance {
         aim: dir(anchors.primaryAim),
         up: dir(anchors.primaryUp),
         curl: anchors.primaryCurl,
+        radius: anchors.primaryRadius * scale,
       },
       [1, -1, 0],
       solveTwoBone,
@@ -530,6 +541,7 @@ export class SkinnedArmRig implements ArmRigInstance {
         aim: m(dir(anchors.supportAim)),
         up: m(dir(anchors.supportUp)),
         curl: anchors.supportCurl,
+        radius: anchors.supportRadius * scale,
       },
       [1, -1, 0],
       solveTwoBone,

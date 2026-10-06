@@ -72,6 +72,10 @@ pub struct GripAnchors {
     pub support_aim: Vec3,
     pub support_up: Vec3,
     pub support_curl: [f32; 5],
+    /// How thick the handle is around each fist's centre, in the prop's units:
+    /// the fingers close on it and no further (`hands.rs`'s `contact_curl`).
+    pub primary_radius: f32,
+    pub support_radius: f32,
 }
 
 fn curl_from(value: &serde_json::Value) -> Option<[f32; 5]> {
@@ -86,6 +90,8 @@ fn curl_from(value: &serde_json::Value) -> Option<[f32; 5]> {
 /// The hand frames and curls every weapon starts from, before `grips.json`.
 const DEFAULT_PRIMARY_CURL: [f32; 5] = [0.7, 0.4, 1.0, 1.0, 1.0];
 const DEFAULT_SUPPORT_CURL: [f32; 5] = [0.3, 0.85, 0.85, 0.85, 0.85];
+const DEFAULT_PRIMARY_RADIUS: f32 = 0.07;
+const DEFAULT_SUPPORT_RADIUS: f32 = 0.09;
 
 fn fallback_grips() -> GripAnchors {
     GripAnchors {
@@ -99,6 +105,8 @@ fn fallback_grips() -> GripAnchors {
         support_aim: Vec3::new(1.0, 0.25, 0.0),
         support_up: Vec3::NEG_Z,
         support_curl: DEFAULT_SUPPORT_CURL,
+        primary_radius: DEFAULT_PRIMARY_RADIUS,
+        support_radius: DEFAULT_SUPPORT_RADIUS,
     }
 }
 
@@ -142,6 +150,8 @@ pub fn grips_for(weapon_id: &str) -> GripAnchors {
         support_aim: vec3_from(&defaults["supportAim"]).unwrap_or(base.support_aim),
         support_up: vec3_from(&defaults["supportUp"]).unwrap_or(base.support_up),
         support_curl: curl_from(&defaults["supportCurl"]).unwrap_or(base.support_curl),
+        primary_radius: defaults["primaryRadius"].as_f64().map_or(base.primary_radius, |r| r as f32),
+        support_radius: defaults["supportRadius"].as_f64().map_or(base.support_radius, |r| r as f32),
     };
     let Some(listed) = file["weapons"].get(weapon_id) else {
         if weapon_id.starts_with("nade_") || weapon_id.starts_with("grenade_") {
@@ -186,6 +196,12 @@ pub fn grips_for(weapon_id: &str) -> GripAnchors {
     }
     if let Some(c) = curl_from(&listed["supportCurl"]) {
         out.support_curl = c;
+    }
+    if let Some(r) = listed["primaryRadius"].as_f64() {
+        out.primary_radius = r as f32;
+    }
+    if let Some(r) = listed["supportRadius"].as_f64() {
+        out.support_radius = r as f32;
     }
     out
 }

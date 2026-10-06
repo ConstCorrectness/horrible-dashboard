@@ -1,5 +1,5 @@
 {
-  "_comment": "Where the hands go on each weapon, in the PROP's own space: the GLB's coordinates as both clients read them (firearms: origin at the rear-bottom, barrel down -Z, y up; knives: origin at the hilt). Measured off each model's own geometry, so a hand lands on the grip whatever the procedural box model looked like. Read by BOTH packages/core/src/modules/hassault/arms.ts and apps/native-fps/src/arms.rs (include_str!), and pinned together by apps/native-fps/tests/browser_parity.rs. Cube units. `primary`/`support` are the centre of the closed fist (the hands rig's `grip` bone). `*Aim` runs wrist to knuckles and `*Up` along the hole through the fist, thumb side -- the hand closes around that axis, so a vertical pistol grip wants an `up` near +Y and a handguard one near -Z. `*Curl` is how closed each finger is, thumb first: a trigger finger at about 0.4 rests on the trigger rather than through it. `*Roll` only steers the procedural fallback arms, which have no fingers to aim.",
+  "_comment": "Where the hands go on each weapon, in the PROP's own space: the GLB's coordinates as both clients read them (firearms: origin at the rear-bottom, barrel down -Z, y up; knives: origin at the hilt). Measured off each model's own geometry, so a hand lands on the grip whatever the procedural box model looked like. Read by BOTH packages/core/src/modules/hassault/arms.ts and apps/native-fps/src/arms.rs (include_str!), and pinned together by apps/native-fps/tests/browser_parity.rs. Cube units. `primary`/`support` are the centre of the closed fist (the hands rig's `grip` bone). `*Aim` runs wrist to knuckles and `*Up` along the hole through the fist, thumb side -- the hand closes around that axis, so a vertical pistol grip wants an `up` near +Y and a handguard one near -Z. `*Curl` is how closed each finger is, thumb first: a trigger finger at about 0.4 rests on the trigger rather than through it. `*Roll` only steers the procedural fallback arms, which have no fingers to aim. `*Radius` is how thick the handle is around each fist's centre, in the same units: a finger closes until its tip touches that cylinder and no further, so a fist closes on a grip instead of through it. Measured from the prop's x/y extent at the grip (hands.rs contact_curl).",
   "_knifeHilt": "Where a knife prop's origin -- its hilt, where blade meets guard -- is placed in the box model's space. Knives are placed by that point rather than by their bounding box, so every archetype's handle lands in the same fist whatever its blade does. Read by fitKnifeModel (models/weapons.ts) and fit_prop (viewmodel.rs).",
   "knifeHilt": [
     0.0,
@@ -30,7 +30,7 @@
       0.3
     ],
     "primaryCurl": [
-      0.7,
+      1.2,
       0.4,
       1.0,
       1.0,
@@ -47,12 +47,14 @@
       -1.0
     ],
     "supportCurl": [
-      0.3,
+      1.2,
       0.85,
       0.85,
       0.85,
       0.85
-    ]
+    ],
+    "primaryRadius": 0.07,
+    "supportRadius": 0.09
   },
   "weapons": {
     "pistol": {
@@ -79,7 +81,7 @@
         0.1
       ],
       "primaryCurl": [
-        0.75,
+        1.2,
         0.38,
         1.0,
         1.0,
@@ -96,12 +98,14 @@
         -0.6
       ],
       "supportCurl": [
-        0.5,
+        1.2,
         0.95,
         0.95,
         0.95,
         0.95
-      ]
+      ],
+      "primaryRadius": 0.06,
+      "supportRadius": 0.06
     },
     "assault": {
       "primary": [
@@ -110,9 +114,9 @@
         -0.56
       ],
       "support": [
-        0.0,
-        0.44,
-        -1.4
+        -0.008,
+        0.52,
+        -1.55
       ],
       "primaryRoll": 0.0,
       "supportRoll": -0.12,
@@ -129,38 +133,41 @@
     },
     "shotgun": {
       "primary": [
-        0.0,
-        0.26,
-        -0.52
+        -0.02,
+        0.28,
+        -0.55
       ],
       "support": [
-        0.0,
-        0.33,
-        -1.72
+        -0.02,
+        0.38,
+        -1.95
       ],
       "primaryRoll": 0.0,
       "supportRoll": -0.08,
       "supportCurl": [
-        0.35,
+        1.2,
         0.95,
         0.95,
         0.95,
         0.95
-      ]
+      ],
+      "supportRadius": 0.07
     },
     "sniper": {
       "primary": [
-        0.0,
-        0.22,
-        -1.19
+        0.03,
+        0.27,
+        -0.65
       ],
       "support": [
-        0.0,
-        0.38,
-        -1.72
+        0.03,
+        0.43,
+        -1.85
       ],
       "primaryRoll": 0.0,
-      "supportRoll": -0.1
+      "supportRoll": -0.1,
+      "supportRadius": 0.075,
+      "primaryRadius": 0.06
     },
     "knife": {
       "primary": [
@@ -182,12 +189,13 @@
         -1.0
       ],
       "primaryCurl": [
-        0.9,
+        1.2,
         1.0,
         1.0,
         1.0,
         1.0
-      ]
+      ],
+      "primaryRadius": 0.045
     }
   }
 }

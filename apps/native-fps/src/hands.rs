@@ -54,6 +54,10 @@ pub struct HandTarget {
     pub aim: Vec3,
     pub up: Vec3,
     pub curl: [f32; 5],
+    /// The handle's thickness around the fist's centre: no finger closes past
+    /// touching it. Zero for "closes on nothing". The thumb settles on the
+    /// handle's surface instead (`thumb_curl`): it lies along it, not around it.
+    pub radius: f32,
 }
 
 /// The parsed asset and its rest pose. Immutable, shared by every view model.
@@ -218,6 +222,140 @@ fn perpendicular(v: Vec3, axis: Vec3) -> Vec3 {
     out.normalize()
 }
 
+/// How far a wrist bends before the hand has to follow the forearm: ~40 degrees.
+/// `hands.ts`'s `MAX_WRIST_BEND`.
+pub const MAX_WRIST_BEND: f32 = 0.7;
+/// Passes of the wrist/forearm fixed point. `hands.ts`'s `WRIST_PASSES`.
+const WRIST_PASSES: usize = 3;
+
+/// `aim` turned toward `forearm` until it is no more than `MAX_WRIST_BEND` from
+/// it; unchanged when it already is. `hands.ts`'s `limitWristAim`.
+pub fn limit_wrist_aim(forearm: Vec3, aim: Vec3) -> Vec3 {
+    if forearm.angle_between(aim) <= MAX_WRIST_BEND {
+        return aim;
+    }
+    let cross = forearm.cross(aim);
+    let axis = if cross.length_squared() < 1e-8 {
+        perpendicular(Vec3::Y, forearm)
+    } else {
+        cross.normalize()
+    };
+    (Quat::from_axis_angle(axis, MAX_WRIST_BEND) * forearm).normalize()
+}
+
+/// How far past the handle's surface a fingertip's pad is allowed to sit: the
+/// pad is soft and the mesh is a glove, so touching is a hair inside.
+const FINGERTIP_PAD: f32 = 0.015;
+/// The coarse step of the contact search, in curl. `hands.ts`'s `CONTACT_STEP`.
+const CONTACT_STEP: f32 = 0.05;
+/// A curl no finger passes. `hands.ts`'s `MAX_CURL`.
+const MAX_CURL: f32 = 1.2;
+
+/// A finger's tip at `curl`, in the hand's rest frame — the same frame as
+/// `Rest::world_pos` — walked down the chain with the same folds `solve` applies.
+/// `hands.ts`'s `fingertip`.
+fn fingertip(rest: &Rest, finger: &str, curl: f32) -> Vec3 {
+    let ratios = if finger == "thumb" {
+        JOINT_FLEX_THUMB
+    } else {
+        JOINT_FLEX_FINGER
+    };
+    let mut rot = rest.world_rot["hand"];
+    let mut pos = rest.world_pos["hand"];
+    let mut parent = "hand".to_string();
+    for j in 1..=3 {
+        let name = format!("{finger}_{j}");
+        let local =
+            rest.world_rot[&parent].inverse() * (rest.world_pos[&name] - rest.world_pos[&parent]);
+        pos += rot * local;
+        let fold = Quat::from_axis_angle(rest.flex_axis[&name], curl * ratios[j - 1]);
+        rot = (rot * rest.local_rot[&name] * fold).normalize();
+        parent = name;
+    }
+    // The tip is one more distal segment on: the last bone's own length, along
+    // the line the previous bone ran into it.
+    let last = format!("{finger}_3");
+    let before = format!("{finger}_2");
+    let span = rest.world_pos[&last] - rest.world_pos[&before];
+    let local_tip = rest.world_rot[&last].inverse() * span;
+    pos + rot * local_tip
+}
+
+/// How far a finger can close before its tip meets a handle `radius` thick
+/// around the fist's centre: the fist's hole is the `up` axis through the `grip`
+/// bone, so a handle is a cylinder on it. `MAX_CURL` when it never gets there,
+/// or when `radius` is zero. `hands.ts`'s `contactCurl`.
+fn contact_curl(rest: &Rest, finger: &str, radius: f32) -> f32 {
+    if radius <= 0.0 {
+        return MAX_CURL;
+    }
+    let target = radius + FINGERTIP_PAD;
+    let centre = rest.world_pos["grip"];
+    let distance = |curl: f32| {
+        let d = fingertip(rest, finger, curl) - centre;
+        (d - rest.up * d.dot(rest.up)).length()
+    };
+    let mut last = distance(0.0);
+    if last <= target {
+        return 0.0;
+    }
+    let mut curl = 0.0;
+    while curl < MAX_CURL {
+        let next = (curl + CONTACT_STEP).min(MAX_CURL);
+        let here = distance(next);
+        if here <= target {
+            // Linear between the two samples: the tip's path is smooth.
+            let t = (last - target) / (last - here).max(1e-6);
+            return curl + (next - curl) * t.clamp(0.0, 1.0);
+        }
+        last = here;
+        curl = next;
+    }
+    MAX_CURL
+}
+
+/// How closed the thumb ends up for a handle `radius` thick, given the curl it
+/// was asked for: that curl if its tip is clear of the handle, otherwise the
+/// nearest curl that is. A thumb asked to close all the way (`MAX_CURL`) so comes
+/// to rest touching the handle, wherever the handle's thickness puts that, and is
+/// never inside it. Unchanged for a zero radius. `hands.ts`'s `thumbCurl`.
+fn thumb_curl(rest: &Rest, radius: f32, requested: f32) -> f32 {
+    if radius <= 0.0 {
+        return requested;
+    }
+    let target = radius + FINGERTIP_PAD;
+    let centre = rest.world_pos["grip"];
+    let distance = |curl: f32| {
+        let d = fingertip(rest, "thumb", curl) - centre;
+        (d - rest.up * d.dot(rest.up)).length()
+    };
+    let clear = |curl: f32| distance(curl) >= target;
+    if clear(requested) {
+        return requested;
+    }
+    let mut step = CONTACT_STEP;
+    while step <= MAX_CURL {
+        // Nearest first, and the way it was asked to go first: a thumb asked to
+        // close further than it can backs off rather than springing open.
+        for candidate in [requested - step, requested + step] {
+            if (0.0..=MAX_CURL).contains(&candidate) && clear(candidate) {
+                return candidate;
+            }
+        }
+        step += CONTACT_STEP;
+    }
+    // A handle thicker than any pose clears: the furthest the thumb gets.
+    let mut best = requested;
+    let mut curl = 0.0;
+    while curl <= MAX_CURL {
+        if distance(curl) > distance(best) {
+            best = curl;
+        }
+        curl += CONTACT_STEP;
+    }
+    best
+}
+
 /// Where the shoulder has to be for the arm to reach `wrist`: straight forward
 /// when that is enough, along the line to the hand when it is not. `hands.ts`'s
 /// `slideShoulder`, which explains why.
@@ -274,13 +412,30 @@ impl ArmPose {
         } else {
             target.aim.normalize()
         };
-        let up = perpendicular(target.up, aim);
-        let hand_delta = frame_rotation(rest.aim, rest.up, aim, up);
-
-        let wrist = target.grip - hand_delta * rest.grip_offset;
-        let shoulder = slide_shoulder(shoulder, wrist, (rest.upper_len + rest.lower_len) * 0.985);
-        let (elbow, stretched) =
-            solve_two_bone(shoulder, wrist, rest.upper_len, rest.lower_len, pole);
+        let wanted_aim = aim;
+        let reach = (rest.upper_len + rest.lower_len) * 0.985;
+        // Each pass is `hands.ts`'s: the hand's frame, the wrist that puts the
+        // fist on the grip, the arm that reaches it.
+        let arm = |aim: Vec3| {
+            let up = perpendicular(target.up, aim);
+            let hand_delta = frame_rotation(rest.aim, rest.up, aim, up);
+            let wrist = target.grip - hand_delta * rest.grip_offset;
+            let shoulder = slide_shoulder(shoulder, wrist, reach);
+            let (elbow, stretched) =
+                solve_two_bone(shoulder, wrist, rest.upper_len, rest.lower_len, pole);
+            (up, hand_delta, wrist, shoulder, elbow, stretched)
+        };
+        let mut aim = aim;
+        let (mut up, mut hand_delta, mut wrist, mut shoulder, mut elbow, mut stretched) = arm(aim);
+        for _ in 0..WRIST_PASSES {
+            let forearm = (wrist - elbow).normalize_or(aim);
+            let limited = limit_wrist_aim(forearm, wanted_aim);
+            if limited.angle_between(aim) < 1e-4 {
+                break;
+            }
+            aim = limited;
+            (up, hand_delta, wrist, shoulder, elbow, stretched) = arm(aim);
+        }
 
         let rest_dir =
             |from: &str, to: &str| (rest.world_pos[to] - rest.world_pos[from]).normalize();
@@ -314,7 +469,12 @@ impl ArmPose {
         );
 
         for (i, f) in FINGERS.iter().enumerate() {
-            let amount = target.curl[i].clamp(0.0, 1.2);
+            let mut amount = target.curl[i].clamp(0.0, MAX_CURL);
+            amount = if *f == "thumb" {
+                thumb_curl(rest, target.radius, amount)
+            } else {
+                amount.min(contact_curl(rest, f, target.radius))
+            };
             let ratios = if *f == "thumb" {
                 JOINT_FLEX_THUMB
             } else {
@@ -413,6 +573,7 @@ impl Arms {
             aim: m(support.aim),
             up: m(support.up),
             curl: support.curl,
+            radius: support.radius,
         };
         self.left.solve(
             asset,
@@ -455,6 +616,7 @@ mod tests {
             aim: Vec3::new(0.0, 0.3, -1.0),
             up: Vec3::new(0.0, 1.0, 0.3),
             curl: FIST,
+            radius: 0.0,
         };
         let solve = arm.solve(
             &a,
@@ -480,6 +642,7 @@ mod tests {
             aim: Vec3::NEG_Z,
             up: Vec3::NEG_Z,
             curl: FIST,
+            radius: 0.0,
         };
         let mut out = Vec::new();
         let (right, left) = arms.build(&a, &far, Some(&far), &mut out);
@@ -493,6 +656,82 @@ mod tests {
     }
 
     #[test]
+    fn a_finger_stops_where_its_tip_meets_the_handle() {
+        let a = asset();
+        let centre = a.rest.world_pos["grip"];
+        let from_axis = |finger: &str, curl: f32| {
+            let d = fingertip(&a.rest, finger, curl) - centre;
+            (d - a.rest.up * d.dot(a.rest.up)).length()
+        };
+        for finger in ["index", "middle", "ring", "pinky"] {
+            // No handle: closes as far as it is asked to.
+            assert_eq!(contact_curl(&a.rest, finger, 0.0), MAX_CURL);
+            // A handle: the tip stops on its surface, not inside it.
+            let stop = contact_curl(&a.rest, finger, 0.07);
+            assert!(stop > 0.0 && stop < MAX_CURL, "{finger} stops at {stop}");
+            assert!((from_axis(finger, stop) - (0.07 + FINGERTIP_PAD)).abs() < 0.01);
+            // A fatter handle stops it sooner.
+            assert!(contact_curl(&a.rest, finger, 0.12) < stop);
+        }
+    }
+
+    #[test]
+    fn a_thumb_rests_on_the_handle_and_never_in_it() {
+        let a = asset();
+        let centre = a.rest.world_pos["grip"];
+        let from_axis = |curl: f32| {
+            let d = fingertip(&a.rest, "thumb", curl) - centre;
+            (d - a.rest.up * d.dot(a.rest.up)).length()
+        };
+        // No handle: it does as it is told.
+        assert_eq!(thumb_curl(&a.rest, 0.0, MAX_CURL), MAX_CURL);
+        for radius in [0.05, 0.07, 0.09, 0.12] {
+            let curl = thumb_curl(&a.rest, radius, MAX_CURL);
+            assert!(
+                from_axis(curl) >= (radius + FINGERTIP_PAD).min(0.12) - 1e-3,
+                "thumb inside a {radius} handle at {curl}"
+            );
+        }
+        // A thumb already clear of the handle is left where it was put.
+        assert_eq!(thumb_curl(&a.rest, 0.05, 0.3), 0.3);
+    }
+
+    #[test]
+    fn a_closed_fist_does_not_pass_through_its_handle() {
+        let a = asset();
+        let mut arm = ArmPose::new(&a);
+        let target = |radius: f32| HandTarget {
+            grip: Vec3::new(0.3, -0.35, -0.6),
+            aim: Vec3::NEG_Z,
+            up: Vec3::Y,
+            curl: FIST,
+            radius,
+        };
+        let tip = |arm: &mut ArmPose, radius: f32| {
+            arm.solve(&a, crate::arms::SHOULDER_R, &target(radius), Vec3::new(1.0, -1.0, 0.0));
+            arm.bone_position(&a, "middle_3").unwrap()
+        };
+        let bare = tip(&mut arm, 0.0);
+        let held = tip(&mut arm, 0.09);
+        // Held open by the handle: the tip is further from the fist's centre.
+        let centre = Vec3::new(0.3, -0.35, -0.6);
+        assert!(held.distance(centre) > bare.distance(centre) + 0.01);
+    }
+
+    #[test]
+    fn a_wrist_bends_no_further_than_its_limit() {
+        let forearm = Vec3::NEG_Z;
+        let slight = Vec3::new(0.3, 0.0, -1.0).normalize();
+        assert!(limit_wrist_aim(forearm, slight).angle_between(slight) < 1e-4);
+        let limited = limit_wrist_aim(forearm, Vec3::X);
+        assert!((limited.angle_between(forearm) - MAX_WRIST_BEND).abs() < 1e-3);
+        assert!(limited.x > 0.0, "turned toward the aim, not away from it");
+        let behind = limit_wrist_aim(forearm, Vec3::Z);
+        assert!(behind.is_finite());
+        assert!((behind.angle_between(forearm) - MAX_WRIST_BEND).abs() < 1e-3);
+    }
+
+    #[test]
     fn the_left_arm_is_on_the_left() {
         let a = asset();
         let mut arms = Arms::new(&a);
@@ -501,6 +740,7 @@ mod tests {
             aim: Vec3::X,
             up: Vec3::NEG_Z,
             curl: FIST,
+            radius: 0.0,
         };
         let right = HandTarget {
             grip: Vec3::new(0.3, -0.35, -0.55),
