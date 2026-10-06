@@ -44,9 +44,29 @@ nothing changes.
 
 Image: `deploy/dashboard-node/Dockerfile`. The `docker` spawner
 (`backend/hub/spawner/docker.py`, `uv sync --extra hub`) creates one container,
-volume and bridge network per user; containers are stopped when idle and started
-on the next request (`/api` answers 503 `starting` meanwhile). `HUB_SPAWNER=static`
-points every user at one running backend — **development only, no isolation**.
+volume and bridge network per user. `HUB_SPAWNER=static` points every user at one
+running backend — **development only, no isolation**.
+
+## Idle instances
+
+An instance runs only while its person is using it, and **an open tab is not use**:
+an unattended tab polls `/api/health` every 10 s, and an open notebook pane every
+2 s. So the hub ignores traffic and sockets, and counts **input** instead:
+
+- The page reports keystrokes, clicks, scrolls and touches to `POST /hub/activity`,
+  at most once a minute (`startActivityReporter` in `hosted.ts`). Loading the page
+  and signing in also count.
+- After `HUB_IDLE_MINUTES` with no input, the reaper asks the instance
+  `GET /api/hosted/busy`. That reports in-flight work: agent turns, executing
+  kernels, training runs and sweeps, eval sweeps, docs crawls, research runs, and
+  background tasks touched in the last hour. If anything is running the instance is
+  kept, for at most `HUB_BUSY_MAX_HOURS` (default 12). Otherwise it is stopped.
+- A stopped instance is **parked**: the tab's polls get 503 `parked` and its
+  socket is closed with 4408, and **neither wakes it**. The next input does, and
+  the page shows a "Resuming" toast while it starts.
+- When the hub restarts, every user who has an instance is put on the reaper's
+  watch list without counting as active. A machine nobody returns to is stopped one
+  idle window later, and a parked one is not woken by its tab's polls.
 
 **Isolation strength:** plain Docker is fine for invite-only use. For open signup
 use a sandboxing runtime (`HUB_RUNTIME=runsc`) or microVMs (Fly Machines, planned).
@@ -61,21 +81,23 @@ anything else listening inside an instance as reachable by other instances.
 
 ## Configuration
 
-| Variable                                             | Meaning                                                                             |
-| ---------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `GAMES_SERVER_URL`                                   | Account server (also passed to instances)                                           |
-| `HUB_DB_PATH`                                        | Hub SQLite (sessions, users, instance tokens)                                       |
-| `HUB_WEB_DIST`                                       | Built `apps/web/dist` served at `/`; absent → API only                              |
-| `HUB_SPAWNER`                                        | `docker` (default) or `static`                                                      |
-| `HUB_INSTANCE_IMAGE`                                 | Instance image tag                                                                  |
-| `HUB_DOCKER_REACH`                                   | `network` (hub is a container, `HUB_SELF_CONTAINER`) or `published` (loopback port) |
-| `HUB_RUNTIME`, `HUB_MEM`, `HUB_CPUS`, `HUB_PIDS`     | Instance runtime and limits                                                         |
-| `HUB_FLY_APP`, `HUB_FLY_REGION`, `HUB_FLY_VOLUME_GB` | `fly` spawner: instances app, region, per-user volume                               |
-| `HUB_FLY_TOKEN`                                      | Machines API token scoped to the instances app (a Fly secret)                       |
-| `HUB_IDLE_MINUTES`                                   | Stop instances idle this long (default 30)                                          |
-| `HUB_ALLOWED_ORIGINS`                                | Extra origins allowed to open `/ws` (CORS with credentials)                         |
-| `HUB_ALLOWED_ACCOUNTS`                               | Invite-only allowlist of ids or handles, checked on every request (live: one id)    |
-| `HUB_COOKIE_SECURE`                                  | `0` only for plain-http localhost                                                   |
+| Variable                                             | Meaning                                                                                                         |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `GAMES_SERVER_URL`                                   | Account server (also passed to instances)                                                                       |
+| `HUB_DB_PATH`                                        | Hub SQLite (sessions, users, instance tokens)                                                                   |
+| `HUB_WEB_DIST`                                       | Built `apps/web/dist` served at `/`; absent → API only                                                          |
+| `HUB_FRONTEND_URL`                                   | Frontend hosted elsewhere: page requests redirect there and `HUB_WEB_DIST` is not served (live: the Vercel URL) |
+| `HUB_SPAWNER`                                        | `docker` (default) or `static`                                                                                  |
+| `HUB_INSTANCE_IMAGE`                                 | Instance image tag                                                                                              |
+| `HUB_DOCKER_REACH`                                   | `network` (hub is a container, `HUB_SELF_CONTAINER`) or `published` (loopback port)                             |
+| `HUB_RUNTIME`, `HUB_MEM`, `HUB_CPUS`, `HUB_PIDS`     | Instance runtime and limits                                                                                     |
+| `HUB_FLY_APP`, `HUB_FLY_REGION`, `HUB_FLY_VOLUME_GB` | `fly` spawner: instances app, region, per-user volume                                                           |
+| `HUB_FLY_TOKEN`                                      | Machines API token scoped to the instances app (a Fly secret)                                                   |
+| `HUB_IDLE_MINUTES`                                   | Stop an instance after this long with no input (default 30; live: 20)                                           |
+| `HUB_BUSY_MAX_HOURS`                                 | Longest an idle but busy instance is kept running (default 12)                                                  |
+| `HUB_ALLOWED_ORIGINS`                                | Extra origins allowed to open `/ws` (CORS with credentials)                                                     |
+| `HUB_ALLOWED_ACCOUNTS`                               | Invite-only allowlist of ids or handles, checked on every request (live: one id)                                |
+| `HUB_COOKIE_SECURE`                                  | `0` only for plain-http localhost                                                                               |
 
 Run: `uv run uvicorn backend.hub.app:app --host 0.0.0.0 --port 8080`.
 
@@ -89,7 +111,7 @@ the hub directly with a single-use ticket from `POST /hub/ws-ticket`
 
 ## Deploying
 
-**Live deployment (2026-10-06):** frontend `https://horrible-dashboard.vercel.app`
+**Live deployment (2026-10-06):** frontend `https://horrible-dashboard.vercel.app`, the only front door — page requests to the hub redirect there (`HUB_FRONTEND_URL`), so a UI fix ships once
 (Vercel project `horrible-dashboard`), hub `https://horrible-hub.fly.dev` (Fly app
 `horrible-hub`), user machines in Fly app `horrible-hub-instances`. Both Fly apps are
 on their own private network, `horrible-hub-net`.

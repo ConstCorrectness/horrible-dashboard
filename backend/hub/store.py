@@ -172,6 +172,12 @@ class HubStore:
             ).fetchone()
         return row[0] if row else None
 
+    def instance_user_ids(self) -> list[str]:
+        """Everyone who has ever had an instance — any of them may be running."""
+        with self._lock:
+            rows = self._db.execute("SELECT user_id FROM instances").fetchall()
+        return [row[0] for row in rows]
+
     def set_instance_token(self, user_id: str, token: str) -> None:
         with self._lock, self._db:
             self._db.execute(

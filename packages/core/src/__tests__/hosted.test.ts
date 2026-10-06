@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   _resetHostedForTests,
+  createActivityReporter,
   hubSignedOut,
   isHosted,
   probeHub,
+  reportActivity,
   socketUrl,
   waitForInstance,
 } from '../hosted';
@@ -118,5 +120,63 @@ describe('socketUrl', () => {
       method: 'POST',
       credentials: 'include',
     });
+  });
+});
+
+describe('activity reporter', () => {
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  it('posts at most once per interval however much input arrives', async () => {
+    let t = 0;
+    const post = vi.fn(async () => ({ resumed: false }));
+    const reporter = createActivityReporter({ post, now: () => t, intervalMs: 60_000 });
+    for (let i = 0; i < 50; i++) reporter.onInput();
+    await flush();
+    expect(post).toHaveBeenCalledTimes(1);
+    t = 59_999;
+    reporter.onInput();
+    await flush();
+    expect(post).toHaveBeenCalledTimes(1);
+    t = 60_000;
+    reporter.onInput();
+    await flush();
+    expect(post).toHaveBeenCalledTimes(2);
+  });
+
+  it('says so when input woke a paused instance', async () => {
+    const onResumed = vi.fn();
+    const reporter = createActivityReporter({
+      post: async () => ({ resumed: true }),
+      onResumed,
+      now: () => 0,
+    });
+    reporter.onInput();
+    await flush();
+    expect(onResumed).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries on the next input when a report was not delivered', async () => {
+    let fail = true;
+    const post = vi.fn(async () => {
+      if (fail) throw new TypeError('offline');
+      return { resumed: false };
+    });
+    const reporter = createActivityReporter({ post, now: () => 1000 });
+    reporter.onInput();
+    await flush();
+    fail = false;
+    reporter.onInput();
+    await flush();
+    expect(post).toHaveBeenCalledTimes(2);
+  });
+
+  it('reportActivity posts to the hub and tolerates a plain backend', async () => {
+    const fetchImpl = vi.fn(async () => json(200, { resumed: true }));
+    await expect(reportActivity(fetchImpl)).resolves.toEqual({ resumed: true });
+    expect(fetchImpl).toHaveBeenCalledWith('/hub/activity', {
+      method: 'POST',
+      credentials: 'include',
+    });
+    await expect(reportActivity(async () => json(404, {}))).resolves.toBeNull();
   });
 });

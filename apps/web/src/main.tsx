@@ -61,6 +61,9 @@ import {
   initWsOrigin,
   isHosted,
   probeHub,
+  reportActivity,
+  startActivityReporter,
+  toastsStore,
   waitForInstance,
   recordsModule,
   browserModule,
@@ -145,8 +148,9 @@ async function boot(): Promise<void> {
       return;
     }
     if (hub.mode === 'signedIn') {
-      // The instance may still be booting (or waking from idle): wait for it
-      // before anything is loaded from it.
+      // Opening the page is input: report it first, so an instance the hub stopped
+      // for idleness starts now. Then wait for it before loading anything from it.
+      await reportActivity();
       const up = await waitForInstance();
       if (!up) throw new Error('Your dashboard instance did not start. Reload to retry.');
     }
@@ -344,6 +348,18 @@ async function boot(): Promise<void> {
   });
 
   bootReady();
+
+  // Behind the hub, input is what keeps this person's instance running (an open
+  // tab alone is not), and what wakes it after the hub stopped it for idleness.
+  if (isHosted()) {
+    startActivityReporter(() =>
+      toastsStore.add(
+        'info',
+        'Resuming',
+        'Your workspace was paused while idle and is starting again.',
+      ),
+    );
+  }
 }
 
 // Surface a boot failure as visible text rather than a blank white window.

@@ -144,13 +144,11 @@ async def proxy_ws(
 
     async def instance_to_browser() -> None:
         async for frame in upstream:
-            hub.touch(user.id)
             if isinstance(frame, str):
                 await websocket.send_text(frame)
             else:
                 await websocket.send_bytes(frame)
 
-    hub.open_socket(user.id)
     tasks = [
         asyncio.create_task(browser_to_instance()),
         asyncio.create_task(instance_to_browser()),
@@ -165,7 +163,6 @@ async def proxy_ws(
         # failure of the WS test. Neither pump holds anything that needs a wait.
         for task in tasks:
             task.cancel()
-        hub.close_socket(user.id)
         code = upstream.close_code or 1000
         # The instance-side close handshake runs on its own: holding the browser's
         # handler open for a round trip to the instance buys nothing, and a server

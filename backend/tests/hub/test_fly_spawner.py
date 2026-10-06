@@ -187,3 +187,16 @@ def test_a_launching_machine_is_not_started(setup) -> None:
     machine["state"] = "created"
     asyncio.run(spawner.ensure(ALICE))
     assert not any(path.endswith("/start") for _, path, _ in fake.calls)
+
+
+def test_running_reports_without_starting(setup) -> None:
+    spawner, fake, _, _ = setup()
+    assert asyncio.run(spawner.running(ALICE)) is None  # never created
+    instance = asyncio.run(spawner.ensure(ALICE))
+    assert asyncio.run(spawner.running(ALICE)) == instance
+    asyncio.run(spawner.stop(ALICE.id))
+    calls = len(fake.calls)
+    assert asyncio.run(spawner.running(ALICE)) is None
+    [machine] = fake.machines.values()
+    assert machine["state"] == "stopped"
+    assert all(method == "GET" for method, _, _ in fake.calls[calls:])

@@ -144,3 +144,109 @@ def put_games_session(body: GamesSession) -> dict[str, bool]:
 
     jsonstore.write_text(server_auth._token_path(), json.dumps(body.model_dump()))
     return {"ok": True}
+
+
+# ---- is this instance doing work? ----------------------------------------------
+#
+# The hub stops an instance once its user has given no input for a while — an open
+# tab is not use (it polls /api/health every 10 s whether anyone is there or not).
+# But stopping the process kills whatever it is in the middle of, so before it does
+# the hub asks here. Each probe reads in-memory state (or one small SQLite count)
+# and is independent: a probe that fails is skipped, never the whole answer.
+
+
+def _agent_turns() -> bool:
+    from backend.modules.agent import orchestrator
+
+    return bool(orchestrator._turns)
+
+
+def _kernels_executing() -> bool:
+    from backend.modules.notebook.manager import notebook_manager
+    from backend.modules.scrive.kernel import scrive_kernels
+    from backend.modules.training.kernels import training_kernels
+
+    for manager in (notebook_manager, scrive_kernels, training_kernels):
+        for session in list(manager.sessions.values()):
+            if session.status == "busy" or session.exec_queue.qsize() > 0:
+                return True
+    return False
+
+
+def _training_runs() -> bool:
+    from backend.modules.training import sweeps
+    from backend.modules.training.runners.script_runner import script_runner
+
+    if any(run.running for run in list(script_runner.runs.values())):
+        return True
+    return any(
+        record.get("state") in ("queued", "running", "stopping")
+        for record in list(sweeps._sweeps.values())
+    )
+
+
+def _eval_sweeps() -> bool:
+    from backend.modules.evals.sweep import active_sweeps
+
+    return bool(active_sweeps())
+
+
+def _doc_crawls() -> bool:
+    from backend.modules.docviewer import crawl
+
+    return any(not task.done() for task in list(crawl._running.values()))
+
+
+def _research_runs() -> bool:
+    from backend.modules.research import runstore
+
+    return bool(runstore.list_resumable_runs())
+
+
+def _queued_tasks() -> bool:
+    # Library ingest, CLIP embedding, search crawls, Drive sync. Only rows touched
+    # in the last hour count: nothing resets a `running` row after a crash, and a
+    # stale one must not keep a machine up forever.
+    from backend.modules.tasks.queue import _get_db_conn
+
+    with _get_db_conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM async_tasks WHERE status IN ('pending', 'running')"
+            " AND updated_at > datetime('now', '-1 hour')"
+        ).fetchone()
+    return bool(row and row[0])
+
+
+#: name → probe. Names are what the hub logs when it keeps an instance running.
+BUSY_PROBES: dict[str, Any] = {
+    "agent turn": _agent_turns,
+    "kernel executing": _kernels_executing,
+    "training run": _training_runs,
+    "eval sweep": _eval_sweeps,
+    "docs crawl": _doc_crawls,
+    "research run": _research_runs,
+    "background task": _queued_tasks,
+}
+
+
+def busy_reasons() -> list[str]:
+    reasons = []
+    for name, probe in BUSY_PROBES.items():
+        try:
+            if probe():
+                reasons.append(name)
+        except Exception:  # noqa: BLE001 - one broken probe must not hide the rest
+            import logging
+
+            logging.getLogger(__name__).debug("busy probe %s failed", name, exc_info=True)
+    return reasons
+
+
+@router.get("/busy")
+async def get_busy() -> dict[str, Any]:
+    """Whether stopping this instance now would cut work short, and what work."""
+    import asyncio
+
+    # Off the loop: two probes touch SQLite.
+    reasons = await asyncio.to_thread(busy_reasons)
+    return {"busy": bool(reasons), "reasons": reasons}

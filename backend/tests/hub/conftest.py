@@ -33,7 +33,7 @@ def _free_port() -> int:
 
 
 def make_upstream() -> tuple[FastAPI, dict[str, Any]]:
-    seen: dict[str, Any] = {"games_session": None, "requests": []}
+    seen: dict[str, Any] = {"games_session": None, "requests": [], "busy": []}
     app = FastAPI()
 
     # ---- game server ----------------------------------------------------------
@@ -73,6 +73,12 @@ def make_upstream() -> tuple[FastAPI, dict[str, Any]]:
             return JSONResponse({}, status_code=401)
         seen["games_session"] = await request.json()
         return {"ok": True}
+
+    @app.get("/api/hosted/busy")
+    async def busy(request: Request) -> Any:
+        if not _authorized(request):
+            return JSONResponse({}, status_code=401)
+        return {"busy": bool(seen["busy"]), "reasons": seen["busy"]}
 
     @app.api_route("/api/echo", methods=["GET", "POST"])
     async def echo(request: Request) -> Any:
@@ -162,7 +168,7 @@ def make_hub(upstream, tmp_path, monkeypatch):
     monkeypatch.setenv("GAMES_SERVER_URL", upstream.url)
     clients: list[TestClient] = []
 
-    def _make(**overrides: Any) -> TestClient:
+    def _make(spawner: Any = None, **overrides: Any) -> TestClient:
         settings: dict[str, Any] = {
             "db_path": tmp_path / f"hub{len(clients)}.db",
             "web_dist": tmp_path / "no-dist",
@@ -170,7 +176,7 @@ def make_hub(upstream, tmp_path, monkeypatch):
             **overrides,
         }
         config = HubConfig(**settings)
-        spawner = StaticSpawner(upstream.url, INSTANCE_TOKEN)
+        spawner = spawner or StaticSpawner(upstream.url, INSTANCE_TOKEN)
         client = TestClient(create_app(config, spawner))
         client.__enter__()
         clients.append(client)
@@ -187,3 +193,31 @@ def sign_in(client: TestClient, email: str = "alice@example.com") -> dict[str, A
     )
     assert res.status_code == 200
     return res.json()
+
+
+class MachineSpawner:
+    """A spawner whose one instance (the fake upstream) can be up or down, and which
+    records every call — enough to tell "woke the machine" from "left it parked"."""
+
+    def __init__(self, url: str) -> None:
+        from backend.hub.spawner.base import Instance
+
+        self.instance = Instance(base_url=url, token=INSTANCE_TOKEN)
+        self.up = False
+        self.ensures = 0
+        self.stops = 0
+
+    async def ensure(self, user):
+        self.ensures += 1
+        self.up = True
+        return self.instance
+
+    async def running(self, user):
+        return self.instance if self.up else None
+
+    async def stop(self, user_id):
+        self.stops += 1
+        self.up = False
+
+    async def close(self):
+        return None

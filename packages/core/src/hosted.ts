@@ -177,3 +177,87 @@ export function _resetHostedForTests(): void {
   account = null;
   signedOut = false;
 }
+
+// ---- activity ------------------------------------------------------------------
+//
+// Behind the hub, an instance runs only while its person is using it. An open tab is
+// not use — it polls /api/health every 10 s with nobody there — so the hub counts
+// input instead, which only the page can see. Reported at most once a minute; the
+// hub's idle window is many minutes, so that is plenty and costs nothing.
+
+/** The fewest milliseconds between two reports. */
+export const ACTIVITY_INTERVAL_MS = 60_000;
+
+const ACTIVITY_EVENTS = ['pointerdown', 'keydown', 'wheel', 'touchstart'] as const;
+
+/**
+ * A throttled reporter: call `onInput` on every input event; it posts at most once
+ * per `intervalMs`, and calls `onResumed` when the hub says the instance had been
+ * stopped and is starting again. Pure apart from `post`, so it is testable.
+ */
+export function createActivityReporter(options: {
+  post: () => Promise<{ resumed?: boolean } | null>;
+  onResumed?: () => void;
+  now?: () => number;
+  intervalMs?: number;
+}): { onInput: () => void } {
+  const now = options.now ?? (() => Date.now());
+  const interval = options.intervalMs ?? ACTIVITY_INTERVAL_MS;
+  let last = -Infinity;
+  let inFlight = false;
+  return {
+    onInput() {
+      const t = now();
+      if (inFlight || t - last < interval) return;
+      last = t;
+      inFlight = true;
+      void options
+        .post()
+        .then((res) => {
+          if (res?.resumed) options.onResumed?.();
+        })
+        .catch(() => {
+          last = -Infinity; // not delivered — let the next input try again
+        })
+        .finally(() => {
+          inFlight = false;
+        });
+    },
+  };
+}
+
+/** Report activity once, now (page load, before waiting for the instance). */
+export async function reportActivity(
+  fetchImpl: FetchLike = fetch,
+): Promise<{ resumed?: boolean } | null> {
+  try {
+    const res = await fetchImpl(apiUrl('/hub/activity'), {
+      method: 'POST',
+      credentials: 'include',
+    });
+    return res.ok ? ((await res.json()) as { resumed?: boolean }) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Listen for input for the life of the page. `onResumed` runs when input woke an
+ * instance the hub had stopped for idleness. Returns a stop function.
+ */
+export function startActivityReporter(onResumed?: () => void): () => void {
+  const reporter = createActivityReporter({ post: () => reportActivity(), onResumed });
+  const onVisible = () => {
+    if (document.visibilityState === 'visible') reporter.onInput();
+  };
+  for (const name of ACTIVITY_EVENTS) {
+    window.addEventListener(name, reporter.onInput, { capture: true, passive: true });
+  }
+  document.addEventListener('visibilitychange', onVisible);
+  return () => {
+    for (const name of ACTIVITY_EVENTS) {
+      window.removeEventListener(name, reporter.onInput, { capture: true });
+    }
+    document.removeEventListener('visibilitychange', onVisible);
+  };
+}

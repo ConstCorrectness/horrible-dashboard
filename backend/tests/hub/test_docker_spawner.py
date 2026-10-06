@@ -179,3 +179,14 @@ def test_container_without_a_recorded_token_is_replaced(setup, tmp_path) -> None
     assert old.removed
     assert len(docker.containers.runs) == 2
     assert instance.token != old_token
+
+
+def test_running_reports_without_starting(setup) -> None:
+    spawner, docker, _ = setup(docker_reach="published")
+    assert asyncio.run(spawner.running(ALICE)) is None
+    instance = asyncio.run(spawner.ensure(ALICE))
+    assert asyncio.run(spawner.running(ALICE)) == instance
+    asyncio.run(spawner.stop(ALICE.id))
+    assert asyncio.run(spawner.running(ALICE)) is None
+    container = docker.containers.by_name[f"hd-user-{user_key(ALICE.id)}"]
+    assert container.status == "exited"

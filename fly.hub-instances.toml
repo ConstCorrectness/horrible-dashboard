@@ -1,7 +1,7 @@
 # Build-and-push only: the image the hub creates each user's Fly Machine from.
 # This app has no services and no deploy of its own — the hub's spawner
 # (backend/hub/spawner/fly.py) owns every machine in it.
-#   fly deploy -c fly.hub-instances.toml --build-only --push --image-label v3
+#   fly deploy -c fly.hub-instances.toml --build-only --push --image-label v4
 
 app = 'horrible-hub-instances'
 primary_region = 'iad'

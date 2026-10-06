@@ -72,6 +72,20 @@ class DockerSpawner:
         async with lock:
             return await asyncio.to_thread(self._ensure_sync, user)
 
+    async def running(self, user: User) -> Instance | None:
+        return await asyncio.to_thread(self._running_sync, user)
+
+    def _running_sync(self, user: User) -> Instance | None:
+        name = f"hd-user-{user_key(user.id)}"
+        token = self._store.instance_token(user.id)
+        container = self._get(self._client.containers, name)
+        if container is None or token is None:
+            return None
+        container.reload()
+        if container.status != "running":
+            return None
+        return Instance(base_url=self._address(container, name), token=token)
+
     async def stop(self, user_id: str) -> None:
         name = f"hd-user-{user_key(user_id)}"
         container = await asyncio.to_thread(self._get, self._client.containers, name)

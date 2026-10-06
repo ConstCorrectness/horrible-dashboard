@@ -120,3 +120,40 @@ def test_hosted_profile_drops_desktop_modules(tmp_path) -> None:
     # Everything a hosted user does use stays.
     assert any(p.startswith("/api/settings") for p in routes)
     assert any(p.startswith("/api/files") for p in routes)
+
+
+def test_busy_route_reports_in_flight_work(monkeypatch) -> None:
+    """The hub asks this before stopping an idle user's instance."""
+    from fastapi import FastAPI
+
+    probes = {"agent turn": lambda: False, "training run": lambda: True}
+    monkeypatch.setattr(hosted, "BUSY_PROBES", probes)
+    api = FastAPI()
+    api.include_router(hosted.router, prefix="/api")
+    client = TestClient(api)
+    assert client.get("/api/hosted/busy").json() == {
+        "busy": True,
+        "reasons": ["training run"],
+    }
+    monkeypatch.setitem(probes, "training run", lambda: False)
+    assert client.get("/api/hosted/busy").json() == {"busy": False, "reasons": []}
+
+
+def test_a_broken_busy_probe_is_skipped_not_fatal(monkeypatch) -> None:
+    def broken() -> bool:
+        raise RuntimeError("module not loaded")
+
+    monkeypatch.setattr(
+        hosted, "BUSY_PROBES", {"broken": broken, "eval sweep": lambda: True}
+    )
+    assert hosted.busy_reasons() == ["eval sweep"]
+
+
+def test_the_real_busy_probes_run_on_an_idle_backend() -> None:
+    """Every shipped probe resolves its imports and answers on a fresh backend —
+    a renamed attribute would otherwise read as "not busy" forever, silently."""
+    from backend.modules.tasks.queue import init_queue_db
+
+    init_queue_db()  # done by the app's lifespan on a real instance
+    for name, probe in hosted.BUSY_PROBES.items():
+        assert probe() in (True, False), name

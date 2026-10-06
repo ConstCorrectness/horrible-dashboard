@@ -8,8 +8,6 @@ import json
 import pytest
 from starlette.websockets import WebSocketDisconnect
 
-from backend.hub.app import Hub
-from backend.hub.config import HubConfig
 from backend.tests.hub.conftest import sign_in
 
 
@@ -184,28 +182,6 @@ def test_two_users_get_separate_sessions(make_hub) -> None:
     assert json.loads(client.get("/api/echo").json()["user"])["id"] == "acc-alice"
 
 
-def test_idle_users_excludes_open_sockets(tmp_path) -> None:
-    class NoSpawner:
-        async def ensure(self, user): ...
-        async def stop(self, user_id): ...
-        async def close(self): ...
-
-    from backend.hub.store import HubStore
-
-    hub = Hub(
-        HubConfig(db_path=tmp_path / "h.db", idle_minutes=1),
-        HubStore(tmp_path / "h.db"),
-        NoSpawner(),
-    )
-    hub.touch("idle")
-    hub.touch("busy")
-    hub.open_socket("busy")
-    later = hub._last_seen["idle"] + 120
-    assert hub.idle_users(now=later) == ["idle"]
-    hub.close_socket("busy")
-    assert sorted(hub.idle_users(now=hub._last_seen["busy"] + 120)) == ["busy", "idle"]
-
-
 def test_spa_index_is_revalidated_and_assets_are_served(make_hub, tmp_path) -> None:
     """Found running a real deploy: a cached index.html kept the previous build's
     bundle running after the frontend was rebuilt."""
@@ -288,3 +264,22 @@ def test_an_existing_session_loses_access_when_not_on_the_list(make_hub) -> None
     open_by_id = make_hub(allowed_accounts=("acc-alice",))
     sign_in(open_by_id)
     assert open_by_id.get("/hub/me").json()["account"]["id"] == "acc-alice"
+
+
+def test_pages_redirect_to_the_frontend_when_it_lives_elsewhere(make_hub, tmp_path) -> None:
+    """One front door: with HUB_FRONTEND_URL set the hub serves no copy of its own,
+    even if a build is present, but keeps every API, auth and socket route."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<!doctype html><title>stale copy</title>")
+    client = make_hub(web_dist=dist, frontend_url="https://dash.example")
+    for path, expected in (
+        ("/", "https://dash.example/"),
+        ("/some/route?x=1", "https://dash.example/some/route?x=1"),
+    ):
+        res = client.get(path, follow_redirects=False)
+        assert res.status_code == 308
+        assert res.headers["location"] == expected
+    assert client.get("/hub/health").json() == {"status": "ok"}
+    assert client.get("/hub/me").status_code == 401
+    assert client.get("/api/anything").status_code == 401

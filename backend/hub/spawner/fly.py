@@ -202,6 +202,19 @@ class FlySpawner:
         self._store.set_placement(
             user.id, {"machine_id": machine_id, "volume_id": volume_id}
         )
+        return self._instance(str(machine_id), token)
+
+    async def running(self, user: User) -> Instance | None:
+        machine_id = self._store.placement(user.id).get("machine_id")
+        token = self._store.instance_token(user.id)
+        if not machine_id or token is None:
+            return None
+        machine = await self._call("GET", f"/machines/{machine_id}")
+        if machine is None or machine.get("state") != "started":
+            return None
+        return self._instance(str(machine_id), token)
+
+    def _instance(self, machine_id: str, token: str) -> Instance:
         return Instance(
             base_url=f"http://{machine_id}.vm.{self._config.fly_app}.internal:{INSTANCE_PORT}",
             token=token,

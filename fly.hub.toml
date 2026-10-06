@@ -11,9 +11,14 @@
 #   echo "HUB_FLY_TOKEN=$(fly tokens create deploy -a horrible-hub-instances)" | fly secrets import -a horrible-hub --stage
 #
 # Each release:
-#   pnpm --filter @horrible/web build
-#   fly deploy -c fly.hub-instances.toml --build-only --push --image-label v3
+#   pnpm --filter @horrible/web build   (the image still copies dist; it is not served)
+#   fly deploy -c fly.hub-instances.toml --build-only --push --image-label v4
 #   fly deploy -c fly.hub.toml
+#   cd apps/web && VITE_WS_ORIGIN=https://horrible-hub.fly.dev vercel build --prod
+#   cd apps/web && vercel deploy --prebuilt --prod
+#
+# The frontend is the Vercel deployment only (HUB_FRONTEND_URL below): a page
+# request to this hub redirects there, so a UI fix ships once, to Vercel.
 
 app = 'horrible-hub'
 primary_region = 'iad'
@@ -27,7 +32,7 @@ primary_region = 'iad'
   HUB_FLY_REGION = 'iad'
   # Bump the label here and in the instances push to roll every user's machine
   # onto a new build the next time they connect.
-  HUB_INSTANCE_IMAGE = 'registry.fly.io/horrible-hub-instances:v3'
+  HUB_INSTANCE_IMAGE = 'registry.fly.io/horrible-hub-instances:v4'
   GAMES_SERVER_URL = 'wss://horrible-games.fly.dev'
   HUB_DB_PATH = '/hub-data/hub.db'
   HUB_MEM = '1g'
@@ -35,6 +40,8 @@ primary_region = 'iad'
   HUB_IDLE_MINUTES = '20'
   # The Vercel frontend's origin(s), comma-separated: allowed to open /ws.
   HUB_ALLOWED_ORIGINS = 'https://horrible-dashboard.vercel.app'
+  # The one front door. Pages requested from this hub redirect here.
+  HUB_FRONTEND_URL = 'https://horrible-dashboard.vercel.app'
   # Invite-only: account ids or handles, comma-separated. Checked on every request,
   # so removing someone cuts them off at the next redeploy. Ids (`github:…`,
   # `local:…`) are safer than handles, which their owner can rename. Empty → anyone

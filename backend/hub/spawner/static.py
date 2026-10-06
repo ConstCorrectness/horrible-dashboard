@@ -19,6 +19,9 @@ class StaticSpawner:
     async def ensure(self, user: User) -> Instance:
         return self._instance
 
+    async def running(self, user: User) -> Instance | None:
+        return self._instance
+
     async def stop(self, user_id: str) -> None:
         return None
 

@@ -45,6 +45,12 @@ class HubConfig:
     db_path: Path = field(
         default_factory=lambda: Path(os.environ.get("HUB_DB_PATH", "hub-data/hub.db"))
     )
+    #: Where the frontend lives when it is not the hub (e.g. the Vercel deployment).
+    #: Set → every page request to the hub redirects there, and `web_dist` is not
+    #: served, so there is one front door and one build to keep current.
+    frontend_url: str = field(
+        default_factory=lambda: os.environ.get("HUB_FRONTEND_URL", "").rstrip("/")
+    )
     #: Built frontend served at `/`. Absent → the hub serves only `/api`, `/hub`, `/ws`
     #: (the frontend is hosted elsewhere, e.g. Vercel).
     web_dist: Path = field(
@@ -110,6 +116,11 @@ class HubConfig:
     )
     idle_minutes: float = field(
         default_factory=lambda: float(os.environ.get("HUB_IDLE_MINUTES", "30"))
+    )
+    #: An idle user's instance that reports work in progress (an agent turn, a
+    #: training run, a busy kernel) is kept running — but no longer than this.
+    busy_max_hours: float = field(
+        default_factory=lambda: float(os.environ.get("HUB_BUSY_MAX_HOURS", "12"))
     )
     #: Browser origins allowed to open `/ws` (and, cross-origin, to call with a
     #: ticket). Empty → same-origin only.

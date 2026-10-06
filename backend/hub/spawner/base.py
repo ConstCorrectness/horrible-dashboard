@@ -22,6 +22,11 @@ class InstanceSpawner(Protocol):
         soon as it has been asked to run — readiness is the hub's to probe."""
         ...
 
+    async def running(self, user: User) -> Instance | None:
+        """The user's instance if it is running right now, else None. Must never
+        start anything: the idle reaper and parked tabs ask this."""
+        ...
+
     async def stop(self, user_id: str) -> None:
         """Stop (not delete) the user's instance; its volume survives."""
         ...
