@@ -383,10 +383,10 @@ for byte.
 
 **Resizing a map: cut it, do not scale it.** A generator's coordinates are metres, and
 every detail hangs off a wall by a few centimetres (a rug, a frieze, a sconce, a
-plinth), so scaling pulls them off the wall they were built against. Dust II and
-Mirage are instead cut along a few lines in open ground and the halves are spread
+plinth), so scaling pulls them off the wall they were built against. Dust II,
+Mirage and Inferno are instead cut along a few lines in open ground and the halves are spread
 apart: the shared machinery is `tools/blender/cutlayout.py`, and each map's
-`LAYOUT_CUTS` (in `dust2_layout.py`, `mirage_layout.py`) lists its cuts as
+`LAYOUT_CUTS` (in `dust2_layout.py`, `mirage_layout.py`, `inferno_layout.py`) lists its cuts as
 `(at, gap)` in metres per axis. A generator wraps its own primitives with a
 `Warper` made from them. A piece wholly on one side of a cut only moves; one that crosses
 it (a long wall, the ground, a ramp) grows by the gap. So walls stay joined and
@@ -395,7 +395,7 @@ everything mounted on them goes with them. Composite helpers (`add_crate_stack`,
 point, and `add_crenellations` re-lays its teeth between the moved ends.
 
 To choose cuts, run the generator with `HASSAULT_<MAP>_SCAN=<file>` set (`DUST2`,
-`MIRAGE`): it writes every primitive's footprint, and a candidate line is clean when
+`MIRAGE`, `INFERNO`): it writes every primitive's footprint, and a candidate line is clean when
 no small object (under about 7 m) crosses it. Stairs, composites and anything that
 is laid out from a list (roof beams, planters, a row of columns) are small whatever
 their size: a cut through one either splits it or stretches it. First run a new
@@ -403,15 +403,20 @@ map's generator with *empty* cuts, which must reproduce its shipped GLB byte for
 byte; that proves the wrapping changed nothing. A hand-placed coordinate in cubes (a spawn, an item,
 a bomb site, a ladder, a bot's cover node, the `MAP_CONFIGS` rows in `world3d.ts`
 and `world3d.rs`) moves with the same cuts through the map's `warp_cubes`, once, on
-the committed unstretched files. With the cuts in place, Dust II's and Mirage's
+the committed unstretched files. With the cuts in place, each map's
 walls enclose 74 x 78 m rather than 62 x 62 m, about 1.55 times the area, and
 still fit the 256-cell grid with room to spare. Mirage, which was one open square
 with a few buildings, kept its several routes to each site and gained length: T's
-walk to A went from 5.7 s to 7.3 s and to B from 6.1 s to 7.7 s.
+walk to A went from 5.7 s to 7.3 s and to B from 6.1 s to 7.7 s. Inferno is
+crowded (Banana, the apartments, the pit, the casks), so only a handful of lines
+are clean; the cuts go through Banana's middle and the middle wall, where only
+long walls cross, and T's walk went from 7.0 s to 8.7 s to A and 5.7 s to 7.5 s
+to B, with a fourth route to each site. The mid hump (`Mid_TRamp_Up`) is a wedge
+and lengthens with the cut at y = 15, so its slope eases rather than breaks.
 After changing cuts run all four steps above, then `probe_eye_inside.py`.
 
 **Props: placed by where clutter gathers, not typed in.** `tools/blender/props.py`
-dresses a map (Dust II and Mirage; `emit` takes each map's own material keys) after everything else is built, so it must be the last builder (and
+dresses a map (Dust II, Mirage and Inferno; `emit` takes each map's own material keys) after everything else is built, so it must be the last builder (and
 the lights must come before it). It plans on a quarter-metre grid of the finished
 map in final metres: what is solid (everything built that a body could meet below
 2.2 m), what is banned, and how far each cell is from a wall. It then walks the
@@ -441,12 +446,13 @@ overlapping, rubble below an eye, no passage closed, deterministic for a seed.
 **Photographed surfaces.** Dust II's surfaces carry real colour, normal and roughness
 maps from ambientCG (CC0; `apps/web/public/maps/textures/README.md` lists each set
 and the licence). They are nine kinds in `glb-surfaces.json` (`photoKinds`),
-matched only by the `dust2_` and `mirage_` infixes in Dust II's and Mirage's own
+matched only by the `dust2_`, `mirage_` and `inferno_` infixes in each map's own
 material names, so the names the other maps share (`mat_wood_crate`,
 `mat_sandstone_ochre`) stay as they were. To give another map photographed
 surfaces, give its materials an infix of their own and add that infix to the
 rules of the kinds it wants; do not widen the bare names. A material left out
-(Mirage's wrought iron, olive van metal, palm fronds) keeps the surface it had.
+(Mirage's wrought iron, olive van metal, palm fronds; Inferno's terracotta,
+bronze, cypress leaves and water) keeps the surface it had.
 Each kind needs an entry in `maplib.SOFTEN_BY_KIND` too, which every photo kind
 already has.
 
