@@ -381,6 +381,134 @@ generator writes there instead of the repo, so a change can be diffed first. The
 generators are deterministic: unchanged, they reproduce the committed GLBs byte
 for byte.
 
+**Resizing a map: cut it, do not scale it.** A generator's coordinates are metres, and
+every detail hangs off a wall by a few centimetres (a rug, a frieze, a sconce, a
+plinth), so scaling pulls them off the wall they were built against. Dust II is
+instead cut along a few lines in open ground and the halves are spread apart:
+`LAYOUT_CUTS` in `tools/blender/dust2_layout.py` lists each cut as `(at, gap)` in
+metres per axis. A piece wholly on one side of a cut only moves; one that crosses
+it (a long wall, the ground, a ramp) grows by the gap. So walls stay joined and
+everything mounted on them goes with them. Composite helpers (`add_crate_stack`,
+`add_palm_tree`, the arches, lanterns and sconces) move as one by their anchor
+point, and `add_crenellations` re-lays its teeth between the moved ends.
+
+To choose cuts, run the generator with `HASSAULT_DUST2_SCAN=<file>` set: it writes
+every primitive's footprint, and a candidate line is clean when no small object
+(under about 7 m) crosses it. A hand-placed coordinate in cubes (a spawn, an item,
+a bomb site, a ladder, a bot's cover node, the `MAP_CONFIGS` rows in `world3d.ts`
+and `world3d.rs`) moves with the same cuts through `dust2_layout.warp_cubes`.
+With the cuts in place, Dust II's walls enclose 74 x 78 m rather than 62 x 62 m,
+about 1.55 times the area, and still fit the 256-cell grid with room to spare.
+After changing cuts run all four steps above, then `probe_eye_inside.py`.
+
+**Props: placed by where clutter gathers, not typed in.** `tools/blender/props.py`
+dresses a map after everything else is built, so it must be the last builder (and
+the lights must come before it). It plans on a quarter-metre grid of the finished
+map in final metres: what is solid (everything built that a body could meet below
+2.2 m), what is banned, and how far each cell is from a wall. It then walks the
+cells next to walls in a seeded random order and lays a *vignette* in a frame
+aligned to the wall: a row of crates (sometimes one stacked), a barrel cluster, a
+sack pile or a row of jars, a taller stack where two walls meet, and rubble. A
+few crates stand as cover in the open lanes (`lane_budget`), and a bazaar's
+stalls go on open floor with room to walk round them. A vignette is kept only if
+every part fits, no part sits in another, and the floor out from the wall is
+still mostly open, so clutter does not close a passage.
+
+Banned: spawns, bomb sites, anything named like a way through (arch, door,
+portal, exit, window, stairs, ramp, any wedge: 2 m clear), the pit, and
+wall-mounted lights (2.5 m clear). The last matters: a crate beside a sconce is a
+step up to it, a body on top has an eye in the cage, and `probe_eye_inside.py`
+fails the map. The zones, their density and what they favour live in `_ZONES` in
+the generator, in the authored frame so they stretch with the cuts, and
+`_DRESS_SEED` fixes the result: a regenerated GLB is identical. Solid props are
+named without `NonCol`, so the bake treats them as cover; rubble is under a
+quarter metre. Each group (crates, barrels, jars, sacks, rubble) is one merged
+node, so the whole layer costs a handful of nodes, and about 57k triangles on Dust
+II after the bevel pass; thin rings (hoops, jar necks) are what the pass makes
+dear, so keep their segment counts low. `backend/tests/test_hassault_props.py`
+tests the planner without Blender: nothing in a wall or a ban, nothing
+overlapping, rubble below an eye, no passage closed, deterministic for a seed.
+
+**Photographed surfaces.** Dust II's surfaces carry real colour, normal and roughness
+maps from ambientCG (CC0; `apps/web/public/maps/textures/README.md` lists each set
+and the licence). They are nine kinds in `glb-surfaces.json` (`photoKinds`),
+matched only by the `dust2_` infix in Dust II's material names, so the names the
+other maps share (`mat_wood_crate`, `mat_sandstone_ochre`) stay as they were. To
+give another map photographed surfaces, give its materials an infix of their own
+and add rules for it; do not widen these.
+
+`tools/hassault_process_textures.py` turns a downloaded set into three 512 px WebP
+files. The albedo is **normalised**: per channel, in linear light, to the same mean
+as the generated tiles (`detailMean`), so the shader's `* 1.5` brings a surface back
+to the colour the map authored and the photograph only adds variation. It does not
+repaint the map. `photoNormalScale` sets how hard each kind's relief bites
+(stucco at 0.5 to 0.6, wood and rust at 1.5); the browser sets it as the material's
+`normalScale` and the native client bakes it into its layers.
+
+The browser (`photo-surfaces.ts`) keeps the generated tile on a material at build
+time and swaps in the images when they arrive, with roughness taken from the map
+(`roughness = 1`). It never does this on the Low tier, which draws Lambert and has
+no use for either map, so Low neither fetches nor shows them. The native client has
+no asset directory, so it embeds the files and appends them to the one
+`Rgba8UnormSrgb` texture array: nine albedo layers, then nine detail layers
+holding the normal's x and y and the roughness. The array decodes sRGB on
+sampling, so those values are stored *encoded*; sampling gives back exactly what
+went in, and the sRGB-space mip chain averages the data rather than its encoding.
+That is why nothing about the bind group or the pipelines changed. The shader
+builds the tangent frame from the screen-space derivatives of position and the
+planar UV (taken at the top of `fs_main`, in uniform control flow) and flips the
+normal's green, because a texture's row 0 is its top here and the maps are
+OpenGL convention.
+
+To look at the result without the game, `cargo run --release --example
+dust2_preview -- out.png x y z yaw pitch` (in `apps/native-fps`) renders the real
+GLB with the real world shader from any camera, in cubes and degrees. Its light is
+the default cube sun, not the map's atmosphere, so judge texture and relief by it,
+not brightness. `maplib.py`'s `SOFTEN_BY_KIND` gives each photo kind the edge
+rounding of the generated kind it replaced; a new kind that is missing there
+silently rounds like the default, and a wall loses its softness.
+
+**Routes.** Stretching Dust II made the walls between its lanes a problem as well as a
+feature: Mid's west wall and Long A's west wall were each unbroken for 40 to 50 m,
+and B's east wall had no way through (the "B Double Doors" were closed boxes), so
+B was reached only through the tunnels. CT took 16.6 s to walk to B and T had one
+route to each site. Three openings fix it, cut with `wall_with_openings` in the
+generator (a wall of pieces with a sill and a lintel at each opening, so it is a
+hole in the collision and not a painted one):
+
+- the **B Doors**, from the CT street into B, which took CT to B from 16.6 s to 2.6 s;
+- the **Long Doors**, from lower Mid into Long A, a second way for T to A and a
+  rotation between the two;
+- the **Lower Dark door**, from Mid into the alley beside the tunnels, a second way
+  for T to B that does not go over the catwalk.
+
+And one vertical layer: the **Long ledge**, a 1.2 m terrace against Long A's west
+wall, up a ramp from the north, with a sniper window in the wall above it. The
+window's sill is 2.6 m, which a jump from the ledge does not clear, so it is a
+sightline and not a way through. The arch helper takes a `yaw` for a gate in a
+wall that runs north to south. Five pickups went in on the new routes, in the JSON
+and in both client tables (ids 11 to 15), so the item count is 15, not 10.
+
+`tools/hassault_route_times.py <map>` measures the walk on the baked grid with the
+playability lint's own rules for what a body can stand in and climb (a jump costs
+three cubes of running): seconds from each team's spawns to each site, and how many
+*different* routes there are, the shortest and then the shortest that keeps 14
+cubes from the ones already found, within 1.6 times its length.
+`backend/tests/test_hassault_routes.py` pins the result: every team reaches every
+site, CT reaches B in under 6 s, T has two routes or more to each site, and each
+doorway is walkable. Dust II now: T takes about 9 s to A or B with three routes to
+each; CT is 2.3 s from A and 2.6 s from B. The 105 s round clock is unchanged;
+whether it wants lengthening is a playtest question, not a number.
+
+`tools/hassault_bot_soak.py <map> [seconds] [bots] [mode]` lets bots play with no
+one watching and reports how much floor they stood on and how many visits each of
+the map's cover nodes got. Bots have no navmesh: they steer straight at a point and
+probe round what is in the way, so a place reached only by a ramp from the far
+side gets no visits however good it is for a player, and a cover node belongs at a
+place they can reach. On the original Dust II they never reached B at all; they do
+now. A bot sitting still for 13 to 26 s is holding cover, not stuck: Mirage and
+Inferno do the same.
+
 To look at a map without running the game,
 `tools/blender/render_map_views.py -- hd_dust2 [out_dir] [glb]` renders a frame
 from the first spawn of each team at eye height. It has no detail textures and a
