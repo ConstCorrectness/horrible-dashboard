@@ -126,6 +126,12 @@ export class ShotController {
   private heldAlt = false;
   /** Semi-automatic weapons need the button released between shots. */
   private triggerUsed = false;
+  /**
+   * A press seen since the last frame. A click can go down and up between two
+   * frames, and `held` alone would never see it — the shot just vanished, most
+   * noticeably on a sniper where every click is a deliberate single.
+   */
+  private clicked = false;
   private lastFireMs = -Infinity;
   private wantReload = false;
   private wantSlot = -1;
@@ -162,6 +168,7 @@ export class ShotController {
     // Releasing here as well: a trigger left held while the grenade came up
     // would fire on the frame the weapon came back.
     if (blocked) {
+      this.clicked = false;
       this.release();
       this.releaseAlt();
     }
@@ -169,6 +176,7 @@ export class ShotController {
 
   press(): void {
     this.held = true;
+    this.clicked = true;
   }
 
   release(): void {
@@ -198,7 +206,10 @@ export class ShotController {
       this.previousSlot = this.slot;
       this.wantSlot = slot;
       this.slot = slot;
-      this.triggerUsed = true; // a switch does not carry the held trigger with it
+      // A switch does not carry a *held* trigger with it. With the button up there
+      // is nothing to carry, and marking it used anyway would eat the first click
+      // after every switch, since only a release clears it.
+      this.triggerUsed = this.held;
       // Nor does it carry the scope. Coming out of a switch still zoomed would
       // leave you at 4× holding a shotgun, and the FOV is the one piece of state
       // here you cannot see the cause of.
@@ -266,6 +277,10 @@ export class ShotController {
   frame(nowMs: number, viewT: number, you: SelfState | null): ShotIntent {
     const intent: ShotIntent = { fire: false, reload: false, weapon: -1, viewT, scoped: 0 };
     if (this.weapons.length === 0) return intent;
+    // One frame's worth of latch: consumed here whether or not we can fire, so a
+    // click during a reload does not go off a second later.
+    const clicked = this.clicked;
+    this.clicked = false;
 
     if (this.wantSlot >= 0) {
       intent.weapon = this.wantSlot;
@@ -310,14 +325,14 @@ export class ShotController {
     // Right-click (heldAlt): heavy stabbing (~0.75s interval)
     if (weapon.id === 'knife') {
       const isAlt = this.heldAlt;
-      const attacking = this.held || isAlt;
+      const attacking = this.held || isAlt || clicked;
       if (!attacking || this.triggerUsed) return intent;
 
       const interval = isAlt ? KNIFE_STAB_INTERVAL : KNIFE_SLASH_INTERVAL;
       if (nowMs - this.lastFireMs < interval * 1000) return intent;
 
       this.lastFireMs = nowMs;
-      this.triggerUsed = true;
+      this.triggerUsed = this.held || isAlt;
       intent.fire = true;
       intent.altFire = isAlt;
       return intent;
@@ -326,14 +341,15 @@ export class ShotController {
     if (weapon.mag > 0 && this.ammo <= 0) {
       // Out. Ask for the reload the server is about to start anyway, so the HUD
       // shows it on this frame rather than on the next snapshot.
-      if (this.held) intent.reload = true;
+      if (this.held || clicked) intent.reload = true;
       return intent;
     }
-    if (!this.held || (!weapon.auto && this.triggerUsed)) return intent;
+    if (!(this.held || clicked) || (!weapon.auto && this.triggerUsed)) return intent;
     if (nowMs - this.lastFireMs < weapon.interval * 1000) return intent;
 
     this.lastFireMs = nowMs;
-    this.triggerUsed = true;
+    // A click that already came back up has nothing left to wait for.
+    this.triggerUsed = this.held;
     if (weapon.mag > 0) this.ammo -= 1;
     intent.fire = true;
 
