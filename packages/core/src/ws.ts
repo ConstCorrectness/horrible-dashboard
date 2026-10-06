@@ -4,6 +4,7 @@
  */
 import type { WsMessage } from '@horribledashboard/sdk';
 
+import { crossOriginSocket, hubSignedOut, isHosted, socketUrl } from './hosted';
 import { wsUrl } from './origin';
 
 export type { WsMessage };
@@ -16,6 +17,10 @@ const closeListeners = new Set<() => void>();
 let socket: WebSocket | null = null;
 let backoff = 500;
 let wsPath = '/ws';
+/** A ticketed URL is being fetched (hosted, cross-origin socket); see `connect`. */
+let resolving = false;
+/** Sends issued while no socket was open yet, flushed on the next `open`. */
+const queued: string[] = [];
 
 /**
  * Configure the WebSocket path/query string (default '/ws').
@@ -32,15 +37,35 @@ export function setWsPath(path: string): void {
 
 function connect(): void {
   if (
-    socket &&
-    (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)
+    hubSignedOut() ||
+    resolving ||
+    (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING))
   ) {
     return;
   }
-  socket = new WebSocket(wsUrl(wsPath));
+  // Behind the hosted hub on another origin (a Vercel frontend), the upgrade cannot
+  // carry the session cookie, so each connection first fetches a single-use ticket.
+  // Everywhere else the URL is known synchronously, exactly as before.
+  if (isHosted() && crossOriginSocket()) {
+    resolving = true;
+    void socketUrl(wsPath)
+      .catch(() => wsUrl(wsPath))
+      .then((url) => {
+        resolving = false;
+        open(url);
+      });
+    return;
+  }
+  open(wsUrl(wsPath));
+}
+
+function open(url: string): void {
+  socket = new WebSocket(url);
 
   socket.onopen = () => {
     backoff = 500;
+    const ws = socket;
+    for (const payload of queued.splice(0)) ws?.send(payload);
     openListeners.forEach((l) => l());
   };
   socket.onmessage = (e: MessageEvent<string>) => {
@@ -119,6 +144,6 @@ export function sendChannel(channel: string, event: string, data?: unknown): voi
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(payload);
   } else {
-    socket?.addEventListener('open', () => socket?.send(payload), { once: true });
+    queued.push(payload);
   }
 }

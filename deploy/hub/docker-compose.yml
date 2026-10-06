@@ -1,0 +1,68 @@
+# A hosted dashboard on one Docker host (a VPS, or Docker Desktop for testing).
+#
+#   pnpm --filter @horrible/web build
+#   docker compose -f deploy/hub/docker-compose.yml --profile build build
+#   HUB_DOMAIN=dash.example.com docker compose -f deploy/hub/docker-compose.yml up -d
+#
+# Caddy terminates TLS (a real certificate for a public HUB_DOMAIN, its local CA for
+# `localhost`) and forwards everything — including the /ws upgrade — to the hub.
+# The hub creates one container per signed-in user from the `instance` image, each
+# on its own network that only the hub joins. See docs/architecture/hosted-hub.mdx.
+
+name: horrible-hub
+
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      HUB_DOMAIN: ${HUB_DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on:
+      - hub
+
+  hub:
+    build:
+      context: ../..
+      dockerfile: deploy/hub/Dockerfile
+    image: horrible-dashboard-hub:latest
+    container_name: horrible-hub
+    restart: unless-stopped
+    environment:
+      HUB_SPAWNER: docker
+      HUB_DOCKER_REACH: network
+      # Must match container_name: the spawner joins each user's network as this.
+      HUB_SELF_CONTAINER: horrible-hub
+      HUB_INSTANCE_IMAGE: horrible-dashboard-node:latest
+      GAMES_SERVER_URL: ${GAMES_SERVER_URL:-wss://horrible-games.fly.dev}
+      HUB_ALLOWED_ACCOUNTS: ${HUB_ALLOWED_ACCOUNTS:-}
+      HUB_ALLOWED_ORIGINS: ${HUB_ALLOWED_ORIGINS:-}
+      HUB_RUNTIME: ${HUB_RUNTIME:-}
+      HUB_MEM: ${HUB_MEM:-2g}
+      HUB_CPUS: ${HUB_CPUS:-1.0}
+      HUB_IDLE_MINUTES: ${HUB_IDLE_MINUTES:-30}
+    volumes:
+      - hub-data:/hub-data
+      # Root-equivalent on the host: the hub can start any container. Keep the hub
+      # minimal, or put a socket proxy in front that only allows container and
+      # network create/start/stop (see the docs page).
+      - /var/run/docker.sock:/var/run/docker.sock
+    # No published port: only Caddy reaches it.
+
+  # Not a service: `--profile build build` builds the per-user instance image the
+  # hub spawns from.
+  instance:
+    profiles: ["build"]
+    build:
+      context: ../..
+      dockerfile: deploy/dashboard-node/Dockerfile
+    image: horrible-dashboard-node:latest
+
+volumes:
+  caddy-data:
+  hub-data:

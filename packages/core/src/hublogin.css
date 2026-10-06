@@ -1,0 +1,136 @@
+/* HubLogin — the hosted dashboard's sign-in screen. Asymmetric two-column grid on
+   a faint technical grid; the panel carries a 2px accent top rule and a clipped
+   corner rather than a glow. Tokens only (themes.css), so it follows the theme. */
+
+.hublogin {
+  min-height: 100vh;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-8, 3rem);
+  padding: var(--space-8, 3rem) clamp(1rem, 6vw, 6rem);
+  color: var(--text);
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(var(--border-dim) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border-dim) 1px, transparent 1px);
+  background-size: 32px 32px;
+  background-position: -1px -1px;
+}
+
+.hublogin-brand {
+  max-width: 34rem;
+  animation: hublogin-enter var(--dur-slow, 320ms) var(--ease-entrance, ease-out) both;
+}
+
+.hublogin-kicker {
+  margin: 0 0 var(--space-3, 0.75rem);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta, 0.75rem);
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+
+.hublogin-title {
+  margin: 0;
+  font-family: var(--font-display, var(--font-sans));
+  font-size: var(--fs-display);
+  font-weight: var(--fw-bold, 700);
+  line-height: 1.02;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+
+.hublogin-lead {
+  margin: var(--space-5, 1.25rem) 0 var(--space-6, 1.75rem);
+  font-size: var(--fs-lead, 1rem);
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+
+.hublogin-meta {
+  margin: 0;
+  display: grid;
+  gap: 0;
+  border-top: 1px solid var(--border);
+}
+
+.hublogin-meta > div {
+  display: grid;
+  grid-template-columns: 7rem 1fr;
+  gap: var(--space-3, 0.75rem);
+  padding: var(--space-2, 0.5rem) 0;
+  border-bottom: 1px solid var(--border-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta, 0.75rem);
+}
+
+.hublogin-meta dt {
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+
+.hublogin-meta dd {
+  margin: 0;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.hublogin-panel {
+  justify-self: start;
+  width: 100%;
+  max-width: 24rem;
+  box-sizing: border-box;
+  padding: var(--space-6, 1.75rem);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%);
+  animation: hublogin-enter var(--dur-slow, 320ms) var(--ease-entrance, ease-out) 80ms both;
+}
+
+.hublogin-panel-title {
+  margin: 0 0 var(--space-4, 1rem);
+  font-size: var(--fs-label, 0.8rem);
+  font-weight: var(--fw-bold, 700);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-secondary);
+}
+
+.hublogin-panel .signin-card {
+  max-width: none;
+}
+
+@keyframes hublogin-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hublogin-brand,
+  .hublogin-panel {
+    animation: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .hublogin {
+    grid-template-columns: 1fr;
+    gap: var(--space-6, 1.75rem);
+    padding: var(--space-6, 1.75rem) 16px;
+    align-items: start;
+  }
+  .hublogin-panel {
+    max-width: none;
+  }
+}

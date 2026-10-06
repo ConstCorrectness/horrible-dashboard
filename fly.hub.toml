@@ -1,0 +1,67 @@
+# The hosted hub on Fly (backend/hub): sign-in, one Fly Machine per user, reverse
+# proxy. See docs/architecture/hosted-hub.mdx.
+#
+# One-time setup (both apps on one private network of their own, so instances
+# cannot reach the organisation's other apps):
+#   fly apps create horrible-hub --network horrible-hub-net
+#   fly apps create horrible-hub-instances --network horrible-hub-net
+#   fly volumes create hub_data -a horrible-hub -r iad -s 1
+#   # The Machines API token, scoped to the instances app only (run it yourself —
+#   # the token never needs to be seen):
+#   echo "HUB_FLY_TOKEN=$(fly tokens create deploy -a horrible-hub-instances)" | fly secrets import -a horrible-hub --stage
+#
+# Each release:
+#   pnpm --filter @horrible/web build
+#   fly deploy -c fly.hub-instances.toml --build-only --push --image-label v3
+#   fly deploy -c fly.hub.toml
+
+app = 'horrible-hub'
+primary_region = 'iad'
+
+[build]
+  dockerfile = 'deploy/hub/Dockerfile'
+
+[env]
+  HUB_SPAWNER = 'fly'
+  HUB_FLY_APP = 'horrible-hub-instances'
+  HUB_FLY_REGION = 'iad'
+  # Bump the label here and in the instances push to roll every user's machine
+  # onto a new build the next time they connect.
+  HUB_INSTANCE_IMAGE = 'registry.fly.io/horrible-hub-instances:v3'
+  GAMES_SERVER_URL = 'wss://horrible-games.fly.dev'
+  HUB_DB_PATH = '/hub-data/hub.db'
+  HUB_MEM = '1g'
+  HUB_CPUS = '1'
+  HUB_IDLE_MINUTES = '20'
+  # The Vercel frontend's origin(s), comma-separated: allowed to open /ws.
+  HUB_ALLOWED_ORIGINS = 'https://horrible-dashboard.vercel.app'
+  # Invite-only: account ids or handles, comma-separated. Checked on every request,
+  # so removing someone cuts them off at the next redeploy. Ids (`github:…`,
+  # `local:…`) are safer than handles, which their owner can rename. Empty → anyone
+  # with a games account can sign up and get a machine (and a volume) on this bill.
+  HUB_ALLOWED_ACCOUNTS = 'github:142928751'
+
+[[mounts]]
+  source = 'hub_data'
+  destination = '/hub-data'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Always on: the hub's idle reaper is what stops users' machines, and it only
+  # runs while the hub does. One machine: sessions live in its SQLite volume.
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 1
+  max_machines_running = 1
+
+  [[http_service.checks]]
+    interval = '15s'
+    timeout = '2s'
+    grace_period = '10s'
+    method = 'GET'
+    path = '/hub/health'
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '512mb'

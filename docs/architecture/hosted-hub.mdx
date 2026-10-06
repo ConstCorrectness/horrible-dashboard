@@ -1,0 +1,131 @@
+---
+title: Hosted hub
+description: Running the dashboard on a server, with each user signed in to their own isolated instance.
+---
+
+# Hosted hub
+
+`pnpm dev` runs one backend on `127.0.0.1` for one local user — the loopback bind
+is its only access control. The **hosted hub** (`backend/hub/`) lets many people
+use one deployment from a browser, each with their own dashboard.
+
+```
+browser ──► hub (public): sign-in, sessions, reverse proxy for /api and /ws
+              │  per-user network, X-Horrible-Instance-Token
+              ▼
+            one instance per user = the normal backend, HORRIBLE_PROFILE=hosted,
+            its own /data volume, cpu/mem/pid limits, no published port
+```
+
+## Sign-in
+
+Accounts are the game server's accounts (email + password, GitHub, Google). The
+hub relays the same flows a node uses (`backend/modules/games/server_auth.py`)
+under `/hub/auth/*`, but turns the minted JWT into a **browser session**: an
+opaque `hd_session` cookie (HttpOnly, SameSite=Lax, Secure by default). The JWT
+never reaches the browser; the hub hands it to the user's instance so games work
+there without a second sign-in.
+
+The frontend calls `probeHub()` (`packages/core/src/hosted.ts`) before any `/api`
+request. Signed out it renders `HubLogin` — the shared `SignInCard` routed to the
+hub via `setSignInViaHub`. Signed in it waits for the instance (`waitForInstance`)
+before loading settings. Without a hub, `/hub/me` 404s (or returns Vite's HTML) and
+nothing changes.
+
+## Instances
+
+`backend/hosted.py` turns the backend into an instance:
+
+- `HORRIBLE_INSTANCE_TOKEN` — every HTTP request and WebSocket upgrade must carry
+  it, or is refused before any route runs. Unset → no-op.
+- `HORRIBLE_PROFILE=hosted` — drops the Clubhouse
+  modules, exposes `GET /api/host` and the hub-only `PUT /api/hosted/games-session`
+  (the proxy refuses `/api/hosted/` from browsers).
+
+Image: `deploy/dashboard-node/Dockerfile`. The `docker` spawner
+(`backend/hub/spawner/docker.py`, `uv sync --extra hub`) creates one container,
+volume and bridge network per user; containers are stopped when idle and started
+on the next request (`/api` answers 503 `starting` meanwhile). `HUB_SPAWNER=static`
+points every user at one running backend — **development only, no isolation**.
+
+**Isolation strength:** plain Docker is fine for invite-only use. For open signup
+use a sandboxing runtime (`HUB_RUNTIME=runsc`) or microVMs (Fly Machines, planned).
+
+**What actually separates two users' instances is the instance token**, not the
+network. Each instance answers only its own token (checked on 2026-10-06: user A's
+container calling user B's API gets 401). The per-user bridge networks were _not_
+isolated from each other on Docker Desktop — A's container could open a TCP
+connection to B's port. Linux Docker normally isolates bridges with its
+`DOCKER-ISOLATION` rules; confirm it on your host before relying on it, and treat
+anything else listening inside an instance as reachable by other instances.
+
+## Configuration
+
+| Variable                                             | Meaning                                                                             |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `GAMES_SERVER_URL`                                   | Account server (also passed to instances)                                           |
+| `HUB_DB_PATH`                                        | Hub SQLite (sessions, users, instance tokens)                                       |
+| `HUB_WEB_DIST`                                       | Built `apps/web/dist` served at `/`; absent → API only                              |
+| `HUB_SPAWNER`                                        | `docker` (default) or `static`                                                      |
+| `HUB_INSTANCE_IMAGE`                                 | Instance image tag                                                                  |
+| `HUB_DOCKER_REACH`                                   | `network` (hub is a container, `HUB_SELF_CONTAINER`) or `published` (loopback port) |
+| `HUB_RUNTIME`, `HUB_MEM`, `HUB_CPUS`, `HUB_PIDS`     | Instance runtime and limits                                                         |
+| `HUB_FLY_APP`, `HUB_FLY_REGION`, `HUB_FLY_VOLUME_GB` | `fly` spawner: instances app, region, per-user volume                               |
+| `HUB_FLY_TOKEN`                                      | Machines API token scoped to the instances app (a Fly secret)                       |
+| `HUB_IDLE_MINUTES`                                   | Stop instances idle this long (default 30)                                          |
+| `HUB_ALLOWED_ORIGINS`                                | Extra origins allowed to open `/ws` (CORS with credentials)                         |
+| `HUB_ALLOWED_ACCOUNTS`                               | Invite-only allowlist of ids or handles, checked on every request (live: one id)    |
+| `HUB_COOKIE_SECURE`                                  | `0` only for plain-http localhost                                                   |
+
+Run: `uv run uvicorn backend.hub.app:app --host 0.0.0.0 --port 8080`.
+
+## Frontend on Vercel
+
+Vercel can host the static frontend, not the backend. Rewrite `/api/*` and
+`/hub/*` to the hub so the cookie stays first-party, and build with
+`VITE_WS_ORIGIN` set to the hub: rewrites cannot carry WebSockets, so `/ws` dials
+the hub directly with a single-use ticket from `POST /hub/ws-ticket`
+(`socketUrl` in `hosted.ts`). Add the Vercel origin to `HUB_ALLOWED_ORIGINS`.
+
+## Deploying
+
+**Live deployment (2026-10-06):** frontend `https://horrible-dashboard.vercel.app`
+(Vercel project `horrible-dashboard`), hub `https://horrible-hub.fly.dev` (Fly app
+`horrible-hub`), user machines in Fly app `horrible-hub-instances`. Both Fly apps are
+on their own private network, `horrible-hub-net`.
+
+- **Fly (`HUB_SPAWNER=fly`):** `backend/hub/spawner/fly.py` creates one Fly Machine
+  (a Firecracker microVM) and one encrypted volume per user, with no services, so a
+  machine is reachable only at `<id>.vm.horrible-hub-instances.internal`. Setup and
+  release commands are in the header of `fly.hub.toml`; the instance image is
+  pushed by `fly.hub-instances.toml`, and bumping its label in both files rolls
+  every user's machine onto the new build the next time they connect.
+- **Vercel:** from `apps/web`, build locally and deploy the output (the build needs
+  the whole pnpm workspace, which a plain upload of `apps/web` does not have):
+
+  ```bash
+  VITE_WS_ORIGIN=https://horrible-hub.fly.dev vercel build --prod
+  vercel deploy --prebuilt --prod
+  ```
+
+  Then make sure the Vercel origin is in `HUB_ALLOWED_ORIGINS` (`fly.hub.toml`).
+
+- **Bind address trap:** asyncio makes a `::` socket **IPv6-only**. Fly's proxy and
+  health checks reach the hub over IPv4, so the hub binds `0.0.0.0`; Fly's private
+  network is IPv6-only, so the Fly spawner starts instances with
+  `HORRIBLE_BIND_HOST=::`. Docker bridges use the instance's IPv4 default.
+- **One Docker host (VPS):** `deploy/hub/docker-compose.yml` — Caddy (TLS) → hub,
+  with the instance image built from `deploy/dashboard-node/Dockerfile` via
+  `--profile build`. Build `apps/web` first; the hub image copies its `dist`.
+- **Local test without the compose file:** run the hub natively with
+  `HUB_SPAWNER=docker HUB_DOCKER_REACH=published HUB_COOKIE_SECURE=0`, and a local
+  game server (`uv run uvicorn backend.games_server.app:app --port 9090`) with
+  `GAMES_SERVER_URL=ws://host.docker.internal:9090` so the instances reach it too.
+  Signed in, the command palette has **Account: Sign out of this dashboard**
+  (`hosted.signOut`, the `hosted` module, registered only behind a hub).
+
+## Not built yet
+
+Quotas and a signup cap, volume backups, and image upgrades for the Docker spawner
+(an existing user container keeps its old image until removed; the Fly spawner
+rolls them).

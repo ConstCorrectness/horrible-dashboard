@@ -56,6 +56,12 @@ import {
   shareModule,
   initShare,
   hassaultModule,
+  hostedModule,
+  HubLogin,
+  initWsOrigin,
+  isHosted,
+  probeHub,
+  waitForInstance,
   recordsModule,
   browserModule,
   audioModule,
@@ -123,6 +129,29 @@ async function boot(): Promise<void> {
   // and the rule the theme comment below protects — that the *shell's* first
   // paint is already themed — is untouched.
   const reactRoot = createRoot(root);
+
+  // Behind the hosted hub (backend/hub/), signed out means every /api call 401s:
+  // show the sign-in screen instead of booting over the user's real settings.
+  // A plain backend has no /hub/me, so this is a no-op for `pnpm dev` and Tauri.
+  if (!isTauri()) {
+    initWsOrigin((import.meta.env.VITE_WS_ORIGIN as string | undefined) ?? null);
+    const hub = await probeHub();
+    if (hub.mode === 'signedOut') {
+      reactRoot.render(
+        <StrictMode>
+          <HubLogin />
+        </StrictMode>,
+      );
+      return;
+    }
+    if (hub.mode === 'signedIn') {
+      // The instance may still be booting (or waking from idle): wait for it
+      // before anything is loaded from it.
+      const up = await waitForInstance();
+      if (!up) throw new Error('Your dashboard instance did not start. Reload to retry.');
+    }
+  }
+
   reactRoot.render(
     <StrictMode>
       <AppRoot appTitle="horrible-dashboard" initialWorkspaceId={initialWorkspaceId} />
@@ -174,7 +203,9 @@ async function boot(): Promise<void> {
     registry.register(mcpModule);
     registry.register(skillsModule);
     registry.register(browserModule);
-    registry.register(clubhouseModule);
+    // A hosted instance does not serve Clubhouse (its sign-in drives a .NET helper
+    // on the user's own machine) — see backend/hosted.py.
+    if (!isHosted()) registry.register(clubhouseModule);
     // Before the modules whose defaults it decides (llama.cpp's build and offload,
     // the tracer's cap, what the training surface recommends).
     registry.register(hardwareModule);
@@ -248,6 +279,7 @@ async function boot(): Promise<void> {
     registry.register(commonsModule);
     registry.register(peopleModule);
     registry.register(hassaultModule);
+    if (isHosted()) registry.register(hostedModule);
   });
 
   await bootStep('plugins', 'Loading plugins', loadPlugins);

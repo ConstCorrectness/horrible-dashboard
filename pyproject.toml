@@ -86,6 +86,10 @@ clip = ["onnxruntime>=1.18", "tokenizers>=0.20"]
 # still an extra because most nodes never point at an Oracle instance:
 # `uv sync --extra oracle`.
 oracle = ["oracledb>=2.5"]
+# The hosted hub's Docker spawner (`backend/hub/spawner/docker.py`): one container per
+# signed-in user. Only the hub process needs it — instances and local nodes never
+# talk to a Docker daemon: `uv sync --extra hub`.
+hub = ["docker>=7.1"]
 # Voice for the Clubhouse agent: local Whisper speech-to-text plus Edge text-to-speech.
 # Whisper needs torch (~1-2 GB), which is exactly why this is an extra and not a core
 # dep — every other module works without a word of audio. Both services are

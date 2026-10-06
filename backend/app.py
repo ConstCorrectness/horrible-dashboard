@@ -13,7 +13,9 @@ if "HORRIBLE_ENABLE_SERVER_BROWSER" not in os.environ:
 
         os.environ["HORRIBLE_ENABLE_SERVER_BROWSER"] = "1"
         env_path = Path(__file__).resolve().parent.parent / ".env"
-        if env_path.exists():
+        # Hosted instances run from an image: there is no checkout to remember a
+        # setting in, and the image's files are not the user's to rewrite.
+        if env_path.exists() and os.environ.get("HORRIBLE_PROFILE") != "hosted":
             content = env_path.read_text()
             if "HORRIBLE_ENABLE_SERVER_BROWSER" not in content:
                 with open(env_path, "a") as f:
@@ -21,7 +23,7 @@ if "HORRIBLE_ENABLE_SERVER_BROWSER" not in os.environ:
     except ImportError:
         pass
 
-from backend import paths
+from backend import hosted, paths
 
 # `<repo>/logs` in a checkout, the per-OS log directory in a packaged install —
 # resolved from this file's location rather than the cwd, so it does not move when
@@ -38,7 +40,7 @@ logging.basicConfig(
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.modules.agent import router as agent_router
@@ -398,10 +400,23 @@ async def _republish_presence() -> None:
 
 app.add_middleware(_ObserveServerPort)
 
+# Added last so it is the outermost layer: a request without the hub's instance
+# token is refused before telemetry, CORS or any route sees it. A no-op unless
+# HORRIBLE_INSTANCE_TOKEN is set — see backend/hosted.py.
+app.add_middleware(hosted.InstanceGate)
+
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "app": "horrible-dashboard", "version": APP_VERSION}
+
+
+@app.get("/api/host")
+def host_info(request: Request) -> dict[str, object]:
+    """Where this backend is running: ``local`` (a checkout or the desktop shell)
+    or ``hosted`` (one user's instance behind the hub, with the account the hub
+    signed in). The frontend reads it to hide what a hosted instance doesn't serve."""
+    return {"profile": hosted.profile(), "account": hosted.hub_user(request.scope)}
 
 
 @app.get("/api/paths")
@@ -413,6 +428,15 @@ def resolved_paths() -> dict[str, object]:
 
 
 app.include_router(agent_router, prefix="/api")
+# Audio stays when hosted: it is mostly the mixer's saved routing, and its Voicemeeter
+# half already answers "not installed" off Windows. Clubhouse goes — its sign-in
+# drives a .NET helper on the user's own machine, which a hosted instance is not.
+app.include_router(audio_router, prefix="/api")
+if not hosted.is_hosted():
+    app.include_router(clubhouse_router, prefix="/api")
+    app.include_router(clubhouse_voice_router, prefix="/api")
+else:
+    app.include_router(hosted.router, prefix="/api")
 app.include_router(workspace_router, prefix="/api")
 app.include_router(desktop_router, prefix="/api")
 app.include_router(database_router, prefix="/api")
@@ -433,7 +457,6 @@ app.include_router(interpretability_router, prefix="/api")
 app.include_router(agentpedia_router, prefix="/api")
 app.include_router(hardware_router, prefix="/api")
 app.include_router(terminal_router, prefix="/api")
-app.include_router(audio_router, prefix="/api")
 app.include_router(llamacpp_router, prefix="/api")
 app.include_router(connectors_router, prefix="/api")
 app.include_router(google_connector_router, prefix="/api")
@@ -446,8 +469,6 @@ app.include_router(notebook_router, prefix="/api")
 app.include_router(scrive_router, prefix="/api")
 app.include_router(docs_router, prefix="/api")
 app.include_router(notes_router, prefix="/api")
-app.include_router(clubhouse_router, prefix="/api")
-app.include_router(clubhouse_voice_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")
 app.include_router(telemetry_router, prefix="/api")
 app.include_router(plugins_router, prefix="/api")

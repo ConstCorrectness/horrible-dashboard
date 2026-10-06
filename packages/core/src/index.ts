@@ -81,7 +81,23 @@ export {
   type AvatarMoodMap,
 } from './Avatar3D';
 export { WorkspaceLauncher } from './WorkspaceLauncher';
-export { apiUrl, getBackendOrigin, initBackendOrigin, wsUrl } from './origin';
+export {
+  apiUrl,
+  getBackendOrigin,
+  getWsOrigin,
+  initBackendOrigin,
+  initWsOrigin,
+  wsUrl,
+} from './origin';
+export {
+  hubAccount,
+  isHosted,
+  probeHub,
+  signOutHub,
+  waitForInstance,
+  type HubAccount,
+  type HubProbe,
+} from './hosted';
 export { GITHUB_MARK, GOOGLE_MARK } from './provider-marks';
 export {
   setWindowControl,
@@ -411,6 +427,7 @@ export { ConnectionGate } from './connectors/ConnectionGate';
 export { accountStore, refreshAccount, type AccountState } from './account-store';
 export { useAccount } from './useAccount';
 export { SignInCard } from './SignInCard';
+export { HubLogin } from './HubLogin';
 export { AccountGate } from './AccountGate';
 export { dashboardModule } from './modules/dashboard';
 export { layoutsModule } from './modules/layouts';
@@ -497,6 +514,7 @@ export {
   type AutoUpdatePolicy,
   type UpdateInfo,
 } from './modules/updates';
+export { hostedModule } from './modules/hosted';
 export { interpretabilityModule } from './modules/interpretability';
 export { evalsModule } from './modules/evals';
 export { trajectoriesModule } from './modules/trajectories';

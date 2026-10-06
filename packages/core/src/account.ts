@@ -24,6 +24,7 @@
  */
 import { apiGet, apiPost } from './api';
 import { isDesktopShell, openExternal } from './external';
+import { hubGet, hubPost } from './hosted';
 
 export type SignInProvider = 'github' | 'google';
 
@@ -79,8 +80,27 @@ export interface Account {
   suggested_handle?: string | null;
 }
 
+/**
+ * Where the sign-in flows below are sent: the node (`/api/games/auth/*`, which
+ * signs *this machine* in) or the hosted hub (`/hub/auth/*`, which signs *this
+ * browser* in to its own dashboard instance — see `HubLogin`). Same game-server
+ * accounts and the same wire shapes either way, which is why one card serves both.
+ */
+let viaHub = false;
+
+/** Route sign-in through the hosted hub. Set by `HubLogin` only. */
+export function setSignInViaHub(on: boolean): void {
+  viaHub = on;
+}
+
+function authPost<T>(path: string, body: unknown): Promise<T> {
+  return viaHub ? hubPost<T>(`/hub/auth${path}`, body) : apiPost<T>(`/games/auth${path}`, body);
+}
+
 export async function fetchAuthProviders(): Promise<AuthProviders> {
-  const raw = await apiGet<Partial<AuthProviders>>('/games/auth/providers');
+  const raw = viaHub
+    ? await hubGet<Partial<AuthProviders>>('/hub/auth/providers')
+    : await apiGet<Partial<AuthProviders>>('/games/auth/providers');
   return { server: raw.server ?? '', flows: raw.flows ?? {} };
 }
 
@@ -116,7 +136,7 @@ export async function signInWith(
   provider: SignInProvider,
   onCode: (code: string, url: string) => void,
 ): Promise<string> {
-  const start = await apiPost<DeviceStart>(`/games/auth/${provider}/start`, {});
+  const start = await authPost<DeviceStart>(`/${provider}/start`, {});
   if (start.error || !start.device_code) {
     throw new Error(
       start.error || `sign-in unavailable — configure games.${provider}.clientId on the server`,
@@ -127,7 +147,7 @@ export async function signInWith(
   const deadline = Date.now() + SIGN_IN_DEADLINE_MS;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, intervalMs));
-    const poll = await apiPost<PollResult>(`/games/auth/${provider}/poll`, {
+    const poll = await authPost<PollResult>(`/${provider}/poll`, {
       device_code: start.device_code,
     });
     if (poll.signed_in) return poll.account?.display_name ?? 'signed in';
@@ -151,8 +171,10 @@ export async function signInWithRedirect(
   provider: SignInProvider,
   openAuthorize: (url: string) => void,
 ): Promise<string> {
-  const start = await apiPost<{ authorize_url?: string; error?: string }>(
-    `/games/auth/${provider}/web/start`,
+  // `pending` comes back from the hub only: it serves many browsers, so it names
+  // which login is being polled. A node has one, and ignores the field.
+  const start = await authPost<{ authorize_url?: string; pending?: string; error?: string }>(
+    `/${provider}/web/start`,
     {},
   );
   if (start.error || !start.authorize_url) {
@@ -164,7 +186,10 @@ export async function signInWithRedirect(
   const deadline = Date.now() + SIGN_IN_DEADLINE_MS;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 2500));
-    const poll = await apiPost<PollResult>(`/games/auth/${provider}/web/poll`, {});
+    const poll = await authPost<PollResult>(
+      `/${provider}/web/poll`,
+      start.pending ? { pending: start.pending } : {},
+    );
     if (poll.signed_in) return poll.account?.display_name ?? 'signed in';
     if (poll.error) throw new Error(poll.error);
   }
@@ -301,12 +326,12 @@ export async function signUpWithPassword(
   username: string,
 ): Promise<Account> {
   return unwrap(
-    await apiPost<LocalAuthResult>('/games/auth/local/signup', { email, password, username }),
+    await authPost<LocalAuthResult>('/local/signup', { email, password, username }),
   );
 }
 
 export async function signInWithPassword(email: string, password: string): Promise<Account> {
-  return unwrap(await apiPost<LocalAuthResult>('/games/auth/local/login', { email, password }));
+  return unwrap(await authPost<LocalAuthResult>('/local/login', { email, password }));
 }
 
 /** Claim or rename the username. Throws with the server's reason ('that username is

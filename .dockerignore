@@ -2,6 +2,8 @@ node_modules
 apps
 # ...except the built browser game the game server serves at `/`.
 !apps/assault-web/dist
+# ...and the dashboard frontend the hosted hub serves at `/` (deploy/hub).
+!apps/web/dist
 packages
 website
 .git

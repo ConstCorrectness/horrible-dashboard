@@ -1,0 +1,6 @@
+# TLS in front of the hosted hub. Caddy proxies WebSocket upgrades as-is, so /ws
+# needs no special block. `localhost` gets a certificate from Caddy's local CA.
+{$HUB_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy hub:8080
+}
