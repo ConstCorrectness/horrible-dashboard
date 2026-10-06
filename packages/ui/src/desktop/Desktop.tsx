@@ -7,7 +7,7 @@
  *
  * See docs/architecture/desktop-shell.mdx.
  */
-import { useCallback, useSyncExternalStore } from 'react';
+import { Component, useCallback, useSyncExternalStore, type ReactNode } from 'react';
 import { layoutStore, openContextMenu, registry, type BackdropDecl } from '@horrible/core';
 
 import { DEFAULT_BACKDROP_ID } from './backdrops';
@@ -20,6 +20,35 @@ function useBackdrop(id: string): BackdropDecl | undefined {
   const subscribe = useCallback((listener: () => void) => registry.onChange(listener), []);
   const getSnapshot = useCallback(() => registry.backdrop(id), [id]);
   return useSyncExternalStore(subscribe, getSnapshot);
+}
+
+/**
+ * A backdrop that throws renders as the plain desktop instead of taking the app down.
+ *
+ * Without this the whole tree unmounted: a bug in the canvas backdrops' effect
+ * (fixed in `backdrops/canvas.ts`) left a blank page with no taskbar and no way
+ * back, because the setting that chose the backdrop is saved and reloads into the
+ * same crash. A wallpaper is the least important thing on the screen; it must not
+ * be able to cost the rest of it. Keyed by backdrop id, so choosing another one
+ * gets a fresh attempt.
+ */
+class BackdropBoundary extends Component<
+  { id: string; children: ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: unknown): void {
+    console.error(`[desktop] backdrop "${this.props.id}" failed; showing none`, error);
+  }
+
+  render(): ReactNode {
+    return this.state.failed ? null : this.props.children;
+  }
 }
 
 export function Desktop() {
@@ -57,7 +86,11 @@ export function Desktop() {
       {/* `pointer-events: none` in CSS unless the provider declared itself
           interactive, so a decorative backdrop never eats a click. */}
       <div className={`os-desktop-backdrop${active?.interactive ? ' is-interactive' : ''}`}>
-        {Body ? <Body params={frame.backdrop.params} /> : null}
+        {Body ? (
+          <BackdropBoundary key={active?.id ?? requested} id={active?.id ?? requested}>
+            <Body params={frame.backdrop.params} />
+          </BackdropBoundary>
+        ) : null}
       </div>
       {/* Over a decorative backdrop, this collects the clicks the backdrop is
           declining, so the desktop menu works across the whole surface. Skipped

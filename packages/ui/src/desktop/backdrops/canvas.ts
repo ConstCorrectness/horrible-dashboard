@@ -82,10 +82,11 @@ export function useCanvasBackdrop(
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       if (!document.hidden) start();
     };
-    resize();
-    const observer = new ResizeObserver(resize);
-    observer.observe(canvas);
 
+    // Declared before the first `resize()` below: that call reaches `start`/`stop`,
+    // and a `const` used before its declaration line throws ("Cannot access … before
+    // initialization"). This ran the other way round once, and the first Grid or
+    // Pulse backdrop to mount took the whole app down to a blank page.
     let raf = 0;
     let last = performance.now();
     let t = 0;
@@ -113,6 +114,11 @@ export function useCanvasBackdrop(
       cancelAnimationFrame(raf);
       raf = 0;
     };
+
+    resize();
+    const observer = new ResizeObserver(resize);
+    observer.observe(canvas);
+
     const onVisibility = () => (document.hidden ? stop() : start());
     document.addEventListener('visibilitychange', onVisibility);
 
