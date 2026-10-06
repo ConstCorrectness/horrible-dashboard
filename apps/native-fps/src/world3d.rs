@@ -2705,26 +2705,26 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
     } else if info.name == "hd_mirage" {
         (
             vec![
-                SpawnPoint { x: 96.0, y: 30.0, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 103.5, y: 28.5, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 96.0, y: 42.0, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 108.0, y: 42.0, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 96.0, y: 174.0, z: 0.0, yaw: 270.0, team: 0 },
-                SpawnPoint { x: 108.0, y: 174.0, z: 0.0, yaw: 270.0, team: 0 },
-                SpawnPoint { x: 99.0, y: 159.0, z: 0.0, yaw: 270.0, team: 0 },
-                SpawnPoint { x: 109.0, y: 163.5, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 114.0, y: 42.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 130.5, y: 40.5, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 114.0, y: 54.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 135.0, y: 54.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 114.0, y: 222.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 135.0, y: 222.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 117.0, y: 207.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 136.0, y: 211.5, z: 0.0, yaw: 270.0, team: 0 },
             ],
             vec![
-                ItemRow { id: 1, kind: "health".into(), x: 54.0, y: 42.0, z: 0.0 },
-                ItemRow { id: 2, kind: "health".into(), x: 150.0, y: 42.0, z: 0.0 },
-                ItemRow { id: 3, kind: "health".into(), x: 102.0, y: 102.0, z: 0.0 },
-                ItemRow { id: 4, kind: "armour".into(), x: 48.0, y: 144.0, z: 2.4 },
-                ItemRow { id: 5, kind: "armour".into(), x: 150.0, y: 144.0, z: 8.4 },
-                ItemRow { id: 6, kind: "ammo_assault".into(), x: 42.0, y: 96.0, z: 8.4 },
-                ItemRow { id: 7, kind: "ammo_assault".into(), x: 144.0, y: 96.0, z: 0.0 },
-                ItemRow { id: 8, kind: "ammo_sniper".into(), x: 102.0, y: 150.0, z: 7.2 },
-                ItemRow { id: 9, kind: "clips".into(), x: 102.0, y: 54.0, z: 0.0 },
-                ItemRow { id: 10, kind: "grenade".into(), x: 78.0, y: 108.0, z: 5.4 },
+                ItemRow { id: 1, kind: "health".into(), x: 72.0, y: 54.0, z: 0.0 },
+                ItemRow { id: 2, kind: "health".into(), x: 177.0, y: 54.0, z: 0.0 },
+                ItemRow { id: 3, kind: "health".into(), x: 120.0, y: 138.0, z: 0.0 },
+                ItemRow { id: 4, kind: "armour".into(), x: 66.0, y: 192.0, z: 2.4 },
+                ItemRow { id: 5, kind: "armour".into(), x: 177.0, y: 192.0, z: 8.4 },
+                ItemRow { id: 6, kind: "ammo_assault".into(), x: 51.0, y: 120.0, z: 8.4 },
+                ItemRow { id: 7, kind: "ammo_assault".into(), x: 171.0, y: 120.0, z: 0.0 },
+                ItemRow { id: 8, kind: "ammo_sniper".into(), x: 120.0, y: 198.0, z: 7.2 },
+                ItemRow { id: 9, kind: "clips".into(), x: 120.0, y: 66.0, z: 0.0 },
+                ItemRow { id: 10, kind: "grenade".into(), x: 96.0, y: 144.0, z: 5.4 },
             ],
         )
     } else if info.name == "hd_inferno" {
@@ -2857,7 +2857,14 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
             center: [123.0, 129.0, 18.0],
             extent: 234.0,
         }
-    } else if info.name == "hd_inferno" || info.name == "hd_mirage" {
+    } else if info.name == "hd_mirage" {
+        WorldBounds {
+            min: [12.0, 12.0, -6.0],
+            max: [234.0, 246.0, 42.0],
+            center: [123.0, 129.0, 18.0],
+            extent: 234.0,
+        }
+    } else if info.name == "hd_inferno" {
         WorldBounds {
             min: [12.0, 12.0, -6.0],
             max: [198.0, 198.0, 42.0],

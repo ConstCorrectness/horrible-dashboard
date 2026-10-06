@@ -82,3 +82,38 @@ def test_a_doorway_opened_in_a_wall_can_be_walked_through(measured, name):
     dist, _ = routes_tool.dijkstra(world, cells, [west])
     assert east in dist, f"{name}: the two sides are not joined"
     assert dist[east] < 2.5 * hop, f"{name}: the way through is {dist[east]:.0f} cubes"
+
+
+# --- Mirage -----------------------------------------------------------------
+# Mirage was one open 62 m square. It is stretched to 74 x 78 m, and it was never
+# short of ways round (it is open), so what these keep is the length the stretch
+# gave the attackers' walk and that no building cut across the middle closed a way.
+
+MIRAGE = MAP.with_name("hd_mirage.json")
+
+
+@pytest.fixture(scope="module")
+def mirage():
+    return routes_tool.measure(str(MIRAGE))
+
+
+def test_every_team_can_walk_to_every_site_on_mirage(mirage):
+    routes, _, _ = mirage
+    assert set(routes) == {(t, s) for t in (0, 1) for s in ("A", "B")}
+    for pair, times in routes.items():
+        assert times, f"{pair} cannot be reached on foot"
+
+
+def test_t_still_has_several_ways_to_each_site_on_mirage(mirage):
+    routes, _, _ = mirage
+    for site in ("A", "B"):
+        assert len(routes[(1, site)]) >= 2, routes[(1, site)]
+
+
+def test_the_stretch_lengthened_the_attackers_walk_on_mirage(mirage):
+    # 5.7 s to A and 6.1 s to B on the 62 m square.
+    routes, _, _ = mirage
+    assert routes[(1, "A")][0] > 6.5
+    assert routes[(1, "B")][0] > 7.0
+    for site in ("A", "B"):
+        assert routes[(1, site)][0] > routes[(0, site)][0] * 2

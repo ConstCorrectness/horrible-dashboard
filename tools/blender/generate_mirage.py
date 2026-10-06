@@ -25,7 +25,10 @@ except ImportError:
     sys.exit(1)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import cutlayout  # noqa: E402
 import maplib  # noqa: E402  (a sibling, found via the path above)
+import mirage_layout  # noqa: E402
+import props  # noqa: E402
 
 
 def clear_scene():
@@ -96,23 +99,24 @@ def create_pbr_material(name, base_color, metallic=0.0, roughness=0.7, emission_
 def setup_materials():
     mats = {}
     # Sandstone & Moorish Plaster with rich surface roughness
-    mats["sandstone_paving"] = create_pbr_material("mat_sandstone_paving", (0.76, 0.70, 0.58), metallic=0.01, roughness=0.85, bump_strength=0.18, bump_scale=20.0)
-    mats["sandstone_light"] = create_pbr_material("mat_sandstone_light", (0.84, 0.76, 0.62), metallic=0.01, roughness=0.82, bump_strength=0.16, bump_scale=18.0)
-    mats["sandstone_ochre"] = create_pbr_material("mat_sandstone_ochre", (0.78, 0.58, 0.38), metallic=0.01, roughness=0.88, bump_strength=0.20, bump_scale=18.0)
-    mats["moorish_plaster_warm"] = create_pbr_material("mat_moorish_plaster_warm", (0.88, 0.82, 0.72), metallic=0.01, roughness=0.90, bump_strength=0.15, bump_scale=25.0)
-    mats["mosaic_tile_blue"] = create_pbr_material("mat_mosaic_tile_blue", (0.10, 0.38, 0.68), metallic=0.08, roughness=0.35, bump_strength=0.06, bump_scale=35.0)
+    mats["sandstone_paving"] = create_pbr_material("mat_mirage_sandstone_paving", (0.76, 0.70, 0.58), metallic=0.01, roughness=0.85, bump_strength=0.18, bump_scale=20.0)
+    mats["sandstone_light"] = create_pbr_material("mat_mirage_sandstone_light", (0.84, 0.76, 0.62), metallic=0.01, roughness=0.82, bump_strength=0.16, bump_scale=18.0)
+    mats["sandstone_ochre"] = create_pbr_material("mat_mirage_sandstone_ochre", (0.78, 0.58, 0.38), metallic=0.01, roughness=0.88, bump_strength=0.20, bump_scale=18.0)
+    mats["moorish_plaster_warm"] = create_pbr_material("mat_mirage_moorish_plaster_warm", (0.88, 0.82, 0.72), metallic=0.01, roughness=0.90, bump_strength=0.15, bump_scale=25.0)
+    mats["mosaic_tile_blue"] = create_pbr_material("mat_mirage_mosaic_tile_blue", (0.10, 0.38, 0.68), metallic=0.08, roughness=0.35, bump_strength=0.06, bump_scale=35.0)
 
     # Woods & Metals
-    mats["cedar_wood"] = create_pbr_material("mat_cedar_wood", (0.36, 0.24, 0.16), metallic=0.0, roughness=0.75, bump_strength=0.28, bump_scale=12.0)
-    mats["wood_crate"] = create_pbr_material("mat_wood_crate", (0.54, 0.40, 0.26), metallic=0.0, roughness=0.65, bump_strength=0.25, bump_scale=14.0)
+    mats["cedar_wood"] = create_pbr_material("mat_mirage_cedar_wood", (0.36, 0.24, 0.16), metallic=0.0, roughness=0.75, bump_strength=0.28, bump_scale=12.0)
+    mats["wood_crate"] = create_pbr_material("mat_mirage_wood_crate", (0.54, 0.40, 0.26), metallic=0.0, roughness=0.65, bump_strength=0.25, bump_scale=14.0)
     mats["wrought_iron"] = create_pbr_material("mat_wrought_iron", (0.18, 0.18, 0.20), metallic=0.85, roughness=0.45, bump_strength=0.10, bump_scale=32.0)
     mats["van_metal_olive"] = create_pbr_material("mat_van_metal_olive", (0.32, 0.38, 0.28), metallic=0.45, roughness=0.55, bump_strength=0.10, bump_scale=25.0)
 
     # Fabrics & foliage
-    mats["canopy_crimson"] = create_pbr_material("mat_canopy_crimson", (0.65, 0.15, 0.18), metallic=0.0, roughness=0.92, bump_strength=0.14, bump_scale=30.0)
-    mats["canopy_indigo"] = create_pbr_material("mat_canopy_indigo", (0.15, 0.25, 0.60), metallic=0.0, roughness=0.92, bump_strength=0.14, bump_scale=30.0)
-    mats["palm_bark"] = create_pbr_material("mat_palm_bark", (0.32, 0.24, 0.18), metallic=0.0, roughness=0.95, bump_strength=0.32, bump_scale=10.0)
+    mats["canopy_crimson"] = create_pbr_material("mat_mirage_canopy_crimson", (0.65, 0.15, 0.18), metallic=0.0, roughness=0.92, bump_strength=0.14, bump_scale=30.0)
+    mats["canopy_indigo"] = create_pbr_material("mat_mirage_canopy_indigo", (0.15, 0.25, 0.60), metallic=0.0, roughness=0.92, bump_strength=0.14, bump_scale=30.0)
+    mats["palm_bark"] = create_pbr_material("mat_mirage_palm_bark", (0.32, 0.24, 0.18), metallic=0.0, roughness=0.95, bump_strength=0.32, bump_scale=10.0)
     mats["palm_fronds"] = create_pbr_material("mat_palm_fronds", (0.16, 0.38, 0.12), metallic=0.0, roughness=0.80)
+    mats["sack"] = create_pbr_material("mat_mirage_sack_burlap", (0.60, 0.48, 0.30), metallic=0.0, roughness=0.95, bump_strength=0.2, bump_scale=40.0)
     mats["terracotta_urn"] = create_pbr_material("mat_terracotta_urn", (0.72, 0.34, 0.20), metallic=0.0, roughness=0.78, bump_strength=0.22, bump_scale=16.0)
 
     # Breakable glass windows
@@ -265,6 +269,26 @@ def add_delivery_van(collection, mats):
         add_cylinder(collection, f"Van_Headlight_{int(hy*10)}_NonCol", (cx - 2.05, hy, cz + 0.9), radius=0.15, height=0.1, material=mats["mosaic_tile_blue"], segments=8)
 
 
+# ---------------------------------------------------------------------------
+# Layout: the map is cut along a few empty lines and the halves spread apart (see
+# `cutlayout.py`, and `mirage_layout.py` for the cuts). Every primitive goes through
+# the warper; the composites move as one by their anchor point.
+# ---------------------------------------------------------------------------
+W = cutlayout.Warper(mirage_layout.CUTS)
+_w = W.w
+
+add_box = W.box(add_box)
+add_cylinder = W.cylinder(add_cylinder)
+add_wedge = W.wedge(maplib.add_wedge)
+add_boxes = W.boxes(maplib.add_boxes)
+add_plinths = W.plinths(maplib.add_plinths)
+add_stairs = W.stairs(maplib.add_stairs)
+add_wall_with_door = W.wall_with_door(maplib.add_wall_with_door)
+add_lantern = W.composite(maplib.add_lantern, 2)
+add_arch = W.composite(add_arch, 2)
+add_detailed_palm = W.composite(add_detailed_palm, 2)
+
+
 def build_mirage_perimeter_and_terrain(col, mats):
     """Paving slabs, perimeter desert masonry, and mosaic trims."""
     add_box(col, "Terrain_Paving", (35.0, 35.0, -0.5), (70.0, 70.0, 1.0), mats["sandstone_paving"])
@@ -306,7 +330,7 @@ def build_site_a(col, mats):
     add_box(col, "Ticket_Booth_Window", (56.4, 56.0, 1.4), (0.2, 1.6, 0.8), mats["cedar_wood"])
 
     # CT Ramp ascending to Ticket booth
-    maplib.add_wedge(col, "CT_Ramp_Slope", (58.0, 50.0, 0.5), (3.0, 6.0, 1.0), mats["sandstone_paving"], "+y")
+    add_wedge(col, "CT_Ramp_Slope", (58.0, 50.0, 0.5), (3.0, 6.0, 1.0), mats["sandstone_paving"], "+y")
 
 
 def build_middle_and_underpass(col, mats):
@@ -319,7 +343,7 @@ def build_middle_and_underpass(col, mats):
 
     # Connector: a ramp up the east side of the Window Room to its floor, so the
     # sniper's nest is a place to fight from rather than a block to walk round.
-    maplib.add_wedge(col, "Connector_Ramp", (45.5, 43.5, 1.2), (3.0, 8.0, 2.4), mats["sandstone_paving"], "+y")
+    add_wedge(col, "Connector_Ramp", (45.5, 43.5, 1.2), (3.0, 8.0, 2.4), mats["sandstone_paving"], "+y")
 
     # Underpass tunnel beneath Mid (X: 30..36, Y: 28..38, Z: -1.5m)
     add_box(col, "Underpass_Trench_Floor", (33.0, 33.0, -0.75), (5.0, 10.0, 1.5), mats["sandstone_ochre"])
@@ -382,11 +406,11 @@ def build_layout_revision(col, mats):
     - Two houses in mid and a wall short of B break the sightlines that let
       each spawn see the other and B from T spawn.
     """
-    maplib.add_stairs(col, "Palace_Stairs_South", (55.0, 11.0, 0.0), 4.0, 2.8, 7.0, 9, "+y", mats["sandstone_paving"])
-    maplib.add_stairs(col, "Palace_Stairs_North", (55.0, 42.5, 0.0), 4.0, 2.8, 6.5, 9, "-y", mats["sandstone_paving"])
+    add_stairs(col, "Palace_Stairs_South", (55.0, 11.0, 0.0), 4.0, 2.8, 7.0, 9, "+y", mats["sandstone_paving"])
+    add_stairs(col, "Palace_Stairs_North", (55.0, 42.5, 0.0), 4.0, 2.8, 6.5, 9, "-y", mats["sandstone_paving"])
 
-    maplib.add_stairs(col, "B_Apts_Stairs", (10.5, 20.0, 0.0), 3.0, 2.95, 8.0, 9, "+y", mats["sandstone_paving"])
-    maplib.add_wall_with_door(col, "B_Apts_Wall_Ground", (24.0, 25.0, 1.4), (0.8, 14.0, 2.8), mats["moorish_plaster_warm"], 25.0, 2.0, 2.6)
+    add_stairs(col, "B_Apts_Stairs", (10.5, 20.0, 0.0), 3.0, 2.95, 8.0, 9, "+y", mats["sandstone_paving"])
+    add_wall_with_door(col, "B_Apts_Wall_Ground", (24.0, 25.0, 1.4), (0.8, 14.0, 2.8), mats["moorish_plaster_warm"], 25.0, 2.0, 2.6)
 
     houses = [
         ("Mid_House", (31.0, 24.5, 3.0), (6.0, 5.0, 6.0)),
@@ -413,7 +437,7 @@ def build_dressing_and_lights(col, mats):
         ((31.0, 24.5, 3.0), (6.0, 5.0, 6.0)),
         ((39.0, 40.25, 2.5), (6.0, 4.5, 5.0)),
     ]
-    maplib.add_plinths(col, "Trim_Plinths_NonCol", walls, mats["sandstone_ochre"], height=0.45)
+    add_plinths(col, "Trim_Plinths_NonCol", walls, mats["sandstone_ochre"], height=0.45)
 
     # Vigas through the houses' parapets.
     vigas = []
@@ -421,14 +445,14 @@ def build_dressing_and_lights(col, mats):
         for i in range(4):
             x = cx - sx / 2 + 0.9 + i * (sx - 1.8) / 3
             vigas.append(((x, cy, top), (0.2, 6.2 if cy < 30 else 5.7, 0.2)))
-    maplib.add_boxes(col, "Trim_Vigas_NonCol", vigas, mats["cedar_wood"])
+    add_boxes(col, "Trim_Vigas_NonCol", vigas, mats["cedar_wood"])
 
     # Awnings over the doors people fight through.
-    maplib.add_boxes(col, "Awning_Crimson_NonCol", [
+    add_boxes(col, "Awning_Crimson_NonCol", [
         ((24.9, 25.0, 3.0), (1.2, 3.0, 0.05)),
         ((31.0, 27.4, 3.4), (3.0, 1.2, 0.05)),
     ], mats["canopy_crimson"])
-    maplib.add_boxes(col, "Awning_Indigo_NonCol", [
+    add_boxes(col, "Awning_Indigo_NonCol", [
         ((39.0, 37.6, 3.2), (3.0, 1.2, 0.05)),
         ((45.5, 47.0, 4.4), (3.2, 1.6, 0.05)),
     ], mats["canopy_indigo"])
@@ -438,15 +462,15 @@ def build_dressing_and_lights(col, mats):
     for i, (x, y) in enumerate(pots):
         # The pot is solid and wider than the leaves, so no body stands in the leaves.
         add_cylinder(col, f"Planter_Pot_{i}", (x, y, 0.35), radius=0.4, height=0.7, material=mats["terracotta_urn"], segments=10)
-    maplib.add_boxes(col, "Planter_Leaves_NonCol", [((x, y, 0.95), (0.7, 0.7, 0.5)) for x, y in pots], mats["palm_fronds"])
+    add_boxes(col, "Planter_Leaves_NonCol", [((x, y, 0.95), (0.7, 0.7, 0.5)) for x, y in pots], mats["palm_fronds"])
 
     # Lanterns in the shade: under the apartments, at the mid doors, the market.
-    maplib.add_lantern(col, "Lantern_Apts_S", (18.0, 21.0, 2.65), hang=0.3)
-    maplib.add_lantern(col, "Lantern_Apts_N", (18.0, 29.0, 2.65), hang=0.3)
-    maplib.add_lantern(col, "Lantern_Market", (28.0, 46.0, 4.15), hang=0.5)
-    maplib.add_lantern(col, "Lantern_MidHouse", (31.0, 28.3, 3.8), hang=0.35, radius=6.0, intensity=1.6)
-    maplib.add_lantern(col, "Lantern_TopMid", (39.0, 37.3, 3.6), hang=0.35, radius=6.0, intensity=1.6)
-    maplib.add_boxes(col, "Lantern_Brackets_NonCol", [
+    add_lantern(col, "Lantern_Apts_S", (18.0, 21.0, 2.65), hang=0.3)
+    add_lantern(col, "Lantern_Apts_N", (18.0, 29.0, 2.65), hang=0.3)
+    add_lantern(col, "Lantern_Market", (28.0, 46.0, 4.15), hang=0.5)
+    add_lantern(col, "Lantern_MidHouse", (31.0, 28.3, 3.8), hang=0.35, radius=6.0, intensity=1.6)
+    add_lantern(col, "Lantern_TopMid", (39.0, 37.3, 3.6), hang=0.35, radius=6.0, intensity=1.6)
+    add_boxes(col, "Lantern_Brackets_NonCol", [
         ((31.0, 27.65, 3.8), (0.05, 1.3, 0.05)),
         ((39.0, 37.65, 3.6), (0.05, 1.3, 0.05)),
     ], mats["wrought_iron"])
@@ -458,6 +482,72 @@ def build_dressing_and_lights(col, mats):
         skyHorizon=0xE4D8C6,
         fogColor=0xE0D4C0,
     )
+
+
+# Where the clutter gathers, in the authored (pre-cut) frame so each zone stretches
+# with the map: (x0, y0, x1, y1), density, vignette weights, lane direction or None.
+_COURT = {"jars": 4, "sacks": 3, "crates": 2, "barrels": 1}
+_WORK = {"crates": 4, "barrels": 3, "jars": 1, "sacks": 1}
+_ZONES = [
+    ((5, 5, 62, 20), 1.2, _COURT, None),  # the T courtyard
+    ((5, 17, 27, 62), 0.9, {"crates": 3, "barrels": 2, "jars": 2, "sacks": 2}, None),  # B
+    ((27, 20, 47, 62), 0.5, _WORK, (0.0, 1.0)),  # the middle street
+    ((47, 17, 65, 62), 0.8, {"crates": 4, "barrels": 2, "jars": 2, "sacks": 1}, None),  # A
+    ((5, 56, 65, 65), 0.8, _COURT, None),  # the CT courtyard
+]
+_DRESS_SEED = 20261007
+# Anything with one of these in its name is a way through: no clutter within 2 m.
+# `Wall_Ground` is the B apartments' wall, which has a door cut through it.
+_WAYS = ("Arch", "Door", "Portal", "Window", "Stairs", "Ramp", "Wall_Ground")
+# What each kind of prop is made of, by this map's own material keys.
+_PROP_MATERIALS = {
+    "crate": "wood_crate",
+    "barrel_wood": "cedar_wood",
+    "barrel_iron": "wrought_iron",
+    "sack": "sack",
+    "jar": "terracotta_urn",
+    "rubble": "sandstone_paving",
+}
+
+
+def build_natural_dressing(col, mats):
+    """Clutter laid out against the finished map rather than typed in.
+
+    Plans on everything already built (so it must run last among the builders),
+    keeps clear of spawns, bomb sites, doorways, stairs and lamps, and places
+    vignettes where a place gets cluttered: against walls, in corners, and a few
+    pieces of cover in the open street. See `props.py`.
+    """
+    import json
+    import random
+
+    with open(
+        os.path.join(maplib.REPO_ROOT, "backend", "modules", "hassault", "maps", "hd_mirage.json"),
+        encoding="utf-8",
+    ) as f:
+        placed = json.load(f)
+    plan = W.plan(
+        props,
+        extent=(4.0, 4.0, 78.0, 82.0),
+        domain=(5.0, 77.0, 5.0, 81.0),
+        placed=placed,
+        ways=_WAYS,
+        sunk=(),
+    )
+    zone_of = W.zone_of(_ZONES, (0.5, _WORK, None))
+    rng = random.Random(_DRESS_SEED)
+    vignettes = props.dress(plan, rng, zone_of, lane_budget=8)
+    counts = props.emit(vignettes, col, mats, _PROP_MATERIALS)
+    tally = {}
+    for name, _ in vignettes:
+        tally[name] = tally.get(name, 0) + 1
+    print("dressing:", tally, counts)
+    if os.environ.get("HASSAULT_MIRAGE_PLAN"):
+        with open(os.environ["HASSAULT_MIRAGE_PLAN"], "w") as f:
+            json.dump(
+                [[n, [[p.kind, p.x, p.y, p.size[0], p.size[1], p.yaw] for p in ps]] for n, ps in vignettes],
+                f,
+            )
 
 
 def build_mirage_scene():
@@ -477,8 +567,11 @@ def build_mirage_scene():
     build_props_and_foliage(c_props, mats)
     build_layout_revision(get_or_create_collection("Revision"), mats)
     build_dressing_and_lights(get_or_create_collection("Dressing"), mats)
+    build_natural_dressing(get_or_create_collection("Clutter"), mats)  # last: it plans on all of the above
 
     print("=== Desert Courtyard (hd_mirage) Built Successfully! ===")
+    if os.environ.get("HASSAULT_MIRAGE_SCAN"):
+        W.dump_scan(os.environ["HASSAULT_MIRAGE_SCAN"])
 
 
 def export_glb():

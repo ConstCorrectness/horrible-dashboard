@@ -629,12 +629,25 @@ def dress(
 # -------------------------------------------------------------------------- emitting
 
 
-def emit(vignettes, collection, mats):
+#: Which of a map's materials each kind of prop is made of, by the key the map's
+#: generator gives it in its `mats`. Dust II's names; another map passes its own.
+DEFAULT_MATERIALS = {
+    "crate": "wood_crate",
+    "barrel_wood": "wood_cedar_weathered",
+    "barrel_iron": "metal_iron_rusted",
+    "sack": "sack",
+    "jar": "sandstone_ochre",
+    "rubble": "sandstone_dark",
+}
+
+
+def emit(vignettes, collection, mats, materials=None):
     """Turn placed pieces into merged objects. Solid pieces collide; rubble does not.
 
     Everything solid is named without `NonCol`, so the bake treats it as cover and a
     body cannot be inside it; rubble is under a quarter metre, below any eye.
     """
+    use = {**DEFAULT_MATERIALS, **(materials or {})}
     meshers = {}
 
     def mesher(group, material):
@@ -647,7 +660,7 @@ def emit(vignettes, collection, mats):
             x, y, z = p.x, p.y, p.z
             sx, sy, sz = p.size
             if p.kind == "crate":
-                m = mesher("crates", "wood_crate")
+                m = mesher("crates", use["crate"])
                 m.box((x, y, z + sz / 2), (sx, sy, sz), yaw=p.yaw)
                 m.box((x, y, z + sz + 0.025), (sx * 1.04, sy * 1.04, 0.05), yaw=p.yaw)
                 # Straps read on a big crate and are lost on a small one.
@@ -660,8 +673,8 @@ def emit(vignettes, collection, mats):
                     )
             elif p.kind in ("barrel", "barrel_down"):
                 r, h = sx, sz
-                wood = mesher("barrels", "wood_cedar_weathered")
-                iron = mesher("barrels", "metal_iron_rusted")
+                wood = mesher("barrels", use["barrel_wood"])
+                iron = mesher("barrels", use["barrel_iron"])
                 if p.kind == "barrel_down":
                     wood.frustum(
                         (x, y, z + r), r, r, h, 12, tilt=math.pi / 2, yaw=p.yaw
@@ -683,7 +696,7 @@ def emit(vignettes, collection, mats):
                     for frac in (0.22, 0.78):
                         iron.frustum((x, y, z + h * frac), r * 1.12, r * 1.12, 0.06, 8)
             elif p.kind == "sack":
-                m = mesher("sacks", "sack")
+                m = mesher("sacks", use["sack"])
                 m.box((x, y, z + sz / 2), (sx, sy, sz), yaw=p.yaw, tilt=0.04)
                 m.box(
                     (
@@ -695,12 +708,12 @@ def emit(vignettes, collection, mats):
                     yaw=p.yaw,
                 )
             elif p.kind == "jar":
-                m = mesher("jars", "sandstone_ochre")
+                m = mesher("jars", use["jar"])
                 r, h = sx, sz
                 m.frustum((x, y, z + h * 0.33), r * 0.8, r, h * 0.66, 8)
                 m.frustum((x, y, z + h * 0.83), r, r * 0.45, h * 0.34, 8)
             elif p.kind == "rubble":
-                mesher("rubble", "sandstone_dark").box(
+                mesher("rubble", use["rubble"]).box(
                     (x, y, z + sz / 2), (sx, sy, sz), yaw=p.yaw, tilt=0.12, roll=0.08
                 )
     counts = {}

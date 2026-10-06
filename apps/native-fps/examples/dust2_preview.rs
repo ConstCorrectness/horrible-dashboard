@@ -1,4 +1,5 @@
-//! Render Dust II (the real GLB, the real world shader, the photographed surfaces)
+//! Render a modelled map (Dust II unless `PREVIEW_MAP` names another: the real GLB,
+//! the real world shader, the photographed surfaces)
 //! from a camera you choose, offscreen to a PNG. For looking at textures and
 //! normal maps in place; the lighting is the default cube sun, not the game's.
 //!
@@ -35,14 +36,16 @@ fn main() {
 }
 
 async fn run(path: &str, camera: Camera) {
+    // PREVIEW_MAP=hd_mirage renders another modelled map; Dust II is the default.
+    let map_name = std::env::var("PREVIEW_MAP").unwrap_or_else(|_| "hd_dust2".to_string());
     let info = MapInfo {
-        name: "hd_dust2".to_string(),
-        title: "hd_dust2".to_string(),
+        name: map_name.clone(),
+        title: map_name.clone(),
         ssize: 64,
         ..Default::default()
     };
-    let world = hassault_native::world3d::load_dust2_glb(info).expect("hd_dust2.glb");
-    let map_name = "hd_dust2";
+    let world = hassault_native::world3d::create_world_3d(info);
+    let map_name = map_name.as_str();
 
     let m3d = world.to_mesh_data();
     println!("loaded map {}: {} collision vertices", map_name, world.col_vertices.len());
