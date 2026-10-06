@@ -1,5 +1,5 @@
 {
-  "why": "Which procedural surface a GLB map material gets, read by both clients (glb-surfaces.ts, apps/native-fps/src/textures3d.rs). Rules are lowercase substrings of the material name, tried in order, first match wins. 'none' means no detail texture: emissive, liquid, foliage and printed surfaces keep their authored colour and only get the world-space grain. `photoKinds` are the kinds backed by CC0 photographed maps (colour, normal, roughness) in apps/web/public/maps/textures/, matched only by Dust II's own `dust2_` material names so other maps are untouched; see tools/hassault_process_textures.py.",
+  "why": "Which procedural surface a GLB map material gets, read by both clients (glb-surfaces.ts, apps/native-fps/src/textures3d.rs). Rules are lowercase substrings of the material name, tried in order, first match wins. 'none' means no detail texture: emissive, liquid, foliage and printed surfaces keep their authored colour and only get the world-space grain. `photoKinds` are the kinds backed by CC0 photographed maps (colour, normal, roughness) in apps/web/public/maps/textures/, matched only by Dust II's own `dust2_` and Mirage's own `mirage_` material names so other maps are untouched; see tools/hassault_process_textures.py.",
   "default": "concrete",
   "rules": [
     {
@@ -39,15 +39,15 @@
     },
     {
       "kind": "limewash",
-      "match": ["dust2_sandstone_light"]
+      "match": ["dust2_sandstone_light", "mirage_sandstone_light", "mirage_moorish_plaster"]
     },
     {
       "kind": "sandstone",
-      "match": ["dust2_sandstone_ochre", "dust2_sandstone_dark"]
+      "match": ["dust2_sandstone_ochre", "dust2_sandstone_dark", "mirage_sandstone_ochre"]
     },
     {
       "kind": "paving",
-      "match": ["dust2_limestone_paving"]
+      "match": ["dust2_limestone_paving", "mirage_sandstone_paving"]
     },
     {
       "kind": "dunesand",
@@ -55,11 +55,11 @@
     },
     {
       "kind": "cedar",
-      "match": ["dust2_wood_cedar", "dust2_palm_bark"]
+      "match": ["dust2_wood_cedar", "dust2_palm_bark", "mirage_cedar_wood", "mirage_palm_bark"]
     },
     {
       "kind": "souk_crate",
-      "match": ["dust2_wood_crate"]
+      "match": ["dust2_wood_crate", "mirage_wood_crate"]
     },
     {
       "kind": "rust_iron",
@@ -67,11 +67,11 @@
     },
     {
       "kind": "burlap",
-      "match": ["dust2_canopy_", "dust2_sack_burlap"]
+      "match": ["dust2_canopy_", "dust2_sack_burlap", "mirage_canopy_", "mirage_sack_burlap"]
     },
     {
       "kind": "glaze",
-      "match": ["dust2_moorish_tile"]
+      "match": ["dust2_moorish_tile", "mirage_mosaic_tile"]
     },
     {
       "kind": "site_a",

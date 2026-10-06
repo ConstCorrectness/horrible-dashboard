@@ -838,20 +838,8 @@
       "kind": "vault_steel"
     },
     {
-      "name": "mat_canopy_crimson",
-      "kind": "carpet"
-    },
-    {
-      "name": "mat_canopy_indigo",
-      "kind": "carpet"
-    },
-    {
       "name": "mat_carpet_tile",
       "kind": "carpet"
-    },
-    {
-      "name": "mat_cedar_wood",
-      "kind": "wood"
     },
     {
       "name": "mat_ceiling_tile",
@@ -1018,20 +1006,52 @@
       "kind": "vault_steel"
     },
     {
-      "name": "mat_moorish_plaster_warm",
-      "kind": "plaster"
+      "name": "mat_mirage_canopy_crimson",
+      "kind": "burlap"
     },
     {
-      "name": "mat_mosaic_tile_blue",
-      "kind": "marble"
+      "name": "mat_mirage_canopy_indigo",
+      "kind": "burlap"
+    },
+    {
+      "name": "mat_mirage_cedar_wood",
+      "kind": "cedar"
+    },
+    {
+      "name": "mat_mirage_moorish_plaster_warm",
+      "kind": "limewash"
+    },
+    {
+      "name": "mat_mirage_mosaic_tile_blue",
+      "kind": "glaze"
+    },
+    {
+      "name": "mat_mirage_palm_bark",
+      "kind": "cedar"
+    },
+    {
+      "name": "mat_mirage_sack_burlap",
+      "kind": "burlap"
+    },
+    {
+      "name": "mat_mirage_sandstone_light",
+      "kind": "limewash"
+    },
+    {
+      "name": "mat_mirage_sandstone_ochre",
+      "kind": "sandstone"
+    },
+    {
+      "name": "mat_mirage_sandstone_paving",
+      "kind": "paving"
+    },
+    {
+      "name": "mat_mirage_wood_crate",
+      "kind": "souk_crate"
     },
     {
       "name": "mat_office_plant_leaves",
       "kind": "none"
-    },
-    {
-      "name": "mat_palm_bark",
-      "kind": "wood"
     },
     {
       "name": "mat_palm_fronds",
@@ -1052,18 +1072,6 @@
     {
       "name": "mat_sandbag_burlap",
       "kind": "carpet"
-    },
-    {
-      "name": "mat_sandstone_light",
-      "kind": "masonry"
-    },
-    {
-      "name": "mat_sandstone_ochre",
-      "kind": "masonry"
-    },
-    {
-      "name": "mat_sandstone_paving",
-      "kind": "masonry"
     },
     {
       "name": "mat_screen_display",

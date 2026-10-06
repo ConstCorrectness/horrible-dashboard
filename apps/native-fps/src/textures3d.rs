@@ -1629,7 +1629,7 @@ mod tests {
     }
 
     #[test]
-    fn only_dust2s_own_materials_are_photographed() {
+    fn only_dust2s_and_mirages_own_materials_are_photographed() {
         // Another map's `wood_crate` or `sandstone_ochre` must not change.
         for name in ["mat_wood_crate", "mat_sandstone_ochre", "Mat_Wood_Crate", "mat_canopy_crimson"] {
             assert!(!MaterialKind::from_name(name).is_photo(), "{name}");
@@ -1643,6 +1643,19 @@ mod tests {
         assert_eq!(MaterialKind::from_name("mat_dust2_metal_iron_rusted"), MaterialKind::RustIron);
         assert_eq!(MaterialKind::from_name("mat_dust2_sack_burlap"), MaterialKind::Burlap);
         assert_eq!(MaterialKind::from_name("mat_dust2_moorish_tile_blue"), MaterialKind::Glaze);
+        // Mirage's own, by its own infix.
+        assert_eq!(MaterialKind::from_name("mat_mirage_sandstone_ochre"), MaterialKind::Sandstone);
+        assert_eq!(MaterialKind::from_name("mat_mirage_sandstone_light"), MaterialKind::Limewash);
+        assert_eq!(MaterialKind::from_name("mat_mirage_moorish_plaster_warm"), MaterialKind::Limewash);
+        assert_eq!(MaterialKind::from_name("mat_mirage_sandstone_paving"), MaterialKind::Paving);
+        assert_eq!(MaterialKind::from_name("mat_mirage_cedar_wood"), MaterialKind::Cedar);
+        assert_eq!(MaterialKind::from_name("mat_mirage_palm_bark"), MaterialKind::Cedar);
+        assert_eq!(MaterialKind::from_name("mat_mirage_wood_crate"), MaterialKind::SoukCrate);
+        assert_eq!(MaterialKind::from_name("mat_mirage_canopy_indigo"), MaterialKind::Burlap);
+        assert_eq!(MaterialKind::from_name("mat_mirage_mosaic_tile_blue"), MaterialKind::Glaze);
+        // And its foliage and ironwork keep what they had.
+        assert!(!MaterialKind::from_name("mat_mirage_palm_fronds").is_photo());
+        assert!(!MaterialKind::from_name("mat_wrought_iron").is_photo());
     }
 
     #[test]

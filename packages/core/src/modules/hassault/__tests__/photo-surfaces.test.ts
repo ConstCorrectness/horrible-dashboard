@@ -65,7 +65,7 @@ describe('photo surface kinds', () => {
     }
   });
 
-  it("match Dust II's own materials and no other map's", () => {
+  it("match Dust II's and Mirage's own materials and no other map's", () => {
     expect(classifySurface('mat_dust2_sandstone_ochre')).toBe('sandstone');
     expect(classifySurface('mat_dust2_sandstone_light')).toBe('limewash');
     expect(classifySurface('mat_dust2_limestone_paving')).toBe('paving');
@@ -75,6 +75,16 @@ describe('photo surface kinds', () => {
     expect(classifySurface('mat_dust2_metal_iron_rusted')).toBe('rust_iron');
     expect(classifySurface('mat_dust2_sack_burlap')).toBe('burlap');
     expect(classifySurface('mat_dust2_moorish_tile_gold')).toBe('glaze');
+    // Mirage's own, by its own infix.
+    expect(classifySurface('mat_mirage_sandstone_ochre')).toBe('sandstone');
+    expect(classifySurface('mat_mirage_sandstone_light')).toBe('limewash');
+    expect(classifySurface('mat_mirage_moorish_plaster_warm')).toBe('limewash');
+    expect(classifySurface('mat_mirage_sandstone_paving')).toBe('paving');
+    expect(classifySurface('mat_mirage_cedar_wood')).toBe('cedar');
+    expect(classifySurface('mat_mirage_wood_crate')).toBe('souk_crate');
+    expect(classifySurface('mat_mirage_canopy_indigo')).toBe('burlap');
+    expect(classifySurface('mat_mirage_mosaic_tile_blue')).toBe('glaze');
+    expect(isPhotoKind(classifySurface('mat_mirage_palm_fronds'))).toBe(false);
     // Mirage and the rest reuse these names, minus the infix, and must not change.
     for (const other of [
       'mat_sandstone_ochre',
@@ -90,7 +100,10 @@ describe('photo surface kinds', () => {
     const rows = (vectors as { classify?: Array<{ name: string; kind: string }> }).classify ?? [];
     expect(rows.length).toBeGreaterThan(100);
     for (const row of rows) {
-      if (isPhotoKind(row.kind)) expect(row.name.toLowerCase(), row.name).toContain('dust2_');
+      if (isPhotoKind(row.kind)) {
+        const lower = row.name.toLowerCase();
+        expect(lower.includes('dust2_') || lower.includes('mirage_'), row.name).toBe(true);
+      }
     }
   });
 });
