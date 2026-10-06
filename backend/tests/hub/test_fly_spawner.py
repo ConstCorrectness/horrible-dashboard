@@ -200,3 +200,18 @@ def test_running_reports_without_starting(setup) -> None:
     [machine] = fake.machines.values()
     assert machine["state"] == "stopped"
     assert all(method == "GET" for method, _, _ in fake.calls[calls:])
+
+
+def test_a_digest_pinned_image_counts_as_current(setup) -> None:
+    """`fly machine update --image` stores `tag@sha256:…`; that must not read as a
+    different image and trigger a restart on the next wake."""
+    spawner, fake, _, _ = setup()
+    asyncio.run(spawner.ensure(ALICE))
+    [machine] = fake.machines.values()
+    machine["config"]["image"] = "registry.fly.io/hd-instances:v1@sha256:abc123"
+    calls = len(fake.calls)
+    asyncio.run(spawner.ensure(ALICE))
+    assert not any(
+        method == "POST" and path == f"/machines/{machine['id']}"
+        for method, path, _ in fake.calls[calls:]
+    )

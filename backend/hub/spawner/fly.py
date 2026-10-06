@@ -179,8 +179,11 @@ class FlySpawner:
         if machine is None:
             machine_id = await self._create_machine(user, volume_id, token)
         else:
-            image = (machine.get("config") or {}).get("image")
-            if image != self._config.instance_image:
+            # Compared without any `@sha256:` pin: `fly machine update --image` stores
+            # the tag *and* its digest, and an exact compare would read a machine
+            # rolled by hand as out of date and restart it on its next wake.
+            image = str((machine.get("config") or {}).get("image") or "").split("@")[0]
+            if image != self._config.instance_image.split("@")[0]:
                 logger.info(
                     "rolling %s onto %s", machine_id, self._config.instance_image
                 )

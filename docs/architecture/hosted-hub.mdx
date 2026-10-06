@@ -121,7 +121,12 @@ on their own private network, `horrible-hub-net`.
   machine is reachable only at `<id>.vm.horrible-hub-instances.internal`. Setup and
   release commands are in the header of `fly.hub.toml`; the instance image is
   pushed by `fly.hub-instances.toml`, and bumping its label in both files rolls
-  every user's machine onto the new build the next time they connect.
+  every user's machine onto the new build the next time the hub starts it. A machine
+  that has been running throughout keeps its old image until then. To roll one
+  immediately, run
+  `fly machine update <id> -a horrible-hub-instances --image registry.fly.io/horrible-hub-instances:<label>`.
+  This restarts it, keeps its volume, and the hub treats the resulting
+  `:<label>@sha256:…` pin as current.
 - **Vercel:** from `apps/web`, build locally and deploy the output (the build needs
   the whole pnpm workspace, which a plain upload of `apps/web` does not have):
 
