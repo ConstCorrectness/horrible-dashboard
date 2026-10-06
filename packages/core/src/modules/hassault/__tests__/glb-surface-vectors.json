@@ -826,10 +826,6 @@
       "kind": "carpet"
     },
     {
-      "name": "mat_awning_stripes",
-      "kind": "none"
-    },
-    {
       "name": "mat_black_metal",
       "kind": "vault_steel"
     },
@@ -844,14 +840,6 @@
     {
       "name": "mat_ceiling_tile",
       "kind": "plaster"
-    },
-    {
-      "name": "mat_cobblestone_dark",
-      "kind": "cobblestone"
-    },
-    {
-      "name": "mat_cobblestone_street",
-      "kind": "cobblestone"
     },
     {
       "name": "mat_concrete_dark",
@@ -958,16 +946,52 @@
       "kind": "hazard"
     },
     {
+      "name": "mat_inferno_canopy_crimson",
+      "kind": "burlap"
+    },
+    {
+      "name": "mat_inferno_cobblestone_dark",
+      "kind": "paving"
+    },
+    {
+      "name": "mat_inferno_cobblestone_street",
+      "kind": "paving"
+    },
+    {
+      "name": "mat_inferno_italian_cypress_trunk",
+      "kind": "cedar"
+    },
+    {
+      "name": "mat_inferno_limestone_carved",
+      "kind": "sandstone"
+    },
+    {
+      "name": "mat_inferno_sandbag_burlap",
+      "kind": "burlap"
+    },
+    {
+      "name": "mat_inferno_tuscan_stucco_ochre",
+      "kind": "sandstone"
+    },
+    {
+      "name": "mat_inferno_tuscan_stucco_warm",
+      "kind": "limewash"
+    },
+    {
+      "name": "mat_inferno_wood_chestnut_aged",
+      "kind": "cedar"
+    },
+    {
+      "name": "mat_inferno_wood_crate",
+      "kind": "souk_crate"
+    },
+    {
       "name": "mat_insulator_ceramic",
       "kind": "concrete"
     },
     {
       "name": "mat_italian_cypress_leaves",
       "kind": "none"
-    },
-    {
-      "name": "mat_italian_cypress_trunk",
-      "kind": "wood"
     },
     {
       "name": "mat_lantern_brass",
@@ -988,10 +1012,6 @@
     {
       "name": "mat_light_sodium_glow",
       "kind": "none"
-    },
-    {
-      "name": "mat_limestone_carved",
-      "kind": "masonry"
     },
     {
       "name": "mat_mahogany",
@@ -1070,10 +1090,6 @@
       "kind": "concrete"
     },
     {
-      "name": "mat_sandbag_burlap",
-      "kind": "carpet"
-    },
-    {
       "name": "mat_screen_display",
       "kind": "none"
     },
@@ -1110,14 +1126,6 @@
       "kind": "plaster"
     },
     {
-      "name": "mat_tuscan_stucco_ochre",
-      "kind": "plaster"
-    },
-    {
-      "name": "mat_tuscan_stucco_warm",
-      "kind": "plaster"
-    },
-    {
       "name": "mat_van_metal_olive",
       "kind": "vault_steel"
     },
@@ -1128,10 +1136,6 @@
     {
       "name": "mat_wall_drywall",
       "kind": "plaster"
-    },
-    {
-      "name": "mat_wood_chestnut_aged",
-      "kind": "wood"
     },
     {
       "name": "mat_wood_crate",

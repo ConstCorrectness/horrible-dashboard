@@ -1,5 +1,5 @@
 {
-  "why": "Which procedural surface a GLB map material gets, read by both clients (glb-surfaces.ts, apps/native-fps/src/textures3d.rs). Rules are lowercase substrings of the material name, tried in order, first match wins. 'none' means no detail texture: emissive, liquid, foliage and printed surfaces keep their authored colour and only get the world-space grain. `photoKinds` are the kinds backed by CC0 photographed maps (colour, normal, roughness) in apps/web/public/maps/textures/, matched only by Dust II's own `dust2_` and Mirage's own `mirage_` material names so other maps are untouched; see tools/hassault_process_textures.py.",
+  "why": "Which procedural surface a GLB map material gets, read by both clients (glb-surfaces.ts, apps/native-fps/src/textures3d.rs). Rules are lowercase substrings of the material name, tried in order, first match wins. 'none' means no detail texture: emissive, liquid, foliage and printed surfaces keep their authored colour and only get the world-space grain. `photoKinds` are the kinds backed by CC0 photographed maps (colour, normal, roughness) in apps/web/public/maps/textures/, matched only by Dust II's own `dust2_`, Mirage's own `mirage_` and Inferno's own `inferno_` material names so other maps are untouched; see tools/hassault_process_textures.py.",
   "default": "concrete",
   "rules": [
     {
@@ -39,15 +39,15 @@
     },
     {
       "kind": "limewash",
-      "match": ["dust2_sandstone_light", "mirage_sandstone_light", "mirage_moorish_plaster"]
+      "match": ["dust2_sandstone_light", "mirage_sandstone_light", "mirage_moorish_plaster", "inferno_tuscan_stucco_warm"]
     },
     {
       "kind": "sandstone",
-      "match": ["dust2_sandstone_ochre", "dust2_sandstone_dark", "mirage_sandstone_ochre"]
+      "match": ["dust2_sandstone_ochre", "dust2_sandstone_dark", "mirage_sandstone_ochre", "inferno_tuscan_stucco_ochre", "inferno_limestone"]
     },
     {
       "kind": "paving",
-      "match": ["dust2_limestone_paving", "mirage_sandstone_paving"]
+      "match": ["dust2_limestone_paving", "mirage_sandstone_paving", "inferno_cobblestone_"]
     },
     {
       "kind": "dunesand",
@@ -55,11 +55,11 @@
     },
     {
       "kind": "cedar",
-      "match": ["dust2_wood_cedar", "dust2_palm_bark", "mirage_cedar_wood", "mirage_palm_bark"]
+      "match": ["dust2_wood_cedar", "dust2_palm_bark", "mirage_cedar_wood", "mirage_palm_bark", "inferno_wood_chestnut", "inferno_italian_cypress_trunk"]
     },
     {
       "kind": "souk_crate",
-      "match": ["dust2_wood_crate", "mirage_wood_crate"]
+      "match": ["dust2_wood_crate", "mirage_wood_crate", "inferno_wood_crate"]
     },
     {
       "kind": "rust_iron",
@@ -67,7 +67,7 @@
     },
     {
       "kind": "burlap",
-      "match": ["dust2_canopy_", "dust2_sack_burlap", "mirage_canopy_", "mirage_sack_burlap"]
+      "match": ["dust2_canopy_", "dust2_sack_burlap", "mirage_canopy_", "mirage_sack_burlap", "inferno_canopy_", "inferno_sandbag"]
     },
     {
       "kind": "glaze",

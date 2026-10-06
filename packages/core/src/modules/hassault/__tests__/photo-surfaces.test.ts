@@ -85,12 +85,27 @@ describe('photo surface kinds', () => {
     expect(classifySurface('mat_mirage_canopy_indigo')).toBe('burlap');
     expect(classifySurface('mat_mirage_mosaic_tile_blue')).toBe('glaze');
     expect(isPhotoKind(classifySurface('mat_mirage_palm_fronds'))).toBe(false);
+    // Inferno's own.
+    expect(classifySurface('mat_inferno_cobblestone_street')).toBe('paving');
+    expect(classifySurface('mat_inferno_cobblestone_dark')).toBe('paving');
+    expect(classifySurface('mat_inferno_tuscan_stucco_warm')).toBe('limewash');
+    expect(classifySurface('mat_inferno_tuscan_stucco_ochre')).toBe('sandstone');
+    expect(classifySurface('mat_inferno_limestone_carved')).toBe('sandstone');
+    expect(classifySurface('mat_inferno_wood_chestnut_aged')).toBe('cedar');
+    expect(classifySurface('mat_inferno_italian_cypress_trunk')).toBe('cedar');
+    expect(classifySurface('mat_inferno_wood_crate')).toBe('souk_crate');
+    expect(classifySurface('mat_inferno_sandbag_burlap')).toBe('burlap');
+    expect(classifySurface('mat_inferno_canopy_crimson')).toBe('burlap');
+    expect(isPhotoKind(classifySurface('mat_inferno_italian_cypress_leaves'))).toBe(false);
+    expect(isPhotoKind(classifySurface('mat_inferno_terracotta_roof'))).toBe(false);
     // Mirage and the rest reuse these names, minus the infix, and must not change.
     for (const other of [
       'mat_sandstone_ochre',
       'mat_wood_crate',
       'mat_canopy_crimson',
       'mat_palm_bark',
+      'mat_cobblestone_street',
+      'mat_tuscan_stucco_warm',
     ]) {
       expect(isPhotoKind(classifySurface(other)), other).toBe(false);
     }
@@ -102,7 +117,10 @@ describe('photo surface kinds', () => {
     for (const row of rows) {
       if (isPhotoKind(row.kind)) {
         const lower = row.name.toLowerCase();
-        expect(lower.includes('dust2_') || lower.includes('mirage_'), row.name).toBe(true);
+        expect(
+          lower.includes('dust2_') || lower.includes('mirage_') || lower.includes('inferno_'),
+          row.name,
+        ).toBe(true);
       }
     }
   });
