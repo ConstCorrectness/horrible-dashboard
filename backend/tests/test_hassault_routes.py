@@ -117,3 +117,38 @@ def test_the_stretch_lengthened_the_attackers_walk_on_mirage(mirage):
     assert routes[(1, "B")][0] > 7.0
     for site in ("A", "B"):
         assert routes[(1, site)][0] > routes[(0, site)][0] * 2
+
+
+# --- Inferno ----------------------------------------------------------------
+# Inferno is stretched to 74 x 78 m by cutting along clean lines, so Banana, mid and
+# the alleys keep their shape and only get longer. What these keep is that nothing
+# the stretch or the dressing put down closed a way to a site, and that the
+# attackers' walk got longer (7.0 s to A and 5.7 s to B on the 62 m square).
+
+INFERNO = MAP.with_name("hd_inferno.json")
+
+
+@pytest.fixture(scope="module")
+def inferno():
+    return routes_tool.measure(str(INFERNO))
+
+
+def test_every_team_can_walk_to_every_site_on_inferno(inferno):
+    routes, _, _ = inferno
+    assert set(routes) == {(t, s) for t in (0, 1) for s in ("A", "B")}
+    for pair, times in routes.items():
+        assert times, f"{pair} cannot be reached on foot"
+
+
+def test_t_has_several_ways_to_each_site_on_inferno(inferno):
+    routes, _, _ = inferno
+    for site in ("A", "B"):
+        assert len(routes[(1, site)]) >= 3, routes[(1, site)]
+
+
+def test_the_stretch_lengthened_the_attackers_walk_on_inferno(inferno):
+    routes, _, _ = inferno
+    assert routes[(1, "A")][0] > 8.0
+    assert routes[(1, "B")][0] > 6.8
+    for site in ("A", "B"):
+        assert routes[(1, site)][0] > routes[(0, site)][0] * 2

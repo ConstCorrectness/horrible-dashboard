@@ -28,7 +28,10 @@ except ImportError:
     sys.exit(1)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import cutlayout  # noqa: E402
+import inferno_layout  # noqa: E402
 import maplib  # noqa: E402  (a sibling, found via the path above)
+import props  # noqa: E402
 
 
 def clear_scene():
@@ -99,27 +102,27 @@ def create_pbr_material(name, base_color, metallic=0.0, roughness=0.7, emission_
 def setup_materials():
     mats = {}
     # Tuscan cobblestone & masonry with realistic surface roughness
-    mats["cobblestone_street"] = create_pbr_material("mat_cobblestone_street", (0.50, 0.48, 0.45), metallic=0.02, roughness=0.82, bump_strength=0.22, bump_scale=16.0)
-    mats["cobblestone_dark"] = create_pbr_material("mat_cobblestone_dark", (0.36, 0.35, 0.33), metallic=0.02, roughness=0.85, bump_strength=0.22, bump_scale=16.0)
-    mats["tuscan_stucco_warm"] = create_pbr_material("mat_tuscan_stucco_warm", (0.86, 0.76, 0.62), metallic=0.01, roughness=0.88, bump_strength=0.18, bump_scale=18.0)
-    mats["tuscan_stucco_ochre"] = create_pbr_material("mat_tuscan_stucco_ochre", (0.80, 0.60, 0.42), metallic=0.01, roughness=0.90, bump_strength=0.18, bump_scale=18.0)
-    mats["limestone_carved"] = create_pbr_material("mat_limestone_carved", (0.72, 0.70, 0.66), metallic=0.02, roughness=0.75, bump_strength=0.14, bump_scale=24.0)
+    mats["cobblestone_street"] = create_pbr_material("mat_inferno_cobblestone_street", (0.50, 0.48, 0.45), metallic=0.02, roughness=0.82, bump_strength=0.22, bump_scale=16.0)
+    mats["cobblestone_dark"] = create_pbr_material("mat_inferno_cobblestone_dark", (0.36, 0.35, 0.33), metallic=0.02, roughness=0.85, bump_strength=0.22, bump_scale=16.0)
+    mats["tuscan_stucco_warm"] = create_pbr_material("mat_inferno_tuscan_stucco_warm", (0.86, 0.76, 0.62), metallic=0.01, roughness=0.88, bump_strength=0.18, bump_scale=18.0)
+    mats["tuscan_stucco_ochre"] = create_pbr_material("mat_inferno_tuscan_stucco_ochre", (0.80, 0.60, 0.42), metallic=0.01, roughness=0.90, bump_strength=0.18, bump_scale=18.0)
+    mats["limestone_carved"] = create_pbr_material("mat_inferno_limestone_carved", (0.72, 0.70, 0.66), metallic=0.02, roughness=0.75, bump_strength=0.14, bump_scale=24.0)
     mats["terracotta_roof"] = create_pbr_material("mat_terracotta_roof", (0.70, 0.32, 0.18), metallic=0.0, roughness=0.78, bump_strength=0.25, bump_scale=14.0)
 
     # Woods & Metals
-    mats["italian_cypress_trunk"] = create_pbr_material("mat_italian_cypress_trunk", (0.28, 0.22, 0.18), metallic=0.0, roughness=0.92, bump_strength=0.30, bump_scale=10.0)
+    mats["italian_cypress_trunk"] = create_pbr_material("mat_inferno_italian_cypress_trunk", (0.28, 0.22, 0.18), metallic=0.0, roughness=0.92, bump_strength=0.30, bump_scale=10.0)
     mats["italian_cypress_leaves"] = create_pbr_material("mat_italian_cypress_leaves", (0.12, 0.28, 0.10), metallic=0.0, roughness=0.80)
-    mats["wood_chestnut_aged"] = create_pbr_material("mat_wood_chestnut_aged", (0.34, 0.24, 0.16), metallic=0.0, roughness=0.72, bump_strength=0.28, bump_scale=12.0)
-    mats["wood_crate"] = create_pbr_material("mat_wood_crate", (0.54, 0.40, 0.26), metallic=0.0, roughness=0.65, bump_strength=0.25, bump_scale=14.0)
+    mats["wood_chestnut_aged"] = create_pbr_material("mat_inferno_wood_chestnut_aged", (0.34, 0.24, 0.16), metallic=0.0, roughness=0.72, bump_strength=0.28, bump_scale=12.0)
+    mats["wood_crate"] = create_pbr_material("mat_inferno_wood_crate", (0.54, 0.40, 0.26), metallic=0.0, roughness=0.65, bump_strength=0.25, bump_scale=14.0)
     mats["wrought_iron"] = create_pbr_material("mat_wrought_iron", (0.16, 0.16, 0.18), metallic=0.85, roughness=0.42, bump_strength=0.10, bump_scale=32.0)
     mats["fountain_water"] = create_pbr_material("mat_fountain_water", (0.20, 0.45, 0.60), metallic=0.10, roughness=0.10, alpha=0.6)
     mats["bronze_bell"] = create_pbr_material("mat_bronze_bell", (0.65, 0.52, 0.28), metallic=0.85, roughness=0.32)
 
     # Fabrics & accents
-    mats["sandbag_burlap"] = create_pbr_material("mat_sandbag_burlap", (0.68, 0.60, 0.46), metallic=0.0, roughness=0.95, bump_strength=0.25, bump_scale=30.0)
+    mats["sandbag_burlap"] = create_pbr_material("mat_inferno_sandbag_burlap", (0.68, 0.60, 0.46), metallic=0.0, roughness=0.95, bump_strength=0.25, bump_scale=30.0)
     mats["lantern_brass"] = create_pbr_material("mat_lantern_brass", (0.78, 0.64, 0.24), metallic=0.88, roughness=0.22)
     mats["lantern_glow"] = create_pbr_material("mat_lantern_glow", (1.0, 0.75, 0.35), metallic=0.0, roughness=0.10, emission_color=(1.0, 0.75, 0.35), emission_strength=5.0)
-    mats["awning_stripes"] = create_pbr_material("mat_awning_stripes", (0.75, 0.22, 0.20), metallic=0.0, roughness=0.85)
+    mats["awning_stripes"] = create_pbr_material("mat_inferno_canopy_crimson", (0.75, 0.22, 0.20), metallic=0.0, roughness=0.85)
 
     # Breakable windows
     mats["glass_window"] = create_pbr_material("mat_glass_window", (0.82, 0.92, 0.98), metallic=0.05, roughness=0.06, alpha=0.35)
@@ -253,9 +256,9 @@ def add_wine_cask(collection, name, pos, mats, radius=0.55, length=1.2, yaw_deg=
         add_cylinder(collection, f"{name}_Hoop_{int(hoop_z*100)}_NonCol", (px, py, pz + radius + hoop_z), radius=radius * 1.03, height=0.06, material=mats["wrought_iron"], segments=16)
 
 
-def add_campanile_tower(collection, mats):
+def add_campanile_tower(collection, name, pos, mats):
     """Classical Italian Campanile (Bell Tower) at northwest ruins corner."""
-    cx, cy, cz = 10.0, 58.0, 0.0
+    cx, cy, cz = pos
     # Main square shaft rising to 12.0m
     add_box(collection, "Campanile_Shaft_Lower", (cx, cy, cz + 4.0), (4.4, 4.4, 8.0), mats["tuscan_stucco_ochre"])
     add_box(collection, "Campanile_Shaft_Upper", (cx, cy, cz + 10.0), (4.2, 4.2, 4.0), mats["tuscan_stucco_warm"])
@@ -299,6 +302,26 @@ def add_hanging_lantern(collection, name, pos, mats, radius=7.0, intensity=2.0):
     add_box(collection, f"{name}_Bracket_NonCol", (px, py, pz + 0.3), (0.1, 0.6, 0.1), mats["wrought_iron"])
     add_cylinder(collection, f"{name}_Housing_NonCol", (px, py, pz), radius=0.2, height=0.45, material=mats["lantern_brass"], segments=8)
     add_cylinder(collection, f"{name}_Flame_NonCol", (px, py, pz), radius=0.1, height=0.25, material=mats["lantern_glow"], segments=8)
+
+
+# ---------------------------------------------------------------------------
+# Layout: the map is cut along a few empty lines and the halves spread apart (see
+# `cutlayout.py`, and `inferno_layout.py` for the cuts). Every primitive goes through
+# the warper; the composites move as one by their anchor point.
+# ---------------------------------------------------------------------------
+W = cutlayout.Warper(inferno_layout.CUTS)
+_w = W.w
+
+add_box = W.box(add_box)
+add_cylinder = W.cylinder(add_cylinder)
+add_wedge = W.wedge(maplib.add_wedge)
+add_boxes = W.boxes(maplib.add_boxes)
+add_plinths = W.plinths(maplib.add_plinths)
+add_arch = W.composite(add_arch, 2)
+add_cypress_tree = W.composite(add_cypress_tree, 2)
+add_wine_cask = W.composite(add_wine_cask, 2)
+add_campanile_tower = W.composite(add_campanile_tower, 2)
+add_hanging_lantern = W.composite(add_hanging_lantern, 2)
 
 
 def build_inferno_perimeter_and_terrain(col, mats):
@@ -360,7 +383,7 @@ def build_site_b(col, mats):
     add_arch(col, "Ruins_Church_Arch", (14.0, 56.0, 0.0), span=4.2, height=4.6, depth=1.6, material=mats["limestone_carved"])
 
     # Campanile Bell Tower
-    add_campanile_tower(col, mats)
+    add_campanile_tower(col, "Campanile", (10.0, 58.0, 0.0), mats)
 
     # Wine Casks cluster (22.0, 52.0)
     add_wine_cask(col, "SiteB_Cask_1", (22.0, 51.5, 0.0), mats, radius=0.55, length=1.2)
@@ -368,7 +391,7 @@ def build_site_b(col, mats):
     add_wine_cask(col, "SiteB_Cask_Top", (22.0, 52.25, 0.9), mats, radius=0.50, length=1.1)
 
     # Construction Ramp connecting B Site to CT
-    maplib.add_wedge(col, "SiteB_CT_Ramp", (25.0, 57.0, 0.6), (4.0, 6.0, 1.2), mats["cobblestone_street"], "+y")
+    add_wedge(col, "SiteB_CT_Ramp", (25.0, 57.0, 0.6), (4.0, 6.0, 1.2), mats["cobblestone_street"], "+y")
 
 
 def build_middle_and_alt_mid(col, mats):
@@ -381,8 +404,8 @@ def build_middle_and_alt_mid(col, mats):
 
     # T-Ramp ascending from T Spawn into Mid
     # A hump, up from T and down into mid: it was a 1 m block you had to jump.
-    maplib.add_wedge(col, "Mid_TRamp_Up", (34.0, 16.0, 0.5), (6.0, 4.0, 1.0), mats["cobblestone_street"], "+y")
-    maplib.add_wedge(col, "Mid_TRamp_Down", (34.0, 20.0, 0.5), (6.0, 4.0, 1.0), mats["cobblestone_street"], "-y")
+    add_wedge(col, "Mid_TRamp_Up", (34.0, 16.0, 0.5), (6.0, 4.0, 1.0), mats["cobblestone_street"], "+y")
+    add_wedge(col, "Mid_TRamp_Down", (34.0, 20.0, 0.5), (6.0, 4.0, 1.0), mats["cobblestone_street"], "-y")
 
     # Hay cart cover in Alt-Mid at (32.0, 24.0)
     add_box(col, "AltMid_Cart_Bed", (32.0, 24.0, 0.6), (2.0, 3.2, 1.2), mats["wood_chestnut_aged"])
@@ -407,7 +430,7 @@ def build_apartments(col, mats):
         add_cylinder(col, f"Balcony_Baluster_{bi}_NonCol", (48.4, by, 3.35), radius=0.06, height=0.8, material=mats["limestone_carved"], segments=8)
 
     # Internal apartment stairs leading from ground to 2nd floor
-    maplib.add_wedge(col, "Apts_Interior_Stairs", (37.0, 34.0, 1.4), (3.0, 4.0, 2.8), mats["wood_chestnut_aged"], "+y")
+    add_wedge(col, "Apts_Interior_Stairs", (37.0, 34.0, 1.4), (3.0, 4.0, 2.8), mats["wood_chestnut_aged"], "+y")
 
 
 def build_site_a(col, mats):
@@ -418,7 +441,7 @@ def build_site_a(col, mats):
 
     # Sunken Pit at (54.0, 44.0, Z = -1.2m)
     add_box(col, "SiteA_Pit_Floor", (54.0, 44.0, -0.6), (6.0, 6.0, 1.2), mats["cobblestone_street"])
-    maplib.add_wedge(col, "SiteA_Pit_Ramp", (54.0, 48.0, -0.6), (4.0, 3.0, 1.2), mats["cobblestone_street"], "+y")
+    add_wedge(col, "SiteA_Pit_Ramp", (54.0, 48.0, -0.6), (4.0, 3.0, 1.2), mats["cobblestone_street"], "+y")
 
     # Moto / Bicycle Cart Cover at (48.0, 52.0)
     add_box(col, "SiteA_Bicycle_Cart", (48.0, 52.0, 0.6), (1.4, 2.4, 1.2), mats["wood_crate"])
@@ -472,7 +495,7 @@ def build_layout_revision(col, mats):
     - Mid gets a well to fight around rather than an open street.
     """
     add_box(col, "East_House", (56.0, 25.0, 3.5), (8.0, 10.0, 7.0), mats["tuscan_stucco_ochre"])
-    maplib.add_wedge(col, "East_House_Roof_NonCol", (56.0, 25.0, 7.6), (8.6, 10.6, 1.2), mats["terracotta_roof"], "+x")
+    add_wedge(col, "East_House_Roof_NonCol", (56.0, 25.0, 7.6), (8.6, 10.6, 1.2), mats["terracotta_roof"], "+x")
     add_box(col, "East_Low_Wall", (47.5, 34.0, 0.6), (4.0, 0.7, 1.2), mats["limestone_carved"])
     add_cylinder(col, "Mid_Well", (30.0, 38.0, 0.5), radius=1.0, height=1.0, material=mats["limestone_carved"], segments=14)
     # The beam clears a standing eye on the rim (1.0 + 1.5 m): at 2.3 m a body
@@ -492,9 +515,9 @@ def build_dressing_and_lights(col, mats):
         ((18.0, 62.0, 4.5), (26.0, 1.2, 9.0)),
         ((56.0, 25.0, 3.5), (8.0, 10.0, 7.0)),
     ]
-    maplib.add_plinths(col, "Trim_Plinths_NonCol", walls, mats["cobblestone_dark"], height=0.6, proud=0.1)
+    add_plinths(col, "Trim_Plinths_NonCol", walls, mats["cobblestone_dark"], height=0.6, proud=0.1)
     # Terracotta coping along the tops of the lane walls.
-    maplib.add_boxes(col, "Trim_Coping_NonCol", [
+    add_boxes(col, "Trim_Coping_NonCol", [
         ((cx, cy, cz + sz / 2 + 0.12), (sx + 0.5, sy + 0.5, 0.24) if sx < sy else (sx + 0.5, sy + 0.5, 0.24))
         for (cx, cy, cz), (sx, sy, sz) in walls[:4]
     ], mats["terracotta_roof"])
@@ -507,7 +530,7 @@ def build_dressing_and_lights(col, mats):
             for side in (-1, 1):
                 shutters.append(((x + side * 0.64, y, 4.6), (0.06, 1.2, 1.6)))
             y += 7.0
-    maplib.add_boxes(col, "Shutters_NonCol", shutters, mats["wood_chestnut_aged"])
+    add_boxes(col, "Shutters_NonCol", shutters, mats["wood_chestnut_aged"])
 
     # Washing strung across Banana, well above head height.
     lines, cloth = [], []
@@ -516,11 +539,11 @@ def build_dressing_and_lights(col, mats):
         lines.append(((19.0, y, z), (13.6, 0.03, 0.03)))
         for k in range(4):
             cloth.append(((14.5 + k * 3.0, y, z - 0.45), (0.9, 0.03, 0.8)))
-    maplib.add_boxes(col, "Washing_Lines_NonCol", lines, mats["wrought_iron"])
-    maplib.add_boxes(col, "Washing_Cloth_NonCol", cloth, mats["awning_stripes"])
+    add_boxes(col, "Washing_Lines_NonCol", lines, mats["wrought_iron"])
+    add_boxes(col, "Washing_Cloth_NonCol", cloth, mats["awning_stripes"])
 
     # Awnings over Boiler and the A porch.
-    maplib.add_boxes(col, "Awnings_NonCol", [
+    add_boxes(col, "Awnings_NonCol", [
         ((36.0, 31.0, 4.4), (3.6, 1.4, 0.05)),
         ((48.0, 57.0, 5.0), (4.2, 1.4, 0.05)),
         ((56.0, 19.6, 3.2), (3.0, 1.2, 0.05)),
@@ -537,6 +560,73 @@ def build_dressing_and_lights(col, mats):
     add_hanging_lantern(col, "Lantern_EastHouse", (51.4, 25.0, 3.0), mats, radius=6.0, intensity=1.8)
 
     maplib.set_atmosphere("golden_hour")
+
+
+# Where the clutter gathers, in the authored (pre-cut) frame so each zone stretches
+# with the map: (x0, y0, x1, y1), density, vignette weights, lane direction or None.
+_COURT = {"jars": 4, "sacks": 3, "crates": 2, "barrels": 1}
+_WORK = {"crates": 4, "barrels": 3, "jars": 1, "sacks": 1}
+_ZONES = [
+    ((5, 5, 66, 14), 1.1, _COURT, None),  # the T courtyard
+    ((12, 14, 26, 40), 0.7, {"crates": 3, "sacks": 3, "barrels": 2, "jars": 1}, (0.0, 1.0)),  # Banana
+    ((26, 14, 43, 40), 0.5, _WORK, (0.0, 1.0)),  # the middle street
+    ((5, 40, 31, 62), 0.9, {"barrels": 4, "crates": 3, "jars": 2, "sacks": 1}, None),  # B: the casks
+    ((43, 14, 65, 40), 0.7, {"crates": 3, "barrels": 2, "jars": 2, "sacks": 2}, None),  # the east alleys
+    ((43, 40, 65, 62), 0.8, {"crates": 4, "barrels": 2, "jars": 2, "sacks": 1}, None),  # A
+    ((5, 56, 66, 65), 0.8, _COURT, None),  # the CT courtyard
+]
+_DRESS_SEED = 20261008
+# Anything with one of these in its name is a way through: no clutter within 2 m.
+_WAYS = ("Arch", "Door", "Portal", "Window", "Stairs", "Ramp", "Porch")
+# What each kind of prop is made of, by this map's own material keys.
+_PROP_MATERIALS = {
+    "crate": "wood_crate",
+    "barrel_wood": "wood_chestnut_aged",
+    "barrel_iron": "wrought_iron",
+    "sack": "sandbag_burlap",
+    "jar": "terracotta_roof",
+    "rubble": "cobblestone_dark",
+}
+
+
+def build_natural_dressing(col, mats):
+    """Clutter laid out against the finished map rather than typed in.
+
+    Plans on everything already built (so it must run last among the builders),
+    keeps clear of spawns, bomb sites, doorways, stairs and lamps, and places
+    vignettes where a place gets cluttered: against walls, in corners, and a few
+    pieces of cover in the open streets. See `props.py`.
+    """
+    import json
+    import random
+
+    with open(
+        os.path.join(maplib.REPO_ROOT, "backend", "modules", "hassault", "maps", "hd_inferno.json"),
+        encoding="utf-8",
+    ) as f:
+        placed = json.load(f)
+    plan = W.plan(
+        props,
+        extent=(4.0, 4.0, 78.0, 82.0),
+        domain=(5.0, 77.0, 5.0, 81.0),
+        placed=placed,
+        ways=_WAYS,
+        sunk=("SiteA_Pit",),
+    )
+    zone_of = W.zone_of(_ZONES, (0.5, _WORK, None))
+    rng = random.Random(_DRESS_SEED)
+    vignettes = props.dress(plan, rng, zone_of, lane_budget=8)
+    counts = props.emit(vignettes, col, mats, _PROP_MATERIALS)
+    tally = {}
+    for name, _ in vignettes:
+        tally[name] = tally.get(name, 0) + 1
+    print("dressing:", tally, counts)
+    if os.environ.get("HASSAULT_INFERNO_PLAN"):
+        with open(os.environ["HASSAULT_INFERNO_PLAN"], "w") as f:
+            json.dump(
+                [[n, [[p.kind, p.x, p.y, p.size[0], p.size[1], p.yaw] for p in ps]] for n, ps in vignettes],
+                f,
+            )
 
 
 def build_inferno_scene():
@@ -560,8 +650,11 @@ def build_inferno_scene():
     build_spawns_and_props(c_props, mats)
     build_layout_revision(get_or_create_collection("Revision"), mats)
     build_dressing_and_lights(get_or_create_collection("Dressing"), mats)
+    build_natural_dressing(get_or_create_collection("Clutter"), mats)  # last: it plans on all of the above
 
     print("=== Tuscan Citadel (hd_inferno) Built Successfully! ===")
+    if os.environ.get("HASSAULT_INFERNO_SCAN"):
+        W.dump_scan(os.environ["HASSAULT_INFERNO_SCAN"])
 
 
 def export_glb():
