@@ -25,7 +25,8 @@ import AgoraRTC, { type IAgoraRTCClient, type ILocalAudioTrack } from 'agora-rtc
 import type PubNub from 'pubnub';
 
 import type { StripHandle } from '../audio/types';
-import { leaveClubhouseChannel } from './api';
+import { leaveClubhouseChannel, sendChannelMessage } from './api';
+import { ChatSender } from './chatSender';
 import type { PcmCapture, UtteranceBuffer } from './liveCapture';
 
 export interface LiveUserState {
@@ -178,6 +179,16 @@ export class ClubhouseRoomSession {
    */
   earsLevel = 0;
   earsTracks = 0;
+
+  /**
+   * Every chat post this room makes, from the agent and from the person typing —
+   * spaced, retried on a rate limit, and (for the agent) never repeated. On the
+   * session so the spacing survives a remount, and so leaving the room can drop
+   * whatever is still queued for it.
+   */
+  // Looked up at send time, not construction: a session is built long before the
+  // first message, and tests build one against an `api` mock without this export.
+  chatSender = new ChatSender((channel, text) => sendChannelMessage(channel, text));
 
   // --- agent audio ---
   agentAudioSource: AudioBufferSourceNode | null = null;
@@ -369,6 +380,9 @@ export class ClubhouseRoomSession {
       this[key] = null;
     }
 
+    // Before anything awaits: a post still queued for this room must not go out
+    // after we have left it (or into the next one).
+    this.chatSender.reset();
     this.sttCapture?.stop();
     this.sttCapture = null;
     this.sttUtterance = null;

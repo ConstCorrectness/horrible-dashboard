@@ -577,6 +577,37 @@ in a capture yet), so the pane displays incoming GIFs on a best-effort reading b
 send one. The next capture containing a GIF pins it in `parseRoomReaction`.
 :::
 
+#### Posting to chat: spacing, retry, repeats
+
+Two Clubhouse refusals showed up in a live room, and the agent's posts swallowed both:
+
+- **`429 Less is more! Please wait a bit and try again`** — a rate limit. It fired between
+  sends 3 s and 7 s apart, so the old fixed 300 ms between a long reply's chunks never
+  cleared it, and a rejected message was simply lost.
+- **`400 Looks like that's been said already!`** — an exact repeat. With a silence timeout
+  set, the nudge asks the model to "say something" every interval, a low-temperature model
+  says the same 48 characters each time, and the room got one refusal a minute, forever.
+
+Every post now goes through one `ChatSender`
+([chatSender.ts](file:///C:/Users/Horrible/Code/horrible-dashboard/packages/core/src/modules/clubhouse/chatSender.ts)),
+owned by the room session:
+
+- **Serialized and spaced.** One chain for the agent and the person typing, with at least
+  3 s between attempts — a rejected attempt counts toward the window too. The limit
+  itself is not documented; 3 s is a measured-failure floor, not a known number.
+- **A 429 is retried** after 5 s, then 10 s, and only then rejected with Clubhouse's own
+  message (the composer toasts it). A 400, or anything else, is not retried.
+- **The agent never repeats itself.** Its posts pass `dedupe`, so a line already posted to
+  that room in the last 10 minutes is skipped instead of refused. A person's own message
+  is never second-guessed: if they type it twice, Clubhouse decides and says so.
+- **A repeated nudge says nothing.** If a nudge's reply equals the previous nudge's, the
+  agent neither speaks nor posts it (`nothing new to say`) and waits a full extra interval
+  before asking again.
+- **Posting no longer holds up speech.** The reply is posted without being awaited, so a
+  rate-limit wait cannot delay the audio; ordering is preserved by the sender's queue.
+- **Leaving a room drops what is still queued** for it, rather than posting into a room
+  you have left (or the next one).
+
 ### 15. `GET /channels/{channel}/chat`
 
 The chat backlog, fetched on join so a late arrival sees what was already said —

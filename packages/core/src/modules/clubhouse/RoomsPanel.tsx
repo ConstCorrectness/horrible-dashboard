@@ -1238,6 +1238,8 @@ export function RoomsPanel() {
   >([]);
   const agentBusyRef = useRef(false);
   const agentSentTextsRef = useRef<Set<string>>(new Set());
+  /** What the last silence nudge said, so a repeat can be recognised and dropped. */
+  const lastNudgeReplyRef = useRef('');
 
   /**
    * Carry out what the server asked for alongside a reply. Music is played here, not
@@ -1336,10 +1338,28 @@ export function RoomsPanel() {
                 : result.notice;
               agentSentTextsRef.current.add(textToSend.trim());
               agentSentTextsRef.current.add(result.notice.trim());
-              await sendComment(textToSend).catch(() => {});
+              // Not awaited: the sender spaces and retries these, and a rate-limit
+              // wait must not hold up the spoken reply. `dedupe` skips a line the
+              // room has already been told.
+              void sendComment(textToSend, { dedupe: true }).catch(() => {});
             }
           }
           if (result.spoke && result.reply) {
+            // The silence nudge asks the model to "say something" every interval, and a
+            // low-temperature model says the same thing each time — which Clubhouse
+            // refused as "said already" once a minute, forever. A nudge that repeats
+            // the last one has nothing new to add: say nothing, and wait a full extra
+            // interval before asking again rather than re-asking at once.
+            if (item.source === 'nudge') {
+              const said = result.reply.trim();
+              if (said === lastNudgeReplyRef.current) {
+                setAgentReason('nothing new to say');
+                lastRoomActivityTsRef.current =
+                  Date.now() + (agentConfigRef.current.silenceTimeoutS || 0) * 1000;
+                continue;
+              }
+              lastNudgeReplyRef.current = said;
+            }
             setIsAgentSpeaking(true);
             if (agentConfigRef.current.postToChat) {
               const textToSend = agentConfigRef.current.robotEmojiPrefix
@@ -1347,7 +1367,10 @@ export function RoomsPanel() {
                 : result.reply;
               agentSentTextsRef.current.add(textToSend.trim());
               agentSentTextsRef.current.add(result.reply.trim());
-              await sendComment(textToSend).catch(() => {});
+              // Not awaited: the sender spaces and retries these, and a rate-limit
+              // wait must not hold up the spoken reply. `dedupe` skips a line the
+              // room has already been told.
+              void sendComment(textToSend, { dedupe: true }).catch(() => {});
             }
             if (agentConfigRef.current.speak) {
               // If backend provided a natural thinking filler, speak it first
@@ -1666,6 +1689,7 @@ export function RoomsPanel() {
     setIsAgentThinking(false);
     setIsAgentSpeaking(false);
     setHeardLines([]);
+    lastNudgeReplyRef.current = '';
     setAgentReason(null);
     // Not left to the 5s poll: until it lands the Agent tab shows the previous
     // room's conversation under the new room's name.
