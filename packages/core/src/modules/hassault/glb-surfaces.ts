@@ -35,7 +35,24 @@ export type SurfaceKind =
   | 'cobblestone'
   | 'roof_tile'
   | 'carpet'
-  | 'brick';
+  | 'brick'
+  | PhotoKind;
+
+/**
+ * Kinds backed by photographed CC0 maps (colour, normal, roughness) rather than a
+ * generated tile. Matched only by Dust II's own `dust2_` material names, so no
+ * other map changes. See `tools/hassault_process_textures.py`.
+ */
+export type PhotoKind =
+  | 'limewash'
+  | 'sandstone'
+  | 'paving'
+  | 'dunesand'
+  | 'cedar'
+  | 'souk_crate'
+  | 'rust_iron'
+  | 'burlap'
+  | 'glaze';
 
 interface SurfaceTable {
   default: SurfaceKind;
@@ -43,9 +60,45 @@ interface SurfaceTable {
   tileScale: Record<string, number>;
   detailMean: number;
   detailGain: number;
+  photoKinds: PhotoKind[];
+  photoNormalScale: Record<PhotoKind, number>;
 }
 
 const TABLE = table as SurfaceTable;
+
+export const PHOTO_KINDS: readonly PhotoKind[] = TABLE.photoKinds;
+
+export function isPhotoKind(kind: string): kind is PhotoKind {
+  return (PHOTO_KINDS as readonly string[]).includes(kind);
+}
+
+/**
+ * The generated tile a photo kind stands in with: on the Low tier, which never
+ * fetches the images, and for the moment before they arrive.
+ */
+export const PHOTO_FALLBACK: Record<PhotoKind, SurfaceKind> = {
+  limewash: 'plaster',
+  sandstone: 'masonry',
+  paving: 'cobblestone',
+  dunesand: 'plaster',
+  cedar: 'wood',
+  souk_crate: 'crate',
+  rust_iron: 'vault_steel',
+  burlap: 'carpet',
+  glaze: 'marble',
+};
+
+/** Where a photo kind's map lives, relative to the web root. `c` albedo, `n` normal, `r` roughness. */
+export function photoTexturePath(kind: PhotoKind, channel: 'c' | 'n' | 'r'): string {
+  return `/maps/textures/${kind}_${channel}.webp`;
+}
+
+/**
+ * How hard each kind's normal map bites (`photoNormalScale` in the JSON, so the
+ * native client bakes the same numbers into its detail layers). Wood, rust and
+ * cloth have shallow relief and want more; stucco read leathery at 1.
+ */
+export const PHOTO_NORMAL_SCALE: Record<PhotoKind, number> = TABLE.photoNormalScale;
 
 /** Linear mean every detail tile is normalised to. */
 export const DETAIL_MEAN = TABLE.detailMean;

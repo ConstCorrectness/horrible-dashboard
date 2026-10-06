@@ -1,5 +1,5 @@
 {
-  "why": "Which procedural surface a GLB map material gets, read by both clients (glb-surfaces.ts, apps/native-fps/src/textures3d.rs). Rules are lowercase substrings of the material name, tried in order, first match wins. 'none' means no detail texture: emissive, liquid, foliage and printed surfaces keep their authored colour and only get the world-space grain.",
+  "why": "Which procedural surface a GLB map material gets, read by both clients (glb-surfaces.ts, apps/native-fps/src/textures3d.rs). Rules are lowercase substrings of the material name, tried in order, first match wins. 'none' means no detail texture: emissive, liquid, foliage and printed surfaces keep their authored colour and only get the world-space grain. `photoKinds` are the kinds backed by CC0 photographed maps (colour, normal, roughness) in apps/web/public/maps/textures/, matched only by Dust II's own `dust2_` material names so other maps are untouched; see tools/hassault_process_textures.py.",
   "default": "concrete",
   "rules": [
     {
@@ -36,6 +36,42 @@
         "book",
         "shrinkwrap"
       ]
+    },
+    {
+      "kind": "limewash",
+      "match": ["dust2_sandstone_light"]
+    },
+    {
+      "kind": "sandstone",
+      "match": ["dust2_sandstone_ochre", "dust2_sandstone_dark"]
+    },
+    {
+      "kind": "paving",
+      "match": ["dust2_limestone_paving"]
+    },
+    {
+      "kind": "dunesand",
+      "match": ["dust2_desert_sand"]
+    },
+    {
+      "kind": "cedar",
+      "match": ["dust2_wood_cedar", "dust2_palm_bark"]
+    },
+    {
+      "kind": "souk_crate",
+      "match": ["dust2_wood_crate"]
+    },
+    {
+      "kind": "rust_iron",
+      "match": ["dust2_metal_iron_rusted"]
+    },
+    {
+      "kind": "burlap",
+      "match": ["dust2_canopy_", "dust2_sack_burlap"]
+    },
+    {
+      "kind": "glaze",
+      "match": ["dust2_moorish_tile"]
     },
     {
       "kind": "site_a",
@@ -164,8 +200,39 @@
     "cobblestone": 3,
     "roof_tile": 3,
     "carpet": 4,
-    "brick": 2
+    "brick": 2,
+    "limewash": 6,
+    "sandstone": 6,
+    "paving": 3,
+    "dunesand": 6,
+    "cedar": 3,
+    "souk_crate": 2.4,
+    "rust_iron": 3,
+    "burlap": 3,
+    "glaze": 6
   },
   "detailMean": 0.6667,
-  "detailGain": 1.5
+  "detailGain": 1.5,
+  "photoKinds": [
+    "limewash",
+    "sandstone",
+    "paving",
+    "dunesand",
+    "cedar",
+    "souk_crate",
+    "rust_iron",
+    "burlap",
+    "glaze"
+  ],
+  "photoNormalScale": {
+    "limewash": 0.5,
+    "sandstone": 0.6,
+    "paving": 1.0,
+    "dunesand": 0.7,
+    "cedar": 1.5,
+    "souk_crate": 1.2,
+    "rust_iron": 1.5,
+    "burlap": 1.0,
+    "glaze": 1.0
+  }
 }

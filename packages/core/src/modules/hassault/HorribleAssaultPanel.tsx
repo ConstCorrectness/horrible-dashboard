@@ -37,6 +37,7 @@ import {
 import { GameAudio } from './audio';
 import { AvatarPool } from './avatars';
 import { createBackdrop, type Backdrop } from './backdrop';
+import { upgradePhotoSurfaces } from './photo-surfaces';
 import { setSurfaceQuality } from './surface-quality';
 import { MatchCompanion } from './panels/MatchCompanion';
 import { BuyMenu } from './panels/BuyMenu';
@@ -1653,9 +1654,11 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
             | import('three').MeshStandardMaterial[]
             | undefined;
           for (const mat of Array.isArray(m) ? m : m ? [m] : []) {
-            if (mat.map && mat.map.anisotropy !== aniso) {
-              mat.map.anisotropy = aniso;
-              mat.map.needsUpdate = true;
+            for (const tex of [mat.map, mat.normalMap, mat.roughnessMap]) {
+              if (tex && tex.anisotropy !== aniso) {
+                tex.anisotropy = aniso;
+                tex.needsUpdate = true;
+              }
             }
           }
         });
@@ -1663,6 +1666,19 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
 
       let mesh: import('three').Mesh | null = null;
       let world3dGroup: import('three').Group | null = null;
+
+      /**
+       * Photographed maps on the modelled map's photo surfaces, once the images
+       * arrive. Not on the Low tier, which draws Lambert and has no use for a normal
+       * or roughness map; it keeps the generated tiles and never fetches them.
+       */
+      const upgradePhotos = () => {
+        if (tier.lambert || !world3dGroup) return;
+        const aniso = Math.min(tier.anisotropy, renderer.capabilities.getMaxAnisotropy());
+        void upgradePhotoSurfaces(THREE, world3dGroup, aniso).then((n) => {
+          if (n > 0) renderer.shadowMap.needsUpdate = true;
+        });
+      };
       const detail = createDetailTexture(THREE, renderer.capabilities.getMaxAnisotropy());
       const material = new THREE.MeshLambertMaterial({
         vertexColors: true,
@@ -1765,6 +1781,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
           });
           filterSurfaces(world3dGroup);
           setSurfaceQuality(THREE, world3dGroup, tier.lambert);
+          upgradePhotos();
           scene.add(world3dGroup);
 
           const cx = world3d.bounds.center[0];
@@ -1841,6 +1858,7 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
         applyAtmosphere(atmosphere, skyOpen);
         filterSurfaces(world3dGroup);
         setSurfaceQuality(THREE, world3dGroup, tier.lambert);
+        upgradePhotos();
         lampPool.forEach((lamp, i) => (lamp.visible = i < tier.lights));
         renderer.shadowMap.needsUpdate = true;
       };
@@ -2985,6 +3003,20 @@ export function HorribleAssaultPanel(props: HorribleAssaultPanelProps = {}) {
     };
     const onMouseDown = (e: MouseEvent) => {
       if (!isLocked()) {
+        // This listener is on `document`, so it sees every press in the app — the
+        // pause menu's buttons included. Re-grabbing the pointer on mousedown
+        // there locks it before the click lands, which is why Settings (and
+        // anything else in the menu) only worked when the timing was kind. A
+        // press re-takes input only when it is on the game surface itself and
+        // nothing else owns the mouse; the overlays carry their own onClick.
+        if (
+          menuOpenRef.current ||
+          consoleOpenRef.current ||
+          chatOpenRef.current ||
+          !(e.target instanceof Node && el.contains(e.target))
+        ) {
+          return;
+        }
         grabInput();
         return;
       }

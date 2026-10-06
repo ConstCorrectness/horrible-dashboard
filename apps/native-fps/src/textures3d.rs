@@ -20,7 +20,14 @@
 //! 12. Tactical Bomb Site Spray Stencils ("B").
 
 pub const TEXTURE_SIZE: u32 = 256;
-pub const LAYER_COUNT: u32 = 18;
+/// The generated surfaces, then the photographed ones' albedo, then their detail.
+pub const GENERATED_LAYERS: u32 = 18;
+/// Surfaces backed by photographed CC0 maps (`apps/web/public/maps/textures/`).
+pub const PHOTO_COUNT: u32 = 9;
+/// Every layer of the array: 18 generated, 9 photo albedos, 9 photo details. The
+/// photo layers are appended so no existing layer index (the shader hardcodes a
+/// few) moves.
+pub const LAYER_COUNT: u32 = GENERATED_LAYERS + PHOTO_COUNT * 2;
 
 /// Fast deterministic pseudo-random hash.
 fn hash(x: f32, y: f32, seed: f32) -> f32 {
@@ -759,6 +766,8 @@ struct SurfaceTable {
     default: MaterialKind,
     rules: Vec<(MaterialKind, Vec<String>)>,
     tile_scale: std::collections::HashMap<MaterialKind, f32>,
+    /// `photoNormalScale`: how hard each photographed kind's normal map bites.
+    normal_scale: std::collections::HashMap<MaterialKind, f32>,
     detail_mean: f32,
 }
 
@@ -802,6 +811,18 @@ fn surface_table() -> &'static SurfaceTable {
             default: kind(&json["default"]),
             rules,
             tile_scale,
+            normal_scale: json["photoNormalScale"]
+                .as_object()
+                .expect("photoNormalScale")
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        MaterialKind::from_key(k)
+                            .unwrap_or_else(|| panic!("photoNormalScale names unknown kind {k}")),
+                        v.as_f64().expect("normal scale") as f32,
+                    )
+                })
+                .collect(),
             detail_mean: json["detailMean"].as_f64().expect("detailMean") as f32,
         }
     })
@@ -835,6 +856,18 @@ pub enum MaterialKind {
     RoofTile = 16,
     Carpet = 17,
     Brick = 18,
+    // Photographed surfaces, matched only by Dust II's own `dust2_` material
+    // names. Kind `18 + n` has its albedo in layer `17 + n` and its normal and
+    // roughness in layer `26 + n`.
+    Limewash = 19,
+    Sandstone = 20,
+    Paving = 21,
+    Dunesand = 22,
+    Cedar = 23,
+    SoukCrate = 24,
+    RustIron = 25,
+    Burlap = 26,
+    Glaze = 27,
 }
 
 impl MaterialKind {
@@ -860,6 +893,15 @@ impl MaterialKind {
             "roof_tile" => MaterialKind::RoofTile,
             "carpet" => MaterialKind::Carpet,
             "brick" => MaterialKind::Brick,
+            "limewash" => MaterialKind::Limewash,
+            "sandstone" => MaterialKind::Sandstone,
+            "paving" => MaterialKind::Paving,
+            "dunesand" => MaterialKind::Dunesand,
+            "cedar" => MaterialKind::Cedar,
+            "souk_crate" => MaterialKind::SoukCrate,
+            "rust_iron" => MaterialKind::RustIron,
+            "burlap" => MaterialKind::Burlap,
+            "glaze" => MaterialKind::Glaze,
             _ => return None,
         })
     }
@@ -891,6 +933,14 @@ impl MaterialKind {
             MaterialKind::RoofTile => 0.70,
             MaterialKind::Carpet => 0.95,
             MaterialKind::Brick => 0.85,
+            // A photo kind's roughness is its map; these are what a map reads
+            // as on average, for anything that wants a number without sampling.
+            MaterialKind::Limewash | MaterialKind::Sandstone | MaterialKind::Dunesand => 0.9,
+            MaterialKind::Paving => 0.8,
+            MaterialKind::Cedar | MaterialKind::SoukCrate => 0.7,
+            MaterialKind::RustIron => 0.6,
+            MaterialKind::Burlap => 0.95,
+            MaterialKind::Glaze => 0.35,
         }
     }
 
@@ -914,7 +964,26 @@ impl MaterialKind {
             | MaterialKind::RoofTile
             | MaterialKind::Brick => 0.02,
             MaterialKind::Carpet => 0.0,
+            MaterialKind::RustIron => 0.5,
+            MaterialKind::Limewash
+            | MaterialKind::Sandstone
+            | MaterialKind::Paving
+            | MaterialKind::Dunesand
+            | MaterialKind::Cedar
+            | MaterialKind::SoukCrate
+            | MaterialKind::Burlap
+            | MaterialKind::Glaze => 0.02,
         }
+    }
+
+    /// True for a surface backed by photographed maps.
+    pub fn is_photo(&self) -> bool {
+        *self as u32 > GENERATED_LAYERS
+    }
+
+    /// The layer holding this kind's normal (x, y) and roughness, for a photo kind.
+    pub fn detail_layer(&self) -> Option<u32> {
+        self.is_photo().then(|| self.layer_index() + PHOTO_COUNT)
     }
 
     /// World units per repeat of the kind's tile (`tileScale`).
@@ -965,6 +1034,128 @@ pub fn texture_layers(size: u32) -> Vec<Vec<u8>> {
         detail(draw_carpet_tile(size, size)),
         detail(draw_brick_tile(size, size)),
     ]
+    .into_iter()
+    .chain(photo_layers(size))
+    .collect()
+}
+
+/// One photographed surface's three maps, embedded: the client has no asset
+/// directory and fetches nothing, so these ride in the binary like the weapon
+/// models do. WebP, which the `image` crate here already decodes.
+struct PhotoSet {
+    color: &'static [u8],
+    normal: &'static [u8],
+    rough: &'static [u8],
+}
+
+macro_rules! photo_set {
+    ($kind:literal) => {
+        PhotoSet {
+            color: include_bytes!(concat!("../../web/public/maps/textures/", $kind, "_c.webp")),
+            normal: include_bytes!(concat!("../../web/public/maps/textures/", $kind, "_n.webp")),
+            rough: include_bytes!(concat!("../../web/public/maps/textures/", $kind, "_r.webp")),
+        }
+    };
+}
+
+/// The photographed kinds in layer order.
+const PHOTO_KINDS: [MaterialKind; PHOTO_COUNT as usize] = [
+    MaterialKind::Limewash,
+    MaterialKind::Sandstone,
+    MaterialKind::Paving,
+    MaterialKind::Dunesand,
+    MaterialKind::Cedar,
+    MaterialKind::SoukCrate,
+    MaterialKind::RustIron,
+    MaterialKind::Burlap,
+    MaterialKind::Glaze,
+];
+
+/// In `MaterialKind` order, from Limewash.
+static PHOTO_SETS: [PhotoSet; PHOTO_COUNT as usize] = [
+    photo_set!("limewash"),
+    photo_set!("sandstone"),
+    photo_set!("paving"),
+    photo_set!("dunesand"),
+    photo_set!("cedar"),
+    photo_set!("souk_crate"),
+    photo_set!("rust_iron"),
+    photo_set!("burlap"),
+    photo_set!("glaze"),
+];
+
+/// Decode an embedded WebP to RGBA8 at `size` x `size`.
+fn decode_square(bytes: &[u8], size: u32) -> Option<Vec<u8>> {
+    let img = image::load_from_memory_with_format(bytes, image::ImageFormat::WebP)
+        .ok()?
+        .to_rgba8();
+    if img.width() == size && img.height() == size {
+        return Some(img.into_raw());
+    }
+    Some(
+        image::imageops::resize(&img, size, size, image::imageops::FilterType::Lanczos3)
+            .into_raw(),
+    )
+}
+
+/// The photographed surfaces' layers: nine albedos, then nine details.
+///
+/// **Albedo** layers are normalised at build time (`hassault_process_textures.py`)
+/// so a surface averages back to its authored colour once the shader's `* 1.5`
+/// is applied, exactly as the generated tiles do; they are stored as they come.
+///
+/// **Detail** layers carry data, not colour: tangent-space normal x and y in red
+/// and green, roughness in blue. The array is `Rgba8UnormSrgb`, which decodes on
+/// sampling, so each value is stored *encoded*: sampling hands back exactly the
+/// number put in, and the mip chain (built in sRGB space, so it averages the
+/// decoded values) averages the data and not its encoding. That is the same
+/// array, bind group and sampler as every other surface, so nothing in the
+/// renderer changes. The normal's green is flipped, because the maps are OpenGL
+/// convention (+Y up the image) and a texture's row 0 is the top here.
+fn photo_layers(size: u32) -> Vec<Vec<u8>> {
+    let mean = detail_mean();
+    let flat_albedo = vec![
+        (linear_to_srgb(mean) * 255.0 + 0.5) as u8;
+        (size * size * 4) as usize
+    ];
+    let mut albedos = Vec::with_capacity(PHOTO_COUNT as usize);
+    let mut details = Vec::with_capacity(PHOTO_COUNT as usize);
+    for (set, kind) in PHOTO_SETS.iter().zip(PHOTO_KINDS) {
+        // The kind's normal strength, baked in: a layer is the same for every
+        // pixel that samples it, so there is nothing for the shader to scale.
+        let strength = surface_table().normal_scale.get(&kind).copied().unwrap_or(1.0);
+        albedos.push(decode_square(set.color, size).unwrap_or_else(|| {
+            let mut flat = flat_albedo.clone();
+            flat.chunks_exact_mut(4).for_each(|px| px[3] = 255);
+            flat
+        }));
+        let normal = decode_square(set.normal, size);
+        let rough = decode_square(set.rough, size);
+        let mut detail = vec![0u8; (size * size * 4) as usize];
+        for (i, px) in detail.chunks_exact_mut(4).enumerate() {
+            let (nx, ny) = match &normal {
+                Some(n) => {
+                    let x = (n[i * 4] as f32 / 255.0 * 2.0 - 1.0) * strength;
+                    let y = -(n[i * 4 + 1] as f32 / 255.0 * 2.0 - 1.0) * strength;
+                    // Stronger than 1 must still be a normal: keep xy inside the disc.
+                    let len = (x * x + y * y).sqrt();
+                    let k = if len > 0.98 { 0.98 / len } else { 1.0 };
+                    ((x * k) * 0.5 + 0.5, (y * k) * 0.5 + 0.5)
+                }
+                None => (0.5, 0.5),
+            };
+            let r = match &rough {
+                Some(r) => r[i * 4] as f32 / 255.0,
+                None => 0.8,
+            };
+            for (out, v) in px.iter_mut().zip([nx, ny, r]) {
+                *out = (linear_to_srgb(v) * 255.0 + 0.5) as u8;
+            }
+            px[3] = 255;
+        }
+        details.push(detail);
+    }
+    albedos.into_iter().chain(details).collect()
 }
 
 /// Helper to construct the complete 2D Texture Array for wgpu.
@@ -1347,7 +1538,8 @@ mod tests {
     fn multiplied_layers_are_grey_detail_at_the_shared_mean() {
         let layers = texture_layers(64);
         assert_eq!(layers.len(), LAYER_COUNT as usize);
-        for (i, layer) in layers.iter().enumerate() {
+        // The generated surfaces only: the photographed ones carry colour and data.
+        for (i, layer) in layers.iter().enumerate().take(GENERATED_LAYERS as usize) {
             // Glass and the site decals are blended by their own colour, not multiplied.
             if matches!(i, 8 | 10 | 11) {
                 continue;
@@ -1359,6 +1551,98 @@ mod tests {
                 "layer {i} should be grey"
             );
         }
+    }
+
+    #[test]
+    fn photographed_albedos_average_to_the_shared_mean_per_channel() {
+        let layers = texture_layers(64);
+        for i in GENERATED_LAYERS as usize..(GENERATED_LAYERS + PHOTO_COUNT) as usize {
+            let layer = &layers[i];
+            assert_eq!(layer.len(), 64 * 64 * 4, "layer {i}");
+            for c in 0..3 {
+                let mean = layer
+                    .chunks(4)
+                    .map(|p| srgb_to_linear(p[c] as f32 / 255.0))
+                    .sum::<f32>()
+                    / (64.0 * 64.0);
+                // Resizing to 64 and the codec move it a little; `* 1.5` must still land on ~1.
+                assert!(
+                    (mean - detail_mean()).abs() < 0.03,
+                    "layer {i} channel {c} mean {mean}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn photographed_details_decode_to_unit_normals_and_roughness() {
+        let layers = texture_layers(64);
+        let first = (GENERATED_LAYERS + PHOTO_COUNT) as usize;
+        let mut moved = 0;
+        for i in first..first + PHOTO_COUNT as usize {
+            let layer = &layers[i];
+            for p in layer.chunks(4) {
+                let nx = srgb_to_linear(p[0] as f32 / 255.0) * 2.0 - 1.0;
+                let ny = srgb_to_linear(p[1] as f32 / 255.0) * 2.0 - 1.0;
+                let rough = srgb_to_linear(p[2] as f32 / 255.0);
+                // A normal map's xy is inside the unit disc (a little over from the codec).
+                assert!(nx * nx + ny * ny < 1.1, "layer {i}: ({nx}, {ny})");
+                assert!((0.0..=1.0).contains(&rough), "layer {i} roughness {rough}");
+                assert_eq!(p[3], 255);
+                if nx.abs() > 0.05 || ny.abs() > 0.05 {
+                    moved += 1;
+                }
+            }
+        }
+        // They are real relief, not flat fallbacks.
+        assert!(moved > 1000, "only {moved} texels have any slope");
+    }
+
+    #[test]
+    fn photo_kinds_point_at_their_own_layers() {
+        for (n, key) in [
+            "limewash",
+            "sandstone",
+            "paving",
+            "dunesand",
+            "cedar",
+            "souk_crate",
+            "rust_iron",
+            "burlap",
+            "glaze",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let kind = MaterialKind::from_key(key).unwrap();
+            assert!(kind.is_photo(), "{key}");
+            assert_eq!(kind.layer_index(), GENERATED_LAYERS + n as u32, "{key}");
+            assert_eq!(
+                kind.detail_layer(),
+                Some(GENERATED_LAYERS + PHOTO_COUNT + n as u32),
+                "{key}"
+            );
+            assert!(kind.detail_layer().unwrap() < LAYER_COUNT);
+        }
+        assert!(!MaterialKind::Brick.is_photo());
+        assert_eq!(MaterialKind::Brick.detail_layer(), None);
+    }
+
+    #[test]
+    fn only_dust2s_own_materials_are_photographed() {
+        // Another map's `wood_crate` or `sandstone_ochre` must not change.
+        for name in ["mat_wood_crate", "mat_sandstone_ochre", "Mat_Wood_Crate", "mat_canopy_crimson"] {
+            assert!(!MaterialKind::from_name(name).is_photo(), "{name}");
+        }
+        assert_eq!(MaterialKind::from_name("mat_dust2_sandstone_ochre"), MaterialKind::Sandstone);
+        assert_eq!(MaterialKind::from_name("mat_dust2_sandstone_light"), MaterialKind::Limewash);
+        assert_eq!(MaterialKind::from_name("mat_dust2_limestone_paving"), MaterialKind::Paving);
+        assert_eq!(MaterialKind::from_name("mat_dust2_desert_sand"), MaterialKind::Dunesand);
+        assert_eq!(MaterialKind::from_name("mat_dust2_wood_cedar_weathered"), MaterialKind::Cedar);
+        assert_eq!(MaterialKind::from_name("mat_dust2_wood_crate"), MaterialKind::SoukCrate);
+        assert_eq!(MaterialKind::from_name("mat_dust2_metal_iron_rusted"), MaterialKind::RustIron);
+        assert_eq!(MaterialKind::from_name("mat_dust2_sack_burlap"), MaterialKind::Burlap);
+        assert_eq!(MaterialKind::from_name("mat_dust2_moorish_tile_blue"), MaterialKind::Glaze);
     }
 
     #[test]

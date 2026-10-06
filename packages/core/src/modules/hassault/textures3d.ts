@@ -19,6 +19,8 @@
  */
 import type * as THREE from 'three';
 
+import { isPhotoKind, PHOTO_FALLBACK } from './glb-surfaces';
+
 const SIZE = 256;
 
 /** Fast deterministic pseudo-random hash */
@@ -798,6 +800,9 @@ export function drawGlbSurfaceTile(kind: string, width = SIZE, height = SIZE): U
     case 'brick':
       return drawBrickTile(width, height);
     default:
+      // A photo kind draws as the generated tile it replaces until (and unless)
+      // its images arrive.
+      if (isPhotoKind(kind)) return drawGlbSurfaceTile(PHOTO_FALLBACK[kind], width, height);
       // glass and the site decals are blended, not multiplied, and a GLB's own
       // glass material is already what it should be; 'none' is untextured.
       return null;

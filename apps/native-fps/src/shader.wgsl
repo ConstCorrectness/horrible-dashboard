@@ -169,6 +169,28 @@ fn detail_uv(world_position: vec3<f32>, normal: vec3<f32>) -> vec2<f32> {
     return world_position.xy;
 }
 
+// A surface's tangent frame from the screen-space derivatives of its position and
+// UV (Schuler's cotangent frame), so a normal map needs no tangents in the vertex
+// format. The UVs here are planar, per vertex, so this is the frame of whichever
+// face the pixel is on. The derivatives are taken by the caller, at the top of
+// `fs_main` before any branch or discard, because they are only defined in
+// uniform control flow.
+fn perturb_normal(
+    n: vec3<f32>,
+    dp1: vec3<f32>,
+    dp2: vec3<f32>,
+    duv1: vec2<f32>,
+    duv2: vec2<f32>,
+    tangent_normal: vec3<f32>,
+) -> vec3<f32> {
+    let dp2perp = cross(dp2, n);
+    let dp1perp = cross(n, dp1);
+    let t = dp2perp * duv1.x + dp1perp * duv2.x;
+    let b = dp2perp * duv1.y + dp1perp * duv2.y;
+    let invmax = inverseSqrt(max(max(dot(t, t), dot(b, b)), 1e-12));
+    return normalize(t * (tangent_normal.x * invmax) + b * (tangent_normal.y * invmax) + n * tangent_normal.z);
+}
+
 fn get_pbr_properties(mat_id: u32) -> vec2<f32> {
     switch (mat_id) {
         case 1u: { return vec2<f32>(0.88, 0.05); } // Asphalt
@@ -187,12 +209,22 @@ fn get_pbr_properties(mat_id: u32) -> vec2<f32> {
         case 16u: { return vec2<f32>(0.70, 0.02); } // RoofTile
         case 17u: { return vec2<f32>(0.95, 0.00); } // Carpet
         case 18u: { return vec2<f32>(0.85, 0.02); } // Brick
+        // Photographed kinds: the roughness here is overridden by the map, and
+        // only the metalness is read. Rusted iron is the one that is metal.
+        case 25u: { return vec2<f32>(0.60, 0.50); } // RustIron
+        case 19u, 20u, 21u, 22u, 23u, 24u, 26u, 27u: { return vec2<f32>(0.80, 0.02); }
         default: { return vec2<f32>(0.70, 0.04); }
     }
 }
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+    // Derivatives first, in uniform control flow: a photographed surface's normal
+    // map needs them, and the `discard` and the material branch below are not.
+    let dp_x = dpdx(in.world_position);
+    let dp_y = dpdy(in.world_position);
+    let duv_x = dpdx(in.uv);
+    let duv_y = dpdy(in.uv);
     // A vertex that has not arrived is not drawn at all, so the world *builds*
     // rather than fading up. Discarded before any lighting work, both because
     // there is no point shading a fragment that is thrown away and because a
@@ -203,6 +235,11 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     }
     let detail = camera.params.y;
     var albedo = in.color;
+    // The shading normal: the face's, unless a photographed surface's map bends it.
+    var normal = normalize(in.normal);
+    // What the lighting is given: the interpolated normal as it always was, so no
+    // surface but a photographed one changes by a rounding error.
+    var shade_normal = in.normal;
 
     // Unlit: the muzzle flash, which the browser draws with `MeshBasicMaterial`.
     // It used to carry the *sun's* direction as its normal to land at full
@@ -233,9 +270,20 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             let props = get_pbr_properties(mat_id);
             roughness = props.x;
             metalness = props.y;
+            if (layer_idx >= 18u && layer_idx < 27u) {
+                // A photographed kind: its detail layer is nine on from its
+                // albedo. Red and green are the normal's x and y (stored encoded
+                // in an sRGB array, so sampled back exactly), blue is roughness.
+                let d = textureSample(pbr_textures, pbr_sampler, in.uv, i32(layer_idx + 9u));
+                let nxy = d.rg * 2.0 - vec2<f32>(1.0, 1.0);
+                let nz = sqrt(max(1.0 - dot(nxy, nxy), 0.0));
+                normal = perturb_normal(normal, dp_x, dp_y, duv_x, duv_y, vec3<f32>(nxy, nz));
+                shade_normal = normal;
+                roughness = d.b;
+            }
         }
 
-        let N = normalize(in.normal);
+        let N = normal;
         // From the **eye**. This used to be built from the build-in's centre at
         // a fixed height of 1.8 — `camera.reveal.yz` is where the map is
         // revealed *from*, not where anybody is standing — so every reflection
@@ -281,7 +329,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             shadow.params.z,
         );
     }
-    let lit = tonemap(shade(albedo, in.normal, in.world_position, detail, occlusion));
+    let lit = tonemap(shade(albedo, shade_normal, in.world_position, detail, occlusion));
     var out_color = vec4<f32>(apply_fog(lit, in.view_depth, camera.params.x), 1.0);
     // The frontier glow, added over the final lit colour so cubes land hot and
     // cool into their normal shading. Last, after the tone curve and the fog,

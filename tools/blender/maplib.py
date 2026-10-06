@@ -176,6 +176,17 @@ SOFTEN_BY_KIND = {
     "gold": (0.02, 0.2),
     "asphalt": (0.04, 0.2),
     "hazard": (0.025, 0.15),
+    # Photographed kinds (Dust II): each rounds as the generated kind it replaces,
+    # so giving a wall a photograph does not change its shape.
+    "sandstone": (0.15, 0.25),
+    "limewash": (0.15, 0.25),
+    "paving": (0.15, 0.25),
+    "dunesand": (0.12, 0.25),
+    "cedar": (0.04, 0.2),
+    "souk_crate": (0.04, 0.2),
+    "rust_iron": (0.025, 0.15),
+    "burlap": (0.03, 0.3),
+    "glaze": (0.03, 0.15),
 }
 #: A material the table does not classify.
 SOFTEN_DEFAULT = (0.04, 0.2)
