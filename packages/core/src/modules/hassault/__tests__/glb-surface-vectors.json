@@ -846,10 +846,6 @@
       "kind": "carpet"
     },
     {
-      "name": "mat_canopy_saffron",
-      "kind": "carpet"
-    },
-    {
       "name": "mat_carpet_tile",
       "kind": "carpet"
     },
@@ -898,8 +894,60 @@
       "kind": "none"
     },
     {
-      "name": "mat_desert_sand",
-      "kind": "plaster"
+      "name": "mat_dust2_canopy_crimson",
+      "kind": "burlap"
+    },
+    {
+      "name": "mat_dust2_canopy_saffron",
+      "kind": "burlap"
+    },
+    {
+      "name": "mat_dust2_desert_sand",
+      "kind": "dunesand"
+    },
+    {
+      "name": "mat_dust2_limestone_paving",
+      "kind": "paving"
+    },
+    {
+      "name": "mat_dust2_metal_iron_rusted",
+      "kind": "rust_iron"
+    },
+    {
+      "name": "mat_dust2_moorish_tile_blue",
+      "kind": "glaze"
+    },
+    {
+      "name": "mat_dust2_moorish_tile_gold",
+      "kind": "glaze"
+    },
+    {
+      "name": "mat_dust2_palm_bark",
+      "kind": "cedar"
+    },
+    {
+      "name": "mat_dust2_sack_burlap",
+      "kind": "burlap"
+    },
+    {
+      "name": "mat_dust2_sandstone_dark",
+      "kind": "sandstone"
+    },
+    {
+      "name": "mat_dust2_sandstone_light",
+      "kind": "limewash"
+    },
+    {
+      "name": "mat_dust2_sandstone_ochre",
+      "kind": "sandstone"
+    },
+    {
+      "name": "mat_dust2_wood_cedar_weathered",
+      "kind": "cedar"
+    },
+    {
+      "name": "mat_dust2_wood_crate",
+      "kind": "souk_crate"
     },
     {
       "name": "mat_fluorescent",
@@ -958,10 +1006,6 @@
       "kind": "masonry"
     },
     {
-      "name": "mat_limestone_paving",
-      "kind": "masonry"
-    },
-    {
       "name": "mat_mahogany",
       "kind": "wood"
     },
@@ -970,24 +1014,12 @@
       "kind": "marble"
     },
     {
-      "name": "mat_metal_iron_rusted",
-      "kind": "vault_steel"
-    },
-    {
       "name": "mat_metal_scaffolding",
       "kind": "vault_steel"
     },
     {
       "name": "mat_moorish_plaster_warm",
       "kind": "plaster"
-    },
-    {
-      "name": "mat_moorish_tile_blue",
-      "kind": "marble"
-    },
-    {
-      "name": "mat_moorish_tile_gold",
-      "kind": "marble"
     },
     {
       "name": "mat_mosaic_tile_blue",
@@ -1020,10 +1052,6 @@
     {
       "name": "mat_sandbag_burlap",
       "kind": "carpet"
-    },
-    {
-      "name": "mat_sandstone_dark",
-      "kind": "masonry"
     },
     {
       "name": "mat_sandstone_light",
@@ -1092,10 +1120,6 @@
     {
       "name": "mat_wall_drywall",
       "kind": "plaster"
-    },
-    {
-      "name": "mat_wood_cedar_weathered",
-      "kind": "wood"
     },
     {
       "name": "mat_wood_chestnut_aged",

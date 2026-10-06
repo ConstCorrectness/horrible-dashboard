@@ -2675,26 +2675,31 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
     } else if info.name == "hd_dust2" {
         (
             vec![
-                SpawnPoint { x: 90.0, y: 30.0, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 102.0, y: 30.0, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 90.0, y: 42.0, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 102.0, y: 42.0, z: 0.0, yaw: 90.0, team: 1 },
-                SpawnPoint { x: 102.0, y: 180.0, z: 0.0, yaw: 270.0, team: 0 },
-                SpawnPoint { x: 114.0, y: 180.0, z: 0.0, yaw: 270.0, team: 0 },
-                SpawnPoint { x: 102.0, y: 168.0, z: 0.0, yaw: 270.0, team: 0 },
-                SpawnPoint { x: 114.0, y: 168.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 99.0, y: 30.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 111.0, y: 30.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 99.0, y: 42.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 111.0, y: 42.0, z: 0.0, yaw: 90.0, team: 1 },
+                SpawnPoint { x: 111.0, y: 228.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 138.0, y: 228.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 111.0, y: 216.0, z: 0.0, yaw: 270.0, team: 0 },
+                SpawnPoint { x: 138.0, y: 216.0, z: 0.0, yaw: 270.0, team: 0 },
             ],
             vec![
-                ItemRow { id: 1, kind: "health".into(), x: 174.0, y: 36.0, z: 0.0 },
-                ItemRow { id: 2, kind: "health".into(), x: 60.0, y: 102.0, z: 0.0 },
-                ItemRow { id: 3, kind: "health".into(), x: 108.0, y: 174.0, z: 0.0 },
-                ItemRow { id: 4, kind: "armour".into(), x: 162.0, y: 108.0, z: 0.0 },
-                ItemRow { id: 5, kind: "armour".into(), x: 30.0, y: 168.0, z: 0.0 },
-                ItemRow { id: 6, kind: "ammo_assault".into(), x: 90.0, y: 90.0, z: 0.0 },
-                ItemRow { id: 7, kind: "ammo_assault".into(), x: 144.0, y: 156.0, z: 3.6 },
-                ItemRow { id: 8, kind: "ammo_sniper".into(), x: 48.0, y: 96.0, z: 0.0 },
-                ItemRow { id: 9, kind: "clips".into(), x: 114.0, y: 132.0, z: 7.2 },
-                ItemRow { id: 10, kind: "grenade".into(), x: 84.0, y: 36.0, z: 0.0 },
+                ItemRow { id: 1, kind: "health".into(), x: 210.0, y: 36.0, z: 0.0 },
+                ItemRow { id: 2, kind: "health".into(), x: 69.0, y: 138.0, z: 0.0 },
+                ItemRow { id: 3, kind: "health".into(), x: 132.0, y: 222.0, z: 0.0 },
+                ItemRow { id: 4, kind: "armour".into(), x: 198.0, y: 144.0, z: 0.0 },
+                ItemRow { id: 5, kind: "armour".into(), x: 30.0, y: 216.0, z: 0.0 },
+                ItemRow { id: 6, kind: "ammo_assault".into(), x: 99.0, y: 114.0, z: 0.0 },
+                ItemRow { id: 7, kind: "ammo_assault".into(), x: 180.0, y: 204.0, z: 3.6 },
+                ItemRow { id: 8, kind: "ammo_sniper".into(), x: 57.0, y: 132.0, z: 0.0 },
+                ItemRow { id: 9, kind: "clips".into(), x: 138.0, y: 168.0, z: 7.2 },
+                ItemRow { id: 10, kind: "grenade".into(), x: 93.0, y: 36.0, z: 0.0 },
+                ItemRow { id: 11, kind: "health".into(), x: 165.0, y: 140.0, z: 3.6 },
+                ItemRow { id: 12, kind: "armour".into(), x: 81.0, y: 142.0, z: 0.0 },
+                ItemRow { id: 13, kind: "ammo_assault".into(), x: 94.0, y: 219.0, z: 0.0 },
+                ItemRow { id: 14, kind: "ammo_sniper".into(), x: 162.0, y: 102.0, z: 0.0 },
+                ItemRow { id: 15, kind: "grenade".into(), x: 57.0, y: 72.0, z: 0.0 },
             ],
         )
     } else if info.name == "hd_mirage" {
@@ -2845,7 +2850,14 @@ pub fn load_world_3d_from_glb(bytes: &[u8], info: MapInfo) -> Result<World3D, St
             center: [105.0, 105.0, 12.0],
             extent: 186.0,
         }
-    } else if info.name == "hd_dust2" || info.name == "hd_inferno" || info.name == "hd_mirage" {
+    } else if info.name == "hd_dust2" {
+        WorldBounds {
+            min: [12.0, 12.0, -6.0],
+            max: [234.0, 246.0, 42.0],
+            center: [123.0, 129.0, 18.0],
+            extent: 234.0,
+        }
+    } else if info.name == "hd_inferno" || info.name == "hd_mirage" {
         WorldBounds {
             min: [12.0, 12.0, -6.0],
             max: [198.0, 198.0, 42.0],

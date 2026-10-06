@@ -191,14 +191,21 @@ TACTICAL_COVER_NODES: dict[str, list[tuple[float, float, str]]] = {
         (42.0, 108.0, "b_apartments"),
     ],
     "hd_dust2": [
-        (162.0, 42.0, "long_a_pit"),
-        (165.0, 174.0, "site_a_goose"),
-        (138.0, 156.0, "site_a_default"),
-        (94.0, 114.0, "catwalk_xbox"),
-        (92.0, 96.0, "mid_doors"),
-        (54.0, 126.0, "upper_b_tunnel"),
-        (72.0, 156.0, "site_b_window"),
-        (24.0, 174.0, "site_b_back_plat"),
+        (198.0, 42.0, "long_a_pit"),
+        (201.0, 222.0, "site_a_goose"),
+        (162.0, 204.0, "site_a_default"),
+        (103.0, 150.0, "catwalk_xbox"),
+        (101.0, 132.0, "mid_doors"),
+        (63.0, 162.0, "upper_b_tunnel"),
+        (81.0, 204.0, "site_b_window"),
+        (24.0, 222.0, "site_b_back_plat"),
+        # The routes added with the larger map. Not the Long ledge itself: bots
+        # steer straight at a node and the ledge is reached only up its ramp from
+        # the north, so a node on it is one they never arrive at. The ramp's foot.
+        (162.0, 168.0, "long_ledge_ramp"),
+        (162.0, 102.0, "long_doors"),
+        (91.5, 142.5, "lower_dark_door"),
+        (95.0, 219.0, "b_doors"),
     ],
 }
 
@@ -399,7 +406,9 @@ class BotBrain:
                 return
 
         enemy = 1 - me.team
-        map_name = getattr(room, "map_name", "") or getattr(getattr(room, "world", None), "name", "")
+        map_name = getattr(room, "map_name", "") or getattr(
+            getattr(room, "world", None), "name", ""
+        )
         tactical_pts = TACTICAL_COVER_NODES.get(map_name.lower(), [])
         valid_tactical = [
             (pt[0], pt[1])
@@ -567,7 +576,9 @@ class BotBrain:
                     if noise.source != me.id:
                         other_p = room.players.get(noise.source)
                         if other_p and other_p.team != me.team and other_p.alive:
-                            dist_noise = math.hypot(noise.x - me.state.x, noise.y - me.state.y)
+                            dist_noise = math.hypot(
+                                noise.x - me.state.x, noise.y - me.state.y
+                            )
                             if dist_noise <= noise.loudness:
                                 self.investigate = (noise.x, noise.y)
                                 self.investigate_in = 2.5 + self.rng.random() * 1.5
@@ -600,7 +611,13 @@ class BotBrain:
                 wanted_heading = math.atan2(goal.y - me.state.y, goal.x - me.state.x)
             elif self.investigate is not None:
                 # Steer towards investigated sound source
-                if math.hypot(self.investigate[0] - me.state.x, self.investigate[1] - me.state.y) < 2.5:
+                if (
+                    math.hypot(
+                        self.investigate[0] - me.state.x,
+                        self.investigate[1] - me.state.y,
+                    )
+                    < 2.5
+                ):
                     self.investigate = None
                     self._pick_roam(room, me)
                     wanted_heading = math.atan2(
@@ -608,7 +625,8 @@ class BotBrain:
                     )
                 else:
                     wanted_heading = math.atan2(
-                        self.investigate[1] - me.state.y, self.investigate[0] - me.state.x
+                        self.investigate[1] - me.state.y,
+                        self.investigate[0] - me.state.x,
                     )
             else:
                 self.roam_in -= dt
@@ -728,15 +746,27 @@ class BotBrain:
             if buy_open and hasattr(me, "money"):
                 owned_weapons = getattr(me, "owned", set())
                 if not any(slot in owned_weapons for slot in (2, 3, 4)):
-                    if me.money >= 4750 and self.skill.name in ("hard", "expert") and self.rng.random() < 0.35:
+                    if (
+                        me.money >= 4750
+                        and self.skill.name in ("hard", "expert")
+                        and self.rng.random() < 0.35
+                    ):
                         buy_item = 2  # Sniper Rifle
                     elif me.money >= 2700:
                         buy_item = 0  # Assault Rifle
                     elif me.money >= 1800:
                         buy_item = 1  # Shotgun
-                elif me.money >= 1000 and "armour" not in getattr(me, "owned_extras", set()) and getattr(me, "armour", 0) < 100:
+                elif (
+                    me.money >= 1000
+                    and "armour" not in getattr(me, "owned_extras", set())
+                    and getattr(me, "armour", 0) < 100
+                ):
                     buy_item = 3  # Armour
-                elif me.money >= 400 and "defuser" not in getattr(me, "owned_extras", set()) and getattr(me, "team", 0) != getattr(mode_state, "attackers", 0):
+                elif (
+                    me.money >= 400
+                    and "defuser" not in getattr(me, "owned_extras", set())
+                    and getattr(me, "team", 0) != getattr(mode_state, "attackers", 0)
+                ):
                     buy_item = 8  # Defusal Kit
                 elif me.money >= 300 and not getattr(me, "owned_nades", set()):
                     buy_item = 4  # HE Grenade

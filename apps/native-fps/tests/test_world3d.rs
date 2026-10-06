@@ -341,7 +341,7 @@ fn test_dust2_glb_generation() {
     assert_eq!(world.render_colors.len(), world.triangles * 9);
 
     assert_eq!(world.spawns.len(), 8, "must have 8 spawns");
-    assert_eq!(world.items.len(), 10, "must have 10 pickups");
+    assert_eq!(world.items.len(), 15, "must have 15 pickups");
 
     let physics = RapierPhysicsWorld::new(&world.col_vertices, &world.col_indices);
     // Ray down to floor
