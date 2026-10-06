@@ -20,21 +20,20 @@ LAYOUT_CUTS = {
 
 CUBES_PER_METRE = 3.0
 
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from cutlayout import Cuts  # noqa: E402
+
+CUTS = Cuts(LAYOUT_CUTS)
+
 
 def warp_metres(v, axis, upper=False):
-    """`v` metres through the cuts. A cut's own coordinate belongs to the side
-    above it when `v` is a lower edge and to the side below when it is an upper
-    edge, so a box that ends on a cut does not grow."""
-    out = v
-    for at, gap in LAYOUT_CUTS[axis]:
-        if v > at or (v == at and not upper):
-            out += gap
-    return out
+    """`v` metres through the cuts (see `cutlayout.Cuts.metres`)."""
+    return CUTS.metres(v, axis, upper)
 
 
 def warp_cubes(x, y):
     """A point in cubes, through the same cuts."""
-    return (
-        warp_metres(x / CUBES_PER_METRE, "x") * CUBES_PER_METRE,
-        warp_metres(y / CUBES_PER_METRE, "y") * CUBES_PER_METRE,
-    )
+    return CUTS.cubes(x, y, CUBES_PER_METRE)

@@ -30,6 +30,7 @@ except ImportError:
     sys.exit(1)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import cutlayout  # noqa: E402
 import dust2_layout  # noqa: E402
 import maplib  # noqa: E402  (a sibling, found via the path above)
 import props  # noqa: E402
@@ -1767,171 +1768,26 @@ def build_lights(col, mats):
 
 
 # ---------------------------------------------------------------------------
-# Layout: cut the map along a few empty lines and spread the halves apart.
-#
-# The map is authored in metres in one frame, and every detail hangs off a wall
-# by a few centimetres (rugs, friezes, sconces, plinths), so scaling it would pull
-# them off their walls. Cutting leaves each side rigid: a piece wholly on one side
-# of a cut only moves, and one that straddles it (a long wall, the ground) grows by
-# the gap. `LAYOUT_CUTS` is (at, gap) in metres per axis; a cut must lie in open
-# ground, and `scan_cuts` names whatever small thing a candidate line would split.
+# Layout: the map is cut along a few empty lines and the halves spread apart (see
+# `cutlayout.py`, and `dust2_layout.py` for the cuts). Every primitive goes through
+# the warper; the composites move as one by their anchor point.
 # ---------------------------------------------------------------------------
 LAYOUT_CUTS = dust2_layout.LAYOUT_CUTS
+W = cutlayout.Warper(dust2_layout.CUTS)
+_w = W.w
 
-_inside = 0  # >0 while a composite is placing its parts, which are already placed
-_scan = []  # (kind, name, (x0, x1), (y0, y1)) for every primitive, when scanning
-
-
-def _w(v, axis, upper=False):
-    return dust2_layout.warp_metres(v, axis, upper)
-
-
-def _w_box(center, size):
-    c, sz = list(center[:2]), list(size[:2])
-    for i, axis in enumerate(("x", "y")):
-        lo, hi = c[i] - sz[i] / 2.0, c[i] + sz[i] / 2.0
-        lo, hi = _w(lo, axis), _w(hi, axis, upper=True)
-        c[i], sz[i] = (lo + hi) / 2.0, hi - lo
-    return tuple(c), tuple(sz)
-
-
-def _w_point(p):
-    return (_w(p[0], "x"), _w(p[1], "y")) + tuple(p[2:])
-
-
-def _record(kind, name, center, size, height=None):
-    """Note a primitive's footprint (and its z span) before it is warped, for the scan
-    and for the dressing, which plans against everything already built."""
-    z0 = (
-        center[2] - (height if height is not None else size[2]) / 2.0
-        if len(center) > 2
-        else 0.0
-    )
-    z1 = z0 + (height if height is not None else size[2]) if len(center) > 2 else 3.0
-    _scan.append(
-        (
-            kind,
-            name,
-            (center[0] - size[0] / 2.0, center[0] + size[0] / 2.0),
-            (center[1] - size[1] / 2.0, center[1] + size[1] / 2.0),
-            (z0, z1),
-        )
-    )
-
-
-def _composite(fn, point_arg):
-    """A helper that places many parts from one point: warp the point, then let
-    the parts through untouched."""
-
-    def wrapped(*args, **kw):
-        global _inside
-        args = list(args)
-        if not _inside:
-            # A composite is a few metres across; a cut through it would split it.
-            _record(
-                "comp", f"{fn.__name__}:{args[1]}", args[point_arg][:2], (3.0, 3.0, 3.0)
-            )
-            args[point_arg] = _w_point(args[point_arg])
-        _inside += 1
-        try:
-            return fn(*args, **kw)
-        finally:
-            _inside -= 1
-
-    return wrapped
-
-
-_add_box_raw, _add_cylinder_raw = add_box, add_cylinder
-_add_wedge_raw, _add_boxes_raw, _add_light_raw = (
-    maplib.add_wedge,
-    maplib.add_boxes,
-    maplib.add_light,
-)
-
-
-def add_box(collection, name, center, size, material):
-    if _inside:
-        return _add_box_raw(collection, name, center, size, material)
-    _record("box", name, center, size)
-    c, sz = _w_box(center, size[:2])
-    return _add_box_raw(
-        collection, name, c + tuple(center[2:]), sz + tuple(size[2:]), material
-    )
-
-
-def add_cylinder(collection, name, center, radius, height, material, segments=16):
-    if _inside:
-        return _add_cylinder_raw(
-            collection, name, center, radius, height, material, segments=segments
-        )
-    _record("cyl", name, center, (radius * 2, radius * 2), height)
-    return _add_cylinder_raw(
-        collection, name, _w_point(center), radius, height, material, segments=segments
-    )
-
-
-def add_wedge(collection, name, center, size, material, direction):
-    if _inside:
-        return _add_wedge_raw(collection, name, center, size, material, direction)
-    _record("wedge", name, center, size)
-    c, sz = _w_box(center, size[:2])
-    return _add_wedge_raw(
-        collection,
-        name,
-        c + tuple(center[2:]),
-        sz + tuple(size[2:]),
-        material,
-        direction,
-    )
-
-
-def add_boxes(collection, name, boxes, material):
-    if _inside:
-        return _add_boxes_raw(collection, name, boxes, material)
-    out = []
-    for center, size in boxes:
-        _record("box", name, center, size)
-        c, sz = _w_box(center, size[:2])
-        out.append((c + tuple(center[2:]), sz + tuple(size[2:])))
-    return _add_boxes_raw(collection, name, out, material)
-
-
-def add_light(pos, **kw):
-    if _inside:
-        return _add_light_raw(pos, **kw)
-    return _add_light_raw(_w_point(pos), **kw)
-
-
-add_crate_stack = _composite(add_crate_stack, 2)
-add_palm_tree = _composite(add_palm_tree, 2)
-add_market_stall = _composite(add_market_stall, 2)
-add_hanging_lantern = _composite(add_hanging_lantern, 2)
-add_wall_sconce = _composite(add_wall_sconce, 2)
-add_arch = _composite(add_arch, 2)
-
-
-_add_crenellations_raw = add_crenellations
-
-
-def add_crenellations(collection, name, start, end, height, mats):
-    """Along a wall: warp both ends and lay the teeth out afresh, so a cut does not
-    leave a gap in the battlement."""
-    global _inside
-    _inside += 1
-    try:
-        return _add_crenellations_raw(
-            collection, name, _w_point(start), _w_point(end), height, mats
-        )
-    finally:
-        _inside -= 1
-
-
-def scan_cuts(path):
-    """Write every primitive's footprint to `path` as JSON, for choosing cuts."""
-    import json
-
-    with open(path, "w") as f:
-        json.dump(_scan, f)
+add_box = W.box(add_box)
+add_cylinder = W.cylinder(add_cylinder)
+add_wedge = W.wedge(maplib.add_wedge)
+add_boxes = W.boxes(maplib.add_boxes)
+add_light = W.light(maplib.add_light)
+add_crate_stack = W.composite(add_crate_stack, 2)
+add_palm_tree = W.composite(add_palm_tree, 2)
+add_market_stall = W.composite(add_market_stall, 2)
+add_hanging_lantern = W.composite(add_hanging_lantern, 2)
+add_wall_sconce = W.composite(add_wall_sconce, 2)
+add_arch = W.composite(add_arch, 2)
+add_crenellations = W.line(add_crenellations, 2, 3)
 
 
 # Where the clutter gathers, in the authored (pre-cut) frame so each zone stretches
@@ -1979,7 +1835,6 @@ def _place_stalls(plan, rng, col, mats, rect, count, size=(5.5, 4.0, 3.8)):
     The stall is the existing `add_market_stall`; this chooses where, so a bigger
     souk gets more of them instead of the same two further apart.
     """
-    global _inside
     placed = []
     for _ in range(600):
         if len(placed) >= count:
@@ -2001,11 +1856,8 @@ def _place_stalls(plan, rng, col, mats, rect, count, size=(5.5, 4.0, 3.8)):
             y - size[1] / 2,
             y + size[1] / 2,
         )
-        _inside += 1  # already in final metres: not through the cuts again
-        try:
+        with W.raw():  # already in final metres: not through the cuts again
             add_market_stall(col, f"Souk_Stall_{len(placed)}", (x, y, 0.0), size, mats)
-        finally:
-            _inside -= 1
         placed.append((x, y))
     return len(placed)
 
@@ -2021,26 +1873,6 @@ def build_natural_dressing(col, mats):
     import json
     import random
 
-    plan = props.Plan(4.0, 4.0, 78.0, 82.0)
-    for kind, name, xr, yr, zr in _scan:
-        if zr[1] <= 0.3 or zr[0] >= 2.2:
-            continue  # a floor, or overhead
-        x0, x1 = _w(xr[0], "x"), _w(xr[1], "x", upper=True)
-        y0, y1 = _w(yr[0], "y"), _w(yr[1], "y", upper=True)
-        plan.mark_rect(plan.solid, x0, x1, y0, y1)
-        if kind == "wedge" or any(word in name for word in _WAYS):
-            plan.mark_rect(plan.forbid, x0, x1, y0, y1, pad=2.0)
-        elif kind == "comp":
-            # Fixtures hang on walls at head height, and a crate or barrel beside
-            # one is a step up to it: a body on top has an eye in the cage. Keep
-            # climbable clutter well clear of anything mounted.
-            mounted = any(word in name.lower() for word in ("sconce", "lantern"))
-            plan.mark_rect(plan.forbid, x0, x1, y0, y1, pad=2.5 if mounted else 0.3)
-    for kind, name, xr, yr, zr in _scan:
-        if name.startswith("Pit_"):  # sunk below the floor the props stand on
-            x0, x1 = _w(xr[0], "x"), _w(xr[1], "x", upper=True)
-            y0, y1 = _w(yr[0], "y"), _w(yr[1], "y", upper=True)
-            plan.mark_rect(plan.forbid, x0, x1, y0, y1, pad=1.5)
     with open(
         os.path.join(
             maplib.REPO_ROOT, "backend", "modules", "hassault", "maps", "hd_dust2.json"
@@ -2048,35 +1880,14 @@ def build_natural_dressing(col, mats):
         encoding="utf-8",
     ) as f:
         placed = json.load(f)
-    for sp in placed["spawns"]:
-        plan.mark_disc(plan.forbid, sp["x"] / 3.0, sp["y"] / 3.0, 4.5)
-    for site in placed["objectives"]["sites"]:
-        plan.mark_disc(
-            plan.forbid, site["x"] / 3.0, site["y"] / 3.0, site["radius"] / 3.0 + 1.5
-        )
-    plan.forbid_outside(5.0, 77.0, 5.0, 81.0)
-    plan.solve()
-
-    zones = [
-        (
-            (
-                _w(x0, "x"),
-                _w(y0, "y"),
-                _w(x1, "x", upper=True),
-                _w(y1, "y", upper=True),
-            ),
-            d,
-            wt,
-            axis,
-        )
-        for (x0, y0, x1, y1), d, wt, axis in _ZONES
-    ]
-
-    def zone_of(x, y):
-        for (x0, y0, x1, y1), density, weights, axis in zones:
-            if x0 <= x <= x1 and y0 <= y <= y1:
-                return density, weights, axis
-        return 0.5, _WORK, None
+    plan = W.plan(
+        props,
+        extent=(4.0, 4.0, 78.0, 82.0),
+        domain=(5.0, 77.0, 5.0, 81.0),
+        placed=placed,
+        ways=_WAYS,
+    )
+    zone_of = W.zone_of(_ZONES, (0.5, _WORK, None))
 
     rng = random.Random(_DRESS_SEED)
     stalls = _place_stalls(
@@ -2135,7 +1946,7 @@ def build_dust2_scene():
 
     print("=== Desert Citadel II (hd_dust2) Built Successfully! ===")
     if os.environ.get("HASSAULT_DUST2_SCAN"):
-        scan_cuts(os.environ["HASSAULT_DUST2_SCAN"])
+        W.dump_scan(os.environ["HASSAULT_DUST2_SCAN"])
 
 
 def export_glb():
