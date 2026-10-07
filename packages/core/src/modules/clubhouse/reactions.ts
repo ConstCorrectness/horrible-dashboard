@@ -130,19 +130,32 @@ export function extractGifUrl(msg: Record<string, unknown>): string | null {
 const EMOJI = /\p{Extended_Pictographic}/u;
 
 /**
- * The emoji in a reaction payload. The documented fields first; then, because the
- * real `new_channel_reaction` event keeps its emoji under a key nobody wrote down, any
- * short string that *is* an emoji. A string of text with an emoji in it (a chat line)
- * is too long to qualify, and the sender's block is never read.
+ * Longest reaction string we will render as a floater. The room can send any reaction
+ * it likes and we show it verbatim, but an unbounded string would let one message grow
+ * the DOM without limit (MAX_FLOATERS caps the *count*, not each node's size). Generous
+ * enough for any real reaction, including a short text one, and the floater is a React
+ * text node so the content is escaped, never interpreted.
+ */
+export const MAX_REACTION_LEN = 200;
+
+/**
+ * The reaction payload's own content string. The content fields a reaction event is
+ * known to carry — in order — then, for the undocumented key the real
+ * `new_channel_reaction` uses, any string that *is* an emoji. The explicit content
+ * fields are taken as-is (emoji or text) so we render whatever the room sent; the
+ * fallback stays emoji-gated so a structural field (`channel`, `message_id`) is never
+ * mistaken for a reaction. The sender's block is never read.
  */
 function findEmoji(msg: Record<string, unknown>): string | null {
-  for (const key of ['emoji', 'reaction']) {
+  for (const key of ['emoji', 'reaction', 'message']) {
     const v = msg[key];
-    if (typeof v === 'string' && v.trim() && v.length <= 16) return v.trim();
+    if (typeof v === 'string' && v.trim() && v.trim().length <= MAX_REACTION_LEN) {
+      return v.trim();
+    }
   }
   for (const [, v] of leafStrings(msg)) {
     const t = v.trim();
-    if (t.length > 0 && t.length <= 16 && EMOJI.test(t)) return t;
+    if (t.length > 0 && t.length <= MAX_REACTION_LEN && EMOJI.test(t)) return t;
   }
   return null;
 }
@@ -174,7 +187,7 @@ export function parseRoomReaction(msg: Record<string, unknown>): ParsedReaction 
   }
   if (!action) {
     const emoji = msg.emoji ?? msg.reaction;
-    if (typeof emoji === 'string' && emoji.trim() && emoji.length <= 16) {
+    if (typeof emoji === 'string' && emoji.trim() && emoji.trim().length <= MAX_REACTION_LEN) {
       return { emoji: emoji.trim() };
     }
   }
