@@ -127,15 +127,23 @@ on their own private network, `horrible-hub-net`.
   `fly machine update <id> -a horrible-hub-instances --image registry.fly.io/horrible-hub-instances:<label>`.
   This restarts it, keeps its volume, and the hub treats the resulting
   `:<label>@sha256:…` pin as current.
-- **Vercel:** from `apps/web`, build locally and deploy the output (the build needs
-  the whole pnpm workspace, which a plain upload of `apps/web` does not have):
+- **Vercel:** the project is connected to the GitHub repo, so **every push to `main`
+  deploys the frontend**, and other branches get preview deployments. Two project
+  settings make that build correct, and both are needed:
+  - **Root Directory `apps/web`**, with files outside it included. Vite writes to
+    `apps/web/dist`, and only from there does Vercel read `apps/web/vercel.json`,
+    whose rewrites send `/api` and `/hub` to the hub. Built from the repo root, it
+    failed with "No Output Directory named dist". Fixing only the output path would
+    have shipped a site with no rewrites.
+  - **Env var `VITE_WS_ORIGIN=https://horrible-hub.fly.dev`** (Production and
+    Preview). Rewrites cannot carry a WebSocket, so the bundle must know to dial the
+    hub directly.
 
-  ```bash
-  VITE_WS_ORIGIN=https://horrible-hub.fly.dev vercel build --prod
-  vercel deploy --prebuilt --prod
-  ```
-
-  Then make sure the Vercel origin is in `HUB_ALLOWED_ORIGINS` (`fly.hub.toml`).
+  A manual deploy (`vercel build --prod`, then `vercel deploy --prebuilt --prod`,
+  from `apps/web`) still works, but is no longer the release path. A new frontend
+  origin must be added to `HUB_ALLOWED_ORIGINS` (`fly.hub.toml`), or its sockets
+  are refused. Preview deployments' own URLs are not on that list, so their live
+  socket is refused by design.
 
 - **Bind address trap:** asyncio makes a `::` socket **IPv6-only**. Fly's proxy and
   health checks reach the hub over IPv4, so the hub binds `0.0.0.0`; Fly's private

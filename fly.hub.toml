@@ -14,8 +14,7 @@
 #   pnpm --filter @horrible/web build   (the image still copies dist; it is not served)
 #   fly deploy -c fly.hub-instances.toml --build-only --push --image-label v4
 #   fly deploy -c fly.hub.toml
-#   cd apps/web && VITE_WS_ORIGIN=https://horrible-hub.fly.dev vercel build --prod
-#   cd apps/web && vercel deploy --prebuilt --prod
+#   (frontend: nothing to do — Vercel deploys apps/web on every push to main)
 #
 # The frontend is the Vercel deployment only (HUB_FRONTEND_URL below): a page
 # request to this hub redirects there, so a UI fix ships once, to Vercel.
