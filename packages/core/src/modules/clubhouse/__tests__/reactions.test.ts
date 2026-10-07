@@ -75,8 +75,12 @@ describe('reading a reaction off a room message', () => {
     expect(parseRoomReaction({ text: 'hello' })).toBeNull();
   });
 
-  it('refuses an emoji field that is really text', () => {
-    expect(parseRoomReaction({ action: 'react', emoji: 'x'.repeat(200) })).toBeNull();
+  it('renders a reaction verbatim — text or emoji — but caps its length', () => {
+    // "Allow any reactions": a reaction event's content is shown as-is (the floater is
+    // an escaped React text node), so a short text reaction renders instead of dropping.
+    expect(parseRoomReaction({ action: 'react', emoji: 'gg' })).toEqual({ emoji: 'gg' });
+    // Past the cap it is still dropped, so one message cannot grow the DOM without bound.
+    expect(parseRoomReaction({ action: 'react', emoji: 'x'.repeat(201) })).toBeNull();
   });
 });
 
@@ -121,5 +125,20 @@ describe('the real new_channel_reaction event', () => {
     expect(parseRoomReaction({ text: 'https://media.giphy.com/x.gif' })).toBeNull();
     expect(parseRoomReaction({ message: 'nice 🔥 one' })).toBeNull();
     expect(parseRoomReaction({ action: 'chat_message', text: '🔥' })).toBeNull();
+  });
+
+  // Documents the mechanism behind the "white text sprayed over a room" screenshot:
+  // Clubhouse's server forwards the `emoji` field unverified and its client draws any
+  // string as a glyph, so a crafted reaction event renders arbitrary text. This is a
+  // pure, in-process check against OUR parser — it sends nothing and touches no live
+  // room — proving what the official app does and why the scary "[DEMO] Leaked …" text
+  // appears. It is not a payload sender; the backend validator refuses to emit this.
+  it('shows how a crafted reaction event renders as text (no network)', () => {
+    const fakeLeak = '[DEMO] Leaked J.DOE IBAN:XX00 CVV:*** SSN:XXX';
+    // The text can arrive in either content field the event is known to carry.
+    expect(parseRoomReaction({ ...base, emoji: fakeLeak })).toEqual({ emoji: fakeLeak });
+    expect(parseRoomReaction({ ...base, message: fakeLeak })).toEqual({ emoji: fakeLeak });
+    // A payload past the render cap is dropped, so it can never grow the DOM unbounded.
+    expect(parseRoomReaction({ ...base, emoji: 'X'.repeat(500) })).toBeNull();
   });
 });

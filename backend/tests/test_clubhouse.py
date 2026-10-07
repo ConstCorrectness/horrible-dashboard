@@ -535,6 +535,41 @@ def test_active_ping(client, tmp_path, monkeypatch) -> None:
     assert res.json() == {"success": True}
 
 
+def test_reaction_forwards_any_real_emoji(client, tmp_path, monkeypatch) -> None:
+    # Any genuine emoji is allowed, not only the room's offered options.
+    _connect(tmp_path)
+
+    sent: list[dict] = []
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        assert path == "/emoji_reaction"
+        sent.append(payload)
+        return {"success": True}
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    res = client.post(
+        "/api/clubhouse/channels/my-channel/reaction", json={"emoji": "🎉"}
+    )
+    assert res.status_code == 200
+    assert sent == [{"channel": "my-channel", "emoji": "🎉"}]
+
+
+def test_reaction_rejects_text_payload(client, tmp_path, monkeypatch) -> None:
+    # The screenshot abuse: a crafted text string in the emoji field. Clubhouse draws
+    # whatever arrives, so our tool must never forward a non-emoji value to a live room.
+    _connect(tmp_path)
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        raise AssertionError("text reaction must never reach Clubhouse")
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    res = client.post(
+        "/api/clubhouse/channels/my-channel/reaction",
+        json={"emoji": "[DEMO] Leaked IBAN:XX00 CVV:***"},
+    )
+    assert res.status_code == 422
+
+
 def test_mute_channel(client, tmp_path, monkeypatch) -> None:
     _connect(tmp_path)
 

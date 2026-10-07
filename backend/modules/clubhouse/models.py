@@ -1,7 +1,8 @@
 from enum import Enum
 from typing import Annotated, Any
 
-from pydantic import BaseModel, StringConstraints
+import regex
+from pydantic import BaseModel, StringConstraints, field_validator
 
 # E.164, e.g. +15551234567
 PhoneNumber = Annotated[str, StringConstraints(pattern=r"^\+\d{7,15}$")]
@@ -207,8 +208,30 @@ class ChatPermissionRequest(BaseModel):
     chat_permission: ChatPermission
 
 
+# A reaction may be any real emoji — not only the room's offered
+# ``emoji_reaction_options`` — but it must *be* an emoji. Clubhouse's server draws
+# whatever string arrives as if it were a glyph, so an unchecked text value lets a
+# crafted request burst arbitrary words across every participant's screen (the
+# fake-"leak" abuse). Requiring a pictographic payload with no letters/digits keeps
+# every genuine emoji (including ZWJ sequences, skin tones and flags) and drops text.
+_EMOJI_ONLY = regex.compile(r"^[\p{Extended_Pictographic}\p{Emoji_Component}‍️]+$")
+
+
 class ReactionRequest(BaseModel):
     emoji: str
+
+    @field_validator("emoji")
+    @classmethod
+    def _must_be_emoji(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("emoji must not be empty")
+        # Code-point cap covers the longest real emoji sequences while bounding abuse.
+        if len(v) > 16:
+            raise ValueError("emoji is too long to be a reaction")
+        if not _EMOJI_ONLY.match(v):
+            raise ValueError("reaction must be an emoji, not text")
+        return v
 
 
 class UninviteSpeakerRequest(BaseModel):
