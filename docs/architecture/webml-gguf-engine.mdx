@@ -1,0 +1,337 @@
+---
+sidebar_label: WebML GGUF engine (plan)
+---
+
+# WebML Phase 6: our own WGSL engine for GGUF
+
+**Status: plan, not started.** This is the plan [WebML](../modules/webml.mdx) said
+Phase 6 needed before any code was written. It is split into stages; each one ships
+on its own and ends with a check that has to pass before the next starts. Nothing
+in Phases 0–5 is replaced. The transformers.js worker stays as the engine for ONNX
+models, for the WASM CPU fallback and for published Scrive pages.
+
+## Why build an engine at all
+
+Phases 0–5 run ONNX exports through transformers.js and ONNX Runtime Web. That
+works, and it limits us in four ways that patches on our side cannot fix:
+
+| Limit today | Where it bites | What owning the forward pass gives |
+| --- | --- | --- |
+| Only the curated `onnx-community` exports run | The catalog is seven models; the node's own GGUFs (llama.cpp catalog, training's `convert.py` output, Ollama / LM Studio blobs) cannot run in the window | Any GGUF of a supported architecture, including **a fine-tune this node just trained** |
+| No `num_logits_to_keep` | Logits for every prompt position: the 2.4 GB `bad_alloc`, worked around with 256-token chunked prefill | The LM head runs on the last position only. The chunking exists only to bound activation memory |
+| KV cache thrown away after every reply | An agent round re-prefills ≈4k tokens (system prompt + tool schemas) every time: **~50 s per round** on Qwen3-0.6B | The longest common token prefix is reused across calls, so a round prefills only what changed |
+| Logits come back to the CPU every step | ~600 KB readback per token for a 152k vocabulary; the `step` events cost a pass over the vocabulary in JS | Sampling and top-k run on the GPU. A step reads back a token id, or with `topK > 0` the k alternatives |
+
+A fifth gain comes later (6.6): the residual stream lives in our own buffers, so
+interpretability readouts (per-layer norms, logit lens) can be read during a normal
+generation.
+
+**Non-goals for Phase 6:** multimodal checkpoints, training or LoRA in the
+browser, a CPU/WASM GGUF path (machines without WebGPU keep transformers.js),
+GGUF in **published** Scrive pages (`webml-embed.html` loads transformers.js from
+jsDelivr; shipping our engine there needs a bundled static asset, which is a
+follow-up), and every ggml quantization type.
+
+## Baseline to beat
+
+From the Phase 5 measurements (2026-10-07, Intel Gen12 iGPU):
+
+- SmolLM2-360M chat, q4f16 ONNX: **~27 tok/s**, TTFT **~0.7 s**
+- Agent round, Qwen3-0.6B, ≈4k-token prompt: **~50 s**, almost all prefill
+
+Stage 6.4 is measured against these numbers on the same machine.
+
+## Shape of the change
+
+```mermaid
+flowchart LR
+    UI["Playground · relay · {webllm}"] --> E["WebmlEngine<br/>(app-global)"]
+    E -->|"source: onnx"| T["transformers.worker.ts<br/>(unchanged)"]
+    E -->|"source: gguf"| G["gguf.worker.ts"]
+    G --> P["gguf/parse · tokenizer · template"]
+    G --> R["gguf/runtime<br/>buffers · KV · command encoding"]
+    R --> K["wgsl/*.wgsl"]
+    G <-->|"Range reads"| S[("OPFS<br/>webml-gguf/")]
+    G -->|"Range fetch"| H["huggingface.co<br/>or this node"]
+```
+
+**One protocol, two workers.** `gguf.worker.ts` speaks the same
+`protocol.ts` events (`progress`, `ready`, `delta`, `step`, `done`, …), so the
+playground, the `browser` provider relay and `{webllm}` blocks barely change. The
+protocol change is additive:
+
+```ts
+// protocol.ts
+export type ModelSource =
+  | { kind: 'onnx' }                                            // today's behaviour
+  | { kind: 'gguf'; repo: string; file: string; revision?: string }
+  | { kind: 'gguf-node'; url: string; file: string };           // served by this node (6.5)
+
+export interface LoadRequest {
+  type: 'load';
+  model: string;      // opaque id; for GGUF `gguf:<repo>/<file>`
+  dtype: Dtype;       // ONNX only; GGUF quant comes from the file
+  device: Device;
+  source?: ModelSource;
+}
+```
+
+The model id stays an opaque string, so `browser_provider.py`, the manifest and
+`webml.defaultModel` carry GGUF models without backend changes. `EngineState.ready`
+gains `engine: 'onnx' | 'gguf'` and, for GGUF, the quant label (`Q4_K_M`) for the UI.
+
+**Switching engines terminates the other worker.** `WebmlEngine` takes a factory
+per engine kind. Loading a model of the other kind terminates the current worker
+instead of sending it `unload`, because terminating is the only way to release a
+GPU device. Only one model is resident at a time, as today.
+
+### New files
+
+| Path | Holds |
+| --- | --- |
+| `packages/webml/src/gguf/parse.ts` | GGUF header reader: a TS port of `backend/modules/interpretability/gguf.py`, with the same bounds (`_MAX_TENSORS`, `_MAX_STRING`, …) and the same ggml type table |
+| `packages/webml/src/gguf/source.ts` | Range reads: HF `resolve/` URLs, the node's file route, OPFS files |
+| `packages/webml/src/gguf/store.ts` | OPFS weight store (`webml-gguf/<repo>/<file>`): list, delete, resume |
+| `packages/webml/src/gguf/arch.ts` | Metadata → `ModelConfig`, plus a support check that says *why* a file is refused |
+| `packages/webml/src/gguf/tokenizer.ts` | BPE (`gpt2`) and SentencePiece (`llama`) from `tokenizer.ggml.*`, with pre-tokenizers per `tokenizer.ggml.pre` |
+| `packages/webml/src/gguf/template.ts` | `tokenizer.chat_template` through `@huggingface/jinja` (already a transformers.js dependency) |
+| `packages/webml/src/gguf/quant.ts` | CPU reference dequantizers: the test oracle, never the runtime path |
+| `packages/webml/src/gguf/runtime.ts` | Device, buffers, KV cache, the per-token command buffer, sampling readback |
+| `packages/webml/src/wgsl/*.wgsl` | Kernels, imported with `?raw` |
+| `packages/webml/src/engine/gguf.worker.ts` | The protocol loop around `runtime.ts` |
+| `packages/webml/kernel-tests/` | Playwright harness: each kernel on the GPU vs `quant.ts` / a CPU reference |
+| `scripts/webml/make_fixtures.py` | Golden vectors: dequantized blocks (`gguf` pip package), token ids (`transformers` tokenizers), llama.cpp top-k for parity |
+
+## Technical decisions
+
+These are the recommendations the stages assume. Each one is checked in the stage
+named in brackets, and a stage that disproves one stops and asks.
+
+1. **Weights live in OPFS, not Cache Storage** [6.2]. A GGUF is one file of
+   0.3–2.5 GB. Cache Storage hands back a `Response`, and reading a byte range out
+   of one means reading the body. OPFS `createSyncAccessHandle` (in the worker)
+   gives positioned reads. The download streams to disk, and the load streams
+   tensor by tensor from disk into `GPUBuffer`s, so the file is never in JS memory
+   at once. Downloads resume from the `.part` length the way the llama.cpp module's
+   do. `cache.ts`'s listing and deleting cover both stores, so "On this device"
+   stays one list.
+2. **Read the header before downloading** [6.0]. The tensor directory and
+   metadata sit before `data_offset`, a few MB including the vocabulary. A Range
+   fetch of the header lets the picker say "architecture `phi3` is not supported"
+   or "`IQ2_XS` is not supported" *before* a 2 GB click, and size the GPU budget
+   from real tensor sizes.
+3. **Port the backend's reader instead of adding `@huggingface/gguf`** [6.0]. The
+   two readers must agree on what a file contains, and the backend one is already the
+   house reference, with a size table that refuses to guess unknown types. The port
+   is about 250 lines and runs against the same fixtures.
+4. **Request the adapter's limits, then chunk anyway** [6.0]. Default
+   `maxStorageBufferBindingSize` is 128 MiB. A tied 151,936 × 2,048 embedding / LM
+   head in Q6_K is ~250 MB. The device is requested with the adapter's maxima, and any
+   tensor over the binding limit is split by rows into several buffers; the matvec
+   dispatches once per chunk. The probe already reports both limits.
+5. **f32 activations and accumulation first, f16 later** [6.1 → 6.4]. Correctness
+   is established with f32 everywhere except weights. `shader-f16` storage for
+   activations and the KV cache is a 6.4 optimization, accumulation stays f32, and
+   parity is re-checked afterwards.
+6. **Dequantize inside the kernels** [6.1]. Weights stay in their ggml block
+   layout on the GPU (uploaded as `u32` words). Decode kernels dequantize in
+   registers; prefill tiles dequantize into workgroup memory. Dequantizing to f16
+   at load would double or triple VRAM, and VRAM is what an iGPU shares with the tab.
+7. **Kernel tests run in Chromium on SwiftShader** [6.0]. Playwright drives the
+   preinstalled Chromium with `--enable-unsafe-webgpu --use-webgpu-adapter=swiftshader`,
+   so CI exercises every kernel with no GPU. It is slow, and that is acceptable: the
+   tests use small random tensors. Dawn's node bindings are the fallback if
+   SwiftShader turns out to miss a feature we need.
+8. **The rope variant is a property of the architecture, not the file** [6.3].
+   `convert_hf_to_gguf.py` permutes Q/K for `llama`, which uses llama.cpp's "normal"
+   interleaved RoPE. `qwen2` and `qwen3` use NEOX (split halves). Getting this wrong
+   still produces fluent-looking garbage for a few tokens, which is why the parity
+   check runs 64 greedy tokens and not 5. Llama 3.x also ships `rope_freqs.weight`
+   (per-dimension factors), which must be applied.
+
+## The kernels
+
+All are compute shaders. "Fused" kernels are a 6.4 change; until then each step is
+its own dispatch.
+
+| Kernel | Notes |
+| --- | --- |
+| `embed` | Dequantize one row per token id. The id is read from a GPU buffer, so the decode loop can feed sampled ids without a round-trip (6.4) |
+| `rmsnorm` | Workgroup reduction (subgroup reduction when `subgroups` is available) times weight. A per-head variant is Qwen3's QK-norm |
+| `matvec_<q>` | Decode (M = 1), memory-bound: the hot path. One variant per quant type: F16, Q8_0, Q4_0, Q4_K, Q5_K, Q6_K |
+| `matmul_<q>` | Prefill (M > 1): tiled, weights dequantized into shared memory |
+| `rope` | `norm` and `neox` variants, `freq_base`, optional `rope_freqs` factors |
+| `kv_write` | Layout `[layer][kv_head][pos][head_dim]`, preallocated to the context budget |
+| `attn_decode` | One workgroup per head with online softmax. Split-K over positions past ~1k (flash-decoding), plus a combine pass. GQA by head index mapping |
+| `attn_prefill` | Causal tiled flash attention |
+| `swiglu` | `silu(gate) * up`, fused into one pass |
+| `add` | Residual. Folded into matvec epilogues in 6.4 |
+| `lm_head` | `matvec` over the vocabulary on the **last position only** |
+| `sample` | Temperature → top-k → (top-p) → softmax → draw with a host-supplied random number. Also writes p(chosen), entropy and the top-k ids/probs for `step` events |
+
+**Per-token encoding.** Bind groups and uniform buffers are built once at load.
+The current position and sequence length sit in one small storage buffer that
+`writeBuffer` updates per step, so a token is one command buffer of roughly
+layers × 12 dispatches, re-encoded with no allocation. Readback goes through a
+ring of mapped staging buffers.
+
+**Pipelined decode (6.4).** `sample` writes the token id into the buffer `embed`
+reads, so step N+1 can be submitted before the host has read step N's token. The
+host reads ids asynchronously to stream text and check stop conditions. On EOS, the
+one speculative step is discarded and its KV slot is dropped.
+
+**Prefix reuse (6.4).** The worker keeps the token ids behind the live KV cache.
+A `generate` call tokenizes its prompt, finds the longest common prefix with those
+ids, keeps the cache up to that point, and prefills only the suffix. For an agent
+round, the suffix is the last tool result plus the new turn.
+
+## Supported models (the first set)
+
+| Model (GGUF) | Arch | Quants | Why |
+| --- | --- | --- | --- |
+| SmolLM2-360M-Instruct | `llama` | Q8_0, then Q4_K_M | Small, fast to iterate on, a direct comparison with the ONNX baseline |
+| Llama-3.2-1B-Instruct | `llama` | Q4_K_M | `rope_freqs` (Llama 3 rope scaling) |
+| Qwen3-0.6B / 1.7B | `qwen3` | Q4_K_M, Q8_0 | QK-norm, NEOX rope, `head_dim` ≠ `embd / heads`, Hermes tool calls: the agent models |
+| Qwen2.5-0.5B/1.5B-Instruct | `qwen2` | Q4_K_M | QKV bias, which is what many fine-tunes start from |
+
+Q4_K_M files mix Q4_K, Q5_K and Q6_K (the LM head is usually Q6_K), and the
+norms are F32. Supporting "Q4_K_M" therefore means all of these types.
+
+Gemma 3 (sliding-window attention, sandwich norms, scaled embeddings, GELU)
+and SmolLM3 (NoPE every fourth layer) are 6.6 candidates. `arch.ts` refuses
+anything else by name.
+
+## Stages
+
+### 6.0 Harness and header (no inference)
+
+- `gguf/parse.ts` plus tests against synthetic GGUFs built in the test, and one
+  real header captured as a fixture. Its output must match `gguf.py` on the same
+  bytes; a Python script dumps the backend reader's view to JSON for comparison.
+- `gguf/source.ts`: Range reads from HF `resolve/` URLs, with the HF token where
+  the connector has one, the same way the llama.cpp catalog does.
+- `kernel-tests/` running one trivial kernel (`add`) in Chromium on SwiftShader
+  in CI.
+- Device creation with the adapter's limits. The chunking helper is tested with a
+  deliberately low limit.
+
+**Exit:** the header of a real Qwen3 Q4_K_M GGUF parses in the browser from a Range
+read, with tensor bytes summing to the file size minus `data_offset`, and
+the kernel harness is green in CI.
+
+### 6.1 Correct, slow, `llama` only
+
+- `quant.ts` references for F32, F16, Q8_0, Q4_0, checked against golden vectors
+  from the `gguf` pip package's dequantizers.
+- Naive kernels: `embed`, `rmsnorm`, `matvec` for those types, `rope` (norm),
+  `kv_write`, `attn_decode`, `swiglu`, `add`, `lm_head`. Each is checked against
+  its CPU reference in the harness. Prefill runs as a loop of decode steps.
+- Logits read back to the CPU and sampled in JS with the existing `distribution()`.
+- A dev-only page (not a panel) runs SmolLM2-360M Q8_0 from a fixed prompt.
+
+**Exit:** 64 greedy tokens match llama.cpp token for token on SmolLM2-360M Q8_0,
+and the top-5 probabilities at each step are within 1e-2. The reference is
+`llama-server`'s `/completion` with `n_probs`, fetched by the llama.cpp module and
+run by `scripts/webml/parity.py`.
+
+### 6.2 A real engine in the app
+
+- `tokenizer.ts`: `gpt2` BPE with the `smollm`, `llama-bpe` and `qwen2`
+  pre-tokenizers, plus `llama` SentencePiece. A golden corpus (code, CJK, emoji,
+  whitespace runs, special tokens) is checked against `transformers` tokenizers of
+  the source repos. Unknown `tokenizer.ggml.pre` values are refused.
+- `template.ts`: chat templates with `tools` and `enable_thinking`, rendered the
+  same as transformers.js renders the same template, verified on the same message
+  fixtures.
+- `gguf.worker.ts` implements the protocol: progress per byte range,
+  `warmup` (pipeline compilation plus one token), interrupt, unload, and the
+  one-generation-at-a-time rule.
+- `store.ts` (OPFS) with resumable downloads. The cache listing covers both stores.
+- Playground: a **GGUF** tab next to the catalog. Enter a repo, see its `.gguf`
+  files with sizes (HF tree API, as `list_repo_ggufs` does on the backend), and
+  get the header preflight verdict before the download button enables.
+- `device.lost` is handled like a worker crash, through `onCrash`.
+
+**Exit:** chat in the playground with SmolLM2-360M GGUF. The model shows in
+`webml_manifest`, and a `browser`-provider chat turn runs on it. `pnpm test`
+and the kernel harness are green.
+
+### 6.3 K-quants and the agent models
+
+- Q4_K, Q5_K, Q6_K (CPU references, then kernels). The `neox` rope, QK-norm and
+  QKV bias, `rope_freqs`, separate `key_length`/`value_length`.
+- Llama-3.2-1B, Qwen2.5 and Qwen3 entries go into a GGUF section of `catalog.ts`,
+  with `toolFormat` and `thinking` as for the ONNX entries.
+
+**Exit:** parity as in 6.1 for every model in the table at Q4_K_M. A Qwen3-1.7B
+`browser`-provider agent round emits a Hermes tool call that the backend parses and
+answers, and the next round completes.
+
+### 6.4 Fast
+
+In order, re-checking parity after each step:
+
+1. Tiled `matmul_<q>` and `attn_prefill`, so prefill stops being a loop of decodes.
+2. Prefix KV reuse across `generate` calls.
+3. GPU `sample` with top-k readback, then pipelined decode.
+4. Subgroup reductions; matvec tuned per quant (rows per workgroup, vectorized
+   `u32` loads).
+5. `shader-f16` activations and KV cache, where available.
+6. Fused epilogues (residual add, norm into the next matvec's input).
+
+`timestamp-query`, when the adapter has it, reports per-kernel time in a dev
+overlay, so each step's change is measured rather than assumed.
+
+**Exit**, on the Gen12 machine:
+- SmolLM2-360M Q4_K_M decode **≥ 27 tok/s** (at least parity with ONNX).
+- TTFT ≤ 0.7 s for a short chat prompt.
+- A Qwen3-1.7B agent round after the first **under 10 s**, with prefix reuse.
+  Today the 0.6B model takes ~50 s.
+
+If decode cannot reach parity, the GGUF engine still ships, for the
+local-model and prefix-reuse wins, but it does not become the default for models
+that have an ONNX export. That call is made here, with the numbers.
+
+### 6.5 This node's GGUFs in the window
+
+- A backend route in the llama.cpp module streams a servable GGUF with `Range`
+  support. It serves only files `llamacpp.list_models` already lists, never an
+  arbitrary path, behind the same auth as the rest of `/llamacpp`.
+- **Run in this window** on the llama.cpp model list and on a finished training
+  run's GGUF (training lineage already links them). The load uses
+  `source: { kind: 'gguf-node' }`. Same-origin bytes skip the HF download, and
+  OPFS still caches them.
+- Hosted (Vercel) has no node, so the action is hidden there.
+
+**Exit:** a model fine-tuned and converted on this node chats in the playground
+with nothing fetched from the Hub.
+
+### 6.6 Later, each optional
+
+- Interpretability readouts during generation: per-layer residual norms and a
+  logit lens into `{tokenviz}` and the model explorer.
+- Gemma 3 and SmolLM3 architectures.
+- GGUF in published Scrive pages (bundled engine asset).
+
+## Risks
+
+| Risk | Mitigation |
+| --- | --- |
+| iGPU limits: binding size, total VRAM shared with the tab | Chunked tensors (decision 4). The preflight budget compares the header's tensor bytes plus KV (`ctx × layers × 2 × kv_heads × head_dim × bytes`) with `maxBufferSize` and refuses with numbers |
+| Tokenizer drift: one wrong pre-tokenizer regex silently changes every prompt | Golden corpus per supported `tokenizer.ggml.pre`, and anything else is refused |
+| Numerical drift that "looks fine" | 64-token greedy parity against llama.cpp at every stage exit, re-run after every 6.4 step |
+| SwiftShader lacks a feature (subgroups, f16) | Those paths fall back, so the baseline kernel is always tested. The fast paths are checked on real hardware by the parity script |
+| OPFS quota or eviction | `navigator.storage.persist()` on the first GGUF download. Quota is checked against the file size before starting |
+| Maintaining a second engine indefinitely | The scope is the supported-models table. Everything else stays on transformers.js and is refused at preflight, not half-run |
+
+## Questions to settle before 6.0
+
+1. **OPFS for GGUF weights** (decision 1). This makes "On this device" span two
+   stores. Recommended.
+2. **Playwright + SwiftShader in CI for kernel tests** (decision 7). This adds a
+   browser job to `packages/webml`'s tests. Recommended.
+3. **The first model set** above. Is Qwen2.5 worth its QKV-bias work in 6.3, or
+   should it move to 6.6?
+4. **The 6.4 bar.** Should the GGUF engine become the default for a model that also
+   has an ONNX export only if it beats ONNX decode speed? Or is parity enough, given
+   prefix reuse?

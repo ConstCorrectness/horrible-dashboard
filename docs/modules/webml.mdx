@@ -3,7 +3,7 @@
 **Status: Phases 0–5 of 6 implemented** (foundation, playground, `browser` chat
 provider, and Scrive's `{space}`, `{app}`, `{webllm}` and `{tokenviz}` — see
 [Scrive](./scrive.mdx#hugging-face-spaces)). Phase 6, our own WGSL kernels for GGUF,
-needs its own plan. Language models that
+is planned in [WebML GGUF engine](../architecture/webml-gguf-engine.mdx), not started. Language models that
 run **in this window, on its GPU**, through WebGPU: no backend round-trip, no
 provider, nothing typed leaves the machine. Modelled on the Hugging Face "webml"
 static Spaces (SmolLM WebGPU, Gemma 4 / Bonsai WebGPU kernels, Agate).
@@ -14,7 +14,8 @@ static Spaces (SmolLM WebGPU, Gemma 4 / Bonsai WebGPU kernels, Agate).
 - **Frontend module:** `packages/core/src/modules/webml/`
 - **Backend surface:** `backend/modules/agent/browser_provider.py` (the `browser` chat
   provider's relay); no routes of its own.
-- **Plan:** `~/.claude/plans/the-webgpu-huggingface-spaces-logical-dragon.md`
+- **Plan:** `~/.claude/plans/the-webgpu-huggingface-spaces-logical-dragon.md` (Phases
+  0–5); Phase 6 in [WebML GGUF engine](../architecture/webml-gguf-engine.mdx).
 
 ## Contributions to the layout shell
 
