@@ -14,6 +14,7 @@
  * explorer follows the node's model). Rows link to blocks only when the layer
  * counts agree, and the header always names the run's model.
  */
+import { registry } from '../../../registry';
 import { settlesAt, useLensRun, type LensToken } from '../../webml';
 
 import './window-lens.css';
@@ -61,6 +62,13 @@ export function WindowLens({
           {run.tokens.length > COLUMNS ? ` (last ${COLUMNS} shown)` : ''}
           {run.live ? ' · generating' : ''}
         </span>
+        <button
+          type="button"
+          className="wl-open"
+          onClick={() => void registry.runCommand('webml.openLens')}
+        >
+          Open in Logit Lens
+        </button>
       </div>
       {blocks != null && !linked && (
         <div className="md-note">

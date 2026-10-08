@@ -11,6 +11,7 @@ import { checkSupport } from './arch';
 import { ggmlTypeName } from './ggml';
 import { layoutProblems, readGgufHeader, type ByteSource, type GgufHeader } from './parse';
 import { GgufRuntime, type LoadOptions } from './runtime';
+import { distribution } from '../distribution';
 import { DEFAULT_SAMPLER } from './sample';
 import { ChatTemplate } from './template';
 import { Tokenizer } from './tokenizer';
@@ -29,6 +30,13 @@ export interface SessionGenerate {
   /** Read out the logit lens at each generated token, into `onStep`. */
   lens?: boolean;
   templateKwargs?: Record<string, unknown>;
+  /**
+   * Don't sample: feed this text as the reply, a token at a time, and report at
+   * each position what the model predicted there (`onStep`, temperature 1) — the
+   * forced token's probability, the alternatives and, with `lens`, every layer.
+   * Two models given the same text are then compared position by position.
+   */
+  forced?: string;
 }
 
 export interface SessionStep {
@@ -191,6 +199,10 @@ export class GgufSession {
       if (end < prompt.length) await this.device.queue.onSubmittedWorkDone();
     }
 
+    if (req.forced !== undefined) {
+      return this.force(req, req.forced, prompt, handlers, interrupted, usage, started);
+    }
+
     const sampler = {
       ...DEFAULT_SAMPLER,
       temperature: req.temperature ?? DEFAULT_SAMPLER.temperature,
@@ -266,6 +278,92 @@ export class GgufSession {
       ttftMs: firstAt ? Math.round(firstAt - started) : 0,
       tokensPerSecond:
         generated.length > 1 && decodeSeconds > 0 ? (generated.length - 1) / decodeSeconds : 0,
+    };
+  }
+
+  /**
+   * Teacher forcing: the reply is `forced`, fed one token at a time after the
+   * prompt (already prefilled). At each position the logits come back whole, so
+   * the step reports the model's own distribution at temperature 1 — including
+   * the probability of the token it is then made to read, however unlikely. With
+   * the lens on, each layer's readout comes from the same pass.
+   *
+   * Not pipelined like sampling: each position's logits are read before the next
+   * token is fed. It is an analysis path, run on short texts.
+   */
+  private async force(
+    req: SessionGenerate,
+    forced: string,
+    prompt: number[],
+    handlers: { onDelta?: (text: string) => void; onStep?: (step: SessionStep) => void },
+    interrupted: () => boolean,
+    usage: (completionTokens: number) => Usage,
+    started: number,
+  ): Promise<SessionResult> {
+    // Special tokens are parsed: the forced text is usually a model's own reply as
+    // its steps spelled it (`<s>` and all), and must read back as the same tokens.
+    const ids = this.tokenizer.encode(forced, { parseSpecial: true });
+    const context = this.runtime.context;
+    if (prompt.length + ids.length > context) {
+      throw new Error(
+        `the prompt and the forced text are ${prompt.length + ids.length} tokens; this model is loaded with a ${context}-token context`,
+      );
+    }
+    const record = Math.max(1, Math.min(20, req.topK ?? 5));
+    const lens = req.lens === true;
+    const greedy = { ...DEFAULT_SAMPLER, temperature: 0 };
+    const word = (t: { id: number; p: number }) => ({
+      token: this.tokenizer.decode([t.id], true),
+      p: t.p,
+    });
+    let probs: Float32Array | undefined;
+    const decoder = new TextDecoder('utf-8', { ignoreBOM: true });
+    let text = '';
+    let fed = 0;
+    let stop: StopReason = 'length';
+    const firstAt = performance.now();
+    for (let i = 0; i < ids.length; i++) {
+      if (interrupted()) {
+        stop = 'interrupt';
+        break;
+      }
+      // The sampler pass is what copies the lens readout out; its pick is unused.
+      this.runtime.queueSample(greedy, 0, 1, 0);
+      const layers = lens ? await this.runtime.readLens(0) : undefined;
+      const dist = distribution(await this.runtime.readLogits(), record, probs);
+      probs = dist.probs;
+      const id = ids[i];
+      const delta = decoder.decode(this.tokenizer.piece(id), { stream: true });
+      if (delta) {
+        text += delta;
+        handlers.onDelta?.(delta);
+      }
+      handlers.onStep?.({
+        index: i,
+        token: this.tokenizer.decode([id], true),
+        p: dist.probs[id] ?? 0,
+        entropy: dist.entropy,
+        topk: dist.top.map(word),
+        ...(layers && {
+          layers: layers.map((l) => ({ norm: l.norm, entropy: l.entropy, top: l.top.map(word) })),
+        }),
+      });
+      this.runtime.queueStep(id, prompt.length + i);
+      this.cached.push(id);
+      fed++;
+    }
+    const tail = decoder.decode();
+    if (tail) {
+      text += tail;
+      handlers.onDelta?.(tail);
+    }
+    const seconds = (performance.now() - firstAt) / 1000;
+    return {
+      text,
+      stop,
+      usage: usage(fed),
+      ttftMs: Math.round(firstAt - started),
+      tokensPerSecond: fed > 1 && seconds > 0 ? fed / seconds : 0,
     };
   }
 }

@@ -26,8 +26,10 @@ static Spaces (SmolLM WebGPU, Gemma 4 / Bonsai WebGPU kernels, Agate).
 
 ## Contributions to the layout shell
 
-- **Panels:** `webml.playground` (WebML Playground, document, singleton).
-- **Commands:** `webml.openPlayground`, `webml.unload`.
+- **Panels:** `webml.playground` (WebML Playground, document, singleton) and
+  `webml.lens` (Logit Lens, document, singleton; sections **Reply** `r`, **Guess**
+  `g`, **Compare** `c`).
+- **Commands:** `webml.openPlayground`, `webml.openLens`, `webml.unload`.
 - **Boot:** `initWebmlRelay()` (beside `initAgentRelay`) answers relayed generations and
   keeps the backend told what this window can run.
 - **Settings:** `webml.defaultModel`, `webml.temperature`, `webml.topk`,
@@ -82,6 +84,13 @@ flowchart LR
 back to the CPU every step anyway, so this costs one pass over the vocabulary, not a
 GPU readback.
 
+`generate` with **`forced`** (GGUF only) does not sample. The reply is the given
+text, fed a token at a time, and each `step` reports what the model predicted at that
+position at temperature 1: the forced token's probability, the alternatives and, with
+`lens`, every layer. Special tokens in the text are parsed, so a reply rebuilt from
+its own steps reads back as the same tokens. It is how the Logit Lens compares two
+models on identical text (`session.ts`, tested against llama.cpp's logits).
+
 ## The playground
 
 Model picker (catalog, any ONNX Hub id, or a GGUF file from a Hub repo, whose
@@ -94,6 +103,46 @@ lens**: per layer, the token the model would have said from its residual stream
 there, its probability, and the stream's norm. It roughly halves decode speed (see
 [WebML GGUF engine](../architecture/webml-gguf-engine.mdx#66-later-each-optional)).
 "On this device" lists cached models with their size and deletes them.
+
+## The Logit Lens
+
+`webml.lens` looks at the lens properly. The window's engine keeps the latest reply
+that ran with the lens on, whichever surface asked (`lens-run.ts`), so this pane, and
+the model explorer's grid, fill in while the reply is written. Code is in
+`modules/webml/lens-lab/`, the arithmetic in `model.ts` (unit-tested).
+
+- **Reply.** Every token against every layer on one canvas heatmap. A cell is the
+  probability that layer gives the token finally chosen (from the layer's top 5;
+  blank when it is not there), so a column fills in as the prediction forms.
+  Outlined cells are where that token is the layer's best, and a tick marks where it
+  **settles**: the first layer from which it stays best to the end. Under the reply,
+  each token's underline is as thick as its settle layer is deep, and dashed for a
+  sampled token the model never preferred. Picking a token shows its stack: the
+  residual norm and the readout's entropy by layer, and every layer's best token.
+- **Guess — "When does it know?".** Five tokens of the reply, one at a time, shown
+  with the text before them. Guess the layer it settled at, then see that token's
+  real column. Exact scores 100, falling to 0 a quarter of the stack away. Tokens
+  that settle at layer 0, never settle, or are whitespace are not asked. The best
+  score is kept in this browser.
+- **Compare — "What did my fine-tune change?".** Pick a base (A) and a fine-tune
+  (B) from this node's GGUFs, the ones kept in this browser, or the loaded model. A
+  model this node trained is offered as B first, with its recorded base named. A
+  writes a greedy reply; then each model is made to **read that same reply** with
+  `forced` and the lens on. Reading identical tokens is the point: two free
+  generations diverge at their first different token, and every position after
+  that would compare two different sentences. The result:
+  - Perplexity of the reply under each, and how many positions B's own top choice
+    differs.
+  - Where each token settles under A and under B, and its output probability under
+    each.
+  - A diverging heatmap of B's probability minus A's for the reply's token at every
+    layer and position: accent where B is surer, `--danger` where it is less sure,
+    blank where they agree. Values come from the top-5 readouts, so a token outside
+    a layer's top 5 counts as 0 there, and the tooltip says so.
+  - Any position's two stacks side by side.
+  The window holds one model at a time, so a comparison loads A, then B, and leaves B
+  loaded. Models that tokenize the reply differently are compared by index, with a
+  warning.
 
 ## The `browser` chat provider
 

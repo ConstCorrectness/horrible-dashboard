@@ -1,0 +1,628 @@
+/* The Logit Lens lab. Tokens only — no literal colours (see themes.css). One hue
+   (the accent) carries magnitude; a comparison adds `--danger` as the other pole
+   of a diverging scale, with the surface as its neutral midpoint. */
+
+.ll-root {
+  container-type: inline-size;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  color: var(--text);
+  background: var(--bg);
+}
+
+.ll-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  min-width: 0;
+}
+
+.ll-dim {
+  color: var(--text-dim);
+}
+
+.ll-hint {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.ll-empty {
+  max-width: 560px;
+  margin: 40px auto;
+  padding: 0 16px;
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+
+.ll-error,
+.ll-warn {
+  padding: 8px 10px;
+  border-left: 2px solid var(--danger);
+  background: var(--bg-raised);
+  font-size: 12px;
+}
+.ll-warn {
+  border-left-color: var(--warn);
+}
+
+/* ── Stat tiles ─────────────────────────────────────────────────────────── */
+
+.ll-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.ll-stat {
+  min-width: 96px;
+  padding: 8px 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  animation: ll-rise var(--dur-enter, 180ms) var(--ease-out, ease-out) both;
+}
+
+.ll-stat-value {
+  font: 600 18px / 1.2 var(--font-mono);
+  color: var(--text-strong);
+  max-width: 26ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ll-stat-label {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.ll-live {
+  align-self: center;
+  color: var(--accent);
+  font-size: 12px;
+  animation: ll-pulse 1.2s ease-in-out infinite;
+}
+
+/* ── The reply as a strip of tokens ──────────────────────────────────────── */
+
+.ll-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  font: 12px/1.7 var(--font-mono);
+}
+
+.ll-strip-tok {
+  padding: 0 2px;
+  border: 0;
+  border-bottom: calc(2px + var(--settle, 0) * 6px) solid
+    color-mix(in srgb, var(--accent) calc(30% + var(--settle, 0) * 70%), transparent);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  white-space: pre;
+  cursor: pointer;
+}
+.ll-strip-tok.is-never {
+  border-bottom-style: dashed;
+  border-bottom-color: var(--text-dim);
+}
+.ll-strip-tok:hover,
+.ll-strip-tok.is-on {
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+.ll-strip-tok.is-on {
+  outline: 1px solid var(--accent);
+}
+
+/* ── The heatmap ─────────────────────────────────────────────────────────── */
+
+.ll-heat {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+/* Which way the stack runs: layer 0 (just after the embedding) at the top. */
+.ll-heat-axis {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 24px;
+  padding-right: 4px;
+  background: var(--bg);
+  font: 9px var(--font-mono);
+  color: var(--text-dim);
+  text-align: right;
+}
+
+.ll-heat-plot {
+  position: relative;
+}
+
+.ll-heat canvas {
+  display: block;
+  cursor: crosshair;
+}
+
+.ll-heat-col,
+.ll-heat-row {
+  position: absolute;
+  pointer-events: none;
+  border: 1px solid var(--text-strong);
+}
+.ll-heat-col {
+  top: 0;
+  transition: left var(--dur-fast, 120ms) var(--ease-out, ease-out);
+}
+.ll-heat-row {
+  left: 0;
+}
+
+.ll-tip {
+  position: absolute;
+  z-index: 2;
+  min-width: 160px;
+  padding: 6px 8px;
+  pointer-events: none;
+  background: var(--bg-elevated, var(--bg-raised));
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+  box-shadow: var(--shadow-overlay);
+  font: 11px/1.5 var(--font-mono);
+  white-space: nowrap;
+}
+
+.ll-legend-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.ll-scale {
+  width: 80px;
+  height: 8px;
+  background: linear-gradient(90deg, var(--bg-raised), var(--accent));
+  border: 1px solid var(--border);
+}
+
+.ll-mark-key,
+.ll-tick-key,
+.ll-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 10px;
+}
+.ll-mark-key {
+  border: 1px solid var(--text-strong);
+}
+.ll-tick-key {
+  width: 3px;
+  background: var(--text-strong);
+}
+.ll-swatch--accent {
+  background: var(--accent);
+}
+.ll-swatch--danger {
+  background: var(--danger);
+}
+.ll-swatch--neutral {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+}
+
+/* ── Charts ──────────────────────────────────────────────────────────────── */
+
+.ll-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.ll-chart {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+}
+
+.ll-chart figcaption {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.ll-legend {
+  display: flex;
+  gap: 10px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.ll-key::before {
+  content: '';
+  display: inline-block;
+  width: 12px;
+  height: 2px;
+  margin-right: 4px;
+  vertical-align: middle;
+  background: var(--accent);
+}
+.ll-key--danger::before {
+  background: var(--danger);
+}
+
+.ll-chart svg {
+  display: block;
+  overflow: visible;
+}
+
+.ll-axis {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.ll-tick {
+  fill: var(--text-dim);
+  font: 9px var(--font-mono);
+}
+
+.ll-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.ll-line--danger {
+  stroke: var(--danger);
+}
+.ll-dot {
+  fill: var(--bg-raised);
+  stroke-width: 2;
+}
+
+.ll-tick--marker {
+  fill: var(--text);
+}
+
+.ll-marker {
+  stroke: var(--text-dim);
+  stroke-dasharray: 3 3;
+}
+
+.ll-cross {
+  stroke: var(--text-dim);
+  stroke-width: 1;
+}
+
+.ll-readout {
+  min-height: 1.4em;
+  font: 11px var(--font-mono);
+  color: var(--text);
+}
+
+/* ── One token's stack ───────────────────────────────────────────────────── */
+
+.ll-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.ll-detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.ll-big-token {
+  font: 600 20px var(--font-mono);
+  color: var(--accent);
+  white-space: pre;
+}
+
+.ll-stack {
+  border-collapse: collapse;
+  font: 11px var(--font-mono);
+  max-width: 640px;
+}
+
+.ll-stack th,
+.ll-stack td {
+  padding: 2px 10px 2px 0;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.ll-stack th {
+  color: var(--text-dim);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 10px;
+}
+
+.ll-stack .ll-tok {
+  white-space: pre;
+}
+
+.ll-stack tr.is-chosen .ll-tok,
+.ll-stack .ll-tok.is-chosen {
+  color: var(--accent);
+}
+
+.ll-stack tr.is-settle td {
+  border-top: 1px dashed var(--accent);
+}
+
+.ll-stack tr.is-differ td {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.ll-bar {
+  display: inline-block;
+  width: 70px;
+  height: 4px;
+  vertical-align: middle;
+  background: color-mix(in srgb, var(--text-dim) 20%, transparent);
+}
+.ll-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--text-dim);
+}
+
+/* ── The game ────────────────────────────────────────────────────────────── */
+
+.ll-question {
+  padding: 12px 14px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+}
+
+.ll-context {
+  margin-top: 6px;
+  font: 14px/1.6 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ll-target {
+  padding: 0 3px;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border-radius: 2px;
+}
+
+.ll-board {
+  display: grid;
+  grid-template-columns: minmax(220px, 340px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+@container (width < 600px) {
+  .ll-board {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ll-layers {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ll-layer {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 20px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) calc(var(--p, 0) * 70%), var(--bg-raised));
+  color: var(--text);
+  font: 11px var(--font-mono);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--dur-base, 220ms) var(--ease-out, ease-out),
+    transform var(--dur-fast, 120ms) var(--ease-out, ease-out);
+}
+.ll-layer:not(:disabled):hover {
+  transform: translateX(4px);
+  border-color: var(--accent);
+}
+.ll-layer:disabled {
+  cursor: default;
+}
+.ll-layer-n {
+  width: 2.5ch;
+  color: var(--text-dim);
+}
+.ll-layer-best {
+  white-space: pre;
+}
+.ll-layer.is-settled .ll-layer-best {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+.ll-layer.is-guess {
+  outline: 2px solid var(--text-strong);
+  outline-offset: -2px;
+}
+.ll-layer.is-truth {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.ll-layer-tag {
+  margin-left: auto;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ll-result {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ll-verdict {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-strong);
+  animation: ll-rise var(--dur-enter, 180ms) var(--ease-out, ease-out) both;
+}
+
+.ll-points {
+  font: 700 32px var(--font-mono);
+  color: var(--accent);
+  animation: ll-pop 360ms var(--ease-out, ease-out) both;
+}
+
+.ll-final {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--accent);
+}
+
+.ll-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ll-actions button,
+.ll-form button {
+  height: var(--control-h, 30px);
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  color: var(--text);
+  cursor: pointer;
+}
+.ll-actions button:hover {
+  border-color: var(--accent);
+}
+.ll-actions button.is-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+.ll-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ── The comparison form ─────────────────────────────────────────────────── */
+
+.ll-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.ll-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.ll-form-wide {
+  grid-column: 1 / -1;
+}
+
+.ll-form select,
+.ll-form input,
+.ll-form textarea {
+  min-height: var(--control-h, 30px);
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.ll-form .ll-hint,
+.ll-form .ll-actions {
+  grid-column: 1 / -1;
+}
+
+.ll-reply {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* ── Motion ──────────────────────────────────────────────────────────────── */
+
+@keyframes ll-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@keyframes ll-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  60% {
+    transform: scale(1.12);
+  }
+}
+
+@keyframes ll-pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+:root[data-motion='off'] .ll-root *,
+:root[data-motion='off'] .ll-root *::before {
+  animation: none !important;
+  transition: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ll-root *,
+  .ll-root *::before {
+    animation: none !important;
+    transition: none !important;
+  }
+}

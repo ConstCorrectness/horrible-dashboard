@@ -73,6 +73,15 @@ export interface GenerateRequest {
   lens?: boolean;
   /** Extra variables for the chat template (`enable_thinking` for Qwen3, …). */
   templateKwargs?: Record<string, unknown>;
+  /**
+   * GGUF only: no sampling — the reply is this text, fed a token at a time, and
+   * each `step` reports what the model predicted at that position (temperature 1:
+   * the forced token's probability, the alternatives, and the lens with `lens`).
+   * How two models are compared on identical text. Special tokens in it are parsed
+   * (`<s>`, `<|im_end|>`), so a reply rebuilt from its own `step` tokens reads back
+   * as the same tokens. Ignored by ONNX models.
+   */
+  forced?: string;
 }
 
 export type WorkerRequest =

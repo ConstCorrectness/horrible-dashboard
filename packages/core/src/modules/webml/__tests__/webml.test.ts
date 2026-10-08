@@ -13,9 +13,10 @@ afterEach(() => registry.resetForTests());
 describe('webml manifest', () => {
   it('registers the playground and its commands', () => {
     registry.register(webmlModule);
-    expect((webmlModule.panels ?? []).map((p) => p.id)).toEqual(['webml.playground']);
+    expect((webmlModule.panels ?? []).map((p) => p.id)).toEqual(['webml.playground', 'webml.lens']);
     expect((webmlModule.commands ?? []).map((c) => c.id)).toEqual([
       'webml.openPlayground',
+      'webml.openLens',
       'webml.unload',
     ]);
     expect((webmlModule.settings ?? []).map((s) => s.key)).toEqual([

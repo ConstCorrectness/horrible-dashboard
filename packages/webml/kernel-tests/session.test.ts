@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
+import { distribution } from '../src/distribution';
 import { GgufSession, type SessionStep } from '../src/gguf/session';
 import { bytesSource } from '../src/gguf/source';
 import f32Expected from './fixtures/tiny-llama-f32.expected.json';
@@ -106,6 +107,93 @@ describe('GgufSession', () => {
       expect(result.text).toBe(text(f32Expected.generated.slice(0, 4)));
       expect(s.runtime.lens).toBe(false);
       expect((await run(false)).steps).toEqual([]);
+    } finally {
+      s.destroy();
+    }
+  });
+
+  /** The steps of a forced run of `text` after the fixture's prompt. */
+  async function forcedText(s: GgufSession, forcedText: string) {
+    const steps: SessionStep[] = [];
+    await s.generate(
+      { messages: [{ role: 'user', content: text(f32Expected.prompt) }], forced: forcedText },
+      { onStep: (step) => steps.push(step) },
+      () => false,
+    );
+    return steps;
+  }
+
+  /** The steps of a forced run of `forcedIds` after the fixture's prompt. */
+  async function forced(s: GgufSession, forcedIds: number[]) {
+    const steps: SessionStep[] = [];
+    const result = await s.generate(
+      {
+        messages: [{ role: 'user', content: text(f32Expected.prompt) }],
+        forced: text(forcedIds),
+        topK: 3,
+        lens: true,
+      },
+      { onStep: (step) => steps.push(step) },
+      () => false,
+    );
+    expect(result.text).toBe(text(forcedIds));
+    expect(result.usage.completionTokens).toBe(forcedIds.length);
+    expect(steps.map((st) => st.token)).toEqual(forcedIds.map((i) => `t${i}`));
+    return steps;
+  }
+
+  it('teacher forcing llama.cpp’s own continuation reports llama.cpp’s distributions', async () => {
+    const s = await open();
+    try {
+      const ids = f32Expected.generated.slice(0, 8);
+      const steps = await forced(s, ids);
+      ids.forEach((id, i) => {
+        // The logits after the prompt and the forced tokens before this one. Three
+        // places: the engine agrees with llama.cpp's logits to 1e-5 of the largest,
+        // which is a few 1e-4 in probability.
+        const want = distribution(f32Expected.logits[f32Expected.prompt.length - 1 + i], 3);
+        expect(steps[i].p).toBeCloseTo(want.probs[id], 3);
+        expect(steps[i].entropy).toBeCloseTo(want.entropy, 2);
+        expect(steps[i].topk.map((a) => a.token)).toEqual(want.top.map((a) => `t${a.id}`));
+      });
+    } finally {
+      s.destroy();
+    }
+  });
+
+  it('teacher forcing tokens the model would not pick: their own small probabilities, and the lens', async () => {
+    const s = await open();
+    const ref = await open();
+    try {
+      // Every other token swapped for another, so most forced tokens are unlikely.
+      const ids = f32Expected.generated
+        .slice(0, 8)
+        .map((id, i) => (i % 2 ? 2 + ((id + 7) % 62) : id));
+      const steps = await forced(s, ids);
+      // Reference: plain forward passes along the same tokens.
+      let logits = await ref.runtime.forward(f32Expected.prompt);
+      for (let i = 0; i < ids.length; i++) {
+        const want = distribution(logits, 3);
+        expect(steps[i].p).toBeCloseTo(want.probs[ids[i]], 4);
+        expect(steps[i].layers).toHaveLength(ref.runtime.config.layers);
+        // The lens's last layer is the model's own output.
+        expect(steps[i].layers!.at(-1)!.top[0].token).toBe(`t${want.top[0].id}`);
+        logits = await ref.runtime.forward([ids[i]], f32Expected.prompt.length + i);
+      }
+      expect(Math.min(...steps.map((st) => st.p))).toBeLessThan(0.1);
+    } finally {
+      s.destroy();
+      ref.destroy();
+    }
+  });
+
+  it('teacher forcing reads special tokens in the forced text as those tokens', async () => {
+    const s = await open();
+    try {
+      // A reply rebuilt from its own steps can hold a control token the model
+      // emitted; it must read back as one token, not as the characters `<s>`.
+      const steps = await forcedText(s, 't5<s>t9');
+      expect(steps.map((st) => st.token)).toEqual(['t5', '<s>', 't9']);
     } finally {
       s.destroy();
     }

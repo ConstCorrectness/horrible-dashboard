@@ -43,7 +43,9 @@ export class AppEngine extends WebmlEngine {
     handlers: GenerateHandlers = {},
   ): Promise<GenerationResult> {
     const state = this.getState();
-    if (!options.lens || state.kind !== 'ready' || this.busy) {
+    // A forced run is an analysis of given text (the Lens Lab's comparison), not a
+    // reply, so it does not replace the reply being looked at.
+    if (!options.lens || options.forced !== undefined || state.kind !== 'ready' || this.busy) {
       return super.generate(options, handlers);
     }
     lensRuns.start(state.model);

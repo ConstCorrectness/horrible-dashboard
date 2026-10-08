@@ -20,8 +20,10 @@ export { useEngineState, useGpuReport, webmlEngine } from './engine';
 export { settlesAt, useLensRun, type LensRun, type LensToken } from './lens-run';
 
 const PlaygroundPanel = lazyPane(() => import('./panels/PlaygroundPanel'), 'PlaygroundPanel');
+const LensLabPanel = lazyPane(() => import('./panels/LensLabPanel'), 'LensLabPanel');
 
 export const PLAYGROUND_VIEW = 'webml.playground';
+export const LENS_LAB_VIEW = 'webml.lens';
 
 /**
  * Whether "Run in this window" makes sense for a GGUF the node lists: an
@@ -64,6 +66,19 @@ export const webmlModule: ModuleManifest = {
       role: 'document',
       icon: '🧪',
       singleton: true,
+    },
+    {
+      id: LENS_LAB_VIEW,
+      title: 'Logit Lens',
+      component: LensLabPanel,
+      role: 'document',
+      icon: '🔬',
+      singleton: true,
+      sections: [
+        { id: 'reply', label: 'Reply', icon: '▦', key: 'r', default: true },
+        { id: 'guess', label: 'Guess', icon: '?', key: 'g' },
+        { id: 'compare', label: 'Compare', icon: '⇄', key: 'c' },
+      ],
     },
   ],
   settings: [
@@ -113,6 +128,11 @@ export const webmlModule: ModuleManifest = {
       id: 'webml.openPlayground',
       title: 'WebML: Open playground (run a model on this GPU)',
       run: () => void openPane(PLAYGROUND_VIEW),
+    },
+    {
+      id: 'webml.openLens',
+      title: 'WebML: Open the logit lens (last reply, guessing game, base vs fine-tune)',
+      run: () => void openPane(LENS_LAB_VIEW),
     },
     {
       id: 'webml.unload',
