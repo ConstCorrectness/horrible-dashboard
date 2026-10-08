@@ -190,7 +190,7 @@ export class GgufSession {
       temperature: req.temperature ?? DEFAULT_SAMPLER.temperature,
     };
     const record = Math.max(0, Math.min(20, req.topK ?? 0));
-    const decoder = new TextDecoder();
+    const decoder = new TextDecoder('utf-8', { ignoreBOM: true });
     const generated: number[] = [];
     let text = '';
     let stop: StopReason = 'length';

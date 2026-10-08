@@ -1,6 +1,8 @@
 // Y = X / sqrt(mean(X²) + eps) * G over rows of `n`: one workgroup per row of the
 // batch (S.n rows). With `last` set, only the batch's last row is normalized, into
 // row 0 of Y: the input to the LM head, which runs on the last position only.
+// With `accumulate` set, the normed row is added to what Y holds instead: Gemma's
+// norms on the attention and feed-forward outputs, fused into the residual add.
 
 const WG: u32 = 256u;
 
@@ -8,6 +10,7 @@ struct Params {
   n: u32,
   eps: f32,
   last: u32,
+  accumulate: u32,
 }
 
 struct Step {
@@ -44,6 +47,11 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
   }
   let scale = 1.0 / sqrt(partial[0] / f32(P.n) + P.eps);
   for (var i = tid; i < P.n; i += WG) {
-    Y[dst + i] = X[src + i] * scale * G[i];
+    let y = X[src + i] * scale * G[i];
+    if (P.accumulate != 0u) {
+      Y[dst + i] += y;
+    } else {
+      Y[dst + i] = y;
+    }
   }
 }

@@ -16,7 +16,9 @@ runnable without the Hub.
 With `--model`, it instead records llama.cpp's greedy run on a real GGUF: the
 prompt's token ids (llama.cpp's own tokenizer), then each generated token with the
 top-5 probabilities it was picked from. `kernel-tests/real-parity.test.ts` replays
-that in the browser (see its header for how to point it at the files).
+that in the browser (see its header for how to point it at the files). It also
+records the prompt's text and llama.cpp's ids for a small corpus of awkward strings,
+so the test can check the engine's tokenizer on the model's own vocabulary.
 
 Add `--f32` to record that run on an F32 copy of the model instead (llama.cpp
 dequantizes every tensor; the copy is deleted afterwards). The weights are the
@@ -72,11 +74,31 @@ class Shape:
     qk_norm: bool = False
     #: Llama 3's rope_freqs tensor (per-pair frequency divisors).
     rope_freqs: bool = False
+    #: Qwen2's biases on Q, K and V.
+    qkv_bias: bool = False
+    #: Gemma 3's post-norms, GELU gate, scaled embedding and sliding window
+    #: (this many keys; llama.cpp windows five layers in six).
+    sliding_window: int = 0
+    rope_base: float = 10000.0
+    rms_eps: float = 1e-5
 
 
 TINY = Shape()
 # Q/K norms, NEOX rope, and a head size that is not embd / heads (128 ≠ 64).
 QWEN3 = Shape(arch="qwen3", head_dim=32, qk_norm=True)
+# 6.6: Qwen2's Q/K/V biases with NEOX rope.
+QWEN2 = Shape(arch="qwen2", qkv_bias=True)
+# Gemma 3: six layers, so five are windowed (5 keys, shorter than the prompt plus
+# its continuation) and the sixth global, each with its own rope base.
+GEMMA3 = Shape(
+    arch="gemma3",
+    layers=6,
+    head_dim=32,
+    qk_norm=True,
+    sliding_window=5,
+    rope_base=1e6,
+    rms_eps=1e-6,
+)
 # Every row a whole number of 256-value K-quant super-blocks.
 LLAMA3_K = Shape(embd=256, ffn=512, layers=1, heads=4, kv_heads=2, head_dim=64, rope_freqs=True)
 QWEN3_K = Shape(
@@ -137,6 +159,14 @@ def weights(rng: np.random.Generator, shape: Shape = TINY) -> dict[str, np.ndarr
         if shape.qk_norm:
             w[p + "attn_q_norm"] = norm(shape.head_dim)
             w[p + "attn_k_norm"] = norm(shape.head_dim)
+        if shape.qkv_bias:
+            for name, n in (("attn_q", q), ("attn_k", kv), ("attn_v", kv)):
+                w[p + name + ".bias"] = (0.5 * rng.standard_normal(n)).astype(
+                    np.float32
+                )
+        if shape.sliding_window:
+            w[p + "post_attention_norm"] = norm(e)
+            w[p + "post_ffw_norm"] = norm(e)
     if shape.rope_freqs:
         # Llama 3 divides the low frequencies by up to 8.
         w["rope_freqs"] = np.linspace(1, 8, shape.head_dim // 2).astype(np.float32)
@@ -163,8 +193,10 @@ def write_model(
         g.add_key_length(shape.head_dim)
         g.add_value_length(shape.head_dim)
     g.add_rope_dimension_count(shape.head_dim)
-    g.add_rope_freq_base(10000.0)
-    g.add_layer_norm_rms_eps(1e-5)
+    g.add_rope_freq_base(shape.rope_base)
+    g.add_layer_norm_rms_eps(shape.rms_eps)
+    if shape.sliding_window:
+        g.add_sliding_window(shape.sliding_window)
     # A vocabulary llama.cpp will load. The parity tests feed ids; the session tests
     # write prompts as text — `t2…t63` are user-defined tokens, matched literally,
     # so "t5t9" is exactly [5, 9] — through a template that concatenates contents.
@@ -183,12 +215,14 @@ def write_model(
             continue  # tied: the head is token_embd
         kind = name.split(".")[-1]
         qtype = MIXED.get(kind, Q.F32) if mixed else Q.F32
+        # Weights are named without their suffix; biases carry theirs.
+        full = name if name.endswith(".bias") else f"{name}.weight"
         if value.ndim == 1 or qtype == Q.F32:
-            g.add_tensor(f"{name}.weight", value)
+            g.add_tensor(full, value)
         elif qtype == Q.F16:
-            g.add_tensor(f"{name}.weight", value.astype(np.float16))
+            g.add_tensor(full, value.astype(np.float16))
         else:
-            g.add_tensor(f"{name}.weight", quantize(value, qtype), raw_dtype=qtype)
+            g.add_tensor(full, quantize(value, qtype), raw_dtype=qtype)
 
     g.write_header_to_file()
     g.write_kv_data_to_file()
@@ -248,6 +282,24 @@ def reference(
 
 DEFAULT_PROMPT = "<|im_start|>user\nWrite a short poem about the sea.<|im_end|>\n<|im_start|>assistant\n"
 
+# Tokenized by llama.cpp without special-token parsing (user-defined tokens, such
+# as Gemma's whitespace runs, still match): whitespace runs, digits, apostrophes,
+# accents, CJK, emoji, code.
+CORPUS = [
+    "Hello world",
+    " leading space, and  two  spaces",
+    "line one\nline two\n\n\nafter three newlines",
+    "\ttab\tseparated\t\tvalues",
+    "numbers 1234567 and 3.14159, 2^10 = 1024",
+    "don't, won't, it's, they'll, I'd",
+    "café, naïve, Æsir, Ångström",
+    "日本語のテキスト、中文文本",
+    "emoji 🌊🐚 and a family 👩‍👩‍👧",
+    "def f(x):\n    return x ** 2  # square\n",
+    "    indented by four",
+    "<start_of_turn> and <|im_start|> as plain text",
+]
+
 
 def real_model(
     model: Path, out: Path, prompt_text: str, prompt_ids: list[int] | None, n: int
@@ -277,9 +329,30 @@ def real_model(
         token = int(top[0])
         steps.append({"token": token, "top": [[int(i), float(probs[i])] for i in top]})
         llm.eval([token])
+    corpus = [
+        {
+            "text": text,
+            "ids": [
+                int(t)
+                for t in llm.tokenize(
+                    text.encode("utf-8"), add_bos=False, special=False
+                )
+            ],
+        }
+        for text in CORPUS
+    ]
     out.write_text(
         json.dumps(
-            {"model": model.name, "prompt": [int(t) for t in prompt], "steps": steps}
+            {
+                "model": model.name,
+                # The text, when the ids were tokenized from it (with BOS and
+                # special-token parsing), so the test can tokenize it too.
+                "text": None if prompt_ids else prompt_text,
+                "prompt": [int(t) for t in prompt],
+                "steps": steps,
+                "corpus": corpus,
+            },
+            ensure_ascii=False,
         )
         + "\n",
         encoding="utf-8",
@@ -310,6 +383,12 @@ def main() -> None:
         action="store_true",
         help="record the run on a dequantized F32 copy (activations stay f32)",
     )
+    ap.add_argument(
+        "--only",
+        nargs="+",
+        metavar="STEM",
+        help="regenerate only these fixtures (e.g. tiny-gemma3-f32), leaving the rest",
+    )
     args = ap.parse_args()
     if args.model:
         if not args.out:
@@ -327,25 +406,38 @@ def main() -> None:
         return
 
     OUT.mkdir(parents=True, exist_ok=True)
+    wanted = lambda stem: not args.only or stem in args.only  # noqa: E731
     rng = np.random.default_rng(61)
     w = weights(rng)
     prompt = [int(t) for t in rng.integers(2, VOCAB, size=PROMPT_LEN)]
     forced = [int(t) for t in rng.integers(2, VOCAB, size=GENERATE)]
     for stem, mixed in (("tiny-llama-f32", False), ("tiny-llama-mixed", True)):
+        if not wanted(stem):
+            continue
         model = OUT / f"{stem}.gguf"
         write_model(model, w, mixed)
         record(model, reference(model, prompt, forced if mixed else None))
 
     # 6.3: Qwen3 in F32 (greedy, tight), and K-quant models made by llama.cpp's own
     # quantizer from F32 sources (teacher-forced: llama.cpp rounds activations to
-    # q8_K for K-quant dot products; the engine keeps them f32).
-    qwen3 = OUT / "tiny-qwen3-f32.gguf"
-    write_model(qwen3, weights(np.random.default_rng(62), QWEN3), shape=QWEN3)
-    record(qwen3, reference(qwen3, prompt, None))
+    # q8_K for K-quant dot products; the engine keeps them f32). 6.6: Qwen2 and
+    # Gemma 3 in F32, greedy.
+    for stem, shape, seed in (
+        ("tiny-qwen3-f32", QWEN3, 62),
+        ("tiny-qwen2-f32", QWEN2, 65),
+        ("tiny-gemma3-f32", GEMMA3, 66),
+    ):
+        if not wanted(stem):
+            continue
+        model = OUT / f"{stem}.gguf"
+        write_model(model, weights(np.random.default_rng(seed), shape), shape=shape)
+        record(model, reference(model, prompt, None))
     for stem, shape, seed, ftype in (
         ("tiny-llama3-q4km", LLAMA3_K, 63, FTYPE_Q4_K_M),
         ("tiny-qwen3-q5km", QWEN3_K, 64, FTYPE_Q5_K_M),
     ):
+        if not wanted(stem):
+            continue
         model = OUT / f"{stem}.gguf"
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "f32.gguf"

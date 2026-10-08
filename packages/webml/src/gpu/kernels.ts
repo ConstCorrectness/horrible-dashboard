@@ -15,8 +15,10 @@ import { F16, F32, Q4_0, Q4_K, Q5_0, Q5_K, Q6_K, Q8_0 } from '../gguf/quant';
 import attnCombineSrc from '../wgsl/attn_combine.wgsl?raw';
 import attnPrefillSrc from '../wgsl/attn_prefill.wgsl?raw';
 import attentionSrc from '../wgsl/attention.wgsl?raw';
+import biasSrc from '../wgsl/bias.wgsl?raw';
 import commonSrc from '../wgsl/common.wgsl?raw';
 import embedSrc from '../wgsl/embed.wgsl?raw';
+import gluSrc from '../wgsl/glu.wgsl?raw';
 import headnormSrc from '../wgsl/headnorm.wgsl?raw';
 import kvF16Src from '../wgsl/kv_f16.wgsl?raw';
 import kvF16PackSrc from '../wgsl/kv_f16_pack.wgsl?raw';
@@ -27,7 +29,6 @@ import matvecSrc from '../wgsl/matvec.wgsl?raw';
 import rmsnormSrc from '../wgsl/rmsnorm.wgsl?raw';
 import ropeSrc from '../wgsl/rope.wgsl?raw';
 import sampleSrc from '../wgsl/sample.wgsl?raw';
-import swigluSrc from '../wgsl/swiglu.wgsl?raw';
 import f16Src from '../wgsl/weights/f16.wgsl?raw';
 import f32Src from '../wgsl/weights/f32.wgsl?raw';
 import kscaleSrc from '../wgsl/weights/kscale.wgsl?raw';
@@ -141,7 +142,8 @@ export const WG = {
   rope: 64,
   attention: 128,
   attnCombine: 128,
-  swiglu: 256,
+  glu: 256,
+  bias: 256,
   kvStore: 256,
 } as const;
 
@@ -225,7 +227,8 @@ export class Kernels {
   headnorm = () => this.get('headnorm', () => headnormSrc);
   rope = () => this.get('rope', () => ropeSrc);
   attnCombine = () => this.get('attn_combine', () => attnCombineSrc);
-  swiglu = () => this.get('swiglu', () => swigluSrc);
+  glu = () => this.get('glu', () => gluSrc);
+  bias = () => this.get('bias', () => biasSrc);
   sample = () => this.get('sample', () => sampleSrc);
 
   private get(key: string, source: () => string): GPUComputePipeline {

@@ -14,6 +14,10 @@
 // the cache type (kv_f16.wgsl or kv_f32.wgsl). Q and O are [n][q_stride]
 // (q_stride = heads × HD); K and V are the caches, [ctx][kv_dim]. Query head h
 // reads KV head h / group.
+//
+// With a sliding `window` (Gemma 3's local layers), a query at position p sees
+// only keys p − window + 1 … p, and the tile starts its walk at the key block
+// holding its first query's earliest key.
 
 const WG: u32 = 64u;
 const TQ: u32 = WG / LANES;
@@ -26,6 +30,7 @@ struct Params {
   kv_dim: u32,
   group: u32,
   scale: f32,
+  window: u32,
 }
 
 struct Step {
@@ -63,14 +68,17 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
     }
   }
 
-  // This query's position, and the end of the keys any query of the tile sees.
+  // This query's position and first key, and the keys any query of the tile sees.
   let my_pos = S.pos + r;
+  let my_lo = select(0u, my_pos + 1u - min(P.window, my_pos + 1u), P.window != 0u);
+  let tile_pos = S.pos + q0;
+  let tile_lo = select(0u, tile_pos + 1u - min(P.window, tile_pos + 1u), P.window != 0u);
   let kv_end = S.pos + min(q0 + TQ, S.n);
 
   var m = MASKED;
   var l = 0.0;
   var acc: array<vec4<f32>, VPL>;
-  for (var t0 = 0u; t0 < kv_end; t0 += KB) {
+  for (var t0 = tile_lo - tile_lo % KB; t0 < kv_end; t0 += KB) {
     for (var kk = 0u; kk < KB; kk++) {
       let t = t0 + kk;
       var d = 0.0;
@@ -89,7 +97,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
     for (var kk = 0u; kk < KB; kk++) {
       let t = t0 + kk;
       var x = MASKED;
-      if (t <= my_pos && t < kv_end) {
+      if (t <= my_pos && t >= my_lo && t < kv_end) {
         var d = 0.0;
         for (var j = 0u; j < LANES; j++) {
           d += part[(qi * KB + kk) * LANES + j];

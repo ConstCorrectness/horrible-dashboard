@@ -114,7 +114,8 @@ export function formatBytes(bytes: number): string {
 
 /**
  * GGUF repos to start from in the playground's GGUF picker, for the architectures
- * and quantizations the WGSL engine runs (llama, qwen3; Q4_K_M and friends).
+ * and quantizations the WGSL engine runs (llama, qwen2, qwen3, gemma3; Q4_K_M and
+ * friends).
  *
  * No sizes here, unlike the ONNX catalog: the picker lists a repo's files and
  * their sizes live from the Hub's tree API, and reads the chosen file's header
@@ -148,6 +149,22 @@ export const GGUF_SUGGESTIONS: readonly GgufSuggestion[] = [
     toolFormat: 'hermes',
     thinking: true,
     license: 'apache-2.0',
+  },
+  {
+    repo: 'Qwen/Qwen2.5-0.5B-Instruct-GGUF',
+    file: 'qwen2.5-0.5b-instruct-q4_k_m.gguf',
+    label: 'Qwen2.5 0.5B Instruct',
+    params: '0.5B',
+    toolFormat: 'hermes',
+    license: 'apache-2.0',
+  },
+  {
+    repo: 'ggml-org/gemma-3-1b-it-GGUF',
+    file: 'gemma-3-1b-it-Q4_K_M.gguf',
+    label: 'Gemma 3 1B Instruct',
+    params: '1B',
+    toolFormat: null,
+    license: 'gemma',
   },
   {
     repo: 'bartowski/Llama-3.2-1B-Instruct-GGUF',

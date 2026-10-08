@@ -140,7 +140,9 @@ class Cursor {
   pos = 0;
   private chunk = FIRST_CHUNK;
   private eof = false;
-  private readonly utf8 = new TextDecoder('utf-8', { fatal: false });
+  // ignoreBOM keeps a string's leading U+FEFF: Gemma's vocabulary has `\ufeff#`
+  // beside `#`, and a decoder that drops it makes the two one token.
+  private readonly utf8 = new TextDecoder('utf-8', { fatal: false, ignoreBOM: true });
 
   constructor(private readonly source: ByteSource) {}
 

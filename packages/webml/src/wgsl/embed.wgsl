@@ -1,5 +1,5 @@
-// Y[r] = row T[r] of the embedding matrix, dequantized, for the batch's S.n
-// tokens: one thread per value. Composed like matvec.wgsl. The token ids are read
+// Y[r] = row T[r] of the embedding matrix, dequantized and multiplied by `scale`
+// (1, or Gemma's √embd), for the batch's S.n tokens: one thread per value. Composed like matvec.wgsl. The token ids are read
 // from a GPU buffer, so a sampled id can feed the next step with no round-trip.
 //
 // An embedding split into row chunks gets one dispatch per chunk; each writes
@@ -12,6 +12,7 @@ struct Params {
   row_bytes: u32,
   first_row: u32,
   rows: u32,
+  scale: f32,
 }
 
 struct Step {
@@ -43,5 +44,5 @@ fn main(
   }
   let c = i % P.n;
   let per = UNIT * UNITS;
-  Y[i] = block_get((tok - P.first_row) * P.row_bytes + (c / per) * BLOCK_BYTES, c % per);
+  Y[i] = block_get((tok - P.first_row) * P.row_bytes + (c / per) * BLOCK_BYTES, c % per) * P.scale;
 }

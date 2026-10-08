@@ -56,6 +56,8 @@ const PRE_TOKENIZERS: Record<string, PreTokenizer> = {
   'llama-bpe': { regexes: [LLAMA3], ignoreMerges: true },
   llama3: { regexes: [LLAMA3], ignoreMerges: true },
   qwen2: { regexes: [QWEN2], ignoreMerges: false },
+  // DeepSeek-R1's Qwen distills: llama.cpp maps it to Qwen2's pre-tokenizer.
+  'deepseek-r1-qwen': { regexes: [QWEN2], ignoreMerges: false },
 };
 
 export const SUPPORTED_PRE_TOKENIZERS = Object.keys(PRE_TOKENIZERS);
@@ -453,6 +455,7 @@ export class Tokenizer {
       all.set(p, at);
       at += p.length;
     }
-    return new TextDecoder().decode(all);
+    // A token can begin with U+FEFF (see parse.ts); keep it, as llama.cpp does.
+    return new TextDecoder('utf-8', { ignoreBOM: true }).decode(all);
   }
 }

@@ -17,6 +17,10 @@
 // (KP, kp_dot, VW, v_pair — f16 or f32), so every array here is sized exactly and
 // indexed by constant loops. K and V caches are [ctx][kv_dim]; Q is [heads * HD].
 // A partials slot is HD + 2 floats: the weighted sum, then m, then the sum.
+//
+// With a sliding `window` (Gemma 3's local layers), only the last `window`
+// positions, pos itself included, are seen: earlier keys score as masked, and a
+// chunk wholly before the window writes nothing (attn_combine.wgsl skips it).
 
 const WG: u32 = 128u;
 const CH: u32 = 128u;
@@ -32,6 +36,7 @@ struct Params {
   kv_dim: u32,
   splits: u32,
   scale: f32,
+  window: u32,
 }
 
 struct Step {
@@ -57,7 +62,9 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
   let kvh = wid.x;
   let t0 = wid.y * CH;
   let total = S.pos + 1u;
-  if (t0 >= total) {
+  // The first position seen.
+  let lo = select(0u, total - min(P.window, total), P.window != 0u);
+  if (t0 >= total || t0 + CH <= lo) {
     return;
   }
   let count = min(CH, total - t0);
@@ -77,7 +84,8 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
     for (var h = 0u; h < GROUP; h++) {
       // The group's heads re-read the same K slice, from cache.
       var d = 0.0;
-      if (t < count) {
+      let seen = t < count && t0 + t >= lo;
+      if (seen) {
         for (var i = lane; i < HDP; i += KL) {
           d += kp_dot(h * HD4 + i * (KPV / 4u), K[row + i]);
         }
@@ -86,7 +94,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
       workgroupBarrier();
       if (lane == 0u) {
         var s = MASKED;
-        if (t < count) {
+        if (seen) {
           s = (red[tid] + red[tid + 1u] + red[tid + 2u] + red[tid + 3u]) * P.scale;
         }
         sc[h * CH + t] = s;
@@ -108,7 +116,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
     let m = red[0];
     workgroupBarrier();
     var p = 0.0;
-    if (tid < count) {
+    if (tid < count && sc[h * CH + tid] > MASKED) {
       p = exp(sc[h * CH + tid] - m);
     }
     sc[h * CH + tid] = p;

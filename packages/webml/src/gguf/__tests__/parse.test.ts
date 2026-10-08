@@ -87,6 +87,21 @@ describe('readGgufHeader', () => {
     expect(h.tensors[0].name).toBe('after');
   });
 
+  it('keeps a leading byte-order mark (Gemma has both `\ufeff#` and `#`)', async () => {
+    const file = gguf({
+      kvs: 1,
+      kv: (b) =>
+        b
+          .str('tok')
+          .u32(STRING)
+          .str(new Uint8Array([0xef, 0xbb, 0xbf, 0x23])),
+      tensors: [],
+      dataBytes: 0,
+    });
+    const h = await readGgufHeader(bytesSource(file));
+    expect(h.metadata.tok).toBe('\ufeff#');
+  });
+
   it('reads a header larger than its first fetch, in growing chunks', async () => {
     // ~3.4 MB of vocabulary: more than the 2 MiB first read.
     const n = 200_000;

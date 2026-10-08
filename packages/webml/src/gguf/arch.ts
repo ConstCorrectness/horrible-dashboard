@@ -7,10 +7,17 @@
  * use (attention biases on a `llama` file, say), which would otherwise run quietly
  * without them.
  *
- * Supported: `llama` (Llama 2/3, SmolLM2; NORM rope, Llama 3's `rope_freqs`) and
- * `qwen3` (NEOX rope, per-head RMS norms on Q and K), with F32 / F16 / Q8_0 / Q4_0 / Q5_0
- * / Q4_K / Q5_K / Q6_K weights. Later stages widen this table, not the engine's
- * tolerance.
+ * Supported, with F32 / F16 / Q8_0 / Q4_0 / Q5_0 / Q4_K / Q5_K / Q6_K weights:
+ *
+ *  - `llama` (Llama 2/3, SmolLM2): NORM rope, Llama 3's `rope_freqs`.
+ *  - `qwen2` (Qwen2 / 2.5, DeepSeek-R1's Qwen distills): NEOX rope, biases on Q, K
+ *    and V.
+ *  - `qwen3`: NEOX rope, per-head RMS norms on Q and K.
+ *  - `gemma3`: Qwen3's Q/K norms, plus an embedding scaled by √embd, RMS norms on the
+ *    attention and feed-forward outputs before each residual add, a GELU gate, and
+ *    sliding-window attention on five layers in six, with their own rope base.
+ *
+ * Later stages widen this table, not the engine's tolerance.
  */
 import { ggmlTypeName } from './ggml';
 import type { GgufHeader, GgufTensor, GgufValue } from './parse';
@@ -33,8 +40,25 @@ export interface ModelConfig {
   rope: RopeKind;
   /** `rope_freqs.weight`: Llama 3's per-dimension frequency divisors. */
   ropeFreqs: boolean;
-  /** Per-head RMS norms on Q and K before rope (Qwen3). */
+  /** Per-head RMS norms on Q and K before rope (Qwen3, Gemma 3). */
   qkNorm: boolean;
+  /** Biases on the Q, K and V projections (Qwen2). */
+  qkvBias: boolean;
+  /** RMS norms on the attention and feed-forward outputs, before the residual adds (Gemma 3). */
+  postNorms: boolean;
+  /** The feed-forward gate's activation: SiLU, or GELU's tanh approximation (Gemma). */
+  ffnAct: 'silu' | 'gelu';
+  /** The embedding rows are multiplied by this: 1, or √embd (Gemma). */
+  embedScale: number;
+  /**
+   * Keys a windowed layer's query sees, itself included (`attention.sliding_window`);
+   * 0 when no layer is windowed. See `layerWindow`.
+   */
+  slidingWindow: number;
+  /** Of every `swaPattern` layers, all but the last are windowed. */
+  swaPattern: number;
+  /** The rope base of windowed layers (`rope.freq_base_swa`). */
+  ropeBaseSwa: number;
   /** Multiplier on Q·K: `attention.scale`, else 1/√headDim. */
   attentionScale: number;
   rmsEps: number;
@@ -53,12 +77,30 @@ interface ArchSpec {
   ropeFreqs: boolean;
   /** llama.cpp asserts every head dimension is rotated. */
   fullRope: boolean;
+  qkvBias?: boolean;
+  /** Gemma 3's post-norms, GELU gate, √embd embedding scale and sliding window. */
+  gemma?: boolean;
 }
 
 const ARCHS: Record<string, ArchSpec> = {
   llama: { rope: 'norm', qkNorm: false, ropeFreqs: true, fullRope: false },
+  qwen2: { rope: 'neox', qkNorm: false, ropeFreqs: false, fullRope: false, qkvBias: true },
   qwen3: { rope: 'neox', qkNorm: true, ropeFreqs: false, fullRope: true },
+  gemma3: { rope: 'neox', qkNorm: true, ropeFreqs: false, fullRope: false, gemma: true },
 };
+
+/** Gemma 3's layers come in sixes, five windowed and one global, unless the file says. */
+const GEMMA3_SWA_PATTERN = 6;
+
+/**
+ * The sliding window of layer `l`: how many keys, its own included, each query
+ * sees; 0 for a layer that sees every earlier position. llama.cpp's
+ * `set_swa_pattern`: of every `swaPattern` layers, all but the last are windowed.
+ */
+export function layerWindow(config: ModelConfig, l: number): number {
+  if (!config.slidingWindow) return 0;
+  return l % config.swaPattern < config.swaPattern - 1 ? config.slidingWindow : 0;
+}
 
 export const SUPPORTED_ARCHS = Object.keys(ARCHS);
 
@@ -112,6 +154,18 @@ export function checkSupport(header: GgufHeader): Support {
   const scaling = meta[`${arch}.rope.scaling.type`];
   if (typeof scaling === 'string' && scaling !== 'none')
     reasons.push(`rope scaling "${scaling}" is not supported yet`);
+  for (const key of ['final_logit_softcapping', 'attn_logit_softcapping']) {
+    if (num(meta, `${arch}.${key}`)) reasons.push(`${key} is not supported yet`);
+  }
+  let slidingWindow = 0;
+  let swaPattern = 1;
+  if (spec.gemma) {
+    slidingWindow = num(meta, `${arch}.attention.sliding_window`) ?? 0;
+    const pattern = meta[`${arch}.attention.sliding_window_pattern`];
+    if (pattern === undefined) swaPattern = GEMMA3_SWA_PATTERN;
+    else if (typeof pattern === 'number' && pattern >= 1) swaPattern = pattern;
+    else reasons.push('a per-layer attention.sliding_window_pattern is not supported yet');
+  }
 
   const byName = new Map(header.tensors.map((t) => [t.name, t]));
   const embedding = byName.get('token_embd.weight');
@@ -138,6 +192,15 @@ export function checkSupport(header: GgufHeader): Support {
     if (spec.qkNorm) {
       expect.set(`${p}attn_q_norm.weight`, [headDim]);
       expect.set(`${p}attn_k_norm.weight`, [headDim]);
+    }
+    if (spec.qkvBias) {
+      expect.set(`${p}attn_q.bias`, [q]);
+      expect.set(`${p}attn_k.bias`, [kv]);
+      expect.set(`${p}attn_v.bias`, [kv]);
+    }
+    if (spec.gemma) {
+      expect.set(`${p}post_attention_norm.weight`, [embd]);
+      expect.set(`${p}post_ffw_norm.weight`, [embd]);
     }
   }
   const optional = new Map<string, number[]>([['output.weight', [embd, vocab]]]);
@@ -169,6 +232,12 @@ export function checkSupport(header: GgufHeader): Support {
   }
 
   if (reasons.length) return { ok: false, reasons: dedupeTypeReasons(reasons) };
+  const ropeBase = num(meta, `${arch}.rope.freq_base`) ?? 10000;
+  // llama.cpp computes Gemma 3's scale rather than reading it: 1/√headDim, except
+  // 27B (62 layers), whose queries are scaled by its width per head.
+  const attentionScale = spec.gemma
+    ? 1 / Math.sqrt(layers === 62 ? Math.floor(embd / heads) : headDim)
+    : num(meta, `${arch}.attention.scale`) || 1 / Math.sqrt(headDim);
   return {
     ok: true,
     config: {
@@ -180,11 +249,19 @@ export function checkSupport(header: GgufHeader): Support {
       kvHeads,
       headDim,
       ropeDims,
-      ropeBase: num(meta, `${arch}.rope.freq_base`) ?? 10000,
+      ropeBase,
       rope: spec.rope,
       ropeFreqs: byName.has('rope_freqs.weight'),
       qkNorm: spec.qkNorm,
-      attentionScale: num(meta, `${arch}.attention.scale`) || 1 / Math.sqrt(headDim),
+      qkvBias: !!spec.qkvBias,
+      postNorms: !!spec.gemma,
+      ffnAct: spec.gemma ? 'gelu' : 'silu',
+      embedScale: spec.gemma ? Math.sqrt(embd) : 1,
+      slidingWindow,
+      swaPattern,
+      // llama.cpp's default for Gemma 3's windowed layers is 10000, not the global base.
+      ropeBaseSwa: num(meta, `${arch}.rope.freq_base_swa`) ?? 10000,
+      attentionScale,
       rmsEps: num(meta, `${arch}.attention.layer_norm_rms_epsilon`) ?? 1e-5,
       contextLength: num(meta, `${arch}.context_length`) ?? 2048,
       vocab,

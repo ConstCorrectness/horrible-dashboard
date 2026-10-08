@@ -6,9 +6,12 @@ sidebar_label: WebML GGUF engine (plan)
 
 **Status: 6.0–6.5 built. 6.4's and 6.5's exit checks pass on an Intel UHD iGPU
 (see [6.4](#64-fast), [6.5](#65-this-nodes-ggufs-in-the-window)). Real-model parity with llama.cpp holds for SmolLM2-360M
-Q4_K_M, Qwen3-1.7B Q4_K_M, Qwen3-0.6B Q8_0 and Llama-3.2-1B Q8_0. Still open from
+Q4_K_M, Qwen3-1.7B Q4_K_M, Qwen3-0.6B Q8_0, Llama-3.2-1B Q8_0,
+DeepSeek-R1-Distill-Qwen-1.5B Q8_0 (`qwen2`) and Gemma-3-1B Q4_K_M. Still open from
 earlier stages: the `browser`-provider agent round with a Hermes tool call (6.3).
-6.6 not started.** This is the plan [WebML](../modules/webml.mdx) said
+In 6.6, the `qwen2` and `gemma3` architectures are built
+([6.6](#66-later-each-optional)); SmolLM3, the interpretability readouts and GGUF
+in published Scrive pages are not.** This is the plan [WebML](../modules/webml.mdx) said
 Phase 6 needed before any code was written. It is split into stages; each one ships
 on its own and ends with a check that has to pass before the next starts. Nothing
 in Phases 0–5 is replaced. The transformers.js worker stays as the engine for ONNX
@@ -164,14 +167,15 @@ its own dispatch.
 | Kernel | Notes |
 | --- | --- |
 | `embed` | Dequantize one row per token id. The id is read from a GPU buffer, so the decode loop can feed sampled ids without a round-trip (6.4) |
-| `rmsnorm` | Workgroup reduction (subgroup reduction when `subgroups` is available) times weight. A per-head variant is Qwen3's QK-norm |
+| `rmsnorm` | Workgroup reduction (subgroup reduction when `subgroups` is available) times weight. A per-head variant is Qwen3's QK-norm. With `accumulate` (6.6) it adds into its output: Gemma's post-norms, fused into the residual add |
 | `matvec_<q>` | Decode (M = 1), memory-bound: the hot path. One variant per quant type: F32, F16, Q8_0, Q4_0, Q5_0 (6.4), Q4_K, Q5_K, Q6_K |
 | `matmul_<q>` | Prefill (M > 1): tiled, weights dequantized into shared memory |
 | `rope` | `norm` and `neox` variants, applied in place. Angles come from a host-built table indexed by position (see `rope.ts`); `rope_freqs` factors arrive with 6.3 |
 | `kv_store` | The pass's new K and V rows (computed, normed and rotated in f32) into the cache at their positions, rounded to f16 (default) or kept f32. Layout `[pos][kv_heads × head_dim]`, preallocated to the context budget. (Through 6.3 the projections wrote the f32 cache directly.) |
-| `attention` + `attn_combine` | Decode: split over 128-position chunks (flash-decoding), one workgroup per (KV head, chunk) serving the whole GQA group, then a merge per head |
-| `attn_prefill` | Causal tiled flash attention |
-| `swiglu` | `silu(gate) * up`, fused into one pass |
+| `attention` + `attn_combine` | Decode: split over 128-position chunks (flash-decoding), one workgroup per (KV head, chunk) serving the whole GQA group, then a merge per head. A sliding `window` (6.6) masks earlier keys; chunks wholly before it are skipped |
+| `attn_prefill` | Causal tiled flash attention, with the same optional window |
+| `glu` | `silu(gate) * up`, or `gelu(gate) * up` for Gemma (6.6), fused into one pass. (`swiglu` until 6.6) |
+| `bias` | Adds a projection's bias to every row: Qwen2's Q, K and V (6.6) |
 | residual | Folded into the attention-output and FFN-down projections in 6.4 (`accumulate` flag on matvec / matmul). (`add`, out-of-place, is the 6.0 harness kernel) |
 | `lm_head` | `matvec` over the vocabulary on the **last position only** |
 | `sample` | llama.cpp's chain (top-k → top-p and min-p → temperature → draw with a host-supplied random number), with an exact top-k. Also writes p(chosen), entropy and the alternatives for `step` events |
@@ -199,13 +203,14 @@ round, the suffix is the last tool result plus the new turn.
 | SmolLM2-360M-Instruct | `llama` | Q8_0, then Q4_K_M | Small, fast to iterate on, a direct comparison with the ONNX baseline |
 | Llama-3.2-1B-Instruct | `llama` | Q4_K_M | `rope_freqs` (Llama 3 rope scaling) |
 | Qwen3-0.6B / 1.7B | `qwen3` | Q4_K_M, Q8_0 | QK-norm, NEOX rope, `head_dim` ≠ `embd / heads`, Hermes tool calls: the agent models |
+| Qwen2.5, DeepSeek-R1's Qwen distills (6.6) | `qwen2` | Q4_K_M, Q8_0 | Q/K/V biases, NEOX rope |
+| Gemma 3 1B (6.6) | `gemma3` | Q4_K_M | Sliding-window attention on five layers in six, post-norms, √embd embedding scale, GELU gate, a 262k vocabulary |
 
 Q4_K_M files mix Q4_K, Q5_K and Q6_K (the LM head is usually Q6_K), and the
 norms are F32. Supporting "Q4_K_M" therefore means all of these types.
 
-Qwen2.5 (`qwen2`, QKV bias), Gemma 3 (sliding-window attention, sandwich norms,
-scaled embeddings, GELU) and SmolLM3 (NoPE every fourth layer) are 6.6 candidates. `arch.ts` refuses
-anything else by name.
+SmolLM3 (NoPE every fourth layer) is the remaining 6.6 candidate. `arch.ts`
+refuses anything else by name.
 
 ## Stages
 
@@ -672,6 +677,72 @@ with nothing fetched from the Hub.
   logit lens into `{tokenviz}` and the model explorer.
 - Qwen2.5 (`qwen2`, QKV bias), Gemma 3 and SmolLM3 architectures.
 - GGUF in published Scrive pages (bundled engine asset).
+
+**Built (2026-10-08): `qwen2` and `gemma3`.** Both were tested on files already on
+this node, so nothing was downloaded: DeepSeek-R1-Distill-Qwen-1.5B Q8_0 (LM Studio,
+`qwen2`) and Gemma-3-1B-it Q4_K_M (llama.cpp's cache).
+
+- **`qwen2`:** `attn_q.bias`, `attn_k.bias` and `attn_v.bias` are added after their
+  projections by the `bias` kernel. Rope is NEOX. The `deepseek-r1-qwen`
+  pre-tokenizer is Qwen2's, as in llama.cpp.
+- **`gemma3`**, as llama.cpp's `llm_build_gemma3` builds it:
+  - The embedding rows are multiplied by √embd.
+  - The output projection and the FFN-down projection write a scratch row.
+    `rmsnorm` with `accumulate` then norms it into the residual
+    (`post_attention_norm`, `post_ffw_norm`).
+  - The gate is GELU's tanh approximation.
+  - Of every six layers, five see only the last `sliding_window` positions (512)
+    and use rope base 10000; the sixth sees everything at the file's base (10⁶).
+    `attention.sliding_window_pattern` and `rope.freq_base_swa` are honoured when
+    present.
+  - The attention scale is computed, not read: 1/√head_dim, or 1/√(embd/heads) for
+    27B, which is detected by its 62 layers.
+  - Final-logit soft-capping and a per-layer window pattern are refused by name.
+  - The KV cache is still allocated in full for windowed layers. A ring buffer
+    would cut that memory; correctness did not need it.
+- **A tokenizer bug the new check found.** Gemma's vocabulary holds both `#` and
+  `\ufeff#`. The GGUF reader's `TextDecoder` dropped a leading byte-order mark, so
+  the two became one string and code comments tokenized differently from llama.cpp.
+  The reader, and both decoders of generated text, now keep it.
+- **Tests:**
+  - Kernels: windowed decode attention (a window inside one chunk, one starting
+    past whole chunks, one wider than the context so far) and windowed prefill;
+    GELU with gates out to ±60; the bias add; accumulating `rmsnorm`; the scaled
+    embedding.
+  - Forward: tiny `qwen2` (biases) and `gemma3` (six layers, a 5-key window, two
+    rope bases) files written and run by llama.cpp, greedy and batched prefill.
+    `qwen2` agrees within 1e-5.
+    - Gemma agrees within 2e-4. llama.cpp's CPU GELU is a lookup table from f16
+      inputs to f16 outputs. Emulating that table in the kernel brought the gap to
+      3.7e-5, so the gap is the table.
+  - Real parity: the reference script now also records the prompt's text and
+    llama.cpp's ids for a corpus of awkward strings. The test checks the engine's
+    tokenizer against both, on the model's own vocabulary.
+- **Real-model parity** on the iGPU, against llama.cpp's F32 run, 64 greedy tokens
+  each:
+
+  | Model | Prompt | Worst top-5 Δp | Mean |
+  | --- | --- | --- | --- |
+  | DeepSeek-R1-Distill-Qwen-1.5B Q8_0 | 11 tokens | 0.0013 | 0.00018 |
+  | Gemma-3-1B Q4_K_M | 17 tokens | 0.0021 | 0.00027 |
+  | Gemma-3-1B Q4_K_M | 1,396 tokens: decode runs past the window | 0.0018 | 0.00015 |
+
+- **In the app:** "Run in this window" on the node's DeepSeek-R1-Distill-Qwen-1.5B
+  row loaded it in 18.5 s, with 371 Range reads. It reasoned, closed `</think>`,
+  answered and stopped on EOS: 242 tokens at 7.7 tok/s, TTFT 552 ms, no Hub
+  requests.
+  - Gemma 3 is not in the node's catalog, so it ran through the bench instead,
+    which uses the same session, template and tokenizer.
+  - Its chat stopped at `<end_of_turn>` after 106 tokens: TTFT 367 ms, decode
+    11.5 tok/s.
+  - In the agent bench, round 1 (3,691 tokens) took 39.9 s and round 2 took 1.75 s
+    with prefix reuse.
+  - Decode is FFN-bound, plus 24 ms per token for the 262k-row LM head.
+- **The picker** suggests Qwen2.5-0.5B-Instruct and Gemma-3-1B-it. Neither repo is
+  gated.
+
+Not built: SmolLM3, which needs a file this node does not have; the readouts; and
+Scrive pages.
 
 ## Risks
 

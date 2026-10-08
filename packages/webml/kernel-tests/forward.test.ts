@@ -1,5 +1,5 @@
 /**
- * The 6.1 and 6.3 exit checks, runnable without the Hub: whole forward passes
+ * The 6.1, 6.3 and 6.6 checks, runnable without the Hub: whole forward passes
  * through the WGSL engine against llama.cpp on the same GGUF files
  * (scripts/gen_webml_llama_parity.py). The K-quant files were made by llama.cpp's
  * own quantizer, as real Q4_K_M / Q5_K_M files are.
@@ -10,12 +10,16 @@ import { readGgufHeader } from '../src/gguf/parse';
 import { GgufRuntime, type LoadOptions } from '../src/gguf/runtime';
 import { bytesSource } from '../src/gguf/source';
 import { gpu } from './harness';
+import gemma3Expected from './fixtures/tiny-gemma3-f32.expected.json';
+import gemma3Url from './fixtures/tiny-gemma3-f32.gguf?url';
 import f32Expected from './fixtures/tiny-llama-f32.expected.json';
 import f32Url from './fixtures/tiny-llama-f32.gguf?url';
 import mixedExpected from './fixtures/tiny-llama-mixed.expected.json';
 import mixedUrl from './fixtures/tiny-llama-mixed.gguf?url';
 import llama3Expected from './fixtures/tiny-llama3-q4km.expected.json';
 import llama3Url from './fixtures/tiny-llama3-q4km.gguf?url';
+import qwen2Expected from './fixtures/tiny-qwen2-f32.expected.json';
+import qwen2Url from './fixtures/tiny-qwen2-f32.gguf?url';
 import qwen3Expected from './fixtures/tiny-qwen3-f32.expected.json';
 import qwen3Url from './fixtures/tiny-qwen3-f32.gguf?url';
 import qwen3kExpected from './fixtures/tiny-qwen3-q5km.expected.json';
@@ -41,6 +45,12 @@ async function load(url: string, options: LoadOptions = {}): Promise<GgufRuntime
     ...options,
   });
 }
+
+/**
+ * See the Gemma 3 case. Measured 2.0e-4; emulating the f16 table in the kernel
+ * brought it to 3.7e-5: the gap is that table, not the engine.
+ */
+const GEMMA_TOLERANCE = 5e-4;
 
 function argmax(row: ArrayLike<number>): number {
   let best = 0;
@@ -138,6 +148,56 @@ describe('forward pass vs llama.cpp', () => {
     }
   });
 
+  // 6.6. Gemma's tolerance is looser because llama.cpp's CPU GELU is a lookup
+  // table of f16 inputs to f16 outputs, where the engine computes it in f32.
+  for (const [name, url, expected, config, tolerance] of [
+    [
+      'Qwen2 (Q/K/V biases, NEOX rope)',
+      qwen2Url,
+      qwen2Expected,
+      { arch: 'qwen2', rope: 'neox', qkvBias: true },
+      1e-5,
+    ],
+    [
+      'Gemma 3 (scaled embedding, post-norms, GELU, five windowed layers of six)',
+      gemma3Url,
+      gemma3Expected,
+      {
+        arch: 'gemma3',
+        qkNorm: true,
+        postNorms: true,
+        ffnAct: 'gelu',
+        embedScale: 8,
+        slidingWindow: 5,
+        swaPattern: 6,
+        ropeBase: 1e6,
+        ropeBaseSwa: 10000,
+      },
+      GEMMA_TOLERANCE,
+    ],
+  ] as const) {
+    it(`${name}, F32: same greedy continuation`, async () => {
+      const want = expected as Expected;
+      const rt = await load(url);
+      try {
+        expect(rt.config).toMatchObject(config);
+        let logits = await rt.forward(want.prompt);
+        const generated: number[] = [];
+        for (let i = 0; i < want.generated.length; i++) {
+          generated.push(argmax(logits));
+          logits = await rt.forward([generated[i]], want.prompt.length + i);
+        }
+        expect(generated).toEqual(want.generated);
+        const rows = await logitsAlong(rt, [...want.prompt, ...want.generated]);
+        expect(Math.max(...rows.map((r, i) => rowError(r, want.logits[i])))).toBeLessThan(
+          tolerance,
+        );
+      } finally {
+        rt.destroy();
+      }
+    });
+  }
+
   for (const [name, url, expected, config] of [
     [
       'Llama 3 Q4_K_M (Q4_K + Q6_K, rope_freqs, tied)',
@@ -197,6 +257,8 @@ describe('prefill vs llama.cpp', () => {
     ['all-F32 llama', f32Url, f32Expected, 1e-5],
     ['Q8_0 / Q4_0 / F16 llama', mixedUrl, mixedExpected, 2e-2],
     ['Qwen3 F32', qwen3Url, qwen3Expected, 1e-5],
+    ['Qwen2 F32', qwen2Url, qwen2Expected, 1e-5],
+    ['Gemma 3 F32', gemma3Url, gemma3Expected, GEMMA_TOLERANCE],
     ['Llama 3 Q4_K_M', llama3Url, llama3Expected, 1e-2],
     ['Qwen3 Q5_K_M', qwen3kUrl, qwen3kExpected, 1e-2],
   ] as const) {

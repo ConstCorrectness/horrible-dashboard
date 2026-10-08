@@ -17,6 +17,10 @@
  * allows their directories). On Windows that only works on the project's drive —
  * Vite drops the drive letter — so reach files on another drive through a junction.
  * On SwiftShader a 360M model takes minutes; `WEBML_GPU=hardware` uses the real GPU.
+ *
+ * References recorded from prompt text also carry that text and a corpus of
+ * awkward strings with llama.cpp's ids for each, and the engine's tokenizer must
+ * reproduce them on the model's own vocabulary.
  */
 import { describe, expect, inject, it } from 'vitest';
 
@@ -24,6 +28,7 @@ import { distribution } from '../src/distribution';
 import { readGgufHeader } from '../src/gguf/parse';
 import { GgufRuntime } from '../src/gguf/runtime';
 import { bytesSource } from '../src/gguf/source';
+import { Tokenizer } from '../src/gguf/tokenizer';
 import { fetchLocal, gpu, report } from './harness';
 
 declare module 'vitest' {
@@ -35,8 +40,12 @@ declare module 'vitest' {
 
 interface Reference {
   model: string;
+  /** The prompt's text, when its ids were tokenized from it (BOS, special tokens). */
+  text?: string | null;
   prompt: number[];
   steps: { token: number; top: [id: number, p: number][] }[];
+  /** llama.cpp's ids for each string, without BOS or special-token parsing. */
+  corpus?: { text: string; ids: number[] }[];
 }
 
 const modelPath = inject('parityModel');
@@ -49,7 +58,23 @@ describe.skipIf(!modelPath || !expectedPath)('a real GGUF vs llama.cpp', () => {
       const ref: Reference = await (await fetchLocal(expectedPath)).json();
       const bytes = new Uint8Array(await (await fetchLocal(modelPath)).arrayBuffer());
       const source = bytesSource(bytes);
-      const rt = await GgufRuntime.load(await gpu(), await readGgufHeader(source), source, {
+      const header = await readGgufHeader(source);
+
+      const tokenizer = new Tokenizer(header.metadata);
+      if (ref.text) {
+        expect(tokenizer.encode(ref.text, { addBos: true }), 'the prompt').toEqual(ref.prompt);
+      }
+      const wrong = (ref.corpus ?? [])
+        .map(({ text, ids }) => ({
+          text,
+          ids,
+          got: tokenizer.encode(text, { parseSpecial: false }),
+        }))
+        .filter(({ ids, got }) => ids.join(' ') !== got.join(' '))
+        .map(({ text, ids, got }) => `${JSON.stringify(text)}: llama.cpp ${ids} ours ${got}`);
+      expect(wrong, wrong.join('\n')).toEqual([]);
+
+      const rt = await GgufRuntime.load(await gpu(), header, source, {
         contextLength: ref.prompt.length + ref.steps.length + 1,
       });
       try {

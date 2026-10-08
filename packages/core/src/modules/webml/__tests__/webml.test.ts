@@ -75,7 +75,8 @@ describe('node GGUFs', () => {
   it('offer "Run in this window" only for architectures the engine runs', () => {
     expect(canRunNodeGguf('qwen3')).toBe(true);
     expect(canRunNodeGguf('llama')).toBe(true);
-    expect(canRunNodeGguf('gemma3')).toBe(false);
+    expect(canRunNodeGguf('gemma3')).toBe(true);
+    expect(canRunNodeGguf('gemma4')).toBe(false);
     expect(canRunNodeGguf('')).toBe(false);
   });
 });

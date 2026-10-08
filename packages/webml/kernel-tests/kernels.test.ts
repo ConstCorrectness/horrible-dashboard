@@ -282,7 +282,7 @@ describe('embed', () => {
         {
           0: uploadBytes(device, w),
           2: out,
-          3: uniformBuffer(device, 'p', [cols, rowBytes, 0, rows]),
+          3: uniformBuffer(device, 'p', [cols, rowBytes, 0, rows, { f32: 1 }]),
           4: stepBuffer(device, 0, tokens.length),
           5: tokenBuffer(device, tokens),
         },
@@ -310,7 +310,7 @@ describe('embed', () => {
       {
         0: uploadBytes(device, chunk),
         2: out,
-        3: uniformBuffer(device, 'p', [cols, rowBytes, 4, 3]),
+        3: uniformBuffer(device, 'p', [cols, rowBytes, 4, 3, { f32: 1 }]),
         4: stepBuffer(device, 0, tokens.length),
         5: tokenBuffer(device, tokens),
       },
@@ -325,6 +325,35 @@ describe('embed', () => {
     expect(Array.from(got.subarray(2 * cols))).toEqual(
       Array.from(dequantize(Q8_0, all, 4 * rowBytes, cols)),
     );
+  });
+
+  it('multiplies every value by the scale (Gemma’s √embd)', async () => {
+    const { device, k } = await setup();
+    const cols = 64;
+    const rows = 5;
+    const w = randomWeights(Q8_0, rows, cols, 8);
+    const rowBytes = tensorBytes(Q8_0, cols)!;
+    const tokens = [3, 1];
+    const scale = Math.fround(Math.sqrt(cols));
+    const out = output(device, tokens.length * cols);
+    const got = await dispatchOnce(
+      device,
+      k.embed(Q8_0),
+      {
+        0: uploadBytes(device, w),
+        2: out,
+        3: uniformBuffer(device, 'p', [cols, rowBytes, 0, rows, { f32: scale }]),
+        4: stepBuffer(device, 0, tokens.length),
+        5: tokenBuffer(device, tokens),
+      },
+      dispatch1d(tokens.length * cols, WG.embed, 65535),
+      out,
+      tokens.length * cols,
+    );
+    const want = tokens.flatMap((t) =>
+      Array.from(dequantize(Q8_0, w, t * rowBytes, cols), (v) => Math.fround(v * scale)),
+    );
+    expect(Array.from(got)).toEqual(want);
   });
 });
 
@@ -377,6 +406,38 @@ describe('rmsnorm', () => {
       },
     );
   }
+
+  it('accumulate: adds each normed row to what the output holds', async () => {
+    const { device, k } = await setup();
+    const x = seeded(rows * n, 24);
+    const g = seeded(n, 25);
+    const before = seeded(rows * n, 26);
+    const out = upload(device, before);
+    const got = await dispatchOnce(
+      device,
+      k.rmsnorm(),
+      {
+        0: upload(device, x),
+        1: upload(device, g),
+        2: out,
+        3: uniformBuffer(device, 'p', [n, { f32: eps }, 0, 1]),
+        4: stepBuffer(device, 0, rows),
+      },
+      [rows, 1],
+      out,
+      rows * n,
+    );
+    const want = Array.from({ length: rows }, (_, r) => norm(x.subarray(r * n, (r + 1) * n), g))
+      .flat()
+      .map((v, i) => v + before[i]);
+    expect(
+      maxRelError(
+        got,
+        want,
+        want.map((v) => Math.abs(v) + 1e-3),
+      ),
+    ).toBeLessThan(1e-5);
+  });
 });
 
 describe('headnorm', () => {
@@ -476,7 +537,10 @@ describe('rope', () => {
   }
 });
 
-/** softmax(q·Kᵀ·scale)·V over cache positions 0 … last, for one query head. */
+/**
+ * softmax(q·Kᵀ·scale)·V over cache positions 0 … last, for one query head; with a
+ * sliding `window`, over its last `window` positions only.
+ */
 function attendCpu(
   q: ArrayLike<number>,
   qAt: number,
@@ -487,9 +551,11 @@ function attendCpu(
   headDim: number,
   last: number,
   scale: number,
+  window = 0,
 ): number[] {
+  const first = window ? Math.max(0, last + 1 - window) : 0;
   const s: number[] = [];
-  for (let t = 0; t <= last; t++) {
+  for (let t = first; t <= last; t++) {
     let d = 0;
     for (let j = 0; j < headDim; j++) d += q[qAt + j] * kc[t * kvDim + kvAt + j];
     s.push(d * scale);
@@ -500,7 +566,7 @@ function attendCpu(
   const out: number[] = [];
   for (let j = 0; j < headDim; j++) {
     let acc = 0;
-    for (let t = 0; t <= last; t++) acc += e[t] * vc[t * kvDim + kvAt + j];
+    for (let t = first; t <= last; t++) acc += e[t - first] * vc[t * kvDim + kvAt + j];
     out.push(acc / z);
   }
   return out;
@@ -569,15 +635,20 @@ describe('kv_store', () => {
 });
 
 describe('attention (decode)', () => {
-  for (const [ctx, pos, headDim, kv] of [
-    [10, 6, 16, 'f32'],
-    [300, 290, 16, 'f32'],
-    [1000, 999, 64, 'f32'],
-    [260, 128, 128, 'f32'],
-    [300, 290, 16, 'f16'],
-    [1000, 999, 64, 'f16'],
+  for (const [ctx, pos, headDim, kv, window] of [
+    [10, 6, 16, 'f32', 0],
+    [300, 290, 16, 'f32', 0],
+    [1000, 999, 64, 'f32', 0],
+    [260, 128, 128, 'f32', 0],
+    [300, 290, 16, 'f16', 0],
+    [1000, 999, 64, 'f16', 0],
+    [10, 6, 16, 'f32', 4],
+    [1000, 700, 64, 'f32', 300],
+    [600, 512, 256, 'f16', 512],
+    [300, 100, 16, 'f32', 512],
   ] as const) {
-    it(`split over chunks, then merged: ${kv} cache, heads of ${headDim}, ${pos + 1} positions`, async () => {
+    const windowed = window ? `, a window of ${window}` : '';
+    it(`split over chunks, then merged: ${kv} cache, heads of ${headDim}, ${pos + 1} positions${windowed}`, async () => {
       const { device, k } = await setup();
       const heads = 4;
       const kvHeads = 2;
@@ -612,7 +683,7 @@ describe('attention (decode)', () => {
               1: cacheBuffer(device, kc, kv),
               2: cacheBuffer(device, vc, kv),
               3: partials,
-              4: uniformBuffer(device, 'p', [kvDim, splits, { f32: scale }]),
+              4: uniformBuffer(device, 'p', [kvDim, splits, { f32: scale }, window]),
               5: step,
             }),
           );
@@ -623,7 +694,7 @@ describe('attention (decode)', () => {
             bind(combine, {
               0: partials,
               1: out,
-              2: uniformBuffer(device, 'p', [headDim, splits]),
+              2: uniformBuffer(device, 'p', [headDim, splits, window]),
               3: step,
             }),
           );
@@ -637,7 +708,7 @@ describe('attention (decode)', () => {
       const want: number[] = [];
       for (let h = 0; h < heads; h++) {
         const kvAt = Math.floor(h / (heads / kvHeads)) * headDim;
-        want.push(...attendCpu(q, h * headDim, kc, vc, kvAt, kvDim, headDim, pos, scale));
+        want.push(...attendCpu(q, h * headDim, kc, vc, kvAt, kvDim, headDim, pos, scale, window));
       }
       expect(maxRelError(got, want, new Float32Array(want.length).fill(1))).toBeLessThan(1e-5);
     });
@@ -645,14 +716,18 @@ describe('attention (decode)', () => {
 });
 
 describe('attention (prefill)', () => {
-  for (const [headDim, pos, n, kv] of [
-    [16, 5, 21, 'f32'],
-    [64, 0, 40, 'f32'],
-    [128, 70, 17, 'f32'],
-    [48, 9, 30, 'f32'],
-    [64, 3, 40, 'f16'],
+  for (const [headDim, pos, n, kv, window] of [
+    [16, 5, 21, 'f32', 0],
+    [64, 0, 40, 'f32', 0],
+    [128, 70, 17, 'f32', 0],
+    [48, 9, 30, 'f32', 0],
+    [64, 3, 40, 'f16', 0],
+    [16, 5, 21, 'f32', 7],
+    [256, 40, 37, 'f32', 19],
+    [64, 3, 40, 'f16', 100],
   ] as const) {
-    it(`causal over cache + batch, ${kv} cache, heads of ${headDim}: ${n} queries from position ${pos}`, async () => {
+    const windowed = window ? `, a window of ${window}` : '';
+    it(`causal over cache + batch, ${kv} cache, heads of ${headDim}: ${n} queries from position ${pos}${windowed}`, async () => {
       const { device, k } = await setup();
       const heads = 4;
       const kvHeads = 2;
@@ -674,7 +749,7 @@ describe('attention (prefill)', () => {
           1: cacheBuffer(device, kc, kv),
           2: cacheBuffer(device, vc, kv),
           3: out,
-          4: uniformBuffer(device, 'p', [qDim, kvDim, heads / kvHeads, { f32: scale }]),
+          4: uniformBuffer(device, 'p', [qDim, kvDim, heads / kvHeads, { f32: scale }, window]),
           5: stepBuffer(device, pos, n),
         },
         [heads, Math.ceil(n / tile)],
@@ -687,7 +762,18 @@ describe('attention (prefill)', () => {
         for (let h = 0; h < heads; h++) {
           const kvAt = Math.floor(h / (heads / kvHeads)) * headDim;
           want.push(
-            ...attendCpu(q, r * qDim + h * headDim, kc, vc, kvAt, kvDim, headDim, pos + r, scale),
+            ...attendCpu(
+              q,
+              r * qDim + h * headDim,
+              kc,
+              vc,
+              kvAt,
+              kvDim,
+              headDim,
+              pos + r,
+              scale,
+              window,
+            ),
           );
         }
       }
@@ -700,26 +786,65 @@ describe('elementwise', () => {
   const n = 150;
   const rows = 2;
 
-  it('swiglu: silu(g) · u over every row', async () => {
+  // GELU's tanh approximation, as ggml_gelu_f32.
+  const gelu = (x: number) =>
+    0.5 * x * (1 + Math.tanh(Math.sqrt(2 / Math.PI) * x * (1 + 0.044715 * x * x)));
+
+  for (const [name, flag, act] of [
+    ['silu', 0, (x: number) => x / (1 + Math.exp(-x))],
+    ['gelu', 1, gelu],
+  ] as const) {
+    it(`glu: ${name}(g) · u over every row, large gates included`, async () => {
+      const { device, k } = await setup();
+      // Gates out to ±60: GELU's tanh must saturate there, not overflow to NaN.
+      const g = seeded(rows * n, 10).map((v, i) => (i % 50 === 0 ? 60 * Math.sign(v) : v * 6));
+      const u = seeded(rows * n, 11);
+      const out = output(device, rows * n);
+      const got = await dispatchOnce(
+        device,
+        k.glu(),
+        {
+          0: upload(device, g),
+          1: upload(device, u),
+          2: out,
+          3: uniformBuffer(device, 'p', [n, flag]),
+          4: stepBuffer(device, 0, rows),
+        },
+        dispatch1d(rows * n, WG.glu, 65535),
+        out,
+        rows * n,
+      );
+      const want = Array.from(g, (x, i) => act(x) * u[i]);
+      expect(got.every(Number.isFinite)).toBe(true);
+      expect(
+        maxRelError(
+          got,
+          want,
+          want.map((v) => Math.abs(v) + 1),
+        ),
+      ).toBeLessThan(1e-6);
+    });
+  }
+
+  it('bias: adds one vector to every row', async () => {
     const { device, k } = await setup();
-    const g = seeded(rows * n, 10).map((v) => v * 6);
-    const u = seeded(rows * n, 11);
-    const out = output(device, rows * n);
+    const b = seeded(n, 12);
+    const y = seeded(rows * n, 13);
+    const out = upload(device, y);
     const got = await dispatchOnce(
       device,
-      k.swiglu(),
+      k.bias(),
       {
-        0: upload(device, g),
-        1: upload(device, u),
-        2: out,
-        3: uniformBuffer(device, 'p', [n]),
-        4: stepBuffer(device, 0, rows),
+        0: upload(device, b),
+        1: out,
+        2: uniformBuffer(device, 'p', [n]),
+        3: stepBuffer(device, 0, rows),
       },
-      dispatch1d(rows * n, WG.swiglu, 65535),
+      dispatch1d(rows * n, WG.bias, 65535),
       out,
       rows * n,
     );
-    const want = Array.from(g, (x, i) => (x / (1 + Math.exp(-x))) * u[i]);
+    const want = Array.from(y, (v, i) => v + b[i % n]);
     expect(maxRelError(got, want, new Float32Array(rows * n).fill(1))).toBeLessThan(1e-6);
   });
 });

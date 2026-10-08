@@ -3,8 +3,9 @@
 **Status: Phases 0–5 of 6 implemented** (foundation, playground, `browser` chat
 provider, and Scrive's `{space}`, `{app}`, `{webllm}` and `{tokenviz}` — see
 [Scrive](./scrive.mdx#hugging-face-spaces)). Phase 6, our own WGSL engine for GGUF, is
-built through stage 6.5 ([WebML GGUF engine](../architecture/webml-gguf-engine.mdx)):
-`llama` and `qwen3` files in F32 to Q4_K_M, matching llama.cpp. The engine prefills in
+built through stage 6.5, plus 6.6's `qwen2` and `gemma3`
+([WebML GGUF engine](../architecture/webml-gguf-engine.mdx)): `llama`, `qwen2`,
+`qwen3` and `gemma3` files in F32 to Q4_K_M, matching llama.cpp. The engine prefills in
 batches, reuses the KV cache across replies, and samples on the GPU. It runs in the
 playground and behind the `browser` chat provider, and runs this node's own GGUFs
 (the llama.cpp catalog, training's conversions) straight from its disk through

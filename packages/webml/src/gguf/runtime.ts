@@ -29,7 +29,7 @@
  * writes its token ids into a GPU buffer and (position, row count) into one small
  * Step uniform, then submits its list again.
  */
-import { checkSupport, tensor, type ModelConfig } from './arch';
+import { checkSupport, layerWindow, tensor, type ModelConfig } from './arch';
 import { tensorBytes } from './ggml';
 import type { ByteSource, GgufHeader, GgufTensor } from './parse';
 import { dequantize } from './quant';
@@ -568,6 +568,12 @@ export class GgufRuntime {
       progress(t.bytes!);
     }
     device.queue.writeBuffer(rope, 0, ropeTable(this.context, c.ropeDims, c.ropeBase, factors));
+    // Windowed layers rotate with their own base (Gemma 3's 10000, beside 10⁶).
+    let ropeSwa = rope;
+    if (c.slidingWindow) {
+      ropeSwa = this.f32Buffer('rope swa', this.context * c.ropeDims);
+      device.queue.writeBuffer(ropeSwa, 0, ropeTable(this.context, c.ropeDims, c.ropeBaseSwa));
+    }
 
     const maxGroups = this.gpu.limits.maxComputeWorkgroupsPerDimension;
     const rowsOf = (mode: Mode) => (mode === 'decode' ? 1 : B);
@@ -632,9 +638,15 @@ export class GgufRuntime {
       output: GPUBuffer,
       label: string,
       last = false,
+      accumulate = false,
     ) => {
       const pipeline = k.rmsnorm();
-      const params = this.uniform(`${label}.params`, [c.embd, { f32: c.rmsEps }, last ? 1 : 0]);
+      const params = this.uniform(`${label}.params`, [
+        c.embd,
+        { f32: c.rmsEps },
+        last ? 1 : 0,
+        accumulate ? 1 : 0,
+      ]);
       list.push({
         label,
         pipeline,
@@ -668,7 +680,7 @@ export class GgufRuntime {
       });
     };
 
-    const ropeOn = (mode: Mode, v: GPUBuffer, heads: number, label: string) => {
+    const ropeOn = (mode: Mode, v: GPUBuffer, heads: number, table: GPUBuffer, label: string) => {
       const pipeline = k.rope();
       const width = heads * c.headDim;
       const params = this.uniform(`${label}.params`, [
@@ -683,7 +695,7 @@ export class GgufRuntime {
       this.lists[mode].push({
         label,
         pipeline,
-        group: bindGroup(device, pipeline, { 0: v, 1: rope, 2: params, 3: this.step }),
+        group: bindGroup(device, pipeline, { 0: v, 1: table, 2: params, 3: this.step }),
         workgroups: dispatch1d((rowsOf(mode) * heads * c.ropeDims) / 2, WG.rope, maxGroups),
       });
     };
@@ -694,15 +706,16 @@ export class GgufRuntime {
       buffers: GPUBuffer[],
       n: number,
       label: string,
+      flags: number[] = [],
     ) => {
-      const params = this.uniform(`${label}.params`, [n]);
+      const params = this.uniform(`${label}.params`, [n, ...flags]);
       const bindings: Record<number, GPUBuffer> = {};
       [...buffers, params, this.step].forEach((b, i) => (bindings[i] = b));
       this.lists[mode].push({
         label,
         pipeline,
         group: bindGroup(device, pipeline, bindings),
-        workgroups: dispatch1d(rowsOf(mode) * n, WG.swiglu, maxGroups),
+        workgroups: dispatch1d(rowsOf(mode) * n, WG.glu, maxGroups),
       });
     };
 
@@ -725,13 +738,25 @@ export class GgufRuntime {
       });
     };
 
-    const attention = (mode: Mode, kCache: GPUBuffer, vCache: GPUBuffer, label: string) => {
+    /** Attention over the cache; with a `window`, over its last `window` positions. */
+    const attention = (
+      mode: Mode,
+      kCache: GPUBuffer,
+      vCache: GPUBuffer,
+      window: number,
+      label: string,
+    ) => {
       const group = c.heads / c.kvHeads;
       if (mode === 'decode') {
         // Chunks of ATTN_CHUNK positions in parallel, one workgroup per KV head
         // serving its query heads; then one merge per query head.
         const pipeline = k.attention(this.kvCache, c.headDim, group);
-        const params = this.uniform(`${label}.params`, [kvDim, splits, { f32: c.attentionScale }]);
+        const params = this.uniform(`${label}.params`, [
+          kvDim,
+          splits,
+          { f32: c.attentionScale },
+          window,
+        ]);
         this.lists.decode.push({
           label,
           pipeline,
@@ -746,7 +771,7 @@ export class GgufRuntime {
           workgroups: [c.kvHeads, splits],
         });
         const combine = k.attnCombine();
-        const combineParams = this.uniform(`${label}.combine.params`, [c.headDim, splits]);
+        const combineParams = this.uniform(`${label}.combine.params`, [c.headDim, splits, window]);
         this.lists.decode.push({
           label: `${label}_combine`,
           pipeline: combine,
@@ -766,6 +791,7 @@ export class GgufRuntime {
           kvDim,
           group,
           { f32: c.attentionScale },
+          window,
         ]);
         this.lists.prefill.push({
           label,
@@ -793,6 +819,7 @@ export class GgufRuntime {
           embedding.rowBytes,
           chunk.firstRow,
           chunk.rows,
+          { f32: c.embedScale },
         ]);
         this.lists[mode].push({
           label: 'embed',
@@ -819,14 +846,20 @@ export class GgufRuntime {
         q: await matrix(`${p}attn_q.weight`),
         k: await matrix(`${p}attn_k.weight`),
         v: await matrix(`${p}attn_v.weight`),
+        qBias: c.qkvBias ? await vector(`${p}attn_q.bias`) : null,
+        kBias: c.qkvBias ? await vector(`${p}attn_k.bias`) : null,
+        vBias: c.qkvBias ? await vector(`${p}attn_v.bias`) : null,
         qNorm: c.qkNorm ? await vector(`${p}attn_q_norm.weight`) : null,
         kNorm: c.qkNorm ? await vector(`${p}attn_k_norm.weight`) : null,
         o: await matrix(`${p}attn_output.weight`),
+        postAttnNorm: c.postNorms ? await vector(`${p}post_attention_norm.weight`) : null,
         ffnNorm: await vector(`${p}ffn_norm.weight`),
         gate: await matrix(`${p}ffn_gate.weight`),
         up: await matrix(`${p}ffn_up.weight`),
         down: await matrix(`${p}ffn_down.weight`),
+        postFfwNorm: c.postNorms ? await vector(`${p}post_ffw_norm.weight`) : null,
       };
+      const window = layerWindow(c, l);
 
       for (const mode of ['decode', 'prefill'] as const) {
         const list = this.lists[mode];
@@ -835,22 +868,42 @@ export class GgufRuntime {
         project(mode, w.q, h, q);
         project(mode, w.k, h, kNew);
         project(mode, w.v, h, vNew);
+        if (w.qBias && w.kBias && w.vBias) {
+          elementwise(mode, k.bias(), [w.qBias, q], qDim, `${p}q_bias`);
+          elementwise(mode, k.bias(), [w.kBias, kNew], kvDim, `${p}k_bias`);
+          elementwise(mode, k.bias(), [w.vBias, vNew], kvDim, `${p}v_bias`);
+        }
         if (w.qNorm && w.kNorm) {
           headNorm(mode, q, c.heads, w.qNorm, `${p}q_norm`);
           headNorm(mode, kNew, c.kvHeads, w.kNorm, `${p}k_norm`);
         }
-        ropeOn(mode, q, c.heads, `${p}rope_q`);
-        ropeOn(mode, kNew, c.kvHeads, `${p}rope_k`);
+        const table = window ? ropeSwa : rope;
+        ropeOn(mode, q, c.heads, table, `${p}rope_q`);
+        ropeOn(mode, kNew, c.kvHeads, table, `${p}rope_k`);
         store(mode, kCache, vCache, `${p}kv_store`);
-        attention(mode, kCache, vCache, `${p}attention`);
-        // The residual adds are fused into the projections that feed them.
-        project(mode, w.o, att, x, true);
+        attention(mode, kCache, vCache, window, `${p}attention`);
+        // The residual adds are fused into the ops that feed them: the projection,
+        // or with Gemma's post-norms, the norm of the projection.
+        if (w.postAttnNorm) {
+          project(mode, w.o, att, h);
+          rmsnorm(list, rows, h, w.postAttnNorm, x, `${p}post_attention_norm`, false, true);
+        } else {
+          project(mode, w.o, att, x, true);
+        }
 
         rmsnorm(list, rows, x, w.ffnNorm, h, `${p}ffn_norm`);
         project(mode, w.gate, h, gate);
         project(mode, w.up, h, up);
-        elementwise(mode, k.swiglu(), [gate, up, act], c.ffn, `${p}swiglu`);
-        project(mode, w.down, act, x, true);
+        const gelu = c.ffnAct === 'gelu';
+        elementwise(mode, k.glu(), [gate, up, act], c.ffn, `${p}${gelu ? 'geglu' : 'swiglu'}`, [
+          gelu ? 1 : 0,
+        ]);
+        if (w.postFfwNorm) {
+          project(mode, w.down, act, h);
+          rmsnorm(list, rows, h, w.postFfwNorm, x, `${p}post_ffw_norm`, false, true);
+        } else {
+          project(mode, w.down, act, x, true);
+        }
       }
     }
 
