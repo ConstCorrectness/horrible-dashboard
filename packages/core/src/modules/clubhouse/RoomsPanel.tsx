@@ -2367,20 +2367,20 @@ export function RoomsPanel() {
             font-size: 0.7rem;
             font-weight: 800;
             letter-spacing: 0.08em;
-            color: var(--text-secondary, #94a3b8);
-            border: 1px solid var(--border, #2e333d);
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
             padding: 0.15rem 0.5rem;
           }
 
           .ch-reaction-gif-toggle[aria-expanded='true'] {
-            color: var(--accent, #6ea8fe);
-            border-color: var(--accent, #6ea8fe);
+            color: var(--accent);
+            border-color: var(--accent);
           }
 
           .ch-gif-picker {
             margin-top: 0.4rem;
             background: rgba(0, 0, 0, 0.25);
-            border: 1px solid var(--border, #2e333d);
+            border: 1px solid var(--border);
             border-radius: 10px;
             padding: 0.5rem;
           }
@@ -2393,10 +2393,10 @@ export function RoomsPanel() {
 
           .ch-gif-search-input {
             flex: 1;
-            background: #14161a;
-            border: 1px solid var(--border, #2e333d);
+            background: var(--bg-inset);
+            border: 1px solid var(--border);
             border-radius: 8px;
-            color: #fff;
+            color: var(--text);
             padding: 0 0.6rem;
             font-size: 0.85rem;
           }
@@ -2404,7 +2404,7 @@ export function RoomsPanel() {
           .ch-gif-error {
             margin: 0.4rem 0 0;
             font-size: 0.75rem;
-            color: var(--text-secondary, #94a3b8);
+            color: var(--text-secondary);
           }
 
           .ch-gif-results {
@@ -2422,12 +2422,12 @@ export function RoomsPanel() {
             border-radius: 8px;
             overflow: hidden;
             cursor: pointer;
-            background: #000;
+            background: var(--bg-inset);
             aspect-ratio: 1;
           }
 
           .ch-gif-result:hover {
-            border-color: var(--accent, #6ea8fe);
+            border-color: var(--accent);
           }
 
           .ch-gif-result img {
@@ -2568,7 +2568,7 @@ export function RoomsPanel() {
             width: 96px;
             height: auto;
             border-radius: 6px;
-            border-top: 2px solid var(--accent, #6ea8fe);
+            border-top: 2px solid var(--accent);
           }
 
           @keyframes ch-reaction-float {

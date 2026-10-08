@@ -83,7 +83,12 @@ const BASELINE: Record<string, number> = {
   // `--bg-raised` and `--border`, the case this file calls the worst of all), and
   // the eight around them went with them. Lowered rather than left at 801: a
   // ratchet that keeps slack lets the next regression back in unnoticed.
-  excluded: 793,
+  // 793 → 783: the clubhouse GIF picker and hassault-web's GameMenu pushed it to
+  // 808, almost all with `var(--token, #hex)` fallbacks the token guard makes dead
+  // (GameMenu's `#6ea8fe` was not even assault-web's accent, which is gold). The
+  // GIF search box had hardcoded midnight's `--bg` as `#14161a`; it now takes the
+  // input spec's `--bg-inset` / `--text`. GameMenu's six older fallbacks went too.
+  excluded: 783,
   // 6 → 11, raised deliberately (2026-10-01): the visualizer's `html` mode. Its
   // demo document and the iframe's white backdrop render inside a sandboxed
   // opaque-origin frame, where the app's custom properties do not resolve — a
