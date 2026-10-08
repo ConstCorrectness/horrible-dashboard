@@ -887,6 +887,24 @@
   min-width: 0;
   min-height: 0;
   overflow: auto;
+  /* Only the active tab is mounted, so this plays on every tab switch, on a
+     dock's tool coming up and on a pane opening: the content settles in rather
+     than snapping. Opacity alone — a transform, even mid-animation, would make
+     this the containing block of every `position: fixed` menu inside the pane. */
+  animation: frame-pane-in var(--dur-enter, 180ms) var(--ease-out, ease-out);
+}
+@keyframes frame-pane-in {
+  from {
+    opacity: 0;
+  }
+}
+:root[data-motion='off'] .frame-pane-host {
+  animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .frame-pane-host {
+    animation: none;
+  }
 }
 .frame-pane-missing {
   padding: 16px;

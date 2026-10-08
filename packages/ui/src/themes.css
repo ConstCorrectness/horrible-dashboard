@@ -569,6 +569,13 @@
   --dur-slow: 320ms;
   --ease-standard: ease;
   --ease-entrance: cubic-bezier(0.22, 0.61, 0.36, 1);
+  /* Window motion (desktop/window-motion.ts mirrors these): entrances settle hard
+     and fast, exits accelerate away faster still, geometry slides. */
+  --dur-enter: 180ms;
+  --dur-exit: 130ms;
+  --dur-move: 220ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
   --stagger-step: 26ms;
 
   /* The height every inline control settles on. A `<select>`, a text input and a

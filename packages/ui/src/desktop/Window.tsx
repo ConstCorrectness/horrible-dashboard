@@ -14,7 +14,7 @@
  *    in-flight rect is local state; dispatching per frame would bump `revision` a
  *    hundred times per drag and drive the autosave debounce into a write loop.
  */
-import { memo, useCallback, useRef, useState, useSyncExternalStore } from 'react';
+import { memo, useCallback, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   clampRect,
   closePaneGuarded,
@@ -35,6 +35,15 @@ import {
 
 import { useHorizontalWheel } from '../hooks/useHorizontalWheel';
 import { PaneWithRegions } from '../layout/Region';
+import {
+  animateGeometry,
+  animateMinimize,
+  animateRestore,
+  animateWindowIn,
+  layoutBox,
+  taskbarButtonRect,
+  type Box,
+} from './window-motion';
 import type { DragState } from './WindowLayer';
 
 /** The eight resize grips, as [class suffix, x-edge, y-edge]. */
@@ -54,6 +63,7 @@ export const DesktopWindow = memo(function DesktopWindow({
   focused,
   presented,
   mergeTarget,
+  animateEntry,
   bounds,
   onDragMove,
   onDragEnd,
@@ -64,6 +74,8 @@ export const DesktopWindow = memo(function DesktopWindow({
   presented: boolean;
   /** True while another window is being dragged over THIS one's tab strip. */
   mergeTarget: boolean;
+  /** Opened just now (not restored with its desktop): play the entrance. */
+  animateEntry: boolean;
   bounds: () => DOMRect | null;
   onDragMove: (windowId: string, client: { x: number; y: number }) => DragState | null;
   onDragEnd: () => void;
@@ -222,6 +234,36 @@ export const DesktopWindow = memo(function DesktopWindow({
   const minimized = win.mode === 'minimized';
   const maximized = win.mode === 'maximized' || win.snap === 'max';
 
+  // Motion (window-motion.ts). After every render, compare what is laid out now
+  // with what was laid out before, and animate the difference: the entrance on
+  // the first render, minimize/restore when that flips, and otherwise any change
+  // of geometry the pointer did not make — maximize, snap, restore-down, a tiled
+  // neighbour. A drag needs no exclusion: its last frame and its committed rect
+  // are the same box, so the commit measures as no change.
+  const elRef = useRef<HTMLDivElement>(null);
+  const shown = useRef<{ box: Box; minimized: boolean; presented: boolean } | null>(null);
+  useLayoutEffect(() => {
+    const el = elRef.current;
+    if (!el) return;
+    const box = layoutBox(el);
+    const before = shown.current;
+    shown.current = { box, minimized, presented };
+    if (!before) {
+      if (animateEntry && !minimized && !presented) animateWindowIn(el);
+      return;
+    }
+    // Presentation swaps the window to `position: fixed`; there is no box to
+    // slide between, and fullscreen should simply be there.
+    if (presented || before.presented) return;
+    if (minimized !== before.minimized) {
+      const button = taskbarButtonRect(active?.instanceId);
+      if (minimized) animateMinimize(el, button);
+      else animateRestore(el, button);
+      return;
+    }
+    if (!minimized && !live) animateGeometry(el, before.box, box);
+  });
+
   // Minimizing hides this tree; it never renders a *different* one.
   //
   // An early `return` with its own JSX was the first attempt and it silently
@@ -243,6 +285,7 @@ export const DesktopWindow = memo(function DesktopWindow({
       ]
         .filter(Boolean)
         .join(' ')}
+      ref={elRef}
       aria-hidden={minimized || undefined}
       data-window-id={win.id}
       // Presented geometry is `position: fixed` in the stylesheet, so the inline

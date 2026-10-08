@@ -52,6 +52,7 @@ import {
 const NAVS = ['left', 'right', 'up', 'down'] as const;
 import { DEFAULT_DESKTOP_MODE_KEY, OOBE_COMPLETE_KEY } from './constants';
 import { DesktopModeSection } from './DesktopModeSection';
+import { ANIMATIONS_SETTING_KEY } from './window-motion';
 import {
   DEFAULT_TASKBAR,
   mergeTaskbarConfig,
@@ -309,6 +310,14 @@ export const desktopModule: ModuleManifest = {
         'The id of the desktop to open when the app starts — `desktop` is the empty floating one. Use `last` to reopen whichever desktop you were on. Only applies with Workspaces on; otherwise the app always opens the floating desktop. Whatever you pick, every other desktop keeps its arrangement.',
       type: 'string',
       default: DEFAULT_BOOT_WORKSPACE,
+    },
+    {
+      key: ANIMATIONS_SETTING_KEY,
+      title: 'Animate windows',
+      description:
+        'Windows open, close, minimize to the taskbar and slide into maximized or snapped positions instead of jumping there, and a pane fades in when its tab is picked. Off makes every change instant. Also off whenever the system asks for reduced motion.',
+      type: 'boolean',
+      default: true,
     },
     {
       key: OOBE_COMPLETE_KEY,
