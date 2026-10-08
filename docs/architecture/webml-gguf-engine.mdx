@@ -4,11 +4,11 @@ sidebar_label: WebML GGUF engine (plan)
 
 # WebML Phase 6: our own WGSL engine for GGUF
 
-**Status: 6.0–6.4 built, and 6.4's exit checks pass on an Intel UHD iGPU
-(see [6.4](#64-fast)). Real-model parity with llama.cpp holds for SmolLM2-360M
+**Status: 6.0–6.5 built. 6.4's and 6.5's exit checks pass on an Intel UHD iGPU
+(see [6.4](#64-fast), [6.5](#65-this-nodes-ggufs-in-the-window)). Real-model parity with llama.cpp holds for SmolLM2-360M
 Q4_K_M, Qwen3-1.7B Q4_K_M, Qwen3-0.6B Q8_0 and Llama-3.2-1B Q8_0. Still open from
 earlier stages: the `browser`-provider agent round with a Hermes tool call (6.3).
-6.5 onward not started.** This is the plan [WebML](../modules/webml.mdx) said
+6.6 not started.** This is the plan [WebML](../modules/webml.mdx) said
 Phase 6 needed before any code was written. It is split into stages; each one ships
 on its own and ends with a check that has to pass before the next starts. Nothing
 in Phases 0–5 is replaced. The transformers.js worker stays as the engine for ONNX
@@ -620,6 +620,51 @@ A planted high-bit slip fails the matvec and matmul tests.
 
 **Exit:** a model fine-tuned and converted on this node chats in the playground
 with nothing fetched from the Hub.
+
+**Built (2026-10-08):**
+
+- **The route:** `GET /api/llamacpp/models/file?path=…` serves a catalog GGUF
+  through Starlette's `FileResponse`, which honours `Range`. The boundary is
+  `/models/layers`'s: `catalog.find_model` must list the path, so an arbitrary file,
+  or a path that walks out of the managed directory, gets a 404.
+  - A lookup the catalog vouched for is kept for 60 s. A load is hundreds of Range
+    reads, and `find_model` rescans every model directory on each call.
+  - CORS now exposes `Content-Range`, because the desktop webview is a different
+    origin from the backend.
+- **The id:** `gguf-node:<path>`, beside the Hub's `gguf:<repo>/<file>`. Both run on
+  the GGUF worker.
+  - The worker cannot know the backend's origin, so the window passes the file's
+    URL with the load: `LoadRequest.url`, from `WebmlEngine`'s `sourceUrl` option.
+    Core sets that option to the route.
+  - There is no `.gguf` check on the path, because Ollama's blobs have none.
+- **The worker** checks the header over `Range`, then uploads the tensors straight
+  from the route. The reads are the "download" progress the playground shows.
+- **Run in this window** appears on the llama.cpp pane's model rows and on the
+  training convert card's result, through the webml module's `runNodeGguf`. It is
+  offered only when:
+  - the architecture is one the engine runs;
+  - the file is not a LoRA adapter;
+  - the app is not hosted. A hosted backend is a remote machine, so every load would
+    pull the whole file across the network.
+- **Tests:**
+  - Backend: Range reads, refused paths, the exposed header.
+  - Unit: id round-trips, routing, the URL handed to the worker.
+  - Kernel project: the real worker streams the tiny model from an HTTP URL and
+    reproduces llama.cpp's continuation, storing nothing in OPFS.
+- **Exit, in the running app** (`pnpm dev`, Playwright driving Edge on the iGPU):
+  - The node already held `qwen3-0-6b-sft-merged-q8_0.gguf`, a Qwen3-0.6B
+    fine-tune trained and converted here. "Run in this window" on its row loaded it
+    in 7.9 s, in 323 Range reads from the node.
+  - It answered at 19 tok/s, TTFT 219 ms.
+  - The page made **no request to the Hub**. The LoRA adapter's row offers no button.
+
+**Changed from the plan:**
+
+- **No OPFS copy.** The plan said OPFS would still cache node files. It does not:
+  the node is this machine, and a second copy of a file already on its disk is
+  waste. Loading streams from local disk over loopback in seconds.
+- **No `source` field.** The id and `LoadRequest.url` carry the source, as 6.2
+  already decided for Hub files.
 
 ### 6.6 Later, each optional
 

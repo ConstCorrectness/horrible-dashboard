@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
@@ -200,6 +201,40 @@ async def model_layers(path: str) -> LayerPlanResponse:
         raise HTTPException(status_code=404, detail="not a model in the catalog")
     plan = await asyncio.to_thread(offload.layer_plan, path)
     return LayerPlanResponse(**plan)
+
+
+#: How long a path the catalog vouched for stays vouched for. The in-browser
+#: engine loads a model as dozens of 16 MB Range reads, and `find_model` rescans
+#: every model directory (Ollama's and LM Studio's included) on each call.
+_SERVE_TTL_S = 60.0
+_servable: dict[str, tuple[float, Path]] = {}
+
+
+def _servable_model(path: str) -> Path | None:
+    now = time.monotonic()
+    hit = _servable.get(path)
+    if hit and now - hit[0] < _SERVE_TTL_S and hit[1].is_file():
+        return hit[1]
+    model = catalog.find_model(path)
+    if model is None:
+        _servable.pop(path, None)
+        return None
+    _servable[path] = (now, model.path)
+    return model.path
+
+
+@router.get("/models/file")
+async def model_file(path: str) -> FileResponse:
+    """One catalog GGUF's bytes, honouring `Range`: how the window's WGSL engine
+    runs a model this node already has (WebML 6.5), with nothing fetched from the Hub.
+
+    The same boundary as `/models/layers`: only a file the catalog lists, never an
+    arbitrary path — this streams whatever it is pointed at.
+    """
+    served = await asyncio.to_thread(_servable_model, path)
+    if served is None:
+        raise HTTPException(status_code=404, detail="not a model in the catalog")
+    return FileResponse(served, media_type="application/octet-stream")
 
 
 @router.post("/models/download")
@@ -547,13 +582,17 @@ def get_record_matrix(
     trace = _require(trace_id)
     record = _record_at(trace, index)
     try:
-        data = stepper.matrix(trace, record, head=head, max_cols=max(8, min(cols, 1024)))
+        data = stepper.matrix(
+            trace, record, head=head, max_cols=max(8, min(cols, 1024))
+        )
     except stepper.StepperError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return MatrixResponse(record=record.to_dict(), **data.to_dict())
 
 
-@router.get("/traces/{trace_id}/record/{index}/heads", response_model=HeadSummaryResponse)
+@router.get(
+    "/traces/{trace_id}/record/{index}/heads", response_model=HeadSummaryResponse
+)
 def get_record_heads(trace_id: str, index: int) -> HeadSummaryResponse:
     """Per-head entropy / self / first-token weight for one attention record."""
     trace = _require(trace_id)
@@ -568,7 +607,9 @@ def get_record_heads(trace_id: str, index: int) -> HeadSummaryResponse:
     )
 
 
-@router.get("/traces/{trace_id}/layer/{layer}/delta", response_model=ResidualDeltaResponse)
+@router.get(
+    "/traces/{trace_id}/layer/{layer}/delta", response_model=ResidualDeltaResponse
+)
 def get_residual_delta(
     trace_id: str, layer: int, passIndex: int = 0
 ) -> ResidualDeltaResponse:

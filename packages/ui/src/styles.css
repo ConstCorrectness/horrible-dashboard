@@ -8505,6 +8505,12 @@ button.agent-model-option.is-selected .agent-model-option-name {
   align-self: flex-start;
 }
 
+.llama-model-actions {
+  display: flex;
+  gap: 0.4rem;
+  align-self: flex-start;
+}
+
 .llama-logs pre {
   margin: 0;
   max-height: 14rem;

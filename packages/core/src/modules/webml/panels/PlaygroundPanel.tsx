@@ -308,7 +308,8 @@ export function PlaygroundPanel() {
             )}
             {state.kind === 'ready' && (
               <span className="webml-meta">
-                ready · {state.model.split('/').pop()} ·{' '}
+                {/* A node GGUF's id is a path, maybe a Windows one: name the file. */}
+                ready · {state.model.split(/[\\/]/).pop()} ·{' '}
                 {state.engine === 'gguf'
                   ? `${state.quant ?? 'GGUF'} · ${state.contextLength?.toLocaleString() ?? '?'} context`
                   : state.dtype}{' '}

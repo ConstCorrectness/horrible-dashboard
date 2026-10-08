@@ -5,14 +5,17 @@
  * picks this worker for `gguf:` model ids.
  *
  * One model at a time, one generation at a time (a second `generate` while one
- * runs is refused, not queued). Weights come from the OPFS store, downloaded from
- * the Hub on first load after the header has been checked.
+ * runs is refused, not queued). A Hub GGUF's weights come from the OPFS store,
+ * downloaded on first load after the header has been checked. A node GGUF
+ * (`gguf-node:`) is read straight from the node's file route, a tensor at a time,
+ * with nothing stored.
  */
 import { requestWebmlDevice, type WebmlDevice } from '../gpu/device';
 import { readGgufHeader } from '../gguf/parse';
 import { GgufSession, preflight } from '../gguf/session';
 import { blobSource, HttpSource, hfResolveUrl } from '../gguf/source';
-import { downloadGguf, openGguf, parseGgufModelId } from '../gguf/store';
+import type { ByteSource } from '../gguf/parse';
+import { downloadGguf, openGguf, parseGgufModelId, parseNodeGgufModelId } from '../gguf/store';
 import type { GenerateRequest, LoadRequest, WorkerEvent, WorkerRequest } from '../protocol';
 
 const post = (event: WorkerEvent) => (self as unknown as Worker).postMessage(event);
@@ -60,6 +63,11 @@ async function load(req: LoadRequest): Promise<void> {
   }
   await unload(false);
   if (req.device !== 'webgpu') throw new Error('GGUF models run on WebGPU only');
+  const node = parseNodeGgufModelId(req.model);
+  if (node) {
+    await loadFromNode(req, node.path);
+    return;
+  }
   const ref = parseGgufModelId(req.model);
   if (!ref) throw new Error(`not a GGUF model id: ${req.model}`);
   const started = performance.now();
@@ -92,8 +100,45 @@ async function load(req: LoadRequest): Promise<void> {
 
   // Uploading weights and compiling pipelines: the client shows this as warm-up.
   post({ type: 'progress', status: 'warmup', file: 'gpu', loaded: 0, total: 0 });
-  const session = await GgufSession.open(await device(), blobSource(file), {
+  await open(req, blobSource(file), started);
+}
+
+/**
+ * A GGUF this node already has: the header checked over `Range`, then the tensors
+ * read from the node as they are uploaded. The read is the "download" the client
+ * shows; nothing is stored, since the file is already on this machine's disk.
+ */
+async function loadFromNode(req: LoadRequest, path: string): Promise<void> {
+  if (!req.url) throw new Error(`no address for ${path}: the window sent no URL for it`);
+  const started = performance.now();
+  const remote = new HttpSource(req.url);
+  const check = preflight(await readGgufHeader(remote));
+  if (!check.ok) throw new Error(`cannot run this model: ${check.reasons.join('; ')}`);
+  const name = path.split(/[\\/]/).pop() ?? path;
+  let lastSent = 0;
+  await open(req, remote, started, (n, total) => {
+    const now = performance.now();
+    if (n < total && now - lastSent < 100) return;
+    lastSent = now;
+    post({
+      type: 'progress',
+      status: n < total ? 'progress' : 'done',
+      file: name,
+      loaded: n,
+      total,
+    });
+  });
+}
+
+async function open(
+  req: LoadRequest,
+  source: ByteSource,
+  started: number,
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<void> {
+  const session = await GgufSession.open(await device(), source, {
     contextLength: req.contextLength,
+    onProgress,
   });
   loaded = { model: req.model, contextLength: req.contextLength, session };
   post({

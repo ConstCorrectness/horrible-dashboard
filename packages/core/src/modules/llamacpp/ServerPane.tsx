@@ -8,6 +8,7 @@ import { Meter } from '../../viz/Meter';
 import { MachineBand } from './MachineBand';
 import { QuantScatter } from './QuantScatter';
 import { getHardware, refreshHardware, type Hardware } from '../hardware/api';
+import { canRunNodeGguf, runNodeGguf } from '../webml';
 import {
   deleteModel,
   downloadModel,
@@ -756,10 +757,24 @@ function ModelsSection({ data, refresh }: { data: ModelsResponse | null; refresh
                     {m.path}
                   </div>
                   {m.error && <div className="llama-error">{m.error}</div>}
-                  {m.deletable && (
-                    <button className="llama-danger" onClick={() => void remove(m.path)}>
-                      Delete
-                    </button>
+                  {((!m.isAdapter && canRunNodeGguf(m.architecture)) || m.deletable) && (
+                    <div className="llama-model-actions">
+                      {/* The window's own GPU, through the WebML engine: no server to
+                          start, nothing fetched from the Hub (WebML 6.5). */}
+                      {!m.isAdapter && canRunNodeGguf(m.architecture) && (
+                        <button
+                          onClick={() => void runNodeGguf(m.path)}
+                          title="Load this file into the WebML engine and chat with it in the playground"
+                        >
+                          Run in this window
+                        </button>
+                      )}
+                      {m.deletable && (
+                        <button className="llama-danger" onClick={() => void remove(m.path)}>
+                          Delete
+                        </button>
+                      )}
+                    </div>
                   )}
                 </li>
               ))}

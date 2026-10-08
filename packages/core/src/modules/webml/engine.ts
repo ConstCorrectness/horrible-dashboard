@@ -10,17 +10,27 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 
 import {
   listCachedModels,
+  parseNodeGgufModelId,
   probeWebGpu,
   WebmlEngine,
+  workerFor,
   type CachedModel,
   type EngineState,
   type GpuReport,
 } from '@horrible/webml';
 
+import { apiUrl } from '../../origin';
+
 let engine: WebmlEngine | null = null;
 
+/** Where a `gguf-node:` model's bytes are: this node's catalog file route. */
+export function nodeGgufUrl(model: string): string | null {
+  const ref = parseNodeGgufModelId(model);
+  return ref ? apiUrl(`/api/llamacpp/models/file?path=${encodeURIComponent(ref.path)}`) : null;
+}
+
 export function webmlEngine(): WebmlEngine {
-  engine ??= new WebmlEngine();
+  engine ??= new WebmlEngine(workerFor, { sourceUrl: nodeGgufUrl });
   return engine;
 }
 

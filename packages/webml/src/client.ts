@@ -5,7 +5,7 @@
  *
  * The worker is created on the first `load`, so constructing an engine is free.
  */
-import { isGgufModelId } from './gguf/store';
+import { isGgufModelId, parseNodeGgufModelId } from './gguf/store';
 import type {
   Device,
   Dtype,
@@ -93,9 +93,20 @@ export function workerFor(kind: EngineKind): Worker {
   return kind === 'gguf' ? ggufWorker() : defaultWorker();
 }
 
-/** Which engine runs `model`: `gguf:` ids are GGUF files, anything else an ONNX repo. */
+/**
+ * Which engine runs `model`: `gguf:` (Hub) and `gguf-node:` (this node) ids are GGUF
+ * files, anything else an ONNX repo.
+ */
 export function engineFor(model: string): EngineKind {
-  return isGgufModelId(model) ? 'gguf' : 'onnx';
+  return isGgufModelId(model) || parseNodeGgufModelId(model) ? 'gguf' : 'onnx';
+}
+
+export interface WebmlEngineOptions {
+  /**
+   * Where a `gguf-node:` model's bytes are: the window knows the backend's origin,
+   * the worker does not. Without it, node models cannot load.
+   */
+  sourceUrl?: (model: string) => string | null;
 }
 
 let seq = 0;
@@ -109,7 +120,10 @@ export class WebmlEngine {
   private loadWaiter: { resolve: () => void; reject: (err: Error) => void } | null = null;
   private readonly pending = new Map<string, Pending>();
 
-  constructor(private readonly createWorker: (kind: EngineKind) => Worker = workerFor) {}
+  constructor(
+    private readonly createWorker: (kind: EngineKind) => Worker = workerFor,
+    private readonly options: WebmlEngineOptions = {},
+  ) {}
 
   getState = (): EngineState => this.state;
 
@@ -151,7 +165,14 @@ export class WebmlEngine {
     this.set({ kind: 'loading', model, dtype, phase: 'download', files: {} });
     return new Promise<void>((resolve, reject) => {
       this.loadWaiter = { resolve, reject };
-      this.send({ type: 'load', model, dtype, device, contextLength: options.contextLength });
+      this.send({
+        type: 'load',
+        model,
+        dtype,
+        device,
+        contextLength: options.contextLength,
+        url: this.options.sourceUrl?.(model) ?? undefined,
+      });
     });
   }
 

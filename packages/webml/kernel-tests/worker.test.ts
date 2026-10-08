@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { listCachedModels } from '../src/cache';
 import { WebmlEngine, engineFor } from '../src/client';
-import { deleteGguf, downloadGguf } from '../src/gguf/store';
+import { deleteGguf, downloadGguf, nodeGgufModelId, parseNodeGgufModelId } from '../src/gguf/store';
 import f32Expected from './fixtures/tiny-llama-f32.expected.json';
 import f32Url from './fixtures/tiny-llama-f32.gguf?url';
 import { fileServer, fixtureBytes } from './harness';
@@ -96,5 +96,51 @@ describe('the GGUF worker through WebmlEngine', () => {
 
   it('refuses a model id that is not in the store and not a Hub file', async () => {
     await expect(engine.load('gguf:bad', 'q4')).rejects.toThrow(/not a GGUF model id/);
+  });
+});
+
+/**
+ * 6.5: a GGUF this node already has. The window resolves where its bytes are (the
+ * node's `/api/llamacpp/models/file`; here the test server, which honours `Range`
+ * the same way) and the worker reads it from there, storing nothing in OPFS.
+ */
+describe('a node GGUF through WebmlEngine', () => {
+  const NODE_PATH = 'C:\\models\\trained\\tiny-llama-f32.gguf';
+  const NODE_ID = nodeGgufModelId(NODE_PATH);
+  const urls: string[] = [];
+  const engine = new WebmlEngine(undefined, {
+    sourceUrl: (model) => {
+      urls.push(model);
+      return parseNodeGgufModelId(model) ? new URL(f32Url, location.href).href : null;
+    },
+  });
+
+  afterAll(() => engine.terminate());
+
+  it("routes gguf-node: ids to the GGUF engine and streams llama.cpp's continuation", async () => {
+    expect(engineFor(NODE_ID)).toBe('gguf');
+    expect(parseNodeGgufModelId(NODE_ID)?.path).toBe(NODE_PATH);
+
+    await engine.load(NODE_ID, 'q4');
+    expect(urls).toEqual([NODE_ID]);
+    expect(engine.getState()).toMatchObject({ kind: 'ready', model: NODE_ID, quant: 'F32' });
+
+    const result = await engine.generate({
+      messages: [{ role: 'user', content: text(f32Expected.prompt) }],
+      temperature: 0,
+      maxNewTokens: f32Expected.generated.length,
+    });
+    expect(result.text).toBe(text(f32Expected.generated));
+    // Read from the node, never copied into OPFS.
+    expect((await listCachedModels()).some((m) => m.id === NODE_ID)).toBe(false);
+  });
+
+  it('refuses a node model when the window gave no address for it', async () => {
+    const bare = new WebmlEngine();
+    try {
+      await expect(bare.load(NODE_ID, 'q4')).rejects.toThrow(/no address/);
+    } finally {
+      bare.terminate();
+    }
   });
 });

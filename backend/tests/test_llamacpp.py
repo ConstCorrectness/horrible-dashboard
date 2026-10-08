@@ -631,3 +631,59 @@ def test_llamacpp_is_an_openai_dialect_provider() -> None:
     assert info.dialect == "openai"
     assert info.can_spawn is True
     assert info.can_pull is False
+
+
+# ── serving a catalog GGUF to the window (WebML 6.5) ─────────────────────────
+
+
+def test_model_file_route_serves_byte_ranges_of_a_catalog_model(data_dir: Path) -> None:
+    """The in-browser engine reads a model as Range requests: a header probe, then
+    the tensors piece by piece. Each must come back as exactly the bytes asked for."""
+    target = catalog.models_root() / "acme--tiny" / "tiny.gguf"
+    _real_gguf(target)
+    data = target.read_bytes()
+    with TestClient(app) as client:
+        part = client.get(
+            "/api/llamacpp/models/file",
+            params={"path": str(target)},
+            headers={"Range": "bytes=4-19"},
+        )
+        whole = client.get("/api/llamacpp/models/file", params={"path": str(target)})
+    assert part.status_code == 206
+    assert part.content == data[4:20]
+    assert part.headers["content-range"] == f"bytes 4-19/{len(data)}"
+    assert whole.status_code == 200
+    assert whole.content == data
+
+
+def test_model_file_route_refuses_paths_outside_the_catalog(data_dir: Path) -> None:
+    """It streams whatever it is pointed at, so it serves only what the catalog
+    lists — not an arbitrary file, and not one reached by walking out of the
+    managed directory."""
+    outside = data_dir / "elsewhere" / "someone-elses.gguf"
+    _real_gguf(outside)
+    traversal = catalog.models_root() / ".." / "elsewhere" / "someone-elses.gguf"
+    with TestClient(app) as client:
+        for path in (outside, traversal, data_dir / "settings.json"):
+            response = client.get(
+                "/api/llamacpp/models/file", params={"path": str(path)}
+            )
+            assert response.status_code == 404, path
+
+
+def test_model_file_route_exposes_content_range_to_the_desktop_webview(
+    data_dir: Path,
+) -> None:
+    """The desktop webview is a different origin from the backend: without the
+    header exposed, script cannot learn the file's size from a range response."""
+    target = catalog.models_root() / "acme--tiny" / "tiny.gguf"
+    _real_gguf(target)
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/llamacpp/models/file",
+            params={"path": str(target)},
+            headers={"Range": "bytes=0-3", "Origin": "tauri://localhost"},
+        )
+    assert response.status_code == 206
+    exposed = response.headers["access-control-expose-headers"].lower()
+    assert "content-range" in exposed

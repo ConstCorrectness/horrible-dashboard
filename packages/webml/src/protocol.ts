@@ -34,9 +34,16 @@ export interface LoadRequest {
   type: 'load';
   /**
    * A Hub model id (ONNX, transformers.js), or `gguf:<owner>/<repo>/<file.gguf>`
-   * for a GGUF file run by our own WGSL engine (gguf.worker.ts).
+   * for a GGUF file run by our own WGSL engine (gguf.worker.ts), or
+   * `gguf-node:<path>` for a GGUF this node already has.
    */
   model: string;
+  /**
+   * `gguf-node:` only: where to Range-read the file (the node's
+   * `/api/llamacpp/models/file`). The worker cannot know the backend's origin, so
+   * the window resolves it (`WebmlEngine`'s `sourceUrl`).
+   */
+  url?: string;
   /** ONNX weight variant. A GGUF's quantization is in the file; this is echoed back. */
   dtype: Dtype;
   device: Device;

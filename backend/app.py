@@ -349,6 +349,10 @@ app.add_middleware(
     allow_origins=list(origins.UI_ORIGINS),
     allow_methods=["*"],
     allow_headers=["*"],
+    # Range reads (the window's GGUF engine on `/api/llamacpp/models/file`) learn the
+    # file's size from Content-Range, which a cross-origin page (the desktop webview)
+    # can only read when it is exposed.
+    expose_headers=["Content-Range", "Accept-Ranges"],
 )
 
 # Observe every inbound /api request (metadata only) — see modules/telemetry.

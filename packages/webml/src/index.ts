@@ -34,6 +34,7 @@ export {
   engineFor,
   loadTotals,
   type EngineState,
+  type WebmlEngineOptions,
   type FileProgress,
   type GenerateHandlers,
   type GenerateOptions,
@@ -44,8 +45,11 @@ export {
   ggufModelId,
   isGgufModelId,
   parseGgufModelId,
+  nodeGgufModelId,
+  parseNodeGgufModelId,
   listGgufs,
   deleteGguf,
   type StoredGguf,
 } from './gguf/store';
 export { listRepoGgufs, inspectHubGguf, type HubGguf, type GgufInspection } from './gguf/hub';
+export { SUPPORTED_ARCHS } from './gguf/arch';

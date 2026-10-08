@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { Button } from '../../../Primitives';
 import { registry } from '../../../registry';
-import { startServer } from '../../llamacpp/api';
+import { getLlamaModels, startServer } from '../../llamacpp/api';
+import { canRunNodeGguf, runNodeGguf } from '../../webml';
 import { usePaneParams } from '../../../panes';
 import { lastProjectId } from '../last-project';
 import { DatasetPicker } from '../../datasets/panels/DatasetPicker';
@@ -169,6 +170,25 @@ function ConvertCard({ projectId }: { projectId: string }) {
    */
   const [produced, setProduced] = useState<{ path: string; servable: boolean } | null>(null);
   const [serving, setServing] = useState(false);
+  /** The produced file runs in the window's WebML engine (its architecture is one it knows). */
+  const [windowRunnable, setWindowRunnable] = useState(false);
+
+  // The conversion reports a path, not an architecture; the catalog has read the
+  // header by now, so ask it.
+  useEffect(() => {
+    setWindowRunnable(false);
+    if (!produced?.servable) return;
+    let live = true;
+    void getLlamaModels()
+      .then((res) => {
+        const entry = res.models.find((m) => m.path === produced.path);
+        if (live) setWindowRunnable(!!entry && canRunNodeGguf(entry.architecture));
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [produced]);
 
   const refresh = useCallback(() => {
     void listCheckpoints(projectId)
@@ -318,8 +338,14 @@ function ConvertCard({ projectId }: { projectId: string }) {
               <Button size="sm" onClick={score}>
                 Score it
               </Button>
+              {windowRunnable && (
+                <Button size="sm" onClick={() => void runNodeGguf(produced.path)}>
+                  Run in this window
+                </Button>
+              )}
               <span style={{ ...dim, fontSize: 11 }}>
-                Serve it locally, then sweep it against its base in Evals.
+                Serve it locally, then sweep it against its base in Evals
+                {windowRunnable ? ' — or chat with it on this window’s GPU' : ''}.
               </span>
             </div>
           )}
@@ -362,7 +388,9 @@ function ShapeVerdict({ shape }: { shape: DatasetShape }) {
         <strong style={{ letterSpacing: '0.08em', textTransform: 'uppercase', fontSize: 10 }}>
           {shape.certain ? shape.format : `${shape.format}?`}
         </strong>
-        {shape.adopted && <span style={{ ...dim, marginLeft: '0.4rem' }}>mapped automatically</span>}
+        {shape.adopted && (
+          <span style={{ ...dim, marginLeft: '0.4rem' }}>mapped automatically</span>
+        )}
       </div>
       <div style={dim}>{shape.reason}</div>
       {ok && mapped.length > 0 && (

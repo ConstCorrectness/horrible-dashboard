@@ -1,7 +1,8 @@
 /** WebmlEngine's routing between the two workers, with fake workers. */
 import { describe, expect, it } from 'vitest';
 
-import { WebmlEngine } from '../client';
+import { WebmlEngine, type WebmlEngineOptions } from '../client';
+import { nodeGgufModelId, parseGgufModelId, parseNodeGgufModelId } from '../gguf/store';
 import type { EngineKind, WorkerEvent, WorkerRequest } from '../protocol';
 
 class FakeWorker extends EventTarget {
@@ -21,13 +22,13 @@ class FakeWorker extends EventTarget {
   }
 }
 
-function setup() {
+function setup(options: WebmlEngineOptions = {}) {
   const workers: FakeWorker[] = [];
   const engine = new WebmlEngine((kind) => {
     const w = new FakeWorker(kind);
     workers.push(w);
     return w as unknown as Worker;
-  });
+  }, options);
   return { workers, engine };
 }
 
@@ -89,5 +90,39 @@ describe('WebmlEngine routing', () => {
     void first.catch(() => undefined); // superseded by the second load
     expect(workers).toHaveLength(1);
     expect(workers[0].sent.filter((r) => r.type === 'load')).toHaveLength(2);
+  });
+});
+
+describe('node GGUFs (gguf-node:)', () => {
+  const PATH = 'D:\\models\\trained\\tiny-Q8_0.gguf';
+  const NODE = nodeGgufModelId(PATH);
+
+  it('round-trips a path, Windows or not, and is not a Hub id', () => {
+    expect(parseNodeGgufModelId(NODE)).toEqual({ path: PATH });
+    // Ollama's blobs have no extension.
+    expect(parseNodeGgufModelId(nodeGgufModelId('/x/blobs/sha256-ab12'))).toEqual({
+      path: '/x/blobs/sha256-ab12',
+    });
+    expect(parseNodeGgufModelId('gguf-node:')).toBeNull();
+    expect(parseNodeGgufModelId(GGUF)).toBeNull();
+    expect(parseGgufModelId(NODE)).toBeNull();
+  });
+
+  it('runs on the GGUF worker, with the URL the window resolved', () => {
+    const asked: string[] = [];
+    const { workers, engine } = setup({
+      sourceUrl: (model) => {
+        asked.push(model);
+        return parseNodeGgufModelId(model) ? '/api/llamacpp/models/file?path=x' : null;
+      },
+    });
+    void engine.load(NODE, 'q4f16');
+    expect(workers.map((w) => w.kind)).toEqual(['gguf']);
+    expect(workers[0].sent[0]).toMatchObject({
+      type: 'load',
+      model: NODE,
+      url: '/api/llamacpp/models/file?path=x',
+    });
+    expect(asked).toEqual([NODE]);
   });
 });

@@ -4,6 +4,9 @@
  * (`engine.ts`) serves the playground pane, the `browser` chat provider and Scrive's
  * `{webllm}` blocks. See docs/modules/webml.mdx.
  */
+import { nodeGgufModelId, probeWebGpu, SUPPORTED_ARCHS } from '@horrible/webml';
+
+import { isHosted } from '../../hosted';
 import { openPane } from '../../layout/controller';
 import { lazyPane } from '../../lazy-pane';
 import { minibuffer } from '../../minibuffer';
@@ -17,6 +20,35 @@ export { useEngineState, useGpuReport, webmlEngine } from './engine';
 const PlaygroundPanel = lazyPane(() => import('./panels/PlaygroundPanel'), 'PlaygroundPanel');
 
 export const PLAYGROUND_VIEW = 'webml.playground';
+
+/**
+ * Whether "Run in this window" makes sense for a GGUF the node lists: an
+ * architecture the WGSL engine runs, and a node on this machine. Hosted, the
+ * backend is a remote machine, and every load would pull the whole file across
+ * the network with nowhere to keep it.
+ */
+export function canRunNodeGguf(architecture: string): boolean {
+  return !isHosted() && SUPPORTED_ARCHS.includes(architecture);
+}
+
+/**
+ * Load a GGUF this node has (a path from the llama.cpp catalog, a training run's
+ * conversion) into the window's engine, and open the playground to chat with it.
+ * Nothing comes from the Hub: the bytes stream from the node's file route.
+ */
+export async function runNodeGguf(path: string): Promise<void> {
+  const gpu = await probeWebGpu();
+  if (!gpu.available) {
+    minibuffer.say(`No WebGPU in this window: ${gpu.reason}`);
+    return;
+  }
+  void openPane(PLAYGROUND_VIEW);
+  try {
+    await webmlEngine().load(nodeGgufModelId(path), 'q4f16', 'webgpu');
+  } catch (err) {
+    minibuffer.say(`Could not load ${path}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
 
 export const webmlModule: ModuleManifest = {
   id: 'webml',

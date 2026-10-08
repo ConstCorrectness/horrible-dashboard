@@ -26,6 +26,29 @@ export function isGgufModelId(id: string): boolean {
   return id.startsWith(ID_PREFIX);
 }
 
+const NODE_PREFIX = 'gguf-node:';
+
+/**
+ * `gguf-node:<path on the node>` — a GGUF this node already has (the llama.cpp
+ * catalog: its own downloads, training's conversions, Ollama's and LM Studio's
+ * files). It is read straight from the node over `Range` requests and never copied
+ * into OPFS: the node is this machine, and a second copy of a 2 GB file is waste.
+ */
+export function nodeGgufModelId(path: string): string {
+  return `${NODE_PREFIX}${path}`;
+}
+
+/**
+ * The node path of a `gguf-node:` id, or null for anything else. No `.gguf` check:
+ * Ollama's blobs have no extension, and the node serves only paths its catalog
+ * lists anyway.
+ */
+export function parseNodeGgufModelId(id: string): { path: string } | null {
+  if (!id.startsWith(NODE_PREFIX)) return null;
+  const path = id.slice(NODE_PREFIX.length);
+  return path ? { path } : null;
+}
+
 /** The Hub repo and file of a GGUF model id, or null for anything else. */
 export function parseGgufModelId(id: string): { repo: string; file: string } | null {
   if (!isGgufModelId(id)) return null;

@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { nodeGgufModelId } from '@horrible/webml';
+
 import { registry } from '../../../registry';
-import { webmlModule } from '../index';
+import { nodeGgufUrl } from '../engine';
+import { canRunNodeGguf, webmlModule } from '../index';
 import { playground, splitThinking } from '../playground-state';
 
 beforeEach(() => registry.resetForTests());
@@ -56,5 +59,23 @@ describe('playground transcript', () => {
       streaming: -1,
     });
     playground.clear();
+  });
+});
+
+describe('node GGUFs', () => {
+  it('resolve to the node catalog file route, the path escaped', () => {
+    const path = 'C:/models/trained/my fine-tune.gguf';
+    expect(nodeGgufUrl(nodeGgufModelId(path))).toBe(
+      `/api/llamacpp/models/file?path=${encodeURIComponent(path)}`,
+    );
+    expect(nodeGgufUrl('gguf:org/repo/model.gguf')).toBeNull();
+    expect(nodeGgufUrl('onnx-community/Qwen3-0.6B-ONNX')).toBeNull();
+  });
+
+  it('offer "Run in this window" only for architectures the engine runs', () => {
+    expect(canRunNodeGguf('qwen3')).toBe(true);
+    expect(canRunNodeGguf('llama')).toBe(true);
+    expect(canRunNodeGguf('gemma3')).toBe(false);
+    expect(canRunNodeGguf('')).toBe(false);
   });
 });
