@@ -153,7 +153,7 @@ def golden() -> None:
     values[1] *= 0
     values[2] *= 1000
     out = {}
-    for qtype in (Q.F32, Q.F16, Q.Q8_0, Q.Q4_0):
+    for qtype in (Q.F32, Q.F16, Q.Q8_0, Q.Q4_0, Q.Q5_0):
         if qtype == Q.F32:
             raw = values.reshape(-1).view(np.uint8)
         elif qtype == Q.F16:

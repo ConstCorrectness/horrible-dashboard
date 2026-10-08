@@ -264,3 +264,5 @@ benchmark_db_driver/
 # Vitest browser-mode failure screenshots
 .vitest-attachments/
 __screenshots__/
+# WebML kernel-test measurements (parity summaries, speed benchmarks)
+packages/webml/kernel-tests/.results/

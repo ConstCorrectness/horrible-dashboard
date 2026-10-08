@@ -4,10 +4,11 @@ sidebar_label: WebML GGUF engine (plan)
 
 # WebML Phase 6: our own WGSL engine for GGUF
 
-**Status: 6.0–6.3 built. Each still has an exit check to run against a real
-model from the Hub (see [6.0](#60-harness-and-header-no-inference),
-[6.1](#61-correct-slow-llama-only), [6.2](#62-a-real-engine-in-the-app) and
-[6.3](#63-k-quants-and-the-agent-models)). 6.4 onward not started.** This is the plan [WebML](../modules/webml.mdx) said
+**Status: 6.0–6.4 built, and 6.4's exit checks pass on an Intel UHD iGPU
+(see [6.4](#64-fast)). Real-model parity with llama.cpp holds for SmolLM2-360M
+Q4_K_M, Qwen3-1.7B Q4_K_M, Qwen3-0.6B Q8_0 and Llama-3.2-1B Q8_0. Still open from
+earlier stages: the `browser`-provider agent round with a Hermes tool call (6.3).
+6.5 onward not started.** This is the plan [WebML](../modules/webml.mdx) said
 Phase 6 needed before any code was written. It is split into stages; each one ships
 on its own and ends with a check that has to pass before the next starts. Nothing
 in Phases 0–5 is replaced. The transformers.js worker stays as the engine for ONNX
@@ -164,16 +165,16 @@ its own dispatch.
 | --- | --- |
 | `embed` | Dequantize one row per token id. The id is read from a GPU buffer, so the decode loop can feed sampled ids without a round-trip (6.4) |
 | `rmsnorm` | Workgroup reduction (subgroup reduction when `subgroups` is available) times weight. A per-head variant is Qwen3's QK-norm |
-| `matvec_<q>` | Decode (M = 1), memory-bound: the hot path. One variant per quant type: F16, Q8_0, Q4_0, Q4_K, Q5_K, Q6_K |
+| `matvec_<q>` | Decode (M = 1), memory-bound: the hot path. One variant per quant type: F32, F16, Q8_0, Q4_0, Q5_0 (6.4), Q4_K, Q5_K, Q6_K |
 | `matmul_<q>` | Prefill (M > 1): tiled, weights dequantized into shared memory |
 | `rope` | `norm` and `neox` variants, applied in place. Angles come from a host-built table indexed by position (see `rope.ts`); `rope_freqs` factors arrive with 6.3 |
-| KV write | No kernel: the K and V projections' matvec writes straight into the cache row for the current position. Layout `[pos][kv_heads × head_dim]`, preallocated to the context budget |
-| `attn_decode` | One workgroup per head with online softmax. Split-K over positions past ~1k (flash-decoding), plus a combine pass. GQA by head index mapping |
+| `kv_store` | The pass's new K and V rows (computed, normed and rotated in f32) into the cache at their positions, rounded to f16 (default) or kept f32. Layout `[pos][kv_heads × head_dim]`, preallocated to the context budget. (Through 6.3 the projections wrote the f32 cache directly.) |
+| `attention` + `attn_combine` | Decode: split over 128-position chunks (flash-decoding), one workgroup per (KV head, chunk) serving the whole GQA group, then a merge per head |
 | `attn_prefill` | Causal tiled flash attention |
 | `swiglu` | `silu(gate) * up`, fused into one pass |
-| `accumulate` | Residual (`x += d`). Folded into matvec epilogues in 6.4. (`add`, out-of-place, is the 6.0 harness kernel) |
+| residual | Folded into the attention-output and FFN-down projections in 6.4 (`accumulate` flag on matvec / matmul). (`add`, out-of-place, is the 6.0 harness kernel) |
 | `lm_head` | `matvec` over the vocabulary on the **last position only** |
-| `sample` | Temperature → top-k → (top-p) → softmax → draw with a host-supplied random number. Also writes p(chosen), entropy and the top-k ids/probs for `step` events |
+| `sample` | llama.cpp's chain (top-k → top-p and min-p → temperature → draw with a host-supplied random number), with an exact top-k. Also writes p(chosen), entropy and the alternatives for `step` events |
 
 **Per-token encoding.** Bind groups and uniform buffers are built once at load.
 The current position and sequence length sit in one small storage buffer that
@@ -306,17 +307,30 @@ run by `scripts/webml/parity.py`.
 - The reference script is `gen_webml_llama_parity.py --model`, not a
   `llama-server` driver.
 
-**Still open:** the SmolLM2 run itself. It needs the model from the Hub:
+**Real models (run 2026-10-08, Intel UHD Gen12 iGPU, `WEBML_GPU=hardware`):**
+the same 64 greedy tokens as llama.cpp on **Qwen3-0.6B Q8_0** and
+**Llama-3.2-1B-Instruct Q8_0**, top-5 probabilities within **2×10⁻⁶** of llama.cpp
+with an f32 cache (3×10⁻⁶ after the 6.4 kernels; 1.1×10⁻³ with 6.4's default f16
+cache). The reference must come from `--f32`: against llama.cpp's own Q8_0 run the
+difference reaches 0.08 on Qwen3 and a near-tie flips on Llama at step 15, because
+llama.cpp rounds activations to q8 inside quantized matmuls and its F32 run of the
+same weights diverges from its Q8 run the same way.
 
 ```sh
 uv run --with llama-cpp-python python scripts/gen_webml_llama_parity.py \
-  --model ~/models/SmolLM2-360M-Instruct-Q8_0.gguf --out /tmp/smollm2.json
-WEBML_PARITY_MODEL=~/models/SmolLM2-360M-Instruct-Q8_0.gguf \
-WEBML_PARITY_EXPECTED=/tmp/smollm2.json pnpm --filter @horrible/webml test:kernels
+  --f32 --model ~/models/Qwen3-0.6B-Q8_0.gguf --out ~/models/qwen3.json
+WEBML_GPU=hardware WEBML_PARITY_MODEL=~/models/Qwen3-0.6B-Q8_0.gguf \
+WEBML_PARITY_EXPECTED=~/models/qwen3.json \
+  pnpm --filter @horrible/webml exec vitest run --project kernels real-parity
 ```
 
-The plumbing is proven on the tiny model, with the reference file outside the repo,
-and a deliberately wrong reference fails with both top-5 lists in the message.
+On Windows, `llama-cpp-python` installs from its CPU wheel index
+(`--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu`), and Vite's
+`/@fs/` only serves files on the project's drive, so models on another drive go
+through a junction. The summary lands in `kernel-tests/.results/` (browser mode does
+not forward the page's console).
+
+SmolLM2-360M was run later in its Q4_K_M form (see [6.4](#64-fast)), not Q8_0.
 
 ### 6.2 A real engine in the app
 
@@ -445,9 +459,12 @@ The picker lists sizes live from the tree API, and the repo and file names could
 not be checked against the Hub from this environment. A suggested file is only
 preselected when the listing has it.
 
-**Still open:** the real-model checks: Q4_K_M parity for each model in the table
-(`gen_webml_llama_parity.py --model` + `real-parity.test.ts`), and a Qwen3-1.7B agent
-round with a Hermes tool call.
+**Real models (2026-10-08):** Q4_K_M parity passes for SmolLM2-360M and Qwen3-1.7B
+(see [6.4](#64-fast)). Qwen3-0.6B and Llama-3.2-1B were checked in Q8_0 (see
+[6.1](#61-correct-slow-llama-only)); their Q4_K_M files were not downloaded.
+
+**Still open:** a Qwen3-1.7B `browser`-provider agent round with a Hermes tool call
+that the backend parses and answers.
 
 ### 6.4 Fast
 
@@ -477,6 +494,118 @@ reuse. Each catalog model with both formats is measured here, and the result is
 recorded in `catalog.ts` as that model's preferred engine. Where GGUF loses, ONNX
 stays the default and GGUF is still available when picked explicitly. Models with
 no ONNX export (local fine-tunes, anything from the GGUF tab) always run on GGUF.
+
+**Built (2026-10-08):** all six steps. Each one was re-checked against llama.cpp on
+the tiny fixtures (both on SwiftShader and on the iGPU) and on the two real Q8_0
+models.
+
+1. **Batched prefill.** The runtime builds two dispatch lists over the same
+   weights and caches: _decode_ (one token: matvec, split attention) and _prefill_
+   (up to `batch` tokens, default 256: `matmul.wgsl` and `attn_prefill.wgsl`), plus
+   a shared _head_ that runs the final norm and the LM head on the last position
+   only. Token ids live in a GPU buffer and a pass's (position, row count) in one
+   Step uniform. `forward.test.ts` checks the logits after every prefix length, in
+   passes of 5 tokens, against llama.cpp on all five fixtures.
+2. **Prefix reuse.** `GgufSession` keeps the token ids behind the live cache and
+   prefills only what follows the longest common prefix (always feeding the last
+   prompt token). `usage.cachedTokens` reports what was reused. A failed generation
+   drops the reuse state.
+3. **GPU sampling, pipelined decode.** `sample.wgsl` runs llama.cpp's chain (top-k
+   40, top-p, min-p, temperature, draw with a host random number) in one workgroup:
+   an exact top-k by bisecting for a threshold, then a bitonic sort of the
+   candidates. It writes the token into the buffer the next step's embed reads and
+   a small record (id, p, entropy, alternatives) that the host reads instead of a
+   vocabulary of logits. The session queues step N+1 before reading token N; on EOS
+   the speculative step's cache entry is not kept. `sample.test.ts` holds it to
+   `gguf/sample.ts` on seeded cases, including flat logits with thousands of
+   candidates.
+4. **Kernel tuning.** These changes had the most effect:
+   - Weight snippets read whole words (a funnel shift for blocks at 2-byte
+     alignment) and unpack four values at a time, rather than one byte at a time.
+   - Matvec gives each lane a 32-value unit and reuses its activations across four
+     rows, so X is not re-read per row. Because the activations are f32, X was ~4×
+     the bytes of a Q8_0 row.
+   - Decode attention splits positions into 128-key chunks (flash-decoding plus a
+     combine pass), serves every query head of a KV group from one workgroup, and
+     reads K in 16-byte pieces shared by four lanes.
+   - Prefill attention keeps Q and the output in registers and stages nothing but
+     a 4 KB block of partial scores in workgroup memory. Staging the K/V tiles
+     there left only two workgroups per core: 9.6 GFLOP/s.
+   - Matmul keeps its tiles k-major as vec4s, uses an 8×4 per-thread block, and
+     decodes a unit's scales once (`unit_prep` / `unit_quad`).
+5. **f16 KV cache** (`LoadOptions.kvCache`, default `f16`). New K/V rows are
+   computed, normed and rotated in f32, then stored by `kv_store.wgsl`, as llama.cpp
+   does. The store rounds to nearest even itself: this iGPU's `pack2x16float`
+   rounds toward zero. It uses core WGSL packing, not `shader-f16`, so SwiftShader
+   and CI run the same path.
+6. **Fused epilogues.** The two residual adds per layer are a flag on the
+   attention-output and FFN-down projections (`accumulate`). The separate kernel is
+   gone.
+
+Measuring: `bench.test.ts` (`WEBML_BENCH_MODEL`) times chat and two agent rounds
+through `GgufSession` and records a per-kernel profile (`GgufRuntime.profile`,
+timestamp queries). `perf.test.ts` (`WEBML_PERF=1`) times each kernel alone at
+Qwen3-0.6B shapes. Results go to `kernel-tests/.results/`.
+
+**Measured** on Qwen3-0.6B Q8_0, Intel UHD (Gen12, 67 GB/s streaming reads), with
+a 3.5k-token agent prompt. The first column is steps 1–3 on the 6.3 kernels. The
+6.3 engine itself (one token at a time, no reuse) had not finished its first agent
+round after 80 minutes and was stopped.
+
+|                                                      | Steps 1–3, 6.3 kernels | All six steps             |
+| ---------------------------------------------------- | ---------------------- | ------------------------- |
+| Chat: TTFT, 20-token prompt                          | 554 ms                 | **171 ms**                |
+| Chat: decode                                         | 2.9 tok/s              | **19.0 tok/s**            |
+| Agent round 1 (3,668 tokens prefilled, 30 generated) | 209 s                  | **43.5 s**                |
+| Agent round 2 (3,664 of 3,719 tokens reused)         | 18.9 s                 | **3.4 s**                 |
+| Matvec (Q8_0 / Q4_K)                                 | ~2 GB/s                | 13 / 10 GB/s              |
+| Matmul, 256 tokens (Q8_0 / Q4_K)                     | 61 GFLOP/s             | 187 / 193 GFLOP/s         |
+| Decode attention at 3.7k positions                   | 3.5 ms/layer           | 0.83 ms (f16), 0.59 (f32) |
+
+The ONNX baseline for an agent round on this model was ~50 s.
+
+**Exit, on the same machine** (`bench.test.ts`, 3.5k-token agent prompt, files from
+the Hub: `bartowski/SmolLM2-360M-Instruct-GGUF` and `unsloth/Qwen3-1.7B-GGUF`):
+
+| Check | Target | Measured |
+| --- | --- | --- |
+| SmolLM2-360M Q4_K_M decode | > 27 tok/s | **30.2 tok/s** (25.7 at 3.7k context) |
+| SmolLM2-360M chat TTFT (38-token prompt) | ≤ 0.7 s | **161 ms** |
+| Qwen3-1.7B Q4_K_M agent round after the first | < 10 s | **5.8 s**: 3,664 of 3,721 tokens reused, 29 generated at 8 tok/s |
+
+Both models also match llama.cpp (`--f32` references, default f16 cache): the same
+64 greedy tokens, top-5 probabilities within 5.7×10⁻⁴ (SmolLM2) and 1.1×10⁻³
+(Qwen3-1.7B). Qwen3-1.7B's first round, a cold 3.7k-token prefill, takes 81 s.
+
+**Q5_0 joined the supported types.** The "Q4_K_M" SmolLM2 file holds mostly Q5_0
+(159 of 269 MB): llama.cpp's quantizer falls back to it where a row is not a multiple
+of 256 values, and SmolLM2's is 960. `quant.ts` matches the `gguf` package's
+dequantizer on golden blocks, and the kernel snippet is checked as the others are.
+A planted high-bit slip fails the matvec and matmul tests.
+
+**Changed from the plan:**
+
+- **f16 activations: not done.** Only the cache is f16. Activations are a small
+  share of the bytes now that matvec reuses them from registers.
+- **The dev overlay** is `GgufRuntime.profile` and the bench's report, not a panel.
+
+**Still open:**
+
+- **The default engine per model.** The rule needs ONNX and GGUF runs of the same
+  model on this machine. The one comparison so far is SmolLM2-360M: 30.2 tok/s on
+  GGUF Q4_K_M against Phase 5's 27 tok/s on ONNX q4f16. That was measured on this
+  iGPU but in an earlier session, with different prompts, so `catalog.ts` is
+  unchanged until both run in the bench.
+- **Matvec is at ~20% of streaming bandwidth.** The next candidates are subgroup
+  reductions and more rows per activation load. Neither won on a first try: 8 rows
+  per lane group was slower.
+- **f16 decode attention is ~40% slower than f32 on this iGPU** although it reads
+  half the bytes. Neither the conversions nor the load shapes explain it, measured
+  separately. It stays the default for the memory (half a gigabyte at 4k context
+  on Qwen3) and for prefill, where it is twice as fast.
+- **SwiftShader miscompiles** a dynamically indexed private array kept live across
+  workgroup barriers. The decode attention avoids the pattern; new kernels should
+  too.
 
 ### 6.5 This node's GGUFs in the window
 

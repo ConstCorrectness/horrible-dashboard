@@ -11,16 +11,13 @@ import { checkSupport } from './arch';
 import { ggmlTypeName } from './ggml';
 import { layoutProblems, readGgufHeader, type ByteSource, type GgufHeader } from './parse';
 import { GgufRuntime, type LoadOptions } from './runtime';
-import { DEFAULT_SAMPLER, sample } from './sample';
+import { DEFAULT_SAMPLER } from './sample';
 import { ChatTemplate } from './template';
 import { Tokenizer } from './tokenizer';
 import type { WebmlDevice } from '../gpu/device';
 
 /** KV positions allocated when the caller does not say: room for an agent turn. */
 export const DEFAULT_CONTEXT = 4096;
-
-/** Prompt tokens submitted between checks for an interrupt. */
-const PREFILL_BATCH = 32;
 
 export interface SessionGenerate {
   messages: ChatMessage[];
@@ -78,6 +75,14 @@ export function dominantQuant(header: GgufHeader): string {
 }
 
 export class GgufSession {
+  /**
+   * The token ids behind the live KV cache: entry i is valid for position i. The
+   * next `generate` keeps the longest prefix its prompt shares with these and
+   * prefills only the rest — for an agent round, the last tool result and the new
+   * turn instead of the whole system prompt and tool schemas again.
+   */
+  private cached: number[] = [];
+
   private constructor(
     readonly runtime: GgufRuntime,
     readonly tokenizer: Tokenizer,
@@ -124,6 +129,21 @@ export class GgufSession {
     interrupted: () => boolean,
     random: () => number = Math.random,
   ): Promise<SessionResult> {
+    try {
+      return await this.run(req, handlers, interrupted, random);
+    } catch (err) {
+      // Whatever was queued before the failure cannot be trusted for reuse.
+      this.cached = [];
+      throw err;
+    }
+  }
+
+  private async run(
+    req: SessionGenerate,
+    handlers: { onDelta?: (text: string) => void; onStep?: (step: SessionStep) => void },
+    interrupted: () => boolean,
+    random: () => number,
+  ): Promise<SessionResult> {
     const started = performance.now();
     const prompt = this.template.encode(req.messages, {
       tools: req.tools,
@@ -137,21 +157,33 @@ export class GgufSession {
       );
     }
     const maxNew = Math.min(req.maxNewTokens ?? 1024, context - prompt.length);
+
+    // Reuse the cache up to the first token that differs. The prompt's last token
+    // is always fed, even when the cache already holds it: its logits start the reply.
+    let reused = 0;
+    const reusable = Math.min(this.cached.length, prompt.length - 1);
+    while (reused < reusable && this.cached[reused] === prompt[reused]) reused++;
+    this.cached.length = reused;
     const usage = (completionTokens: number): Usage => ({
       promptTokens: prompt.length,
       completionTokens,
+      cachedTokens: reused,
     });
 
-    // Prefill in batches, so Stop is heard during a long prompt too.
-    for (let at = 0; at < prompt.length - 1; at += PREFILL_BATCH) {
+    // Prefill one pass at a time, so Stop is heard during a long prompt too. Only
+    // the last pass runs the LM head; a single token takes the decode path.
+    const batch = this.runtime.batch;
+    for (let at = reused; at < prompt.length; at += batch) {
       if (interrupted()) {
         return { text: '', stop: 'interrupt', usage: usage(0), ttftMs: 0, tokensPerSecond: 0 };
       }
-      const end = Math.min(at + PREFILL_BATCH, prompt.length - 1);
-      for (let i = at; i < end; i++) this.runtime.queueStep(prompt[i], i);
-      await this.device.queue.onSubmittedWorkDone();
+      const end = Math.min(at + batch, prompt.length);
+      const pass = prompt.slice(at, end);
+      if (pass.length === 1) this.runtime.queueStep(pass[0], at);
+      else this.runtime.queueBatch(pass, at, end === prompt.length);
+      this.cached.push(...pass);
+      if (end < prompt.length) await this.device.queue.onSubmittedWorkDone();
     }
-    let logits = await this.runtime.forward([prompt[prompt.length - 1]], prompt.length - 1);
 
     const sampler = {
       ...DEFAULT_SAMPLER,
@@ -164,34 +196,45 @@ export class GgufSession {
     let stop: StopReason = 'length';
     let firstAt = 0;
 
+    // Decode with the sampler on the GPU, one step ahead of this loop: the sampler
+    // writes each token where the next step's embed reads it, so step i + 1 is
+    // queued before token i is read back and the GPU never waits for the host.
+    // When the reply ends on EOS, that one speculative step is dropped (its cache
+    // entry is not kept).
+    const slot = (i: number) => (i % 2) as 0 | 1;
+    this.runtime.queueSample(sampler, random(), record, 0);
     for (let i = 0; i < maxNew; i++) {
-      if (interrupted()) {
-        stop = 'interrupt';
-        break;
+      const ahead = i + 1 < maxNew && !interrupted();
+      if (ahead) {
+        this.runtime.queueNext(prompt.length + i);
+        this.runtime.queueSample(sampler, random(), record, slot(i + 1));
       }
-      const { id, dist } = sample(logits, sampler, random, record);
+      const { id, p, entropy, top } = await this.runtime.readSample(slot(i));
       if (!firstAt) firstAt = performance.now();
       if (this.tokenizer.eog.has(id)) {
         stop = 'eos';
         break;
       }
       generated.push(id);
+      if (ahead) this.cached.push(id);
       const delta = decoder.decode(this.tokenizer.piece(id), { stream: true });
       if (delta) {
         text += delta;
         handlers.onDelta?.(delta);
       }
-      if (dist && handlers.onStep) {
+      if (record > 0 && handlers.onStep) {
         handlers.onStep({
           index: generated.length - 1,
           token: this.tokenizer.decode([id], true),
-          p: dist.probs[id] ?? 0,
-          entropy: dist.entropy,
-          topk: dist.top.map((alt) => ({ token: this.tokenizer.decode([alt.id], true), p: alt.p })),
+          p,
+          entropy,
+          topk: top.map((alt) => ({ token: this.tokenizer.decode([alt.id], true), p: alt.p })),
         });
       }
-      if (i === maxNew - 1) break;
-      logits = await this.runtime.forward([id], prompt.length + i);
+      if (!ahead) {
+        if (i < maxNew - 1) stop = 'interrupt';
+        break;
+      }
     }
     const tail = decoder.decode();
     if (tail) {

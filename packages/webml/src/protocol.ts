@@ -78,6 +78,11 @@ export type StopReason = 'eos' | 'length' | 'interrupt';
 export interface Usage {
   promptTokens: number;
   completionTokens: number;
+  /**
+   * GGUF: prompt tokens whose KV entries were kept from the previous reply (the
+   * shared prefix), so not prefilled again. Included in `promptTokens`.
+   */
+  cachedTokens?: number;
 }
 
 export type WorkerEvent =

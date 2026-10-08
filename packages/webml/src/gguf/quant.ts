@@ -8,6 +8,9 @@
  *   Q8_0  34 bytes / 32 values: f16 d, i8 q[32]            x = d * q
  *   Q4_0  18 bytes / 32 values: f16 d, u8 qs[16]            x[j]    = d * ((qs[j] & 15) - 8)
  *                                                           x[j+16] = d * ((qs[j] >> 4) - 8)
+ *   Q5_0  22 bytes / 32 values: f16 d, u32 qh, u8 qs[16]    as Q4_0 with a fifth bit, bit j
+ *         of qh for value j (bit j + 16 for value j + 16):  x = d * (q - 16)
+ *         llama.cpp's K-quant files use it where a row is not a multiple of 256 (SmolLM2)
  *
  * K-quants, 256 values per super-block (ggml-quants.c, dequantize_row_q*_K):
  *   Q4_K  144 bytes: f16 d, f16 dmin, u8 scales[12], u8 qs[128]
@@ -22,6 +25,7 @@ import { GGML_TYPES } from './ggml';
 export const F32 = 0;
 export const F16 = 1;
 export const Q4_0 = 2;
+export const Q5_0 = 6;
 export const Q8_0 = 8;
 export const Q4_K = 12;
 export const Q5_K = 13;
@@ -32,6 +36,7 @@ export const SUPPORTED_TYPES: ReadonlySet<number> = new Set([
   F32,
   F16,
   Q4_0,
+  Q5_0,
   Q8_0,
   Q4_K,
   Q5_K,
@@ -101,6 +106,18 @@ export function dequantize(
           const q = bytes[at + 2 + j];
           out[b * 32 + j] = d * ((q & 15) - 8);
           out[b * 32 + j + 16] = d * ((q >> 4) - 8);
+        }
+      }
+      break;
+    case Q5_0:
+      for (let b = 0; b < count / 32; b++) {
+        const at = byteOffset + b * 22;
+        const d = f16ToF32(view.getUint16(at, true));
+        const qh = view.getUint32(at + 2, true);
+        for (let j = 0; j < 16; j++) {
+          const q = bytes[at + 6 + j];
+          out[b * 32 + j] = d * (((q & 15) | (((qh >>> j) & 1) << 4)) - 16);
+          out[b * 32 + j + 16] = d * (((q >> 4) | (((qh >>> (j + 16)) & 1) << 4)) - 16);
         }
       }
       break;

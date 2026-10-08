@@ -6,18 +6,36 @@ const UNIT: u32 = 32u;
 const UNITS: u32 = 8u;
 const BLOCK_BYTES: u32 = 144u;
 
-fn unit_dot(block: u32, sub: u32, x: u32) -> f32 {
+fn q4k_nibbles(block: u32, sub: u32, k: u32) -> vec4<f32> {
+  let w = word_at(block + 16u + 32u * (sub >> 1u) + 4u * k);
+  return bytes4((w >> ((sub & 1u) * 4u)) & 0x0F0F0F0Fu);
+}
+
+fn unit_dot(block: u32, sub: u32) -> f32 {
   let sm = scale_min_k4(block + 4u, sub);
-  let q = block + 16u + 32u * (sub >> 1u);
-  let shift = (sub & 1u) * 4u;
-  var sqx = 0.0;
-  var sx = 0.0;
-  for (var l = 0u; l < 32u; l++) {
-    let xv = X[x + l];
-    sqx += f32((byte_at(q + l) >> shift) & 15u) * xv;
-    sx += xv;
+  var sq = vec4<f32>(0.0);
+  var sx = vec4<f32>(0.0);
+  for (var k = 0u; k < 8u; k++) {
+    sq += q4k_nibbles(block, sub, k) * xv[k];
+    sx += xv[k];
   }
-  return f16_at(block) * sm.x * sqx - f16_at(block + 2u) * sm.y * sx;
+  return f16_at(block) * sm.x * hsum(sq) - f16_at(block + 2u) * sm.y * hsum(sx);
+}
+
+fn vals4(block: u32, j: u32) -> vec4<f32> {
+  let sub = j / 32u;
+  let sm = scale_min_k4(block + 4u, sub);
+  return f16_at(block) * sm.x * q4k_nibbles(block, sub, (j % 32u) / 4u) - f16_at(block + 2u) * sm.y;
+}
+
+// d·sc (x) and dmin·m (y) of the sub-block.
+fn unit_prep(block: u32, sub: u32) -> vec4<f32> {
+  let sm = scale_min_k4(block + 4u, sub);
+  return vec4<f32>(f16_at(block) * sm.x, f16_at(block + 2u) * sm.y, 0.0, 0.0);
+}
+
+fn unit_quad(block: u32, sub: u32, k: u32, prep: vec4<f32>) -> vec4<f32> {
+  return prep.x * q4k_nibbles(block, sub, k) - prep.y;
 }
 
 fn block_get(block: u32, j: u32) -> f32 {
