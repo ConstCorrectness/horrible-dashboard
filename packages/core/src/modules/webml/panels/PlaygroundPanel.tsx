@@ -49,6 +49,7 @@ export function PlaygroundPanel() {
   const topK = useSetting<number>('webml.topk') ?? 5;
   const temperature = useSetting<number>('webml.temperature') ?? 0.7;
   const thinkingOn = useSetting<boolean>('webml.thinking') ?? false;
+  const lensOn = useSetting<boolean>('webml.lens') ?? false;
 
   const [choice, setChoice] = useState(() =>
     catalogEntry(defaultModel) ? defaultModel : isGgufModelId(defaultModel) ? GGUF : CUSTOM,
@@ -140,6 +141,7 @@ export function PlaygroundPanel() {
           messages: prompt,
           topK,
           temperature,
+          lens: lensOn,
           templateKwargs: thinking ? { enable_thinking: thinkingOn } : undefined,
         },
         {
@@ -151,7 +153,13 @@ export function PlaygroundPanel() {
               ...m,
               steps: [
                 ...(m.steps ?? []),
-                { token: step.token, p: step.p, entropy: step.entropy, topk: step.topk },
+                {
+                  token: step.token,
+                  p: step.p,
+                  entropy: step.entropy,
+                  topk: step.topk,
+                  ...(step.layers && { layers: step.layers }),
+                },
               ],
             })),
         },
@@ -334,6 +342,7 @@ export function PlaygroundPanel() {
             <span className="webml-meta">
               temperature {temperature} · top-k shown {topK}
               {thinkingModel ? ` · thinking ${thinkingOn ? 'on' : 'off'}` : ''}
+              {lensOn && state.kind === 'ready' && state.engine === 'gguf' ? ' · logit lens' : ''}
             </span>
           </section>
 

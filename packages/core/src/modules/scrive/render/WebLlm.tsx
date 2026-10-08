@@ -34,6 +34,8 @@ export interface WebLlmOptions {
   dtype?: Dtype;
   system: string;
   showTokens: boolean;
+  /** Record the logit lens with each token (GGUF models; implies `tokens`). */
+  showLens: boolean;
   maxTokens: number;
 }
 
@@ -46,7 +48,8 @@ export function webLlmOptions(arg: unknown, options: Record<string, unknown>): W
     model: String(arg ?? '').trim(),
     dtype: (['q4f16', 'q4', 'fp16', 'fp32'] as const).find((d) => d === dtype),
     system: String(options.system ?? '').trim(),
-    showTokens: show.includes('tokens'),
+    showTokens: show.includes('tokens') || show.includes('lens'),
+    showLens: show.includes('lens'),
     maxTokens: Math.max(16, Math.min(2048, Number(options.max) || 256)),
   };
 }
@@ -141,6 +144,7 @@ export function WebLlm({
           messages: prompt,
           maxNewTokens: opts.maxTokens,
           topK: opts.showTokens ? 5 : 0,
+          lens: opts.showLens,
           temperature: 0.7,
           templateKwargs: entry?.thinking ? { enable_thinking: false } : undefined,
         },
@@ -152,7 +156,13 @@ export function WebLlm({
               ...t,
               steps: [
                 ...(t.steps ?? []),
-                { token: s.token, p: s.p, entropy: s.entropy, topk: s.topk },
+                {
+                  token: s.token,
+                  p: s.p,
+                  entropy: s.entropy,
+                  topk: s.topk,
+                  ...(s.layers && { layers: s.layers }),
+                },
               ],
             })),
         },

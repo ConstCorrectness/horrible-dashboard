@@ -6,7 +6,7 @@
  *
  * Kept apart from the worker so the loop can be tested in a page without one.
  */
-import type { ChatMessage, StopReason, Usage } from '../protocol';
+import type { ChatMessage, LayerLens, StopReason, Usage } from '../protocol';
 import { checkSupport } from './arch';
 import { ggmlTypeName } from './ggml';
 import { layoutProblems, readGgufHeader, type ByteSource, type GgufHeader } from './parse';
@@ -26,6 +26,8 @@ export interface SessionGenerate {
   temperature?: number;
   /** Alternatives recorded per token for `onStep`; 0 = off. */
   topK?: number;
+  /** Read out the logit lens at each generated token, into `onStep`. */
+  lens?: boolean;
   templateKwargs?: Record<string, unknown>;
 }
 
@@ -35,6 +37,7 @@ export interface SessionStep {
   p: number;
   entropy: number;
   topk: { token: string; p: number }[];
+  layers?: LayerLens[];
 }
 
 export interface SessionResult {
@@ -129,12 +132,15 @@ export class GgufSession {
     interrupted: () => boolean,
     random: () => number = Math.random,
   ): Promise<SessionResult> {
+    this.runtime.lens = req.lens === true;
     try {
       return await this.run(req, handlers, interrupted, random);
     } catch (err) {
       // Whatever was queued before the failure cannot be trusted for reuse.
       this.cached = [];
       throw err;
+    } finally {
+      this.runtime.lens = false;
     }
   }
 
@@ -190,6 +196,7 @@ export class GgufSession {
       temperature: req.temperature ?? DEFAULT_SAMPLER.temperature,
     };
     const record = Math.max(0, Math.min(20, req.topK ?? 0));
+    const lens = req.lens === true;
     const decoder = new TextDecoder('utf-8', { ignoreBOM: true });
     const generated: number[] = [];
     let text = '';
@@ -210,6 +217,7 @@ export class GgufSession {
         this.runtime.queueSample(sampler, random(), record, slot(i + 1));
       }
       const { id, p, entropy, top } = await this.runtime.readSample(slot(i));
+      const layers = lens ? await this.runtime.readLens(slot(i)) : undefined;
       if (!firstAt) firstAt = performance.now();
       if (this.tokenizer.eog.has(id)) {
         stop = 'eos';
@@ -222,13 +230,20 @@ export class GgufSession {
         text += delta;
         handlers.onDelta?.(delta);
       }
-      if (record > 0 && handlers.onStep) {
+      if ((record > 0 || lens) && handlers.onStep) {
+        const word = (t: { id: number; p: number }) => ({
+          token: this.tokenizer.decode([t.id], true),
+          p: t.p,
+        });
         handlers.onStep({
           index: generated.length - 1,
           token: this.tokenizer.decode([id], true),
           p,
           entropy,
-          topk: top.map((alt) => ({ token: this.tokenizer.decode([alt.id], true), p: alt.p })),
+          topk: top.map(word),
+          ...(layers && {
+            layers: layers.map((l) => ({ norm: l.norm, entropy: l.entropy, top: l.top.map(word) })),
+          }),
         });
       }
       if (!ahead) {

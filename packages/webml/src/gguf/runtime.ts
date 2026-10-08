@@ -25,6 +25,12 @@
  * before the host has read the token before it, and the host reads back only a
  * small record per token (`readSample`).
  *
+ * With `lens` set, a pass that computes logits also reads out the **logit lens**
+ * at its last position: after each layer, the residual stream is normed with the
+ * final norm (lens_in.wgsl), all layers go through the LM head as one batch — one
+ * pass over its weights, not one per layer — and lens_topk.wgsl keeps each
+ * layer's entropy and top tokens. `readLens` returns them, beside the sample.
+ *
  * Everything — buffers, uniforms, bind groups — is built once at load. A pass
  * writes its token ids into a GPU buffer and (position, row count) into one small
  * Step uniform, then submits its list again.
@@ -46,6 +52,8 @@ import {
   Kernels,
   KERNEL_BLOCK,
   type KvType,
+  LENS_K,
+  LENS_STRIDE,
   MATMUL_TILE,
   MAX_GQA_GROUP,
   MAX_HEAD_DIM,
@@ -69,6 +77,16 @@ export interface PassProfile {
   totalMs: number;
   /** Per kind (`attn_q`, `attention`, `ffn_down`, `embed`, …), slowest first. */
   kinds: { kind: string; ms: number; dispatches: number }[];
+}
+
+/** One layer of the logit lens at the position being predicted. */
+export interface LayerReadout {
+  /** L2 norm of the residual stream after this layer. */
+  norm: number;
+  /** Entropy, in bits, of the LM head's distribution over this layer's residual. */
+  entropy: number;
+  /** Its most likely tokens, best first. */
+  top: { id: number; p: number }[];
 }
 
 /** A token the GPU sampler chose, with the distribution it was drawn from. */
@@ -113,6 +131,8 @@ interface Dispatch {
   pipeline: GPUComputePipeline;
   group: GPUBindGroup;
   workgroups: [number, number];
+  /** Part of the logit lens: run only while `lens` is set. */
+  lens?: boolean;
 }
 
 type Mode = 'decode' | 'prefill';
@@ -137,6 +157,15 @@ export class GgufRuntime {
   private sampled!: GPUBuffer;
   /** Two, so the record of step N+1 can be copied while step N's is being read. */
   private readonly sampleStaging: GPUBuffer[] = [];
+  private lensOut!: GPUBuffer;
+  private readonly lensStaging: GPUBuffer[] = [];
+
+  /**
+   * Read out the logit lens on the passes queued while this is set; `queueSample`
+   * then keeps each one for `readLens`. Off by default: it costs one more pass over
+   * the LM head's weights per token.
+   */
+  lens = false;
 
   private constructor(
     private readonly gpu: WebmlDevice,
@@ -239,7 +268,36 @@ export class GgufRuntime {
     pass.dispatchWorkgroups(1);
     pass.end();
     encoder.copyBufferToBuffer(this.sampled, 0, this.sampleStaging[slot], 0, RECORD_BYTES);
+    if (this.lens) {
+      encoder.copyBufferToBuffer(this.lensOut, 0, this.lensStaging[slot], 0, this.lensBytes);
+    }
     device.queue.submit([encoder.finish()]);
+  }
+
+  private get lensBytes(): number {
+    return this.config.layers * LENS_STRIDE * 4;
+  }
+
+  /**
+   * The logit lens `queueSample` kept in `slot` with `lens` set: one readout per
+   * layer, from the pass that produced the logits that sample was drawn from.
+   */
+  async readLens(slot: 0 | 1): Promise<LayerReadout[]> {
+    const staging = this.lensStaging[slot];
+    await staging.mapAsync(GPUMapMode.READ, 0, this.lensBytes);
+    const words = new Uint32Array(staging.getMappedRange(0, this.lensBytes).slice(0));
+    staging.unmap();
+    const floats = new Float32Array(words.buffer);
+    const out: LayerReadout[] = [];
+    for (let l = 0; l < this.config.layers; l++) {
+      const at = l * LENS_STRIDE;
+      const top = [];
+      for (let j = 0; j < LENS_K; j++) {
+        top.push({ id: words[at + 2 + 2 * j], p: floats[at + 3 + 2 * j] });
+      }
+      out.push({ norm: floats[at], entropy: floats[at + 1], top });
+    }
+    return out;
   }
 
   /** The record `queueSample` put in `slot` (waits for it). */
@@ -318,7 +376,7 @@ export class GgufRuntime {
     this.stepData[1] = tokens.length;
     device.queue.writeBuffer(this.step, 0, this.stepData);
 
-    const list = [...this.lists[mode], ...this.lists.head];
+    const list = [...this.lists[mode], ...this.lists.head].filter((d) => !d.lens || this.lens);
     const querySet = device.createQuerySet({ type: 'timestamp', count: list.length * 2 });
     const bytes = list.length * 2 * 8;
     const resolved = device.createBuffer({
@@ -401,6 +459,7 @@ export class GgufRuntime {
     const encoder = device.createCommandEncoder({ label });
     const pass = encoder.beginComputePass({ label });
     for (const d of logits ? [...this.lists[mode], ...this.lists.head] : this.lists[mode]) {
+      if (d.lens && !this.lens) continue;
       pass.setPipeline(d.pipeline);
       pass.setBindGroup(0, d.group);
       pass.dispatchWorkgroups(d.workgroups[0], d.workgroups[1]);
@@ -537,7 +596,24 @@ export class GgufRuntime {
       RECORD_BYTES,
       GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
     );
+    // The logit lens: each layer's normed residual, their logits, and the readouts.
+    const lensIn = this.f32Buffer('lens in', c.layers * c.embd);
+    const lensLogits = this.f32Buffer('lens logits', c.layers * c.vocab);
+    this.lensOut = this.buffer(
+      'lens readouts',
+      this.lensBytes,
+      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    );
+    // Its LM-head pass is a batch of one row per layer, at no position.
+    const lensStep = this.uniform('lens step', [0, c.layers]);
     for (const slot of [0, 1]) {
+      this.lensStaging.push(
+        this.buffer(
+          `lens staging ${slot}`,
+          this.lensBytes,
+          GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+        ),
+      );
       this.sampleStaging.push(
         this.buffer(
           `sampled staging ${slot}`,
@@ -836,6 +912,33 @@ export class GgufRuntime {
       }
     }
 
+    const outputNorm = await vector('output_norm.weight');
+
+    /** The lens input at layer `l`: the stream's last row, normed, into row `l`. */
+    const lensAt = (mode: Mode, l: number) => {
+      const pipeline = k.lensIn();
+      const params = this.uniform(`blk.${l}.lens_in.params`, [
+        c.embd,
+        { f32: c.rmsEps },
+        l,
+        LENS_STRIDE,
+      ]);
+      this.lists[mode].push({
+        label: `blk.${l}.lens_in`,
+        pipeline,
+        group: bindGroup(device, pipeline, {
+          0: x,
+          1: outputNorm,
+          2: lensIn,
+          3: this.lensOut,
+          4: params,
+          5: this.step,
+        }),
+        workgroups: [1, 1],
+        lens: true,
+      });
+    };
+
     for (let l = 0; l < c.layers; l++) {
       const p = `blk.${l}.`;
       const cacheBytes = this.context * kvDim * (this.kvCache === 'f16' ? 2 : 4);
@@ -904,23 +1007,70 @@ export class GgufRuntime {
         } else {
           project(mode, w.down, act, x, true);
         }
+        lensAt(mode, l);
       }
     }
 
     // The head: the last row's final norm into row 0 of h, then the LM head as a
     // matvec — the decode list's projection, which reads row 0.
-    rmsnorm(this.lists.head, 1, x, await vector('output_norm.weight'), h, 'output_norm', true);
+    rmsnorm(this.lists.head, 1, x, outputNorm, h, 'output_norm', true);
     const lmHead = c.tiedEmbeddings ? embedding : await matrix('output.weight');
     const before = this.lists.decode.length;
     project('decode', lmHead, h, this.logits);
     this.lists.head.push(...this.lists.decode.splice(before));
 
+    // The lens's LM head: every layer's row at once, through the prefill matmul.
+    for (const { chunk, buffer } of lmHead.chunks) {
+      const pipeline = k.matmul(lmHead.tensor.type);
+      const params = this.uniform('lens.matmul', [
+        chunk.rows,
+        lmHead.cols,
+        lmHead.rowBytes,
+        chunk.firstRow,
+        0,
+        c.vocab,
+        0,
+      ]);
+      this.lists.head.push({
+        label: 'lens_head',
+        pipeline,
+        group: bindGroup(device, pipeline, {
+          0: buffer,
+          1: lensIn,
+          2: lensLogits,
+          3: params,
+          4: lensStep,
+        }),
+        workgroups: [
+          Math.ceil(chunk.rows / MATMUL_TILE.rows),
+          Math.ceil(c.layers / MATMUL_TILE.batch),
+        ],
+        lens: true,
+      });
+    }
+    {
+      const pipeline = k.lensTopk();
+      this.lists.head.push({
+        label: 'lens_topk',
+        pipeline,
+        group: bindGroup(device, pipeline, {
+          0: lensLogits,
+          1: this.lensOut,
+          2: this.uniform('lens.topk', [c.vocab, LENS_STRIDE]),
+        }),
+        workgroups: [c.layers, 1],
+        lens: true,
+      });
+    }
+
     // One trial pass of each kind, inside the caller's error scope. They write
     // cache position 0, which the first real pass overwrites.
+    this.lens = true;
     this.queueStep(0, 0);
     this.queueBatch([0], 0, true);
     this.queueSample({ temperature: 0.8, topK: 40, topP: 0.95, minP: 0.05 }, 0.5, 4, 0);
     this.queueNext(0);
+    this.lens = false;
     await device.queue.onSubmittedWorkDone();
   }
 }

@@ -98,7 +98,15 @@ const RUN = {
   model: 'onnx-community/Qwen3-0.6B-ONNX',
   prompt: 'Say hi',
   steps: [
-    { token: 'Hi', p: 0.9, entropy: 0.4, topk: [{ token: 'Hi', p: 0.9 }, { token: 'Hello', p: 0.05 }] },
+    {
+      token: 'Hi',
+      p: 0.9,
+      entropy: 0.4,
+      topk: [
+        { token: 'Hi', p: 0.9 },
+        { token: 'Hello', p: 0.05 },
+      ],
+    },
     { token: '!', p: 0.3, entropy: 2.1, topk: [] },
   ],
 };
@@ -162,7 +170,11 @@ describe('{app}', () => {
     const src = '```{app} kernel-demo\n:height: 500\n```';
     const pm = editableBlock(parseMyst(src).children[0], src);
     expect(pm?.type).toBe('scriveEmbed');
-    expect(pm?.attrs).toMatchObject({ name: 'app', src: 'kernel-demo', options: { height: '500' } });
+    expect(pm?.attrs).toMatchObject({
+      name: 'app',
+      src: 'kernel-demo',
+      options: { height: '500' },
+    });
     expect(printBlock(pm!)).toBe(src);
   });
 
@@ -222,9 +234,64 @@ describe('{webllm} and {tokenviz}', () => {
 describe('parseTokenRun', () => {
   it('accepts a run and reports what is wrong with anything else', async () => {
     const { parseTokenRun } = await import('../../../token-strip/TokenStrip');
-    expect(parseTokenRun(RUN)).toMatchObject({ model: RUN.model, steps: [{ token: 'Hi' }, { token: '!' }] });
+    expect(parseTokenRun(RUN)).toMatchObject({
+      model: RUN.model,
+      steps: [{ token: 'Hi' }, { token: '!' }],
+    });
     expect(parseTokenRun(null)).toBe('not a JSON object');
     expect(parseTokenRun({})).toBe('no "steps" array');
     expect(parseTokenRun({ steps: [{ token: 1 }] })).toBe('a step needs "token" and "p"');
+  });
+
+  it('keeps a step’s logit lens when every layer is well-formed, and drops it otherwise', async () => {
+    const { parseTokenRun } = await import('../../../token-strip/TokenStrip');
+    const layers = [
+      { norm: 3.5, entropy: 9.1, top: [{ token: 'the', p: 0.02 }] },
+      { norm: 41, entropy: 0.6, top: [{ token: 'Hi', p: 0.88 }] },
+    ];
+    const step = { token: 'Hi', p: 0.9, entropy: 0.4, topk: [] };
+    const run = (l: unknown) => parseTokenRun({ steps: [{ ...step, layers: l }] });
+    expect(run(layers)).toMatchObject({ steps: [{ layers }] });
+    expect((run([{ norm: 'x' }]) as { steps: object[] }).steps[0]).not.toHaveProperty('layers');
+    expect((run([]) as { steps: object[] }).steps[0]).not.toHaveProperty('layers');
+  });
+
+  it('draws the lens in the token’s hover card as plain markup, the chosen token marked', async () => {
+    const { TokenStrip } = await import('../../../token-strip/TokenStrip');
+    const html = renderToStaticMarkup(
+      <TokenStrip
+        steps={[
+          {
+            token: 'Hi',
+            p: 0.9,
+            entropy: 0.4,
+            topk: [],
+            layers: [
+              { norm: 3.5, entropy: 9.1, top: [{ token: 'the', p: 0.02 }] },
+              { norm: 41, entropy: 0.6, top: [{ token: 'Hi', p: 0.88 }] },
+            ],
+          },
+        ]}
+      />,
+    );
+    expect(html).toContain('aria-label="Logit lens by layer"');
+    expect(html.match(/tokstrip-lens-row/g)).toHaveLength(2);
+    expect(html).toContain('tokstrip-lens-row is-chosen');
+    // Norm bars are relative to the step's largest.
+    expect(html).toContain('width:100%');
+  });
+});
+
+describe('{webllm} options', () => {
+  it('lens in :show: asks for the logit lens and shows the strip it lives in', async () => {
+    const { webLlmOptions } = await import('../render/WebLlm');
+    expect(webLlmOptions('m', { show: 'chat, lens' })).toMatchObject({
+      showTokens: true,
+      showLens: true,
+    });
+    expect(webLlmOptions('m', { show: 'chat tokens' })).toMatchObject({
+      showTokens: true,
+      showLens: false,
+    });
   });
 });

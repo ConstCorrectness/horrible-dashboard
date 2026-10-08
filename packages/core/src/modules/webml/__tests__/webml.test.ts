@@ -22,6 +22,7 @@ describe('webml manifest', () => {
       'webml.defaultModel',
       'webml.temperature',
       'webml.topk',
+      'webml.lens',
       'webml.thinking',
     ]);
   });

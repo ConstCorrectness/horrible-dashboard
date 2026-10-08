@@ -6,6 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
+import { distribution } from '../src/distribution';
 import { readGgufHeader } from '../src/gguf/parse';
 import { GgufRuntime, type LoadOptions } from '../src/gguf/runtime';
 import { bytesSource } from '../src/gguf/source';
@@ -243,6 +244,61 @@ describe('forward pass vs llama.cpp', () => {
       rt.destroy();
     }
   });
+});
+
+/**
+ * The logit lens (6.6). Its last layer is the model's own output, so it must
+ * reproduce the logits the pass returns: the same top tokens with the same
+ * probabilities and entropy. That is the self-check that its norm and LM-head path
+ * are right; the layers before it go through the same path.
+ */
+describe('logit lens', () => {
+  const greedy = { temperature: 0, topK: 1, topP: 1, minP: 0 };
+
+  for (const [name, url, expected] of [
+    ['llama', f32Url, f32Expected],
+    ['Qwen3', qwen3Url, qwen3Expected],
+    ['Gemma 3', gemma3Url, gemma3Expected],
+  ] as const) {
+    it(`${name}: the last layer reproduces the logits, after a prefill pass and a decode step`, async () => {
+      const want = expected as Expected;
+      const rt = await load(url, { batch: 8 });
+      try {
+        rt.lens = true;
+        const check = async (slot: 0 | 1) => {
+          rt.queueSample(greedy, 0, 1, slot);
+          const lens = await rt.readLens(slot);
+          const dist = distribution(await rt.readLogits(), 5);
+          expect(lens).toHaveLength(rt.config.layers);
+          const last = lens.at(-1)!;
+          expect(last.top.map((t) => t.id)).toEqual(dist.top.map((t) => t.id));
+          last.top.forEach((t, j) => expect(t.p).toBeCloseTo(dist.top[j].p, 4));
+          expect(last.entropy).toBeCloseTo(dist.entropy, 3);
+          for (const layer of lens) {
+            expect(layer.norm).toBeGreaterThan(0);
+            const ps = layer.top.map((t) => t.p);
+            expect(ps).toEqual([...ps].sort((a, b) => b - a));
+          }
+          return lens;
+        };
+        rt.queueBatch(want.prompt, 0, true);
+        const fromPrefill = await check(0);
+        rt.queueStep(want.generated[0], want.prompt.length);
+        const fromDecode = await check(1);
+        // Different positions, different streams.
+        expect(fromDecode.map((l) => l.norm)).not.toEqual(fromPrefill.map((l) => l.norm));
+
+        // Off again: the same pass reads out nothing new.
+        rt.lens = false;
+        rt.queueStep(want.generated[1], want.prompt.length + 1);
+        rt.queueSample(greedy, 0, 1, 1);
+        await rt.readSample(1);
+        expect(await rt.readLens(1)).toEqual(fromDecode);
+      } finally {
+        rt.destroy();
+      }
+    });
+  }
 });
 
 /**

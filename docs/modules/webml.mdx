@@ -30,7 +30,7 @@ static Spaces (SmolLM WebGPU, Gemma 4 / Bonsai WebGPU kernels, Agate).
 - **Boot:** `initWebmlRelay()` (beside `initAgentRelay`) answers relayed generations and
   keeps the backend told what this window can run.
 - **Settings:** `webml.defaultModel`, `webml.temperature`, `webml.topk`,
-  `webml.thinking`.
+  `webml.lens`, `webml.thinking`.
 - **Agent context:** the playground reports the WebGPU adapter, the loaded model and
   the last reply's speed (read-only; no agent tools).
 
@@ -88,6 +88,10 @@ header is checked before Load enables), weight variant, a download-size warning 
 the first click, per-file progress, then chat with live **tok/s**, **TTFT**, token
 count and stop reason. Each reply's **token-probability strip** shades every token
 by its probability; hovering shows the alternatives and the distribution's entropy.
+With **`webml.lens`** on and a GGUF model loaded, the hover also shows the **logit
+lens**: per layer, the token the model would have said from its residual stream
+there, its probability, and the stream's norm. It roughly halves decode speed (see
+[WebML GGUF engine](../architecture/webml-gguf-engine.mdx#66-later-each-optional)).
 "On this device" lists cached models with their size and deletes them.
 
 ## The `browser` chat provider

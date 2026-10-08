@@ -90,6 +90,14 @@ export const webmlModule: ModuleManifest = {
       default: 5,
     },
     {
+      key: 'webml.lens',
+      title: 'Logit lens',
+      description:
+        'GGUF models: with each generated token, record what the model would have said at every layer and how large its residual stream was there. Shown in the token-probability strip. Costs one more pass over the output layer per token.',
+      type: 'boolean',
+      default: false,
+    },
+    {
       key: 'webml.thinking',
       title: 'Let thinking models think',
       description:

@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
+import { distribution } from '../src/distribution';
 import { tensorBytes } from '../src/gguf/ggml';
 import { dequantize, F16, F32, Q4_0, Q4_K, Q5_0, Q5_K, Q6_K, Q8_0 } from '../src/gguf/quant';
 import { ropeTable } from '../src/gguf/rope';
@@ -19,6 +20,8 @@ import {
   Kernels,
   KERNEL_BLOCK,
   type KvType,
+  LENS_K,
+  LENS_STRIDE,
   MATMUL_TILE,
   uniformBuffer,
   WG,
@@ -846,5 +849,89 @@ describe('elementwise', () => {
     );
     const want = Array.from(y, (v, i) => v + b[i % n]);
     expect(maxRelError(got, want, new Float32Array(rows * n).fill(1))).toBeLessThan(1e-6);
+  });
+});
+
+describe('logit lens', () => {
+  it('lens_in: the last row of the pass, normed into its layer’s row, and its L2 norm', async () => {
+    const { device, k } = await setup();
+    const n = 300;
+    const rows = 3;
+    const layers = 4;
+    const layer = 2;
+    const eps = 1e-6;
+    const x = seeded(rows * n, 40);
+    const g = seeded(n, 41);
+    const lensIn = output(device, layers * n);
+    const readouts = output(device, layers * LENS_STRIDE);
+    const bindings = {
+      0: upload(device, x),
+      1: upload(device, g),
+      2: lensIn,
+      3: readouts,
+      4: uniformBuffer(device, 'p', [n, { f32: eps }, layer, LENS_STRIDE]),
+      5: stepBuffer(device, 7, rows),
+    };
+    const got = await dispatchOnce(device, k.lensIn(), bindings, [1, 1], lensIn, layers * n);
+    const last = x.subarray((rows - 1) * n);
+    let ss = 0;
+    for (const v of last) ss += v * v;
+    const scale = 1 / Math.sqrt(ss / n + eps);
+    const want = Array.from(last, (v, i) => v * scale * g[i]);
+    const row = got.subarray(layer * n, (layer + 1) * n);
+    expect(
+      maxRelError(
+        row,
+        want,
+        want.map((v) => Math.abs(v) + 1e-3),
+      ),
+    ).toBeLessThan(1e-5);
+    // Other layers' rows are untouched.
+    expect(got.subarray(0, layer * n).every((v) => v === 0)).toBe(true);
+    const words = await dispatchOnce(
+      device,
+      k.lensIn(),
+      bindings,
+      [1, 1],
+      readouts,
+      layers * LENS_STRIDE,
+    );
+    expect(words[layer * LENS_STRIDE]).toBeCloseTo(Math.sqrt(ss), 3);
+  });
+
+  it('lens_topk: per row, the entropy and the top tokens with their probabilities', async () => {
+    const { device, k } = await setup();
+    const vocab = 1000;
+    const layers = 3;
+    const logits = seeded(layers * vocab, 42).map((v) => v * 4);
+    // A tie inside the top tokens of row 1: the lower id must come first.
+    const row1 = logits.subarray(vocab);
+    const peak = Math.max(...row1) + 1;
+    row1[700] = peak;
+    row1[300] = peak;
+    const readouts = output(device, layers * LENS_STRIDE);
+    const words = await dispatchOnce(
+      device,
+      k.lensTopk(),
+      {
+        0: upload(device, logits),
+        1: readouts,
+        2: uniformBuffer(device, 'p', [vocab, LENS_STRIDE]),
+      },
+      [layers, 1],
+      readouts,
+      layers * LENS_STRIDE,
+    );
+    const ids = new Uint32Array(words.buffer);
+    for (let l = 0; l < layers; l++) {
+      const want = distribution(logits.subarray(l * vocab, (l + 1) * vocab), LENS_K);
+      const at = l * LENS_STRIDE;
+      expect(words[at + 1]).toBeCloseTo(want.entropy, 4);
+      for (let j = 0; j < LENS_K; j++) {
+        expect(ids[at + 2 + 2 * j], `row ${l} pick ${j}`).toBe(want.top[j].id);
+        expect(words[at + 3 + 2 * j]).toBeCloseTo(want.top[j].p, 5);
+      }
+    }
+    expect([ids[LENS_STRIDE + 2], ids[LENS_STRIDE + 4]]).toEqual([300, 700]);
   });
 });

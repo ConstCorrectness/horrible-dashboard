@@ -9,9 +9,9 @@ sidebar_label: WebML GGUF engine (plan)
 Q4_K_M, Qwen3-1.7B Q4_K_M, Qwen3-0.6B Q8_0, Llama-3.2-1B Q8_0,
 DeepSeek-R1-Distill-Qwen-1.5B Q8_0 (`qwen2`) and Gemma-3-1B Q4_K_M. Still open from
 earlier stages: the `browser`-provider agent round with a Hermes tool call (6.3).
-In 6.6, the `qwen2` and `gemma3` architectures are built
-([6.6](#66-later-each-optional)); SmolLM3, the interpretability readouts and GGUF
-in published Scrive pages are not.** This is the plan [WebML](../modules/webml.mdx) said
+In 6.6, the `qwen2` and `gemma3` architectures and the logit-lens readouts are
+built ([6.6](#66-later-each-optional)). SmolLM3, the readouts in the model
+explorer, and GGUF in published Scrive pages are not.** This is the plan [WebML](../modules/webml.mdx) said
 Phase 6 needed before any code was written. It is split into stages; each one ships
 on its own and ends with a check that has to pass before the next starts. Nothing
 in Phases 0–5 is replaced. The transformers.js worker stays as the engine for ONNX
@@ -741,8 +741,48 @@ this node, so nothing was downloaded: DeepSeek-R1-Distill-Qwen-1.5B Q8_0 (LM Stu
 - **The picker** suggests Qwen2.5-0.5B-Instruct and Gemma-3-1B-it. Neither repo is
   gated.
 
-Not built: SmolLM3, which needs a file this node does not have; the readouts; and
-Scrive pages.
+**Built (2026-10-08): the logit lens during generation.** A `generate` with
+`lens: true` adds, to every `step` event, one readout per layer at the position
+being predicted:
+
+- the residual stream's L2 norm after the layer;
+- the entropy of what the LM head says from it;
+- that distribution's top five tokens.
+
+How the engine does it:
+
+- **Collecting the inputs:** `lens_in.wgsl` runs after each layer's last residual
+  add. It norms the pass's last row with the model's final norm into that layer's
+  row of a `[layers × embd]` buffer.
+- **Per layer, at once:** the head list then runs the LM head over all the rows as
+  one prefill-matmul batch, so it is one pass over the head's weights rather than
+  one per layer. `lens_topk.wgsl` keeps each row's entropy and top tokens. Only
+  `layers × 12` words come back, copied beside the sampler's record so pipelined
+  decode is untouched.
+- **Switching:** the dispatches are flagged and skipped unless `runtime.lens` is set,
+  so the lens costs nothing when off. Its buffers are always allocated,
+  `layers × vocab` floats: 17 MB for Qwen3-0.6B and 27 MB for Gemma-3-1B.
+- **The self-check:** the last layer's lens is the model's own output, so it must
+  reproduce the pass's logits (same top tokens, probabilities and entropy). This is
+  tested on llama, Qwen3 and Gemma 3, after a prefill pass and a decode step. It is
+  the same argument `backend/modules/llamacpp/lens.py` makes for its traces.
+- **Cost, Qwen3-0.6B Q8_0 on the iGPU:**
+  - Decode drops from 19.4 to 9.3 tok/s.
+  - The 28-row lens matmul over the 151,936-row head takes 51 ms per token, against
+    12 ms for the one-row head. It is compute-bound, so it is opt-in.
+- **Where it shows:**
+  - The `webml.lens` setting turns it on in the playground.
+  - `:show: lens` turns it on for `{webllm}`.
+  - The token strip's hover card shows a per-layer table: each layer's best token,
+    in the accent once it is the token chosen, its probability, and a norm bar.
+  - A run kept as a `{tokenviz}` figure carries the lens, so a published page shows
+    it as plain markup.
+- **In the app**, a node Qwen3-0.6B fine-tune answering "the capital of France in
+  one word" shows the expected shape. The early layers say "no" and "events" at a
+  few percent; layer 25 says "France"; layers 26–27 say "Paris".
+
+Not built: SmolLM3, which needs a file this node does not have; the readouts in the
+model explorer (its lens is the llama.cpp trace grid); and Scrive pages.
 
 ## Risks
 

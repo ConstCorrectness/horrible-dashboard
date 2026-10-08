@@ -24,6 +24,8 @@ import kvF16Src from '../wgsl/kv_f16.wgsl?raw';
 import kvF16PackSrc from '../wgsl/kv_f16_pack.wgsl?raw';
 import kvF32Src from '../wgsl/kv_f32.wgsl?raw';
 import kvStoreSrc from '../wgsl/kv_store.wgsl?raw';
+import lensInSrc from '../wgsl/lens_in.wgsl?raw';
+import lensTopkSrc from '../wgsl/lens_topk.wgsl?raw';
 import matmulSrc from '../wgsl/matmul.wgsl?raw';
 import matvecSrc from '../wgsl/matvec.wgsl?raw';
 import rmsnormSrc from '../wgsl/rmsnorm.wgsl?raw';
@@ -156,6 +158,12 @@ export const MAX_HEAD_DIM = 256;
 /** The most query heads per KV head attention.wgsl serves together. */
 export const MAX_GQA_GROUP = 8;
 
+/** Tokens the logit lens reads out per layer (lens_topk.wgsl's K). */
+export const LENS_K = 5;
+
+/** Words per layer in a lens readout: norm, entropy, then (id, p) per token. */
+export const LENS_STRIDE = 2 + 2 * LENS_K;
+
 /** The output tile of one matmul workgroup: weight rows × batch rows (matmul.wgsl). */
 export const MATMUL_TILE = { rows: 64, batch: 32 } as const;
 
@@ -230,6 +238,8 @@ export class Kernels {
   glu = () => this.get('glu', () => gluSrc);
   bias = () => this.get('bias', () => biasSrc);
   sample = () => this.get('sample', () => sampleSrc);
+  lensIn = () => this.get('lens_in', () => lensInSrc);
+  lensTopk = () => this.get('lens_topk', () => lensTopkSrc);
 
   private get(key: string, source: () => string): GPUComputePipeline {
     let pipeline = this.cache.get(key);

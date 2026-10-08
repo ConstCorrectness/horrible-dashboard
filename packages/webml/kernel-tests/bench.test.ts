@@ -11,6 +11,8 @@
  *
  * - **chat**: a short user prompt, 128 greedy tokens. TTFT and decode tok/s — the
  *   plan's ≤ 0.7 s and > 27 tok/s (SmolLM2-360M Q4_K_M) targets.
+ * - **chatLens**: the same chat with the logit lens read out at every token (6.6),
+ *   steps decoded as the playground would: what the lens costs per token.
  * - **agent**: two rounds over one long system prompt (`WEBML_BENCH_SYSTEM`
  *   tokens, default 3500, like an agent's tools and instructions), 32 tokens
  *   each. Round 2 repeats round 1's messages plus a reply and a new question, so
@@ -60,11 +62,11 @@ describe.skipIf(!modelPath)('speed on a real GGUF', () => {
       const loadMs = performance.now() - loadStart - read;
 
       const kwargs = session.thinking ? { enable_thinking: false } : undefined;
-      const run = async (messages: ChatMessage[], maxNewTokens: number) => {
+      const run = async (messages: ChatMessage[], maxNewTokens: number, lens = false) => {
         const started = performance.now();
         const result = await session.generate(
-          { messages, maxNewTokens, temperature: 0, templateKwargs: kwargs },
-          {},
+          { messages, maxNewTokens, temperature: 0, templateKwargs: kwargs, lens },
+          lens ? { onStep: () => undefined } : {},
           () => false,
         );
         return { ...result, wallMs: Math.round(performance.now() - started) };
@@ -74,10 +76,11 @@ describe.skipIf(!modelPath)('speed on a real GGUF', () => {
         // Compile and touch everything once; not measured.
         await run([{ role: 'user', content: 'Hi' }], 4);
 
-        const chat = await run(
-          [{ role: 'user', content: 'Write a short poem about the sea.' }],
-          128,
-        );
+        const poem: ChatMessage[] = [
+          { role: 'user', content: 'Write a short poem about the sea.' },
+        ];
+        const chat = await run(poem, 128);
+        const chatLens = await run(poem, 128, true);
 
         const system = systemPrompt(session, inject('benchSystem'));
         const round1Messages: ChatMessage[] = [
@@ -100,6 +103,14 @@ describe.skipIf(!modelPath)('speed on a real GGUF', () => {
           ? {
               decodeAtPosition: depth,
               decode: await session.runtime.profile('decode', depth),
+              decodeLens: await (async () => {
+                session.runtime.lens = true;
+                try {
+                  return await session.runtime.profile('decode', depth);
+                } finally {
+                  session.runtime.lens = false;
+                }
+              })(),
               prefill: await session.runtime.profile('prefill', 0, session.runtime.batch),
             }
           : null;
@@ -121,6 +132,10 @@ describe.skipIf(!modelPath)('speed on a real GGUF', () => {
             tokens: chat.usage.completionTokens,
             ttftMs: chat.ttftMs,
             decodeTokensPerSecond: +chat.tokensPerSecond.toFixed(1),
+          },
+          chatLens: {
+            tokens: chatLens.usage.completionTokens,
+            decodeTokensPerSecond: +chatLens.tokensPerSecond.toFixed(1),
           },
           agent: [round1, round2].map((r) => ({
             promptTokens: r.usage.promptTokens,

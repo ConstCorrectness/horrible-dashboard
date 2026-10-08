@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { GgufSession } from '../src/gguf/session';
+import { GgufSession, type SessionStep } from '../src/gguf/session';
 import { bytesSource } from '../src/gguf/source';
 import f32Expected from './fixtures/tiny-llama-f32.expected.json';
 import f32Url from './fixtures/tiny-llama-f32.gguf?url';
@@ -71,6 +71,41 @@ describe('GgufSession', () => {
         // Greedy picks the most likely token.
         expect(st.topk[0].token).toBe(st.token);
       }
+    } finally {
+      s.destroy();
+    }
+  });
+
+  it('reads out the logit lens at each token when asked, and only then', async () => {
+    const s = await open();
+    try {
+      const run = async (lens: boolean) => {
+        const steps: SessionStep[] = [];
+        const result = await s.generate(
+          {
+            messages: [{ role: 'user', content: text(f32Expected.prompt) }],
+            temperature: 0,
+            maxNewTokens: 4,
+            lens,
+          },
+          { onStep: (step) => steps.push(step) },
+          () => false,
+        );
+        return { steps, result };
+      };
+      const { steps, result } = await run(true);
+      // The lens alone turns the steps on; no alternatives were asked for.
+      expect(steps).toHaveLength(4);
+      for (const st of steps) {
+        expect(st.topk).toEqual([]);
+        expect(st.layers).toHaveLength(s.runtime.config.layers);
+        // Greedy: the last layer's best token is the token chosen.
+        expect(st.layers!.at(-1)!.top[0].token).toBe(st.token);
+      }
+      // The lens changes what is read out, not what is generated.
+      expect(result.text).toBe(text(f32Expected.generated.slice(0, 4)));
+      expect(s.runtime.lens).toBe(false);
+      expect((await run(false)).steps).toEqual([]);
     } finally {
       s.destroy();
     }

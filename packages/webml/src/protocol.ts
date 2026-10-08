@@ -65,6 +65,12 @@ export interface GenerateRequest {
   temperature?: number;
   /** Record this many alternatives per token as `step` events; 0 / absent = off. */
   topK?: number;
+  /**
+   * GGUF only: read out the logit lens at every generated token — each layer's
+   * residual norm and what the LM head would say from it — into the `step` events.
+   * Costs one more pass over the LM head's weights per token. Ignored by ONNX models.
+   */
+  lens?: boolean;
   /** Extra variables for the chat template (`enable_thinking` for Qwen3, …). */
   templateKwargs?: Record<string, unknown>;
 }
@@ -78,6 +84,16 @@ export type WorkerRequest =
 export interface Alternative {
   token: string;
   p: number;
+}
+
+/** The logit lens at one layer, for the position a token was chosen at. */
+export interface LayerLens {
+  /** L2 norm of the residual stream after the layer. */
+  norm: number;
+  /** Entropy, in bits, of the LM head's distribution over that residual. */
+  entropy: number;
+  /** That distribution's most likely tokens, best first. */
+  top: Alternative[];
 }
 
 export type StopReason = 'eos' | 'length' | 'interrupt';
@@ -121,6 +137,8 @@ export type WorkerEvent =
       /** Shannon entropy of the distribution, in bits. */
       entropy: number;
       topk: Alternative[];
+      /** With `lens`: one entry per layer, first to last. */
+      layers?: LayerLens[];
     }
   | {
       type: 'done';
