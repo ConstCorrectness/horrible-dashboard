@@ -2,20 +2,23 @@
   "name": "@horrible/webml",
   "version": "0.1.0",
   "private": true,
-  "description": "In-browser model inference on WebGPU: the GPU probe, a model worker (transformers.js), its client, the Cache Storage weight cache and a catalog of known-good models. Consumed as source by @horrible/core.",
+  "description": "In-browser model inference on WebGPU: the GPU probe, a model worker (transformers.js), its client, the Cache Storage weight cache, a catalog of known-good models, and the start of our own GGUF engine (header reader, WebGPU device, WGSL kernels). Consumed as source by @horrible/core.",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run --project unit",
+    "test:kernels": "vitest run --project kernels"
   },
   "dependencies": {
     "@huggingface/transformers": "4.3.0"
   },
   "devDependencies": {
+    "@vitest/browser-playwright": "4.1.10",
     "@webgpu/types": "^0.1.74",
+    "playwright": "1.56.1",
     "typescript": "^5.8.0",
     "vitest": "^4.1.10"
   }

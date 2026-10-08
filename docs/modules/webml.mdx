@@ -3,7 +3,9 @@
 **Status: Phases 0–5 of 6 implemented** (foundation, playground, `browser` chat
 provider, and Scrive's `{space}`, `{app}`, `{webllm}` and `{tokenviz}` — see
 [Scrive](./scrive.mdx#hugging-face-spaces)). Phase 6, our own WGSL kernels for GGUF,
-is planned in [WebML GGUF engine](../architecture/webml-gguf-engine.mdx), not started. Language models that
+is planned in [WebML GGUF engine](../architecture/webml-gguf-engine.mdx); its first
+stage (the GGUF header reader and the WebGPU kernel test harness) is built, and nothing
+runs a GGUF model yet. Language models that
 run **in this window, on its GPU**, through WebGPU: no backend round-trip, no
 provider, nothing typed leaves the machine. Modelled on the Hugging Face "webml"
 static Spaces (SmolLM WebGPU, Gemma 4 / Bonsai WebGPU kernels, Agate).

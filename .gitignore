@@ -260,3 +260,7 @@ apps/web/public/models/*.glb
 
 
 benchmark_db_driver/
+
+# Vitest browser-mode failure screenshots
+.vitest-attachments/
+__screenshots__/
