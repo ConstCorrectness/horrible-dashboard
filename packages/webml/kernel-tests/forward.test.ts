@@ -1,7 +1,8 @@
 /**
- * 6.1's exit check, runnable without the Hub: whole forward passes through the
- * WGSL engine against llama.cpp on the same GGUF files
- * (scripts/gen_webml_llama_parity.py).
+ * The 6.1 and 6.3 exit checks, runnable without the Hub: whole forward passes
+ * through the WGSL engine against llama.cpp on the same GGUF files
+ * (scripts/gen_webml_llama_parity.py). The K-quant files were made by llama.cpp's
+ * own quantizer, as real Q4_K_M / Q5_K_M files are.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -13,6 +14,12 @@ import f32Expected from './fixtures/tiny-llama-f32.expected.json';
 import f32Url from './fixtures/tiny-llama-f32.gguf?url';
 import mixedExpected from './fixtures/tiny-llama-mixed.expected.json';
 import mixedUrl from './fixtures/tiny-llama-mixed.gguf?url';
+import llama3Expected from './fixtures/tiny-llama3-q4km.expected.json';
+import llama3Url from './fixtures/tiny-llama3-q4km.gguf?url';
+import qwen3Expected from './fixtures/tiny-qwen3-f32.expected.json';
+import qwen3Url from './fixtures/tiny-qwen3-f32.gguf?url';
+import qwen3kExpected from './fixtures/tiny-qwen3-q5km.expected.json';
+import qwen3kUrl from './fixtures/tiny-qwen3-q5km.gguf?url';
 
 interface Expected {
   prompt: number[];
@@ -104,6 +111,57 @@ describe('forward pass vs llama.cpp', () => {
       rt.destroy();
     }
   });
+
+  it('Qwen3 (Q/K norms, NEOX rope, head size ≠ embd/heads), F32: same greedy continuation', async () => {
+    const want = qwen3Expected as Expected;
+    const rt = await load(qwen3Url);
+    try {
+      expect(rt.config).toMatchObject({ arch: 'qwen3', rope: 'neox', qkNorm: true, headDim: 32 });
+      let logits = await rt.forward(want.prompt);
+      const generated: number[] = [];
+      for (let i = 0; i < want.generated.length; i++) {
+        generated.push(argmax(logits));
+        logits = await rt.forward([generated[i]], want.prompt.length + i);
+      }
+      expect(generated).toEqual(want.generated);
+      const rows = await logitsAlong(rt, [...want.prompt, ...want.generated]);
+      expect(Math.max(...rows.map((r, i) => rowError(r, want.logits[i])))).toBeLessThan(1e-5);
+    } finally {
+      rt.destroy();
+    }
+  });
+
+  for (const [name, url, expected, config] of [
+    [
+      'Llama 3 Q4_K_M (Q4_K + Q6_K, rope_freqs, tied)',
+      llama3Url,
+      llama3Expected,
+      { arch: 'llama', ropeFreqs: true, tiedEmbeddings: true },
+    ],
+    [
+      'Qwen3 Q5_K_M (Q5_K + Q6_K, tied)',
+      qwen3kUrl,
+      qwen3kExpected,
+      { arch: 'qwen3', qkNorm: true, tiedEmbeddings: true },
+    ],
+  ] as const) {
+    it(`${name}: logits close to llama.cpp under teacher forcing`, async () => {
+      const want = expected as Expected;
+      const rt = await load(url);
+      try {
+        expect(rt.config).toMatchObject(config);
+        const rows = await logitsAlong(rt, [...want.prompt, ...want.generated]);
+        const errors = rows.map((r, i) => rowError(r, want.logits[i]));
+        // llama.cpp rounds activations to q8_K before K-quant dot products; we do not.
+        // Measured: worst 0.39%, mean 0.25%, for both files.
+        expect(Math.max(...errors)).toBeLessThan(1e-2);
+        const agree = rows.filter((r, i) => argmax(r) === argmax(want.logits[i])).length;
+        expect(agree / rows.length).toBeGreaterThanOrEqual(0.95);
+      } finally {
+        rt.destroy();
+      }
+    });
+  }
 
   it('refuses positions outside the context and tokens outside the vocabulary', async () => {
     const rt = await load(f32Url, { contextLength: 16 });

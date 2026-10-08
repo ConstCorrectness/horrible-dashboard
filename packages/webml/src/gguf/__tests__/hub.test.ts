@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
+import { GGUF_SUGGESTIONS, ggufSuggestion } from '../../catalog';
 import { inspectHubGguf, listRepoGgufs } from '../hub';
 import { ggufModelId, parseGgufModelId } from '../store';
 
@@ -84,6 +85,17 @@ describe('inspectHubGguf', () => {
   it('says why a file cannot run', async () => {
     const got = await inspectHubGguf('org/q', 'q.gguf', hub({ 'q.gguf': tinyQwen3 }));
     expect(got.ok).toBe(false);
-    expect(got.reasons).toContain('architecture "qwen3" is not supported (supported: llama)');
+    // The header-only fixture lacks most of a block's tensors.
+    expect(got.reasons[0]).toMatch(/^missing tensors: blk\.0\.attn_v\.weight/);
+  });
+});
+
+describe('GGUF suggestions', () => {
+  it('are unique repos naming a file that makes a valid model id', () => {
+    expect(new Set(GGUF_SUGGESTIONS.map((s) => s.repo)).size).toBe(GGUF_SUGGESTIONS.length);
+    for (const s of GGUF_SUGGESTIONS) {
+      expect(parseGgufModelId(ggufModelId(s.repo, s.file))).toEqual({ repo: s.repo, file: s.file });
+      expect(ggufSuggestion(s.repo)).toBe(s);
+    }
   });
 });

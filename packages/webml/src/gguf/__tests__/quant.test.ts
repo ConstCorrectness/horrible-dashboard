@@ -36,7 +36,7 @@ describe('dequantize', () => {
   });
 
   it('refuses unsupported types and partial blocks', () => {
-    expect(() => dequantize(12, new Uint8Array(144), 0, 256)).toThrow(/no dequantizer for Q4_K/);
+    expect(() => dequantize(10, new Uint8Array(84), 0, 256)).toThrow(/no dequantizer for Q2_K/);
     expect(() => dequantize(8, new Uint8Array(34), 0, 16)).toThrow(/whole number of Q8_0 blocks/);
   });
 });

@@ -6,10 +6,10 @@
 import { describe, expect, it } from 'vitest';
 
 import { tensorBytes } from '../src/gguf/ggml';
-import { dequantize, F16, F32, Q4_0, Q8_0 } from '../src/gguf/quant';
+import { dequantize, F16, F32, Q4_0, Q4_K, Q5_K, Q6_K, Q8_0 } from '../src/gguf/quant';
 import { ropeTable } from '../src/gguf/rope';
 import { dispatch1d } from '../src/gpu/dispatch';
-import { Kernels, KERNEL_BLOCK, uniformBuffer, WG } from '../src/gpu/kernels';
+import { blockValues, Kernels, KERNEL_BLOCK, uniformBuffer, WG } from '../src/gpu/kernels';
 import {
   dispatchOnce,
   gpu,
@@ -27,7 +27,13 @@ const TYPES = [
   ['F16', F16],
   ['Q8_0', Q8_0],
   ['Q4_0', Q4_0],
+  ['Q4_K', Q4_K],
+  ['Q5_K', Q5_K],
+  ['Q6_K', Q6_K],
 ] as const;
+
+/** A row length that is two whole blocks of `type`, and at least 96. */
+const colsFor = (type: number) => Math.max(96, 2 * blockValues(type));
 
 async function setup() {
   const d = await gpu();
@@ -39,7 +45,7 @@ describe('matvec', () => {
     it(`${name}: W·x into an offset, position-strided slot`, async () => {
       const { device, k } = await setup();
       const rows = 37;
-      const cols = 128;
+      const cols = colsFor(type);
       const pos = 2;
       const outBase = 5;
       const posStride = 50;
@@ -58,7 +64,7 @@ describe('matvec', () => {
           2: out,
           3: uniformBuffer(device, 'p', [
             rows,
-            cols / KERNEL_BLOCK[type].elems,
+            cols / KERNEL_BLOCK[type].unit,
             rowBytes,
             outBase,
             posStride,
@@ -96,7 +102,7 @@ describe('embed', () => {
     it(`${name}: dequantizes the token's row exactly`, async () => {
       const { device, k } = await setup();
       const rows = 9;
-      const cols = 96;
+      const cols = colsFor(type);
       const token = 6;
       const w = randomWeights(type, rows, cols, 21 + type);
       const rowBytes = tensorBytes(type, cols)!;
@@ -151,6 +157,43 @@ describe('rmsnorm', () => {
         want.map((v) => Math.abs(v) + 1e-3),
       ),
     ).toBeLessThan(1e-5);
+  });
+});
+
+describe('headnorm', () => {
+  it('normalizes each head of a position-strided slot with one shared weight', async () => {
+    const { device, k } = await setup();
+    const heads = 3;
+    const headDim = 40;
+    const pos = 2;
+    const posStride = 130;
+    const eps = 1e-6;
+    const n = pos * posStride + heads * headDim;
+    const v = seeded(n, 14);
+    const g = seeded(headDim, 15);
+    const buf = upload(device, v);
+    const got = await dispatchOnce(
+      device,
+      k.headnorm(),
+      {
+        0: buf,
+        1: upload(device, g),
+        2: uniformBuffer(device, 'p', [headDim, { f32: eps }, 0, posStride]),
+        3: stepBuffer(device, pos),
+      },
+      [heads, 1],
+      buf,
+      n,
+    );
+    const want = Float32Array.from(v);
+    for (let h = 0; h < heads; h++) {
+      const at = pos * posStride + h * headDim;
+      let ss = 0;
+      for (let i = 0; i < headDim; i++) ss += v[at + i] ** 2;
+      const s = 1 / Math.sqrt(ss / headDim + eps);
+      for (let i = 0; i < headDim; i++) want[at + i] = v[at + i] * s * g[i];
+    }
+    expect(maxRelError(got, want, new Float32Array(n).fill(1))).toBeLessThan(1e-5);
   });
 });
 

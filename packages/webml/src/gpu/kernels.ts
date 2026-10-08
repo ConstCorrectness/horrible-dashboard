@@ -11,37 +11,58 @@
  * (BLOCK, BLOCK_BYTES, block_dot, block_get) + the kernel body.
  */
 import { GGML_TYPES } from '../gguf/ggml';
-import { F16, F32, Q4_0, Q8_0 } from '../gguf/quant';
+import { F16, F32, Q4_0, Q4_K, Q5_K, Q6_K, Q8_0 } from '../gguf/quant';
 import accumulateSrc from '../wgsl/accumulate.wgsl?raw';
 import attentionSrc from '../wgsl/attention.wgsl?raw';
 import commonSrc from '../wgsl/common.wgsl?raw';
 import embedSrc from '../wgsl/embed.wgsl?raw';
+import headnormSrc from '../wgsl/headnorm.wgsl?raw';
 import matvecSrc from '../wgsl/matvec.wgsl?raw';
 import rmsnormSrc from '../wgsl/rmsnorm.wgsl?raw';
 import ropeSrc from '../wgsl/rope.wgsl?raw';
 import swigluSrc from '../wgsl/swiglu.wgsl?raw';
 import f16Src from '../wgsl/weights/f16.wgsl?raw';
 import f32Src from '../wgsl/weights/f32.wgsl?raw';
+import kscaleSrc from '../wgsl/weights/kscale.wgsl?raw';
 import q4_0Src from '../wgsl/weights/q4_0.wgsl?raw';
+import q4_kSrc from '../wgsl/weights/q4_k.wgsl?raw';
+import q5_kSrc from '../wgsl/weights/q5_k.wgsl?raw';
+import q6_kSrc from '../wgsl/weights/q6_k.wgsl?raw';
 import q8_0Src from '../wgsl/weights/q8_0.wgsl?raw';
 
 /**
- * How the kernels step through a row of each weight type: values and bytes per
- * step. The ggml block for quants; 4 (F32) or 2 (F16) values per word-aligned read
- * for floats, so their rows must be a multiple of that.
+ * How the kernels step through a row of each weight type, matching the UNIT /
+ * UNITS / BLOCK_BYTES constants of its weights/<type>.wgsl: `unit` values per
+ * piece of work, `units` per block of `bytes`. A row must be whole blocks —
+ * 4 (F32) or 2 (F16) values for the word-aligned float reads, 32 for Q8_0/Q4_0,
+ * 256 for the K-quants (eight units of 32 each).
  */
-export const KERNEL_BLOCK: Readonly<Record<number, { elems: number; bytes: number }>> = {
-  [F32]: { elems: 4, bytes: 16 },
-  [F16]: { elems: 2, bytes: 4 },
-  [Q8_0]: { elems: 32, bytes: 34 },
-  [Q4_0]: { elems: 32, bytes: 18 },
+export const KERNEL_BLOCK: Readonly<
+  Record<number, { unit: number; units: number; bytes: number }>
+> = {
+  [F32]: { unit: 4, units: 1, bytes: 16 },
+  [F16]: { unit: 2, units: 1, bytes: 4 },
+  [Q8_0]: { unit: 32, units: 1, bytes: 34 },
+  [Q4_0]: { unit: 32, units: 1, bytes: 18 },
+  [Q4_K]: { unit: 32, units: 8, bytes: 144 },
+  [Q5_K]: { unit: 32, units: 8, bytes: 176 },
+  [Q6_K]: { unit: 32, units: 8, bytes: 210 },
 };
+
+/** Values in one block of `type`: what a row's length must be a multiple of. */
+export function blockValues(type: number): number {
+  const b = KERNEL_BLOCK[type];
+  return b.unit * b.units;
+}
 
 const WEIGHT_SNIPPETS: Record<number, string> = {
   [F32]: f32Src,
   [F16]: f16Src,
   [Q8_0]: q8_0Src,
   [Q4_0]: q4_0Src,
+  [Q4_K]: kscaleSrc + q4_kSrc,
+  [Q5_K]: kscaleSrc + q5_kSrc,
+  [Q6_K]: q6_kSrc,
 };
 
 /** Workgroup sizes, matching the `WG` constants in the shaders. */
@@ -49,6 +70,7 @@ export const WG = {
   matvec: 64,
   embed: 256,
   rmsnorm: 256,
+  headnorm: 64,
   rope: 64,
   attention: 256,
   swiglu: 256,
@@ -69,6 +91,7 @@ export class Kernels {
   }
 
   rmsnorm = () => this.get('rmsnorm', () => rmsnormSrc);
+  headnorm = () => this.get('headnorm', () => headnormSrc);
   rope = () => this.get('rope', () => ropeSrc);
   attention = () => this.get('attention', () => attentionSrc);
   swiglu = () => this.get('swiglu', () => swigluSrc);

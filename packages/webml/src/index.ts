@@ -10,6 +10,9 @@ export {
 export {
   CATALOG,
   catalogEntry,
+  GGUF_SUGGESTIONS,
+  ggufSuggestion,
+  type GgufSuggestion,
   pickDtype,
   formatBytes,
   type CatalogModel,

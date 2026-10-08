@@ -15,7 +15,7 @@ struct Step {
 }
 
 @group(0) @binding(0) var<storage, read> W: array<u32>;
-// Declared because the weight snippets' block_dot reads it; unused here, so the
+// Declared because the weight snippets' unit_dot reads it; unused here, so the
 // auto layout leaves it out.
 @group(0) @binding(1) var<storage, read> X: array<f32>;
 @group(0) @binding(2) var<storage, read_write> Y: array<f32>;
@@ -28,6 +28,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   if (i >= P.n) {
     return;
   }
-  let b = i / BLOCK;
-  Y[i] = block_get(S.tok_row * P.row_bytes + b * BLOCK_BYTES, i % BLOCK);
+  let per = UNIT * UNITS;
+  Y[i] = block_get(S.tok_row * P.row_bytes + (i / per) * BLOCK_BYTES, i % per);
 }

@@ -96,13 +96,17 @@ export function randomWeights(type: number, rows: number, cols: number, seed: nu
   const noise = seeded(rows * cols * 2, seed);
   let n = 0;
   const next = () => noise[n++ % noise.length];
-  const sizes: Record<number, [number, number]> = {
-    0: [1, 4],
-    1: [1, 2],
-    8: [32, 34],
-    2: [32, 18],
+  // [values, bytes] per block, and where the block's f16 scales sit.
+  const sizes: Record<number, [number, number, number[]]> = {
+    0: [1, 4, []],
+    1: [1, 2, []],
+    8: [32, 34, [0]],
+    2: [32, 18, [0]],
+    12: [256, 144, [0, 2]],
+    13: [256, 176, [0, 2]],
+    14: [256, 210, [208]],
   };
-  const [elems, bytesPer] = sizes[type];
+  const [elems, bytesPer, scales] = sizes[type];
   const out = new Uint8Array((rows * cols * bytesPer) / elems);
   const view = new DataView(out.buffer);
   if (type === 0) {
@@ -112,7 +116,9 @@ export function randomWeights(type: number, rows: number, cols: number, seed: nu
   } else {
     for (let i = 0; i < out.length; i++) out[i] = Math.floor(((next() + 1) / 2) * 256) & 255;
     for (let b = 0; b < out.length / bytesPer; b++) {
-      view.setUint16(b * bytesPer, f32ToF16(0.01 + 0.05 * Math.abs(next())), true);
+      for (const at of scales) {
+        view.setUint16(b * bytesPer + at, f32ToF16(0.002 + 0.01 * Math.abs(next())), true);
+      }
     }
   }
   return out;

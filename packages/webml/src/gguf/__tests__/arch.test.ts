@@ -27,6 +27,9 @@ describe('checkSupport', () => {
         ropeDims: 16,
         ropeBase: 10000,
         rope: 'norm',
+        ropeFreqs: false,
+        qkNorm: false,
+        attentionScale: 0.25,
         rmsEps: Math.fround(1e-5),
         contextLength: 64,
         vocab: 64,
@@ -50,13 +53,33 @@ describe('checkSupport', () => {
   });
 
   it('refuses an unsupported architecture by name', async () => {
+    const h = await header(kernelFixture('tiny-llama-f32.gguf'));
+    h.metadata['general.architecture'] = 'phi3';
+    expect(checkSupport(h)).toEqual({
+      ok: false,
+      reasons: ['architecture "phi3" is not supported (supported: llama, qwen3)'],
+    });
+  });
+
+  it('refuses tensors it would ignore, rather than running without them', async () => {
+    const h = await header(kernelFixture('tiny-llama-f32.gguf'));
+    h.tensors.push({ ...h.tensors[1], name: 'blk.0.attn_q.bias' });
+    const support = checkSupport(h);
+    expect(support.ok).toBe(false);
+    expect(!support.ok && support.reasons).toEqual([
+      'tensors this engine would ignore (so it would compute the wrong thing): blk.0.attn_q.bias',
+    ]);
+  });
+
+  it('names every problem with a malformed qwen3 header', async () => {
     const support = checkSupport(
       await header(new URL('./fixtures/tiny-qwen3.gguf', import.meta.url)),
     );
-    expect(support).toEqual({
-      ok: false,
-      reasons: ['architecture "qwen3" is not supported (supported: llama)'],
-    });
+    // The fixture pins the header reader, so it has only some of a block's tensors.
+    expect(!support.ok && support.reasons).toEqual([
+      'missing tensors: blk.0.attn_v.weight, blk.0.attn_output.weight, blk.0.ffn_norm.weight, ' +
+        'blk.0.ffn_gate.weight, blk.0.attn_k_norm.weight',
+    ]);
   });
 });
 

@@ -1,7 +1,9 @@
 // Y[out] = W · X for one row per workgroup: the decode-time (M = 1) matrix-vector
 // product over quantized weights, dequantized in registers. Composed with
-// common.wgsl and one weights/<type>.wgsl, which define BLOCK, BLOCK_BYTES and
-// block_dot.
+// common.wgsl and one weights/<type>.wgsl, which define UNIT (values per unit of
+// work), UNITS (units per block), BLOCK_BYTES and unit_dot. A ggml block is one
+// unit for the simple types and eight for the K-quants' 256-value super-blocks,
+// so a K-quant row still spreads over the whole workgroup.
 //
 // The output index is out_base + pos * out_pos_stride + row, with `pos` from the
 // per-token Step buffer: that is how K and V projections land straight in their
@@ -11,7 +13,7 @@ const WG: u32 = 64u;
 
 struct Params {
   rows: u32,
-  blocks: u32,
+  units: u32,
   row_bytes: u32,
   out_base: u32,
   out_pos_stride: u32,
@@ -41,8 +43,9 @@ fn main(
     return;
   }
   var acc = 0.0;
-  for (var b = tid; b < P.blocks; b += WG) {
-    acc += block_dot(row * P.row_bytes + b * BLOCK_BYTES, b * BLOCK);
+  for (var u = tid; u < P.units; u += WG) {
+    let b = u / UNITS;
+    acc += unit_dot(row * P.row_bytes + b * BLOCK_BYTES, u % UNITS, u * UNIT);
   }
   partial[tid] = acc;
   workgroupBarrier();

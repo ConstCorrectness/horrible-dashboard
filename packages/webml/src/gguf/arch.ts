@@ -3,10 +3,14 @@
  *
  * The check runs on the header alone (see parse.ts), so the playground can refuse
  * a file before downloading it. Every refusal names what is unsupported; a file is
- * never half-run on a guess.
+ * never half-run on a guess — including a file with tensors the engine would not
+ * use (attention biases on a `llama` file, say), which would otherwise run quietly
+ * without them.
  *
- * 6.1 supports the `llama` architecture with F32 / F16 / Q8_0 / Q4_0 weights and no
- * rope scaling. Later stages widen this table, not the engine's tolerance.
+ * Supported: `llama` (Llama 2/3, SmolLM2; NORM rope, Llama 3's `rope_freqs`) and
+ * `qwen3` (NEOX rope, per-head RMS norms on Q and K), with F32 / F16 / Q8_0 / Q4_0
+ * / Q4_K / Q5_K / Q6_K weights. Later stages widen this table, not the engine's
+ * tolerance.
  */
 import { ggmlTypeName } from './ggml';
 import type { GgufHeader, GgufTensor, GgufValue } from './parse';
@@ -27,6 +31,12 @@ export interface ModelConfig {
   ropeDims: number;
   ropeBase: number;
   rope: RopeKind;
+  /** `rope_freqs.weight`: Llama 3's per-dimension frequency divisors. */
+  ropeFreqs: boolean;
+  /** Per-head RMS norms on Q and K before rope (Qwen3). */
+  qkNorm: boolean;
+  /** Multiplier on Q·K: `attention.scale`, else 1/√headDim. */
+  attentionScale: number;
   rmsEps: number;
   contextLength: number;
   vocab: number;
@@ -36,36 +46,42 @@ export interface ModelConfig {
 
 export type Support = { ok: true; config: ModelConfig } | { ok: false; reasons: string[] };
 
-const SUPPORTED_ARCHS: Record<string, RopeKind> = { llama: 'norm' };
+interface ArchSpec {
+  rope: RopeKind;
+  qkNorm: boolean;
+  /** `rope_freqs.weight` may be present. */
+  ropeFreqs: boolean;
+  /** llama.cpp asserts every head dimension is rotated. */
+  fullRope: boolean;
+}
+
+const ARCHS: Record<string, ArchSpec> = {
+  llama: { rope: 'norm', qkNorm: false, ropeFreqs: true, fullRope: false },
+  qwen3: { rope: 'neox', qkNorm: true, ropeFreqs: false, fullRope: true },
+};
+
+export const SUPPORTED_ARCHS = Object.keys(ARCHS);
 
 function num(meta: Record<string, GgufValue>, key: string): number | undefined {
   const v = meta[key];
   return typeof v === 'number' ? v : undefined;
 }
 
-/** Tensor names one llama-family block must have. */
-const BLOCK_TENSORS = [
-  'attn_norm',
-  'attn_q',
-  'attn_k',
-  'attn_v',
-  'attn_output',
-  'ffn_norm',
-  'ffn_gate',
-  'ffn_up',
-  'ffn_down',
-];
+/** "a, b, c and 4 more" */
+function some(names: string[]): string {
+  return `${names.slice(0, 5).join(', ')}${names.length > 5 ? ` and ${names.length - 5} more` : ''}`;
+}
 
 export function checkSupport(header: GgufHeader): Support {
   const meta = header.metadata;
   const reasons: string[] = [];
   const arch = typeof meta['general.architecture'] === 'string' ? meta['general.architecture'] : '';
-  const rope = SUPPORTED_ARCHS[arch];
-  if (!rope) {
+  const spec = ARCHS[arch];
+  if (!spec) {
     return {
       ok: false,
       reasons: [
-        `architecture "${arch || 'unknown'}" is not supported (supported: ${Object.keys(SUPPORTED_ARCHS).join(', ')})`,
+        `architecture "${arch || 'unknown'}" is not supported (supported: ${SUPPORTED_ARCHS.join(', ')})`,
       ],
     };
   }
@@ -91,52 +107,58 @@ export function checkSupport(header: GgufHeader): Support {
   }
   if (!Number.isInteger(headDim) || headDim <= 0)
     reasons.push(`head size ${headDim} is not a whole number`);
-  if (ropeDims % 2 || ropeDims > headDim)
+  if (ropeDims % 2 || ropeDims > headDim || (spec.fullRope && ropeDims !== headDim))
     reasons.push(`rope.dimension_count ${ropeDims} does not fit head size ${headDim}`);
   const scaling = meta[`${arch}.rope.scaling.type`];
   if (typeof scaling === 'string' && scaling !== 'none')
     reasons.push(`rope scaling "${scaling}" is not supported yet`);
 
   const byName = new Map(header.tensors.map((t) => [t.name, t]));
-  if (byName.has('rope_freqs.weight'))
-    reasons.push('per-dimension rope frequencies (rope_freqs) are not supported yet');
   const embedding = byName.get('token_embd.weight');
-  const required = ['token_embd.weight', 'output_norm.weight'];
-  for (let l = 0; l < layers; l++)
-    for (const t of BLOCK_TENSORS) required.push(`blk.${l}.${t}.weight`);
-  const missing = required.filter((n) => !byName.has(n));
-  if (missing.length) {
+  const vocab = embedding?.shape[1] ?? 0;
+  const q = heads * headDim;
+  const kv = kvHeads * headDim;
+
+  // Every tensor the engine reads, with the shape the metadata implies.
+  const expect = new Map<string, number[]>([
+    ['token_embd.weight', [embd, vocab]],
+    ['output_norm.weight', [embd]],
+  ]);
+  for (let l = 0; l < layers; l++) {
+    const p = `blk.${l}.`;
+    expect.set(`${p}attn_norm.weight`, [embd]);
+    expect.set(`${p}attn_q.weight`, [embd, q]);
+    expect.set(`${p}attn_k.weight`, [embd, kv]);
+    expect.set(`${p}attn_v.weight`, [embd, kv]);
+    expect.set(`${p}attn_output.weight`, [q, embd]);
+    expect.set(`${p}ffn_norm.weight`, [embd]);
+    expect.set(`${p}ffn_gate.weight`, [embd, ffn]);
+    expect.set(`${p}ffn_up.weight`, [embd, ffn]);
+    expect.set(`${p}ffn_down.weight`, [ffn, embd]);
+    if (spec.qkNorm) {
+      expect.set(`${p}attn_q_norm.weight`, [headDim]);
+      expect.set(`${p}attn_k_norm.weight`, [headDim]);
+    }
+  }
+  const optional = new Map<string, number[]>([['output.weight', [embd, vocab]]]);
+  if (spec.ropeFreqs) optional.set('rope_freqs.weight', [ropeDims / 2]);
+
+  const missing = [...expect.keys()].filter((n) => !byName.has(n));
+  if (missing.length) reasons.push(`missing tensors: ${some(missing)}`);
+  const unused = header.tensors
+    .map((t) => t.name)
+    .filter((n) => !expect.has(n) && !optional.has(n));
+  if (unused.length) {
     reasons.push(
-      `missing tensors: ${missing.slice(0, 5).join(', ')}${missing.length > 5 ? ` and ${missing.length - 5} more` : ''}`,
+      `tensors this engine would ignore (so it would compute the wrong thing): ${some(unused)}`,
     );
-  } else if (embedding && Number.isInteger(headDim)) {
+  }
+  if (!missing.length && embedding && Number.isInteger(headDim)) {
     // Shapes must agree with the metadata: a kernel told the wrong row count reads
     // past its buffer, which WGSL clamps silently into garbage, not an error.
-    const vocab = embedding.shape[1] ?? 0;
-    const q = heads * headDim;
-    const kv = kvHeads * headDim;
-    const expect: [string, number[]][] = [
-      ['token_embd.weight', [embd, vocab]],
-      ['output_norm.weight', [embd]],
-    ];
-    if (byName.has('output.weight')) expect.push(['output.weight', [embd, vocab]]);
-    for (let l = 0; l < layers; l++) {
-      const p = `blk.${l}.`;
-      expect.push(
-        [`${p}attn_norm.weight`, [embd]],
-        [`${p}attn_q.weight`, [embd, q]],
-        [`${p}attn_k.weight`, [embd, kv]],
-        [`${p}attn_v.weight`, [embd, kv]],
-        [`${p}attn_output.weight`, [q, embd]],
-        [`${p}ffn_norm.weight`, [embd]],
-        [`${p}ffn_gate.weight`, [embd, ffn]],
-        [`${p}ffn_up.weight`, [embd, ffn]],
-        [`${p}ffn_down.weight`, [ffn, embd]],
-      );
-    }
-    for (const [name, shape] of expect) {
-      const got = byName.get(name)!.shape;
-      if (got.join('×') !== shape.join('×')) {
+    for (const [name, shape] of [...expect, ...optional]) {
+      const got = byName.get(name)?.shape;
+      if (got && got.join('×') !== shape.join('×')) {
         reasons.push(`${name} is ${got.join('×')}, but the metadata implies ${shape.join('×')}`);
       }
     }
@@ -159,10 +181,13 @@ export function checkSupport(header: GgufHeader): Support {
       headDim,
       ropeDims,
       ropeBase: num(meta, `${arch}.rope.freq_base`) ?? 10000,
-      rope,
+      rope: spec.rope,
+      ropeFreqs: byName.has('rope_freqs.weight'),
+      qkNorm: spec.qkNorm,
+      attentionScale: num(meta, `${arch}.attention.scale`) || 1 / Math.sqrt(headDim),
       rmsEps: num(meta, `${arch}.attention.layer_norm_rms_epsilon`) ?? 1e-5,
       contextLength: num(meta, `${arch}.context_length`) ?? 2048,
-      vocab: embedding!.shape[1] ?? 0,
+      vocab,
       tiedEmbeddings: !byName.has('output.weight'),
     },
   };

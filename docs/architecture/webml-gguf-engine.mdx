@@ -4,10 +4,10 @@ sidebar_label: WebML GGUF engine (plan)
 
 # WebML Phase 6: our own WGSL engine for GGUF
 
-**Status: 6.0, 6.1 and 6.2 built. Each still has an exit check to run against a
-real model from the Hub (see [6.0](#60-harness-and-header-no-inference),
-[6.1](#61-correct-slow-llama-only) and [6.2](#62-a-real-engine-in-the-app)).
-6.3 onward not started.** This is the plan [WebML](../modules/webml.mdx) said
+**Status: 6.0–6.3 built. Each still has an exit check to run against a real
+model from the Hub (see [6.0](#60-harness-and-header-no-inference),
+[6.1](#61-correct-slow-llama-only), [6.2](#62-a-real-engine-in-the-app) and
+[6.3](#63-k-quants-and-the-agent-models)). 6.4 onward not started.** This is the plan [WebML](../modules/webml.mdx) said
 Phase 6 needed before any code was written. It is split into stages; each one ships
 on its own and ends with a check that has to pass before the next starts. Nothing
 in Phases 0–5 is replaced. The transformers.js worker stays as the engine for ONNX
@@ -406,6 +406,48 @@ and the kernel harness are green.
 **Exit:** parity as in 6.1 for every model in the table at Q4_K_M. A Qwen3-1.7B
 `browser`-provider agent round emits a Hermes tool call that the backend parses and
 answers, and the next round completes.
+
+**Built (2026-10-08):**
+
+- **K-quants:** Q4_K, Q5_K and Q6_K, as CPU references (equal to the `gguf`
+  package's dequantizers on golden blocks) and as kernels.
+  - The weight snippets now work in 32-value units, and a K-quant super-block is
+    eight of them, so a K-quant row still spreads across the whole workgroup.
+  - Matvec and embed are checked for all seven types.
+  - Planted bugs are caught: Q6_K's second scale ignored, Q5_K's high bit read from
+    the wrong plane, the packed 6-bit scales read from the wrong byte.
+- **Architectures** (`arch.ts`): `qwen3` (NEOX rope, per-head Q/K RMS norms, every
+  head dimension rotated, as llama.cpp asserts) and Llama 3's `rope_freqs`, plus an
+  optional `attention.scale`.
+  - The check now also refuses tensors the engine would ignore. Attention biases on
+    a `llama` file, for example, are refused rather than silently skipped.
+- **Kernels and rope:** a new `headnorm` kernel does the Q/K norms. The rope table
+  divides angles by `rope_freqs` in float32, as ggml does.
+- **Parity with llama.cpp** (`forward.test.ts`). The K-quant files come from llama.cpp's own
+  quantizer (`llama_model_quantize` from F32 sources), so their tensor-type mix is
+  the one real Q4_K_M / Q5_K_M files have.
+  - **Qwen3, F32** (Q/K norms, NEOX, head size 32 with `embd / heads` = 16): the same
+    32 greedy tokens, logits within 5×10⁻⁷.
+  - **Llama, Q4_K_M** (Q4_K + Q6_K, `rope_freqs`, tied): worst 0.39%, mean 0.25%, top
+    token 40 of 40.
+  - **Qwen3, Q5_K_M** (Q5_K + Q6_K, tied): worst 0.39%, mean 0.25%, top token 40 of 40.
+  - The differences come from llama.cpp rounding activations to q8_K for K-quant
+    dot products.
+  - Planted bugs are caught: Q/K norms skipped, `rope_freqs` ignored, Qwen3 with NORM
+    rope.
+- **Suggested repos:** `GGUF_SUGGESTIONS` in `catalog.ts` lists SmolLM2-360M,
+  Qwen3-0.6B/1.7B and Llama-3.2-1B GGUF repos with their tool format and thinking
+  switch, shown as suggestions in the picker. The relay uses a suggestion's tool
+  format as it uses the ONNX catalog's.
+
+**Changed from the plan:** suggestions carry no sizes, unlike the ONNX catalog.
+The picker lists sizes live from the tree API, and the repo and file names could
+not be checked against the Hub from this environment. A suggested file is only
+preselected when the listing has it.
+
+**Still open:** the real-model checks: Q4_K_M parity for each model in the table
+(`gen_webml_llama_parity.py --model` + `real-parity.test.ts`), and a Qwen3-1.7B agent
+round with a Hermes tool call.
 
 ### 6.4 Fast
 

@@ -2,7 +2,7 @@
 /**
  * A GGUF model resident on the GPU, and its forward pass, one token at a time.
  *
- * 6.1: correct and slow. Activations, the KV cache and all accumulation are f32;
+ * Correct and slow (6.1–6.3). Activations, the KV cache and all accumulation are f32;
  * weights stay in their ggml block layout and are dequantized inside the kernels.
  * A prompt is fed as a loop of single-token steps (no batched prefill yet), and
  * the logits come back to the CPU for sampling.
@@ -19,7 +19,7 @@ import { ropeTable } from './rope';
 import { paddedSize, tensorChunks, type RowChunk } from '../gpu/chunks';
 import { maxBindingBytes, type WebmlDevice } from '../gpu/device';
 import { dispatch1d } from '../gpu/dispatch';
-import { bindGroup, Kernels, KERNEL_BLOCK, uniformBuffer, WG } from '../gpu/kernels';
+import { bindGroup, blockValues, Kernels, KERNEL_BLOCK, uniformBuffer, WG } from '../gpu/kernels';
 
 export interface LoadOptions {
   /** Positions to allocate the KV cache for; capped at the model's context length. */
@@ -205,9 +205,8 @@ export class GgufRuntime {
     const matrix = async (name: string): Promise<Matrix> => {
       const t = tensor(header, name);
       const cols = t.shape[0];
-      const block = KERNEL_BLOCK[t.type];
-      if (cols % block.elems) {
-        throw new Error(`${name}: rows of ${cols} are not a multiple of ${block.elems}`);
+      if (cols % blockValues(t.type)) {
+        throw new Error(`${name}: rows of ${cols} are not a multiple of ${blockValues(t.type)}`);
       }
       const rowBytes = tensorBytes(t.type, cols)!;
       const chunks = [];
@@ -261,7 +260,13 @@ export class GgufRuntime {
     );
     this.step = this.buffer('step', 16, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
     const rope = this.f32Buffer('rope', this.context * c.ropeDims);
-    device.queue.writeBuffer(rope, 0, ropeTable(this.context, c.ropeDims, c.ropeBase));
+    let factors: Float32Array | undefined;
+    if (c.ropeFreqs) {
+      const t = tensor(header, 'rope_freqs.weight');
+      factors = dequantize(t.type, await read(t, 0, t.bytes!), 0, t.elements);
+      progress(t.bytes!);
+    }
+    device.queue.writeBuffer(rope, 0, ropeTable(this.context, c.ropeDims, c.ropeBase, factors));
 
     const maxGroups = this.gpu.limits.maxComputeWorkgroupsPerDimension;
     const add = (d: Dispatch) => this.dispatches.push(d);
@@ -278,7 +283,7 @@ export class GgufRuntime {
       for (const { chunk, buffer } of m.chunks) {
         const params = this.uniform(`${m.tensor.name}.params`, [
           chunk.rows,
-          m.cols / block.elems,
+          m.cols / block.unit,
           m.rowBytes,
           outBase + chunk.firstRow,
           outPosStride,
@@ -306,6 +311,24 @@ export class GgufRuntime {
         pipeline,
         group: bindGroup(device, pipeline, { 0: input, 1: weight, 2: output, 3: params }),
         workgroups: [1, 1],
+      });
+    };
+
+    /** Qwen3's per-head RMS norm on Q or K, in place, before rope. */
+    const headNorm = (
+      v: GPUBuffer,
+      heads: number,
+      posStride: number,
+      weight: GPUBuffer,
+      label: string,
+    ) => {
+      const pipeline = k.headnorm();
+      const params = this.uniform(`${label}.params`, [c.headDim, { f32: c.rmsEps }, 0, posStride]);
+      add({
+        label,
+        pipeline,
+        group: bindGroup(device, pipeline, { 0: v, 1: weight, 2: params, 3: this.step }),
+        workgroups: [heads, 1],
       });
     };
 
@@ -371,6 +394,10 @@ export class GgufRuntime {
       matvec(await matrix(`${p}attn_q.weight`), h, q);
       matvec(await matrix(`${p}attn_k.weight`), h, kCache, 0, kvDim);
       matvec(await matrix(`${p}attn_v.weight`), h, vCache, 0, kvDim);
+      if (c.qkNorm) {
+        headNorm(q, c.heads, 0, await vector(`${p}attn_q_norm.weight`), `${p}q_norm`);
+        headNorm(kCache, c.kvHeads, kvDim, await vector(`${p}attn_k_norm.weight`), `${p}k_norm`);
+      }
       ropeOn(q, c.heads, 0, `${p}rope_q`);
       ropeOn(kCache, c.kvHeads, kvDim, `${p}rope_k`);
       {
@@ -381,7 +408,7 @@ export class GgufRuntime {
           kvDim,
           c.heads / c.kvHeads,
           this.context,
-          { f32: 1 / Math.sqrt(c.headDim) },
+          { f32: c.attentionScale },
         ]);
         add({
           label: `${p}attention`,

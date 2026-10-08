@@ -16,6 +16,8 @@ export function ropeTable(
   positions: number,
   dims: number,
   base: number,
+  /** Llama 3's `rope_freqs`: pair i's angle is divided by factors[i]. */
+  factors?: ArrayLike<number>,
 ): Float32Array<ArrayBuffer> {
   const f = Math.fround;
   const scale = f(Math.pow(f(base), f(-2 / dims)));
@@ -23,8 +25,10 @@ export function ropeTable(
   for (let p = 0; p < positions; p++) {
     let theta = f(p);
     for (let i = 0; i < dims / 2; i++) {
-      table[p * dims + 2 * i] = Math.cos(theta);
-      table[p * dims + 2 * i + 1] = Math.sin(theta);
+      // ggml divides in float32 (rope_yarn(theta / ff, …)) before taking cos/sin.
+      const angle = factors ? f(theta / f(factors[i])) : theta;
+      table[p * dims + 2 * i] = Math.cos(angle);
+      table[p * dims + 2 * i + 1] = Math.sin(angle);
       theta = f(theta * scale);
     }
   }

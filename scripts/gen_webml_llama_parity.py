@@ -32,21 +32,56 @@ arithmetic. Regenerate only when the fixture itself must change.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import os
+import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 from gguf import GGMLQuantizationType as Q
 from gguf import GGUFWriter
 from gguf.quants import quantize
+import llama_cpp
 from llama_cpp import Llama
 
 OUT = Path("packages/webml/kernel-tests/fixtures")
 
-EMBD, FFN, LAYERS, HEADS, KV_HEADS, VOCAB, CTX = 64, 96, 2, 4, 2, 64, 64
-HEAD_DIM = EMBD // HEADS
+VOCAB, CTX = 64, 64
 PROMPT_LEN, GENERATE = 8, 32
+
+
+@dataclass(frozen=True)
+class Shape:
+    arch: str = "llama"
+    embd: int = 64
+    ffn: int = 96
+    layers: int = 2
+    heads: int = 4
+    kv_heads: int = 2
+    head_dim: int = 16
+    #: Qwen3's per-head RMS norms on Q and K.
+    qk_norm: bool = False
+    #: Llama 3's rope_freqs tensor (per-pair frequency divisors).
+    rope_freqs: bool = False
+
+
+TINY = Shape()
+# Q/K norms, NEOX rope, and a head size that is not embd / heads (128 ≠ 64).
+QWEN3 = Shape(arch="qwen3", head_dim=32, qk_norm=True)
+# Every row a whole number of 256-value K-quant super-blocks.
+LLAMA3_K = Shape(embd=256, ffn=512, layers=1, heads=4, kv_heads=2, head_dim=64, rope_freqs=True)
+QWEN3_K = Shape(
+    arch="qwen3",
+    embd=256,
+    ffn=512,
+    layers=1,
+    heads=2,
+    kv_heads=1,
+    head_dim=128,
+    qk_norm=True,
+)
 
 # Per-tensor types for the mixed model. Norms stay F32, as llama.cpp's converter
 # leaves every 1-D tensor.
@@ -61,9 +96,13 @@ MIXED = {
     "ffn_down": Q.F16,
 }
 
+# llama.cpp's LLAMA_FTYPE values for llama_model_quantize.
+FTYPE_Q4_K_M, FTYPE_Q5_K_M = 15, 17
 
-def weights(rng: np.random.Generator) -> dict[str, np.ndarray]:
+
+def weights(rng: np.random.Generator, shape: Shape = TINY) -> dict[str, np.ndarray]:
     """Float weights in numpy order ([out, in]), scaled so activations stay O(1)."""
+    e, q, kv = shape.embd, shape.heads * shape.head_dim, shape.kv_heads * shape.head_dim
 
     def linear(out: int, inp: int) -> np.ndarray:
         return (rng.standard_normal((out, inp)) / np.sqrt(inp)).astype(np.float32)
@@ -72,35 +111,51 @@ def weights(rng: np.random.Generator) -> dict[str, np.ndarray]:
         return (1 + 0.1 * rng.standard_normal(n)).astype(np.float32)
 
     w = {
-        "token_embd": rng.standard_normal((VOCAB, EMBD)).astype(np.float32),
-        "output_norm": norm(EMBD),
+        "token_embd": rng.standard_normal((VOCAB, e)).astype(np.float32),
+        "output_norm": norm(e),
         # Peaky enough that greedy picks are not near-ties.
-        "output": 3 * linear(VOCAB, EMBD),
+        "output": 3 * linear(VOCAB, e),
     }
-    for layer in range(LAYERS):
+    for layer in range(shape.layers):
         p = f"blk.{layer}."
-        w[p + "attn_norm"] = norm(EMBD)
-        w[p + "attn_q"] = linear(HEADS * HEAD_DIM, EMBD)
-        w[p + "attn_k"] = linear(KV_HEADS * HEAD_DIM, EMBD)
-        w[p + "attn_v"] = linear(KV_HEADS * HEAD_DIM, EMBD)
-        w[p + "attn_output"] = linear(EMBD, HEADS * HEAD_DIM)
-        w[p + "ffn_norm"] = norm(EMBD)
-        w[p + "ffn_gate"] = linear(FFN, EMBD)
-        w[p + "ffn_up"] = linear(FFN, EMBD)
-        w[p + "ffn_down"] = linear(EMBD, FFN)
+        w[p + "attn_norm"] = norm(e)
+        w[p + "attn_q"] = linear(q, e)
+        w[p + "attn_k"] = linear(kv, e)
+        w[p + "attn_v"] = linear(kv, e)
+        w[p + "attn_output"] = linear(e, q)
+        w[p + "ffn_norm"] = norm(e)
+        w[p + "ffn_gate"] = linear(shape.ffn, e)
+        w[p + "ffn_up"] = linear(shape.ffn, e)
+        w[p + "ffn_down"] = linear(e, shape.ffn)
+        if shape.qk_norm:
+            w[p + "attn_q_norm"] = norm(shape.head_dim)
+            w[p + "attn_k_norm"] = norm(shape.head_dim)
+    if shape.rope_freqs:
+        # Llama 3 divides the low frequencies by up to 8.
+        w["rope_freqs"] = np.linspace(1, 8, shape.head_dim // 2).astype(np.float32)
     return w
 
 
-def write_model(path: Path, w: dict[str, np.ndarray], mixed: bool) -> None:
-    g = GGUFWriter(str(path), "llama")
+def write_model(
+    path: Path,
+    w: dict[str, np.ndarray],
+    mixed: bool = False,
+    shape: Shape = TINY,
+    tied: bool | None = None,
+) -> None:
+    tied = mixed if tied is None else tied
+    g = GGUFWriter(str(path), shape.arch)
     g.add_name(path.stem)
-    g.add_block_count(LAYERS)
+    g.add_block_count(shape.layers)
     g.add_context_length(CTX)
-    g.add_embedding_length(EMBD)
-    g.add_feed_forward_length(FFN)
-    g.add_head_count(HEADS)
-    g.add_head_count_kv(KV_HEADS)
-    g.add_rope_dimension_count(HEAD_DIM)
+    g.add_embedding_length(shape.embd)
+    g.add_feed_forward_length(shape.ffn)
+    g.add_head_count(shape.heads)
+    g.add_head_count_kv(shape.kv_heads)
+    if shape.head_dim != shape.embd // shape.heads:
+        g.add_key_length(shape.head_dim)
+        g.add_value_length(shape.head_dim)
+    g.add_rope_dimension_count(shape.head_dim)
     g.add_rope_freq_base(10000.0)
     g.add_layer_norm_rms_eps(1e-5)
     # A vocabulary llama.cpp will load. The parity tests feed ids; the session tests
@@ -117,7 +172,7 @@ def write_model(path: Path, w: dict[str, np.ndarray], mixed: bool) -> None:
     g.add_chat_template("{% for m in messages %}{{ m.content }}{% endfor %}")
 
     for name, value in w.items():
-        if mixed and name == "output":
+        if tied and name == "output":
             continue  # tied: the head is token_embd
         kind = name.split(".")[-1]
         qtype = MIXED.get(kind, Q.F32) if mixed else Q.F32
@@ -132,6 +187,19 @@ def write_model(path: Path, w: dict[str, np.ndarray], mixed: bool) -> None:
     g.write_kv_data_to_file()
     g.write_tensors_to_file()
     g.close()
+
+
+def llama_quantize(src: Path, dst: Path, ftype: int) -> None:
+    """Quantize with llama.cpp itself — how real Q4_K_M / Q5_K_M files are made,
+    including which tensors it keeps at higher precision."""
+    params = llama_cpp.llama_model_quantize_default_params()
+    params.ftype = ftype
+    params.nthread = 1
+    rc = llama_cpp.llama_model_quantize(
+        str(src).encode(), str(dst).encode(), ctypes.byref(params)
+    )
+    if rc != 0:
+        raise RuntimeError(f"llama_model_quantize failed ({rc})")
 
 
 def reference(
@@ -242,11 +310,32 @@ def main() -> None:
     for stem, mixed in (("tiny-llama-f32", False), ("tiny-llama-mixed", True)):
         model = OUT / f"{stem}.gguf"
         write_model(model, w, mixed)
-        ref = reference(model, prompt, forced if mixed else None)
-        (OUT / f"{stem}.expected.json").write_text(
-            json.dumps(ref) + "\n", encoding="utf-8"
-        )
-        print(f"{model}: {model.stat().st_size} bytes, generated {ref['generated']}")
+        record(model, reference(model, prompt, forced if mixed else None))
+
+    # 6.3: Qwen3 in F32 (greedy, tight), and K-quant models made by llama.cpp's own
+    # quantizer from F32 sources (teacher-forced: llama.cpp rounds activations to
+    # q8_K for K-quant dot products; the engine keeps them f32).
+    qwen3 = OUT / "tiny-qwen3-f32.gguf"
+    write_model(qwen3, weights(np.random.default_rng(62), QWEN3), shape=QWEN3)
+    record(qwen3, reference(qwen3, prompt, None))
+    for stem, shape, seed, ftype in (
+        ("tiny-llama3-q4km", LLAMA3_K, 63, FTYPE_Q4_K_M),
+        ("tiny-qwen3-q5km", QWEN3_K, 64, FTYPE_Q5_K_M),
+    ):
+        model = OUT / f"{stem}.gguf"
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "f32.gguf"
+            write_model(
+                src, weights(np.random.default_rng(seed), shape), shape=shape, tied=True
+            )
+            llama_quantize(src, model, ftype)
+        record(model, reference(model, prompt, forced))
+
+
+def record(model: Path, ref: dict[str, object]) -> None:
+    out = model.with_name(model.name.removesuffix(".gguf") + ".expected.json")
+    out.write_text(json.dumps(ref) + "\n", encoding="utf-8")
+    print(f"{model}: {model.stat().st_size} bytes, generated {ref['generated']}")
 
 
 if __name__ == "__main__":

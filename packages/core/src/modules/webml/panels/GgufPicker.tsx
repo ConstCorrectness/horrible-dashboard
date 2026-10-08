@@ -8,7 +8,9 @@ import { useEffect, useState } from 'react';
 
 import {
   formatBytes,
+  GGUF_SUGGESTIONS,
   ggufModelId,
+  ggufSuggestion,
   inspectHubGguf,
   listRepoGgufs,
   parseGgufModelId,
@@ -75,7 +77,10 @@ export function GgufPicker({
     try {
       const files = (await listRepoGgufs(r)).filter((f) => !f.isProjector);
       setListing({ kind: 'ok', files });
-      if (!files.some((f) => f.path === file)) setFile(files[0]?.path ?? '');
+      if (!files.some((f) => f.path === file)) {
+        const preferred = ggufSuggestion(r)?.file;
+        setFile(files.find((f) => f.path === preferred)?.path ?? files[0]?.path ?? '');
+      }
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err);
       setListing({ kind: 'error', message: `could not list ${r} on huggingface.co: ${why}` });
@@ -89,6 +94,7 @@ export function GgufPicker({
           type="text"
           aria-label="Hub repo with GGUF files"
           placeholder="owner/name (GGUF repo)"
+          list="webml-gguf-suggestions"
           value={repo}
           onChange={(e) => setRepo(e.target.value)}
           onKeyDown={(e) => {
@@ -103,6 +109,13 @@ export function GgufPicker({
           {listing.kind === 'loading' ? 'Finding…' : 'Find'}
         </button>
       </div>
+      <datalist id="webml-gguf-suggestions">
+        {GGUF_SUGGESTIONS.map((s) => (
+          <option key={s.repo} value={s.repo}>
+            {s.label} · {s.params}
+          </option>
+        ))}
+      </datalist>
       {listing.kind === 'error' && <span className="webml-error">{listing.message}</span>}
       {listing.kind === 'ok' &&
         (listing.files.length === 0 ? (

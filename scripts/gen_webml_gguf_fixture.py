@@ -166,6 +166,24 @@ def golden() -> None:
             "hex": raw.tobytes().hex(),
             "values": [float(v) for v in deq.astype(np.float32)],
         }
+    # K-quants: numpy cannot quantize to them, so the blocks are random bytes with
+    # sane f16 scales written in (random scale bytes would include NaN and Inf).
+    for qtype, size, halves in (
+        (Q.Q4_K, 144, (0, 2)),
+        (Q.Q5_K, 176, (0, 2)),
+        (Q.Q6_K, 210, (208,)),
+    ):
+        raw = rng.integers(0, 256, size=3 * size, dtype=np.uint8)
+        for b in range(3):
+            for h in halves:
+                scale = np.float16(rng.uniform(0.001, 0.05))
+                raw[b * size + h : b * size + h + 2] = np.frombuffer(scale.tobytes(), np.uint8)
+        deq = dequantize(raw, qtype).reshape(-1)
+        out[qtype.name] = {
+            "type": int(qtype),
+            "hex": raw.tobytes().hex(),
+            "values": [float(v) for v in deq.astype(np.float32)],
+        }
     GOLDEN.write_text(json.dumps(out) + "\n", encoding="utf-8")
 
 

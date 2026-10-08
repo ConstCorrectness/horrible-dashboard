@@ -11,6 +11,8 @@
  */
 import {
   catalogEntry,
+  ggufSuggestion,
+  parseGgufModelId,
   listCachedModels,
   pickDtype,
   probeWebGpu,
@@ -76,8 +78,14 @@ async function run(data: GenerateRequestData): Promise<void> {
     }
     // Tools go to the template only for models that write a format we parse; a
     // catalog model without one would just be confused by a long tool preamble.
-    // (A GGUF has no catalog entry; its template decides what to do with tools.)
-    const tools = data.tools?.length && entry?.toolFormat !== null ? data.tools : undefined;
+    // A suggested GGUF repo says the same; any other GGUF's template decides.
+    const ref = parseGgufModelId(model);
+    const toolFormat = entry
+      ? entry.toolFormat
+      : ref
+        ? ggufSuggestion(ref.repo)?.toolFormat
+        : undefined;
+    const tools = data.tools?.length && toolFormat !== null ? data.tools : undefined;
     const loaded = engine.getState();
     const thinking = entry?.thinking ?? (loaded.kind === 'ready' && loaded.thinking === true);
     const result = await engine.generate(
