@@ -17,22 +17,29 @@ if (existsSync(rootEnv)) {
 export default defineConfig({
   plugins: [react()],
   optimizeDeps: {
+    // Scan only the app. Vite's default is every .html file here, and the dev-only
+    // `operator-check.html` imports `three`, which this package does not depend on:
+    // one unresolvable import fails the whole startup scan, Vite then skips
+    // pre-bundling, finds each dependency only when a pane first loads it, and
+    // reloads the page every time it does ("new dependencies optimized: katex …
+    // reloading") — the dashboard blinking away and back mid-use.
+    entries: ['index.html'],
     include: [
       '@codemirror/state',
       '@codemirror/view',
       '@codemirror/commands',
       '@codemirror/language',
       '@codemirror/autocomplete',
-      '@codemirror/search',
       '@codemirror/lint',
       '@codemirror/theme-one-dark',
       '@codemirror/lang-python',
       '@codemirror/lang-markdown',
       '@codemirror/lang-javascript',
       'codemirror',
-      '@mui/material',
-      '@emotion/react',
-      '@emotion/styled',
+      // Dependencies of @horrible/core (consumed as source), not of this app.
+      '@horrible/core > @mui/material',
+      '@horrible/core > @emotion/react',
+      '@horrible/core > @emotion/styled',
     ],
   },
   build: {
