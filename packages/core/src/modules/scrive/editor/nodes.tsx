@@ -38,6 +38,14 @@ import { openClip } from '../open';
 import { CellOutputs, CellRunBar, usePageCells } from '../render/CellOutputs';
 import { relativeTo } from '../render/directives';
 import { SceneFrame } from '../render/SceneFrame';
+import { fetchSpaceInfo, parseSpaceRef } from '../render/space';
+import { SpaceEmbed } from '../render/SpaceEmbed';
+import { AppFrame, parseAppRef } from '../render/AppFrame';
+import { listApps, type AppInfo } from '../api';
+import { openApp } from '../open';
+import { TokenViz } from '../render/TokenViz';
+import { WebLlm } from '../render/WebLlm';
+import type { TokenRun } from '../../../token-strip/TokenStrip';
 import { assetUrl } from '../render/directives';
 import { MystView } from '../render/MystView';
 import { useScriveDoc } from './context';
@@ -745,6 +753,226 @@ export const R3fScene = Node.create({
   },
   addNodeView() {
     return ReactNodeViewRenderer(R3fSceneView);
+  },
+});
+
+// ── live embeds ({space}, …) ───────────────────────────────────────────────────
+
+/** Fields for a `{space}`: its id, and the height of the frame once it is run. */
+function SpaceFields({ props, inputRef }: { props: ViewProps; inputRef: React.Ref<HTMLInputElement & HTMLTextAreaElement> }) {
+  const src = String(props.node.attrs.src ?? '');
+  const options = (props.node.attrs.options as Record<string, unknown> | null) ?? {};
+  const [note, setNote] = useState<string | null>(null);
+  const setOptions = (next: Record<string, unknown>) => props.updateAttributes({ options: next });
+  // The embed host is the Hub's to say (static Spaces live on another domain), so it
+  // is looked up once, when the id is settled, and written down as `:host:` — a
+  // published page cannot ask.
+  const resolve = () => {
+    const ref = parseSpaceRef(src);
+    if (!ref) {
+      setNote('A Space is owner/name, or its huggingface.co/spaces/… URL');
+      return;
+    }
+    if (ref.id !== src) props.updateAttributes({ src: ref.id });
+    setNote('Looking up the Space…');
+    fetchSpaceInfo(ref.id).then(
+      (info) => {
+        setOptions({ ...options, host: info.host.replace(/^https:\/\//, '') });
+        setNote(`${info.title} · ${info.sdk} Space`);
+      },
+      (e: unknown) => setNote(e instanceof Error ? e.message : String(e)),
+    );
+  };
+  return (
+    <div className="scrive-ed-fields is-image">
+      <input
+        ref={inputRef}
+        type="text"
+        className="scrive-ed-field"
+        aria-label="Hugging Face Space"
+        placeholder="owner/name"
+        value={src}
+        onChange={(e) => props.updateAttributes({ src: e.target.value })}
+        onBlur={resolve}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') resolve();
+          fieldKeys(props)(e);
+        }}
+      />
+      <input
+        type="number"
+        className="scrive-ed-field"
+        aria-label="Height in pixels"
+        value={String(options.height ?? '')}
+        placeholder="640"
+        onChange={(e) => {
+          const next = { ...options };
+          if (e.target.value) next.height = e.target.value;
+          else delete next.height;
+          setOptions(next);
+        }}
+        onKeyDown={fieldKeys(props)}
+      />
+      {note && <span className="scrive-meta">{note}</span>}
+    </div>
+  );
+}
+
+/** Fields for an `{app}`: which of the site's apps, and the frame's height. */
+function AppFields({
+  props,
+  inputRef,
+}: {
+  props: ViewProps;
+  inputRef: React.Ref<HTMLInputElement & HTMLTextAreaElement>;
+}) {
+  const { site } = useScriveDoc();
+  const src = String(props.node.attrs.src ?? '');
+  const options = (props.node.attrs.options as Record<string, unknown> | null) ?? {};
+  const [known, setKnown] = useState<AppInfo[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    listApps(site).then(
+      (a) => live && setKnown(a),
+      () => live && setKnown([]),
+    );
+    return () => {
+      live = false;
+    };
+  }, [site]);
+  const name = parseAppRef(src);
+  const exists = !name || !known || known.some((a) => a.name === name);
+  return (
+    <div className="scrive-ed-fields is-image">
+      <input
+        ref={inputRef}
+        type="text"
+        className="scrive-ed-field"
+        aria-label="App folder"
+        placeholder="app name (a folder in apps/)"
+        list={`scrive-apps-${site}`}
+        value={src}
+        onChange={(e) => props.updateAttributes({ src: e.target.value })}
+        onKeyDown={fieldKeys(props)}
+      />
+      <datalist id={`scrive-apps-${site}`}>
+        {(known ?? []).map((a) => (
+          <option key={a.name} value={a.name}>
+            {a.title}
+          </option>
+        ))}
+      </datalist>
+      <input
+        type="number"
+        className="scrive-ed-field"
+        aria-label="Height in pixels"
+        value={String(options.height ?? '')}
+        placeholder="600"
+        onChange={(e) => {
+          const next = { ...options };
+          if (e.target.value) next.height = e.target.value;
+          else delete next.height;
+          props.updateAttributes({ options: next });
+        }}
+        onKeyDown={fieldKeys(props)}
+      />
+      {!exists && (
+        <button type="button" className="scrive-app-tool" onClick={() => openApp(site)}>
+          No apps/{name} yet — make or import one
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ScriveEmbedView(props: ViewProps) {
+  const name = String(props.node.attrs.name ?? '');
+  const src = String(props.node.attrs.src ?? '');
+  const options = (props.node.attrs.options as Record<string, unknown> | null) ?? {};
+  const { open, ref } = useEditing(props);
+  const { site, pagePath } = useScriveDoc();
+  const app = name === 'app' ? parseAppRef(src) : null;
+  // A reply kept from a {webllm} block: its run saved as data/<stem>.json and a
+  // {tokenviz} figure inserted right after the block.
+  const keep = async (run: TokenRun) => {
+    const stem = `${(run.model.split('/').pop() ?? 'model').toLowerCase()}-${Date.now().toString(36)}`;
+    const file = new File([JSON.stringify(run, null, 2)], `${stem}.json`, { type: 'application/json' });
+    const saved = await uploadAsset(site, file, 'data');
+    const pos = props.getPos();
+    if (typeof pos !== 'number') return;
+    props.editor
+      .chain()
+      .insertContentAt(pos + props.node.nodeSize, {
+        type: 'scriveEmbed',
+        attrs: { name: 'tokenviz', src: relativeTo(pagePath, saved), options: {} },
+      })
+      .run();
+  };
+  return (
+    <NodeViewWrapper className="scrive-ed-block" data-selected={props.selected}>
+      <div contentEditable={false}>
+        {name === 'space' && <SpaceEmbed arg={src} options={options} />}
+        {open && name === 'space' && <SpaceFields props={props} inputRef={ref} />}
+        {name === 'app' && (
+          <AppFrame
+            site={site}
+            name={src}
+            height={Number(options.height) || 600}
+            onPreview={app ? () => openApp(site, app) : undefined}
+          />
+        )}
+        {open && name === 'app' && <AppFields props={props} inputRef={ref} />}
+        {name === 'webllm' && <WebLlm arg={src} options={options} onKeep={(run) => void keep(run)} />}
+        {name === 'tokenviz' && <TokenViz site={site} pagePath={pagePath} src={src} />}
+        {open && (name === 'webllm' || name === 'tokenviz') && (
+          <div className="scrive-ed-fields is-image">
+            <input
+              ref={ref}
+              type="text"
+              className="scrive-ed-field"
+              aria-label={name === 'webllm' ? 'Hugging Face model id' : 'Run file (JSON)'}
+              placeholder={name === 'webllm' ? 'owner/model (ONNX)' : 'data/run.json'}
+              value={src}
+              onChange={(e) => props.updateAttributes({ src: e.target.value })}
+              onKeyDown={fieldKeys(props)}
+            />
+          </div>
+        )}
+      </div>
+    </NodeViewWrapper>
+  );
+}
+
+/** Scrive's live embeds (`EMBED_DIRECTIVES` in myst/pm.ts): one node, drawn by name. */
+export const ScriveEmbed = Node.create({
+  name: 'scriveEmbed',
+  group: 'block',
+  atom: true,
+  selectable: true,
+  draggable: true,
+  addAttributes() {
+    return {
+      name: {
+        default: '',
+        parseHTML: (el) => el.getAttribute('data-embed') ?? '',
+        renderHTML: (a) => ({ 'data-embed': a.name }),
+      },
+      src: {
+        default: '',
+        parseHTML: (el) => el.getAttribute('data-src') ?? '',
+        renderHTML: (a) => ({ 'data-src': a.src }),
+      },
+      options: { default: {}, rendered: false },
+    };
+  },
+  parseHTML() {
+    return [{ tag: 'div[data-embed]' }];
+  },
+  renderHTML({ HTMLAttributes }) {
+    return ['div', mergeAttributes(HTMLAttributes)];
+  },
+  addNodeView() {
+    return ReactNodeViewRenderer(ScriveEmbedView);
   },
 });
 

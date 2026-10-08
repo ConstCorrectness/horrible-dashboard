@@ -48,6 +48,21 @@ describe('finding the URL in a GIF payload', () => {
     expect(extractGifUrl({ gif: { id: 'abc' } })).toBeNull();
     expect(extractGifUrl({ text: 'hi' })).toBeNull();
   });
+
+  it('reconstructs a media URL from a bare Giphy id', () => {
+    // Clubhouse broadcasts a GIF reaction as a `giphy_id`, not a URL. Rebuild it to
+    // an allowlisted media.giphy.com URL so received GIFs actually render.
+    expect(extractGifUrl({ giphy_id: 'eA0ISBY2td31e' })).toBe(
+      'https://media.giphy.com/media/eA0ISBY2td31e/giphy.gif',
+    );
+    expect(extractGifUrl({ gif: { id: 'eA0ISBY2td31e' } })).toBe(
+      'https://media.giphy.com/media/eA0ISBY2td31e/giphy.gif',
+    );
+    // A short/garbage id is not treated as a Giphy token.
+    expect(extractGifUrl({ giphy_id: 'no!' })).toBeNull();
+    // The message id is not a Giphy id at the top level.
+    expect(extractGifUrl({ id: 'abcdef123456' })).toBeNull();
+  });
 });
 
 describe('reading a reaction off a room message', () => {
@@ -55,6 +70,28 @@ describe('reading a reaction off a room message', () => {
     expect(parseRoomReaction({ action: 'react', emoji: '🔥' })).toEqual({ emoji: '🔥' });
     expect(parseRoomReaction({ action: 'emoji_reaction', emoji: '👏' })).toEqual({ emoji: '👏' });
     expect(parseRoomReaction({ reaction: '❤️' })).toEqual({ emoji: '❤️' });
+  });
+
+  it('captures the target of a directed reaction, and leaves it off a room-wide one', () => {
+    // Real wire shape (2026-10-08): emoji_reaction with target_user_id.
+    expect(
+      parseRoomReaction({
+        action: 'emoji_reaction',
+        channel: 'xkvQ2QZD',
+        user_id: 2125780680,
+        emoji: '🌸',
+        target_user_id: null,
+      }),
+    ).toEqual({ emoji: '🌸' });
+    expect(
+      parseRoomReaction({
+        action: 'emoji_reaction',
+        channel: 'xkvQ2QZD',
+        user_id: 2125780680,
+        emoji: '🔥',
+        target_user_id: 760006201,
+      }),
+    ).toEqual({ emoji: '🔥', targetUserId: 760006201 });
   });
 
   it('reads a GIF reaction from an allowed host', () => {

@@ -83,3 +83,10 @@ Footnotes work[^fn] and so do [reference links][docs].
 :height: 420
 :params: {"samples": 500}
 ```
+
+A live demo from the Hub:
+
+:::{space} webml-community/smollm-webgpu
+:height: 640
+:host: webml-community-smollm-webgpu.static.hf.space
+:::

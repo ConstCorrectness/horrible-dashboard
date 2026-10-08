@@ -75,6 +75,55 @@ export function createSite(id: string, title: string): Promise<SiteMeta> {
   return apiPost('/scrive/sites', { id, title });
 }
 
+// ── web apps (`apps/<name>/`, run on their own origin) ─────────────────────────
+
+export interface AppInfo {
+  name: string;
+  title: string;
+  hasIndex: boolean;
+  files: number;
+  bytes: number;
+  /** `SPACE.json` of an imported Space. */
+  source: {
+    space: string;
+    revision: string;
+    license: string;
+    url: string;
+    skipped: { path: string; size: number; reason: string }[];
+  } | null;
+  skipped: { path: string; size: number; reason: string }[];
+}
+
+export interface AppsOrigin {
+  origin: string | null;
+  reason: string;
+}
+
+let appsOriginPromise: Promise<AppsOrigin> | null = null;
+
+/** Where this backend serves web apps (`http://scrive-apps.localhost:<port>`), once. */
+export function getAppsOrigin(): Promise<AppsOrigin> {
+  appsOriginPromise ??= apiGet<AppsOrigin>('/scrive/apps-origin');
+  appsOriginPromise.catch(() => (appsOriginPromise = null));
+  return appsOriginPromise;
+}
+
+export function listApps(site: string): Promise<AppInfo[]> {
+  return apiGet(`/scrive/sites/${site}/apps`);
+}
+
+export function listAppTemplates(): Promise<string[]> {
+  return apiGet('/scrive/app-templates');
+}
+
+export function createApp(site: string, name: string, template: string): Promise<AppInfo> {
+  return apiPost(`/scrive/sites/${site}/apps`, { name, template });
+}
+
+export function importSpaceApp(site: string, space: string, name?: string): Promise<AppInfo> {
+  return apiPost(`/scrive/sites/${site}/apps/import`, { space, name: name || null });
+}
+
 export function getSite(site: string): Promise<{ site: SiteMeta; config: SiteConfig }> {
   return apiGet(`/scrive/sites/${site}`);
 }
@@ -344,6 +393,8 @@ export interface SiteBundle {
   assets: string[];
   /** Scene sources the pages embed (site paths). */
   scenes?: string[];
+  /** Web apps the pages embed, by name. */
+  apps?: string[];
   cards: { path: string; title: string; description: string; kicker: string }[];
   pages: string[];
 }

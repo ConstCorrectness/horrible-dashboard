@@ -24,6 +24,7 @@ describe('scrive manifest', () => {
       'scrive.outbox',
       'scrive.clip',
       'scrive.live',
+      'scrive.app',
     ]);
     const commands = (scriveModule.commands ?? []).map((c) => c.id);
     expect(commands).toEqual(

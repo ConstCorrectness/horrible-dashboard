@@ -9,7 +9,20 @@
  */
 
 /** Shown until the room's own `emoji_reaction_options` arrive on join. */
-export const DEFAULT_REACTIONS = ['❤️', '😂', '👍', '🙌', '👏', '🔥'];
+export const DEFAULT_REACTIONS = [
+  '❤️',
+  '😂',
+  '👍',
+  '🙌',
+  '👏',
+  '🔥',
+  '✨',
+  '💯',
+  '🎉',
+  '😮',
+  '🙏',
+  '👀',
+];
 
 /**
  * Floaters kept on screen at once. A room where someone holds a reaction down (or a
@@ -21,6 +34,14 @@ export const MAX_FLOATERS = 30;
 export interface ParsedReaction {
   emoji?: string;
   gifUrl?: string;
+  /**
+   * The user a reaction is aimed at. A room-wide reaction leaves this unset
+   * (`target_user_id: null` on the wire); a reaction sent *at* one person carries
+   * their id here, so the floater can be anchored on that person's tile — the "target"
+   * visible in the room. Still delivered on the room-wide channel, so every client
+   * anchors it the same way.
+   */
+  targetUserId?: number;
 }
 
 /**
@@ -52,6 +73,28 @@ export function isAllowedGifUrl(raw: string): boolean {
 }
 
 const URL_KEYS = ['gif_url', 'gifUrl', 'url', 'media_url', 'image_url', 'original_url'];
+/**
+ * Clubhouse broadcasts a GIF reaction as a bare Giphy id (the `giphy_id` field its
+ * composer sends), not a full URL — so a client that only looks for a URL renders
+ * nothing, which is why received GIFs went unseen. A Giphy id reconstructs to a media
+ * URL on `media.giphy.com`, which is already on the allowlist. The id is validated as
+ * Giphy's own alphanumeric token so nothing attacker-controlled lands in the path.
+ */
+const GIPHY_ID_KEYS = ['giphy_id', 'giphyId', 'gif_id', 'gifId'];
+const GIPHY_ID = /^[A-Za-z0-9]{6,64}$/;
+
+function giphyUrlFromId(obj: Record<string, unknown>, allowBareId = false): string | null {
+  // A bare `id` is only a Giphy id inside a gif sub-object; on the top-level message
+  // `id` is the message id, so it is read only when `allowBareId` is set.
+  const keys = allowBareId ? [...GIPHY_ID_KEYS, 'id'] : GIPHY_ID_KEYS;
+  for (const key of keys) {
+    const v = obj[key];
+    if (typeof v === 'string' && GIPHY_ID.test(v)) {
+      return `https://media.giphy.com/media/${v}/giphy.gif`;
+    }
+  }
+  return null;
+}
 /** Providers nest the renditions; take the smallest that animates. */
 const RENDITION_KEYS = [
   'fixed_height_small',
@@ -102,10 +145,14 @@ export function findGifUrls(msg: Record<string, unknown>, scan = true): string[]
   };
 
   direct(msg);
+  const topId = giphyUrlFromId(msg);
+  if (topId) urls.push(topId);
   for (const key of ['gif', 'gif_reaction', 'media']) {
     const nested = asRecord(msg[key]);
     if (!nested) continue;
     direct(nested);
+    const nestedId = giphyUrlFromId(nested, true);
+    if (nestedId) urls.push(nestedId);
     const images = asRecord(nested.images);
     if (images) {
       for (const rendition of RENDITION_KEYS) {
@@ -175,15 +222,22 @@ export function parseRoomReaction(msg: Record<string, unknown>): ParsedReaction 
   const gifish = /gif/i.test(action) || 'gif' in msg || 'gif_url' in msg || 'gifUrl' in msg;
   const reactionish = action === 'react' || /reaction/i.test(action);
 
+  // The person a reaction is aimed at. `target_user_id` is null for a room-wide one.
+  const rawTarget = msg.target_user_id;
+  const targetUserId =
+    typeof rawTarget === 'number' && Number.isFinite(rawTarget) ? rawTarget : undefined;
+  const withTarget = (r: ParsedReaction): ParsedReaction =>
+    targetUserId != null ? { ...r, targetUserId } : r;
+
   if (gifish || reactionish) {
     const gif = findGifUrls(msg).find(isAllowedGifUrl);
-    if (gif) return { gifUrl: gif };
+    if (gif) return withTarget({ gifUrl: gif });
     if (gifish) return null;
   }
 
   if (reactionish) {
     const emoji = findEmoji(msg);
-    return emoji ? { emoji } : null;
+    return emoji ? withTarget({ emoji }) : null;
   }
   if (!action) {
     const emoji = msg.emoji ?? msg.reaction;

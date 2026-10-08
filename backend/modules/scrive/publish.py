@@ -45,7 +45,7 @@ from urllib.parse import urlsplit
 import yaml
 from pydantic import BaseModel, Field
 
-from backend.modules.scrive import cards, sections, store, themes
+from backend.modules.scrive import apps, cards, sections, store, themes
 from backend.modules.scrive.cards import Card
 from backend.modules.scrive.models import PageMeta
 from backend.publishing import github_pages
@@ -86,6 +86,9 @@ TEXT_SUFFIXES = {
 #: Never pushed in jupyter-book mode: Scrive's state, build output, VCS, vendored
 #: code, post templates (unwritten pages) and site themes (static-mode only).
 SOURCE_SKIP = {
+    # Web apps go out as support files (`_scrive/apps/`), never as sources a build
+    # would turn into pages.
+    "apps",
     ".scrive",
     "_build",
     SUPPORT,
@@ -118,6 +121,8 @@ class Bundle(BaseModel):
     assets: list[str] = Field(default_factory=list)
     #: Scene sources the pages embed — each must exist for its frame to show.
     scenes: list[str] = Field(default_factory=list)
+    #: Web apps (`apps/<name>/`) the pages embed, by name.
+    apps: list[str] = Field(default_factory=list)
     #: Share cards to draw (`cards.py`).
     cards: list[Card] = Field(default_factory=list)
     #: The source pages this build published — preflight reads them for leftovers.
@@ -301,18 +306,63 @@ def _scenes(base: Path) -> dict[str, str]:
     return found
 
 
+def app_page_path(name: str) -> str:
+    """Where a web app is published: `apps/demo/` → `_scrive/apps/demo/`. The JB
+    plugin and the client build use the same mapping."""
+    return f"{SUPPORT}/apps/{name}/"
+
+
+def _app_files(base: Path) -> dict[str, bytes]:
+    """Every web app's files, verbatim, under `_scrive/apps/<name>/` — without the
+    import record, and without the console shim the local apps origin injects."""
+    root = base / apps.APPS_DIR
+    out: dict[str, bytes] = {}
+    if not root.is_dir():
+        return out
+    for app in sorted(root.iterdir()):
+        if not app.is_dir() or not apps.APP_NAME.match(app.name):
+            continue
+        for path in sorted(app.rglob("*")):
+            if not path.is_file() or path.name.endswith(".scrive-tmp"):
+                continue
+            rel = path.relative_to(app).as_posix()
+            if rel == apps.SOURCE_FILE:
+                continue
+            out[app_page_path(app.name) + rel] = path.read_bytes()
+    return out
+
+
+WEBML_EMBED_PATH = f"{SUPPORT}/webml/embed.html"
+
+
+def _uses_webllm(base: Path) -> bool:
+    """Whether any page in the site has a `{webllm}` block."""
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = sorted(d for d in dirnames if d not in SOURCE_SKIP)
+        for name in filenames:
+            if name.lower().endswith(store.PAGE_SUFFIXES):
+                text = (Path(dirpath) / name).read_text(encoding="utf-8", errors="replace")
+                if "{webllm}" in text:
+                    return True
+    return False
+
+
 def _support_files(base: Path) -> dict[str, bytes]:
-    """The scene runtime and one page per scene — only when the site has scenes."""
+    """Web apps, the in-browser model page when a page has a `{webllm}`, and the scene
+    runtime plus one page per scene when there are scenes."""
+    files = _app_files(base)
+    if _uses_webllm(base):
+        files[WEBML_EMBED_PATH] = (STATIC / "webml-embed.html").read_bytes()
     scenes = _scenes(base)
     if not scenes:
-        return {}
+        return files
     runtime = STATIC / "scrive-runtime.js"
     if not runtime.is_file():
         raise PublishError(
             "This site has 3D scenes, but the scene runtime is not built. Run: "
             "pnpm --filter @horrible/scrive-runtime build"
         )
-    files = {RUNTIME_PATH: runtime.read_bytes()}
+    files[RUNTIME_PATH] = runtime.read_bytes()
     for scene, source in scenes.items():
         files[scene_page_path(scene)] = scene_page(scene, source).encode("utf-8")
     return files
@@ -364,6 +414,25 @@ def static_files(
                     message=f"{scene} is embedded as a 3D scene but is not in the site; "
                     "its frame will be empty.",
                     file=scene,
+                )
+            )
+    for name in sorted(set(bundle.apps)):
+        if not any(path.startswith(app_page_path(name)) for path in support):
+            findings.append(
+                Finding(
+                    rule="missing-app",
+                    message=f"apps/{name} is embedded by a page but is not in the site; "
+                    "its frame will be empty.",
+                    file=f"apps/{name}",
+                )
+            )
+        elif app_page_path(name) + "index.html" not in support:
+            findings.append(
+                Finding(
+                    rule="missing-app",
+                    message=f"apps/{name} has no index.html, so its frame will show "
+                    "a 404.",
+                    file=f"apps/{name}",
                 )
             )
     files.update(support)

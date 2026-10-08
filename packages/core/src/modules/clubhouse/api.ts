@@ -248,6 +248,31 @@ export function sendClubhouseReaction(
   return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/reaction`, { emoji });
 }
 
+/** Float a GIF over the room, by Giphy id (Clubhouse's `/gif_reaction`). Pass
+ *  `targetUserId` to aim it at one person's tile; omit it for a room-wide reaction. */
+export function sendClubhouseGif(
+  channel: string,
+  giphyId: string,
+  targetUserId?: number,
+): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/gif-reaction`, {
+    giphy_id: giphyId,
+    target_user_id: targetUserId ?? null,
+  });
+}
+
+export interface GiphyResult {
+  id: string;
+  preview_url: string;
+}
+
+/** Search Giphy through the backend proxy (keeps the API key server-side). */
+export function searchClubhouseGiphy(query: string): Promise<{ results: GiphyResult[] }> {
+  return apiGet<{ results: GiphyResult[] }>(
+    `/clubhouse/giphy/search?q=${encodeURIComponent(query)}`,
+  );
+}
+
 /** The room's listeners. Like every room read, only answers for a room you are in. */
 export function getClubhouseChannelAudience(channel: string): Promise<{ users: ChannelUser[] }> {
   return apiGet<{ users: ChannelUser[] }>(`/clubhouse/channels/${channel}/audience`);

@@ -234,6 +234,27 @@ class ReactionRequest(BaseModel):
         return v
 
 
+# A GIF reaction is sent by Giphy id (Clubhouse's ``/gif_reaction`` endpoint), not a
+# URL — so the id is validated as Giphy's own alphanumeric token. This keeps the send
+# side to real Giphy assets, the same way the emoji validator keeps it to real emoji:
+# a free-form URL or text can never be published to a room through this client.
+_GIPHY_ID = regex.compile(r"^[A-Za-z0-9]{6,64}$")
+
+
+class GifReactionRequest(BaseModel):
+    giphy_id: str
+    # Null (the default) is a room-wide reaction; a user id aims it at one person.
+    target_user_id: int | None = None
+
+    @field_validator("giphy_id")
+    @classmethod
+    def _must_be_giphy_id(cls, v: str) -> str:
+        v = v.strip()
+        if not _GIPHY_ID.match(v):
+            raise ValueError("giphy_id must be a Giphy id, not a URL or text")
+        return v
+
+
 class UninviteSpeakerRequest(BaseModel):
     user_id: int
 

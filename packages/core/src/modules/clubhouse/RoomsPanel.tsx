@@ -36,6 +36,8 @@ import {
   type FollowUser,
   type PersonMemory,
   type TtsVoiceOption,
+  searchClubhouseGiphy,
+  type GiphyResult,
 } from './api';
 import { bindClubhouse } from './actions';
 import { MediaInsightsModal } from './MediaInsightsModal';
@@ -403,6 +405,38 @@ export function RoomsPanel() {
   const [commentText, setCommentText] = useState('');
   const [selectedUser, setSelectedUser] = useState<ClubhouseUserProfile | null>(null);
   const [loadingProfile, setLoadingProfile] = useState(false);
+  const [gifPickerOpen, setGifPickerOpen] = useState(false);
+  const [gifQuery, setGifQuery] = useState('');
+  const [gifResults, setGifResults] = useState<GiphyResult[]>([]);
+  const [gifSearching, setGifSearching] = useState(false);
+  const [gifError, setGifError] = useState<string | null>(null);
+
+  const runGifSearch = async () => {
+    const q = gifQuery.trim();
+    if (!q) return;
+    setGifSearching(true);
+    setGifError(null);
+    try {
+      const { results } = await searchClubhouseGiphy(q);
+      setGifResults(results);
+      if (results.length === 0) setGifError('No GIFs found.');
+    } catch (err) {
+      setGifError(err instanceof Error ? err.message : String(err));
+      setGifResults([]);
+    } finally {
+      setGifSearching(false);
+    }
+  };
+
+  const pickGif = (id: string) => {
+    void sendGif(id).catch((err) =>
+      toastsStore.add('warning', 'GIF', err instanceof Error ? err.message : String(err)),
+    );
+    setGifPickerOpen(false);
+    setGifQuery('');
+    setGifResults([]);
+    setGifError(null);
+  };
 
   // Voice agent. The conversation itself lives on the backend (one session per
   // channel); this is the settings mirror plus the local "is it talking" flag.
@@ -964,6 +998,7 @@ export function RoomsPanel() {
     dismissSpeakerInvite,
     sendComment,
     sendReaction,
+    sendGif,
     getNetworkInsights,
     getEarsHealth,
   } = useClubhouseVoice({
@@ -1831,6 +1866,7 @@ export function RoomsPanel() {
         <div
           key={u.user_id || Math.random()}
           className="ch-user-card"
+          data-user-id={u.user_id}
           title={u.name || ''}
           onClick={() => handleUserClick(u.user_id)}
         >
@@ -2325,6 +2361,80 @@ export function RoomsPanel() {
           .ch-reaction-btn:hover {
             transform: scale(1.25) translateY(-2px);
             background: rgba(255, 255, 255, 0.05);
+          }
+
+          .ch-reaction-gif-toggle {
+            font-size: 0.7rem;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            color: var(--text-secondary, #94a3b8);
+            border: 1px solid var(--border, #2e333d);
+            padding: 0.15rem 0.5rem;
+          }
+
+          .ch-reaction-gif-toggle[aria-expanded='true'] {
+            color: var(--accent, #6ea8fe);
+            border-color: var(--accent, #6ea8fe);
+          }
+
+          .ch-gif-picker {
+            margin-top: 0.4rem;
+            background: rgba(0, 0, 0, 0.25);
+            border: 1px solid var(--border, #2e333d);
+            border-radius: 10px;
+            padding: 0.5rem;
+          }
+
+          .ch-gif-search-row {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+          }
+
+          .ch-gif-search-input {
+            flex: 1;
+            background: #14161a;
+            border: 1px solid var(--border, #2e333d);
+            border-radius: 8px;
+            color: #fff;
+            padding: 0 0.6rem;
+            font-size: 0.85rem;
+          }
+
+          .ch-gif-error {
+            margin: 0.4rem 0 0;
+            font-size: 0.75rem;
+            color: var(--text-secondary, #94a3b8);
+          }
+
+          .ch-gif-results {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 0.35rem;
+            margin-top: 0.5rem;
+            max-height: 220px;
+            overflow-y: auto;
+          }
+
+          .ch-gif-result {
+            padding: 0;
+            border: 1px solid transparent;
+            border-radius: 8px;
+            overflow: hidden;
+            cursor: pointer;
+            background: #000;
+            aspect-ratio: 1;
+          }
+
+          .ch-gif-result:hover {
+            border-color: var(--accent, #6ea8fe);
+          }
+
+          .ch-gif-result img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
           }
 
           .ch-input-row {
@@ -5032,7 +5142,54 @@ export function RoomsPanel() {
                 {emoji}
               </button>
             ))}
+            <button
+              className="ch-reaction-btn ch-reaction-gif-toggle"
+              onClick={() => setGifPickerOpen((o) => !o)}
+              title="Send a GIF"
+              aria-expanded={gifPickerOpen}
+            >
+              GIF
+            </button>
           </div>
+
+          {gifPickerOpen && (
+            <div className="ch-gif-picker">
+              <form
+                className="ch-gif-search-row"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void runGifSearch();
+                }}
+              >
+                <input
+                  className="ch-gif-search-input"
+                  type="text"
+                  placeholder="Search GIFs…"
+                  value={gifQuery}
+                  onChange={(e) => setGifQuery(e.target.value)}
+                  autoFocus
+                />
+                <button className="ch-btn-send" type="submit" disabled={gifSearching}>
+                  {gifSearching ? '…' : 'Search'}
+                </button>
+              </form>
+              {gifError && <p className="ch-gif-error">{gifError}</p>}
+              {gifResults.length > 0 && (
+                <div className="ch-gif-results">
+                  {gifResults.map((g) => (
+                    <button
+                      key={g.id}
+                      className="ch-gif-result"
+                      onClick={() => pickGif(g.id)}
+                      title="Send this GIF"
+                    >
+                      <img src={g.preview_url} alt="" referrerPolicy="no-referrer" loading="lazy" />
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Chat Input */}
           <form className="ch-input-row" onSubmit={handleSendComment}>

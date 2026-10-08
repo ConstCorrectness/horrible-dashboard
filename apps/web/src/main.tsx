@@ -97,6 +97,8 @@ import {
   docsModule,
   notebookModule,
   scriveModule,
+  webmlModule,
+  initWebmlRelay,
   visualizerModule,
 } from '@horrible/core';
 import { AppRoot } from '@horrible/ui';
@@ -267,6 +269,7 @@ async function boot(): Promise<void> {
     registry.register(docsModule);
     registry.register(notebookModule);
     registry.register(scriveModule);
+    registry.register(webmlModule);
     registry.register(visualizerModule);
     registry.register(flowModule);
     registry.register(gamesModule);
@@ -318,6 +321,9 @@ async function boot(): Promise<void> {
     // Always-on tool-call relay: executes tools the backend relays for any chat turn
     // OR flow run (so flow Tool nodes and agent nodes can drive tools).
     initAgentRelay();
+    // The window's half of the `browser` chat provider: in-browser model rounds
+    // relayed from the backend, plus what this window's GPU can run.
+    initWebmlRelay();
     // Subscribe to the peer fabric so presence syncs before the Peers widget opens.
     initNetwork();
     initLobby();

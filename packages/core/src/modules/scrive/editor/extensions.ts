@@ -17,6 +17,7 @@ import {
   CodeCell,
   FootnoteRef,
   R3fScene,
+  ScriveEmbed,
   HtmlInline,
   Image,
   MathBlock,
@@ -41,6 +42,7 @@ export const TOP_LEVEL = [
   'admonition',
   'codeCell',
   'r3fScene',
+  'scriveEmbed',
   'mystBlock',
 ];
 
@@ -102,6 +104,7 @@ export function scriveExtensions(): AnyExtension[] {
     Admonition,
     CodeCell,
     R3fScene,
+    ScriveEmbed,
     MystRole,
     FootnoteRef,
     HtmlInline,

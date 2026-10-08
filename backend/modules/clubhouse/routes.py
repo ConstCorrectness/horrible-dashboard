@@ -29,6 +29,7 @@ from backend.modules.clubhouse.models import (
     ChatPermissionRequest,
     ClubdeckAvailability,
     ClubhouseStatus,
+    GifReactionRequest,
     ReactionRequest,
     RoomAudience,
     CompleteAuthRequest,
@@ -1295,6 +1296,70 @@ async def send_reaction(channel: str, body: ReactionRequest) -> dict[str, Any]:
     return await _ch_authed_post(
         "/emoji_reaction",
         {"channel": channel, "emoji": body.emoji},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.get("/giphy/search")
+async def giphy_search(q: str, limit: int = 24) -> dict[str, Any]:
+    """Proxy Giphy search so no API key or CORS lives in the browser.
+
+    Returns compact results (id + a small preview URL). Needs ``GIPHY_API_KEY`` in the
+    environment; without it the picker tells the user to configure one.
+    """
+    key = os.environ.get("GIPHY_API_KEY")
+    if not key:
+        raise HTTPException(status_code=503, detail="GIPHY_API_KEY is not configured.")
+    q = q.strip()
+    if not q:
+        return {"results": []}
+    params = {
+        "api_key": key,
+        "q": q,
+        "limit": max(1, min(limit, 50)),
+        "rating": "pg-13",
+    }
+    try:
+        async with instrumented_client(timeout=10) as client:
+            res = await client.get(
+                "https://api.giphy.com/v1/gifs/search", params=params
+            )
+        res.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Giphy search failed: {exc}"
+        ) from exc
+    results: list[dict[str, Any]] = []
+    for g in res.json().get("data", []):
+        gid = g.get("id")
+        if not isinstance(gid, str):
+            continue
+        images = g.get("images", {}) or {}
+        preview = (
+            (images.get("fixed_width_small") or {}).get("url")
+            or (images.get("fixed_height_small") or {}).get("url")
+            or f"https://media.giphy.com/media/{gid}/giphy.gif"
+        )
+        results.append({"id": gid, "preview_url": preview})
+    return {"results": results}
+
+
+@router.post("/channels/{channel}/gif-reaction")
+async def send_gif_reaction(channel: str, body: GifReactionRequest) -> dict[str, Any]:
+    """Float a GIF over the room (Clubhouse POST /gif_reaction).
+
+    Sent by Giphy id, not a URL. ``target_user_id`` aims it at one person; null is
+    room-wide. The id is validated upstream so only real Giphy assets are published.
+    """
+    auth = _require_auth()
+    payload: dict[str, Any] = {"channel": channel, "giphy_id": body.giphy_id}
+    if body.target_user_id is not None:
+        payload["target_user_id"] = body.target_user_id
+    return await _ch_authed_post(
+        "/gif_reaction",
+        payload,
         auth["auth_token"],
         auth["user_id"],
         auth.get("device_id"),

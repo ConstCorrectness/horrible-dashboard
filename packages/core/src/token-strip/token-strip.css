@@ -1,0 +1,63 @@
+/* The token-probability strip (TokenStrip.tsx). Also inlined into published Scrive
+ * sites, so it uses only tokens both the app themes and the site themes define. */
+
+.tokstrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.tokstrip-tok {
+  position: relative;
+  white-space: pre;
+  padding: 0 1px;
+  /* --p is the chosen token's probability; an unsure token reads warmer. */
+  background: color-mix(in srgb, var(--danger) calc((1 - var(--p)) * 45%), transparent);
+  border-bottom: 2px solid color-mix(in srgb, var(--accent) calc(var(--p) * 100%), transparent);
+  cursor: default;
+}
+
+.tokstrip-pop {
+  display: none;
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 180px;
+  padding: 6px 8px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+  white-space: normal;
+}
+
+.tokstrip-tok:hover > .tokstrip-pop,
+.tokstrip-tok:focus-visible > .tokstrip-pop {
+  display: block;
+}
+
+.tokstrip-meta {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.tokstrip-alt {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.tokstrip-alt.is-chosen {
+  color: var(--accent);
+}
+
+.tokstrip-bar {
+  grid-column: 1 / -1;
+  height: 2px;
+  background: var(--accent);
+  opacity: 0.6;
+}

@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>In-browser model</title>
+    <!--
+      Scrive's {webllm} block on a published site: a language model that runs in the
+      reader's browser on WebGPU. Settings arrive in the URL fragment (JSON):
+      {model, dtype, system, tokens, max, sizes}. Nothing downloads until the reader
+      clicks; the weights then stay in this site's Cache Storage.
+    -->
+    <style>
+      :root {
+        --fg: #1b1d21;
+        --muted: #6a707b;
+        --rule: #d8dbe0;
+        --accent: #2f6fdd;
+        --danger: #c4314b;
+        --bg: #fbfbfc;
+        --raised: #ffffff;
+        --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #e3e5e9;
+          --muted: #8a909c;
+          --rule: #2e333d;
+          --accent: #6ea8fe;
+          --danger: #e06c75;
+          --bg: #14161a;
+          --raised: #1d2026;
+        }
+      }
+      html,
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          14px/1.5 system-ui,
+          sans-serif;
+      }
+      header {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 12px;
+        align-items: baseline;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--rule);
+      }
+      .title {
+        font-weight: 700;
+        letter-spacing: 0.04em;
+      }
+      .meta {
+        font: 12px var(--mono);
+        color: var(--muted);
+      }
+      .error {
+        font: 12px var(--mono);
+        color: var(--danger);
+        padding: 6px 12px;
+      }
+      #gate,
+      #ask {
+        display: flex;
+        gap: 8px;
+        padding: 10px 12px;
+      }
+      #turns {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding: 10px 12px;
+      }
+      .turn {
+        display: grid;
+        grid-template-columns: 4.5em 1fr;
+        gap: 10px;
+      }
+      .role {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--muted);
+        padding-top: 3px;
+      }
+      .turn.user .role {
+        color: var(--accent);
+      }
+      .text {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      #ask {
+        border-top: 1px solid var(--rule);
+      }
+      input {
+        flex: 1;
+        min-width: 0;
+        height: 30px;
+        padding: 0 8px;
+        border: 1px solid var(--rule);
+        background: var(--raised);
+        color: inherit;
+      }
+      button {
+        height: 30px;
+        padding: 0 12px;
+        border: 1px solid var(--accent);
+        background: transparent;
+        color: var(--accent);
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      /* Token-probability strip: the same look as Scrive's {tokenviz}. */
+      .tokstrip {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1px;
+        margin-top: 6px;
+        font: 12px/1.6 var(--mono);
+      }
+      .tok {
+        position: relative;
+        white-space: pre;
+        padding: 0 1px;
+        background: color-mix(in srgb, var(--danger) calc((1 - var(--p)) * 45%), transparent);
+        border-bottom: 2px solid
+          color-mix(in srgb, var(--accent) calc(var(--p) * 100%), transparent);
+      }
+      .pop {
+        display: none;
+        position: absolute;
+        z-index: 5;
+        top: calc(100% + 4px);
+        left: 0;
+        min-width: 180px;
+        padding: 6px 8px;
+        background: var(--raised);
+        border: 1px solid var(--rule);
+        border-top: 2px solid var(--accent);
+        white-space: normal;
+      }
+      .tok:hover > .pop,
+      .tok:focus-visible > .pop {
+        display: block;
+      }
+      .alt {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        font-size: 11px;
+      }
+      .alt.chosen {
+        color: var(--accent);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span class="title" id="title">In-browser model</span>
+      <span class="meta" id="status"></span>
+    </header>
+    <div id="gate"><button type="button" id="load">Run it here</button></div>
+    <div id="turns" hidden></div>
+    <form id="ask" hidden>
+      <input
+        id="q"
+        type="text"
+        placeholder="Ask the model"
+        autocomplete="off"
+        aria-label="Message the model"
+      />
+      <button type="submit" id="send">Send</button>
+    </form>
+    <div class="error" id="error" hidden></div>
+    <script type="module">
+      const $ = (id) => document.getElementById(id);
+      let params = {};
+      try {
+        params = JSON.parse(decodeURIComponent(location.hash.slice(1)) || '{}');
+      } catch {
+        params = {};
+      }
+      const model = String(params.model || '');
+      const maxTokens = Math.max(16, Math.min(2048, Number(params.max) || 256));
+      const sizes = params.sizes && typeof params.sizes === 'object' ? params.sizes : {};
+      const fail = (message) => {
+        $('error').textContent = message;
+        $('error').hidden = false;
+      };
+      const mb = (b) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.round(b / 1e6)} MB`);
+
+      $('title').textContent = model.split('/').pop() || 'In-browser model';
+
+      if (!model) {
+        fail('No model was given.');
+        $('load').disabled = true;
+      }
+
+      // Pick the weights this GPU can run (q4f16 needs shader-f16) before saying the size.
+      let dtype = params.dtype || '';
+      let adapter = null;
+      if (!navigator.gpu) {
+        $('status').textContent = 'this browser has no WebGPU';
+        $('load').disabled = true;
+      } else {
+        adapter = await navigator.gpu.requestAdapter().catch(() => null);
+        if (!adapter) {
+          $('status').textContent = 'no WebGPU adapter';
+          $('load').disabled = true;
+        }
+      }
+      if (!dtype) {
+        const offered = Object.keys(sizes).length ? Object.keys(sizes) : ['q4f16', 'q4'];
+        const f16 = !!adapter?.features.has('shader-f16');
+        dtype = offered.find((d) => f16 || !d.endsWith('f16')) || offered[0];
+      }
+      const bytes = Number(sizes[dtype]) || 0;
+      $('load').textContent = bytes ? `Run it here (downloads ${mb(bytes)} once)` : 'Run it here';
+      if (adapter)
+        $('status').textContent = `${dtype} · runs on your GPU; nothing you type leaves this page`;
+
+      let lib = null;
+      let tokenizer = null;
+      let lm = null;
+      let stopping = null;
+      const history = [];
+
+      $('load').addEventListener('click', async () => {
+        $('load').disabled = true;
+        $('status').textContent = 'loading…';
+        try {
+          lib = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0');
+          const progress = (p) => {
+            if (p.status === 'progress' && p.total)
+              $('status').textContent = `${p.file} ${Math.round((100 * p.loaded) / p.total)}%`;
+          };
+          tokenizer = await lib.AutoTokenizer.from_pretrained(model, {
+            progress_callback: progress,
+          });
+          lm = await lib.AutoModelForCausalLM.from_pretrained(model, {
+            dtype,
+            device: 'webgpu',
+            progress_callback: progress,
+          });
+          stopping = new lib.InterruptableStoppingCriteria();
+          $('gate').hidden = true;
+          $('turns').hidden = false;
+          $('ask').hidden = false;
+          $('status').textContent = `${dtype} · ready`;
+          $('q').focus();
+        } catch (e) {
+          fail(String(e?.message || e));
+          $('load').disabled = false;
+          $('status').textContent = '';
+        }
+      });
+
+      function turn(role, text) {
+        const row = document.createElement('div');
+        row.className = `turn ${role}`;
+        const label = document.createElement('span');
+        label.className = 'role';
+        label.textContent = role === 'user' ? 'You' : 'Model';
+        const body = document.createElement('div');
+        const t = document.createElement('div');
+        t.className = 'text';
+        t.textContent = text;
+        body.append(t);
+        row.append(label, body);
+        $('turns').append(row);
+        return { body, text: t };
+      }
+
+      function distribution(row, k) {
+        let max = -Infinity;
+        for (let i = 0; i < row.length; i++) if (row[i] > max) max = row[i];
+        let sum = 0;
+        const probs = new Float32Array(row.length);
+        for (let i = 0; i < row.length; i++) sum += probs[i] = Math.exp(row[i] - max);
+        let entropy = 0;
+        const top = [];
+        for (let i = 0; i < row.length; i++) {
+          const p = (probs[i] /= sum);
+          if (p > 0) entropy -= p * Math.log2(p);
+          if (top.length < k || p > top[top.length - 1].p) {
+            top.push({ id: i, p });
+            top.sort((a, b) => b.p - a.p);
+            if (top.length > k) top.pop();
+          }
+        }
+        return { probs, entropy, top };
+      }
+
+      function strip(steps) {
+        const el = document.createElement('div');
+        el.className = 'tokstrip';
+        for (const s of steps) {
+          const tok = document.createElement('span');
+          tok.className = 'tok';
+          tok.tabIndex = 0;
+          tok.style.setProperty('--p', s.p.toFixed(3));
+          tok.textContent = s.token.replace(/\n/g, '↵') || '∅';
+          const pop = document.createElement('span');
+          pop.className = 'pop';
+          const head = document.createElement('div');
+          head.className = 'meta';
+          head.textContent = `p ${s.p.toFixed(3)} · H ${s.entropy.toFixed(2)} bits`;
+          pop.append(head);
+          for (const a of s.topk) {
+            const alt = document.createElement('div');
+            alt.className = `alt${a.token === s.token ? ' chosen' : ''}`;
+            alt.textContent = `${JSON.stringify(a.token)}  ${a.p.toFixed(3)}`;
+            pop.append(alt);
+          }
+          tok.append(pop);
+          el.append(tok);
+        }
+        return el;
+      }
+
+      let busy = false;
+      $('ask').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (busy) {
+          stopping?.interrupt();
+          return;
+        }
+        const question = $('q').value.trim();
+        if (!question || !lm) return;
+        $('q').value = '';
+        turn('user', question);
+        history.push({ role: 'user', content: question });
+        const reply = turn('assistant', '…');
+        busy = true;
+        $('send').textContent = 'Stop';
+
+        const messages = [
+          ...(params.system ? [{ role: 'system', content: String(params.system) }] : []),
+          ...history,
+        ];
+        const inputs = tokenizer.apply_chat_template(messages, {
+          add_generation_prompt: true,
+          return_dict: true,
+          enable_thinking: false,
+        });
+        const steps = [];
+        let last = null;
+        class Recorder extends lib.LogitsProcessor {
+          _call(_ids, logits) {
+            if (params.tokens) last = distribution(logits.data.subarray(0, logits.dims.at(-1)), 5);
+            return logits;
+          }
+        }
+        const processors = new lib.LogitsProcessorList();
+        processors.push(new Recorder());
+        let text = '';
+        let count = 0;
+        let first = 0;
+        const streamer = new lib.TextStreamer(tokenizer, {
+          skip_prompt: true,
+          skip_special_tokens: true,
+          callback_function: (t) => {
+            text += t;
+            reply.text.textContent = text;
+          },
+          token_callback_function: (tokens) => {
+            if (!first) first = performance.now();
+            for (const id of tokens) {
+              count++;
+              if (!last) continue;
+              steps.push({
+                token: tokenizer.decode([id], { skip_special_tokens: false }),
+                p: last.probs[Number(id)] ?? 0,
+                entropy: last.entropy,
+                topk: last.top.map((a) => ({
+                  token: tokenizer.decode([a.id], { skip_special_tokens: false }),
+                  p: a.p,
+                })),
+              });
+            }
+          },
+        });
+        stopping.reset();
+        try {
+          await lm.generate({
+            ...inputs,
+            max_new_tokens: maxTokens,
+            do_sample: true,
+            temperature: 0.7,
+            streamer,
+            stopping_criteria: stopping,
+            logits_processor: processors,
+          });
+          history.push({ role: 'assistant', content: text });
+          const seconds = first ? (performance.now() - first) / 1000 : 0;
+          const meta = document.createElement('div');
+          meta.className = 'meta';
+          meta.textContent = `${count} tokens${seconds > 0 && count > 1 ? ` · ${((count - 1) / seconds).toFixed(1)} tok/s` : ''}`;
+          if (params.tokens && steps.length) reply.body.append(strip(steps));
+          reply.body.append(meta);
+        } catch (err) {
+          fail(String(err?.message || err));
+        } finally {
+          busy = false;
+          $('send').textContent = 'Send';
+        }
+      });
+    </script>
+  </body>
+</html>

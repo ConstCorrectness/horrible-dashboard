@@ -35,6 +35,12 @@ import { MermaidBlock } from './MermaidBlock';
 import { PageAgentContext } from './page-agent';
 import { pendingPrompt } from '../prompts';
 import { paramValues, parseParams, SceneFrame } from './SceneFrame';
+import { SpaceEmbed } from './SpaceEmbed';
+import { AppFrame, parseAppRef } from './AppFrame';
+import { openApp } from '../open';
+import { TokenViz } from './TokenViz';
+import { WebLlm, webLlmOptions } from './WebLlm';
+import { catalogEntry } from '@horrible/webml';
 import { groupInlineHtml } from './inline-html';
 import { sanitizeHtml } from './sanitize';
 import { StaticRenderContext } from './static-context';
@@ -671,6 +677,55 @@ function Directive({ node }: { node: MystNode }) {
           params={parsed.params}
         />
       );
+    }
+    case 'space':
+      return <SpaceEmbed arg={node.args} options={parsed} published={Boolean(published)} />;
+    case 'webllm': {
+      if (published) {
+        const o = webLlmOptions(node.args, parsed);
+        if (!o.model) return null;
+        return (
+          <figure className="scrive-llm" data-status="ready">
+            <iframe
+              title={`In-browser model ${o.model}`}
+              src={published.webllm(ctx.pagePath, {
+                model: o.model,
+                dtype: o.dtype ?? '',
+                system: o.system,
+                tokens: o.showTokens,
+                max: o.maxTokens,
+                // The catalog's download sizes, so the page can say what a click costs.
+                sizes: catalogEntry(o.model)?.sizes ?? {},
+              })}
+              loading="lazy"
+              style={{ height: Number(parsed.height) || 420 }}
+            />
+          </figure>
+        );
+      }
+      return <WebLlm arg={node.args} options={parsed} />;
+    }
+    case 'tokenviz':
+      return <TokenViz site={ctx.site} pagePath={ctx.pagePath} src={String(node.args ?? '').trim()} />;
+    case 'app': {
+      // A web app from the site's apps/ folder. In the app it runs on the apps origin
+      // with live reload and its console; published, it is the copy under _scrive/apps/.
+      const height = Number(parsed.height) || 600;
+      const name = parseAppRef(node.args);
+      if (published) {
+        return name ? (
+          <figure className="scrive-app" data-status="ready">
+            <iframe
+              title={`Web app ${name}`}
+              src={published.app(ctx.pagePath, name)}
+              loading="lazy"
+              style={{ height }}
+              allow="cross-origin-isolated; fullscreen; clipboard-write"
+            />
+          </figure>
+        ) : null;
+      }
+      return <AppFrame site={ctx.site} name={node.args} height={height} onPreview={name ? () => openApp(ctx.site, name) : undefined} />;
     }
     case 'pending':
       // A section still to write never reaches readers (preflight says so).

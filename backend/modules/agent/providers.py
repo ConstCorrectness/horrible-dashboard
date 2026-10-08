@@ -255,6 +255,18 @@ PROVIDERS: dict[str, ProviderInfo] = {
         # offer. `:free` entries are rate-limited rather than unlimited.
         static_models=("minimax/minimax-m3:free", "minimax/minimax-m3"),
     ),
+    "browser": ProviderInfo(
+        kind="browser",
+        label="In-browser (WebGPU)",
+        # Not a server at all: the model runs in an open app window and each round
+        # is relayed over that window's `/ws` socket -- see `browser_provider.py`.
+        dialect="browser",
+        default_endpoint="",
+        install_url="",
+        can_pull=False,
+        can_spawn=False,
+        tier_note="Runs on this machine's GPU inside the app window. Free, private, small models only.",
+    ),
 }
 
 DEFAULT_PROVIDER = "ollama"
@@ -929,6 +941,11 @@ async def list_models(
     if info.hosted and not api_key_for(info):
         raise MissingApiKey(f"No API key configured for {info.label}")
 
+    if info.dialect == "browser":
+        from backend.modules.agent import browser_provider
+
+        return browser_provider.available_models()
+
     if info.dialect == "litellm":
         if info.catalog_url:
             return await _catalog_models(client, info)
@@ -986,6 +1003,15 @@ async def chat(
     leaves the model's own default alone.
     """
     messages = normalize_system_messages(messages)
+    if info.dialect == "browser":
+        from backend.modules.agent import browser_provider
+
+        async def _silent(_reasoning: str, _content: str) -> None:
+            return None
+
+        return await browser_provider.chat_stream(
+            model, messages, tools, _silent, temperature, max_tokens
+        )
     if info.dialect == "litellm":
         call_kwargs = litellm_call_kwargs(info)
         if temperature is not None:
@@ -1104,6 +1130,12 @@ async def chat_stream(
     ``"auto"``/a specific function) forces a call on the OpenAI dialect; Ollama has no
     reliable equivalent, so it's ignored there."""
     messages = normalize_system_messages(messages)
+    if info.dialect == "browser":
+        from backend.modules.agent import browser_provider
+
+        return await browser_provider.chat_stream(
+            model, messages, tools, on_delta, temperature, max_tokens
+        )
     if info.dialect == "ollama":
         return await _ollama_chat_stream(
             client,
@@ -1664,6 +1696,12 @@ async def generate(
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
 
+    if info.dialect == "browser":
+        result = await chat(
+            client, info, endpoint, model, messages, [], temperature, max_tokens
+        )
+        return result.content
+
     if info.dialect == "litellm":
         response = await litellm.acompletion(
             model=qualify_model(info, model),
@@ -1711,6 +1749,27 @@ async def generate_stream(
     """Stream a one-shot completion as NDJSON ``{"response": <token>}`` lines,
     normalizing Ollama's ``/api/generate`` and the OpenAI ``/v1/chat/completions``
     SSE stream into the one shape the frontend already understands."""
+    if info.dialect == "browser":
+        from backend.modules.agent import browser_provider
+
+        tokens: asyncio.Queue[str | None] = asyncio.Queue()
+
+        async def sink(_reasoning: str, content: str) -> None:
+            if content:
+                await tokens.put(content)
+
+        # A task (which copies this context, socket included) so tokens can be
+        # yielded while the round is still running; None marks its end.
+        round_ = asyncio.create_task(
+            browser_provider.chat_stream(
+                model, [{"role": "user", "content": prompt}], [], sink
+            )
+        )
+        round_.add_done_callback(lambda _t: tokens.put_nowait(None))
+        while (token := await tokens.get()) is not None:
+            yield json.dumps({"response": token}) + "\n"
+        await round_  # surfaces the round's error, if it had one
+        return
     if info.dialect == "litellm":
         response = await litellm.acompletion(
             model=qualify_model(info, model),

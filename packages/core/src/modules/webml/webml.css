@@ -1,0 +1,307 @@
+/* WebML playground. Tokens only — no literal colours (see themes.css). */
+
+.webml {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  color: var(--text);
+  background: var(--bg);
+}
+
+.webml-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4, 16px);
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border-top: 2px solid var(--accent);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.webml-title {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 12px;
+  color: var(--text-strong);
+}
+
+.webml-meta {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.webml-flag {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0 6px;
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim);
+}
+
+.webml-flag.is-on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.webml-flag.is-bad {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.webml-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) 1fr;
+}
+
+@container (max-width: 640px) {
+  .webml-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+    overflow: auto;
+  }
+}
+
+.webml-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  min-height: 0;
+  overflow: auto;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.webml-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  /* An angular corner: the card's top-right is cut. */
+  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%);
+}
+
+.webml-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-dim);
+}
+
+.webml-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.webml-row > input,
+.webml-row > select {
+  flex: 1;
+  min-width: 0;
+}
+
+.webml-side input,
+.webml-side select {
+  padding: 0 0.6rem;
+}
+
+.webml-bar {
+  height: 4px;
+  background: var(--bg-inset);
+  overflow: hidden;
+}
+
+.webml-bar > div {
+  height: 100%;
+  background: var(--accent);
+  transform-origin: left;
+  transition: transform 120ms linear;
+}
+
+.webml-error {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--danger);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.webml-cache {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.webml-cache li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.webml-cache li:last-child {
+  border-bottom: 0;
+}
+
+.webml-cache-id {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+}
+
+.webml-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg);
+}
+
+.webml-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid var(--border);
+}
+
+.webml-stat {
+  padding: 8px 12px;
+  border-right: 1px solid var(--border);
+}
+
+.webml-stat:last-child {
+  border-right: 0;
+}
+
+.webml-stat-value {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 18px;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.webml-transcript {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  /* A faint technical grid behind the conversation. */
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--border) 45%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--border) 45%, transparent) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.webml-empty {
+  margin: auto;
+  max-width: 34ch;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+@keyframes webml-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.webml-msg {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: 10px;
+  animation: webml-arrive 180ms ease-out both;
+}
+
+.webml-msg-role {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding-top: 2px;
+}
+
+.webml-msg.is-user .webml-msg-role {
+  color: var(--accent);
+}
+
+.webml-msg-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+
+.webml-think {
+  font-size: 12px;
+  color: var(--text-dim);
+  border-left: 2px solid var(--border-strong);
+  padding-left: 8px;
+  margin-bottom: 6px;
+}
+
+.webml-think summary {
+  cursor: pointer;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.webml-msg-meta {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  color: var(--text-faint);
+  margin-top: 4px;
+}
+
+.webml-composer {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.webml-composer textarea {
+  flex: 1;
+  min-height: 52px;
+  max-height: 160px;
+  resize: vertical;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 6px 8px;
+}
+
+.webml-composer-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}

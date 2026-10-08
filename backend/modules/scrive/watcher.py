@@ -17,7 +17,7 @@ import asyncio
 import logging
 from pathlib import Path
 
-from backend.modules.scrive import index, store
+from backend.modules.scrive import apps, index, store
 from backend.modules.scrive.models import PageChanged
 from backend.modules.ws import broadcast_event
 
@@ -80,6 +80,20 @@ def event_for(base: Path, path: Path, change: str) -> PageChanged | None:
     )
 
 
+def app_for(base: Path, path: Path) -> tuple[str, str] | None:
+    """`(site, app)` when `path` is a file of a web app (`<site>/apps/<app>/…`), so an
+    open preview can reload; None otherwise."""
+    try:
+        rel = path.resolve().relative_to(base.resolve())
+    except ValueError:
+        return None
+    if len(rel.parts) < 4 or rel.parts[1] != apps.APPS_DIR:
+        return None
+    if path.name.endswith(".scrive-tmp"):
+        return None
+    return rel.parts[0], rel.parts[2]
+
+
 async def _run() -> None:
     names = {
         Change.added: "added",
@@ -101,8 +115,14 @@ async def _run() -> None:
                 # One event per page per batch, judged by the file's state now
                 # (see `event_for`), so the order changes arrived in cannot matter.
                 latest: dict[str, str] = {}
+                changed_apps: set[tuple[str, str]] = set()
                 for change, raw in batch:
                     latest[raw] = names.get(change, "modified")
+                    app = app_for(base, Path(raw))
+                    if app is not None:
+                        changed_apps.add(app)
+                for site, app in sorted(changed_apps):
+                    await broadcast_event(CHANNEL, "app.changed", {"site": site, "app": app})
                 for raw, change in latest.items():
                     event = event_for(base, Path(raw), change)
                     if event is not None:

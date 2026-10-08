@@ -245,6 +245,15 @@
         "rule": "overused-font",
         "value": "arial",
         "createdAt": "2026-10-02T21:16:44.781Z"
+      },
+      {
+        "rule": "codex-grid-background",
+        "value": "*",
+        "files": [
+          "packages/core/src/modules/webml/webml.css"
+        ],
+        "createdAt": "2026-10-08T05:02:37.852Z",
+        "reason": "CLAUDE.local.md section 2 (project design rules) asks for subtle background patterns like faint grid overlays; this transcript grid is that"
       }
     ]
   }

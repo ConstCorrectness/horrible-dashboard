@@ -460,3 +460,21 @@ def test_a_dev_to_key_is_checked_before_it_is_kept() -> None:
     assert not connector_store.is_connected("devto")
     assert run(devto._submit({"api_key": KEY}))["account"]["label"] == "@me"
     assert connector_store.is_connected("devto")
+
+
+def test_a_space_is_sent_as_a_link_to_the_space() -> None:
+    page = (
+        "Try it:\n\n"
+        "```{space} webml-community/smollm-webgpu\n:height: 640\n"
+        ":host: webml-community-smollm-webgpu.static.hf.space\n```\n\n"
+        ":::{space} https://huggingface.co/spaces/Logolabs/agate-webgpu\n:::\n"
+    )
+    converted = crosspost.to_markdown(page, page="posts/a.md", flavor="hashnode")
+    assert (
+        "[Live demo: webml-community/smollm-webgpu on Hugging Face]"
+        "(https://huggingface.co/spaces/webml-community/smollm-webgpu)"
+    ) in converted.markdown
+    assert "(https://huggingface.co/spaces/Logolabs/agate-webgpu)" in converted.markdown
+    assert "hf.space" not in converted.markdown
+    assert any("Hugging Face Spaces" in n for n in converted.notes)
+    assert crosspost.leftover_myst(converted.markdown) == []

@@ -255,6 +255,242 @@
   border: 0;
 }
 
+/* A Hugging Face Space ({space}): a caption bar, and the frame behind a <details>
+ * the reader opens — Spaces often start a large download the moment they load. */
+.scrive-space {
+  margin: 0 0 1em;
+  border: 1px solid var(--scrive-page-rule);
+  border-top: 2px solid var(--scrive-page-accent);
+  background: var(--scrive-page-inset);
+}
+
+.scrive-space-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35em 0.9em;
+  padding: 0.45rem 0.7rem;
+}
+
+.scrive-space-title {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.scrive-space-link,
+.scrive-space-meta,
+.scrive-space-note {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--scrive-page-muted);
+}
+
+.scrive-space-error {
+  padding: 0.35rem 0.7rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--danger);
+}
+
+.scrive-space-pad {
+  padding: 0 0.7rem 0.5rem;
+}
+
+.scrive-run {
+  border-top: 1px solid var(--scrive-page-rule);
+}
+
+.scrive-run > summary {
+  cursor: pointer;
+  padding: 0.45rem 0.7rem;
+  font-size: 0.8em;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--scrive-page-accent);
+}
+
+/* An in-browser model ({webllm}) and a recorded generation ({tokenviz}). */
+.scrive-llm,
+.scrive-tokenviz {
+  margin: 0 0 1em;
+  border: 1px solid var(--scrive-page-rule);
+  border-top: 2px solid var(--scrive-page-accent);
+  background: var(--scrive-page-inset);
+}
+
+.scrive-llm iframe {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--scrive-page-rule);
+}
+
+.scrive-llm-gate {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.7rem;
+  border-top: 1px solid var(--scrive-page-rule);
+}
+
+.scrive-llm-turns {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.6rem 0.7rem;
+  border-top: 1px solid var(--scrive-page-rule);
+}
+
+.scrive-llm-turn {
+  display: grid;
+  grid-template-columns: 4.5em 1fr;
+  gap: 0.6rem;
+}
+
+.scrive-llm-role {
+  font-size: 0.7em;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--scrive-page-muted);
+  padding-top: 0.2em;
+}
+
+.scrive-llm-turn.is-user .scrive-llm-role {
+  color: var(--scrive-page-accent);
+}
+
+.scrive-llm-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.scrive-llm-ask {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem 0.7rem;
+  border-top: 1px solid var(--scrive-page-rule);
+}
+
+.scrive-llm-ask input {
+  flex: 1;
+  min-width: 0;
+  padding: 0 0.6rem;
+}
+
+.scrive-tokenviz-prompt {
+  margin: 0;
+  padding: 0.4rem 0.7rem;
+  border-top: 1px solid var(--scrive-page-rule);
+  color: var(--scrive-page-muted);
+  font-style: italic;
+}
+
+.scrive-tokenviz-strip {
+  padding: 0.5rem 0.7rem;
+}
+
+.scrive-tokenviz .scrive-tokenviz-strip {
+  border-top: 1px solid var(--scrive-page-rule);
+}
+
+/* A web app ({app}): the same frame as a Space, its own toolbar and console. */
+.scrive-app {
+  margin: 0 0 1em;
+  border: 1px solid var(--scrive-page-rule);
+  border-top: 2px solid var(--scrive-page-accent);
+  background: var(--scrive-page-inset);
+}
+
+.scrive-app[data-status='error'] {
+  border-top-color: var(--danger);
+}
+
+.scrive-app iframe {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--scrive-page-rule);
+  background: var(--scrive-page-surface);
+}
+
+.scrive-app-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-left: auto;
+}
+
+/* A chip, not a 30px action control: it carries a class, so the control-height rule
+ * leaves it alone. */
+.scrive-app-tool {
+  padding: 0 0.5rem;
+  height: 22px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--scrive-page-muted);
+  background: transparent;
+  border: 1px solid var(--scrive-page-rule);
+  cursor: pointer;
+}
+
+.scrive-app-tool:hover:not(:disabled) {
+  color: var(--scrive-page-text);
+  border-color: var(--scrive-page-accent);
+}
+
+.scrive-app-tool.is-bad {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.scrive-app-console {
+  max-height: 220px;
+  overflow: auto;
+  padding: 0.4rem 0.7rem;
+  border-top: 1px solid var(--scrive-page-rule);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+}
+
+.scrive-app-line {
+  display: grid;
+  grid-template-columns: 3.5em 1fr;
+  gap: 0.6em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--scrive-page-muted);
+}
+
+.scrive-app-line.is-error {
+  color: var(--danger);
+}
+
+.scrive-app-line.is-warn {
+  color: var(--warn);
+}
+
+.scrive-app-level {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.scrive-run > summary .scrive-space-note {
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.scrive-run iframe {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--scrive-page-rule);
+  background: var(--scrive-page-surface);
+}
+
 /* A 3D scene's slot until the sandboxed renderer lands (Phase 3): a plain inset
  * surface with the accent rule, sized to the scene's declared height. */
 /* A 3D scene: the sandboxed frame, and a bar for its label, status and tools. */

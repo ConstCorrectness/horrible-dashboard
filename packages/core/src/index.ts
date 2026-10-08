@@ -474,6 +474,7 @@ export { datasetsModule } from './modules/datasets';
 export { localtrackModule } from './modules/localtrack';
 export { notebookModule } from './modules/notebook';
 export { scriveModule } from './modules/scrive';
+export { initWebmlRelay, webmlModule } from './modules/webml';
 export { visualizerModule } from './modules/visualizer';
 export { flowModule } from './modules/flow';
 export { gamesModule } from './modules/games';

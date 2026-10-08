@@ -61,6 +61,17 @@ _CODE = {"code", "code-block", "sourcecode", "code-cell"}
 _FLATTEN = {"grid", "glossary", "div", "container"}
 _DROP = {"toctree", "tableofcontents", "include", "literalinclude", "bibliography"}
 
+_SPACE_ID = re.compile(r"^([A-Za-z0-9][\w.-]*)/([\w.-]+)$")
+_SPACE_URL = re.compile(r"^https://(?:www\.)?huggingface\.co/spaces/([^/?#]+)/([^/?#]+)")
+
+
+def _space_id(arg: str) -> str | None:
+    """`{space}`'s argument (an id or its huggingface.co URL) as `owner/name`.
+    The TS twin is `parseSpaceRef` in render/space.ts."""
+    arg = arg.strip()
+    m = _SPACE_ID.match(arg) or _SPACE_URL.match(arg)
+    return f"{m.group(1)}/{m.group(2)}" if m else None
+
 _ROLE = re.compile(r"\{([A-Za-z][\w:-]*)\}(`+)(.+?)\2")
 _LINK = re.compile(r"(!?\[[^\]\n]*\]\()(\s*<?)([^)\s>]+)(>?(?:\s+\"[^\"]*\")?\s*\))")
 #: A reference definition (`[docs]: url`), not a footnote (`[^fn]: text`).
@@ -341,6 +352,26 @@ class _Converter:
         if name == "r3f":
             self.note("3D scenes are sent as a link to the page, where they run.")
             return [f"[Interactive 3D figure: open it on the site]({POST_URL})", ""]
+        if name in ("webllm", "tokenviz"):
+            self.note(
+                "In-browser models and token-probability figures are sent as a link "
+                "to the page, where they run."
+            )
+            label = "Try the model" if name == "webllm" else "Token-probability figure"
+            return [f"[{label}: open it on the site]({POST_URL})", ""]
+        if name == "app":
+            self.note("Web apps are sent as a link to the page, where they run.")
+            return [f"[Interactive demo: open it on the site]({POST_URL})", ""]
+        if name == "space":
+            space = _space_id(d.argument)
+            if not space:
+                self.note("A {space} without a Space id was left out.")
+                return []
+            self.note("Hugging Face Spaces are sent as a link to the Space.")
+            return [
+                f"[Live demo: {space} on Hugging Face](https://huggingface.co/spaces/{space})",
+                "",
+            ]
         if name in ("tab-set",):
             return self.block(d.body)
         if name in ("tab-item", "card"):

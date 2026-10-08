@@ -14,6 +14,7 @@ import {
   listPages,
   listThemes,
   readPage,
+  siteFileUrl,
   type SiteBundle,
   type ThemeInfo,
 } from '../api';
@@ -22,10 +23,40 @@ import { cellId, codeCellsOf } from '../cells';
 import { parseMyst, splitFrontmatter, type MystNode } from '../myst/parse';
 import { buildPrint, buildSite, cellKey, isPublic, type SiteBuild, type SiteSource } from './build';
 import { mermaidVariables, themePalettes } from './palette';
+import { sitePath } from './urls';
 
 export interface PreparedSite {
   source: SiteSource;
   theme: ThemeInfo;
+}
+
+/** The data files a page's `{tokenviz}` blocks draw, as site paths. */
+function tokenvizSources(pagePath: string, content: string): string[] {
+  const found: string[] = [];
+  const visit = (node: MystNode) => {
+    if (node.type === 'mystDirective' && node.name === 'tokenviz' && typeof node.args === 'string') {
+      const path = sitePath(pagePath, node.args.trim());
+      if (path) found.push(path);
+    }
+    for (const child of node.children ?? []) visit(child);
+  };
+  visit(parseMyst(splitFrontmatter(content).body));
+  return found;
+}
+
+/** Fetch each data file once; a missing or malformed one is left out (the page then
+ * omits that figure). */
+async function loadData(site: string, paths: string[]): Promise<Record<string, unknown>> {
+  const out: Record<string, unknown> = {};
+  for (const path of new Set(paths)) {
+    try {
+      const res = await fetch(siteFileUrl(site, path));
+      if (res.ok) out[path] = await res.json();
+    } catch {
+      // Left out.
+    }
+  }
+  return out;
 }
 
 function mermaidSources(content: string): string[] {
@@ -114,6 +145,7 @@ export async function preparePage(site: string, path: string): Promise<PreparedS
       pages: [{ meta: pageMeta, content: page.content }],
       cells,
       mermaid: await drawDiagrams(mermaidSources(page.content), theme.tokens),
+      data: await loadData(site, tokenvizSources(path, page.content)),
     },
   };
 }
@@ -126,6 +158,7 @@ export async function buildPrintBundle(site: string, path: string): Promise<Site
     files: build.files,
     assets: build.assets,
     scenes: build.scenes,
+    apps: build.apps,
     cards: [],
     pages: build.pages,
   };
@@ -149,11 +182,13 @@ export async function prepareSite(site: string): Promise<PreparedSite> {
   );
   const cells: SiteSource['cells'] = {};
   const codes: string[] = [];
+  const dataPaths: string[] = [];
   for (const page of pages) {
     if (!page.content || !page.meta.path.endsWith('.md')) continue;
     const outputs = await outputsFor(site, page.meta.path, page.content);
     if (Object.keys(outputs).length) cells[page.meta.path] = outputs;
     codes.push(...mermaidSources(page.content));
+    dataPaths.push(...tokenvizSources(page.meta.path, page.content));
   }
   return {
     theme,
@@ -164,6 +199,7 @@ export async function prepareSite(site: string): Promise<PreparedSite> {
       pages,
       cells,
       mermaid: await drawDiagrams(codes, theme.tokens),
+      data: await loadData(site, dataPaths),
     },
   };
 }
@@ -181,6 +217,7 @@ export async function buildBundle(
       files: build.files,
       assets: build.assets,
       scenes: build.scenes,
+      apps: build.apps,
       cards: build.cards,
       pages: build.pages,
     },

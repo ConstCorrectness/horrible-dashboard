@@ -455,6 +455,127 @@ fetched once per session for every scene on every page. `ready` is sent when the
 canvas is created rather than on the first frame, since a hidden window runs no
 animation frames.
 
+## Hugging Face Spaces
+
+`{space} owner/name` (or the Space's `huggingface.co/spaces/…` URL) embeds a live
+Hugging Face Space — the WebGPU demos in particular, which run entirely in the
+reader's browser. Insert it from the slash menu ("Hugging Face Space").
+
+````md
+```{space} webml-community/smollm-webgpu
+:height: 640
+:host: webml-community-smollm-webgpu.static.hf.space
+```
+````
+
+- **`:host:` is looked up, not derived.** A static Space is served from
+  `<subdomain>.static.hf.space` and its plain `<subdomain>.hf.space` answers 404; a
+  Gradio or Docker Space is the reverse. The editor asks the Hub API
+  (`/api/spaces/<id>` → `host`) when the id is entered and writes the answer down, so a
+  published page — which makes no API calls — embeds what is written. Preview also
+  resolves it live. Only `*.hf.space` hosts are ever embedded (`spaceEmbedUrl`); a page
+  is often agent-written, and `:host:` must not become a way to frame anything else.
+- **Never loaded on arrival.** WebGPU Spaces start a model download the moment they
+  load, so the frame sits behind a "Run it here" `<details>`. In the app the iframe is
+  only created once it is opened; a published page has no script, so it ships the
+  iframe inside the closed `<details>` with `loading="lazy"`. PDF export leaves it
+  shut (`details:not(.scrive-run)`), so on paper it is the caption and its link.
+- **Its own origin.** `sandbox="allow-scripts allow-same-origin …"` is safe because the
+  frame's origin is `hf.space`, never ours; same-origin is what lets the Space keep its
+  weights in its own Cache Storage. WebGPU works inside the cross-origin frame
+  (verified 2026-10-07 in the app's Chromium).
+- One editor node, `scriveEmbed` (`EMBED_DIRECTIVES` in `myst/pm.ts`), holds every
+  argument-plus-options live embed; its node view draws by `name`.
+
+## Web apps
+
+A site's `apps/<name>/` folder is a website of its own — static HTML, JS and CSS with
+an `index.html` — embedded in a post with `{app} <name>` (slash menu: "Web app").
+Make one from a template (`blank`, `transformers-chat`, `webgpu-compute`), have the
+agent write one (`scrive.writeAppFile`), or import a static Hugging Face Space.
+**Scrive: Web apps** opens the gallery; each app opens in a preview pane with
+desktop / tablet / phone widths, live reload and its console.
+
+### Its own origin (`backend/modules/scrive/apps.py`)
+
+An app is arbitrary JavaScript, and the ones worth embedding keep a gigabyte of model
+weights in Cache Storage — which an opaque `sandbox` origin (the `{r3f}` pattern)
+throws on. So apps are served from a **real, separate origin**,
+`http://scrive-apps.localhost:<port>/<site>/<app>/`:
+
+- Chromium and WebView2 resolve every `*.localhost` name to loopback and treat it as
+  a secure context, so WebGPU and Cache Storage work there (verified: a WGSL kernel
+  over a million floats ran there in 22 ms and matched the CPU).
+- It shares no cookies, storage or same-origin access with the app UI or the API.
+- **`AppsGate`** (pure ASGI, outside every route) enforces the split both ways: the
+  apps host serves app files only (GET/HEAD; API paths are just missing files), and a
+  request *from* the apps origin — by `Origin` or `Referer` — to anything else is
+  refused, the `/ws` socket included. CORS already kept apps from *reading* API
+  responses; the gate stops them *sending* (a form POST, a WebSocket).
+- HTML gets a console shim first in `<head>` that posts `console.*`, `error` and
+  `unhandledrejection` to the parent; the frame's own console is a cross-origin one.
+  Published copies never carry it.
+- The watcher sends `app.changed {site, app}` for any file under an app; open frames
+  reload.
+- `GET /api/scrive/apps-origin` says where apps are served — `null` for a caller off
+  this machine (hosted), which cannot reach a loopback name.
+
+`apps/` is in `SKIP_DIRS`, so an imported Space's `README.md` is never a page.
+
+### Importing a Space
+
+`POST /api/scrive/sites/{site}/apps/import {space}` copies a **static** Space (others
+need a server; embed those with `{space}`) at its current revision. Model weights
+(`.onnx`, `.safetensors`, `.gguf`, `.bin` …), files over 25 MB and anything past
+100 MB in total are left on the Hub and listed in `apps/<name>/SPACE.json` with the
+source, revision and licence. On the apps origin a request for a skipped file
+redirects to the Hub at that revision (the Hub answers with CORS), so a Space that
+loads `./models/x.onnx` still runs locally. A *published* copy has no such redirect —
+an app that needs local weights must fetch them from the Hub by URL.
+
+### Publishing
+
+Apps go out verbatim (minus `SPACE.json`) under `_scrive/apps/<name>/` in both modes
+— in jupyter-book mode that rides the workflow's existing `_scrive/` copy, and `apps/`
+is kept out of the pushed sources so a build never turns an app's Markdown into
+pages. A page's `{app}` becomes an iframe of that copy; preflight reports
+`missing-app` for an embedded app that is not there or has no `index.html`.
+
+## In-browser models and token figures
+
+`{webllm} owner/model` puts a language model in a post that runs on the reader's GPU
+(slash menu: "In-browser model"); `{tokenviz} data/run.json` shows a recorded reply as
+a token-probability strip (slash menu: "Token probabilities").
+
+````md
+```{webllm} onnx-community/Qwen3-0.6B-ONNX
+:system: You are a terse assistant.
+:show: chat, tokens
+:max: 128
+```
+````
+
+- **In the app**, `{webllm}` is the app-global WebML engine (see [WebML](./webml.mdx)):
+  the same loaded model as the playground. Nothing downloads until someone clicks; the
+  button says the size first, or that the model is already cached.
+- With `tokens` in `:show:`, each reply carries its strip, and **Keep as figure** saves
+  the run to `data/<model>-<id>.json` and inserts a `{tokenviz}` right after the block.
+  That is the version most posts want: readers see exactly what the author saw and
+  download nothing.
+- **Published**, `{webllm}` is an iframe of `_scrive/webml/embed.html` (written into the
+  site only when a page uses `{webllm}`; source `backend/modules/scrive/static/
+  webml-embed.html`). It is plain JS importing transformers.js 4.3.0 from jsDelivr, its
+  settings in the URL fragment, on the blog's own origin so the weights stay cached.
+  It also waits for a click.
+- **`{tokenviz}`** is pure markup plus CSS hovers (`token-strip/` in core, shared with
+  the playground), so a published page needs no script for it: the build preloads the
+  JSON (`SiteSource.data`, `StaticRender.data`) and inlines `token-strip.css` into
+  `site.css`. A missing file drops the figure for readers and shows the author why.
+- A run file is `{model, prompt, steps: [{token, p, entropy, topk: [{token, p}]}]}`.
+  `p` is from the distribution after the model's processors and temperature; the
+  sampler then keeps the top 50 and renormalises, so a sampled token can show a small
+  `p` (greedy runs always pick the shown top-1, which is tested live).
+
 ## The agent
 
 The agent writes Scrive pages the way a person would hand them to an editor: as
@@ -480,6 +601,7 @@ Undo, and none deletes a file.
 | `scrive.fillSection` | ✓ | Replaces the `{pending}` placeholder under a heading (or the lead, `heading: ''`). Refuses a section that is already written |
 | `scrive.editPage` | ✓ | Ops, all or nothing, against a `base_revision`: `replaceSection`, `deleteSection`, `insert` (after/before a heading, after some text, at start/end), `replaceText` (must match exactly once), `setFrontmatter` |
 | `scrive.createPage` | ✓ | A page from a template (with inputs) or from full MyST. For a real page the agent is told to propose an outline instead |
+| `scrive.writeAppFile` | ✓ | one file of `apps/<app>/`; refuses to overwrite unless asked, never `SPACE.json` |
 | `scrive.writeScene` | ✓ | `scenes/<name>.tsx` for an `{r3f}` block; refuses to overwrite unless asked |
 | `scrive.makeClip` | ✓ | An edit list for a site video (segments, crop, speed, captions, overlays, preset), rendered locally; answers the file and the MyST to embed it. Posts nothing |
 | `scrive.critiquePage` | | The review pass below |
@@ -759,8 +881,10 @@ repository named after the site, on your account, created if missing.
     `build_type: workflow`.
   - `scrive-myst-plugin.mjs`, listed in the **pushed** copy of `myst.yml` (the site's
     own file is never rewritten). It teaches the real build Scrive's directives:
-    `{r3f}` → an iframe of the prebuilt scene page, `{video}` → media, `{pending}` →
-    nothing.
+    `{r3f}` → an iframe of the prebuilt scene page, `{video}` → media, `{space}` → an
+    iframe of the Space at its `:host:` plus a link, `{app}` → an iframe of
+    `_scrive/apps/<name>/`, `{webllm}` → an iframe of the model page, `{tokenviz}` →
+    the reply as text, `{pending}` → nothing.
 
   The theme does not apply in this mode; the site looks like Jupyter Book.
 
@@ -832,6 +956,9 @@ the Pages post as the original and the copy as a copy.
 | `{code-cell}`, `{code}` | fenced code; outputs stay on the site | same |
 | `{iframe}` (YouTube…) | `{% embed %}` | `%[url]` |
 | `{r3f}`, `{video}` | a link to the page, or to the file | same |
+| `{space}` | a link to the Space on huggingface.co | same |
+| `{app}` | a link to the page, where it runs | same |
+| `{webllm}`, `{tokenviz}` | a link to the page | same |
 | `{tab-set}`, `{card}`, `{grid}` | flattened, labels in bold | same |
 | `(label)=`, `{ref}`, comments, `+++` | dropped; a `{ref}` reads as its heading | same |
 
@@ -1265,6 +1392,9 @@ Notebook publishing benefits from all of this too.
     with no `path`, the site's clips and videos and the screen recorder.
   - `scrive.live` ("Scrive Live", document, params `{key, title}`): a page a friend is
     hosting, edited live.
+  - `scrive.app` ("Scrive Web App", document, params `{site, app}`): one web app's
+    preview (viewport widths, console, reload); with no `app`, the site's apps, a new-app
+    form and the Space importer.
 - **Shell indicator** `scrive.outlines`: "Outline · to review" while any outline
   waits. The same module-level watcher opens a proposed outline, and a page an agent
   creates, as soon as it appears (`outline-watch.ts`, started once however many
@@ -1288,6 +1418,7 @@ Notebook publishing benefits from all of this too.
   - `scrive.publishSite` (the current site's Publish pane)
   - `scrive.sharePage` (the focused page's Share pane), `scrive.openOutbox`
   - `scrive.openClips` (the current site's clips)
+  - `scrive.openApps` (the current site's web apps)
 - **Keybinding:** `mod+s` → `scrive.save` with `when: paneFocus == 'scrive.page'`. That
   is more specific than the editor's unconditional `mod+s`, so it takes over only while
   a Scrive page has focus.

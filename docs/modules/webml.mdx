@@ -1,0 +1,139 @@
+# WebML
+
+**Status: Phases 0–5 of 6 implemented** (foundation, playground, `browser` chat
+provider, and Scrive's `{space}`, `{app}`, `{webllm}` and `{tokenviz}` — see
+[Scrive](./scrive.mdx#hugging-face-spaces)). Phase 6, our own WGSL kernels for GGUF,
+needs its own plan. Language models that
+run **in this window, on its GPU**, through WebGPU: no backend round-trip, no
+provider, nothing typed leaves the machine. Modelled on the Hugging Face "webml"
+static Spaces (SmolLM WebGPU, Gemma 4 / Bonsai WebGPU kernels, Agate).
+
+- **Engine package:** `packages/webml` (`@horrible/webml`) — GPU probe, model
+  worker, client, weight cache, catalog. No React, so Scrive's published blocks can
+  reuse it.
+- **Frontend module:** `packages/core/src/modules/webml/`
+- **Backend surface:** `backend/modules/agent/browser_provider.py` (the `browser` chat
+  provider's relay); no routes of its own.
+- **Plan:** `~/.claude/plans/the-webgpu-huggingface-spaces-logical-dragon.md`
+
+## Contributions to the layout shell
+
+- **Panels:** `webml.playground` (WebML Playground, document, singleton).
+- **Commands:** `webml.openPlayground`, `webml.unload`.
+- **Boot:** `initWebmlRelay()` (beside `initAgentRelay`) answers relayed generations and
+  keeps the backend told what this window can run.
+- **Settings:** `webml.defaultModel`, `webml.temperature`, `webml.topk`,
+  `webml.thinking`.
+- **Agent context:** the playground reports the WebGPU adapter, the loaded model and
+  the last reply's speed (read-only; no agent tools).
+
+## How a model runs
+
+```mermaid
+flowchart LR
+    UI["Playground<br/>(or chat provider, {webllm})"] -->|"load / generate"| E["WebmlEngine<br/>(app-global)"]
+    E -->|postMessage| W["Worker<br/>transformers.js"]
+    W -->|"ONNX Runtime Web<br/>WebGPU EP"| G[("GPU")]
+    W -->|"fetch once"| H["huggingface.co"]
+    W <-->|"Cache Storage<br/>transformers-cache"| C[("weights")]
+    W -->|"delta · step · done"| E
+```
+
+- **One engine for the app** (`engine.ts`). A loaded model is a gigabyte of GPU
+  memory and seconds of shader compilation, and every surface wants the same one, so
+  it is app-global like a notebook kernel: closing the playground does not unload
+  it; `WebML: Unload` or loading another model does.
+- **The worker** (`packages/webml/src/engine/transformers.worker.ts`) holds one model
+  and runs one generation at a time — a second request while one runs is refused,
+  not queued. It warms the model with a one-token generation after loading, so the
+  first reply's TTFT measures the model, not WGSL compilation.
+- **Weights** download once from the Hub and live in Cache Storage
+  (`transformers-cache`, keyed by Hub URL). ONNX Runtime's WASM runtime comes from
+  jsDelivr on first use and is cached the same way.
+- **No cross-origin isolation.** WebGPU does not need COOP/COEP, and adding
+  `require-corp` would break the browser pane and the third-party SDKs. The cost:
+  the WASM CPU fallback runs single-threaded.
+
+## The protocol
+
+`packages/webml/src/protocol.ts`. Host → worker: `load`, `generate`, `interrupt`,
+`unload`. Worker → host: `progress`, `ready`, `error`, `delta`, `step`, `done`,
+`unloaded`; every generation event carries its `id`.
+
+`step` events are opt-in (`topK > 0`). Each is the distribution the token was
+**sampled from** — recorded by a logits processor appended after the model's own
+(repetition penalty, temperature, top-k), so it is what the sampler saw. Logits come
+back to the CPU every step anyway, so this costs one pass over the vocabulary, not a
+GPU readback.
+
+## The playground
+
+Model picker (catalog + any Hub id), weight variant, a download-size warning before
+the first click, per-file progress, then chat with live **tok/s**, **TTFT**, token
+count and stop reason. Each reply's **token-probability strip** shades every token
+by its probability; hovering shows the alternatives and the distribution's entropy.
+"On this device" lists cached models with their size and deletes them.
+
+## The `browser` chat provider
+
+The agent loop runs in the backend; only the model moved. A round for provider
+`browser` is relayed to the window whose socket started the turn:
+
+```mermaid
+sequenceDiagram
+    participant L as run_agent_loop (backend)
+    participant W as App window (relay.ts)
+    participant G as WebmlEngine (GPU)
+    L->>W: generate_request {genId, model, messages, tools}
+    W->>G: load (if needed) + generate
+    G-->>W: deltas
+    W-->>L: generate_delta* → generate_done {usage}
+    Note over L: parse Hermes <tool_call> blocks → ToolCalls
+    L->>W: tool_call (the usual relay) …next round
+```
+
+- **Which window:** `current_ws_conn` (a context variable) is set once per `/ws`
+  connection in `backend/app.py`; every task spawned from that socket inherits it.
+  Callers without one (evals, games, synthetic data, `/agent/complete` over HTTP) get
+  `BrowserProviderUnavailable` — an `httpx.HTTPError`, so they treat it as "provider
+  down" rather than hanging.
+- **Reachability:** each window pushes `webml_manifest` (WebGPU or the reason it has
+  none, cached models, the loaded one) on connect and whenever a load or delete
+  changes it. The status probe lists only those models, so picking one never starts
+  a download behind the user's back.
+- **Tool calls:** in-browser models write them as text. **Hermes**
+  (`<tool_call>{"name","arguments"}</tool_call>`, Qwen3 and SmolLM3) is parsed in the
+  backend; the markup is held back from the streamed answer (`HermesFilter`). Catalog
+  models with no tool format get no tool preamble at all. An unparseable block becomes
+  a call carrying `arg_error`, never a call with empty arguments.
+- **Only the asking window may answer** (`genId` is checked against the socket), and
+  the chat's Stop sends `generate_cancel`, which interrupts the worker.
+
+**Chunked prefill.** The onnx-community exports have no `num_logits_to_keep` input,
+so one forward over an agent turn's prompt (system prompt + ~25 tool schemas ≈ 4k
+tokens) returns logits for every position: 4k × a 152k vocabulary = 2.4 GB, past ONNX
+Runtime Web's 32-bit heap (`std::bad_alloc`). The worker therefore feeds prompts over
+256 tokens into the KV cache in 256-token chunks, then generates from the warm cache.
+
+**Measured (2026-10-07, Intel Gen12 iGPU):** SmolLM2-360M chat at ~27 tok/s,
+TTFT ~0.7 s; an agent round with Qwen3-0.6B (≈4k-token prompt, re-sent every round)
+takes ~50 s, almost all prefill. The relay round-trips correctly — Qwen3-0.6B emits a
+valid Hermes `list_open_panes` call and the result reaches the next round — but at
+0.6B it then repeats the call instead of answering. Use Qwen3-1.7B or SmolLM3-3B for
+agent work; the small models are for chat.
+
+## Catalog
+
+`packages/webml/src/catalog.ts`: text-generation repos checked to ship q4/q4f16 ONNX
+weights (sizes from the Hub, 2026-10-07). `q4f16` needs the adapter's `shader-f16`
+feature; without it the picker falls back to `q4`. Multimodal checkpoints (Gemma 4
+E2B, Qwen3.5) are not listed — they load through a processor, not
+`AutoModelForCausalLM`.
+
+## Browser vs desktop
+
+| | Browser | Desktop (WebView2) |
+| --- | --- | --- |
+| WebGPU | Chrome/Edge 113+, secure context (localhost counts) | on by default; no GPU flags in `WEBVIEW2_ARGS` |
+| Weight cache | per origin | per app origin |
+| Hosted (Vercel) | works — the GPU is the visitor's | n/a |

@@ -30,6 +30,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from backend.modules.scrive import (
+    apps,
     clips,
     media,
     critique,
@@ -420,6 +421,32 @@ async def write_scene(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@_tool
+async def write_app_file(args: dict[str, Any]) -> dict[str, Any]:
+    site = _site(args)
+    app = str(args.get("app") or "").strip().removeprefix("apps/").strip("/")
+    path = str(args.get("path") or "index.html")
+    try:
+        rel = apps.write_app_file(
+            site, app, path, str(args.get("content") or ""), bool(args.get("overwrite"))
+        )
+    except apps.AppError as exc:
+        raise ToolError(
+            f"{exc} — an app name is letters, digits, '.', '_' or '-'"
+        ) from exc
+    except FileExistsError as exc:
+        raise ToolError(
+            f"{exc} already exists — pass overwrite: true to replace it"
+        ) from exc
+    return {
+        "path": rel,
+        "embed_from_post": f"```{{app}} {app}\n:height: 600\n```",
+        "note": "the person sees the app run in the page's Preview, with its console "
+        "errors beneath it; it runs in its own origin, so it may fetch from CDNs and "
+        "the Hugging Face Hub",
+    }
+
+
 # --- registration --------------------------------------------------------------------
 
 
@@ -752,6 +779,33 @@ def register_agent_tools() -> None:
             required=["name", "source"],
             side_effect=True,
             specifier_template="{site}/scenes/{name}",
+        ),
+        AgentTool(
+            name="scrive.writeAppFile",
+            description=(
+                "Write one file of a web app in the site, apps/<app>/<path> (index.html "
+                "first). An app is plain static HTML/JS/CSS — ES modules from a CDN are "
+                "fine, so is WebGPU or transformers.js — embedded in a post with an "
+                "{app} block. Writes only; nothing is published."
+            ),
+            handler=write_app_file,
+            group="scrive",
+            parameters={
+                "site": _SITE,
+                "app": {
+                    "type": "string",
+                    "description": "The app folder, e.g. 'kernel-demo'.",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "File inside the app, e.g. 'index.html' or 'js/main.js'.",
+                },
+                "content": {"type": "string"},
+                "overwrite": {"type": "boolean"},
+            },
+            required=["app", "path", "content"],
+            side_effect=True,
+            specifier_template="{site}/apps/{app}/{path}",
         ),
         AgentTool(
             name="scrive.makeClip",

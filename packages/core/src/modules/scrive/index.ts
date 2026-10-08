@@ -10,8 +10,10 @@ import { minibuffer } from '../../minibuffer';
 import type { ModuleManifest } from '../../registry';
 import { createPage } from './api';
 import {
+  APP_VIEW,
   CLIP_VIEW,
   LIVE_VIEW,
+  openApp,
   openClip,
   openPublish,
   openScrivePage,
@@ -36,6 +38,7 @@ const SharePanel = lazyPane(() => import('./panels/SharePanel'), 'SharePanel');
 const OutboxPanel = lazyPane(() => import('./panels/OutboxPanel'), 'OutboxPanel');
 const ClipPanel = lazyPane(() => import('./panels/ClipPanel'), 'ClipPanel');
 const LivePanel = lazyPane(() => import('./panels/LivePanel'), 'LivePanel');
+const AppPanel = lazyPane(() => import('./panels/AppPanel'), 'AppPanel');
 
 const SITES_VIEW = 'scrive.sites';
 const POSTS_VIEW = 'scrive.posts';
@@ -234,6 +237,14 @@ export const scriveModule: ModuleManifest = {
       role: 'document',
       icon: '🪶',
     },
+    {
+      // A site's web apps (params: {site, app}): the gallery, or one app's preview.
+      id: APP_VIEW,
+      title: 'Scrive Web App',
+      component: AppPanel,
+      role: 'document',
+      icon: '🪶',
+    },
   ],
   // An outline the agent proposed waits on a person; it must not get lost.
   shellIndicators: [
@@ -265,6 +276,18 @@ export const scriveModule: ModuleManifest = {
       run: shareFocused,
     },
     { id: 'scrive.openOutbox', title: 'Scrive: Outbox', run: () => void openPane(OUTBOX_VIEW) },
+    {
+      id: 'scrive.openApps',
+      title: 'Scrive: Web apps (make, import a Space, preview)',
+      run: () => {
+        const site = getCurrentSite();
+        if (!site) {
+          minibuffer.say('Pick a site in the Scrive pane first', 'error');
+          return;
+        }
+        openApp(site);
+      },
+    },
     {
       id: 'scrive.openClips',
       title: 'Scrive: Clips (cut, caption, GIF, record screen)',

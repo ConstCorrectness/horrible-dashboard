@@ -217,4 +217,4 @@ def test_ungrouped_plugin_core_tools_filtered_for_scoped_agents() -> None:
             t["function"]["name"] for t in orchestrator._core_tools(coder)
         }
     finally:
-        registry.agent_tools.clear()
+        registry.agent_tools.pop("mytool.doThing", None)

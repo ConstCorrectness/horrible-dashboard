@@ -570,6 +570,70 @@ def test_reaction_rejects_text_payload(client, tmp_path, monkeypatch) -> None:
     assert res.status_code == 422
 
 
+def test_gif_reaction_forwards_giphy_id(client, tmp_path, monkeypatch) -> None:
+    # GIFs go to Clubhouse's dedicated /gif_reaction endpoint, by Giphy id.
+    _connect(tmp_path)
+
+    sent: list[tuple[str, dict]] = []
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        sent.append((path, payload))
+        return {"success": True}
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    res = client.post(
+        "/api/clubhouse/channels/my-channel/gif-reaction",
+        json={"giphy_id": "eA0ISBY2td31e"},
+    )
+    assert res.status_code == 200
+    assert sent == [
+        ("/gif_reaction", {"channel": "my-channel", "giphy_id": "eA0ISBY2td31e"})
+    ]
+
+
+def test_gif_reaction_includes_target_when_directed(
+    client, tmp_path, monkeypatch
+) -> None:
+    _connect(tmp_path)
+
+    sent: list[tuple[str, dict]] = []
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        sent.append((path, payload))
+        return {"success": True}
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    res = client.post(
+        "/api/clubhouse/channels/my-channel/gif-reaction",
+        json={"giphy_id": "eA0ISBY2td31e", "target_user_id": 760006201},
+    )
+    assert res.status_code == 200
+    assert sent == [
+        (
+            "/gif_reaction",
+            {
+                "channel": "my-channel",
+                "giphy_id": "eA0ISBY2td31e",
+                "target_user_id": 760006201,
+            },
+        )
+    ]
+
+
+def test_gif_reaction_rejects_url_or_text(client, tmp_path, monkeypatch) -> None:
+    _connect(tmp_path)
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        raise AssertionError("a non-Giphy-id must never reach Clubhouse")
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    res = client.post(
+        "/api/clubhouse/channels/my-channel/gif-reaction",
+        json={"giphy_id": "https://evil.example/track.gif"},
+    )
+    assert res.status_code == 422
+
+
 def test_mute_channel(client, tmp_path, monkeypatch) -> None:
     _connect(tmp_path)
 

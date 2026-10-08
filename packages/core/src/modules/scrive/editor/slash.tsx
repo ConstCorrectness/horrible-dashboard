@@ -280,6 +280,70 @@ export const SLASH_ITEMS: SlashItem[] = [
         .run(),
   },
   {
+    id: 'space',
+    label: 'Hugging Face Space',
+    group: 'Live',
+    keywords: 'huggingface hf space demo webgpu gradio embed',
+    run: (e) =>
+      e
+        .chain()
+        .focus()
+        .insertContent({
+          type: 'scriveEmbed',
+          attrs: { name: 'space', src: '', options: { height: '640' } },
+        })
+        .run(),
+  },
+  {
+    id: 'app',
+    label: 'Web app',
+    group: 'Live',
+    keywords: 'html javascript webgpu demo app website preview iframe',
+    run: (e) =>
+      e
+        .chain()
+        .focus()
+        .insertContent({
+          type: 'scriveEmbed',
+          attrs: { name: 'app', src: '', options: { height: '600' } },
+        })
+        .run(),
+  },
+  {
+    id: 'webllm',
+    label: 'In-browser model',
+    group: 'Live',
+    keywords: 'llm webgpu model chat transformers webllm ai',
+    run: (e) =>
+      e
+        .chain()
+        .focus()
+        .insertContent({
+          type: 'scriveEmbed',
+          attrs: {
+            name: 'webllm',
+            src: 'onnx-community/Qwen3-0.6B-ONNX',
+            options: { show: 'chat, tokens' },
+          },
+        })
+        .run(),
+  },
+  {
+    id: 'tokenviz',
+    label: 'Token probabilities',
+    group: 'Live',
+    keywords: 'tokenviz tokens probability entropy visualization llm',
+    run: (e) =>
+      e
+        .chain()
+        .focus()
+        .insertContent({
+          type: 'scriveEmbed',
+          attrs: { name: 'tokenviz', src: '', options: {} },
+        })
+        .run(),
+  },
+  {
     id: 'raw',
     label: 'MyST source',
     group: 'Live',

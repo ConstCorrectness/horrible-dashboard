@@ -755,6 +755,13 @@ is the source of truth; it collapses every one of them onto one of three **diale
 | Anthropic     | `litellm` | —                        | no   | no    | yes |
 | Google Gemini | `litellm` | —                        | no   | no    | yes |
 | OpenRouter    | `litellm` | —                        | no   | no    | yes |
+| In-browser    | `browser` | — (the app window)       | no   | no    | —   |
+
+`browser` is the one provider with no server: the model runs on the GPU of an open
+app window (WebGPU) and each round is relayed over that window's `/ws` socket. It is
+reachable only while a window reports WebGPU, lists only models that window has
+cached, and refuses callers with no window (evals, games). See
+[WebML](./webml.mdx#the-browser-chat-provider).
 
 `llamacpp` is the node's **own** server — the backend downloads the `llama-server`
 binary, picks the GGUF and supervises the process, which is why it is the one

@@ -29,6 +29,12 @@ export interface StaticRender {
   mermaid(code: string): string | null;
   /** The URL of a scene's standalone page, with its tweak values. */
   scene(pagePath: string, src: string, params: Record<string, unknown>): string;
+  /** The URL of a web app (`apps/<name>/`, published under `_scrive/apps/`). */
+  app(pagePath: string, name: string): string;
+  /** The URL of the in-browser model embed (`_scrive/webml/embed.html`) with its settings. */
+  webllm(pagePath: string, params: Record<string, unknown>): string;
+  /** A site data file's parsed JSON, preloaded by the build (`{tokenviz}`); undefined if absent. */
+  data(pagePath: string, src: string): unknown;
 }
 
 export const StaticRenderContext = createContext<StaticRender | null>(null);

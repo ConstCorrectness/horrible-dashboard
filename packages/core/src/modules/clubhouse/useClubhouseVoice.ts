@@ -28,6 +28,7 @@ import {
   muteClubhouseChannel,
   setClubhouseHand,
   sendClubhouseReaction,
+  sendClubhouseGif,
   acceptClubhouseSpeaker,
   getClubhouseStatus,
   getClubhouseChannelChat,
@@ -227,11 +228,29 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     [session],
   );
 
-  /** Put one reaction on screen for three seconds, keeping the overlay bounded. */
-  const floatReaction = (emoji: string, gifUrl?: string, idHint = '') => {
+  /**
+   * Put one reaction on screen for three seconds, keeping the overlay bounded. When the
+   * reaction is aimed at someone (`targetUserId`), anchor the floater on that person's
+   * tile — the "target" the room shows — by reading the tile's position relative to the
+   * overlay; a room-wide reaction keeps the old random low-screen drift.
+   */
+  const floatReaction = (emoji: string, gifUrl?: string, idHint = '', targetUserId?: number) => {
     const id = `${idHint || 'r'}-${Math.random().toString(36).slice(2, 9)}`;
-    const x = 15 + Math.random() * 70;
-    const y = 80 + Math.random() * 10;
+    let x = 15 + Math.random() * 70;
+    let y = 80 + Math.random() * 10;
+    if (targetUserId != null && typeof document !== 'undefined') {
+      const tile = document.querySelector(`[data-user-id="${targetUserId}"]`);
+      const overlay = document.querySelector('.ch-floating-reactions-overlay');
+      if (tile && overlay) {
+        const t = tile.getBoundingClientRect();
+        const o = overlay.getBoundingClientRect();
+        if (o.width > 0 && o.height > 0) {
+          // A little jitter so repeated reactions on one tile don't stack exactly.
+          x = ((t.left + t.width / 2 - o.left) / o.width) * 100 + (Math.random() * 8 - 4);
+          y = ((t.top + t.height / 2 - o.top) / o.height) * 100 + (Math.random() * 6 - 3);
+        }
+      }
+    }
     session.update('activeReactions', (prev) =>
       [...prev, { id, emoji, gifUrl, x, y }].slice(-MAX_FLOATERS),
     );
@@ -970,12 +989,50 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
             }
 
             // --- Reactions: emoji and GIF ---
+            // Temporary capture to learn a reaction's real shape — especially whether
+            // one can be aimed at a single person. A room-wide reaction arrives on
+            // `channel_all.<room>`; one targeted at a user should arrive on that user's
+            // own `channel_user.<room>.<userId>` channel, and/or carry a recipient id in
+            // the payload. So log, for any reaction-ish message: the PubNub channel it
+            // came in on, the full payload, and every field that could name a target or
+            // a sender. Open Clubdeck and send reactions (tap a person vs. the room) to
+            // populate this; remove once the field is identified.
+            const reactionish =
+              /react|reaction|gif/i.test(action ?? '') ||
+              'emoji' in msg ||
+              'reaction' in msg ||
+              'gif' in msg ||
+              'gif_url' in msg;
+            if (reactionish) {
+              const rec = msg as Record<string, unknown>;
+              const idish = Object.fromEntries(
+                Object.entries(rec).filter(([k]) =>
+                  /user_id|from_|to_|target|recipient|receiver|action_user|for_user|dest/i.test(k),
+                ),
+              );
+              console.log(
+                '[reaction-shape]',
+                JSON.stringify({
+                  onChannel: event.channel, // channel_all.<room> = broadcast; channel_user.<room>.<id> = targeted
+                  myUserId,
+                  senderId: senderId ?? null,
+                  action: action ?? null,
+                  idFields: idish, // any key that could be a target/recipient/sender
+                  full: event.message,
+                }),
+              );
+            }
             const reaction = parseRoomReaction(msg as Record<string, unknown>);
             if (reaction) {
               // Our own are floated when the send succeeds; Clubhouse echoes them back.
               if (senderId != null && myUserId != null && Number(senderId) === Number(myUserId))
                 return;
-              floatReaction(reaction.emoji ?? '', reaction.gifUrl, String(event.timetoken || ''));
+              floatReaction(
+                reaction.emoji ?? '',
+                reaction.gifUrl,
+                String(event.timetoken || ''),
+                reaction.targetUserId,
+              );
             } else if (/gif/i.test(action ?? '') || 'gif' in msg) {
               // A GIF we could not show: its host is not on the allowlist, or its
               // URL is somewhere unexpected. Said once per message so the shape is
@@ -1217,6 +1274,14 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     if (!activeChannel) return;
     await sendClubhouseReaction(activeChannel, emoji);
     floatReaction(emoji);
+  };
+
+  const sendGif = async (giphyId: string, targetUserId?: number) => {
+    if (!activeChannel) return;
+    await sendClubhouseGif(activeChannel, giphyId, targetUserId);
+    // Float our own locally; Clubhouse echoes it back on the room channel (and the
+    // echo is suppressed because its sender id is us).
+    floatReaction('', `https://media.giphy.com/media/${giphyId}/giphy.gif`, '', targetUserId);
   };
 
   // Play Agent Audio through the mixer
@@ -1605,6 +1670,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     dismissSpeakerInvite,
     sendComment,
     sendReaction,
+    sendGif,
     seedLiveUsers,
     getNetworkInsights,
     getEarsHealth,

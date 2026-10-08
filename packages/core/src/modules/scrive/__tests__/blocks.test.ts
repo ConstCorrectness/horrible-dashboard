@@ -266,6 +266,25 @@ describe('printer', () => {
     expect(printBlock(pm!)).toBe(src);
   });
 
+  it('opens a {space} embed as a block and prints it back as written', () => {
+    const src =
+      '```{space} webml-community/smollm-webgpu\n:height: 640\n:host: webml-community-smollm-webgpu.static.hf.space\n```';
+    const node = parseMyst(src).children[0];
+    const pm = editableBlock(node, src);
+    expect(pm?.type).toBe('scriveEmbed');
+    expect(pm?.attrs).toMatchObject({ name: 'space', src: 'webml-community/smollm-webgpu' });
+    expect(pm?.attrs?.options).toEqual({
+      height: '640',
+      host: 'webml-community-smollm-webgpu.static.hf.space',
+    });
+    expect(printBlock(pm!)).toBe(src);
+    // A colon fence opens the same block; a body keeps it raw.
+    const colon = ':::{space} a/b\n:::';
+    expect(editableBlock(parseMyst(colon).children[0], colon)?.type).toBe('scriveEmbed');
+    const withBody = '```{space} a/b\nwords\n```';
+    expect(editableBlock(parseMyst(withBody).children[0], withBody)).toBeNull();
+  });
+
   it('keeps a {math} directive a directive', () => {
     const src = '```{math}\n:label: eq:a\nx = 1\n```';
     expect(roundTrip(src)).toBe(src);

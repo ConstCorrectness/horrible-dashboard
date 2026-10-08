@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>WebGPU kernel</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 16px;
+        font:
+          14px/1.5 system-ui,
+          sans-serif;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 13px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+      pre {
+        font:
+          12px ui-monospace,
+          monospace;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>WebGPU kernel</h1>
+    <pre id="out">running…</pre>
+    <script type="module">
+      // One WGSL compute kernel — y = a·x + y over a million floats — timed on the GPU
+      // and checked against the CPU. Change N or the kernel and save to re-run.
+      const out = document.getElementById('out');
+      const say = (line) => (out.textContent += `\n${line}`);
+      out.textContent = '';
+
+      const N = 1 << 20;
+      const KERNEL = /* wgsl */ `
+        @group(0) @binding(0) var<storage, read> x: array<f32>;
+        @group(0) @binding(1) var<storage, read_write> y: array<f32>;
+        @group(0) @binding(2) var<uniform> a: f32;
+
+        @compute @workgroup_size(256)
+        fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+          if (id.x < arrayLength(&y)) {
+            y[id.x] = a * x[id.x] + y[id.x];
+          }
+        }`;
+
+      const adapter = await navigator.gpu?.requestAdapter();
+      if (!adapter) throw new Error('no WebGPU adapter in this browser');
+      const device = await adapter.requestDevice();
+      say(`adapter: ${adapter.info?.vendor ?? '?'} ${adapter.info?.architecture ?? ''}`);
+
+      const x = Float32Array.from({ length: N }, (_, i) => i % 7);
+      const y = Float32Array.from({ length: N }, (_, i) => i % 3);
+      const make = (data, usage) => {
+        const buffer = device.createBuffer({
+          size: data.byteLength,
+          usage,
+          mappedAtCreation: true,
+        });
+        new Float32Array(buffer.getMappedRange()).set(data);
+        buffer.unmap();
+        return buffer;
+      };
+      const xBuf = make(x, GPUBufferUsage.STORAGE);
+      const yBuf = make(y, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+      const aBuf = make(new Float32Array([2]), GPUBufferUsage.UNIFORM);
+      const readBuf = device.createBuffer({
+        size: y.byteLength,
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+      });
+
+      const pipeline = device.createComputePipeline({
+        layout: 'auto',
+        compute: { module: device.createShaderModule({ code: KERNEL }), entryPoint: 'main' },
+      });
+      const bind = device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [xBuf, yBuf, aBuf].map((buffer, binding) => ({ binding, resource: { buffer } })),
+      });
+
+      const started = performance.now();
+      const encoder = device.createCommandEncoder();
+      const pass = encoder.beginComputePass();
+      pass.setPipeline(pipeline);
+      pass.setBindGroup(0, bind);
+      pass.dispatchWorkgroups(Math.ceil(N / 256));
+      pass.end();
+      encoder.copyBufferToBuffer(yBuf, 0, readBuf, 0, y.byteLength);
+      device.queue.submit([encoder.finish()]);
+      await readBuf.mapAsync(GPUMapMode.READ);
+      const result = new Float32Array(readBuf.getMappedRange().slice(0));
+      const ms = performance.now() - started;
+
+      let bad = 0;
+      for (let i = 0; i < N; i++) if (result[i] !== 2 * x[i] + y[i]) bad++;
+      say(`${N.toLocaleString()} elements in ${ms.toFixed(2)} ms (dispatch + readback)`);
+      say(bad ? `${bad} mismatches against the CPU` : 'matches the CPU exactly');
+    </script>
+  </body>
+</html>

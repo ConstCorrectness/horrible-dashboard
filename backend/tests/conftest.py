@@ -108,3 +108,41 @@ def reset_process_global_stores():
     server_port = sys.modules.get("backend.server_port")
     if server_port is not None:
         server_port.reset()
+
+
+@pytest.fixture(autouse=True)
+def restore_plugin_registry():
+    """Put the global plugin registry back the way the test found it.
+
+    `backend.app` fills `backend.sdk.registry.registry` once, at import — scrive's
+    agent tools, the built-in connectors and the rest — and nothing fills it again.
+    A test that clears it (`registry.reset()` in test_backend_sdk.py, a `finally:
+    registry.agent_tools.clear()`) therefore removed those for every test after it:
+    `KeyError: 'scrive.proposeOutline'` in test_scrive_agent.py, but only when the
+    suite ran it after test_agent_roster.py.
+
+    Snapshots every container field and restores it in place, since other modules
+    hold references to the registry object. Read from `sys.modules` for the same
+    reason as above: a test that never loaded the SDK has nothing to restore.
+    """
+    import dataclasses
+    import sys
+
+    module = sys.modules.get("backend.sdk.registry")
+    if module is None:
+        yield
+        return
+    registry = module.registry
+    saved = {
+        f.name: getattr(registry, f.name).copy() for f in dataclasses.fields(registry)
+    }
+
+    yield
+
+    for name, value in saved.items():
+        current = getattr(registry, name)
+        current.clear()
+        if isinstance(current, dict):
+            current.update(value)
+        else:
+            current.extend(value)

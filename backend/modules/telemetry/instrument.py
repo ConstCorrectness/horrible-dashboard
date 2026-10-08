@@ -258,20 +258,27 @@ async def _on_response(response: httpx.Response) -> None:
         response_body, response_bytes = None, None
     else:
         response_body, response_bytes = await _capture_response(response)
+    # A redirect hop's request is built as a stream httpx never reads (there is no
+    # body to send), and `.content` on an unread stream raises `RequestNotRead` —
+    # which, raised from a response hook, failed every redirected call.
+    try:
+        request_content: bytes | None = request.content
+    except httpx.RequestNotRead:
+        request_content = None
     event = recorder.record(
         source="outbound",
         method=request.method,
         target=target,
         status=response.status_code,
         duration_ms=(time.perf_counter() - start) * 1000 if start is not None else None,
-        request_bytes=len(request.content) if request.content else None,
+        request_bytes=len(request_content) if request_content else None,
         response_bytes=response_bytes,
         request_headers=capture_headers(request.headers),
         response_headers=capture_headers(response.headers),
         request_body=(
             None
             if redacted
-            else safe_body(request.content, max_chars=_max_body_chars())
+            else safe_body(request_content, max_chars=_max_body_chars())
         ),
         response_body=response_body,
     )

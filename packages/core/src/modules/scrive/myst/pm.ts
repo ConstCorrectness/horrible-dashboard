@@ -239,6 +239,25 @@ function r3fScene(node: MystNode): PMNode {
   };
 }
 
+/**
+ * Scrive's live embeds: an argument and options, never a body. One editor block
+ * (`scriveEmbed`) holds all of them; its node view picks what to draw by `name`.
+ * `{space}` is a Hugging Face Space (render/space.ts); `{app}` a web app from the
+ * site's `apps/` folder (render/AppFrame.tsx); `{webllm}` an in-browser model
+ * (render/WebLlm.tsx); `{tokenviz}` a recorded generation (render/TokenViz.tsx).
+ */
+export const EMBED_DIRECTIVES: readonly string[] = ['space', 'app', 'webllm', 'tokenviz'];
+
+function embedDirective(node: MystNode): PMNode {
+  const name = String(node.name);
+  const { options, body } = splitDirectiveBody(String(node.value ?? ''));
+  if (body.trim()) unsupported(`a {${name}} with a body`);
+  return {
+    type: 'scriveEmbed',
+    attrs: { name, src: typeof node.args === 'string' ? node.args : '', options },
+  };
+}
+
 /** `{math}` with at most a `:label:` — the same block as `$$`, remembered as written. */
 function mathDirective(node: MystNode): PMNode {
   const inner = node.children ?? [];
@@ -294,6 +313,7 @@ export function blockFromMdast(node: MystNode, source?: string): PMNode {
       if (node.name === 'math') return mathDirective(node);
       if (node.name === 'code-cell') return codeCell(node);
       if (node.name === 'r3f') return r3fScene(node);
+      if (EMBED_DIRECTIVES.includes(String(node.name))) return embedDirective(node);
       if (!CONTAINERS.includes(String(node.name) as (typeof CONTAINERS)[number])) {
         unsupported(`directive ${String(node.name)}`);
       }
@@ -490,6 +510,16 @@ export function blockToMdast(node: PMNode): MystNode {
             return out;
           }),
         })),
+      };
+    case 'scriveEmbed':
+      return {
+        type: 'mystDirective',
+        name: String(a.name ?? ''),
+        args: String(a.src ?? ''),
+        options: (a.options as Record<string, unknown> | undefined) ?? {},
+        value: '',
+        fence: '`',
+        rawBody: true,
       };
     case 'r3fScene':
       return {

@@ -53,8 +53,10 @@ MYST_FILE = "myst.yml"
 PAGE_SUFFIXES = (".md", ".ipynb")
 #: Never listed as pages: Scrive's own state, build output (`_build/`, and the
 #: published `_scrive/` support files), VCS, vendored code, post templates (pages-to-be,
-#: listed by the template picker instead) and site themes (whose `THEME.md` is a guide).
+#: listed by the template picker instead), site themes (whose `THEME.md` is a guide) and
+#: web apps (`apps/<name>/`, served as files — an imported Space's README is not a page).
 SKIP_DIRS = {
+    "apps",
     ".scrive",
     "_build",
     "_scrive",

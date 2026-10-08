@@ -365,6 +365,7 @@ def test_no_scrive_tool_publishes() -> None:
         "scrive.proposeOutline",
         "scrive.readPage",
         "scrive.searchSite",
+        "scrive.writeAppFile",
         "scrive.writeScene",
     ]
     for name in names:
@@ -379,6 +380,7 @@ def test_no_scrive_tool_publishes() -> None:
         "scrive.editPage",
         "scrive.fillSection",
         "scrive.makeClip",
+        "scrive.writeAppFile",
         "scrive.writeScene",
     }
 

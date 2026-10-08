@@ -21,6 +21,7 @@ from typing import Any
 
 
 from backend.modules.agent import permission_store, permissions
+from backend.modules.agent import browser_provider
 from backend.modules.agent import providers as P
 from backend.modules.agent.routes import _load_config
 from backend.modules.otel import tracing as otel_tracing
@@ -1611,6 +1612,10 @@ async def handle_agent_message(conn: WsConnection, msg: dict[str, Any]) -> None:
     if event == "manifest":
         tools = data.get("tools")
         conn.agent_tools = tools if isinstance(tools, list) else []
+    elif event == "webml_manifest":
+        browser_provider.record_manifest(conn, data)
+    elif event in ("generate_delta", "generate_done", "generate_error"):
+        browser_provider.on_event(conn, event, data)
     elif event == "list_tools":
         # Introspection for the chat widget's `/tools` command: the FULL catalog,
         # labeled by group. With progressive disclosure the model only *sees* the core

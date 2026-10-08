@@ -23,7 +23,7 @@ if "HORRIBLE_ENABLE_SERVER_BROWSER" not in os.environ:
     except ImportError:
         pass
 
-from backend import hosted, paths
+from backend import hosted, origins, paths
 
 # `<repo>/logs` in a checkout, the per-OS log directory in a packaged install —
 # resolved from this file's location rather than the cwd, so it does not move when
@@ -45,6 +45,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.modules.agent import router as agent_router
 from backend.modules.agent import routes as agent_routes
+from backend.modules.agent import browser_provider
 from backend.modules.agent.orchestrator import handle_agent_message
 from backend.modules.browser import router as browser_router
 from backend.modules.chat import router as chat_router
@@ -167,6 +168,7 @@ from backend.modules.social import router as social_router
 from backend.modules.notebook import handle_notebook_message, notebook_manager
 from backend.modules.docs import router as docs_router
 from backend.modules.notebook import router as notebook_router
+from backend.modules.scrive import apps as scrive_apps
 from backend.modules.scrive import router as scrive_router
 from backend.modules.scrive import watcher as scrive_watcher
 from backend.modules.scrive.runner import runner as scrive_outbox
@@ -340,14 +342,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="horrible-dashboard", lifespan=lifespan)
 
-# Browser layout dev server and Tauri webview origins.
+# Browser layout dev server and Tauri webview origins. `/ws` checks the same list
+# by hand, since CORS does not cover WebSocket upgrades — see backend/origins.py.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "tauri://localhost",
-        "http://tauri.localhost",
-    ],
+    allow_origins=list(origins.UI_ORIGINS),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -399,6 +398,11 @@ async def _republish_presence() -> None:
 
 
 app.add_middleware(_ObserveServerPort)
+
+# Scrive web apps run on their own origin (`scrive-apps.localhost`), served by this
+# backend: the gate keeps that host to app files only, and keeps requests *from* it
+# away from every API route and the `/ws` socket. See backend/modules/scrive/apps.py.
+app.add_middleware(scrive_apps.AppsGate)
 
 # Added last so it is the outermost layer: a request without the hub's instance
 # token is refused before telemetry, CORS or any route sees it. A no-op unless
@@ -620,6 +624,13 @@ async def ws(websocket: WebSocket) -> None:
     channel messages (the `agent` orchestrator, `network` peer control, …). One
     receive loop owns reads; outbound work runs as tasks that send through the
     connection lock."""
+    # Any web page can open a WebSocket to loopback; CORS does not apply. Refused
+    # before accept, so the client sees the upgrade fail (HTTP 403).
+    if not origins.ws_origin_allowed(
+        websocket.headers.get("origin"), websocket.headers.get("host")
+    ):
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     await websocket.send_json(
         {"channel": "system", "event": "hello", "version": APP_VERSION}
@@ -628,6 +639,10 @@ async def ws(websocket: WebSocket) -> None:
     from backend.modules.ws import register_connection, unregister_connection
 
     register_connection(conn)
+    # Every task spawned from this socket (chat turns, their sub-agents, flow agent
+    # nodes) inherits it, which is how the `browser` provider finds the window
+    # whose GPU should answer.
+    browser_provider.current_ws_conn.set(conn)
     terminals = TerminalManager(conn)
     repl = ReplManager(conn)
     lsp = LspManager(conn)
@@ -721,6 +736,7 @@ async def ws(websocket: WebSocket) -> None:
         pass
     finally:
         unregister_connection(conn)
+        browser_provider.drop(conn)
         await terminals.close_all()
         await repl.close_all()
         await lsp.close_all()

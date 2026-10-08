@@ -13,11 +13,12 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeVar
 
-from fastapi import APIRouter, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from backend import extras
 from backend.modules.scrive import (
+    apps,
     clips,
     critique,
     exports,
@@ -32,6 +33,9 @@ from backend.modules.scrive import (
     templates,
     themes,
 )
+import httpx
+
+from backend.modules.telemetry.instrument import instrumented_client
 from backend.modules.scrive.runner import announce
 from backend.modules.scrive.runner import runner as outbox_runner
 from backend.publishing import github_pages
@@ -68,6 +72,7 @@ def _call(fn: Callable[[], T]) -> T:
         themes.ThemeError,
         PublishError,
         clips.ClipError,
+        apps.AppError,
     ) as exc:
         raise HTTPException(400, str(exc)) from exc
     except FileNotFoundError as exc:
@@ -133,6 +138,84 @@ def save_page(site: str, body: SavePage, path: str = Query(...)):
 def delete_page(site: str, path: str = Query(...)) -> dict[str, bool]:
     _call(lambda: store.delete_page(site, path))
     return {"ok": True}
+
+
+# --- web apps (`apps/<name>/`, served on their own origin by apps.AppsGate) -------------
+
+
+class AppsOrigin(BaseModel):
+    #: `http://scrive-apps.localhost:<port>`, or None where apps cannot be served.
+    origin: str | None
+    reason: str = ""
+
+
+class AppInfo(BaseModel):
+    name: str
+    title: str
+    hasIndex: bool
+    files: int
+    bytes: int
+    #: `SPACE.json` for an imported Space: where it came from, its licence, what was
+    #: skipped.
+    source: dict[str, Any] | None = None
+    #: Files an import left out (weights, oversized), on the import's own reply.
+    skipped: list[dict[str, Any]] = []
+
+
+class CreateApp(BaseModel):
+    name: str
+    template: str = "blank"
+
+
+class ImportSpace(BaseModel):
+    space: str
+    name: str | None = None
+
+
+@router.get("/apps-origin", response_model=AppsOrigin)
+def apps_origin(request: Request) -> AppsOrigin:
+    origin = apps.apps_origin(
+        request.scope.get("server"), request.client.host if request.client else None
+    )
+    if origin:
+        return AppsOrigin(origin=origin)
+    return AppsOrigin(
+        origin=None,
+        reason="Web apps preview on a backend running on this machine: they need "
+        "their own origin (scrive-apps.localhost), which a hosted node does not have.",
+    )
+
+
+@router.get("/app-templates", response_model=list[str])
+def app_templates() -> list[str]:
+    return apps.templates()
+
+
+@router.get("/sites/{site}/apps", response_model=list[AppInfo])
+def list_apps(site: str) -> list[AppInfo]:
+    return [AppInfo(**a) for a in _call(lambda: apps.list_apps(site))]
+
+
+@router.post("/sites/{site}/apps", response_model=AppInfo)
+def create_app(site: str, body: CreateApp) -> AppInfo:
+    return AppInfo(**_call(lambda: apps.create_app(site, body.name, body.template)))
+
+
+@router.post("/sites/{site}/apps/import", response_model=AppInfo)
+async def import_app(site: str, body: ImportSpace) -> AppInfo:
+    """Copy a static Hugging Face Space into `apps/<name>/` (weights skipped)."""
+    try:
+        async with instrumented_client(timeout=60.0) as client:
+            result = await apps.import_space(client, site, body.space, body.name)
+    except (apps.AppError, store.StoreError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except FileExistsError as exc:
+        raise HTTPException(409, f"already exists: {exc}") from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"the Hub did not answer: {exc}") from exc
+    return AppInfo(**result)
 
 
 @router.get("/sites/{site}/asset")

@@ -62,7 +62,8 @@ PRINT_TIMEOUT_MS = 60_000
 SCENE_WAIT_MS = 20_000
 SCENE_SETTLE_MS = 1200
 _FOR_PAPER = """() => {
-  document.querySelectorAll('details').forEach((d) => { d.open = true; });
+  // A Space's "Run it here" stays shut: on paper it is the caption and its link.
+  document.querySelectorAll('details:not(.scrive-run)').forEach((d) => { d.open = true; });
   document.querySelectorAll('[loading="lazy"]').forEach((e) => { e.loading = 'eager'; });
 }"""
 

@@ -71,3 +71,18 @@ export const LIVE_VIEW = 'scrive.live';
 export function openLive(key: string, title: string): void {
   openDocument(LIVE_VIEW, `${LIVE_VIEW}:${key}`, { key, title: `Live ${title}` }, () => true);
 }
+
+export const APP_VIEW = 'scrive.app';
+
+/**
+ * The web-app preview for `apps/<name>/` of `site` (viewport sizes, console, reload) —
+ * or, with no name, the site's apps to pick from, make or import.
+ */
+export function openApp(site: string, name = ''): void {
+  openDocument(
+    APP_VIEW,
+    `${APP_VIEW}:${site}/${name}`,
+    { site, app: name, title: name ? `App ${name}` : `Apps · ${site}` },
+    () => true,
+  );
+}

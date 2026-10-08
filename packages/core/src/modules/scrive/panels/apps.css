@@ -1,0 +1,240 @@
+/* Scrive web apps: the gallery and the preview. Tokens only. */
+
+.scrive-apps {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  color: var(--text);
+  background: var(--bg);
+}
+
+.scrive-apps-gallery {
+  overflow: auto;
+}
+
+.scrive-apps-pad {
+  padding: 0 14px;
+}
+
+.scrive-apps-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 14px;
+  border-top: 2px solid var(--accent);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.scrive-apps-title {
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-strong);
+}
+
+.scrive-apps-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin: 12px 0 6px;
+}
+
+.scrive-apps-crumb,
+.scrive-apps-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.scrive-apps-crumb {
+  border-color: transparent;
+  padding: 0;
+}
+
+.scrive-apps-chip:hover:not(:disabled),
+.scrive-apps-crumb:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.scrive-apps-chip.is-on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.scrive-apps-chip.is-bad {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.scrive-apps-viewports,
+.scrive-apps-actions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.scrive-apps-actions {
+  margin-left: auto;
+}
+
+.scrive-apps-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+}
+
+.scrive-apps-body.has-console {
+  grid-template-columns: 1fr minmax(220px, 30%);
+}
+
+/* The stage: a faint technical grid behind a frame narrower than the pane. */
+.scrive-apps-stage {
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--border) 45%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--border) 45%, transparent) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.scrive-apps-frame {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.scrive-apps-console {
+  min-height: 0;
+  overflow: auto;
+  padding: 0 10px 10px;
+  border-left: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.scrive-apps-console .scrive-app-console {
+  max-height: none;
+  border-top: 0;
+  padding: 0;
+}
+
+.scrive-apps-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+  padding: 12px 14px 0;
+}
+
+.scrive-apps-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%);
+}
+
+.scrive-apps-card .scrive-apps-label {
+  margin: 0;
+}
+
+.scrive-apps-row {
+  display: flex;
+  gap: 6px;
+}
+
+.scrive-apps-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 0 0.6rem;
+}
+
+.scrive-apps-row select {
+  padding: 0 0.6rem;
+}
+
+.scrive-apps-note {
+  margin: 10px 14px 0;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.scrive-apps-note.is-bad {
+  color: var(--danger);
+}
+
+.scrive-apps-skipped {
+  margin: 6px 14px 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+@keyframes scrive-apps-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.scrive-apps-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 14px;
+  display: flex;
+  flex-direction: column;
+}
+
+.scrive-apps-list li {
+  animation: scrive-apps-arrive 160ms ease-out both;
+}
+
+.scrive-apps-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  text-align: left;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.scrive-apps-item:hover {
+  background: var(--bg-hover);
+}
+
+.scrive-apps-item-title {
+  font-weight: 600;
+}

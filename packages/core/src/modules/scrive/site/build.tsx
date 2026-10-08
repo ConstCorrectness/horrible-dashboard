@@ -38,6 +38,7 @@ import {
 } from '../myst/parse';
 import { MystView, toText } from '../render/MystView';
 import pageCss from '../render/page.css?raw';
+import tokenStripCss from '../../../token-strip/token-strip.css?raw';
 import { StaticRenderContext, type StaticRender } from '../render/static-context';
 import {
   Document,
@@ -73,6 +74,8 @@ export interface SiteSource {
   cells?: Record<string, Record<string, NbOutput[]>>;
   /** `{mermaid}` source → SVG, drawn ahead of time (`prepare.ts`). */
   mermaid?: Record<string, string>;
+  /** Site JSON files a page draws from (`{tokenviz}`), by site path, preloaded. */
+  data?: Record<string, unknown>;
   /** For the footer; defaults to this year. */
   year?: number;
   /** Pages built whatever their status: a print build exports a draft. */
@@ -93,6 +96,8 @@ export interface SiteBuild {
   assets: string[];
   /** Scene sources the pages embed; the backend reports any that do not exist. */
   scenes: string[];
+  /** Web apps the pages embed, by name; the backend reports any that do not exist. */
+  apps: string[];
   cards: CardRequest[];
   /** The source pages published. */
   pages: string[];
@@ -118,7 +123,11 @@ export function siteStylesheet(
   tokens: string,
   // The stylesheets' text. Injectable because vitest stubs `?raw` CSS imports as
   // empty strings; under Vite they are the files.
-  css: { page: string; site: string } = { page: pageCss, site: siteCss },
+  css: { page: string; site: string; tokens?: string } = {
+    page: pageCss,
+    site: siteCss,
+    tokens: tokenStripCss,
+  },
 ): string {
   // page.css pulls KaTeX in with an @import for the app; the site links it instead,
   // and only from pages that have math.
@@ -128,6 +137,7 @@ export function siteStylesheet(
     `/* Theme tokens */\n${tokens}`,
     `/* Page content (render/page.css) */\n${page}`,
     `/* Layout (site/site.css) */\n${css.site}`,
+    `/* Token-probability strips (token-strip/token-strip.css) */\n${css.tokens ?? ''}`,
     `/* Diagrams: the one drawn for the reader's colour scheme */\n${diagrams}\n`,
   ].join('\n\n');
 }
@@ -255,6 +265,7 @@ export function buildSite(input: SiteSource): SiteBuild {
   const bySource = new Map(pages.map((p) => [p.source, p]));
   const assets = new Set<string>();
   const scenes = new Set<string>();
+  const apps = new Set<string>();
   const files: Record<string, string> = {};
   const cards: CardRequest[] = [];
 
@@ -338,6 +349,17 @@ export function buildSite(input: SiteSource): SiteBuild {
         ? `#${encodeURIComponent(JSON.stringify(params))}`
         : '';
       return relativeUrl(page.out, target) + hash;
+    },
+    webllm(_pagePath, params) {
+      return `${relativeUrl(page.out, '_scrive/webml/embed.html')}#${encodeURIComponent(JSON.stringify(params))}`;
+    },
+    data(pagePath, src) {
+      const path = sitePath(pagePath, src);
+      return path === null ? undefined : input.data?.[path];
+    },
+    app(_pagePath, name) {
+      apps.add(name);
+      return relativeUrl(page.out, `_scrive/apps/${name}/index.html`).replace(/index\.html$/, '');
     },
   });
 
@@ -731,6 +753,7 @@ export function buildSite(input: SiteSource): SiteBuild {
     files,
     assets: [...assets].sort(),
     scenes: [...scenes].sort(),
+    apps: [...apps].sort(),
     cards,
     pages: pages.map((p) => p.source),
     leftOut,
@@ -752,6 +775,7 @@ export function buildPrint(input: SiteSource, path: string): SiteBuild {
     files: { [out]: build.files[out], '_scrive/site.css': build.files['_scrive/site.css'] },
     assets: build.assets,
     scenes: build.scenes,
+    apps: build.apps,
     cards: [],
     pages: [path],
     leftOut: [],

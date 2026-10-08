@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>In-browser chat</title>
+    <style>
+      :root {
+        --fg: #1b1d21;
+        --muted: #6a707b;
+        --rule: #d8dbe0;
+        --accent: #2f6fdd;
+        --bg: #fbfbfc;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #e3e5e9;
+          --muted: #8a909c;
+          --rule: #2e333d;
+          --accent: #6ea8fe;
+          --bg: #14161a;
+        }
+      }
+      body {
+        margin: 0;
+        padding: 16px;
+        font:
+          15px/1.5 system-ui,
+          sans-serif;
+        color: var(--fg);
+        background: var(--bg);
+      }
+      header {
+        display: flex;
+        gap: 12px;
+        align-items: baseline;
+        border-top: 2px solid var(--accent);
+        padding-top: 8px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 13px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+      .meta {
+        font:
+          12px ui-monospace,
+          monospace;
+        color: var(--muted);
+      }
+      #log {
+        margin: 12px 0;
+        white-space: pre-wrap;
+        min-height: 4em;
+      }
+      form {
+        display: flex;
+        gap: 8px;
+      }
+      input {
+        flex: 1;
+        height: 30px;
+        padding: 0 8px;
+        border: 1px solid var(--rule);
+        background: transparent;
+        color: inherit;
+      }
+      button {
+        height: 30px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>In-browser chat</h1>
+      <span class="meta" id="status"></span>
+    </header>
+    <button id="load" type="button">Load the model (273 MB, once)</button>
+    <div id="log"></div>
+    <form id="ask">
+      <input id="q" type="text" placeholder="Ask something" autocomplete="off" disabled />
+      <button type="submit" disabled>Send</button>
+    </form>
+    <script type="module">
+      // Runs entirely in the reader's browser on WebGPU. Nothing downloads until the
+      // reader asks; then the weights stay in this origin's Cache Storage.
+      import {
+        pipeline,
+        TextStreamer,
+      } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0';
+
+      const MODEL = 'HuggingFaceTB/SmolLM2-360M-Instruct';
+      const status = document.getElementById('status');
+      const log = document.getElementById('log');
+      const input = document.getElementById('q');
+      const send = document.querySelector('#ask button');
+
+      const loadButton = document.getElementById('load');
+      let generator = null;
+
+      if (!navigator.gpu) {
+        status.textContent = 'this browser has no WebGPU';
+        loadButton.disabled = true;
+      }
+      loadButton.addEventListener('click', async () => {
+        loadButton.disabled = true;
+        status.textContent = 'loading…';
+        generator = await pipeline('text-generation', MODEL, {
+          device: 'webgpu',
+          dtype: 'q4f16',
+          progress_callback: (p) => {
+            if (p.status === 'progress') status.textContent = `${p.file} ${Math.round(p.progress)}%`;
+          },
+        });
+        loadButton.hidden = true;
+        status.textContent = `${MODEL} · ready`;
+        input.disabled = send.disabled = false;
+        input.focus();
+      });
+
+      document.getElementById('ask').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const question = input.value.trim();
+        if (!question || !generator) return;
+        input.value = '';
+        log.textContent = '';
+        const started = performance.now();
+        let tokens = 0;
+        const streamer = new TextStreamer(generator.tokenizer, {
+          skip_prompt: true,
+          callback_function: (text) => (log.textContent += text),
+          token_callback_function: () => tokens++,
+        });
+        await generator([{ role: 'user', content: question }], { max_new_tokens: 256, streamer });
+        const seconds = (performance.now() - started) / 1000;
+        status.textContent = `${tokens} tokens · ${(tokens / seconds).toFixed(1)} tok/s`;
+      });
+    </script>
+  </body>
+</html>

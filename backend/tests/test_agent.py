@@ -68,6 +68,8 @@ def test_status_unconfigured_and_unreachable(client: TestClient) -> None:
         "anthropic",
         "gemini",
         "openrouter",
+        # Listed always; reachable only while an open window reports WebGPU.
+        "browser",
     }
     assert all(p["reachable"] is False for p in body["providers"])
     # A hosted provider's readiness is whether we hold a key, not whether a port
