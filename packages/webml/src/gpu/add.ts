@@ -1,4 +1,8 @@
 /// <reference types="@webgpu/types" />
+// Packages that compile this source with their own tsconfig (@horrible/core) need the
+// `?raw` declaration to come with it; an import cannot carry an ambient module.
+// eslint-disable-next-line @typescript-eslint/triple-slash-reference
+/// <reference path="../wgsl/wgsl.d.ts" />
 /** The `add` kernel (`wgsl/add.wgsl`): `out = a + b` over `n` f32s. */
 import source from '../wgsl/add.wgsl?raw';
 import { dispatch1d } from './dispatch';

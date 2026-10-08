@@ -103,15 +103,18 @@ def write_model(path: Path, w: dict[str, np.ndarray], mixed: bool) -> None:
     g.add_rope_dimension_count(HEAD_DIM)
     g.add_rope_freq_base(10000.0)
     g.add_layer_norm_rms_eps(1e-5)
-    # A vocabulary llama.cpp will load. Nothing is tokenized: tests feed ids.
+    # A vocabulary llama.cpp will load. The parity tests feed ids; the session tests
+    # write prompts as text — `t2…t63` are user-defined tokens, matched literally,
+    # so "t5t9" is exactly [5, 9] — through a template that concatenates contents.
     g.add_tokenizer_model("gpt2")
     g.add_tokenizer_pre("default")
     g.add_token_list(["<s>", "</s>"] + [f"t{i}" for i in range(2, VOCAB)])
-    g.add_token_types([3, 3] + [1] * (VOCAB - 2))
+    g.add_token_types([3, 3] + [4] * (VOCAB - 2))
     g.add_token_merges(["t 1"])
     g.add_bos_token_id(0)
     g.add_eos_token_id(1)
     g.add_add_bos_token(False)
+    g.add_chat_template("{% for m in messages %}{{ m.content }}{% endfor %}")
 
     for name, value in w.items():
         if mixed and name == "output":

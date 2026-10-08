@@ -26,6 +26,9 @@ export {
 export {
   WebmlEngine,
   defaultWorker,
+  ggufWorker,
+  workerFor,
+  engineFor,
   loadTotals,
   type EngineState,
   type FileProgress,
@@ -34,3 +37,12 @@ export {
   type GenerationResult,
   type StepEvent,
 } from './client';
+export {
+  ggufModelId,
+  isGgufModelId,
+  parseGgufModelId,
+  listGgufs,
+  deleteGguf,
+  type StoredGguf,
+} from './gguf/store';
+export { listRepoGgufs, inspectHubGguf, type HubGguf, type GgufInspection } from './gguf/hub';

@@ -184,3 +184,50 @@ export function maxRelError(
   }
   return worst;
 }
+
+/**
+ * A fetch that serves `file` like the Hub's CDN: honours `Range`, reports
+ * `Content-Range`. With `cutAfter`, the first response body errors after that many
+ * bytes (a dropped connection), and later ones are whole.
+ */
+export function fileServer(file: Uint8Array, options: { cutAfter?: number } = {}) {
+  const requests: (string | null)[] = [];
+  let cut = options.cutAfter;
+  const fetcher = (async (_url: string, init?: RequestInit) => {
+    const range = (init?.headers as Record<string, string> | undefined)?.Range ?? null;
+    requests.push(range);
+    const m = range ? /bytes=(\d+)-(\d*)/.exec(range) : null;
+    const start = m ? Number(m[1]) : 0;
+    const end = m && m[2] ? Math.min(Number(m[2]), file.length - 1) : file.length - 1;
+    if (start >= file.length) return new Response(null, { status: 416 });
+    const body = file.slice(start, end + 1);
+    const limit = cut;
+    cut = undefined;
+    let sent = false;
+    // Pull-based, so the cut arrives after the reader has taken the bytes before it
+    // (erroring in `start` would discard what was queued).
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent) {
+          if (limit === undefined) controller.close();
+          else controller.error(new Error('connection reset'));
+          return;
+        }
+        sent = true;
+        controller.enqueue(limit === undefined ? body : body.slice(0, limit));
+      },
+    });
+    return new Response(stream, {
+      status: m ? 206 : 200,
+      headers: m
+        ? { 'content-range': `bytes ${start}-${end}/${file.length}` }
+        : { 'content-length': String(file.length) },
+    });
+  }) as typeof fetch;
+  return { fetcher, requests };
+}
+
+/** A fixture file's bytes, by its `?url`. */
+export async function fixtureBytes(url: string): Promise<Uint8Array> {
+  return new Uint8Array(await (await fetch(url)).arrayBuffer());
+}

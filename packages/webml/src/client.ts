@@ -5,9 +5,11 @@
  *
  * The worker is created on the first `load`, so constructing an engine is free.
  */
+import { isGgufModelId } from './gguf/store';
 import type {
   Device,
   Dtype,
+  EngineKind,
   GenerateRequest,
   StopReason,
   Usage,
@@ -31,7 +33,18 @@ export type EngineState =
       phase: 'download' | 'warmup';
       files: Record<string, FileProgress>;
     }
-  | { kind: 'ready'; model: string; dtype: Dtype; device: Device; loadMs: number }
+  | {
+      kind: 'ready';
+      model: string;
+      dtype: Dtype;
+      device: Device;
+      loadMs: number;
+      engine: EngineKind;
+      /** GGUF: the dominant weight type ("Q8_0"). */
+      quant?: string;
+      /** GGUF: KV-cache positions allocated. */
+      contextLength?: number;
+    }
   | { kind: 'error'; message: string; model?: string };
 
 export interface GenerationResult {
@@ -66,16 +79,35 @@ export function defaultWorker(): Worker {
   });
 }
 
+export function ggufWorker(): Worker {
+  return new Worker(new URL('./engine/gguf.worker.ts', import.meta.url), {
+    type: 'module',
+    name: 'webml-gguf',
+  });
+}
+
+/** The worker for each engine: transformers.js for ONNX, our WGSL engine for GGUF. */
+export function workerFor(kind: EngineKind): Worker {
+  return kind === 'gguf' ? ggufWorker() : defaultWorker();
+}
+
+/** Which engine runs `model`: `gguf:` ids are GGUF files, anything else an ONNX repo. */
+export function engineFor(model: string): EngineKind {
+  return isGgufModelId(model) ? 'gguf' : 'onnx';
+}
+
 let seq = 0;
 
 export class WebmlEngine {
   private worker: Worker | null = null;
+  /** The engine the current (or next) worker runs. */
+  private kind: EngineKind = 'onnx';
   private state: EngineState = { kind: 'idle' };
   private readonly listeners = new Set<() => void>();
   private loadWaiter: { resolve: () => void; reject: (err: Error) => void } | null = null;
   private readonly pending = new Map<string, Pending>();
 
-  constructor(private readonly createWorker: () => Worker = defaultWorker) {}
+  constructor(private readonly createWorker: (kind: EngineKind) => Worker = workerFor) {}
 
   getState = (): EngineState => this.state;
 
@@ -89,17 +121,35 @@ export class WebmlEngine {
     return this.pending.size > 0;
   }
 
-  /** Load a model (resolves when it is warmed up). Loading the loaded model is a no-op. */
-  load(model: string, dtype: Dtype, device: Device = 'webgpu'): Promise<void> {
+  /**
+   * Load a model (resolves when it is warmed up). Loading the loaded model is a
+   * no-op. A model for the other engine replaces the worker: terminating it is the
+   * only way to give its GPU memory back.
+   */
+  load(
+    model: string,
+    dtype: Dtype,
+    device: Device = 'webgpu',
+    options: { contextLength?: number } = {},
+  ): Promise<void> {
     const s = this.state;
     if (s.kind === 'ready' && s.model === model && s.dtype === dtype && s.device === device) {
       return Promise.resolve();
     }
+    const kind = engineFor(model);
+    if (this.worker && kind !== this.kind) {
+      this.worker.terminate();
+      this.worker = null;
+      for (const p of this.pending.values())
+        p.reject(new Error('superseded by loading another model'));
+      this.pending.clear();
+    }
+    this.kind = kind;
     this.loadWaiter?.reject(new Error('superseded by another load'));
     this.set({ kind: 'loading', model, dtype, phase: 'download', files: {} });
     return new Promise<void>((resolve, reject) => {
       this.loadWaiter = { resolve, reject };
-      this.send({ type: 'load', model, dtype, device });
+      this.send({ type: 'load', model, dtype, device, contextLength: options.contextLength });
     });
   }
 
@@ -140,7 +190,7 @@ export class WebmlEngine {
 
   private send(req: WorkerRequest): void {
     if (!this.worker) {
-      this.worker = this.createWorker();
+      this.worker = this.createWorker(this.kind);
       this.worker.addEventListener('message', (e: MessageEvent<WorkerEvent>) =>
         this.onEvent(e.data),
       );
@@ -192,6 +242,9 @@ export class WebmlEngine {
           dtype: event.dtype,
           device: event.device,
           loadMs: event.loadMs,
+          engine: event.engine ?? 'onnx',
+          quant: event.quant,
+          contextLength: event.contextLength,
         });
         this.loadWaiter?.resolve();
         this.loadWaiter = null;
