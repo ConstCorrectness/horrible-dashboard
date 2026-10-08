@@ -10,7 +10,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run --project unit",
-    "test:kernels": "vitest run --project kernels"
+    "test:kernels": "vitest run --project kernels",
+    "build:embed": "vite build --config vite.embed.config.ts"
   },
   "dependencies": {
     "@huggingface/jinja": "0.5.10",
@@ -21,6 +22,7 @@
     "@webgpu/types": "^0.1.74",
     "playwright": "1.56.1",
     "typescript": "^5.8.0",
+    "vite": "^7.0.0",
     "vitest": "^4.1.10"
   }
 }

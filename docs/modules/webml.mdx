@@ -3,13 +3,14 @@
 **Status: Phases 0–5 of 6 implemented** (foundation, playground, `browser` chat
 provider, and Scrive's `{space}`, `{app}`, `{webllm}` and `{tokenviz}` — see
 [Scrive](./scrive.mdx#hugging-face-spaces)). Phase 6, our own WGSL engine for GGUF, is
-built through stage 6.5, plus 6.6's `qwen2` and `gemma3`
+built through stage 6.6
 ([WebML GGUF engine](../architecture/webml-gguf-engine.mdx)): `llama`, `qwen2`,
-`qwen3` and `gemma3` files in F32 to Q4_K_M, matching llama.cpp. The engine prefills in
-batches, reuses the KV cache across replies, and samples on the GPU. It runs in the
-playground and behind the `browser` chat provider, and runs this node's own GGUFs
-(the llama.cpp catalog, training's conversions) straight from its disk through
-**Run in this window**. Language models that
+`qwen3`, `gemma3` and `smollm3` files in F32 to Q4_K_M, matching llama.cpp. The engine
+prefills in batches, reuses the KV cache across replies, and samples on the GPU. It
+runs in the playground, behind the `browser` chat provider and in published Scrive
+pages, and runs this node's own GGUFs (the llama.cpp catalog, training's conversions)
+straight from its disk through **Run in this window**. With the logit lens on, every
+token carries a per-layer readout, shown in the token strip and the model explorer. Language models that
 run **in this window, on its GPU**, through WebGPU: no backend round-trip, no
 provider, nothing typed leaves the machine. Modelled on the Hugging Face "webml"
 static Spaces (SmolLM WebGPU, Gemma 4 / Bonsai WebGPU kernels, Agate).

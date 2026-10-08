@@ -214,10 +214,26 @@ describe('{webllm} and {tokenviz}', () => {
       dtype: '',
       system: 'Be terse.',
       tokens: true,
+      lens: false,
       max: 64,
       sizes: { q4f16: 569_789_750, q4: 919_096_585 },
     });
     expect(html).toContain('loading="lazy"');
+  });
+
+  it('a published GGUF {webllm} passes its id and the lens through to the page', () => {
+    const html = render(
+      '```{webllm} gguf:Qwen/Qwen3-0.6B-GGUF/Qwen3-0.6B-Q8_0.gguf\n:show: lens\n```',
+      true,
+    );
+    const src = /src="([^"]+)"/.exec(html)?.[1] ?? '';
+    expect(JSON.parse(decodeURIComponent(src.split('#')[1].replace(/&amp;/g, '&')))).toMatchObject({
+      model: 'gguf:Qwen/Qwen3-0.6B-GGUF/Qwen3-0.6B-Q8_0.gguf',
+      tokens: true,
+      lens: true,
+      // Not in the ONNX catalog: the page asks the Hub for the file's size.
+      sizes: {},
+    });
   });
 
   it('a published {tokenviz} is the strip as plain markup, from preloaded data', () => {

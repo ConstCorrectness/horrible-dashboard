@@ -120,6 +120,8 @@ dmypy.json
 
 # Scrive's {r3f} scene runtime: built by packages/scrive-runtime
 backend/modules/scrive/static/scrive-runtime.js
+# The GGUF engine published {webllm} pages run: built by packages/webml (build:embed)
+backend/modules/scrive/static/webml-gguf.worker.js
 
 # pytype static type analyzer
 .pytype/

@@ -342,6 +342,33 @@ It also reports the **mixed quantization** a K-quant build actually uses (a Gemm
 and where the bytes sit: select Attention and the pane says what share of the file
 it is.
 
+### The window's logit lens
+
+The explorer's lens so far has been the llama.cpp trace grid: a trace the node
+captured, read as words. The second source is the model **running in this window**.
+When a GGUF generates with the logit lens on (the playground's `webml.lens`, or a
+`{webllm}` with `:show: lens`; see [WebML](./webml.mdx)), the engine reads out every
+layer at every token, and the explorer draws the latest such reply under *Whole
+model* and under a selected block (`inspect/WindowLens.tsx`).
+
+- **A layer × token grid**, layer 0 at the top, the reply's last 32 tokens across.
+  Each cell is the token the LM head would pick from the residual stream after that
+  layer, shaded by its probability. Where it is the token finally chosen, it is in the
+  accent, so a prediction settling reads as the accent running up a column to the
+  last row. Hovering a cell gives the probability, the entropy and the stream's norm.
+- **A `settles` footer**: the first layer from which the chosen token leads at that
+  layer and every later one. A dash means the last layer preferred another token (a
+  sampled runner-up).
+- **It fills while the reply is written.** The window's engine keeps the run
+  (`webml/lens-run.ts`) whichever surface asked for it, so neither the playground nor
+  `{webllm}` reports in. One run is kept, the newest, cut to its last 512 tokens.
+- **Rows link to blocks only when the layer counts agree.** The explorer follows the
+  node's model, and the window's is often another one, so the grid always names its
+  own model. When the counts match, clicking a layer selects and opens that block and
+  the selected block's row is outlined. When they differ, a note says so and the rows
+  are not links. With no node model loaded, the empty state still shows the grid,
+  unlinked.
+
 ### Locating the weights
 
 `gguf.resolve_model_path` tries, in order:

@@ -252,6 +252,22 @@ def test_preflight_reads_the_files_that_leave(site) -> None:
     assert [f.blocking for f in findings if f.rule == "secret"] == [True]
 
 
+def test_preflight_names_a_webllm_model_readers_cannot_reach(site) -> None:
+    body = (
+        "```{webllm} gguf-node:C:\\models\\qwen3-sft-q8_0.gguf\n```\n\n"
+        "```{webllm} gguf:Qwen/Qwen3-0.6B-GGUF/Qwen3-0.6B-Q8_0.gguf\n```\n"
+    )
+    write(site, "posts/a.md", post("published", body))
+    files = {publish.WEBML_GGUF_WORKER_PATH: f"var k='{FAKE_TOKEN}'".encode()}
+    findings = publish.preflight(site, files, ["posts/a.md"])
+    node = [f for f in findings if f.rule == "node-model"]
+    # The node file, by name, and only it: a Hub GGUF is reachable.
+    assert [(f.file, f.blocking) for f in node] == [("posts/a.md", False)]
+    assert "qwen3-sft-q8_0.gguf" in node[0].message
+    # The bundled engine is ours, minified, and not scanned.
+    assert not any(f.file == publish.WEBML_GGUF_WORKER_PATH for f in findings)
+
+
 def test_an_empty_site_cannot_be_acknowledged_into_a_publish(site) -> None:
     findings = publish.preflight(site, {"index.html": b"x"}, [])
     assert publish._blocked(findings, acknowledged=True)

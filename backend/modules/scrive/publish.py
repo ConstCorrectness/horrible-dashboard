@@ -333,26 +333,47 @@ def _app_files(base: Path) -> dict[str, bytes]:
 
 
 WEBML_EMBED_PATH = f"{SUPPORT}/webml/embed.html"
+#: Our WGSL engine for `gguf:` models, started by the embed page beside it. Built by
+#: `pnpm --filter @horrible/webml build:embed` (gitignored, like the scene runtime).
+WEBML_GGUF_WORKER_PATH = f"{SUPPORT}/webml/gguf.worker.js"
+WEBML_GGUF_WORKER = "webml-gguf.worker.js"
+#: The model a `{webllm}` names: its directive argument.
+_WEBLLM_MODEL = re.compile(r"\{webllm\}[ \t]*([^\s`]*)")
 
 
-def _uses_webllm(base: Path) -> bool:
-    """Whether any page in the site has a `{webllm}` block."""
+def _webllm_models(base: Path) -> dict[str, list[str]]:
+    """Every page with a `{webllm}` block, and the models its blocks name ('' for a
+    block with none)."""
+    found: dict[str, list[str]] = {}
     for dirpath, dirnames, filenames in os.walk(base):
         dirnames[:] = sorted(d for d in dirnames if d not in SOURCE_SKIP)
-        for name in filenames:
+        for name in sorted(filenames):
             if name.lower().endswith(store.PAGE_SUFFIXES):
-                text = (Path(dirpath) / name).read_text(encoding="utf-8", errors="replace")
+                path = Path(dirpath) / name
+                text = path.read_text(encoding="utf-8", errors="replace")
                 if "{webllm}" in text:
-                    return True
-    return False
+                    found[path.relative_to(base).as_posix()] = _WEBLLM_MODEL.findall(
+                        text
+                    )
+    return found
 
 
 def _support_files(base: Path) -> dict[str, bytes]:
-    """Web apps, the in-browser model page when a page has a `{webllm}`, and the scene
-    runtime plus one page per scene when there are scenes."""
+    """Web apps, the in-browser model page when a page has a `{webllm}` (with the GGUF
+    engine when one runs a `gguf:` model), and the scene runtime plus one page per
+    scene when there are scenes."""
     files = _app_files(base)
-    if _uses_webllm(base):
+    webllm = _webllm_models(base)
+    if webllm:
         files[WEBML_EMBED_PATH] = (STATIC / "webml-embed.html").read_bytes()
+    if any(m.startswith("gguf:") for models in webllm.values() for m in models):
+        worker = STATIC / WEBML_GGUF_WORKER
+        if not worker.is_file():
+            raise PublishError(
+                "This site runs a GGUF model in the reader's browser, but the GGUF "
+                "engine is not built. Run: pnpm --filter @horrible/webml build:embed"
+            )
+        files[WEBML_GGUF_WORKER_PATH] = worker.read_bytes()
     scenes = _scenes(base)
     if not scenes:
         return files
@@ -603,7 +624,9 @@ def preflight(site_id: str, files: dict[str, bytes], pages: list[str]) -> list[F
                     file=path,
                 )
             )
-        if path == RUNTIME_PATH or PurePosixPath(path).suffix not in TEXT_SUFFIXES:
+        if path in (RUNTIME_PATH, WEBML_GGUF_WORKER_PATH) or (
+            PurePosixPath(path).suffix not in TEXT_SUFFIXES
+        ):
             continue
         for hit in scan_text(data.decode("utf-8", "replace")):
             findings.append(
@@ -620,6 +643,19 @@ def preflight(site_id: str, files: dict[str, bytes], pages: list[str]) -> list[F
             text = store.read_page(site_id, page).content
         except (FileNotFoundError, store.StoreError):
             continue
+        for model in _WEBLLM_MODEL.findall(text):
+            if model.startswith("gguf-node:"):
+                name = re.split(r"[\\/]", model)[-1]
+                findings.append(
+                    Finding(
+                        rule="node-model",
+                        message=f"A {{webllm}} runs {name} from this "
+                        "machine's disk, which readers cannot reach; the published "
+                        "block says so instead of loading. Upload the file to the "
+                        "Hub and name it gguf:<owner>/<repo>/<file.gguf>.",
+                        file=page,
+                    )
+                )
         left = sections.pending_blocks(text) if page.endswith(".md") else []
         if left:
             findings.append(

@@ -14,7 +14,8 @@
  *   the Scrive editor looked up from the Hub), or a link to the Space without one.
  * - `{app} name` → an iframe of the site's web app, published at `_scrive/apps/<name>/`.
  * - `{webllm} owner/model` → an iframe of `_scrive/webml/embed.html`, the in-browser
- *   model page, with its settings in the fragment.
+ *   model page, with its settings in the fragment. A `gguf:owner/repo/file.gguf`
+ *   model runs in our own engine (`_scrive/webml/gguf.worker.js`, beside the page).
  * - `{tokenviz} data/run.json` → the recorded reply as text (the hover strip is the
  *   static build's), read from the file at build time.
  * - `{pending}` → nothing: a section still to write never reaches readers.
@@ -143,7 +144,11 @@ const app = {
 const webllm = {
   name: 'webllm',
   doc: "A language model that runs in the reader's browser (WebGPU).",
-  arg: { type: String, doc: 'Hugging Face model id (ONNX).', required: true },
+  arg: {
+    type: String,
+    doc: 'Hugging Face model id (ONNX), or gguf:owner/repo/file.gguf.',
+    required: true,
+  },
   options: {
     dtype: { type: String },
     system: { type: String },
@@ -153,14 +158,20 @@ const webllm = {
   },
   run(data) {
     const model = String(data.arg ?? '').trim();
-    if (!/^[A-Za-z0-9][\w.-]*\/[\w.-]+$/.test(model)) return [];
+    // An ONNX repo, a Hub GGUF, or a node GGUF (whose page says readers cannot reach it).
+    const ok =
+      /^[A-Za-z0-9][\w.-]*\/[\w.-]+$/.test(model) ||
+      /^gguf:[A-Za-z0-9][\w.-]*\/[\w.-]+\/[\w./-]+$/.test(model) ||
+      /^gguf-node:\S+$/.test(model);
+    if (!ok) return [];
     const o = data.options ?? {};
     const show = String(o.show ?? 'chat');
     const params = {
       model,
       dtype: String(o.dtype ?? ''),
       system: String(o.system ?? ''),
-      tokens: /tokens/.test(show),
+      tokens: /tokens|lens/.test(show),
+      lens: /lens/.test(show),
       max: Number(o.max) || 256,
       sizes: {},
     };

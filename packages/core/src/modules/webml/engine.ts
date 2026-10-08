@@ -16,10 +16,14 @@ import {
   workerFor,
   type CachedModel,
   type EngineState,
+  type GenerateHandlers,
+  type GenerateOptions,
+  type GenerationResult,
   type GpuReport,
 } from '@horrible/webml';
 
 import { apiUrl } from '../../origin';
+import { lensRuns } from './lens-run';
 
 let engine: WebmlEngine | null = null;
 
@@ -29,8 +33,34 @@ export function nodeGgufUrl(model: string): string | null {
   return ref ? apiUrl(`/api/llamacpp/models/file?path=${encodeURIComponent(ref.path)}`) : null;
 }
 
+/**
+ * The engine, keeping the latest logit-lens run (`lens-run.ts`) whichever surface
+ * asked for it, so the model explorer can draw it without each caller reporting in.
+ */
+export class AppEngine extends WebmlEngine {
+  override generate(
+    options: GenerateOptions,
+    handlers: GenerateHandlers = {},
+  ): Promise<GenerationResult> {
+    const state = this.getState();
+    if (!options.lens || state.kind !== 'ready' || this.busy) {
+      return super.generate(options, handlers);
+    }
+    lensRuns.start(state.model);
+    return super
+      .generate(options, {
+        ...handlers,
+        onStep: (step) => {
+          lensRuns.push(step);
+          handlers.onStep?.(step);
+        },
+      })
+      .finally(() => lensRuns.finish());
+  }
+}
+
 export function webmlEngine(): WebmlEngine {
-  engine ??= new WebmlEngine(workerFor, { sourceUrl: nodeGgufUrl });
+  engine ??= new AppEngine(workerFor, { sourceUrl: nodeGgufUrl });
   return engine;
 }
 

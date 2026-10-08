@@ -8,8 +8,13 @@
     <!--
       Scrive's {webllm} block on a published site: a language model that runs in the
       reader's browser on WebGPU. Settings arrive in the URL fragment (JSON):
-      {model, dtype, system, tokens, max, sizes}. Nothing downloads until the reader
-      clicks; the weights then stay in this site's Cache Storage.
+      {model, dtype, system, tokens, lens, max, sizes}. Nothing downloads until the
+      reader clicks; the weights then stay on this site's origin.
+
+      An ONNX repo runs in transformers.js from jsDelivr (Cache Storage). A
+      `gguf:<owner>/<repo>/<file.gguf>` model runs in our own WGSL engine,
+      `gguf.worker.js` beside this page (packages/webml, `build:embed`), with the
+      file kept in OPFS; with `lens`, each token's hover also shows the logit lens.
     -->
     <style>
       :root {
@@ -62,6 +67,10 @@
         font: 12px var(--mono);
         color: var(--danger);
         padding: 6px 12px;
+      }
+      /* Without this, the `display: flex` below would show a hidden gate or form. */
+      [hidden] {
+        display: none !important;
       }
       #gate,
       #ask {
@@ -161,6 +170,45 @@
       .alt.chosen {
         color: var(--accent);
       }
+      /* The logit lens: one row per layer, first to last (as the app's token strip). */
+      .pop:has(.lens) {
+        max-height: 420px;
+        overflow-y: auto;
+      }
+      .lens {
+        display: grid;
+        width: 280px;
+        grid-template-columns: auto minmax(0, 1fr) auto 56px;
+        column-gap: 8px;
+        margin-top: 6px;
+        padding-top: 4px;
+        border-top: 1px solid var(--rule);
+        font-size: 11px;
+      }
+      .lens-head {
+        color: var(--muted);
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+      }
+      .lens-tok {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .lens-tok.chosen {
+        color: var(--accent);
+      }
+      .lens-norm {
+        align-self: center;
+        height: 4px;
+        background: color-mix(in srgb, var(--muted) 20%, transparent);
+      }
+      .lens-norm > span {
+        display: block;
+        height: 100%;
+        background: var(--muted);
+      }
     </style>
   </head>
   <body>
@@ -192,16 +240,30 @@
       const model = String(params.model || '');
       const maxTokens = Math.max(16, Math.min(2048, Number(params.max) || 256));
       const sizes = params.sizes && typeof params.sizes === 'object' ? params.sizes : {};
+      const lens = !!params.lens;
+      const showTokens = !!params.tokens || lens;
+      // `gguf:<owner>/<repo>/<file.gguf>` runs in our own WGSL engine (gguf.worker.js,
+      // beside this page); anything else is an ONNX repo for transformers.js.
+      const ggufRef = /^gguf:([^/]+\/[^/]+)\/(.+\.gguf)$/i.exec(model);
       const fail = (message) => {
         $('error').textContent = message;
         $('error').hidden = false;
       };
       const mb = (b) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.round(b / 1e6)} MB`);
 
-      $('title').textContent = model.split('/').pop() || 'In-browser model';
+      $('title').textContent =
+        (ggufRef ? ggufRef[2].replace(/\.gguf$/i, '') : model).split('/').pop() ||
+        'In-browser model';
 
       if (!model) {
         fail('No model was given.');
+        $('load').disabled = true;
+      } else if (model.startsWith('gguf-node:')) {
+        // A file on the author's machine: nothing a reader's browser can reach.
+        fail("This model is a file on the author's machine, so it cannot run here.");
+        $('load').disabled = true;
+      } else if (model.startsWith('gguf:') && !ggufRef) {
+        fail(`Not a GGUF model id: ${model}`);
         $('load').disabled = true;
       }
 
@@ -223,39 +285,69 @@
         const f16 = !!adapter?.features.has('shader-f16');
         dtype = offered.find((d) => f16 || !d.endsWith('f16')) || offered[0];
       }
-      const bytes = Number(sizes[dtype]) || 0;
-      $('load').textContent = bytes ? `Run it here (downloads ${mb(bytes)} once)` : 'Run it here';
-      if (adapter)
-        $('status').textContent = `${dtype} · runs on your GPU; nothing you type leaves this page`;
+      // A GGUF's size is the Hub's (the tree API); its quantization is in the file.
+      const label = ggufRef ? 'GGUF' : dtype;
+      if (ggufRef) {
+        void Promise.all([ggufSize(), ggufCached()]).then(([bytes, cached]) => {
+          if ($('load').disabled) return;
+          $('load').textContent = cached
+            ? 'Run it here (cached on this device)'
+            : bytes
+              ? `Run it here (downloads ${mb(bytes)} once)`
+              : 'Run it here';
+        });
+      } else {
+        const bytes = Number(sizes[dtype]) || 0;
+        $('load').textContent = bytes ? `Run it here (downloads ${mb(bytes)} once)` : 'Run it here';
+      }
+      if (adapter && !$('load').disabled)
+        $('status').textContent = `${label} · runs on your GPU; nothing you type leaves this page`;
 
-      let lib = null;
-      let tokenizer = null;
-      let lm = null;
-      let stopping = null;
+      /** The GGUF file's size from the Hub, or 0 when the Hub does not say. */
+      async function ggufSize() {
+        try {
+          const repo = ggufRef[1].split('/').map(encodeURIComponent).join('/');
+          const res = await fetch(
+            `https://huggingface.co/api/models/${repo}/tree/main?recursive=1`,
+          );
+          if (!res.ok) return 0;
+          const entry = (await res.json()).find?.((e) => e.path === ggufRef[2]);
+          return Number(entry?.lfs?.size ?? entry?.size) || 0;
+        } catch {
+          return 0;
+        }
+      }
+
+      /** Whether the engine already holds the whole file in this site's OPFS. */
+      async function ggufCached() {
+        try {
+          const root = await navigator.storage.getDirectory();
+          const dir = await root.getDirectoryHandle('webml-gguf');
+          const meta = await (
+            await dir.getFileHandle(`${encodeURIComponent(model)}.json`)
+          ).getFile();
+          return !!JSON.parse(await meta.text()).complete;
+        } catch {
+          return false;
+        }
+      }
+
+      /**
+       * The two engines behind one chat: each loads, then streams a reply's text and
+       * its token steps ({token, p, entropy, topk, layers?}) and says how it went.
+       */
+      const engine = ggufRef ? ggufEngine() : onnxEngine();
       const history = [];
 
       $('load').addEventListener('click', async () => {
         $('load').disabled = true;
         $('status').textContent = 'loading…';
         try {
-          lib = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0');
-          const progress = (p) => {
-            if (p.status === 'progress' && p.total)
-              $('status').textContent = `${p.file} ${Math.round((100 * p.loaded) / p.total)}%`;
-          };
-          tokenizer = await lib.AutoTokenizer.from_pretrained(model, {
-            progress_callback: progress,
-          });
-          lm = await lib.AutoModelForCausalLM.from_pretrained(model, {
-            dtype,
-            device: 'webgpu',
-            progress_callback: progress,
-          });
-          stopping = new lib.InterruptableStoppingCriteria();
+          const ready = await engine.load((s) => ($('status').textContent = s));
           $('gate').hidden = true;
           $('turns').hidden = false;
           $('ask').hidden = false;
-          $('status').textContent = `${dtype} · ready`;
+          $('status').textContent = `${ready} · ready`;
           $('q').focus();
         } catch (e) {
           fail(String(e?.message || e));
@@ -263,6 +355,193 @@
           $('status').textContent = '';
         }
       });
+
+      /** transformers.js 4.3.0 from jsDelivr, for ONNX repos. */
+      function onnxEngine() {
+        let lib = null;
+        let tokenizer = null;
+        let lm = null;
+        let stopping = null;
+        return {
+          async load(say) {
+            lib = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0');
+            const progress = (p) => {
+              if (p.status === 'progress' && p.total)
+                say(`${p.file} ${Math.round((100 * p.loaded) / p.total)}%`);
+            };
+            tokenizer = await lib.AutoTokenizer.from_pretrained(model, {
+              progress_callback: progress,
+            });
+            lm = await lib.AutoModelForCausalLM.from_pretrained(model, {
+              dtype,
+              device: 'webgpu',
+              progress_callback: progress,
+            });
+            stopping = new lib.InterruptableStoppingCriteria();
+            return dtype;
+          },
+          stop() {
+            stopping?.interrupt();
+          },
+          async generate(messages, onText, onStep) {
+            const inputs = tokenizer.apply_chat_template(messages, {
+              add_generation_prompt: true,
+              return_dict: true,
+              enable_thinking: false,
+            });
+            let last = null;
+            class Recorder extends lib.LogitsProcessor {
+              _call(_ids, logits) {
+                if (showTokens) last = distribution(logits.data.subarray(0, logits.dims.at(-1)), 5);
+                return logits;
+              }
+            }
+            const processors = new lib.LogitsProcessorList();
+            processors.push(new Recorder());
+            let text = '';
+            let count = 0;
+            let first = 0;
+            const streamer = new lib.TextStreamer(tokenizer, {
+              skip_prompt: true,
+              skip_special_tokens: true,
+              callback_function: (t) => {
+                text += t;
+                onText(text);
+              },
+              token_callback_function: (tokens) => {
+                if (!first) first = performance.now();
+                for (const id of tokens) {
+                  count++;
+                  if (!last) continue;
+                  onStep({
+                    token: tokenizer.decode([id], { skip_special_tokens: false }),
+                    p: last.probs[Number(id)] ?? 0,
+                    entropy: last.entropy,
+                    topk: last.top.map((a) => ({
+                      token: tokenizer.decode([a.id], { skip_special_tokens: false }),
+                      p: a.p,
+                    })),
+                  });
+                }
+              },
+            });
+            stopping.reset();
+            await lm.generate({
+              ...inputs,
+              max_new_tokens: maxTokens,
+              do_sample: true,
+              temperature: 0.7,
+              streamer,
+              stopping_criteria: stopping,
+              logits_processor: processors,
+            });
+            const seconds = first ? (performance.now() - first) / 1000 : 0;
+            return {
+              text,
+              count,
+              tokensPerSecond: seconds > 0 && count > 1 ? (count - 1) / seconds : 0,
+            };
+          },
+        };
+      }
+
+      /**
+       * Our WGSL engine (`gguf.worker.js`): the app's GGUF worker, bundled. It speaks
+       * the app's worker protocol (packages/webml/src/protocol.ts); the weights are
+       * read from the Hub once into this site's OPFS.
+       */
+      function ggufEngine() {
+        let worker = null;
+        /** The load in flight: {say, resolve, reject}. */
+        let loading = null;
+        let thinking = false;
+        let seq = 0;
+        const replies = new Map();
+        const loadFailed = (err) => {
+          loading?.reject(err);
+          loading = null;
+        };
+        function start() {
+          worker = new Worker(new URL('./gguf.worker.js', import.meta.url), {
+            type: 'module',
+            name: 'webml-gguf',
+          });
+          worker.addEventListener('error', (e) => {
+            const err = new Error(e.message || 'the model worker crashed');
+            loadFailed(err);
+            for (const r of replies.values()) r.reject(err);
+            replies.clear();
+            worker?.terminate();
+            worker = null;
+          });
+          worker.addEventListener('message', ({ data: e }) => {
+            const reply = e.id ? replies.get(e.id) : null;
+            switch (e.type) {
+              case 'progress':
+                if (e.status === 'warmup') loading?.say('compiling shaders…');
+                else if (e.total)
+                  loading?.say(`${e.file} ${Math.round((100 * e.loaded) / e.total)}%`);
+                return;
+              case 'ready':
+                thinking = !!e.thinking;
+                loading?.resolve(e.quant || 'GGUF');
+                loading = null;
+                return;
+              case 'error':
+                if (!e.id) return loadFailed(new Error(e.message));
+                replies.delete(e.id);
+                reply?.reject(new Error(e.message));
+                return;
+              case 'delta':
+                if (!reply) return;
+                reply.text += e.text;
+                reply.onText(reply.text);
+                return;
+              case 'step':
+                reply?.onStep(e);
+                return;
+              case 'done':
+                replies.delete(e.id);
+                reply?.resolve({
+                  text: e.text,
+                  count: e.usage.completionTokens,
+                  tokensPerSecond: e.tokensPerSecond,
+                });
+                return;
+            }
+          });
+        }
+        return {
+          /** Resolves with the file's weight type ("Q4_K"). */
+          load(say) {
+            if (!worker) start();
+            return new Promise((resolve, reject) => {
+              loading = { say, resolve, reject };
+              // `dtype` is the ONNX field; a GGUF's quantization is in the file.
+              worker.postMessage({ type: 'load', model, dtype: 'q4', device: 'webgpu' });
+            });
+          },
+          stop() {
+            worker?.postMessage({ type: 'interrupt' });
+          },
+          generate(messages, onText, onStep) {
+            const id = `g${++seq}`;
+            return new Promise((resolve, reject) => {
+              replies.set(id, { text: '', onText, onStep, resolve, reject });
+              worker.postMessage({
+                type: 'generate',
+                id,
+                messages,
+                maxNewTokens: maxTokens,
+                temperature: 0.7,
+                topK: showTokens ? 5 : 0,
+                lens,
+                templateKwargs: thinking ? { enable_thinking: false } : undefined,
+              });
+            });
+          },
+        };
+      }
 
       function turn(role, text) {
         const row = document.createElement('div');
@@ -300,6 +579,42 @@
         return { probs, entropy, top };
       }
 
+      const span = (className, text) => {
+        const el = document.createElement('span');
+        el.className = className;
+        if (text !== undefined) el.textContent = text;
+        return el;
+      };
+
+      /**
+       * One step's logit lens, as the app's token strip draws it: per layer, the LM
+       * head's best token there (in the accent once it is the token chosen), its
+       * probability, and the residual stream's norm against the step's largest.
+       */
+      function lensTable(token, layers) {
+        const table = span('lens');
+        table.setAttribute('role', 'table');
+        table.setAttribute('aria-label', 'Logit lens by layer');
+        for (const h of ['layer', 'token', 'p', 'norm']) table.append(span('lens-head', h));
+        const most = Math.max(...layers.map((l) => l.norm), 1e-9);
+        layers.forEach((l, i) => {
+          const best = l.top[0];
+          const chosen = best?.token === token ? ' chosen' : '';
+          const bar = span('lens-norm');
+          bar.title = l.norm.toFixed(1);
+          const fill = span('');
+          fill.style.width = `${Math.max(2, (l.norm / most) * 100)}%`;
+          bar.append(fill);
+          table.append(
+            span('meta', String(i)),
+            span(`lens-tok${chosen}`, best ? JSON.stringify(best.token) : '—'),
+            span('meta', best ? best.p.toFixed(2) : ''),
+            bar,
+          );
+        });
+        return table;
+      }
+
       function strip(steps) {
         const el = document.createElement('div');
         el.className = 'tokstrip';
@@ -321,6 +636,7 @@
             alt.textContent = `${JSON.stringify(a.token)}  ${a.p.toFixed(3)}`;
             pop.append(alt);
           }
+          if (s.layers?.length) pop.append(lensTable(s.token, s.layers));
           tok.append(pop);
           el.append(tok);
         }
@@ -331,11 +647,11 @@
       $('ask').addEventListener('submit', async (e) => {
         e.preventDefault();
         if (busy) {
-          stopping?.interrupt();
+          engine.stop();
           return;
         }
         const question = $('q').value.trim();
-        if (!question || !lm) return;
+        if (!question) return;
         $('q').value = '';
         turn('user', question);
         history.push({ role: 'user', content: question });
@@ -347,65 +663,19 @@
           ...(params.system ? [{ role: 'system', content: String(params.system) }] : []),
           ...history,
         ];
-        const inputs = tokenizer.apply_chat_template(messages, {
-          add_generation_prompt: true,
-          return_dict: true,
-          enable_thinking: false,
-        });
         const steps = [];
-        let last = null;
-        class Recorder extends lib.LogitsProcessor {
-          _call(_ids, logits) {
-            if (params.tokens) last = distribution(logits.data.subarray(0, logits.dims.at(-1)), 5);
-            return logits;
-          }
-        }
-        const processors = new lib.LogitsProcessorList();
-        processors.push(new Recorder());
-        let text = '';
-        let count = 0;
-        let first = 0;
-        const streamer = new lib.TextStreamer(tokenizer, {
-          skip_prompt: true,
-          skip_special_tokens: true,
-          callback_function: (t) => {
-            text += t;
-            reply.text.textContent = text;
-          },
-          token_callback_function: (tokens) => {
-            if (!first) first = performance.now();
-            for (const id of tokens) {
-              count++;
-              if (!last) continue;
-              steps.push({
-                token: tokenizer.decode([id], { skip_special_tokens: false }),
-                p: last.probs[Number(id)] ?? 0,
-                entropy: last.entropy,
-                topk: last.top.map((a) => ({
-                  token: tokenizer.decode([a.id], { skip_special_tokens: false }),
-                  p: a.p,
-                })),
-              });
-            }
-          },
-        });
-        stopping.reset();
         try {
-          await lm.generate({
-            ...inputs,
-            max_new_tokens: maxTokens,
-            do_sample: true,
-            temperature: 0.7,
-            streamer,
-            stopping_criteria: stopping,
-            logits_processor: processors,
-          });
-          history.push({ role: 'assistant', content: text });
-          const seconds = first ? (performance.now() - first) / 1000 : 0;
+          const result = await engine.generate(
+            messages,
+            (text) => (reply.text.textContent = text),
+            (s) => steps.push(s),
+          );
+          reply.text.textContent = result.text;
+          history.push({ role: 'assistant', content: result.text });
           const meta = document.createElement('div');
           meta.className = 'meta';
-          meta.textContent = `${count} tokens${seconds > 0 && count > 1 ? ` · ${((count - 1) / seconds).toFixed(1)} tok/s` : ''}`;
-          if (params.tokens && steps.length) reply.body.append(strip(steps));
+          meta.textContent = `${result.count} tokens${result.tokensPerSecond > 0 ? ` · ${result.tokensPerSecond.toFixed(1)} tok/s` : ''}`;
+          if (showTokens && steps.length) reply.body.append(strip(steps));
           reply.body.append(meta);
         } catch (err) {
           fail(String(err?.message || err));

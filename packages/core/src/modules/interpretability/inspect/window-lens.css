@@ -1,0 +1,96 @@
+/*
+ * The window's logit lens in the model explorer: a layer × token grid. A cell's
+ * fill is the LM head's probability for its best token at that layer (`--p`), and
+ * the token finally chosen is in the accent, so a prediction settling reads as the
+ * accent running up a column to the last row.
+ */
+
+.wl-root {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--border);
+  min-width: 0;
+}
+
+.wl-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  align-items: baseline;
+  font-size: var(--fs-meta);
+}
+
+.wl-scroll {
+  overflow: auto;
+  max-height: 420px;
+  min-width: 0;
+}
+
+.wl-grid {
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  white-space: pre;
+}
+
+.wl-grid th,
+.wl-grid td {
+  padding: 1px 4px;
+  text-align: center;
+  border: 1px solid var(--border);
+}
+
+.wl-grid thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-raised);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.wl-grid th[scope='row'] {
+  position: sticky;
+  left: 0;
+  background: var(--bg-raised);
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
+.wl-grid td {
+  color: var(--text-dim);
+  background: color-mix(in srgb, var(--accent) calc(var(--p, 0) * 28%), transparent);
+}
+
+.wl-grid td.is-chosen {
+  color: var(--accent);
+}
+
+.wl-grid td.is-settled {
+  font-weight: 600;
+}
+
+.wl-grid tr.is-selected > * {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.wl-grid tfoot td,
+.wl-grid tfoot th {
+  color: var(--text-faint);
+}
+
+.wl-layer {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.wl-layer:hover,
+.wl-layer:focus-visible {
+  color: var(--accent);
+}

@@ -25,6 +25,8 @@ import qwen3Expected from './fixtures/tiny-qwen3-f32.expected.json';
 import qwen3Url from './fixtures/tiny-qwen3-f32.gguf?url';
 import qwen3kExpected from './fixtures/tiny-qwen3-q5km.expected.json';
 import qwen3kUrl from './fixtures/tiny-qwen3-q5km.gguf?url';
+import smollm3Expected from './fixtures/tiny-smollm3-f32.expected.json';
+import smollm3Url from './fixtures/tiny-smollm3-f32.gguf?url';
 
 interface Expected {
   prompt: number[];
@@ -176,6 +178,13 @@ describe('forward pass vs llama.cpp', () => {
       },
       GEMMA_TOLERANCE,
     ],
+    [
+      'SmolLM3 (no rope on layer 3 of 5)',
+      smollm3Url,
+      smollm3Expected,
+      { arch: 'smollm3', rope: 'norm', noRopeStep: 4 },
+      1e-5,
+    ],
   ] as const) {
     it(`${name}, F32: same greedy continuation`, async () => {
       const want = expected as Expected;
@@ -259,6 +268,7 @@ describe('logit lens', () => {
     ['llama', f32Url, f32Expected],
     ['Qwen3', qwen3Url, qwen3Expected],
     ['Gemma 3', gemma3Url, gemma3Expected],
+    ['SmolLM3', smollm3Url, smollm3Expected],
   ] as const) {
     it(`${name}: the last layer reproduces the logits, after a prefill pass and a decode step`, async () => {
       const want = expected as Expected;
@@ -315,6 +325,7 @@ describe('prefill vs llama.cpp', () => {
     ['Qwen3 F32', qwen3Url, qwen3Expected, 1e-5],
     ['Qwen2 F32', qwen2Url, qwen2Expected, 1e-5],
     ['Gemma 3 F32', gemma3Url, gemma3Expected, GEMMA_TOLERANCE],
+    ['SmolLM3 F32', smollm3Url, smollm3Expected, 1e-5],
     ['Llama 3 Q4_K_M', llama3Url, llama3Expected, 1e-2],
     ['Qwen3 Q5_K_M', qwen3kUrl, qwen3kExpected, 1e-2],
   ] as const) {

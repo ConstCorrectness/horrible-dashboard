@@ -16,6 +16,8 @@ import { webmlEngine } from './engine';
 export { initWebmlRelay } from './relay';
 // For other modules (Scrive's `{webllm}`): the one app-global engine.
 export { useEngineState, useGpuReport, webmlEngine } from './engine';
+// For the model explorer: the window's latest logit-lens run.
+export { settlesAt, useLensRun, type LensRun, type LensToken } from './lens-run';
 
 const PlaygroundPanel = lazyPane(() => import('./panels/PlaygroundPanel'), 'PlaygroundPanel');
 

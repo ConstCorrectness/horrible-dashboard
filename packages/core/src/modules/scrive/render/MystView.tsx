@@ -693,6 +693,7 @@ function Directive({ node }: { node: MystNode }) {
                 dtype: o.dtype ?? '',
                 system: o.system,
                 tokens: o.showTokens,
+                lens: o.showLens,
                 max: o.maxTokens,
                 // The catalog's download sizes, so the page can say what a click costs.
                 sizes: catalogEntry(o.model)?.sizes ?? {},

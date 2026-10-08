@@ -4,5 +4,5 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable", "WebWorker"],
     "types": ["@webgpu/types"]
   },
-  "include": ["src", "kernel-tests", "vitest.config.ts"]
+  "include": ["src", "kernel-tests", "vitest.config.ts", "vite.embed.config.ts"]
 }

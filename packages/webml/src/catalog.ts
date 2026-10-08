@@ -114,8 +114,8 @@ export function formatBytes(bytes: number): string {
 
 /**
  * GGUF repos to start from in the playground's GGUF picker, for the architectures
- * and quantizations the WGSL engine runs (llama, qwen2, qwen3, gemma3; Q4_K_M and
- * friends).
+ * and quantizations the WGSL engine runs (llama, qwen2, qwen3, gemma3, smollm3;
+ * Q4_K_M and friends).
  *
  * No sizes here, unlike the ONNX catalog: the picker lists a repo's files and
  * their sizes live from the Hub's tree API, and reads the chosen file's header

@@ -57,6 +57,10 @@ jobs:
       - name: Unit tests
         run: pnpm --filter @horrible/webml test
 
+      # The GGUF worker as one file for published Scrive pages (vite.embed.config.ts).
+      - name: Build the published-page engine
+        run: pnpm --filter @horrible/webml build:embed
+
       # The Chromium build matching the pinned `playwright` devDependency.
       - name: Install Chromium
         run: pnpm --filter @horrible/webml exec playwright install --with-deps chromium

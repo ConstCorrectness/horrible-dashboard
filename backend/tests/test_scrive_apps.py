@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from backend.modules.scrive import apps, publish, store, watcher
+from backend.publishing.errors import PublishError
 
 APPS = {"host": "scrive-apps.localhost:8100"}
 
@@ -367,6 +368,36 @@ def test_the_model_page_ships_only_with_a_webllm(client, site) -> None:
     assert "@huggingface/transformers@4.3.0" in page
     # Nothing downloads until the reader clicks.
     assert 'id="load"' in page
+
+
+def test_a_gguf_model_ships_the_engine_beside_the_page(client, site, tmp_path, monkeypatch) -> None:
+    static = tmp_path / "static"
+    static.mkdir()
+    (static / "webml-embed.html").write_bytes((publish.STATIC / "webml-embed.html").read_bytes())
+    monkeypatch.setattr(publish, "STATIC", static)
+    base = store.site_dir("blog")
+
+    # An ONNX model needs only the page.
+    write("posts/a.md", "```{webllm} onnx-community/Qwen3-0.6B-ONNX\n```\n")
+    assert publish.WEBML_GGUF_WORKER_PATH not in publish._support_files(base)
+
+    # A Hub GGUF needs the engine, and says how to build it when it is missing.
+    write("posts/b.md", "```{webllm} gguf:Qwen/Qwen3-0.6B-GGUF/Qwen3-0.6B-Q8_0.gguf\n```\n")
+    assert publish._webllm_models(base) == {
+        "posts/a.md": ["onnx-community/Qwen3-0.6B-ONNX"],
+        "posts/b.md": ["gguf:Qwen/Qwen3-0.6B-GGUF/Qwen3-0.6B-Q8_0.gguf"],
+    }
+    with pytest.raises(PublishError, match="build:embed"):
+        publish._support_files(base)
+    (static / publish.WEBML_GGUF_WORKER).write_bytes(b"self.onmessage = () => {};")
+    files = publish._support_files(base)
+    assert files[publish.WEBML_GGUF_WORKER_PATH] == b"self.onmessage = () => {};"
+    # In the page's folder: the page starts it by a relative URL.
+    assert publish.WEBML_GGUF_WORKER_PATH.rsplit("/", 1)[0] == (
+        publish.WEBML_EMBED_PATH.rsplit("/", 1)[0]
+    )
+    page = files[publish.WEBML_EMBED_PATH].decode("utf-8")
+    assert "new URL('./gguf.worker.js', import.meta.url)" in page
 
 
 def test_models_and_figures_cross_post_as_links() -> None:

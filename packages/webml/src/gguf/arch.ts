@@ -16,6 +16,7 @@
  *  - `gemma3`: Qwen3's Q/K norms, plus an embedding scaled by √embd, RMS norms on the
  *    attention and feed-forward outputs before each residual add, a GELU gate, and
  *    sliding-window attention on five layers in six, with their own rope base.
+ *  - `smollm3`: `llama` without rope on every fourth layer (NoPE).
  *
  * Later stages widen this table, not the engine's tolerance.
  */
@@ -59,6 +60,11 @@ export interface ModelConfig {
   swaPattern: number;
   /** The rope base of windowed layers (`rope.freq_base_swa`). */
   ropeBaseSwa: number;
+  /**
+   * Every `noRopeStep`-th layer (the 4th, 8th, …) skips rope: SmolLM3's NoPE
+   * layers. 0 when every layer is roped. See `layerRoped`.
+   */
+  noRopeStep: number;
   /** Multiplier on Q·K: `attention.scale`, else 1/√headDim. */
   attentionScale: number;
   rmsEps: number;
@@ -80,6 +86,8 @@ interface ArchSpec {
   qkvBias?: boolean;
   /** Gemma 3's post-norms, GELU gate, √embd embedding scale and sliding window. */
   gemma?: boolean;
+  /** Layers that skip rope: every this many (llama.cpp's `n_no_rope_layer_step`). */
+  noRopeStep?: number;
 }
 
 const ARCHS: Record<string, ArchSpec> = {
@@ -87,6 +95,9 @@ const ARCHS: Record<string, ArchSpec> = {
   qwen2: { rope: 'neox', qkNorm: false, ropeFreqs: false, fullRope: false, qkvBias: true },
   qwen3: { rope: 'neox', qkNorm: true, ropeFreqs: false, fullRope: true },
   gemma3: { rope: 'neox', qkNorm: true, ropeFreqs: false, fullRope: false, gemma: true },
+  // llama.cpp hard-codes the step (4) rather than reading the file's
+  // `no_rope_layers`, and asserts every head dimension is rotated.
+  smollm3: { rope: 'norm', qkNorm: false, ropeFreqs: false, fullRope: true, noRopeStep: 4 },
 };
 
 /** Gemma 3's layers come in sixes, five windowed and one global, unless the file says. */
@@ -100,6 +111,15 @@ const GEMMA3_SWA_PATTERN = 6;
 export function layerWindow(config: ModelConfig, l: number): number {
   if (!config.slidingWindow) return 0;
   return l % config.swaPattern < config.swaPattern - 1 ? config.slidingWindow : 0;
+}
+
+/**
+ * Whether layer `l` applies rope to Q and K. llama.cpp's `llm_build_smollm3`:
+ * `(il + 1) % n_no_rope_layer_step != 0`, so layers 3, 7, 11, … see no positions
+ * at all and rely on the causal mask alone.
+ */
+export function layerRoped(config: ModelConfig, l: number): boolean {
+  return !config.noRopeStep || (l + 1) % config.noRopeStep !== 0;
 }
 
 export const SUPPORTED_ARCHS = Object.keys(ARCHS);
@@ -261,6 +281,7 @@ export function checkSupport(header: GgufHeader): Support {
       swaPattern,
       // llama.cpp's default for Gemma 3's windowed layers is 10000, not the global base.
       ropeBaseSwa: num(meta, `${arch}.rope.freq_base_swa`) ?? 10000,
+      noRopeStep: spec.noRopeStep ?? 0,
       attentionScale,
       rmsEps: num(meta, `${arch}.attention.layer_norm_rms_epsilon`) ?? 1e-5,
       contextLength: num(meta, `${arch}.context_length`) ?? 2048,

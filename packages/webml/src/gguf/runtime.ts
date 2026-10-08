@@ -35,7 +35,7 @@
  * writes its token ids into a GPU buffer and (position, row count) into one small
  * Step uniform, then submits its list again.
  */
-import { checkSupport, layerWindow, tensor, type ModelConfig } from './arch';
+import { checkSupport, layerRoped, layerWindow, tensor, type ModelConfig } from './arch';
 import { tensorBytes } from './ggml';
 import type { ByteSource, GgufHeader, GgufTensor } from './parse';
 import { dequantize } from './quant';
@@ -963,6 +963,8 @@ export class GgufRuntime {
         postFfwNorm: c.postNorms ? await vector(`${p}post_ffw_norm.weight`) : null,
       };
       const window = layerWindow(c, l);
+      // SmolLM3's NoPE layers: Q and K go to the cache unrotated.
+      const roped = layerRoped(c, l);
 
       for (const mode of ['decode', 'prefill'] as const) {
         const list = this.lists[mode];
@@ -980,9 +982,11 @@ export class GgufRuntime {
           headNorm(mode, q, c.heads, w.qNorm, `${p}q_norm`);
           headNorm(mode, kNew, c.kvHeads, w.kNorm, `${p}k_norm`);
         }
-        const table = window ? ropeSwa : rope;
-        ropeOn(mode, q, c.heads, table, `${p}rope_q`);
-        ropeOn(mode, kNew, c.kvHeads, table, `${p}rope_k`);
+        if (roped) {
+          const table = window ? ropeSwa : rope;
+          ropeOn(mode, q, c.heads, table, `${p}rope_q`);
+          ropeOn(mode, kNew, c.kvHeads, table, `${p}rope_k`);
+        }
         store(mode, kCache, vCache, `${p}kv_store`);
         attention(mode, kCache, vCache, window, `${p}attention`);
         // The residual adds are fused into the ops that feed them: the projection,

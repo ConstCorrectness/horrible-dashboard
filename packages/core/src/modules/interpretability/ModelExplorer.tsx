@@ -8,6 +8,7 @@ import { ModelDesigner } from './designer/ModelDesigner';
 import { buildInspectGraph, inspectGraphKey } from './inspect/graph';
 import { HeadGrouping } from './inspect/HeadGrouping';
 import { InspectCanvas } from './inspect/InspectCanvas';
+import { WindowLens } from './inspect/WindowLens';
 import { explorerStage, stepperStage } from './inspect/stepper-stage';
 import { GlossaryBadge, ResearchWorkflowHeader } from './ResearchGuide';
 
@@ -364,6 +365,9 @@ function ModelInspector() {
             🔍 Inspect Prompt Context
           </button>
         </div>
+
+        {/* No structure to link it to, but the window's lens still reads. */}
+        <WindowLens blocks={null} selectedLayer={null} />
       </div>
     );
   }
@@ -569,6 +573,17 @@ function ModelInspector() {
                   ) : null,
                 ],
               ]}
+            />
+          )}
+
+          {(selection.stage === 'model' || selection.stage === 'block') && (
+            <WindowLens
+              blocks={arch.layers}
+              selectedLayer={selection.stage === 'block' ? selection.layer : null}
+              onPickLayer={(layer) => {
+                setSelection({ stage: 'block', layer });
+                setLayerOpen(true);
+              }}
             />
           )}
 

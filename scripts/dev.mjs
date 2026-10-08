@@ -107,6 +107,14 @@ if (!existsSync('backend/modules/scrive/static/scrive-runtime.js')) {
     shell: useShell,
   });
 }
+// Likewise the GGUF engine a published {webllm} page runs (packages/webml).
+if (!existsSync('backend/modules/scrive/static/webml-gguf.worker.js')) {
+  console.log('🧠 Building the GGUF engine for published pages (first run only)…');
+  spawnSync('pnpm', ['--filter', '@horrible/webml', 'build:embed'], {
+    stdio: 'inherit',
+    shell: useShell,
+  });
+}
 
 const backend = spawn(
   'uv',

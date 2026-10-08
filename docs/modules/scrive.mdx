@@ -564,17 +564,23 @@ a token-probability strip (slash menu: "Token probabilities").
   download nothing.
 - **Published**, `{webllm}` is an iframe of `_scrive/webml/embed.html` (written into the
   site only when a page uses `{webllm}`; source `backend/modules/scrive/static/
-  webml-embed.html`). It is plain JS importing transformers.js 4.3.0 from jsDelivr, its
-  settings in the URL fragment, on the blog's own origin so the weights stay cached.
-  It also waits for a click.
+  webml-embed.html`). It is plain JS, its settings in the URL fragment, on the blog's
+  own origin so the weights stay cached. It also waits for a click. An ONNX repo runs
+  in transformers.js 4.3.0 from jsDelivr.
+- A **GGUF** model, `gguf:<owner>/<repo>/<file.gguf>`, runs in WebML's own engine: the
+  site also gets `_scrive/webml/gguf.worker.js`, the engine bundled as one file
+  (`pnpm --filter @horrible/webml build:embed`; publishing stops and says so if it is
+  not built). The file is read from the Hub once and kept in the site's OPFS. A
+  `gguf-node:` model is a file on the author's machine, which readers cannot reach:
+  preflight warns (`node-model`) and the published block says it cannot run.
 - **`{tokenviz}`** is pure markup plus CSS hovers (`token-strip/` in core, shared with
   the playground), so a published page needs no script for it: the build preloads the
   JSON (`SiteSource.data`, `StaticRender.data`) and inlines `token-strip.css` into
   `site.css`. A missing file drops the figure for readers and shows the author why.
 - With `lens` in `:show:` (GGUF models; implies `tokens`), each token also carries
   the **logit lens**: what the model would have said at every layer, and how large
-  its residual stream was there. The strip's hover shows it, and a kept figure keeps
-  it.
+  its residual stream was there. The strip's hover shows it, in the app and on a
+  published page, and a kept figure keeps it.
 - A run file is `{model, prompt, steps: [{token, p, entropy, topk: [{token, p}]}]}`;
   a lens run adds `layers: [{norm, entropy, top: [{token, p}]}]` to each step.
   `p` is from the distribution after the model's processors and temperature; the
@@ -1492,7 +1498,7 @@ the fabric too), Hashnode drafts, and a theme-layout editor in the app.
 | `packages/core/src/modules/scrive/__tests__/frontmatter.test.ts` | One-field edits keep comments and order; block lists, removals, appends, quoting, CRLF, prefix-safe keys |
 | `backend/tests/test_scrive_agent.py` | Sections: headings skip fences, edits leave other bytes alone, CRLF stays CRLF, fills refuse written sections, the lead, inserts never land inside a directive, ambiguous text refused, frontmatter keys, ops all-or-nothing. Templates: inputs, defaults, site override, save-as-template. Outlines: nothing written until approval, edits, approve-once, discard, template inputs checked at proposal. Tools: the pinned surface with no publishing tool, agent writes marked once for the watcher, stale revisions refused, scenes kept in `scenes/`, site inference. Critique rules. Keyword search; index chunks; hash-fallback vectors never stored |
 | `packages/core/src/modules/scrive/__tests__/agent.test.ts` | Changed-block detection (fills, moves, removals, frontmatter); prompt wording, including the fence a selection is quoted in and that no prompt asks to publish; `sendInChat`'s queue |
-| `backend/tests/test_scrive_publish.py` | Themes (built-ins, a site theme extending one, fallback, never listed as pages), the config route, which pages go, scene pages that cannot be broken out of, the jupyter-book file set (no drafts or state, plugin in the pushed `myst.yml` only, workflow), preflight on the outgoing bytes, static publish end to end against a fake Pages (media, cards, `CNAME`, URL filling, record), deleting only last publish's files, a secret blocking until acknowledged, paths a bundle may not write, missing embeds and scenes, the local build and its sandboxed route, share cards (escaping, Pillow fallback, content cache, a real Chromium render), the agent refused a `status` change |
+| `backend/tests/test_scrive_publish.py` | Themes (built-ins, a site theme extending one, fallback, never listed as pages), the config route, which pages go, scene pages that cannot be broken out of, the jupyter-book file set (no drafts or state, plugin in the pushed `myst.yml` only, workflow), preflight on the outgoing bytes, static publish end to end against a fake Pages (media, cards, `CNAME`, URL filling, record), deleting only last publish's files, a secret blocking until acknowledged, paths a bundle may not write, missing embeds and scenes, a `{webllm}` model readers cannot reach, the local build and its sandboxed route, share cards (escaping, Pillow fallback, content cache, a real Chromium render), the agent refused a `status` change |
 | `backend/tests/test_publishing_core.py` (Phase 5) | Unchanged files are not uploaded again; nothing new makes no tree; the blob sha matches git's |
 | `packages/core/src/modules/scrive/__tests__/site.test.tsx` | Page folders and relative URLs; `isPublic`; the file set with drafts left out; every link relative, links to drafts unlinked; no app chrome published; cached outputs, scriptless tabs, scene iframes; KaTeX only with math; share images; post order and prev/next; feed, sitemap and 404; per-layout shape; the stylesheet; theme palettes; the MyST plugin's directives through `myst-parser` |
 | `backend/tests/test_scrive_outbox.py` | The agent can only draft; suggested payloads; approval freezes the payload with the live link; an unpublished link, a missing connection and over-long posts are hard blocks; a secret blocks until acknowledged and is never echoed; send and schedule need approval; X weighting, link placement, cost and media rules; the ticker sends a scheduled post; a thread replies to itself; 429 backs off then sends; a refusal fails with the platform's reason; a thread cut off resumes without re-posting; a post with no answer fails as unknown and Retry posts again; a restart mid-post marks it unknown; X media and YouTube uploads resume at their saved or confirmed offset; YouTube metadata, private lock, chapters and refused characters; the LinkedIn card with escaped text, image and pinned version; no token in a row or in `/api/connectors`; PKCE URLs with exact redirects, X's rotated refresh token, LinkedIn's expiry countdown, YouTube on the Google client with its own grant |

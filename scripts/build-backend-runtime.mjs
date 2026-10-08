@@ -269,6 +269,9 @@ function copySource(outDir) {
   log('building the Scrive scene runtime');
   // pnpm is a .cmd shim on Windows, which execFileSync cannot run without a shell.
   run('pnpm', ['--filter', '@horrible/scrive-runtime', 'build'], { shell: process.platform === 'win32' });
+  // And the GGUF engine published {webllm} pages run, built the same way.
+  log('building the GGUF engine for published pages');
+  run('pnpm', ['--filter', '@horrible/webml', 'build:embed'], { shell: process.platform === 'win32' });
   log('copying backend/');
   cpSync(join(REPO, 'backend'), join(outDir, 'backend'), {
     recursive: true,

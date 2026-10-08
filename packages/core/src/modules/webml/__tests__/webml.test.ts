@@ -77,6 +77,7 @@ describe('node GGUFs', () => {
     expect(canRunNodeGguf('qwen3')).toBe(true);
     expect(canRunNodeGguf('llama')).toBe(true);
     expect(canRunNodeGguf('gemma3')).toBe(true);
+    expect(canRunNodeGguf('smollm3')).toBe(true);
     expect(canRunNodeGguf('gemma4')).toBe(false);
     expect(canRunNodeGguf('')).toBe(false);
   });

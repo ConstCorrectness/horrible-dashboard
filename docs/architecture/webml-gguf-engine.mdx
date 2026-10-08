@@ -4,18 +4,19 @@ sidebar_label: WebML GGUF engine (plan)
 
 # WebML Phase 6: our own WGSL engine for GGUF
 
-**Status: 6.0–6.5 built. 6.4's and 6.5's exit checks pass on an Intel UHD iGPU
+**Status: 6.0–6.6 built. 6.4's and 6.5's exit checks pass on an Intel UHD iGPU
 (see [6.4](#64-fast), [6.5](#65-this-nodes-ggufs-in-the-window)). Real-model parity with llama.cpp holds for SmolLM2-360M
 Q4_K_M, Qwen3-1.7B Q4_K_M, Qwen3-0.6B Q8_0, Llama-3.2-1B Q8_0,
 DeepSeek-R1-Distill-Qwen-1.5B Q8_0 (`qwen2`) and Gemma-3-1B Q4_K_M. Still open from
 earlier stages: the `browser`-provider agent round with a Hermes tool call (6.3).
-In 6.6, the `qwen2` and `gemma3` architectures and the logit-lens readouts are
-built ([6.6](#66-later-each-optional)). SmolLM3, the readouts in the model
-explorer, and GGUF in published Scrive pages are not.** This is the plan [WebML](../modules/webml.mdx) said
+6.6 is built ([6.6](#66-later-each-optional)): the `qwen2`, `gemma3` and `smollm3`
+architectures, the logit lens during generation and in the model explorer, and GGUF
+in published Scrive pages. SmolLM3 is checked against llama.cpp on a tiny file only:
+no real SmolLM3 GGUF was on this node and the Hub was out of reach.** This is the plan [WebML](../modules/webml.mdx) said
 Phase 6 needed before any code was written. It is split into stages; each one ships
 on its own and ends with a check that has to pass before the next starts. Nothing
 in Phases 0–5 is replaced. The transformers.js worker stays as the engine for ONNX
-models, for the WASM CPU fallback and for published Scrive pages.
+models (in the app and on published Scrive pages) and for the WASM CPU fallback.
 
 ## Why build an engine at all
 
@@ -34,10 +35,9 @@ interpretability readouts (per-layer norms, logit lens) can be read during a nor
 generation.
 
 **Non-goals for Phase 6:** multimodal checkpoints, training or LoRA in the
-browser, a CPU/WASM GGUF path (machines without WebGPU keep transformers.js),
-GGUF in **published** Scrive pages (`webml-embed.html` loads transformers.js from
-jsDelivr; shipping our engine there needs a bundled static asset, which is a
-follow-up), and every ggml quantization type.
+browser, a CPU/WASM GGUF path (machines without WebGPU keep transformers.js), and
+every ggml quantization type. GGUF in **published** Scrive pages started as a
+non-goal, since it needed our engine as a bundled static asset; 6.6 built that.
 
 ## Baseline to beat
 
@@ -205,12 +205,12 @@ round, the suffix is the last tool result plus the new turn.
 | Qwen3-0.6B / 1.7B | `qwen3` | Q4_K_M, Q8_0 | QK-norm, NEOX rope, `head_dim` ≠ `embd / heads`, Hermes tool calls: the agent models |
 | Qwen2.5, DeepSeek-R1's Qwen distills (6.6) | `qwen2` | Q4_K_M, Q8_0 | Q/K/V biases, NEOX rope |
 | Gemma 3 1B (6.6) | `gemma3` | Q4_K_M | Sliding-window attention on five layers in six, post-norms, √embd embedding scale, GELU gate, a 262k vocabulary |
+| SmolLM3 3B (6.6) | `smollm3` | Q4_K_M, Q8_0 (checked on a tiny file only) | `llama` with no rope on every fourth layer (NoPE), Llama 3's tokenizer |
 
 Q4_K_M files mix Q4_K, Q5_K and Q6_K (the LM head is usually Q6_K), and the
 norms are F32. Supporting "Q4_K_M" therefore means all of these types.
 
-SmolLM3 (NoPE every fourth layer) is the remaining 6.6 candidate. `arch.ts`
-refuses anything else by name.
+`arch.ts` refuses anything else by name.
 
 ## Stages
 
@@ -781,8 +781,64 @@ How the engine does it:
   one word" shows the expected shape. The early layers say "no" and "events" at a
   few percent; layer 25 says "France"; layers 26–27 say "Paris".
 
-Not built: SmolLM3, which needs a file this node does not have; the readouts in the
-model explorer (its lens is the llama.cpp trace grid); and Scrive pages.
+**Built (2026-10-08): `smollm3`.** llama.cpp's `llm_build_smollm3` is its `llama`
+graph with one change: layers where `(il + 1) % 4 == 0` (3, 7, 11, …) skip rope on Q
+and K, so they see positions only through the causal mask. The step is hard-coded to
+4 in llama.cpp, not read from the file, and the engine does the same
+(`ModelConfig.noRopeStep`, `layerRoped`). As llama.cpp asserts, every head dimension
+must be rotated on the other layers. The tokenizer is Llama 3's: its pre-tokenizer
+hashes to `llama-bpe` in llama.cpp's converter, which the engine already runs.
+
+- **Tests:** a tiny five-layer `smollm3` file, so the NoPE layer sits between roped
+  ones, written and run by llama.cpp (llama-cpp-python 0.3.34). Greedy continuation,
+  logits within 1e-5, batched prefill and the lens self-check all pass. With rope
+  wrongly applied on layer 3, the prefill check fails at the fourth token.
+- **Not checked on a real file.** No SmolLM3 GGUF was on this node, and the Hub was
+  out of reach from where this was built. So there is no real-model parity run yet.
+  SmolLM3's chat template (`/think` and `/no_think`, `enable_thinking`) has also not
+  been run through the template interpreter, and the playground's picker does not
+  suggest a SmolLM3 file until it has.
+
+**Built (2026-10-08): the lens in the model explorer.** The explorer draws the
+window's latest lens run under *Whole model* and under a selected block, as a
+layer × token grid with a footer row saying where each prediction settles (see
+[Interpretability](../modules/interpretability.mdx#the-windows-logit-lens)).
+
+- **Recording:** the app's engine (`webml/engine.ts`) tees the `step` events of any
+  generation with `lens: true` into one app-global run (`webml/lens-run.ts`). The
+  playground and `{webllm}` are unchanged, and the grid fills while the reply is
+  written.
+- **Linking:** rows select blocks in the diagram only when the run's layer count
+  matches the explored model's block count. The explorer follows the node's model,
+  and the window's is often a different one, so the grid always names its own.
+
+**Built (2026-10-08): GGUF in published Scrive pages.** A published `{webllm}` with a
+`gguf:<owner>/<repo>/<file.gguf>` model now runs in our engine instead of being an
+ONNX-only block.
+
+- **The asset:** `vite.embed.config.ts` builds `gguf.worker.ts`, with the WGSL kernels,
+  the tokenizer and the template interpreter, into one ES-module worker,
+  `backend/modules/scrive/static/webml-gguf.worker.js`. It is 211 kB (56 kB gzipped),
+  gitignored and built like the scene runtime: by `pnpm --filter @horrible/webml
+  build:embed`, by `pnpm dev` when it is missing, by the desktop backend bundle, and in
+  `packages/webml`'s CI.
+- **Publishing:** a site with a `gguf:` `{webllm}` gets the worker at
+  `_scrive/webml/gguf.worker.js`, beside `embed.html`. If it is not built, the publish
+  stops and names the command. A `gguf-node:` model (a file on the author's machine)
+  is a preflight warning (`node-model`), and its published block says it cannot run.
+- **The page:** `embed.html` starts the worker as a module worker and speaks the app's
+  worker protocol in a few lines of plain JS. The app's client and the transformers.js
+  worker stay out of the bundle. The file is read from the Hub over Range requests
+  and kept in the site's OPFS, so the button says the size (from the Hub's tree API)
+  or that it is already cached.
+- **Lens:** `:show: lens` reaches published pages too. Each token's hover card shows
+  the per-layer table the app's token strip does.
+- **Checked** in headless Chromium on SwiftShader, with the Hub's responses served
+  from the tiny `llama` and `smollm3` fixtures. The page loaded the file, answered with
+  its token strip and a per-layer lens, and said "cached on this device" after a
+  reload. This also fixed an older bug in the page: `display: flex` overrode
+  `hidden`, so the "Run it here" gate stayed on screen after loading and the message
+  box showed before it.
 
 ## Risks
 

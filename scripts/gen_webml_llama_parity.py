@@ -99,6 +99,9 @@ GEMMA3 = Shape(
     rope_base=1e6,
     rms_eps=1e-6,
 )
+# SmolLM3: `llama` with rope skipped on every fourth layer. Five layers, so the
+# NoPE layer (3) sits between roped ones.
+SMOLLM3 = Shape(arch="smollm3", layers=5)
 # Every row a whole number of 256-value K-quant super-blocks.
 LLAMA3_K = Shape(embd=256, ffn=512, layers=1, heads=4, kv_heads=2, head_dim=64, rope_freqs=True)
 QWEN3_K = Shape(
@@ -420,17 +423,20 @@ def main() -> None:
 
     # 6.3: Qwen3 in F32 (greedy, tight), and K-quant models made by llama.cpp's own
     # quantizer from F32 sources (teacher-forced: llama.cpp rounds activations to
-    # q8_K for K-quant dot products; the engine keeps them f32). 6.6: Qwen2 and
-    # Gemma 3 in F32, greedy.
-    for stem, shape, seed in (
-        ("tiny-qwen3-f32", QWEN3, 62),
-        ("tiny-qwen2-f32", QWEN2, 65),
-        ("tiny-gemma3-f32", GEMMA3, 66),
+    # q8_K for K-quant dot products; the engine keeps them f32). 6.6: Qwen2, Gemma 3
+    # and SmolLM3 in F32, greedy.
+    for stem, shape, seed, tied in (
+        ("tiny-qwen3-f32", QWEN3, 62, False),
+        ("tiny-qwen2-f32", QWEN2, 65, False),
+        ("tiny-gemma3-f32", GEMMA3, 66, False),
+        ("tiny-smollm3-f32", SMOLLM3, 67, False),
     ):
         if not wanted(stem):
             continue
         model = OUT / f"{stem}.gguf"
-        write_model(model, weights(np.random.default_rng(seed), shape), shape=shape)
+        write_model(
+            model, weights(np.random.default_rng(seed), shape), shape=shape, tied=tied
+        )
         record(model, reference(model, prompt, None))
     for stem, shape, seed, ftype in (
         ("tiny-llama3-q4km", LLAMA3_K, 63, FTYPE_Q4_K_M),

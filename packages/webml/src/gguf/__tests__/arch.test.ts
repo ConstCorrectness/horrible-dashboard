@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import { checkSupport, layerWindow, type ModelConfig } from '../arch';
+import { checkSupport, layerRoped, layerWindow, type ModelConfig } from '../arch';
 import { readGgufHeader } from '../parse';
 import { ropeTable } from '../rope';
 import { bytesSource } from '../source';
@@ -36,6 +36,7 @@ describe('checkSupport', () => {
         slidingWindow: 0,
         swaPattern: 1,
         ropeBaseSwa: 10000,
+        noRopeStep: 0,
         attentionScale: 0.25,
         rmsEps: Math.fround(1e-5),
         contextLength: 64,
@@ -64,7 +65,9 @@ describe('checkSupport', () => {
     h.metadata['general.architecture'] = 'phi3';
     expect(checkSupport(h)).toEqual({
       ok: false,
-      reasons: ['architecture "phi3" is not supported (supported: llama, qwen2, qwen3, gemma3)'],
+      reasons: [
+        'architecture "phi3" is not supported (supported: llama, qwen2, qwen3, gemma3, smollm3)',
+      ],
     });
   });
 
@@ -128,6 +131,27 @@ describe('checkSupport', () => {
     });
   });
 
+  it('reads smollm3: llama with no rope on every fourth layer', async () => {
+    const support = checkSupport(await header(kernelFixture('tiny-smollm3-f32.gguf')));
+    expect(support.ok && support.config).toMatchObject({
+      arch: 'smollm3',
+      layers: 5,
+      rope: 'norm',
+      ropeFreqs: false,
+      qkNorm: false,
+      noRopeStep: 4,
+    });
+  });
+
+  it('refuses a smollm3 file that rotates only part of each head, as llama.cpp asserts', async () => {
+    const h = await header(kernelFixture('tiny-smollm3-f32.gguf'));
+    h.metadata['smollm3.rope.dimension_count'] = 8;
+    expect(checkSupport(h)).toEqual({
+      ok: false,
+      reasons: ['rope.dimension_count 8 does not fit head size 16'],
+    });
+  });
+
   it('names every problem with a malformed qwen3 header', async () => {
     const support = checkSupport(
       await header(new URL('./fixtures/tiny-qwen3.gguf', import.meta.url)),
@@ -151,6 +175,19 @@ describe('layerWindow', () => {
 
   it('windows no layer when the model has no window', () => {
     expect(layerWindow(config(0, 6), 0)).toBe(0);
+  });
+});
+
+describe('layerRoped', () => {
+  it('skips rope on every fourth layer, as llama.cpp’s llm_build_smollm3', () => {
+    const roped = Array.from({ length: 9 }, (_, l) =>
+      layerRoped({ noRopeStep: 4 } as ModelConfig, l),
+    );
+    expect(roped).toEqual([true, true, true, false, true, true, true, false, true]);
+  });
+
+  it('ropes every layer of a model without NoPE layers', () => {
+    expect(layerRoped({ noRopeStep: 0 } as ModelConfig, 3)).toBe(true);
   });
 });
 
