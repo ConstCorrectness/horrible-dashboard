@@ -22,7 +22,7 @@ export interface ByteSource {
   /** The file's total size, when the source knows it. */
   readonly size: number | null;
   /** Up to `length` bytes from `offset`; fewer only at the end of the file. */
-  read(offset: number, length: number): Promise<Uint8Array>;
+  read(offset: number, length: number): Promise<Uint8Array<ArrayBuffer>>;
 }
 
 export class GgufError extends Error {

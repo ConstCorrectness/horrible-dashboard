@@ -4,8 +4,9 @@ sidebar_label: WebML GGUF engine (plan)
 
 # WebML Phase 6: our own WGSL engine for GGUF
 
-**Status: 6.0 built; one exit check still to run (see [6.0](#60-harness-and-header-no-inference)).
-6.1 onward not started.** This is the plan [WebML](../modules/webml.mdx) said
+**Status: 6.0 and 6.1 built. Each has one exit check still to run against a real
+model from the Hub (see [6.0](#60-harness-and-header-no-inference) and
+[6.1](#61-correct-slow-llama-only)). 6.2 onward not started.** This is the plan [WebML](../modules/webml.mdx) said
 Phase 6 needed before any code was written. It is split into stages; each one ships
 on its own and ends with a check that has to pass before the next starts. Nothing
 in Phases 0–5 is replaced. The transformers.js worker stays as the engine for ONNX
@@ -101,12 +102,14 @@ GPU device. Only one model is resident at a time, as today.
 | `packages/webml/src/gpu/device.ts` | The device, requested with the adapter's limits and optional features |
 | `packages/webml/src/gpu/chunks.ts` | Splitting a tensor over the binding limit into whole-row chunks |
 | `packages/webml/src/gpu/dispatch.ts` | Workgroup counts, spilling into y past the per-dimension limit |
-| `packages/webml/src/gpu/<kernel>.ts` | One wrapper per kernel: pipeline, bind group, dispatch |
-| `packages/webml/src/gguf/runtime.ts` | Buffers, KV cache, the per-token command buffer, sampling readback |
+| `packages/webml/src/gpu/kernels.ts` | Every pipeline, composed per weight type and cached; uniform and bind-group helpers |
+| `packages/webml/src/gguf/rope.ts` | The rope angle table, built the way ggml builds its rope cache |
+| `packages/webml/src/gguf/runtime.ts` | Buffers, KV cache, the per-token command list, logits readback |
 | `packages/webml/src/wgsl/*.wgsl` | Kernels, imported with `?raw` |
 | `packages/webml/src/engine/gguf.worker.ts` | The protocol loop around `runtime.ts` |
 | `packages/webml/kernel-tests/` | Vitest browser mode (Playwright provider): each kernel on the GPU vs `quant.ts` / a CPU reference |
-| `scripts/gen_webml_gguf_fixture.py` | The header conformance fixture. Later stages add golden vectors: dequantized blocks (`gguf` pip package), token ids (`transformers` tokenizers), llama.cpp top-k for parity |
+| `scripts/gen_webml_gguf_fixture.py` | The header conformance fixture and golden dequantized blocks (`gguf` pip package). Token-id goldens (`transformers` tokenizers) come in 6.2 |
+| `scripts/gen_webml_llama_parity.py` | llama.cpp references (via `llama-cpp-python`): the tiny-model fixtures, and `--model` runs on real GGUFs |
 
 ## Technical decisions
 
@@ -167,12 +170,12 @@ its own dispatch.
 | `rmsnorm` | Workgroup reduction (subgroup reduction when `subgroups` is available) times weight. A per-head variant is Qwen3's QK-norm |
 | `matvec_<q>` | Decode (M = 1), memory-bound: the hot path. One variant per quant type: F16, Q8_0, Q4_0, Q4_K, Q5_K, Q6_K |
 | `matmul_<q>` | Prefill (M > 1): tiled, weights dequantized into shared memory |
-| `rope` | `norm` and `neox` variants, `freq_base`, optional `rope_freqs` factors |
-| `kv_write` | Layout `[layer][kv_head][pos][head_dim]`, preallocated to the context budget |
+| `rope` | `norm` and `neox` variants, applied in place. Angles come from a host-built table indexed by position (see `rope.ts`); `rope_freqs` factors arrive with 6.3 |
+| KV write | No kernel: the K and V projections' matvec writes straight into the cache row for the current position. Layout `[pos][kv_heads × head_dim]`, preallocated to the context budget |
 | `attn_decode` | One workgroup per head with online softmax. Split-K over positions past ~1k (flash-decoding), plus a combine pass. GQA by head index mapping |
 | `attn_prefill` | Causal tiled flash attention |
 | `swiglu` | `silu(gate) * up`, fused into one pass |
-| `add` | Residual. Folded into matvec epilogues in 6.4 |
+| `accumulate` | Residual (`x += d`). Folded into matvec epilogues in 6.4. (`add`, out-of-place, is the 6.0 harness kernel) |
 | `lm_head` | `matvec` over the vocabulary on the **last position only** |
 | `sample` | Temperature → top-k → (top-p) → softmax → draw with a host-supplied random number. Also writes p(chosen), entropy and the top-k ids/probs for `step` events |
 
@@ -270,6 +273,54 @@ the kernel harness is green in CI.
 and the top-5 probabilities at each step are within 1e-2. The reference is
 `llama-server`'s `/completion` with `n_probs`, fetched by the llama.cpp module and
 run by `scripts/webml/parity.py`.
+
+**Built (2026-10-08):**
+
+- `gguf/quant.ts`: matches the `gguf` package's dequantizers exactly on all four
+  types (`quant.test.ts`, golden blocks in `quant-golden.json`).
+- `gguf/arch.ts`: header → `ModelConfig`. It refuses other architectures, other
+  weight types, rope scaling, `rope_freqs`, and tensors whose shapes contradict the
+  metadata, each with a reason.
+- Kernels: `embed`, `rmsnorm`, `matvec` (F32 / F16 / Q8_0 / Q4_0), `rope`,
+  `attention`, `swiglu`, `accumulate`. `kernel-tests/kernels.test.ts` checks each
+  one against a CPU reference (embed exactly, the rest within 1e-5).
+- `gguf/runtime.ts`: `GgufRuntime.load` → `queueStep` / `forward` / `readLogits`.
+  Everything per-token is built at load, and a step rewrites one 16-byte uniform.
+- **Parity with llama.cpp, without the Hub.** The reference is `llama-cpp-python`,
+  which builds llama.cpp from source, rather than `llama-server`.
+  `scripts/gen_webml_llama_parity.py` writes two tiny random-weight `llama` GGUFs
+  and records llama.cpp's logits at every position, with an f32 KV cache and no
+  flash attention. `kernel-tests/forward.test.ts` replays them:
+  - **All-F32 model:** the same 32 greedy tokens. The worst logit differs by
+    5×10⁻⁷ of the row's largest, about the fixture's 6-decimal rounding.
+  - **The same model with every tensor chunked to 1 KB bindings:** the same logits.
+  - **Q8_0 / Q4_0 / F16 model with tied embeddings:** worst 0.77% and mean 0.42%,
+    from llama.cpp quantizing activations to q8_0/f16 where the engine keeps f32.
+    The top token agrees at 40 of 40 positions.
+- **The suite catches bugs.** These planted bugs each fail it: llama treated as
+  NEOX rope, GQA heads mapped `h % group`, Q4_0 nibbles swapped, attention scaled
+  by 1/d instead of 1/√d.
+
+**Changed from the plan:**
+
+- The dev page is replaced by `kernel-tests/real-parity.test.ts`. It runs a real
+  model from a fixed prompt and checks the result instead of only showing it.
+  There is no tokenizer until 6.2, so the prompt's token ids come from llama.cpp's
+  tokenizer in the reference file.
+- The reference script is `gen_webml_llama_parity.py --model`, not a
+  `llama-server` driver.
+
+**Still open:** the SmolLM2 run itself. It needs the model from the Hub:
+
+```sh
+uv run --with llama-cpp-python python scripts/gen_webml_llama_parity.py \
+  --model ~/models/SmolLM2-360M-Instruct-Q8_0.gguf --out /tmp/smollm2.json
+WEBML_PARITY_MODEL=~/models/SmolLM2-360M-Instruct-Q8_0.gguf \
+WEBML_PARITY_EXPECTED=/tmp/smollm2.json pnpm --filter @horrible/webml test:kernels
+```
+
+The plumbing is proven on the tiny model, with the reference file outside the repo,
+and a deliberately wrong reference fails with both top-5 lists in the message.
 
 ### 6.2 A real engine in the app
 

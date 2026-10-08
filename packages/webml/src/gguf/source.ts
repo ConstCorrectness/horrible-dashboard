@@ -43,7 +43,7 @@ export class HttpSource implements ByteSource {
     return this.known;
   }
 
-  async read(offset: number, length: number): Promise<Uint8Array> {
+  async read(offset: number, length: number): Promise<Uint8Array<ArrayBuffer>> {
     if (length <= 0) return new Uint8Array(0);
     if (this.known !== null && offset >= this.known) return new Uint8Array(0);
     const res = await this.fetcher(this.url, {

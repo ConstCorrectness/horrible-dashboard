@@ -8,6 +8,10 @@ and, beside it, what `backend/modules/interpretability/gguf.py` reads from it.
 `parse.ts` and must agree field for field, which is what keeps the two readers
 from drifting apart. See docs/architecture/webml-gguf-engine.mdx.
 
+It also writes `quant-golden.json`: blocks quantized and dequantized by the same
+package, the oracle `quant.test.ts` checks the CPU dequantizers against (which in
+turn are the oracle for the WGSL kernels).
+
 The tensor data is seeded random bytes in each type's block layout: the fixture
 pins the *header*, not any dequantized value. Regenerate only when the fixture
 itself needs to change, and make the TS suite pass before committing.
@@ -21,12 +25,14 @@ from pathlib import Path
 import numpy as np
 from gguf import GGMLQuantizationType as Q
 from gguf import GGUFValueType, GGUFWriter
+from gguf.quants import dequantize, quantize
 
 from backend.modules.interpretability.gguf import read_header
 
 OUT = Path("packages/webml/src/gguf/__tests__/fixtures")
 GGUF = OUT / "tiny-qwen3.gguf"
 EXPECTED = OUT / "tiny-qwen3.expected.json"
+GOLDEN = OUT / "quant-golden.json"
 
 # (name, ggml shape [row length, rows], type). Row lengths are whole blocks of the
 # type: 32 for Q8_0 / Q4_0, 256 for the K-quants.
@@ -139,7 +145,32 @@ def dump() -> None:
     )
 
 
+def golden() -> None:
+    """Per type: raw block bytes (hex) and the values gguf dequantizes them to."""
+    rng = np.random.default_rng(60)
+    # Mixed magnitudes, including an all-zero block (scale 0) and a large one.
+    values = rng.standard_normal((3, 64)).astype(np.float32)
+    values[1] *= 0
+    values[2] *= 1000
+    out = {}
+    for qtype in (Q.F32, Q.F16, Q.Q8_0, Q.Q4_0):
+        if qtype == Q.F32:
+            raw = values.reshape(-1).view(np.uint8)
+        elif qtype == Q.F16:
+            raw = values.astype(np.float16).reshape(-1).view(np.uint8)
+        else:
+            raw = quantize(values, qtype).reshape(-1)
+        deq = dequantize(raw, qtype).reshape(-1)
+        out[qtype.name] = {
+            "type": int(qtype),
+            "hex": raw.tobytes().hex(),
+            "values": [float(v) for v in deq.astype(np.float32)],
+        }
+    GOLDEN.write_text(json.dumps(out) + "\n", encoding="utf-8")
+
+
 if __name__ == "__main__":
     write()
     dump()
+    golden()
     print(f"wrote {GGUF} ({GGUF.stat().st_size} bytes) and {EXPECTED}")

@@ -75,3 +75,112 @@ export function seeded(n: number, seed: number): Float32Array {
   }
   return out;
 }
+
+/** f32 → IEEE half bits, round-half-up, flushing values below the normal range to 0. */
+export function f32ToF16(v: number): number {
+  const u = new Uint32Array(new Float32Array([v]).buffer)[0];
+  const sign = (u >>> 16) & 0x8000;
+  const exp = ((u >>> 23) & 0xff) - 127 + 15;
+  const mant = u & 0x7fffff;
+  if (exp <= 0) return sign;
+  if (exp >= 31) return sign | 0x7c00;
+  return (sign | (exp << 10) | (mant >> 13)) + ((mant >> 12) & 1);
+}
+
+/**
+ * `rows` rows of `cols` values in ggml layout for `type`, from seeded noise: random
+ * quant bytes with sane f16 scales (random bytes would include NaN/Inf scales),
+ * random f16 / f32 values for the float types.
+ */
+export function randomWeights(type: number, rows: number, cols: number, seed: number): Uint8Array {
+  const noise = seeded(rows * cols * 2, seed);
+  let n = 0;
+  const next = () => noise[n++ % noise.length];
+  const sizes: Record<number, [number, number]> = {
+    0: [1, 4],
+    1: [1, 2],
+    8: [32, 34],
+    2: [32, 18],
+  };
+  const [elems, bytesPer] = sizes[type];
+  const out = new Uint8Array((rows * cols * bytesPer) / elems);
+  const view = new DataView(out.buffer);
+  if (type === 0) {
+    for (let i = 0; i < rows * cols; i++) view.setFloat32(4 * i, next(), true);
+  } else if (type === 1) {
+    for (let i = 0; i < rows * cols; i++) view.setUint16(2 * i, f32ToF16(next()), true);
+  } else {
+    for (let i = 0; i < out.length; i++) out[i] = Math.floor(((next() + 1) / 2) * 256) & 255;
+    for (let b = 0; b < out.length / bytesPer; b++) {
+      view.setUint16(b * bytesPer, f32ToF16(0.01 + 0.05 * Math.abs(next())), true);
+    }
+  }
+  return out;
+}
+
+export function uploadBytes(device: GPUDevice, bytes: Uint8Array, label = 'weights'): GPUBuffer {
+  const buffer = device.createBuffer({
+    label,
+    size: Math.max(4, Math.ceil(bytes.byteLength / 4) * 4),
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    mappedAtCreation: true,
+  });
+  new Uint8Array(buffer.getMappedRange()).set(bytes);
+  buffer.unmap();
+  return buffer;
+}
+
+/** The Step uniform (`pos`, `tok_row`) the per-token kernels read. */
+export function stepBuffer(device: GPUDevice, pos: number, tokRow = 0): GPUBuffer {
+  const buffer = device.createBuffer({
+    size: 16,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+  device.queue.writeBuffer(buffer, 0, new Uint32Array([pos, tokRow, 0, 0]));
+  return buffer;
+}
+
+/** Run one dispatch of `pipeline` and read back `floats` of `out`. */
+export function dispatchOnce(
+  device: GPUDevice,
+  pipeline: GPUComputePipeline,
+  bindings: Record<number, GPUBuffer>,
+  workgroups: [number, number],
+  out: GPUBuffer,
+  floats: number,
+): Promise<Float32Array> {
+  return run(
+    device,
+    (enc) => {
+      const pass = enc.beginComputePass();
+      pass.setPipeline(pipeline);
+      pass.setBindGroup(
+        0,
+        device.createBindGroup({
+          layout: pipeline.getBindGroupLayout(0),
+          entries: Object.entries(bindings).map(([b, buffer]) => ({
+            binding: Number(b),
+            resource: { buffer },
+          })),
+        }),
+      );
+      pass.dispatchWorkgroups(...workgroups);
+      pass.end();
+    },
+    out,
+    floats,
+  );
+}
+
+/** Max |a - b| over `scale` (elementwise), the comparison every kernel test uses. */
+export function maxRelError(
+  got: ArrayLike<number>,
+  want: ArrayLike<number>,
+  scale: ArrayLike<number>,
+): number {
+  let worst = 0;
+  for (let i = 0; i < want.length; i++) {
+    worst = Math.max(worst, Math.abs(got[i] - want[i]) / Math.max(scale[i], 1e-12));
+  }
+  return worst;
+}
