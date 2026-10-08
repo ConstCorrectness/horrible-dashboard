@@ -13,6 +13,7 @@
     "test:kernels": "vitest run --project kernels"
   },
   "dependencies": {
+    "@huggingface/jinja": "0.5.10",
     "@huggingface/transformers": "4.3.0"
   },
   "devDependencies": {

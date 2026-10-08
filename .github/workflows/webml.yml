@@ -46,6 +46,14 @@ jobs:
       - name: Typecheck
         run: pnpm --filter @horrible/webml typecheck
 
+      # llama.cpp's vocab-only GGUFs for the tokenizer tests: fetched from a pinned
+      # release tag and SHA-256 checked (src/gguf/__tests__/vocab.ts).
+      - name: Cache tokenizer vocabularies
+        uses: actions/cache@v4
+        with:
+          path: .cache/webml-vocab
+          key: webml-vocab-b6800
+
       - name: Unit tests
         run: pnpm --filter @horrible/webml test
 
