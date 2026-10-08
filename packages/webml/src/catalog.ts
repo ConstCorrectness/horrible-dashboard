@@ -111,3 +111,64 @@ export function formatBytes(bytes: number): string {
   const v = bytes / 1000 ** i;
   return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
 }
+
+/**
+ * GGUF repos to start from in the playground's GGUF picker, for the architectures
+ * and quantizations the WGSL engine runs (llama, qwen3; Q4_K_M and friends).
+ *
+ * No sizes here, unlike the ONNX catalog: the picker lists a repo's files and
+ * their sizes live from the Hub's tree API, and reads the chosen file's header
+ * before anything downloads. `file` is the file to preselect when the listing
+ * has it.
+ */
+export interface GgufSuggestion {
+  repo: string;
+  file: string;
+  label: string;
+  params: string;
+  toolFormat: ToolFormat;
+  thinking?: boolean;
+  license: string;
+}
+
+export const GGUF_SUGGESTIONS: readonly GgufSuggestion[] = [
+  {
+    repo: 'bartowski/SmolLM2-360M-Instruct-GGUF',
+    file: 'SmolLM2-360M-Instruct-Q8_0.gguf',
+    label: 'SmolLM2 360M Instruct',
+    params: '360M',
+    toolFormat: null,
+    license: 'apache-2.0',
+  },
+  {
+    repo: 'unsloth/Qwen3-0.6B-GGUF',
+    file: 'Qwen3-0.6B-Q4_K_M.gguf',
+    label: 'Qwen3 0.6B',
+    params: '0.6B',
+    toolFormat: 'hermes',
+    thinking: true,
+    license: 'apache-2.0',
+  },
+  {
+    repo: 'bartowski/Llama-3.2-1B-Instruct-GGUF',
+    file: 'Llama-3.2-1B-Instruct-Q4_K_M.gguf',
+    label: 'Llama 3.2 1B Instruct',
+    params: '1.2B',
+    toolFormat: null,
+    license: 'llama3.2',
+  },
+  {
+    repo: 'unsloth/Qwen3-1.7B-GGUF',
+    file: 'Qwen3-1.7B-Q4_K_M.gguf',
+    label: 'Qwen3 1.7B',
+    params: '1.7B',
+    toolFormat: 'hermes',
+    thinking: true,
+    license: 'apache-2.0',
+  },
+];
+
+/** The suggestion a `gguf:` id came from, if any (its tool format and thinking switch). */
+export function ggufSuggestion(repo: string): GgufSuggestion | undefined {
+  return GGUF_SUGGESTIONS.find((s) => s.repo === repo);
+}

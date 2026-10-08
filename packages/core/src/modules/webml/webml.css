@@ -138,6 +138,14 @@
   overflow-wrap: anywhere;
 }
 
+/* Every reason a GGUF cannot run here, one per line. */
+.webml-reasons {
+  margin: 0;
+  padding-left: 14px;
+  display: grid;
+  gap: 2px;
+}
+
 .webml-cache {
   list-style: none;
   margin: 0;

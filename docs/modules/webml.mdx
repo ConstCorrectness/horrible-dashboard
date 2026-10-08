@@ -3,7 +3,10 @@
 **Status: Phases 0–5 of 6 implemented** (foundation, playground, `browser` chat
 provider, and Scrive's `{space}`, `{app}`, `{webllm}` and `{tokenviz}` — see
 [Scrive](./scrive.mdx#hugging-face-spaces)). Phase 6, our own WGSL kernels for GGUF,
-needs its own plan. Language models that
+is planned in [WebML GGUF engine](../architecture/webml-gguf-engine.mdx). Its first two
+stages are built: the header reader and kernel harness, then a correct but slow
+`llama` forward pass that matches llama.cpp. It is not yet wired into the playground
+or the chat provider. Language models that
 run **in this window, on its GPU**, through WebGPU: no backend round-trip, no
 provider, nothing typed leaves the machine. Modelled on the Hugging Face "webml"
 static Spaces (SmolLM WebGPU, Gemma 4 / Bonsai WebGPU kernels, Agate).
@@ -14,7 +17,8 @@ static Spaces (SmolLM WebGPU, Gemma 4 / Bonsai WebGPU kernels, Agate).
 - **Frontend module:** `packages/core/src/modules/webml/`
 - **Backend surface:** `backend/modules/agent/browser_provider.py` (the `browser` chat
   provider's relay); no routes of its own.
-- **Plan:** `~/.claude/plans/the-webgpu-huggingface-spaces-logical-dragon.md`
+- **Plan:** `~/.claude/plans/the-webgpu-huggingface-spaces-logical-dragon.md` (Phases
+  0–5); Phase 6 in [WebML GGUF engine](../architecture/webml-gguf-engine.mdx).
 
 ## Contributions to the layout shell
 
@@ -39,6 +43,11 @@ flowchart LR
     W -->|"delta · step · done"| E
 ```
 
+- **Two workers behind one engine.** Hub ONNX repos run in transformers.js. GGUF
+  files, addressed as `gguf:<owner>/<repo>/<file.gguf>`, run in our own WGSL engine
+  (`gguf.worker.ts`, see [WebML GGUF engine](../architecture/webml-gguf-engine.mdx)).
+  Both speak the same protocol. Loading a model for the other engine replaces the
+  worker, which is the only way to free its GPU memory.
 - **One engine for the app** (`engine.ts`). A loaded model is a gigabyte of GPU
   memory and seconds of shader compilation, and every surface wants the same one, so
   it is app-global like a notebook kernel: closing the playground does not unload
@@ -47,6 +56,9 @@ flowchart LR
   and runs one generation at a time — a second request while one runs is refused,
   not queued. It warms the model with a one-token generation after loading, so the
   first reply's TTFT measures the model, not WGSL compilation.
+- **GGUF weights** download once into OPFS (`webml-gguf/`), resuming if
+  interrupted. "On this device" lists them beside the ONNX cache and flags partial
+  downloads.
 - **Weights** download once from the Hub and live in Cache Storage
   (`transformers-cache`, keyed by Hub URL). ONNX Runtime's WASM runtime comes from
   jsDelivr on first use and is cached the same way.
@@ -68,7 +80,8 @@ GPU readback.
 
 ## The playground
 
-Model picker (catalog + any Hub id), weight variant, a download-size warning before
+Model picker (catalog, any ONNX Hub id, or a GGUF file from a Hub repo, whose
+header is checked before Load enables), weight variant, a download-size warning before
 the first click, per-file progress, then chat with live **tok/s**, **TTFT**, token
 count and stop reason. Each reply's **token-probability strip** shades every token
 by its probability; hovering shows the alternatives and the distribution's entropy.

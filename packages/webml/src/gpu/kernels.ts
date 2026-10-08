@@ -1,0 +1,156 @@
+/// <reference types="@webgpu/types" />
+// Packages that compile this source with their own tsconfig (@horrible/core) need the
+// `?raw` declaration to come with it; an import cannot carry an ambient module.
+// eslint-disable-next-line @typescript-eslint/triple-slash-reference
+/// <reference path="../wgsl/wgsl.d.ts" />
+/**
+ * The engine's compute pipelines, compiled once per device and cached.
+ *
+ * `matvec` and `embed` read weights in their ggml block layout, so each is
+ * composed per weight type: common.wgsl (byte reads) + weights/<type>.wgsl
+ * (BLOCK, BLOCK_BYTES, block_dot, block_get) + the kernel body.
+ */
+import { GGML_TYPES } from '../gguf/ggml';
+import { F16, F32, Q4_0, Q4_K, Q5_K, Q6_K, Q8_0 } from '../gguf/quant';
+import accumulateSrc from '../wgsl/accumulate.wgsl?raw';
+import attentionSrc from '../wgsl/attention.wgsl?raw';
+import commonSrc from '../wgsl/common.wgsl?raw';
+import embedSrc from '../wgsl/embed.wgsl?raw';
+import headnormSrc from '../wgsl/headnorm.wgsl?raw';
+import matvecSrc from '../wgsl/matvec.wgsl?raw';
+import rmsnormSrc from '../wgsl/rmsnorm.wgsl?raw';
+import ropeSrc from '../wgsl/rope.wgsl?raw';
+import swigluSrc from '../wgsl/swiglu.wgsl?raw';
+import f16Src from '../wgsl/weights/f16.wgsl?raw';
+import f32Src from '../wgsl/weights/f32.wgsl?raw';
+import kscaleSrc from '../wgsl/weights/kscale.wgsl?raw';
+import q4_0Src from '../wgsl/weights/q4_0.wgsl?raw';
+import q4_kSrc from '../wgsl/weights/q4_k.wgsl?raw';
+import q5_kSrc from '../wgsl/weights/q5_k.wgsl?raw';
+import q6_kSrc from '../wgsl/weights/q6_k.wgsl?raw';
+import q8_0Src from '../wgsl/weights/q8_0.wgsl?raw';
+
+/**
+ * How the kernels step through a row of each weight type, matching the UNIT /
+ * UNITS / BLOCK_BYTES constants of its weights/<type>.wgsl: `unit` values per
+ * piece of work, `units` per block of `bytes`. A row must be whole blocks —
+ * 4 (F32) or 2 (F16) values for the word-aligned float reads, 32 for Q8_0/Q4_0,
+ * 256 for the K-quants (eight units of 32 each).
+ */
+export const KERNEL_BLOCK: Readonly<
+  Record<number, { unit: number; units: number; bytes: number }>
+> = {
+  [F32]: { unit: 4, units: 1, bytes: 16 },
+  [F16]: { unit: 2, units: 1, bytes: 4 },
+  [Q8_0]: { unit: 32, units: 1, bytes: 34 },
+  [Q4_0]: { unit: 32, units: 1, bytes: 18 },
+  [Q4_K]: { unit: 32, units: 8, bytes: 144 },
+  [Q5_K]: { unit: 32, units: 8, bytes: 176 },
+  [Q6_K]: { unit: 32, units: 8, bytes: 210 },
+};
+
+/** Values in one block of `type`: what a row's length must be a multiple of. */
+export function blockValues(type: number): number {
+  const b = KERNEL_BLOCK[type];
+  return b.unit * b.units;
+}
+
+const WEIGHT_SNIPPETS: Record<number, string> = {
+  [F32]: f32Src,
+  [F16]: f16Src,
+  [Q8_0]: q8_0Src,
+  [Q4_0]: q4_0Src,
+  [Q4_K]: kscaleSrc + q4_kSrc,
+  [Q5_K]: kscaleSrc + q5_kSrc,
+  [Q6_K]: q6_kSrc,
+};
+
+/** Workgroup sizes, matching the `WG` constants in the shaders. */
+export const WG = {
+  matvec: 64,
+  embed: 256,
+  rmsnorm: 256,
+  headnorm: 64,
+  rope: 64,
+  attention: 256,
+  swiglu: 256,
+  accumulate: 256,
+} as const;
+
+export class Kernels {
+  private readonly cache = new Map<string, GPUComputePipeline>();
+
+  constructor(readonly device: GPUDevice) {}
+
+  matvec(type: number): GPUComputePipeline {
+    return this.get(`matvec.${type}`, () => commonSrc + weightSnippet(type) + matvecSrc);
+  }
+
+  embed(type: number): GPUComputePipeline {
+    return this.get(`embed.${type}`, () => commonSrc + weightSnippet(type) + embedSrc);
+  }
+
+  rmsnorm = () => this.get('rmsnorm', () => rmsnormSrc);
+  headnorm = () => this.get('headnorm', () => headnormSrc);
+  rope = () => this.get('rope', () => ropeSrc);
+  attention = () => this.get('attention', () => attentionSrc);
+  swiglu = () => this.get('swiglu', () => swigluSrc);
+  accumulate = () => this.get('accumulate', () => accumulateSrc);
+
+  private get(key: string, source: () => string): GPUComputePipeline {
+    let pipeline = this.cache.get(key);
+    if (!pipeline) {
+      pipeline = this.device.createComputePipeline({
+        label: key,
+        layout: 'auto',
+        compute: { module: this.device.createShaderModule({ label: key, code: source() }) },
+      });
+      this.cache.set(key, pipeline);
+    }
+    return pipeline;
+  }
+}
+
+function weightSnippet(type: number): string {
+  const src = WEIGHT_SNIPPETS[type];
+  if (!src) throw new Error(`no kernel for ${GGML_TYPES[type]?.name ?? `type ${type}`} weights`);
+  return src;
+}
+
+/** A field of a uniform struct: u32 unless marked as f32. */
+export type UniformField = number | { f32: number };
+
+/** A uniform buffer holding `fields` in order (each 4 bytes), padded to 16 bytes. */
+export function uniformBuffer(device: GPUDevice, label: string, fields: UniformField[]): GPUBuffer {
+  const words = Math.max(4, Math.ceil(fields.length / 4) * 4);
+  const data = new ArrayBuffer(words * 4);
+  const view = new DataView(data);
+  fields.forEach((f, i) => {
+    if (typeof f === 'number') view.setUint32(i * 4, f, true);
+    else view.setFloat32(i * 4, f.f32, true);
+  });
+  const buffer = device.createBuffer({
+    label,
+    size: data.byteLength,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+  device.queue.writeBuffer(buffer, 0, data);
+  return buffer;
+}
+
+/** A bind group for group 0 of `pipeline`, binding each buffer at its key. */
+export function bindGroup(
+  device: GPUDevice,
+  pipeline: GPUComputePipeline,
+  buffers: Record<number, GPUBuffer>,
+  label?: string,
+): GPUBindGroup {
+  return device.createBindGroup({
+    label,
+    layout: pipeline.getBindGroupLayout(0),
+    entries: Object.entries(buffers).map(([binding, buffer]) => ({
+      binding: Number(binding),
+      resource: { buffer },
+    })),
+  });
+}

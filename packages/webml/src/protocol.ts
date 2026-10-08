@@ -32,10 +32,20 @@ export type Dtype = 'q4f16' | 'q4' | 'fp16' | 'fp32';
 
 export interface LoadRequest {
   type: 'load';
+  /**
+   * A Hub model id (ONNX, transformers.js), or `gguf:<owner>/<repo>/<file.gguf>`
+   * for a GGUF file run by our own WGSL engine (gguf.worker.ts).
+   */
   model: string;
+  /** ONNX weight variant. A GGUF's quantization is in the file; this is echoed back. */
   dtype: Dtype;
   device: Device;
+  /** GGUF only: KV-cache positions to allocate (default 4096, capped by the model). */
+  contextLength?: number;
 }
+
+/** Which worker runs a model. */
+export type EngineKind = 'onnx' | 'gguf';
 
 export interface GenerateRequest {
   type: 'generate';
@@ -72,7 +82,20 @@ export interface Usage {
 
 export type WorkerEvent =
   | { type: 'progress'; file: string; loaded: number; total: number; status: string }
-  | { type: 'ready'; model: string; dtype: Dtype; device: Device; loadMs: number }
+  | {
+      type: 'ready';
+      model: string;
+      dtype: Dtype;
+      device: Device;
+      loadMs: number;
+      engine?: EngineKind;
+      /** GGUF: the weight type holding most of the file ("Q8_0"). */
+      quant?: string;
+      /** GGUF: the KV-cache positions allocated. */
+      contextLength?: number;
+      /** GGUF: the chat template takes `enable_thinking`. */
+      thinking?: boolean;
+    }
   | { type: 'error'; id?: string; message: string }
   | { type: 'delta'; id: string; text: string }
   | {

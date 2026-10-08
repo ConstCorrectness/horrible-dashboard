@@ -11,6 +11,8 @@
  */
 import {
   catalogEntry,
+  ggufSuggestion,
+  parseGgufModelId,
   listCachedModels,
   pickDtype,
   probeWebGpu,
@@ -44,7 +46,8 @@ export async function webmlManifest(): Promise<{
   const loaded = state.kind === 'ready' ? state.model : null;
   let models: string[] = [];
   try {
-    models = (await listCachedModels()).map((m) => m.id);
+    // A partial GGUF download is on disk but cannot run until it is resumed.
+    models = (await listCachedModels()).filter((m) => !m.partial).map((m) => m.id);
   } catch {
     // No Cache Storage here: only the loaded model is runnable without a download.
   }
@@ -75,14 +78,23 @@ async function run(data: GenerateRequestData): Promise<void> {
     }
     // Tools go to the template only for models that write a format we parse; a
     // catalog model without one would just be confused by a long tool preamble.
-    const tools = data.tools?.length && entry?.toolFormat !== null ? data.tools : undefined;
+    // A suggested GGUF repo says the same; any other GGUF's template decides.
+    const ref = parseGgufModelId(model);
+    const toolFormat = entry
+      ? entry.toolFormat
+      : ref
+        ? ggufSuggestion(ref.repo)?.toolFormat
+        : undefined;
+    const tools = data.tools?.length && toolFormat !== null ? data.tools : undefined;
+    const loaded = engine.getState();
+    const thinking = entry?.thinking ?? (loaded.kind === 'ready' && loaded.thinking === true);
     const result = await engine.generate(
       {
         messages: data.messages,
         tools,
         temperature: data.temperature ?? undefined,
         maxNewTokens: data.maxTokens ?? 2048,
-        templateKwargs: entry?.thinking
+        templateKwargs: thinking
           ? { enable_thinking: getSetting<boolean>('webml.thinking') ?? false }
           : undefined,
       },

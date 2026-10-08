@@ -1,0 +1,106 @@
+/**
+ * The generation loop end to end on the tiny model: chat template → tokenizer →
+ * runtime → sampler → streamed text. Greedy decoding must reproduce llama.cpp's
+ * continuation (the same reference as forward.test.ts), now starting from text.
+ */
+import { describe, expect, it } from 'vitest';
+
+import { GgufSession } from '../src/gguf/session';
+import { bytesSource } from '../src/gguf/source';
+import f32Expected from './fixtures/tiny-llama-f32.expected.json';
+import f32Url from './fixtures/tiny-llama-f32.gguf?url';
+import { fixtureBytes, gpu } from './harness';
+
+/** The fixture's tokens t2…t63 are user-defined, so a prompt is their texts run together. */
+const text = (ids: number[]) => ids.map((i) => `t${i}`).join('');
+
+async function open(): Promise<GgufSession> {
+  return GgufSession.open(await gpu(), bytesSource(await fixtureBytes(f32Url)));
+}
+
+describe('GgufSession', () => {
+  it('greedy from a templated text prompt continues exactly as llama.cpp does', async () => {
+    const s = await open();
+    try {
+      expect(s.template.encode([{ role: 'user', content: text(f32Expected.prompt) }])).toEqual(
+        f32Expected.prompt,
+      );
+      const deltas: string[] = [];
+      const result = await s.generate(
+        {
+          messages: [{ role: 'user', content: text(f32Expected.prompt) }],
+          temperature: 0,
+          maxNewTokens: f32Expected.generated.length,
+        },
+        { onDelta: (d) => deltas.push(d) },
+        () => false,
+      );
+      expect(result.text).toBe(text(f32Expected.generated));
+      expect(deltas.join('')).toBe(result.text);
+      expect(result.stop).toBe('length');
+      expect(result.usage).toEqual({
+        promptTokens: f32Expected.prompt.length,
+        completionTokens: f32Expected.generated.length,
+      });
+    } finally {
+      s.destroy();
+    }
+  });
+
+  it('reports each token with the distribution it was drawn from', async () => {
+    const s = await open();
+    try {
+      const steps: { index: number; token: string; p: number; topk: { token: string }[] }[] = [];
+      await s.generate(
+        {
+          messages: [{ role: 'user', content: text(f32Expected.prompt) }],
+          temperature: 0,
+          maxNewTokens: 4,
+          topK: 3,
+        },
+        { onStep: (step) => steps.push(step) },
+        () => false,
+      );
+      expect(steps.map((st) => st.index)).toEqual([0, 1, 2, 3]);
+      expect(steps.map((st) => st.token)).toEqual(
+        f32Expected.generated.slice(0, 4).map((i) => `t${i}`),
+      );
+      for (const st of steps) {
+        expect(st.topk).toHaveLength(3);
+        // Greedy picks the most likely token.
+        expect(st.topk[0].token).toBe(st.token);
+      }
+    } finally {
+      s.destroy();
+    }
+  });
+
+  it('stops when interrupted, and refuses a prompt longer than the context', async () => {
+    const s = await open();
+    try {
+      let calls = 0;
+      const result = await s.generate(
+        {
+          messages: [{ role: 'user', content: text(f32Expected.prompt) }],
+          temperature: 0.8,
+          maxNewTokens: 30,
+        },
+        {},
+        () => ++calls > 12,
+      );
+      expect(result.stop).toBe('interrupt');
+      expect(result.usage.completionTokens).toBeLessThan(30);
+
+      // The tiny model's context is 64 positions.
+      await expect(
+        s.generate(
+          { messages: [{ role: 'user', content: text(new Array(70).fill(5)) }] },
+          {},
+          () => false,
+        ),
+      ).rejects.toThrow(/the prompt is 70 tokens; this model is loaded with a 64-token context/);
+    } finally {
+      s.destroy();
+    }
+  });
+});
