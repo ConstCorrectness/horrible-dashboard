@@ -104,8 +104,9 @@ GPU device. Only one model is resident at a time, as today.
 
 ## Technical decisions
 
-These are the recommendations the stages assume. Each one is checked in the stage
-named in brackets, and a stage that disproves one stops and asks.
+The stages assume these decisions. Each one is checked in the stage named in
+brackets, and a stage that disproves one stops and asks. Decisions 1 and 7 were
+confirmed on 2026-10-08 (see [Decided](#decided)).
 
 1. **Weights live in OPFS, not Cache Storage** [6.2]. A GGUF is one file of
    0.3–2.5 GB. Cache Storage hands back a `Response`, and reading a byte range out
@@ -192,13 +193,12 @@ round, the suffix is the last tool result plus the new turn.
 | SmolLM2-360M-Instruct | `llama` | Q8_0, then Q4_K_M | Small, fast to iterate on, a direct comparison with the ONNX baseline |
 | Llama-3.2-1B-Instruct | `llama` | Q4_K_M | `rope_freqs` (Llama 3 rope scaling) |
 | Qwen3-0.6B / 1.7B | `qwen3` | Q4_K_M, Q8_0 | QK-norm, NEOX rope, `head_dim` ≠ `embd / heads`, Hermes tool calls: the agent models |
-| Qwen2.5-0.5B/1.5B-Instruct | `qwen2` | Q4_K_M | QKV bias, which is what many fine-tunes start from |
 
 Q4_K_M files mix Q4_K, Q5_K and Q6_K (the LM head is usually Q6_K), and the
 norms are F32. Supporting "Q4_K_M" therefore means all of these types.
 
-Gemma 3 (sliding-window attention, sandwich norms, scaled embeddings, GELU)
-and SmolLM3 (NoPE every fourth layer) are 6.6 candidates. `arch.ts` refuses
+Qwen2.5 (`qwen2`, QKV bias), Gemma 3 (sliding-window attention, sandwich norms,
+scaled embeddings, GELU) and SmolLM3 (NoPE every fourth layer) are 6.6 candidates. `arch.ts` refuses
 anything else by name.
 
 ## Stages
@@ -258,9 +258,9 @@ and the kernel harness are green.
 
 ### 6.3 K-quants and the agent models
 
-- Q4_K, Q5_K, Q6_K (CPU references, then kernels). The `neox` rope, QK-norm and
-  QKV bias, `rope_freqs`, separate `key_length`/`value_length`.
-- Llama-3.2-1B, Qwen2.5 and Qwen3 entries go into a GGUF section of `catalog.ts`,
+- Q4_K, Q5_K, Q6_K (CPU references, then kernels). The `neox` rope, QK-norm,
+  `rope_freqs`, separate `key_length`/`value_length`.
+- Llama-3.2-1B and Qwen3 entries go into a GGUF section of `catalog.ts`,
   with `toolFormat` and `thinking` as for the ONNX entries.
 
 **Exit:** parity as in 6.1 for every model in the table at Q4_K_M. A Qwen3-1.7B
@@ -283,14 +283,18 @@ In order, re-checking parity after each step:
 overlay, so each step's change is measured rather than assumed.
 
 **Exit**, on the Gen12 machine:
-- SmolLM2-360M Q4_K_M decode **≥ 27 tok/s** (at least parity with ONNX).
+- SmolLM2-360M Q4_K_M decode **> 27 tok/s** (faster than its ONNX export).
 - TTFT ≤ 0.7 s for a short chat prompt.
 - A Qwen3-1.7B agent round after the first **under 10 s**, with prefix reuse.
   Today the 0.6B model takes ~50 s.
 
-If decode cannot reach parity, the GGUF engine still ships, for the
-local-model and prefix-reuse wins, but it does not become the default for models
-that have an ONNX export. That call is made here, with the numbers.
+**Which engine is the default.** For a model that has both an ONNX export and a
+GGUF, the GGUF engine becomes the default **only if its decode is faster** than
+the ONNX export on the same machine. Equal speed is not enough, even with prefix
+reuse. Each catalog model with both formats is measured here, and the result is
+recorded in `catalog.ts` as that model's preferred engine. Where GGUF loses, ONNX
+stays the default and GGUF is still available when picked explicitly. Models with
+no ONNX export (local fine-tunes, anything from the GGUF tab) always run on GGUF.
 
 ### 6.5 This node's GGUFs in the window
 
@@ -310,7 +314,7 @@ with nothing fetched from the Hub.
 
 - Interpretability readouts during generation: per-layer residual norms and a
   logit lens into `{tokenviz}` and the model explorer.
-- Gemma 3 and SmolLM3 architectures.
+- Qwen2.5 (`qwen2`, QKV bias), Gemma 3 and SmolLM3 architectures.
 - GGUF in published Scrive pages (bundled engine asset).
 
 ## Risks
@@ -324,14 +328,14 @@ with nothing fetched from the Hub.
 | OPFS quota or eviction | `navigator.storage.persist()` on the first GGUF download. Quota is checked against the file size before starting |
 | Maintaining a second engine indefinitely | The scope is the supported-models table. Everything else stays on transformers.js and is refused at preflight, not half-run |
 
-## Questions to settle before 6.0
+## Decided
 
-1. **OPFS for GGUF weights** (decision 1). This makes "On this device" span two
-   stores. Recommended.
-2. **Playwright + SwiftShader in CI for kernel tests** (decision 7). This adds a
-   browser job to `packages/webml`'s tests. Recommended.
-3. **The first model set** above. Is Qwen2.5 worth its QKV-bias work in 6.3, or
-   should it move to 6.6?
-4. **The 6.4 bar.** Should the GGUF engine become the default for a model that also
-   has an ONNX export only if it beats ONNX decode speed? Or is parity enough, given
-   prefix reuse?
+Settled on 2026-10-08, before 6.0:
+
+1. **GGUF weights live in OPFS** (decision 1). "On this device" lists both OPFS
+   and Cache Storage.
+2. **Kernel tests run in Playwright on SwiftShader** (decision 7), as a browser
+   job in `packages/webml`'s CI.
+3. **Qwen2.5 moves to 6.6.** The 6.3 set is SmolLM2, Llama 3.2 and Qwen3.
+4. **GGUF replaces ONNX as a model's default only if it decodes faster** (6.4).
+   Matching ONNX speed is not enough.
