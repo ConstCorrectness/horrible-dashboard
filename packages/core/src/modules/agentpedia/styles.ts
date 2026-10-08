@@ -84,8 +84,12 @@ export const primaryButton: CSSProperties = {
 export function card(active = false): CSSProperties {
   return {
     background: 'var(--bg-secondary)',
-    border: '1px solid var(--border)',
-    borderTop: `2px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
+    // Width, style and colour rather than `border` plus `borderTop`: React warns
+    // when a rerender changes one of two overlapping properties, and `active`
+    // changes the top edge on every selection.
+    borderStyle: 'solid',
+    borderWidth: '2px 1px 1px',
+    borderColor: `${active ? 'var(--accent)' : 'var(--border)'} var(--border) var(--border)`,
     borderRadius: 'var(--radius-md)',
     padding: 10,
     cursor: 'pointer',

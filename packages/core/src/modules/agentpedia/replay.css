@@ -1,0 +1,150 @@
+/* The stepper's transport and timeline. Tokens only. */
+
+.replay-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.replay-speeds {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.replay-speed {
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font: 11px var(--font-mono);
+  cursor: pointer;
+}
+.replay-speed + .replay-speed {
+  border-left: 1px solid var(--border);
+}
+.replay-speed.is-on {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.replay-track {
+  position: relative;
+  display: flex;
+  flex: 1 1 320px;
+  min-width: 200px;
+  height: 40px;
+  gap: 2px;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+}
+.replay-track:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.replay-seg {
+  position: relative;
+  min-width: 14px;
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  transition:
+    background var(--dur-fast, 120ms) ease,
+    border-color var(--dur-fast, 120ms) ease;
+}
+.replay-seg.is-past {
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-secondary));
+}
+.replay-seg.is-current {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-secondary));
+}
+
+.replay-seg-label {
+  position: absolute;
+  left: 4px;
+  bottom: 2px;
+  font: 9px var(--font-mono);
+  color: var(--text-secondary);
+}
+
+.replay-wire i {
+  position: absolute;
+  top: 3px;
+  width: 1px;
+  height: 7px;
+  background: var(--text-secondary);
+}
+.replay-wire i.is-bad {
+  background: var(--error);
+}
+
+.replay-step {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-style: normal;
+  font-size: 10px;
+  line-height: 1;
+}
+.replay-step.is-ok,
+.replay-legend .is-ok {
+  color: var(--success);
+}
+.replay-step.is-bad,
+.replay-legend .is-bad {
+  color: var(--error);
+}
+.replay-step.is-gated,
+.replay-legend .is-gated {
+  color: var(--warning);
+}
+
+.replay-head {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--text-primary);
+  border-radius: 1px;
+  pointer-events: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--bg-primary) 70%, transparent);
+}
+
+.replay-legend {
+  font: 10px var(--font-mono);
+  color: var(--text-secondary);
+}
+
+/* A step arriving while the turn replays. */
+.replay-arrive {
+  animation: replay-arrive 320ms var(--ease-out, ease-out) both;
+}
+
+@keyframes replay-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+  60% {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent);
+  }
+}
+
+:root[data-motion='off'] .replay-arrive {
+  animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .replay-arrive {
+    animation: none;
+  }
+}

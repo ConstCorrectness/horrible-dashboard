@@ -300,3 +300,88 @@ export function deleteFork(forkTurnId: string): Promise<{ deleted: boolean }> {
     `/agentpedia/forks/${encodeURIComponent(forkTurnId)}`,
   );
 }
+
+// ── Duels ────────────────────────────────────────────────────────────────────
+
+export type DuelVote = "a" | "b" | "tie" | "both_bad";
+
+export interface DuelSide {
+  fork_turn_id: string;
+  /** The contestant’s leaderboard name. Hidden by the pane until the vote. */
+  label: string;
+  edits: ForkEdit[];
+  status: string;
+  error: string | null;
+  model: string;
+  provider: string;
+  answer: string;
+  decision: string[];
+  calls: string[];
+  rounds: number;
+  total_tokens: number;
+}
+
+export interface Duel {
+  id: string;
+  turn_id: string;
+  from_round: number;
+  created_at: number;
+  a: DuelSide;
+  b: DuelSide;
+  vote: DuelVote | null;
+  voted_at: number | null;
+}
+
+export interface Contestant {
+  label: string;
+  rating: number;
+  games: number;
+  wins: number;
+  losses: number;
+  ties: number;
+  both_bad: number;
+}
+
+export interface Leaderboard {
+  contestants: Contestant[];
+  voted: number;
+  k: number;
+  start: number;
+}
+
+export function runDuel(req: {
+  turn_id: string;
+  from_round: number;
+  contestants: [ForkEdit[], ForkEdit[]];
+}): Promise<Duel> {
+  return apiPost<Duel>("/agentpedia/duels", req);
+}
+
+export function listDuels(): Promise<{ duels: Duel[] }> {
+  return apiGet<{ duels: Duel[] }>("/agentpedia/duels");
+}
+
+export function voteDuel(id: string, vote: DuelVote): Promise<Duel> {
+  return apiPost<Duel>(`/agentpedia/duels/${encodeURIComponent(id)}/vote`, { vote });
+}
+
+export function deleteDuel(id: string): Promise<{ deleted: boolean }> {
+  return apiDelete<{ deleted: boolean }>(`/agentpedia/duels/${encodeURIComponent(id)}`);
+}
+
+export function getLeaderboard(): Promise<Leaderboard> {
+  return apiGet<Leaderboard>("/agentpedia/leaderboard");
+}
+
+/** The active provider’s models, to suggest contestants (the agent’s public status). */
+export async function availableModels(): Promise<string[]> {
+  try {
+    const status = await apiGet<{ model?: string | null; available_models?: string[] }>(
+      "/agent/status",
+    );
+    const models = status.available_models ?? [];
+    return status.model && !models.includes(status.model) ? [status.model, ...models] : models;
+  } catch {
+    return [];
+  }
+}

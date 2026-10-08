@@ -17,11 +17,12 @@ were not designed together:
 Reading one turn meant three panes and a lot of matching by timestamp. Agentpedia is
 what happens when you put the three beside each other and scrub them together.
 
-**It owns one table and no more.** Every field the stepper serves is joined at read
-time from a module that already owns it; the single exception is the **fork edge**
-(which turn is a counterfactual of which, produced by which edits), because nothing
-else records that and there is nowhere honest to put it — see
-[Where the edge lives](#where-the-edge-lives).
+**It owns two tables and no more.** Every field the stepper serves is joined at read
+time from a module that already owns it. The exceptions are the **fork edge** (which
+turn is a counterfactual of which, produced by which edits) and the **duel** (which
+two forks were put side by side, and which one a person preferred), because nothing
+else records either and there is nowhere honest to put them — see
+[Where the edge lives](#where-the-edge-lives) and [Duels](#duels).
 
 The name is the point of comparison. A Neuronpedia feature page gives a *feature* a
 permanent address you can cite and compare against. A **harness** — the prompt, the
@@ -29,7 +30,8 @@ tools, the sampling settings, everything that decides how an agent behaves minus
 task itself — deserves the same, instead of being an untracked implementation detail
 of whichever run happened to use it.
 
-**Status: implemented** — the stepper, the harness pages, and forks.
+**Status: implemented** — the stepper (with replay), the harness pages, forks and
+duels.
 
 ## What made it possible
 
@@ -42,9 +44,9 @@ running at once into a transcript that reads as one agent behaving erratically.
 
 ## Contributions to the layout shell
 
-- **Panels:** `agentpedia.hub` (role `document`, singleton) with three sections —
-  **Runs** (`r`), **Harness** (`h`), **Forks** (`f`). One pane rather than three, per
-  the pane-consolidation rule: these are three views of one object.
+- **Panels:** `agentpedia.hub` (role `document`, singleton) with four sections —
+  **Runs** (`r`), **Harness** (`h`), **Forks** (`f`), **Duels** (`d`). One pane
+  rather than four, per the pane-consolidation rule: these are views of one object.
 - **Commands:** `agentpedia.open`, `agentpedia.prevRound`, `agentpedia.nextRound`.
 - **Agent tools** (grouped under `agentpedia`, so they cost nothing until loaded):
   `agentpedia.step`, `agentpedia.harness`, `agentpedia.fork` (gated),
@@ -124,6 +126,28 @@ is [the probe](interpretability.mdx#the-window-a-turn-actually-ran-under).)
 A **peer** turn has no rounds at all and that is not an error: `agent.ask_peer` ran on
 another user's node, which assembled its own context on its own machine. The stepper
 says so instead of rendering a blank.
+
+### Replay
+
+**▶ Replay** plays a turn back round by round, with a timeline of the whole turn
+beside it (`ReplayBar.tsx`, the arithmetic in `replay.ts`, unit-tested).
+
+- **The timeline is the turn at a glance.** Each round is a segment as wide as its
+  wall time. Inside it, each thing the agent did is a marker whose shape carries its
+  outcome: ● ok, ✕ failed, ◆ gated; the colour only repeats it. Each request that went
+  over the wire is a tick along the top. Click or drag anywhere on it to seek; ← and →
+  on it move by a round.
+- **Playing** advances the stepper through the rounds. In the round being played,
+  the Did column shows only the steps the playhead has passed, each arriving with a
+  short highlight, so a turn reads as a sequence of decisions instead of a finished
+  list. Paused mid-round, it stays that way; stepping to a round by hand parks the
+  replay there and shows the round whole.
+- **Two clocks.** The timeline is drawn to real time, because "round 3 took most of
+  the turn" is a finding. Playback is paced: about 1.6 seconds a round plus half a
+  second per step, capped at 6, at 0.5×, 1×, 2× or 4×. Replaying a 40-second round in
+  real time would be watching nothing happen. The playhead maps paced progress onto
+  the real-time track, so both stay true. A round with no recorded wall time takes
+  the mean width.
 
 ## Harness — the pedia pages
 
@@ -301,6 +325,36 @@ answer** is in no snapshot, because the last assistant message is appended after
 last round was captured. It comes from the trajectory store when capture was on, and
 otherwise reads `not recorded`.
 
+## Duels
+
+**⚔ Duel** in the stepper puts two configurations on the same round: two models, two
+temperatures, two system prompts. Each answers it, and you judge which is better
+without being told which is which. Enough votes rank configurations on your own
+tasks rather than on a public benchmark (`duel.py`, `DuelsSection.tsx`).
+
+- **Each side is an ordinary fork** (`fork.run`), run at once, tools always
+  simulated. A duel never runs live. Both forks are recorded as fork edges and open
+  in the stepper like any other turn ("Step through A/B" after the vote).
+- **Blind.** The server decides at random which contestant is shown as A. The answers
+  carry no names until the vote; then the names flip in, the winning side is marked,
+  and each side's rating change is shown.
+- **Refused before anything runs** when the two contestants have the same edits, or
+  when an edit matches nothing. That is stricter than a single fork, which runs and
+  reports the rejected edit: a contestant whose edit silently did nothing would earn
+  a rating under a name it did not deserve.
+- **A contestant is a configuration, not just a model.** Its leaderboard label is the
+  model plus each edit that changes the configuration ("qwen3:8b · T=0.7 · custom
+  system prompt"), so the same configuration's rating pools across every task it was
+  tried on.
+- **The leaderboard is Elo replayed from the votes** (K 32, everyone starting at
+  1000), in vote order, on every read. Nothing is stored but the votes, so changing a
+  vote or forgetting a duel leaves nothing behind. A tie scores half to each. "Both
+  bad" is counted on both rows but moves no rating, since it says nothing about which
+  was better. A duel between two draws of the same configuration is skipped.
+- **The table** is `agentpedia_duels` in `app.db`: the pairing, both sides' answers
+  and first moves, and the vote. Unlike the fork edge, a failed write raises: a duel
+  someone waited two model turns for and then judged must not vanish silently.
+
 ## Backend surface
 
 | Method | Path | Purpose |
@@ -312,6 +366,12 @@ otherwise reads `not recorded`.
 | GET | `/api/agentpedia/forks` | The fork edges, newest first (`limit`, `parent`) |
 | GET | `/api/agentpedia/forks/{fork_turn_id}/diff` | Parent beside fork at the branch round |
 | DELETE | `/api/agentpedia/forks/{fork_turn_id}` | Forget the edge; the fork's own turn stays |
+| POST | `/api/agentpedia/duels` | Run two contestants (fork edits) on one round at once; A and B assigned at random |
+| GET | `/api/agentpedia/duels` | Duels, newest first |
+| GET | `/api/agentpedia/duels/{id}` | One duel |
+| POST | `/api/agentpedia/duels/{id}/vote` | Record the verdict (`a`, `b`, `tie`, `both_bad`); voting again replaces it |
+| DELETE | `/api/agentpedia/duels/{id}` | Forget the pairing and its vote; both forks stay |
+| GET | `/api/agentpedia/leaderboard` | Elo over every voted duel, replayed from the votes |
 
 `GET /turns` reads the **durable** `agent_turns` table, not the 25-turn ring: a
 stepper whose history ends 25 turns ago cannot answer "what was the agent doing this
