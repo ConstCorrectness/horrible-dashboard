@@ -18,6 +18,13 @@ prompt's token ids (llama.cpp's own tokenizer), then each generated token with t
 top-5 probabilities it was picked from. `kernel-tests/real-parity.test.ts` replays
 that in the browser (see its header for how to point it at the files).
 
+Add `--f32` to record that run on an F32 copy of the model instead (llama.cpp
+dequantizes every tensor; the copy is deleted afterwards). The weights are the
+same values, but llama.cpp's F32 matmuls keep activations in f32, as the engine
+does, where its quantized ones round them to q8 first. On a quantized model that
+rounding alone moves top-5 probabilities by several hundredths over 28 layers, so
+the 0.01 check is only meaningful against an `--f32` reference.
+
 - `tiny-llama-f32`: every weight F32, a separate output head. llama.cpp's f32
   matmuls do not quantize activations, so agreement here is tight.
 - `tiny-llama-mixed`: Q8_0, Q4_0 and F16 weights, tied embeddings. llama.cpp
@@ -97,7 +104,7 @@ MIXED = {
 }
 
 # llama.cpp's LLAMA_FTYPE values for llama_model_quantize.
-FTYPE_Q4_K_M, FTYPE_Q5_K_M = 15, 17
+FTYPE_ALL_F32, FTYPE_Q4_K_M, FTYPE_Q5_K_M = 0, 15, 17
 
 
 def weights(rng: np.random.Generator, shape: Shape = TINY) -> dict[str, np.ndarray]:
@@ -189,12 +196,16 @@ def write_model(
     g.close()
 
 
-def llama_quantize(src: Path, dst: Path, ftype: int) -> None:
+def llama_quantize(
+    src: Path, dst: Path, ftype: int, *, requantize: bool = False
+) -> None:
     """Quantize with llama.cpp itself — how real Q4_K_M / Q5_K_M files are made,
-    including which tensors it keeps at higher precision."""
+    including which tensors it keeps at higher precision. With `requantize`, the
+    source may already be quantized (dequantizing to F32 is a requantization)."""
     params = llama_cpp.llama_model_quantize_default_params()
     params.ftype = ftype
-    params.nthread = 1
+    params.nthread = 1 if not requantize else os.cpu_count() or 4
+    params.allow_requantize = requantize
     rc = llama_cpp.llama_model_quantize(
         str(src).encode(), str(dst).encode(), ctypes.byref(params)
     )
@@ -294,12 +305,25 @@ def main() -> None:
         "--prompt-ids", help="comma-separated token ids instead of --prompt"
     )
     ap.add_argument("--tokens", type=int, default=64, help="greedy tokens to record")
+    ap.add_argument(
+        "--f32",
+        action="store_true",
+        help="record the run on a dequantized F32 copy (activations stay f32)",
+    )
     args = ap.parse_args()
     if args.model:
         if not args.out:
             ap.error("--model needs --out")
         ids = [int(t) for t in args.prompt_ids.split(",")] if args.prompt_ids else None
-        real_model(args.model, args.out, args.prompt, ids, args.tokens)
+        if not args.f32:
+            real_model(args.model, args.out, args.prompt, ids, args.tokens)
+            return
+        # Next to the output, not in the system temp dir: the copy is 4 bytes per
+        # weight (2.4 GB for a 0.6B model).
+        with tempfile.TemporaryDirectory(dir=args.out.parent) as tmp:
+            f32 = Path(tmp) / args.model.name
+            llama_quantize(args.model, f32, FTYPE_ALL_F32, requantize=True)
+            real_model(f32, args.out, args.prompt, ids, args.tokens)
         return
 
     OUT.mkdir(parents=True, exist_ok=True)

@@ -1,12 +1,28 @@
-// F32 weights, read four at a time. Rows must be a multiple of 4 elements.
-const UNIT: u32 = 4u;
+// F32 weights, as 32-value units of 128 bytes. Rows must be a multiple of 32
+// elements.
+const UNIT: u32 = 32u;
 const UNITS: u32 = 1u;
-const BLOCK_BYTES: u32 = 16u;
+const BLOCK_BYTES: u32 = 128u;
 
-fn unit_dot(block: u32, sub: u32, x: u32) -> f32 {
-  let w = block >> 2u;
-  return bitcast<f32>(W[w]) * X[x] + bitcast<f32>(W[w + 1u]) * X[x + 1u]
-    + bitcast<f32>(W[w + 2u]) * X[x + 2u] + bitcast<f32>(W[w + 3u]) * X[x + 3u];
+fn vals4(block: u32, j: u32) -> vec4<f32> {
+  let w = (block >> 2u) + j;
+  return bitcast<vec4<f32>>(vec4<u32>(W[w], W[w + 1u], W[w + 2u], W[w + 3u]));
+}
+
+fn unit_dot(block: u32, sub: u32) -> f32 {
+  var s = vec4<f32>(0.0);
+  for (var k = 0u; k < 8u; k++) {
+    s += vals4(block, 4u * k) * xv[k];
+  }
+  return hsum(s);
+}
+
+fn unit_prep(block: u32, sub: u32) -> vec4<f32> {
+  return vec4<f32>(0.0);
+}
+
+fn unit_quad(block: u32, sub: u32, k: u32, prep: vec4<f32>) -> vec4<f32> {
+  return vals4(block, 4u * k);
 }
 
 fn block_get(block: u32, j: u32) -> f32 {

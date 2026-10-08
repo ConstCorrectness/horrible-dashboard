@@ -8,7 +8,7 @@
  * without them.
  *
  * Supported: `llama` (Llama 2/3, SmolLM2; NORM rope, Llama 3's `rope_freqs`) and
- * `qwen3` (NEOX rope, per-head RMS norms on Q and K), with F32 / F16 / Q8_0 / Q4_0
+ * `qwen3` (NEOX rope, per-head RMS norms on Q and K), with F32 / F16 / Q8_0 / Q4_0 / Q5_0
  * / Q4_K / Q5_K / Q6_K weights. Later stages widen this table, not the engine's
  * tolerance.
  */

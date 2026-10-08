@@ -2,11 +2,11 @@
 
 **Status: Phases 0–5 of 6 implemented** (foundation, playground, `browser` chat
 provider, and Scrive's `{space}`, `{app}`, `{webllm}` and `{tokenviz}` — see
-[Scrive](./scrive.mdx#hugging-face-spaces)). Phase 6, our own WGSL kernels for GGUF,
-is planned in [WebML GGUF engine](../architecture/webml-gguf-engine.mdx). Its first two
-stages are built: the header reader and kernel harness, then a correct but slow
-`llama` forward pass that matches llama.cpp. It is not yet wired into the playground
-or the chat provider. Language models that
+[Scrive](./scrive.mdx#hugging-face-spaces)). Phase 6, our own WGSL engine for GGUF, is
+built through stage 6.4 ([WebML GGUF engine](../architecture/webml-gguf-engine.mdx)):
+`llama` and `qwen3` files in F32 to Q4_K_M, matching llama.cpp. The engine prefills in
+batches, reuses the KV cache across replies, and samples on the GPU. It runs in the
+playground and behind the `browser` chat provider. Language models that
 run **in this window, on its GPU**, through WebGPU: no backend round-trip, no
 provider, nothing typed leaves the machine. Modelled on the Hugging Face "webml"
 static Spaces (SmolLM WebGPU, Gemma 4 / Bonsai WebGPU kernels, Agate).

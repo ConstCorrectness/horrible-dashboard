@@ -41,6 +41,7 @@ describe('GgufSession', () => {
       expect(result.usage).toEqual({
         promptTokens: f32Expected.prompt.length,
         completionTokens: f32Expected.generated.length,
+        cachedTokens: 0,
       });
     } finally {
       s.destroy();
@@ -70,6 +71,53 @@ describe('GgufSession', () => {
         // Greedy picks the most likely token.
         expect(st.topk[0].token).toBe(st.token);
       }
+    } finally {
+      s.destroy();
+    }
+  });
+
+  it('reuses the KV cache for the prefix a new prompt shares with the last reply', async () => {
+    const s = await open();
+    const { prompt, generated } = f32Expected;
+    const greedy = (ids: number[], maxNewTokens: number) =>
+      s.generate(
+        { messages: [{ role: 'user', content: text(ids) }], temperature: 0, maxNewTokens },
+        {},
+        () => false,
+      );
+    try {
+      // Round 1: 8 prompt tokens, 4 replies. The cache then holds the prompt and
+      // the first 3 replies (the 4th was sampled, never fed).
+      const first = await greedy(prompt, 4);
+      expect(first.text).toBe(text(generated.slice(0, 4)));
+      expect(first.usage.cachedTokens).toBe(0);
+
+      // Round 2 extends that conversation: 11 tokens are already cached, so only 3
+      // are prefilled — and the continuation is still llama.cpp's.
+      const second = await greedy([...prompt, ...generated.slice(0, 6)], 5);
+      expect(second.usage.cachedTokens).toBe(prompt.length + 3);
+      expect(second.text).toBe(text(generated.slice(6, 11)));
+
+      // A prompt that differs from the first token on reuses nothing, and is right.
+      const other = [generated[0], ...prompt.slice(1)];
+      const third = await greedy(other, 3);
+      expect(third.usage.cachedTokens).toBe(0);
+      const fresh = await open();
+      try {
+        const want = await fresh.generate(
+          { messages: [{ role: 'user', content: text(other) }], temperature: 0, maxNewTokens: 3 },
+          {},
+          () => false,
+        );
+        expect(third.text).toBe(want.text);
+      } finally {
+        fresh.destroy();
+      }
+
+      // The same prompt again: everything but its last token is reused.
+      const again = await greedy(other, 3);
+      expect(again.usage.cachedTokens).toBe(other.length - 1);
+      expect(again.text).toBe(third.text);
     } finally {
       s.destroy();
     }

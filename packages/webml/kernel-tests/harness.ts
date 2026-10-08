@@ -1,5 +1,7 @@
 /// <reference types="@webgpu/types" />
 /** Shared plumbing for kernel tests: one device, upload, readback, seeded inputs. */
+import { commands } from 'vitest/browser';
+
 import { requestWebmlDevice, type WebmlDevice } from '../src/gpu/device';
 
 let shared: Promise<WebmlDevice> | null = null;
@@ -87,6 +89,47 @@ export function f32ToF16(v: number): number {
   return (sign | (exp << 10) | (mant >> 13)) + ((mant >> 12) & 1);
 }
 
+/** f32 → IEEE half bits, rounding to nearest even (as pack2x16float), subnormals kept. */
+export function f16Bits(v: number): number {
+  const u = new Uint32Array(new Float32Array([v]).buffer)[0];
+  const sign = (u >>> 16) & 0x8000;
+  const exp = (u >>> 23) & 0xff;
+  let mant = u & 0x7fffff;
+  if (exp === 0xff) return sign | 0x7c00 | (mant ? 0x200 : 0);
+  const e = exp - 127 + 15;
+  if (e >= 31) return sign | 0x7c00;
+  let shift = 13;
+  let base = e << 10;
+  if (e <= 0) {
+    if (e < -10) return sign;
+    mant |= 0x800000;
+    shift = 14 - e;
+    base = 0;
+  }
+  let half = base | (mant >>> shift);
+  const rem = mant & ((1 << shift) - 1);
+  const mid = 1 << (shift - 1);
+  // A carry out of the mantissa correctly bumps the exponent.
+  if (rem > mid || (rem === mid && half & 1)) half++;
+  return sign | half;
+}
+
+/** IEEE half bits → number. */
+export function fromF16Bits(h: number): number {
+  const sign = h & 0x8000 ? -1 : 1;
+  const exp = (h >>> 10) & 0x1f;
+  const mant = h & 0x3ff;
+  if (exp === 0) return sign * mant * 2 ** -24;
+  if (exp === 31) return mant ? NaN : sign * Infinity;
+  return sign * (1 + mant / 1024) * 2 ** (exp - 15);
+}
+
+/** `values` rounded to f16: the packed halves, and their values as f32. */
+export function toF16(values: ArrayLike<number>): { bits: Uint16Array; values: Float32Array } {
+  const bits = Uint16Array.from(values as ArrayLike<number>, f16Bits);
+  return { bits, values: Float32Array.from(bits, fromF16Bits) };
+}
+
 /**
  * `rows` rows of `cols` values in ggml layout for `type`, from seeded noise: random
  * quant bytes with sane f16 scales (random bytes would include NaN/Inf scales),
@@ -102,6 +145,7 @@ export function randomWeights(type: number, rows: number, cols: number, seed: nu
     1: [1, 2, []],
     8: [32, 34, [0]],
     2: [32, 18, [0]],
+    6: [32, 22, [0]],
     12: [256, 144, [0, 2]],
     13: [256, 176, [0, 2]],
     14: [256, 210, [208]],
@@ -136,13 +180,23 @@ export function uploadBytes(device: GPUDevice, bytes: Uint8Array, label = 'weigh
   return buffer;
 }
 
-/** The Step uniform (`pos`, `tok_row`) the per-token kernels read. */
-export function stepBuffer(device: GPUDevice, pos: number, tokRow = 0): GPUBuffer {
+/** The Step uniform the kernels read: the pass's first position and its row count. */
+export function stepBuffer(device: GPUDevice, pos: number, n = 1): GPUBuffer {
   const buffer = device.createBuffer({
     size: 16,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
-  device.queue.writeBuffer(buffer, 0, new Uint32Array([pos, tokRow, 0, 0]));
+  device.queue.writeBuffer(buffer, 0, new Uint32Array([pos, n, 0, 0]));
+  return buffer;
+}
+
+/** Token ids as the u32 storage buffer `embed` reads. */
+export function tokenBuffer(device: GPUDevice, ids: number[]): GPUBuffer {
+  const buffer = device.createBuffer({
+    size: Math.max(16, ids.length * 4),
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+  device.queue.writeBuffer(buffer, 0, Uint32Array.from(ids));
   return buffer;
 }
 
@@ -236,4 +290,27 @@ export function fileServer(file: Uint8Array, options: { cutAfter?: number } = {}
 /** A fixture file's bytes, by its `?url`. */
 export async function fixtureBytes(url: string): Promise<Uint8Array> {
   return new Uint8Array(await (await fetch(url)).arrayBuffer());
+}
+
+/**
+ * Write a measurement to `kernel-tests/.results/<name>.json` (gitignored). Browser
+ * mode does not forward the page's console here, so numbers worth keeping — parity
+ * summaries, benchmark timings — go to a file instead.
+ */
+export async function report(name: string, data: unknown): Promise<void> {
+  await commands.writeFile(
+    `kernel-tests/.results/${name}.json`,
+    JSON.stringify(data, null, 2) + '\n',
+  );
+}
+
+/**
+ * A local file through Vite's `/@fs/`, for POSIX and Windows paths alike. Its
+ * directory must be in the kernels project's `server.fs.allow`.
+ */
+export async function fetchLocal(path: string): Promise<Response> {
+  const url = '/@fs/' + path.replace(/\\/g, '/').replace(/^\/+/, '');
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
+  return res;
 }
