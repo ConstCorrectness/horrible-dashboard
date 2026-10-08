@@ -4,9 +4,10 @@ sidebar_label: WebML GGUF engine (plan)
 
 # WebML Phase 6: our own WGSL engine for GGUF
 
-**Status: 6.0 and 6.1 built. Each has one exit check still to run against a real
-model from the Hub (see [6.0](#60-harness-and-header-no-inference) and
-[6.1](#61-correct-slow-llama-only)). 6.2 onward not started.** This is the plan [WebML](../modules/webml.mdx) said
+**Status: 6.0, 6.1 and 6.2 built. Each still has an exit check to run against a
+real model from the Hub (see [6.0](#60-harness-and-header-no-inference),
+[6.1](#61-correct-slow-llama-only) and [6.2](#62-a-real-engine-in-the-app)).
+6.3 onward not started.** This is the plan [WebML](../modules/webml.mdx) said
 Phase 6 needed before any code was written. It is split into stages; each one ships
 on its own and ends with a check that has to pass before the next starts. Nothing
 in Phases 0–5 is replaced. The transformers.js worker stays as the engine for ONNX
@@ -48,8 +49,8 @@ Stage 6.4 is measured against these numbers on the same machine.
 ```mermaid
 flowchart LR
     UI["Playground · relay · {webllm}"] --> E["WebmlEngine<br/>(app-global)"]
-    E -->|"source: onnx"| T["transformers.worker.ts<br/>(unchanged)"]
-    E -->|"source: gguf"| G["gguf.worker.ts"]
+    E -->|"Hub ONNX id"| T["transformers.worker.ts<br/>(unchanged)"]
+    E -->|"gguf: id"| G["gguf.worker.ts"]
     G --> P["gguf/parse · tokenizer · template"]
     G --> R["gguf/runtime<br/>buffers · KV · command encoding"]
     R --> K["wgsl/*.wgsl"]
@@ -59,28 +60,19 @@ flowchart LR
 
 **One protocol, two workers.** `gguf.worker.ts` speaks the same
 `protocol.ts` events (`progress`, `ready`, `delta`, `step`, `done`, …), so the
-playground, the `browser` provider relay and `{webllm}` blocks barely change. The
-protocol change is additive:
+playground, the `browser` provider relay and `{webllm}` blocks barely change.
 
-```ts
-// protocol.ts
-export type ModelSource =
-  | { kind: 'onnx' }                                            // today's behaviour
-  | { kind: 'gguf'; repo: string; file: string; revision?: string }
-  | { kind: 'gguf-node'; url: string; file: string };           // served by this node (6.5)
+**A GGUF is addressed by its model id**, `gguf:<owner>/<repo>/<path/to/file.gguf>`,
+and `WebmlEngine` routes on that prefix. The plan's `source` field was not needed:
+every consumer already passes model ids around as opaque strings, including
+`browser_provider.py`, the manifest and `webml.defaultModel`. The protocol change is
+additive and optional:
 
-export interface LoadRequest {
-  type: 'load';
-  model: string;      // opaque id; for GGUF `gguf:<repo>/<file>`
-  dtype: Dtype;       // ONNX only; GGUF quant comes from the file
-  device: Device;
-  source?: ModelSource;
-}
-```
-
-The model id stays an opaque string, so `browser_provider.py`, the manifest and
-`webml.defaultModel` carry GGUF models without backend changes. `EngineState.ready`
-gains `engine: 'onnx' | 'gguf'` and, for GGUF, the quant label (`Q4_K_M`) for the UI.
+- `LoadRequest.contextLength`: KV positions to allocate (default 4096, capped by
+  the model).
+- `ready` gains `engine` (`'onnx' | 'gguf'`), `quant` (the weight type holding most
+  of the file, e.g. `Q8_0`), `contextLength`, and `thinking` (the template takes
+  `enable_thinking`). `EngineState.ready` mirrors them.
 
 **Switching engines terminates the other worker.** `WebmlEngine` takes a factory
 per engine kind. Loading a model of the other kind terminates the current worker
@@ -93,7 +85,7 @@ GPU device. Only one model is resident at a time, as today.
 | --- | --- |
 | `packages/webml/src/gguf/parse.ts` | GGUF header reader: a TS port of `backend/modules/interpretability/gguf.py`, with the same bounds (`_MAX_TENSORS`, `_MAX_STRING`, …) and the same ggml type table |
 | `packages/webml/src/gguf/source.ts` | Range reads: HF `resolve/` URLs, the node's file route, OPFS files |
-| `packages/webml/src/gguf/store.ts` | OPFS weight store (`webml-gguf/<repo>/<file>`): list, delete, resume |
+| `packages/webml/src/gguf/store.ts` | OPFS weight store (`webml-gguf/`, one file and a JSON sidecar per model id): list, delete, resumable download, quota check |
 | `packages/webml/src/gguf/arch.ts` | Metadata → `ModelConfig`, plus a support check that says *why* a file is refused |
 | `packages/webml/src/gguf/tokenizer.ts` | BPE (`gpt2`) and SentencePiece (`llama`) from `tokenizer.ggml.*`, with pre-tokenizers per `tokenizer.ggml.pre` |
 | `packages/webml/src/gguf/template.ts` | `tokenizer.chat_template` through `@huggingface/jinja` (already a transformers.js dependency) |
@@ -105,6 +97,10 @@ GPU device. Only one model is resident at a time, as today.
 | `packages/webml/src/gpu/kernels.ts` | Every pipeline, composed per weight type and cached; uniform and bind-group helpers |
 | `packages/webml/src/gguf/rope.ts` | The rope angle table, built the way ggml builds its rope cache |
 | `packages/webml/src/gguf/runtime.ts` | Buffers, KV cache, the per-token command list, logits readback |
+| `packages/webml/src/gguf/sample.ts` | llama.cpp's default sampler chain; the distribution behind `step` events |
+| `packages/webml/src/gguf/session.ts` | One loaded model: template → tokens → runtime → sampler → streamed text; `preflight()` for headers |
+| `packages/webml/src/gguf/hub.ts` | A repo's GGUF files (tree API) and one file's header verdict, before download |
+| `packages/core/src/modules/webml/panels/GgufPicker.tsx` | The playground's GGUF chooser |
 | `packages/webml/src/wgsl/*.wgsl` | Kernels, imported with `?raw` |
 | `packages/webml/src/engine/gguf.worker.ts` | The protocol loop around `runtime.ts` |
 | `packages/webml/kernel-tests/` | Vitest browser mode (Playwright provider): each kernel on the GPU vs `quant.ts` / a CPU reference |
@@ -343,6 +339,62 @@ and a deliberately wrong reference fails with both top-5 lists in the message.
 **Exit:** chat in the playground with SmolLM2-360M GGUF. The model shows in
 `webml_manifest`, and a `browser`-provider chat turn runs on it. `pnpm test`
 and the kernel harness are green.
+
+**Built (2026-10-08):**
+
+- **Tokenizer** (`tokenizer.ts`), ported from llama.cpp's `llama-vocab.cpp`:
+  - byte-level BPE with the `default`, `gpt-2`, `starcoder`/`smollm`,
+    `llama-bpe`/`llama3` and `qwen2` pre-tokenizers, and SentencePiece with byte
+    fallback;
+  - special tokens split out longest first, and llama.cpp's end-of-generation set.
+  - It matches the reference ids for every test string of llama.cpp's five
+    vocab-only GGUFs (llama-bpe, qwen2, starcoder, gpt-2, llama-spm). Those are the
+    `.out` files llama.cpp's own tokenizer tests use. The tests download them from
+    release tag `b6800`, pin each SHA-256, and CI caches them.
+  - `smollm` has no vocab file of its own. llama.cpp gives it the starcoder
+    regexes, and starcoder is tested.
+- **Templates** (`template.ts`): tested on Qwen2's own template and on Llama 3
+  style BOS, `tools` and `enable_thinking` templates. ChatML is the fallback only
+  when the vocabulary has its markers.
+- **Sampler** (`sample.ts`): top-k 40, top-p 0.95, min-p 0.05, then temperature, as
+  llama.cpp's defaults are (GGUFs carry no generation config).
+- **Session, worker, client:**
+  - The worker checks the header over Range before downloading anything.
+  - Prefill runs in batches of 32, so Stop is heard during a long prompt.
+  - `unload` waits for a running generation instead of freeing its buffers.
+  - A lost GPU device is reported, and the next load creates a new one.
+- **Store:** resumable downloads, and partial files are flagged in "On this device"
+  but never offered to the manifest.
+- **Tests:**
+  - Unit: 77 in the node project, including the tokenizer vectors.
+  - Kernel project: 35, in Chromium on SwiftShader. The session and the real
+    `WebmlEngine` + worker each reproduce llama.cpp's greedy continuation from a
+    text prompt. OPFS download, resume and delete run in a real browser.
+  - The tiny models' `t2…t63` tokens are user-defined, so a prompt written as text
+    tokenizes to exactly the reference ids.
+- **In the app:** `pnpm dev` and Playwright, with huggingface.co answered by a
+  stand-in that serves the tiny model. Find listed the file and its verdict
+  (`llama · F32 · 64 context`), and Load downloaded it into OPFS and reported
+  `ready · F32 · 64 context · webgpu`. A chat reply streamed with token
+  probabilities. A Qwen3 file was refused, with the reason listed and Load
+  disabled.
+
+**Changed from the plan:**
+
+- **Tokenizer reference:** llama.cpp's vocab test files, not a corpus run through
+  `transformers` tokenizers. Those need the Hub.
+- **Picker placement:** a "GGUF file from the Hub…" choice in the model picker, not
+  a separate tab, so load, progress and ready stay one UI.
+- **Device loss:** handled in the worker rather than through the client's
+  `onCrash`. The worker survives a lost device; only the device has to be recreated.
+
+**Still open:**
+
+- The SmolLM2 chat itself, and a `browser`-provider agent turn on a GGUF model.
+  Both need a real model from the Hub.
+- The manifest already lists complete `gguf:` ids, and the relay passes the
+  template's thinking flag. Neither has run against the backend loop with a real
+  model.
 
 ### 6.3 K-quants and the agent models
 

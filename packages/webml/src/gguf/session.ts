@@ -83,6 +83,8 @@ export class GgufSession {
     readonly tokenizer: Tokenizer,
     readonly template: ChatTemplate,
     readonly quant: string,
+    /** The template takes `enable_thinking` (Qwen3, SmolLM3): reasoning can be switched. */
+    readonly thinking: boolean,
     private readonly device: GPUDevice,
   ) {}
 
@@ -101,7 +103,15 @@ export class GgufSession {
       ...options,
       contextLength: options.contextLength ?? DEFAULT_CONTEXT,
     });
-    return new GgufSession(runtime, tokenizer, template, dominantQuant(header), gpu.device);
+    const thinking = typeof t === 'string' && t.includes('enable_thinking');
+    return new GgufSession(
+      runtime,
+      tokenizer,
+      template,
+      dominantQuant(header),
+      thinking,
+      gpu.device,
+    );
   }
 
   destroy(): void {

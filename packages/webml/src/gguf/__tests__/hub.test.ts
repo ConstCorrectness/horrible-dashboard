@@ -76,6 +76,8 @@ describe('inspectHubGguf', () => {
       quant: 'F16',
       contextLength: 64,
       size: tinyLlama.length,
+      thinking: false,
+      tools: false,
     });
   });
 

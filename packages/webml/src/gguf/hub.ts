@@ -50,6 +50,10 @@ export interface GgufInspection {
   contextLength: number | null;
   /** File size, when the server said. */
   size: number | null;
+  /** The chat template takes `enable_thinking`. */
+  thinking: boolean;
+  /** The chat template renders `tools`. */
+  tools: boolean;
 }
 
 /** Read one Hub GGUF's header and say whether this engine can run it. */
@@ -63,6 +67,7 @@ export async function inspectHubGguf(
   const meta = header.metadata;
   const arch = typeof meta['general.architecture'] === 'string' ? meta['general.architecture'] : '';
   const ctx = meta[`${arch}.context_length`];
+  const template = meta['tokenizer.chat_template'];
   const check = preflight(header);
   return {
     id: ggufModelId(repo, file),
@@ -73,5 +78,7 @@ export async function inspectHubGguf(
     quant: dominantQuant(header),
     contextLength: typeof ctx === 'number' ? ctx : null,
     size: source.size,
+    thinking: typeof template === 'string' && template.includes('enable_thinking'),
+    tools: typeof template === 'string' && /\btools\b/.test(template),
   };
 }

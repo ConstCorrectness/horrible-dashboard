@@ -93,6 +93,8 @@ export type WorkerEvent =
       quant?: string;
       /** GGUF: the KV-cache positions allocated. */
       contextLength?: number;
+      /** GGUF: the chat template takes `enable_thinking`. */
+      thinking?: boolean;
     }
   | { type: 'error'; id?: string; message: string }
   | { type: 'delta'; id: string; text: string }

@@ -2,6 +2,10 @@
  * WebML playground: load a model into this window's GPU, talk to it, and watch
  * how sure it was of every token. The model is the app-global one (`engine.ts`),
  * so whatever is loaded here is also what the `browser` chat provider answers with.
+ *
+ * Two kinds of model: the ONNX catalog (or any ONNX Hub repo), run by
+ * transformers.js, and GGUF files from the Hub, run by our own WGSL engine
+ * (docs/architecture/webml-gguf-engine.mdx).
  */
 import { useMemo, useRef, useState } from 'react';
 
@@ -10,6 +14,7 @@ import {
   catalogEntry,
   deleteCachedModel,
   formatBytes,
+  isGgufModelId,
   loadTotals,
   pickDtype,
   type ChatMessage,
@@ -27,11 +32,13 @@ import {
 } from '../playground-state';
 import { refreshWebmlManifest } from '../relay';
 import { useRollingNumber } from '../rolling';
+import { GgufPicker, type GgufChoice } from './GgufPicker';
 import { TokenStrip } from '../../../token-strip/TokenStrip';
 
 import '../webml.css';
 
 const CUSTOM = '__custom__';
+const GGUF = '__gguf__';
 const ALL_DTYPES: Dtype[] = ['q4f16', 'q4', 'fp16', 'fp32'];
 
 export function PlaygroundPanel() {
@@ -43,9 +50,15 @@ export function PlaygroundPanel() {
   const temperature = useSetting<number>('webml.temperature') ?? 0.7;
   const thinkingOn = useSetting<boolean>('webml.thinking') ?? false;
 
-  const [choice, setChoice] = useState(() => (catalogEntry(defaultModel) ? defaultModel : CUSTOM));
-  const [custom, setCustom] = useState(() => (catalogEntry(defaultModel) ? '' : defaultModel));
-  const modelId = choice === CUSTOM ? custom.trim() : choice;
+  const [choice, setChoice] = useState(() =>
+    catalogEntry(defaultModel) ? defaultModel : isGgufModelId(defaultModel) ? GGUF : CUSTOM,
+  );
+  const [custom, setCustom] = useState(() =>
+    catalogEntry(defaultModel) || isGgufModelId(defaultModel) ? '' : defaultModel,
+  );
+  const [gguf, setGguf] = useState<GgufChoice>({ id: '', inspection: null });
+  const isGguf = choice === GGUF;
+  const modelId = isGguf ? gguf.id : choice === CUSTOM ? custom.trim() : choice;
   const entry = catalogEntry(modelId);
   const f16 = gpu?.available ? gpu.f16 : false;
   const offered: Dtype[] = entry ? (Object.keys(entry.sizes) as Dtype[]) : ALL_DTYPES;
@@ -58,11 +71,16 @@ export function PlaygroundPanel() {
   const cached = useCachedModels(cacheVersion);
   const abort = useRef<AbortController | null>(null);
 
-  const isCached = cached?.some((m) => m.id === modelId) ?? false;
-  const downloadBytes = entry?.sizes[dtype];
+  const isCached = cached?.some((m) => m.id === modelId && !m.partial) ?? false;
+  const downloadBytes = isGguf ? gguf.inspection?.size : entry?.sizes[dtype];
   const gpuReady = gpu?.available === true;
   const ready = state.kind === 'ready';
   const busy = streaming !== -1;
+  // A GGUF loads once its header says it can run here (or it is already on disk).
+  const canLoad = isGguf ? gpuReady && (isCached || gguf.inspection?.ok === true) : true;
+  // Reasoning switch: the catalog says, or a loaded GGUF's template does.
+  const thinkingModel =
+    entry?.thinking ?? (ready && state.model === modelId && state.thinking === true);
 
   const last = useMemo(
     () => [...messages].reverse().find((m) => m.role === 'assistant' && m.meta),
@@ -75,7 +93,12 @@ export function PlaygroundPanel() {
     webgpu: gpu,
     engine:
       state.kind === 'ready'
-        ? { model: state.model, dtype: state.dtype, loadMs: state.loadMs }
+        ? {
+            model: state.model,
+            engine: state.engine,
+            weights: state.quant ?? state.dtype,
+            loadMs: state.loadMs,
+          }
         : state.kind,
     lastReply: last?.meta ?? null,
     turns: messages.length,
@@ -84,6 +107,8 @@ export function PlaygroundPanel() {
   const load = async () => {
     if (!modelId) return;
     try {
+      // GGUF weights live in OPFS; ask the browser not to evict them under pressure.
+      if (isGguf) await navigator.storage?.persist?.().catch(() => false);
       await webmlEngine().load(modelId, dtype, gpuReady ? 'webgpu' : 'wasm');
     } catch {
       // The engine state carries the message.
@@ -108,14 +133,14 @@ export function PlaygroundPanel() {
     const ctrl = new AbortController();
     abort.current = ctrl;
     const model = state.model;
-    const loadedEntry = catalogEntry(model);
+    const thinking = catalogEntry(model)?.thinking ?? state.thinking === true;
     try {
       const result = await webmlEngine().generate(
         {
           messages: prompt,
           topK,
           temperature,
-          templateKwargs: loadedEntry?.thinking ? { enable_thinking: thinkingOn } : undefined,
+          templateKwargs: thinking ? { enable_thinking: thinkingOn } : undefined,
         },
         {
           signal: ctrl.signal,
@@ -206,8 +231,10 @@ export function PlaygroundPanel() {
                   </option>
                 ))}
                 <option value={CUSTOM}>Other Hub model…</option>
+                <option value={GGUF}>GGUF file from the Hub…</option>
               </select>
             </div>
+            {isGguf && <GgufPicker initial={defaultModel} onChange={setGguf} />}
             {choice === CUSTOM && (
               <div className="webml-row">
                 <input
@@ -219,26 +246,29 @@ export function PlaygroundPanel() {
                 />
               </div>
             )}
-            <div className="webml-row">
-              <select
-                aria-label="Weights"
-                value={dtype}
-                onChange={(e) => setDtypeChoice(e.target.value as Dtype)}
-              >
-                {offered.map((d) => (
-                  <option key={d} value={d} disabled={d.endsWith('f16') && !f16}>
-                    {d}
-                    {entry?.sizes[d] ? ` · ${formatBytes(entry.sizes[d]!)}` : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
+            {!isGguf && (
+              <div className="webml-row">
+                <select
+                  aria-label="Weights"
+                  value={dtype}
+                  onChange={(e) => setDtypeChoice(e.target.value as Dtype)}
+                >
+                  {offered.map((d) => (
+                    <option key={d} value={d} disabled={d.endsWith('f16') && !f16}>
+                      {d}
+                      {entry?.sizes[d] ? ` · ${formatBytes(entry.sizes[d]!)}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <span className="webml-meta">
               {isCached
                 ? 'cached on this device'
                 : downloadBytes
                   ? `downloads ${formatBytes(downloadBytes)} from huggingface.co`
                   : 'downloads from huggingface.co'}
+              {isGguf && !gpuReady ? ' · GGUF models need WebGPU' : ''}
               {entry ? ` · ${entry.license}` : ''}
               {entry?.toolFormat ? ' · tools' : ''}
             </span>
@@ -246,9 +276,11 @@ export function PlaygroundPanel() {
               <button
                 type="button"
                 onClick={() => void load()}
-                disabled={!modelId || state.kind === 'loading' || busy}
+                disabled={!modelId || !canLoad || state.kind === 'loading' || busy}
               >
-                {ready && state.model === modelId && state.dtype === dtype ? 'Loaded' : 'Load'}
+                {ready && state.model === modelId && (isGguf || state.dtype === dtype)
+                  ? 'Loaded'
+                  : 'Load'}
               </button>
               <button
                 type="button"
@@ -267,14 +299,20 @@ export function PlaygroundPanel() {
                 </div>
                 <span className="webml-meta">
                   {state.phase === 'warmup'
-                    ? 'compiling GPU kernels…'
+                    ? isGgufModelId(state.model)
+                      ? 'uploading weights to the GPU…'
+                      : 'compiling GPU kernels…'
                     : `${formatBytes(progress?.loaded ?? 0)} / ${formatBytes(progress?.total ?? 0)} · ${Object.keys(state.files).length} files`}
                 </span>
               </>
             )}
             {state.kind === 'ready' && (
               <span className="webml-meta">
-                ready · {state.model.split('/').pop()} · {state.dtype} · {state.device} ·{' '}
+                ready · {state.model.split('/').pop()} ·{' '}
+                {state.engine === 'gguf'
+                  ? `${state.quant ?? 'GGUF'} · ${state.contextLength?.toLocaleString() ?? '?'} context`
+                  : state.dtype}{' '}
+                · {state.device} ·{' '}
                 {state.loadMs ? `${(state.loadMs / 1000).toFixed(1)} s` : 'already loaded'}
               </span>
             )}
@@ -294,7 +332,7 @@ export function PlaygroundPanel() {
             </div>
             <span className="webml-meta">
               temperature {temperature} · top-k shown {topK}
-              {entry?.thinking ? ` · thinking ${thinkingOn ? 'on' : 'off'}` : ''}
+              {thinkingModel ? ` · thinking ${thinkingOn ? 'on' : 'off'}` : ''}
             </span>
           </section>
 
@@ -312,6 +350,7 @@ export function PlaygroundPanel() {
                       {m.id}
                     </span>
                     <span className="webml-meta">
+                      {m.partial ? 'partial · ' : ''}
                       {m.bytes ? formatBytes(m.bytes) : `${m.files} files`}
                     </span>
                     <button
@@ -343,7 +382,7 @@ export function PlaygroundPanel() {
               <p className="webml-empty">
                 {ready
                   ? 'The model runs on this machine’s GPU. Nothing you type leaves the window.'
-                  : 'Load a model to start. Weights download once and stay in this browser’s cache.'}
+                  : 'Load a model to start. Weights download once and stay in this browser’s storage.'}
               </p>
             ) : (
               messages.map((m, i) => (

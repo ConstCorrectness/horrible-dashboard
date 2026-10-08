@@ -54,6 +54,7 @@ async function load(req: LoadRequest): Promise<void> {
       engine: 'gguf',
       quant: loaded.session.quant,
       contextLength: loaded.session.runtime.context,
+      thinking: loaded.session.thinking,
     });
     return;
   }
@@ -104,6 +105,7 @@ async function load(req: LoadRequest): Promise<void> {
     engine: 'gguf',
     quant: session.quant,
     contextLength: session.runtime.context,
+    thinking: session.thinking,
   });
 }
 

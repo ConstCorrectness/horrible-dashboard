@@ -44,6 +44,8 @@ export type EngineState =
       quant?: string;
       /** GGUF: KV-cache positions allocated. */
       contextLength?: number;
+      /** GGUF: the chat template takes `enable_thinking`. */
+      thinking?: boolean;
     }
   | { kind: 'error'; message: string; model?: string };
 
@@ -245,6 +247,7 @@ export class WebmlEngine {
           engine: event.engine ?? 'onnx',
           quant: event.quant,
           contextLength: event.contextLength,
+          thinking: event.thinking,
         });
         this.loadWaiter?.resolve();
         this.loadWaiter = null;
