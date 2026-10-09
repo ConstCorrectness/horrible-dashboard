@@ -30,7 +30,8 @@ export interface OtelSpan {
   events: OtelSpanEvent[];
   resource: Record<string, unknown>;
   scope: string;
-  origin: 'received' | 'local';
+  /** `peer`: a friend's node ran it and sent it back with its answer. */
+  origin: 'received' | 'local' | 'peer';
   received_at: number;
 }
 
@@ -46,6 +47,24 @@ export interface IngestInfo {
   grpc_endpoint: string | null;
 }
 
+/** One place the node's own spans are exported to. Mirrors `ExportDestination`. */
+export interface ExportDestination {
+  /** `otel` (the generic OTLP connector) or `opik`. */
+  name: string;
+  label: string;
+  host: string;
+  include_content: boolean;
+  /** Non-secret facts — Opik's `project` and `workspace`. */
+  detail: Record<string, string>;
+  last_ok_at: number | null;
+  last_error: string;
+  last_error_at: number | null;
+  spans_ok: number;
+  spans_failed: number;
+  /** The most recent export failed. */
+  failing: boolean;
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api/otel${path}`, init);
   if (!res.ok) {
@@ -58,6 +77,9 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 export const getIngestInfo = () => req<IngestInfo>('/ingest');
 
 export const rotateIngestToken = () => req<IngestInfo>('/ingest/rotate', { method: 'POST' });
+
+/** Where the node's spans go, and how the last export to each went. */
+export const getExportStatus = () => req<ExportDestination[]>('/export');
 
 /**
  * The spans behind a run, from whichever side it came from.

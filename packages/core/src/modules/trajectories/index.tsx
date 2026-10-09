@@ -137,6 +137,14 @@ export const trajectoriesModule: ModuleManifest = {
       default: false,
     },
     {
+      key: 'otel.exportPeerSpans',
+      title: "Export friends' returned traces",
+      description:
+        "When a friend's agent answers yours and sends back the trace of that answer, pass it on to your export destinations (Opik, the OTLP connector) as part of your own trace. It is stored on this node either way.",
+      type: 'boolean',
+      default: true,
+    },
+    {
       key: 'otel.forwardReceived',
       title: 'Forward received traces to the export connector',
       description:

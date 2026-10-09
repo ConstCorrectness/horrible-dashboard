@@ -178,6 +178,7 @@ describe('hardcoded colours', () => {
       'packages/core/src/modules/trajectories/panels/FollowSection.tsx',
       'packages/core/src/modules/trajectories/panels/LineageSection.tsx',
       'packages/core/src/modules/trajectories/panels/lineage.css',
+      'packages/core/src/modules/trajectories/panels/ExportCard.tsx',
     ];
     for (const rel of cleaned) {
       const hits = readFileSync(join(REPO, rel), 'utf8').match(HEX) ?? [];

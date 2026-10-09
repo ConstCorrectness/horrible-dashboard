@@ -109,6 +109,16 @@ export function TraceView({ run }: { run: TrajectoryRun }) {
             >
               {row.orphan ? '↳ ' : ''}
               {row.span.name || row.span.span_id}
+              {/* The half of the trace a friend's node ran and sent back with its
+                  answer. Its node id is the fabric-authenticated sender's. */}
+              {row.span.origin === 'peer' ? (
+                <span
+                  title={`Ran on peer ${String(row.span.resource['horrible.peer.node_id'] ?? '')}`}
+                  style={{ marginLeft: 'var(--space-2)', color: 'var(--accent)' }}
+                >
+                  @{String(row.span.resource['horrible.peer.node_id'] ?? 'peer').slice(0, 8)}
+                </span>
+              ) : null}
             </span>
             <div className="traj-track">
               <button

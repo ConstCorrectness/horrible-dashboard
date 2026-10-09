@@ -465,6 +465,7 @@ async def _run_offer(
 ) -> None:
     from backend.modules.evals import sweep
     from backend.modules.evals.runner_agent import run_case
+    from backend.modules.otel import tracing as otel_tracing
 
     status, error = "done", ""
     try:
@@ -472,9 +473,11 @@ async def _run_offer(
         # resource, and a friend's suite must queue behind the owner's, not beside it.
         async with sweep._target_semaphore:
             for index, case in enumerate(offer.cases):
-                result = await run_case(
-                    case, agent_tools, provider=info, endpoint=endpoint, model=model
-                )
+                # A friend asked for this run: say so on each case's trace.
+                with otel_tracing.labels(requested_by=offer.from_node):
+                    result = await run_case(
+                        case, agent_tools, provider=info, endpoint=endpoint, model=model
+                    )
                 await _send(
                     offer.from_node,
                     EVAL_PROGRESS,

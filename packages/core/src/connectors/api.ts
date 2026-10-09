@@ -52,6 +52,8 @@ export interface ConnectorField {
   value: string;
   /** One line of guidance rendered under the input. */
   help: string;
+  /** `toggle` renders a checkbox that submits "true"/"false". Absent means text. */
+  kind?: 'text' | 'toggle';
 }
 
 /** One step of a connect flow. A single shape covers all three connector kinds. */

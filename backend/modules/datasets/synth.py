@@ -91,6 +91,7 @@ async def _generate_local(
     from backend.modules.agent import providers as P
     from backend.modules.agent.roster import resolve_provider
     from backend.modules.agent.routes import load_config
+    from backend.modules.otel import tracing as otel_tracing
 
     config = load_config()
     info, endpoint = resolve_provider(config, str(params.get("agent") or "main"))
@@ -102,14 +103,17 @@ async def _generate_local(
     async with httpx.AsyncClient(timeout=180.0) as client:
         while len(out) < count:
             batch = min(BATCH, count - len(out))
-            result = await P.chat(
-                client,
-                info,
-                endpoint,
-                model,
-                [{"role": "user", "content": _prompt(params, seeds, batch)}],
-                [],
-            )
+            # A bare model call with no agent around it: the label says what it
+            # was for in a trace UI.
+            with otel_tracing.labels(source="dataset-synth"):
+                result = await P.chat(
+                    client,
+                    info,
+                    endpoint,
+                    model,
+                    [{"role": "user", "content": _prompt(params, seeds, batch)}],
+                    [],
+                )
             rows = _parse_array(result.content)
             if not rows:
                 # No progress means the next identical call makes none either.

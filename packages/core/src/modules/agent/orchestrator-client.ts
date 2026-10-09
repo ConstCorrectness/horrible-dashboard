@@ -71,6 +71,10 @@ export interface AskOptions {
    *  its records before the first frame arrives, which is what the trace view
    *  joins on. Omitted, one is generated. */
   turnId?: string;
+  /** The chat session this turn belongs to. Only labels the trace — the backend
+   *  stays stateless per turn — so a trace UI (Opik) can group a chat's turns as
+   *  one thread. */
+  sessionId?: string;
 }
 
 /** A fresh turn id, in the shape the backend and every recorder key on. */
@@ -269,6 +273,7 @@ export function askAgent(
       history: history ?? [],
       context: context ? { ...context, panes } : panes.length ? { panes } : null,
       ...(opts?.agentId && opts.agentId !== 'main' ? { agentId: opts.agentId } : {}),
+      ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
     });
   });
 }

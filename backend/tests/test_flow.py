@@ -300,3 +300,47 @@ def test_if_node_false_branch_prunes_true(tmp_path, monkeypatch) -> None:
 
     assert finished["q"]["branch"] == "false"
     assert "b" in finished and "a" in skipped
+
+
+def test_a_flow_run_is_one_trace_with_its_agent_nodes_inside(
+    tmp_path, monkeypatch
+) -> None:
+    """One root per run: a second root under the same trace id would replace the
+    first in an agent-trace UI."""
+    from backend.tests.otel_helpers import captured_spans
+
+    monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path))
+    TestClient(app).put(
+        "/api/flows/traced",
+        json={
+            "name": "Traced",
+            "nodes": [
+                {"id": "t", "type": "trigger.prompt", "config": {"prompt": "hi"}},
+                {"id": "g", "type": "agent", "config": {"label": "Summarise"}},
+            ],
+            "edges": [{"id": "e1", "source": "t", "target": "g"}],
+        },
+    )
+    seen: dict = {}
+
+    async def fake_loop(conn, run_id, messages, tools, info, endpoint, model, emit, **kw):
+        seen.update(kw)
+        return "ok"
+
+    monkeypatch.setattr(executor, "run_agent_loop", fake_loop)
+    monkeypatch.setattr(executor, "_load_config", lambda: _FakeConfig())
+    monkeypatch.setattr(executor, "_tools_for", lambda conn, prompt="": [])
+    monkeypatch.setattr(
+        roster,
+        "resolve_provider",
+        lambda config, agent_id="main": (_FakeInfo(), "http://x"),
+    )
+    with captured_spans(monkeypatch) as spans:
+        asyncio.run(executor.run_flow(_FakeConn(), "traced", "run9", "go"))
+        (root,) = spans.get_finished_spans()
+    assert root.attributes["gen_ai.agent.id"] == "flow:traced"
+    assert root.attributes["horrible.source"] == "flow"
+    assert root.status.is_ok
+    # The node's loop is traced as the node, not as `main`.
+    assert seen["otel_agent"] == ("flow:node:g", "Summarise")
+    assert seen["trace_source"] == "flow"

@@ -424,6 +424,8 @@ async def run(req: ForkRequest) -> ForkRecord:
                 mode_override=mode,
                 simulate=simulate_hook,
                 deny_tools=plan["denied"],
+                # Its own trace (otel/ids.py), labelled as what it is.
+                trace_source="fork",
             ),
             timeout=FORK_TIMEOUT_S,
         )

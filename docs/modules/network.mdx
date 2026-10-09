@@ -636,6 +636,22 @@ Handlers are awaited inline by the session pump, so a handler that awaited a lon
 turn would wedge the receive loop for its duration — see
 [Cancelling a remote agent turn](mobile-android.mdx#cancelling-a-remote-agent-turn).
 
+Every `agent_request` is built by `agent_bridge.request_peer_agent` (the chat's
+`agent.ask_peer` and research's peer sub-agents alike). Besides `request_id`, `prompt`
+and the `origin_chain` loop guard, it carries optional trace fields, all ignored by an
+older peer:
+
+| Field | On | |
+| --- | --- | --- |
+| `traceparent` | `agent_request` | W3C trace context; the callee's turn continues the caller's trace |
+| `want_spans` | `agent_request` | ask for that turn's spans back |
+| `trace_sinks` | `agent_request` | fingerprints of the caller's Opik destinations (at most 4 are read) |
+| `trace` | `agent_result` | the turn's spans: `enc`, `body` (OTLP protobuf, gzip, base64, ≤ 256 KiB), `truncated`, `exported_to` |
+
+`trace` is sent only when the callee has `network.returnTraces` on (default off), and
+never carries prompts or tool data. See [Peers return their
+spans](otel.mdx#peers-return-their-spans).
+
 Screen watching (`view_request` / `view_frame`) is **scaffolded but not
 functional** — the desktop never emits a frame. See
 [Remote view](mobile-android.mdx#remote-view-screen-watching).
@@ -659,6 +675,7 @@ weight taught people to skim past the six that matter.
 | `network.trustMode` | enum | `manual` | `manual` (an invite you generated) or `open-lan`. |
 | `network.lobbyUrl` | string | `""` | Lobby server `ws://…/lobby-ws` for discovery + rooms (blank = off). |
 | `network.allowRemoteAgent` | boolean | `false` | Let a trusted peer's agent ask yours. |
+| `network.returnTraces` | boolean | `false` | Send the asking peer the spans of its answer — shape, timings, models, tool names; never prompts or tool data. |
 | `network.allowComputeLending` | boolean | `false` | Let a trusted friend borrow this machine (loaded model, GPU, installed extras). Off means nothing is lent whatever the policy says. |
 | `network.computeLeasePolicy` | enum | `ask` | Who may hold a lease: `ask` (approval required — currently denies, no UI yet), `trusted`, `off`. Unrecognised values read as `off`. |
 

@@ -1636,6 +1636,9 @@ async def handle_agent_message(conn: WsConnection, msg: dict[str, Any]) -> None:
         context = data.get("context")
         turn_id = str(data.get("turnId", ""))
         agent_id = str(data.get("agentId") or "main")
+        # The chat session the turn belongs to. Only labels the trace (a thread in
+        # Opik); the backend stays stateless per turn — `history` is the context.
+        session_id = data.get("sessionId")
         task = asyncio.create_task(
             run_agent_turn(
                 conn,
@@ -1644,6 +1647,7 @@ async def handle_agent_message(conn: WsConnection, msg: dict[str, Any]) -> None:
                 history if isinstance(history, list) else None,
                 context if isinstance(context, dict) else None,
                 agent_id=agent_id,
+                session_id=str(session_id) if session_id else None,
             )
         )
         # A detached task that raises is a chat that never answers and never says
@@ -2350,6 +2354,26 @@ async def _final_answer(
     )
 
 
+def _last_user_text(messages: list[dict[str, Any]]) -> str | None:
+    """The newest user message's text — what this turn was asked. Multimodal
+    content keeps its text parts only; an image is not a prompt anyone reads."""
+    for message in reversed(messages):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = [
+                str(p.get("text", ""))
+                for p in content
+                if isinstance(p, dict) and p.get("type") == "text"
+            ]
+            return "\n".join(p for p in parts if p) or None
+        return None
+    return None
+
+
 async def run_agent_loop(
     conn: WsConnection,
     turn_id: str,
@@ -2370,6 +2394,9 @@ async def run_agent_loop(
     parent_turn_id: str | None = None,
     simulate: Simulate | None = None,
     deny_tools: set[str] | None = None,
+    trace_source: str | None = None,
+    conversation_id: str | None = None,
+    otel_agent: tuple[str, str] | None = None,
 ) -> str:
     """The shared tool-calling loop: stream the provider, relay each gated tool call
     to the frontend, and repeat until the model returns a final answer (no tool
@@ -2447,17 +2474,26 @@ async def run_agent_loop(
     # stamp for the same reason: everything the turn does nests inside it — chat
     # spans at the provider chokepoint, tool spans below, and a delegate's whole
     # sub-turn, whose context is inherited through the await.
+    #
+    # `trace_source` and `conversation_id` only label the span: what started the
+    # turn, and which chat session it belongs to (an agent-trace UI's thread).
+    # `otel_agent` renames the agent *in the trace only* — a flow node runs as
+    # `main` but is traced as itself; its trajectory and permissions are untouched.
     spans = contextlib.ExitStack()
+    span_agent_id, span_agent_name = otel_agent or (agent_id, spec.name if spec else "")
     agent_span = spans.enter_context(
         otel_tracing.agent_span(
             turn_id=turn_id,
-            agent_id=agent_id,
-            agent_name=spec.name if spec else "",
+            agent_id=span_agent_id,
+            agent_name=span_agent_name,
             model=model,
             provider=str(getattr(info, "kind", "")),
             parent_turn_id=parent_turn_id,
+            source=trace_source or ("delegate" if parent_turn_id else None),
+            conversation_id=conversation_id,
         )
     )
+    agent_span.io(prompt=_last_user_text(messages))
     try:
         async with instrumented_client(timeout=120) as client:
             round_no = 0
@@ -2670,6 +2706,8 @@ async def run_agent_loop(
         if rec:
             rec.finish(answer)
         agent_span.set("horrible.rounds", rec.rounds if rec else None)
+        if answer:
+            agent_span.io(answer=answer)
         spans.close()
         telemetry_turn.leave(turn_token)
         await _finish_capture(turn_id, info, endpoint, model)
@@ -2684,6 +2722,8 @@ async def run_agent_turn(
     *,
     remote: bool = False,
     agent_id: str = "main",
+    session_id: str | None = None,
+    source: str | None = None,
 ) -> None:
     """Drive one user turn: assemble the conversation, run the shared tool-calling
     loop, and send the authoritative answer. The provider dialect (Ollama vs
@@ -2816,6 +2856,8 @@ async def run_agent_turn(
             active_groups=active_groups,
             spec=spec,
             mode_override=mode_override,
+            trace_source=source or ("peer" if remote else "chat"),
+            conversation_id=session_id,
         )
         # The loop mutated `active_groups` in place as the model loaded tools —
         # hand that forward so the next turn starts where this one ended.

@@ -239,6 +239,10 @@ Every step's complete message transcript is persisted and served
 drill-down and the observability pane read the same record. Run/step snapshots
 and synthesis deltas stream on the **`research` `/ws` channel**.
 
+A run is one OTel trace (`invoke_agent research`, `source:research`), with one child
+span per step attempt and the step's model calls inside it; a peer sub-agent's spans
+hang off its step when the friend returns them. See [OpenTelemetry](otel.mdx).
+
 ## Depth: rounds, verification, steering
 
 ### Gap-filling rounds

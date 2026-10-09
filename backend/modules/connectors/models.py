@@ -68,6 +68,8 @@ class FieldModel(BaseModel):
     value: str = ""
     # One line of guidance rendered under the input (e.g. "set by GOOGLE_CLIENT_ID").
     help: str = ""
+    # `toggle` renders a checkbox and submits "true"/"false". Text otherwise.
+    kind: Literal["text", "toggle"] = "text"
 
 
 class StepModel(BaseModel):

@@ -104,7 +104,9 @@ async def handle_remote_command(
 
         rconn = RemoteAgentConn(hub, env.src, env.msg_id, _remote_mode())
         try:
-            await run_agent_turn(rconn, env.msg_id, prompt, remote=True)
+            await run_agent_turn(
+                rconn, env.msg_id, prompt, remote=True, source="mobile"
+            )
             await rconn.wait_done(timeout=30.0)
             summary = rconn.answer_text or "No recent activity to report."
             await hub.send_to(

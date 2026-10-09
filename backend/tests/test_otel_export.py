@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from backend.modules.otel import decode, export, ids, tracing
+from backend.tests.otel_helpers import collector as _collector
 
 
 @pytest.fixture(autouse=True)
@@ -110,42 +111,6 @@ async def test_forward_received_relays_the_original_bytes(monkeypatch) -> None:
     assert body == b"\x01\x02"
     assert headers["x-api-key"] == "k"
     assert headers["content-encoding"] == "gzip"
-
-
-def _collector():
-    """A real OTLP/HTTP collector on a free port, in a thread.
-
-    The exporter wiring — provider slot, batch processor, endpoint suffix, headers —
-    is the half a unit test cannot reach: everything up to `BatchSpanProcessor` can be
-    right while nothing ever leaves the process.
-    """
-    import threading
-    from http.server import BaseHTTPRequestHandler, HTTPServer
-
-    received: list[tuple[str, dict[str, str], bytes]] = []
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_POST(self):  # noqa: N802
-            length = int(self.headers.get("content-length") or 0)
-            received.append(
-                (
-                    self.path,
-                    {k.lower(): v for k, v in self.headers.items()},
-                    self.rfile.read(length),
-                )
-            )
-            self.send_response(200)
-            self.send_header("content-type", "application/x-protobuf")
-            self.end_headers()
-            self.wfile.write(b"")
-
-        def log_message(self, *args):  # keep the suite's output clean
-            return
-
-    server = HTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    return server, received
 
 
 def test_the_nodes_spans_actually_reach_a_collector(monkeypatch) -> None:

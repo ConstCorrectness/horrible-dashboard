@@ -407,7 +407,7 @@ are stable, not creative.
 | Direction     | event               | data                                             |
 | ------------- | ------------------- | ------------------------------------------------ |
 | client→server | `manifest`          | `{tools: SerializedTool[]}`                      |
-| client→server | `ask`               | `{turnId, prompt, history?, context?, agentId?}` |
+| client→server | `ask`               | `{turnId, prompt, history?, context?, agentId?, sessionId?}` |
 | server→client | `tool_call`         | `{turnId, callId, name, args}`                   |
 | client→server | `tool_result`       | `{turnId, callId, ok, result?, error?}`          |
 | server→client | `approval_request`  | `{turnId, approvalId, tool, specifier, mode}`    |
@@ -426,6 +426,10 @@ are stable, not creative.
 `agentId` selects (and tags) the **roster agent** driving the turn — omitted it
 means `main`, so pre-roster clients keep working. See
 [Specialized agents & delegation](#specialized-agents--delegation).
+
+`sessionId` is the persisted chat session the turn belongs to. It only labels the
+trace (`gen_ai.conversation.id`, a thread in Opik — see [otel](otel.mdx)); the
+backend stays stateless per turn, and `history` remains the conversation.
 
 The frontend pushes the **capability manifest** (`manifest`) on connect, on every
 reconnect, and whenever the registry changes

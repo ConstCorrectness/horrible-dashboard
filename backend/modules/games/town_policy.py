@@ -213,6 +213,28 @@ class TownPolicy:
     # ---- agent mode -------------------------------------------------------------
 
     async def _agent(self, tick: dict[str, Any]) -> dict[str, Any] | None:
+        """One tick's decision, as one OTel trace — the board policy's
+        one-trace-per-move rule, so the tick's model call is not a stray root."""
+        import uuid
+
+        from backend.modules.otel import tracing as otel_tracing
+
+        you = tick.get("you") or {}
+        with otel_tracing.agent_span(
+            turn_id=f"game.town.{uuid.uuid4().hex[:8]}",
+            agent_id="games:town",
+            agent_name=str(you.get("name") or "town"),
+            model="",
+            provider="games",
+            source="games",
+        ) as span:
+            span.set("horrible.game", "town")
+            decision = await self._agent_tick(tick)
+            action = (decision or {}).get("action")
+            span.set("horrible.action", str(action) if action is not None else None)
+            return decision
+
+    async def _agent_tick(self, tick: dict[str, Any]) -> dict[str, Any] | None:
         from backend.modules.games.loadout import get_llm_harness
 
         persona = (get_llm_harness("town").context or "").strip()

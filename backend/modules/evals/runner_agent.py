@@ -229,31 +229,36 @@ async def run_case(
         observed.append(ToolCall(name=name, arguments=args))
         return conn.fixture_for(name)
 
+    from backend.modules.otel import tracing as otel_tracing
+
     started = time.monotonic()
     answer = ""
     error = ""
     try:
-        answer = await asyncio.wait_for(
-            run_agent_loop(
-                conn,
-                turn_id,
-                messages,
-                tools,
-                provider,
-                endpoint,
-                model,
-                emit,
-                temperature=temperature,
-                active_groups=active_groups,
-                spec=spec,
-                # Forced, not inherited: see the module docstring. A case must not
-                # score the permission rules of whoever happens to run it.
-                mode_override=Mode.AUTONOMOUS,
-                # Nothing acts — and not only on the leg a connection can see.
-                simulate=simulate,
-            ),
-            timeout=CASE_TIMEOUT_S,
-        )
+        # Entered before `wait_for`, which copies the context into the task it makes.
+        with otel_tracing.labels(eval_case=case.id):
+            answer = await asyncio.wait_for(
+                run_agent_loop(
+                    conn,
+                    turn_id,
+                    messages,
+                    tools,
+                    provider,
+                    endpoint,
+                    model,
+                    emit,
+                    temperature=temperature,
+                    active_groups=active_groups,
+                    spec=spec,
+                    # Forced, not inherited: see the module docstring. A case must not
+                    # score the permission rules of whoever happens to run it.
+                    mode_override=Mode.AUTONOMOUS,
+                    # Nothing acts — and not only on the leg a connection can see.
+                    simulate=simulate,
+                    trace_source="evals",
+                ),
+                timeout=CASE_TIMEOUT_S,
+            )
     except TimeoutError:
         error = f"case timed out after {CASE_TIMEOUT_S:.0f}s"
     except Exception as exc:  # provider errors, malformed responses, anything
@@ -311,12 +316,15 @@ async def run_case(
         from backend.modules.evals import judge as judge_grader
 
         try:
-            passed, detail, judge_model = await judge_grader.grade(
-                rubric=case.expect.rubric,
-                question=judge_grader.question_of(case),
-                answer=answer,
-                model=case.expect.judge_model,
-            )
+            # The judge's model call has no agent around it; the labels say what
+            # it was for, so it does not read as a stray LLM call in a trace UI.
+            with otel_tracing.labels(source="evals-judge", eval_case=case.id):
+                passed, detail, judge_model = await judge_grader.grade(
+                    rubric=case.expect.rubric,
+                    question=judge_grader.question_of(case),
+                    answer=answer,
+                    model=case.expect.judge_model,
+                )
             result.passed = passed
             result.detail = detail
         except judge_grader.JudgeError as exc:

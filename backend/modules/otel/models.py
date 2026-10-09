@@ -6,7 +6,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-SpanOrigin = Literal["received", "local"]
+#: Where a stored span came from: an OTLP sender (`received`), this node's own
+#: tracer (`local`), or a friend's node, returned with the answer to a request
+#: this node sent it (`peer`, see `peer_spans.py`).
+SpanOrigin = Literal["received", "local", "peer"]
 
 #: OTLP `Status.StatusCode`.
 STATUS_UNSET = 0
@@ -53,6 +56,24 @@ class TraceSummary(BaseModel):
     end_ns: int = 0
     errors: int = 0
     received_at: float = 0.0
+
+
+class ExportDestination(BaseModel):
+    """One place the node's spans are exported to, and how the last export went.
+    Never carries a credential — see `destinations.py`."""
+
+    name: str
+    label: str = ""
+    host: str = ""
+    include_content: bool = False
+    detail: dict[str, str] = {}
+    last_ok_at: float | None = None
+    last_error: str = ""
+    last_error_at: float | None = None
+    spans_ok: int = 0
+    spans_failed: int = 0
+    #: The most recent outcome was a failure.
+    failing: bool = False
 
 
 class IngestInfo(BaseModel):

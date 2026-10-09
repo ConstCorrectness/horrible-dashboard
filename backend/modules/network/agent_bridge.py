@@ -15,6 +15,7 @@ See docs/modules/agent-chat.mdx (agent-to-agent) and docs/architecture/distribut
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 import uuid
@@ -70,6 +71,31 @@ async def ask_peer(
     """Ask a peer's agent `prompt`; return `{answer}` or `{error}`. Used as the
     backend implementation of the `agent.ask_peer` tool. `hub` defaults to the
     process-global singleton (overridable in tests)."""
+    return await request_peer_agent(
+        peer_id,
+        prompt,
+        origin_chain=origin_chain,
+        hub=hub,
+        timeout=PEER_AGENT_TIMEOUT_S,
+    )
+
+
+async def request_peer_agent(
+    peer_id: str,
+    prompt: str,
+    *,
+    origin_chain: list[str] | None = None,
+    hub: PeerHub | None = None,
+    timeout: float = PEER_AGENT_TIMEOUT_S,
+) -> dict[str, Any]:
+    """Send one `agent_request` and wait for its `agent_result`.
+
+    The one place a request is built, so every caller — the chat's
+    `agent.ask_peer`, research's peer sub-agents — carries the same loop guard and
+    the same trace context, and gets the peer's spans back the same way.
+
+    Trace fields are optional on the wire both ways: an older peer ignores them
+    and answers without a `trace`, which simply means no remote half."""
     if hub is None:
         from backend.modules.network.hub import peer_hub as hub
 
@@ -84,27 +110,73 @@ async def ask_peer(
         "origin_chain": chain,
     }
     # W3C trace context, so the peer's turn is a child of this `execute_tool` span
-    # in the same trace. Optional on the wire: an older peer ignores it, and the
-    # spans stay on that node unless it exports them too.
-    from backend.modules.otel.tracing import current_traceparent
-
-    if traceparent := current_traceparent():
+    # in the same trace — and an ask for that turn's spans to come back with the
+    # answer, plus which trace sinks we export to, so a peer exporting to the same
+    # Opik project itself can say so and we skip sending its spans twice.
+    traceparent = otel_tracing.current_traceparent()
+    if traceparent:
         payload["traceparent"] = traceparent
+        payload["want_spans"] = True
+        sinks = _trace_sinks()
+        if sinks:
+            payload["trace_sinks"] = sinks
     try:
         reply = await hub.request(
             peer_id,
             protocol.AGENT_REQUEST,
             payload,
-            timeout=PEER_AGENT_TIMEOUT_S,
+            timeout=timeout,
         )
     except KeyError:
         return {"error": f"no connected peer {peer_id}"}
     except TimeoutError:
         return {"error": "peer agent timed out"}
-    data = reply.data
+    data = reply.data or {}
+    if traceparent and data.get("trace"):
+        from backend.modules.otel import peer_spans
+
+        try:
+            # Off the loop: sqlite and protobuf. The peer is named by the envelope
+            # the fabric authenticated, never by anything inside the payload.
+            await asyncio.to_thread(
+                peer_spans.ingest,
+                data["trace"],
+                sent_traceparent=traceparent,
+                peer=str(getattr(reply, "src", "") or peer_id),
+            )
+        except Exception:  # noqa: BLE001 — the answer matters more than its trace
+            logger.info("could not take in %s's spans", peer_id, exc_info=True)
     if data.get("ok"):
         return {"answer": data.get("text", "")}
     return {"error": data.get("error", "peer agent failed")}
+
+
+def _trace_sinks() -> list[str]:
+    """Fingerprints of this node's export destinations that have one (Opik)."""
+    from backend.modules.otel import destinations
+
+    return [
+        s["detail"]["fingerprint"]
+        for s in destinations.statuses()
+        if s.get("detail", {}).get("fingerprint")
+    ]
+
+
+_FINGERPRINT = re.compile(r"^[0-9a-f]{16}$")
+
+
+def _shared_sinks(data: dict[str, Any]) -> list[str]:
+    """The caller's trace sinks that are also ours: same Opik, same project. A
+    peer-supplied list, so only well-formed fingerprints, and only a few."""
+    theirs = data.get("trace_sinks")
+    if not isinstance(theirs, list):
+        return []
+    ours = set(_trace_sinks())
+    return [
+        fp
+        for fp in theirs[:4]
+        if isinstance(fp, str) and _FINGERPRINT.match(fp) and fp in ours
+    ]
 
 
 # ---- callee side ------------------------------------------------------------------
@@ -208,19 +280,55 @@ async def handle_remote_agent_request(
 
     rconn = RemoteAgentConn(hub, env.src, request_id, _remote_mode())
 
+    traceparent = _valid_traceparent(data)
+    shared = _shared_sinks(data)
+    # Send the caller this turn's spans only when both sides want it: the caller
+    # asked (and sent a trace to hang them on), and this node allows it.
+    from backend.modules.otel import peer_spans
+
+    return_spans = bool(
+        traceparent and data.get("want_spans") and peer_spans.returns_enabled()
+    )
+    bucket: otel_tracing.CaptureBucket | None = None
+
     async def _reply(ok: bool, text: str | None, error: str | None) -> None:
-        await hub.send_to(
-            env.src,
-            protocol.AGENT_RESULT,
-            {"request_id": request_id, "ok": ok, "text": text, "error": error},
-            re=env.msg_id,
-        )
+        result: dict[str, Any] = {
+            "request_id": request_id,
+            "ok": ok,
+            "text": text,
+            "error": error,
+        }
+        if bucket is not None and bucket.spans:
+            try:
+                trace = await asyncio.to_thread(
+                    peer_spans.collect, bucket, exported_to=shared
+                )
+            except Exception:  # noqa: BLE001 — never lose the answer over its trace
+                logger.info("could not encode spans for %s", env.src, exc_info=True)
+                trace = None
+            if trace:
+                result["trace"] = trace
+        await hub.send_to(env.src, protocol.AGENT_RESULT, result, re=env.msg_id)
 
     async def _run_and_reply() -> None:
+        nonlocal bucket
         try:
             try:
                 # remote=True restricts the turn to no actuating tools (no browser behind it).
-                with otel_tracing.remote_parent(_valid_traceparent(data)):
+                # The labels say who asked, and which of the caller's trace sinks
+                # are also ours (same Opik project) — the Opik shaping keeps such a
+                # turn nested in the caller's trace instead of re-rooting it.
+                with (
+                    otel_tracing.remote_parent(traceparent),
+                    otel_tracing.labels(
+                        peer_caller=env.src,
+                        peer_shared_sinks=",".join(shared) or None,
+                    ),
+                    otel_tracing.capture()
+                    if return_spans
+                    else contextlib.nullcontext() as captured,
+                ):
+                    bucket = captured
                     await run_agent_turn(rconn, request_id, prompt, remote=True)  # type: ignore[arg-type]
                 await rconn.wait_done(timeout=PEER_AGENT_TIMEOUT_S)
             except Exception as exc:  # never let a remote turn crash the session

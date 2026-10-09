@@ -658,6 +658,8 @@ harness drive, with the model calls nested inside it (`otel.enabled`, on by defa
 It shows up as a Trace view in Trajectories, and exports with everything else — see
 [OpenTelemetry](otel.mdx). A move is its own trace rather than a match being one,
 because the moves of a match are independent drives of the same harness.
+A bug-hunt session (`TaskAgent`) and an AgentTown tick are traced the same way, each
+as one trace with its model and tool calls inside, tagged `source:games`.
 
 ## Training — the no-stakes room
 

@@ -7,6 +7,8 @@ functions carry, so the chat span comes from the chokepoint, not the test.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from backend.modules.agent.providers import Usage
@@ -252,6 +254,148 @@ def test_traceparent_round_trips(spans):
     assert format(remote.parent.span_id, "016x") == span_hex
 
 
+# --- what a trace UI needs: I/O, threads, sources -------------------------------
+
+
+async def _loop(turn_id: str, **kwargs) -> None:
+    from backend.modules.agent import orchestrator
+    from backend.modules.agent.offline_conn import OfflineConnection
+
+    await orchestrator.run_agent_loop(
+        OfflineConnection([tool_decl("ui.noop")], {}),
+        turn_id,
+        [
+            {"role": "user", "content": "earlier question"},
+            {"role": "assistant", "content": "earlier answer"},
+            {"role": "user", "content": "what is two plus two"},
+        ],
+        [],
+        INFO,
+        "http://localhost:11434",
+        "test-model",
+        _noop_emit,
+        temperature=0.0,
+        **kwargs,
+    )
+
+
+@pytest.mark.anyio
+async def test_root_span_carries_prompt_and_answer_only_when_wanted(
+    scripted, spans, monkeypatch
+):
+    scripted(["four"])
+    await _loop("io-off")
+    (agent,) = _by_name(spans.get_finished_spans())["invoke_agent"]
+    assert "gen_ai.input.messages" not in agent.attributes
+    assert "gen_ai.output.messages" not in agent.attributes
+
+    spans.clear()
+    # Wanted by a destination (Opik's toggle), not by the global setting.
+    tracing.set_destination_content("opik", True)
+    try:
+        scripted(["four"])
+        await _loop("io-on")
+    finally:
+        tracing.set_destination_content("opik", False)
+    (agent,) = _by_name(spans.get_finished_spans())["invoke_agent"]
+    # The turn's own question — the newest user message, not the history.
+    assert json.loads(agent.attributes["gen_ai.input.messages"]) == [
+        {"role": "user", "content": "what is two plus two"}
+    ]
+    assert json.loads(agent.attributes["gen_ai.output.messages"]) == [
+        {"role": "assistant", "content": "four"}
+    ]
+
+
+@pytest.mark.anyio
+async def test_session_id_and_source_label_the_root(scripted, spans):
+    scripted(["ok"])
+    await _loop("sess", trace_source="chat", conversation_id="session-1")
+    (agent,) = _by_name(spans.get_finished_spans())["invoke_agent"]
+    assert agent.attributes["gen_ai.conversation.id"] == "session-1"
+    assert agent.attributes["horrible.source"] == "chat"
+
+
+@pytest.mark.anyio
+async def test_a_flow_node_is_traced_under_its_own_name(scripted, spans):
+    scripted(["ok"])
+    await _loop("flow-run", otel_agent=("flow:f1:n2", "Summarise"), trace_source="flow")
+    (agent,) = _by_name(spans.get_finished_spans())["invoke_agent"]
+    assert agent.attributes["gen_ai.agent.id"] == "flow:f1:n2"
+    assert agent.name == "invoke_agent Summarise"
+
+
+def test_labels_stamp_entry_spans_only(spans):
+    with tracing.labels(source="evals-judge", eval_case="c1"):
+        with tracing.agent_span(
+            turn_id="lbl", agent_id="main", agent_name="", model="m", provider="x"
+        ):
+            with tracing.chat_span(
+                provider_kind="x", model="m", endpoint="", messages=[], params={}
+            ):
+                pass
+        with tracing.chat_span(
+            provider_kind="x", model="m", endpoint="", messages=[], params={}
+        ):
+            pass
+    finished = spans.get_finished_spans()
+    agent = next(s for s in finished if s.name.startswith("invoke_agent"))
+    nested, bare = sorted(
+        (s for s in finished if s.name.startswith("chat")),
+        key=lambda s: s.parent is None,
+    )
+    assert agent.attributes["horrible.eval_case"] == "c1"
+    assert bare.attributes["horrible.source"] == "evals-judge"
+    # Nested under our own span: it inherits nothing.
+    assert "horrible.eval_case" not in nested.attributes
+    # And outside the block, nothing at all.
+    with tracing.chat_span(
+        provider_kind="x", model="m", endpoint="", messages=[], params={}
+    ):
+        pass
+    assert "horrible.source" not in spans.get_finished_spans()[-1].attributes
+
+
+def test_delegate_source_defaults_and_explicit_source_wins(spans):
+    with tracing.labels(source="ignored-under-explicit"):
+        with tracing.agent_span(
+            turn_id="src",
+            agent_id="main",
+            agent_name="",
+            model="m",
+            provider="x",
+            source="mobile",
+        ):
+            pass
+    (agent,) = spans.get_finished_spans()
+    assert agent.attributes["horrible.source"] == "mobile"
+
+
+def test_a_fork_is_its_own_trace_and_its_delegates_join_it() -> None:
+    original = ids.trace_id_for_turn("t1")
+    fork = ids.trace_id_for_turn("t1:fork:ab12cd34")
+    assert fork != original
+    assert ids.trace_id_for_turn("t1:fork:ab12cd34:coder:ef56") == fork
+    # Two forks of one turn are two traces.
+    assert ids.trace_id_for_turn("t1:fork:99999999") not in (original, fork)
+    # Ordinary delegates are untouched.
+    assert ids.trace_id_for_turn("t1:coder:ab12") == original
+
+
+def test_the_resource_names_this_node(spans):
+    from backend.modules.network.identity import load_identity
+
+    with tracing.agent_span(
+        turn_id="node", agent_id="main", agent_name="", model="m", provider="x"
+    ):
+        pass
+    (agent,) = spans.get_finished_spans()
+    # The provider is made once per process, so compare against the identity it
+    # captured rather than this test's (per-test data dir) one.
+    node = agent.resource.attributes.get("service.instance.id")
+    assert node and len(node) == len(load_identity().node_id)
+
+
 # --- outbound propagation ------------------------------------------------------
 
 
@@ -346,3 +490,43 @@ async def test_a_games_move_is_its_own_trace(spans) -> None:
     # using it would hand every move of the game the same derived trace.
     assert move.attributes["horrible.turn_id"].startswith("game.tictactoe.")
     assert move.parent is None
+
+
+@pytest.mark.anyio
+async def test_a_task_agent_session_is_one_trace(spans, monkeypatch) -> None:
+    """A bug-hunt session: its model calls and tool calls nest under one span."""
+    from backend.modules.agent.providers import ChatResult, ToolCall
+    from backend.modules.games import task_agent
+    from backend.modules.games.loadout import LlmHarness
+
+    monkeypatch.setattr(
+        task_agent, "get_llm_harness", lambda gid: LlmHarness(gid, context="", tools=[])
+    )
+    turns = [
+        [("task.readFile", {"path": "a.py"})],
+        [("task.submit", {})],
+    ]
+
+    async def chat(messages, tools):
+        calls = turns.pop(0)
+        return ChatResult(
+            assistant_message={"role": "assistant", "content": ""},
+            tool_calls=[
+                ToolCall(id=f"c{i}", name=n, arguments=a)
+                for i, (n, a) in enumerate(calls)
+            ],
+            content="",
+        )
+
+    agent = task_agent.TaskAgent(chat_fn=chat, game_id="bughunt")
+    out = await agent.run({"files": {"a.py": "x = 1"}, "description": "fix it"})
+    assert out == {"files": {"a.py": "x = 1"}}
+    groups = _by_name(spans.get_finished_spans())
+    (session,) = groups["invoke_agent"]
+    (tool,) = groups["execute_tool"]
+    assert session.parent is None
+    assert session.attributes["gen_ai.agent.id"] == "games:bughunt"
+    assert session.attributes["horrible.source"] == "games"
+    assert session.attributes["horrible.turn_id"].startswith("game.task.bughunt.")
+    assert tool.attributes["gen_ai.tool.name"] == "task.readFile"
+    assert tool.parent.span_id == session.context.span_id

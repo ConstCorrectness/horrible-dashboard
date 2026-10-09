@@ -126,6 +126,8 @@ ConnectorKind = Literal["oauth", "api-key", "custom"]
 #   {"step": "device",   "user_code": ..., "verification_uri": ..., "interval": 5}
 #   {"step": "redirect", "authorize_url": ...}
 #   {"step": "form",     "fields": [{"name": "api_key", "secret": True}]}
+#                        (a field may set "kind": "toggle" for a checkbox that
+#                        submits "true"/"false")
 #   {"connected": True,  "account": {...}}
 #   {"pending": True} | {"error": "..."}
 ConnectorStep = dict[str, Any]

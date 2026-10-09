@@ -169,6 +169,7 @@ class AgentPolicy:
             agent_name=str(getattr(loadout, "name", "") or key),
             model=str(getattr(loadout, "model", "") or ""),
             provider="games",
+            source="games",
         ) as move_span:
             move_span.set("horrible.game", key)
             move_span.set("horrible.legal_actions", len(ids))

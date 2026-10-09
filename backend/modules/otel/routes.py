@@ -17,13 +17,19 @@ from backend import server_port
 from backend.modules.otel import (
     auth,
     decode,
+    destinations,
     export,
     grpc_server,
     ids,
     materialize,
     store,
 )
-from backend.modules.otel.models import IngestInfo, Span, TraceSummary
+from backend.modules.otel.models import (
+    ExportDestination,
+    IngestInfo,
+    Span,
+    TraceSummary,
+)
 
 router = APIRouter(prefix="/otel", tags=["otel"])
 
@@ -108,6 +114,12 @@ def ingest_info(request: Request) -> IngestInfo:
     )
 
 
+@router.get("/export", response_model=list[ExportDestination])
+def export_status() -> list[ExportDestination]:
+    """Where the node's spans go, and whether the last export to each worked."""
+    return [ExportDestination(**d) for d in destinations.statuses()]
+
+
 @router.post(
     "/ingest/rotate",
     response_model=IngestInfo,
@@ -126,8 +138,10 @@ def rotate_ingest_token() -> IngestInfo:
 
 @router.get("/traces", response_model=list[TraceSummary])
 def list_traces(origin: str | None = None, limit: int = 50) -> list[TraceSummary]:
-    if origin not in (None, "received", "local"):
-        raise HTTPException(status_code=400, detail="origin must be received|local")
+    if origin not in (None, "received", "local", "peer"):
+        raise HTTPException(
+            status_code=400, detail="origin must be received|local|peer"
+        )
     return store.list_traces(origin=origin, limit=max(1, min(limit, 500)))  # type: ignore[arg-type]
 
 

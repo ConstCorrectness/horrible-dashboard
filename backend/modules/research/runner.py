@@ -111,8 +111,23 @@ class ResearchRunner:
             self._set_run(run_id, status="failed", error=str(exc))
             return
 
+        from backend.modules.otel import tracing as otel_tracing
+
         try:
-            await self._pipeline(run, lead, sub)
+            # One trace per run: every step's model calls nest under it rather than
+            # each being a stray single-span trace. A run resumed after a restart
+            # starts a second root under the same trace id (the id derives from the
+            # run), which a trace UI shows as the resumed half.
+            with otel_tracing.agent_span(
+                turn_id=f"research.{run_id}",
+                agent_id="research",
+                agent_name="Research",
+                model=str(getattr(lead, "model", "") or ""),
+                provider=str(getattr(getattr(lead, "info", None), "kind", "") or ""),
+                source="research",
+            ) as span:
+                span.io(prompt=run.get("query"))
+                await self._pipeline(run, lead, sub)
         except RunCancelled:
             self._set_run(run_id, status="cancelled")
             logger.info("research run %s: cancelled", run_id)
@@ -286,9 +301,7 @@ class ResearchRunner:
             if bool(get_value("research.distributeSubagents", False)):
                 peers = peer_subagent.eligible_peers()
                 if peers:
-                    picked = peer_subagent.assign(
-                        [s["input"] for s in wave], peers
-                    )
+                    picked = peer_subagent.assign([s["input"] for s in wave], peers)
                     remote_assignments = {
                         wave[i]["id"]: node for i, node in picked.items()
                     }
@@ -566,8 +579,20 @@ class ResearchRunner:
                 self._check_cancel(run_id)
             runstore.mark_step_running(step_id)
             self._publish_step(step_id)
+            from backend.modules.otel import tracing as otel_tracing
+
             try:
-                output, transcript, tokens = await factory()
+                # A child of the run's span: one attempt of one step, its model
+                # calls inside. Retries are siblings, which is how they read.
+                with otel_tracing.agent_span(
+                    turn_id=f"research.{run_id}",
+                    agent_id=f"research:{current['kind']}",
+                    agent_name=str(current.get("name") or current["kind"]),
+                    model="",
+                    provider="research",
+                ) as step_span:
+                    step_span.set("horrible.attempt", int(current["attempt"]) + 1)
+                    output, transcript, tokens = await factory()
             except RunCancelled:
                 runstore.finish_step(step_id, status="pending")
                 self._publish_step(step_id)

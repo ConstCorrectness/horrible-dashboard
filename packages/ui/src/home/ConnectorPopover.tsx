@@ -199,19 +199,37 @@ export function ConnectorPopover({
         </>
       ) : step?.step === 'form' ? (
         <form className="integration-form" onSubmit={(e) => void send(e)}>
-          {step.fields.map((f) => (
-            <label key={f.name}>
-              {f.label || f.name}
-              <input
-                type={f.secret ? 'password' : 'text'}
-                placeholder={f.placeholder}
-                value={values[f.name] ?? ''}
-                autoComplete="off"
-                onChange={(e) => setValues((v) => ({ ...v, [f.name]: e.target.value }))}
-              />
-              {f.help && <span className="integration-field-help">{f.help}</span>}
-            </label>
-          ))}
+          {step.fields.map((f) =>
+            f.kind === 'toggle' ? (
+              // A checkbox that still submits a string, so `submit` sees one shape:
+              // "true"/"false" rather than an absent key when unticked.
+              <label key={f.name} className="integration-toggle">
+                <span className="integration-toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={values[f.name] === 'true'}
+                    onChange={(e) =>
+                      setValues((v) => ({ ...v, [f.name]: e.target.checked ? 'true' : 'false' }))
+                    }
+                  />
+                  {f.label || f.name}
+                </span>
+                {f.help && <span className="integration-field-help">{f.help}</span>}
+              </label>
+            ) : (
+              <label key={f.name}>
+                {f.label || f.name}
+                <input
+                  type={f.secret ? 'password' : 'text'}
+                  placeholder={f.placeholder}
+                  value={values[f.name] ?? ''}
+                  autoComplete="off"
+                  onChange={(e) => setValues((v) => ({ ...v, [f.name]: e.target.value }))}
+                />
+                {f.help && <span className="integration-field-help">{f.help}</span>}
+              </label>
+            ),
+          )}
           <button className="primary" type="submit" disabled={busy}>
             {busy ? '…' : 'Continue'}
           </button>

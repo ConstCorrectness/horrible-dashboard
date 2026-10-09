@@ -35,17 +35,21 @@ class DecodeError(ValueError):
     """The body is not a trace export this endpoint understands (→ HTTP 400)."""
 
 
-def inflate(body: bytes, encoding: str | None) -> bytes:
+def inflate(
+    body: bytes, encoding: str | None, *, limit: int = MAX_INFLATED_BYTES
+) -> bytes:
+    """`body` decoded per `encoding`, refusing anything that inflates past
+    `limit` — a gzip bomb stops at the limit rather than at memory."""
     if not encoding or encoding.lower() in ("identity", ""):
         return body
     if encoding.lower() != "gzip":
         raise DecodeError(f"unsupported Content-Encoding: {encoding}")
     inflater = zlib.decompressobj(wbits=16 + zlib.MAX_WBITS)
     try:
-        out = inflater.decompress(body, MAX_INFLATED_BYTES + 1)
+        out = inflater.decompress(body, limit + 1)
     except zlib.error as exc:
         raise DecodeError(f"bad gzip body: {exc}") from exc
-    if len(out) > MAX_INFLATED_BYTES or inflater.unconsumed_tail:
+    if len(out) > limit or inflater.unconsumed_tail:
         raise DecodeError("inflated body exceeds the size limit")
     return out
 

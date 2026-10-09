@@ -699,7 +699,14 @@ export function ChatWidget() {
           onError: (msg) => patch((t) => ({ ...t, text: `⚠ ${msg}` })),
         },
         history,
-        { agentId: turnAgent, signal: abort.signal, turnId },
+        // `ensureSession` ran above, so the session exists: its id groups this
+        // chat's turns as one thread in a trace UI.
+        {
+          agentId: turnAgent,
+          signal: abort.signal,
+          turnId,
+          sessionId: liveActiveId() ?? undefined,
+        },
       );
       if (abort.signal.aborted) patch((t) => ({ ...t, text: t.text || '(stopped)' }));
     } finally {

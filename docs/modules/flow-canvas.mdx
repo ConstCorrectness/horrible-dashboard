@@ -151,6 +151,10 @@ flowchart LR
 Tool calls a node makes still ride the **`agent`** channel relay + gate; the `flow`
 channel is execution *telemetry* for the canvas.
 
+A run is one OTel trace: an `invoke_agent flow:<id>` span around the whole walk, with
+each Agent node's loop nested inside and traced as the node (`flow:node:<id>`), not as
+`main`. See [OpenTelemetry](otel.mdx#forks-are-their-own-trace).
+
 ## Frontend
 
 - **Library:** [`@xyflow/react`](https://reactflow.dev) (React Flow, MIT) — the

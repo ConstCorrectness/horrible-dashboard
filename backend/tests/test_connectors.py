@@ -326,6 +326,8 @@ def test_api_key_round_trip(client: TestClient, fake_connectors):
         "placeholder": "",
         "value": "",
         "help": "",
+        # A field that does not say otherwise is a text input.
+        "kind": "text",
     }
 
     res = client.post(

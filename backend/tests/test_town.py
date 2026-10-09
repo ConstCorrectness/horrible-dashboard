@@ -379,3 +379,22 @@ def test_agent_illegal_tool_args_fall_back() -> None:
             assert action["place"] in PLACES
 
     asyncio.run(go())
+
+
+def test_an_agent_tick_is_one_agent_span(monkeypatch) -> None:
+    from backend.tests.otel_helpers import captured_spans
+
+    async def chat(messages: list[dict[str, Any]], tools: list[dict[str, Any]]):
+        return _Result([_Call("town.act", {"action": "move", "place": "docks"})])
+
+    async def go() -> None:
+        policy = TownPolicy(chat_fn=chat, rng=random.Random(7))
+        await policy.decide(_tick_msg(), agent_mode=True)
+
+    with captured_spans(monkeypatch) as spans:
+        asyncio.run(go())
+        (tick,) = spans.get_finished_spans()
+    assert tick.attributes["gen_ai.agent.id"] == "games:town"
+    assert tick.attributes["horrible.source"] == "games"
+    assert tick.attributes["horrible.action"] == "move"
+    assert tick.parent is None

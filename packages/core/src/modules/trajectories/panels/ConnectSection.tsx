@@ -13,9 +13,16 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { Button, Chip, PaneHeader } from '../../../Primitives';
-import { getIngestInfo, rotateIngestToken, type IngestInfo } from '../otel-api';
+import {
+  getExportStatus,
+  getIngestInfo,
+  rotateIngestToken,
+  type ExportDestination,
+  type IngestInfo,
+} from '../otel-api';
 import { RefreshIcon } from '../icons';
 import { ago, bodyScroll, card, heading, mono, SectionShell } from './common';
+import { ExportCard } from './ExportCard';
 
 type Framework = 'pydantic' | 'langgraph' | 'openai' | 'adk' | 'otel';
 
@@ -138,10 +145,13 @@ export function ConnectSection() {
   const [error, setError] = useState('');
   const [framework, setFramework] = useState<Framework>('pydantic');
   const [reveal, setReveal] = useState(false);
+  const [destinations, setDestinations] = useState<ExportDestination[] | null>(null);
 
   const load = useCallback(async () => {
     try {
-      setInfo(await getIngestInfo());
+      const [ingest, exports] = await Promise.all([getIngestInfo(), getExportStatus()]);
+      setInfo(ingest);
+      setDestinations(exports);
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -251,6 +261,10 @@ export function ConnectSection() {
               <Snippet label="Remote exporter" text={envRemote} />
             </div>
           </div>
+        </div>
+
+        <div style={{ marginTop: 'var(--space-5)' }}>
+          <ExportCard destinations={destinations} />
         </div>
 
         <div style={{ ...card, marginTop: 'var(--space-5)' }}>

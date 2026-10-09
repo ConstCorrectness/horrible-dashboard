@@ -9,12 +9,15 @@ node/edge telemetry. See docs/modules/flow-canvas.md.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import uuid
 from collections import defaultdict
 from types import SimpleNamespace
 from typing import Any
+
+from backend.modules.otel import tracing as otel_tracing
 
 from backend.modules.agent.orchestrator import (
     _call_frontend_tool,
@@ -117,6 +120,21 @@ async def run_flow(
     outputs: dict[str, str] = {}
     config = _load_config()
 
+    # The whole run is one OTel trace, rooted here: each Agent node's loop nests
+    # under this span instead of being a root of its own — a second root in the
+    # same trace would replace the first in an agent-trace UI (Opik).
+    spans = contextlib.ExitStack()
+    flow_span = spans.enter_context(
+        otel_tracing.agent_span(
+            turn_id=run_id,
+            agent_id=f"flow:{flow.id}",
+            agent_name=flow.name or flow.id,
+            model="",
+            provider="flow",
+            source="flow",
+        )
+    )
+    flow_span.io(prompt=run_input)
     try:
         for node_id in order:
             node = nodes_by_id[node_id]
@@ -145,6 +163,7 @@ async def run_flow(
                         conn, run_id, node, payload, run_input, config
                     )
             except Exception as exc:  # noqa: BLE001 — report any node failure to the UI
+                flow_span.fail(exc)
                 await conn.send_json(
                     _evt(
                         "node_finished",
@@ -188,11 +207,14 @@ async def run_flow(
                         )
                     )
         await conn.send_json(_evt("run_finished", {"runId": run_id}))
-    except asyncio.CancelledError:
+        flow_span.ok()
+    except asyncio.CancelledError as exc:
+        flow_span.fail(exc)
         await conn.send_json(_evt("error", {"runId": run_id, "message": "stopped"}))
         raise
     finally:
         _runs.pop(run_id, None)
+        spans.close()
 
 
 def _eval_condition(node: FlowNode, payload: str) -> bool:
@@ -319,4 +341,14 @@ async def _run_agent_node(
         context_size=_tool_context_size(),
         max_tokens=_tool_max_tokens(),
         top_p=_tool_top_p(),
+        # Runs as `main`, traced as the node it is.
+        trace_source="flow",
+        otel_agent=(
+            f"flow:node:{node.id}",
+            str(
+                node.config.get("label")
+                or node.config.get("name")
+                or f"agent {node.id}"
+            ),
+        ),
     )

@@ -348,3 +348,29 @@ def test_transcripts_persist_and_serve(fake_pipeline) -> None:
     # Without the flag transcripts stay out of the payload.
     res = client.get(f"/api/research/runs/{run['id']}/steps")
     assert all(s.get("transcript") is None for s in res.json()["steps"])
+
+
+def test_a_run_is_one_trace_with_a_span_per_step(fake_pipeline, monkeypatch) -> None:
+    """Every step nests under the run, instead of each model call being a stray
+    single-span trace."""
+    from backend.modules.otel import ids
+    from backend.tests.otel_helpers import captured_spans
+
+    with captured_spans(monkeypatch) as spans:
+        run = runstore.create_run(query="what is up", effort="quick")
+        final = asyncio.run(_drive(run["id"]))
+        assert final["status"] == "done"
+        finished = spans.get_finished_spans()
+
+    roots = [s for s in finished if s.parent is None]
+    assert [s.attributes["gen_ai.agent.id"] for s in roots] == ["research"]
+    (root,) = roots
+    assert root.attributes["horrible.source"] == "research"
+    assert format(root.context.trace_id, "032x") == ids.trace_id_for_turn(
+        f"research.{run['id']}"
+    )
+    steps = [s for s in finished if s.parent is not None]
+    kinds = {s.attributes["gen_ai.agent.id"] for s in steps}
+    assert {"research:plan", "research:subagent", "research:synthesis"} <= kinds
+    assert all(s.context.trace_id == root.context.trace_id for s in steps)
+    assert all(s.parent.span_id == root.context.span_id for s in steps)

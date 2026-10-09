@@ -3515,6 +3515,15 @@ body {
   font-size: 0.8rem;
 }
 
+/* A `kind: "toggle"` field: the checkbox sits on the label's line, the help below. */
+.integration-toggle-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
 /* Guidance under a credential input — where to get the value, or that an env var
    has pinned it and editing here would do nothing. */
 .integration-field-help {

@@ -104,6 +104,8 @@ from backend.modules.otel import materialize as otel_materialize
 from backend.modules.otel import tracing as otel_tracing
 from backend.modules.otel.export import configure as configure_otel_export
 from backend.modules.otel.export import register as register_otel_connector
+from backend.modules.otel.opik import configure as configure_opik_export
+from backend.modules.otel.opik import register as register_opik_connector
 from backend.modules.otel.routes import router as otel_router
 from backend.modules.otel.store import init_otel_db
 from backend.modules.trajectories import init_trajectories_db
@@ -266,6 +268,8 @@ async def lifespan(app: FastAPI):
     otel_materialize.start()
     # Attach the external exporter if one is configured (connector or OTEL_* env).
     await asyncio.to_thread(configure_otel_export)
+    # And Opik, a second destination with its own span shaping (otel/opik.py).
+    await asyncio.to_thread(configure_opik_export)
     # The OTLP/gRPC receiver, only when `otel.grpcPort` asks for one: it binds a
     # second listening port, so it is opt-in rather than discovered in netstat.
     await otel_grpc.start()
@@ -561,6 +565,9 @@ register_trajectories_tools()
 # The `otel` connector (external trace export). Contributes no agent tools — where
 # the node's traces go is not something the agent should change (otel/export.py).
 register_otel_connector()
+# The `opik` connector: the same spans, shaped for Opik's attribute mapping, with
+# their own content toggle. No agent tools either.
+register_opik_connector()
 # Agentpedia's own tools (grouped under `agentpedia`): the agent stepping through
 # the turn it just took, and forking it to ask what it would have done without a
 # tool. `fork` is gated — a simulated fork cannot act, but it spends a real model

@@ -101,35 +101,29 @@ def _is_self(url: str) -> bool:
 
 def configure() -> bool:
     """(Re)attach the exporter for the node's own spans. Returns whether one is
-    attached. Safe to call repeatedly — the old processor is flushed and shut
-    down on a thread so a slow collector cannot stall the caller."""
-    from backend.modules.otel import tracing
+    attached. Safe to call repeatedly — see `destinations.attach`.
 
-    slot = tracing.export_slot()
-    old = slot.inner
-    slot.inner = None
-    if old is not None:
-        import threading
+    Content follows the global `otel.captureContent`, read at export time: another
+    destination asking for content (Opik's toggle) records it, and this one then
+    strips it rather than shipping what nobody asked to send here."""
+    from backend.modules.otel import destinations, tracing
 
-        threading.Thread(target=old.shutdown, daemon=True).start()
     cfg = config()
     if cfg is None:
+        destinations.detach(CONNECTOR_ID)
         return False
     url, headers = cfg
     if _is_self(url):
         logger.warning("otel: refusing to export to this node's own receiver (%s)", url)
+        destinations.detach(CONNECTOR_ID)
         return False
-    try:
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
-            OTLPSpanExporter,
-        )
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
-
-        slot.inner = BatchSpanProcessor(OTLPSpanExporter(endpoint=url, headers=headers))
-    except Exception:  # noqa: BLE001
-        logger.warning("otel: could not attach exporter for %s", url, exc_info=True)
-        return False
-    return True
+    return destinations.attach(
+        CONNECTOR_ID,
+        url=url,
+        headers=headers,
+        include_content=tracing.capture_content,
+        label="OTLP",
+    )
 
 
 def _forward_enabled() -> bool:
@@ -229,6 +223,13 @@ async def _submit(values: dict[str, str]) -> dict[str, Any]:
                 "error": "That is this node's own receiver — exporting there would "
                 "loop every span back in."
             }
+        if "/private/otel" in parsed.path:
+            # It would work, but every span would arrive unshaped: Opik files
+            # unmapped attributes under the span's input. See otel/opik.py.
+            return {
+                "error": "That is an Opik endpoint. Use the Opik connector instead — "
+                "it shapes spans the way Opik reads them."
+            }
         _put(_ENDPOINT, endpoint)
     if headers:
         _put(_HEADERS, headers)
@@ -247,10 +248,17 @@ def _label() -> str:
 
 
 def _status() -> ConnectorStatus:
+    from backend.modules.otel import destinations
+
     if config() is None:
         return ConnectorStatus(connected=False)
+    # Connected-but-failing is its own state: a rejected key must not read as a
+    # quiet collector.
+    st = destinations.status(CONNECTOR_ID)
     return ConnectorStatus(
-        connected=True, account=ConnectorAccount(id=CONNECTOR_ID, label=_label())
+        connected=True,
+        account=ConnectorAccount(id=CONNECTOR_ID, label=_label()),
+        error=f"Last export failed: {st.last_error}" if st and st.failing else None,
     )
 
 

@@ -158,32 +158,11 @@ async def _ask(node_id: str, prompt: str) -> dict[str, Any]:
     rather than by raising that module's constant — a chat user waiting on "ask
     Rob's agent" should not inherit a ten-minute ceiling because research needed
     one.
+
+    The request itself is `agent_bridge.request_peer_agent`'s, so it carries the
+    same loop guard and the same trace context: the peer's half of the step lands
+    in the research run's trace.
     """
-    import uuid
+    from backend.modules.network.agent_bridge import request_peer_agent
 
-    from backend.modules.network import protocol
-    from backend.modules.network.hub import peer_hub
-
-    me = peer_hub.signer.node_id
-    try:
-        reply = await peer_hub.request(
-            node_id,
-            protocol.AGENT_REQUEST,
-            {
-                "request_id": uuid.uuid4().hex,
-                "prompt": prompt,
-                # The same loop guard `ask_peer` builds: a peer that would have to
-                # come back to us to answer must not.
-                "origin_chain": [me],
-            },
-            timeout=PEER_SUBAGENT_TIMEOUT_S,
-        )
-    except KeyError:
-        return {"error": f"no connected peer {node_id}"}
-    except TimeoutError:
-        return {"error": "peer agent timed out"}
-
-    data = reply.data or {}
-    if data.get("ok"):
-        return {"answer": data.get("text", "")}
-    return {"error": data.get("error", "peer agent failed")}
+    return await request_peer_agent(node_id, prompt, timeout=PEER_SUBAGENT_TIMEOUT_S)

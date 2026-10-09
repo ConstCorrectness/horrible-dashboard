@@ -85,6 +85,14 @@ export const networkModule: ModuleManifest = {
       type: 'boolean',
       default: false,
     },
+    {
+      key: 'network.returnTraces',
+      title: 'Return traces to the asking agent',
+      description:
+        "When a peer's agent asks yours something, send back the trace of that answer — its shape, timings, models and tool names, never prompts or tool data. The peer may store it and export it to its own trace tools (Opik, an OTLP collector).",
+      type: 'boolean',
+      default: false,
+    },
     // Compute lending. Basic rather than advanced: these are "who may use my
     // machine", the same class of question as allowRemoteAgent above — not
     // NAT-traversal plumbing copied from whoever runs your infrastructure.

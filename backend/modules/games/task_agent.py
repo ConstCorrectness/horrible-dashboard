@@ -109,12 +109,35 @@ class TaskAgent:
         )
 
     async def run(self, observation: dict[str, Any]) -> dict[str, Any]:
-        """Drive the session and return the `{files}` payload to submit."""
+        """Drive the session and return the `{files}` payload to submit.
+
+        One OTel trace per session, like a board move's: its model calls and tool
+        calls nest under it instead of each model call being a stray root trace."""
+        import uuid
+
+        from backend.modules.otel import tracing as otel_tracing
+
+        harness = get_llm_harness(self._game_id)
+        with otel_tracing.agent_span(
+            turn_id=f"game.task.{self._game_id}.{uuid.uuid4().hex[:8]}",
+            agent_id=f"games:{self._game_id}",
+            agent_name=str(getattr(harness, "name", "") or self._game_id),
+            model=str(getattr(harness, "model", "") or ""),
+            provider="games",
+            source="games",
+        ) as session:
+            session.set("horrible.game", self._game_id)
+            session.io(prompt=observation.get("description") or None)
+            out = await self._run(observation, harness)
+            session.set("horrible.files", len(out.get("files") or {}))
+            return out
+
+    async def _run(self, observation: dict[str, Any], harness: Any) -> dict[str, Any]:
         self._files = dict(observation.get("files") or {})
         self._visible_tests = {
             str(k): str(v) for k, v in (observation.get("visible_tests") or {}).items()
         }
-        runtime = HarnessRuntime(get_llm_harness(self._game_id))
+        runtime = HarnessRuntime(harness)
         tools = _builtin_tools() + runtime.provider_tools()
 
         prior = observation.get("attempts") or []
@@ -146,7 +169,7 @@ class TaskAgent:
             },
         ]
 
-        for _ in range(MAX_TASK_ROUNDS):
+        for round_no in range(MAX_TASK_ROUNDS):
             result = await self._chat(messages, tools)
             messages.append(
                 getattr(result, "assistant_message", None)
@@ -166,7 +189,16 @@ class TaskAgent:
                 if call.name == SUBMIT_TOOL:
                     self._emit("chose", action_id="submit")
                     return {"files": self._files}
-                out = await self._dispatch(call, runtime)
+                from backend.modules.otel import tracing as otel_tracing
+
+                with otel_tracing.tool_span(
+                    call.name,
+                    call_id=getattr(call, "id", None),
+                    round_no=round_no,
+                    args=call.arguments,
+                ) as tool:
+                    out = await self._dispatch(call, runtime)
+                    tool.finish(out)
                 messages.append(
                     {
                         "role": "tool",

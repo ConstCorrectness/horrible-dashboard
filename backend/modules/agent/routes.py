@@ -307,11 +307,23 @@ async def chat(req: ChatRequest) -> StreamingResponse:
     endpoint = config.endpoint or info.default_endpoint
 
     async def gen() -> AsyncIterator[str]:
-        async with instrumented_client(timeout=None) as client:
-            async for line in P.generate_stream(
-                client, info, endpoint, config.model, req.prompt
-            ):
-                yield line
+        from backend.modules.otel import tracing as otel_tracing
+
+        # `generate_stream` is the one provider call outside the `traced_chat`
+        # chokepoint (it is not a chat call), so it gets its span here.
+        with otel_tracing.chat_span(
+            provider_kind=str(getattr(info, "kind", "")),
+            model=config.model,
+            endpoint=endpoint,
+            messages=[{"role": "user", "content": req.prompt}],
+            params={},
+        ) as span:
+            async with instrumented_client(timeout=None) as client:
+                async for line in P.generate_stream(
+                    client, info, endpoint, config.model, req.prompt
+                ):
+                    yield line
+            span.ok()
 
     return StreamingResponse(gen(), media_type="application/x-ndjson")
 
