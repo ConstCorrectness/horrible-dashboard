@@ -27,6 +27,7 @@ import {
   fillTarget,
   layoutStore,
   setDesktopMeasurer,
+  setPaneExitAnimator,
   snapZoneAt,
   type SnapZone,
   type WindowState,
@@ -34,6 +35,7 @@ import {
 
 import { DesktopWindow } from './Window';
 import { SnapOverlay } from './SnapOverlay';
+import { animateWindowOut, noteViewportChange, syncMotionAttribute } from './window-motion';
 
 export interface DragState {
   windowId: string;
@@ -64,6 +66,7 @@ export function WindowLayer() {
     if (!el) return;
     const rect = el.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
+    noteViewportChange();
     layoutStore.dispatch({
       type: 'SET_WINDOW_VIEWPORT',
       viewport: { w: Math.round(rect.width), h: Math.round(rect.height) },
@@ -111,6 +114,38 @@ export function WindowLayer() {
   const frameRef = useRef(frame);
   frameRef.current = frame;
   const windows = useCallback(() => frameRef.current.windows, []);
+
+  useEffect(syncMotionAttribute, []);
+
+  // Closing a window's last pane closes the window: let it leave rather than
+  // vanish. Registered with core because every close — the ✕, a keybinding, the
+  // taskbar, an agent tool — goes through `closePaneGuarded`, which waits for this
+  // (briefly) once the pane's close guard has agreed.
+  useEffect(
+    () =>
+      setPaneExitAnimator((instanceId) => {
+        const win = frameRef.current.windows.find(
+          (w) => w.area.tabs.length === 1 && w.area.tabs[0].instanceId === instanceId,
+        );
+        if (!win || win.mode === 'minimized') return;
+        const el = ref.current?.querySelector<HTMLElement>(
+          `.os-window[data-window-id="${CSS.escape(win.id)}"]`,
+        );
+        return el ? animateWindowOut(el) : undefined;
+      }),
+    [],
+  );
+
+  // Which windows count as *opened* rather than restored. The windows a desktop
+  // arrives with (startup, switching workspace) appear at once; only those that
+  // appear after it play an entrance. Recorded in render so the windows' own
+  // layout effects, which run before this component's, can already read it.
+  const arrival = useRef<{ key: string; ids: Set<string> } | null>(null);
+  const arrivalKey = `${workspaceId ?? ''}|${hydrated}`;
+  if (arrival.current?.key !== arrivalKey) {
+    arrival.current = { key: arrivalKey, ids: new Set(frame.windows.map((w) => w.id)) };
+  }
+  const arrivedWith = arrival.current.ids;
 
   /**
    * Live drag feedback: which zone would apply, and which titlebar is under us.
@@ -181,6 +216,7 @@ export function WindowLayer() {
           presented={presentedWindowId === win.id}
           focused={frame.focusedWindowId === win.id}
           mergeTarget={drag?.mergeTargetId === win.id}
+          animateEntry={!arrivedWith.has(win.id)}
           bounds={bounds}
           onDragMove={onDragMove}
           onDragEnd={onDragEnd}

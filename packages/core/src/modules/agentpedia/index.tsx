@@ -45,6 +45,7 @@ export const agentpediaModule: ModuleManifest = {
         { id: 'runs', label: 'Runs', icon: '▤', key: 'r', default: true },
         { id: 'harness', label: 'Harness', icon: '⚖', key: 'h' },
         { id: 'forks', label: 'Forks', icon: '⑂', key: 'f' },
+        { id: 'duels', label: 'Duels', icon: '⚔', key: 'd' },
       ],
     },
   ],

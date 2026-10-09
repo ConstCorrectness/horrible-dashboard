@@ -19,13 +19,18 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Query
 
-from backend.modules.agentpedia import fork, join, store
+from backend.modules.agentpedia import duel, fork, join, store
 from backend.modules.agentpedia.models import (
+    Duel,
+    DuelListResponse,
+    DuelRequest,
+    DuelVoteRequest,
     ForkDiff,
     ForkListResponse,
     ForkPreview,
     ForkRecord,
     ForkRequest,
+    Leaderboard,
     TurnIndexResponse,
     TurnView,
 )
@@ -148,3 +153,54 @@ def delete_fork(fork_turn_id: str) -> dict[str, bool]:
     """Forget the counterfactual link. The fork's own turn stays in `agent_turns`,
     where it is an ordinary turn and the stepper can still open it."""
     return {"deleted": store.delete_fork(fork_turn_id)}
+
+
+# ── Duels ────────────────────────────────────────────────────────────────────
+#
+# Two forks of one round, judged blind. `POST /duels` costs two model turns, run
+# at once with tools simulated; everything else reads or records a verdict.
+
+
+@router.post("/duels", response_model=Duel)
+async def create_duel(req: DuelRequest) -> Duel:
+    """Run two contestants on the same round. Which one is shown as A is random,
+    so the pane can present them unlabelled until the vote."""
+    try:
+        return await duel.run(req)
+    except duel.DuelError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/duels", response_model=DuelListResponse)
+def list_duels(limit: int = Query(100, ge=1, le=1000)) -> DuelListResponse:
+    return DuelListResponse(duels=store.list_duels(limit))
+
+
+@router.get("/duels/{duel_id}", response_model=Duel)
+def get_duel(duel_id: str) -> Duel:
+    found = store.get_duel(duel_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail=f"No duel {duel_id!r}")
+    return found
+
+
+@router.post("/duels/{duel_id}/vote", response_model=Duel)
+def vote_duel(duel_id: str, req: DuelVoteRequest) -> Duel:
+    """Record the verdict. Voting again replaces it; the leaderboard is replayed
+    from the votes on every read, so nothing goes stale."""
+    try:
+        return duel.vote(duel_id, req.vote)
+    except duel.DuelError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.delete("/duels/{duel_id}")
+def delete_duel(duel_id: str) -> dict[str, bool]:
+    """Forget the pairing and its vote; both forks stay, as forks."""
+    return {"deleted": store.delete_duel(duel_id)}
+
+
+@router.get("/leaderboard", response_model=Leaderboard)
+def leaderboard() -> Leaderboard:
+    """Elo over every voted duel, replayed from a fresh start in vote order."""
+    return duel.leaderboard(store.voted_duels())

@@ -1,0 +1,214 @@
+/* Duels. Tokens only — no literal colours. The moment the section exists for is
+   the reveal: the contestants' names flip in, and the leaderboard rows that moved
+   pulse once. */
+
+.duel-board {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
+
+.duel-board-row {
+  display: grid;
+  grid-template-columns: 1.6em minmax(0, 1fr) 3.2em 64px 4.2em;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  font-size: 12px;
+}
+
+.duel-board-row.is-moved {
+  animation: duel-moved 900ms var(--ease-out, ease-out);
+}
+
+.duel-rank {
+  font: 700 12px var(--font-mono);
+  color: var(--text-secondary);
+}
+
+.duel-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.duel-rating {
+  font: 600 12px var(--font-mono);
+  text-align: right;
+}
+
+.duel-bar {
+  height: 4px;
+  background: color-mix(in srgb, var(--text-secondary) 20%, transparent);
+}
+.duel-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width var(--dur-move, 220ms) var(--ease-out, ease-out);
+}
+
+.duel-record {
+  font: 11px var(--font-mono);
+  color: var(--text-secondary);
+  text-align: right;
+}
+
+.duel-sides {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.duel-side,
+.duel-contestant {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  animation: agentpedia-rise 180ms ease-out both;
+}
+
+.duel-side.is-won {
+  border-top-color: var(--accent);
+}
+.duel-side.is-lost {
+  opacity: 0.75;
+}
+.duel-side.is-bad {
+  border-top-color: var(--error);
+}
+
+.duel-side-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+
+.duel-side-name {
+  font: 700 15px var(--font-mono);
+}
+
+.duel-who {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+.duel-who.is-revealed {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--text-primary);
+  animation: duel-flip 420ms var(--ease-out, ease-out) both;
+}
+
+.duel-verdict {
+  margin-left: auto;
+  font: 700 10px var(--font-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.duel-side.is-lost .duel-verdict,
+.duel-side.is-bad .duel-verdict {
+  color: var(--text-secondary);
+}
+
+.duel-delta {
+  margin-left: 6px;
+  display: inline-block;
+  animation: duel-flip 420ms var(--ease-out, ease-out) both;
+}
+
+.duel-moves {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+
+.duel-answer {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.55;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.duel-vote {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.duel-field {
+  display: grid;
+  gap: 4px;
+}
+
+/* Two bars racing while both contestants answer. */
+.duel-racing {
+  display: inline-grid;
+  gap: 3px;
+  width: 120px;
+}
+.duel-racing > span {
+  height: 3px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  background-size: 200% 100%;
+  animation: duel-race 1.1s linear infinite;
+}
+.duel-racing > span + span {
+  animation-duration: 1.4s;
+}
+
+@keyframes duel-flip {
+  from {
+    opacity: 0;
+    transform: rotateX(90deg);
+  }
+}
+
+@keyframes duel-moved {
+  30% {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 18%, var(--bg-secondary));
+  }
+}
+
+@keyframes duel-race {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+:root[data-motion='off'] .duel-board-row,
+:root[data-motion='off'] .duel-who,
+:root[data-motion='off'] .duel-side,
+:root[data-motion='off'] .duel-contestant,
+:root[data-motion='off'] .duel-racing > span {
+  animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .duel-board-row,
+  .duel-who,
+  .duel-side,
+  .duel-contestant,
+  .duel-racing > span {
+    animation: none;
+  }
+}

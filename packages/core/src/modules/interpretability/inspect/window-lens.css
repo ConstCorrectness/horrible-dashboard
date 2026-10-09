@@ -94,3 +94,17 @@
 .wl-layer:focus-visible {
   color: var(--accent);
 }
+
+.wl-open {
+  margin-left: auto;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.wl-open:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}

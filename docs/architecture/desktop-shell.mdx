@@ -893,6 +893,48 @@ drag never reaches the handler.
   and it is persisted, so the round trip survives a reload.
 - **Close** runs the existing `closePaneGuarded`, so a dirty pane still prompts.
 
+### Motion
+
+Windows move the way a native window manager's do: short, decisive, decelerating
+(`desktop/window-motion.ts`, timings mirrored by `--dur-enter`, `--dur-exit`,
+`--dur-move`, `--ease-out` and `--ease-in` in `themes.css`).
+
+| Change | What plays |
+| --- | --- |
+| A window opens | Fades in from 97% scale and 8px low, 180ms, expo-out |
+| A window closes | Fades to 96%, 130ms, accelerating; then it is removed |
+| Minimize / restore | Shrinks into its taskbar button (`data-taskbar-instance`) and grows back out; straight down when the taskbar is hidden |
+| Maximize, restore-down, a snap, a tiled neighbour | Slides from the old box to the new one, 220ms |
+| A tab is picked, a dock tool comes up, a pane opens | The pane's content fades in, 180ms (`.frame-pane-host`) |
+
+- **All of it is the Web Animations API on the window's own element**, so there is
+  no animation state in React and nothing to clean up. `DesktopWindow` measures its
+  layout box after every render and animates any difference it did not cause
+  itself. A drag needs no special case: its last frame and its committed rect are
+  the same box.
+- **Geometry slides by transform (FLIP), never by left/top/width/height.** A window
+  can hold a canvas, a terminal or a browser engine, and resizing those every frame
+  costs far more than one composited transform. The content is briefly scaled
+  during the slide, as on macOS.
+- **Closing waits for the exit** through `setPaneExitAnimator`
+  (`core/layout/pane-exit.ts`). `closePaneGuarded` is every close's path, so the ✕,
+  keybindings, the taskbar and agent tools all get it. It plays only after the close
+  guard has agreed, and a close never waits more than `PANE_EXIT_MAX_MS` (200ms).
+  Only a window whose last pane is closing animates; closing one tab of several does
+  not.
+- **Restored windows do not animate in.** The windows a desktop arrives with, at
+  startup or on a workspace switch, appear at once. Only windows opened after that
+  play an entrance.
+- **Resizing the app does not animate.** The layer rescales every window's rect on
+  every frame of a resize, so geometry changes within 300ms of one are applied as
+  they come.
+- **The pane fade is opacity only.** A transform on `.frame-pane-host`, even
+  mid-animation, would make it the containing block of every `position: fixed` menu
+  inside the pane.
+- **Off** with the `desktop.animations` setting (mirrored onto
+  `<html data-motion>` for the stylesheet) and whenever the system asks for reduced
+  motion. Every change is then instant, closes included.
+
 ### Presenting a pane
 
 Maximize fills the window layer, which is inset below the workspace strip and above

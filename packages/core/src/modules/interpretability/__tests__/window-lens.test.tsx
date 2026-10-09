@@ -39,7 +39,7 @@ describe('WindowLens', () => {
       <WindowLens blocks={28} selectedLayer={1} onPickLayer={() => {}} />,
     );
     expect(html).toContain('has 2 layers and the one above has 28 blocks');
-    expect(html).not.toContain('<button');
+    expect(html).not.toContain('class="wl-layer"');
     expect(html).not.toContain('is-selected');
   });
 });

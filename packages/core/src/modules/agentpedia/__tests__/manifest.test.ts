@@ -12,13 +12,13 @@ import { agentpediaModule } from '../index';
 import { bindStepper, stepperAction } from '../actions';
 
 describe('agentpedia manifest', () => {
-  it('declares one singleton document pane with three sections', () => {
+  it('declares one singleton document pane with four sections', () => {
     expect(agentpediaModule.panels).toHaveLength(1);
     const [pane] = agentpediaModule.panels ?? [];
     expect(pane.id).toBe('agentpedia.hub');
     expect(pane.role).toBe('document');
     expect(pane.singleton).toBe(true);
-    expect(pane.sections?.map((s) => s.id)).toEqual(['runs', 'harness', 'forks']);
+    expect(pane.sections?.map((s) => s.id)).toEqual(['runs', 'harness', 'forks', 'duels']);
     // Exactly one default, or the pane opens on whichever the host picks first.
     expect(pane.sections?.filter((s) => s.default)).toHaveLength(1);
   });

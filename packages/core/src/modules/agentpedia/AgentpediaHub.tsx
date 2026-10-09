@@ -28,6 +28,9 @@ import { IconAlert, IconCheck, IconChevron, IconClock, IconRetry } from '../../g
 import { usePaneSection } from '../../layout/use-sections';
 import { usePaneParams } from '../../panes';
 import { bindStepper } from './actions';
+import { ReplayBar, useReplay } from './ReplayBar';
+import { locate, revealed } from './replay';
+import { DuelsSection } from './DuelsSection';
 import { ForksSection, type ForkTarget } from './ForksSection';
 import {
   getTurn,
@@ -268,10 +271,13 @@ function WireColumn({ round, status }: { round: RoundView; status: TurnView['wir
   );
 }
 
-function DidRow({ step }: { step: DidStep }) {
+function DidRow({ step, arriving }: { step: DidStep; arriving?: boolean }) {
   const tone = step.gated ? 'warn' : step.ok === false ? 'bad' : 'ok';
   return (
-    <div style={{ ...S.card(false), cursor: 'default', marginBottom: 6 }}>
+    <div
+      className={arriving ? 'replay-arrive' : undefined}
+      style={{ ...S.card(false), cursor: 'default', marginBottom: 6 }}
+    >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={S.statusPill(tone)}>{step.gated ? 'gated' : step.kind}</span>
         <span style={{ ...S.mono, color: 'var(--text-primary)' }}>{step.name ?? step.kind}</span>
@@ -286,12 +292,25 @@ function DidRow({ step }: { step: DidStep }) {
   );
 }
 
-function DidColumn({ round, captureOn }: { round: RoundView; captureOn: boolean }) {
+function DidColumn({
+  round,
+  captureOn,
+  reveal,
+}: {
+  round: RoundView;
+  captureOn: boolean;
+  /** While replaying: how many of the round's steps have happened so far. */
+  reveal?: number;
+}) {
+  const shown = reveal === undefined ? round.did : round.did.slice(0, reveal);
   return (
     <div style={S.column}>
       <div style={S.columnHead}>
         <span>Did</span>
-        <span style={S.mono}>{round.did.length} steps</span>
+        <span style={S.mono}>
+          {reveal === undefined ? '' : `${shown.length} of `}
+          {round.did.length} steps
+        </span>
       </div>
       <div style={{ padding: 10 }}>
         {round.did.length === 0 ? (
@@ -301,7 +320,7 @@ function DidColumn({ round, captureOn }: { round: RoundView; captureOn: boolean 
               : 'Trajectory capture is off, so what the agent did was never recorded. Turn it on for a dataset in the Trajectories pane.'}
           </div>
         ) : (
-          round.did.map((step) => <DidRow key={step.seq} step={step} />)
+          shown.map((step) => <DidRow key={step.seq} step={step} arriving={reveal !== undefined} />)
         )}
       </div>
     </div>
@@ -365,25 +384,47 @@ function Stepper({
   captureOn,
   onBack,
   onFork,
+  onDuel,
 }: {
   turn: TurnView;
   captureOn: boolean;
   onBack: () => void;
   onFork: (round: number) => void;
+  onDuel: (round: number) => void;
 }) {
   const [index, setIndex] = useState(0);
   const round = turn.rounds[Math.min(index, turn.rounds.length - 1)];
+  // The replay moves `index` as it plays; stepping by hand parks it there.
+  const replay = useReplay(turn.rounds, setIndex);
+  const { park } = replay;
+  // Read through a ref: the ←/→ bindings hold `go` across renders.
+  const indexRef = useRef(index);
+  indexRef.current = index;
+  const go = useCallback(
+    (next: (i: number) => number) => {
+      const to = Math.max(0, Math.min(turn.rounds.length - 1, next(indexRef.current)));
+      park(to);
+      setIndex(to);
+    },
+    [park, turn.rounds.length],
+  );
+  // Mid-round (playing, or paused partway through), only the steps the playhead
+  // has passed are shown; parked on a round, all of them are.
+  const { round: playRound, fraction } = locate(replay.t, turn.rounds.length);
+  const midRound = replay.playing || (fraction > 0 && fraction < 1);
+  const reveal =
+    midRound && round && playRound === index ? revealed(round.did.length, fraction) : undefined;
 
   // Publish the scrubbing verbs for the ←/→ bindings while this stepper is mounted.
   // Bound to `turn.rounds.length` rather than to a ref so the clamp cannot outlive
   // the turn it was computed for.
   useEffect(() => {
     bindStepper({
-      prevRound: () => setIndex((i) => Math.max(0, i - 1)),
-      nextRound: () => setIndex((i) => Math.min(turn.rounds.length - 1, i + 1)),
+      prevRound: () => go((i) => i - 1),
+      nextRound: () => go((i) => i + 1),
     });
     return () => bindStepper(null);
-  }, [turn.rounds.length]);
+  }, [go]);
 
   useEffect(() => setIndex(0), [turn.turn_id]);
 
@@ -429,7 +470,7 @@ function Stepper({
       <div style={{ ...S.bar, gap: 6, flexWrap: 'wrap' }}>
         <button
           style={S.ghostButton}
-          onClick={() => setIndex((i) => Math.max(0, i - 1))}
+          onClick={() => go((i) => i - 1)}
           disabled={index === 0}
           aria-label="Previous round"
         >
@@ -438,11 +479,13 @@ function Stepper({
         {turn.rounds.map((r, i) => (
           <button
             key={r.round}
-            onClick={() => setIndex(i)}
+            onClick={() => go(() => i)}
             style={{
               ...S.ghostButton,
               padding: '0 12px',
-              borderColor: i === index ? 'var(--accent)' : 'var(--border)',
+              // The whole shorthand, not `borderColor`: the base style sets
+              // `border`, and React warns when a rerender mixes the two.
+              border: `1px solid ${i === index ? 'var(--accent)' : 'var(--border)'}`,
               color: i === index ? 'var(--text-primary)' : 'var(--text-secondary)',
             }}
           >
@@ -451,7 +494,7 @@ function Stepper({
         ))}
         <button
           style={S.ghostButton}
-          onClick={() => setIndex((i) => Math.min(turn.rounds.length - 1, i + 1))}
+          onClick={() => go((i) => i + 1)}
           disabled={index >= turn.rounds.length - 1}
           aria-label="Next round"
         >
@@ -467,7 +510,16 @@ function Stepper({
         <button style={S.ghostButton} onClick={() => onFork(round.round)}>
           ⑂ Fork this round
         </button>
+        <button
+          style={S.ghostButton}
+          onClick={() => onDuel(round.round)}
+          title="Two configurations answer this round side by side; you judge them blind"
+        >
+          ⚔ Duel
+        </button>
       </div>
+
+      <ReplayBar rounds={turn.rounds} replay={replay} />
 
       <div
         style={{
@@ -479,7 +531,7 @@ function Stepper({
       >
         <ShownColumn round={round} />
         <WireColumn round={round} status={turn.wire_status} />
-        <DidColumn round={round} captureOn={captureOn} />
+        <DidColumn round={round} captureOn={captureOn} reveal={reveal} />
         <CostColumn round={round} />
       </div>
     </div>
@@ -488,9 +540,11 @@ function Stepper({
 
 function RunsSection({
   onFork,
+  onDuel,
   openTurnId,
 }: {
   onFork: (turnId: string, round: number) => void;
+  onDuel: (turnId: string, round: number) => void;
   /** A turn to step into on arrival — the eval results pane's deep link. */
   openTurnId?: string;
 }) {
@@ -543,6 +597,7 @@ function RunsSection({
         captureOn={captureOn}
         onBack={() => setOpen(null)}
         onFork={(round) => onFork(open.turn_id, round)}
+        onDuel={(round) => onDuel(open.turn_id, round)}
       />
     );
   }
@@ -717,11 +772,28 @@ export function AgentpediaHub() {
   // is the one value they share — and `setSection` is what moves the tab strip,
   // the keyboard and the pane's own buttons together.
   const [forkTarget, setForkTarget] = useState<ForkTarget | null>(null);
+  const [duelTarget, setDuelTarget] = useState<ForkTarget | null>(null);
+  // A turn another section asked the stepper to open (a duel's side).
+  const [stepTo, setStepTo] = useState<string | null>(null);
 
   const startFork = useCallback(
     (turnId: string, round: number) => {
       setForkTarget({ turnId, round });
       setSection('forks');
+    },
+    [setSection],
+  );
+  const startDuel = useCallback(
+    (turnId: string, round: number) => {
+      setDuelTarget({ turnId, round });
+      setSection('duels');
+    },
+    [setSection],
+  );
+  const stepThrough = useCallback(
+    (turnId: string) => {
+      setStepTo(turnId);
+      setSection('runs');
     },
     [setSection],
   );
@@ -732,8 +804,18 @@ export function AgentpediaHub() {
         <HarnessSection />
       ) : section === 'forks' ? (
         <ForksSection target={forkTarget} onClearTarget={() => setForkTarget(null)} />
+      ) : section === 'duels' ? (
+        <DuelsSection
+          target={duelTarget}
+          onClearTarget={() => setDuelTarget(null)}
+          onStep={stepThrough}
+        />
       ) : (
-        <RunsSection onFork={startFork} openTurnId={openTurnId || undefined} />
+        <RunsSection
+          onFork={startFork}
+          onDuel={startDuel}
+          openTurnId={stepTo ?? (openTurnId || undefined)}
+        />
       )}
     </div>
   );

@@ -33,7 +33,7 @@ import time
 from contextlib import contextmanager
 from typing import Any, Generator
 
-from backend.modules.agentpedia.models import ForkRecord
+from backend.modules.agentpedia.models import Duel, ForkRecord
 from backend.modules.database.app_db import ensure_app_db_dir
 
 logger = logging.getLogger(__name__)
@@ -173,10 +173,111 @@ def delete_fork(fork_turn_id: str) -> bool:
 
 
 def clear() -> None:
-    """Drop every fork edge (tests)."""
+    """Drop every fork edge and duel (tests)."""
     try:
         init_fork_db()
+        init_duel_db()
         with get_db_conn() as conn:
             conn.execute("DELETE FROM agentpedia_forks")
+            conn.execute("DELETE FROM agentpedia_duels")
     except Exception:
         logger.exception("agentpedia: clear failed")
+
+
+# ── Duels ────────────────────────────────────────────────────────────────────
+#
+# The second thing agentpedia owns: a duel and its vote. Like the fork edge, it
+# is a fact nothing else records — which two runs were put side by side, and
+# which one a person preferred. Each side's run is an ordinary fork (its edge in
+# the table above, its turn in `agent_turns`); this row is only the pairing and
+# the verdict.
+
+
+def init_duel_db() -> None:
+    """Create the duel table (idempotent)."""
+    with get_db_conn() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS agentpedia_duels (
+                id TEXT PRIMARY KEY,
+                turn_id TEXT NOT NULL,
+                created_at REAL NOT NULL DEFAULT 0,
+                voted_at REAL,
+                record TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_duels_created"
+            " ON agentpedia_duels(created_at DESC)"
+        )
+
+
+def save_duel(duel: Duel) -> None:
+    """Insert or replace a duel. Raises: a duel the user waited two model turns
+    for and then voted on must not vanish silently."""
+    init_duel_db()
+    with get_db_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO agentpedia_duels (id, turn_id, created_at, voted_at, record)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                voted_at = excluded.voted_at,
+                record = excluded.record
+            """,
+            (
+                duel.id,
+                duel.turn_id,
+                duel.created_at or time.time(),
+                duel.voted_at,
+                duel.model_dump_json(),
+            ),
+        )
+
+
+def _duel(row: sqlite3.Row) -> Duel | None:
+    try:
+        return Duel.model_validate(json.loads(row["record"]))
+    except Exception:
+        logger.exception("agentpedia: unreadable duel row %s", row["id"])
+        return None
+
+
+def list_duels(limit: int = 100) -> list[Duel]:
+    """Duels, newest first."""
+    init_duel_db()
+    with get_db_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM agentpedia_duels ORDER BY created_at DESC LIMIT ?",
+            (max(1, min(limit, 1000)),),
+        ).fetchall()
+    return [duel for row in rows if (duel := _duel(row)) is not None]
+
+
+def voted_duels() -> list[Duel]:
+    """Every duel with a vote, in the order the votes were cast."""
+    init_duel_db()
+    with get_db_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM agentpedia_duels WHERE voted_at IS NOT NULL"
+            " ORDER BY voted_at ASC"
+        ).fetchall()
+    return [duel for row in rows if (duel := _duel(row)) is not None]
+
+
+def get_duel(duel_id: str) -> Duel | None:
+    init_duel_db()
+    with get_db_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM agentpedia_duels WHERE id = ?", (duel_id,)
+        ).fetchone()
+    return _duel(row) if row is not None else None
+
+
+def delete_duel(duel_id: str) -> bool:
+    """Forget the pairing and its vote. Both forks stay, as forks."""
+    init_duel_db()
+    with get_db_conn() as conn:
+        cursor = conn.execute("DELETE FROM agentpedia_duels WHERE id = ?", (duel_id,))
+        return bool(cursor.rowcount)

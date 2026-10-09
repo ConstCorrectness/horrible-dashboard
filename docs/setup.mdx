@@ -157,6 +157,14 @@ Every script in the repo-root `package.json`:
   "logs/*"`, already set in `scripts/dev.mjs`/`dev-backend.ps1`) rather than a bare
   `uvicorn --reload` with no scoping — that watches the whole repo root, including
   `logs/backend.log`.
+- **The dashboard blanks out and comes back while you use it (dev only), with
+  `new dependencies optimized: … reloading` in the terminal.** Vite reloads the whole
+  page whenever it pre-bundles a dependency it did not find at startup. That only
+  happens when its startup scan fails, and one unresolvable import in any page it
+  scans is enough: the dev-only `apps/web/operator-check.html` imports `three`, which
+  `apps/web` does not depend on. `optimizeDeps.entries` in `apps/web/vite.config.ts`
+  therefore limits the scan to `index.html`. If it comes back, run
+  `DEBUG=vite:deps pnpm dev:web` and look for `Failed to run dependency scan`.
 - **Desktop first build seems stuck.** It's compiling Rust; give it a few minutes.
 
 For how to verify a change in the running app, see the `running-the-app` workflow.

@@ -371,3 +371,85 @@ class ForkDiff(BaseModel):
     #: True when the two made the same first move at the branch round. The headline.
     same_decision: bool = False
     token_delta: int = 0
+
+
+# ── Duels ────────────────────────────────────────────────────────────────────
+#
+# Two forks of one round, each with its own edits, judged blind by a person. A
+# fork answers "what does this change do"; a duel answers "which of these two
+# would I rather have", and enough of them rank the configurations on the
+# user's own tasks rather than on a public benchmark.
+
+#: A person's verdict. `both_bad` is recorded but moves no rating: "neither"
+#: says nothing about which of the two was better.
+DuelVote = Literal["a", "b", "tie", "both_bad"]
+
+
+class DuelRequest(BaseModel):
+    turn_id: str
+    from_round: int = 0
+    #: The two contestants, as fork edits. Which one ends up as answer A and which
+    #: as answer B is decided by the server at random, so the pane can show them
+    #: unlabelled and the vote is blind.
+    contestants: list[list[ForkEdit]] = Field(default_factory=list, min_length=2, max_length=2)
+    fixtures: dict[str, Any] = Field(default_factory=dict)
+
+
+class DuelSide(BaseModel):
+    """One contestant's run, as the duel shows it."""
+
+    fork_turn_id: str
+    #: The contestant's identity on the leaderboard: model, plus whatever its edits
+    #: changed. Hidden by the pane until the vote.
+    label: str
+    edits: list[ForkEdit] = Field(default_factory=list)
+    status: str = "complete"
+    error: str | None = None
+    model: str = ""
+    provider: str = ""
+    answer: str = ""
+    #: What it reached for first, and every tool it called.
+    decision: list[str] = Field(default_factory=list)
+    calls: list[str] = Field(default_factory=list)
+    rounds: int = 0
+    total_tokens: int = 0
+
+
+class Duel(BaseModel):
+    id: str
+    turn_id: str
+    from_round: int = 0
+    created_at: float = 0.0
+    a: DuelSide
+    b: DuelSide
+    vote: DuelVote | None = None
+    voted_at: float | None = None
+
+
+class DuelVoteRequest(BaseModel):
+    vote: DuelVote
+
+
+class DuelListResponse(BaseModel):
+    duels: list[Duel] = Field(default_factory=list)
+
+
+class Contestant(BaseModel):
+    label: str
+    rating: float
+    games: int = 0
+    wins: int = 0
+    losses: int = 0
+    ties: int = 0
+    both_bad: int = 0
+
+
+class Leaderboard(BaseModel):
+    """Elo over every voted duel, replayed in vote order from a fresh start, so the
+    ratings are a pure function of the votes and never drift from them."""
+
+    contestants: list[Contestant] = Field(default_factory=list)
+    #: Duels with a vote (the ones the ratings come from).
+    voted: int = 0
+    k: float = 32.0
+    start: float = 1000.0

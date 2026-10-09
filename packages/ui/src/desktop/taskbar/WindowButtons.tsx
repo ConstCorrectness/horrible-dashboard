@@ -30,6 +30,8 @@ export function WindowButtons({ showLabels }: { showLabels: boolean }) {
       {entries.map((e) => (
         <button
           key={e.instanceId}
+          // Where a minimized window flies to (window-motion.ts).
+          data-taskbar-instance={e.instanceId}
           type="button"
           className={`os-taskbar-btn is-${e.state}${showLabels ? '' : ' is-iconic'}${e.attention ? ' wants-attention' : ''}`}
           // The accessible name always carries the title even when labels are
